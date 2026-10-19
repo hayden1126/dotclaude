@@ -277,7 +277,10 @@ class Base(LanesRepo):
             with contextlib.suppress(FileNotFoundError):
                 os.remove(path)
         else:
-            self.write(path, json.dumps(self.session_record(entry)))
+            # Atomic: a waiter left running by an earlier call in the test keeps rewriting the
+            # file, and a later call's load_session would otherwise catch it empty.
+            self.write(path + ".tmp", json.dumps(self.session_record(entry)))
+            os.replace(path + ".tmp", path)
 
     def fake_load(self, pid):
         if pid != CLAUDE:  # the call's search for its session reads the ancestors below it
