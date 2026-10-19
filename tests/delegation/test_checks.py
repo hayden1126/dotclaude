@@ -455,6 +455,24 @@ class Hook(StateTest):
         self.assertEqual(checks.hook_main("{}", out=self.out.append), 0)
         self.assertEqual((self.out, self.launched), ([], []))
 
+    def test_a_state_file_too_deep_for_json_gives_the_nudges_a_torn_one_gives(self):
+        seen = {}
+        for name, body in (("torn", "{"), ("deep", "[" * 100000)):  # deep: RecursionError in json
+            for state in ("canary.json", "audit.json", "due.json"):
+                os.makedirs(os.path.dirname(checks.state_path(state)), exist_ok=True)
+                with open(checks.state_path(state), "w") as f:
+                    f.write(body)
+            self.out, self.launched[:] = [], []
+            self.assertEqual(checks.hook_main("{}", out=self.out.append), 0)
+            seen[name] = (self.out, list(self.launched))
+        self.assertEqual(seen["deep"], seen["torn"])
+        self.assertEqual(seen["torn"][1], [["quick", "audit"]])  # no state: both checks run
+
+    def test_a_payload_too_deep_for_json_reads_as_no_session(self):
+        self.settled()
+        self.assertEqual(checks.hook_main("[" * 100000, out=self.out.append), 0)  # RecursionError
+        self.assertEqual((self.out, self.launched), ([], []))
+
     def test_a_new_version_launches_and_records_the_start(self):
         checks.hook_main("{}", out=self.out.append)
         self.assertEqual(self.launched, [["quick", "audit"]])

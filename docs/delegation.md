@@ -470,7 +470,12 @@ Allow rules on excluded commands sit behind it: an allow rule skips the classifi
   its session is live; with neither, always. Otherwise, when its Claude process has ended (even
   in a session that runs on after a crash), the guard marked it `waiter_unheard`, or its waiter
   is dead, the refusal names `wait --resume <id>`, which moves the watch to the caller's
-  session.
+  session. A watch file that can't be read (torn, hand-edited, or nested too deep for json)
+  refuses it too, naming the file, since it may be that run's watch. So does a
+  `codex-delegate resume` whose run has no readable open watch. A resume that finds the run's
+  watch takes it over as usual, and `codex-delegate run` isn't refused: its run id is new, so
+  no file watches it. Pruning keeps such a file, so it refuses until someone fixes or removes
+  it.
 - **An acknowledged lapse is heard at a stop, not at the moment.** After one block and one
   warning, the guard starts a detached waiter on the lapsed watch, which watches the whole
   condition (the whole log, too) for up to a day. Its exit reaches no one, so it can't wake an
@@ -1188,8 +1193,9 @@ wrapper only since the detached supervisor. Waiting is liveness, so the fix is e
   with no launch line there falls back to the watch its `--resume` names, else the one created
   within 120 s after the launch, told apart by `--pid`, `--file` or `--log` when several were.
   Unfolded, a codex kill says Codex keeps running and gives the run's watch to re-arm, or
-  `wait --codex` with the run id when it has no watch, or `codex-delegate status` to find the run
-  when even the run id is unknown.
+  `wait --codex` with the run id when it has no watch (refused while a watch file can't be read:
+  the duplicate refusal above), or `codex-delegate status` to find the run when even the run id
+  is unknown.
 - **`codex-delegate`'s own watch.** `run` and `resume` record a `{codex: run_id}` watch whose
   waiter is the wrapper itself. Before Codex starts they print the launch line,
   `codex-delegate: run <run_id>, watch <watch_id>. If this command is stopped, Codex keeps running:

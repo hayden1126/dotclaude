@@ -240,7 +240,7 @@ def parse_breakdown(path):
             c = json.load(f)
         if c.get('size') == size:
             return c.get('cats') or None, c.get('acw')
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):   # json recurses on nesting
         pass
 
     cats = acw = None
@@ -298,14 +298,14 @@ def autocompact_setting(cfg):
         with open(os.path.join(cfg, 'settings.json'), encoding='utf-8') as f:
             v = json.load(f).get('autoCompactWindow')
         return v if isinstance(v, (int, float)) and v > 0 else None
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):   # json recurses on nesting
         return None
 
 
 def main():
     try:
         data = json.load(sys.stdin)
-    except ValueError:
+    except (ValueError, RecursionError):   # json recurses on nesting
         data = None
     if not isinstance(data, dict):
         print('Ctx ?')

@@ -95,6 +95,18 @@ class Haiku(Base):
             f.write("{not json")
         self.assertEqual(haiku.oauth_token(self.cfg), "home-token")
 
+    def test_a_file_or_reply_too_deep_for_json_is_a_bad_one(self):
+        deep = "[" * 100000   # RecursionError in json, not ValueError
+        os.makedirs(os.path.join(self.home, ".claude"))
+        self.token("home-token", os.path.join(self.home, ".claude"))
+        with open(os.path.join(self.cfg, ".credentials.json"), "w") as f:
+            f.write(deep)
+        self.assertEqual(haiku.oauth_token(self.cfg), "home-token")
+        self.urlopen(Response(deep.encode()))
+        with self.assertRaises(haiku.HaikuError) as e:
+            haiku.ask("s", "u", model="m", max_tokens=1, timeout=1, cfg=self.cfg)
+        self.assertEqual(e.exception.reason, "bad-response")
+
     def test_a_call_sends_the_token_and_the_fields(self):
         self.token()
         self.urlopen(reply("hello"))

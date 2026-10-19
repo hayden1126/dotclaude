@@ -76,7 +76,9 @@ class FileHistory(unittest.TestCase):
         return p
 
     def test_lists_every_backup_oldest_first_across_sessions(self):
-        out = self.run_cli().stdout.splitlines()
+        p = self.run_cli()
+        self.assertEqual(p.stderr, "")
+        out = p.stdout.splitlines()
         rows = [l for l in out if l.lstrip()[:1].isdigit()]
         self.assertEqual(len(rows), 3, out)
         self.assertIn(OLD[:8], rows[0])
@@ -85,6 +87,19 @@ class FileHistory(unittest.TestCase):
         self.assertIn("now: 11 bytes", out[0])
         # The subagent's backup names a file that doesn't exist: not listed.
         self.assertNotIn("@v3", "\n".join(out))
+
+    def test_an_unreadable_line_is_skipped_and_counted(self):
+        transcript = os.path.join(self.cfg, "projects", "-home-hayden-code-karaoke",
+                                  SID + ".jsonl")
+        with open(transcript, "a", encoding="utf-8") as f:
+            f.write('{"type": "file-history-delta", "trackingPath": ' + json.dumps(self.target)
+                    + "\n")   # torn mid-write
+            f.write("[" * 100000 + ' "file-history" ' + json.dumps(self.target)
+                    + "\n")   # RecursionError in json, not ValueError
+        p = self.run_cli()
+        rows = [l for l in p.stdout.splitlines() if l.lstrip()[:1].isdigit()]
+        self.assertEqual(len(rows), 3, p.stdout)
+        self.assertIn("2 transcript lines unreadable", p.stderr)
 
     def test_show_prints_a_version(self):
         self.assertEqual(self.run_cli("--show", "1").stdout, "first")

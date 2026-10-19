@@ -201,6 +201,15 @@ class RoundTrip(LanesRepo):
         self.assertIn("PR #8 merged", out)
         self.assertFalse(os.path.exists(path))
 
+    def test_a_pr_list_too_deep_for_json_proves_no_merge(self):
+        self.lane("new", "chart-fix")
+        self.commit("chart.txt", "axis\n", cwd=self.lane_path("chart-fix"))
+        self.env["FAKE_GH_OUT"] = "[" * 100000  # RecursionError in json, not ValueError
+        p = self.run_lane("done", "chart-fix")
+        self.assertEqual(p.returncode, 1, p.stdout)
+        self.assertIn("not merged", p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+
     def test_done_refuses_when_it_cannot_see_other_processes(self):
         # Sandboxed, its own claude has no /proc entry: a live session in the lane would be
         # invisible, so it must refuse rather than pass.
@@ -711,6 +720,15 @@ class HandoffFlag(LanesRepo):
                 self.sessions()
                 setup()
                 self.assertIn("handoff?", self.flags())
+
+    def test_a_gh_reply_too_deep_for_json_reads_as_no_answer(self):
+        self.env["FAKE_GH_OUT"] = "[" * 100000  # RecursionError in json
+        p = self.run_lane("ls", "--json")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        (row,) = json.loads(p.stdout)
+        self.assertEqual(row["pr"], "?")
+        self.assertIn("handoff?", row["flags"])
 
     def test_a_branch_git_cannot_read_lights_it(self):
         # The worktree and its branch gone: the record survives in the mirror (the Stop hook's
