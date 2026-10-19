@@ -74,22 +74,21 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 - **dotclaude runs in lanes (since 2026-10-12).** The lead is the main checkout. Lanes live in
   `~/dotclaude-lanes/`, and each lane's state is in its record (`lane ls`, `lane asks`), not
   here. The config caps live lanes at 3, with locks `install` and `suite`.
-  - Merged through lanes, installed from main and closed: #90 to #123 (2026-10-12 to
-    2026-10-18), with lead PR #117 among them (its check passed: session 3a153a27's auto-pass
-    loaded the handoff skill before pass-respawn's `handoff-check`). Last: launch-path, #124
-    (pass-respawn and `session-registry.sh` find a claude run under its versioned path, and a
-    plain pass refuses while the tab's shell has a stopped job). Before it, cross-lane, #123
-    (`lane ls` flags `overlap` when two live lanes change one file, and `lane trial` merges the
-    other live lanes into a scratch tree and runs the suites before ready; `skills/lanes/
-    SKILL.md`, Lifecycle).
+  - Merged through lanes, installed from main and closed: #90 to #125 (2026-10-12 to
+    2026-10-19), with lead PR #117 among them (its check passed: session 3a153a27's auto-pass
+    loaded the handoff skill before pass-respawn's `handoff-check`). Last: bug-route, #125
+    (`lane addr --repo <path> lead`, and a CLAUDE.md line sending a dotclaude bug met in another
+    repo to this lead; the lead logs each report in the backlog. A durable inbox was rejected:
+    revisit only if a report gets lost). Before it: launch-path, #124 (a claude run under its
+    versioned path), and cross-lane, #123 (`lane ls` flags `overlap`, and `lane trial` runs
+    before ready; `skills/lanes/SKILL.md`, Lifecycle).
     `gh pr list --state merged --limit 30` names each, and the closed records under `.git/lanes/_closed/<id>-<date>/` hold the detail (#116's
     post-merge smoke is in restore-effort's artifacts); tab-bar's design is in
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lane (opened 2026-10-18), merge order:** 1 bug-route (`feat/addr-repo`, from
-    d8683d2; Hayden's go after #123; it carries the lead's notes). Its Brief has the detail;
-    the backlog item below keeps the evidence.
+  - **No live lanes** (since #125's close, 2026-10-19). The next lane comes from the backlog
+    on Hayden's pick.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
     backlog. Shipping it first needs a check of how each enforcement site fails
@@ -124,17 +123,6 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     it), runs `claude stop <job>` and respawns that pane with a fresh claude. Unknowns: a pane
     in agent view leaves no link on disk, two clients can attach to one job, and the order of
     the stop and the respawn.
-  - **Bug reports from sessions outside dotclaude reach its lead (lane bug-route, live)**
-    (Hayden's pick 2026-10-18, option A). The karaoke session's report (pass-bg) worked over
-    SendMessage only because Hayden told it where to send, since `lane addr` refuses outside its
-    repo and ListAgents names are tab titles. Build: `lane addr --repo <path> lead`, which finds
-    another repo's lead from its lead record with the same checks, plus one global CLAUDE.md
-    line: a bug in dotclaude's tooling goes to that address, and with no lead live, to Hayden.
-    The lead logs each report in this backlog. Rejected: a durable inbox that runs sandbox-off
-    and that the lead reads at session start (a new write path, and untrusted text in the lead's
-    context); revisit only if a report gets lost. The CLAUDE.md line is Hayden's edit (proposed
-    via `/revise-claude-md`). Files: `skills/lanes/scripts/lane`, `tests/lanes`,
-    `skills/lanes/SKILL.md`, `docs/lanes.md`, `CLAUDE.md`.
   - **chrome-bg's TTL loop counts down on the wall clock** (from lane monotonic, 2026-10-18).
     `bin/chrome-bg:1314` and `:1353` wait until the run record's `expires`, so a forward clock
     step cuts a TTL short by up to 0.6 s. The record stays wall clock (`ls` and gc read it,
@@ -213,17 +201,18 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next (lead, main checkout):** watch lane bug-route (In flight, merge order 1). On its
-  "merged #N", run the post-merge chain (`skills/lanes/SKILL.md`, The lead, step 7; never
-  amend or rebase the lead branch). Check `lane ls` first: a merge Hayden made on GitHub and
-  mentioned to no session sends no message. If a lane later in order is ready first, swap the
-  order in STATUS and tell both lanes (the one next in order carries the lead's notes). Hold
-  `lane done` while
-  another lane holds the `suite` lock (its `branch -d` rewrites `.git/config`). No chat about a lane's own asks; speak
-  on cross-lane orders, decisions raised with the lead, failed checks and lead-only actions.
+- **Next (lead, main checkout):** no lanes are live. Offer Hayden the backlog (In flight) and
+  open what he picks with a lane table (`skills/lanes/SKILL.md`, The lead, steps 1-3). A bug
+  report from a session in another repo now arrives by SendMessage (CLAUDE.md, #125): check it
+  against the code and log it in the backlog. On a lane's "merged #N", run the post-merge chain
+  (The lead, step 7; never amend or rebase the lead branch). Check `lane ls` first: a merge
+  Hayden made on GitHub and mentioned to no session sends no message. Hold `lane done` while
+  another lane holds the `suite` lock (its `branch -d` rewrites `.git/config`). No chat about a
+  lane's own asks; speak on cross-lane orders, decisions raised with the lead, failed checks
+  and lead-only actions.
   - The lead's commits: `git log --first-parent main..chore/after-pr4` (STATUS only, plus merges
     of main). Session 9dd86d28 (2026-10-18) started at ee36b32 and ended at this handoff: it ran
-    the chain for #120 to #124 (`ls .git/lanes/_closed/` shows each close), checked #117 on the
+    the chain for #120 to #125 (`ls .git/lanes/_closed/` shows each close), checked #117 on the
     previous lead's pass, opened tab-pin, cross-lane, pass-bg, launch-path and bug-route, and logged the karaoke
     session's report, Hayden's bug-report pick and pass-bg's Not mine items.
   - Open with Hayden, nothing for the lead to do: the capella-studio lead asked how a new lane
