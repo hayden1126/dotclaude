@@ -216,6 +216,73 @@ class WritableRoots(Plain):
         self.assertIn("/mdw", denies)
         self.assertNotIn("/projdw", denies)
 
+    # A settings file that exists but doesn't parse hides the dirs it lets the sandbox write.
+    JUNK = {"junk": "{", "deep": "[" * 100000, "not an object": "[1]"}  # RecursionError in json
+
+    def test_an_unparseable_settings_file_refuses(self):
+        user = os.path.join(self.home, ".claude", "settings.json")
+        local = os.path.join(self.main, ".claude", "settings.local.json")
+        flagged = os.path.join(self.tmp, "flagged.json")
+        argv = ["claude", "--settings", flagged]
+        import lanelib
+        repo = lanelib.resolve(self.main)
+        for path in (user, local, flagged):
+            for why, junk in self.JUNK.items():
+                with self.subTest(path=path, why=why):
+                    for p in (user, local, flagged):
+                        self.settings(p)
+                    self.write(path, junk)
+                    with self.assertRaises(self.mod.Refuse) as cm:
+                        self.real_roots(repo, self.main, None, argv)
+                    self.assertEqual((cm.exception.code, cm.exception.reason),
+                                     (1, "settings unparseable"))
+                    self.assertIn(path, cm.exception.message)
+
+    def test_an_unparseable_inline_settings_flag_refuses(self):
+        for why, inline in {"junk": "{", "deep": '{"a": ' + "[" * 100000}.items():  # RecursionError in json
+            with self.subTest(why=why):
+                with self.assertRaises(self.mod.Refuse) as cm:
+                    self.real_roots(None, self.main, None, ["claude", "--settings", inline])
+                self.assertEqual((cm.exception.code, cm.exception.reason),
+                                 (1, "settings unparseable"))
+                self.assertIn("inline --settings", cm.exception.message)
+
+    def test_an_unparseable_deny_tier_refuses(self):
+        user = os.path.join(self.home, ".claude", "settings.json")
+        for why, junk in self.JUNK.items():
+            self.write(user, junk)
+            with self.subTest(why=why):
+                with self.assertRaises(self.mod.Refuse) as cm:
+                    self.mod.deny_roots()
+                self.assertEqual(cm.exception.reason, "settings unparseable")
+                self.assertIn(user, cm.exception.message)
+
+    def test_an_unparseable_settings_file_refuses_the_pass(self):
+        user = os.path.join(self.home, ".claude", "settings.json")
+        self.write(user, "{")
+        self.mod.writable_roots = self.real_roots
+        code, out = self.run_pass("--print")
+        self.assertEqual(code, 1, out)
+        self.assertIn(user, out)
+        self.assertIn("settings unparseable", self.log())
+        self.assertEqual(self.calls("tmux"), [])
+
+    def test_an_empty_or_missing_settings_file_still_passes(self):
+        # Sandbox mount stubs are empty files; a missing file lists nothing, as before.
+        user = os.path.join(self.home, ".claude", "settings.json")
+        local = os.path.join(self.main, ".claude", "settings.local.json")
+        self.write(user, "")
+        self.write(local, " \n\t")
+        argv = ["claude", "--settings", os.path.join(self.tmp, "missing.json")]
+        import lanelib
+        roots = self.real_roots(lanelib.resolve(self.main), self.main, None, argv)
+        self.assertIn(self.main, roots)
+        self.assertIsInstance(self.mod.deny_roots(), list)
+        os.remove(local)  # uncommitted in the checkout, it would fail the handoff gate
+        self.mod.writable_roots = self.real_roots
+        code, out = self.run_pass("--print")
+        self.assertEqual(code, 0, out)
+
     def test_the_script_under_a_writable_root_refuses(self):
         self.mod.writable_roots = lambda repo, cwd, launch=None, session_argv=None: [REPO]
         code, out = self.run_pass("--print")

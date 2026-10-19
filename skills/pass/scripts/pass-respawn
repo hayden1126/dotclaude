@@ -945,14 +945,32 @@ def listed(tree, keys: tuple[str, ...], bases: list[str]) -> list[str]:
     return out
 
 
+def settings_tree(text: str | bytes, name: str) -> dict:
+    """A settings document's object, {} when text is blank (a sandbox mount stub is an empty
+    file). Refuses one that doesn't parse or isn't an object: the dirs it lists can't be known."""
+    if not text.strip():
+        return {}
+    try:
+        tree = json.loads(text)
+    except (ValueError, RecursionError):   # json recurses on nesting
+        tree = None
+    if not isinstance(tree, dict):
+        raise Refuse(1, f"pass-respawn: {name} is not a JSON object, so the dirs it lets the "
+                     "sandbox write can't be known; fix it or move it aside",
+                     "settings unparseable")
+    return tree
+
+
 def listed_paths(path: str, keys: tuple[str, ...], base: str | None) -> list[str]:
     """A settings file's list at keys as absolute paths (listed): a relative one resolves against
-    base and against the file's own dir, or is skipped when base is None."""
+    base and against the file's own dir, or is skipped when base is None. A file that can't be
+    opened lists nothing; one that doesn't parse refuses (settings_tree)."""
     try:
-        with open(path) as f:
-            tree = json.load(f)
-    except (OSError, ValueError, RecursionError):   # json recurses on nesting
+        with open(path, "rb") as f:
+            text = f.read()
+    except OSError:
         return []
+    tree = settings_tree(text, f"the settings file {path}")
     return listed(tree, keys, [base, os.path.dirname(path)] if base is not None else [])
 
 
@@ -1009,12 +1027,12 @@ def flag_base(repo: lanelib.Repo | None, cwd: str, launch: str | None) -> str:
 
 
 def flag_settings(argv: list[str] | None, base: str) -> tuple[list[str], list[dict]]:
-    """The session's --settings values: (absolute file paths, parsed inline JSON objects)."""
+    """The session's --settings values: (absolute file paths, parsed inline JSON objects).
+    Refuses an inline value that doesn't parse (settings_tree)."""
     files, inline = [], []
     for value in session_flags(argv)[1]:
         if value.lstrip().startswith("{"):
-            with contextlib.suppress(ValueError, RecursionError):   # json recurses on nesting
-                inline.append(json.loads(value))
+            inline.append(settings_tree(value, f"an inline --settings value ({value[:80]!r})"))
         else:
             files.append(os.path.normpath(os.path.join(base, os.path.expanduser(value))))
     return files, inline
@@ -1027,7 +1045,8 @@ def writable_roots(repo: lanelib.Repo | None, cwd: str, launch: str | None = Non
     allowWrite and additionalDirectories (the project's at the top level and the launch dir),
     and the session's own flags (session_argv, its claude's command line): each --add-dir, and
     the allowWrite and additionalDirectories of each --settings file or inline JSON. A relative
-    flag value resolves against the launch dir (the claude's cwd), else the checkout."""
+    flag value resolves against the launch dir (the claude's cwd), else the checkout. Refuses when
+    a settings file or inline value doesn't parse (settings_tree)."""
     top = repo.toplevel if repo else os.path.realpath(cwd)
     roots = [repo.toplevel, repo.main] if repo else [top]
     dirs = [top]
@@ -1057,7 +1076,8 @@ def writable_roots(repo: lanelib.Repo | None, cwd: str, launch: str | None = Non
 
 def deny_roots() -> list[str]:
     """sandbox.filesystem.denyWrite from the user and managed tiers, absolute entries only: the
-    paths the sandbox can't write inside a writable root. A project file's is never read."""
+    paths the sandbox can't write inside a writable root. A project file's is never read. A tier
+    file that doesn't parse refuses (listed_paths)."""
     return [p for f in tier_files() for p in listed_paths(f, (*SANDBOX_KEYS, "denyWrite"), None)]
 
 
