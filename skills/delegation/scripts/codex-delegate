@@ -652,7 +652,7 @@ def crashed(row, waiter, ex):
         if e.get("event") != "stop":
             e = dict(row, ts=dc.now_iso(), event="stop", status="crashed", rc=None, exit=1,
                      timed_out=False, report_ok=False, report_status=None, audit_ok=False,
-                     models=[], disallowed=[],
+                     models=[], disallowed=[], audit_unreadable=0,
                      report_error="the wrapper failed before Codex ended", error=err)
             dc.append_row(e)
         end_watch(waiter, dc.codex_stopped(e)[0])
@@ -689,7 +689,7 @@ def finish(row, rc, thread_id, since_epoch, out, stream=None):
                        thread_id=thread_id,
                        **{k: summary[k] for k in ("rc", "exit", "timed_out", "report_ok",
                                                   "report_status", "report_error", "audit_ok",
-                                                  "models", "disallowed")}))
+                                                  "models", "disallowed", "audit_unreadable")}))
     print(json.dumps(summary, indent=2), file=stream or sys.stdout)
     return code
 
@@ -701,8 +701,8 @@ def read_text(path):
     try:
         with dc.open_unprotected(path) as f:
             return f.read().decode()
-    except PermissionError:
-        die(f"{path} reaches a path the sandbox keeps unreadable")
+    except PermissionError as e:  # a read-protected path, or protected paths that won't read
+        die(str(e))
 
 
 def check_paths(dirs=(), reads=()):
@@ -960,7 +960,7 @@ def cmd_cancel(a):
                        "report_ok": False, "report_status": None,
                        "report_error": "cancelled before it reported",
                        "audit_ok": aud["ok"], "models": aud["models"],
-                       "disallowed": aud["disallowed"],
+                       "disallowed": aud["disallowed"], "audit_unreadable": aud["unreadable"],
                        "error": "cancelled by codex-delegate cancel"})
         w = dc.codex_watch(run_id)
         if w is not None:

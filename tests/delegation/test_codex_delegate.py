@@ -159,6 +159,15 @@ class Commands(unittest.TestCase):
         self.assertNotIn(" -s ", s)
         self.assertNotIn(" -C ", s)
 
+    def test_a_prompt_whose_protected_paths_cant_be_checked_says_so(self):
+        # Not "reaches a path the sandbox keeps unreadable": the protected paths didn't read.
+        why = "x can't be checked against the protected paths: unreadable settings file"
+        err = io.StringIO()
+        with mock.patch.object(cd.dc, "open_unprotected", side_effect=PermissionError(why)), \
+                contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
+            cd.read_text("x")
+        self.assertEqual(err.getvalue(), f"codex-delegate: {why}\n")
+
     def test_wrap(self):
         c = cd.wrap(["codex"], 60, "8G", scope=False)
         self.assertEqual(c[0], "timeout")
@@ -504,6 +513,9 @@ class FullRun(unittest.TestCase):
         self.assertEqual(p.returncode, 3, p.stderr)
         s = self.summary(p)
         self.assertEqual((s["audit_ok"], s["audit_unreadable"]), (False, 1))
+        stop = self.ledger()[-1]  # so the ledger says why the audit failed
+        self.assertEqual((stop["event"], stop["audit_ok"], stop["audit_unreadable"]),
+                         ("stop", False, 1))
 
     def test_a_malformed_settings_file_refuses_before_anything_runs(self):
         # Skipped, it would drop its denyWrite entries from codex's writable-root check.
@@ -619,8 +631,8 @@ class FullRun(unittest.TestCase):
         self.assertIn(f"dropped watch {wid}", c.stdout)
         self.assertFalse(cd.dc.pid_alive(rec["pid"], rec["start"]))
         stop = self.ledger()[-1]
-        self.assertEqual((stop["event"], stop["status"], stop["exit"], stop["report_ok"]),
-                         ("stop", "cancelled", 1, False))
+        self.assertEqual((stop["event"], stop["status"], stop["exit"], stop["report_ok"],
+                          stop["audit_unreadable"]), ("stop", "cancelled", 1, False, 0))
         self.assertEqual(self.watches()[wid]["state"], "dropped")
         self.assertEqual(proc.wait(timeout=20), 1)  # its wrapper leaves the stop row be
         self.assertIn(f"run {run_id} was cancelled; its stop row stands", proc.stdout.read())
@@ -908,7 +920,8 @@ class FullRun(unittest.TestCase):
         self.assertIn("codex-delegate: FileNotFoundError", p.stderr)
         stop = self.ledger()[-1]
         self.assertEqual((stop["event"], stop["status"], stop["exit"], stop["report_ok"],
-                          stop["audit_ok"]), ("stop", "crashed", 1, False, False))
+                          stop["audit_ok"], stop["audit_unreadable"]),
+                         ("stop", "crashed", 1, False, False, 0))
         self.assertIn("FileNotFoundError", stop["error"])
         _, wid = self.launch_ids(p.stdout.split("\n", 1)[0] + "\n")
         self.assertEqual(self.watches()[wid]["state"], "failed")
