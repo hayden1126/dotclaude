@@ -317,10 +317,9 @@ Before any AskUserQuestion, in a lane or the lead:
 4. If the user skipped a question, say so before asking its parts again.
 5. Explain each code name in plain words, or drop it.
 
-The ask-check hook (`hooks/ask_check.py`) denies a risky ask once with this list as the reason:
-one after a subagent report with at most one Read, Grep, Glob or Bash since, one with 4 or more
-backticked names, or one naming another live lane's file (its branch's diff or its brief's
-Expected files) without the lane. Fix what applies and resend; the resend passes.
+The ask-check hook (`hooks/ask_check.py`) denies a risky ask once with this list as the reason
+(README's `ask-check.sh` entry says which asks are risky). Fix what applies and resend; the
+resend passes.
 
 ## Cheat sheet
 

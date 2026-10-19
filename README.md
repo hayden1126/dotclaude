@@ -577,8 +577,10 @@ need nothing extra.
   A deny is the only hook output the model sees before the dialog. It resends in the same turn
   (probed on 2.1.304), and the resend passes: a deny of this hook's already in the window lets
   any ask through. Each ask runs one `git rev-parse` to find its repo; the lane rule runs more
-  git only when that repo has another live lane, inside a 3 s budget, and never `git status` in
-  another lane's worktree (about 60 to 70 ms per ask on HAYPC). Subagent calls are skipped. Fails open: with no
+  git only when that repo has another live lane, inside a time budget (`LANE_BUDGET` in
+  `hooks/ask_check.py`), and never `git status` in another lane's worktree (about 60 to 70 ms
+  per ask on HAYPC). Replayed over 1,485 past asks, the report and backtick rules would have
+  denied 11.2% (17.6% in plan mode). Subagent calls are skipped. Fails open: with no
   transcript, or on any error, the ask goes through. Denies go to
   `$XDG_STATE_HOME/dotclaude/ask-check.log`.
 - **PreToolUse(`Bash`): `delete-guard.sh`** (in this repo), for commands run with
