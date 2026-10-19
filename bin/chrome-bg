@@ -978,6 +978,7 @@ class Run:
         self.hello = {}
         self.target = None
         self.window = None
+        self.deadline = None  # the TTL's end on time.monotonic(): expires steps with the wall clock
 
     @property
     def url(self):
@@ -1013,7 +1014,7 @@ def start_run(rid, url, size, kind, ttl=None, cwd=None, marks=False, on_hello=No
     """The start sequence (the module docstring's "Start:"). On any failure, or a signal, it ends
     the run it began before raising."""
     w, h = size
-    now = time.time()
+    now, mono = time.time(), time.monotonic()
     st = proc_stat(os.getpid())
     rec = {"id": rid, "kind": kind, "owner": {"pid": os.getpid(), "start": st[1] if st else None},
            "cwd": cwd or os.getcwd(), "created": now, "expires": now + ttl if ttl else None,
@@ -1022,6 +1023,7 @@ def start_run(rid, url, size, kind, ttl=None, cwd=None, marks=False, on_hello=No
     # Written before the supervisor exists, so gc never takes this run's young dir for an orphan.
     write_record(rec)
     run = Run(rec)
+    run.deadline = mono + ttl if ttl else None
     try:
         run.sup = Supervisor(rid)
         hello = run.hello = parse_hello(run.sup.call("hello", timeout=60))
@@ -1311,7 +1313,7 @@ def holder(rid, args, ttl, cwd, ready):
         say(f"ready at {run.url}")
         why, next_poll, failed = "TTL reached", time.monotonic() + PROCS_POLL_S, 0
         empty_since = None  # when the first of an unbroken run of reads finding no page ended
-        while time.time() < run.rec["expires"]:
+        while time.monotonic() < run.deadline:
             if run.sup.p.poll() is not None:
                 why = "the supervisor exited"  # finish() then kills the run by its dir
                 break
@@ -1350,7 +1352,7 @@ def holder(rid, args, ttl, cwd, ready):
                     elif started - empty_since >= PAGES_GONE_S:  # no page all that time
                         why = "its last page closed"
                         break
-            take_signal(min(0.5, PROCS_POLL_S, max(0.05, run.rec["expires"] - time.time())))
+            take_signal(min(0.5, PROCS_POLL_S, max(0.05, run.deadline - time.monotonic())))
         say(why)
     except Stopped as e:
         say(f"signal {e.signum}")
