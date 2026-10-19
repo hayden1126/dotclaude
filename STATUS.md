@@ -101,13 +101,15 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
 
   Backlog:
-  - **Lane ask quality** (logged 2026-10-19, Hayden: "in a next session we investigate, do a
-    past transcript search, and plan for fixes"). Lane json-depth's four question rounds: claims
-    asked before they were checked (two wrong), another live lane's file proposed without saying
-    so, scope grown past the brief on its own recommendations, a skipped question re-split
-    silently, jargon, decisions kept only in the plan-mode file. Plus the lead's own: `lane new`
-    took a branch name merged #94 had used. Log, evidence and the search plan:
-    `~/scratch/lane-ask-quality/MISTAKES.md` (private: it quotes the transcript).
+  - **Lane ask quality: investigated, Hayden picked the fixes** (2026-10-19, session ee8a43bd).
+    A search of 1,472 asks found the problem in every kind of session, not only lanes, roughly
+    doubled in plan mode (agents' claims reach the ask unchecked). The rules were already in
+    context and were ignored; a checklist sent at ask time fixed json-depth's later rounds.
+    Hayden's picks: a PreToolUse hook on AskUserQuestion denies only risky asks, with a
+    checklist in the reason (probe the same-turn resend first); plan mode at `lane open` stays;
+    `lane new` refuses a branch name with any PR, with an override; two parallel lanes,
+    ask-check and branch-reuse. Causes and picks: `~/scratch/lane-ask-quality/MISTAKES.md`;
+    rates and precision: `SEARCH.md` beside it (both private: they quote transcripts).
   - G8 open probes (a) and (b) (Hayden's pick, 2026-10-14): Hayden runs
     `~/scratch/sandbox-audit/g8-probe/run.py` by hand with the sandbox off, because the auto-mode
     classifier refused the run. Results go into the private findings file's G8 section.
@@ -226,9 +228,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lane ask quality (Backlog): read `~/scratch/lane-ask-quality/MISTAKES.md`, investigate the
-     causes, run the past transcript search it describes, then plan fixes and show Hayden the
-     options before building (likely a lead PR or its own lane; keep off live lanes' files).
+  0. Lane ask quality (Backlog, picks made): open lanes ask-check (`feat/ask-check`) and
+     branch-reuse (`fix/lane-branch-reuse`) once Hayden approves the new-lane table; both names
+     had no PR on 2026-10-19.
   1. No live lanes. Hayden picks the next work from the backlog (item 0 first, unless he says
      otherwise). On a bug report from another repo's session (CLAUDE.md, #125): check it
      against the code and log it in the backlog. When lanes run again, follow The lead in
