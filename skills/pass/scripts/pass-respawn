@@ -1262,7 +1262,10 @@ def prepare(args: argparse.Namespace, procs, cmdline=lanelib.proc_cmdline) -> Pl
     repo = lanelib.resolve(args.cwd)
     if repo is None:
         raise Refuse(1, "pass-respawn: not inside a git work tree", "not a work tree")
-    _, lane = repo.identity()
+    try:
+        _, lane = repo.identity()
+    except lanelib.Untrusted as e:  # a left-out record may be this checkout's
+        raise Refuse(1, f"pass-respawn: {e}", "untrusted lane record")
     status_rel = os.path.join(lanelib.RECORD_DIR, "STATUS.md") if lane else "STATUS.md"
     transcript = transcript_path(session, sid, stop_record(sid)) if session and sid else None
     try:

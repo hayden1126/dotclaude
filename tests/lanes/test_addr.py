@@ -492,6 +492,26 @@ class LeadPick(LiveSessions):
             with self.subTest(bad):
                 self.assertIsNone(lanelib.proc_tmux(self.child(pane="%5", server=bad)))
 
+    def test_an_unread_session_file_in_main_makes_the_lead_unknown(self):
+        # A session file that won't read as a JSON object, of a process running in main, may
+        # be the lead or a second continuation: `addr lead` refuses and names it. One whose
+        # process runs outside main can't be either.
+        (a, want), _ = self.pair()
+        self.write_lead(a)
+        repo = lanelib.Repo(self.main, self.common)
+        sessions = os.path.join(self.home, ".claude", "sessions")
+        for why, junk in {"junk": "{", "deep": "[" * 100000}.items():  # RecursionError in json
+            with self.subTest(why):
+                path = os.path.join(sessions, f"{self.child(self.main)}.json")
+                self.write(path, junk)
+                self.refused("the lead is unknown", path)
+                with mock.patch.dict(os.environ, CLAUDE_CONFIG_DIR=os.path.dirname(sessions)):
+                    self.assertIsNone(lanelib.lead_of(repo, lanelib.main_sessions(repo)))
+                outside = os.path.join(sessions, f"{self.child(self.tmp)}.json")
+                os.rename(path, outside)
+                self.assertEqual(self.addr_lead(), want)
+                os.unlink(outside)
+
 
 class AddrRepo(LiveSessions):
     """`lane addr --repo PATH`: the lane or lead of the lanes repo whose main checkout holds PATH,

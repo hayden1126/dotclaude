@@ -2334,6 +2334,21 @@ class Lane(Base):
         self.assertEqual(code, 0, out)
         self.assertIn(shlex.join(self.respawn("--permission-mode", "plan")), out.splitlines())
 
+    def test_an_unreadable_lane_record_refuses(self):
+        # Left out of the lanes, the lane's checkout would resume from the root STATUS.md.
+        lane_json = os.path.join(self.common, "lanes", "chart-fix", "lane.json")
+        for why, junk in {"junk": "{", "deep": "[" * 100000}.items():  # RecursionError in json
+            with self.subTest(why):
+                self.reset()
+                self.write(lane_json, junk)
+                code, out = self.run_pass("--print", cwd=self.path)
+                self.assertEqual(code, 1, out)
+                self.assertIn(f"pass-respawn: {os.path.realpath(self.path)} matches no lane "
+                              "record", out)
+                self.assertIn("lanes/chart-fix/lane.json is not JSON", out)
+                self.assertNotIn("handoff-check failed", out)  # refused at identity, ahead of it
+                self.assertEqual(self.calls("tmux", "respawn-pane"), [])
+
     def test_compact_in_a_lane_points_the_focus_at_the_record(self):
         code, out = self.run_pass("--compact", "--print", cwd=self.path)
         self.assertEqual(code, 0, out)

@@ -290,13 +290,22 @@ class Repo:
         return None
 
     def identity(self, lanes: list[dict] | None = None) -> tuple[str, dict | None]:
-        """("lane", lane) | ("main", None) | ("unregistered", None) | ("plain", None)."""
+        """("lane", lane) | ("main", None) | ("unregistered", None) | ("plain", None). Untrusted
+        for a checkout outside main that matches no record while one is rejected."""
         if not self.has_lanes:
             return "plain", None
         lane = self.lane_at(self.toplevel, lanes)
         if lane:
             return "lane", lane
-        return ("main", None) if self.is_main else ("unregistered", None)
+        if self.is_main:
+            return "main", None
+        # self.rejected is the lanes() call's that lane_at matched against. A rejected record
+        # may be this checkout's, so outside main it isn't told from one: Untrusted.
+        if self.rejected and not inside(self.toplevel, self.main):
+            lane_id, why = self.rejected[0]
+            raise Untrusted(f"{self.toplevel} matches no lane record, and lane {lane_id}'s is "
+                            f"left out ({why}), so it may be this checkout's: fix or remove it")
+        return "unregistered", None
 
     def config(self) -> dict:
         with open(self.config_path, "rb") as f:
@@ -762,7 +771,7 @@ def read_record(repo: "Repo", lane_id: str) -> dict:
     with open(repo.lane_json(lane_id)) as f:
         try:
             lane = json.load(f)
-        except ValueError:
+        except (ValueError, RecursionError):  # json recurses on nesting
             raise Untrusted(f"lanes/{lane_id}/lane.json is not JSON")
     if why := record_problem(lane, lane_id):
         raise Untrusted(f"lanes/{lane_id}/lane.json: {why}")
@@ -1014,10 +1023,14 @@ def pids_visible(proc: str = "/proc") -> bool:
 def live_sessions() -> list[dict] | None:
     """Claude Code's per-process session files whose process exists (session_state), stopped or
     not: a stopped session still holds its lane, so `open` and seed_line leave it be. None when
-    pids can't be seen."""
+    pids can't be seen, or when a session file that won't read (session_scan) may be a live
+    one: it is named for a pid that is present, or not for a pid at all."""
     if not pids_visible():
         return None
-    return [s for s in session_files() if session_state(s) is not None]
+    files, unread = session_scan()
+    if any((pid := file_pid(path)) is None or pid_present(pid) for path in unread):
+        return None
+    return [s for s in files if session_state(s) is not None]
 
 
 def inside(path: str, root: str) -> bool:
@@ -1251,18 +1264,59 @@ def read_head(path: str, limit: int) -> bytes | None:
         os.close(fd)
 
 
-def session_files() -> list[dict]:
+SESSION_MAX = 1 << 20  # bytes of a session file
+REREAD_WAIT = 0.1  # seconds before an unread session file is read again: a torn rewrite
+
+
+class Sessions(NamedTuple):
+    """session_scan's result."""
+    files: list[dict]  # each a JSON object
+    unread: list[str]  # paths that exist but don't read as one: junk, too deep, unreadable
+
+
+def read_session(path: str) -> dict | None:
+    """One session file as a JSON object, else None (gone, unreadable, junk or too deep)."""
+    try:
+        s = json.loads(read_head(path, SESSION_MAX) or b"null")
+    except (ValueError, RecursionError):  # json recurses on nesting
+        return None
+    return s if isinstance(s, dict) else None
+
+
+def session_scan() -> Sessions:
     """Claude Code's per-process session files (<config>/sessions/<pid>.json), live or stale,
-    each a JSON object. They outlive their process, so a pid in one proves nothing alone."""
-    out = []
-    for path in glob.glob(os.path.join(sessions_dir(), "*.json")):
-        try:
-            s = json.loads(read_head(path, 1 << 20) or b"null")
-        except ValueError:
-            continue
-        if isinstance(s, dict):
-            out.append(s)
-    return out
+    and the paths of those that exist yet don't read as a JSON object, each read once more
+    after REREAD_WAIT. They outlive their process, so a pid in one proves nothing alone. A
+    caller that trusts what it finds rules each unread path out (file_pid) or fails closed."""
+    files, unread = [], glob.glob(os.path.join(sessions_dir(), "*.json"))
+    for wait in (0, REREAD_WAIT):
+        if not unread:
+            break
+        time.sleep(wait)
+        paths, unread = unread, []
+        for path in paths:
+            if (s := read_session(path)) is not None:
+                files.append(s)
+            elif os.path.lexists(path):  # a missing file is no session
+                unread.append(path)
+    return Sessions(files, unread)
+
+
+def session_files() -> list[dict]:
+    """session_scan's files alone, for a caller a skipped file only costs proof."""
+    return session_scan().files
+
+
+def file_pid(path: str) -> int | None:
+    """The pid a session file's name gives (<pid>.json), or None for another name."""
+    m = re.fullmatch(r"([1-9][0-9]{0,9})\.json", os.path.basename(path))
+    return int(m.group(1)) if m else None
+
+
+def pid_present(pid: int, proc: str = PROC) -> bool:
+    """Whether a process with pid exists (stopped or not) and hasn't exited."""
+    st = proc_stat(pid, proc)
+    return st is not None and st[1] not in EXITED
 
 
 def proc_start_of(session: dict) -> int | None:
@@ -1290,14 +1344,21 @@ def sessions_above(pid: int | None = None) -> list[tuple[dict, Proc]]:
     of a reused pid never counts. One stat-only scan finds the chain, and only a matched pid's
     real cwd is read (Proc.cwd, None when it can't be). Sandboxed, no ancestor is in sight: an
     empty list. `done`'s lead_only checks each one; a lead act takes the nearest, and the lead
-    heal (lead_relink) times a /pass by it."""
+    heal (lead_relink) times a /pass by it. Untrusted when a session file that won't read
+    (session_scan) may be an ancestor's: one not named for a pid outside the chain."""
     procs = scan(full=False)
+    chain = ancestors(os.getpid() if pid is None else pid, procs)
+    files, unread = session_scan()
+    for path in unread:
+        if (named := file_pid(path)) is None or named in chain:
+            raise Untrusted(f"session file {path} can't be read as a JSON object, so the "
+                            "Claude sessions above this command can't be told")
     by_pid = {}
-    for s in session_files():
+    for s in files:
         if type(s.get("pid")) is int:
             by_pid.setdefault(s["pid"], []).append(s)
     out = []
-    for a in ancestors(os.getpid() if pid is None else pid, procs):
+    for a in chain:
         p = procs.get(a)
         for s in by_pid.get(a, []):
             if p is None or proc_start_of(s) != p.start:
@@ -1340,11 +1401,14 @@ def socket_of(session: dict) -> str | None:
 
 
 def transcript_cwd(path: str) -> str | None:
-    """The first cwd a transcript records, from its first TRANSCRIPT_HEAD bytes, or None."""
+    """The first cwd a transcript records, from its first TRANSCRIPT_HEAD bytes, or None: also
+    when a line ahead of it that won't parse holds the bytes `"cwd"`."""
     for line in (read_head(path, TRANSCRIPT_HEAD) or b"").splitlines():
         try:
             rec = json.loads(line)
-        except ValueError:  # the line cut at the limit, or not JSON
+        except (ValueError, RecursionError):  # cut at the limit, not JSON, or too deep
+            if b'"cwd"' in line:  # it may hold the first cwd: a later one proves nothing
+                return None
             continue
         if isinstance(rec, dict) and isinstance(rec.get("cwd"), str):
             return rec["cwd"]
@@ -1462,6 +1526,22 @@ def main_sessions(repo: Repo) -> list[dict]:
                    and socket_of(s)), key=lambda s: s["pid"])
 
 
+def lead_unknown(repo: Repo, proc: str = PROC) -> str | None:
+    """A session file that won't read (session_scan) and may hide a main-checkout session, so
+    the lead can't be told: named for a present pid whose real cwd is inside repo.main or can't
+    be read. Its path, or None. lead_of and lead_relink check it; `lane addr lead` names it."""
+    for path in session_scan().unread:
+        if (pid := file_pid(path)) is None or not pid_present(pid, proc):
+            continue
+        try:
+            cwd = os.readlink(os.path.join(proc, str(pid), "cwd"))
+        except OSError:
+            return path
+        if cwd_inside(cwd, repo.main):
+            return path
+    return None
+
+
 def lead_of(repo: Repo, sessions: list[dict]) -> dict | None:
     """The lead among main_sessions(repo), which run (a stopped one is out of reach): the one
     whose pid and procStart the record holds (a /clear keeps both); else the record's one
@@ -1473,8 +1553,8 @@ def lead_of(repo: Repo, sessions: list[dict]) -> dict | None:
     fresh claude in the old pane, two resumes, a child claude that inherits TMUX_PANE) give
     None. With none, one session is the lead, as long as the recorded process isn't stopped
     (Ctrl+Z): beside a lead that `fg` brings back, the one running is likely a side chat
-    (Hayden's call, 2026-10-17). Else None."""
-    if not sessions:
+    (Hayden's call, 2026-10-17). Else None, as beside a session file lead_unknown names."""
+    if not sessions or lead_unknown(repo):
         return None
     rec = read_lead(repo)
     if rec is not None:
@@ -1609,7 +1689,8 @@ def lead_relink(repo: Repo, sid: str, pid: int | None = None, proc: str = PROC) 
         if started is None or not started - PASS_TTL <= written <= started + PASS_SLACK:
             return None
     # As lead_of: beside another continuation (a second resume, a successor in the recorded
-    # pane), none is the lead, so neither heals ahead of the other and Hayden picks.
+    # pane), or a session file that may hide one (lead_unknown), none is the lead, so neither
+    # heals ahead of the other and Hayden picks.
     others = [s for s in continuations(repo, rec, main_sessions(repo))
               if (s["pid"], proc_start_of(s)) != nearest]
-    return None if others else why
+    return None if others or lead_unknown(repo, proc) else why

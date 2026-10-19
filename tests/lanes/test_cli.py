@@ -953,6 +953,49 @@ class RecordTrust(LanesRepo):
         self.assertEqual(p.returncode, 1)
         self.assertIn("#42 (chart-fix)", p.stderr)
 
+    def test_an_unreadable_record_holds_its_lane_and_what_it_held(self):
+        # A record that won't read as a JSON object is left out, but its checkout is no
+        # unregistered one, and its claims, port and cap slot can't be told, so nothing is
+        # handed out while it stands. The main checkout still knows itself.
+        self.lane("new", "api-docs", "--claim", "42")
+        api = os.path.join(self.common, "lanes", "api-docs", "lane.json")
+        saved = self.read(api)
+        for why, junk in {"junk": "{", "deep": "[" * 100000}.items():  # RecursionError in json
+            with self.subTest(why):
+                self.write(api, junk)
+                repo = lanelib.resolve(self.main)
+                self.assertEqual([lane["id"] for lane in repo.lanes()], ["chart-fix"])
+                self.assertEqual(repo.rejected, [("api-docs", "lanes/api-docs/lane.json is not "
+                                                              "JSON")])
+                p = self.run_lane("whoami", cwd=self.lane_path("api-docs"))
+                self.assertEqual((p.returncode, p.stdout), (1, ""), p.stderr)
+                self.assertIn("matches no lane record", p.stderr)
+                self.assertIn("api-docs", p.stderr)
+                self.assertIn("main  (the main checkout", self.lane("whoami"))
+                for args, cwd in ((("new", "other", "--claim", "43"), None),
+                                  (("claim", "42"), self.lane_path("chart-fix"))):
+                    with self.subTest(args=args):
+                        p = self.run_lane(*args, cwd=cwd)
+                        self.assertEqual(p.returncode, 1, p.stderr)
+                        self.assertIn("lanes/api-docs/lane.json is not JSON", p.stderr)
+                self.assertFalse(os.path.exists(self.lane_path("other")))
+                self.assertEqual(self.lane_json("chart-fix")["claims"], [])
+        self.write(api, saved)
+        self.lane("claim", "43", cwd=self.lane_path("chart-fix"))
+
+    def test_open_refuses_beside_an_unreadable_session_file(self):
+        # Not named for a pid, it may be a live session's in the lane (lanelib.live_sessions).
+        path = os.path.join(self.home, ".claude", "sessions", "not-a-pid.json")
+        for why, junk in {"junk": "{", "deep": "[" * 100000}.items():  # RecursionError in json
+            with self.subTest(why):
+                self.write(path, junk)
+                p = self.run_lane("open", "chart-fix")
+                self.assertEqual((p.returncode, p.stdout), (1, ""), p.stderr)
+                self.assertIn("can't be read as a JSON object, so this can't tell whether lane "
+                              "chart-fix already has a session", p.stderr)
+                self.assertNotIn("sandboxed", p.stderr)
+                self.assertIn("session liveness unknown", self.run_lane("ls").stderr)
+
     def test_open_done_and_adopt_refuse_a_twinned_path(self):
         self.plant("twin", id="twin")
         for args in (("open", "twin", "--print"), ("done", "twin", "--abandon"),
@@ -2922,6 +2965,26 @@ class LeadAct(LeadChain):
         self.assertEqual(p.returncode, 1)
         self.assertIn("no lanes config", p.stderr)
         self.assertIsNone(self.lead())
+
+    def test_an_unread_ancestor_session_file_refuses_a_lead_act(self):
+        # This runner starts each fake, so its pid's file may be the session above: one that
+        # won't read as a JSON object can't be told from a lane's. A dead pid's can't be one.
+        sessions = os.path.join(self.home, ".claude", "sessions")
+        for why, junk in {"junk": "{", "deep": "[" * 100000}.items():  # RecursionError in json
+            for argv in (["lead"], ["done", "chart-fix", "--abandon"]):
+                with self.subTest(why, argv=argv):
+                    path = os.path.join(sessions, f"{os.getpid()}.json")
+                    self.write(path, junk)
+                    _, res = self.act(argv)
+                    self.assertEqual((res["rc"], res["out"]), (1, ""), res["err"])
+                    self.assertIn(f"session file {path} can't be read", res["err"])
+                    gone = subprocess.Popen(["true"])
+                    gone.wait()
+                    os.rename(path, os.path.join(sessions, f"{gone.pid}.json"))
+            pid, res = self.act(["lead"])
+            self.assertEqual(res["rc"], 0, res["err"])
+            self.assertLead(pid)
+        self.assertTrue(os.path.isdir(self.path))  # no done got through
 
 
 class SwitchedBranch(LanesRepo):

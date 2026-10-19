@@ -13,6 +13,8 @@ from unittest import mock
 import _fixture  # noqa: F401  (puts lanelib on sys.path)
 import lanelib
 
+UNREAD = {"junk": "{", "deep": "[" * 100000}  # RecursionError in json
+
 
 class ProseOnly(unittest.TestCase):
     def phrases(self, text):
@@ -218,6 +220,21 @@ class LeadRelink(_fixture.LiveSessions):
         self.write_lead(stopped, sid=self.OLD)
         self.assertEqual(self.relink(self.OLD), "resume")
         self.assertIsNone(self.relink(self.NEW))
+
+    def test_an_unread_session_file_in_main_never_heals(self):
+        # It may be a second continuation (lanelib.lead_unknown), so neither heals. One whose
+        # process runs outside main can't be, so the resume still heals.
+        self.session(self.main, pid=os.getpid(), sock=None, sessionId=self.OLD)
+        self.write_lead(self.child(self.main, done=True), start=1, sid=self.OLD)
+        for why, junk in UNREAD.items():
+            with self.subTest(why):
+                path = os.path.join(self.home, ".claude", "sessions",
+                                    f"{self.child(self.main)}.json")
+                self.write(path, junk)
+                self.assertIsNone(self.relink(self.OLD))
+                os.rename(path, os.path.join(os.path.dirname(path),
+                                             f"{self.child(self.tmp)}.json"))
+                self.assertEqual(self.relink(self.OLD), "resume")
 
     def test_a_pass_needs_a_fresh_marker_of_the_lead_leaving_this_pane(self):
         # The claude above the child: the successor, with its own new id.
@@ -444,6 +461,88 @@ class CarriedPick(unittest.TestCase):
                 self.assertEqual(lanelib.carried_pick(self.LAUNCHED, path, resume=True),
                                  ["--model", "sonnet", "--effort", "low"])
         self.assertEqual(lanelib.carried_pick({}, None, resume=True), [])
+
+
+class UnreadSessions(unittest.TestCase):
+    """A session file that exists but doesn't read as a JSON object (junk, or nested past
+    json's reach) may hide a live session: liveness turns unknown and the sessions above a
+    command can't be told, unless its name rules it out."""
+
+    def setUp(self):
+        self.cfg = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.cfg)
+        self.dir = os.path.join(self.cfg, "sessions")
+        os.makedirs(self.dir)
+        patch = mock.patch.dict(os.environ, CLAUDE_CONFIG_DIR=self.cfg, _LANE_TEST_SANDBOXED="0")
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def child(self, done=False):
+        p = subprocess.Popen(["true"] if done else ["sleep", "60"])
+        self.addCleanup(lambda: p.poll() is None and (p.kill(), p.wait()))
+        if done:
+            p.wait()
+        return p.pid
+
+    def put(self, name, text):
+        path = os.path.join(self.dir, name)
+        with open(path, "w") as f:
+            f.write(text)
+        return path
+
+    def test_liveness_is_unknown_beside_an_unread_file_of_a_present_pid(self):
+        pid = self.child()
+        self.put(f"{pid}.json", json.dumps({"pid": pid, "procStart": str(lanelib.proc_start(pid))}))
+        self.assertEqual([s["pid"] for s in lanelib.live_sessions()], [pid])
+        for why, junk in UNREAD.items():
+            for name in (f"{self.child()}.json", "not-a-pid.json"):
+                with self.subTest(why, name=name):
+                    path = self.put(name, junk)
+                    self.assertIsNone(lanelib.live_sessions())
+                    os.unlink(path)
+            with self.subTest(why, name="a dead pid's"):  # it can't hide a live session
+                path = self.put(f"{self.child(done=True)}.json", junk)
+                self.assertEqual([s["pid"] for s in lanelib.live_sessions()], [pid])
+                os.unlink(path)
+
+    def test_a_torn_file_is_read_again_once(self):
+        pid = self.child()
+        good = json.dumps({"pid": pid, "procStart": str(lanelib.proc_start(pid))})
+        path = self.put(f"{pid}.json", "{")
+        with mock.patch.object(lanelib.time, "sleep", lambda _: self.put(f"{pid}.json", good)):
+            self.assertEqual([s["pid"] for s in lanelib.live_sessions()], [pid])
+        self.assertEqual(lanelib.session_scan().unread, [])
+        self.put(f"{pid}.json", "{")
+        self.assertEqual(lanelib.session_scan().unread, [path])
+
+    def test_the_sessions_above_refuse_an_unread_ancestor_file(self):
+        hook = self.child()  # this runner is its parent, so an ancestor
+        self.assertEqual(lanelib.sessions_above(hook), [])
+        for why, junk in UNREAD.items():
+            for name in (f"{os.getpid()}.json", "not-a-pid.json"):
+                with self.subTest(why, name=name):
+                    path = self.put(name, junk)
+                    with self.assertRaisesRegex(lanelib.Untrusted, "can't be read"):
+                        lanelib.sessions_above(hook)
+                    os.unlink(path)
+            for done in (True, False):  # a pid outside the chain, dead or running: ruled out
+                with self.subTest(why, name="no ancestor's", done=done):
+                    path = self.put(f"{self.child(done)}.json", junk)
+                    self.assertEqual(lanelib.sessions_above(hook), [])
+                    os.unlink(path)
+
+    def test_a_transcript_line_holding_cwd_that_wont_parse_ends_the_scan(self):
+        # A skipped line never lets a later cwd prove where the session started.
+        later = json.dumps({"type": "user", "cwd": "/later"}) + "\n"
+        path = os.path.join(self.cfg, "t.jsonl")
+        for why, line in {"junk": '{"cwd": "/first"', "deep": '{"cwd": ' + "[" * 100000}.items():
+            with self.subTest(why):
+                with open(path, "w") as f:
+                    f.write(line + "\n" + later)
+                self.assertIsNone(lanelib.transcript_cwd(path))
+        with open(path, "w") as f:  # a junk line with no cwd in it can't hide one
+            f.write('{"type": "summ\n' + later)
+        self.assertEqual(lanelib.transcript_cwd(path), "/later")
 
 
 if __name__ == "__main__":
