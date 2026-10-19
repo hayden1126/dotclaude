@@ -192,7 +192,11 @@ class ProjectFilesStayOut(Workspace):
         events = {"handoff-reminder.sh": {"prompt": "let's wrap up"},
                   "session-title.sh": {"cwd": self.cwd, "transcript_path": self.transcript,
                                        "prompt": "fix the parser"},
-                  "excluded-check.sh": {"hook_event_name": "SessionStart", "cwd": self.cwd}}
+                  "excluded-check.sh": {"hook_event_name": "SessionStart", "cwd": self.cwd},
+                  # ask-check prints only on a deny: four backticked names.
+                  "ask-check.sh": {"tool_name": "AskUserQuestion", "cwd": self.cwd,
+                                   "transcript_path": self.transcript, "tool_input": {
+                                       "questions": [{"question": "`a1` `b2` `c3` `d4`?"}]}}}
         for name, event in events.items():
             with self.subTest(hook=name):
                 p = subprocess.run(["bash", os.path.join(HOOKS, name)], input=json.dumps(event),
