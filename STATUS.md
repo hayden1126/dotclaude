@@ -87,15 +87,14 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lanes** (opened 2026-10-19 from origin/main 6522605; briefs in each record). chrome-ttl
-    merged as #126 (chrome-bg's TTL on a monotonic deadline, plus coding-practices rule 8),
-    installed from main and closed 2026-10-19. Merge order: 1 **tab-cmd** (`fix/tab-scripts-claude-cmd`, the
-    tab scripts finding claude under its versioned path, fix committed on Hayden's "trigger +
-    confirm" design; carries the lead's notes), 2 **json-depth** (`fix/json-depth-rebuild`, the parked sweep rebuilt on
-    main; it switched off its record's `fix/json-depth`, which merged #94 already used). #94
-    already covered `claude-saved` and `tmux-claude-status`, so json-depth no longer overlaps
-    tab-cmd. Hayden's fail-closed picks (2026-10-19) moved json-depth onto `bin/chrome-bg` and
-    `setup.sh`; #126 is in main now, so its chrome-bg work starts from there.
+  - **Live lanes** (opened 2026-10-19 from origin/main 6522605; briefs in each record). Merged,
+    installed from main and closed 2026-10-19: chrome-ttl as #126 (chrome-bg's TTL on a
+    monotonic deadline, plus coding-practices rule 8) and tab-cmd as #127 (a claude run under its
+    versioned path counts as claude in the tab scripts: Hayden's "trigger + confirm" design, the
+    command looks like N.N.N and the pane tty's foreground group runs from `/claude/versions/`).
+    Merge order: 1 **json-depth** (`fix/json-depth-rebuild`, the parked sweep rebuilt on main; it
+    switched off its record's `fix/json-depth`, which merged #94 already used; carries the lead's
+    notes). Hayden's fail-closed picks (2026-10-19) moved it onto `bin/chrome-bg` and `setup.sh`.
   - The parked json-depth sweep is on `fix/json-depth-sweep`, a local branch never pushed: lane
     json-depth's reference only. Ask Hayden before deleting it once that lane merges.
   - `lane new` with `|`, `<`, `>` or `;` inside its quoted `--goal` runs sandboxed and fails
@@ -118,6 +117,15 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     rerun the menu-clip repro and the tmux suites. If it fixes the clip, install at a quiet
     moment (a server restart; claude-restore reopens the tabs) and drop the row-0 menu rule.
     Until then, 3.7c's default menus that dotclaude doesn't own still clip under a top bar.
+  - **`handoff?` never clears on a switched lane past 200 PRs** (bug report from capella-studio's
+    lead, session 5788b9fb, 2026-10-19; checked against the code). `pr_states` lists the newest
+    `PR_LIMIT` (200) PRs in one gh call; once that list is full, `merges_of`
+    (`skills/lanes/scripts/lane:884`) returns unknown for any lane that switched branches (or was
+    adopted, or predates the horizon), so the flag stays on and the hand-back gate can't pass.
+    Documented as a limit in `docs/lanes.md` ("What it can't tell"), but capella's lanes keys,
+    polish and blockfix all hit it; dotclaude reaches it near #200. Fix shape (the reporter's):
+    for just those lanes, one extra `gh pr list --head <branch> --state merged` per branch
+    instead of giving up. Lane-able (`lane`, `tests/lanes`, `docs/lanes.md`).
   - **An untitled versioned claude's tab reads `2.1.303`** (cosmetic, from lane tab-cmd,
     2026-10-19): `tmux/claude.conf:55-56` and `tmux/tmux-tab-bar:201` fall back to
     `pane_current_command` for a pane with no title.
@@ -206,7 +214,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   0. Lane ask quality (Backlog): read `~/scratch/lane-ask-quality/MISTAKES.md`, investigate the
      causes, run the past transcript search it describes, then plan fixes and show Hayden the
      options before building (likely a lead PR or its own lane; keep off live lanes' files).
-  1. Watch the lanes (tab-cmd, json-depth: In flight). First check `lane ls` shows
+  1. Watch the lanes (json-depth: In flight). First check `lane ls` shows
      each with a live session, not `orphan`. On each "merged #N", run the post-merge chain (The lead, step 7; never
      amend or rebase the lead branch). Check `lane ls` first: a merge Hayden made on GitHub and
      mentioned to no session sends no message. If a lane later in order is ready first, swap
