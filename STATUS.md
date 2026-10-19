@@ -89,7 +89,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
   - **Live lanes** (opened 2026-10-19 from origin/main 6522605; briefs in each record). chrome-ttl
     merged as #126 (chrome-bg's TTL on a monotonic deadline, plus coding-practices rule 8),
-    installed from main 2026-10-19. Merge order: 1 **tab-cmd** (`fix/tab-scripts-claude-cmd`, the
+    installed from main and closed 2026-10-19. Merge order: 1 **tab-cmd** (`fix/tab-scripts-claude-cmd`, the
     tab scripts finding claude under its versioned path; its design fork goes to Hayden; carries
     the lead's notes), 2 **json-depth** (`fix/json-depth-rebuild`, the parked sweep rebuilt on
     main; it switched off its record's `fix/json-depth`, which merged #94 already used). #94
