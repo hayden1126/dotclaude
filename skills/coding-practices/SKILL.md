@@ -17,6 +17,7 @@ If you catch yourself thinking "for development, the simplest approach is...", s
 5. **Minimal, root-cause fixes.** Fix the cause, not the symptom. Prefer a one-line fix at the source over a five-line downstream workaround. Do not over-engineer the fix.
 6. **Tests before implementation** for non-trivial changes. Never delete or weaken existing tests without explicit approval. If there is no test infrastructure, propose one (framework, one example test, layout) and get approval before implementing.
 7. **Match the surrounding code.** Naming, comment density, and idioms should look like the file you are editing.
+8. **Durations on a monotonic clock.** Deadlines, timeouts and elapsed times read `time.monotonic()` (or the language's equivalent), since the wall clock steps. Keep wall-clock stamps for values shown or compared across processes, and wait on a monotonic deadline derived beside one.
 
 ## Python function pattern
 ```python
