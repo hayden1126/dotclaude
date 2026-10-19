@@ -754,12 +754,13 @@ def crashed(w, sid, me):
     return me is not None and w.get("session_id") == sid and dc.claude_gone(w)
 
 
-def adoption(sid, me, now):
+def adoption(sid, me, now, live):
     """The adoption step of the commit pass, as (adopt, settle). adopt(wid) is the update that
     adopts watch wid, checked again under the lock:
-    - one this process left in a session that isn't live (dc.left_by_clear: a /clear, or a
-      watch recorded with no session) moves into this session. One another session re-armed,
-      or whose old session came back, since it was gathered stays where it is;
+    - one this process left in a session that isn't live (dc.left_by_clear, by `live`, read
+      afresh before the lock: a /clear, or a watch recorded with no session) moves into this
+      session. One another session re-armed, or whose old session came back, since it was
+      gathered stays where it is;
     - a crashed one records this process as its Claude process, and a waiter whose process
       still runs, even with a stale heartbeat, is marked waiter_unheard: its exit goes to the
       process that ended.
@@ -775,7 +776,7 @@ def adoption(sid, me, now):
             if cur.get("state") not in dc.UNRESOLVED:
                 return
             if cur.get("session_id") != sid:
-                if dc.left_by_clear(cur, me, dc.live_sessions()):
+                if dc.left_by_clear(cur, me, live):
                     moved.append((wid, cur.get("session_id")))
                     cur["session_id"] = sid
                     dc.unblock(cur)
@@ -901,7 +902,8 @@ def commit(sid, transcript, adopted, me, pendings, kills, scan_out, stop, size, 
                 outcomes[wid] = "ack"
         return fn
 
-    adopt, settle = adoption(sid, me, now)
+    # Read once, before the lock: live_sessions may wait out a torn session file.
+    adopt, settle = adoption(sid, me, now, dc.live_sessions() if adopted else None)
     fns = {wid: adopt(wid) for wid in adopted}
     for p in pendings:  # an adopted watch's item runs on what its adoption left
         wid = p.w["id"]

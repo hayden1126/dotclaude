@@ -173,6 +173,34 @@ class PlainRepo(Check):
         os.symlink(os.devnull, os.path.join(self.main, ".claude", "hooks"))
         self.assertPasses(self.check())
 
+    def test_an_unreadable_session_file_fails_unless_a_readable_one_names_the_session(self):
+        # It may be this session's, holding a later start: the newest readable one in this
+        # checkout can't stand in for it. A readable file with the session's id still decides.
+        sleeper = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(lambda: (sleeper.kill(), sleeper.wait()))
+        junk_path = os.path.join(self.home, ".claude", "sessions", f"{sleeper.pid}.json")
+        for why, junk in {"junk": "{", "deep": "[" * 100000}.items():  # RecursionError in json
+            with self.subTest(why):
+                self.write(junk_path, junk)
+                for env in ({}, {"CLAUDE_CODE_SESSION_ID": "sess-other"}):
+                    with self.subTest(env=env):
+                        self.assertGap(self.check(**env), f"{junk_path} can't be read")
+                self.assertPasses(self.check(CLAUDE_CODE_SESSION_ID="sess-0001"))
+        os.unlink(junk_path)
+        self.assertPasses(self.check())
+
+    def test_a_dead_pids_unreadable_session_file_never_fails(self):
+        # This session's claude runs, so a file named for a pid that is gone isn't its own.
+        # Sandboxed, every pid looks gone, so there it still fails.
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        junk_path = os.path.join(self.home, ".claude", "sessions", f"{dead.pid}.json")
+        for why, junk in {"junk": "{", "deep": "[" * 100000}.items():  # RecursionError in json
+            with self.subTest(why):
+                self.write(junk_path, junk)
+                self.assertPasses(self.check())
+                self.assertGap(self.check(_LANE_TEST_SANDBOXED="1"), f"{junk_path} can't be read")
+
     def test_a_leftover_needs_its_repo_relative_path(self):
         self.write(os.path.join(self.main, "src", "scratch.txt"), "x")
         self.commit("STATUS.md", GOOD + "- scratch.txt is a deliberate local probe.\n")
@@ -391,6 +419,20 @@ class Lane(Check):
     def test_a_complete_lane_handoff_passes(self):
         self.finish()
         self.assertPasses(self.check(cwd=self.path))
+
+    def test_an_unreadable_lane_record_fails_in_its_checkout(self):
+        # Left out of the lanes, the lane's checkout would read as unregistered and check the
+        # root STATUS.md instead of the lane record.
+        self.finish()
+        lane_json = os.path.join(self.common, "lanes", "chart-fix", "lane.json")
+        for why, junk in {"junk": "{", "deep": "[" * 100000}.items():  # RecursionError in json
+            with self.subTest(why):
+                self.write(lane_json, junk)
+                code, out = self.check(cwd=self.path)
+                self.assertEqual(code, 1, out)
+                self.assertIn("FAIL  ", out)
+                self.assertIn("matches no lane record", out)
+                self.assertIn("lanes/chart-fix/lane.json is not JSON", out)
 
     def test_the_main_status_is_not_the_lane_record(self):
         self.finish()

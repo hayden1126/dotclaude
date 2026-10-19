@@ -159,6 +159,15 @@ class Commands(unittest.TestCase):
         self.assertNotIn(" -s ", s)
         self.assertNotIn(" -C ", s)
 
+    def test_a_prompt_whose_protected_paths_cant_be_checked_says_so(self):
+        # Not "reaches a path the sandbox keeps unreadable": the protected paths didn't read.
+        why = "x can't be checked against the protected paths: unreadable settings file"
+        err = io.StringIO()
+        with mock.patch.object(cd.dc, "open_unprotected", side_effect=PermissionError(why)), \
+                contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
+            cd.read_text("x")
+        self.assertEqual(err.getvalue(), f"codex-delegate: {why}\n")
+
     def test_wrap(self):
         c = cd.wrap(["codex"], 60, "8G", scope=False)
         self.assertEqual(c[0], "timeout")
@@ -229,6 +238,25 @@ class Audit(unittest.TestCase):
     def test_missing_root_fails(self):
         res = cd.audit("nope", 0)
         self.assertEqual((res["ok"], res["root_found"]), (False, False))
+
+    def test_an_unreadable_meta_or_model_line_fails_the_audit(self):
+        # A skipped meta line may hide a child thread (in any rollout), a model line its model.
+        deep = "[" * 100000 + "]" * 100000  # RecursionError in json
+        for name, marker in (("U", "session_meta"), ("R", "turn_context")):
+            for line in ('{"type": "%s", ' % marker, '{"type": "%s", "x": %s}' % (marker, deep)):
+                self.rollout("R", None, "gpt-5.6-sol")
+                self.assertEqual(cd.audit("R", 0)["unreadable"], 0)
+                path = os.path.join(self.day, f"rollout-2026-x-{name}.jsonl")
+                with open(path, "a") as f:
+                    f.write(line + "\n")
+                res = cd.audit("R", 0)
+                self.assertEqual((res["ok"], res["unreadable"]), (False, 1), (name, line[:30]))
+                if name == "U":
+                    os.remove(path)
+        self.rollout("R", None, "gpt-5.6-sol")
+        with open(os.path.join(self.day, "rollout-2026-x-R.jsonl"), "a") as f:
+            f.write("{\n")  # no marker: not a line the audit reads
+        self.assertTrue(cd.audit("R", 0)["ok"])
 
 
 class TurnRows(unittest.TestCase):
@@ -475,6 +503,32 @@ class FullRun(unittest.TestCase):
         self.assertIsNone(stop["report_status"])
         self.assertEqual(p.returncode, 0)
 
+    def test_an_unreadable_rollout_line_fails_the_audit_and_is_counted(self):
+        day = os.path.join(self.tmp.name, "codex", "sessions",
+                           datetime.date.today().strftime("%Y/%m/%d"))
+        os.makedirs(day)
+        with open(os.path.join(day, "rollout-x-junk.jsonl"), "w") as f:
+            f.write('{"type": "session_meta", \n')  # it may be a child of this run's thread
+        p = self.run_ok()
+        self.assertEqual(p.returncode, 3, p.stderr)
+        s = self.summary(p)
+        self.assertEqual((s["audit_ok"], s["audit_unreadable"]), (False, 1))
+        stop = self.ledger()[-1]  # so the ledger says why the audit failed
+        self.assertEqual((stop["event"], stop["audit_ok"], stop["audit_unreadable"]),
+                         ("stop", False, 1))
+
+    def test_a_malformed_settings_file_refuses_before_anything_runs(self):
+        # Skipped, it would drop its denyWrite entries from codex's writable-root check.
+        os.makedirs(os.path.join(self.tmp.name, ".claude"))
+        for text in ("{", "[" * 100000):  # RecursionError in json
+            with open(os.path.join(self.tmp.name, ".claude", "settings.json"), "w") as f:
+                f.write(text)
+            p = self.run_ok()
+            self.assertEqual(p.returncode, 2, p.stderr)
+            self.assertIn("settings.json", p.stderr)
+            self.assertNotIn("Traceback", p.stderr)
+        self.assertFalse(os.path.exists(self.argv_log))
+
     def test_finalize_records_a_run_whose_wrapper_died(self):
         self.run_ok()
         run_id = self.drop_stop_row()
@@ -577,8 +631,8 @@ class FullRun(unittest.TestCase):
         self.assertIn(f"dropped watch {wid}", c.stdout)
         self.assertFalse(cd.dc.pid_alive(rec["pid"], rec["start"]))
         stop = self.ledger()[-1]
-        self.assertEqual((stop["event"], stop["status"], stop["exit"], stop["report_ok"]),
-                         ("stop", "cancelled", 1, False))
+        self.assertEqual((stop["event"], stop["status"], stop["exit"], stop["report_ok"],
+                          stop["audit_unreadable"]), ("stop", "cancelled", 1, False, 0))
         self.assertEqual(self.watches()[wid]["state"], "dropped")
         self.assertEqual(proc.wait(timeout=20), 1)  # its wrapper leaves the stop row be
         self.assertIn(f"run {run_id} was cancelled; its stop row stands", proc.stdout.read())
@@ -866,7 +920,8 @@ class FullRun(unittest.TestCase):
         self.assertIn("codex-delegate: FileNotFoundError", p.stderr)
         stop = self.ledger()[-1]
         self.assertEqual((stop["event"], stop["status"], stop["exit"], stop["report_ok"],
-                          stop["audit_ok"]), ("stop", "crashed", 1, False, False))
+                          stop["audit_ok"], stop["audit_unreadable"]),
+                         ("stop", "crashed", 1, False, False, 0))
         self.assertIn("FileNotFoundError", stop["error"])
         _, wid = self.launch_ids(p.stdout.split("\n", 1)[0] + "\n")
         self.assertEqual(self.watches()[wid]["state"], "failed")

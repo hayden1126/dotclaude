@@ -216,6 +216,136 @@ class WritableRoots(Plain):
         self.assertIn("/mdw", denies)
         self.assertNotIn("/projdw", denies)
 
+    # A settings file that exists but doesn't parse hides the dirs it lets the sandbox write.
+    JUNK = {"junk": "{", "deep": "[" * 100000, "not an object": "[1]"}  # RecursionError in json
+
+    def test_an_unparseable_settings_file_refuses(self):
+        user = os.path.join(self.home, ".claude", "settings.json")
+        local = os.path.join(self.main, ".claude", "settings.local.json")
+        flagged = os.path.join(self.tmp, "flagged.json")
+        argv = ["claude", "--settings", flagged]
+        import lanelib
+        repo = lanelib.resolve(self.main)
+        for path in (user, local, flagged):
+            for why, junk in self.JUNK.items():
+                with self.subTest(path=path, why=why):
+                    for p in (user, local, flagged):
+                        self.settings(p)
+                    self.write(path, junk)
+                    with self.assertRaises(self.mod.Refuse) as cm:
+                        self.real_roots(repo, self.main, None, argv)
+                    self.assertEqual((cm.exception.code, cm.exception.reason),
+                                     (1, "settings unparseable"))
+                    self.assertIn(path, cm.exception.message)
+
+    def test_an_unparseable_inline_settings_flag_refuses(self):
+        for why, inline in {"junk": "{", "deep": '{"a": ' + "[" * 100000}.items():  # RecursionError in json
+            with self.subTest(why=why):
+                with self.assertRaises(self.mod.Refuse) as cm:
+                    self.real_roots(None, self.main, None, ["claude", "--settings", inline])
+                self.assertEqual((cm.exception.code, cm.exception.reason),
+                                 (1, "settings unparseable"))
+                self.assertIn("inline --settings", cm.exception.message)
+
+    def test_an_unparseable_inline_settings_flag_is_named_by_position_and_length(self):
+        # It may hold an env secret, and the refusal is printed into the session.
+        good = json.dumps({"env": {"X": "1"}})
+        secret = '{"env": {"TOKEN": "sk-secret-123"'
+        argv = ["claude", "--settings", good, "--settings", secret]
+        with mock.patch.object(self.mod.time, "sleep") as sleep:  # an inline value is no file
+            with self.assertRaises(self.mod.Refuse) as cm:
+                self.real_roots(None, self.main, None, argv)
+        sleep.assert_not_called()
+        self.assertNotIn("sk-secret", cm.exception.message)
+        self.assertNotIn("TOKEN", cm.exception.message)
+        self.assertIn(f"the 2nd inline --settings value ({len(secret)} chars)",
+                      cm.exception.message)
+
+    def test_a_settings_file_fixed_before_the_second_read_passes(self):
+        # Claude Code may rewrite settings.json (a /model save): a torn write is read again once.
+        user = os.path.join(self.home, ".claude", "settings.json")
+        self.write(user, "{")
+        fixed = json.dumps({"sandbox": {"filesystem": {"allowWrite": ["/fixed"]}}})
+        with mock.patch.object(self.mod.time, "sleep", lambda _: self.write(user, fixed)):
+            self.assertIn("/fixed", self.real_roots(None, self.main, None, ["claude"]))
+        self.write(user, "{")
+        with mock.patch.object(self.mod.time, "sleep") as sleep:
+            with self.assertRaises(self.mod.Refuse):
+                self.real_roots(None, self.main, None, ["claude"])
+        sleep.assert_called_once_with(self.mod.SETTINGS_REREAD)
+
+    def test_junk_then_an_empty_read_refuses(self):
+        # A mount stub is never anything but empty: content on the first read and none on the
+        # second is a rewrite still under way, so listing nothing would drop its allowWrite.
+        user = os.path.join(self.home, ".claude", "settings.json")
+        for junk in ("{", "[" * 100000):  # RecursionError in json
+            self.write(user, junk)
+            with mock.patch.object(self.mod.time, "sleep", lambda _: self.write(user, "")):
+                with self.assertRaises(self.mod.Refuse):
+                    self.real_roots(None, self.main, None, ["claude"])
+
+    def test_junk_then_no_file_refuses(self):
+        # Gone on the second read after content on the first: still mid-rewrite, not "no file".
+        user = os.path.join(self.home, ".claude", "settings.json")
+        self.write(user, "{")
+        with mock.patch.object(self.mod.time, "sleep", lambda _: os.remove(user)):
+            with self.assertRaises(self.mod.Refuse):
+                self.real_roots(None, self.main, None, ["claude"])
+
+    def test_an_empty_settings_file_is_read_once_more(self):
+        # A truncate-then-write leaves an empty file as its likeliest torn state: listing nothing
+        # at once would drop that tier's allowWrite. A sandbox mount stub stays empty: no dirs.
+        user = os.path.join(self.home, ".claude", "settings.json")
+        fixed = json.dumps({"sandbox": {"filesystem": {"allowWrite": ["/fixed"]}}})
+        self.write(user, "")
+        with mock.patch.object(self.mod.time, "sleep", lambda _: self.write(user, fixed)):
+            self.assertIn("/fixed", self.real_roots(None, self.main, None, ["claude"]))
+        for text in ("", "\n  "):
+            self.write(user, text)
+            with mock.patch.object(self.mod.time, "sleep") as sleep:
+                self.assertNotIn("/fixed", self.real_roots(None, self.main, None, ["claude"]))
+            self.assertEqual(sleep.mock_calls, [mock.call(self.mod.SETTINGS_REREAD)] * 2)
+        os.remove(user)
+        with mock.patch.object(self.mod.time, "sleep") as sleep:
+            self.real_roots(None, self.main, None, ["claude"])
+        sleep.assert_not_called()
+
+    def test_an_unparseable_deny_tier_refuses(self):
+        user = os.path.join(self.home, ".claude", "settings.json")
+        for why, junk in self.JUNK.items():
+            self.write(user, junk)
+            with self.subTest(why=why):
+                with self.assertRaises(self.mod.Refuse) as cm:
+                    self.mod.deny_roots()
+                self.assertEqual(cm.exception.reason, "settings unparseable")
+                self.assertIn(user, cm.exception.message)
+
+    def test_an_unparseable_settings_file_refuses_the_pass(self):
+        user = os.path.join(self.home, ".claude", "settings.json")
+        self.write(user, "{")
+        self.mod.writable_roots = self.real_roots
+        code, out = self.run_pass("--print")
+        self.assertEqual(code, 1, out)
+        self.assertIn(user, out)
+        self.assertIn("settings unparseable", self.log())
+        self.assertEqual(self.calls("tmux"), [])
+
+    def test_an_empty_or_missing_settings_file_still_passes(self):
+        # Sandbox mount stubs are empty files; a missing file lists nothing, as before.
+        user = os.path.join(self.home, ".claude", "settings.json")
+        local = os.path.join(self.main, ".claude", "settings.local.json")
+        self.write(user, "")
+        self.write(local, " \n\t")
+        argv = ["claude", "--settings", os.path.join(self.tmp, "missing.json")]
+        import lanelib
+        roots = self.real_roots(lanelib.resolve(self.main), self.main, None, argv)
+        self.assertIn(self.main, roots)
+        self.assertIsInstance(self.mod.deny_roots(), list)
+        os.remove(local)  # uncommitted in the checkout, it would fail the handoff gate
+        self.mod.writable_roots = self.real_roots
+        code, out = self.run_pass("--print")
+        self.assertEqual(code, 0, out)
+
     def test_the_script_under_a_writable_root_refuses(self):
         self.mod.writable_roots = lambda repo, cwd, launch=None, session_argv=None: [REPO]
         code, out = self.run_pass("--print")

@@ -781,6 +781,80 @@ class PageCount(unittest.TestCase):
             cb.page_count(dead, "/devtools/browser/b")
         self.assertIn(f"{dead}/json/version: ConnectionRefusedError", str(cm.exception))
 
+    def test_a_malformed_version_is_a_fail(self):
+        routes = {}
+        port = self.serve(routes)
+        for name, body in (("junk", b"{"), ("deep", b"[" * 100000)):  # RecursionError in json
+            with self.subTest(name):
+                routes["/json/version"] = (200, body)
+                with self.assertRaises(cb.Fail) as cm:
+                    cb.json_version(port)
+                self.assertIn(f"{port}/json/version", str(cm.exception))
+
+
+JUNK = {"junk": "{", "deep": "[" * 100000}  # RecursionError in json
+
+
+class Malformed(unittest.TestCase):
+    """Every JSON chrome-bg reads, junk or nested too deep: a Fail or a skip, never a crash."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp)
+
+    def patch(self, name, value):
+        old = getattr(cb, name)
+        setattr(cb, name, value)
+        self.addCleanup(setattr, cb, name, old)
+
+    def test_read_record_reports_why(self):
+        old = os.environ.get("XDG_STATE_HOME")
+        os.environ["XDG_STATE_HOME"] = self.tmp
+        self.addCleanup(lambda: os.environ.pop("XDG_STATE_HOME") if old is None
+                        else os.environ.__setitem__("XDG_STATE_HOME", old))
+        os.makedirs(cb.state_dir())
+        for name, text in JUNK.items():
+            with self.subTest(name):
+                with open(cb.record_path("eeee0001"), "w") as f:
+                    f.write(text)
+                rec, why = cb.read_record("eeee0001")
+                self.assertIsNone(rec)
+                self.assertTrue(why.startswith("unreadable: "), why)
+
+    def test_a_malformed_cdp_frame_is_a_fail(self):
+        for name, text in JUNK.items():
+            with self.subTest(name):
+                cdp = cb.CDP.__new__(cb.CDP)
+                cdp.next_id, cdp.events, cdp.replies = 0, [], {}
+                cdp.ws = type("WS", (), {"send": lambda self, m: None,
+                                         "recv": lambda self, timeout, t=text: t})()
+                with self.assertRaises(cb.Fail) as cm:
+                    cdp.send("Browser.getVersion", timeout=5)
+                self.assertIn("Browser.getVersion", str(cm.exception))
+
+    def test_a_malformed_supervisor_reply_is_a_fail(self):
+        for name, text in JUNK.items():
+            with self.subTest(name):
+                out = os.path.join(self.tmp, f"out-{name}")
+                with open(out, "wb") as f:
+                    f.write(text.encode() + b"\n")
+                sup = cb.Supervisor.__new__(cb.Supervisor)
+                sup.rid, sup.buf, sup.err_path = "eeee0001", b"", os.path.join(self.tmp, "err")
+                with open(out, "rb") as stdout:
+                    sup.p = type("P", (), {"stdin": io.BytesIO(), "stdout": stdout})()
+                    with self.assertRaises(cb.Fail) as cm:
+                        sup.call("hello", timeout=5)
+                self.assertIn("the supervisor answered hello", str(cm.exception))
+
+    def test_a_malformed_one_shot_reply_is_a_fail(self):
+        for name, text in JUNK.items():
+            with self.subTest(name):
+                self.patch("ps_argv", lambda *a, t=text: [
+                    sys.executable, "-c", "import sys; sys.stdout.write(sys.argv[1])", t])
+                with self.assertRaises(cb.Fail) as cm:
+                    cb.one_shot("-Scan")
+                self.assertIn("chrome-bg.ps1 -Scan failed", str(cm.exception))
+
 
 # The Windows side, faked. FAKE_SUP speaks chrome-bg.ps1's protocol (the Protocol block atop
 # chrome-bg.ps1) over stdin and stdout and answers only with CONTRACT's replies. On `launch` it starts
@@ -1300,13 +1374,19 @@ class Live(unittest.TestCase):
         self.addCleanup(end)
         return p
 
-    def owner(self, rid=None, *, ignore_term=False, mine=True):
+    def owner(self, rid=None, *, ignore_term=False, mine=True, term_writes=None):
         """A stand-in owner process: a python whose argv names bin/chrome-bg, with a child whose
         argv holds `-Id <rid>` standing for that run's supervisor (it exits with its parent), so
-        it passes owner_proven for rid. mine=False gives a plain `sleep`. (Popen, start time)."""
+        it passes owner_proven for rid. mine=False gives a plain `sleep`. term_writes, a Python
+        expression, is the text it leaves as rid's record when SIGTERM ends it. (Popen, start
+        time)."""
         if mine:
+            record = os.path.join(self.recdir, f"{rid}.json")
             code = ("import signal, subprocess, sys, time\n"
                     + ("signal.signal(signal.SIGTERM, signal.SIG_IGN)\n" if ignore_term else "")
+                    + (f"def term(*_):\n    open({record!r}, 'w').write({term_writes})\n"
+                       "    sys.exit(0)\nsignal.signal(signal.SIGTERM, term)\n"
+                       if term_writes else "")
                     + "subprocess.Popen([sys.executable, '-c', 'import os, time\\np = os.getppid()\\n"
                     "while os.getppid() == p: time.sleep(0.1)', '-Id', sys.argv[3]])\n"
                     "open(sys.argv[1], 'w').close()\ntime.sleep(60)\n")
@@ -1332,7 +1412,9 @@ class Live(unittest.TestCase):
         out = []
         for n in sorted(names):
             if re.fullmatch(r"[0-9a-f]{8}\.json", n):
-                with open(os.path.join(recdir, n)) as f:
+                # A malformed record (its own tests) is skipped; json recurses on nesting.
+                with open(os.path.join(recdir, n)) as f, \
+                        contextlib.suppress(ValueError, RecursionError):
                     out.append(json.load(f))
         return out
 
@@ -2198,6 +2280,62 @@ class Live(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(recdir, rid + ".json")))
         self.assertFalse(os.path.exists(os.path.join(self.tmp, "rel")))
         self.assertFalse(os.path.exists(os.path.join(self.root, "rel")))
+
+    def test_gc_leaves_a_run_with_a_malformed_record_alone(self):
+        # The record exists but can't be read: its run may be live, so it is never killed. A
+        # run dir with no record file at all still is, once YOUNG_S old.
+        os.makedirs(self.recdir)
+        for rid, text in (("eeee0001", JUNK["junk"]), ("eeee0002", JUNK["deep"])):
+            with open(os.path.join(self.recdir, rid + ".json"), "w") as f:
+                f.write(text)
+            self.put_dir(rid, 600)
+        self.put_dir("eeee0003", 600)
+        r = self.cli("stop", "--gc")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for rid in ("eeee0001", "eeee0002"):
+            self.assertFalse(self.has("kill-" + rid), r.stdout)
+            self.assertTrue(os.path.isdir(os.path.join(self.base, rid)))
+            self.assertTrue(os.path.exists(os.path.join(self.recdir, rid + ".json")))
+            self.assertIn(f"left {rid} alone: its record is malformed (unreadable: ", r.stdout)
+        self.assertTrue(self.has("kill-eeee0003"), r.stdout)
+        self.assertIn("killed eeee0003: a run dir with no record", r.stdout)
+
+    def test_gc_keeps_the_old_logs_of_a_run_with_a_malformed_record(self):
+        # Its run may be live (as gc's kill pass reads it), so its logs are a live run's too.
+        os.makedirs(self.recdir)
+        with open(os.path.join(self.recdir, "eeee0021.json"), "w") as f:
+            f.write(JUNK["junk"])
+        old = time.time() - 8 * 86400  # wall clock
+        paths = {}
+        for rid in ("eeee0021", "eeee0022"):  # the second has no record: its logs go
+            paths[rid] = [os.path.join(self.base, rid + ".log"),
+                          os.path.join(self.recdir, rid + ".holder.log"),
+                          os.path.join(self.recdir, rid + ".err")]
+            for p in paths[rid]:
+                with open(p, "w") as f:
+                    f.write("x\n")
+                os.utime(p, (old, old))
+        r = self.cli("stop", "--gc")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for p in paths["eeee0021"]:
+            self.assertTrue(os.path.exists(p), p)
+        for p in paths["eeee0022"]:
+            self.assertFalse(os.path.exists(p), p)
+
+    def test_stop_fails_when_the_owner_leaves_a_malformed_record(self):
+        deep = "'[' * 100000"  # RecursionError in json
+        for rid, junk in (("eeee0011", "'{'"), ("eeee0012", deep)):
+            with self.subTest(junk):
+                owner, start = self.owner(rid, term_writes=junk)
+                self.put_record(rid, owner.pid, start)
+                r = self.cli("stop", rid)
+                self.assertEqual(owner.wait(10), 0, "the owner ran its SIGTERM handler")
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertNotIn("stopped by its owner", r.stdout)
+                self.assertIn(f"{rid}.json", r.stderr)
+                self.assertIn("malformed", r.stderr)
+                self.assertFalse(self.has("kill-" + rid), "a malformed record's run was killed")
+                self.assertTrue(os.path.exists(os.path.join(self.recdir, rid + ".json")))
 
     def test_gc_skips_young_unrecorded_dirs(self):
         self.put_dir("cccc0001", 5)

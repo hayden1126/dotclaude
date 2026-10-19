@@ -211,8 +211,12 @@ def checkout_status(root):
 
 
 def parent_checkout(session_id, main):
-    """The parent session's own checkout when it is not `main` (a lane), else None."""
-    top = dc.session_toplevel(session_id)
+    """The parent session's own checkout when it is not `main` (a lane), else None, as when
+    the session files can't be trusted (dc.session_toplevel raises)."""
+    try:
+        top = dc.session_toplevel(session_id)
+    except ValueError:
+        return None
     return top if top and top != os.path.realpath(main) else None
 
 
@@ -1250,8 +1254,9 @@ WAIT_EXIT_HELP = """exit codes:
   64  bad usage: no condition, an unknown or malformed id, an unknown codex run, a --pid that
       isn't watchable (not running, pid 1, a kernel thread, another user's), --max over 110,
       a second watch on a codex run that a watch already waits on (or while a watch file
-      can't be read, since it may be that one), resuming an ended watch, or a run inside the
-      sandbox
+      can't be read, since it may be that one), resuming an ended watch, a --log or --file
+      under a protected path (or while a settings file or policy.toml that lists those won't
+      parse), or a run inside the sandbox
   70  internal error, or nothing could be decided (a finalize recorded no stop row, the codex
       run left the ledger): the watch stays open for a --resume; details in
       delegation-ledger.err
@@ -1288,7 +1293,10 @@ def wait_condition(args):
     if not (args.pid or args.file or args.done):
         raise dc.WaitRefused("give what to wait for: --pid, --file, --log with --done, or --codex")
     # The waiter runs outside the sandbox, where its exit would say what a protected file holds.
-    read_denied = dc.sandbox_paths()[0]
+    try:
+        read_denied = dc.sandbox_paths()[0]
+    except ValueError as ex:  # a skipped file would drop its protected paths
+        raise dc.WaitRefused(f"{ex}, so the protected paths can't be checked") from None
     for opt in ("log", "file"):
         path = getattr(args, opt)
         hit = path is not None and dc.path_conflict(path, read_denied)

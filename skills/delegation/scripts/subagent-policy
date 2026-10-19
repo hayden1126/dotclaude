@@ -90,38 +90,22 @@ def load_policy(path=None):
     return p
 
 
-def _read_json(path):
-    """An empty file reads as no settings: while a sandboxed command runs, the sandbox mounts
-    /dev/null over a protected settings path the project lacks, which leaves an empty file
-    where the hook looks. Anything else that doesn't parse still fails closed."""
-    try:
-        with open(path) as f:
-            text = f.read()
-    except FileNotFoundError:
-        return {}
-    if not text.strip():
-        return {}
-    try:
-        return json.loads(text)
-    except ValueError as e:
-        raise ValueError(f"unreadable settings file {path}: {e}")
-
-
 def settings_tiers(project, home):
     """Settings files by tier, lowest precedence first, following
     code.claude.com/docs/en/settings#settings-precedence. A `--settings` payload is invisible
     to a hook, so whoever launches Claude with one (the live harness) also names it in
-    DELEGATION_SETTINGS_EXTRA. That is the launcher's environment, which no agent can set."""
+    DELEGATION_SETTINGS_EXTRA. That is the launcher's environment, which no agent can set.
+    A file that exists but doesn't read as an object raises (dc.read_settings): main denies."""
     tiers = [
-        ("user", _read_json(os.path.join(home, ".claude", "settings.json"))),
-        ("user", _read_json(os.path.join(home, ".claude", "settings.local.json"))),
-        ("project", _read_json(os.path.join(project, ".claude", "settings.json"))),
-        ("local", _read_json(os.path.join(project, ".claude", "settings.local.json"))),
+        ("user", dc.read_settings(os.path.join(home, ".claude", "settings.json"))),
+        ("user", dc.read_settings(os.path.join(home, ".claude", "settings.local.json"))),
+        ("project", dc.read_settings(os.path.join(project, ".claude", "settings.json"))),
+        ("local", dc.read_settings(os.path.join(project, ".claude", "settings.local.json"))),
     ]
     extra = os.environ.get("DELEGATION_SETTINGS_EXTRA")
     if extra:
-        tiers.append(("user", _read_json(extra)))  # --settings ranks as a trusted tier
-    tiers.append(("managed", _read_json("/etc/claude-code/managed-settings.json")))
+        tiers.append(("user", dc.read_settings(extra)))  # --settings ranks as a trusted tier
+    tiers.append(("managed", dc.read_settings("/etc/claude-code/managed-settings.json")))
     return tiers
 
 
@@ -231,7 +215,7 @@ class Analyzer:
         self.data = data
         self.p = policy
         self.home = home or os.path.expanduser("~")
-        self.meta = dc.agent_meta(data)
+        self.meta = dc.agent_meta(data, strict=True)
         self.agent_type = dc.agent_role(data, self.meta)
         self.cwd = os.path.realpath(data.get("cwd") or os.getcwd())
         self.worktree = self._worktree()
@@ -336,7 +320,8 @@ class Analyzer:
     def deadline(self, tool):
         """Past the role's stop budget for this activation, deny every tool but [deadline]
         allow, policed or not: a web-looping agent must stop too. Fails open: an unreadable
-        index, or any error here, means no deadline rather than a policy-error."""
+        index, or any error here but the alarm's (PolicyTimeout), means no deadline rather than
+        a policy-error."""
         allow = self.p["deadline"]["allow"]
         if tool in allow:
             return
@@ -344,6 +329,8 @@ class Analyzer:
             age = dc.activation_age(dc.read_agent_state(dc.norm_id(self.data.get("agent_id"))),
                                     time.time())
             _, stop_s = dc.deadline_for(self.p, self.agent_type)
+        except PolicyTimeout:
+            raise
         except Exception:  # noqa: BLE001  no clock, no deadline
             return
         if age is not None and age >= stop_s:
@@ -1195,12 +1182,19 @@ def heartbeat():
         with open(path, "a"):
             pass
         os.utime(path, None)
+    except PolicyTimeout:
+        raise
     except Exception:
         pass
 
 
+class PolicyTimeout(Exception):
+    """The alarm's: not TimeoutError, an OSError that a read catching OSError (dc.read_session)
+    would swallow, leaving the hook to run on with no alarm. main turns it into a deny."""
+
+
 def _alarm(_sig, _frm):
-    raise TimeoutError(f"policy check took over {ALARM_SECONDS}s")
+    raise PolicyTimeout(f"policy check took over {ALARM_SECONDS}s")
 
 
 def evaluate(data, policy=None, home=None):

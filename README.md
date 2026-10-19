@@ -134,7 +134,8 @@ Asks cover what an excluded command could still be made to run or read:
 The wrappers check their own path arguments the same way: `codex-delegate` refuses a `--dir` or
 `--out` that is, holds or sits under a denyWrite path (codex's sandbox doesn't know that list), and
 a `--brief` or `--prompt` under a denyRead path; `delegation-ledger wait` refuses such a `--log`
-or `--file`. What CLAUDE.md, the skills and the agents tell Claude to run asks nothing, except
+or `--file`. Both refuse while a user or managed settings file or `policy.toml` exists but won't
+parse, since its lists can't be known. What CLAUDE.md, the skills and the agents tell Claude to run asks nothing, except
 the lead's once-per-repo `lane init --root ... --setup` (a test scans them), and a suite fails
 when the installed tmux, git or Claude Code has a verb or flag the inventory hasn't classified.
 Spellings a glob can't anchor, such as a quoted verb, a global flag before a `claude` subcommand

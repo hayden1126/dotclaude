@@ -36,7 +36,8 @@ The contract every run gets, whatever the brief says:
   sub-agent spawned without a model stays on it too. An explicit spawn_agent(model=...)
   can still override that, so the preamble tells Codex to pin every spawn, and a post-run
   audit walks every descendant rollout and fails the run on any model outside sol, terra
-  and the run's own (so astra fails any run that didn't choose it).
+  and the run's own (so astra fails any run that didn't choose it), and on a session_meta
+  or turn_context line that won't parse (audit_unreadable), since it may hide either.
 - Sandbox: workspace-write rooted at --dir, network only with --network.
 - Limits: a systemd-run --user --scope memory cap (so an OOM kills Codex, not the WSL VM)
   and a hard timeout.
@@ -213,42 +214,46 @@ def sessions_root():
                         "sessions")
 
 
-def rollout_meta(path):
-    """The first session_meta payload: a child's carries parent_thread_id."""
+def marked_lines(path, marker, limit=None, first=False):
+    """(events, unreadable) for the lines of a rollout (the first `limit` of them, if given)
+    that hold `"marker"`: each parsed event of that type (with `first`, up to the first one),
+    and how many of those lines don't read as a JSON object (junk or too deep), which a caller
+    that trusts the rollout counts against it."""
+    events, unreadable = [], 0
     try:
         with open(path) as f:
             for i, line in enumerate(f):
-                if i > 50:
+                if limit is not None and i >= limit:
                     break
+                if f'"{marker}"' not in line:
+                    continue
                 try:
                     e = json.loads(line)
-                except ValueError:
-                    continue
-                if e.get("type") == "session_meta":
-                    return e.get("payload") or {}
+                except (ValueError, RecursionError):  # json recurses on nesting
+                    e = None
+                if not isinstance(e, dict):
+                    unreadable += 1
+                elif e.get("type") == marker:
+                    events.append(e)
+                    if first:
+                        break
     except OSError:
         pass
-    return {}
+    return events, unreadable
+
+
+def rollout_meta(path):
+    """(payload, unreadable): the first session_meta payload in the first lines (a child's
+    carries parent_thread_id), and how many session_meta lines before it don't read."""
+    events, unreadable = marked_lines(path, "session_meta", limit=51, first=True)
+    return ((events[0].get("payload") or {}) if events else {}), unreadable
 
 
 def rollout_models(path):
-    models = set()
-    try:
-        with open(path) as f:
-            for line in f:
-                if '"turn_context"' not in line:
-                    continue
-                try:
-                    e = json.loads(line)
-                except ValueError:
-                    continue
-                if e.get("type") == "turn_context":
-                    m = (e.get("payload") or {}).get("model")
-                    if m:
-                        models.add(m)
-    except OSError:
-        pass
-    return models
+    """(models, unreadable): the models a rollout's turn_context lines name, and how many of
+    those lines don't read."""
+    events, unreadable = marked_lines(path, "turn_context")
+    return {m for e in events if (m := (e.get("payload") or {}).get("model"))}, unreadable
 
 
 def candidate_rollouts(since_epoch):
@@ -263,13 +268,17 @@ def candidate_rollouts(since_epoch):
 
 def audit(thread_id, since_epoch, allowed=BASE):
     """Every model used by the thread and its descendants. ok is False when the root
-    rollout can't be found (nothing verified) or any model is outside `allowed`."""
+    rollout can't be found (nothing verified), any model is outside `allowed`, or a
+    session_meta or turn_context line it reads doesn't parse (`unreadable` counts them): a
+    skipped meta line may hide a child thread, and a skipped model line the model it used."""
     files = candidate_rollouts(since_epoch)
     roots = [p for p in files if p.endswith(f"-{thread_id}.jsonl")]
     if not roots:
         roots = glob.glob(os.path.join(sessions_root(), "*", "*", "*",
                                        f"rollout-*-{thread_id}.jsonl"))
-    metas = {p: rollout_meta(p) for p in set(files) | set(roots)}
+    read = {p: rollout_meta(p) for p in set(files) | set(roots)}
+    metas = {p: m for p, (m, _) in read.items()}
+    unreadable = sum(n for _, n in read.values())
     family, members = {thread_id}, set(roots)
     grew = True
     while grew:
@@ -282,11 +291,14 @@ def audit(thread_id, since_epoch, allowed=BASE):
                 grew = True
     models = {}
     for p in members:
-        for m in rollout_models(p):
+        used, n = rollout_models(p)
+        unreadable += n
+        for m in used:
             models.setdefault(m, []).append(os.path.basename(p))
     bad = sorted(m for m in models if m not in allowed)
-    return {"ok": bool(roots) and not bad, "root_found": bool(roots),
-            "threads": len(members), "models": sorted(models), "disallowed": bad}
+    return {"ok": bool(roots) and not bad and not unreadable, "root_found": bool(roots),
+            "threads": len(members), "models": sorted(models), "disallowed": bad,
+            "unreadable": unreadable}
 
 
 # ---------------------------------------------------------------- run / resume
@@ -641,7 +653,7 @@ def crashed(row, waiter, ex):
         if e.get("event") != "stop":
             e = dict(row, ts=dc.now_iso(), event="stop", status="crashed", rc=None, exit=1,
                      timed_out=False, report_ok=False, report_status=None, audit_ok=False,
-                     models=[], disallowed=[],
+                     models=[], disallowed=[], audit_unreadable=0,
                      report_error="the wrapper failed before Codex ended", error=err)
             dc.append_row(e)
         end_watch(waiter, dc.codex_stopped(e)[0])
@@ -661,7 +673,8 @@ def finish(row, rc, thread_id, since_epoch, out, stream=None):
     except (OSError, ValueError, RecursionError) as e:   # json recurses on nesting
         report_error = f"report.json unreadable ({type(e).__name__})"
     aud = audit(thread_id, since_epoch, allowed_for(row["model"])) if thread_id else {
-        "ok": False, "root_found": False, "threads": 0, "models": [], "disallowed": []}
+        "ok": False, "root_found": False, "threads": 0, "models": [], "disallowed": [],
+        "unreadable": 0}
     if rc:
         code = 124 if rc == 124 else 1
     else:
@@ -669,14 +682,15 @@ def finish(row, rc, thread_id, since_epoch, out, stream=None):
     summary = {"run_id": row["run_id"], "thread_id": thread_id, "rc": rc, "exit": code,
                "timed_out": rc == 124, "report_ok": report_ok, "report_status": report_status,
                "report_error": report_error, "audit_ok": aud["ok"], "models": aud["models"],
-               "disallowed": aud["disallowed"], "out": out}
+               "disallowed": aud["disallowed"], "audit_unreadable": aud["unreadable"],
+               "out": out}
     # status and error are set even when plain: fold merges rows, so an earlier turn's
     # cancel or crash would otherwise still show.
     dc.append_row(dict(row, ts=dc.now_iso(), event="stop", status="finished", error=None,
                        thread_id=thread_id,
                        **{k: summary[k] for k in ("rc", "exit", "timed_out", "report_ok",
                                                   "report_status", "report_error", "audit_ok",
-                                                  "models", "disallowed")}))
+                                                  "models", "disallowed", "audit_unreadable")}))
     print(json.dumps(summary, indent=2), file=stream or sys.stdout)
     return code
 
@@ -688,15 +702,19 @@ def read_text(path):
     try:
         with dc.open_unprotected(path) as f:
             return f.read().decode()
-    except PermissionError:
-        die(f"{path} reaches a path the sandbox keeps unreadable")
+    except PermissionError as e:  # a read-protected path, or protected paths that won't read
+        die(str(e))
 
 
 def check_paths(dirs=(), reads=()):
     """Refuse a writable root codex would get that is, holds or sits under a write-protected
     path, and a file to send it from under a read-protected one: this wrapper runs outside
-    Claude's sandbox, and codex's own sandbox doesn't know Claude's lists (Hayden, 2026-10-13)."""
-    read_denied, write_denied = dc.sandbox_paths()
+    Claude's sandbox, and codex's own sandbox doesn't know Claude's lists (Hayden, 2026-10-13).
+    A settings file or policy.toml that can't be read refuses too (dc.sandbox_paths)."""
+    try:
+        read_denied, write_denied = dc.sandbox_paths()
+    except ValueError as e:  # a skipped file would drop its protected paths
+        die(f"{e}, so the protected paths can't be checked")
     for flag, path in dirs:
         hit = dc.path_conflict(path, write_denied, contains=True)
         if hit:
@@ -934,7 +952,8 @@ def cmd_cancel(a):
         thread_id = e.get("thread_id") or dc.events_thread_id(e.get("out"))
         aud = audit(thread_id, dc.parse_iso(e["first_ts"]).timestamp(),
                     allowed_for(e["model"])) if thread_id else {
-            "ok": False, "models": [], "disallowed": []}
+            "ok": False, "root_found": False, "threads": 0, "models": [], "disallowed": [],
+            "unreadable": 0}
         dc.append_row({**{k: e.get(k) for k in ("runner", "id", "run_id", "model", "dir", "out",
                                                  "network", "effort")},
                        "ts": dc.now_iso(), "event": "stop", "status": "cancelled",
@@ -942,7 +961,7 @@ def cmd_cancel(a):
                        "report_ok": False, "report_status": None,
                        "report_error": "cancelled before it reported",
                        "audit_ok": aud["ok"], "models": aud["models"],
-                       "disallowed": aud["disallowed"],
+                       "disallowed": aud["disallowed"], "audit_unreadable": aud["unreadable"],
                        "error": "cancelled by codex-delegate cancel"})
         w = dc.codex_watch(run_id)
         if w is not None:

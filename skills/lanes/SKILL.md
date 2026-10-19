@@ -316,7 +316,7 @@ what").
 | `lane whoami` | your lane id, `main`, `unregistered` or `plain` (`--json` for scripts) |
 | `lane ls` | the board: branch, ahead/behind, PR, port, claims, live sessions, context (CTX: `312k*` past the auto-pass soft tier, `523k!` past hard), state (STATE: busy, idle, waiting, shell; message a lane idle past soft to run /pass), tmux window, flags; then any held locks, each pair of lanes whose changed files overlap (with the files), a main checkout with two or more live sessions (each one's window, the lead first) or a stopped lead (its window to `fg` it in), and the install hold |
 | `lane ls --requests` | request to lane, from claims only |
-| `lane who 42` | the lane that claims #42, or "unclaimed" |
+| `lane who 42` | the lane that claims #42, or "unclaimed" (with a warning while a left-out record may hold it) |
 | `lane claim 42` / `lane release 42` | claim or drop a request for your lane |
 | `lane note "<text>"` | append a timestamped line to your record's State |
 | `lane asks` | every lane's open "Asks for Hayden", one list |
@@ -341,7 +341,7 @@ Run `lane init`, `new`, `adopt`, `ls`, `open`, `done`, `addr` and `lead` as bare
 `excludedCommands`, so they run outside the sandbox with the network, gh's credential and a view
 of other processes. Piped or sandboxed, `ls` says what it skipped (PR state, sessions and window
 show `?`), and `new`, `open`, `done`, `addr` and `lead` refuse. `lane ls` also names any record it left out (a
-`lane.json` the CLI didn't write, or two claiming one path): look at it before removing it. `open --print` still prints, but warns that it
+`lane.json` the CLI didn't write, or two claiming one path): look at it before removing it. While one is left out, `new`, `adopt` and `claim` refuse to hand out claims, ports or cap slots. A session file that won't read as JSON makes `open` refuse, naming it: one named `<pid>.json` stops counting once that process ends, any other must be removed. `addr lead` refuses beside one whose process runs in the main checkout (or whose cwd can't be read) or is the recorded lead's. `open --print` still prints, but warns that it
 can't see a live session, so its command may start a second one. Every other subcommand runs
 sandboxed. `lane lock` and `lane trial` must: the commands they run inherit their sandbox.
 

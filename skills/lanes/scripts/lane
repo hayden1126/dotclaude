@@ -454,11 +454,24 @@ def lane_data_dir(repo: Repo, lane_id: str) -> str:
     return d
 
 
+def held_lanes(repo: Repo) -> list[dict]:
+    """repo.lanes(shared=True), for handing out claims, ports and cap slots: a LaneError while a
+    record is left out (rejected and not kept as a twin), since what it holds can't be told and
+    a second lane could take it."""
+    lanes = repo.lanes(shared=True)
+    kept = {lane["id"] for lane in lanes}
+    if dropped := [(i, why) for i, why in repo.rejected if i not in kept]:
+        lane_id, why = dropped[0]
+        raise LaneError(shown(f"lane {lane_id}'s record is left out ({why}), so what it holds "
+                              "can't be told: fix or remove it first"))
+    return lanes
+
+
 def free_port(repo: Repo, cfg: dict) -> int | None:
     ports = parse_ports(cfg.get("ports", ""))
     if ports is None:
         return None
-    used = {lane.get("port") for lane in repo.lanes(shared=True)}
+    used = {lane.get("port") for lane in held_lanes(repo)}
     for port in ports:
         if port not in used:
             return port
@@ -668,7 +681,7 @@ def new_record(lane_id: str, branch: str, path: str, base_sha: str | None, port:
 def claim_conflicts(repo: Repo, lane_id: str, reqs: list[str]) -> list[str]:
     """Requests a live lane other than lane_id already claims, as '#42 (chart-fix)'."""
     out = []
-    for other in repo.lanes(shared=True):
+    for other in held_lanes(repo):
         if other["id"] == lane_id or not lanelib.is_live(other):
             continue  # a stale lane (worktree gone) is not live, so its claims don't hold
         out += [f"{r} ({other['id']})" for r in reqs if r in other.get("claims", [])]
@@ -738,7 +751,7 @@ def cmd_new(args) -> None:
     base_sha = fetched_base(repo, cfg)
     with lock(repo):
         check_unregistered(repo, args.id)
-        live = list(filter(lanelib.is_live, repo.lanes(shared=True)))
+        live = list(filter(lanelib.is_live, held_lanes(repo)))
         if len(live) >= int(cfg.get("cap", DEFAULT_CAP)):
             raise LaneError(f"{len(live)} live lanes, at the cap of {cfg.get('cap')}: close one "
                             "with `lane done`, or raise it with `lane init --cap`")
@@ -825,6 +838,7 @@ def cmd_adopt(args) -> None:
                         "link would mirror and archive its target): remove it, then adopt")
     with lock(repo):
         check_unregistered(repo, lane_id)
+        held_lanes(repo)  # a left-out record may be this path's: refuse, ports or not (free_port)
         if held := holders(repo, path):  # again under the lock: a racing adopt or new
             raise LaneError(f"{path} is already registered as lane {held[0]['id']}")
         mb = git(["merge-base", "--end-of-options", f"refs/heads/{trees[path]}", base_ref(cfg)],
@@ -1290,6 +1304,14 @@ def needs_handoff(repo: Repo, lane: dict, ref: str, merges: list[float | None] |
     return False
 
 
+def warn_left_out(repo: Repo) -> None:
+    """Warn of each record the last repo.lanes() call left out: what it holds can't be told, so
+    a board, or a request it may hold, is never shown as the whole picture without this."""
+    for lane_id, why in repo.rejected:
+        warn(f"left out lanes/{lane_id}: {why}. Sandboxed Bash can write any lane.json, so a "
+             "record the CLI didn't write is never acted on; look at it before removing it")
+
+
 def cmd_ls(args) -> None:
     repo = lanes_repo()
     if args.requests:
@@ -1297,6 +1319,7 @@ def cmd_ls(args) -> None:
         for lane in filter(lanelib.is_live, repo.lanes(shared=True)):  # stale: claims void
             for r in lane.get("claims", []):
                 reqs.setdefault(r, []).append(lane["id"])
+        warn_left_out(repo)
         if args.json:
             say(json.dumps(reqs, indent=2))
             return
@@ -1307,9 +1330,7 @@ def cmd_ls(args) -> None:
             say(f"{r:<10} {', '.join(reqs[r])}{mark}")
         return
     rows = board(repo)
-    for lane_id, why in repo.rejected:
-        warn(f"left out lanes/{lane_id}: {why}. Sandboxed Bash can write any lane.json, so a "
-             "record the CLI didn't write is never acted on; look at it before removing it")
+    warn_left_out(repo)
     if args.json:
         say(json.dumps(rows, indent=2))
         return
@@ -1337,11 +1358,25 @@ def cmd_ls(args) -> None:
             f"the lead's ./setup.sh in {h['main']} releases it")
 
 
+def lead_unknown_note(path: str, of: str = "", capital: bool = False) -> str:
+    """Why the lead is unknown beside the session file lanelib.lead_unknown names (of: the repo
+    `addr --repo` asked about), and when it clears: that file is always named for a present pid
+    (running or stopped), and session_scan rules it out once that process ends, so nothing needs
+    removing."""
+    note = (f"the lead is unknown: session file {path} can't be read as a JSON object, and its "
+            f"process may be the lead or run in the main checkout{of}. It stops counting once "
+            "that process ends")
+    return note[0].upper() + note[1:] if capital else note
+
+
 def main_footer(repo: Repo) -> str | None:
     """The board's line for a crowded main checkout or a stopped lead, None otherwise or
     sandboxed (none in sight): each live session's window, the lead marked first, then the rest
     by pid, `no tmux` outside tmux and `agent worktree` for one launched in .claude/worktrees;
-    with two or more and no lead picked, the way to pick one (LEAD_HINT); with no lead picked
+    with two or more and no lead picked, the way to pick one (LEAD_HINT); beside a session file
+    that makes the lead unknown (lanelib.lead_unknown), that file, at any count (the lead's own
+    file drops it out of the sessions, leaving one or none, and `addr lead` still refuses); with
+    no lead picked
     and the recorded one stopped (Ctrl+Z), its window to `fg` it in. A picked continuation (a
     resume of the stopped lead's session) leaves nothing to fg, so it says nothing of the
     stopped one."""
@@ -1349,8 +1384,9 @@ def main_footer(repo: Repo) -> str | None:
         return None
     sessions = lanelib.main_sessions(repo)
     lead = lanelib.lead_of(repo, sessions)
+    unread = None if lead else lanelib.lead_unknown(repo)
     stopped = None if lead else lanelib.stopped_lead(repo)
-    if len(sessions) < 2 and not stopped:
+    if len(sessions) < 2 and not stopped and not unread:
         return None
     agents = os.path.join(repo.main, ".claude", "worktrees")
     cells = []
@@ -1362,7 +1398,8 @@ def main_footer(repo: Repo) -> str | None:
     n = len(sessions)
     line = ("main checkout: no live session" if not n else
             f"main checkout: {n} live session{'' if n == 1 else 's'}: {', '.join(cells)}")
-    tail = ([LEAD_HINT] if n > 1 and not lead else []) + (
+    hint = lead_unknown_note(unread, capital=True) if unread else LEAD_HINT
+    tail = ([hint] if unread or n > 1 and not lead else []) + (
         [stopped_note("The lead", stopped)] if stopped else [])
     return shown(". ".join([line, *tail]))
 
@@ -1372,7 +1409,9 @@ def print_board(rows: list[dict]) -> None:
         warn("gh unavailable (no network or credential): PR state shows ?, so handoff? can't "
              "clear")
     if any(r["live_sessions"] is None for r in rows):
-        warn("sandboxed: session liveness unknown; run `lane ls` bare")
+        warn("a session file can't be read as a JSON object: session liveness unknown"
+             if lanelib.pids_visible() else "sandboxed: session liveness unknown; run `lane ls` "
+             "bare")
     head = ("LANE", "BRANCH", "+/-", "PR", "PORT", "CLAIMS", "SESSIONS", "CTX", "STATE",
             "WINDOW", "FLAGS")
     table = [head]
@@ -1448,6 +1487,7 @@ def cmd_who(args) -> None:
     repo = lanes_repo()
     req = lanelib.norm_request(args.req)
     holders = [lane for lane in repo.lanes(shared=True) if req in lane.get("claims", [])]
+    warn_left_out(repo)
     if not holders:
         say(f"{req}: unclaimed")
         return
@@ -1552,11 +1592,28 @@ def cmd_open(args) -> None:
         raise LaneError(f"lane {args.id} is setup-failed: finish it with `lane adopt {path}` first")
     live = lanelib.live_sessions()
     if live is None:
-        unknown = (f"sandboxed: session liveness unknown, so this can't tell whether lane "
-                   f"{args.id} already has a session")
+        if lanelib.pids_visible():  # a session file that won't read may be a live session's
+            # One named for a gone pid is ruled out; one not named for a pid comes first, since
+            # it never clears by itself.
+            unread = sorted(lanelib.session_scan().unread,
+                            key=lambda p: lanelib.file_pid(p) is not None)
+            name = (f"session file {unread[0]}" if unread else
+                    f"a session file in {lanelib.sessions_dir()}")
+            unknown = (f"{name} can't be read as a JSON object, so this can't tell whether lane "
+                       f"{args.id} already has a session")
+            if not unread:  # on this second look it reads, is gone, or its process ended
+                fix = ": it reads now or is gone, so run this again"
+            elif (pid := lanelib.file_pid(unread[0])) is not None:
+                fix = f": it stops counting once process {pid} ends"
+            else:
+                fix = ": remove it: a file not named <pid>.json never stops counting"
+        else:
+            unknown = (f"sandboxed: session liveness unknown, so this can't tell whether lane "
+                       f"{args.id} already has a session")
+            fix = (f". Run it as a bare `lane open {args.id}` (excludedCommands runs that "
+                   "outside the sandbox)")
         if not args.print:
-            raise LaneError(f"{unknown}. Run it as a bare `lane open {args.id}` "
-                            "(excludedCommands runs that outside the sandbox)")
+            raise LaneError(shown(unknown + fix))
         warn(f"{unknown}: the printed command may duplicate a live session")
     if here := sessions_in(live or [], path):
         if args.model is not None or args.effort is not None:
@@ -1679,6 +1736,8 @@ def cmd_addr(args) -> None:
     if args.id == "lead":
         found = lanelib.main_sessions(repo)
         pick = lanelib.lead_of(repo, found)  # the recorded lead, its continuation, or the one
+        if not pick and (unread := lanelib.lead_unknown(repo)):
+            raise LaneError(shown(lead_unknown_note(unread, of)))
         if pick:
             found = [pick]
         elif lead := lanelib.stopped_lead(repo):
@@ -1707,8 +1766,12 @@ def cmd_addr(args) -> None:
 
 
 def holder_line(repo: Repo, command: list[str]) -> str:
-    """Who runs what since when; no pid, since each sandboxed command has its own pid namespace."""
-    kind, lane = repo.identity()
+    """Who runs what since when; no pid, since each sandboxed command has its own pid namespace.
+    A checkout identity can't tell (Untrusted) shows as unregistered: the line is cosmetic."""
+    try:
+        kind, lane = repo.identity()
+    except lanelib.Untrusted:
+        kind, lane = "unregistered", None
     who = lane["id"] if lane else (kind if kind == "main" else f"{kind} {repo.toplevel}")
     cmd = shlex.join(command)
     if len(cmd) > HOLDER_CMD_MAX:
