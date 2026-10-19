@@ -1360,10 +1360,11 @@ def cmd_ls(args) -> None:
 
 def lead_unknown_note(path: str, of: str = "", capital: bool = False) -> str:
     """Why the lead is unknown beside the session file lanelib.lead_unknown names (of: the repo
-    `addr --repo` asked about), and how to clear it."""
+    `addr --repo` asked about), and when it clears: that file is always named for a running pid,
+    and session_scan rules it out once that process ends, so nothing needs removing."""
     note = (f"the lead is unknown: session file {path} can't be read as a JSON object, and its "
-            f"process may be the lead or run in the main checkout{of}. Remove it once that "
-            "process has ended")
+            f"process may be the lead or run in the main checkout{of}. It stops counting once "
+            "that process ends")
     return note[0].upper() + note[1:] if capital else note
 
 
@@ -1371,8 +1372,10 @@ def main_footer(repo: Repo) -> str | None:
     """The board's line for a crowded main checkout or a stopped lead, None otherwise or
     sandboxed (none in sight): each live session's window, the lead marked first, then the rest
     by pid, `no tmux` outside tmux and `agent worktree` for one launched in .claude/worktrees;
-    with two or more and no lead picked, the way to pick one (LEAD_HINT), or, beside a session
-    file that makes the lead unknown (lanelib.lead_unknown), that file; with no lead picked
+    with two or more and no lead picked, the way to pick one (LEAD_HINT); beside a session file
+    that makes the lead unknown (lanelib.lead_unknown), that file, at any count (the lead's own
+    file drops it out of the sessions, leaving one or none, and `addr lead` still refuses); with
+    no lead picked
     and the recorded one stopped (Ctrl+Z), its window to `fg` it in. A picked continuation (a
     resume of the stopped lead's session) leaves nothing to fg, so it says nothing of the
     stopped one."""
@@ -1382,7 +1385,7 @@ def main_footer(repo: Repo) -> str | None:
     lead = lanelib.lead_of(repo, sessions)
     unread = None if lead else lanelib.lead_unknown(repo)
     stopped = None if lead else lanelib.stopped_lead(repo)
-    if len(sessions) < 2 and not stopped:
+    if len(sessions) < 2 and not stopped and not unread:
         return None
     agents = os.path.join(repo.main, ".claude", "worktrees")
     cells = []
@@ -1395,7 +1398,7 @@ def main_footer(repo: Repo) -> str | None:
     line = ("main checkout: no live session" if not n else
             f"main checkout: {n} live session{'' if n == 1 else 's'}: {', '.join(cells)}")
     hint = lead_unknown_note(unread, capital=True) if unread else LEAD_HINT
-    tail = ([hint] if n > 1 and not lead else []) + (
+    tail = ([hint] if unread or n > 1 and not lead else []) + (
         [stopped_note("The lead", stopped)] if stopped else [])
     return shown(". ".join([line, *tail]))
 
@@ -1589,9 +1592,17 @@ def cmd_open(args) -> None:
     live = lanelib.live_sessions()
     if live is None:
         if lanelib.pids_visible():  # a session file that won't read may be a live session's
-            unknown = (f"a session file in {lanelib.sessions_dir()} can't be read as a JSON "
-                       f"object, so this can't tell whether lane {args.id} already has a session")
-            fix = ": remove it once its process has ended"
+            unread = lanelib.session_scan().unread  # one named for a gone pid is ruled out
+            name = (f"session file {unread[0]}" if unread else
+                    f"a session file in {lanelib.sessions_dir()}")
+            unknown = (f"{name} can't be read as a JSON object, so this can't tell whether lane "
+                       f"{args.id} already has a session")
+            if not unread:  # it read on this second look: a torn write, now whole
+                fix = ": it reads now, so run this again"
+            elif (pid := lanelib.file_pid(unread[0])) is not None:
+                fix = f": it stops counting once process {pid} ends"
+            else:
+                fix = ": remove it: a file not named <pid>.json never stops counting"
         else:
             unknown = (f"sandboxed: session liveness unknown, so this can't tell whether lane "
                        f"{args.id} already has a session")

@@ -532,10 +532,28 @@ class LeadPick(LiveSessions):
         out = self.lane("ls")
         self.assertIn("main checkout: 2 live sessions", out)
         self.assertIn(f"The lead is unknown: session file {path} can't be read", out)
-        self.assertIn("Remove it once that process has ended", out)
+        self.assertIn("It stops counting once that process ends", out)
+        self.assertNotIn("Remove it", out)  # session_scan rules out a dead pid's file itself
         self.assertNotIn("No lead picked", out)
         os.unlink(path)
         self.assertIn("No lead picked", self.lane("ls"))
+
+    def test_the_board_names_the_leads_own_unread_file_with_one_session_or_none_left(self):
+        # The lead's unread file drops it out of main_sessions(), so beside it one main session
+        # is left (or none): `addr lead` refuses there, and the footer must say why.
+        lead = self.child(self.main)
+        self.write_lead(lead)
+        path = os.path.join(self.home, ".claude", "sessions", f"{lead}.json")
+        self.write(path, "{")
+        for n, line in ((0, "main checkout: no live session"),
+                        (1, "main checkout: 1 live session")):
+            with self.subTest(n=n):
+                if n:
+                    self.session(self.main)
+                self.refused("the lead is unknown", path)
+                out = self.lane("ls")
+                self.assertIn(f"{line}", out)
+                self.assertIn(f"The lead is unknown: session file {path} can't be read", out)
 
 
 class AddrRepo(LiveSessions):

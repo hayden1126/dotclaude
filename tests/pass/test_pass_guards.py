@@ -274,6 +274,24 @@ class WritableRoots(Plain):
                 self.real_roots(None, self.main, None, ["claude"])
         sleep.assert_called_once_with(self.mod.SETTINGS_REREAD)
 
+    def test_an_empty_settings_file_is_read_once_more(self):
+        # A truncate-then-write leaves an empty file as its likeliest torn state: listing nothing
+        # at once would drop that tier's allowWrite. A sandbox mount stub stays empty: no dirs.
+        user = os.path.join(self.home, ".claude", "settings.json")
+        fixed = json.dumps({"sandbox": {"filesystem": {"allowWrite": ["/fixed"]}}})
+        self.write(user, "")
+        with mock.patch.object(self.mod.time, "sleep", lambda _: self.write(user, fixed)):
+            self.assertIn("/fixed", self.real_roots(None, self.main, None, ["claude"]))
+        for text in ("", "\n  "):
+            self.write(user, text)
+            with mock.patch.object(self.mod.time, "sleep") as sleep:
+                self.assertNotIn("/fixed", self.real_roots(None, self.main, None, ["claude"]))
+            self.assertEqual(sleep.mock_calls, [mock.call(self.mod.SETTINGS_REREAD)] * 2)
+        os.remove(user)
+        with mock.patch.object(self.mod.time, "sleep") as sleep:
+            self.real_roots(None, self.main, None, ["claude"])
+        sleep.assert_not_called()
+
     def test_an_unparseable_deny_tier_refuses(self):
         user = os.path.join(self.home, ".claude", "settings.json")
         for why, junk in self.JUNK.items():

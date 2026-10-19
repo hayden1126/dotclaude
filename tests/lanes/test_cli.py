@@ -1031,10 +1031,22 @@ class RecordTrust(LanesRepo):
                 self.write(path, junk)
                 p = self.run_lane("open", "chart-fix")
                 self.assertEqual((p.returncode, p.stdout), (1, ""), p.stderr)
-                self.assertIn("can't be read as a JSON object, so this can't tell whether lane "
-                              "chart-fix already has a session", p.stderr)
+                self.assertIn(f"session file {path} can't be read as a JSON object, so this "
+                              "can't tell whether lane chart-fix already has a session", p.stderr)
+                self.assertIn("remove it: a file not named <pid>.json never stops counting",
+                              p.stderr)
                 self.assertNotIn("sandboxed", p.stderr)
                 self.assertIn("session liveness unknown", self.run_lane("ls").stderr)
+        os.unlink(path)
+        # One named for a running pid (this test's) stops counting once that process ends.
+        pid = os.getpid()
+        path = os.path.join(self.home, ".claude", "sessions", f"{pid}.json")
+        self.write(path, "{")
+        p = self.run_lane("open", "chart-fix")
+        self.assertEqual((p.returncode, p.stdout), (1, ""), p.stderr)
+        self.assertIn(f"session file {path} can't be read", p.stderr)
+        self.assertIn(f"it stops counting once process {pid} ends", p.stderr)
+        self.assertNotIn("remove it", p.stderr)
 
     def test_open_done_and_adopt_refuse_a_twinned_path(self):
         self.plant("twin", id="twin")
