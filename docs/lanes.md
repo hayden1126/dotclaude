@@ -813,9 +813,9 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   code fails in a lanes repo and only warns in a plain one, where long-lived text has no peer
   to mislead. `--closing`, which `lane done` runs, judges freshness against HEAD's commit only
   and skips approval: after a `/pass`, the idle new session started after the handoff. It also
-  fails on a `Keep open:` item in Next. Its unpushed-commit warning counts what the lane has
-  checked out, as `ls` does (a branch, or a detached HEAD), and `lane.json`'s branch, which a
-  switch leaves behind, only when HEAD can't be read or names an invalid branch. It counts the
+  fails on a `Keep open:` item in Next. Its unpushed-commit warning follows the checked-out
+  branch or detached HEAD (why: the branch switch paragraph under `lane done`), falling back to
+  `lane.json`'s branch only when HEAD can't be read or names an invalid branch. It counts the
   commits that neither the base nor any of origin's refs hold, never against one pushed copy:
   a lane that switched off a merged PR's old head once warned of 431 unpushed commits, measured
   against that PR's unpruned copy, and a lane made with `--reuse-branch` would meet the same
