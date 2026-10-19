@@ -287,9 +287,10 @@ How it holds:
   `claude -p` or a background session never leads. A refused or failed act changes nothing.
   A session file that exists but won't read as a JSON object (junk, or nested too deep for
   Python's json) refuses a lead act when it may be an ancestor's: named for a pid in the chain,
-  or not for a pid at all. One named for a running process whose cwd is in the main checkout
-  (or can't be read) makes the lead unknown: `lane addr lead` refuses and names the file, and
-  the heal moves nothing.
+  or not for a pid at all. One named for a present process (running or stopped) whose cwd is in
+  the main checkout (or can't be read), or for the recorded lead's pid wherever it runs, makes
+  the lead unknown: `lane addr lead` refuses and names the file, the board's footer names it
+  too, and the heal moves nothing.
 - **Liveness** (lane stopped-lead, 2026-10-17). On 2026-10-17 the lead (pid 1107) was stopped
   with Ctrl+Z while a resume of its session ran as pid 40133 in the same pane, and `lane addr
   lead` kept handing out 1107's socket: a stopped process's socket still accepts connections, so
@@ -562,7 +563,8 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
     it out, and `lane ls` names it. While one is left out, what it holds can't be told: `new`,
     `adopt` and `claim` refuse to hand out a claim, port or cap slot, and a checkout outside
     the main one that matches no record can't take itself for unregistered (`handoff-check`
-    fails, `pass-respawn` refuses).
+    fails, `pass-respawn` refuses). Two records sharing a path only count there when the
+    path is that checkout's.
   - A lane's path must be a real worktree of this repo, outside the main checkout and any other
     lane, before `open` starts `claude` there, the setup runs there, files are copied there, or
     `done` archives and removes it.

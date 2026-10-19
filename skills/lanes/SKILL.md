@@ -341,7 +341,7 @@ Run `lane init`, `new`, `adopt`, `ls`, `open`, `done`, `addr` and `lead` as bare
 `excludedCommands`, so they run outside the sandbox with the network, gh's credential and a view
 of other processes. Piped or sandboxed, `ls` says what it skipped (PR state, sessions and window
 show `?`), and `new`, `open`, `done`, `addr` and `lead` refuse. `lane ls` also names any record it left out (a
-`lane.json` the CLI didn't write, or two claiming one path): look at it before removing it. While one is left out, `new`, `adopt` and `claim` refuse to hand out claims, ports or cap slots. A session file that won't read as JSON makes `open` and `addr lead` refuse, naming it: remove it once its process has ended. `open --print` still prints, but warns that it
+`lane.json` the CLI didn't write, or two claiming one path): look at it before removing it. While one is left out, `new`, `adopt` and `claim` refuse to hand out claims, ports or cap slots. A session file that won't read as JSON makes `open` and `addr lead` refuse, naming it. It stops counting once its process ends; one not named `<pid>.json` must be removed. `open --print` still prints, but warns that it
 can't see a live session, so its command may start a second one. Every other subcommand runs
 sandboxed. `lane lock` and `lane trial` must: the commands they run inherit their sandbox.
 
