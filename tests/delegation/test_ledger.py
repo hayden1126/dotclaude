@@ -744,6 +744,13 @@ class AgentIndex(LedgerEnv):
         self.hook(self.start())
         self.assertEqual(self.index()["activations"], 1)
 
+    def test_an_entry_too_deep_for_json_reads_as_empty(self):
+        os.makedirs(self.agents())
+        with open(os.path.join(self.agents(), "a1.json"), "w") as f:
+            f.write("[" * 100000)  # RecursionError in json, not ValueError
+        with mock.patch.dict(os.environ, {"XDG_STATE_HOME": self.env["XDG_STATE_HOME"]}):
+            self.assertEqual(dc.read_agent_state("a1"), {})
+
 
 class Nudge(LedgerEnv):
     """The deadline nudge on PostToolUse, against an index whose activation began in the past
@@ -1138,6 +1145,15 @@ class Watch(LiveSession):
             self.assertEqual(dc.read_rows(tail=last), rows[-1:])      # a cut on a line end
             self.assertEqual(dc.read_rows(tail=last + 5), rows[-1:])  # a split line, dropped
             self.assertEqual(dc.read_rows(tail=1 << 20), rows)        # no cut, nothing dropped
+            self.assertEqual(dc.read_rows(), rows)
+
+    def test_a_row_too_deep_for_json_is_skipped(self):
+        rows = [{"runner": "claude", "id": f"a{i}", "event": "start"} for i in range(2)]
+        self.append(rows[0])
+        with open(self.ledger, "a") as f:
+            f.write("[" * 100000 + "\n")  # RecursionError in json, not ValueError
+        self.append(rows[1])
+        with mock.patch.dict(os.environ, {"DELEGATION_LEDGER": self.ledger}):
             self.assertEqual(dc.read_rows(), rows)
 
     def test_a_malformed_file_warns_first_but_never_in_the_token(self):

@@ -866,7 +866,7 @@ def pr_states(repo: Repo) -> PRs | None:
         return None
     try:
         rows = json.loads(p.stdout)
-    except ValueError:
+    except (ValueError, RecursionError):   # json recurses on nesting
         return None
     label, merges = {}, {}
     for row in sorted(rows, key=lambda r: r.get("number", 0)):  # the newest PR wins the label
@@ -2798,7 +2798,7 @@ def sweep_open_sessions(path: str) -> None:
         for entry in glob.glob(os.path.join(reg, "*.json")):
             try:
                 rec = json.loads(lanelib.read_head(entry, 1 << 20) or b"null")
-            except ValueError:
+            except (ValueError, RecursionError):   # json recurses on nesting
                 continue
             if isinstance(rec, dict) and lanelib.cwd_inside(rec.get("cwd"), path):
                 try:
@@ -3088,7 +3088,7 @@ def closable(repo: Repo, lane: dict, fetched: bool, branch: str) -> tuple[str | 
         for row in rows:
             if row.get("headRefOid") == tip:
                 return f"PR #{row.get('number')} merged", "merged", ""
-    except (OSError, subprocess.SubprocessError, ValueError):
+    except (OSError, subprocess.SubprocessError, ValueError, RecursionError):
         pass
     in_base = git(["merge-base", "--is-ancestor", "--end-of-options", tip, ref],
                   repo.toplevel).returncode == 0

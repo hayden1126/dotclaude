@@ -168,6 +168,17 @@ class Commands(unittest.TestCase):
             self.assertIn("MemoryMax=8G", c)
 
 
+class Phase(unittest.TestCase):
+    def test_a_line_too_deep_for_json_is_skipped(self):
+        self.assertRaises(RecursionError, json.loads, "[" * 20000)  # deep enough on this build
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "events.jsonl")
+            with open(path, "w") as f:
+                f.write(json.dumps({"type": "turn.completed"}) + "\n")
+                f.write("[" * 20000 + "\n")  # RecursionError in json; inside phase's 32 KiB tail
+            self.assertEqual(cd.phase(path), "turn completed")
+
+
 class Audit(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -974,6 +985,31 @@ class FullRun(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertNotIn("the watch guard won't see this watch", p.stderr)
         self.assertEqual(self.watches()["w-old"]["session_id"], "s0")
+
+    def test_a_watch_file_that_does_not_read_refuses_a_resume_but_not_a_new_run(self):
+        # It may be the resumed run's watch; a new run's id is fresh, so no file watches it.
+        run_id = self.summary(self.run_ok())["run_id"]
+        bad = os.path.join(self.tmp.name, "state", "dotclaude", "watches", "w-bad.json")
+        for junk in ("{", "[" * 100000):  # RecursionError in json, not ValueError
+            with open(bad, "w") as f:
+                f.write(junk)
+            p = self.run_cd("resume", run_id, "--no-scope")
+            self.assertEqual(p.returncode, 2, p.stderr)
+            self.assertIn(f"watch file {bad} can't be read", p.stderr)
+            self.assertNotIn("Traceback", p.stderr)
+            p = self.run_ok()
+            self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_a_resume_that_finds_its_watch_takes_it_over_past_a_bad_file(self):
+        # There is one open watch per run at most, so the bad file can't be a second one.
+        run_id = self.summary(self.run_ok())["run_id"]
+        self.write_watch("w-old", run_id)
+        with open(os.path.join(self.tmp.name, "state", "dotclaude", "watches", "w-bad.json"),
+                  "w") as f:
+            f.write("[" * 100000)  # RecursionError in json, not ValueError
+        p = self.run_cd("resume", run_id, "--no-scope")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.launch_ids(p.stdout.split("\n", 1)[0] + "\n")[1], "w-old")
 
     def test_resume_is_refused_while_a_live_waiter_holds_the_runs_watch(self):
         run_id = self.summary(self.run_ok())["run_id"]

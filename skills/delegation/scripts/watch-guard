@@ -469,7 +469,7 @@ def parse_notice(line, pos):
     queue-operation entry, don't."""
     try:
         e = json.loads(line)
-    except ValueError:
+    except (ValueError, RecursionError):   # json recurses on nesting
         return None
     if not isinstance(e, dict):
         return None
@@ -536,7 +536,7 @@ def read_kill_record(sid):
     try:
         with open(kills_path(sid)) as f:
             rec = json.load(f)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):   # json recurses on nesting
         return {}
     return rec if isinstance(rec, dict) else {}
 
@@ -578,7 +578,7 @@ def launched(path, tool_use, spent):
                 continue
             try:
                 e = json.loads(line)
-            except ValueError:
+            except (ValueError, RecursionError):   # json recurses on nesting
                 continue
             msg = e.get("message") if isinstance(e, dict) else None
             for c in (msg.get("content") if isinstance(msg, dict) else None) or []:

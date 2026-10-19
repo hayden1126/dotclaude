@@ -94,6 +94,12 @@ class MergeCli(unittest.TestCase):
                 r = run(MERGE, self.base, self.overlay(text))
                 self.assertEqual((r.returncode, r.stdout), (1, ""))
 
+    def test_an_overlay_too_deep_for_json_fails_as_a_bad_one(self):
+        r = run(MERGE, self.base, self.overlay("[" * 100000))   # RecursionError in json
+        self.assertEqual((r.returncode, r.stdout), (1, ""))
+        self.assertIn("does not parse", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
     def test_the_real_baseline_passes_through(self):
         with open(os.path.join(REPO, "settings.json")) as f:
             want = f.read()
@@ -327,6 +333,60 @@ class IgnoreBlock(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         with open(self.dest) as f:
             self.assertEqual(f.read(), f"{install_ignore.BEGIN}\n/.x\n")
+
+
+class CcstatuslineSettings(unittest.TestCase):
+    """setup.sh's inline python that installs ~/.config/ccstatusline/settings.json: an existing
+    file that doesn't parse or lacks the ctx widget is backed up before the baseline replaces
+    it."""
+
+    MARK = "\"$CC_CFG_DIR/settings.json\" <<'PY'\n"
+
+    def fresh(self):
+        """A new temp dir's ccstatusline/settings.json path, not yet written."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        os.makedirs(os.path.join(tmp.name, "ccstatusline"))
+        return os.path.join(tmp.name, "ccstatusline", "settings.json")
+
+    def install(self, dst):
+        with open(os.path.join(REPO, "setup.sh")) as f:
+            src = f.read()
+        self.assertIn(self.MARK, src)
+        src = src.split(self.MARK, 1)[1].split("\nPY\n", 1)[0]
+        baseline = os.path.join(REPO, "statusline", "ccstatusline-settings.json")
+        p = subprocess.run([sys.executable, "-I", "-", baseline, dst], input=src,
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        with open(dst) as f:
+            lines = json.load(f)["lines"]
+        self.assertTrue(any(w.get("type") == "custom-command"
+                            and "ctx-breakdown" in (w.get("commandPath") or "")
+                            for line in lines for w in line), lines)
+        return p
+
+    def backups(self, dst):
+        return glob.glob(dst + ".pre-dotclaude-*")
+
+    def test_a_file_that_does_not_parse_is_backed_up(self):
+        # "[" * 100000: RecursionError in json, not ValueError.
+        for junk in ("{", "[" * 100000):
+            with self.subTest(junk=junk[:8]):
+                dst = self.fresh()
+                with open(dst, "w") as f:
+                    f.write(junk)
+                p = self.install(dst)
+                kept = self.backups(dst)
+                self.assertEqual(len(kept), 1, kept)
+                with open(kept[0]) as f:
+                    self.assertEqual(f.read(), junk)
+                self.assertIn("isn't a readable JSON object; backed up to", p.stdout)
+
+    def test_a_missing_file_gets_the_baseline_and_no_backup(self):
+        dst = self.fresh()
+        p = self.install(dst)
+        self.assertEqual(self.backups(dst), [])
+        self.assertNotIn("backed up to", p.stdout)
 
 
 def setup_lines():

@@ -514,6 +514,17 @@ class Skips(Base):
                            env={**self.env, **IN_TAB})
         self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
 
+    def test_a_line_too_deep_for_json_in_the_tail_is_skipped(self):
+        # "[" * 100000: RecursionError in json, not ValueError. The line holds every needle
+        # main_chain and starts_handoff look for, so both parse it.
+        self.write_transcript(330_000)
+        with open(self.transcript, "a") as f:
+            f.write("[" * 100000 + ' "assistant" "tool_use" "Skill" pass-respawn\n')
+        self.assertEqual(cw.tokens(self.transcript), 330_000)
+        self.assertFalse(cw.handoff_since(self.transcript, 0))
+        self.on()
+        self.assertEqual(self.stop(), block("soft", "330k"))   # exits 0, empty stderr
+
     def test_sidechain_and_zero_usage_entries_do_not_count(self):
         zero = assistant(0)
         zero["message"]["model"] = "<synthetic>"

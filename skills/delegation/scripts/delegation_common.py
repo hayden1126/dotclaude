@@ -220,7 +220,7 @@ def read_agent_state(aid):
     try:
         with open(_agent_path(aid)) as f:
             d = json.load(f)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):   # json recurses on nesting
         return {}
     return d if isinstance(d, dict) else {}
 
@@ -334,7 +334,7 @@ def read_rows(tail=None):
     for line in lines[1:] if cut else lines:
         try:
             rows.append(json.loads(line))
-        except ValueError:
+        except (ValueError, RecursionError):
             continue  # a torn write after a crash; skip it rather than fail the reader
     return rows
 
@@ -350,7 +350,7 @@ def first_row_ts(limit=100):
                     ts = json.loads(line).get("ts")
                     parse_iso(ts)
                     return ts
-                except (ValueError, AttributeError, TypeError):
+                except (ValueError, AttributeError, TypeError, RecursionError):
                     continue
     except OSError:
         pass
@@ -434,7 +434,7 @@ def extract_report(text):
     for c in candidates:
         try:
             return json.loads(c), None
-        except ValueError:
+        except (ValueError, RecursionError):   # json recurses on nesting
             pass
     return None, "no parseable JSON report"
 
@@ -634,7 +634,7 @@ def _codex_turn_file(path, e):
     try:
         with open(path) as f:
             d = json.load(f)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):   # json recurses on nesting
         return None
     if (isinstance(d, dict) and d.get("wrapper_pid") is not None
             and d.get("wrapper_pid") == e.get("wrapper_pid")
@@ -693,7 +693,7 @@ def events_thread_id(out):
                     continue
                 try:
                     e = json.loads(line)
-                except ValueError:
+                except (ValueError, RecursionError):   # json recurses on nesting
                     continue
                 if e.get("type") == "thread.started" and e.get("thread_id"):
                     return e["thread_id"]
@@ -882,7 +882,7 @@ def read_watch(wid):
             w = json.load(f)
     except FileNotFoundError:
         return None
-    except ValueError as ex:  # a torn or hand-edited file
+    except (ValueError, RecursionError) as ex:  # a torn or hand-edited file
         raise ValueError(f"watch {wid}: damaged file ({ex})") from None
     if not isinstance(w, dict):
         raise ValueError(f"watch {wid}: damaged file (not a JSON object)")
@@ -932,7 +932,7 @@ def prune_watches():
                 if os.path.getmtime(p) < now - PRUNE_TMP_DAYS * 86400:
                     os.remove(p)
         for p in glob.glob(os.path.join(watches_dir(), "*.json")):
-            with contextlib.suppress(OSError, ValueError):
+            with contextlib.suppress(OSError, ValueError, RecursionError):
                 if os.path.getmtime(p) >= now - PRUNE_ENDED_DAYS * 86400:
                     continue
                 with open(p) as f:
@@ -941,17 +941,22 @@ def prune_watches():
                     os.remove(p)
 
 
-def all_watches():
-    """Every watch file that parses, oldest first."""
+def all_watches(unread=None):
+    """Every watch file that parses, oldest first. One that doesn't (torn, hand-edited, nested
+    past json's reach, no JSON object) is left out, and its path goes on `unread` when given."""
     out = []
     for p in glob.glob(os.path.join(watches_dir(), "*.json")):
         try:
             with open(p) as f:
                 w = json.load(f)
-        except (OSError, ValueError):
+        except FileNotFoundError:  # resolved and pruned since the glob
             continue
+        except (OSError, ValueError, RecursionError):   # json recurses on nesting
+            w = None
         if isinstance(w, dict):
             out.append(w)
+        elif unread is not None:
+            unread.append(p)
     return sorted(out, key=lambda w: str(w.get("created")))
 
 
@@ -1333,10 +1338,10 @@ def new_watch_id():
     return "w-" + time.strftime("%Y%m%dT%H%M%S") + "-" + secrets.token_hex(3)
 
 
-def codex_watch(run_id):
+def codex_watch(run_id, unread=None):
     """The unresolved watch on a codex run, or None. There is one at most: a second is refused
-    (Waiter.refuse_a_second_codex_watch)."""
-    return next((w for w in all_watches() if w.get("state") in UNRESOLVED
+    (Waiter.refuse_a_second_codex_watch). unread: as all_watches'."""
+    return next((w for w in all_watches(unread) if w.get("state") in UNRESOLVED
                  and (w.get("condition") or {}).get("codex") == run_id), None)
 
 
@@ -1380,16 +1385,24 @@ class Waiter:
             raise WaitRefused(f"watch {w.get('id')} already has a live waiter (pid "
                               f"{w.get('waiter_pid')}); it will notify its session")
 
-    def refuse_a_second_codex_watch(self, new):
+    def refuse_a_second_codex_watch(self, new, fresh=False):
         """WaitRefused when any session already has an unresolved watch on new's codex run,
         since each watch's waiter could finalize it. Called under the watches lock, so two
-        waits started together can't both pass."""
+        waits started together can't both pass. A watch file that can't be read refuses too:
+        it may be that watch. Not for a `fresh` run (codex-delegate run, whose id is new), which
+        no file can watch yet."""
         run = new["condition"].get("codex")
-        w = codex_watch(run) if run is not None else None
+        if run is None:
+            return
+        unread = None if fresh else []
+        w = codex_watch(run, unread)
         if w is not None:
             self.refuse_a_live_waiter(w)
             raise WaitRefused(f"watch {w.get('id')} already waits on {run}: "
                               f"delegation-ledger wait --resume {w.get('id')}")
+        if unread:
+            raise WaitRefused(f"watch file {unread[0]} can't be read, and it may already wait "
+                              f"on {run}: look at it, then fix or remove it")
 
     def refuse_unless_left_to_the_guard(self, w):
         """For a detached waiter: WaitRefused unless the watch is as the guard left it when it
@@ -1400,11 +1413,12 @@ class Waiter:
             raise WaitRefused(f"watch {self.wid} is no longer an acknowledged lapse with no "
                               f"waiter in session {self.session}, so no detached waiter is due")
 
-    def take(self, new):
-        """Become the watch's waiter, creating it from `new` when given."""
+    def take(self, new, fresh=False):
+        """Become the watch's waiter, creating it from `new` when given (`fresh`: as
+        refuse_a_second_codex_watch's)."""
         def take(w):
             if new is not None:
-                self.refuse_a_second_codex_watch(new)
+                self.refuse_a_second_codex_watch(new, fresh)
                 w.update(new)
             elif not w:
                 raise WaitRefused(f"no watch {self.wid!r}")

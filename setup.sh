@@ -331,13 +331,14 @@ settings = None
 try:
     with open(dst) as f:
         settings = json.load(f)
-except (OSError, ValueError):
+except (OSError, ValueError, RecursionError):   # json recurses on nesting
     pass
-if settings is None or not has_ctx_widget(settings):
-    if settings is not None:
+if not isinstance(settings, dict) or not has_ctx_widget(settings):
+    if os.path.exists(dst):
         backup = f'{dst}.pre-dotclaude-{int(time.time())}'
         shutil.copy(dst, backup)
-        print(f'!! existing ccstatusline settings lacked the ctx widget; backed up to {backup}')
+        why = 'lacked the ctx widget' if isinstance(settings, dict) else "isn't a readable JSON object"
+        print(f'!! existing ccstatusline settings {why}; backed up to {backup}')
     settings = baseline
 
 ensure_summary_widgets(settings, baseline)

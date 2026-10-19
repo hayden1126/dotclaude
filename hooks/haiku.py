@@ -48,7 +48,7 @@ def oauth_token(cfg: str) -> str:
         try:
             with open(p) as f:
                 token = json.load(f)["claudeAiOauth"]["accessToken"]
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, ValueError, KeyError, TypeError, RecursionError):
             continue
         if isinstance(token, str) and token:
             return token
@@ -82,7 +82,7 @@ def ask(system: str, user: str, *, model: str, max_tokens: int, timeout: float, 
         raise HaikuError("timeout" if timed_out else "network") from None
     except (OSError, http.client.HTTPException):   # a cut or garbled response too
         raise HaikuError("network") from None
-    except ValueError:
+    except (ValueError, RecursionError):   # json recurses on nesting
         raise HaikuError("bad-response") from None
     if not isinstance(resp, dict) or not isinstance(resp.get("content"), list):
         raise HaikuError("bad-response")
