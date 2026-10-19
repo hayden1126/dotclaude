@@ -611,8 +611,15 @@ class AddrRepo(LiveSessions):
         self.lane("init", cwd=self.home)
         self.session(self.home)
         self.write(os.path.join(self.other, ".git", "commondir"), os.path.join(self.home, ".git"))
-        self.refused(self.other, f"git places it in the repo of {self.home}, but the nearest .git "
-                     "above it is not that repo's git dir")
+        # A gitfile naming the enclosing git dir, whose config sets core.worktree to its main:
+        # git then reports that main as the toplevel, so only the nearest .git tells.
+        planted = os.path.join(self.home, "planted")
+        self.write(os.path.join(planted, ".git"), f"gitdir: {os.path.join(self.home, '.git')}\n")
+        self.git("config", "core.worktree", self.home, cwd=self.home)
+        for path in (self.other, planted):
+            with self.subTest(path):
+                self.refused(path, f"git places it in the repo of {self.home}, but the nearest "
+                             ".git above it is not that repo's git dir")
 
     def test_a_git_dir_name_that_is_no_utf8_refuses_cleanly(self):
         # rev-parse prints the name raw; strict decoding would end in a traceback.
