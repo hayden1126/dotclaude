@@ -585,6 +585,8 @@ class CDP:
                 m = json.loads(self.ws.recv(min(left, 2 * POLL_S)))
             except TimeoutError:
                 continue
+            except (ValueError, RecursionError) as e:  # json recurses on nesting
+                raise Fail(f"chrome-bg: a CDP frame during {method} doesn't parse: {e!r}") from None
             if not isinstance(m, dict):
                 continue
             if "id" in m:
@@ -608,7 +610,7 @@ def json_get(port, what, timeout=5):
         r = c.getresponse()
         body = r.read()
         v = json.loads(body) if r.status == 200 else None
-    except (http.client.HTTPException, ValueError) as e:
+    except (http.client.HTTPException, ValueError, RecursionError) as e:  # json recurses on nesting
         # Not HTTP, or not JSON: something else listens there.
         raise Fail(f"chrome-bg: 127.0.0.1:{port}/json/{what}: {e!r}") from None
     finally:
@@ -726,26 +728,23 @@ def read_record(rid):
             rec = json.load(f)
     except FileNotFoundError:
         return None, None
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, RecursionError) as e:  # json recurses on nesting
         return None, f"unreadable: {e}"
     why = record_problem(rec, rid)
     return (None, why) if why else (rec, None)
 
 
-def load_record(rid):
-    return read_record(rid)[0]
-
-
 REPORTED = set()
 
 
-def read_records():
-    """Every well-formed record. A *.json here that is not one is ignored and reported once."""
+def scan_records():
+    """(every well-formed record, {run id: why} for each <id>.json here that is not one). A
+    *.json here that is not a record is ignored and reported once."""
     try:
         names = sorted(os.listdir(state_dir()))
     except OSError:
-        return []
-    recs = []
+        return [], {}
+    recs, rejected = [], {}
     for name in names:
         if not name.endswith(".json") or name.startswith("."):
             continue
@@ -753,11 +752,19 @@ def read_records():
         rec, why = read_record(m.group(1)) if m else (None, "its name is not an 8-hex run id")
         if rec:
             recs.append(rec)
-        elif why and name not in REPORTED:
-            REPORTED.add(name)
-            print(f"chrome-bg: ignoring {os.path.join(state_dir(), name)}: not a run record "
-                  f"({why})", file=sys.stderr)
-    return recs
+        elif why:
+            if m:
+                rejected[m.group(1)] = why
+            if name not in REPORTED:
+                REPORTED.add(name)
+                print(f"chrome-bg: ignoring {os.path.join(state_dir(), name)}: not a run record "
+                      f"({why})", file=sys.stderr)
+    return recs, rejected
+
+
+def read_records():
+    """Every well-formed record (scan_records)."""
+    return scan_records()[0]
 
 
 def remove_record(rid):
@@ -917,7 +924,7 @@ class Supervisor:
             line = raw.decode("utf-8", "replace").strip().lstrip(BOM)
         try:
             reply = json.loads(line)
-        except ValueError:
+        except (ValueError, RecursionError):  # json recurses on nesting
             raise Fail(f"chrome-bg: the supervisor answered {op} with {line[:200]!r}") from None
         if not isinstance(reply, dict) or reply.get("ok") is not True:
             raise Fail(f"chrome-bg: the supervisor's {op} failed: {failure(reply)}")
@@ -951,7 +958,7 @@ def one_shot(*args, timeout=60):
              for ln in r.stdout.decode("utf-8", "replace").splitlines() if ln.strip()]
     reply = None
     if lines:
-        with contextlib.suppress(ValueError):
+        with contextlib.suppress(ValueError, RecursionError):  # json recurses on nesting
             reply = json.loads(lines[-1])
     if not isinstance(reply, dict) or reply.get("ok") is not True:
         why = (failure(reply) if reply is not None else
@@ -1166,7 +1173,8 @@ def stop_record(rec, root):
     """Stop a run some other process owns. A live owner that is provably this run's chrome-bg
     gets Browser.close, then SIGTERM, and cleans up itself. Otherwise (the owner is dead, is not
     provably this run's, or outlasts STOP_WAIT_S) a one-shot -Kill ends the run by its dir.
-    Returns how it ended."""
+    Returns how it ended. Raises Fail, killing nothing, when the owner ends but leaves the record
+    malformed: the run may still be someone's."""
     rid = rec["id"]
     how = "killed by its dir"
     if not owner_dead(rec):
@@ -1180,9 +1188,15 @@ def stop_record(rec, root):
             deadline = time.monotonic() + STOP_WAIT_S
             while not owner_dead(rec) and time.monotonic() < deadline:
                 take_signal(2 * POLL_S)
-            if owner_dead(rec) and load_record(rid) is None:
-                return "stopped by its owner"
-            if not owner_dead(rec):
+            if owner_dead(rec):
+                left, why = read_record(rid)
+                if why:
+                    raise Fail(f"chrome-bg: run {rid}'s owner {pid} ended, but its record "
+                               f"{record_path(rid)} is now malformed ({why}), so the run was "
+                               "left alone")
+                if left is None:
+                    return "stopped by its owner"
+            else:
                 how += f" (its owner {pid} was still there after {STOP_WAIT_S:g}s)"
         else:
             how += (f" (its owner {pid} is not provably this run's chrome-bg, so it was not "
@@ -1432,7 +1446,7 @@ def cmd_start(args):
         os.close(r)
     try:
         res = json.loads(data)
-    except ValueError:
+    except (ValueError, RecursionError):  # json recurses on nesting
         res = None
     if not isinstance(res, dict) or res.get("ok") is not True:
         why = (res.get("error") if isinstance(res, dict) else None) or (
@@ -1485,13 +1499,14 @@ def prune_logs(logs, root):
 
 def gc():
     """Stop runs whose owner is provably dead or whose TTL ran out; kill run dirs no record
-    claims once they are YOUNG_S old (a younger one may be a run still launching); prune old
-    logs. Returns one line per action."""
+    claims once they are YOUNG_S old (a younger one may be a run still launching), but leave one
+    whose record is malformed alone (it may be live); prune old logs. Returns one line per
+    action."""
     done = []
     runs, logs, root = scan_runs()
     # Records after the scan: a run writes its record before its supervisor starts, so every dir
     # in the scan already has its record, if it has one.
-    recs = read_records()
+    recs, rejected = scan_records()
     for rec in recs:
         try:  # no one record may stop gc, whatever is wrong with it
             why = ("its owner is gone" if owner_dead(rec) else "its TTL ran out" if expired(rec)
@@ -1503,6 +1518,9 @@ def gc():
     known = {r["id"] for r in recs}
     for rid, info in sorted(runs.items()):
         if rid in known:
+            continue
+        if rid in rejected:
+            done.append(f"left {rid} alone: its record is malformed ({rejected[rid]})")
             continue
         if info["age"] is None:
             if info["pids"]:
