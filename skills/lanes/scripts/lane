@@ -1360,8 +1360,9 @@ def cmd_ls(args) -> None:
 
 def lead_unknown_note(path: str, of: str = "", capital: bool = False) -> str:
     """Why the lead is unknown beside the session file lanelib.lead_unknown names (of: the repo
-    `addr --repo` asked about), and when it clears: that file is always named for a running pid,
-    and session_scan rules it out once that process ends, so nothing needs removing."""
+    `addr --repo` asked about), and when it clears: that file is always named for a present pid
+    (running or stopped), and session_scan rules it out once that process ends, so nothing needs
+    removing."""
     note = (f"the lead is unknown: session file {path} can't be read as a JSON object, and its "
             f"process may be the lead or run in the main checkout{of}. It stops counting once "
             "that process ends")
@@ -1592,13 +1593,16 @@ def cmd_open(args) -> None:
     live = lanelib.live_sessions()
     if live is None:
         if lanelib.pids_visible():  # a session file that won't read may be a live session's
-            unread = lanelib.session_scan().unread  # one named for a gone pid is ruled out
+            # One named for a gone pid is ruled out; one not named for a pid comes first, since
+            # it never clears by itself.
+            unread = sorted(lanelib.session_scan().unread,
+                            key=lambda p: lanelib.file_pid(p) is not None)
             name = (f"session file {unread[0]}" if unread else
                     f"a session file in {lanelib.sessions_dir()}")
             unknown = (f"{name} can't be read as a JSON object, so this can't tell whether lane "
                        f"{args.id} already has a session")
-            if not unread:  # it read on this second look: a torn write, now whole
-                fix = ": it reads now, so run this again"
+            if not unread:  # on this second look it reads, is gone, or its process ended
+                fix = ": it reads now or is gone, so run this again"
             elif (pid := lanelib.file_pid(unread[0])) is not None:
                 fix = f": it stops counting once process {pid} ends"
             else:

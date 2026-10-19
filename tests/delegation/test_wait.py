@@ -1646,6 +1646,15 @@ class ReadObject(unittest.TestCase):
                 dc.read_settings(self.path)
             sleep.assert_called_once_with(dc.REREAD_WAIT)
 
+    def test_junk_then_an_empty_read_raises(self):
+        # A mount stub is never anything but empty: content on the first read and none on the
+        # second is a rewrite still under way, so {} would drop that tier's denyRead.
+        for junk in ("{", "[" * 100000):  # RecursionError in json
+            self.write(junk)
+            with mock.patch.object(dc.time, "sleep", side_effect=lambda s: s and self.write("")), \
+                    self.assertRaises(ValueError):
+                dc.read_settings(self.path)
+
     def test_a_missing_file_is_no_settings_with_no_wait(self):
         with mock.patch.object(dc.time, "sleep") as sleep:
             self.assertEqual(dc.read_settings(self.path), {})

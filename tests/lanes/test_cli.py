@@ -1047,6 +1047,13 @@ class RecordTrust(LanesRepo):
         self.assertIn(f"session file {path} can't be read", p.stderr)
         self.assertIn(f"it stops counting once process {pid} ends", p.stderr)
         self.assertNotIn("remove it", p.stderr)
+        # Beside it, a file not named for a pid is the one named: it never clears by itself.
+        other = os.path.join(self.home, ".claude", "sessions", "zz-not-a-pid.json")
+        self.write(other, "{")
+        p = self.run_lane("open", "chart-fix")
+        self.assertEqual((p.returncode, p.stdout), (1, ""), p.stderr)
+        self.assertIn(f"session file {other} can't be read", p.stderr)
+        self.assertIn("remove it: a file not named <pid>.json never stops counting", p.stderr)
 
     def test_open_done_and_adopt_refuse_a_twinned_path(self):
         self.plant("twin", id="twin")

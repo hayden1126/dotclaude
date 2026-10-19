@@ -274,6 +274,16 @@ class WritableRoots(Plain):
                 self.real_roots(None, self.main, None, ["claude"])
         sleep.assert_called_once_with(self.mod.SETTINGS_REREAD)
 
+    def test_junk_then_an_empty_read_refuses(self):
+        # A mount stub is never anything but empty: content on the first read and none on the
+        # second is a rewrite still under way, so listing nothing would drop its allowWrite.
+        user = os.path.join(self.home, ".claude", "settings.json")
+        for junk in ("{", "[" * 100000):  # RecursionError in json
+            self.write(user, junk)
+            with mock.patch.object(self.mod.time, "sleep", lambda _: self.write(user, "")):
+                with self.assertRaises(self.mod.Refuse):
+                    self.real_roots(None, self.main, None, ["claude"])
+
     def test_an_empty_settings_file_is_read_once_more(self):
         # A truncate-then-write leaves an empty file as its likeliest torn state: listing nothing
         # at once would drop that tier's allowWrite. A sandbox mount stub stays empty: no dirs.

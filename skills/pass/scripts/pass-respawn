@@ -970,7 +970,9 @@ def listed_paths(path: str, keys: tuple[str, ...], base: str | None) -> list[str
     opened lists nothing, at once; one that is empty or doesn't parse is read once more after
     SETTINGS_REREAD (Claude Code rewrites settings.json, as on a /model save, and a read may
     catch it torn, likeliest empty after the truncate), then lists nothing if still empty (a
-    sandbox mount stub) or refuses (settings_tree)."""
+    sandbox mount stub, which is never anything but empty) or refuses (settings_tree), as it
+    does when the first read held content and the second is empty: a rewrite still under way."""
+    torn = False
     for last in (False, True):
         try:
             with open(path, "rb") as f:
@@ -980,12 +982,17 @@ def listed_paths(path: str, keys: tuple[str, ...], base: str | None) -> list[str
         if not text.strip() and not last:
             time.sleep(SETTINGS_REREAD)
             continue
+        if torn and not text.strip():
+            raise Refuse(1, f"pass-respawn: the settings file {path} emptied between two reads, "
+                         "so the dirs it lets the sandbox write can't be known; run it again",
+                         "settings unparseable")
         try:
             tree = settings_tree(text, f"the settings file {path}")
             break
         except Refuse:
             if last:
                 raise
+            torn = True
             time.sleep(SETTINGS_REREAD)
     return listed(tree, keys, [base, os.path.dirname(path)] if base is not None else [])
 

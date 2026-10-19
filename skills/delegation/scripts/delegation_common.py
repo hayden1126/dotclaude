@@ -92,8 +92,7 @@ def read_object(path, what):
         except (OSError, ValueError) as e:  # ValueError: a NUL in the path
             raise ValueError(f"unreadable {what} {path}: {e}") from None
         if not text.strip():
-            err = None  # empty on the last read too: a mount stub, so no settings
-            continue
+            continue  # a mount stub stays empty; after content (err set) it's still mid-rewrite
         try:
             obj = json.loads(text)
         except (ValueError, RecursionError) as e:  # json recurses on nesting

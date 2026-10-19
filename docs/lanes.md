@@ -603,7 +603,7 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   `cwd`, `startedAt` (ms), `status`, `tmux` (`session:@window.%pane`) and
   `messagingSocketPath`. A session's own shell also has `$CLAUDE_CODE_SESSION_ID`. A file that
   won't read as a JSON object (read again once after 0.1 s, for a torn rewrite) and is named
-  for a running pid, or for no pid, fails `handoff-check` unless a readable one names this
+  for a present pid (running or stopped), or for no pid, fails `handoff-check` unless a readable one names this
   session, and makes liveness unknown for `lane open` (which refuses) and `lane ls`. Where pids
   are visible, a dead pid's file is ruled out at once; sandboxed, every unreadable file counts.
 - **Addressing** (lane lane-addr, 2026-10-13): a ListAgents name is the session's title, which
