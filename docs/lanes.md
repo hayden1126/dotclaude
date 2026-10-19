@@ -600,9 +600,10 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
 - **Session facts** for `handoff-check`: `~/.claude/sessions/<pid>.json` carries `sessionId`,
   `cwd`, `startedAt` (ms), `status`, `tmux` (`session:@window.%pane`) and
   `messagingSocketPath`. A session's own shell also has `$CLAUDE_CODE_SESSION_ID`. A file that
-  won't read as a JSON object (read again once after 0.1 s, for a torn rewrite) fails
-  `handoff-check` unless a readable one names this session, and makes liveness unknown for
-  `lane open` (which refuses) and `lane ls` when its pid runs or its name isn't a pid.
+  won't read as a JSON object (read again once after 0.1 s, for a torn rewrite) and is named
+  for a running pid, or for no pid, fails `handoff-check` unless a readable one names this
+  session, and makes liveness unknown for `lane open` (which refuses) and `lane ls`. Where pids
+  are visible, a dead pid's file is ruled out at once; sandboxed, every unreadable file counts.
 - **Addressing** (lane lane-addr, 2026-10-13): a ListAgents name is the session's title, which
   `session-title.sh` rewrites as the summary changes, so a name goes stale between turns (a
   lane's send to the lead failed "not reachable"). The messaging socket holds for the life of

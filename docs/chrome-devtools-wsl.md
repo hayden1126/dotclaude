@@ -185,8 +185,8 @@ chrome-bg check
   dirs that no record claims once they are 2 minutes old (a younger one may be
   a run still launching), and prunes logs older than 7 days. Every `start` and
   `run` does this first. A run whose record exists but won't read (junk, nested
-  too deep, or failing its checks) is left alone, never killed: fix or remove
-  the record. `stop` fails the same way when an owner ends and leaves its
+  too deep, or failing its checks) is left alone, never killed, and keeps its
+  logs: fix or remove the record. `stop` fails the same way when an owner ends and leaves its
   record malformed.
 - `ls` lists runs: id, port, Chrome pids, owner, age, cwd. A run dir with no
   record shows as `no record`.
