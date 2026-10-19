@@ -242,6 +242,9 @@ class Base(LanesRepo):
             self.fg_ttys.append(tty)
             return self.fg
         self.mod.foreground = foreground
+        self.jobs = []  # the tab's stopped jobs, (pid, comm)
+        real_jobs = self.mod.stopped_jobs
+        self.mod.stopped_jobs = lambda pid: list(self.jobs) if pid == CLAUDE else real_jobs(pid)
         self.argv0 = self.claude  # the claude's argv[0] in the fake /proc/<pid>/cmdline
         self.real_load = self.mod.load_session
         self.mod.load_session = self.fake_load
@@ -1387,8 +1390,7 @@ class Plain(Base):
 
     def test_a_claude_run_by_its_versioned_path_passes_the_final_recheck(self):
         # tmux names a pane after its foreground leader's argv[0] basename, so a claude exec'd by
-        # its versioned path (live on 2.1.302: .lane/artifacts/probe-startup.txt in lane
-        # launch-path's record) reads `2.1.302`, not `claude`.
+        # its versioned path reads `2.1.302`, not `claude` (probed 2026-10-18 on 2.1.302).
         self.argv0 = os.path.join(self.home, ".local", "share", "claude", "versions", "2.1.302")
         os.environ["FAKE_TMUX_PANE"] = f"{PANE_SHELL} 2.1.302 {PANE_TTY}"
         code, out = self.run_pass("--foreground")
@@ -1409,6 +1411,25 @@ class Plain(Base):
                 self.reset()
                 self.assertEqual(self.mod.wait_and_act(self.plan(), table), "gone")
                 self.assertDropped("gone", "pass dropped")
+
+    def test_a_stopped_job_in_the_tab_refuses_a_plain_pass(self):
+        # The respawn hangs up the pane's shell and its jobs with it (probed 2026-10-18 on tmux
+        # 3.7c): a Ctrl+Z'd vim with unsaved edits, or a Ctrl+Z'd claude.
+        self.jobs = [(4321, "vim"), (4322, "2.1.302"), (4323, "less")]
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 1, out)
+        self.assertDropped("busy", "a stopped job in the tab would die with the respawn: vim "
+                           "(pid 4321), 2.1.302 (pid 4322), +1 more")
+        self.assertLoud("pass dropped in tab 3: a stopped job in the tab would die with the "
+                        "respawn: vim (pid 4321), 2.1.302 (pid 4322), +1 more. Bring it back (fg) "
+                        "and end it, then /pass, or /pass compact keeps it")
+        self.assertIn("outcome=busy busy: stopped jobs in the tab: vim (pid 4321), 2.1.302 "
+                      "(pid 4322), less (pid 4323)", self.log())
+
+    def test_a_stopped_job_in_the_tab_leaves_a_compact_pass_alone(self):
+        self.jobs = [(4321, "vim")]  # typing /compact kills nothing
+        code, out = self.run_pass("--compact", "--foreground")
+        self.assertEqual(code, 0, out)
 
     def test_a_claude_behind_another_foreground_group_drops_gone(self):
         # Ctrl+Z'd in a shell tab with a second claude (or a --resume twin) run in front: the
@@ -2494,6 +2515,25 @@ class Units(unittest.TestCase):
         # the pane's tty unknown.
         for pane_tty in (other, "", os.path.join(self.dir, "none")):
             self.assertFalse(self.mod.foreground(25, pane_tty, self.dir), pane_tty)
+
+    def test_stopped_jobs_are_the_stopped_processes_on_the_terminal_outside_its_group(self):
+        # Fields 3 to 8: state, ppid, pgrp, session, tty_nr, tpgid; claude 30 in a zsh tab (24).
+        tail = " ".join(str(n) for n in range(9, 22))
+        row = lambda pid, comm, state, pgrp, tty: (  # noqa: E731
+            str(pid), f"{pid} ({comm}) {state} 24 {pgrp} 24 {tty} 30 {tail} 5 0 0")
+        self.stat((row(30, "claude", "S", 30, 34823),
+                   row(37, "2.1.302", "T", 37, 34823),  # a Ctrl+Z'd claude
+                   row(31, "vi m", "T", 31, 34823),
+                   row(32, "vim", "T", 32, 34999),  # another terminal's
+                   row(33, "npm", "T", 30, 34823),  # the claude's own group: its business
+                   row(34, "sleep", "S", 34, 34823),  # running in the background
+                   row(35, "gdb\x1b[2J", "t", 35, 34823),  # traced; its title made printable
+                   ("36", "garbage")))
+        self.assertEqual(self.mod.stopped_jobs(30, self.dir),
+                         [(31, "vi m"), (35, "gdb?[2J"), (37, "2.1.302")])
+        self.stat((row(40, "claude", "S", 40, 0), row(41, "vim", "T", 41, 0)))  # no terminal
+        self.assertEqual(self.mod.stopped_jobs(40, self.dir), [])
+        self.assertEqual(self.mod.stopped_jobs(99, self.dir), [])  # gone
 
     def test_the_transcript_path_follows_the_session(self):
         with mock.patch.dict(os.environ, {"HOME": self.dir}):

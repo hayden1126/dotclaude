@@ -97,7 +97,8 @@ foreground group of the pane's tty), tmux answering for the pane and the pane no
 (`#{pane_in_mode}` 0), and
 Claude Code's input box present and empty (`busy` otherwise, each with its own cause and fix:
 typing would join a draft and a respawn would discard it; the dim ghost suggestion is not a
-draft). A pane tmux can't find, a missing session file,
+draft), and, for a plain pass, no stopped job in the tab (stopped_jobs; `busy` otherwise: the
+respawn would hang it up with the pane's shell). A pane tmux can't find, a missing session file,
 a dead or replaced process, or a session file naming another session or pane drops `gone` at
 once, while waiting too. Past --timeout (600 s; at most 3600) it gives up (`timeout`). Each drop
 is logged, then told to the session (below), then shown, and touches nothing else. A refusal of
@@ -460,6 +461,36 @@ def foreground(pid: int, tty: str, proc: str = "/proc") -> bool:
                 and int(fields[4]) == os.stat(tty).st_rdev)
     except (OSError, ValueError, IndexError, TypeError):
         return False
+
+
+def stopped_jobs(pid: int, proc: str = "/proc") -> list[tuple[int, str]]:
+    """The stopped (or traced) processes on pid's terminal outside its process group, as (pid,
+    comm) in pid order, the comm made printable: the tab's jobs a plain respawn would kill, since
+    it hangs up the pane's shell and its jobs with it (probed 2026-10-18 on tmux 3.7c), such as a
+    Ctrl+Z'd vim with unsaved edits or a Ctrl+Z'd claude. A background job that runs dies too,
+    but a shell keeps helpers running (zsh plugins' workers), so only a stopped one counts. []
+    when pid has no terminal or its stat can't be read."""
+    def stat(name):
+        with open(os.path.join(proc, str(name), "stat")) as f:
+            head, _, rest = f.read().rpartition(")")
+        return head.partition("(")[2], rest.split()
+
+    try:
+        _, mine = stat(int(pid))
+        tty, group = int(mine[4]), int(mine[2])
+    except (OSError, ValueError, IndexError, TypeError):
+        return []
+    out = []
+    for name in os.listdir(proc) if tty else ():
+        if not name.isdigit():
+            continue
+        try:
+            comm, fields = stat(name)
+            if fields[0] in ("T", "t") and int(fields[4]) == tty and int(fields[2]) != group:
+                out.append((int(name), "".join(c if c.isprintable() else "?" for c in comm)))
+        except (OSError, ValueError, IndexError):
+            continue
+    return sorted(out)
 
 
 def ancestry(table: dict, pid: int | None) -> list[int]:
@@ -1890,6 +1921,15 @@ def wait_and_act(plan: Plan, procs) -> str:
                     fix="Run the pass skill again once " + (
                         "the tab is back." if why == "tmux didn't answer"
                         else "Hayden has cleared it."))
+    if plan.mode == "plain" and (jobs := stopped_jobs(plan.claude_pid)):
+        named = [f"{comm} (pid {pid})" for pid, comm in jobs]
+        shown = ", ".join(named[:SHOWN]) + (f", +{len(named) - SHOWN} more"
+                                             if len(named) > SHOWN else "")
+        return drop(plan, "busy", "busy: stopped jobs in the tab: " + ", ".join(named),
+                    f"pass dropped: a stopped job in the tab would die with the respawn: {shown}. "
+                    "Bring it back (fg) and end it, then /pass, or /pass compact keeps it",
+                    cause=f"a stopped job in the tab would die with the respawn ({shown})",
+                    fix="Run the pass skill again once Hayden has ended it, or pass compact.")
     begin_acting(plan)
     if plan.mode == "plain":
         carry = last = None
