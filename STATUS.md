@@ -128,12 +128,6 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **Two delegation readers ignore CLAUDE_CONFIG_DIR** (from lane json-depth's PR 2 plan pass,
     2026-10-19; predates it): `dc.claude_ancestor` and `dc.live_sessions` read a hard-coded
     `~/.claude/sessions`, while `dc.session_toplevel` uses `sessions_dir`.
-  - **handoff-check's unpushed count ignores a branch switch** (from lane json-depth,
-    2026-10-19; checked against the code). `unpushed()` (`skills/handoff/scripts/handoff-check:132`)
-    reads lane.json's `branch`, while `ls`, `whoami` and `done` follow the checked-out branch.
-    After json-depth's `git switch -c fix/json-depth-rebuild` it counted the old `fix/json-depth`
-    against #94's stale `origin/fix/json-depth` and warned "431 unpushed commit(s)". Warning only.
-    Fix: count the checked-out branch, as the rest of the lane tooling does.
   - **`handoff?` never clears on a switched lane past 200 PRs** (bug report from capella-studio's
     lead, session 5788b9fb, 2026-10-19; checked against the code). `pr_states` lists the newest
     `PR_LIMIT` (200) PRs in one gh call; once that list is full, `merges_of`
@@ -235,8 +229,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   1. While item 0's lanes run, Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
      against the code and log it in the backlog. When lanes run again, follow The lead in
      `skills/lanes/SKILL.md` (step 7 is the post-merge chain; never amend or rebase the lead
-     branch), and check a new lane's branch name against `gh pr list --state all --head <b>`
-     first (#94's name reuse, 2026-10-19).
+     branch). `lane new` refuses a branch name any PR used, and refuses when gh can't answer
+     (lane branch-reuse); `--reuse-branch` overrides.
   - The lead's commits: `git log --first-parent main..chore/after-pr4` (STATUS only, plus merges
     of main). Session c6847b46 (2026-10-19) started at 7aad9eb and ended at this handoff: it
     opened chrome-ttl, tab-cmd and json-depth, ran the chain for #126 to #129 and closed all three,
