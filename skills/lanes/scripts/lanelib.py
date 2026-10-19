@@ -113,10 +113,22 @@ def git(args: list[str],
     cwd: str,
     check: bool = False,
     timeout: float = 60,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
-    """Run git with C-locale output; check raises CalledProcessError on a non-zero exit."""
-    env = dict(os.environ, LC_ALL="C", GIT_TERMINAL_PROMPT="0")
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, env=env,
+    """Run git with C-locale output; check raises CalledProcessError on a non-zero exit.
+
+    Without env, the caller's environment passes through whole: `done` sets GIT_COMMON_DIR for
+    every git it runs, and the tests set GIT_AUTHOR_*. With env, every inherited GIT_* variable
+    is dropped first and env's are set last: a GIT_DIR, GIT_INDEX_FILE, GIT_CONFIG_PARAMETERS or
+    GIT_TRACE from the caller would redirect, reconfigure or log a sandbox-off call, so such a
+    call names each GIT_* it wants."""
+    if env is None:
+        full = dict(os.environ, LC_ALL="C", GIT_TERMINAL_PROMPT="0")
+    else:
+        full = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        full.update(LC_ALL="C", GIT_TERMINAL_PROMPT="0")
+        full.update(env)
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, env=full,
                           check=check, timeout=timeout)
 
 
@@ -207,11 +219,16 @@ class Repo:
         return self.toplevel == self.main
 
     @property
+    def key(self) -> str:
+        """This repo's name in places other repos share: its config's in the state dir, its
+        `lane trial` scratch dirs' in the temp dir. 12 hex of the common dir's sha256."""
+        return hashlib.sha256(self.common_dir.encode()).hexdigest()[:12]
+
+    @property
     def config_path(self) -> str:
         """Out of the repo, where sandboxed Bash can't write (docs/lanes.md S3). One file per
         common dir."""
-        key = hashlib.sha256(self.common_dir.encode()).hexdigest()[:12]
-        return os.path.join(state_dir(), LANES, f"{os.path.basename(self.main)}-{key}.toml")
+        return os.path.join(state_dir(), LANES, f"{os.path.basename(self.main)}-{self.key}.toml")
 
     @property
     def lead_path(self) -> str:

@@ -359,6 +359,8 @@ Allow rules on excluded commands sit behind it: an allow rule skips the classifi
     the main checkout's `git status` at the writer's start and stop, and the lane's too when the
     parent runs in one (`parent_root`, `parent_before`, `parent_after`). `audit` reports a change
     in either, naming the lane by path. That is evidence, since the lead may have edited too.
+    A repo that sets `extensions.worktreeConfig`, or a status git can't run, isn't hashed
+    ("unknown"), and `audit` names those runs as unchecked.
   - Both lane checks depend on the parent's sessions file. When it can't be read or names no
     git checkout, only the main checkout is checked, as before.
 - **What the policy can't see.** Script bodies, interpreter code, and an alias that shadows a real

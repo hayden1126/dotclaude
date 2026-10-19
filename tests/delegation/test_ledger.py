@@ -2,6 +2,7 @@
 import datetime
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -370,6 +371,58 @@ class LedgerHook(LedgerEnv):
         return subprocess.run(["python3", LEDGER, "audit"], capture_output=True, text=True,
                               env=self.env).stdout
 
+    OK_LINE = ("ok   no worktree agent coincided with a change in the main checkout or the parent "
+               "session's checkout")
+    UNCHECKED = ("WARN 1 worktree agent run(s) couldn't be checked against the main checkout or "
+                 "the parent session's checkout: git status there was unreadable, or the repo "
+                 "sets extensions.worktreeConfig")
+
+    def writer_run(self, before=None, mid=None):
+        """A writer's start and stop in a worktree of a fresh repo, with `before(repo)` ahead of
+        the start and `mid(repo)` between. Returns the audit's completed process."""
+        repo = os.path.join(self.tmp.name, "repo")
+        wt = os.path.join(repo, ".claude", "worktrees", "agent-w1")
+        os.makedirs(wt)
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        if before:
+            before(repo)
+        self.hook(dict(self.start("agent-w1"), cwd=wt, agent_type="writer"))
+        if mid:
+            mid(repo)
+        self.hook(dict(self.stop("w1"), cwd=wt, agent_type="writer"))
+        return subprocess.run(["python3", LEDGER, "audit"], capture_output=True, text=True,
+                              env=self.env)
+
+    @staticmethod
+    def set_extension(repo):
+        subprocess.run(["git", "-C", repo, "config", "extensions.worktreeConfig", "true"],
+                       check=True)
+
+    def test_every_run_checked_keeps_the_ok_line_as_it_was(self):
+        p = self.writer_run()
+        self.assertIn(self.OK_LINE, p.stdout.splitlines())
+        self.assertNotIn("couldn't be checked", p.stdout)
+        self.assertEqual(p.returncode, 0)
+
+    def test_two_unknown_hashes_are_an_unchecked_run_not_an_ok(self):
+        # Equal "unknown"s match while nothing was compared: audit names the run unchecked.
+        p = self.writer_run(before=self.set_extension)
+        start, stop = self.rows()
+        self.assertEqual((start["main_before"], stop["main_after"]), ("unknown", "unknown"))
+        lines = p.stdout.splitlines()
+        self.assertIn(self.OK_LINE + " among the runs that could be checked", lines)
+        self.assertIn(self.UNCHECKED, lines)
+        self.assertEqual(p.returncode, 1)
+
+    def test_a_hash_against_unknown_is_an_unchecked_run_not_a_change(self):
+        p = self.writer_run(mid=self.set_extension)
+        start, stop = self.rows()
+        self.assertNotEqual(start["main_before"], "unknown")
+        self.assertEqual(stop["main_after"], "unknown")
+        self.assertNotIn("main checkout changed", p.stdout)
+        self.assertIn(self.UNCHECKED, p.stdout.splitlines())
+        self.assertEqual(p.returncode, 1)
+
     def test_a_resume_compares_only_its_own_activation(self):
         # audit pairs each start with its own stop, never the previous activation's: an edit
         # between activations is no agent's doing.
@@ -472,6 +525,156 @@ def thinking(ago):
 def ended(ago):
     return {"type": "assistant", "timestamp": iso_ago(ago), "message": {
         "stop_reason": "end_turn", "content": [{"type": "text", "text": "done"}]}}
+
+
+class CheckoutStatus(unittest.TestCase):
+    """checkout_status runs sandbox-off in a checkout the session's sandbox can write: git there
+    runs nothing that checkout configures. Each guard's test fails with it reverted."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = os.path.realpath(tmp.name)
+        self.env = dict(os.environ, HOME=self.tmp, GIT_CONFIG_NOSYSTEM="1",
+                        GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
+                        GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
+        self.repo = self.init("repo")
+
+    def git(self, cwd, *args):
+        return subprocess.run(["git", "-c", "protocol.file.allow=always", *args], cwd=cwd,
+                              env=self.env, check=True, capture_output=True, text=True).stdout
+
+    def init(self, name):
+        path = os.path.join(self.tmp, name)
+        self.git(self.tmp, "init", "-q", "-b", "main", path)
+        with open(os.path.join(path, "f"), "w") as f:
+            f.write(name)
+        self.git(path, "add", "f")
+        self.git(path, "commit", "-q", "-m", name)
+        return path
+
+    def marker_script(self, path, marker):
+        with open(path, "w") as f:
+            f.write(f"#!/bin/sh\ntouch {marker}\n")
+        os.chmod(path, 0o755)
+
+    def status(self):
+        with mock.patch.dict(os.environ, self.env):
+            return ledger_mod.checkout_status(self.repo)
+
+    def test_a_submodules_own_fsmonitor_never_runs(self):
+        sub = self.init("sub")
+        self.git(self.repo, "submodule", "add", "-q", sub, "s")
+        self.git(self.repo, "commit", "-q", "-m", "s")
+        gitdir = self.git(os.path.join(self.repo, "s"), "rev-parse", "--path-format=absolute",
+                          "--git-dir").strip()
+        marker, script = os.path.join(self.tmp, "FSM"), os.path.join(self.tmp, "fsm.sh")
+        self.marker_script(script, marker)
+        self.git(self.tmp, "config", "--file", os.path.join(gitdir, "config"), "core.fsmonitor",
+                 script)
+        # The -c that turns fsmonitor off reaches a submodule's own status too, so its clean
+        # filter (on a stat-dirty file) is what only =dirty keeps from running.
+        cleaned, clean = os.path.join(self.tmp, "CLEAN"), os.path.join(self.tmp, "clean.sh")
+        with open(clean, "w") as f:
+            f.write(f"#!/bin/sh\ntouch {cleaned}\ncat\n")
+        os.chmod(clean, 0o755)
+        self.git(self.tmp, "config", "--file", os.path.join(gitdir, "config"), "filter.x.clean",
+                 clean)
+        with open(os.path.join(self.repo, "s", ".gitattributes"), "w") as f:
+            f.write("* filter=x\n")
+        os.utime(os.path.join(self.repo, "s", "f"), (0, 0))
+        before = self.status()
+        self.assertNotEqual(before, "unknown")
+        self.assertFalse(os.path.exists(marker), "the submodule's core.fsmonitor ran")
+        self.assertFalse(os.path.exists(cleaned), "the submodule's clean filter ran")
+        # A submodule whose commit moved still shows (=dirty, not =all).
+        # This commit runs in the submodule, so it would run the planted fsmonitor itself.
+        self.git(os.path.join(self.repo, "s"), "-c", "core.fsmonitor=false", "commit", "-q",
+                 "--allow-empty", "-m", "moved")
+        self.assertNotEqual(self.status(), before)
+        self.assertFalse(os.path.exists(marker), "the submodule's core.fsmonitor ran")
+
+    def test_the_index_is_never_written(self):
+        marker = os.path.join(self.tmp, "PIC")
+        os.makedirs(os.path.join(self.repo, "hk"))
+        self.marker_script(os.path.join(self.repo, "hk", "post-index-change"), marker)
+        self.git(self.repo, "config", "core.hooksPath", "hk")
+        os.utime(os.path.join(self.repo, "f"), (0, 0))  # stat-dirty: a status would refresh it
+        index = os.path.join(self.repo, ".git", "index")
+        with open(index, "rb") as f:
+            before = f.read()
+        self.assertNotEqual(self.status(), "unknown")
+        with open(index, "rb") as f:
+            self.assertEqual(f.read(), before)
+        self.assertFalse(os.path.exists(marker), "post-index-change ran")
+
+    def worktree_clean_trap(self):
+        """The extension on in the repo's own config and a clean filter in config.worktree,
+        routed by .gitattributes to a stat-dirty file, so a status there would run it. Returns
+        the marker the filter touches."""
+        marker = os.path.join(self.tmp, "CLEAN")
+        clean = os.path.join(self.tmp, "clean.sh")
+        with open(clean, "w") as f:
+            f.write(f"#!/bin/sh\ntouch {marker}\ncat\n")
+        os.chmod(clean, 0o755)
+        self.git(self.repo, "config", "extensions.worktreeConfig", "true")
+        self.git(self.repo, "config", "--worktree", "filter.x.clean", clean)
+        with open(os.path.join(self.repo, ".gitattributes"), "w") as f:
+            f.write("* filter=x\n")
+        os.utime(os.path.join(self.repo, "f"), (0, 0))
+        return marker
+
+    def assertTrapHeld(self, marker):
+        got = self.status()
+        self.assertFalse(os.path.exists(marker), "config.worktree's clean filter ran")
+        self.assertEqual(got, "unknown")
+        subprocess.run(["git", "status"], cwd=self.repo, env=self.env, capture_output=True)
+        self.assertTrue(os.path.exists(marker), "the trap never fires")
+
+    def test_per_worktree_config_reads_as_unknown_and_never_runs(self):
+        # config.worktree is trusted only for the session's own gitdir, and the checkout the
+        # hook reads may be another's.
+        self.assertTrapHeld(self.worktree_clean_trap())
+
+    def test_a_config_worktree_cannot_turn_the_extension_off(self):
+        # git reads the extension from the repo's own config alone, so a config.worktree that
+        # sets it false changes the merged value but not which files git reads.
+        marker = self.worktree_clean_trap()
+        self.git(self.repo, "config", "--worktree", "extensions.worktreeConfig", "false")
+        self.assertEqual(self.git(self.repo, "config", "--type=bool", "--get",
+                                  "extensions.worktreeConfig").strip(), "false")
+        self.assertTrapHeld(marker)
+
+    def test_an_unreadable_worktree_config_setting_reads_as_unknown(self):
+        self.git(self.repo, "config", "extensions.worktreeConfig", "maybe")
+        self.assertEqual(self.status(), "unknown")
+
+    def test_a_failed_extension_read_reads_as_unknown_even_if_status_runs(self):
+        # A real malformed value fails git status too; a git that fails only the config read
+        # shows the read's own exit code is what gates.
+        stub = os.path.join(self.tmp, "bin")
+        os.makedirs(stub)
+        with open(os.path.join(stub, "git"), "w") as f:
+            f.write("#!/bin/sh\nfor a; do [ \"$a\" = config ] && exit 128; done\n"
+                    f"exec {shutil.which('git')} \"$@\"\n")
+        os.chmod(os.path.join(stub, "git"), 0o755)
+        self.env["PATH"] = stub + os.pathsep + self.env.get("PATH", "")
+        self.assertEqual(self.status(), "unknown")
+
+    def test_a_failing_status_reads_as_unknown(self):
+        with open(os.path.join(self.repo, ".git", "index"), "w") as f:
+            f.write("garbage")
+        self.assertEqual(self.status(), "unknown")
+
+    def test_a_relative_fsmonitor_never_runs_from_the_checkout(self):
+        # The repo's config is protected, but a relative command in it resolves in the checkout.
+        marker = os.path.join(self.tmp, "FSM")
+        self.marker_script(os.path.join(self.repo, "fsm.sh"), marker)
+        self.git(self.repo, "config", "core.fsmonitor", "./fsm.sh")
+        self.assertNotEqual(self.status(), "unknown")
+        self.assertFalse(os.path.exists(marker), "the checkout's fsmonitor ran")
+        subprocess.run(["git", "status"], cwd=self.repo, env=self.env, capture_output=True)
+        self.assertTrue(os.path.exists(marker), "the trap never fires")
 
 
 class AgentIndex(LedgerEnv):

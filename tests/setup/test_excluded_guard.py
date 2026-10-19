@@ -1258,6 +1258,10 @@ class SandboxReality(unittest.TestCase):
             sandboxed = False
         if not sandboxed:
             self.skipTest("not inside the Bash sandbox")
+        if os.path.realpath(REPO).startswith(os.path.realpath(tempfile.gettempdir()) + os.sep):
+            # `lane trial`'s scratch copy: the sandbox protects only the checkouts it was
+            # started for, never one under the temp dir.
+            self.skipTest("a scratch checkout under the temp dir")
         guard = load_guard()
         gitdir, common, _ = guard.discover(REPO)
         paths = [os.path.join(common, "config"), os.path.join(common, "hooks")]
