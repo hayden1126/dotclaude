@@ -340,8 +340,16 @@ class Saved(unittest.TestCase):
         self.transcript(2)
         self.background(1)
         self.transcript(1)
-        self.client("attach", sid(1)[:8], argv0="/home/u/.local/share/claude/versions/2.1.303")
-        self.env["STUB_COMMAND"] = "2.1.303"
+        # The client is the pane tty's foreground job, as in a real attach tab, so the pane
+        # passes runs_claude: only the client scan keeps the crashed chat out. bash runs the
+        # script file named `attach` from its cwd, its argv kept as a real client's.
+        d = os.path.join(self.tmp, "client")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "attach"), "w") as f:
+            f.write("sleep 30\n:\n")
+        pane_pid, _ = fg_pane.spawn(self, "/home/u/.local/share/claude/versions/2.1.303",
+                                    args=("attach", sid(1)[:8]), exe="/bin/bash", cwd=d)
+        self.env.update(STUB_PANE_PID=str(pane_pid), STUB_COMMAND="2.1.303")
         self.run_saved("shelve", "%4", CLIENT)
         self.assertEqual(list(self.saved()), [sid(1)])
         self.assertEqual(self.calls("claude"), [["claude", "stop", sid(1)[:8]]])

@@ -12,16 +12,19 @@ import signal
 import time
 
 
-def spawn(testcase, argv0):
-    """A pty whose session leader (`sleep`, the pane's shell) has put a job run as argv0 (a path
-    to a link to sleep) in the foreground. Returns (pane pid, job pid); cleanup kills both."""
+def spawn(testcase, argv0, args=("60",), exe=None, cwd=None):
+    """A pty whose session leader (`sleep`, the pane's shell) has put a job in the foreground:
+    exe (default argv0, a path to a link to sleep) run as argv0 + args, in cwd. Returns (pane
+    pid, job pid); cleanup kills both."""
     pid, master = pty.fork()
     if pid == 0:
         try:
             job = os.fork()
             if job == 0:
                 os.setpgid(0, 0)
-                os.execv(argv0, [argv0, "60"])
+                if cwd:
+                    os.chdir(cwd)
+                os.execv(exe or argv0, [argv0, *args])
             os.setpgid(job, job)
             os.tcsetpgrp(0, job)
             os.execv("/bin/sleep", ["sleep", "60"])
