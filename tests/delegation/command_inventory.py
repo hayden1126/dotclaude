@@ -71,7 +71,7 @@ EXCLUDED = [
     Excluded("lane done *", "checks the merge with gh, sees and signals the lane's sessions",
              ["lane done chart-fix"]),
     Excluded("lane addr *", "sees other sessions' processes to tell a live one from a stale file",
-             ["lane addr chart-fix", "lane addr lead"]),
+             ["lane addr chart-fix", "lane addr lead", "lane addr --repo ~/dotclaude lead"]),
     Excluded("lane lead", "sees the session above it and writes the lead record in the state dir",
              ["lane lead"]),
     Excluded("pass-respawn","respawns its tmux pane", ["pass-respawn"]),
@@ -386,7 +386,8 @@ DENIES = CLAUDE_DENY
 # no ask or deny.
 NO_ASK = ["lane ls", "lane ls --json", "lane open chart-fix", "lane open chart-fix --print",
           "lane new chart-fix --claim 42 --goal x", "lane done chart-fix", "lane init --cap 4",
-          "lane adopt ../x", "lane lead", "pass-respawn -C /x --compact", "pass-respawn -C /x --print",
+          "lane adopt ../x", "lane lead", "lane addr lead", "lane addr --repo ~/dotclaude lead",
+          "pass-respawn -C /x --compact", "pass-respawn -C /x --print",
           "delegation-ledger wait --pid 1 --max 30", "delegation-ledger canary --quick",
           "codex-delegate run --model sol --dir /x --brief b.md", "tmux ls",
           "tmux list-panes -a -F '#{pane_id} #{pane_current_path}'",

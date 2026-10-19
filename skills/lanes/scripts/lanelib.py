@@ -309,11 +309,24 @@ class Repo:
         return os.path.join(self.lane_dir(lane_id), "lane.json")
 
 
-def resolve(cwd: str) -> Repo | None:
-    """The Repo holding cwd, or None outside a work tree (or when git fails)."""
+# The env of the git `lane addr --repo` runs in a repo it was only handed. The excluded-command
+# guard judged the cwd's git config, not that repo's, which any sandboxed session that can write
+# it may have planted (one rooted at $HOME can write every repo's under it). So, as
+# excluded_guard.git_read and install-state.py's commits_past run git: no GIT_* from the caller
+# (git.env drops them, a GIT_DIR or the sandbox's safe.directory=* included), no system or global
+# config, no transport. git's own ownership check stays on: a repo another user owns is refused.
+HANDED_ENV = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+              "GIT_OPTIONAL_LOCKS": "0", "GIT_ALLOW_PROTOCOL": "none", "GIT_NO_LAZY_FETCH": "1"}
+
+
+def resolve(cwd: str, env: dict[str, str] | None = None, timeout: float = 60) -> Repo | None:
+    """The Repo holding cwd, or None outside a work tree (or when git fails, runs past timeout
+    or prints a path that isn't UTF-8). env as git's: HANDED_ENV for a repo the
+    excluded-command guard didn't judge."""
     try:
-        p = git(["rev-parse", "--path-format=absolute", "--git-common-dir", "--show-toplevel"], cwd)
-    except (OSError, subprocess.SubprocessError):
+        p = git(["rev-parse", "--path-format=absolute", "--git-common-dir", "--show-toplevel"], cwd,
+                timeout=timeout, env=env)
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError):
         return None
     lines = p.stdout.splitlines()
     if p.returncode != 0 or len(lines) != 2:

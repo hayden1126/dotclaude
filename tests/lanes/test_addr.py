@@ -19,6 +19,7 @@ from unittest import mock
 
 from _fixture import LANE, LiveSessions
 import lanelib  # noqa: E402  (on sys.path once _fixture is imported)
+from test_cli import load_lane_script
 
 # Lead records that fit in LEAD_MAX bytes and nest past json's reach in pure Python (pure_json).
 DEEP_RECORDS = {"nested lists": "[" * 2048 + "]" * 2048,
@@ -490,6 +491,165 @@ class LeadPick(LiveSessions):
         for bad in ("/s,x,0", "rel,1,0", "/s,1"):
             with self.subTest(bad):
                 self.assertIsNone(lanelib.proc_tmux(self.child(pane="%5", server=bad)))
+
+
+class AddrRepo(LiveSessions):
+    """`lane addr --repo PATH`: the lane or lead of the lanes repo that holds PATH, from any cwd
+    (a session in another repo, or in the home dir, reporting a bug to this repo's lead). The
+    excluded-command guard judged the cwd's git config, never PATH's, so the one git run there
+    takes lanelib.HANDED_ENV: no GIT_* from the caller, no system or global config, no
+    transport, and git's own ownership check."""
+
+    def setUp(self):
+        super().setUp()
+        self.lane("new", "chart-fix")
+        self.other = os.path.join(self.home, "other")  # a second lanes repo, ~/other
+        self.git("init", "-q", "-b", "main", self.other, cwd=self.tmp)
+        self.commit("README.md", "other\n", cwd=self.other)
+        self.lane("init", cwd=self.other)
+
+    def addr(self, *args, cwd=None):
+        return self.lane("addr", *args, cwd=cwd or self.home).strip()
+
+    def refused(self, path, *needles, lane_id="lead", cwd=None):
+        p = self.run_lane("addr", "--repo", path, lane_id, cwd=cwd or self.home)
+        self.assertEqual((p.returncode, p.stdout), (1, ""), p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        for needle in needles:
+            self.assertIn(needle, p.stderr)
+        return p.stderr
+
+    def test_another_repo_s_lead_from_any_cwd(self):
+        mine = self.session(self.main)
+        want = self.session(self.other)
+        for cwd in (self.main, self.lane_path("chart-fix"), self.home):
+            with self.subTest(cwd):
+                self.assertEqual(self.addr("--repo", self.other, "lead", cwd=cwd), want)
+        self.assertEqual(self.addr("lead", cwd=self.main), mine)  # no --repo: the cwd's repo
+
+    def test_any_path_in_the_repo_names_it(self):
+        want = self.session(self.other)
+        sub = os.path.join(self.other, "src")
+        os.makedirs(sub)
+        self.assertEqual(self.addr("--repo", sub, "lead"), want)
+        # A quoted ~ reaches the CLI unexpanded: it expands it against the caller's HOME.
+        self.assertEqual(self.addr("--repo", "~/other", "lead"), want)
+        mine = self.session(self.main)  # a lane's worktree names its repo too
+        self.assertEqual(self.addr("--repo", self.lane_path("chart-fix"), "lead"), mine)
+
+    def test_a_lane_of_another_repo(self):
+        # The hint names where `lane open` must run: from the caller's cwd it would find the
+        # cwd's repo, which may have a lane of that name too.
+        self.refused(self.main, f"no live session in lane chart-fix of {self.main}: `lane open "
+                     f"chart-fix` from {self.main} starts one", lane_id="chart-fix", cwd=self.other)
+        want = self.session(self.lane_path("chart-fix"))
+        self.assertEqual(self.addr("--repo", self.main, "chart-fix", cwd=self.other), want)
+
+    def test_a_path_in_no_lanes_repo_refuses_with_the_reason(self):
+        plain = os.path.join(self.home, "plain")
+        self.git("init", "-q", plain, cwd=self.tmp)
+        cases = {os.path.join(self.home, "nope"): "no such directory",
+                 self.home: "git names no work tree there that it trusts",
+                 plain: f"{plain} is no lanes repo"}
+        for path, needle in cases.items():
+            with self.subTest(path):
+                err = self.refused(path, f"--repo {path}: ", needle)
+                self.assertNotIn("run `lane init`", err)  # the caller can't, in another repo
+
+    def test_an_empty_path_refuses_never_the_cwd_s_repo(self):
+        # `--repo "$UNSET"` from inside a lanes repo with a live lead.
+        self.session(self.main)
+        self.refused("", "--repo: an empty path", cwd=self.main)
+
+    def test_a_path_with_control_characters_is_shown_masked(self):
+        err = self.refused(os.path.join(self.home, "a\x1b[2Jb"), "a?[2Jb: no such directory")
+        self.assertNotIn("\x1b", err)
+
+    def test_a_path_git_places_in_another_repo_refuses(self):
+        # A planted .git file, or a commondir file in a .git dir, sends git to another repo's
+        # git dir: a report would reach a lead the caller never named.
+        self.session(self.other)
+        planted = os.path.join(self.home, "planted")
+        self.write(os.path.join(planted, ".git"), f"gitdir: {os.path.join(self.other, '.git')}\n")
+        bent = os.path.join(self.home, "bent")
+        self.git("init", "-q", bent, cwd=self.tmp)
+        self.write(os.path.join(bent, ".git", "commondir"), os.path.join(self.other, ".git"))
+        for path in (planted, bent):
+            with self.subTest(path):
+                self.refused(path, f"--repo {path}: git places it in the repo of {self.other}, "
+                             "but it is in neither that main checkout nor one of its lanes")
+
+    def test_a_git_dir_name_that_is_no_utf8_refuses_cleanly(self):
+        # rev-parse prints the name raw; strict decoding would end in a traceback.
+        odd = os.path.join(os.fsencode(self.home), b"x\xff")
+        subprocess.run(["git", "init", "-q", odd], env=self.env, check=True, capture_output=True)
+        planted = os.path.join(self.home, "planted")
+        os.makedirs(planted)
+        with open(os.path.join(planted, ".git"), "wb") as f:
+            f.write(b"gitdir: " + os.path.join(odd, b".git") + b"\n")
+        self.refused(planted, "git names no work tree there that it trusts")
+
+    def test_no_live_lead_refuses_naming_the_repo(self):
+        self.session(self.main)
+        self.refused(self.other, f"no live session in the main checkout of {self.other} (the lead)")
+
+    def test_several_sessions_and_none_picked_refuse(self):
+        self.session(self.other)
+        self.session(self.other)
+        self.refused(self.other, f"2 live sessions in the main checkout of {self.other} (the lead)",
+                     "No lead picked")
+
+    def test_sandboxed_the_bare_hint_keeps_the_flag(self):
+        self.session(self.other)
+        self.env["_LANE_TEST_SANDBOXED"] = "1"
+        self.refused("~/other", "sandboxed", f"bare `lane addr --repo {self.other} lead`")
+
+    def test_an_inherited_git_dir_never_redirects_it(self):
+        # git with GIT_DIR set ignores its cwd: the caller's repo would answer for PATH's.
+        self.session(self.main)
+        want = self.session(self.other)
+        self.env["GIT_DIR"] = self.common
+        self.assertEqual(self.addr("--repo", self.other, "lead"), want)
+
+    def test_git_s_ownership_check_holds(self):
+        # GIT_TEST_ASSUME_DIFFERENT_OWNER has git treat the repo as another user's. Patched into
+        # HANDED_ENV, it reaches git only if handed_repo runs git with that env.
+        lane_cli = load_lane_script()
+        self.assertEqual(lane_cli.handed_repo(self.other).main, self.other)
+        # Where safe.directory=* could wave it through: the Bash sandbox exports it as
+        # GIT_CONFIG_*, a session rooted at $HOME could write the global config, and the system
+        # config, which no test can write, is stood in for by a file GIT_CONFIG_SYSTEM names.
+        foreign = {"GIT_TEST_ASSUME_DIFFERENT_OWNER": "1"}
+        system = os.path.join(self.tmp, "gitconfig")
+        for f in (os.path.join(self.home, ".gitconfig"), system):
+            self.write(f, "[safe]\n\tdirectory = *\n")
+        trust_all = dict(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="safe.directory",
+                         GIT_CONFIG_VALUE_0="*", **foreign)
+        cases = (  # (why, os.environ, the env that shows it would, HANDED_ENV's stand-in)
+            ("GIT_CONFIG_*", trust_all, None, {}),
+            ("global config", {"HOME": self.home}, foreign, {}),
+            ("system config", {}, dict(foreign, GIT_CONFIG_SYSTEM=system),
+             {"GIT_CONFIG_SYSTEM": system}))
+        for why, environ, env, stand_in in cases:
+            with self.subTest(why):
+                with mock.patch.dict(os.environ, environ):
+                    self.assertIsNotNone(lanelib.resolve(self.other, env=env))
+                with mock.patch.dict(lanelib.HANDED_ENV, foreign, **stand_in), \
+                        mock.patch.dict(os.environ, environ), \
+                        self.assertRaisesRegex(lane_cli.LaneError, "no work tree there that it"):
+                    lane_cli.handed_repo(self.other)
+
+    def test_a_config_include_that_blocks_times_out(self):
+        # A FIFO include holds git at its open until a writer comes.
+        fifo = os.path.join(self.tmp, "fifo")
+        os.mkfifo(fifo)
+        self.git("config", "include.path", fifo, cwd=self.other)
+        lane_cli = load_lane_script()
+        started = time.monotonic()
+        with mock.patch.object(lane_cli, "HANDED_GIT_WAIT", 0.5), \
+                self.assertRaisesRegex(lane_cli.LaneError, "no answer within 0.5 s"):
+            lane_cli.handed_repo(self.other)
+        self.assertLess(time.monotonic() - started, 5)
 
 
 if __name__ == "__main__":
