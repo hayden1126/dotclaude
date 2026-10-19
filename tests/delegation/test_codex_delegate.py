@@ -1000,6 +1000,17 @@ class FullRun(unittest.TestCase):
             p = self.run_ok()
             self.assertEqual(p.returncode, 0, p.stderr)
 
+    def test_a_resume_that_finds_its_watch_takes_it_over_past_a_bad_file(self):
+        # There is one open watch per run at most, so the bad file can't be a second one.
+        run_id = self.summary(self.run_ok())["run_id"]
+        self.write_watch("w-old", run_id)
+        with open(os.path.join(self.tmp.name, "state", "dotclaude", "watches", "w-bad.json"),
+                  "w") as f:
+            f.write("[" * 100000)  # RecursionError in json, not ValueError
+        p = self.run_cd("resume", run_id, "--no-scope")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.launch_ids(p.stdout.split("\n", 1)[0] + "\n")[1], "w-old")
+
     def test_resume_is_refused_while_a_live_waiter_holds_the_runs_watch(self):
         run_id = self.summary(self.run_ok())["run_id"]
         self.write_watch("w-live", run_id, live=True, sid="s1")  # its session is live
