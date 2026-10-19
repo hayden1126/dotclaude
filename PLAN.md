@@ -388,8 +388,10 @@ nothing medium or worse) and live runs shaped these:
   during a `/compact`, and for any split pane. At the prompt the file reads `idle`, or `shell`
   while a background shell runs (found live: a compact waiter sat until its timeout). The
   waiter also checks the session id, `procStart` and pane, and runs a final re-check right
-  before acting: the same `statusUpdatedAt`, the pane still running that claude, not in copy
-  mode, and no unsent draft in the input box (a dim ghost suggestion isn't one).
+  before acting: the same `statusUpdatedAt`, the pane still running that claude (by its name or
+  its own argv[0] basename, its process group in front on the pane's tty), not in copy mode, no
+  unsent draft in the input box (a dim ghost suggestion isn't one) and, for a plain pass, no
+  stopped job in the tab's shell, which the respawn would hang up.
 - **Background work comes from the Stop payload, not the process tree.** In-process agents are
   no child process. `hooks/stop-ring.sh` writes a per-session stop record (time, task labels,
   transcript path), and a plain pass drops `busy` on any task but `dream`, a teammate included.
