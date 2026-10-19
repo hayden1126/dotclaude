@@ -168,6 +168,16 @@ class Commands(unittest.TestCase):
             self.assertIn("MemoryMax=8G", c)
 
 
+class Phase(unittest.TestCase):
+    def test_a_line_too_deep_for_json_is_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "events.jsonl")
+            with open(path, "w") as f:
+                f.write(json.dumps({"type": "turn.completed"}) + "\n")
+                f.write("[" * 20000 + "\n")  # RecursionError in json; inside phase's 32 KiB tail
+            self.assertEqual(cd.phase(path), "turn completed")
+
+
 class Audit(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
