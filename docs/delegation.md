@@ -160,7 +160,8 @@ repo that turns the sandbox off loses subagent Bash; the policy still applies.
 
 **Writer:**
 - Its root is `meta.json`'s `worktreePath`, falling back to a cwd under `.claude/worktrees/`.
-  Otherwise it is denied.
+  Otherwise it is denied. A meta.json that exists but won't read as a JSON object (junk, or
+  nested too deep for Python's json) denies every policed tool; a missing or empty one doesn't.
 - File-tool writes must stay inside the worktree or temp.
 - `cd` and `git -C` outside the worktree and temp are denied.
 - Literal Bash write targets outside the worktree are denied in the main checkout, and in the
@@ -364,8 +365,10 @@ Allow rules on excluded commands sit behind it: an allow rule skips the classifi
     in either, naming the lane by path. That is evidence, since the lead may have edited too.
     A repo that sets `extensions.worktreeConfig`, or a status git can't run, isn't hashed
     ("unknown"), and `audit` names those runs as unchecked.
-  - Both lane checks depend on the parent's sessions file. When it can't be read or names no
-    git checkout, only the main checkout is checked, as before.
+  - Both lane checks depend on the parent's sessions file. When it is missing or names no git
+    checkout, only the main checkout is checked, as before. A sessions file that exists but
+    won't read as a JSON object, and may be the parent's (named for an ancestor pid, or not for
+    a pid at all), denies instead.
 - **What the policy can't see.** Script bodies, interpreter code, and an alias that shadows a real
   binary name are out of its sight. The sandbox, the credential barrier and the network filter
   bound them (cc-safety-net's residual risks RR-1 to RR-5).
@@ -531,6 +534,8 @@ Allow rules on excluded commands sit behind it: an allow rule skips the classifi
     `CLAUDE_PID`, so the env may be another process's, or the env names no session;
   - when the walk finds nothing, the env counts only when `CLAUDE_PID` is an ancestor of the
     command, at any level: then it is the process, and `CLAUDE_CODE_SESSION_ID` the session.
+    An ancestor's sessions file that exists but won't read as a JSON object ends the walk with
+    nothing found, so a nested `claude -p` is never pinned on a farther claude.
 
   A watch made outside Claude Code records no process and the session `unknown`, and a guard
   that finds no process adopts nothing. Adoption also rests on the sessions file naming the new
@@ -538,7 +543,10 @@ Allow rules on excluded commands sit behind it: an allow rule skips the classifi
   are live (`live_sessions`), so it decides when the old id stops being live and its watch can
   be adopted, and it names the session of a walked process that isn't `CLAUDE_PID`. Were the
   rewrite to stop, the old session would read as live and nothing would be adopted: safe, but
-  the old watch would go unguarded. A new watch would still get the new id, from the env.
+  the old watch would go unguarded. A new watch would still get the new id, from the env. A
+  sessions file that won't read as a JSON object, named for a running pid or not for a pid,
+  makes liveness unknown: no watch counts as orphaned, none is adopted, a `--resume` refuses
+  beside a live waiter, and `open` shows `alive` as unknown.
 - **A hook's `CLAUDE_PID` isn't verified.** When the walk finds nothing, the process comes from
   `CLAUDE_PID`, and whether a Stop hook's env carries it is unchecked. A hook finds its process
   by the walk first, and every Claude process writes a sessions file, so this matters only with
@@ -1396,7 +1404,9 @@ wins.
   `$CLAUDE_CONFIG_DIR` when set) names a running session's `sessionId` and its `cwd`, the
   directory it was launched in. `session_toplevel` in `delegation_common.py` finds the file whose
   `sessionId` is the hook payload's `session_id` (the parent session's, on a subagent's hooks),
-  runs `git rev-parse --show-toplevel` in its `cwd`, and returns None on any miss. The policy and
+  runs `git rev-parse --show-toplevel` in its `cwd`, and returns None on any miss. A file that
+  won't read as a JSON object (read again once after 0.1 s, for a torn rewrite) and may be the
+  parent's raises instead, so the policy denies; the ledger reads that as None. The policy and
   the ledger read the parent's checkout from it.
 - **Hook input** (probe):
   - `agent_id` and `agent_type` appear on a subagent's PreToolUse, SubagentStart and SubagentStop,
@@ -1655,7 +1665,9 @@ wins.
   - `agents.default_subagent_model` exists, and `codex-delegate` passes it with `-c`;
   - an explicit model argument still overrides both;
   - a child can't get its own sandbox;
-  - a child rollout's first `session_meta` carries `payload.parent_thread_id`;
+  - a child rollout's first `session_meta` carries `payload.parent_thread_id`, so the audit
+    fails (`unreadable` in its result) when a `session_meta` or `turn_context` line doesn't
+    parse: it may hide a child or a model;
   - `--json` emits no heartbeat event;
   - `--output-schema` applies per turn, so resume must pass it again.
 

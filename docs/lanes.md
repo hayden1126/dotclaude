@@ -285,6 +285,11 @@ How it holds:
   `lane done` finds it, and only when it is interactive, has a messaging socket, and launched in
   the main checkout outside any linked worktree. A lane's session, an agent worktree's, a
   `claude -p` or a background session never leads. A refused or failed act changes nothing.
+  A session file that exists but won't read as a JSON object (junk, or nested too deep for
+  Python's json) refuses a lead act when it may be an ancestor's: named for a pid in the chain,
+  or not for a pid at all. One named for a running process whose cwd is in the main checkout
+  (or can't be read) makes the lead unknown: `lane addr lead` refuses and names the file, and
+  the heal moves nothing.
 - **Liveness** (lane stopped-lead, 2026-10-17). On 2026-10-17 the lead (pid 1107) was stopped
   with Ctrl+Z while a resume of its session ran as pid 40133 in the same pane, and `lane addr
   lead` kept handing out 1107's socket: a stopped process's socket still accepts connections, so
@@ -554,7 +559,10 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   `.worktreeinclude`), so it is checked before use:
   - A `lane.json` must pass `lanelib.record_problem` (its id is its dir's name, its branch can't
     be read as a git option, its path is absolute, and so on), or every command and hook leaves
-    it out, and `lane ls` names it.
+    it out, and `lane ls` names it. While one is left out, what it holds can't be told: `new`,
+    `adopt` and `claim` refuse to hand out a claim, port or cap slot, and a checkout outside
+    the main one that matches no record can't take itself for unregistered (`handoff-check`
+    fails, `pass-respawn` refuses).
   - A lane's path must be a real worktree of this repo, outside the main checkout and any other
     lane, before `open` starts `claude` there, the setup runs there, files are copied there, or
     `done` archives and removes it.
@@ -591,7 +599,10 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   auto-compact.
 - **Session facts** for `handoff-check`: `~/.claude/sessions/<pid>.json` carries `sessionId`,
   `cwd`, `startedAt` (ms), `status`, `tmux` (`session:@window.%pane`) and
-  `messagingSocketPath`. A session's own shell also has `$CLAUDE_CODE_SESSION_ID`.
+  `messagingSocketPath`. A session's own shell also has `$CLAUDE_CODE_SESSION_ID`. A file that
+  won't read as a JSON object (read again once after 0.1 s, for a torn rewrite) fails
+  `handoff-check` unless a readable one names this session, and makes liveness unknown for
+  `lane open` (which refuses) and `lane ls` when its pid runs or its name isn't a pid.
 - **Addressing** (lane lane-addr, 2026-10-13): a ListAgents name is the session's title, which
   `session-title.sh` rewrites as the summary changes, so a name goes stale between turns (a
   lane's send to the lead failed "not reachable"). The messaging socket holds for the life of
