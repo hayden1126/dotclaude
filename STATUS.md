@@ -93,8 +93,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     scripts finding claude under its versioned path; its design fork goes to Hayden), 3
     **json-depth** (`fix/json-depth-rebuild`, the parked sweep rebuilt on main; told to switch
     off its record's `fix/json-depth`, which merged #94 already used, so `lane ls` showed it
-    "#94 merged"). json-depth's audit found #94 already covered `claude-saved`, so its overlap
-    with tab-cmd is likely gone. Hayden's fail-closed picks (2026-10-19) moved it onto
+    "#94 merged"). #94 already covered `claude-saved` and `tmux-claude-status`, so json-depth no
+    longer overlaps tab-cmd (both lanes told). Hayden's fail-closed picks (2026-10-19) moved it onto
     `bin/chrome-bg` (chrome-ttl's file, #126) and `setup.sh`: its chrome-bg work starts from main
     after #126 merges.
   - The parked json-depth sweep is on `fix/json-depth-sweep`, a local branch never pushed: lane
