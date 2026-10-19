@@ -90,8 +90,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **Live lanes** (opened 2026-10-19 from origin/main 6522605; briefs in each record). chrome-ttl
     merged as #126 (chrome-bg's TTL on a monotonic deadline, plus coding-practices rule 8),
     installed from main and closed 2026-10-19. Merge order: 1 **tab-cmd** (`fix/tab-scripts-claude-cmd`, the
-    tab scripts finding claude under its versioned path; its design fork goes to Hayden; carries
-    the lead's notes), 2 **json-depth** (`fix/json-depth-rebuild`, the parked sweep rebuilt on
+    tab scripts finding claude under its versioned path, fix committed on Hayden's "trigger +
+    confirm" design; carries the lead's notes), 2 **json-depth** (`fix/json-depth-rebuild`, the parked sweep rebuilt on
     main; it switched off its record's `fix/json-depth`, which merged #94 already used). #94
     already covered `claude-saved` and `tmux-claude-status`, so json-depth no longer overlaps
     tab-cmd. Hayden's fail-closed picks (2026-10-19) moved json-depth onto `bin/chrome-bg` and
@@ -118,16 +118,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     rerun the menu-clip repro and the tmux suites. If it fixes the clip, install at a quiet
     moment (a server restart; claude-restore reopens the tabs) and drop the row-0 menu rule.
     Until then, 3.7c's default menus that dotclaude doesn't own still clip under a top bar.
-  - **The tab scripts find claude by the pane's command** (in lane tab-cmd; from lane launch-path, 2026-10-18;
-    Hayden's pick: log it, not that lane's work). tmux takes `pane_current_command` from
-    argv[0]'s basename, so a claude run under its versioned path reads `2.1.302` (the lead's
-    private-server probe; #124 fixed the same check in pass-respawn). In `tmux/tmux-claude-status`'s pane
-    loop, such a pane counts toward no window's `win_has_claude`, and a starred one loses its
-    star and gets `@claude_star_away` on every tick. In `tmux/claude-saved`'s session lookup,
-    the branch with no live session file requires `claude`, so the pane maps to no session.
-    Needs its own design: the status script reads only `pane_current_command` per pane per
-    tick, so a per-pane session-file lookup (or matching the claude's argv[0] basename) has a
-    cost to weigh. Not seen live (same 9-pane check).
+  - **An untitled versioned claude's tab reads `2.1.303`** (cosmetic, from lane tab-cmd,
+    2026-10-19): `tmux/claude.conf:55-56` and `tmux/tmux-tab-bar:201` fall back to
+    `pane_current_command` for a pane with no title.
   - **A background session passes on its own (log only: Hayden kept the bg pass manual,
     2026-10-18; don't build it without his ask)** (from lane pass-bg). After the turn ends, the
     waiter finds the pane running `claude attach <jobId>` (`tmux/claude-saved` already maps
