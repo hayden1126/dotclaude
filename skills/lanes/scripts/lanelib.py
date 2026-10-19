@@ -812,19 +812,25 @@ def worktree_problem(repo: "Repo", path: str, lanes: list[dict]) -> str | None:
 GITDIR_MAX = 4096  # bytes read of a .git file or an admin dir's gitdir file
 
 
+def git_top(path: str) -> str | None:
+    """The nearest dir at or above path (real) that holds a .git, where git's own discovery
+    stops, or None."""
+    top = os.path.realpath(path)
+    while not os.path.lexists(os.path.join(top, ".git")):
+        if (parent := os.path.dirname(top)) == top:
+            return None
+        top = parent
+    return top
+
+
 def linked_worktree(repo: "Repo", cwd) -> str | None:
     """The linked worktree of this repo that holds cwd (a cwd from /proc or a session file), by
     the nearest .git at or above it: a regular file naming <common-dir>/worktrees/<x>, whose
     gitdir file names that .git back. Both are read with read_head: bounded, never through a
     link, never waiting on a FIFO. None for the main checkout (its .git is a dir), for another
     repo's checkout, and for anything else."""
-    if not (isinstance(cwd, str) and "\0" not in cwd):
+    if not (isinstance(cwd, str) and "\0" not in cwd) or (top := git_top(cwd)) is None:
         return None
-    top = os.path.realpath(cwd)
-    while not os.path.lexists(os.path.join(top, ".git")):
-        if (parent := os.path.dirname(top)) == top:
-            return None
-        top = parent
     dotgit = os.path.join(top, ".git")
     text = (read_head(dotgit, GITDIR_MAX) or b"").decode(errors="replace").strip()
     if not text.startswith("gitdir: ") or "\0" in text:

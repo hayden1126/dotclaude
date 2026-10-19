@@ -494,7 +494,8 @@ class LeadPick(LiveSessions):
 
 
 class AddrRepo(LiveSessions):
-    """`lane addr --repo PATH`: the lane or lead of the lanes repo that holds PATH, from any cwd
+    """`lane addr --repo PATH`: the lane or lead of the lanes repo whose main checkout holds PATH,
+    from any cwd
     (a session in another repo, or in the home dir, reporting a bug to this repo's lead). The
     excluded-command guard judged the cwd's git config, never PATH's, so the one git run there
     takes lanelib.HANDED_ENV: no GIT_* from the caller, no system or global config, no
@@ -534,8 +535,6 @@ class AddrRepo(LiveSessions):
         self.assertEqual(self.addr("--repo", sub, "lead"), want)
         # A quoted ~ reaches the CLI unexpanded: it expands it against the caller's HOME.
         self.assertEqual(self.addr("--repo", "~/other", "lead"), want)
-        mine = self.session(self.main)  # a lane's worktree names its repo too
-        self.assertEqual(self.addr("--repo", self.lane_path("chart-fix"), "lead"), mine)
 
     def test_a_lane_of_another_repo(self):
         # The hint names where `lane open` must run: from the caller's cwd it would find the
@@ -556,28 +555,64 @@ class AddrRepo(LiveSessions):
                 err = self.refused(path, f"--repo {path}: ", needle)
                 self.assertNotIn("run `lane init`", err)  # the caller can't, in another repo
 
+    def test_messages_about_a_lane_name_its_repo(self):
+        # From the caller's cwd, a bare `lane open` or `lane done` acts on the cwd's repo.
+        self.refused(self.main, f"no lane nope of {self.main}", lane_id="nope")
+        os.makedirs(os.path.join(self.other, ".git", "lanes", "lead"))
+        self.refused(self.other, f"rename that lane (`lane done lead` from {self.other}, then a new "
+                     "id)")
+        rec = os.path.join(self.common, "lanes", "chart-fix", "lane.json")
+        good = self.read(rec)
+        self.write(rec, json.dumps(dict(json.loads(good), path=self.home)))
+        self.refused(self.main, f"refusing lane chart-fix of {self.main}: ", lane_id="chart-fix")
+        self.write(rec, json.dumps(dict(json.loads(good), path="rel")))
+        self.refused(self.main, f"lane chart-fix of {self.main}: lanes/chart-fix/lane.json: bad "
+                     "path", lane_id="chart-fix")
+        self.write(rec, good)
+        shutil.rmtree(self.lane_path("chart-fix"))
+        self.refused(self.main, f"lane chart-fix of {self.main} is stale", lane_id="chart-fix")
+
     def test_an_empty_path_refuses_never_the_cwd_s_repo(self):
         # `--repo "$UNSET"` from inside a lanes repo with a live lead.
         self.session(self.main)
         self.refused("", "--repo: an empty path", cwd=self.main)
+        self.env["_LANE_TEST_SANDBOXED"] = "1"  # never a bare-run hint that would refuse too
+        err = self.refused("", "--repo: an empty path", cwd=self.main)
+        self.assertNotIn("sandboxed", err)
 
     def test_a_path_with_control_characters_is_shown_masked(self):
         err = self.refused(os.path.join(self.home, "a\x1b[2Jb"), "a?[2Jb: no such directory")
         self.assertNotIn("\x1b", err)
 
-    def test_a_path_git_places_in_another_repo_refuses(self):
+    def test_a_path_outside_the_main_checkout_git_names_refuses(self):
         # A planted .git file, or a commondir file in a .git dir, sends git to another repo's
-        # git dir: a report would reach a lead the caller never named.
+        # git dir: a report would reach a lead the caller never named. A lane.json naming the
+        # planted dir proves nothing, since sandboxed Bash can write any. So only the main
+        # checkout counts, a lane's worktree included out.
         self.session(self.other)
         planted = os.path.join(self.home, "planted")
         self.write(os.path.join(planted, ".git"), f"gitdir: {os.path.join(self.other, '.git')}\n")
         bent = os.path.join(self.home, "bent")
         self.git("init", "-q", bent, cwd=self.tmp)
         self.write(os.path.join(bent, ".git", "commondir"), os.path.join(self.other, ".git"))
-        for path in (planted, bent):
+        self.write(os.path.join(self.other, ".git", "lanes", "x", "lane.json"),
+                   json.dumps({"id": "x", "branch": "x", "path": planted}))
+        for path, main in ((planted, self.other), (bent, self.other),
+                           (self.lane_path("chart-fix"), self.main)):
             with self.subTest(path):
-                self.refused(path, f"--repo {path}: git places it in the repo of {self.other}, "
-                             "but it is in neither that main checkout nor one of its lanes")
+                self.refused(path, f"--repo {path}: git places it in the repo of {main}, but the "
+                             "nearest .git above it is not that repo's git dir (name the main "
+                             "checkout)")
+
+    def test_a_lanes_repo_enclosing_the_path_never_takes_it(self):
+        # A lanes repo whose main checkout holds PATH (one at the home dir, say), and a commondir
+        # planted in PATH's own .git naming it: git then places PATH in the enclosing repo.
+        self.git("init", "-q", "-b", "main", self.home, cwd=self.tmp)
+        self.lane("init", cwd=self.home)
+        self.session(self.home)
+        self.write(os.path.join(self.other, ".git", "commondir"), os.path.join(self.home, ".git"))
+        self.refused(self.other, f"git places it in the repo of {self.home}, but the nearest .git "
+                     "above it is not that repo's git dir")
 
     def test_a_git_dir_name_that_is_no_utf8_refuses_cleanly(self):
         # rev-parse prints the name raw; strict decoding would end in a traceback.
