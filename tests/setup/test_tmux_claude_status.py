@@ -17,6 +17,8 @@ import tempfile
 import time
 import unittest
 
+import fg_pane
+
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SCRIPT = os.path.join(REPO, "tmux", "tmux-claude-status")
 
@@ -74,7 +76,9 @@ class Status(unittest.TestCase):
 
     def spawn(self):
         """A pane shell with one child: returns (shell pid, child pid)."""
-        p = subprocess.Popen(["bash", "-c", "sleep 60 & wait"])
+        # Its own session: no controlling tty, so no foreground group (tpgid -1), whatever
+        # runs the tests.
+        p = subprocess.Popen(["bash", "-c", "sleep 60 & wait"], start_new_session=True)
         self.addCleanup(p.wait)
         self.addCleanup(p.kill)
         path = f"/proc/{p.pid}/task/{p.pid}/children"
@@ -95,6 +99,15 @@ class Status(unittest.TestCase):
         self.panes.append((pane_id, window_id, shell, command, path))
         self.windows.setdefault(window_id, state)
         return child
+
+    def versioned_pane(self, pane_id, window_id, path, state="", home="claude/versions"):
+        """A pane whose foreground job runs as <tmp>/<home>/2.1.303, so tmux names it
+        `2.1.303`: claude run by its versioned path when home is claude/versions."""
+        argv0 = fg_pane.link(self.tmp, *home.split("/"), "2.1.303")
+        shell, job = fg_pane.spawn(self, argv0)
+        self.panes.append((pane_id, window_id, shell, "2.1.303", path))
+        self.windows.setdefault(window_id, state)
+        return job
 
     def run_status(self, agents, hosts="501 502", raw=None, **env):
         # list-panes puts claude-saved's ★ and away mark (1 or 0 each) between the command and
@@ -481,6 +494,48 @@ class Status(unittest.TestCase):
         self.run_status([], hosts="")
         self.assertEqual([c for c in self.calls() if c.startswith("claude-saved sync")],
                          ["claude-saved sync %4"])
+
+    # --- claude run by its versioned path --------------------------------------------------
+    # tmux names the pane `2.1.303` (argv[0]'s basename). It counts as claude only when its
+    # tty's foreground process runs from a claude/versions directory: a bare version name
+    # alone is any program's.
+
+    def test_a_versioned_claude_keeps_its_window_and_star(self):
+        self.versioned_pane("%4", "@4", "/x", state="busy")
+        self.stars.add("%4")
+        self.run_status([], hosts="")
+        self.assertEqual(self.writes(), [])
+
+    def test_a_versioned_claude_back_from_ctrl_z_syncs_its_star(self):
+        self.saved_stub()
+        self.versioned_pane("%4", "@4", "/x", state="busy")
+        self.away.add("%4")
+        self.run_status([], hosts="")
+        self.assertIn("claude-saved sync %4", self.calls())
+        self.assertEqual(self.writes(), ["tmux set-option -pu -t %4 @claude_star_away"])
+
+    def test_a_cold_versioned_claude_window_is_filled_and_synced(self):
+        self.saved_stub()
+        self.versioned_pane("%4", "@4", "/x")
+        self.run_status([], hosts="")
+        self.assertIn("claude-saved sync %4", self.calls())
+        self.assertEqual(self.writes(), ["tmux set-option -w -t @4 @claude_state idle"])
+
+    def test_a_versioned_attach_client_is_mapped(self):
+        # An attach client run by its versioned path is a client too.
+        self.versioned_pane("%2", "@2", DNA)
+        self.run_status([self.bg()])
+        self.assertEqual(self.tabs(), mapped("bg-1 %2 @2"))
+
+    def test_a_version_name_from_elsewhere_is_not_claude(self):
+        self.versioned_pane("%4", "@4", "/x", state="busy", home="other")
+        self.stars.add("%4")
+        self.pane("%5", "@5", "/y", state="busy", command="2.1.303")   # no tty: no foreground job
+        self.run_status([], hosts="")
+        self.assertEqual(self.writes(), ["tmux set-option -p -t %4 @claude_star_away 1",
+                                         "tmux set-option -pu -t %4 @claude_star",
+                                         "tmux set-option -uw -t @4 @claude_state",
+                                         "tmux set-option -uw -t @5 @claude_state"])
 
     def test_track_runs_when_the_claude_panes_change_and_every_60_s(self):
         # claude-saved track records attach tabs for claude-restore: a tab that starts or stops
