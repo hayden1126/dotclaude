@@ -119,7 +119,7 @@ def read_state(name):
     try:
         with open(state_path(name)) as f:
             d = json.load(f)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):   # json recurses on nesting
         return {}
     return d if isinstance(d, dict) else {}
 
@@ -245,7 +245,7 @@ def check_posture():
             p = subprocess.run(["claude", "sandbox", "status"], cwd=tmp, capture_output=True,
                                text=True, timeout=30)
         s = json.loads(p.stdout.strip().splitlines()[-1])
-    except (OSError, subprocess.SubprocessError, ValueError, IndexError) as e:
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError, RecursionError) as e:
         return False, f"`claude sandbox status` gave no JSON ({type(e).__name__}: {e})"
     if not isinstance(s, dict):
         return False, "`claude sandbox status` gave no JSON object"
@@ -620,7 +620,7 @@ def hook_main(stdin_text="", out=print):
     watches drops only that nudge."""
     try:
         session = _d(json.loads(stdin_text or "{}")).get("session_id")
-    except ValueError:
+    except (ValueError, RecursionError):
         session = None  # the payload only spares this session's own watches
     try:
         orphans, unheard, unreadable = left_watches(session)

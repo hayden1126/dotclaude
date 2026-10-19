@@ -157,6 +157,17 @@ class Walk(unittest.TestCase):
         self.assertEqual(lanelib.newest_mtime(rec), before)  # a target's change is not ours
 
 
+class TranscriptCwd(unittest.TestCase):
+    def test_a_line_too_deep_for_json_is_skipped_and_a_later_cwd_found(self):
+        root = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        path = os.path.join(root, "t.jsonl")
+        with open(path, "w") as f:
+            f.write("[" * 50000 + "\n")  # RecursionError in json; inside the 64 KiB head
+            f.write(json.dumps({"cwd": "/work"}) + "\n")
+        self.assertEqual(lanelib.transcript_cwd(path), "/work")
+
+
 class LeadRelink(_fixture.LiveSessions):
     """lanelib.lead_relink in process, for a child standing in for the hook (its pid): which
     proof, if any, says the session running it continues the recorded lead. This test runner

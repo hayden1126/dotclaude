@@ -152,7 +152,7 @@ def handback_message(path):
     for line in lines:
         try:
             e = json.loads(line)
-        except ValueError:
+        except (ValueError, RecursionError):   # json recurses on nesting
             continue
         for c in (e.get("message") or {}).get("content") or []:
             if not isinstance(c, dict):
@@ -405,7 +405,7 @@ def records(lines):
     for line in lines:
         try:
             e = json.loads(line)
-        except ValueError:
+        except (ValueError, RecursionError):   # json recurses on nesting
             continue
         if not isinstance(e, dict) or e.get("type") not in ("user", "assistant"):
             continue
@@ -490,7 +490,7 @@ def description(path):
     try:
         with open(meta) as f:
             return (json.load(f).get("description") or "")[:60]
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError, RecursionError):   # json recurses on nesting
         return ""
 
 

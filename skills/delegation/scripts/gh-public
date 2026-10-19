@@ -67,7 +67,7 @@ def main(argv=None):
                      f"{headers.get('x-ratelimit-limit')} ({'token' if t else 'no token'})\n")
     try:
         print(json.dumps(json.loads(body), indent=1))
-    except ValueError:
+    except (ValueError, RecursionError):   # json recurses on nesting
         sys.stdout.write(body.decode("utf-8", "replace"))
     return code
 

@@ -1865,6 +1865,11 @@ class Kills(GuardEnv):
         self.lines(notice("bk2", "toolu_2", "after junk", self.now - 60), raw_first='{"torn')
         self.assertEqual(self.decide(), self.block(self.kill_reason("after junk")))
 
+    def test_a_line_too_deep_for_json_before_a_kill_is_skipped_and_the_kill_still_seen(self):
+        deep = "[" * 100000 + "task-notification"  # RecursionError in json; the mark gets it read
+        self.lines(notice("bk2", "toolu_2", "after junk", self.now - 60), raw_first=deep)
+        self.assertEqual(self.decide(), self.block(self.kill_reason("after junk")))
+
     def test_old_kill_records_are_pruned(self):
         os.makedirs(os.path.join(self.state, "dotclaude", "kills"))
         stale = os.path.join(self.state, "dotclaude", "kills", "s9.json")

@@ -362,7 +362,7 @@ def launch(cmd, cwd, out, prompt, owner):
         msg = f.read().decode("utf-8", "replace")
     try:
         rec = json.loads(msg)
-    except ValueError:
+    except (ValueError, RecursionError):   # json recurses on nesting
         rec = None
     if not isinstance(rec, dict):
         raise LaunchFailed(msg or "the Codex supervisor exited before Codex started")
@@ -468,7 +468,7 @@ def stream(cmd, cwd, out, row, prompt, start_event, waiter, wait_min):
                 line, buf = buf, ""
                 try:
                     e = json.loads(line)
-                except ValueError:
+                except (ValueError, RecursionError):   # json recurses on nesting
                     continue
                 if e.get("type") == "thread.started":
                     thread_id = e.get("thread_id") or thread_id
@@ -656,7 +656,7 @@ def finish(row, rc, thread_id, since_epoch, out, stream=None):
         report_ok = not errs
         report_status = obj.get("status") if isinstance(obj, dict) else None
         report_error = errs[0] if errs else None
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, RecursionError) as e:   # json recurses on nesting
         report_error = f"report.json unreadable ({type(e).__name__})"
     aud = audit(thread_id, since_epoch, allowed_for(row["model"])) if thread_id else {
         "ok": False, "root_found": False, "threads": 0, "models": [], "disallowed": []}
@@ -814,7 +814,7 @@ def phase(events_path):
     for line in reversed(lines):
         try:
             e = json.loads(line)
-        except ValueError:
+        except (ValueError, RecursionError):   # json recurses on nesting
             continue
         t = e.get("type", "")
         if t == "turn.completed":
