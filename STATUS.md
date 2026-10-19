@@ -92,9 +92,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     monotonic deadline, plus coding-practices rule 8) and tab-cmd as #127 (a claude run under its
     versioned path counts as claude in the tab scripts: Hayden's "trigger + confirm" design, the
     command looks like N.N.N and the pane tty's foreground group runs from `/claude/versions/`).
-    Merge order: 1 **json-depth** (`fix/json-depth-rebuild`, the parked sweep rebuilt on main; it
-    switched off its record's `fix/json-depth`, which merged #94 already used; carries the lead's
-    notes). Hayden's fail-closed picks (2026-10-19) moved it onto `bin/chrome-bg` and `setup.sh`.
+    json-depth's PR 1 merged as #128 and was installed from main, 2026-10-19: deep JSON reads as
+    malformed wherever that is equal or stricter. The lane stays open (`Keep open:`) for PR 2:
+    fail closed at the trust sites, plus chrome-bg, on `fix/json-depth-fail-closed` from main (Hayden's picks are
+    in its record's Decisions). Merge order: 1 **json-depth** PR 2 (carries the lead's notes).
   - The parked json-depth sweep is on `fix/json-depth-sweep`, a local branch never pushed: lane
     json-depth's reference only. Ask Hayden before deleting it once that lane merges.
   - `lane new` with `|`, `<`, `>` or `;` inside its quoted `--goal` runs sandboxed and fails
@@ -122,6 +123,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     list what dotclaude's guards (sandbox, permission rules, delete, overwrite and excluded-command
     guards, subagent policy, lanes) don't cover. Unfixed security gaps go to the private
     findings file, not here ([[dotclaude-public-repo]]).
+  - **setup.sh's ccstatusline write crashes on an odd settings shape** (from lane json-depth's PR 1
+    writer, 2026-10-19; predates it): the heredoc's `has_ctx_widget` assumes `lines` is a list of
+    lists, and a directory at the destination crashes it too.
   - **handoff-check's unpushed count ignores a branch switch** (from lane json-depth,
     2026-10-19; checked against the code). `unpushed()` (`skills/handoff/scripts/handoff-check:132`)
     reads lane.json's `branch`, while `ls`, `whoami` and `done` follow the checked-out branch.

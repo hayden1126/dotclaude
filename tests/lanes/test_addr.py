@@ -492,6 +492,69 @@ class LeadPick(LiveSessions):
             with self.subTest(bad):
                 self.assertIsNone(lanelib.proc_tmux(self.child(pane="%5", server=bad)))
 
+    def test_an_unread_session_file_in_main_makes_the_lead_unknown(self):
+        # A session file that won't read as a JSON object, of a process running in main, may
+        # be the lead or a second continuation: `addr lead` refuses and names it. One whose
+        # process runs outside main can't be either.
+        (a, want), _ = self.pair()
+        self.write_lead(a)
+        repo = lanelib.Repo(self.main, self.common)
+        sessions = os.path.join(self.home, ".claude", "sessions")
+        for why, junk in {"junk": "{", "deep": "[" * 100000}.items():  # RecursionError in json
+            with self.subTest(why):
+                path = os.path.join(sessions, f"{self.child(self.main)}.json")
+                self.write(path, junk)
+                self.refused("the lead is unknown", path)
+                with mock.patch.dict(os.environ, CLAUDE_CONFIG_DIR=os.path.dirname(sessions)):
+                    self.assertIsNone(lanelib.lead_of(repo, lanelib.main_sessions(repo)))
+                outside = os.path.join(sessions, f"{self.child(self.tmp)}.json")
+                os.rename(path, outside)
+                self.assertEqual(self.addr_lead(), want)
+                os.unlink(outside)
+
+    def test_the_leads_own_unread_file_makes_the_lead_unknown_wherever_it_runs(self):
+        # A Bash `cd` moves the lead's process out of main; its file, unread, must not let the
+        # one other main session pass for the lead (a side chat).
+        lead = self.child(self.tmp)
+        self.write_lead(lead)
+        self.session(self.main)
+        path = os.path.join(self.home, ".claude", "sessions", f"{lead}.json")
+        for why, junk in {"junk": "{", "deep": "[" * 100000}.items():  # RecursionError in json
+            with self.subTest(why):
+                self.write(path, junk)
+                self.refused("the lead is unknown", path)
+
+    def test_the_board_names_an_unread_file_in_place_of_the_lead_hint(self):
+        # No lane lead can pick past it, so the footer says what to remove instead.
+        self.pair()
+        path = os.path.join(self.home, ".claude", "sessions", f"{self.child(self.main)}.json")
+        self.write(path, "{")
+        out = self.lane("ls")
+        self.assertIn("main checkout: 2 live sessions", out)
+        self.assertIn(f"The lead is unknown: session file {path} can't be read", out)
+        self.assertIn("It stops counting once that process ends", out)
+        self.assertNotIn("Remove it", out)  # session_scan rules out a dead pid's file itself
+        self.assertNotIn("No lead picked", out)
+        os.unlink(path)
+        self.assertIn("No lead picked", self.lane("ls"))
+
+    def test_the_board_names_the_leads_own_unread_file_with_one_session_or_none_left(self):
+        # The lead's unread file drops it out of main_sessions(), so beside it one main session
+        # is left (or none): `addr lead` refuses there, and the footer must say why.
+        lead = self.child(self.main)
+        self.write_lead(lead)
+        path = os.path.join(self.home, ".claude", "sessions", f"{lead}.json")
+        self.write(path, "{")
+        for n, line in ((0, "main checkout: no live session"),
+                        (1, "main checkout: 1 live session")):
+            with self.subTest(n=n):
+                if n:
+                    self.session(self.main)
+                self.refused("the lead is unknown", path)
+                out = self.lane("ls")
+                self.assertIn(f"{line}", out)
+                self.assertIn(f"The lead is unknown: session file {path} can't be read", out)
+
 
 class AddrRepo(LiveSessions):
     """`lane addr --repo PATH`: the lane or lead of the lanes repo whose main checkout holds PATH,

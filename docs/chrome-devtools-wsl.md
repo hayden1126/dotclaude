@@ -184,7 +184,10 @@ chrome-bg check
 - `stop --gc` stops runs whose owner is gone or whose TTL ran out, kills run
   dirs that no record claims once they are 2 minutes old (a younger one may be
   a run still launching), and prunes logs older than 7 days. Every `start` and
-  `run` does this first.
+  `run` does this first. A run whose record exists but won't read (junk, nested
+  too deep, or failing its checks) is left alone, never killed, and keeps its
+  logs: fix or remove the record. `stop` fails the same way when an owner ends and leaves its
+  record malformed.
 - `ls` lists runs: id, port, Chrome pids, owner, age, cwd. A run dir with no
   record shows as `no record`.
 - `check` is the live self-test. It opens a window behind yours for about 30 s,
@@ -267,7 +270,7 @@ path), does the Windows half. The rules, and why:
   log outlives the run, for `check` and post-mortems; gc prunes logs after 7
   days.
 - One WSL distro per Windows user: gc takes every run dir under
-  `%TEMP%\chrome-bg\` that no local record claims as its own, so a second distro
+  `%TEMP%\chrome-bg\` that no local record file names, so a second distro
   running chrome-bg would have its runs killed after 2 minutes.
 
 **Keep Bash off the display (`hooks/blank-display.sh`):** in a repo whose

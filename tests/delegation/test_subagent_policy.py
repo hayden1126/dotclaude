@@ -3,10 +3,13 @@
 Each test runs against a temporary home whose user settings carry this repo's baseline
 `sandbox` block, so the excluded-command rules are the ones that ship. Its state dir (the
 liveness index the deadline reads) is in that home too."""
+import contextlib
 import datetime
+import io
 import json
 import os
 import re
+import signal
 import subprocess
 import tempfile
 import unittest
@@ -182,11 +185,64 @@ class Gate(Base):
         p = self.run_main(self.ev("SubagentHandback", {"message": "report"}), env)
         self.assertEqual((p.returncode, p.stdout), (0, ""))
 
+    def test_malformed_settings_or_meta_deny_policed_tools(self):
+        # Skipped, a settings file would drop its deny lists, and a meta.json a writer's root.
+        self.meta("w1", agentType="writer", worktreePath=self.wt)
+        payload = self.ev("Bash", {"command": "touch x"}, atype="writer", cwd=self.wt, aid="w1")
+        self.assertEqual(self.run_main(payload).stdout, "")
+        settings = os.path.join(self.home, ".claude", "settings.json")
+        meta = os.path.join(self.slug_dir, "s1", "subagents", "agent-w1.meta.json")
+        for path in (settings, meta):
+            with open(path) as f:
+                good = f.read()
+            for text in ("{", "[" * 100000, "[]"):  # RecursionError in json; not an object
+                with open(path, "w") as f:
+                    f.write(text)
+                p = self.run_main(payload)
+                self.assertIn("policy-error", p.stdout, (path, text[:5]))
+                handback = self.ev("SubagentHandback", {"message": "r"}, atype="writer",
+                                   cwd=self.wt, aid="w1")
+                self.assertEqual(self.run_main(handback).stdout, "")
+            with open(path, "w") as f:
+                f.write(good)
+
     def test_the_alarm_denies_before_claude_codes_timeout_would_allow(self):
         fifo = os.path.join(self.home, "hang.toml")
         os.mkfifo(fifo)  # opening it for reading blocks until the alarm fires
         p = self.run_main(self.ev("Bash", {"command": "ls"}), {"DELEGATION_POLICY": fifo})
-        self.assertIn("TimeoutError", p.stdout)
+        self.assertIn("PolicyTimeout", p.stdout)
+
+    def main_in_process(self, payload):
+        """main() run here, its stdout: patch what the alarm should land in around it."""
+        self.addCleanup(signal.signal, signal.SIGALRM, signal.getsignal(signal.SIGALRM))
+        out = io.StringIO()
+        with mock.patch("sys.stdin", io.StringIO(json.dumps(payload))), \
+                contextlib.redirect_stdout(out):
+            self.assertEqual(sp.main(), 0)
+        return out.getvalue()
+
+    def test_an_alarm_inside_a_read_that_catches_oserror_or_any_error_still_denies(self):
+        # TimeoutError is an OSError: an alarm landing in dc.read_session (except OSError) was
+        # swallowed, and the hook ran on with no alarm left. So were ones in the deadline check
+        # and the heartbeat (except Exception, failing open). PolicyTimeout gets past each.
+        path = os.path.join(self.home, "s.json")
+        with open(path, "w") as f:
+            f.write("{}")
+
+        def ring(*_):
+            sp._alarm(signal.SIGALRM, None)
+
+        session = mock.patch.object(sp, "evaluate", lambda *_: sp.dc.read_session(path))
+        sites = {"a session read": (session, mock.patch.object(sp.dc.json, "load", ring)),
+                 "the deadline": (mock.patch.object(sp.dc, "read_agent_state", ring),),
+                 "the heartbeat": (mock.patch.object(sp.os, "utime", ring),)}
+        for where, patches in sites.items():
+            with self.subTest(where), contextlib.ExitStack() as stack:
+                for p in patches:
+                    stack.enter_context(p)
+                out = self.main_in_process(self.ev("Bash", {"command": "ls"}))
+                self.assertIn("policy-error", out)
+                self.assertIn("PolicyTimeout", out)
 
     def test_malformed_input_from_a_subagent_is_denied(self):
         env = dict(os.environ, HOME=self.home, XDG_STATE_HOME=os.path.join(self.home, "state"))
@@ -589,6 +645,20 @@ class WriterInLane(Writer):
         d = sp.evaluate(self.ev("Bash", {"command": self.lane_writes()[0]}, atype="writer",
                                 cwd=self.wt, aid="w1"), POLICY, home=self.home)
         self.assertIn("the parent session's checkout", d.message)
+
+    def test_an_unreadable_session_file_that_may_be_the_parents_refuses(self):
+        # Skipped, it may hold the parent's lane, which would then be left to the sandbox.
+        with open(os.path.join(self.sessions, f"{2 ** 22 + 12345}.json"), "w") as f:
+            f.write("{")  # a pid that isn't an ancestor: ruled out
+        self.assertDenied(self.wb(self.lane_writes()[0]), "worktree-root", "scope_down")
+        for name in (f"{os.getpid()}.json", "odd.json"):  # an ancestor's, or no pid at all
+            for text in ("{", "[" * 100000):  # RecursionError in json
+                with open(os.path.join(self.sessions, name), "w") as f:
+                    f.write(text)
+                with self.assertRaises(ValueError, msg=name):
+                    self.wb(self.lane_writes()[0])
+                self.assertIsNone(self.wb("touch x"))  # no lookup inside the worktree
+            os.remove(os.path.join(self.sessions, name))
 
     def test_without_a_sessions_file_the_lane_is_left_to_the_sandbox(self):
         os.remove(os.path.join(self.sessions, "4242.json"))

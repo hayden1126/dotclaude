@@ -1063,6 +1063,42 @@ class Usage(WaitEnv):
             open(self.path("other"), "w").close()
             self.assertTrue(dc.unprotected_exists(self.path("other")))
 
+    def test_a_malformed_settings_or_policy_file_refuses_instead_of_dropping_its_lists(self):
+        # A skipped file would drop its denyRead entries, and the waiter reads outside the
+        # sandbox. Missing and empty (the sandbox's mount stub) stay no settings.
+        settings = self.path(".claude/settings.json")
+        os.makedirs(os.path.dirname(settings), exist_ok=True)
+        target = self.path("out")
+        open(target, "w").close()
+        with mock.patch.dict(os.environ, {"HOME": self.tmp.name}):
+            dc.sandbox_paths()
+            for text in ("", "\n"):
+                with open(settings, "w") as f:
+                    f.write(text)
+                self.assertTrue(dc.sandbox_paths()[0])
+            for text in ("{", "[" * 100000, "[]"):  # RecursionError in json; not an object
+                with open(settings, "w") as f:
+                    f.write(text)
+                with self.assertRaises(ValueError):
+                    dc.sandbox_paths()
+                with self.assertRaises(PermissionError):
+                    dc.open_unprotected(target)
+                self.assertFalse(dc.unprotected_exists(target))
+                p = self.run_("--file", target, poll=False)
+                self.assertEqual(p.returncode, USAGE, p.stderr)
+                self.assertIn("settings.json", p.stderr)
+            os.remove(settings)
+            bad = self.path("bad.toml")
+            with open(bad, "w") as f:
+                f.write("[protect\n")
+            with mock.patch.dict(os.environ, {"DELEGATION_POLICY": bad}):
+                with self.assertRaises(ValueError):
+                    dc.sandbox_paths()
+            p = self.run_("--file", target, poll=False, DELEGATION_POLICY=bad)
+            self.assertEqual(p.returncode, USAGE, p.stderr)
+            self.assertIn("bad.toml", p.stderr)
+        self.assertFalse(os.path.exists(self.watches))
+
     def test_max_stays_under_the_bash_cap(self):
         target = self.path("out")
         open(target, "w").close()
@@ -1506,6 +1542,156 @@ class ClaudeProcess(unittest.TestCase):
             self.assertFalse(dc.pids_visible())  # the sandbox: nothing outside it shows
             self.session_file(os.getppid())
             self.assertTrue(dc.pids_visible())  # only stale: a live Claude process is above
+
+    def junk(self, name, text):
+        with open(os.path.join(self.sessions, name), "w") as f:
+            f.write(text)
+
+    def test_an_unreadable_ancestor_file_stops_the_walk(self):
+        # A farther claude would pin this command on its parent's session.
+        self.session_file(os.getppid())
+        for text in ("{", "[" * 100000):  # RecursionError in json
+            self.junk(f"{os.getpid()}.json", text)
+            self.assertIsNone(dc.claude_ancestor())
+        os.remove(os.path.join(self.sessions, f"{os.getpid()}.json"))
+        self.junk(f"{DEAD}.json", "{")  # not an ancestor's: never read
+        self.assertEqual(dc.claude_ancestor()[0], os.getppid())
+
+    def test_an_unreadable_file_that_may_be_live_makes_liveness_unknown(self):
+        self.session_file(os.getppid())
+        self.junk(f"{DEAD}.json", "{")  # a pid that isn't running: ruled out
+        self.assertEqual(dc.live_sessions(), {"s": os.getppid()})
+        w = {"id": "w-1", "state": "open", "session_id": "s-gone"}
+        self.assertTrue(dc.watch_orphaned(w))
+        me = (os.getpid(), dc.proc_start(os.getpid()))
+        left = dict(w, claude_pid=me[0], claude_start=me[1])
+        self.assertTrue(dc.left_by_clear(left, me, dc.live_sessions()))
+        for name in (f"{os.getpid()}.json", "odd.json"):  # a running pid, or no pid at all
+            for text in ("{", "[" * 100000):  # RecursionError in json
+                self.junk(name, text)
+                self.assertIsNone(dc.live_sessions(), name)
+                self.assertFalse(dc.watch_orphaned(w), name)  # so a live waiter is held
+                self.assertFalse(dc.left_by_clear(left, me, dc.live_sessions()), name)
+            os.remove(os.path.join(self.sessions, name))
+
+    def test_session_toplevel_refuses_an_unreadable_file_it_cant_rule_out(self):
+        repo = os.path.join(os.path.dirname(self.sessions), "repo")
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        with open(os.path.join(self.sessions, "4242.json"), "w") as f:
+            json.dump({"pid": 4242, "sessionId": "s1", "cwd": repo}, f)
+        os.environ.pop("CLAUDE_CONFIG_DIR", None)
+        self.junk(f"{DEAD}.json", "{")  # not an ancestor's: ruled out
+        self.assertEqual(dc.session_toplevel("s1"), os.path.realpath(repo))
+        for name in (f"{os.getpid()}.json", "odd.json"):  # an ancestor's, or no pid at all
+            for text in ("{", "[" * 100000):  # RecursionError in json
+                self.junk(name, text)
+                with self.assertRaises(ValueError, msg=name):
+                    dc.session_toplevel("s1")
+            os.remove(os.path.join(self.sessions, name))
+
+    def test_a_dead_pids_unread_file_is_ruled_out_without_a_reread(self):
+        # Every caller rules it out, so the scan doesn't wait to read it again. Where pids can't
+        # be seen every pid reads as dead, so there it is read again.
+        dead, mine = (os.path.join(self.sessions, f"{p}.json") for p in (DEAD, os.getpid()))
+        self.junk(f"{DEAD}.json", "{")
+        with mock.patch.object(dc.time, "sleep") as sleep:
+            self.assertEqual(dc.session_scan([dead]), ([], []))
+        self.assertNotIn(mock.call(dc.REREAD_WAIT), sleep.mock_calls)
+        with self.env(SANDBOX_RUNTIME=1), mock.patch.object(dc.time, "sleep") as sleep:
+            self.assertEqual(dc.session_scan([dead]), ([], [dead]))
+        sleep.assert_any_call(dc.REREAD_WAIT)
+        self.junk(f"{os.getpid()}.json", "{")  # a running pid's
+        with mock.patch.object(dc.time, "sleep") as sleep:
+            self.assertEqual(dc.session_scan([mine]), ([], [mine]))
+        sleep.assert_any_call(dc.REREAD_WAIT)
+
+    def test_claude_pid_counts_past_an_unread_ancestor_file_only_for_that_ancestor(self):
+        # The walk stopped at this process's file; a farther CLAUDE_PID (the parent) would pin
+        # this command on another claude's session.
+        self.junk(f"{os.getpid()}.json", "{")
+        with self.env(CLAUDE_PID=os.getppid(), CLAUDE_CODE_SESSION_ID="s-parent"):
+            self.assertEqual(dc.claude_identity(), (None, "unknown"))
+        with self.env(CLAUDE_PID=os.getpid(), CLAUDE_CODE_SESSION_ID="s-me"):
+            self.assertEqual(dc.claude_identity(),
+                             ((os.getpid(), dc.proc_start(os.getpid())), "s-me"))
+
+    def test_liveness_passed_as_unknown_isnt_read_again(self):
+        w = {"id": "w-1", "state": "open", "session_id": "s-gone"}
+        with mock.patch.object(dc, "live_sessions", side_effect=AssertionError("read")):
+            self.assertFalse(dc.watch_orphaned(w, live=None))
+            self.assertTrue(dc.watch_orphaned(w, live={}))
+
+
+class ReadObject(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.path = os.path.join(tmp.name, "settings.json")
+
+    def write(self, text):
+        with open(self.path, "w") as f:
+            f.write(text)
+
+    def test_a_torn_write_fixed_by_the_second_read_is_accepted(self):
+        # Claude Code rewrites settings.json in place (a /model save): a read mid-write sees part.
+        self.write('{"model": ')
+        with mock.patch.object(dc.time, "sleep",
+                               side_effect=lambda s: s and self.write('{"model": "opus"}')):
+            self.assertEqual(dc.read_settings(self.path), {"model": "opus"})
+
+    def test_junk_on_both_reads_raises_after_one_wait(self):
+        for text in ("{", "[" * 100000):  # RecursionError in json
+            self.write(text)
+            with mock.patch.object(dc.time, "sleep") as sleep, self.assertRaises(ValueError):
+                dc.read_settings(self.path)
+            sleep.assert_called_once_with(dc.REREAD_WAIT)
+
+    def test_junk_then_an_empty_read_raises(self):
+        # A mount stub is never anything but empty: content on the first read and none on the
+        # second is a rewrite still under way, so {} would drop that tier's denyRead.
+        for junk in ("{", "[" * 100000):  # RecursionError in json
+            self.write(junk)
+            with mock.patch.object(dc.time, "sleep", side_effect=lambda s: s and self.write("")), \
+                    self.assertRaises(ValueError):
+                dc.read_settings(self.path)
+
+    def test_content_then_no_file_raises(self):
+        # Gone on the second read after content on the first: still mid-rewrite, not "no file".
+        self.write("{")
+        with mock.patch.object(dc.time, "sleep", side_effect=lambda s: s and os.remove(self.path)), \
+                self.assertRaises(ValueError):
+            dc.read_settings(self.path)
+
+    def test_a_file_that_isnt_utf8_raises(self):
+        for second in (b"\xff", b""):  # not UTF-8 on both reads, or emptied after it
+            with open(self.path, "wb") as f:
+                f.write(b"\xff")
+            with mock.patch.object(dc.time, "sleep",
+                                   side_effect=lambda s, b=second: s and open(self.path, "wb").write(b)), \
+                    self.assertRaises(ValueError):
+                dc.read_settings(self.path)
+
+    def test_a_missing_file_is_no_settings_with_no_wait(self):
+        with mock.patch.object(dc.time, "sleep") as sleep:
+            self.assertEqual(dc.read_settings(self.path), {})
+        sleep.assert_not_called()
+
+    def test_an_empty_first_read_takes_the_second(self):
+        # A truncate-then-write leaves an empty file as its likeliest torn state: taken as {}
+        # at once, it would drop that tier's denyRead.
+        full = {"sandbox": {"filesystem": {"denyRead": ["/secret"]}}}
+        self.write("")
+        with mock.patch.object(dc.time, "sleep",
+                               side_effect=lambda s: s and self.write(json.dumps(full))):
+            self.assertEqual(dc.read_settings(self.path), full)
+
+    def test_an_empty_file_is_no_settings_after_one_wait(self):
+        # A sandbox mount stub (/dev/null) stays empty.
+        for text in ("", "\n", "  \t\n"):
+            self.write(text)
+            with mock.patch.object(dc.time, "sleep") as sleep:
+                self.assertEqual(dc.read_settings(self.path), {})
+            sleep.assert_called_once_with(dc.REREAD_WAIT)
 
 
 class WaiterIdentity(unittest.TestCase):

@@ -217,6 +217,32 @@ class LedgerHook(LedgerEnv):
         self.assertEqual(dc.agent_meta({"transcript_path": "/nonexistent/s.jsonl",
                                         "agent_id": "a1"}), {})
 
+    def test_a_malformed_meta_json_raises_only_when_strict(self):
+        # The policy's Analyzer is strict, so a writer never runs unconfined on junk; missing
+        # or empty is a plain subagent's, whose meta.json doesn't exist yet at SubagentStart.
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "s1", "subagents"))
+            data = {"transcript_path": os.path.join(d, "s1.jsonl"), "agent_id": "agent-a1",
+                    "agent_type": "writer"}
+            self.assertEqual(dc.agent_meta(data, strict=True), {})
+            path = os.path.join(d, "s1", "subagents", "agent-a1.meta.json")
+            for text in ("", " \n"):
+                with open(path, "w") as f:
+                    f.write(text)
+                self.assertEqual(dc.agent_meta(data, strict=True), {})
+            for text in ("{", "[" * 100000, "[]"):  # RecursionError in json; not an object
+                with open(path, "w") as f:
+                    f.write(text)
+                with self.assertRaises(ValueError):
+                    dc.agent_meta(data, strict=True)
+                self.assertEqual(dc.agent_meta(data), {})
+                self.assertEqual(dc.agent_role(data), "writer")
+
+    def test_parent_checkout_is_none_when_the_session_files_cant_be_trusted(self):
+        with mock.patch.object(ledger_mod.dc, "session_toplevel",
+                               side_effect=ValueError("session file x.json can't be read")):
+            self.assertIsNone(ledger_mod.parent_checkout("s1", "/main"))
+
     def test_teammate_restarts_fold_to_one_entry(self):
         for _ in range(3):
             self.hook(self.start())
@@ -1104,6 +1130,17 @@ class Watch(LiveSession):
             "1 more unfinished but not live in the last 48h: delegation-ledger open"])
         self.assertEqual(self.summary(), "")
         self.assertIn("orphaned", self.open_())
+
+    def test_an_unreadable_session_file_leaves_liveness_unknown_not_gone(self):
+        self.hook(self.start(sid="s9"))
+        sessions = os.path.join(self.tmp.name, ".claude", "sessions")
+        with open(os.path.join(sessions, f"{2 ** 22 + 12345}.json"), "w") as f:
+            f.write("{")  # a pid that isn't running: ruled out
+        self.assertIn("orphaned", self.open_())
+        for text in ("{", "[" * 100000):  # RecursionError in json
+            with open(os.path.join(sessions, "odd.json"), "w") as f:
+                f.write(text)
+            self.assertNotIn("orphaned", self.open_())
 
     def test_a_turn_that_just_ended_is_finishing_then_warns(self):
         # The stop row lands a few seconds after the end_turn entry; a poll in that gap

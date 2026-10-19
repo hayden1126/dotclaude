@@ -299,7 +299,8 @@ codex-delegate audit <thread_id> [--model astra]   # every model the thread and 
 - **Protected paths:** `run` and `resume` refuse (exit 2) a `--dir` or `--out` that is, holds
   or sits under a denyWrite path, such as `~/dotclaude` or a lane checkout whose install is
   live, since codex's sandbox doesn't know Claude's lists; Hayden runs such a delegation by
-  hand. `run` also refuses a `--brief`, and `resume` a `--prompt`, under a denyRead path.
-  `--network` and `--no-scope` ask. Codex's `workspace-write` sandbox limits writes, not reads,
+  hand. `run` also refuses a `--brief`, and `resume` a `--prompt`, under a denyRead path. Both
+  refuse, and so does `delegation-ledger wait`, while a user or managed settings file or
+  `policy.toml` exists but won't parse, since its lists can't be known. `--network` and `--no-scope` ask. Codex's `workspace-write` sandbox limits writes, not reads,
   so a delegated codex can still read those paths itself; a follow-up moves the wrapper to a
   codex permission profile that denies them.

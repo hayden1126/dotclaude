@@ -798,6 +798,17 @@ class Watches(GuardEnv):
         self.assertIsNone(self.read()["blocked_at"])
         self.assertNotIn("adopted", self.err_log())
 
+    def test_the_adoption_check_reads_liveness_once_not_per_watch(self):
+        # live_sessions may wait out a torn session file, which mustn't happen per watch while
+        # the watches lock is held.
+        self.mine()
+        self.mine(wid="w-2")
+        self.lines()
+        sessions = self.as_claude()
+        self.decide()
+        self.assertEqual([self.read(w)["session_id"] for w in ("w-1", "w-2")], ["s1", "s1"])
+        self.assertEqual(sessions.call_count, 2)  # the gather, then the commit's check
+
     def test_a_watch_re_armed_elsewhere_after_gather_isnt_adopted(self):
         self.mine()
         self.lines()
