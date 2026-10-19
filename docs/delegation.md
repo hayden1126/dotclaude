@@ -338,7 +338,10 @@ Not covered:
 - the cwd a command moves to itself (`cd X && git push`, `git -C X push`): the guard judges the
   call's starting cwd, and such a call either matches no pattern or runs sandboxed (a compound
   command stays in the sandbox). The guard doesn't read `dangerouslyDisableSandbox`: a sandbox-off
-  call is judged like any other, by its text.
+  call is judged like any other, by its text;
+- a repo an excluded command is handed as an argument (`lane addr --repo PATH`): the guard never
+  judges PATH's git config, so the CLI hardens the one git it runs there itself (docs/lanes.md,
+  "Bug reports from other repos").
 
 Allow rules on excluded commands sit behind it: an allow rule skips the classifier, and
 `test_settings.py` fails if one covers an excluded command while the guard isn't wired.

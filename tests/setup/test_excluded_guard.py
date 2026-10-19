@@ -22,8 +22,8 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 HOOK = os.path.join(REPO, "hooks", "excluded-guard.sh")
 SESSION_HOOK = os.path.join(REPO, "hooks", "excluded-check.sh")
 MODULE = os.path.join(REPO, "hooks", "excluded_guard.py")
-EXCLUDED = ["git push", "git push origin *", "gh pr *", "lane ls", "lane ls *", "claude *",
-            "codex login status"]
+EXCLUDED = ["git push", "git push origin *", "gh pr *", "lane ls", "lane ls *", "lane addr *",
+            "claude *", "codex login status"]
 HEADS = ("git", "gh", "lane", "claude", "codex")
 MARKER = "#!/bin/sh\necho marker\n"
 
@@ -189,6 +189,14 @@ class Rule1Repository(Guard):
 
     def test_a_cwd_with_no_repo_passes_while_the_project_is_a_repo(self):
         self.allowed("git push", cwd=self.mkdir("plain"))
+
+    def test_lane_addr_repo_runs_from_another_repo_and_from_home(self):
+        # The global CLAUDE.md line's call, from a session outside dotclaude: the guard judges
+        # the cwd, never the --repo path (the CLI hardens its own git there).
+        call = "lane addr --repo ~/dotclaude lead"
+        self.allowed(call)
+        self.env["CLAUDE_PROJECT_DIR"] = self.home
+        self.allowed(call, cwd=self.home)
 
     def test_another_worktrees_config_worktree_is_judged(self):
         # A lane-like project, cwd in the main checkout: same common dir, a different gitdir.

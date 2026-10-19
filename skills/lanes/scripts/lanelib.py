@@ -309,11 +309,24 @@ class Repo:
         return os.path.join(self.lane_dir(lane_id), "lane.json")
 
 
-def resolve(cwd: str) -> Repo | None:
-    """The Repo holding cwd, or None outside a work tree (or when git fails)."""
+# The env of the git `lane addr --repo` runs in a repo it was only handed. The excluded-command
+# guard judged the cwd's git config, not that repo's, which any sandboxed session that can write
+# it may have planted (one rooted at $HOME can write every repo's under it). So, as
+# excluded_guard.git_read and install-state.py's commits_past run git: no GIT_* from the caller
+# (git.env drops them, a GIT_DIR or the sandbox's safe.directory=* included), no system or global
+# config, no transport. git's own ownership check stays on: a repo another user owns is refused.
+HANDED_ENV = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+              "GIT_OPTIONAL_LOCKS": "0", "GIT_ALLOW_PROTOCOL": "none", "GIT_NO_LAZY_FETCH": "1"}
+
+
+def resolve(cwd: str, env: dict[str, str] | None = None, timeout: float = 60) -> Repo | None:
+    """The Repo holding cwd, or None outside a work tree (or when git fails, runs past timeout
+    or prints a path that isn't UTF-8). env as git's: HANDED_ENV for a repo the
+    excluded-command guard didn't judge."""
     try:
-        p = git(["rev-parse", "--path-format=absolute", "--git-common-dir", "--show-toplevel"], cwd)
-    except (OSError, subprocess.SubprocessError):
+        p = git(["rev-parse", "--path-format=absolute", "--git-common-dir", "--show-toplevel"], cwd,
+                timeout=timeout, env=env)
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError):
         return None
     lines = p.stdout.splitlines()
     if p.returncode != 0 or len(lines) != 2:
@@ -799,19 +812,25 @@ def worktree_problem(repo: "Repo", path: str, lanes: list[dict]) -> str | None:
 GITDIR_MAX = 4096  # bytes read of a .git file or an admin dir's gitdir file
 
 
+def git_top(path: str) -> str | None:
+    """The nearest dir at or above path (real) that holds a .git, where git's own discovery
+    stops, or None."""
+    top = os.path.realpath(path)
+    while not os.path.lexists(os.path.join(top, ".git")):
+        if (parent := os.path.dirname(top)) == top:
+            return None
+        top = parent
+    return top
+
+
 def linked_worktree(repo: "Repo", cwd) -> str | None:
     """The linked worktree of this repo that holds cwd (a cwd from /proc or a session file), by
     the nearest .git at or above it: a regular file naming <common-dir>/worktrees/<x>, whose
     gitdir file names that .git back. Both are read with read_head: bounded, never through a
     link, never waiting on a FIFO. None for the main checkout (its .git is a dir), for another
     repo's checkout, and for anything else."""
-    if not (isinstance(cwd, str) and "\0" not in cwd):
+    if not (isinstance(cwd, str) and "\0" not in cwd) or (top := git_top(cwd)) is None:
         return None
-    top = os.path.realpath(cwd)
-    while not os.path.lexists(os.path.join(top, ".git")):
-        if (parent := os.path.dirname(top)) == top:
-            return None
-        top = parent
     dotgit = os.path.join(top, ".git")
     text = (read_head(dotgit, GITDIR_MAX) or b"").decode(errors="replace").strip()
     if not text.startswith("gitdir: ") or "\0" in text:
