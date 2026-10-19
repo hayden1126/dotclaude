@@ -85,6 +85,8 @@ def read_object(path, what):
             with open(path) as f:
                 text = f.read()
         except FileNotFoundError:
+            if err:  # content on the first read, gone now: still mid-rewrite
+                break
             return {}
         except UnicodeDecodeError as e:  # not UTF-8, or a rewrite cut mid-character
             err = f"unreadable {what} {path}: {e}"

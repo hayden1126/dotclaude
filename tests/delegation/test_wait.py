@@ -1655,6 +1655,22 @@ class ReadObject(unittest.TestCase):
                     self.assertRaises(ValueError):
                 dc.read_settings(self.path)
 
+    def test_content_then_no_file_raises(self):
+        # Gone on the second read after content on the first: still mid-rewrite, not "no file".
+        self.write("{")
+        with mock.patch.object(dc.time, "sleep", side_effect=lambda s: s and os.remove(self.path)), \
+                self.assertRaises(ValueError):
+            dc.read_settings(self.path)
+
+    def test_a_file_that_isnt_utf8_raises(self):
+        for second in (b"\xff", b""):  # not UTF-8 on both reads, or emptied after it
+            with open(self.path, "wb") as f:
+                f.write(b"\xff")
+            with mock.patch.object(dc.time, "sleep",
+                                   side_effect=lambda s, b=second: s and open(self.path, "wb").write(b)), \
+                    self.assertRaises(ValueError):
+                dc.read_settings(self.path)
+
     def test_a_missing_file_is_no_settings_with_no_wait(self):
         with mock.patch.object(dc.time, "sleep") as sleep:
             self.assertEqual(dc.read_settings(self.path), {})

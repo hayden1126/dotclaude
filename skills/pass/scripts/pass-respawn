@@ -978,7 +978,9 @@ def listed_paths(path: str, keys: tuple[str, ...], base: str | None) -> list[str
             with open(path, "rb") as f:
                 text = f.read()
         except OSError:
-            return []
+            if not torn:
+                return []
+            text = b""  # content on the first read, gone now: still mid-rewrite
         if not text.strip() and not last:
             time.sleep(SETTINGS_REREAD)
             continue

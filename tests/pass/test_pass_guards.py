@@ -284,6 +284,14 @@ class WritableRoots(Plain):
                 with self.assertRaises(self.mod.Refuse):
                     self.real_roots(None, self.main, None, ["claude"])
 
+    def test_junk_then_no_file_refuses(self):
+        # Gone on the second read after content on the first: still mid-rewrite, not "no file".
+        user = os.path.join(self.home, ".claude", "settings.json")
+        self.write(user, "{")
+        with mock.patch.object(self.mod.time, "sleep", lambda _: os.remove(user)):
+            with self.assertRaises(self.mod.Refuse):
+                self.real_roots(None, self.main, None, ["claude"])
+
     def test_an_empty_settings_file_is_read_once_more(self):
         # A truncate-then-write leaves an empty file as its likeliest torn state: listing nothing
         # at once would drop that tier's allowWrite. A sandbox mount stub stays empty: no dirs.
