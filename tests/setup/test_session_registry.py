@@ -9,10 +9,11 @@ SessionEnd deletes the entry on an explicit end (/exit, /clear, logout) and only
 shutdown can't be told from a closed window at hook time. In a tab it then hands the payload to
 ~/.local/bin/claude-saved, fail-open. The entry also carries the window's @tab_place (the tab
 bar's placement, opaque here) as `place` when it is a valid one, and the `--model` and `--effort`
-the session's claude launched with (its nearest ancestor named claude, from /proc) as `model` and
-`effort`, each when present and in its shape. A stub tmux answers `display` and logs each call's
-argv, one argument per field. Each hook runs under a stub claude: its own parent, nearer than any
-real session the test runs in, whose launch flags would otherwise leak in."""
+the session's claude launched with (from /proc: its nearest ancestor whose session file names it
+and the session, else its nearest ancestor named claude) as `model` and `effort`, each when
+present and in its shape. A stub tmux answers `display` and logs each call's argv, one argument
+per field. Each hook runs under a stub claude that writes its own session file: its own parent,
+nearer than any real session the test runs in, whose launch flags would otherwise leak in."""
 import fcntl
 import json
 import os
@@ -49,12 +50,24 @@ TAB = {"TMUX": "/tmp/tmux-1000/default,1,0", "TMUX_PANE": "%7",
        "CLAUDE_CODE_SESSION_ATTENDED": "1"}
 # A tab bar placement: opaque to the hook, so spaces, quotes, # and non-ASCII pass as they are.
 PLACE = '{"row": 1, "pos": 2, "k": "a b #{pane_id} \'q\' ' + chr(0xe9) + ';"}'
-# A stub claude: a direct shebang keeps its comm `claude` (an env shebang would make it bash), and
-# it runs the hook as a child, never exec, so it stays the hook's ancestor.
-CLAUDE = """#!/bin/bash
+# A stub claude: a direct shebang keeps its comm its file name, `claude` or a version like
+# `2.1.302` (an env shebang would make it bash), and it runs the hook as a child, never exec, so
+# it stays the hook's ancestor. With $STUB_SESSION set it first writes its session file as Claude
+# Code does by SessionStart (~/.claude/sessions/<pid>.json: pid, procStart as stat field 22 or
+# $STUB_PROC_START, sessionId).
+CLAUDE = r"""#!/bin/bash
+if [ -n "${STUB_SESSION:-}" ]; then
+  read -r stat < "/proc/$$/stat"
+  fields=(${stat##*\) })
+  mkdir -p "$HOME/.claude/sessions"
+  printf '{"pid": %s, "procStart": "%s", "sessionId": "%s"}' "$$" \
+    "${STUB_PROC_START:-${fields[19]}}" "$STUB_SESSION" > "$HOME/.claude/sessions/$$.json"
+fi
 "$CLAUDE_RUNS" "$@"
 exit $?
 """
+OUTER = '#!/bin/bash\n"%s" %s\nexit $?\n'   # a claude above the stub, which runs it
+VERSIONED = os.path.join("versions", "2.1.302")   # a claude exec'd by its versioned path
 LAUNCH = ["--model", "sonnet", "--effort=low", "--permission-mode", "plan", "Read STATUS.md"]
 
 
@@ -76,31 +89,40 @@ class Registry(unittest.TestCase):
         self.env.update(PATH=stubs + os.pathsep + self.env["PATH"], STUB_LOG=self.log,
                         HOME=self.home, XDG_STATE_HOME=os.path.join(self.tmp, "state"),
                         STUB_START=str(START), STUB_PID=str(PID), STUB_SOCKET=SOCKET)
-        self.claude = self.claude_stub("claude-bin")
+        self.claude = self.claude_stub(os.path.join("claude-bin", "claude"))
         self.hook = HOOK
 
-    def claude_stub(self, where):
-        """A stub claude in its own dir, which runs $CLAUDE_RUNS with its args."""
-        path = os.path.join(self.tmp, where, "claude")
-        os.makedirs(os.path.dirname(path))
+    def claude_stub(self, where, body=CLAUDE):
+        """A stub claude at <tmp>/<where>, which runs $CLAUDE_RUNS with its args."""
+        path = os.path.join(self.tmp, where)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
-            f.write(CLAUDE)
+            f.write(body)
         os.chmod(path, 0o755)
         return path
 
-    def fire(self, event, session=TAB, launch=(), **payload):
+    def outer(self, *inner_flags):
+        """A claude named claude above the current stub, which runs it with inner_flags (plain
+        words): fire's launch flags go to the outer one."""
+        self.claude = self.claude_stub(os.path.join("outer", "claude"),
+                                       OUTER % (self.claude, " ".join(inner_flags)))
+
+    def fire(self, event, session=TAB, launch=(), stub_session=..., **payload):
         """Run the hook as `claude <launch>` would: under the stub claude, with launch as its
-        flags."""
+        flags. The stub writes its session file naming stub_session (by default the payload's
+        id; None writes none)."""
+        sid = payload.get("session_id", SID)
+        stub_session = sid if stub_session is ... else stub_session
         body = {"session_id": SID, "hook_event_name": event, "cwd": "/home/u/code/dna",
-                "transcript_path": f"/home/u/.claude/projects/dna/{payload.get('session_id', SID)}.jsonl",
-                **payload}
+                "transcript_path": f"/home/u/.claude/projects/dna/{sid}.jsonl", **payload}
         runs = os.path.join(self.tmp, "run-hook")
         with open(runs, "w") as f:
             f.write('#!/bin/bash\nbash "%s"\nexit $?\n' % self.hook)
         os.chmod(runs, 0o755)
+        stub = {} if stub_session is None else {"STUB_SESSION": stub_session}
         p = subprocess.run([self.claude, *launch], input=json.dumps(body), capture_output=True,
                            text=True, timeout=10,
-                           env={"CLAUDE_RUNS": runs, **self.env, **session})
+                           env={"CLAUDE_RUNS": runs, **self.env, **stub, **session})
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual((p.stdout, p.stderr), ("", ""))
 
@@ -299,19 +321,47 @@ class Registry(unittest.TestCase):
                 self.assertEqual({k: e[k] for k in ("model", "effort") if k in e}, kept)
                 self.assertEqual(e["pane"], "%7")
 
+    def flags(self):
+        return {k: v for k, v in self.entries()[SID].items() if k in ("model", "effort")}
+
     def test_the_nearest_claude_is_the_sessions(self):
         # A session's hook sits a few processes below its claude; any claude further up (the
-        # one a test runs in, say) is another session.
-        inner = self.claude
-        self.claude = os.path.join(self.tmp, "outer", "claude")   # runs inner with no flags
-        os.makedirs(os.path.dirname(self.claude))
-        with open(self.claude, "w") as f:
-            f.write('#!/bin/bash\n"%s"\nexit $?\n' % inner)
-        os.chmod(self.claude, 0o755)
+        # one a test runs in, say) is another session. So by its session file, and by name.
+        for stub_session in (..., None):
+            with self.subTest(stub_session=stub_session):
+                self.claude = self.claude_stub(os.path.join("claude-bin", "claude"))
+                self.outer()
+                self.start(launch=LAUNCH, stub_session=stub_session)
+                self.assertEqual(self.flags(), {})
+
+    def test_a_claude_run_by_its_versioned_path_is_found_by_its_session_file(self):
+        # Its comm is the version (2.1.302), so no name finds it; its session file does, which
+        # exists by SessionStart (probed on 2.1.302, startup and clear alike).
+        self.claude = self.claude_stub(VERSIONED)
         self.start(launch=LAUNCH)
-        e = self.entries()[SID]
-        self.assertNotIn("model", e)
-        self.assertNotIn("effort", e)
+        self.assertEqual(self.flags(), {"model": "sonnet", "effort": "low"})
+        # Nearer than a claude named claude above it, launched with other flags.
+        self.outer()
+        self.start(launch=["--model", "opus"])
+        self.assertEqual(self.flags(), {})
+
+    def test_only_a_file_naming_this_session_and_its_process_counts(self):
+        # Another session's file, a stale procStart (a reused pid's file) and no file at all pass
+        # the versioned claude (launched with opus) over: the nearest claude by name answers,
+        # here one with no flags.
+        self.claude = self.claude_stub(VERSIONED)
+        self.outer("--model", "opus")
+        for stub_session, start in ((NEW, None), (SID, "1"), (None, None)):
+            with self.subTest(stub_session=stub_session, start=start):
+                self.env.pop("STUB_PROC_START", None)
+                if start:
+                    self.env["STUB_PROC_START"] = start
+                self.start(stub_session=stub_session)
+                self.assertEqual(self.flags(), {})
+
+    def test_without_a_session_file_the_nearest_claude_by_name_answers(self):
+        self.start(launch=LAUNCH, stub_session=None)
+        self.assertEqual(self.flags(), {"model": "sonnet", "effort": "low"})
 
     def test_a_linked_hook_finds_lanelib_through_its_link(self):
         # Installed, the hook is a symlink in ~/.claude/hooks to the repo's hooks/.

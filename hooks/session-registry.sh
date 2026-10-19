@@ -13,12 +13,15 @@
 # the pane's TMUX, so `tmux display` reaches it. place is the window's @tab_place, the tab bar's
 # row and position for it (tmux/tmux-tab-bar owns the format; here it is an opaque string, kept
 # only as 1 to 2048 bytes of UTF-8 with no control character), which claude-restore sets back.
-# model and effort are the session's claude's own launch flags: its nearest ancestor named claude
-# (a hook runs a few processes below it), read from /proc and kept only in their shape
-# (lanelib.pick_ok). claude-restore and claude-saved's Open resume the session with them, as a
-# plain pass would carry them (lanelib.carried_pick; docs/lanes.md, "Model and effort"). lanelib
-# is found through this hook's link, by absolute path only; any failure there writes the entry
-# without them.
+# model and effort are the session's claude's own launch flags, read from /proc and kept only in
+# their shape (lanelib.pick_ok). Its claude is the nearest ancestor (a hook runs a few processes
+# below it) whose session file, ~/.claude/sessions/<pid>.json, records that process's own
+# procStart and this session's id (lanelib.sessions_above). The file exists by SessionStart,
+# startup and clear alike (probed on 2.1.302), and finds a claude exec'd by its versioned path,
+# whose comm is the version. With no such file, the nearest ancestor named claude.
+# claude-restore and claude-saved's Open resume the session with them, as a plain pass would
+# carry them (lanelib.carried_pick; docs/lanes.md, "Model and effort"). lanelib is found through
+# this hook's link, by absolute path only; any failure there writes the entry without them.
 # Every write and delete holds open-sessions/.records.lock (flock, waiting up to 2 s, then going
 # ahead without it), as claude-saved's do: tmux-tab-bar compares and replaces a record's place
 # under it, so a record deleted or rewritten here is never brought back or overwritten by a stale
@@ -109,12 +112,17 @@ def locked():
             time.sleep(0.01)
 
 def launch_pick():
-    """The --model and --effort the session claude launched with, as entry fields: the nearest
-    ancestor named claude, its argv from /proc. {} on any failure (no lanelib, no claude above
-    this hook, an unreadable /proc), so the entry is still written."""
+    """The --model and --effort the session claude launched with, as entry fields, from its argv
+    in /proc. Its claude is the nearest ancestor whose session file records the procStart of
+    that very process and the id of this session (lanelib.sessions_above), else the nearest
+    ancestor named claude. {} on any failure (no lanelib, no claude above this hook, an
+    unreadable /proc), so the entry is still written."""
     try:
-        claude = next(pid for pid, _ in lanelib.ancestry(os.getpid())
-                      if (lanelib.proc_stat(pid) or ("",))[0] == "claude")
+        claude = next((p.pid for s, p in lanelib.sessions_above() if s.get("sessionId") == sid),
+                      None)
+        if claude is None:
+            claude = next(pid for pid, _ in lanelib.ancestry(os.getpid())
+                          if (lanelib.proc_stat(pid) or ("",))[0] == "claude")
         flags = lanelib.pick_flags(lanelib.proc_cmdline(claude))
         return {flag[2:]: value for flag, value in flags.items() if lanelib.pick_ok(flag, value)}
     except Exception:
