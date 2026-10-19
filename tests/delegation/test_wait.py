@@ -1589,6 +1589,70 @@ class ClaudeProcess(unittest.TestCase):
                     dc.session_toplevel("s1")
             os.remove(os.path.join(self.sessions, name))
 
+    def test_a_dead_pids_unread_file_is_ruled_out_without_a_reread(self):
+        # Every caller rules it out, so the scan doesn't wait to read it again. Where pids can't
+        # be seen every pid reads as dead, so there it is read again.
+        dead, mine = (os.path.join(self.sessions, f"{p}.json") for p in (DEAD, os.getpid()))
+        self.junk(f"{DEAD}.json", "{")
+        with mock.patch.object(dc.time, "sleep") as sleep:
+            self.assertEqual(dc.session_scan([dead]), ([], []))
+        self.assertNotIn(mock.call(dc.REREAD_WAIT), sleep.mock_calls)
+        with self.env(SANDBOX_RUNTIME=1), mock.patch.object(dc.time, "sleep") as sleep:
+            self.assertEqual(dc.session_scan([dead]), ([], [dead]))
+        sleep.assert_any_call(dc.REREAD_WAIT)
+        self.junk(f"{os.getpid()}.json", "{")  # a running pid's
+        with mock.patch.object(dc.time, "sleep") as sleep:
+            self.assertEqual(dc.session_scan([mine]), ([], [mine]))
+        sleep.assert_any_call(dc.REREAD_WAIT)
+
+    def test_claude_pid_counts_past_an_unread_ancestor_file_only_for_that_ancestor(self):
+        # The walk stopped at this process's file; a farther CLAUDE_PID (the parent) would pin
+        # this command on another claude's session.
+        self.junk(f"{os.getpid()}.json", "{")
+        with self.env(CLAUDE_PID=os.getppid(), CLAUDE_CODE_SESSION_ID="s-parent"):
+            self.assertEqual(dc.claude_identity(), (None, "unknown"))
+        with self.env(CLAUDE_PID=os.getpid(), CLAUDE_CODE_SESSION_ID="s-me"):
+            self.assertEqual(dc.claude_identity(),
+                             ((os.getpid(), dc.proc_start(os.getpid())), "s-me"))
+
+    def test_liveness_passed_as_unknown_isnt_read_again(self):
+        w = {"id": "w-1", "state": "open", "session_id": "s-gone"}
+        with mock.patch.object(dc, "live_sessions", side_effect=AssertionError("read")):
+            self.assertFalse(dc.watch_orphaned(w, live=None))
+            self.assertTrue(dc.watch_orphaned(w, live={}))
+
+
+class ReadObject(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.path = os.path.join(tmp.name, "settings.json")
+
+    def write(self, text):
+        with open(self.path, "w") as f:
+            f.write(text)
+
+    def test_a_torn_write_fixed_by_the_second_read_is_accepted(self):
+        # Claude Code rewrites settings.json in place (a /model save): a read mid-write sees part.
+        self.write('{"model": ')
+        with mock.patch.object(dc.time, "sleep",
+                               side_effect=lambda s: s and self.write('{"model": "opus"}')):
+            self.assertEqual(dc.read_settings(self.path), {"model": "opus"})
+
+    def test_junk_on_both_reads_raises_after_one_wait(self):
+        for text in ("{", "[" * 100000):  # RecursionError in json
+            self.write(text)
+            with mock.patch.object(dc.time, "sleep") as sleep, self.assertRaises(ValueError):
+                dc.read_settings(self.path)
+            sleep.assert_called_once_with(dc.REREAD_WAIT)
+
+    def test_missing_or_empty_is_no_settings_with_no_wait(self):
+        with mock.patch.object(dc.time, "sleep") as sleep:
+            self.assertEqual(dc.read_settings(self.path), {})
+            self.write("\n")
+            self.assertEqual(dc.read_settings(self.path), {})
+        sleep.assert_not_called()
+
 
 class WaiterIdentity(unittest.TestCase):
     def test_a_waiter_records_the_identity_it_was_given_without_walking_again(self):

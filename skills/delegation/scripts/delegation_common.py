@@ -65,28 +65,41 @@ def state_dir(home=None):
     return os.path.join(base, "dotclaude")
 
 
+REREAD_WAIT = 0.1  # seconds before a file that won't parse is read again: a torn rewrite
+
+
 def read_object(path, what):
     """The JSON object in the file at path, or {} when it is missing or empty: while a
     sandboxed command runs, the sandbox mounts /dev/null over a protected path the project
-    lacks, which leaves an empty file where a reader looks. ValueError, naming the file as
-    `what`, for anything else that doesn't read as a JSON object (an unreadable file, junk, too
-    deep, or another JSON value), so a reader that trusts it fails closed."""
-    try:
-        with open(path) as f:
-            text = f.read()
-    except FileNotFoundError:
-        return {}
-    except (OSError, ValueError) as e:  # ValueError: not UTF-8
-        raise ValueError(f"unreadable {what} {path}: {e}") from None
-    if not text.strip():
-        return {}
-    try:
-        obj = json.loads(text)
-    except (ValueError, RecursionError) as e:  # json recurses on nesting
-        raise ValueError(f"unreadable {what} {path}: {type(e).__name__}") from None
-    if not isinstance(obj, dict):
-        raise ValueError(f"{what} {path} is not a JSON object")
-    return obj
+    lacks, which leaves an empty file where a reader looks. A file that won't parse is read once
+    more after REREAD_WAIT, since Claude Code rewrites settings.json in place (a /model save).
+    ValueError, naming the file as `what`, for anything else that doesn't read as a JSON object
+    (an unreadable file, junk, too deep, or another JSON value), so a reader that trusts it
+    fails closed."""
+    for wait in (0, REREAD_WAIT):
+        if wait:
+            time.sleep(wait)
+        try:
+            with open(path) as f:
+                text = f.read()
+        except FileNotFoundError:
+            return {}
+        except UnicodeDecodeError as e:  # not UTF-8, or a rewrite cut mid-character
+            err = f"unreadable {what} {path}: {e}"
+            continue
+        except (OSError, ValueError) as e:  # ValueError: a NUL in the path
+            raise ValueError(f"unreadable {what} {path}: {e}") from None
+        if not text.strip():
+            return {}
+        try:
+            obj = json.loads(text)
+        except (ValueError, RecursionError) as e:  # json recurses on nesting
+            err = f"unreadable {what} {path}: {type(e).__name__}"
+            continue
+        if not isinstance(obj, dict):
+            raise ValueError(f"{what} {path} is not a JSON object")
+        return obj
+    raise ValueError(err)
 
 
 def read_settings(path):
@@ -580,9 +593,6 @@ def ancestors():
     return out
 
 
-REREAD_WAIT = 0.1  # seconds before an unread session file is read again: a torn rewrite
-
-
 def read_session(path):
     """One session file as a JSON object, else None (gone, unreadable, junk or too deep)."""
     try:
@@ -593,11 +603,14 @@ def read_session(path):
     return s if isinstance(s, dict) else None
 
 
-def session_scan(paths):
+def session_scan(paths, rule_out_dead=True):
     """(files, unread) for the Claude Code session files at paths: (path, object) for each
     that reads as a JSON object, and the paths of those that exist yet don't, each read once
     more after REREAD_WAIT. A caller that trusts what it finds rules each unread path out
-    (file_pid) or fails closed."""
+    (file_pid) or fails closed. One named for a pid that isn't running is every caller's to rule
+    out, so it is dropped after the first read, with no wait; but not where pids can't be seen
+    (pids_visible), since there every pid reads as gone, nor with rule_out_dead False
+    (claude_ancestor, whose paths name live ancestors, and which pids_visible walks)."""
     files, unread = [], list(paths)
     for wait in (0, REREAD_WAIT):
         if not unread:
@@ -609,6 +622,10 @@ def session_scan(paths):
                 files.append((path, s))
             elif os.path.lexists(path):  # a missing file is no session
                 unread.append(path)
+        if not wait and rule_out_dead:
+            dead = [p for p in unread if (pid := file_pid(p)) is not None and not pid_alive(pid)]
+            if dead and pids_visible():
+                unread = [p for p in unread if p not in dead]
     return files, unread
 
 
@@ -627,18 +644,25 @@ def claude_ancestor(chain=None):
     file exists but can't be read (session_scan): the walk never goes on to a farther claude,
     which would pin a nested `claude -p` on its parent's session. A `claude -p` run writes its
     own sessions file, so a nested one finds itself, not its parent."""
-    for pid in (ancestors() if chain is None else chain)[:SESSION_WALK + 1]:
-        files, unread = session_scan([os.path.expanduser(f"~/.claude/sessions/{pid}.json")])
+    return _ancestor_walk(ancestors() if chain is None else chain)[0]
+
+
+def _ancestor_walk(chain):
+    """(found, stopped): claude_ancestor's result for `chain`, and the pid whose sessions file
+    exists but can't be read, which stopped the walk (None when none did)."""
+    for pid in chain[:SESSION_WALK + 1]:
+        files, unread = session_scan([os.path.expanduser(f"~/.claude/sessions/{pid}.json")],
+                                     rule_out_dead=False)
         if unread:
-            return None
+            return None, pid
         if not files:
             continue
         d, start = files[0][1], proc_start(pid)
         if d.get("pid") == pid and (d.get("procStart") is None
                                     or str(d["procStart"]) == str(start)):
             sid = d.get("sessionId")
-            return pid, start, (sid if isinstance(sid, str) and sid else None)
-    return None
+            return (pid, start, (sid if isinstance(sid, str) and sid else None)), None
+    return None, None
 
 
 def pids_visible():
@@ -1329,9 +1353,11 @@ def claude_identity():
       none). The env can't: CLAUDE_PID isn't A, so the env may be another process's, or it
       names no session;
     - it finds nothing: the env counts only when CLAUDE_PID names an ancestor of this process,
-      at any level. Then that is the process, and CLAUDE_CODE_SESSION_ID the session."""
+      at any level. Then that is the process, and CLAUDE_CODE_SESSION_ID the session;
+    - it stops at an ancestor's file that won't read: the env counts only when CLAUDE_PID is
+      that ancestor, since a farther one may be the parent claude of a nested `claude -p`."""
     chain = ancestors()
-    found = claude_ancestor(chain)
+    found, stopped = _ancestor_walk(chain)
     try:
         env_pid = int(os.environ.get("CLAUDE_PID") or "")
     except ValueError:
@@ -1340,7 +1366,7 @@ def claude_identity():
     if found is not None:
         pid, start, sid = found
         return (pid, start), (env_sid if env_pid == pid and env_sid else sid) or "unknown"
-    if env_pid is None or env_pid not in chain:
+    if env_pid is None or env_pid not in (chain if stopped is None else [stopped]):
         return None, "unknown"
     return (env_pid, proc_start(env_pid)), env_sid or "unknown"
 
@@ -1396,7 +1422,10 @@ def ended_unheard(w, now=None):
         return False
 
 
-def watch_orphaned(w, current=None, live=None, now=None):
+NOT_READ = object()  # watch_orphaned's `live` when the caller hasn't read live_sessions()
+
+
+def watch_orphaned(w, current=None, live=NOT_READ, now=None):
     """Whether nobody will hear from an unresolved watch's waiter, whatever its state. One the
     guard marked waiter_unheard is orphaned whatever its process: the guard that adopted it
     after a crash is alive, but the waiter's exit still goes to the process that ended. With a
@@ -1405,8 +1434,8 @@ def watch_orphaned(w, current=None, live=None, now=None):
     session's, or left_by_clear, which covers an "unknown" session too). With none recorded,
     the session decides: not while it is `current` (the caller's) or live. A watch with no
     session and no process was started outside Claude Code and reports to whoever ran it, so
-    only a dead waiter orphans it. `live` is live_sessions(), if read; when liveness is unknown
-    (None), a session isn't known to be gone, so its watch isn't orphaned."""
+    only a dead waiter orphans it. `live` is live_sessions(), read here unless given; when
+    liveness is unknown (None), a session isn't known to be gone, so its watch isn't orphaned."""
     if w.get("waiter_unheard"):
         return True
     if w.get("claude_pid") is not None:
@@ -1416,7 +1445,7 @@ def watch_orphaned(w, current=None, live=None, now=None):
         return not waiter_alive(w, now)
     if current and sid == current:
         return False
-    live = live_sessions() if live is None else live
+    live = live_sessions() if live is NOT_READ else live
     return live is not None and sid not in live
 
 
