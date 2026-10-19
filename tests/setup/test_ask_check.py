@@ -128,7 +128,7 @@ class Harness:
         self.assertIsNotNone(out, "expected a deny")
         self.assertEqual(out["permissionDecision"], "deny")
         reason = out["permissionDecisionReason"]
-        self.assertTrue(reason.startswith("ask-check:"), reason)
+        self.assertTrue(reason.startswith(load_module().MARKER), reason)
         for item in load_module().CHECKLIST:
             self.assertIn(item, reason)
         self.assertIn("deny " + ",".join(rules), self.log())
@@ -239,6 +239,27 @@ class Check(Harness, unittest.TestCase):
         self.entries([typed(), *report_rows(), use("q1", "AskUserQuestion"), denied("q1")])
         self.assertIsNone(self.fire())
         self.assertIn("pass already-denied", self.log())
+
+    def test_the_hooks_own_reason_lets_its_resend_through(self):
+        # Round trip: the reason fire() printed, written back as Claude Code writes a deny.
+        rows = [typed(), *report_rows()]
+        self.entries(rows)
+        reason = self.assertDenied(self.fire(), "report")
+        text = "PreToolUse:AskUserQuestion hook error: " + reason
+        self.entries(rows + [use("q1", "AskUserQuestion"),
+                             result("q1", text, error=True, tur="Error: " + text)])
+        self.assertIsNone(self.fire())
+
+    def test_the_deny_is_found_past_big_rows_after_it(self):
+        mod = load_module()
+        mod.TAIL_MAX = mod.CHUNK = 4096
+        blob = {"type": "api-request-blob", "blob": "z" * 20000,
+                "messages": [{"role": "user", "content": "x"}]}
+        self.entries([typed(), *report_rows(), use("q1", "AskUserQuestion"), denied("q1"),
+                      blob, blob])
+        self.assertTrue(mod.window(self.transcript)["denied"])
+        mod.READ_MAX = 8192
+        self.assertFalse(mod.window(self.transcript)["denied"])  # the hard cap still holds
 
     def test_the_deny_is_found_whatever_claude_code_wraps_it_in(self):
         # Only the reason's own opening is matched: a release may reword the prefix.
@@ -384,7 +405,9 @@ class CrossLane(Harness, LanesRepo):
         self.assertIsNone(self.fire(question("Add a case in tests/lanes/test_cli.py?")))
 
     def test_prose_with_a_slash_is_no_entry_and_a_glob_matches_its_files(self):
-        self.brief("beta", "the and/or rules, skills/lanes/*.py")
+        self.brief("beta", "the and/or rules, skills/lanes/*.py /etc/hosts.txt docs/**/*.md")
+        self.assertIsNone(self.fire(question("Edit /etc/hosts.txt?")))
+        self.assertDenied(self.fire(question("Edit docs/a/b/deep.md?")), "lane")
         self.assertIsNone(self.fire(question("Keep one and/or both?")))
         self.assertDenied(self.fire(question("Edit skills/lanes/lanelib_extra.py?")), "lane")
         self.assertIsNone(self.fire(question("Edit skills/lanes/SKILL.md?")))
@@ -392,6 +415,7 @@ class CrossLane(Harness, LanesRepo):
     def test_a_deep_folder_entry_covers_paths_under_it_a_shallow_one_does_not(self):
         self.brief("beta", "skills/autopass/ hooks/")
         self.assertDenied(self.fire(question("Edit skills/autopass/state.py?")), "lane")
+        self.assertDenied(self.fire(question("Add a file in skills/autopass/?")), "lane")
         self.assertIsNone(self.fire(question("Edit hooks/notify.sh?")))
         self.assertIsNone(self.fire(question("Does autopass fire?")))
 
@@ -415,11 +439,15 @@ class CrossLane(Harness, LanesRepo):
     def test_a_symlinked_record_is_not_read(self):
         target = os.path.join(self.tmp, "elsewhere.md")
         with open(target, "w") as f:
-            f.write("- Expected files: bin/secret-tool.sh\n")
+            f.write("- Expected files: hooks/secret-tool.sh\n")
         status = self.record("beta")
         os.remove(status)
         os.symlink(target, status)
-        self.assertIsNone(self.fire(question("Change bin/secret-tool.sh?")))
+        self.assertIsNone(self.fire(question("Change hooks/secret-tool.sh?")))
+        os.remove(status)  # the same line in the real file counts
+        with open(status, "w") as f:
+            f.write("- Expected files: hooks/secret-tool.sh\n")
+        self.assertDenied(self.fire(question("Change hooks/secret-tool.sh?")), "lane")
 
     def test_a_switched_lane_is_read_by_its_checked_out_branch(self):
         self.git("switch", "-q", "-c", "feat/beta-two", cwd=self.beta)
@@ -438,6 +466,15 @@ class CrossLane(Harness, LanesRepo):
                      "Ask the relay lane about bin/relay-tool?"):
             with self.subTest(text=text):
                 self.assertIsNone(self.fire(question(text)))
+
+    def test_a_lane_id_written_as_a_file_name_does_not_name_the_lane(self):
+        self.lane("new", "stop-ring")
+        ring = self.lane_path("stop-ring")
+        os.makedirs(os.path.join(ring, "hooks"))
+        self.commit("hooks/stop-ring.sh", "x\n", cwd=ring)
+        self.assertDenied(self.fire(question("Edit hooks/stop-ring.sh?")), "lane")
+        self.assertIsNone(self.fire(question("Edit hooks/stop-ring.sh (lane stop-ring's)?")))
+        self.assertIsNone(self.fire(question("Ask stop-ring before editing hooks/stop-ring.sh?")))
 
     def test_a_failed_diff_costs_only_its_own_lane(self):
         self.lane("new", "gamma")

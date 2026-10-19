@@ -36,7 +36,7 @@ SCRIPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__
 sys.path.insert(0, SCRIPTS)
 try:
     import lanelib  # noqa: E402
-except ImportError as e:  # the lane rule is off; the others still hold
+except Exception as e:  # a broken or half-switched lanelib: the lane rule is off, the others hold
     lanelib, LANELIB_ERROR = None, e
 
 # How a resend finds this hook's deny: the reason's own opening, never Claude Code's wording
@@ -55,7 +55,12 @@ ANSWERS = {"AskUserQuestion", "ExitPlanMode"}  # a result that isn't an error is
 TICK = re.compile(r"`([^`\n]{2,60})`")
 TICKS_MAX = 3
 CHUNK = 1 << 18
-TAIL_MAX = 8 << 20  # bytes read back from the transcript's end at most
+# Bytes of user and assistant entries read back from the transcript's end at most. Other rows
+# don't count (an api-request-blob runs to 2.4 MB, and one follows each deny), but the whole
+# read stops at READ_MAX.
+TAIL_MAX = 8 << 20
+READ_MAX = 64 << 20
+NOT_ENTRIES = (b'{"type":"api-request', b'{"type":"attachment"', b'{"type":"file-history')
 RECORD_MAX = 1 << 16
 GIT_WAIT = 1.0  # each git call
 LANE_BUDGET = 3.0  # seconds for the whole lane rule: settings.json kills the hook at 5 s
@@ -66,6 +71,7 @@ GENERIC = {"SKILL.md", "STATUS.md", "README.md", "PLAN.md", "SPEC.md", "CLAUDE.m
            "__init__.py"}
 EXPECTED = re.compile(r"^- Expected files:[ \t]*(.*)$", re.M)
 PATHLIKE = re.compile(r"/|\.\w{1,8}$")
+GLOBS_MAX = 3  # stars in one Expected entry: a lane-written regex stays linear enough
 TOKEN = re.compile(r"[\w.*-]+(?:/[\w.*-]+)*/?")  # path characters only, * for a glob
 
 
@@ -95,20 +101,23 @@ def entry(line: bytes) -> dict | None:
 
 
 def newest_first(path: str):
-    """The transcript's entries from its end back, up to TAIL_MAX bytes; a line cut at the cap
-    is dropped."""
+    """The transcript's entries from its end back, until TAIL_MAX bytes of entries or READ_MAX
+    bytes in all; a line cut at READ_MAX is dropped."""
     with open(path, "rb") as f:
         end = f.seek(0, os.SEEK_END)
-        pos, carry = end, b""
-        while pos > 0 and end - pos < TAIL_MAX:
+        pos, carry, kept = end, b"", 0
+        while pos > 0 and end - pos < READ_MAX and kept < TAIL_MAX:
             step = min(CHUNK, pos)
             pos -= step
             f.seek(pos)
             lines = (f.read(step) + carry).split(b"\n")
             carry = lines.pop(0) if pos > 0 else b""
             for line in reversed(lines):
-                e = entry(line)
+                e = None if line.startswith(NOT_ENTRIES) else entry(line)
                 if e:
+                    kept += len(line)
+                    if kept > TAIL_MAX:
+                        return
                     yield e
 
 
@@ -179,8 +188,9 @@ def window(path: str) -> dict:
 
 
 def pattern(path: str) -> str:
-    """A regex for path, a * matching within one segment."""
-    return re.escape(path).replace(r"\*", r"[\w.-]*")
+    """A regex for path: ** matches across folders, * within one."""
+    return re.escape(path).replace(r"\*\*", "\0").replace(r"\*", r"[\w.-]*").replace(
+        "\0", r"[\w./-]*")
 
 
 def bounded(path: str) -> str:
@@ -202,8 +212,8 @@ def mentions(text: str, path: str) -> bool:
     if "/" in path:
         if re.search(bounded(path), text):
             return True
-        if (folder or "." not in base) and re.search(
-                r"(?<![\w.-])" + pattern(path) + r"/[\w.-]", text):
+        if (folder or "." not in base) and re.search(r"(?<![\w.-])" + pattern(path) + "/",
+                                                     text):
             return True
     return (not folder and "*" not in base and len(base) >= 8 and base not in GENERIC
             and bool(re.search(bounded(base), text)))
@@ -222,7 +232,7 @@ def expected_files(lane: dict) -> list[str]:
         return []
     tokens = (t.strip("`'\"()[]{},;:.").removeprefix("./") for t in m.group(1).split())
     return [t for t in tokens if TOKEN.fullmatch(t) and PATHLIKE.search(t)
-            and not t.startswith("-")
+            and not t.startswith(("-", "/")) and t.count("*") <= GLOBS_MAX
             and ("/" not in t.strip("/") or os.path.lexists(
                 os.path.join(lane["path"], t.split("/", 1)[0])))]
 
@@ -256,7 +266,8 @@ def names_lane(text: str, lane_id: str) -> bool:
     outside a path; a plain word (`pass`) only beside "lane" or in backticks, since "the tests
     pass" names no lane."""
     word = re.escape(lane_id)
-    if re.search(r"[-\d]", lane_id) and re.search(r"(?<![\w/.-])" + word + r"(?![\w/-])", text):
+    if re.search(r"[-\d]", lane_id) and re.search(
+            r"(?<![\w/.-])" + word + r"(?![\w/-]|\.\w)", text):  # `ask-check.sh` is a file
         return True
     return bool(re.search(r"\blanes?\s+`?" + word + r"`?(?![\w/-])|(?<![\w/.-])`?" + word
                           + r"`?\s+lane\b|`" + word + "`", text, re.I))
