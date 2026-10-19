@@ -199,9 +199,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  1. Open three lanes, one per lane-able backlog item (approved by Hayden 2026-10-19: "open 3
-     lanes next", after the lead listed the backlog: these three, plus the G8 probes and tmux
-     3.8 left to him and the bg auto-pass left as log only). Run `lane new <id> --branch <b>
+  1. Open three lanes, one per lane-able backlog item (approved by Hayden 2026-10-19). His
+     words: "open 3 lanes next", after the lead listed the backlog: these three, plus the G8
+     probes and tmux 3.8 left to him and the bg auto-pass left as log only. Run `lane new <id> --branch <b>
      --goal ... --files ... --overlaps ... --done-when ...` bare, then `lane open <id>`, for each
      (`skills/lanes/SKILL.md`, The lead, step 3). Goals from the backlog items, in plain text:
      no backticks, `|`, `<`, `>`, `;` or `#`. Then commit the Live lanes line with the merge
