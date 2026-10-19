@@ -48,7 +48,8 @@ The contract every run gets, whatever the brief says:
 
 Exit status: 0 ok; 1 Codex failed (its own code is in the summary's `rc`), or the wrapper
 did before Codex ended (the stop row's `error` says why); 2 refused or bad usage (a resume of
-a run whose Codex still runs, too); 3 the model audit failed; 4 the report is missing or
+a run whose Codex still runs, or one with no readable watch while a watch file can't be read,
+too); 3 the model audit failed; 4 the report is missing or
 invalid; 5 stopped waiting at --max-wait with its watch dropped or taken over (Codex keeps
 running); 75 still running at --max-wait (re-arm with the command printed); 124 timed out;
 143 killed by SIGTERM or SIGHUP while Codex runs (Codex keeps running, and the watch guard's
@@ -293,8 +294,9 @@ def audit(thread_id, since_epoch, allowed=BASE):
 def claim_watch(run_id, take_over, poll):
     """This wrapper as the waiter of a watch on its run, recorded before Codex starts: a new
     watch, or with `take_over` (a resume), the run's open watch whose waiter is gone. A live
-    waiter on the run refuses it, so two wrappers on one run can't both start Codex; a resume
-    refuses a run whose Codex still runs before it gets here (cmd_resume). None in the sandbox,
+    waiter on the run refuses it, so two wrappers on one run can't both start Codex, and so does
+    a watch file that can't be read, except for a new run (Waiter.refuse_a_second_codex_watch);
+    a resume refuses a run whose Codex still runs before it gets here (cmd_resume). None in the sandbox,
     whose pids mean nothing outside it: the run goes on with no watch."""
     if not dc.pids_visible():
         print(SANDBOXED, file=sys.stderr, flush=True)

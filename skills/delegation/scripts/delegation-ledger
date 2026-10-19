@@ -1249,8 +1249,9 @@ WAIT_EXIT_HELP = """exit codes:
       is gone; the line printed says which
   64  bad usage: no condition, an unknown or malformed id, an unknown codex run, a --pid that
       isn't watchable (not running, pid 1, a kernel thread, another user's), --max over 110,
-      a second watch on a codex run that a watch already waits on, resuming an ended watch,
-      or a run inside the sandbox
+      a second watch on a codex run that a watch already waits on (or while a watch file
+      can't be read, since it may be that one), resuming an ended watch, or a run inside the
+      sandbox
   70  internal error, or nothing could be decided (a finalize recorded no stop row, the codex
       run left the ledger): the watch stays open for a --resume; details in
       delegation-ledger.err

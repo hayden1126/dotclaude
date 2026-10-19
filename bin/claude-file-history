@@ -16,7 +16,9 @@ A path inside the session's working directory is recorded relative to it ("docs/
 so each recorded path is resolved against the cwd of the entries around it (and the session's
 first cwd), then compared by realpath. The transcripts (gigabytes) are pre-filtered with grep -F
 for the file's name: the name in PATH and, through a symlink, the real one. A backup recorded
-under some other link's name is found by passing that link as PATH.
+under some other link's name is found by passing that link as PATH. A transcript line that
+names the file but doesn't parse (torn, or nested too deep for json) is skipped, and stderr says
+how many were.
 """
 import argparse
 import json

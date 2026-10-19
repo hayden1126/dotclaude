@@ -1193,8 +1193,9 @@ wrapper only since the detached supervisor. Waiting is liveness, so the fix is e
   with no launch line there falls back to the watch its `--resume` names, else the one created
   within 120 s after the launch, told apart by `--pid`, `--file` or `--log` when several were.
   Unfolded, a codex kill says Codex keeps running and gives the run's watch to re-arm, or
-  `wait --codex` with the run id when it has no watch, or `codex-delegate status` to find the run
-  when even the run id is unknown.
+  `wait --codex` with the run id when it has no watch (refused while a watch file can't be read:
+  the duplicate refusal above), or `codex-delegate status` to find the run when even the run id
+  is unknown.
 - **`codex-delegate`'s own watch.** `run` and `resume` record a `{codex: run_id}` watch whose
   waiter is the wrapper itself. Before Codex starts they print the launch line,
   `codex-delegate: run <run_id>, watch <watch_id>. If this command is stopped, Codex keeps running:

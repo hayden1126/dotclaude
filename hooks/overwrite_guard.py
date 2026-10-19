@@ -20,7 +20,8 @@ also prove `my notes.md`. Both need an unusual sequence, and the shrink rule sti
 
 A subagent (agent_id) is judged by its own transcript, <session dir>/subagents/agent-<id>.jsonl,
 since the parent's reads are not in its context. A transcript that can't be found or read skips
-read-proof; the shrink rule still applies. Any other failure allows the call (fail open) and is
+read-proof; the shrink rule still applies. A transcript line that doesn't parse (or nests too
+deep for json) is skipped and proves nothing. Any other failure allows the call (fail open) and is
 logged to $XDG_STATE_HOME/dotclaude/overwrite-guard.log, as is every deny.
 
 The search maps the transcript and jumps between occurrences of the file's basename and of the
