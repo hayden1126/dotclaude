@@ -94,7 +94,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     command looks like N.N.N and the pane tty's foreground group runs from `/claude/versions/`).
     json-depth's PR 1 merged as #128 and was installed from main, 2026-10-19: deep JSON reads as
     malformed wherever that is equal or stricter. The lane stays open (`Keep open:`) for PR 2:
-    fail closed at the trust sites, plus chrome-bg, on a new branch from main (Hayden's picks are
+    fail closed at the trust sites, plus chrome-bg, on `fix/json-depth-fail-closed` from main (Hayden's picks are
     in its record's Decisions). Merge order: 1 **json-depth** PR 2 (carries the lead's notes).
   - The parked json-depth sweep is on `fix/json-depth-sweep`, a local branch never pushed: lane
     json-depth's reference only. Ask Hayden before deleting it once that lane merges.
