@@ -31,6 +31,7 @@ import subprocess
 import sys
 import time
 
+START = time.monotonic()
 SCRIPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "skills",
                        "lanes", "scripts")
 sys.path.insert(0, SCRIPTS)
@@ -62,8 +63,10 @@ TAIL_MAX = 8 << 20
 READ_MAX = 64 << 20
 NOT_ENTRIES = (b'{"type":"api-request', b'{"type":"attachment"', b'{"type":"file-history')
 RECORD_MAX = 1 << 16
-GIT_WAIT = 1.0  # each git call
-LANE_BUDGET = 3.0  # seconds for the whole lane rule: settings.json kills the hook at 5 s
+GIT_WAIT = 1.0  # each git call at most
+# Seconds from the hook's start (the transcript read included) by which every lane git call has
+# ended: settings.json kills the hook at 5 s, which would cost the other rules' deny.
+LANE_BUDGET = 3.5
 # The CLI's OVERLAP_ENV: a three-dot diff reads objects only, and never fetches a missing one.
 DIFF_ENV = {"GIT_NO_LAZY_FETCH": "1", "GIT_ALLOW_PROTOCOL": "none"}
 SKIPPED = ("STATUS.md", "README.md")
@@ -187,20 +190,23 @@ def window(path: str) -> dict:
     return state
 
 
-def pattern(path: str) -> str:
-    """A regex for path: ** matches across folders, * within one."""
+def pattern(path: str, glob: bool = False) -> str:
+    """A regex for path; for a glob (an Expected entry, never a committed file's name), **
+    matches across folders and * within one."""
+    if not glob:
+        return re.escape(path)
     return re.escape(path).replace(r"\*\*", "\0").replace(r"\*", r"[\w.-]*").replace(
         "\0", r"[\w./-]*")
 
 
-def bounded(path: str) -> str:
+def bounded(path: str, glob: bool = False) -> str:
     """A regex for path as a whole name: it may end a longer path (`/abs/hooks/x.py`,
     `./hooks/x.py`), but never sits inside a longer name (`myhooks/x.py`, `x.py.bak`); a
     sentence's closing period is fine."""
-    return r"(?<![\w.-])" + pattern(path) + r"(?![\w/-]|\.\w)"
+    return r"(?<![\w.-])" + pattern(path, glob) + r"(?![\w/-]|\.\w)"
 
 
-def mentions(text: str, path: str) -> bool:
+def mentions(text: str, path: str, glob: bool = False) -> bool:
     """Does the ask name path (a file, or a folder when it ends in /): in full when 2+ levels
     deep; by a path under it when it may be a folder (no extension) 2+ levels deep; by a file's
     basename of 8+ characters that isn't generic. tests/ and status files never count."""
@@ -210,13 +216,13 @@ def mentions(text: str, path: str) -> bool:
         return False
     base = path.rsplit("/", 1)[-1]
     if "/" in path:
-        if re.search(bounded(path), text):
+        if re.search(bounded(path, glob), text):
             return True
-        if (folder or "." not in base) and re.search(r"(?<![\w.-])" + pattern(path) + "/",
-                                                     text):
+        if (folder or "." not in base) and re.search(
+                r"(?<![\w.-])" + pattern(path, glob) + "/", text):
             return True
-    return (not folder and "*" not in base and len(base) >= 8 and base not in GENERIC
-            and bool(re.search(bounded(base), text)))
+    return (not folder and not (glob and "*" in base) and len(base) >= 8
+            and base not in GENERIC and bool(re.search(bounded(base), text)))
 
 
 def expected_files(lane: dict) -> list[str]:
@@ -230,18 +236,24 @@ def expected_files(lane: dict) -> list[str]:
     m = EXPECTED.search(raw.decode("utf-8", "replace")) if raw else None
     if not m:
         return []
-    tokens = (t.strip("`'\"()[]{},;:.").removeprefix("./") for t in m.group(1).split())
+    tokens = (t.lstrip("`'\"([{").rstrip("`'\"()[]{},;:.").removeprefix("./")
+              for t in m.group(1).split())
     return [t for t in tokens if TOKEN.fullmatch(t) and PATHLIKE.search(t)
             and not t.startswith(("-", "/")) and t.count("*") <= GLOBS_MAX
-            and ("/" not in t.strip("/") or os.path.lexists(
+            and ("/" not in t.strip("/") or "*" in t.split("/", 1)[0] or os.path.lexists(
                 os.path.join(lane["path"], t.split("/", 1)[0])))]
+
+
+def git_wait() -> float:
+    """The timeout for the next lane git call: GIT_WAIT, cut to what LANE_BUDGET leaves."""
+    return max(0.05, min(GIT_WAIT, START + LANE_BUDGET - time.monotonic()))
 
 
 def worktree_heads(repo: "lanelib.Repo") -> dict[str, str]:
     """Registered worktree path (real) -> the ref it has checked out: its branch, or its commit
     when detached. The lane CLI's worktree_heads and lane_head do the same; hooks don't import
     the CLI."""
-    p = lanelib.git(["worktree", "list", "--porcelain"], repo.toplevel, timeout=GIT_WAIT,
+    p = lanelib.git(["worktree", "list", "--porcelain"], repo.toplevel, timeout=git_wait(),
                     env=DIFF_ENV)
     out, path = {}, None
     for line in p.stdout.splitlines() if p.returncode == 0 else []:
@@ -257,7 +269,7 @@ def worktree_heads(repo: "lanelib.Repo") -> dict[str, str]:
 def committed_files(repo: "lanelib.Repo", base: str, ref: str) -> list[str]:
     p = lanelib.git(["diff", "--name-only", "-z", "--no-renames", "--no-ext-diff",
                      "--end-of-options", f"{base}...{ref}", "--"], repo.toplevel,
-                    timeout=GIT_WAIT, env=DIFF_ENV)
+                    timeout=git_wait(), env=DIFF_ENV)
     return [f for f in p.stdout.split("\0") if f] if p.returncode == 0 else []
 
 
@@ -275,13 +287,12 @@ def names_lane(text: str, lane_id: str) -> bool:
 
 def lane_hits(text: str, cwd: str) -> list[tuple[str, str]]:
     """(lane id, file) for each file another live lane is changing that the ask names, where
-    the ask doesn't name that lane. A git call that fails or runs past GIT_WAIT costs only its
-    own lane, and lanes left when LANE_BUDGET runs out are skipped."""
+    the ask doesn't name that lane. A git call that fails or times out costs only its own lane,
+    and lanes left when LANE_BUDGET runs out are skipped."""
     if lanelib is None:
         log(f"lane rule off: lanelib unimportable ({LANELIB_ERROR})")
         return []
-    deadline = time.monotonic() + LANE_BUDGET
-    repo = lanelib.resolve(cwd, timeout=GIT_WAIT)
+    repo = lanelib.resolve(cwd, timeout=GIT_WAIT, env=DIFF_ENV)
     if repo is None or not repo.has_lanes:
         return []
     lanes = repo.lanes()
@@ -303,7 +314,7 @@ def lane_hits(text: str, cwd: str) -> list[tuple[str, str]]:
         heads = {}
     hits = []
     for lane in others:
-        if time.monotonic() > deadline:
+        if time.monotonic() > START + LANE_BUDGET:
             log(f"lane budget spent: skipped lane {lane['id']} and those after it")
             break
         ref = heads.get(os.path.realpath(lane["path"])) or f"refs/heads/{lane['branch']}"
@@ -312,7 +323,8 @@ def lane_hits(text: str, cwd: str) -> list[tuple[str, str]]:
         except (OSError, ValueError, subprocess.SubprocessError) as e:
             log(f"diff unread lane={lane['id']} {type(e).__name__}: {e}")
             files = []
-        found = {f.rstrip("/") for f in files + expected_files(lane) if mentions(text, f)}
+        found = {f for f in files if mentions(text, f)}
+        found |= {f.rstrip("/") for f in expected_files(lane) if mentions(text, f, glob=True)}
         hits += [(lane["id"], f) for f in sorted(found)]
     return hits
 

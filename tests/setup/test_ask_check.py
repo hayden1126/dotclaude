@@ -405,7 +405,12 @@ class CrossLane(Harness, LanesRepo):
         self.assertIsNone(self.fire(question("Add a case in tests/lanes/test_cli.py?")))
 
     def test_prose_with_a_slash_is_no_entry_and_a_glob_matches_its_files(self):
-        self.brief("beta", "the and/or rules, skills/lanes/*.py /etc/hosts.txt docs/**/*.md")
+        self.brief("beta", "the and/or rules, skills/lanes/*.py /etc/hosts.txt docs/**/*.md "
+                           "(./hooks/dot_entry.py) .claude/agents/ **/deep_glob_*.py")
+        os.makedirs(os.path.join(self.beta, ".claude"))
+        self.assertDenied(self.fire(question("Edit hooks/dot_entry.py?")), "lane")
+        self.assertDenied(self.fire(question("Add .claude/agents/new.md?")), "lane")
+        self.assertDenied(self.fire(question("Edit skills/x/deep_glob_one.py?")), "lane")
         self.assertIsNone(self.fire(question("Edit /etc/hosts.txt?")))
         self.assertDenied(self.fire(question("Edit docs/a/b/deep.md?")), "lane")
         self.assertIsNone(self.fire(question("Keep one and/or both?")))
@@ -418,6 +423,11 @@ class CrossLane(Harness, LanesRepo):
         self.assertDenied(self.fire(question("Add a file in skills/autopass/?")), "lane")
         self.assertIsNone(self.fire(question("Edit hooks/notify.sh?")))
         self.assertIsNone(self.fire(question("Does autopass fire?")))
+
+    def test_a_committed_name_with_stars_is_literal(self):
+        self.commit("docs/a*b.md", "x\n", cwd=self.beta)
+        self.assertIsNone(self.fire(question("Edit docs/aXXb.md?")))
+        self.assertDenied(self.fire(question("Edit docs/a*b.md?")), "lane")
 
     def test_generic_names_and_skipped_files_need_more(self):
         self.commit("STATUS.md", "x\n", cwd=self.beta)
