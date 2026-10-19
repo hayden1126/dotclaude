@@ -632,7 +632,12 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   takes the flock, so two `lane claim 42` calls can't both win. `lane new` reserves the port and
   writes `lane.json` under the lock, then runs the setup command outside it, so a slow
   `npm ci` never blocks a claim; a failed setup leaves the lane registered for a retry or
-  `lane done --abandon`. After the setup (which may set a `core.hooksPath`), `new` checks the
+  `lane done --abandon`. Before any of that, `new` refuses a branch name any PR has used
+  (`gh pr list --head <b> --state all`): `ls` labels a lane by its branch's newest PR, so a new
+  lane on a merged PR's old head showed as that PR merged, which can start a false post-merge
+  chain (lane branch-reuse, 2026-10-19). It asks after the fetch has proved the network up, and
+  refuses when gh still can't answer (no login, a remote off GitHub, a reply that won't parse),
+  as it does on a failed fetch. `--reuse-branch` skips the check (Hayden's picks). After the setup (which may set a `core.hooksPath`), `new` checks the
   worktree as the excluded-command guard will judge the lane's own calls, prints the Edit deny
   rule each dir needs and seeds it into the record's Asks for Hayden, as does `adopt` finishing a
   setup-failed lane; adopting another worktree only prints them (docs/delegation.md, "The
@@ -808,7 +813,13 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   code fails in a lanes repo and only warns in a plain one, where long-lived text has no peer
   to mislead. `--closing`, which `lane done` runs, judges freshness against HEAD's commit only
   and skips approval: after a `/pass`, the idle new session started after the handoff. It also
-  fails on a `Keep open:` item in Next.
+  fails on a `Keep open:` item in Next. Its unpushed-commit warning counts what the lane has
+  checked out, as `ls` does (a branch, or a detached HEAD), and `lane.json`'s branch, which a
+  switch leaves behind, only when HEAD can't be read or names an invalid branch. It counts the
+  commits that neither the base nor any of origin's refs hold, never against one pushed copy:
+  a lane that switched off a merged PR's old head once warned of 431 unpushed commits, measured
+  against that PR's unpruned copy, and a lane made with `--reuse-branch` would meet the same
+  copy under its own name.
 - **`lane done`** validates the id and asserts its deletes stay inside `<common-dir>/lanes/`. It
   needs commits past the lane's base, then either a merged PR whose head commit is the branch tip
   (a squash merge) or the tip in the base. An adopted lane's base is a merge-base: with nothing
@@ -924,8 +935,8 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   call, 2026-10-13).
 
   A lane can switch branches for a follow-up PR, which leaves `lane.json`'s branch behind (lane
-  tab-bar, 2026-10-14). So `ls`, `whoami` and `done` go by the branch the worktree has checked
-  out; a detached one (mid-rebase, say) shows `lane.json`'s branch's PR on the board. `done`
+  tab-bar, 2026-10-14). So `ls`, `whoami`, `done` and `handoff-check`'s unpushed count go by the
+  branch the worktree has checked out; a detached one (mid-rebase, say) shows `lane.json`'s branch's PR on the board. `done`
   judges that branch and `lane.json`'s, when it differs and still exists: each must pass, except
   one with nothing past the base once the other does. It refuses a detached worktree without
   `--abandon` (its commit is on no branch to judge), and refuses the remove if the worktree's
