@@ -73,7 +73,7 @@ def geometry_facts(code: int, out: str) -> dict:
     payload = None
     for line in reversed(out.strip().splitlines()):
         if line.startswith("{"):
-            with contextlib.suppress(json.JSONDecodeError):
+            with contextlib.suppress(json.JSONDecodeError, RecursionError):
                 payload = json.loads(line)
             break
     if not isinstance(payload, dict) or "slides" not in payload:

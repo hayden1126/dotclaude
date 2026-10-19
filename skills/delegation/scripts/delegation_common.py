@@ -220,7 +220,7 @@ def read_agent_state(aid):
     try:
         with open(_agent_path(aid)) as f:
             d = json.load(f)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):   # json recurses on nesting
         return {}
     return d if isinstance(d, dict) else {}
 
@@ -334,7 +334,7 @@ def read_rows(tail=None):
     for line in lines[1:] if cut else lines:
         try:
             rows.append(json.loads(line))
-        except ValueError:
+        except (ValueError, RecursionError):
             continue  # a torn write after a crash; skip it rather than fail the reader
     return rows
 
@@ -350,7 +350,7 @@ def first_row_ts(limit=100):
                     ts = json.loads(line).get("ts")
                     parse_iso(ts)
                     return ts
-                except (ValueError, AttributeError, TypeError):
+                except (ValueError, AttributeError, TypeError, RecursionError):
                     continue
     except OSError:
         pass
@@ -434,7 +434,7 @@ def extract_report(text):
     for c in candidates:
         try:
             return json.loads(c), None
-        except ValueError:
+        except (ValueError, RecursionError):   # json recurses on nesting
             pass
     return None, "no parseable JSON report"
 
@@ -634,7 +634,7 @@ def _codex_turn_file(path, e):
     try:
         with open(path) as f:
             d = json.load(f)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):   # json recurses on nesting
         return None
     if (isinstance(d, dict) and d.get("wrapper_pid") is not None
             and d.get("wrapper_pid") == e.get("wrapper_pid")
@@ -693,7 +693,7 @@ def events_thread_id(out):
                     continue
                 try:
                     e = json.loads(line)
-                except ValueError:
+                except (ValueError, RecursionError):   # json recurses on nesting
                     continue
                 if e.get("type") == "thread.started" and e.get("thread_id"):
                     return e["thread_id"]
@@ -882,7 +882,7 @@ def read_watch(wid):
             w = json.load(f)
     except FileNotFoundError:
         return None
-    except ValueError as ex:  # a torn or hand-edited file
+    except (ValueError, RecursionError) as ex:  # a torn or hand-edited file
         raise ValueError(f"watch {wid}: damaged file ({ex})") from None
     if not isinstance(w, dict):
         raise ValueError(f"watch {wid}: damaged file (not a JSON object)")
@@ -932,7 +932,7 @@ def prune_watches():
                 if os.path.getmtime(p) < now - PRUNE_TMP_DAYS * 86400:
                     os.remove(p)
         for p in glob.glob(os.path.join(watches_dir(), "*.json")):
-            with contextlib.suppress(OSError, ValueError):
+            with contextlib.suppress(OSError, ValueError, RecursionError):
                 if os.path.getmtime(p) >= now - PRUNE_ENDED_DAYS * 86400:
                     continue
                 with open(p) as f:
@@ -948,7 +948,7 @@ def all_watches():
         try:
             with open(p) as f:
                 w = json.load(f)
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):   # json recurses on nesting
             continue
         if isinstance(w, dict):
             out.append(w)
@@ -1169,7 +1169,7 @@ def live_sessions():
         try:
             with open(p) as f:
                 d = json.load(f)
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):   # json recurses on nesting
             continue
         sid = d.get("sessionId") if isinstance(d, dict) else None
         if isinstance(sid, str) and sid and pid_alive(d.get("pid"), d.get("procStart")):
