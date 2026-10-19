@@ -983,6 +983,46 @@ class RecordTrust(LanesRepo):
         self.write(api, saved)
         self.lane("claim", "43", cwd=self.lane_path("chart-fix"))
 
+    def test_who_and_ls_requests_warn_beside_a_left_out_record(self):
+        # The left-out record may hold the request, so "unclaimed" never stands alone.
+        self.lane("new", "api-docs", "--claim", "42")
+        self.write(os.path.join(self.common, "lanes", "api-docs", "lane.json"), "{")
+        for args in (("who", "42"), ("ls", "--requests"), ("ls", "--requests", "--json")):
+            with self.subTest(args=args):
+                p = self.run_lane(*args)
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertIn("left out lanes/api-docs: lanes/api-docs/lane.json is not JSON",
+                              p.stderr)
+        self.assertIn("#42: unclaimed", self.run_lane("who", "42").stdout)
+
+    def test_adopt_refuses_while_a_record_is_left_out(self):
+        # Without ports, free_port never reads held_lanes, so adopt checks it itself: else
+        # `--id` registers a second lane on the left-out one's worktree.
+        (cfg,) = self.config_files()
+        text = self.read(cfg)
+        self.write(cfg, "\n".join(x for x in text.splitlines() if not x.startswith("ports")))
+        self.lane("new", "api-docs")
+        self.write(os.path.join(self.common, "lanes", "api-docs", "lane.json"), "{")
+        p = self.run_lane("adopt", self.lane_path("api-docs"), "--id", "api-twin")
+        self.assertEqual((p.returncode, p.stdout), (1, ""), p.stderr)
+        self.assertIn("lanes/api-docs/lane.json is not JSON", p.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.common, "lanes", "api-twin")))
+
+    def test_twins_elsewhere_leave_an_unregistered_checkout_unregistered(self):
+        # Two records sharing a path void only that path's identity; a record that won't read
+        # may be any checkout's, so it still voids an unregistered one.
+        self.plant("twin", id="twin")
+        loose = os.path.join(self.tmp, "loose")
+        self.git("worktree", "add", "-q", "-b", "loose", loose, "origin/main")
+        self.assertTrue(self.lane("whoami", cwd=loose).startswith("unregistered "))
+        p = self.run_lane("whoami", cwd=self.lane_path("chart-fix"))
+        self.assertEqual((p.returncode, p.stdout), (1, ""), p.stderr)
+        self.assertIn("shares its path", p.stderr)
+        self.write(os.path.join(self.common, "lanes", "junk", "lane.json"), "{")
+        p = self.run_lane("whoami", cwd=loose)
+        self.assertEqual((p.returncode, p.stdout), (1, ""), p.stderr)
+        self.assertIn("matches no lane record", p.stderr)
+
     def test_open_refuses_beside_an_unreadable_session_file(self):
         # Not named for a pid, it may be a live session's in the lane (lanelib.live_sessions).
         path = os.path.join(self.home, ".claude", "sessions", "not-a-pid.json")

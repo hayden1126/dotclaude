@@ -515,6 +515,19 @@ class UnreadSessions(unittest.TestCase):
         self.put(f"{pid}.json", "{")
         self.assertEqual(lanelib.session_scan().unread, [path])
 
+    def test_a_dead_pids_file_is_ruled_out_without_a_second_read(self):
+        # Its process is gone, so it hides no live session: no wait for a torn rewrite.
+        # Sandboxed, every pid looks gone, so there it stays unread.
+        for why, junk in UNREAD.items():
+            with self.subTest(why):
+                path = self.put(f"{self.child(done=True)}.json", junk)
+                with mock.patch.object(lanelib.time, "sleep") as sleep:
+                    self.assertEqual(lanelib.session_scan().unread, [])
+                self.assertNotIn(mock.call(lanelib.REREAD_WAIT), sleep.call_args_list)
+                with mock.patch.dict(os.environ, _LANE_TEST_SANDBOXED="1"):
+                    self.assertEqual(lanelib.session_scan().unread, [path])
+                os.unlink(path)
+
     def test_the_sessions_above_refuse_an_unread_ancestor_file(self):
         hook = self.child()  # this runner is its parent, so an ancestor
         self.assertEqual(lanelib.sessions_above(hook), [])

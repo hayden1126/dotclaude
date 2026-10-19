@@ -51,8 +51,9 @@ from lanelib import git  # noqa: E402
 
 def session_start(repo: lanelib.Repo, lane: dict | None) -> tuple[float | None, str]:
     """This session's start (epoch seconds) and where it came from. Untrusted when no readable
-    session file holds $CLAUDE_CODE_SESSION_ID and one won't read (lanelib.session_scan): it
-    may be this session's, with a later start than the newest readable one here."""
+    session file holds $CLAUDE_CODE_SESSION_ID and one won't read (lanelib.session_scan, which
+    rules out one named for a pid that is gone where pids are visible: this session's claude
+    runs): it may be this session's, with a later start than the newest readable one here."""
     if lane is not None:
         starts = [t for s in lane.get("sessions", []) if (t := lanelib.parse_iso(s.get("startedAt")))]
         return (max(starts), "lane.json sessions[]") if starts else (None, "lane.json sessions[]")
