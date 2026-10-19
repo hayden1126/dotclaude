@@ -87,8 +87,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lanes: ask-check** (opened 2026-10-19, Next item 0; merge order 1 now, carries the
-    lead's notes). branch-reuse merged as #130 and was installed from main, 2026-10-19: `lane
+  - **Live lanes** (all opened 2026-10-19; briefs in each record). Merge order: 1 ask-check
+    (Next item 0, carries the lead's notes; holds the install), 2 pr-horizon (`handoff?` past
+    200 PRs, the capella report below; overlaps ask-check on `docs/lanes.md`), 3 config-dir
+    (the two delegation readers that ignore CLAUDE_CONFIG_DIR, below). branch-reuse merged as #130 and was installed from main, 2026-10-19: `lane
     new` refuses a branch name any PR used (or when gh can't answer; `--reuse-branch`
     overrides), and handoff-check counts the checked-out branch. The three lanes opened earlier on 2026-10-19
     merged, were installed from main and closed: chrome-ttl as #126 (chrome-bg's TTL on a
@@ -134,11 +136,16 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **Lanes tell the lead at workflow stages** (Hayden, 2026-10-19, in lane branch-reuse's
     window: "when a PR is made, or similar stages"). The board already shows a draft (`lane ls`
     reads gh); what it doesn't explain ahead of time are side effects: branch-reuse's install hold
-    and its probe lane reading "#129 merged". Branch-reuse's suggested rule: message the lead at
-    draft opened (with what's left before ready), at ready asked and at merged (exists), and
-    before any act whose effect reaches past the lane's worktree (an install from the lane,
-    making a lane, taking a cap slot). Home: `skills/lanes/SKILL.md` Lifecycle step 6 and "Who
-    asks Hayden what", which lane ask-check is editing, so a later lane.
+    and its probe lane reading "#129 merged". Hayden's refinement (2026-10-19): the problem was a
+    lane telling him the lead must run setup.sh (or similar) without saying to approve it or pass
+    it on, so he didn't know what to do. Rule: a lane never tells Hayden what the lead must do;
+    it messages the lead, before any act whose effect reaches past its worktree (an install from
+    the lane, making a lane, taking a cap slot) and with anything the lead must run. The lead asks
+    Hayden when the act needs his ok; steps under standing approval (the post-merge chain's
+    reinstall) stay no-ask unless he says otherwise. "Draft opened" and "ready asked" messages
+    are dropped: `lane ls` shows both. Seen again the same day: ask-check installed from its lane
+    without telling the lead. Home: `skills/lanes/SKILL.md` Lifecycle steps 5 and 6 and "Who asks
+    Hayden what", which ask-check edits, so it opens after ask-check merges.
   - **`handoff?` never clears on a switched lane past 200 PRs** (bug report from capella-studio's
     lead, session 5788b9fb, 2026-10-19; checked against the code). `pr_states` lists the newest
     `PR_LIMIT` (200) PRs in one gh call; once that list is full, `merges_of`
