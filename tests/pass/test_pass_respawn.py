@@ -230,6 +230,10 @@ class Base(LanesRepo):
         self.status, self.updated, self.stopped = None, 0, False
         real_start = self.mod.proc_start
         self.mod.proc_start = lambda pid: self.start_now if pid == CLAUDE else real_start(pid)
+        self.fg = True  # the claude's process group is its terminal's foreground group
+        real_fg = self.mod.foreground
+        self.mod.foreground = lambda pid: self.fg if pid == CLAUDE else real_fg(pid)
+        self.argv0 = self.claude  # the claude's argv[0] in the fake /proc/<pid>/cmdline
         self.real_load = self.mod.load_session
         self.mod.load_session = self.fake_load
         # then()'s entries wait here for a scan that doesn't follow their own read (landed_scan).
@@ -361,7 +365,7 @@ class Base(LanesRepo):
     def cmdline(self, launched=()):
         """The fake /proc/<pid>/cmdline: the session claude launched with launched (a real pid
         900000 on the machine must never lend its argv to a test)."""
-        return lambda pid: [self.claude, *launched] if pid == CLAUDE else None
+        return lambda pid: [self.argv0, *launched] if pid == CLAUDE else None
 
     def run_pass(self, *args, procs=None, cwd=None, launched=()):
         """main() on the checkout, its session claude launched with launched."""
@@ -1372,13 +1376,37 @@ class Plain(Base):
         self.assertEqual(code, 1, out)
         self.assertDropped("busy", "no record since the call")
 
+    def test_a_claude_run_by_its_versioned_path_passes_the_final_recheck(self):
+        # tmux names a pane after its foreground leader's argv[0] basename, so a claude exec'd by
+        # its versioned path (live on 2.1.302: .lane/artifacts/probe-startup.txt in lane
+        # launch-path's record) reads `2.1.302`, not `claude`.
+        self.argv0 = os.path.join(self.home, ".local", "share", "claude", "versions", "2.1.302")
+        os.environ["FAKE_TMUX_PANE"] = f"{PANE_SHELL} 2.1.302"
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(self.calls("tmux", "respawn-pane")), 1)
+
     def test_a_pane_not_running_claude_drops_gone(self):
-        for pane in (f"{PANE_SHELL} zsh", "12345 claude"):
-            with self.subTest(pane=pane):
+        versioned = "/home/u/.local/share/claude/versions/2.1.302"
+        for argv0, pane in ((None, f"{PANE_SHELL} zsh"), (None, "12345 claude"),
+                            (None, f"{PANE_SHELL} 2.1.302"),  # not this claude's name
+                            (versioned, f"{PANE_SHELL} vim"), (versioned, f"{PANE_SHELL} zsh"),
+                            (versioned, "12345 2.1.302"),  # its name, but not above it
+                            ("", f"{PANE_SHELL} ")):  # no argv[0] read, no command named
+            with self.subTest(argv0=argv0, pane=pane):
+                self.argv0 = self.claude if argv0 is None else argv0
                 os.environ["FAKE_TMUX_PANE"] = pane
                 self.reset()
                 self.assertEqual(self.mod.wait_and_act(self.plan(), table), "gone")
                 self.assertDropped("gone", "pass dropped")
+
+    def test_a_claude_behind_another_foreground_group_drops_gone(self):
+        # Ctrl+Z'd in a shell tab with a second claude (or a --resume twin) run in front: the
+        # pane's command still reads claude, but this claude's group isn't the terminal's.
+        self.fg = False
+        self.assertEqual(self.mod.wait_and_act(self.plan(), table), "gone")
+        self.assertDropped("gone", "pass dropped")
+        self.assertIn(f"claude {CLAUDE} isn't its terminal's foreground group", self.log())
 
     def test_a_gone_pane_or_session_drops_gone_at_once(self):
         for script, fail, dead in ((["busy"], "display-message", False), ([None], "", False),
@@ -2432,6 +2460,18 @@ class Units(unittest.TestCase):
         self.assertEqual(self.mod.proc_start(10, self.dir), 98765)
         self.assertIsNone(self.mod.proc_start(11, self.dir))
         self.assertIsNone(self.mod.proc_start(12, self.dir))
+
+    def test_foreground_compares_the_group_with_the_terminals(self):
+        # Fields 3 to 8: state, ppid, pgrp, session, tty_nr, tpgid.
+        tail = " ".join(str(n) for n in range(9, 22))
+        self.stat((("20", f"20 (cl aude) S 1 20 20 34823 20 {tail} 5 0 0"),
+                   ("21", f"21 (claude) T 1 21 21 34823 30 {tail} 5 0 0"),
+                   ("22", f"22 (2.1.302) S 1 22 22 0 -1 {tail} 5 0 0"), ("24", "garbage")))
+        self.assertTrue(self.mod.foreground(20, self.dir))
+        self.assertFalse(self.mod.foreground(21, self.dir))  # another group in front
+        self.assertFalse(self.mod.foreground(22, self.dir))  # no terminal
+        self.assertFalse(self.mod.foreground(23, self.dir))  # gone
+        self.assertFalse(self.mod.foreground(24, self.dir))
 
     def test_the_transcript_path_follows_the_session(self):
         with mock.patch.dict(os.environ, {"HOME": self.dir}):
