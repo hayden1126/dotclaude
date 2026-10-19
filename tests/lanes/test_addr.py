@@ -512,6 +512,31 @@ class LeadPick(LiveSessions):
                 self.assertEqual(self.addr_lead(), want)
                 os.unlink(outside)
 
+    def test_the_leads_own_unread_file_makes_the_lead_unknown_wherever_it_runs(self):
+        # A Bash `cd` moves the lead's process out of main; its file, unread, must not let the
+        # one other main session pass for the lead (a side chat).
+        lead = self.child(self.tmp)
+        self.write_lead(lead)
+        self.session(self.main)
+        path = os.path.join(self.home, ".claude", "sessions", f"{lead}.json")
+        for why, junk in {"junk": "{", "deep": "[" * 100000}.items():  # RecursionError in json
+            with self.subTest(why):
+                self.write(path, junk)
+                self.refused("the lead is unknown", path)
+
+    def test_the_board_names_an_unread_file_in_place_of_the_lead_hint(self):
+        # No lane lead can pick past it, so the footer says what to remove instead.
+        self.pair()
+        path = os.path.join(self.home, ".claude", "sessions", f"{self.child(self.main)}.json")
+        self.write(path, "{")
+        out = self.lane("ls")
+        self.assertIn("main checkout: 2 live sessions", out)
+        self.assertIn(f"The lead is unknown: session file {path} can't be read", out)
+        self.assertIn("Remove it once that process has ended", out)
+        self.assertNotIn("No lead picked", out)
+        os.unlink(path)
+        self.assertIn("No lead picked", self.lane("ls"))
+
 
 class AddrRepo(LiveSessions):
     """`lane addr --repo PATH`: the lane or lead of the lanes repo whose main checkout holds PATH,

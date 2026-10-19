@@ -247,6 +247,33 @@ class WritableRoots(Plain):
                                  (1, "settings unparseable"))
                 self.assertIn("inline --settings", cm.exception.message)
 
+    def test_an_unparseable_inline_settings_flag_is_named_by_position_and_length(self):
+        # It may hold an env secret, and the refusal is printed into the session.
+        good = json.dumps({"env": {"X": "1"}})
+        secret = '{"env": {"TOKEN": "sk-secret-123"'
+        argv = ["claude", "--settings", good, "--settings", secret]
+        with mock.patch.object(self.mod.time, "sleep") as sleep:  # an inline value is no file
+            with self.assertRaises(self.mod.Refuse) as cm:
+                self.real_roots(None, self.main, None, argv)
+        sleep.assert_not_called()
+        self.assertNotIn("sk-secret", cm.exception.message)
+        self.assertNotIn("TOKEN", cm.exception.message)
+        self.assertIn(f"the 2nd inline --settings value ({len(secret)} chars)",
+                      cm.exception.message)
+
+    def test_a_settings_file_fixed_before_the_second_read_passes(self):
+        # Claude Code may rewrite settings.json (a /model save): a torn write is read again once.
+        user = os.path.join(self.home, ".claude", "settings.json")
+        self.write(user, "{")
+        fixed = json.dumps({"sandbox": {"filesystem": {"allowWrite": ["/fixed"]}}})
+        with mock.patch.object(self.mod.time, "sleep", lambda _: self.write(user, fixed)):
+            self.assertIn("/fixed", self.real_roots(None, self.main, None, ["claude"]))
+        self.write(user, "{")
+        with mock.patch.object(self.mod.time, "sleep") as sleep:
+            with self.assertRaises(self.mod.Refuse):
+                self.real_roots(None, self.main, None, ["claude"])
+        sleep.assert_called_once_with(self.mod.SETTINGS_REREAD)
+
     def test_an_unparseable_deny_tier_refuses(self):
         user = os.path.join(self.home, ".claude", "settings.json")
         for why, junk in self.JUNK.items():

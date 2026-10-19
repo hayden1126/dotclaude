@@ -1474,10 +1474,11 @@ def expired(rec):
     return isinstance(exp, (int, float)) and time.time() >= exp
 
 
-def prune_logs(logs, root):
+def prune_logs(logs, root, malformed=()):
     """Logs older than LOG_DAYS: the supervisors' <id>.log that -Scan lists under the Windows
-    root, and the holders' and supervisors' stderr here. A live run's are kept."""
-    live = {r["id"] for r in read_records()}
+    root, and the holders' and supervisors' stderr here. A live run's are kept, and so are those
+    of a run whose record is malformed (malformed: scan_records' ids): it may be live."""
+    live = {r["id"] for r in read_records()} | set(malformed)
     for rid, age in sorted(logs.items()):
         if age > LOG_DAYS * 86400 and rid not in live:
             with contextlib.suppress(Fail, OSError):
@@ -1533,7 +1534,7 @@ def gc():
             done.append(f"killed {rid}: a run dir with no record, {fmt_age(info['age'])} old")
         except Exception as e:
             done.append(f"could not kill {rid}: {e if isinstance(e, Fail) else repr(e)}")
-    prune_logs(logs, root)
+    prune_logs(logs, root, rejected)
     return done
 
 

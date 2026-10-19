@@ -2300,6 +2300,28 @@ class Live(unittest.TestCase):
         self.assertTrue(self.has("kill-eeee0003"), r.stdout)
         self.assertIn("killed eeee0003: a run dir with no record", r.stdout)
 
+    def test_gc_keeps_the_old_logs_of_a_run_with_a_malformed_record(self):
+        # Its run may be live (as gc's kill pass reads it), so its logs are a live run's too.
+        os.makedirs(self.recdir)
+        with open(os.path.join(self.recdir, "eeee0021.json"), "w") as f:
+            f.write(JUNK["junk"])
+        old = time.time() - 8 * 86400  # wall clock
+        paths = {}
+        for rid in ("eeee0021", "eeee0022"):  # the second has no record: its logs go
+            paths[rid] = [os.path.join(self.base, rid + ".log"),
+                          os.path.join(self.recdir, rid + ".holder.log"),
+                          os.path.join(self.recdir, rid + ".err")]
+            for p in paths[rid]:
+                with open(p, "w") as f:
+                    f.write("x\n")
+                os.utime(p, (old, old))
+        r = self.cli("stop", "--gc")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for p in paths["eeee0021"]:
+            self.assertTrue(os.path.exists(p), p)
+        for p in paths["eeee0022"]:
+            self.assertFalse(os.path.exists(p), p)
+
     def test_stop_fails_when_the_owner_leaves_a_malformed_record(self):
         deep = "'[' * 100000"  # RecursionError in json
         for rid, junk in (("eeee0011", "'{'"), ("eeee0012", deep)):

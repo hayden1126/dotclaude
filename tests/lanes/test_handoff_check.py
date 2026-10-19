@@ -176,7 +176,9 @@ class PlainRepo(Check):
     def test_an_unreadable_session_file_fails_unless_a_readable_one_names_the_session(self):
         # It may be this session's, holding a later start: the newest readable one in this
         # checkout can't stand in for it. A readable file with the session's id still decides.
-        junk_path = os.path.join(self.home, ".claude", "sessions", "2.json")
+        sleeper = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(lambda: (sleeper.kill(), sleeper.wait()))
+        junk_path = os.path.join(self.home, ".claude", "sessions", f"{sleeper.pid}.json")
         for why, junk in {"junk": "{", "deep": "[" * 100000}.items():  # RecursionError in json
             with self.subTest(why):
                 self.write(junk_path, junk)
@@ -186,6 +188,18 @@ class PlainRepo(Check):
                 self.assertPasses(self.check(CLAUDE_CODE_SESSION_ID="sess-0001"))
         os.unlink(junk_path)
         self.assertPasses(self.check())
+
+    def test_a_dead_pids_unreadable_session_file_never_fails(self):
+        # This session's claude runs, so a file named for a pid that is gone isn't its own.
+        # Sandboxed, every pid looks gone, so there it still fails.
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        junk_path = os.path.join(self.home, ".claude", "sessions", f"{dead.pid}.json")
+        for why, junk in {"junk": "{", "deep": "[" * 100000}.items():  # RecursionError in json
+            with self.subTest(why):
+                self.write(junk_path, junk)
+                self.assertPasses(self.check())
+                self.assertGap(self.check(_LANE_TEST_SANDBOXED="1"), f"{junk_path} can't be read")
 
     def test_a_leftover_needs_its_repo_relative_path(self):
         self.write(os.path.join(self.main, "src", "scratch.txt"), "x")
