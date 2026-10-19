@@ -4,14 +4,15 @@ detached waiter and its drops, and the inputs it trusts.
 Each test runs the script in-process against a throwaway repo (tests/lanes/_fixture.py, which
 points HOME and XDG_STATE_HOME into a temp dir). Fakes stand in for everything live:
   - tmux: a fake first on PATH that logs each call's argv (one argument per \\x1f field) and
-    answers `display-message -p` with $FAKE_TMUX_PANE (pane pid and current command) or the
+    answers `display-message -p` with $FAKE_TMUX_PANE (pane pid, current command, tty) or the
     server line; a command named in $FAKE_TMUX_FAIL exits 1.
   - the session file: load_session is wrapped so each read writes the next scripted status to
     $HOME/.claude/sessions/<pid>.json first (the last one repeats; the first is the call's own
     read), then reads it for real. When the status first turns idle (or shell), the wrapper writes
     the stop record stop-ring.sh would (self.stop_waits; None writes none). A callable in the
     script runs first and gives the status (Base.then: it appends to the transcript once).
-  - /proc: proc_start is replaced, and a fake process table stands in for proc_table.
+  - /proc: proc_start, foreground and stopped_jobs are replaced for the session's claude (Units
+    tests the real ones on a fake /proc), and a fake process table stands in for proc_table.
   - the transcript: a file under the fake $HOME/.claude/projects, which tests append to.
 handoff-check runs for real as a subprocess. Nothing reaches the live tmux server or the real
 ~/.claude."""
@@ -148,6 +149,7 @@ def marked(text, day=TODAY):
 APPROVED = marked(GOOD)
 SID = "sess-0001"
 CLAUDE, PANE_SHELL, SHELL = 900000, 899999, 900001
+PANE_TTY = "/dev/pts/4"  # the pane's tty, as #{pane_tty} names it
 START = 4242
 SERVER = "1791000000 222 /tmp/tmux-1000/default"
 ESC, PROMPT_MARK, NBSP = chr(27), chr(0x276F), chr(0xA0)
@@ -209,7 +211,7 @@ class Base(LanesRepo):
         self.env["PATH"] = os.pathsep.join(e for e in self.env["PATH"].split(os.pathsep)
                                            if not e.startswith("/mnt/"))
         self.env.update(TMUX_PANE="%4", CLAUDE_CODE_SESSION_ID=SID, FAKE_TMUX_LOG=self.tmux_log,
-                        FAKE_TMUX_SERVER=SERVER, FAKE_TMUX_PANE=f"{PANE_SHELL} claude",
+                        FAKE_TMUX_SERVER=SERVER, FAKE_TMUX_PANE=f"{PANE_SHELL} claude {PANE_TTY}",
                         FAKE_TMUX_FAIL="", FAKE_TMUX_MODE="0", FAKE_TMUX_SCREEN=EMPTY_BOX,
                         FAKE_TMUX_WHERE=WHERE, FAKE_TMUX_CLIENTS=CLIENTS,
                         FAKE_TOAST_LOG=self.toast_log, FAKE_TOAST_EXIT="0")
@@ -230,6 +232,20 @@ class Base(LanesRepo):
         self.status, self.updated, self.stopped = None, 0, False
         real_start = self.mod.proc_start
         self.mod.proc_start = lambda pid: self.start_now if pid == CLAUDE else real_start(pid)
+        self.fg = True  # the claude's group is in front on the pane's tty
+        self.fg_ttys = []  # the pane ttys the final re-check asked about
+        real_fg = self.mod.foreground
+
+        def foreground(pid, tty):
+            if pid != CLAUDE:
+                return real_fg(pid, tty)
+            self.fg_ttys.append(tty)
+            return self.fg
+        self.mod.foreground = foreground
+        self.jobs = []  # the tab's stopped jobs, (pid, comm)
+        real_jobs = self.mod.stopped_jobs
+        self.mod.stopped_jobs = lambda pid: list(self.jobs) if pid == CLAUDE else real_jobs(pid)
+        self.argv0 = self.claude  # the claude's argv[0] in the fake /proc/<pid>/cmdline
         self.real_load = self.mod.load_session
         self.mod.load_session = self.fake_load
         # then()'s entries wait here for a scan that doesn't follow their own read (landed_scan).
@@ -361,7 +377,7 @@ class Base(LanesRepo):
     def cmdline(self, launched=()):
         """The fake /proc/<pid>/cmdline: the session claude launched with launched (a real pid
         900000 on the machine must never lend its argv to a test)."""
-        return lambda pid: [self.claude, *launched] if pid == CLAUDE else None
+        return lambda pid: [self.argv0, *launched] if pid == CLAUDE else None
 
     def run_pass(self, *args, procs=None, cwd=None, launched=()):
         """main() on the checkout, its session claude launched with launched."""
@@ -1372,13 +1388,57 @@ class Plain(Base):
         self.assertEqual(code, 1, out)
         self.assertDropped("busy", "no record since the call")
 
+    def test_a_claude_run_by_its_versioned_path_passes_the_final_recheck(self):
+        # tmux names a pane after its foreground leader's argv[0] basename, so a claude exec'd by
+        # its versioned path reads `2.1.302`, not `claude` (probed 2026-10-18 on 2.1.302).
+        self.argv0 = os.path.join(self.home, ".local", "share", "claude", "versions", "2.1.302")
+        os.environ["FAKE_TMUX_PANE"] = f"{PANE_SHELL} 2.1.302 {PANE_TTY}"
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(self.calls("tmux", "respawn-pane")), 1)
+        self.assertEqual(set(self.fg_ttys), {PANE_TTY})  # asked about the pane's own tty
+
     def test_a_pane_not_running_claude_drops_gone(self):
-        for pane in (f"{PANE_SHELL} zsh", "12345 claude"):
-            with self.subTest(pane=pane):
+        versioned = "/home/u/.local/share/claude/versions/2.1.302"
+        for argv0, pane in ((None, f"{PANE_SHELL} zsh"), (None, "12345 claude"),
+                            (None, f"{PANE_SHELL} 2.1.302"),  # not this claude's name
+                            (versioned, f"{PANE_SHELL} vim"), (versioned, f"{PANE_SHELL} zsh"),
+                            (versioned, "12345 2.1.302"),  # its name, but not above it
+                            ("", f"{PANE_SHELL} ")):  # no argv[0] read, no command named
+            with self.subTest(argv0=argv0, pane=pane):
+                self.argv0 = self.claude if argv0 is None else argv0
                 os.environ["FAKE_TMUX_PANE"] = pane
                 self.reset()
                 self.assertEqual(self.mod.wait_and_act(self.plan(), table), "gone")
                 self.assertDropped("gone", "pass dropped")
+
+    def test_a_stopped_job_in_the_tab_refuses_a_plain_pass(self):
+        # The respawn hangs up the pane's shell and its jobs with it (probed 2026-10-18 on tmux
+        # 3.7c): a Ctrl+Z'd vim with unsaved edits, or a Ctrl+Z'd claude.
+        self.jobs = [(4321, "vim"), (4322, "2.1.302"), (4323, "less")]
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 1, out)
+        self.assertDropped("busy", "a stopped job in the tab would die with the respawn: vim "
+                           "(pid 4321), 2.1.302 (pid 4322), +1 more")
+        self.assertLoud("pass dropped in tab 3: a stopped job in the tab would die with the "
+                        "respawn: vim (pid 4321), 2.1.302 (pid 4322), +1 more. Bring it back (fg) "
+                        "and end it, then /pass, or /pass compact keeps it")
+        self.assertIn("outcome=busy busy: stopped jobs in the tab: vim (pid 4321), 2.1.302 "
+                      "(pid 4322), less (pid 4323)", self.log())
+
+    def test_a_stopped_job_in_the_tab_leaves_a_compact_pass_alone(self):
+        self.jobs = [(4321, "vim")]  # typing /compact kills nothing
+        code, out = self.run_pass("--compact", "--foreground")
+        self.assertEqual(code, 0, out)
+
+    def test_a_claude_behind_another_foreground_group_drops_gone(self):
+        # Ctrl+Z'd in a shell tab with a second claude (or a --resume twin) run in front: the
+        # pane's command still reads claude, but this claude's group isn't the terminal's.
+        self.fg = False
+        self.assertEqual(self.mod.wait_and_act(self.plan(), table), "gone")
+        self.assertDropped("gone", "pass dropped")
+        self.assertIn(f"claude {CLAUDE} isn't in front on the pane's terminal {PANE_TTY}",
+                      self.log())
 
     def test_a_gone_pane_or_session_drops_gone_at_once(self):
         for script, fail, dead in ((["busy"], "display-message", False), ([None], "", False),
@@ -2422,8 +2482,16 @@ class Units(unittest.TestCase):
     def test_proc_table_reads_comm_and_ppid(self):
         self.stat((("123", "123 (odd (name) x) S 45 1 1 0"), ("7", "7 (claude) S 1 7 7"),
                    ("self", "1 (x) S 0"), ("99", "garbage")))
-        self.assertEqual(self.mod.proc_table(self.dir),
-                         {123: ("odd (name) x", 45), 7: ("claude", 1)})
+        self.raw_stat("8", b"8 (caf\xc3) S 7 8 8 0")  # a name the kernel cut mid-character
+        self.assertEqual(self.mod.proc_table(self.dir), {123: ("odd (name) x", 45),
+                                                         7: ("claude", 1),
+                                                         8: ("caf" + chr(0xFFFD), 7)})
+
+    def raw_stat(self, pid, data):
+        """A stat file holding data as bytes: /proc prints a process's name unescaped."""
+        os.makedirs(os.path.join(self.dir, pid))
+        with open(os.path.join(self.dir, pid, "stat"), "wb") as f:
+            f.write(data)
 
     def test_proc_start_reads_field_22_and_a_zombie_has_none(self):
         tail = " ".join(str(n) for n in range(4, 22))  # fields 4..21, then starttime
@@ -2432,6 +2500,52 @@ class Units(unittest.TestCase):
         self.assertEqual(self.mod.proc_start(10, self.dir), 98765)
         self.assertIsNone(self.mod.proc_start(11, self.dir))
         self.assertIsNone(self.mod.proc_start(12, self.dir))
+
+    def test_foreground_wants_the_group_in_front_on_the_panes_terminal(self):
+        # Fields 3 to 8: state, ppid, pgrp, session, tty_nr, tpgid. /dev/null stands in for the
+        # pane's tty (a real device, so its st_rdev is what a tty_nr names). In a zsh tab the
+        # session is zsh's (24 here), so pid, pgrp and session differ.
+        tty, other = "/dev/null", "/dev/zero"
+        nr = os.stat(tty).st_rdev
+        tail = " ".join(str(n) for n in range(9, 22))
+        self.stat((("20", f"20 (cl aude) S 1 20 20 {nr} 20 {tail} 5 0 0"),  # the pane's process
+                   ("25", f"25 (claude) S 24 25 24 {nr} 25 {tail} 5 0 0"),  # a zsh tab's
+                   ("26", f"26 (claude) S 24 27 24 {nr} 27 {tail} 5 0 0"),  # its group's leader
+                   ("21", f"21 (claude) T 24 21 24 {nr} 30 {tail} 5 0 0"),  # stopped behind 30
+                   ("27", f"27 (claude) S 24 26 24 {nr} 24 {tail} 5 0 0"),  # zsh in front
+                   ("22", f"22 (2.1.302) S 1 22 22 0 -1 {tail} 5 0 0"),  # no terminal
+                   ("24", "garbage")))
+        for pid in (20, 25, 26):
+            self.assertTrue(self.mod.foreground(pid, tty, self.dir), pid)
+        for pid in (21, 27, 22, 23, 24):  # 23: gone
+            self.assertFalse(self.mod.foreground(pid, tty, self.dir), pid)
+        # In front, but on another terminal than the pane's (a program in the pane hosts it), or
+        # the pane's tty unknown.
+        for pane_tty in (other, "", os.path.join(self.dir, "none")):
+            self.assertFalse(self.mod.foreground(25, pane_tty, self.dir), pane_tty)
+
+    def test_stopped_jobs_are_the_stopped_processes_on_the_terminal_outside_its_group(self):
+        # Fields 3 to 8: state, ppid, pgrp, session, tty_nr, tpgid; claude 30 in a zsh tab (24).
+        tail = " ".join(str(n) for n in range(9, 22))
+        row = lambda pid, comm, state, pgrp, tty: (  # noqa: E731
+            str(pid), f"{pid} ({comm}) {state} 24 {pgrp} 24 {tty} 30 {tail} 5 0 0")
+        self.stat((row(30, "claude", "S", 30, 34823),
+                   row(37, "2.1.302", "T", 37, 34823),  # a Ctrl+Z'd claude
+                   row(31, "vi m", "T", 31, 34823),
+                   row(32, "vim", "T", 32, 34999),  # another terminal's
+                   row(33, "npm", "T", 30, 34823),  # the claude's own group: its business
+                   row(34, "sleep", "S", 34, 34823),  # running in the background
+                   row(35, "gdb\x1b[2J", "t", 35, 34823),  # traced; its title made printable
+                   ("36", "garbage")))
+        self.assertEqual(self.mod.stopped_jobs(30, self.dir),
+                         [(31, "vi m"), (35, "gdb?[2J"), (37, "2.1.302")])
+        self.stat((row(40, "claude", "S", 40, 0), row(41, "vim", "T", 41, 0)))  # no terminal
+        self.assertEqual(self.mod.stopped_jobs(40, self.dir), [])
+        self.assertEqual(self.mod.stopped_jobs(99, self.dir), [])  # gone
+        # A name that isn't UTF-8 (the kernel cuts one at 15 bytes, mid-character if need be)
+        # still lists the job.
+        self.raw_stat("38", f"38 (vim \xe9) T 24 38 24 34823 30 {tail} 5 0 0".encode("latin-1"))
+        self.assertIn((38, "vim " + chr(0xFFFD)), self.mod.stopped_jobs(30, self.dir))
 
     def test_the_transcript_path_follows_the_session(self):
         with mock.patch.dict(os.environ, {"HOME": self.dir}):

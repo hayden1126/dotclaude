@@ -722,9 +722,10 @@ rechecks the handoff and respawns the pane with a fresh `claude`.
   the turn's `turn_duration` entry or an Esc interrupt after the call, with no new turn since. The
   pass drops, with nothing changed, when work landed after the handoff (`stale`), a prompt or a
   new turn came after the call, or the status changed after the turn (`resumed`), the stop listed
-  any background task but memory upkeep or an artifact watch, or the pane was in copy mode, held
-  a draft in the input box or tmux didn't answer (`busy`), the session or pane went away or
-  changed (`gone`), or the turn never ended (`timeout`). A refusal (`stale`, `busy`, `timeout`,
+  any background task but memory upkeep or an artifact watch, the pane was in copy mode, held a
+  draft in the input box, showed no input box or tmux didn't answer, or, for a plain pass, the
+  tab's shell had a stopped job the respawn would hang up (`busy`), the session or pane went away
+  or changed (`gone`), or the turn never ended (`timeout`). A refusal (`stale`, `busy`, `timeout`,
   `failed`, an `error` in the waiter, and `partial` below) shows its cause and fix on every
   terminal attached to the pane's tmux session until a key press, plus a Windows toast; `resumed`
   (but for an unreadable transcript, which is loud), `gone` and `cancelled` show one brief line in

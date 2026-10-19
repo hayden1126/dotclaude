@@ -654,12 +654,14 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   flags for its next plain pass to carry, so each types the flags instead (`--resume` honors both,
   probed 2026-10-17 on 2.1.302). `hooks/session-registry.sh` saves the flags the session's claude launched with, as
   `model` and `effort` in its open-sessions entry, at each SessionStart: the hook's nearest
-  ancestor named `claude`, its `/proc` command line, each value only in the shape a pass would
-  pass on. `claude-saved` copies them into a starred or shelved chat's entry at Star, Shelve and
-  each SessionStart. At relaunch, `carried_pick` reads them with the transcript, which by then is
-  complete, with one difference for a resume: when no usable entry follows a `/model` (the server
-  died before the reply), it carries the `/model`'s argument if `lane open` would accept it, since
-  a resume keeps the session's own model where a new session takes the default the command saved.
+  ancestor that is a Claude process (its session file records its own procStart, which finds a
+  claude run by its versioned path, whose comm is the version; else its name is `claude`), its
+  `/proc` command line, each value only in the shape a pass would pass on. `claude-saved` copies
+  them into a starred or shelved chat's entry at Star, Shelve and each SessionStart. At relaunch,
+  `carried_pick` reads them with the transcript, which by then is complete, with one difference
+  for a resume: when no usable entry follows a `/model` (the server died before the reply), it
+  carries the `/model`'s argument if `lane open` would accept it, since a resume keeps the
+  session's own model where a new session takes the default the command saved.
   Hayden approved launch flags plus the transcript over either alone: the flags alone undo a
   mid-session `/model`, and the transcript alone loses an alias or a 1M form and would pin a
   session launched without flags to what it last ran. How each case comes out:

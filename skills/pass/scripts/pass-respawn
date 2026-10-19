@@ -91,11 +91,14 @@ artifact watch is the Artifact tool's live watch, whose id the model never sees:
 ends it, and the log line ends `; ignored: artifact watch <url> (<id>)`.
 Right before acting it re-checks: the turn still over, by the
 settle's rule (`resumed`), the process alive with the same procStart, the pane
-still running that claude (pane_pid is the claude or its ancestor, pane_current_command is
-`claude`), tmux answering for the pane and the pane not in copy mode (`#{pane_in_mode}` 0), and
+still running that claude in front (pane_pid is the claude or its ancestor, pane_current_command
+is `claude` or the claude's own argv[0] basename, and the claude's process group is the
+foreground group of the pane's tty), tmux answering for the pane and the pane not in copy mode
+(`#{pane_in_mode}` 0), and
 Claude Code's input box present and empty (`busy` otherwise, each with its own cause and fix:
 typing would join a draft and a respawn would discard it; the dim ghost suggestion is not a
-draft). A pane tmux can't find, a missing session file,
+draft), and, for a plain pass, no stopped job in the tab (stopped_jobs; `busy` otherwise: the
+respawn would hang it up with the pane's shell). A pane tmux can't find, a missing session file,
 a dead or replaced process, or a session file naming another session or pane drops `gone` at
 once, while waiting too. Past --timeout (600 s; at most 3600) it gives up (`timeout`). Each drop
 is logged, then told to the session (below), then shown, and touches nothing else. A refusal of
@@ -312,7 +315,7 @@ TIMEOUT = 600.0
 MAX_TIMEOUT = 3600.0
 PANE_RE = re.compile(r"%\d+")
 SID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
-PANE_FORMAT = "#{pane_pid} #{pane_current_command}"
+PANE_FORMAT = "#{pane_pid} #{pane_current_command} #{pane_tty}"
 PROMPT_MARK = chr(0x276F)  # the input box's prompt mark, then a no-break space
 PROMPT_LINE = re.compile(PROMPT_MARK + "[" + chr(0xA0) + " ]")
 ESCAPE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[()*+][0-~]|[@-_])")
@@ -382,6 +385,7 @@ class Plan:
     toast: list[str] | None = None  # the toast's argv less its message (toast_command)
     launched: dict = dataclasses.field(default_factory=dict)  # launch_pick, checked at the call
     pick: list[str] = dataclasses.field(default_factory=list)  # lanelib.carried_pick, at act time
+    argv0: str = ""        # the claude's argv[0] basename at the call: its pane_current_command
     lock_fd: int | None = None  # the pending lock the waiter holds (None: not taken)
     acting: bool = False   # past the final re-check: SIGTERM no longer cancels
     late_cancel: bool = False  # a SIGTERM came while acting, and was ignored
@@ -421,9 +425,9 @@ def proc_table(proc: str = "/proc") -> dict[int, tuple[str, int]]:
     for name in os.listdir(proc):
         if not name.isdigit():
             continue
-        try:
-            with open(os.path.join(proc, name, "stat")) as f:
-                stat = f.read()
+        try:  # bytes: a comm is unescaped and may be cut mid-character, so it may not be UTF-8
+            with open(os.path.join(proc, name, "stat"), "rb") as f:
+                stat = f.read().decode(errors="replace")
         except OSError:
             continue
         left, right = stat.find("("), stat.rfind(")")  # comm may hold spaces and parens
@@ -442,6 +446,51 @@ def proc_start(pid: int, proc: str = "/proc") -> int | None:
         return None if fields[0] in ("Z", "X") else int(fields[19])
     except (OSError, ValueError, IndexError, TypeError):
         return None
+
+
+def foreground(pid: int, tty: str, proc: str = "/proc") -> bool:
+    """Whether pid runs in front on tty (the pane's, a /dev path): its terminal is tty (stat field
+    7, tty_nr, against the device's st_rdev) and its process group is that terminal's foreground
+    group (fields 5 and 8, pgrp and tpgid). False when it is stopped behind another job, runs on
+    a terminal a program in the pane hosts, has none (tpgid -1) or can't be read. Its name
+    decides nothing: a second claude in front of a stopped one reads the same."""
+    try:
+        with open(os.path.join(proc, str(int(pid)), "stat")) as f:
+            fields = f.read().rsplit(")", 1)[1].split()
+        return (int(fields[5]) > 0 and int(fields[2]) == int(fields[5])
+                and int(fields[4]) == os.stat(tty).st_rdev)
+    except (OSError, ValueError, IndexError, TypeError):
+        return False
+
+
+def stopped_jobs(pid: int, proc: str = "/proc") -> list[tuple[int, str]]:
+    """The stopped (or traced) processes on pid's terminal outside its process group, as (pid,
+    comm) in pid order, the comm made printable: the tab's jobs a plain respawn would kill, since
+    it hangs up the pane's shell and its jobs with it (probed 2026-10-18 on tmux 3.7c), such as a
+    Ctrl+Z'd vim with unsaved edits or a Ctrl+Z'd claude. A background job that runs dies too,
+    but a shell keeps helpers running (zsh plugins' workers), so only a stopped one counts. []
+    when pid has no terminal or its stat can't be read."""
+    def stat(name):  # bytes: the name is unescaped, and the kernel may cut it mid-character
+        with open(os.path.join(proc, str(name), "stat"), "rb") as f:
+            head, _, rest = f.read().decode(errors="replace").rpartition(")")
+        return head.partition("(")[2], rest.split()
+
+    try:
+        _, mine = stat(int(pid))
+        tty, group = int(mine[4]), int(mine[2])
+    except (OSError, ValueError, IndexError, TypeError):
+        return []
+    out = []
+    for name in os.listdir(proc) if tty else ():
+        if not name.isdigit():
+            continue
+        try:
+            comm, fields = stat(name)
+            if fields[0] in ("T", "t") and int(fields[4]) == tty and int(fields[2]) != group:
+                out.append((int(name), "".join(c if c.isprintable() else "?" for c in comm)))
+        except (OSError, ValueError, IndexError):
+            continue
+    return sorted(out)
 
 
 def ancestry(table: dict, pid: int | None) -> list[int]:
@@ -1268,7 +1317,8 @@ def prepare(args: argparse.Namespace, procs, cmdline=lanelib.proc_cmdline) -> Pl
                      "checked); it can't tell when this session's turn ends", why)
     return Plan(mode, pane, repo.toplevel, lane is not None, status_rel, tmux, claude, claude_pid,
                 proc_start(claude_pid), sid, session, called, transcript, size, args.timeout,
-                path, toast_command(roots, path), launched)
+                path, toast_command(roots, path), launched,
+                argv0=os.path.basename(claude_argv[0]) if claude_argv else "")
 
 
 # ---- the waiter ----
@@ -1290,8 +1340,13 @@ def observe(plan: Plan, procs=None) -> tuple[str, str, dict | None]:
     session file. The file changes first: turn_duration's bytes land 0.1 to 0.4 s later (the
     spike's poller), so busy reads as over only once they land, and a poll that sees idle or
     shell has usually not seen the end yet (wait_and_act picks its rule after the settle).
-    Given procs (the final re-check), the pane must also run this claude: its pane_pid the claude
-    or an ancestor of it, its current command `claude`. detail is the file's status."""
+    Given procs (the final re-check), the pane must also run this claude in front: its pane_pid
+    the claude or an ancestor of it, its current command `claude` or the claude's own argv[0]
+    basename (tmux's name for the foreground group's leader: `2.1.302` for a claude exec'd by its
+    versioned path; a path with a space reads otherwise, since tmux cuts at the space first, and
+    drops `gone`), and the claude in front on the pane's tty (foreground: its group the
+    terminal's foreground group, which a second claude in front of a Ctrl+Z'd one passes the
+    name without). detail is the file's status."""
     p = tmux(plan, "display-message", "-p", "-t", plan.pane, PANE_FORMAT)
     if p is None or p.returncode != 0:
         return "gone", f"pane {plan.pane}: " + ((p.stderr.strip() if p else "tmux didn't run")
@@ -1301,11 +1356,16 @@ def observe(plan: Plan, procs=None) -> tuple[str, str, dict | None]:
                               plan.pane):
         return "gone", why, None
     if procs is not None:
-        pid, _, cmd = p.stdout.strip().partition(" ")
-        if cmd != "claude" or not pid.isdigit() or int(pid) not in ancestry(procs(),
-                                                                            plan.claude_pid):
+        # The command may be empty, never spaced (tmux cuts it at a space); the tty is a path.
+        pid, cmd, tty = (p.stdout.strip().split(" ") + ["", ""])[:3]
+        if (not cmd or cmd not in ("claude", plan.argv0) or not pid.isdigit()
+                or int(pid) not in ancestry(procs(), plan.claude_pid)):
             return "gone", f"pane {plan.pane} runs {cmd or '?'} (pid {pid or '?'}), not claude " \
                            f"{plan.claude_pid}", None
+        if not foreground(plan.claude_pid, tty):
+            return "gone", f"claude {plan.claude_pid} isn't in front on the pane's terminal " \
+                           f"{tty or '?'} (stopped, another program in front, or on another " \
+                           "terminal)", None
     scan_turns(plan)
     status, updated = session.get("status"), session.get("statusUpdatedAt")
     idle = ((status in AT_PROMPT and isinstance(updated, (int, float))
@@ -1861,6 +1921,15 @@ def wait_and_act(plan: Plan, procs) -> str:
                     fix="Run the pass skill again once " + (
                         "the tab is back." if why == "tmux didn't answer"
                         else "Hayden has cleared it."))
+    if plan.mode == "plain" and (jobs := stopped_jobs(plan.claude_pid)):
+        named = [f"{comm} (pid {pid})" for pid, comm in jobs]
+        shown = ", ".join(named[:SHOWN]) + (f", +{len(named) - SHOWN} more"
+                                             if len(named) > SHOWN else "")
+        return drop(plan, "busy", "busy: stopped jobs in the tab: " + ", ".join(named),
+                    f"pass dropped: a stopped job in the tab would die with the respawn: {shown}. "
+                    "Bring it back (fg) and end it, then /pass, or /pass compact keeps it",
+                    cause=f"a stopped job in the tab would die with the respawn ({shown})",
+                    fix="Run the pass skill again once Hayden has ended it, or pass compact.")
     begin_acting(plan)
     if plan.mode == "plain":
         carry = last = None
