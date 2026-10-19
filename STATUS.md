@@ -87,7 +87,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **No live lanes** (since json-depth's close, 2026-10-19). The three lanes opened 2026-10-19
+  - **Live lanes: branch-reuse and ask-check** (opened 2026-10-19, Next item 0). The three lanes opened earlier on 2026-10-19
     merged, were installed from main and closed: chrome-ttl as #126 (chrome-bg's TTL on a
     monotonic deadline, plus coding-practices rule 8), tab-cmd as #127 (a claude run under its
     versioned path counts as claude in the tab scripts: Hayden's "trigger + confirm" design, the
@@ -228,9 +228,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lane ask quality (Backlog, picks made): open lanes ask-check (`feat/ask-check`) and
-     branch-reuse (`fix/lane-branch-reuse`) once Hayden approves the new-lane table; both names
-     had no PR on 2026-10-19.
+  0. Lane ask quality (Backlog, picks made): lanes branch-reuse (`fix/lane-branch-reuse`, merge
+     order 1, carries the lead branch) and ask-check (`feat/ask-check`, order 2) opened
+     2026-10-19; their state is in their records (`lane ls`). They overlap only if branch-reuse
+     touches `skills/lanes/SKILL.md`.
   1. No live lanes. Hayden picks the next work from the backlog (item 0 first, unless he says
      otherwise). On a bug report from another repo's session (CLAUDE.md, #125): check it
      against the code and log it in the backlog. When lanes run again, follow The lead in
