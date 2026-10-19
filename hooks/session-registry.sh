@@ -15,10 +15,11 @@
 # only as 1 to 2048 bytes of UTF-8 with no control character), which claude-restore sets back.
 # model and effort are the session's claude's own launch flags, read from /proc and kept only in
 # their shape (lanelib.pick_ok). Its claude is the nearest ancestor (a hook runs a few processes
-# below it) whose session file, ~/.claude/sessions/<pid>.json, records that process's own
-# procStart and this session's id (lanelib.sessions_above). The file exists by SessionStart,
-# startup and clear alike (probed on 2.1.302), and finds a claude exec'd by its versioned path,
-# whose comm is the version. With no such file, the nearest ancestor named claude.
+# below it) that is a Claude process: one whose session file, ~/.claude/sessions/<pid>.json,
+# records that process's own procStart (lanelib.sessions_above), which finds a claude exec'd by
+# its versioned path (comm 2.1.302), or one named claude. The file exists by SessionStart,
+# startup and clear alike (probed on 2.1.302). Its session id isn't checked: an in-session
+# /resume (unprobed) may switch it, and the nearest Claude process is the hook's own anyway.
 # claude-restore and claude-saved's Open resume the session with them, as a plain pass would
 # carry them (lanelib.carried_pick; docs/lanes.md, "Model and effort"). lanelib is found through
 # this hook's link, by absolute path only; any failure there writes the entry without them.
@@ -113,16 +114,14 @@ def locked():
 
 def launch_pick():
     """The --model and --effort the session claude launched with, as entry fields, from its argv
-    in /proc. Its claude is the nearest ancestor whose session file records the procStart of
-    that very process and the id of this session (lanelib.sessions_above), else the nearest
-    ancestor named claude. {} on any failure (no lanelib, no claude above this hook, an
-    unreadable /proc), so the entry is still written."""
+    in /proc. Its claude is the nearest ancestor that is a Claude process: its session file
+    records the procStart of that very process (lanelib.sessions_above), or its name is claude.
+    {} on any failure (no lanelib, no claude above this hook, an unreadable /proc), so the entry
+    is still written."""
     try:
-        claude = next((p.pid for s, p in lanelib.sessions_above() if s.get("sessionId") == sid),
-                      None)
-        if claude is None:
-            claude = next(pid for pid, _ in lanelib.ancestry(os.getpid())
-                          if (lanelib.proc_stat(pid) or ("",))[0] == "claude")
+        filed = {p.pid for _, p in lanelib.sessions_above()}
+        claude = next(pid for pid, _ in lanelib.ancestry(os.getpid())
+                      if pid in filed or (lanelib.proc_stat(pid) or ("",))[0] == "claude")
         flags = lanelib.pick_flags(lanelib.proc_cmdline(claude))
         return {flag[2:]: value for flag, value in flags.items() if lanelib.pick_ok(flag, value)}
     except Exception:

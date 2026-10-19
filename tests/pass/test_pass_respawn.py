@@ -4,14 +4,15 @@ detached waiter and its drops, and the inputs it trusts.
 Each test runs the script in-process against a throwaway repo (tests/lanes/_fixture.py, which
 points HOME and XDG_STATE_HOME into a temp dir). Fakes stand in for everything live:
   - tmux: a fake first on PATH that logs each call's argv (one argument per \\x1f field) and
-    answers `display-message -p` with $FAKE_TMUX_PANE (pane pid and current command) or the
+    answers `display-message -p` with $FAKE_TMUX_PANE (pane pid, current command, tty) or the
     server line; a command named in $FAKE_TMUX_FAIL exits 1.
   - the session file: load_session is wrapped so each read writes the next scripted status to
     $HOME/.claude/sessions/<pid>.json first (the last one repeats; the first is the call's own
     read), then reads it for real. When the status first turns idle (or shell), the wrapper writes
     the stop record stop-ring.sh would (self.stop_waits; None writes none). A callable in the
     script runs first and gives the status (Base.then: it appends to the transcript once).
-  - /proc: proc_start is replaced, and a fake process table stands in for proc_table.
+  - /proc: proc_start and foreground are replaced, and a fake process table stands in for
+    proc_table.
   - the transcript: a file under the fake $HOME/.claude/projects, which tests append to.
 handoff-check runs for real as a subprocess. Nothing reaches the live tmux server or the real
 ~/.claude."""
@@ -148,6 +149,7 @@ def marked(text, day=TODAY):
 APPROVED = marked(GOOD)
 SID = "sess-0001"
 CLAUDE, PANE_SHELL, SHELL = 900000, 899999, 900001
+PANE_TTY = "/dev/pts/4"  # the pane's tty, as #{pane_tty} names it
 START = 4242
 SERVER = "1791000000 222 /tmp/tmux-1000/default"
 ESC, PROMPT_MARK, NBSP = chr(27), chr(0x276F), chr(0xA0)
@@ -209,7 +211,7 @@ class Base(LanesRepo):
         self.env["PATH"] = os.pathsep.join(e for e in self.env["PATH"].split(os.pathsep)
                                            if not e.startswith("/mnt/"))
         self.env.update(TMUX_PANE="%4", CLAUDE_CODE_SESSION_ID=SID, FAKE_TMUX_LOG=self.tmux_log,
-                        FAKE_TMUX_SERVER=SERVER, FAKE_TMUX_PANE=f"{PANE_SHELL} claude",
+                        FAKE_TMUX_SERVER=SERVER, FAKE_TMUX_PANE=f"{PANE_SHELL} claude {PANE_TTY}",
                         FAKE_TMUX_FAIL="", FAKE_TMUX_MODE="0", FAKE_TMUX_SCREEN=EMPTY_BOX,
                         FAKE_TMUX_WHERE=WHERE, FAKE_TMUX_CLIENTS=CLIENTS,
                         FAKE_TOAST_LOG=self.toast_log, FAKE_TOAST_EXIT="0")
@@ -230,9 +232,16 @@ class Base(LanesRepo):
         self.status, self.updated, self.stopped = None, 0, False
         real_start = self.mod.proc_start
         self.mod.proc_start = lambda pid: self.start_now if pid == CLAUDE else real_start(pid)
-        self.fg = True  # the claude's process group is its terminal's foreground group
+        self.fg = True  # the claude's group is in front on the pane's tty
+        self.fg_ttys = []  # the pane ttys the final re-check asked about
         real_fg = self.mod.foreground
-        self.mod.foreground = lambda pid: self.fg if pid == CLAUDE else real_fg(pid)
+
+        def foreground(pid, tty):
+            if pid != CLAUDE:
+                return real_fg(pid, tty)
+            self.fg_ttys.append(tty)
+            return self.fg
+        self.mod.foreground = foreground
         self.argv0 = self.claude  # the claude's argv[0] in the fake /proc/<pid>/cmdline
         self.real_load = self.mod.load_session
         self.mod.load_session = self.fake_load
@@ -1381,10 +1390,11 @@ class Plain(Base):
         # its versioned path (live on 2.1.302: .lane/artifacts/probe-startup.txt in lane
         # launch-path's record) reads `2.1.302`, not `claude`.
         self.argv0 = os.path.join(self.home, ".local", "share", "claude", "versions", "2.1.302")
-        os.environ["FAKE_TMUX_PANE"] = f"{PANE_SHELL} 2.1.302"
+        os.environ["FAKE_TMUX_PANE"] = f"{PANE_SHELL} 2.1.302 {PANE_TTY}"
         code, out = self.run_pass("--foreground")
         self.assertEqual(code, 0, out)
         self.assertEqual(len(self.calls("tmux", "respawn-pane")), 1)
+        self.assertEqual(set(self.fg_ttys), {PANE_TTY})  # asked about the pane's own tty
 
     def test_a_pane_not_running_claude_drops_gone(self):
         versioned = "/home/u/.local/share/claude/versions/2.1.302"
@@ -1406,7 +1416,8 @@ class Plain(Base):
         self.fg = False
         self.assertEqual(self.mod.wait_and_act(self.plan(), table), "gone")
         self.assertDropped("gone", "pass dropped")
-        self.assertIn(f"claude {CLAUDE} isn't its terminal's foreground group", self.log())
+        self.assertIn(f"claude {CLAUDE} isn't in front on the pane's terminal {PANE_TTY}",
+                      self.log())
 
     def test_a_gone_pane_or_session_drops_gone_at_once(self):
         for script, fail, dead in ((["busy"], "display-message", False), ([None], "", False),
@@ -2461,17 +2472,28 @@ class Units(unittest.TestCase):
         self.assertIsNone(self.mod.proc_start(11, self.dir))
         self.assertIsNone(self.mod.proc_start(12, self.dir))
 
-    def test_foreground_compares_the_group_with_the_terminals(self):
-        # Fields 3 to 8: state, ppid, pgrp, session, tty_nr, tpgid.
+    def test_foreground_wants_the_group_in_front_on_the_panes_terminal(self):
+        # Fields 3 to 8: state, ppid, pgrp, session, tty_nr, tpgid. /dev/null stands in for the
+        # pane's tty (a real device, so its st_rdev is what a tty_nr names). In a zsh tab the
+        # session is zsh's (24 here), so pid, pgrp and session differ.
+        tty, other = "/dev/null", "/dev/zero"
+        nr = os.stat(tty).st_rdev
         tail = " ".join(str(n) for n in range(9, 22))
-        self.stat((("20", f"20 (cl aude) S 1 20 20 34823 20 {tail} 5 0 0"),
-                   ("21", f"21 (claude) T 1 21 21 34823 30 {tail} 5 0 0"),
-                   ("22", f"22 (2.1.302) S 1 22 22 0 -1 {tail} 5 0 0"), ("24", "garbage")))
-        self.assertTrue(self.mod.foreground(20, self.dir))
-        self.assertFalse(self.mod.foreground(21, self.dir))  # another group in front
-        self.assertFalse(self.mod.foreground(22, self.dir))  # no terminal
-        self.assertFalse(self.mod.foreground(23, self.dir))  # gone
-        self.assertFalse(self.mod.foreground(24, self.dir))
+        self.stat((("20", f"20 (cl aude) S 1 20 20 {nr} 20 {tail} 5 0 0"),  # the pane's process
+                   ("25", f"25 (claude) S 24 25 24 {nr} 25 {tail} 5 0 0"),  # a zsh tab's
+                   ("26", f"26 (claude) S 24 27 24 {nr} 27 {tail} 5 0 0"),  # its group's leader
+                   ("21", f"21 (claude) T 24 21 24 {nr} 30 {tail} 5 0 0"),  # stopped behind 30
+                   ("27", f"27 (claude) S 24 26 24 {nr} 24 {tail} 5 0 0"),  # zsh in front
+                   ("22", f"22 (2.1.302) S 1 22 22 0 -1 {tail} 5 0 0"),  # no terminal
+                   ("24", "garbage")))
+        for pid in (20, 25, 26):
+            self.assertTrue(self.mod.foreground(pid, tty, self.dir), pid)
+        for pid in (21, 27, 22, 23, 24):  # 23: gone
+            self.assertFalse(self.mod.foreground(pid, tty, self.dir), pid)
+        # In front, but on another terminal than the pane's (a program in the pane hosts it), or
+        # the pane's tty unknown.
+        for pane_tty in (other, "", os.path.join(self.dir, "none")):
+            self.assertFalse(self.mod.foreground(25, pane_tty, self.dir), pane_tty)
 
     def test_the_transcript_path_follows_the_session(self):
         with mock.patch.dict(os.environ, {"HOME": self.dir}):

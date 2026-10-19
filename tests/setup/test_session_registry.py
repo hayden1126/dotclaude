@@ -9,11 +9,12 @@ SessionEnd deletes the entry on an explicit end (/exit, /clear, logout) and only
 shutdown can't be told from a closed window at hook time. In a tab it then hands the payload to
 ~/.local/bin/claude-saved, fail-open. The entry also carries the window's @tab_place (the tab
 bar's placement, opaque here) as `place` when it is a valid one, and the `--model` and `--effort`
-the session's claude launched with (from /proc: its nearest ancestor whose session file names it
-and the session, else its nearest ancestor named claude) as `model` and `effort`, each when
-present and in its shape. A stub tmux answers `display` and logs each call's argv, one argument
-per field. Each hook runs under a stub claude that writes its own session file: its own parent,
-nearer than any real session the test runs in, whose launch flags would otherwise leak in."""
+the session's claude launched with (from /proc: its nearest ancestor that is a Claude process, by
+a session file that names its own procStart or by the name claude) as `model` and `effort`, each
+when present and in its shape. A stub tmux answers `display` and logs each call's argv, one
+argument per field. Each hook runs under a stub claude that writes its own session file: its own
+parent, nearer than any real session the test runs in, whose launch flags would otherwise leak
+in."""
 import fcntl
 import json
 import os
@@ -345,19 +346,21 @@ class Registry(unittest.TestCase):
         self.start(launch=["--model", "opus"])
         self.assertEqual(self.flags(), {})
 
-    def test_only_a_file_naming_this_session_and_its_process_counts(self):
-        # Another session's file, a stale procStart (a reused pid's file) and no file at all pass
-        # the versioned claude (launched with opus) over: the nearest claude by name answers,
-        # here one with no flags.
+    def test_a_session_file_counts_only_for_its_own_process(self):
+        # The versioned claude, launched with opus, under a claude named claude with no flags. Its
+        # file counts whatever session it names (an in-session /resume may not have switched it
+        # yet), but a stale procStart (a reused pid's file) or no file passes it over, and the
+        # nearest claude by name answers.
         self.claude = self.claude_stub(VERSIONED)
         self.outer("--model", "opus")
-        for stub_session, start in ((NEW, None), (SID, "1"), (None, None)):
+        for stub_session, start, flags in ((NEW, None, {"model": "opus"}), (SID, "1", {}),
+                                           (None, None, {})):
             with self.subTest(stub_session=stub_session, start=start):
                 self.env.pop("STUB_PROC_START", None)
                 if start:
                     self.env["STUB_PROC_START"] = start
                 self.start(stub_session=stub_session)
-                self.assertEqual(self.flags(), {})
+                self.assertEqual(self.flags(), flags)
 
     def test_without_a_session_file_the_nearest_claude_by_name_answers(self):
         self.start(launch=LAUNCH, stub_session=None)

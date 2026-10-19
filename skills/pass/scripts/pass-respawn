@@ -92,8 +92,8 @@ ends it, and the log line ends `; ignored: artifact watch <url> (<id>)`.
 Right before acting it re-checks: the turn still over, by the
 settle's rule (`resumed`), the process alive with the same procStart, the pane
 still running that claude in front (pane_pid is the claude or its ancestor, pane_current_command
-is `claude` or the claude's own argv[0] basename, and the claude's process group is its
-terminal's foreground group), tmux answering for the pane and the pane not in copy mode
+is `claude` or the claude's own argv[0] basename, and the claude's process group is the
+foreground group of the pane's tty), tmux answering for the pane and the pane not in copy mode
 (`#{pane_in_mode}` 0), and
 Claude Code's input box present and empty (`busy` otherwise, each with its own cause and fix:
 typing would join a draft and a respawn would discard it; the dim ghost suggestion is not a
@@ -314,7 +314,7 @@ TIMEOUT = 600.0
 MAX_TIMEOUT = 3600.0
 PANE_RE = re.compile(r"%\d+")
 SID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
-PANE_FORMAT = "#{pane_pid} #{pane_current_command}"
+PANE_FORMAT = "#{pane_pid} #{pane_current_command} #{pane_tty}"
 PROMPT_MARK = chr(0x276F)  # the input box's prompt mark, then a no-break space
 PROMPT_LINE = re.compile(PROMPT_MARK + "[" + chr(0xA0) + " ]")
 ESCAPE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[()*+][0-~]|[@-_])")
@@ -447,14 +447,17 @@ def proc_start(pid: int, proc: str = "/proc") -> int | None:
         return None
 
 
-def foreground(pid: int, proc: str = "/proc") -> bool:
-    """Whether pid's process group is its terminal's foreground group (stat fields 5 and 8, pgrp
-    and tpgid): False when it is stopped behind another job, has no terminal (tpgid -1) or can't
-    be read. Its name decides nothing: a second claude in front of a stopped one reads the same."""
+def foreground(pid: int, tty: str, proc: str = "/proc") -> bool:
+    """Whether pid runs in front on tty (the pane's, a /dev path): its terminal is tty (stat field
+    7, tty_nr, against the device's st_rdev) and its process group is that terminal's foreground
+    group (fields 5 and 8, pgrp and tpgid). False when it is stopped behind another job, runs on
+    a terminal a program in the pane hosts, has none (tpgid -1) or can't be read. Its name
+    decides nothing: a second claude in front of a stopped one reads the same."""
     try:
         with open(os.path.join(proc, str(int(pid)), "stat")) as f:
             fields = f.read().rsplit(")", 1)[1].split()
-        return int(fields[5]) > 0 and int(fields[2]) == int(fields[5])
+        return (int(fields[5]) > 0 and int(fields[2]) == int(fields[5])
+                and int(fields[4]) == os.stat(tty).st_rdev)
     except (OSError, ValueError, IndexError, TypeError):
         return False
 
@@ -1310,8 +1313,9 @@ def observe(plan: Plan, procs=None) -> tuple[str, str, dict | None]:
     the claude or an ancestor of it, its current command `claude` or the claude's own argv[0]
     basename (tmux's name for the foreground group's leader: `2.1.302` for a claude exec'd by its
     versioned path; a path with a space reads otherwise, since tmux cuts at the space first, and
-    drops `gone`), and the claude's process group the terminal's foreground group (foreground: a
-    second claude in front of a Ctrl+Z'd one passes the name). detail is the file's status."""
+    drops `gone`), and the claude in front on the pane's tty (foreground: its group the
+    terminal's foreground group, which a second claude in front of a Ctrl+Z'd one passes the
+    name without). detail is the file's status."""
     p = tmux(plan, "display-message", "-p", "-t", plan.pane, PANE_FORMAT)
     if p is None or p.returncode != 0:
         return "gone", f"pane {plan.pane}: " + ((p.stderr.strip() if p else "tmux didn't run")
@@ -1321,14 +1325,16 @@ def observe(plan: Plan, procs=None) -> tuple[str, str, dict | None]:
                               plan.pane):
         return "gone", why, None
     if procs is not None:
-        pid, _, cmd = p.stdout.strip().partition(" ")
+        # The command may be empty, never spaced (tmux cuts it at a space); the tty is a path.
+        pid, cmd, tty = (p.stdout.strip().split(" ") + ["", ""])[:3]
         if (not cmd or cmd not in ("claude", plan.argv0) or not pid.isdigit()
                 or int(pid) not in ancestry(procs(), plan.claude_pid)):
             return "gone", f"pane {plan.pane} runs {cmd or '?'} (pid {pid or '?'}), not claude " \
                            f"{plan.claude_pid}", None
-        if not foreground(plan.claude_pid):
-            return "gone", f"claude {plan.claude_pid} isn't its terminal's foreground group " \
-                           "(stopped, or another program in front)", None
+        if not foreground(plan.claude_pid, tty):
+            return "gone", f"claude {plan.claude_pid} isn't in front on the pane's terminal " \
+                           f"{tty or '?'} (stopped, another program in front, or on another " \
+                           "terminal)", None
     scan_turns(plan)
     status, updated = session.get("status"), session.get("statusUpdatedAt")
     idle = ((status in AT_PROMPT and isinstance(updated, (int, float))
