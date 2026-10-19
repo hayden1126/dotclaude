@@ -68,6 +68,22 @@ glyph_write() {
     *) tmux set-option -w -t "$1" @claude_state "$2" 2>/dev/null ;;
   esac
 }
+# True when a pane's command is claude. tmux names a pane by argv[0]'s basename, so a claude run
+# by its versioned path (~/.local/share/claude/versions/2.1.303) reads `2.1.303`: that name counts
+# only when the pane tty's foreground process group (field 8 of the pane process's stat, the
+# process tmux names) runs from a claude/versions directory, since any program may carry a
+# version name. It runs for every pane on every pass, so it forks nothing, and /proc is read only
+# for a version name. Args: command, pane pid.
+is_claude() {
+  [ "$1" = claude ] && return 0
+  [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+ && "$2" =~ ^[0-9]+$ ]] || return 1
+  local stat="" tpgid="" argv0=""
+  read -r stat 2>/dev/null < "/proc/$2/stat" || return 1
+  read -r _ _ _ _ _ tpgid _ <<< "${stat##*) }"
+  [[ "$tpgid" =~ ^[0-9]+$ ]] && [ "$tpgid" -gt 0 ] || return 1
+  IFS= read -r -d '' argv0 2>/dev/null < "/proc/$tpgid/cmdline" || return 1   # NUL-ended, as claude-saved's argv()
+  [[ "$argv0" == */claude/versions/* ]]
+}
 if [ -f "$stamp" ] && [ "$(age "$stamp")" -lt 3 ]; then
   cat "$cache" 2>/dev/null   # repeat the last delegation token between real runs
   exit 0
@@ -101,6 +117,7 @@ declare -A win_has_claude        # window -> whether ANY pane in it runs claude 
 panes=""
 while read -r pane wid shell cmd star away path; do
   [ -n "$pane" ] || continue
+  is_claude "$cmd" "$shell" && cmd=claude     # one name for every check below and in $panes
   [ "$cmd" = "claude" ] && win_has_claude[$wid]=1
   if [ "$star" = 1 ] && [ "$cmd" != "claude" ]; then
     # A ★ on a pane no longer running claude (it died, exited unseen, or is suspended) goes,
