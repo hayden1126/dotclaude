@@ -337,7 +337,7 @@ if not isinstance(settings, dict) or not has_ctx_widget(settings):
     if os.path.exists(dst):
         backup = f'{dst}.pre-dotclaude-{int(time.time())}'
         shutil.copy(dst, backup)
-        why = 'lacked the ctx widget' if isinstance(settings, dict) else "didn't parse"
+        why = 'lacked the ctx widget' if isinstance(settings, dict) else "isn't a readable JSON object"
         print(f'!! existing ccstatusline settings {why}; backed up to {backup}')
     settings = baseline
 

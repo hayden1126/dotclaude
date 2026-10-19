@@ -1870,6 +1870,14 @@ class Kills(GuardEnv):
         self.lines(notice("bk2", "toolu_2", "after junk", self.now - 60), raw_first=deep)
         self.assertEqual(self.decide(), self.block(self.kill_reason("after junk")))
 
+    def test_a_kill_record_too_deep_for_json_reads_as_none_seen(self):
+        self.lines(notice("bk1", "toolu_1", "fresh", self.now - 60))
+        kills = os.path.join(self.state, "dotclaude", "kills")
+        os.makedirs(kills)
+        with open(os.path.join(kills, "s1.json"), "w") as f:
+            f.write("[" * 100000)  # RecursionError in json, not ValueError
+        self.assertEqual(self.decide(), self.block(self.kill_reason("fresh")))
+
     def test_old_kill_records_are_pruned(self):
         os.makedirs(os.path.join(self.state, "dotclaude", "kills"))
         stale = os.path.join(self.state, "dotclaude", "kills", "s9.json")

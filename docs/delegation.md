@@ -471,7 +471,9 @@ Allow rules on excluded commands sit behind it: an allow rule skips the classifi
   in a session that runs on after a crash), the guard marked it `waiter_unheard`, or its waiter
   is dead, the refusal names `wait --resume <id>`, which moves the watch to the caller's
   session. A watch file that can't be read (torn, hand-edited, or nested too deep for json)
-  refuses it too, naming the file, since it may be that run's watch.
+  refuses it too, and `codex-delegate resume` with it, naming the file, since it may be that
+  run's watch. `codex-delegate run` isn't refused: its run id is new, so no file watches it.
+  Pruning keeps such a file, so it refuses until someone fixes or removes it.
 - **An acknowledged lapse is heard at a stop, not at the moment.** After one block and one
   warning, the guard starts a detached waiter on the lapsed watch, which watches the whole
   condition (the whole log, too) for up to a day. Its exit reaches no one, so it can't wake an

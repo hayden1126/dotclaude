@@ -307,7 +307,7 @@ def claim_watch(run_id, take_over, poll):
                           "condition": {"codex": run_id}, "created": dc.now_iso(),
                           "description": dc.condition_text({"codex": run_id})}
     try:
-        waiter.take(new)
+        waiter.take(new, fresh=not take_over)
     except dc.WaitRefused as ex:
         die(str(ex))
     # Only a new watch warns. With a process, its guard adopts even an "unknown" session. A

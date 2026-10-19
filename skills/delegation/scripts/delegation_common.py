@@ -1174,7 +1174,7 @@ def live_sessions():
         try:
             with open(p) as f:
                 d = json.load(f)
-        except (OSError, ValueError, RecursionError):   # json recurses on nesting
+        except (OSError, ValueError):
             continue
         sid = d.get("sessionId") if isinstance(d, dict) else None
         if isinstance(sid, str) and sid and pid_alive(d.get("pid"), d.get("procStart")):
@@ -1385,15 +1385,16 @@ class Waiter:
             raise WaitRefused(f"watch {w.get('id')} already has a live waiter (pid "
                               f"{w.get('waiter_pid')}); it will notify its session")
 
-    def refuse_a_second_codex_watch(self, new):
+    def refuse_a_second_codex_watch(self, new, fresh=False):
         """WaitRefused when any session already has an unresolved watch on new's codex run,
         since each watch's waiter could finalize it. Called under the watches lock, so two
         waits started together can't both pass. A watch file that can't be read refuses too:
-        it may be that watch."""
+        it may be that watch. Not for a `fresh` run (codex-delegate run, whose id is new), which
+        no file can watch yet."""
         run = new["condition"].get("codex")
         if run is None:
             return
-        unread = []
+        unread = None if fresh else []
         w = codex_watch(run, unread)
         if w is not None:
             self.refuse_a_live_waiter(w)
@@ -1412,11 +1413,12 @@ class Waiter:
             raise WaitRefused(f"watch {self.wid} is no longer an acknowledged lapse with no "
                               f"waiter in session {self.session}, so no detached waiter is due")
 
-    def take(self, new):
-        """Become the watch's waiter, creating it from `new` when given."""
+    def take(self, new, fresh=False):
+        """Become the watch's waiter, creating it from `new` when given (`fresh`: as
+        refuse_a_second_codex_watch's)."""
         def take(w):
             if new is not None:
-                self.refuse_a_second_codex_watch(new)
+                self.refuse_a_second_codex_watch(new, fresh)
                 w.update(new)
             elif not w:
                 raise WaitRefused(f"no watch {self.wid!r}")

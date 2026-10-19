@@ -1344,7 +1344,7 @@ def transcript_cwd(path: str) -> str | None:
     for line in (read_head(path, TRANSCRIPT_HEAD) or b"").splitlines():
         try:
             rec = json.loads(line)
-        except (ValueError, RecursionError):  # the line cut at the limit, or not JSON
+        except ValueError:  # the line cut at the limit, or not JSON
             continue
         if isinstance(rec, dict) and isinstance(rec.get("cwd"), str):
             return rec["cwd"]

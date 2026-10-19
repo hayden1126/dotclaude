@@ -380,7 +380,7 @@ class CcstatuslineSettings(unittest.TestCase):
                 self.assertEqual(len(kept), 1, kept)
                 with open(kept[0]) as f:
                     self.assertEqual(f.read(), junk)
-                self.assertIn("didn't parse; backed up to", p.stdout)
+                self.assertIn("isn't a readable JSON object; backed up to", p.stdout)
 
     def test_a_missing_file_gets_the_baseline_and_no_backup(self):
         dst = self.fresh()
