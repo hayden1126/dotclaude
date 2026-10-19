@@ -1,7 +1,8 @@
 """A throwaway lanes repo for tests: a bare origin, a clone as the main checkout, `lane init`.
 
-No network: origin is a local bare repo, and a fake `gh` that always fails sits first on PATH, so
-PR state is the degraded `?` and `done` falls back to git. A fake `claude` sits there too, for
+No network: origin is a local bare repo, and a fake `gh` that fails sits first on PATH, so PR
+state is the degraded `?` and `done` falls back to git; it answers `new`'s used-name check with
+no PR. A fake `claude` sits there too, for
 `lane open`, and TMUX is unset (a test that opens a window sets it and stubs tmux). HOME,
 XDG_STATE_HOME, TMUX_TMPDIR and the Claude session variables point into the temp dir, so nothing
 reads or writes the real machine's state.
@@ -41,8 +42,13 @@ class LanesRepo(unittest.TestCase):
         os.makedirs(os.path.join(self.home, ".claude", "sessions"))
         os.makedirs(fake_bin)
         with open(os.path.join(fake_bin, "gh"), "w") as f:
-            # FAKE_GH_OUT, when set, is printed as the reply to any call (a test's canned JSON).
-            f.write('#!/bin/sh\nif [ -n "$FAKE_GH_OUT" ]; then printf "%s" "$FAKE_GH_OUT"; exit 0; fi\n'
+            # `new`'s check (`pr list --head <b> --state all`) gets FAKE_GH_NEW, `[]` when unset
+            # (no PR used the name) and a failure when `fail`. FAKE_GH_OUT, when set, is printed
+            # as the reply to any other call (a test's canned JSON).
+            f.write('#!/bin/sh\ncase " $* " in *" --head "*" --state all "*)\n'
+                    '  if [ "$FAKE_GH_NEW" = fail ]; then echo "gh: offline in tests" >&2; exit 1; fi\n'
+                    '  printf "%s" "${FAKE_GH_NEW:-[]}"; exit 0;;\nesac\n'
+                    'if [ -n "$FAKE_GH_OUT" ]; then printf "%s" "$FAKE_GH_OUT"; exit 0; fi\n'
                     "echo 'gh: offline in tests' >&2\nexit 1\n")
         os.chmod(os.path.join(fake_bin, "gh"), 0o755)
         with open(os.path.join(fake_bin, "claude"), "w") as f:
