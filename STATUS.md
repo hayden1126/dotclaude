@@ -122,6 +122,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     list what dotclaude's guards (sandbox, permission rules, delete, overwrite and excluded-command
     guards, subagent policy, lanes) don't cover. Unfixed security gaps go to the private
     findings file, not here ([[dotclaude-public-repo]]).
+  - **handoff-check's unpushed count ignores a branch switch** (from lane json-depth,
+    2026-10-19; checked against the code). `unpushed()` (`skills/handoff/scripts/handoff-check:132`)
+    reads lane.json's `branch`, while `ls`, `whoami` and `done` follow the checked-out branch.
+    After json-depth's `git switch -c fix/json-depth-rebuild` it counted the old `fix/json-depth`
+    against #94's stale `origin/fix/json-depth` and warned "431 unpushed commit(s)". Warning only.
+    Fix: count the checked-out branch, as the rest of the lane tooling does.
   - **`handoff?` never clears on a switched lane past 200 PRs** (bug report from capella-studio's
     lead, session 5788b9fb, 2026-10-19; checked against the code). `pr_states` lists the newest
     `PR_LIMIT` (200) PRs in one gh call; once that list is full, `merges_of`
