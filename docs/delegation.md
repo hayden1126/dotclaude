@@ -535,7 +535,8 @@ Allow rules on excluded commands sit behind it: an allow rule skips the classifi
   - when the walk finds nothing, the env counts only when `CLAUDE_PID` is an ancestor of the
     command, at any level: then it is the process, and `CLAUDE_CODE_SESSION_ID` the session.
     An ancestor's sessions file that exists but won't read as a JSON object ends the walk with
-    nothing found, so a nested `claude -p` is never pinned on a farther claude.
+    nothing found, and then the env counts only when `CLAUDE_PID` is that ancestor, so a
+    nested `claude -p` is never pinned on a farther claude.
 
   A watch made outside Claude Code records no process and the session `unknown`, and a guard
   that finds no process adopts nothing. Adoption also rests on the sessions file naming the new
