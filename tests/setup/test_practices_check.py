@@ -19,6 +19,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -824,6 +825,28 @@ class Failures(Base):
         self.assertIsNone(self.start("startup"))
 
 
+def key_shapes():
+    """The strings a samples file's {key:<kind>} stands for, each shaped like a real key of that
+    kind. They are built here, by concatenation, so no key-shaped literal sits in the repo for a
+    secret scanner to flag (and a sample can't leak a real one)."""
+    return {
+        "aws": "AK" + "IA" + "Z7Q4" * 4,
+        "github": "gh" + "p_" + "a1B2c3D4e5" * 3 + "F6g7H8",
+        "slack": "xo" + "xb-" + "1234567890" + "-" + "9876543210123" + "-"
+                 + "aB3dE6gH9jK2mN5pQ8sT1vW4",
+        "openai": "sk" + "-proj-" + "Ab3De6Gh9Jk2Mn5Pq8St1Vw4" * 2,
+        "stripe": "sk" + "_live_" + "Zx9Yw8Vu7Ts6Rq5Po4Nm3Lk2",
+        "pem": "-----" + "BEGIN RSA " + "PRIVATE KEY" + "-----",
+    }
+
+
+def expand_keys(content):
+    """content with each {key:<kind>} replaced by key_shapes()[kind]; KeyError names an unknown
+    kind."""
+    shapes = key_shapes()
+    return re.sub(r"\{key:(\w+)\}", lambda m: shapes[m.group(1)], content)
+
+
 def check_samples(sample_file, skill_dir):
     """The samples in sample_file the engine gets wrong, as strings."""
     skill, why = PC.load_skill(skill_dir)
@@ -839,8 +862,13 @@ def check_samples(sample_file, skill_dir):
         if item is None:
             wrong.append(f"{s['kind']} {s['id']}: no such id")
             continue
+        try:
+            content = expand_keys(s["content"])
+        except KeyError as e:
+            wrong.append(f"{s['kind']} {s['id']}: no key shape {e}")
+            continue
         fn = PC.event_fires if s["kind"] == "event" else PC.rule_fires
-        got = fn(item, s["path"], PC.scan_text(s["content"]))
+        got = fn(item, s["path"], PC.scan_text(content))
         if got != s["fires"]:
             wrong.append(f"{s['kind']} {s['id']} on {s['path']}: fired={got}, want {s['fires']}")
     return wrong
@@ -879,6 +907,39 @@ class Shipped(unittest.TestCase):
                         "{ await auth() }'\n")
             self.assertEqual(check_samples(samples, skill),
                              ["rule SEC-17 on lib/a.ts: fired=True, want False"])
+
+    def test_key_placeholders_expand_to_key_shapes(self):
+        shapes = {"aws": r"\bAKIA[0-9A-Z]{16}\b", "github": r"\bghp_[A-Za-z0-9]{36}\b",
+                  "slack": r"\bxoxb-[0-9]{10,13}-[0-9]{10,13}-[A-Za-z0-9]{24}\b",
+                  "openai": r"\bsk-proj-[A-Za-z0-9]{48}\b",
+                  "stripe": r"\bsk_live_[A-Za-z0-9]{24}\b",
+                  "pem": r"-----BEGIN [A-Z ]{0,20}PRIVATE KEY-----"}
+        body = "skill = 'keyshape'\n" + "".join(
+            f"[[rule]]\nid = 'K-{kind}'\nwhen = '''{rx}'''\nscope = 'line'\nsay = 'x'\n"
+            for kind, rx in shapes.items())
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = os.path.join(tmp, "keyshape")
+            os.makedirs(skill)
+            with open(os.path.join(skill, "events.toml"), "w") as f:
+                f.write(body)
+            samples = os.path.join(tmp, "keyshape.toml")
+            with open(samples, "w") as f:
+                for kind in shapes:
+                    f.write(f"[[sample]]\nkind = 'rule'\nid = 'K-{kind}'\nfires = true\n"
+                            f"path = 'a.ts'\ncontent = 'k = \"{{key:{kind}}}\"'\n"
+                            f"[[sample]]\nkind = 'rule'\nid = 'K-{kind}'\nfires = false\n"
+                            f"path = 'a.ts'\ncontent = 'k = \"{{key:{kind}}}\" "
+                            f"// practices-allow: K-{kind} fixture'\n")
+                f.write("[[sample]]\nkind = 'rule'\nid = 'K-aws'\nfires = true\n"
+                        "path = 'a.ts'\ncontent = '{key:nope}'\n")
+            self.assertEqual(check_samples(samples, skill),
+                             ["rule K-aws: no key shape 'nope'"])
+        for kind, value in key_shapes().items():
+            self.assertRegex(value, shapes[kind])
+        with open(__file__) as f:
+            mine = f.read()
+        for value in key_shapes().values():
+            self.assertNotIn(value, mine)
 
     def test_every_shipped_events_toml_parses_with_unique_ids_and_safe_regexes(self):
         for path in sorted(glob.glob(os.path.join(REPO, "skills", "*", "events.toml"))):
