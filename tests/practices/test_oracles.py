@@ -17,8 +17,11 @@ import json
 import os
 import shutil
 import subprocess
+import socket
+import stat
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -346,8 +349,8 @@ class RunHarness(unittest.TestCase):
             prompt.write_text("hello\n")
             # The "session" reads its prompt, starts a background writer, and exits at once.
             cmd = ["bash", "-c", f"cat; (sleep 2; echo late > {late}) & echo done"]
-            code, timed_out = run.run_turn(cmd, prompt, tmp, tmp / "out.txt", tmp / "err.txt", timeout=30)
-            self.assertEqual((code, timed_out), (0, False))
+            code, timed_out, strays = run.run_turn(cmd, prompt, tmp, tmp / "out.txt", tmp / "err.txt", timeout=30)
+            self.assertEqual((code, timed_out, strays), (0, False, 0))
             self.assertEqual((tmp / "out.txt").read_text(), "hello\ndone\n")
             time.sleep(3)
             self.assertFalse(late.exists(), "a background grandchild outlived the turn")
@@ -357,10 +360,59 @@ class RunHarness(unittest.TestCase):
             tmp = Path(tmp)
             (tmp / "prompt.txt").write_text("")
             started = time.monotonic()
-            code, timed_out = run.run_turn(["bash", "-c", "sleep 60 & sleep 60"], tmp / "prompt.txt", tmp,
-                                           tmp / "out.txt", tmp / "err.txt", timeout=1)
+            code, timed_out, _ = run.run_turn(["bash", "-c", "sleep 60 & sleep 60"], tmp / "prompt.txt", tmp,
+                                              tmp / "out.txt", tmp / "err.txt", timeout=1)
             self.assertEqual((code, timed_out), (None, True))
             self.assertLess(time.monotonic() - started, 10)
+
+    @staticmethod
+    def alive(pid):
+        try:
+            with open(f"/proc/{pid}/stat") as f:
+                return f.read().rsplit(")", 1)[1].split()[0] != "Z"
+        except OSError:
+            return False
+
+    def test_turn_kills_a_setsid_escapee_by_marker(self):
+        with tempfile.TemporaryDirectory(prefix="practices-turn-") as tmp:
+            tmp = Path(tmp)
+            pidfile = tmp / "escapee.pid"
+            (tmp / "prompt.txt").write_text("")
+            # A fake claude that leaves a grandchild in its own session, out of the group kill.
+            cmd = ["bash", "-c", f"setsid bash -c 'echo $$ > {pidfile}; exec sleep 60' </dev/null >/dev/null 2>&1 & "
+                                 f"while [ ! -s {pidfile} ]; do sleep 0.1; done; echo done"]
+            code, timed_out, strays = run.run_turn(cmd, tmp / "prompt.txt", tmp, tmp / "out.txt", tmp / "err.txt",
+                                                   timeout=30)
+            pid = int(pidfile.read_text())
+            self.assertEqual((code, timed_out, strays), (0, False, 1))
+            deadline = time.monotonic() + 5
+            while self.alive(pid) and time.monotonic() < deadline:
+                time.sleep(0.1)
+            self.assertFalse(self.alive(pid), "the setsid grandchild survived")
+
+    def test_stop_all_ends_running_turns(self):
+        with tempfile.TemporaryDirectory(prefix="practices-turn-") as tmp:
+            tmp = Path(tmp)
+            (tmp / "prompt.txt").write_text("")
+            result = {}
+            worker = threading.Thread(target=lambda: result.update(r=run.run_turn(
+                ["bash", "-c", "setsid sleep 60 & sleep 60"], tmp / "prompt.txt", tmp, tmp / "out.txt",
+                tmp / "err.txt", timeout=120)))
+            worker.start()
+            try:
+                deadline = time.monotonic() + 5
+                while not run._active and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                markers = list(run._active)
+                self.assertEqual(len(markers), 1)
+                time.sleep(0.3)  # let the setsid child start
+                run.stop_all()
+                worker.join(10)
+                self.assertFalse(worker.is_alive(), "the turn didn't end on stop_all")
+                self.assertEqual(run.marked_processes(markers[0]), [])
+            finally:
+                run.STOP.clear()
+                worker.join(10)
 
     def test_fixture_git_and_diff_against_the_harness_commit(self):
         root, sha = run.build_fixture("A")
@@ -420,15 +472,26 @@ class RunHarness(unittest.TestCase):
         self.assertFalse(bar("idor", "B", c(0, 5, 0), 5)[1])
 
 
+BWRAP_OK = bool(NODE) and run.bwrap_usable()
+NO_BWRAP = "bwrap can't start here (nested in Claude Code's sandbox)"
+
 CONTAINMENT_PROBE = """\
-import { readFileSync, writeFileSync } from "node:fs";
-const [work] = process.argv.slice(2);
-const home = process.env.HOME;
+import { lstatSync, readFileSync, writeFileSync } from "node:fs";
+import net from "node:net";
+const [work, specFile] = process.argv.slice(2);
+const spec = JSON.parse(readFileSync(specFile, "utf8"));
 const tryIt = (fn) => { try { fn(); return true; } catch { return false; } };
+const connects = (path) => new Promise((resolve) => {
+  const s = net.connect(path);
+  const done = (v) => { s.destroy(); resolve(v); };
+  s.once("connect", () => done(true));
+  s.once("error", () => done(false));
+  setTimeout(() => done(false), 3000).unref();
+});
 const out = {
   wroteWork: tryIt(() => writeFileSync(`${work}/ok.txt`, "x")),
-  wroteHome: tryIt(() => writeFileSync(`${home}/planted-by-probe.txt`, "x")),
-  readSecret: tryIt(() => readFileSync(`${home}/secret.txt`, "utf8")),
+  present: spec.paths.filter((p) => tryIt(() => lstatSync(p))),
+  connected: await connects(spec.socket),
   env: Object.keys(process.env).sort(),
 };
 try {
@@ -441,12 +504,41 @@ console.log(JSON.stringify(out));
 """
 
 
+def host_sockets(max_depth=4, time_cap=5.0, limit=300):
+    """Unix socket files on the host under /tmp, /run, /mnt (not the drvfs drive letters),
+    /var and $HOME, bounded by depth, time and count. Symlinks aren't followed."""
+    found, deadline = [], time.monotonic() + time_cap
+
+    def walk(d, depth):
+        if depth > max_depth or time.monotonic() > deadline or len(found) >= limit:
+            return
+        try:
+            entries = list(os.scandir(d))
+        except OSError:
+            return
+        for e in entries:
+            try:
+                mode = e.stat(follow_symlinks=False).st_mode
+            except OSError:
+                continue
+            if stat.S_ISSOCK(mode):
+                found.append(e.path)
+            elif stat.S_ISDIR(mode) and not (d == "/mnt" and len(e.name) == 1):
+                walk(e.path, depth + 1)
+
+    for root in ("/tmp", "/run", "/mnt", "/var", os.path.expanduser("~")):
+        walk(root, 1)
+    return found
+
+
 class Containment(unittest.TestCase):
     def test_grade_env_is_an_allowlist(self):
         with tempfile.TemporaryDirectory(prefix="practices-env-") as tmp:
             env = run.grade_env("/fx", tmp)
+            self.assertTrue(Path(env["HOME"]).is_dir())
         self.assertEqual(sorted(env), ["DB_PATH", "FIXTURE", "HOME", "LANG", "LLM_API_KEY", "PATH", "TMPDIR"])
-        self.assertTrue(env["DB_PATH"].startswith(tmp) and env["TMPDIR"].startswith(tmp))
+        for key in ("HOME", "DB_PATH", "TMPDIR"):
+            self.assertTrue(env[key].startswith(tmp), key)
         self.assertEqual(env["LLM_API_KEY"], run.DUMMY_LLM_KEY)
 
     def test_refuses_without_bwrap_unless_unsafe(self):
@@ -460,39 +552,65 @@ class Containment(unittest.TestCase):
         finally:
             run.bwrap_usable = real
 
-    @unittest.skipUnless(NODE and run.bwrap_usable(), "bwrap can't start here (nested in Claude Code's sandbox)")
-    def test_probe_cannot_touch_home_or_network(self):
-        with tempfile.TemporaryDirectory(prefix="practices-contain-") as tmp:
-            tmp = Path(tmp)
-            home, work = tmp / "home", tmp / "work"
-            home.mkdir()
-            work.mkdir()
-            (home / "secret.txt").write_text("not for the oracle")
-            probe = work / "probe.mjs"
-            probe.write_text(CONTAINMENT_PROBE)
-            env = run.grade_env(work, work)
-            env["HOME"] = str(home)
-            cmd = run.contained([NODE, str(probe), str(work)], home=home, writable=[work], cwd=work)
-            p = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=60)
-            self.assertEqual(p.returncode, 0, p.stderr)
-            out = json.loads(p.stdout.strip().splitlines()[-1])
-            self.assertTrue(out["wroteWork"], "the writable bind must work, or the test proves nothing")
-            self.assertFalse(out["wroteHome"])
-            self.assertFalse((home / "planted-by-probe.txt").exists())
-            self.assertFalse(out["readSecret"])
-            self.assertFalse(out["network"])
-            self.assertEqual(out["env"], sorted([*env, "PWD"]))  # bwrap's --chdir sets PWD
+    def test_bwrap_root_is_an_allowlist(self):
+        cmd = run.contained(["true"], writable=["/tmp/x"], real_home="/nonexistent-home")
+        args = cmd[: cmd.index("--")]
+        mounted = {args[i + 2] for i, a in enumerate(args) if a in ("--ro-bind", "--bind", "--symlink")}
+        mounted |= {args[i + 1] for i, a in enumerate(args) if a in ("--proc", "--dev", "--tmpfs")}
+        self.assertNotIn("/", mounted)
+        for forbidden in ("/home", "/run", "/mnt", "/var", "/root"):
+            self.assertFalse(any(m == forbidden or m.startswith(forbidden + "/") for m in mounted), forbidden)
+        self.assertTrue({"/usr", "/etc", "/proc", "/dev", "/tmp", "/tmp/x"} <= mounted)
 
     def test_writable_path_under_home_is_refused(self):
         with tempfile.TemporaryDirectory(prefix="practices-contain-") as tmp:
             home = Path(tmp) / "home"
             with self.assertRaises(ValueError):
-                run.contained(["true"], home=home, writable=[home / "deep" / "rundir"])
+                run.contained(["true"], writable=[home / "deep" / "rundir"], real_home=home)
             with self.assertRaises(ValueError):
-                run.contained(["true"], home=home, writable=[home])
-            run.contained(["true"], home=home, writable=[Path(tmp) / "fixture"])  # a sibling is fine
+                run.contained(["true"], writable=[home], real_home=home)
+            run.contained(["true"], writable=[Path(tmp) / "fixture"], real_home=home)  # a sibling is fine
 
-    @unittest.skipUnless(NODE and run.bwrap_usable(), "bwrap can't start here (nested in Claude Code's sandbox)")
+    @unittest.skipUnless(BWRAP_OK, NO_BWRAP)
+    def test_probe_sees_no_host_socket_home_or_drive(self):
+        with tempfile.TemporaryDirectory(prefix="practices-contain-") as tmp, \
+                tempfile.TemporaryDirectory(prefix="practices-sock-") as sockdir:
+            tmp = Path(tmp)
+            work = tmp / "work"
+            work.mkdir()
+            sock_path = os.path.join(sockdir, "listen.sock")
+            server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            server.bind(sock_path)
+            server.listen(4)
+            try:
+                paths = sorted({*host_sockets(), sock_path, os.path.expanduser("~")}
+                               | ({"/mnt/c"} if os.path.exists("/mnt/c") else set()))
+                spec = work / "spec.json"
+                spec.write_text(json.dumps({"paths": paths, "socket": sock_path}))
+                probe = work / "probe.mjs"
+                probe.write_text(CONTAINMENT_PROBE)
+                probe_cmd = [NODE, str(probe), str(work), str(spec)]
+
+                # Control, outside the sandbox: the probe can connect and does see the paths.
+                c = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=60)
+                control = json.loads(c.stdout.strip().splitlines()[-1])
+                self.assertTrue(control["connected"], "the probe must be able to connect, or the test proves nothing")
+                self.assertIn(sock_path, control["present"])
+
+                env = run.grade_env(work, tmp / "scratch")
+                p = subprocess.run(run.contained(probe_cmd, writable=[work], cwd=work), env=env,
+                                   capture_output=True, text=True, timeout=60)
+                self.assertEqual(p.returncode, 0, p.stderr)
+                out = json.loads(p.stdout.strip().splitlines()[-1])
+                self.assertTrue(out["wroteWork"], "the writable bind must work, or the test proves nothing")
+                self.assertFalse(out["connected"])
+                self.assertEqual(out["present"], [], "host sockets, $HOME or /mnt/c visible inside")
+                self.assertFalse(out["network"])
+                self.assertEqual(out["env"], sorted([*env, "PWD"]))  # bwrap's --chdir sets PWD
+            finally:
+                server.close()
+
+    @unittest.skipUnless(BWRAP_OK, NO_BWRAP)
     def test_contained_grade_with_run_dir_under_home(self):
         # As in a live run: the fixture in the system temp dir, the run dir under $HOME.
         with tempfile.TemporaryDirectory(prefix="practices-contain-") as tmp:

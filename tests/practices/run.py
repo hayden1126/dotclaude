@@ -36,19 +36,25 @@ Per run:
     fixture, 900 s timeout per turn, env passed through unchanged. project,local drops every
     user-tier skill, plugin, agent and CLAUDE.md; --strict-mcp-config drops the claude.ai
     connectors that load in some runs and not others (spike.md section 1). Each turn runs in
-    its own process group with stdin, stdout and stderr on files; when it exits, or times out,
-    the whole group is killed, so a background grandchild can't hold the run open or keep
-    writing while the oracle grades.
+    its own process group with stdin, stdout and stderr on files, and PRACTICES_RUN=<uuid> in
+    its env. When it exits, or times out, the whole group is killed, then any process of this
+    uid still carrying that marker (one that called setsid; counted as `strays`), so nothing
+    the session started holds the run open or writes while the oracle grades. The marker is
+    the only proof of origin used: never a name, cwd or start time.
+  - Ctrl-C: queued runs never start, running turns are killed with everything they started
+    (by marker), finished rows are already in results.jsonl, and run.py exits 130.
   - Grade: only after the process exits (a background agent may still be writing), run the
     oracle under the pristine checkout's loader (fixture/scripts/register.mjs here), never the
     copy the agent could edit, with a 60 s timeout. The oracle runs agent-written code, so it
-    runs under bwrap: the filesystem read-only, $HOME an empty read-only tmpfs (no credential
-    file visible), this checkout's tests/practices bound back read-only, the fixture and a
-    fresh scratch dir in the system temp dir writable (nothing under $HOME can be: the home
-    remount would make it read-only, so contained() refuses it), no network, its own pid
-    namespace. Its env is an allowlist: PATH, HOME, LANG, FIXTURE, DB_PATH and TMPDIR (both in
-    the scratch dir, removed after grading) and a dummy LLM_API_KEY. The run dir may sit under
-    $HOME; run.py writes the oracle's output there itself, outside bwrap.
+    runs under bwrap, built from an allowlist: /usr, /etc and the /bin, /sbin, /lib* dirs
+    read-only (merged-/usr symlinks recreated), a fresh /proc, /dev and /tmp, this checkout's
+    tests/practices read-only at /practices, and the fixture and a fresh scratch dir in the
+    system temp dir writable. No /home, /run, /mnt, /var or /root exist inside, so no
+    credential file, Unix socket (tmux, docker, Claude Code's own) or Windows drive is
+    reachable; no network; its own pid namespace. A writable path under $HOME is refused. Its
+    env is an allowlist: PATH, HOME, LANG, FIXTURE, DB_PATH, TMPDIR (HOME, DB_PATH and TMPDIR
+    in the scratch dir, removed after grading) and a dummy LLM_API_KEY. The run dir may sit
+    under $HOME; run.py writes the oracle's output there itself, outside bwrap.
     Without a usable bwrap, run.py refuses to start unless --unsafe-grade is passed.
   - Record: one line per run in <out>/results.jsonl (verdict, checks, triggered and
     triggered_turns, turns, duration, cost, init memory_paths and skills, hook denials, the
@@ -284,9 +290,28 @@ def stream_summary(events):
 # ---------------------------------------------------------------- grading
 
 BWRAP = shutil.which("bwrap")
-BWRAP_BASE = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
-              "--unshare-net", "--unshare-pid", "--die-with-parent", "--new-session"]
+BWRAP_FLAGS = ["--unshare-net", "--unshare-pid", "--die-with-parent", "--new-session"]
+# The only host dirs the oracle sees, read-only. No /home, /run, /mnt, /var or /root: a
+# read-only mount doesn't stop connect() on a Unix socket (tmux, docker, Claude Code's own),
+# and /mnt holds the Windows drives on WSL.
+SYSTEM_DIRS = ["/usr", "/etc", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32"]
+PRACTICES_MOUNT = "/practices"  # where this checkout's tests/practices appears inside
 DUMMY_LLM_KEY = "sk-test-0000000000000000"  # agent code may refuse to run without a key
+
+
+def system_binds():
+    """Read-only binds for the system dirs that exist; a merged-/usr symlink is recreated."""
+    args = []
+    for d in SYSTEM_DIRS:
+        if os.path.islink(d):
+            args += ["--symlink", os.readlink(d), d]
+        elif os.path.isdir(d):
+            args += ["--ro-bind", d, d]
+    return args
+
+
+def node_binary():
+    return os.path.realpath(shutil.which("node") or "/usr/bin/node")
 
 
 def bwrap_usable():
@@ -294,50 +319,49 @@ def bwrap_usable():
     if not BWRAP:
         return False
     try:
-        p = subprocess.run([BWRAP, *BWRAP_BASE, "true"], capture_output=True, timeout=20)
+        p = subprocess.run([BWRAP, *BWRAP_FLAGS, *system_binds(), "--proc", "/proc", "--dev", "/dev", "true"],
+                           capture_output=True, timeout=20)
     except (OSError, subprocess.TimeoutExpired):
         return False
     return p.returncode == 0
 
 
-def contained(cmd, home, writable, readable=(), cwd=None):
-    """`cmd` under bwrap: the filesystem read-only, `home` an empty read-only tmpfs (so no
-    credential file under it is visible or writable), `readable` bound back read-only and
-    `writable` read-write, no network, its own pid namespace. Order matters: a later bind
-    overlays an earlier one, and the home remount comes after the binds that need mount points
-    in it. That remount also makes any bind nested under `home` read-only, so a writable path
-    under `home` is refused here rather than failing every write inside."""
-    home_path = Path(home).resolve()
+def contained(cmd, writable, readable=None, cwd=None, real_home=None):
+    """`cmd` under bwrap, from an allowlist: the system dirs read-only, a fresh /proc, /dev and
+    /tmp, `readable` ({host path: path inside}) bound read-only, `writable` bound read-write
+    at the same path, no network, its own pid namespace. Nothing else of the host exists
+    inside. A writable path under the real $HOME is refused: it would bring part of $HOME in."""
+    home = Path(real_home or os.environ.get("HOME", "/nonexistent")).resolve()
     for p in writable:
-        if Path(p).resolve().is_relative_to(home_path):
-            raise ValueError(f"writable path {p} is under {home}, which the sandbox remounts read-only")
-    args = [BWRAP, *BWRAP_BASE, "--tmpfs", str(home)]
-    node = os.path.realpath(shutil.which("node") or "/usr/bin/node")
-    if node.startswith(str(home).rstrip("/") + "/"):  # e.g. an nvm install under $HOME
+        if Path(p).resolve().is_relative_to(home):
+            raise ValueError(f"writable path {p} is under {home}; grading keeps $HOME out of the sandbox")
+    args = [BWRAP, *BWRAP_FLAGS, *system_binds(), "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"]
+    node = node_binary()
+    if not node.startswith("/usr/"):  # e.g. an nvm install
         prefix = os.path.dirname(os.path.dirname(node))
         args += ["--ro-bind", prefix, prefix]
-    for p in readable:
-        args += ["--ro-bind", str(p), str(p)]
+    for src, dest in (readable or {}).items():
+        args += ["--ro-bind", str(src), str(dest)]
     for p in writable:
         args += ["--bind", str(p), str(p)]
-    args += ["--remount-ro", str(home)]
     if cwd:
         args += ["--chdir", str(cwd)]
     return [*args, "--", *cmd]
 
 
-def grade_env(fixture, scratch, home=None):
-    """The oracle's whole environment: an allowlist, nothing inherited beyond it. DB_PATH and
-    TMPDIR live in `scratch`, the oracle's only writable dir besides the fixture."""
-    tmp = Path(scratch) / "tmp"
-    tmp.mkdir(parents=True, exist_ok=True)
+def grade_env(fixture, scratch):
+    """The oracle's whole environment: an allowlist, nothing inherited beyond it. HOME, DB_PATH
+    and TMPDIR live in `scratch`, the oracle's only writable dir besides the fixture."""
+    scratch = Path(scratch)
+    for d in ("home", "tmp"):
+        (scratch / d).mkdir(parents=True, exist_ok=True)
     return {
         "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
-        "HOME": str(home or os.environ.get("HOME", "/nonexistent")),
+        "HOME": str(scratch / "home"),
         "LANG": os.environ.get("LANG", "C.UTF-8"),
         "FIXTURE": str(fixture),
-        "DB_PATH": str(Path(scratch) / "oracle.db"),
-        "TMPDIR": str(tmp),
+        "DB_PATH": str(scratch / "oracle.db"),
+        "TMPDIR": str(scratch / "tmp"),
         "LLM_API_KEY": DUMMY_LLM_KEY,
     }
 
@@ -356,19 +380,24 @@ def grading_contained(unsafe):
 
 def grade(fixture, case, run_dir, contain=True, home=None):
     """Runs the case's oracle against the fixture, under bwrap unless `contain` is False.
-    The oracle writes only to the fixture and a fresh scratch dir (DB_PATH, TMPDIR) in the
-    system temp dir, removed afterwards; run_dir may sit under $HOME, so run.py writes the
-    oracle's output there itself, outside bwrap. Returns the verdict dict; a missing verdict
-    line or a timeout scores broken."""
+    The oracle writes only to the fixture and a fresh scratch dir (HOME, DB_PATH, TMPDIR) in
+    the system temp dir, removed afterwards; run_dir may sit under $HOME, so run.py writes the
+    oracle's output there itself, outside bwrap. `home` is the real home kept out (default
+    $HOME). Returns the verdict dict; a missing verdict line or a timeout scores broken."""
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
     install_stubs(fixture)  # the agent could have edited node_modules/next
     scratch = Path(tempfile.mkdtemp(prefix="practices-grade-"))
     try:
-        env = grade_env(fixture, scratch, home)
-        cmd = ["node", "--import", LOADER.as_uri(), str(CASES_DIR / case / "oracle.mjs")]
+        env = grade_env(fixture, scratch)
         if contain:
-            cmd = contained(cmd, home=env["HOME"], writable=[fixture, scratch], readable=[HERE], cwd=fixture)
+            inside = Path(PRACTICES_MOUNT)
+            cmd = contained(
+                [node_binary(), "--import", (inside / LOADER.relative_to(HERE)).as_uri(),
+                 str(inside / "cases" / case / "oracle.mjs")],
+                writable=[fixture, scratch], readable={HERE: PRACTICES_MOUNT}, cwd=fixture, real_home=home)
+        else:
+            cmd = [node_binary(), "--import", LOADER.as_uri(), str(CASES_DIR / case / "oracle.mjs")]
         try:
             p = subprocess.run(cmd, cwd=fixture, env=env, capture_output=True, text=True, timeout=ORACLE_TIMEOUT)
             stdout, stderr = p.stdout, p.stderr
@@ -399,27 +428,99 @@ def _exited(pid):
     return os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
 
 
-def run_turn(cmd, prompt_file, cwd, stdout_path, stderr_path, timeout):
+MARKER_VAR = "PRACTICES_RUN"
+STOP = threading.Event()  # set on Ctrl-C: running turns end, no new turn or grade starts
+_active = {}  # marker -> pid of each running claude turn
+_active_lock = threading.Lock()
+
+
+class Interrupted(Exception):
+    pass
+
+
+def marked_processes(marker):
+    """Pids of this uid's processes whose environment carries PRACTICES_RUN=<marker> exactly.
+    The marker is the proof a process came from our session: never match by name, cwd or
+    start time (other Claude sessions run the same tools on this machine)."""
+    needle = f"{MARKER_VAR}={marker}".encode()
+    uid, me, pids = os.getuid(), os.getpid(), []
+    for name in os.listdir("/proc"):
+        if not name.isdigit() or int(name) == me:
+            continue
+        try:
+            if os.stat(f"/proc/{name}").st_uid != uid:
+                continue
+            with open(f"/proc/{name}/environ", "rb") as f:
+                environ = f.read()
+        except OSError:
+            continue
+        if needle in environ.split(b"\0"):
+            pids.append(int(name))
+    return pids
+
+
+def kill_marked(marker, grace=2.0):
+    """SIGTERM every process carrying the marker, then SIGKILL any still carrying it after
+    `grace` seconds (re-scanned, so a reused pid without the marker is never hit). Returns how
+    many were found."""
+    found = marked_processes(marker)
+    for pid in found:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass
+    deadline = time.monotonic() + grace
+    while found and time.monotonic() < deadline and marked_processes(marker):
+        time.sleep(0.1)
+    for pid in marked_processes(marker):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    return len(found)
+
+
+def stop_all():
+    """Ctrl-C: stop every running turn and everything it started, by marker."""
+    STOP.set()
+    with _active_lock:
+        markers = list(_active)
+    for marker in markers:
+        kill_marked(marker, grace=0.5)
+
+
+def run_turn(cmd, prompt_file, cwd, stdout_path, stderr_path, timeout, marker=None):
     """Runs one claude turn in its own session (process group), stdin from a file and stdout
-    and stderr to files, so no pipe can hold the run open. When the turn ends, or at the
-    timeout, the whole group is killed: a background grandchild can't outlive the turn and
-    keep writing while the oracle grades. Returns (exit code or None, timed out)."""
+    and stderr to files, so no pipe can hold the run open, with PRACTICES_RUN=<marker> in its
+    env. When the turn ends, times out or STOP is set, the whole group is killed, then any
+    process still carrying the marker (a child that called setsid left the group): nothing
+    the session started outlives it or writes while the oracle grades.
+    Returns (exit code or None, timed out, strays killed by marker)."""
+    marker = marker or uuid.uuid4().hex
+    env = dict(os.environ, **{MARKER_VAR: marker})
     with open(prompt_file) as stdin, open(stdout_path, "w") as out, open(stderr_path, "w") as err:
-        p = subprocess.Popen(cmd, stdin=stdin, stdout=out, stderr=err, cwd=cwd, env=os.environ.copy(),
+        p = subprocess.Popen(cmd, stdin=stdin, stdout=out, stderr=err, cwd=cwd, env=env,
                              start_new_session=True)
-    deadline = time.monotonic() + timeout
-    timed_out = False
-    while not _exited(p.pid):
-        if time.monotonic() >= deadline:
-            timed_out = True
-            break
-        time.sleep(0.5)
+    with _active_lock:
+        _active[marker] = p.pid
     try:
-        os.killpg(p.pid, signal.SIGKILL)  # p is unreaped, so this pgid is still ours
-    except (ProcessLookupError, PermissionError):
-        pass
-    code = p.wait()
-    return (None if timed_out else code), timed_out
+        deadline = time.monotonic() + timeout
+        timed_out = False
+        while not _exited(p.pid) and not STOP.is_set():
+            if time.monotonic() >= deadline:
+                timed_out = True
+                break
+            time.sleep(0.5)
+        try:
+            os.killpg(p.pid, signal.SIGKILL)  # p is unreaped, so this pgid is still ours
+        except (ProcessLookupError, PermissionError):
+            pass
+        code = p.wait()
+        strays = kill_marked(marker)
+    finally:
+        with _active_lock:
+            _active.pop(marker, None)
+    return (None if timed_out else code), timed_out, strays
 
 
 # ---------------------------------------------------------------- one run
@@ -428,20 +529,25 @@ def run_one(case, arm, index, args, out):
     run_dir = out / f"{case}-{arm}-{index}"
     run_dir.mkdir(parents=True, exist_ok=True)
     fixture, harness_sha = build_fixture(arm)
-    streams, labels, exits, timed_out = [], [], [], False
+    streams, labels, exits, timed_out, strays = [], [], [], False, 0
     turns = turns_for(case, arm, args.model)
     for n, (label, prompt, cmd) in enumerate(turns, 1):
+        if STOP.is_set():
+            raise Interrupted()
         suffix = "" if len(turns) == 1 else f"-{n}-{label}"
         stream = run_dir / f"stream{suffix}.jsonl"
         prompt_file = run_dir / f"prompt{suffix}.txt"
         prompt_file.write_text(prompt)
         streams.append(str(stream))
         labels.append(label)
-        code, timed_out = run_turn(cmd, prompt_file, fixture, stream, run_dir / f"stderr{suffix}.txt",
-                                   SESSION_TIMEOUT)
+        code, timed_out, turn_strays = run_turn(cmd, prompt_file, fixture, stream,
+                                                run_dir / f"stderr{suffix}.txt", SESSION_TIMEOUT)
         exits.append(code)
+        strays += turn_strays
         if timed_out:
             break
+    if STOP.is_set():
+        raise Interrupted()
 
     # The agent's change, taken before grading touches the fixture (the stub reinstall, any
     # files the agent's code writes). A failed diff is recorded and never costs the verdict.
@@ -470,7 +576,7 @@ def run_one(case, arm, index, args, out):
         "triggered_turns": triggered_turns,
         **summary,
         "hook_denials": hook_denials(events),
-        "exit_codes": exits, "timed_out": timed_out,
+        "exit_codes": exits, "timed_out": timed_out, "strays": strays,
         "harness_sha": harness_sha,
         "stream": streams, "oracle": str(run_dir / "oracle.out"), "diff": str(diff),
     }
@@ -576,23 +682,34 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     print(f"results: {out / 'results.jsonl'}")
     jobs = [(case, arm, i) for case in cases for arm in arms for i in range(1, a.n + 1)]
-    rows, write_lock = [], threading.Lock()
+    rows = []
     started = time.monotonic()
-    with open(out / "results.jsonl", "a") as results, \
-            concurrent.futures.ThreadPoolExecutor(max_workers=max(1, a.j)) as pool:
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, a.j))
+    with open(out / "results.jsonl", "a") as results:
         futures = {pool.submit(run_one, case, arm, i, a, out): (case, arm, i) for case, arm, i in jobs}
-        for fut in concurrent.futures.as_completed(futures):
-            case, arm, i = futures[fut]
-            try:
-                row = fut.result()
-            except Exception as e:  # a harness error scores the run broken, never silently drops it
-                row = {"case": case, "arm": arm, "run": i, "verdict": "broken", "checks": [],
-                       "triggered": False, "total_cost_usd": None, "harness_error": repr(e)}
-                log(f"  {case:16} {arm} #{i}: harness error {e!r}")
-            rows.append(row)
-            with write_lock:
-                results.write(json.dumps(row) + "\n")
+        try:
+            for fut in concurrent.futures.as_completed(futures):
+                case, arm, i = futures[fut]
+                try:
+                    row = fut.result()
+                except Interrupted:
+                    continue
+                except Exception as e:  # a harness error scores the run broken, never silently drops it
+                    row = {"case": case, "arm": arm, "run": i, "verdict": "broken", "checks": [],
+                           "triggered": False, "total_cost_usd": None, "harness_error": repr(e)}
+                    log(f"  {case:16} {arm} #{i}: harness error {e!r}")
+                rows.append(row)
+                results.write(json.dumps(row) + "\n")  # each finished row is on disk at once
                 results.flush()
+        except KeyboardInterrupt:
+            # Queued runs never start; running turns and everything they started are killed
+            # by marker; a run between turns or grading stops at its next check.
+            stop_all()
+            pool.shutdown(wait=True, cancel_futures=True)
+            print(f"\nrun.py: interrupted; {len(rows)} of {len(jobs)} runs finished and are in "
+                  f"{out / 'results.jsonl'}")
+            return 130
+    pool.shutdown(wait=True)
     missed = summarize(rows, cases, arms, a.n)
     print(f"\n{len(rows)} runs in {time.monotonic() - started:.0f} s; results in {out}")
     if missed:
