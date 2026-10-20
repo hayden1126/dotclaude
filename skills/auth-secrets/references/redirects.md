@@ -77,7 +77,14 @@ Call `safeRedirectPath` wherever the value arrives or is stored (the sign-in pag
 - **Next.js:** `redirect(safeRedirect(searchParams.get("next")))`. For `NextResponse.redirect`, pass the result straight in; never `new URL(next, request.url)` on the raw value.
 - **Express:** `res.redirect(safeRedirect(req.query.next))`.
 - **Django:** `url_has_allowed_host_and_scheme(url, allowed_hosts={settings.APP_HOST}, require_https=True)`, with the host from settings rather than `request.get_host()`.
-- **Auth.js:** its default `redirect` callback keeps targets on `baseUrl`. If you override the callback, return `safeRedirect(url)` from it.
+- **Auth.js:** its default `redirect` callback keeps targets on `baseUrl`. An override also receives absolute same-origin URLs, which step 3 refuses, so strip `baseUrl` first:
+
+  ```ts
+  redirect({ url, baseUrl }) {
+    const own = url === baseUrl || url.startsWith(baseUrl + "/");
+    return safeRedirect(own ? url.slice(baseUrl.length) || "/" : url);
+  }
+  ```
 
 ## Prove it
 
