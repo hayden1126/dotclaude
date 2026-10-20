@@ -1,8 +1,10 @@
 """Reading a Bash command as simple commands, shared by delete_guard.py and practices_check.py.
 
 One quote-aware pre-pass joins backslash-newline continuations, drops `#` comments, skips
-heredoc bodies, and replaces each $(...), `...`, $((...)) and $'...' with a placeholder; then
-shlex splits the result into simple commands (segments). command_words() finds the command a
+heredoc bodies, replaces each $(...), `...`, $((...)) and $'...' with a placeholder, and marks
+each redirection (`>`, `>>`, `<`, `2>&1`, `&>`, `<<<`, an fd digit before one); then shlex splits
+the result into simple commands (segments), leaving out each redirection and its target, so a
+command's positional words stay its own (`git push 2>&1` names no remote "2"). command_words() finds the command a
 segment runs through prefix assignments, shell keywords and wrappers (`sudo -u x`, `env -i`,
 `timeout 30`), and cd_target() follows a `cd`. git_call() reads a git command's global options
 (-C, --git-dir, --work-tree, a GIT_DIR= prefix) and its subcommand.
@@ -28,10 +30,13 @@ LONG_ARGS = {"--user", "--group", "--chdir", "--unset", "--split-string", "--kil
              "--error", "--pid", "--pgid", "--uid"}
 # Placeholders. They start with a character no variable name can hold, so `$p$(date)` stays two
 # parts; shlex keeps % inside a word.
-SUBST, ANSI, ARITH = "%SUBST%", "%ANSI%", "%ARITH%"
+SUBST, ANSI, ARITH, REDIR = "%SUBST%", "%ANSI%", "%ARITH%", "%REDIR%"
 ASSIGN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.S)
 COUNT = re.compile(r"\d+(\.\d+)?[smhd]?")  # `timeout 30s`, `nice -n 5`
 HEREDOC = re.compile(r"<<(-?)\s*(?:'([^']*)'|\"([^\"]*)\"|\\?([A-Za-z_0-9.-]+))")
+# A redirection: an fd digit (only at a word start) before <<<, <>, <&, >>, >&, >|, < or >; or
+# &> and &>>. A heredoc's << has its own branch, and <( and >( are process substitutions.
+REDIRECT = re.compile(r"(\d*)(?:<<<|<>|<&|>>|>&|>\||<(?![<(])|>(?!\())|&>>?")
 
 
 def skip_quoted(s, i, quote, escapes=None):
@@ -129,9 +134,10 @@ def prepass(command):
             while i < len(s) and s[i] != "\n":
                 i += 1
             continue
-        elif quote is None and s.startswith("<<<", i):  # a here-string, not a heredoc
-            out.append("<<<")
-            i += 3
+        elif quote is None and (m := REDIRECT.match(s, i)) and (
+                not m.group(1) or i == 0 or s[i - 1] in " \t\n;&|()"):
+            out.append(f" {REDIR} ")  # segments() drops it and its target word
+            i = m.end()
             continue
         elif quote is None and s.startswith("<<", i):
             line = "".join(out).rsplit("\n", 1)[-1]
@@ -165,18 +171,22 @@ def prepass(command):
 
 
 def segments(command):
-    """Simple commands as word lists, split at ; && || | & ( ) and newlines. Raises ValueError
-    (from shlex) on an unbalanced quote."""
+    """Simple commands as word lists, split at ; && || | & ( ) and newlines, each redirection
+    and its target word left out. Raises ValueError (from shlex) on an unbalanced quote."""
     lex = shlex.shlex(prepass(command), posix=True, punctuation_chars=";&|()")
     lex.whitespace = " \t\r"
     lex.wordchars += "$-./~*?[]{}=:+@%,^!#"
     lex.commenters = ""
-    seg = []
+    seg, target = [], False
     for tok in lex:
         if tok == "\n" or (tok and set(tok) <= set(";&|()")):
             if seg:
                 yield seg
-            seg = []
+            seg, target = [], False
+        elif tok == REDIR:
+            target = True
+        elif target:
+            target = False  # the redirection's file or fd (`>out`, `2>&1`, `<<< "$msg"`)
         else:
             seg.append(tok)
     if seg:

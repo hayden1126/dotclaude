@@ -1296,6 +1296,15 @@ class Push(BashBase):
         self.assertIn("newer.ts:1", reason)
         self.assertNotIn("new.ts:1,", reason)
 
+    def test_a_push_with_a_redirection_is_scanned(self):
+        self.commit(**{"new.ts": "y({ ...body })\n"})
+        for n, command in enumerate(("git push 2>&1", "git push origin 2>&1 | tail",
+                                     "git push -q 2>/dev/null")):
+            with self.subTest(command=command):
+                self.assertIn("new.ts:1", self.pre(command, session_id=f"redir-{n}"))
+        self.assertIn("a.ts:1", self.committed(command="git commit -m x >/dev/null",
+                                               **{"a.ts": "x({ ...body })\n"}))
+
     def test_a_clean_push_deletes_and_dry_runs_pass(self):
         self.commit(**{"clean.ts": "const a = 1\n"})
         self.assertIsNone(self.pre("git push"))
@@ -1504,6 +1513,25 @@ class BashWords(unittest.TestCase):
         self.assertEqual(self.git("echo 'git push'"), [])
         self.assertEqual([g[0] for g, _ in self.git(
             "git commit -F- <<'EOF'\ngit push origin main\nEOF\n")], ["commit"])
+
+    def test_redirections_and_their_targets_are_no_words(self):
+        # Review round 1: `git push 2>&1` read as remote "2" and refspec ">", so no push
+        # source resolved and nothing was scanned.
+        cases = {
+            "git push 2>&1": [("push", [])],
+            "git push origin 2>&1 | tail": [("push", ["origin"])],
+            "git push -q 2>/dev/null": [("push", ["-q"])],
+            "git commit -m x >/dev/null": [("commit", ["-m", "x"])],
+            "2>err git push >>log origin main": [("push", ["origin", "main"])],
+            "git push &>/dev/null; git push >| out": [("push", []), ("push", [])],
+            'git commit -F - <<< "$msg"': [("commit", ["-F", "-"])],
+            "git push origin x>&- 3<&0": [("push", ["origin", "x"])],
+            "git push origin 2": [("push", ["origin", "2"])],  # a word, not an fd
+            'git commit -m "a > b" 2>&1': [("commit", ["-m", "a > b"])],
+        }
+        for command, want in cases.items():
+            with self.subTest(command=command):
+                self.assertEqual([g for g, _ in self.git(command)], want)
 
     def test_cd_then_commit_runs_in_the_new_dir(self):
         self.assertEqual(self.git("cd sub && git commit")[0][1], "/r/sub")
