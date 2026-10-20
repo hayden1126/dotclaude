@@ -79,7 +79,8 @@ function browserHeaders(url, { as, ip }) {
   return headers;
 }
 
-class Missing extends Error {}
+// The code the task asked for isn't there (no route, action, module or export): broken.
+export class Missing extends Error {}
 
 function isFile(p) {
   try {

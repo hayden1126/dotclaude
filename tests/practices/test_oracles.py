@@ -52,6 +52,11 @@ def case_names():
     return sorted(d.name for d in CASES.iterdir() if (d / "oracle.mjs").is_file())
 
 
+def bad_overlays(case):
+    """bad/, or bad-1/, bad-2/... when a case has more than one planted pattern."""
+    return sorted(d.name for d in (CASES / case).iterdir() if d.is_dir() and d.name.split("-")[0] == "bad")
+
+
 @unittest.skipUnless(NODE, "node is not installed")
 class OracleVerdicts(unittest.TestCase):
     def verdict(self, case, variant):
@@ -63,9 +68,8 @@ class OracleVerdicts(unittest.TestCase):
             return run_oracle(fixture, case, tmp)
 
     def check_case(self, case):
-        expected = {"good": "pass", "bad": "fail", "empty": "broken"}
-        if not (CASES / case / "bad").is_dir():
-            del expected["bad"]
+        """good -> pass, every bad* overlay -> fail, nothing written -> broken (missing)."""
+        expected = {"good": "pass", **{b: "fail" for b in bad_overlays(case)}, "empty": "broken"}
         for variant, want in expected.items():
             with self.subTest(variant=variant):
                 out = self.verdict(case, variant)
@@ -74,14 +78,11 @@ class OracleVerdicts(unittest.TestCase):
                     self.assertIn("missing", [c["name"] for c in out["checks"]], json.dumps(out, indent=1))
 
     def test_every_case_has_its_files(self):
-        self.assertEqual(
-            case_names(),
-            ["action-authz", "actor-from-body", "benign", "idor", "mass-assign", "rate-limit-paid"],
-        )
+        self.assertEqual(case_names(), sorted(run.CASES))
         for case in case_names():
             for name in ("prompt.md", "oracle.mjs", "good"):
                 self.assertTrue((CASES / case / name).exists(), f"{case}/{name}")
-            self.assertEqual((CASES / case / "bad").is_dir(), case != "benign", case)
+            self.assertEqual(bool(bad_overlays(case)), case != "benign", case)
 
     def test_idor(self):
         self.check_case("idor")
@@ -100,6 +101,9 @@ class OracleVerdicts(unittest.TestCase):
 
     def test_benign(self):
         self.check_case("benign")
+
+    def test_open_redirect(self):
+        self.check_case("open-redirect")
 
 
 # Secure implementations written differently from good/: each must still score pass.
