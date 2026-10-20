@@ -97,9 +97,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     skill only; Hayden picked "security first"; its spec waits on his review). link-atomic and
     summary-retire opened 2026-10-20 on Hayden's ok (Backlog items below). summary-retire merged
     as #139, link-atomic as #140, pr-horizon as #135 and config-dir as #133 (2026-10-20):
-    installed from main, the lanes closed. 3 mute (`feat/device-mute`, opened 2026-10-20 on Hayden's ok: the device-wide mute
+    installed from main, the lanes closed. 4 policy-fp (`fix/policy-false-denials`, opened
+    2026-10-20 on Hayden's ok: the three subagent-policy false denials below). 3 mute (`feat/device-mute`, opened 2026-10-20 on Hayden's ok: the device-wide mute
     below, plus `setup-tmux.sh`'s `link()` fix, his pick the same day). Hayden raised the cap
-    from 3 to 4 on 2026-10-20 for exam-prep; 3 of 4 slots are taken.
+    from 3 to 4 on 2026-10-20 for exam-prep; it is full.
   - **Lane ask quality: done** (2026-10-19 to 2026-10-20). ask-check merged as #131 and was
     installed from main 2026-10-20: a PreToolUse hook on AskUserQuestion (`hooks/ask_check.py`)
     denies risky asks with a checklist in the reason. branch-reuse merged as #130: `lane new`
@@ -211,7 +212,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     `ux,uy=(x2-x1)/d` is refused. Delegated agents fall back to Edit or rewrite by hand. Fix:
     parse the s-command (skip pattern and replacement, then read flags) and judge `=(` only at
     a word start outside quotes, keeping `1e date`, `s/a/b/e`, `s/a/b/w f`, `cat =(ls)` and
-    `${(f)x}` refused. Lane-able (`subagent-policy`, `tests/delegation`).
+    `${(f)x}` refused. In lane policy-fp since 2026-10-20.
   - **excluded-guard refuses an over-matched command in an agent worktree** (lane mute's report,
     2026-10-20; checked in code, not reproduced). Candidacy splits on `|`, `;` and `&&` without
     quotes, so a plain `grep` whose quoted pattern holds an excluded head becomes a candidate
@@ -344,8 +345,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lanes exam-prep (merge order 1, carries the lead branch), practices (2) and mute (3)
-     run; their state is in their records (`lane ls`). After each reinstall,
+  0. Lanes exam-prep (merge order 1, carries the lead branch), practices (2), mute (3) and
+     policy-fp (4) run; their state is in their records (`lane ls`). After each reinstall,
      check `ls -la ~/.claude/CLAUDE.md` (the Watch item). Watch that push asks open with the
      briefing (#137); if they skip it, the Stop-hook check is the follow-up (Hayden's pick).
   1. Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
