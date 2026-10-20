@@ -358,8 +358,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lanes exam-prep (merge order 1, carries the lead branch), practices (2), mute (3) and
-     policy-fp (4) run; their state is in their records (`lane ls`). After each reinstall,
+  0. Lanes practices (merge order 1, carries the lead branch), exam-prep (2), mute (3) and
+     policy-fp (4) run; if #142 hasn't merged by Wed 10/21 noon, reinstall from main and put
+     exam-prep first; their state is in their records (`lane ls`). After each reinstall,
      check `ls -la ~/.claude/CLAUDE.md` (the Watch item). Watch that push asks open with the
      briefing (#137); if they skip it, the Stop-hook check is the follow-up (Hayden's pick).
   1. Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
