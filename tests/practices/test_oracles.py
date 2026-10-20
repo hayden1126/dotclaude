@@ -1115,6 +1115,14 @@ class RunHarness(unittest.TestCase):
         self.assertFalse(bar("idor", "C", c(5, 0, 0), 5)[1])
         self.assertTrue(bar("benign", "D", c(4, 0, 1), 5)[1])
         self.assertFalse(bar("idor", "B", c(0, 5, 0), 5)[1])
+        # Off-target cases: B, C and D report them and never miss; A still discriminates.
+        self.assertTrue(run.OFF_TARGET <= set(run.CASES))
+        for case in ("email-change", "open-redirect"):
+            for arm in ("B", "C", "D"):
+                self.assertEqual(bar(case, arm, c(0, 5, 0), 5),
+                                 ("reported only (off-target)", False))
+            self.assertTrue(bar(case, "A", c(3, 2, 0), 5)[1])
+        self.assertTrue(bar("idor", "C", c(4, 1, 0), 5)[1])
 
 
 BWRAP_OK = bool(NODE) and run.bwrap_usable()

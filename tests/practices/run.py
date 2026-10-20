@@ -81,6 +81,8 @@ or when any run scored error):
      benign is reported only.
   C, D  "green": pass == n (on benign too: over-restriction scores broken).
   B  reported only.
+  Off-target cases (OFF_TARGET: email-change, open-redirect, bugs server-code doesn't target):
+     B, C and D report them as "reported only (off-target)" and never miss; A keeps its bar.
 """
 import argparse
 import concurrent.futures
@@ -110,6 +112,9 @@ HOOK_TIMEOUT = 5  # seconds; the hook keeps its own budget under this (spike.md 
 
 CASES = ["idor", "mass-assign", "actor-from-body", "action-authz", "rate-limit-paid", "benign",
          "open-redirect", "email-change", "reset-host", "csv-injection"]
+# Cases whose bug the server-code skill doesn't target: arms B, C and D report them without a bar,
+# so a skill that never mentions the bug can't miss on them. A still has to discriminate.
+OFF_TARGET = {"email-change", "open-redirect"}
 ARMS = ["A", "B", "C", "D"]
 # pass, fail and broken come from the oracle; error is the harness's own (an exception, a
 # claude exit with no result, no stream, a sandbox refusal), counted apart and never valid.
@@ -720,6 +725,8 @@ def bar(case, arm, counts, n):
         valid = p + f
         ok = valid >= 3 and f * 2 > valid
         return ("discriminates" if ok else f"MISS (fail {f} of {valid} valid)"), not ok
+    if case in OFF_TARGET:
+        return "reported only (off-target)", False
     if arm in ("C", "D"):
         ok = p == n
         return ("green" if ok else f"MISS (pass {p} of {n})"), not ok

@@ -445,6 +445,16 @@
         ]
       },
       {
+        "matcher": "Edit|Write|MultiEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/practices-check.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [
           {
@@ -592,6 +602,16 @@
           {
             "type": "command",
             "command": "bash \"$HOME/.claude/hooks/excluded-check.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/practices-check.sh\"",
             "timeout": 5
           }
         ]

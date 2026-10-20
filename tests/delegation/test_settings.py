@@ -266,6 +266,21 @@ class Baseline(unittest.TestCase):
         self.assertLessEqual(entry["hooks"][0]["timeout"], 5)
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "ask-check.sh"), os.X_OK))
 
+    def test_the_practices_check_is_wired_on_edits_and_session_start_and_fails_open(self):
+        # One engine for every practices skill: L1 and L2 deny edits by JSON, L4 answers
+        # SessionStart(compact), and startup carries its health line. The shim exits 0 on any
+        # failure; the engine keeps its own 2 s budget under the 5 s kill.
+        check = 'bash "$HOME/.claude/hooks/practices-check.sh"'
+        self.assertEqual(commands("PreToolUse", "Edit|Write|MultiEdit|Bash"), [check])
+        self.assertEqual(commands("SessionStart", "startup|resume|clear|compact").count(check), 1)
+        hooks = [h for entries in S["hooks"].values() for e in entries for h in e["hooks"]
+                 if "practices-check" in h["command"]]
+        self.assertEqual(len(hooks), 2)
+        for h in hooks:
+            self.assertEqual(h["command"], check)
+            self.assertEqual(h["timeout"], 5)
+        self.assertTrue(os.access(os.path.join(REPO, "hooks", "practices-check.sh"), os.X_OK))
+
     def test_the_pass_banner_is_wired_on_startup_only(self):
         # A /pass respawn starts as `startup`; the banner shows what the old session said in its
         # last turn, once. The first reply waits for SessionStart hooks, so the timeout stays
