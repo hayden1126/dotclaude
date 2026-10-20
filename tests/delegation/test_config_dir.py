@@ -1,12 +1,13 @@
 """Every delegation reader of Claude Code's config dir goes through dc.config_dir:
 $CLAUDE_CONFIG_DIR when set, else ~/.claude. The sessions readers (claude_ancestor, live_sessions,
-session_toplevel), the user settings sandbox_paths reads, the transcripts `sandbox-denials` scans
-and the shim check_guard_shim runs. Under a temp HOME and config dir whose files the tests
+session_toplevel), the user settings sandbox_paths and subagent-policy read, subagent-policy's
+shell snapshots, the transcripts `sandbox-denials` scans and the shim check_guard_shim runs. Under a temp HOME and config dir whose files the tests
 write; each case also writes a decoy in the other place, so only the right one can pass."""
 import json
 import os
 import subprocess
 import tempfile
+import types
 import unittest
 from unittest import mock
 
@@ -14,6 +15,7 @@ from _paths import SCRIPTS, load_script
 
 dc = load_script("delegation_common.py")
 checks = load_script("delegation_checks.py")
+sp = load_script("subagent-policy")
 LEDGER = os.path.join(SCRIPTS, "delegation-ledger")
 
 
@@ -76,6 +78,32 @@ class ConfigDir(unittest.TestCase):
         read_denied = dc.sandbox_paths()[0]
         self.assertIn("/deny-home", read_denied)
         self.assertNotIn("/deny-cfg", read_denied)
+
+    def test_subagent_policy_reads_the_config_dirs_user_settings(self):
+        for where, root in ((self.cfg, "/deny-cfg"), (self.home_cfg, "/deny-home")):
+            self.write(os.path.join(where, "settings.json"), json.dumps(
+                {"sandbox": {"filesystem": {"denyRead": [root]}}}))
+
+        def user_roots():
+            return [r for tier, s in sp.settings_tiers(self.repo, self.home) if tier == "user"
+                    for r in (((s or {}).get("sandbox") or {}).get("filesystem") or {})
+                    .get("denyRead", [])]
+        self.assertEqual(user_roots(), ["/deny-cfg"])
+        os.environ.pop("CLAUDE_CONFIG_DIR")
+        self.assertEqual(user_roots(), ["/deny-home"])
+
+    def test_subagent_policy_reads_the_config_dirs_shell_snapshots(self):
+        for where, d in ((self.cfg, "/cfg-bin"), (self.home_cfg, "/home-bin")):
+            self.write(os.path.join(where, "shell-snapshots", "snapshot-zsh.sh"),
+                       f"export PATH='{d}'\n")
+
+        def path_dirs():
+            return sp.Analyzer._path_dirs(types.SimpleNamespace(home=self.home))
+        self.assertIn("/cfg-bin", path_dirs())
+        self.assertNotIn("/home-bin", path_dirs())
+        os.environ.pop("CLAUDE_CONFIG_DIR")
+        self.assertIn("/home-bin", path_dirs())
+        self.assertNotIn("/cfg-bin", path_dirs())
 
     def test_sandbox_denials_scans_the_config_dirs_transcripts(self):
         for where, host in ((self.cfg, "cfg.example"), (self.home_cfg, "home.example")):
