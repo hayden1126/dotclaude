@@ -8,7 +8,7 @@
 
 ## Boundaries (ask first)
 - Delete freely what this session made, build output, and anything under temp or an agent worktree. Propose and confirm before deleting tracked files, uncommitted work, or anything outside the repo. Exception: after a lane's PR merges, the lead runs `lane done` for it without asking (the `lanes` skill).
-- Never `git push`, open a PR or merge without my explicit approval in chat, and push only the changes I approved. Pushes that can reach `main` and merges also hit a permission prompt, so I click accept for those.
+- Never `git push`, open a PR or merge without my explicit approval in chat, and push only the changes I approved. Open each push ask with a fresh briefing, written for someone who has forgotten the work: the goal, what is done (the commits since the last push), and, when the goal isn't reached yet, how far along it is and what is left. Pushes that can reach `main` and merges also hit a permission prompt, so I click accept for those.
 - One PR per piece of work, finished before it merges: open it as a draft, and mark it ready only after cleanup, the doc updates and STATUS are committed and, where the repo installs from its checkout, the install and smoke test ran from the branch. A fact only knowable after the merge rides in the next PR, never a STATUS-only one.
 - Never run `git checkout`, reset, or any revert without confirmation.
 - Kill only processes this session started, proven by the PID I recorded or a parent chain back to my own command, never by name, start time, or "looks orphaned": other Claude sessions run the same tools on this machine.
