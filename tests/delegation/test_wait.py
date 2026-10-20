@@ -65,6 +65,7 @@ class WaitEnv(unittest.TestCase):
                         CLAUDE_CODE_SESSION_ID="s1", CLAUDE_PID=str(os.getpid()))
         self.env.pop("SANDBOX_RUNTIME", None)  # set inside the sandbox; the Sandbox test sets it
         self.env.pop("DELEGATION_LEDGER", None)
+        self.env.pop("CLAUDE_CONFIG_DIR", None)  # the sessions dir lives in the fake home
         sessions = os.path.join(self.tmp.name, ".claude", "sessions")
         os.makedirs(sessions)
         with open(os.path.join(sessions, "1.json"), "w") as f:
@@ -1052,6 +1053,7 @@ class Usage(WaitEnv):
         log = self.path("job.log")
         open(log, "w").close()
         with mock.patch.dict(os.environ, {"HOME": self.tmp.name}):
+            os.environ.pop("CLAUDE_CONFIG_DIR", None)  # the settings live in the fake home
             cursor = dc.log_cursor()
             self.assertIsNone(dc.scan_log(log, re.compile("DONE"), None, cursor))
             os.remove(log)
@@ -1071,6 +1073,7 @@ class Usage(WaitEnv):
         target = self.path("out")
         open(target, "w").close()
         with mock.patch.dict(os.environ, {"HOME": self.tmp.name}):
+            os.environ.pop("CLAUDE_CONFIG_DIR", None)  # the settings live in the fake home
             dc.sandbox_paths()
             for text in ("", "\n"):
                 with open(settings, "w") as f:
@@ -1501,6 +1504,7 @@ class ClaudeProcess(unittest.TestCase):
         self.addCleanup(env.stop)
         os.environ.pop("CLAUDE_PID", None)
         os.environ.pop("SANDBOX_RUNTIME", None)
+        os.environ.pop("CLAUDE_CONFIG_DIR", None)  # the sessions dir lives in the fake home
 
     def session_file(self, pid, start=None):
         with open(os.path.join(self.sessions, f"{pid}.json"), "w") as f:
@@ -1579,7 +1583,6 @@ class ClaudeProcess(unittest.TestCase):
         subprocess.run(["git", "init", "-q", repo], check=True)
         with open(os.path.join(self.sessions, "4242.json"), "w") as f:
             json.dump({"pid": 4242, "sessionId": "s1", "cwd": repo}, f)
-        os.environ.pop("CLAUDE_CONFIG_DIR", None)
         self.junk(f"{DEAD}.json", "{")  # not an ancestor's: ruled out
         self.assertEqual(dc.session_toplevel("s1"), os.path.realpath(repo))
         for name in (f"{os.getpid()}.json", "odd.json"):  # an ancestor's, or no pid at all
