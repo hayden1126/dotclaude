@@ -43,11 +43,19 @@ class LanesRepo(unittest.TestCase):
         os.makedirs(fake_bin)
         with open(os.path.join(fake_bin, "gh"), "w") as f:
             # `new`'s check (`pr list --head <b> --state all`) gets FAKE_GH_NEW, `[]` when unset
-            # (no PR used the name) and a failure when `fail`. FAKE_GH_OUT, when set, is printed
-            # as the reply to any other call (a test's canned JSON).
-            f.write('#!/bin/sh\ncase " $* " in *" --head "*" --state all "*)\n'
+            # (no PR used the name) and a failure when `fail`. A branch's merged PRs
+            # (`--head <b> --state merged`) get FAKE_GH_MERGED the same way, when it is set.
+            # FAKE_GH_OUT, when set, is printed as the reply to any other call (a test's canned
+            # JSON). FAKE_GH_LOG, when set, gets each call's args, one line per call.
+            f.write('#!/bin/sh\n'
+                    'if [ -n "$FAKE_GH_LOG" ]; then echo "$*" >> "$FAKE_GH_LOG"; fi\n'
+                    'case " $* " in *" --head "*" --state all "*)\n'
                     '  if [ "$FAKE_GH_NEW" = fail ]; then echo "gh: offline in tests" >&2; exit 1; fi\n'
-                    '  printf "%s" "${FAKE_GH_NEW:-[]}"; exit 0;;\nesac\n'
+                    '  printf "%s" "${FAKE_GH_NEW:-[]}"; exit 0;;\n'
+                    '*" --head "*" --state merged "*)\n'
+                    '  if [ "$FAKE_GH_MERGED" = fail ]; then echo "gh: offline in tests" >&2; exit 1; fi\n'
+                    '  if [ -n "$FAKE_GH_MERGED" ]; then printf "%s" "$FAKE_GH_MERGED"; exit 0; fi;;\n'
+                    'esac\n'
                     'if [ -n "$FAKE_GH_OUT" ]; then printf "%s" "$FAKE_GH_OUT"; exit 0; fi\n'
                     "echo 'gh: offline in tests' >&2\nexit 1\n")
         os.chmod(os.path.join(fake_bin, "gh"), 0o755)

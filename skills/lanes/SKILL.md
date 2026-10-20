@@ -214,10 +214,12 @@ inherits the lead from it.
    lane's work: a PR from the lane's branches merged after the record's last write, a commit is
    newer than it, or a session that started after it has ended, so that session never wrote it
    (both times within 10 s count as after, for the clock's steps). It stays on whenever any of
-   that can't be read (gh, a `mergedAt`, the record, a session stamp, the last commit), and,
-   once gh's list holds its full 200 PRs, for a lane older than the oldest, adopted or switched
-   to another branch (its PR may be cut). Until then, message the lane; if its session is gone,
-   add it to Hayden's asks. Never order a merge or close a lane before the gate passes.
+   that can't be read (gh, a `mergedAt`, the record, a session stamp, the last commit). Once
+   gh's list holds its full 200 PRs, a lane older than the oldest, adopted, made with
+   `new --reuse-branch` or switched to another branch gets one more gh call per branch for its
+   merged PRs, and a full answer there keeps the flag on too. Until then, message the lane; if
+   its session is gone, add it to Hayden's asks. Never order a merge or close a lane before the
+   gate passes.
 6. **Watch and order.** Watch `lane ls`. Keep the merge order in the project STATUS. A lane
    whose install is live merges main with the sandbox off: its own hooks, skills and tests are
    write-protected then (`docs/lanes.md` S3).
