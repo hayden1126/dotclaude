@@ -95,9 +95,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     released ask-check's install, which it redoes before ready). Smoke: a fresh `claude -p`
     ended with the label, but "checklist" made it write `- [ ]` boxes, which Hayden doesn't
     want (plain bullets): the wording fix, lead PR #134, merged 2026-10-20 with no lead
-    reinstall (Hayden's call: it would release ask-check's install again). It goes live when
-    ask-check merges main (the live CLAUDE.md links into its worktree); then smoke-test that a
-    fresh session's list uses plain bullets. branch-reuse merged as #130 and was installed from main, 2026-10-19: `lane
+    reinstall (Hayden's call: it would release ask-check's install again). Live since ask-check
+    merged main (db2468c); smoke passed 2026-10-20: a fresh `claude -p` ended with a plain-bullet
+    list and skipped the inline mark on the section right before it. branch-reuse merged as #130 and was installed from main, 2026-10-19: `lane
     new` refuses a branch name any PR used (or when gh can't answer; `--reuse-branch`
     overrides), and handoff-check counts the checked-out branch. The three lanes opened earlier on 2026-10-19
     merged, were installed from main and closed: chrome-ttl as #126 (chrome-bg's TTL on a
