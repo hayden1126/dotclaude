@@ -24,7 +24,6 @@ PENDING = {
     "templates/CHASSIS.md",
     "templates/CONVERT.md",
     "templates/STYLE.md",
-    "workflows/03-backbone.md",
     "workflows/04-write.md",
     "workflows/05-verify.md",
     "workflows/06-site.md",

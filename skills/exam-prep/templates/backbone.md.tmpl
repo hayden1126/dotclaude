@@ -1,0 +1,71 @@
+<!-- exam-prep template backbone.md.tmpl. Baseline as of 2026-10-20; changes only via `12-retro`. Drop this line in the hub copy. -->
+# Backbone: {{COURSE}} {{EXAM}}: concept order, id registry, coverage
+
+The single source of truth for the writers. Every section number, title and id below is fixed
+before any writer starts: writers use them verbatim and link to them. Citations look like
+`[D5 p.23]`, `[D2 #/14]`, `[HW1 Q2c]`. Extracts are in `_build/extract/`. {{CHECKER: Worked-example
+data and traces come from the checker's output (`_build/verify/examples.out.md`); writers copy
+numbers from there and never compute their own. | NO CHECKER: Nothing in this course is
+computable (PLAN.md's Checker line): writers build each worked example from its cited sources,
+showing the working, and `05-verify`'s reviewers redo it.}}
+
+Corrections found while reading the extracts (each re-checked on the page image and fixed in the
+extract too):
+- {{DOC p.N: the extract read X; the page reads Y (re-read at 300 dpi)}}
+
+## Conventions
+
+Each is stated once, in the subsection named here, and every other use links to it.
+
+- {{CONVENTION, such as a tie-break order or when a check runs}}: stated in §{{N.M}}
+  (`{{ID}}`); source {{CITE}}; reproduces {{the official solutions it was checked against}}.
+
+## §1 {{TITLE}} (`sec-1`, file `notes/01-{{SLUG}}.md`, {{concise | full}})
+
+| § | Title | id | Sources | Practice | How it's tested |
+|---|---|---|---|---|---|
+| 1.1 | {{TITLE}} | `sec-1-{{SLUG}}` | {{D1 pp.8-12}} | {{HW1 Q2a}} | {{the answer shape the practice asks for}} |
+| 1.{{N}} | Must know | `sec-1-must-know` | summary of §1 | | review checklist |
+
+- Lettered sets: `set-{{NAME}}-a` .. `-{{LAST}}`: a) {{...}}, b) {{...}} [{{CITE}}].
+- Figures: `fig-1-{{SLUG}}` Fig 1.{{K}} ({{static | step-through}}: {{what it shows, its data}})
+  [{{CITE}}].
+- Worked examples: `ex-1-{{SLUG}}` Worked example 1.{{K}}: "{{TITLE}}" (data: {{CHECKER:
+  `examples.out.md`, SECTION OF IT | NO CHECKER: the sources it builds on}}; the course's Checker
+  line decides, for every example alike).
+
+## Cross-section links writers should use
+
+- §{{N.M}} → §{{N.M}} ("{{the relation, in one phrase}}").
+
+## Figure shortlist
+
+Found from both directions: mechanisms the notes can't carry in prose, and the slides' own
+diagrams. Each row says why prose isn't enough.
+
+| id | Section | Kind | Why a figure | Source |
+|---|---|---|---|---|
+| `fig-{{N}}-{{SLUG}}` | {{N.M}} | {{static or step-through}} | {{reason}} | {{CITE or "new"}} |
+
+## How it's tested
+
+Every practice question part and the section that teaches it; every subsection lists its
+practice in the tables above.
+
+| Question | Shape | Conventions | Section |
+|---|---|---|---|
+| {{HW1 Q2a}} | {{trace under stated conventions}} | {{CONVENTIONS}} | {{N.M}} |
+
+## Coverage matrix
+
+Every extract block maps to a subsection or to `skip (why)`. `coverage_check.py` checks it: the
+first cell is `<doc> <locator>` parts, the last is `skip (why)` or subsection numbers, notes in
+parentheses after them.
+
+| Source block range | → | Subsection |
+|---|---|---|
+| {{D1 p.1}} | | skip ({{title}}) |
+| {{D1 pp.2-12, 15}} | | {{1.1}} |
+| {{D2 #/3-7}} | | {{1.2 (a note)}} |
+| {{HW1 Q1-Q3}} | | {{1.1, 2.3}} |
+| {{W1 (all)}} | | {{2.1}} |
