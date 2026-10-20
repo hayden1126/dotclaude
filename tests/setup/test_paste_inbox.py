@@ -47,6 +47,15 @@ NAMED = re.compile(r"^\d{8}T\d{6}Z-(?P<device>[a-z0-9._-]+)-[0-9a-f]{6}-(?P<stem
                    r"(?:\.(?P<ext>[a-z0-9]{1,10}))?$")
 
 
+# What WSL interop prints when the Bash sandbox blocks it: UtilConnectUnix, or
+# UtilBindVsockAnyPort (seen 2026-10-20), depending on the WSL and sandbox versions.
+INTEROP_BLOCKED = ("UtilConnectUnix", "UtilBindVsockAnyPort")
+
+
+def interop_blocked(text):
+    return any(m in text for m in INTEROP_BLOCKED)
+
+
 def name64(name):
     """A file name as the laptop sends it: base64url of its UTF-8, unpadded."""
     return base64.urlsafe_b64encode(name.encode()).rstrip(b"=").decode()
@@ -817,7 +826,7 @@ class Laptop(unittest.TestCase):
                 env = {**os.environ, "RP_PS1": os.path.join(LAPTOP, name), "WSLENV": "RP_PS1/p"}
                 p = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-Command", check],
                                    capture_output=True, text=True, timeout=60, env=env)
-                if "UtilConnectUnix" in p.stderr or "UtilConnectUnix" in p.stdout:
+                if interop_blocked(p.stderr + p.stdout):
                     self.skipTest("the Bash sandbox blocks WSL interop; run outside it")
                 self.assertEqual(p.stdout.replace("\r", "").strip(), "errors=0", p.stderr)
 
@@ -850,7 +859,7 @@ class LaptopPowerShell(unittest.TestCase):
         p = subprocess.run([self.ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy",
                             "Bypass", "-Command", command], capture_output=True, timeout=90)
         err = p.stderr.decode("utf-8", "replace")
-        if "UtilConnectUnix" in err or "UtilConnectUnix" in p.stdout.decode("utf-8", "replace"):
+        if interop_blocked(err + p.stdout.decode("utf-8", "replace")):
             self.skipTest("the Bash sandbox blocks WSL interop; run outside it")
         return p.returncode, err
 
@@ -890,7 +899,7 @@ class LaptopPowerShell(unittest.TestCase):
                             base64.b64encode(command.encode("utf-16-le")).decode()],
                            capture_output=True, timeout=60, env=env)
         out = p.stdout.decode("utf-8", "replace") + p.stderr.decode("utf-8", "replace")
-        if "UtilConnectUnix" in out:
+        if interop_blocked(out):
             self.skipTest("the Bash sandbox blocks WSL interop; run outside it")
         got = p.stdout.decode().split()
         self.assertEqual(got, [name64(n) for n in names], out)
@@ -936,7 +945,7 @@ class LaptopPowerShell(unittest.TestCase):
                             base64.b64encode(command.encode("utf-16-le")).decode()],
                            capture_output=True, timeout=60)
         out = p.stdout.decode("utf-8", "replace") + p.stderr.decode("utf-8", "replace")
-        if "UtilConnectUnix" in out:
+        if interop_blocked(out):
             self.skipTest("the Bash sandbox blocks WSL interop; run outside it")
         self.assertEqual(p.stdout.decode().split("\r\n")[:3],
                          ["leaf=True", "hidden=hidden [1].txt|hidden bytes",
@@ -971,7 +980,7 @@ class LaptopPowerShell(unittest.TestCase):
                             base64.b64encode(command.encode("utf-16-le")).decode()],
                            capture_output=True, timeout=60)
         out = p.stdout.decode("utf-8", "replace") + p.stderr.decode("utf-8", "replace")
-        if "UtilConnectUnix" in out:
+        if interop_blocked(out):
             self.skipTest("the Bash sandbox blocks WSL interop; run outside it")
         lines = [line for line in p.stdout.decode().split("\r\n") if line]
         self.assertEqual(lines[0], "plain=FAIL: big.pdf is over 50 MB after 0", out)
@@ -1007,7 +1016,7 @@ class LaptopPowerShell(unittest.TestCase):
                            capture_output=True, timeout=60)
         out = p.stdout.decode("utf-8", "replace")
         err = p.stderr.decode("utf-8", "replace")
-        if "UtilConnectUnix" in out + err:
+        if interop_blocked(out + err):
             self.skipTest("the Bash sandbox blocks WSL interop; run outside it")
         self.assertEqual(p.returncode, 1, out + err)
         self.assertIn("remote-paste: big.pdf is over 50 MB", err)
