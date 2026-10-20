@@ -87,19 +87,18 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lanes** (briefs in each record). Merge order (Hayden's reorder, 2026-10-20: the
-    atomic link first, so no later install runs the old `link()`; link-atomic merged as #140
-    the same day): 1 summary-retire
-    (`chore/retire-summary-rows`, carries the lead's notes, and also takes the ccstatusline
-    crash fix, Hayden's pick the same day), 2 exam-prep (`feat/exam-prep-skill`, opened
-    2026-10-20 on Hayden's ok: the exam-prep skill suite below; second so it can install from its
-    lane for the dry run before round 1's go/no-go, Thu 10/22), 3 practices (`feat/practices-suite`, opened 2026-10-19 at Hayden's ask: the skill
-    suite below, researched from his project memories and online sources, then the security
-    skill only; Hayden picked "security first"; its spec waits on his review). link-atomic and
-    summary-retire opened 2026-10-20 on Hayden's ok (Backlog items below). link-atomic merged as
-    #140, pr-horizon as #135 and config-dir as #133 (2026-10-20): installed from main, the lanes
-    closed. 4 mute (`feat/device-mute`, opened 2026-10-20 on Hayden's ok: the device-wide mute
-    below, plus `setup-tmux.sh`'s `link()` fix, his pick the same day). Hayden raised the cap
+  - **Live lanes** (briefs in each record). Merge order (2026-10-20): 1 practices
+    (`feat/practices-suite`, draft #142, carries the lead's notes; opened 2026-10-19 at Hayden's
+    ask: the skill suite below, security first). Hayden moved it ahead of exam-prep the same day
+    since #142 is finished; if it hasn't merged by Wed 10/21 noon, the lead reinstalls from main
+    and exam-prep goes first again. 2 exam-prep (`feat/exam-prep-skill`, opened 2026-10-20: the
+    exam-prep skill suite below; ahead of mute and policy-fp so it can install from its lane for
+    the dry run before round 1's go/no-go, Thu 10/22). 3 mute (`feat/device-mute`, #141,
+    opened 2026-10-20: the device-wide mute below, plus `setup-tmux.sh`'s `link()` fix).
+    4 policy-fp (`fix/policy-false-denials`, opened 2026-10-20: the three subagent-policy false
+    denials below). Each opened on Hayden's ok. Merged and closed 2026-10-20, installed from
+    main: summary-retire (#139), link-atomic (#140, which Hayden ordered first so no later
+    install ran the old `link()`), pr-horizon (#135), config-dir (#133). Hayden raised the cap
     from 3 to 4 on 2026-10-20 for exam-prep; it is full.
   - **Lane ask quality: done** (2026-10-19 to 2026-10-20). ask-check merged as #131 and was
     installed from main 2026-10-20: a PreToolUse hook on AskUserQuestion (`hooks/ask_check.py`)
@@ -164,12 +163,14 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **Lanes tell the lead before an act past their worktree: merged as #136** (lead PR,
     2026-10-20, installed from main). New briefs drop the hand-written "Message the lead before
     any act..." Constraints line: the skill carries it (Lifecycle step 3).
-  - **Retire the status-line summary rows; brief before each push** (Hayden, 2026-10-20: "I
-    don't read it anymore"). His picks: keep the tab label (the Stop hook
-    `hooks/session-summary.sh` asks Haiku for the label only; the rows and
-    `statusline/session-summary.py` go), and the briefing is a rule now, with a check later only
-    if asks skip it. The rule merged as #137 (2026-10-20, installed). The retirement runs in lane
-    summary-retire; at its merge the lead updates memory `dotclaude-session-summary-statusline`.
+  - **Retire the status-line summary rows: merged as #139** (lane summary-retire, 2026-10-20,
+    installed from main and the lane closed; Hayden: "I don't read it anymore"). The Stop hook
+    `hooks/session-summary.sh` asks Haiku for the tab label only; the rows and
+    `statusline/session-summary.py` are gone, and `setup.sh` strips the two retired widgets from
+    an existing ccstatusline layout (the live file is one row). It also took the ccstatusline
+    crash fix: a wrongly shaped `lines` re-seeds with a backup, and a dir, FIFO or bad link at
+    the destination warns and skips. The briefing-before-push rule merged as #137; a check
+    follows only if asks skip it.
   - **The exam-prep skill suite** (Hayden's brief, `~/.claude/plans/exam-prep-skill-brief.md`,
     approved 2026-10-06, revised 2026-10-20; copied into lane exam-prep's artifacts): one
     umbrella skill, intake through tutor and retro, built from the Security I and AI 4701 runs.
@@ -181,7 +182,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     mutes the Windows toast and the notify ring for every session on the machine (no toggle
     exists today). Design settled 2026-10-20 (Hayden picked the lead's pick on all four forks:
     `PLAN.md`, "Next: a device-wide mute"). In lane mute since 2026-10-20 (its record holds the
-    state); README overlaps summary-retire.
+    state).
   - **`setup-tmux.sh`'s own `link()` has #140's gap class** (lane link-atomic's report,
     2026-10-20). `setup-tmux.sh:62-71` moves a real file aside, then runs `ln -sfn`. GNU ln
     9.4 replaces a link with no missing window (the lead's race test: 0 misses in about 600k
@@ -189,6 +190,49 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     window on every platform on a first install. Fix: reuse #140's temp-name and `os.replace`
     swap (merged). In lane mute since 2026-10-20 (Hayden folded it in, since that lane edits
     `setup-tmux.sh:73-78` anyway).
+  - **Stale worktree admin dirs break sandboxed commands now and then** (lane mute's report,
+    2026-10-20; the lead checked). `.git/worktrees/` holds 45 entries `git worktree prune
+    --dry-run` would remove ("gitdir file does not exist": closed lanes, old agent worktrees,
+    test names like `tree1`), each holding only a 0-byte `config.worktree` the sandbox planted as
+    a mount point (created about 5 s after each worktree). Claude Code's sandbox protects each
+    entry's `commondir` and `config.worktree`, so every sandboxed command mounts over paths that
+    don't exist; mute twice got bwrap's "Can't get type of source
+    .git/worktrees/excluded-guard/commondir" (and once `.git/config.lock`), and the retry ran
+    clean. Fix to try: `git worktree prune` (deletes under `.git/`: Hayden's ok first), then see
+    whether running sessions plant the dirs again. Same family as config-dir's bwrap error in the
+    Watch item below.
+  - **Three false denials in the subagent policy** (lane exam-prep's dry run, 2026-10-20; the
+    lead reproduced each with the code's own regexes). In `skills/delegation/scripts/subagent-policy`:
+    (1) sed-exec: `SED_CMD`'s `/[A-Za-z0-9]*` branch (`:806`), meant for flags after the closing
+    delimiter, also matches inside the pattern, so `sed -i 's/the same .../x/'` is refused as an
+    `e` command (`:820`); (2) the same branch makes the w-flag finder read `s/show me/x/p` as a
+    write to `me/x/p` (`:823`), which a read-only role is refused; (3) zsh-expansion
+    (`:456`) searches the raw string for `=\(` before parsing, so a quoted heredoc line like
+    `ux,uy=(x2-x1)/d` is refused. Delegated agents fall back to Edit or rewrite by hand. Fix:
+    parse the s-command (skip pattern and replacement, then read flags) and judge `=(` only at
+    a word start outside quotes, keeping `1e date`, `s/a/b/e`, `s/a/b/w f`, `cat =(ls)` and
+    `${(f)x}` refused. In lane policy-fp since 2026-10-20.
+  - **context-watch reads the pre-compact count right after a compact** (lane exam-prep's
+    report, 2026-10-20, session 89ae7cc8; the lead checked the code, not probed live).
+    `scan()` (`hooks/context_watch.py:170-200`) walks back to the last main-chain assistant
+    usage and never stops at a compact boundary: `main_chain` skips the `compact_boundary`
+    system line, and the compact-summary user entry has no usage. At the first PostToolUse after
+    a compact, that call's assistant entry wasn't on disk yet, so the nudge said "521k ... hand
+    off now" where the real count was 107k. Obeying it loops compact after compact. Fix: a
+    compact boundary met before any post-compact usage means no count yet (say nothing, write
+    nothing), with a test on a transcript fixture that ends at a boundary. Lane-able
+    (`hooks/context_watch.py`, `tests/`); no live lane owns it.
+  - **Subagent policy gaps SP1 and SP2** (from lane policy-fp, 2026-10-20, routed to the lead
+    on Hayden's pick; the lead re-checked both). Details and proposed fixes are in the private
+    findings file's "Subagent policy gaps 2026-10-20" section ([[dotclaude-public-repo]]). Both
+    edit lane policy-fp's files, so their lane opens after policy-fp merges.
+  - **excluded-guard refuses an over-matched command in an agent worktree** (lane mute's report,
+    2026-10-20; checked in code, not reproduced). Candidacy splits on `|`, `;` and `&&` without
+    quotes, so a plain `grep` whose quoted pattern holds an excluded head becomes a candidate
+    (`hooks/excluded_guard.py` docstring: "an over-match only adds checks"). In an agent
+    worktree the gitdir isn't the project's, so rule 1 judges its `config.worktree`
+    (`hooks/excluded_guard.py:522-525`), finds it writable and refuses. Only delegated writers
+    hit it, and they report the denial. Fix if it recurs: a quote-aware split for candidacy.
   - **paste-inbox's sandbox skip: merged as #138** (lead PR, 2026-10-20, from lane
     summary-retire's report): sandboxed WSL interop now fails with `UtilBindVsockAnyPort`, not
     `UtilConnectUnix`, so 9 Laptop and LaptopPowerShell cases failed instead of skipping; one
@@ -314,8 +358,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lanes summary-retire (merge order 1, carries the lead branch), exam-prep (2), practices
-     (3) and mute (4) run; their state is in their records (`lane ls`). After each reinstall,
+  0. Lanes practices (merge order 1, carries the lead branch), exam-prep (2), mute (3) and
+     policy-fp (4) run; if #142 hasn't merged by Wed 10/21 noon, reinstall from main and put
+     exam-prep first; their state is in their records (`lane ls`). After each reinstall,
      check `ls -la ~/.claude/CLAUDE.md` (the Watch item). Watch that push asks open with the
      briefing (#137); if they skip it, the Stop-hook check is the follow-up (Hayden's pick).
   1. Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
