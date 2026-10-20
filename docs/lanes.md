@@ -195,6 +195,12 @@ it too. No doc said which window owns which ask.
 - A lane with more PRs to come starts its Next with `Keep open: <why>`, and `lane done` refuses
   it. `--abandon` closes it anyway and stays an ask rule (Hayden, 2026-10-14).
 - Lanes report their own state and asks, never the lead's messages.
+- Before an act whose effect leaves its worktree (an install from the lane, a cap slot), and
+  with anything the lead must run, a lane messages the lead, never Hayden (Hayden, 2026-10-19).
+  The lead asks him only when the act needs his ok. On 2026-10-19 one lane told Hayden the lead
+  had to run `setup.sh` without saying whether to approve it or pass it on, and another
+  installed from its lane without telling the lead. "Draft opened" and "ready asked" need no
+  message: `lane ls` shows both.
 
 Why it works this way:
 
