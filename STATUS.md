@@ -254,10 +254,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
      branch). `lane new` refuses a branch name any PR used, and refuses when gh can't answer
      (lane branch-reuse); `--reuse-branch` overrides.
   - The lead's commits: `git log --first-parent main..chore/after-pr4` (STATUS only, plus merges
-    of main). Session c6847b46 (2026-10-19) started at 7aad9eb and ended at this handoff: it
-    opened chrome-ttl, tab-cmd and json-depth, ran the chain for #126 to #129 and closed all three,
-    logged json-depth's ask mistakes for item 0, capella's `handoff?` report, the AWS article and
-    the lanes' Not mine items.
+    of main). Session ee8a43bd (2026-10-19 to 10-20) ran `324c937..HEAD` on the lead branch: the
+    ask-quality investigation (transcript search, Hayden's picks), lanes branch-reuse and
+    ask-check (#130, #131: chain run, both closed, the probe lane reuse-probe abandoned on his
+    ok), lead PRs #132 and #134 (the Waiting-on-you rule, smoke passed), and opened pr-horizon
+    and config-dir.
   - Open with Hayden, nothing for the lead to do: the capella-studio lead asked how a new lane
     should clear the excluded-command guard, and the lead recommended (2026-10-17) pointing
     capella's `core.hooksPath` at the main checkout's protected `.githooks` (absolute path)
@@ -265,7 +266,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     mcp, blockfix, keys) can leave `settings.machine.json` (Hayden's edit, then `./setup.sh`).
   - A config rewrite with the sandbox off (`git config`, `branch -d`, so `lane done` too) while a
     lane's suite runs can fail its SandboxReality test once: the rewrite swaps `.git/config`
-    under the running sandbox's mount. Wait for `lane ls` to drop the `suite` lock.
+    under the running sandbox's mount. Wait for `lane ls` to drop the `suite` lock. The other
+    way round: while any lane's sandboxed command runs, an empty read-only `.git/config.lock`
+    sits in the main checkout and every config write fails ("could not lock config file"). A
+    lead PR's branch then takes `git branch --no-track <b> origin/main` plus `git worktree add
+    <dir> <b>`, neither of which writes config (2026-10-19, #132).
   - A detached job started from a lane's held install keeps running in the lane after the
     lead's reinstall, and `lane done` refuses it by name ("nothing proves these processes ...
     are lane X's"). Seen 2026-10-18: Vulcan lane blockfix's session (fa4e8df1) began the
