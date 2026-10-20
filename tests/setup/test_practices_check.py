@@ -1209,6 +1209,58 @@ class L3s(BashBase):
         self.assertIsNone(self.post("git commit -m x", tid, agent_id=agent))
 
 
+class Push(BashBase):
+    """The push gate scans what a push would send (the remotes' refs set by update-ref: no
+    test ever pushes)."""
+
+    def setUp(self):
+        super().setUp()
+        self.pushed = self.commit(**{"old.ts": "x({ ...body })\n"})
+        self.sh("update-ref", "refs/remotes/origin/main", self.pushed)
+
+    def test_denies_once_per_new_finding_and_the_resend_passes(self):
+        self.commit(**{"new.ts": "y({ ...body })\n"})
+        reason = self.pre("git push origin main")
+        self.assertTrue(reason.startswith("[practices:push]"), reason)
+        self.assertIn("SEC-17 (demo) at new.ts:1", reason)
+        self.assertNotIn("old.ts", reason)
+        self.assertNotIn("...body", reason)
+        self.assertIsNone(self.pre("git push origin main"))
+        self.commit(**{"newer.ts": "z({ ...body })\n"})
+        reason = self.pre("git push")
+        self.assertIn("newer.ts:1", reason)
+        self.assertNotIn("new.ts:1,", reason)
+
+    def test_a_clean_push_deletes_and_dry_runs_pass(self):
+        self.commit(**{"clean.ts": "const a = 1\n"})
+        self.assertIsNone(self.pre("git push"))
+        self.commit(**{"bad.ts": "y({ ...body })\n"})
+        for command in ("git push origin --delete old", "git push origin :old",
+                        "git push --dry-run", "git push -n origin main",
+                        "git push origin '$(echo main)'"):
+            with self.subTest(command=command):
+                self.assertIsNone(self.pre(command))
+
+    def test_named_sources_and_every_branch(self):
+        tip = self.commit(**{"main.ts": "y({ ...body })\n"})
+        self.sh("update-ref", "refs/remotes/origin/main", tip)
+        feat = self.commit(**{"f.ts": "z({ ...body })\n"})
+        self.sh("update-ref", "refs/heads/feature", feat)
+        self.sh("update-ref", "refs/heads/main", tip)  # HEAD (main) is pushed; feature isn't
+        self.assertIsNone(self.pre("git push"))
+        reason = self.pre("git push origin +feature:feature")
+        self.assertIn("f.ts:1", reason)
+        self.assertNotIn("main.ts", reason)
+        self.assertIn("f.ts:1", self.pre("git push --all origin", session_id="s2"))
+
+    def test_a_call_that_commits_and_pushes_is_denied_once(self):
+        command = "git add -A && git commit -m x && git push"
+        reason = self.pre(command)
+        self.assertIn("separate Bash calls", reason)
+        self.assertIsNone(self.pre(command))
+        self.assertIsNone(self.pre('git commit -m "then git push"'))
+
+
 class Budgets(BashBase):
     """A spent budget, a git timeout and a crash allow the call, and leave their trace."""
 

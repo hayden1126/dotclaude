@@ -1497,21 +1497,119 @@ def post_tool_use(event):
     return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": text}}
 
 
+# The push gate: what a git push would send, scanned before it goes.
+
+PUSH_ARG_OPTS = {"--repo", "--receive-pack", "--exec", "-o", "--push-option"}
+
+
+def push_sources(args):
+    """(the source refs a git push sends, why it is skipped or None). No refspec sends HEAD;
+    --all, --branches and --mirror send every local branch ("--branches"); a delete
+    (--delete, `:ref`) and --dry-run send nothing."""
+    srcs, positional, every, i = [], [], False, 0
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            positional += args[i + 1:]
+            break
+        if a in ("--delete", "--dry-run") or (a.startswith("-") and not a.startswith("--")
+                                               and set(a[1:]) & {"d", "n"}):
+            return [], "a delete or a dry run"
+        if a in ("--all", "--branches", "--mirror"):
+            every = True
+        elif a in PUSH_ARG_OPTS:
+            i += 1
+        elif not a.startswith("-"):
+            positional.append(a)
+        i += 1
+    for spec in positional[1:]:
+        spec = spec.lstrip("+")
+        src = spec.split(":", 1)[0]
+        if src:
+            srcs.append(src)
+    if every:
+        srcs.append("--branches")
+    elif not positional[1:]:
+        srcs.append("HEAD")
+    return srcs, None
+
+
+def push_gate(event, pushes, skills, cfg, ts, ctx):
+    """(new findings, the repo) for the commits the pushes would send that no remote has."""
+    rules = commit_rules(skills, cfg)
+    out = []
+    for _, args, where in pushes:
+        srcs, skip = push_sources(args)
+        if skip or not srcs:
+            continue
+        if any("$" in s or "%SUBST%" in s for s in srcs):
+            log("git-skipped", "push: an expansion in a refspec, so this push wasn't checked")
+            continue
+        repo = open_repo(where, "push")
+        if repo is None:
+            continue
+        tips = ["--branches"] if "--branches" in srcs else []
+        tips += [oid for s in srcs if s != "--branches" and (oid := repo.rev(s))]
+        if not tips:
+            continue
+        found = scan(repo, [*tips, "--not", "--remotes"], rules, "push", ctx)
+        out += fresh(found, event, ts, repo)
+    return out
+
+
+def push_reason(findings):
+    return ("[practices:push] The commits this push would send add code that a practices rule "
+            "flags. Fix it in a new commit (or amend one that isn't pushed yet) and push again, "
+            "or, when one is a false positive, add `practices-allow: <id> <reason>` to the code "
+            "(on the flagged line itself for a line-scoped rule). Resending this push unchanged "
+            "passes this check.\n" + findings_text(findings))
+
+
 def bash_pre(event):
-    """PreToolUse(Bash): record HEAD before a commit (L3s)."""
+    """PreToolUse(Bash): deny a call that both commits and pushes once, record HEAD before a
+    commit (L3s), and deny a push once per new finding in what it would send."""
     gits, ghs = bash_calls(event)
     commits = [g for g in gits if g[0] == "commit"]
-    if not commits:
+    pushes = [g for g in gits if g[0] == "push"]
+    if not (commits or pushes):
         return None
-    if not load_config(event)["enabled"]:
+    cfg = load_config(event)
+    if not cfg["enabled"]:
         return None
+    if commits and pushes:
+        key = f"push|engine|chain|-|{_sha1(command_of(event))}"
+        if key not in state_keys(event):
+            state_add(event, [key])
+            return deny(
+                "[practices:push] This one Bash call both commits and pushes, so the push check "
+                "can't see what the commit adds. Run the commit and the push as separate Bash "
+                "calls. Resending this call unchanged passes this check, unscanned.")
+    reasons, keys = [], []
     try:
-        record_heads(event, commits)
+        if commits:
+            record_heads(event, commits)
+        if pushes:
+            skills = discover(event)
+            with Transcripts(event) as ts:
+                new = push_gate(event, pushes, skills, cfg, ts, context(event, cfg, ts))
+            if new:
+                reasons.append(push_reason(new))
+                keys += [f.key for f in new]
     except Budget as e:
-        log("budget-spent", f"after {BUDGET}s, in the L3s {e}; the commit went unrecorded")
+        log("budget-spent", f"after {BUDGET}s, in the Bash check's {e}; the call was allowed")
+        return None
     except GitError as e:
-        log("git-skipped", f"L3s: {e}")
-    return None
+        log("git-skipped", f"Bash check: {e}")
+        return None
+    if not reasons:
+        return None
+    state_add(event, keys)
+    return deny("\n\n".join(reasons))
+
+
+def deny(reason):
+    return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                   "permissionDecisionReason": reason}}
 
 
 # ---------------------------------------------------------------- SessionStart
