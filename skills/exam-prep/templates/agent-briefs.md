@@ -180,3 +180,104 @@ These are the Markdown forms the page's converter reads (06-site); use them exac
   tables, no `{#id}` anchors, and cross-references and Must-know pointers as text naming the
   section ("§{{M}}.K <its title>").}}
 ```
+
+## Review (stage 05)
+
+Role: `reviewer`: it reads and reports; the main session checks each finding, applies the fixes
+and runs every script, since delegated agents can't run scripts (L07). One per section file. The
+"Audit" variant below checks a condensation instead.
+
+```text
+# Brief: review §{{N}} {{TITLE}} of the notes against its sources
+
+## Purpose
+The notes are the student's source of truth, and a wrong fact or trace there costs exam points.
+This review finds what is wrong or missing in §{{N}} before the student reads it. You report; the
+main session checks each finding and applies the fixes.
+
+## End state
+- Done means: every finding, ranked blocker, major or minor, each with its line in
+  notes/{{FILE}}, what is wrong, and the evidence (the extract block, page image or checker
+  output that shows it).
+- Artifact path: report only.
+- Report: at most 700 words, then the JSON block (status, summary, artifacts, blocked_actions).
+
+## Scope
+- Work in: {{ROOT}}, read only.
+- Review {{ROOT}}/notes/{{FILE}} against its extract blocks ({{EXTRACT BLOCKS}} in
+  {{ROOT}}/_build/extract/), {{ROOT}}/_build/backbone.md (§{{N}} and the Conventions block) and
+  {{ROOT}}/_build/STYLE.md. {{CHECKER: Every worked example's numbers come from
+  {{ROOT}}/_build/verify/examples.out.md. | NO CHECKER: Nothing in this course is computable, so
+  there is no checker output: redo every step of each worked example from its cited sources, and
+  report each step that doesn't follow.}}{{DIAGRAMS: Also compare these diagram pages, which no
+  checker trace covers, with their extract blocks and page images
+  ({{ROOT}}/_build/pages/<doc>/p-NNN.png): {{PAGES}}.}}
+- Check in this order, and spend most of your effort on the first:
+  1. Accuracy: every claim matches its cited source; every number matches examples.out.md or the
+     source (with no checker, the source or your own working).
+  2. Coverage: every subsection the backbone lists for §{{N}}, and every extract block the
+     coverage matrix maps to it, except the official answers of the sets named below.
+  3. Direction and causation: which condition guarantees which result, which proof needs which
+     property; no ambiguous implication.
+  4. STYLE: the rest of STYLE.md.
+- Answers: the notes quote an answer only from a set MANIFEST.md marks `yes, attempted`. The
+  student hasn't attempted {{UNATTEMPTED SETS, or "any answer set"}}: their official answers sit
+  in the extracts for their conventions only. A quote from one in the notes is a blocker, and no
+  finding may propose adding one.
+- Out of scope: other sections' files, except to check a link's target. Never open anything under
+  {{ROOT}}/practice/, which holds answer keys, or a file MANIFEST.md marks `reserved`.
+```
+
+**Audit variant** (a condensation: Must-know checklists here, the cheat sheet in 07, the cram
+order in 08). Same role, shape and Answers line, a fresh agent that hasn't reviewed the sections.
+Replace the title, Purpose, the End state's "Done means", and the Scope's review, check-order and
+out-of-scope lines with:
+
+```text
+# Brief: audit {{CONDENSATION}} against the notes and their sources
+
+## Purpose
+A condensation is what the student reads when time runs out, so a wrong line there is read more
+often than any other. Every line must be true, carry its conditions, and point where it says.
+
+- Done means: every finding, ranked blocker, major or minor, each with its line in
+  {{CONDENSATION}}, what is wrong, and the evidence (the notes line or extract block that shows
+  it).
+- Audit every line of {{CONDENSATION}} ({{WHERE}}) against the notes section it summarizes and
+  that section's extract blocks. Report each line that is wrong, overstated, missing a condition,
+  or links somewhere that doesn't say it, and each point the section teaches as must-know that
+  the condensation leaves out.
+- Out of scope: open nothing under {{ROOT}}/practice/ but {{CONDENSATION}} itself when it lives
+  there (never a `*-key.md` file or the mock), and no file MANIFEST.md marks `reserved`.
+```
+
+## Cold solver (stage 08, from 05-verify "The mock")
+
+Role: `reviewer`: it solves on paper and reports. Its scope is a list of the files it may open,
+since the key's values also sit in the checker and the extracts.
+
+```text
+# Brief: solve the {{EXAM}} mock cold, without the key
+
+## Purpose
+A mock question with two defensible answers, an unstated convention or a wrong key teaches the
+wrong thing the night before the exam. Solving it the way the student will, without the key, is
+how those surface.
+
+## End state
+- Done means: an answer to every question part, with its working, and per part a note when it is
+  ambiguous (give both readings), depends on a convention the question doesn't state, or can't
+  be answered from the notes.
+- Artifact path: report only.
+- Report: the answers first, then the notes, at most 900 words, then the JSON block (status,
+  summary, artifacts, blocked_actions).
+
+## Scope
+- Work in: {{ROOT}}, read only, and open only these: the mock,
+  {{ROOT}}/practice/mock-{{EXAM_SLUG}}.md; the notes, {{ROOT}}/notes/*.md{{SHEET: ; and the
+  sheet the student may bring, {{ROOT}}/cheatsheet/{{SHEET FILE}}}}.
+- Solve the mock from those, as the student would.
+- Out of scope: every other file. Above all, nothing else under {{ROOT}}/practice/ (the key) or
+  {{ROOT}}/_build/ (the checker and the extracts hold official answers and the key's values),
+  nothing under {{ROOT}}/sources/, and no file MANIFEST.md marks `reserved`.
+```

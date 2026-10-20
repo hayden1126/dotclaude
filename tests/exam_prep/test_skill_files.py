@@ -22,7 +22,6 @@ EM_DASH = chr(0x2014)
 PENDING = {
     "templates/CHASSIS.md",
     "templates/CONVERT.md",
-    "workflows/05-verify.md",
     "workflows/06-site.md",
     "workflows/07-cheatsheet.md",
     "workflows/08-practice.md",
