@@ -412,6 +412,52 @@ VARIANTS["email confirm link to a page"] = ("email-change", {
     "app/settings/actions.ts": (CASES / "email-change/good/app/settings/actions.ts").read_text()
         .replace("/api/settings/email/confirm?token=", "/settings/email/confirm?token="),
 })
+# A six-digit code beside the user id, checked against the pending change.
+EMAIL_CODES = 'CREATE TABLE IF NOT EXISTS email_codes (user_id INTEGER PRIMARY KEY, new_email TEXT, code TEXT)'
+VARIANTS["email confirm link with a six-digit code"] = ("email-change", {
+    "app/settings/actions.ts": EMAIL_ACTION_HEAD + f"""\
+  const {{ randomInt }} = await import("node:crypto");
+  const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
+  getDb().exec("{EMAIL_CODES}");
+  getDb().prepare("INSERT OR REPLACE INTO email_codes VALUES (?, ?, ?)").run(user.id, email, code);
+  const link = `http://localhost:3000/api/settings/email/confirm?user=${{user.id}}&code=${{code}}`;
+  await sendMail({{ to: email, subject: "Confirm your new email", text: `Confirm: ${{link}}` }});
+  return {{ ok: true }};
+}}
+""",
+    "app/api/settings/email/confirm/route.ts": f"""\
+import {{ NextResponse, type NextRequest }} from "next/server";
+import {{ getDb }} from "@/lib/db";
+export async function GET(request: NextRequest) {{
+  const q = request.nextUrl.searchParams;
+  const db = getDb();
+  db.exec("{EMAIL_CODES}");
+  const userId = Number(q.get("user"));
+  const row = db.prepare("SELECT new_email FROM email_codes WHERE user_id = ? AND code = ?").get(userId, String(q.get("code"))) as
+    {{ new_email: string }} | undefined;
+  if (row) {{
+    db.prepare("UPDATE users SET email = ? WHERE id = ?").run(row.new_email, userId);
+    db.prepare("DELETE FROM email_codes WHERE user_id = ?").run(userId);
+  }}
+  return NextResponse.redirect(new URL("/settings", request.url));
+}}
+""",
+})
+# The token as a path segment: forged in place, the route still matches.
+VARIANTS["email confirm token in a path segment"] = ("email-change", {
+    "lib/email-change.ts": (CASES / "email-change/good/lib/email-change.ts").read_text(),
+    "app/settings/actions.ts": (CASES / "email-change/good/app/settings/actions.ts").read_text()
+        .replace("/api/settings/email/confirm?token=${token}", "/api/settings/email/confirm/${token}"),
+    "app/api/settings/email/confirm/[token]/route.ts": """\
+import { NextResponse, type NextRequest } from "next/server";
+import { confirmPendingChange } from "@/lib/email-change";
+export async function GET(request: NextRequest, { params }: { params: Promise<{ token: string }> }) {
+  const ok = confirmPendingChange((await params).token);
+  return NextResponse.redirect(new URL(ok ? "/settings?email=changed" : "/settings?email=invalid", request.url));
+}
+""",
+})
+assert "/api/settings/email/confirm/${token}" in VARIANTS["email confirm token in a path segment"][1]["app/settings/actions.ts"]
 assert "/settings/email/confirm?token=" in VARIANTS["email confirm link to a page"][1]["app/settings/actions.ts"]
 assert "/api/settings/email/confirm" not in VARIANTS["email confirm link to a page"][1]["app/settings/actions.ts"]
 VARIANTS["reset link from the request URL's origin (Next keeps it the server's own)"] = ("reset-host", {
@@ -455,6 +501,42 @@ import { getDb } from "@/lib/db";
 export async function GET(request: NextRequest) {
   const { u, e } = JSON.parse(Buffer.from(request.nextUrl.searchParams.get("token") ?? "", "base64url").toString());
   getDb().prepare("UPDATE users SET email = ? WHERE id = ?").run(e, u);
+  return NextResponse.redirect(new URL("/settings", request.url));
+}
+""",
+    }),
+    "email confirm token that is URL-encoded base64 of {userId, email}": ("email-change", {
+        "app/settings/actions.ts": EMAIL_ACTION_HEAD + """\
+  const token = Buffer.from(JSON.stringify({ userId: user.id, email })).toString("base64");
+  const link = `http://localhost:3000/api/settings/email/confirm?token=${encodeURIComponent(token)}`;
+  await sendMail({ to: email, subject: "Confirm your new email", text: `Confirm: ${link}` });
+  return { ok: true };
+}
+""",
+        "app/api/settings/email/confirm/route.ts": """\
+import { NextResponse, type NextRequest } from "next/server";
+import { getDb } from "@/lib/db";
+export async function GET(request: NextRequest) {
+  const raw = request.nextUrl.searchParams.get("token") ?? "";
+  const { userId, email } = JSON.parse(Buffer.from(raw, "base64").toString());
+  getDb().prepare("UPDATE users SET email = ? WHERE id = ?").run(email, userId);
+  return NextResponse.redirect(new URL("/settings", request.url));
+}
+""",
+    }),
+    "email confirm link of the user id and address as path segments": ("email-change", {
+        "app/settings/actions.ts": EMAIL_ACTION_HEAD + """\
+  const link = `http://localhost:3000/api/settings/email/confirm/${user.id}/${encodeURIComponent(email)}`;
+  await sendMail({ to: email, subject: "Confirm your new email", text: `Confirm: ${link}` });
+  return { ok: true };
+}
+""",
+        "app/api/settings/email/confirm/[user]/[email]/route.ts": """\
+import { NextResponse, type NextRequest } from "next/server";
+import { getDb } from "@/lib/db";
+export async function GET(request: NextRequest, { params }: { params: Promise<{ user: string; email: string }> }) {
+  const { user, email } = await params;
+  getDb().prepare("UPDATE users SET email = ? WHERE id = ?").run(email, Number(user));
   return NextResponse.redirect(new URL("/settings", request.url));
 }
 """,

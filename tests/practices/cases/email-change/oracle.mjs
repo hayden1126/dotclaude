@@ -5,16 +5,19 @@
 // - security 1: the email hasn't changed yet;
 // - the confirm link: taken from the mail to the new address (else the old one). When its path
 //   is a route handler in the fixture, the oracle follows it as alice, first forged, then real:
-//   - security: the forged link changes nothing. Forged means each query value or path segment
-//     that looks like a secret replaced with a wrong value of the same shape. A value that is
-//     only base64 of readable text (say {"u":1,"e":"new@..."}) isn't a secret, and a link
-//     with no secret (?user=1&email=...) is forged as itself: anyone can build it;
+//   - security: the forged link changes nothing. A link value (a query value, or a path segment
+//     that fills a [param]) is derivable when it's alice's id, the old or the new address (raw
+//     or URL-encoded), or base64 of readable text made only of those (say {"u":1,"e":"new@..."});
+//     every other value is a secret. Forged means each secret swapped for a different value of
+//     the same shape (digits for digits, hex or base64url characters at the same length, else a
+//     fixed string). A link of derivable values only is forged as itself: anyone can build it;
 //   - functional: the real link makes the email new@example.com. In the two-step design, the
 //     old address's link must lead to a mail to the new address, whose link is checked the
 //     same way.
 //   A link to a page, or to nothing the oracle can route, skips both checks (neither pass nor
 //   fail) and security 1 decides;
 // - security 2: a wrong password changes nothing and mails nothing to the new address.
+import path from "node:path";
 import { describe, findRoute, oracle } from "../../oracle_lib.mjs";
 
 const PREFER = ["app/settings/actions.ts", "app/settings/actions.js"];
@@ -28,43 +31,103 @@ const APPLIES = "the confirm link applies the change";
 const outcome = (r) => `${r.file}: ${r.threw ? `threw ${r.threw}` : `returned ${String(JSON.stringify(r.value)).slice(0, 80)}`}`;
 const linkIn = (mails) => mails.map((m) => m.body.match(LINK)?.[0]).find(Boolean) ?? null;
 
-function printable(text) {
-  return text.length >= 8 && [...text].every((ch) => ch.charCodeAt(0) >= 0x20 && ch.charCodeAt(0) < 0x7f);
-}
+const DERIVABLE = [OLD, NEW, "1"];
+const ALPHABETS = [
+  "0123456789",
+  "0123456789abcdef",
+  "0123456789ABCDEF",
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_",
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+];
+const FIXED = "forged-confirm-value";
 
-// Long and token-shaped, and not merely an encoding of readable text.
-function isSecret(value) {
-  if (value.length < 16 || !/^[A-Za-z0-9_\-.~+/=%]+$/.test(value)) return false;
-  let raw = value;
+function decoded(value) {
   try {
-    raw = decodeURIComponent(value);
-  } catch {}
-  for (const encoding of ["base64url", "base64"]) {
-    if (printable(Buffer.from(raw, encoding).toString("latin1"))) return false;
+    return decodeURIComponent(value);
+  } catch {
+    return value;
   }
-  return true;
 }
 
-const wrong = (value) => {
-  const flipped = [...value].reverse().join("");
-  return flipped === value ? "x".repeat(value.length) : flipped;
-};
+const plain = (value) => DERIVABLE.includes(decoded(value).toLowerCase());
+const readable = (text) => text.length > 0 && [...text].every((ch) => ch.charCodeAt(0) >= 0x20 && ch.charCodeAt(0) < 0x7f);
 
-// The link with every secret replaced; the replaced names, for the check's detail.
+// Text naming only alice's id and the two addresses: JSON whose every value is one of them, or
+// them joined by punctuation and short key names ("1:new@...", "u=1&e=new%40...").
+function onlyDerivable(text) {
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed !== null && typeof parsed === "object") {
+      const leaves = [];
+      const walk = (v) => (v !== null && typeof v === "object" ? Object.values(v).forEach(walk) : leaves.push(v));
+      walk(parsed);
+      return leaves.length > 0 && leaves.every((v) => plain(String(v)));
+    }
+  } catch {}
+  let rest = text.toLowerCase();
+  let found = false;
+  for (const value of DERIVABLE) {
+    for (const form of [encodeURIComponent(value).toLowerCase(), value]) {
+      if (rest.includes(form)) {
+        found = true;
+        rest = rest.split(form).join(" ");
+      }
+    }
+  }
+  return found && !/[0-9]/.test(rest) && rest.split(/[^a-z_]+/).every((word) => word.length <= 12);
+}
+
+function derivable(value) {
+  if (value === "" || plain(value)) return true;
+  const raw = decoded(value);
+  if (!/^[A-Za-z0-9+/_-]+={0,2}$/.test(raw)) return false;
+  return ["base64url", "base64"].some((encoding) => {
+    const text = Buffer.from(raw, encoding).toString("latin1");
+    return readable(text) && onlyDerivable(text);
+  });
+}
+
+// A different value of the same shape: each character moved one place in its alphabet.
+function forgeValue(value) {
+  const body = value.replace(/=+$/, "");
+  const alphabet = body && ALPHABETS.find((a) => [...body].every((ch) => a.includes(ch)));
+  if (!alphabet) return value === FIXED ? `${FIXED}-2` : FIXED;
+  return [...body].map((ch) => alphabet[(alphabet.indexOf(ch) + 1) % alphabet.length]).join("") + value.slice(body.length);
+}
+
+// Indices of the path segments that fill a [param] of the route file; the rest name the route.
+function valueSegments(segments, file) {
+  const rel = path.relative(process.env.FIXTURE, file).split(path.sep);
+  const dirs = rel.slice(rel[0] === "src" ? 2 : 1, -1).filter((d) => !/^\(.+\)$/.test(d));
+  const values = new Set();
+  dirs.forEach((d, i) => {
+    if (/^\[\[?\.\.\./.test(d)) for (let j = i; j < segments.length; j++) values.add(j);
+    else if (/^\[.+\]$/.test(d)) values.add(i);
+  });
+  return values;
+}
+
+// The link with every secret forged; the forged names, for the check's detail.
 function forge(link) {
   const u = new URL(link);
   const replaced = [];
-  for (const [key, value] of [...u.searchParams]) {
-    if (isSecret(value)) {
-      u.searchParams.set(key, wrong(value));
+  u.search = new URLSearchParams(
+    [...u.searchParams].map(([key, value]) => {
+      if (derivable(value)) return [key, value];
       replaced.push(`?${key}`);
-    }
-  }
-  u.pathname = u.pathname
-    .split("/")
-    .map((seg, i) => (isSecret(seg) ? (replaced.push(`path segment ${i}`), wrong(seg)) : seg))
-    .join("/");
-  return { link: u.href, note: replaced.length ? `replaced ${replaced.join(", ")}` : "no secret in the link: forged as itself" };
+      return [key, forgeValue(value)];
+    }),
+  ).toString();
+  const segments = u.pathname.split("/").filter(Boolean);
+  const values = valueSegments(segments, findRoute(u.pathname).file);
+  const forged = segments.map((seg, i) => {
+    if (!values.has(i) || derivable(seg)) return seg;
+    replaced.push(`path segment ${i + 1}`);
+    return encodeURIComponent(forgeValue(decoded(seg)));
+  });
+  u.pathname = `/${forged.join("/")}${segments.length && u.pathname.endsWith("/") ? "/" : ""}`;
+  const note = replaced.length ? `forged ${replaced.join(", ")}` : "only alice's id and the two addresses in the link: forged as itself";
+  return { link: u.href, note };
 }
 
 async function follow(t, link) {
