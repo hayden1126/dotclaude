@@ -134,7 +134,10 @@ fi
 
 # The new ~/.tmux.conf lands with one rename too, so a tmux server starting mid-run never reads a
 # missing or half-written file. A symlinked ~/.tmux.conf is written through: the temp goes beside
-# the real file and replaces it, and the link stays.
+# the real file and replaces it, and the link stays. The rename needs the real file's directory
+# writable and makes a new inode, so the mode carries over but hard links, the owner, ACLs and
+# xattrs don't; a link to a writable file in a read-only directory, which the old in-place write
+# handled, now fails the run (set -e).
 python3 -I - "$HOME/.tmux.conf" "$REPO_DIR" "$base" "$TS" <<'PY'
 import os, re, stat, sys, tempfile
 path, repo, base, ts = sys.argv[1], sys.argv[2], sys.argv[3] == "1", sys.argv[4]
