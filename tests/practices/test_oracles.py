@@ -7,17 +7,25 @@ For every case in cases/: the known-good overlay scores `pass`, the known-bad ov
 
   python3 -m unittest discover -s tests/practices -t tests/practices -v
 
+The overlays here are trusted, so they're graded through run.grade without bwrap (it can't
+start nested inside Claude Code's sandbox), with the same env allowlist as a live run. The
+containment test checks the bwrap wrapper itself, and skips where bwrap can't start.
+
 Skips when node (or npm, for the npm test) is absent. Fixtures go to TMPDIR.
 """
 import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import run  # noqa: E402
+
 FIXTURE = HERE / "fixture"
 STUB = HERE / "next_stub"
 CASES = HERE / "cases"
@@ -33,15 +41,7 @@ def build(dest):
 
 
 def run_oracle(fixture, case, workdir):
-    env = dict(os.environ, FIXTURE=str(fixture), DB_PATH=str(workdir / "oracle.db"), LLM_FAKE="1")
-    p = subprocess.run(
-        [NODE, "--import", LOADER.as_uri(), str(CASES / case / "oracle.mjs")],
-        cwd=fixture, env=env, capture_output=True, text=True, timeout=60,
-    )
-    for line in reversed(p.stdout.splitlines()):
-        if line.startswith('{"verdict"'):
-            return json.loads(line)
-    return {"verdict": None, "stdout": p.stdout[-2000:], "stderr": p.stderr[-2000:]}
+    return run.grade(fixture, case, Path(workdir) / "grade", contain=False)
 
 
 def case_names():
@@ -66,6 +66,8 @@ class OracleVerdicts(unittest.TestCase):
             with self.subTest(variant=variant):
                 out = self.verdict(case, variant)
                 self.assertEqual(out["verdict"], want, json.dumps(out, indent=1))
+                if variant == "empty":  # broken for the right reason, not a crashed oracle
+                    self.assertIn("missing", [c["name"] for c in out["checks"]], json.dumps(out, indent=1))
 
     def test_every_case_has_its_files(self):
         self.assertEqual(
@@ -278,6 +280,70 @@ class RunHarness(unittest.TestCase):
         self.assertFalse(bar("idor", "C", c(5, 0, 0), 5)[1])
         self.assertTrue(bar("benign", "D", c(4, 0, 1), 5)[1])
         self.assertFalse(bar("idor", "B", c(0, 5, 0), 5)[1])
+
+
+CONTAINMENT_PROBE = """\
+import { readFileSync, writeFileSync } from "node:fs";
+const [work] = process.argv.slice(2);
+const home = process.env.HOME;
+const tryIt = (fn) => { try { fn(); return true; } catch { return false; } };
+const out = {
+  wroteWork: tryIt(() => writeFileSync(`${work}/ok.txt`, "x")),
+  wroteHome: tryIt(() => writeFileSync(`${home}/planted-by-probe.txt`, "x")),
+  readSecret: tryIt(() => readFileSync(`${home}/secret.txt`, "utf8")),
+  env: Object.keys(process.env).sort(),
+};
+try {
+  await fetch("http://example.com/", { signal: AbortSignal.timeout(5000) });
+  out.network = true;
+} catch {
+  out.network = false;
+}
+console.log(JSON.stringify(out));
+"""
+
+
+class Containment(unittest.TestCase):
+    def test_grade_env_is_an_allowlist(self):
+        with tempfile.TemporaryDirectory(prefix="practices-env-") as tmp:
+            env = run.grade_env("/fx", tmp)
+        self.assertEqual(sorted(env), ["DB_PATH", "FIXTURE", "HOME", "LANG", "LLM_API_KEY", "PATH", "TMPDIR"])
+        self.assertTrue(env["DB_PATH"].startswith(tmp) and env["TMPDIR"].startswith(tmp))
+        self.assertEqual(env["LLM_API_KEY"], run.DUMMY_LLM_KEY)
+
+    def test_refuses_without_bwrap_unless_unsafe(self):
+        real = run.bwrap_usable
+        run.bwrap_usable = lambda: False
+        try:
+            with self.assertRaises(SystemExit) as cm:
+                run.grading_contained(unsafe=False)
+            self.assertIn("--unsafe-grade", str(cm.exception.code))
+            self.assertFalse(run.grading_contained(unsafe=True))
+        finally:
+            run.bwrap_usable = real
+
+    @unittest.skipUnless(NODE and run.bwrap_usable(), "bwrap can't start here (nested in Claude Code's sandbox)")
+    def test_probe_cannot_touch_home_or_network(self):
+        with tempfile.TemporaryDirectory(prefix="practices-contain-") as tmp:
+            tmp = Path(tmp)
+            home, work = tmp / "home", tmp / "work"
+            home.mkdir()
+            work.mkdir()
+            (home / "secret.txt").write_text("not for the oracle")
+            probe = work / "probe.mjs"
+            probe.write_text(CONTAINMENT_PROBE)
+            env = run.grade_env(work, work)
+            env["HOME"] = str(home)
+            cmd = run.contained([NODE, str(probe), str(work)], home=home, writable=[work], cwd=work)
+            p = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=60)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            out = json.loads(p.stdout.strip().splitlines()[-1])
+            self.assertTrue(out["wroteWork"], "the writable bind must work, or the test proves nothing")
+            self.assertFalse(out["wroteHome"])
+            self.assertFalse((home / "planted-by-probe.txt").exists())
+            self.assertFalse(out["readSecret"])
+            self.assertFalse(out["network"])
+            self.assertEqual(out["env"], sorted(env))
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 
   python3 tests/practices/run.py --arms A [--cases idor,mass-assign] [-n 5] [-j 2]
                                  [--model claude-opus-5-5] [--out DIR] [--keep] [--dry-run]
+                                 [--unsafe-grade]
 
 Manual only, never in the suite: it makes model calls, and runs sandbox-off (the sandbox
 hides the credential). `--dry-run` makes none: it builds one fixture per case and arm, runs
@@ -34,8 +35,13 @@ Per run:
     user-tier skill, plugin, agent and CLAUDE.md; --strict-mcp-config drops the claude.ai
     connectors that load in some runs and not others (spike.md section 1).
   - Grade: only after the process exits (a background agent may still be writing), run the
-    oracle with FIXTURE, a fresh DB_PATH and LLM_FAKE=1, 60 s timeout, under the pristine
-    checkout's loader (fixture/scripts/register.mjs here), never the copy the agent could edit.
+    oracle under the pristine checkout's loader (fixture/scripts/register.mjs here), never the
+    copy the agent could edit, with a 60 s timeout. The oracle runs agent-written code, so it
+    runs under bwrap: the filesystem read-only, $HOME an empty read-only tmpfs (no credential
+    file visible), this checkout's tests/practices bound back read-only, the fixture and the
+    run dir writable, no network, its own pid namespace. Its env is an allowlist: PATH, HOME,
+    LANG, FIXTURE, DB_PATH and TMPDIR (both inside the run dir) and a dummy LLM_API_KEY.
+    Without a usable bwrap, run.py refuses to start unless --unsafe-grade is passed.
   - Record: one line per run in <out>/results.jsonl (verdict, checks, triggered, turns,
     duration, cost, init memory_paths and skills, hook denials, and the paths of the saved
     stream, oracle output and diff under <out>/<case>-<arm>-<i>/). `triggered` is any Skill
@@ -238,16 +244,83 @@ def stream_summary(events):
 
 # ---------------------------------------------------------------- grading
 
-def grade(fixture, case, run_dir):
-    """Runs the case's oracle against the fixture. Returns its verdict dict; a missing
-    verdict line or a timeout scores broken."""
+BWRAP = shutil.which("bwrap")
+BWRAP_BASE = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
+              "--unshare-net", "--unshare-pid", "--die-with-parent", "--new-session"]
+DUMMY_LLM_KEY = "sk-test-0000000000000000"  # agent code may refuse to run without a key
+
+
+def bwrap_usable():
+    """Whether bwrap can start here. It can't nested inside Claude Code's own sandbox."""
+    if not BWRAP:
+        return False
+    try:
+        p = subprocess.run([BWRAP, *BWRAP_BASE, "true"], capture_output=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return p.returncode == 0
+
+
+def contained(cmd, home, writable, readable=(), cwd=None):
+    """`cmd` under bwrap: the filesystem read-only, `home` an empty read-only tmpfs (so no
+    credential file under it is visible or writable), `readable` bound back read-only and
+    `writable` read-write, no network, its own pid namespace. Order matters: a later bind
+    overlays an earlier one, and the home remount comes after the binds that need mount points
+    in it."""
+    args = [BWRAP, *BWRAP_BASE, "--tmpfs", str(home)]
+    node = os.path.realpath(shutil.which("node") or "/usr/bin/node")
+    if node.startswith(str(home).rstrip("/") + "/"):  # e.g. an nvm install under $HOME
+        prefix = os.path.dirname(os.path.dirname(node))
+        args += ["--ro-bind", prefix, prefix]
+    for p in readable:
+        args += ["--ro-bind", str(p), str(p)]
+    for p in writable:
+        args += ["--bind", str(p), str(p)]
+    args += ["--remount-ro", str(home)]
+    if cwd:
+        args += ["--chdir", str(cwd)]
+    return [*args, "--", *cmd]
+
+
+def grade_env(fixture, run_dir):
+    """The oracle's whole environment: an allowlist, nothing inherited beyond it."""
+    tmp = Path(run_dir) / "tmp"
+    tmp.mkdir(parents=True, exist_ok=True)
+    return {
+        "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+        "HOME": os.environ.get("HOME", "/nonexistent"),
+        "LANG": os.environ.get("LANG", "C.UTF-8"),
+        "FIXTURE": str(fixture),
+        "DB_PATH": str(Path(run_dir) / "oracle.db"),
+        "TMPDIR": str(tmp),
+        "LLM_API_KEY": DUMMY_LLM_KEY,
+    }
+
+
+def grading_contained(unsafe):
+    """True to grade under bwrap; False only with --unsafe-grade. Exits when neither works."""
+    if bwrap_usable():
+        return True
+    if unsafe:
+        print("run.py: WARNING: bwrap is unavailable; grading runs agent code uncontained (--unsafe-grade)")
+        return False
+    sys.exit("run.py: grading runs agent-written code, so it needs bwrap (bubblewrap) to contain it, "
+             "and bwrap can't start here (not installed, or nested inside another sandbox). "
+             "Run sandbox-off with bwrap installed, or pass --unsafe-grade to grade uncontained.")
+
+
+def grade(fixture, case, run_dir, contain=True):
+    """Runs the case's oracle against the fixture, under bwrap unless `contain` is False.
+    Returns its verdict dict; a missing verdict line or a timeout scores broken."""
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
     db = run_dir / "oracle.db"
     if db.exists():
         db.unlink()
-    env = dict(os.environ, FIXTURE=str(fixture), DB_PATH=str(db), LLM_FAKE="1")
+    env = grade_env(fixture, run_dir)
     cmd = ["node", "--import", LOADER.as_uri(), str(CASES_DIR / case / "oracle.mjs")]
+    if contain:
+        cmd = contained(cmd, home=env["HOME"], writable=[fixture, run_dir], readable=[HERE], cwd=fixture)
     try:
         p = subprocess.run(cmd, cwd=fixture, env=env, capture_output=True, text=True, timeout=ORACLE_TIMEOUT)
         stdout, stderr = p.stdout, p.stderr
@@ -294,7 +367,7 @@ def run_one(case, arm, index, args, out):
         if timed_out:
             break
 
-    verdict = grade(fixture, case, run_dir)
+    verdict = grade(fixture, case, run_dir, contain=args.contain)
     diff = run_dir / "diff.patch"
     diff.write_text(agent_diff(fixture))
     per_turn = [stream_summary(read_stream(s)) for s in streams]
@@ -372,7 +445,9 @@ def dry_run(cases, arms, args):
                 print(f"  ({label}) cd {shlex.quote(str(fixture))} && {shlex.join(cmd)} {stdin}")
             if not args.keep:
                 shutil.rmtree(fixture, ignore_errors=True)
-    print(f"\ndry run: {len(cases) * len(arms) - len(failed)}/{len(cases) * len(arms)} fixtures built "
+    print("\ngrading sandbox: " + ("bwrap works here" if bwrap_usable() else
+          "bwrap can't start here; a live run needs it (sandbox-off) or --unsafe-grade"))
+    print(f"dry run: {len(cases) * len(arms) - len(failed)}/{len(cases) * len(arms)} fixtures built "
           "with npm test green; no model calls made")
     return 1 if failed else 0
 
@@ -387,6 +462,8 @@ def main():
     ap.add_argument("--out", help="results dir (default: a new practices-out-* temp dir)")
     ap.add_argument("--keep", action="store_true", help="keep each run's fixture")
     ap.add_argument("--dry-run", action="store_true", help="build fixtures, run npm test, print commands")
+    ap.add_argument("--unsafe-grade", action="store_true",
+                    help="grade without bwrap when it can't start (runs agent code uncontained)")
     a = ap.parse_args()
 
     arms = [x.strip().upper() for x in a.arms.split(",") if x.strip()]
@@ -397,6 +474,7 @@ def main():
     check_prereqs(arms)
     if a.dry_run:
         return dry_run(cases, arms, a)
+    a.contain = grading_contained(a.unsafe_grade)
     if not shutil.which("claude"):
         sys.exit("run.py: claude is not on PATH")
 
