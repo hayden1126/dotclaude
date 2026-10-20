@@ -167,9 +167,14 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     summary-retire; at its merge the lead updates memory `dotclaude-session-summary-statusline`.
   - **A device-wide toggle for the toast and the sound** (Hayden, 2026-10-20): one switch that
     mutes the Windows toast and the notify ring for every session on the machine (no toggle
-    exists today). Design and four forks, each with the lead's pick, in `PLAN.md` ("Next: a
-    device-wide mute"); Hayden picks, then it opens as a lane when a slot frees (`hooks/`,
+    exists today). Design settled 2026-10-20 (Hayden picked the lead's pick on all four forks:
+    `PLAN.md`, "Next: a device-wide mute"); it opens as a lane when a slot frees (`hooks/`,
     `tmux/`, tests; no live lane's files).
+  - **`tests/setup/test_paste_inbox.py`'s WSL-interop skip misses in the sandbox** (from lane
+    summary-retire, 2026-10-20; checked by the lead): its six skip sites match only
+    `UtilConnectUnix`, but sandboxed interop now fails with `UtilBindVsockAnyPort:307: socket
+    failed 1`, so 9 Laptop and LaptopPowerShell cases fail instead of skipping in every
+    sandboxed `tests/setup` run and `lane trial`. Fix: match both markers.
   - **Watch: `~/.claude/CLAUDE.md` vanished after a lane install** (2026-10-20 00:53Z). Lane
     config-dir's `setup.sh` (00:52:28 to 00:52:38, sandbox off) linked it, then it was gone by
     00:53:02, with no backup (a symlink is removed, not backed up). Hayden relinked it by hand

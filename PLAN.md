@@ -1022,6 +1022,10 @@ Hayden asked (2026-10-20) for one switch that mutes the Windows toast and the no
 every session on the machine. No toggle exists today. It waits for a free lane slot; this section
 settles its design first.
 
+**Picked (Hayden, 2026-10-20), the lead's pick on all four forks:** a flag file in the state dir;
+two switches, sound and toast; a mark in the tab bar plus a 1-hour option; the tmux menu plus a
+`claude-mute` CLI.
+
 What fires today:
 - `hooks/notify.sh`, on a Notification (`permission_prompt|elicitation_dialog`): `play_ring` when
   a person sees the session (line 22), then the toast through `notify-toast.ps1` (line 50).
