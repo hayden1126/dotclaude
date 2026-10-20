@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 import re
+import resource
 import subprocess
 import sys
 import tempfile
@@ -337,8 +338,9 @@ class IgnoreBlock(unittest.TestCase):
 
 class CcstatuslineSettings(unittest.TestCase):
     """setup.sh's inline python that installs ~/.config/ccstatusline/settings.json: an existing
-    file that doesn't parse or lacks the ctx widget is backed up before the baseline replaces
-    it."""
+    file that doesn't parse, has a malformed lines list or lacks the ctx widget is backed up
+    before the baseline replaces it, a destination that isn't a regular file is left alone, and
+    the retired session-summary rows leave an existing file."""
 
     MARK = "\"$CC_CFG_DIR/settings.json\" <<'PY'\n"
 
@@ -349,24 +351,70 @@ class CcstatuslineSettings(unittest.TestCase):
         os.makedirs(os.path.join(tmp.name, "ccstatusline"))
         return os.path.join(tmp.name, "ccstatusline", "settings.json")
 
-    def install(self, dst):
+    def run_install(self, dst, preexec_fn=None):
         with open(os.path.join(REPO, "setup.sh")) as f:
             src = f.read()
         self.assertIn(self.MARK, src)
         src = src.split(self.MARK, 1)[1].split("\nPY\n", 1)[0]
         baseline = os.path.join(REPO, "statusline", "ccstatusline-settings.json")
         p = subprocess.run([sys.executable, "-I", "-", baseline, dst], input=src,
-                           capture_output=True, text=True, timeout=30)
+                           capture_output=True, text=True, timeout=30, preexec_fn=preexec_fn)
         self.assertEqual(p.returncode, 0, p.stderr)
+        return p
+
+    @staticmethod
+    def scripts(lines):
+        """The basename of every *.py token in lines' commandPaths."""
+        return {os.path.basename(t.strip('"')) for line in lines for w in line
+                for t in (w.get("commandPath") or "").split() if t.strip('"').endswith(".py")}
+
+    def install(self, dst):
+        p = self.run_install(dst)
         with open(dst) as f:
             lines = json.load(f)["lines"]
-        self.assertTrue(any(w.get("type") == "custom-command"
-                            and "ctx-breakdown" in (w.get("commandPath") or "")
-                            for line in lines for w in line), lines)
+        self.assertIn("ctx-breakdown.py", self.scripts(lines), lines)
+        self.assertNotIn("session-summary.py", self.scripts(lines), lines)
         return p
 
     def backups(self, dst):
         return glob.glob(dst + ".pre-dotclaude-*")
+
+    def installed(self, lines):
+        """lines, as an earlier install left them, after this install: the lines it writes."""
+        dst = self.fresh()
+        with open(dst, "w") as f:
+            json.dump({"version": 3, "lines": lines}, f)
+        self.install(dst)
+        with open(dst) as f:
+            return json.load(f)["lines"]
+
+    LINE_1 = [{"id": "1", "type": "model"},
+              {"id": "3", "type": "custom-command", "commandPath": "python ctx-breakdown.py"},
+              {"id": "30", "type": "custom-text", "customText": "mine"}]
+
+    @staticmethod
+    def summary_widget(row):
+        return {"id": str(19 + row), "type": "custom-command",
+                "commandPath": f'"/usr/bin/python3" "/c/session-summary.py" --row {row}'}
+
+    def test_an_install_with_the_summary_rows_loses_them(self):
+        lines = self.installed([self.LINE_1, [self.summary_widget(1)], [self.summary_widget(2)]])
+        self.assertEqual(len(lines), 1, lines)
+        self.assertEqual([(w["id"], w["type"]) for w in lines[0]],
+                         [(w["id"], w["type"]) for w in self.LINE_1])
+        self.assertEqual(lines[0][2]["customText"], "mine")
+
+    def test_a_line_shared_with_a_summary_widget_keeps_the_rest(self):
+        own = {"id": "40", "type": "custom-text", "customText": "keep"}
+        # Named like the retired script, but not that script: the user's own widgets.
+        tool = {"id": "41", "type": "custom-command",
+                "commandPath": "/home/u/session-summary-tools/x.sh"}
+        mine = {"id": "42", "type": "custom-command", "commandPath": "python my-session-summary.py"}
+        lines = self.installed([self.LINE_1, [self.summary_widget(1), own],
+                                [self.summary_widget(2)], [], [tool, mine]])
+        self.assertEqual(lines[1:3], [[own], []])
+        self.assertEqual([w["id"] for w in lines[3]], ["41", "42"])
+        self.assertTrue(lines[3][1]["commandPath"].endswith('/my-session-summary.py"'), lines[3])
 
     def test_a_file_that_does_not_parse_is_backed_up(self):
         # "[" * 100000: RecursionError in json, not ValueError.
@@ -381,6 +429,113 @@ class CcstatuslineSettings(unittest.TestCase):
                 with open(kept[0]) as f:
                     self.assertEqual(f.read(), junk)
                 self.assertIn("isn't a readable JSON object; backed up to", p.stdout)
+
+    def test_a_malformed_lines_list_is_backed_up(self):
+        # Each crashed the helpers, which read lines as a list of lists of dicts; the last two
+        # hold the ctx widget, so its check alone doesn't catch them.
+        ctx = self.LINE_1[1]
+        for lines in ({"a": 1}, "x", [{"not": "a list"}], [["a widget"]],
+                      [[{"type": "custom-command", "commandPath": 5}]], [[ctx, "junk"]],
+                      [[ctx, None]],
+                      [[ctx], [{"type": "custom-command", "commandPath": ["x.py"]}]]):
+            with self.subTest(lines=lines):
+                dst = self.fresh()
+                with open(dst, "w") as f:
+                    json.dump({"lines": lines}, f)
+                p = self.install(dst)
+                self.assertEqual(len(self.backups(dst)), 1)
+                self.assertIn("has a malformed lines list; backed up to", p.stdout)
+
+    def test_a_file_too_deep_to_write_back_is_backed_up(self):
+        # json reads 2000 levels but can't write them back: the write would crash after
+        # truncating the file.
+        dst = self.fresh()
+        text = json.dumps({"lines": [self.LINE_1]})[:-1] + ', "x": ' + "[" * 2000 + "]" * 2000 + "}"
+        with open(dst, "w") as f:
+            f.write(text)
+        p = self.install(dst)
+        kept = self.backups(dst)
+        self.assertEqual(len(kept), 1, kept)
+        with open(kept[0]) as f:
+            self.assertEqual(f.read(), text)
+        self.assertIn("nests too deep to write back; backed up to", p.stdout)
+
+    def test_a_destination_that_is_not_a_regular_file_is_left_alone(self):
+        # A directory crashed the backup copy, a FIFO would hang the read, and a dangling or
+        # looping link crashed the write (or sent it wherever the link points).
+        def link(target):
+            return lambda dst: os.symlink(target(dst), dst)
+        makers = {"dir": os.makedirs, "fifo": os.mkfifo,
+                  "link to a dir": link(os.path.dirname),
+                  "dangling link": link(lambda dst: dst + ".gone/settings.json"),
+                  "link loop": link(lambda dst: dst)}
+        for name, make in makers.items():
+            with self.subTest(make=name):
+                dst = self.fresh()
+                make(dst)
+                before = os.lstat(dst)
+                p = self.run_install(dst)
+                after = os.lstat(dst)
+                self.assertEqual((after.st_mode, after.st_ino), (before.st_mode, before.st_ino))
+                self.assertFalse(os.path.lexists(dst + ".gone"))
+                self.assertEqual(self.backups(dst), [])
+                self.assertIn("isn't a regular file; ccstatusline settings not installed",
+                              p.stdout)
+
+    def test_a_link_to_a_file_stays_a_link(self):
+        # A dotfiles manager's link: the file it points at gets the new layout. A leftover
+        # read-only copy from a killed run doesn't stop the write.
+        dst = self.fresh()
+        target = os.path.join(os.path.dirname(dst), "managed.json")
+        with open(target, "w") as f:
+            json.dump({"lines": [self.LINE_1]}, f)
+        os.symlink(target, dst)
+        leftover = target + ".dotclaude-new"
+        with open(leftover, "w") as f:
+            f.write("{}")
+        os.chmod(leftover, 0o444)
+        p = self.install(dst)
+        self.assertNotIn("!!", p.stdout)
+        self.assertEqual(os.readlink(dst), target)
+        with open(target) as f:
+            ctx = json.load(f)["lines"][0][1]["commandPath"]
+        self.assertTrue(ctx.startswith(f'"{sys.executable}" '), ctx)   # patched: written
+        self.assertFalse(os.path.lexists(leftover))
+
+    def test_a_failed_write_leaves_the_old_file_whole(self):
+        # A write cut short (disk full, quota, EFBIG) after the open had truncated the file lost
+        # the user's layout, with no backup. RLIMIT_FSIZE makes the write fail: Python ignores
+        # SIGXFSZ, so it raises EFBIG.
+        dst = self.fresh()
+        text = json.dumps({"lines": [self.LINE_1]}, indent=2)
+        with open(dst, "w") as f:
+            f.write(text)
+        limit = len(text) + 20   # the read fits; the patched paths make the write longer
+        p = self.run_install(
+            dst, preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit)))
+        with open(dst) as f:
+            self.assertEqual(f.read(), text)
+        self.assertEqual(os.listdir(os.path.dirname(dst)), ["settings.json"])
+        self.assertIn("couldn't be written (File too large); ccstatusline settings not installed",
+                      p.stdout)
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads and writes past file modes")
+    def test_a_file_it_cannot_back_up_or_write_is_left_alone(self):
+        for mode, why in ((0o000, "couldn't be backed up"), (0o444, "couldn't be written")):
+            with self.subTest(mode=oct(mode)):
+                dst = self.fresh()
+                text = json.dumps({"lines": [self.LINE_1]})
+                with open(dst, "w") as f:
+                    f.write(text)
+                os.chmod(dst, mode)
+                self.addCleanup(os.chmod, dst, 0o644)
+                p = self.run_install(dst)
+                os.chmod(dst, 0o644)
+                with open(dst) as f:
+                    self.assertEqual(f.read(), text)
+                self.assertEqual(self.backups(dst), [])
+                self.assertIn(f"{why} (Permission denied); ccstatusline settings not installed",
+                              p.stdout)
 
     def test_a_missing_file_gets_the_baseline_and_no_backup(self):
         dst = self.fresh()
