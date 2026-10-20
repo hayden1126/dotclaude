@@ -251,6 +251,22 @@ Why it works this way:
 - **The backlog line moved to the lead.** The lead owns the project STATUS, so the one line at
   merge is a step of its chain, not the lane's.
 
+### How to ask (the ask check)
+
+Lane json-depth's asks (2026-10-19) repeated an agent's claims unchecked, named lane chrome-ttl's
+file without the lane, grew past the brief and named functions Hayden had never seen. A checklist
+the lead sent at the moment of the ask fixed the next rounds; the memory lines saying the same
+had been in context all along. **Hayden's call:** a PreToolUse hook on AskUserQuestion, in every
+session, denies only a risky ask, once, with the checklist as the reason. The list is in
+`skills/lanes/SKILL.md`, "Who asks Hayden what"; the rules are in README's `ask-check.sh` entry.
+
+For the lane rule, a live lane's files are its branch's three-dot diff from the base plus the
+path-like entries of its brief's Expected files line. Uncommitted work is left out: lanes start
+in plan mode, which can't edit, and they commit per step. Across 32 closed lanes the first commit
+came a median 44 minutes after the lane opened, so the Expected line is what covers a set of lanes
+opened together; it named a median 62% of the files each lane merged (outside `tests/`,
+STATUS.md and README.md, which the rule skips).
+
 ## One lead per main checkout (lane two-sessions, 2026-10-14)
 
 The night capella-studio got its first lanes, its main checkout held two live sessions. The lead,
