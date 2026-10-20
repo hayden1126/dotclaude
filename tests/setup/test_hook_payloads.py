@@ -1,9 +1,11 @@
-"""session-title.sh and session-summary.sh: the event arrives on stdin at any size, and injected
-content (task notices, agent messages, skill bodies) is never taken for the user (stdlib only)."""
+"""session-title.sh and session-summary.sh: the event arrives on stdin at any size, injected
+content (task notices, agent messages, skill bodies) is never taken for the user, and only a clean
+Haiku label reaches the tab (stdlib only)."""
 import ast
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -12,6 +14,22 @@ import unittest
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HOOKS = os.path.join(REPO, "hooks")
 BIG = "x" * 200_000  # over MAX_ARG_STRLEN (128 KiB), which a payload passed as argv can't pass
+
+
+def human(text):
+    return {"type": "user", "origin": {"kind": "human"},
+            "message": {"role": "user", "content": text}}
+
+
+def assistant(text):
+    return {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}
+
+
+def bulk(size):
+    """Claude Code's own transcript entries, at least size bytes: request snapshots and the
+    skill listing, which carry no dialogue."""
+    return [{"type": "api-request-blob", "message": {"role": "user", "content": "x" * 50_000}}
+            for _ in range(size // 50_000 + 1)]
 
 
 def hook(name, payload, env=None):
@@ -98,19 +116,37 @@ class SessionTitle(Workspace):
     def test_a_huge_prompt_still_titles(self):
         self.assertEqual(self.title(prompt="fix the parser " + BIG)[:22], "proj · fix the parser ")
 
+    def cache(self, name, text):
+        d = os.path.join(self.tmp.name, "cfg", "session-summaries")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, name), "w") as f:
+            f.write(text + "\n")
+
+    def test_the_haiku_label_beats_the_prompt(self):
+        self.cache("sid.title.txt", "Parser fix")
+        self.assertEqual(self.title(prompt="something else"), "proj · Parser fix")
+
+    def test_a_retired_summary_never_titles(self):
+        # The long summaries are retired; one an older hook cached is not a label.
+        self.cache("sid.txt", "Fixing the parser; tests green")
+        self.assertEqual(self.title(prompt=""), "proj")
+
 
 class SessionSummary(Workspace):
     """Runs the hook's own script up to the dialogue it would send to Haiku, never the call."""
 
-    MARK = "dialogue = recent_dialogue(transcript)"
-
-    def dialogue(self, entries, **payload):
-        with open(self.transcript, "w") as f:
-            f.writelines(json.dumps(e) + "\n" for e in entries)
+    def dialogue(self, entries, tail_max=None, **payload):
+        # Non-ASCII stays raw, as Claude Code's JSON.stringify leaves it.
+        with open(self.transcript, "w", encoding="utf-8") as f:
+            f.writelines(json.dumps(e, ensure_ascii=False) + "\n" for e in entries)
         src = open(os.path.join(HOOKS, "session-summary.sh")).read()
         src = src.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
-        self.assertIn(self.MARK, src)
-        src = src.split(self.MARK, 1)[0] + "print(recent_dialogue(transcript))\n"
+        if tail_max is not None:
+            src, n = re.subn(r"^TAIL_MAX\s*=.*$", f"TAIL_MAX = {tail_max}", src, flags=re.M)
+            self.assertEqual(n, 1, "no TAIL_MAX line to retune")
+        mark = re.search(r"^dialogue = (recent_dialogue\(.*\))$", src, re.M)
+        self.assertIsNotNone(mark, "the hook no longer builds its dialogue in one line")
+        src = src[:mark.start()] + f"print({mark.group(1)})\n"
         # The hook passes its own directory, where it imports haiku.py from.
         p = subprocess.run(["python3", "-c", src, HOOKS], capture_output=True, text=True,
                            timeout=20,
@@ -145,10 +181,62 @@ class SessionSummary(Workspace):
                           "User: these args are not user input"])
 
     def test_a_huge_event_is_still_read(self):
-        entries = [{"type": "user", "origin": {"kind": "human"},
-                    "message": {"role": "user", "content": "fix the parser"}}]
-        self.assertEqual(self.dialogue(entries, last_assistant_message=BIG),
+        self.assertEqual(self.dialogue([human("fix the parser")], last_assistant_message=BIG),
+                         "User: fix the parser\nAssistant: " + "x" * 400)
+
+    def test_a_prompt_behind_claude_codes_own_entries_is_found(self):
+        # At a session's first Stop the prompt sits behind the skill listing and the request
+        # snapshots, past the first read: 239 KB back in a live claude -p run (2026-10-20).
+        self.assertEqual(self.dialogue([human("fix the parser")] + bulk(300_000)),
                          "User: fix the parser")
+
+    def test_the_read_back_stops_at_its_cap(self):
+        self.assertEqual(self.dialogue([human("fix the parser")] + bulk(3_000_000)), "")
+
+    def test_the_cap_holds_off_a_power_of_two(self):
+        # Retuned to 3 MB, the read grows to 2 MB and then 3 MB, never 4.
+        for size, want in ((2_500_000, "User: fix the parser"), (3_400_000, "")):
+            with self.subTest(size=size):
+                self.assertEqual(self.dialogue([human("fix the parser")] + bulk(size),
+                                               tail_max=3 << 20), want)
+
+    def test_a_cap_under_the_first_read_holds(self):
+        for size, want in ((10_000, "User: fix the parser"), (70_000, "")):
+            with self.subTest(size=size):
+                self.assertEqual(self.dialogue([human("fix the parser")] + bulk(size),
+                                               tail_max=64 << 10), want)
+
+    def test_a_line_separator_inside_a_message_keeps_it_whole(self):
+        # Claude Code leaves U+2028 raw, and str.splitlines() splits there: the pieces lost the
+        # message, and a piece that parsed as a bare number crashed the script.
+        sep = chr(0x2028)
+        for prompt, want in ((f"fix{sep}the parser", "User: fix the parser"),
+                             (f"fix{sep}1{sep}the parser", "User: fix 1 the parser")):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(self.dialogue([human(prompt)]), want)
+
+    def test_the_stop_events_reply_ends_the_dialogue(self):
+        # At Stop the transcript may not hold the turn's reply yet; the event carries it.
+        self.assertEqual(self.dialogue([human("fix the parser")],
+                                       last_assistant_message="Fixed the\nparser."),
+                         "User: fix the parser\nAssistant: Fixed the parser.")
+
+    def test_a_reply_the_transcript_already_holds_is_not_doubled(self):
+        entries = [human("fix the parser"), assistant("Fixed the parser.")]
+        self.assertEqual(self.dialogue(entries, last_assistant_message="Fixed the\nparser."),
+                         "User: fix the parser\nAssistant: Fixed the parser.")
+
+    def test_the_reply_counts_toward_the_recent_messages(self):
+        entries = [human(f"step {i}") for i in range(12)]
+        self.assertEqual(self.dialogue(entries, last_assistant_message="Done.").splitlines(),
+                         [f"User: step {i}" for i in range(3, 12)] + ["Assistant: Done."])
+
+    def test_a_reply_that_isnt_text_is_left_out(self):
+        for reply in (None, 42, ["Fixed."], {"text": "Fixed."}, "  "):
+            with self.subTest(reply=reply):
+                self.assertEqual(self.dialogue([human("fix the parser")],
+                                               last_assistant_message=reply),
+                                 "User: fix the parser")
 
     def test_the_detached_job_gets_the_whole_event_on_stdin(self):
         # A python3 shim records its first argument and how many bytes reached its stdin, so
@@ -170,12 +258,120 @@ class SessionSummary(Workspace):
         with open(out) as f:
             self.assertEqual(f.read().split(), ["-I", str(len(json.dumps(event).encode()))])
 
-    def test_stdin_too_deep_for_json_draws_nothing(self):
-        # The widget, statusline/session-summary.py: "[" * 100000 is RecursionError in json.
-        widget = os.path.join(REPO, "statusline", "session-summary.py")
-        p = subprocess.run(["python3", "-I", widget, "--row", "1"], input="[" * 100000,
-                           capture_output=True, text=True, timeout=20)
-        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+
+class SessionLabel(Workspace):
+    """The hook's whole script on a fake haiku.py, which records the request and answers
+    FAKE_REPLY: what reaches the cache for each reply."""
+
+    FAKE = '''import json, os
+class HaikuError(Exception):
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+def config_dir(transcript):
+    return os.path.dirname(os.path.dirname(os.path.dirname(transcript)))
+def ask(system, user, **kw):
+    with open(os.environ["FAKE_LOG"], "w") as f:
+        json.dump({"system": system, "user": user}, f)
+    if os.environ["FAKE_REPLY"] == "<error>":
+        raise HaikuError("http-500")
+    return os.environ["FAKE_REPLY"]
+'''
+
+    def setUp(self):
+        super().setUp()
+        self.fake = os.path.join(self.tmp.name, "fake")
+        os.makedirs(self.fake)
+        with open(os.path.join(self.fake, "haiku.py"), "w") as f:
+            f.write(self.FAKE)
+        with open(self.transcript, "w") as f:
+            f.write(json.dumps({"type": "user", "origin": {"kind": "human"},
+                                "message": {"role": "user", "content": "fix the parser"}}) + "\n")
+        self.out = os.path.join(self.tmp.name, "cfg", "session-summaries")
+        self.log = os.path.join(self.tmp.name, "request.json")
+
+    def path(self, name):
+        return os.path.join(self.out, name)
+
+    def run_hook(self, reply):
+        src = open(os.path.join(HOOKS, "session-summary.sh")).read()
+        src = src.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+        p = subprocess.run(["python3", "-I", "-c", src, self.fake], capture_output=True,
+                           text=True, timeout=20,
+                           env={**self.env, "FAKE_REPLY": reply, "FAKE_LOG": self.log},
+                           input=json.dumps({"session_id": "sid",
+                                             "transcript_path": self.transcript}))
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def cached(self, name):
+        try:
+            with open(self.path(name), encoding="utf-8") as f:
+                return f.read()
+        except FileNotFoundError:
+            return None
+
+    def seed(self, name, text):
+        os.makedirs(os.path.dirname(self.path(name)), exist_ok=True)
+        with open(self.path(name), "w", encoding="utf-8") as f:
+            f.write(text + "\n")
+
+    def test_a_label_reply_caches_the_label_alone(self):
+        for reply in ("LABEL: Parser fix", "The session fixes the parser.\nLABEL: Parser fix."):
+            with self.subTest(reply=reply):
+                shutil.rmtree(self.out, ignore_errors=True)
+                self.run_hook(reply)
+                self.assertEqual(self.cached("sid.title.txt"), "Parser fix\n")
+                self.assertIsNone(self.cached("sid.txt"))
+                self.assertTrue(os.path.exists(self.path(os.path.join(".state", "sid"))))
+
+    def test_a_reply_without_a_clean_label_caches_nothing(self):
+        # Kept as it was, and no state either, so the next Stop asks again. A refusal anywhere
+        # in the reply means the model took the transcript for instructions: its label goes too.
+        for reply in ("Parser fix", "LABEL: I can't help with that", "LABEL:",
+                      "I can't read that file.\nLABEL: Parser fix",
+                      "I'm unable to see the file.\nLABEL: Parser fix", "<error>"):
+            with self.subTest(reply=reply):
+                shutil.rmtree(self.out, ignore_errors=True)
+                if os.path.exists(self.log):
+                    os.remove(self.log)
+                self.seed("sid.title.txt", "Old label")
+                self.run_hook(reply)
+                self.assertTrue(os.path.exists(self.log), "the call never ran")
+                self.assertEqual(self.cached("sid.title.txt"), "Old label\n")
+                self.assertIsNone(self.cached("sid.txt"))
+                self.assertFalse(os.path.exists(self.path(".state")))
+
+    def test_the_cadence_gate_keys_on_the_label(self):
+        size = str(os.path.getsize(self.transcript))
+        # An older hook's summary and state, with no label yet: ask.
+        self.seed("sid.txt", "An old summary")
+        self.seed(os.path.join(".state", "sid"), size)
+        self.run_hook("LABEL: Parser fix")
+        self.assertEqual(self.cached("sid.title.txt"), "Parser fix\n")
+        # A label, and the transcript grew under MIN_GROWTH since: don't.
+        os.remove(self.log)
+        self.run_hook("LABEL: Something else")
+        self.assertFalse(os.path.exists(self.log))
+        self.assertEqual(self.cached("sid.title.txt"), "Parser fix\n")
+
+    def test_a_first_stop_with_the_prompt_far_back_still_labels(self):
+        with open(self.transcript, "a") as f:
+            f.writelines(json.dumps(e) + "\n" for e in bulk(300_000))
+        self.run_hook("LABEL: Parser fix")
+        self.assertEqual(self.cached("sid.title.txt"), "Parser fix\n")
+
+    def test_a_long_label_is_clipped(self):
+        self.run_hook("LABEL: " + "x" * 40)
+        self.assertEqual(self.cached("sid.title.txt"), "x" * 31 + "…\n")
+
+    def test_the_prior_label_goes_back_and_a_retired_summary_does_not(self):
+        self.seed("sid.title.txt", "Old label")
+        self.seed("sid.txt", "An old summary from before the rows retired")
+        self.run_hook("LABEL: Parser fix")
+        with open(self.log) as f:
+            user = json.load(f)["user"]
+        self.assertIn("Old label", user)
+        self.assertNotIn("An old summary", user)
 
 
 class ProjectFilesStayOut(Workspace):
