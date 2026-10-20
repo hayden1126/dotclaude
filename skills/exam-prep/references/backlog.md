@@ -43,7 +43,7 @@ marks the rest `dropped`, with the reason.
 | K17 | On the cheat sheet each item has one home; answer templates point to blocks by name instead of restating them. | org, struct | K-org.F11, K-struct.F9 | open |
 | K18 | Every course gets a practice page shaped like the exam's source, even when no cheat sheet is allowed. | org | K-org.F12 | open |
 | K19 | One "all Must know" view (a page or a toggle). | org | K-org.F13 | open |
-| K20 | One place owns each idea: a figure's caption doesn't give away the result its step-through drills, and a caveat is written once and linked. | struct, word | K-struct.F3, K-word.F16 | open |
+| K20 | One place owns each idea: a figure's caption doesn't give away the result its step-through drills, and a caveat is written once and linked. **Conflicts:** S30 (a caveat where the plain number first appears). | struct, word | K-struct.F3, K-word.F16 | open |
 | K21 | Put each pitfall at the step or claim it guards ("Trap:" inside the step); at most one cross-cutting pitfall closes a subsection. | struct | K-struct.F4 | open |
 | K22 | A fixed set of block types: worked example (fresh numbers, collapsed, right after its procedure), slide trace (open, labeled), proof (inline, numbered, ending in a QED mark). | struct | K-struct.F8 | open |
 | K23 | Inside a cheat-sheet block, one claim per line in a fixed order (rule, example, trap), or a small table. | struct | K-struct.F10 | open |
@@ -59,7 +59,7 @@ marks the rest `dropped`, with the reason.
 | K33 | Work offline: vendor MathJax (or pre-render the math) and self-host the fonts in every product, the mock included. | ui | K-ui.F11 | open |
 | K34 | A recipe's first step defines every symbol it uses, with its start value; every bound names its quantity. | word | K-word.F6 | open |
 | K35 | One Conclusion per construction, at most two sentences: the result, then the property it rests on. Variants come before the Result. | word, struct | K-word.F8, K-struct.F17 | open |
-| K36 | No internal ids or authoring labels in rendered text; the build fails on id-like strings and empty "Practice: (none)" lines. | word, struct | K-word.F9, K-struct.F20 | open |
+| K36 | No internal ids or authoring labels in rendered text; the build fails on id-like strings and empty "Practice: (none)" lines. **Conflicts:** S9 (every subsection's line names its practice, "none" included). | word, struct | K-word.F9, K-struct.F20 | open |
 | K37 | Number only actions; a premise goes in a "Why it works" line. A coined term is defined once. | word | K-word.F10 | open |
 | K38 | Check every rule's wording at its boundary input ("next multiple after" versus "smallest multiple at least"). | word | K-word.F11 | open |
 | K39 | A causal "so" or "because" names the same property everywhere it recurs; review causal claims across sections, not only within one. | word | K-word.F12 | open |

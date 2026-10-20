@@ -20,11 +20,8 @@ EM_DASH = chr(0x2014)
 
 # Paths the skill names that a later stage creates. Remove each one in the commit that adds it.
 PENDING = {
-    "scripts/linkcheck.py",
     "templates/CHASSIS.md",
     "templates/CONVERT.md",
-    "templates/STYLE.md",
-    "workflows/04-write.md",
     "workflows/05-verify.md",
     "workflows/06-site.md",
     "workflows/07-cheatsheet.md",

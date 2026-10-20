@@ -110,3 +110,73 @@ Transcribe; never summarize.
     without pages ({{SOLDOC}} is {{DOC}} when the solutions sit in the same file).}}
 - Last line: `Coverage: {{RANGE}}; N blocks; K image only (<why, per page>); U flagged unreadable.`
 ```
+
+## Write (stage 04)
+
+Role: `general-purpose`, for the same reason as the extract brief: it reads sources and writes one
+output file. One per backbone section file.
+
+```text
+# Brief: write §{{N}} {{TITLE}} of the notes into notes/{{OUT}}
+
+## Purpose
+These notes are the student's source of truth for the exam: the page, the cheat sheet and the mock
+all derive from them. A student who may have skipped every lecture learns §{{N}} from this file
+alone, so it must be correct, cover what the exam tests, and make the ideas easy to map.
+
+## End state
+- Done means: every subsection the backbone lists for §{{N}}, in its order and with its ids,
+  ending with the Must-know checklist.
+- Artifact path: {{ROOT}}/notes/{{OUT}}. Write it as you go, subsection by subsection, so a crash
+  loses nothing.
+- Report: end your reply with the JSON block (status, summary, artifacts, blocked_actions). The
+  summary lists every TODO-VERIFY you left and any extract content you couldn't place.
+
+## Scope
+- Work in: {{ROOT}}. Read only, except your one output file.
+- Read first, in full: {{ROOT}}/_build/STYLE.md (how to write), then {{ROOT}}/_build/backbone.md:
+  section §{{N}} (its table, lettered sets, figures and worked examples), the Conventions block,
+  the cross-section links and the How it's tested table.
+- Sources: {{EXTRACT BLOCKS: the coverage-matrix rows that map into §{{N}}, as files and block
+  ranges}} in {{ROOT}}/_build/extract/, and {{EXAMPLES: the parts of
+  {{ROOT}}/_build/verify/examples.out.md your worked examples use}}.
+- Out of scope: every other section's file, the backbone, and every file MANIFEST.md marks
+  `reserved` ({{RESERVED FILES}}). Never open a file under practice/ whose name ends in -key.md.
+
+## Format
+These are the Markdown forms the page's converter reads (06-site); use them exactly.
+- Headings: the first line is `# §{{N}} {{TITLE}}`, with no anchor (it is `sec-{{N}}`). Then one
+  heading per backbone row, its number, title and id verbatim: `## {{N}}.M <title> {#<id>}`. A
+  `###` inside a subsection needs no id.
+- A procedure: one line per step, `Step 1: ...`, `Step 2: ...`. A lettered set the backbone
+  places in §{{N}}: one bullet per member, its anchor at the line's end,
+  `- a) **<member>:** ... {#set-<set>-a}`. A set placed elsewhere is linked, never lettered again.
+- A worked example the backbone lists, as one blockquote: `> **Worked example {{N}}.K: <title>**
+  {#<id>}` on one line, then `> Setup: ...`, `> Step 1: ...`, `> **Result:** ...`, and last
+  `> **Conclusion:** ...`, inside the quote (the page folds the whole example). A construction
+  outside an example ends with an unquoted `**Conclusion:**` line, after a blank line.
+- Each subsection ends with `**How it's tested:** <the answer shape>. Practice: [HW1 Q2c], ...`,
+  then any `> **Pitfall:** ...` callouts.
+- A figure the backbone lists: `<!-- FIG <id>: <what it shows, its data> -->` where it belongs;
+  it is drawn later.
+- Links use backbone ids only, the text naming the target: `[§{{M}}.K <its title>](#<its id>)`.
+  A section another writer owns still links by its id.
+- Cite every fact from the sources: `[D5 p.23]`, `[D2 #/14]`, `[HW1 Q2c]`. A section of another
+  document is cited in brackets too (`[W1 §2.1]`).
+- Numbers: {{CHECKER: copy every trace and computed value from examples.out.md. When a value you
+  need isn't there, write `TODO-VERIFY: <what to compute, from which inputs>` and go on. Never
+  compute one yourself. | NO CHECKER (PLAN.md's Checker line says nothing is computable): take
+  every value from a cited source; a step that derives one shows its working, so the reviewers
+  can check it against the source.}}
+- Worked examples use {{the checker's data | an instance you build from the sources}}, never a
+  homework's or a recitation's numbers. Quote an answer only from a set MANIFEST.md marks
+  `yes, attempted`; {{UNATTEMPTED: the answer sets the student hasn't attempted yet}} are read
+  for their conventions only, never quoted. No mock key appears in the notes.
+- Depth: {{concise | full}}, as the backbone marks it. A slide-only derivation that no practice
+  question asks for is marked as background, with that evidence.
+- The last subsection is `## {{N}}.K Must know {#sec-{{N}}-must-know}`: one line per point, each
+  ending with a link into this section, `([§{{N}}.2](#<id>))`.
+- {{PLAIN TEXT: the student reads in a plain-text tool, so no LaTeX (plain Unicode math), pipe
+  tables, no `{#id}` anchors, and cross-references and Must-know pointers as text naming the
+  section ("§{{M}}.K <its title>").}}
+```

@@ -47,7 +47,7 @@ same rule.
 | FB-027 | Intake ends with a written plan the student approves, then hub setup. Expect several plan rounds; fold each refinement into the plan file before showing it again. | w00 | H1.C15, A1.C4 |
 | FB-028 | Before launch, audit the plan for visual design, pedagogy, structure, enumeration and cross-references. Written rules beat "reuse the look". | w00 | H1.C10, H1.C11 |
 | FB-029 | When intake needs a file the student hasn't provided yet, wait for it. Don't continue past the question. | w00 | H1.C6 |
-| FB-030 | Write for a student who may have skipped the lectures: assume no prior exposure. | w04, t:style | A1.C1 |
+| FB-030 | Write for a student who may have skipped the lectures: assume no prior exposure. | S14, w04 | A1.C1 |
 
 ## 01-ingest
 
@@ -87,27 +87,27 @@ same rule.
 |---|---|---|---|
 | FB-070 | STYLE rules 1 to 13 (pedagogy, structure, numbering, Conclusion lines, causation, no redundancy, worked examples, conventions, how it's tested, citations, figures, clickable cross-references, the look). | S1-S13 | B4 (section 5b), A1.C5, A1.C6, A1.C23, A1.C31 |
 | FB-071 | Teaching examples use fresh numbers. The real answer key lives in its own quarantined file. | S7, w04 | A4.C7 |
-| FB-072 | Define every symbol and acronym at first use. Gloss logic symbols and unusual notation in plain words where they appear. | w04, t:style | A3.C14, B3.C11, B3.C25, A1.C28 |
-| FB-073 | No exam-writer jargon in student-facing text. | w04, t:style | B3.C12, B4.C27 |
-| FB-074 | Never coin labels for examples (T1, Tree A). Name an example by its source page or its shape. | w04, t:style | B3.C32, B4.C11 |
-| FB-075 | Prefer a three-sentence explanation or a tiny worked instance over a compressed argument. A proof goes step by step on a small instance. | w04, t:style | B3.C13, B3.C14, B4.C19 |
-| FB-076 | Open a concept with how it compares to the one it replaces: what is the same, what differs, why it exists. | w04, t:style | B3.C15, B4.C21 |
-| FB-077 | Mark slide-only derivations that no practice question asks for as background, with that evidence. | w04 | B3.C16 |
-| FB-078 | Every section ends with a "Must know" checklist: one line per point, each linked into the notes, as many points as the exam needs (twelve was fine). | w04, t:style | B3.C7, B3.C9, B4.C29 |
-| FB-079 | When the exam asks for proofs, add a proof-techniques block to the notes and the cheat sheet. | w04, w07 | B3.C20, B4.C26 |
-| FB-080 | A pitfall states its exact conditions. | w04, t:style | B4.C25, B3.C22 |
-| FB-081 | Explain every step of a bound or derivation that a reader would ask "why" about, in plain words. | w04, t:style | B4.C20, B4.C22 |
-| FB-082 | Use the course's own terms, and list the aliases the course uses. | w04, t:style | A1.C26, A3.C9 |
-| FB-083 | In a construction or counter-example, label each object's role (the real input, the trusted component, the thing under test). | w04, t:style | A1.C22 |
-| FB-084 | Each mechanism's section says what it provides and what it does not. | w04, t:style | A3.C15 |
-| FB-085 | A conditional claim ("needs X only if Y") shows both the normal case and the edge case. | w04, t:style | A1.C30 |
-| FB-086 | No compressed aphorisms: give the concrete situation (who holds what, which channel is trusted). | w04, t:style | A1.C29 |
-| FB-087 | When a later section qualifies a number, put a forward caveat where the plain number first appears. | w04, t:style | A1.C25 |
-| FB-088 | Confusable pairs get an explicit comparison table. | w04, t:style | B3.C23 |
-| FB-089 | Where the slides' convention and the answer keys' convention differ, reconcile them in one place. | w04 | B3.C24, B4.G17 |
+| FB-072 | Define every symbol and acronym at first use. Gloss logic symbols and unusual notation in plain words where they appear. | S15 | A3.C14, B3.C11, B3.C25, A1.C28 |
+| FB-073 | No exam-writer jargon in student-facing text. | S16 | B3.C12, B4.C27 |
+| FB-074 | Never coin labels for examples (T1, Tree A). Name an example by its source page or its shape. | S17 | B3.C32, B4.C11 |
+| FB-075 | Prefer a three-sentence explanation or a tiny worked instance over a compressed argument. A proof goes step by step on a small instance. | S18 | B3.C13, B3.C14, B4.C19 |
+| FB-076 | Open a concept with how it compares to the one it replaces: what is the same, what differs, why it exists. | S19 | B3.C15, B4.C21 |
+| FB-077 | Mark slide-only derivations that no practice question asks for as background, with that evidence. | S20, w04 | B3.C16 |
+| FB-078 | Every section ends with a "Must know" checklist: one line per point, each linked into the notes, as many points as the exam needs (twelve was fine). | S21, w04 | B3.C7, B3.C9, B4.C29 |
+| FB-079 | When the exam asks for proofs, add a proof-techniques block to the notes and the cheat sheet. | S22, w07 | B3.C20, B4.C26 |
+| FB-080 | A pitfall states its exact conditions. | S23 | B4.C25, B3.C22 |
+| FB-081 | Explain every step of a bound or derivation that a reader would ask "why" about, in plain words. | S24 | B4.C20, B4.C22 |
+| FB-082 | Use the course's own terms, and list the aliases the course uses. | S25 | A1.C26, A3.C9 |
+| FB-083 | In a construction or counter-example, label each object's role (the real input, the trusted component, the thing under test). | S26 | A1.C22 |
+| FB-084 | Each mechanism's section says what it provides and what it does not. | S27 | A3.C15 |
+| FB-085 | A conditional claim ("needs X only if Y") shows both the normal case and the edge case. | S28 | A1.C30 |
+| FB-086 | No compressed aphorisms: give the concrete situation (who holds what, which channel is trusted). | S29 | A1.C29 |
+| FB-087 | When a later section qualifies a number, put a forward caveat where the plain number first appears. | S30 | A1.C25 |
+| FB-088 | Confusable pairs get an explicit comparison table. | S31 | B3.C23 |
+| FB-089 | Where the slides' convention and the answer keys' convention differ, reconcile them in one place. | S32, w04 | B3.C24, B4.G17 |
 | FB-090 | Writers never compute a trace or a number by hand: they leave a TODO-VERIFY marker, and the value comes from the checker. | w04, w05 | B1 (stage 04), B4 (hard rules), B1.G8 |
 | FB-091 | After all sections exist, a wiring pass adds the cross-reference links, the lettering and the Conclusion lines. | w04 | A1.C6 |
-| FB-092 | When the student reads in a plain-text tool, write for it: no LaTeX, pipe tables, cross-references as text. | w04 | A4.C3, A1.G14 |
+| FB-092 | When the student reads in a plain-text tool, write for it: no LaTeX, pipe tables, cross-references as text. | S10, w04 | A4.C3, A1.G14 |
 | FB-093 | Ship one combined file next to the per-topic files when the student studies from one document. | w04 | A1.C9 |
 
 ## 05-verify
