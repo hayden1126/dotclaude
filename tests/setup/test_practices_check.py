@@ -1227,6 +1227,20 @@ class L3s(BashBase):
         self.assertIsNone(self.committed(**{"lib__save.ts": "x({ ...body })\n"}))
         self.assertIn("lib/other.ts:1", self.committed(**{"lib__other.ts": "x({ ...body })\n"}))
 
+    def test_an_l2_deny_accepts_only_the_lines_it_named(self):
+        # Review round 1: the L2 key had no line in it, so one deny exempted every later
+        # finding of that rule in that file.
+        self.loaded()
+        self.assertIsNotNone(self.fire("lib/save.ts", "x({ ...body })\n"))
+        told = self.committed(**{"lib__save.ts": "x({ ...body })\ny({ ...body, z })\n"})
+        self.assertIn("lib/save.ts:2", told)
+        self.assertNotIn("lib/save.ts:1", told)
+        self.skill("keys", KEYS, where="user")
+        self.assertIsNotNone(self.fire("k.ts", "a = 'TOKEN_ABCDEFGH'\n"))
+        told = self.committed(**{"k.ts": "a = 'TOKEN_ABCDEFGH'\nb = 'TOKEN_QRSTUVWX'\n"})
+        self.assertIn("KEY-1 (keys) at k.ts:2", told)
+        self.assertNotIn("k.ts:1", told)
+
     def test_a_line_scoped_allow_covers_only_its_line_and_at_picks_the_levels(self):
         self.skill("keys", KEYS, where="user")
         told = self.committed(**{"k.ts": "a = 'TOKEN_ABCDEFGH' // practices-allow: KEY-1 test\n"

@@ -134,8 +134,10 @@ run SEC-60, the engine's own rule: a lockfile changed in the range (LOCKFILES, r
 with no audit Bash call (AUDIT) in the transcript or, for a subagent, the parent's.
 A finding's key is `<level>|<skill>|<rule>|<path>|sha1(the stripped line)`; a level denies or
 tells only the findings whose key is new for this session and agent (the denies/ state file),
-so the resend passes and a partial fix re-tells only what is new. A finding L2 already denied
-for that file and rule (its key or marker) was accepted at edit time and is skipped. A deny or
+so the resend passes and a partial fix re-tells only what is new. An L2 deny also records a
+key per line it named (`L2|<skill>|<rule>|<path>|sha1(the stripped line)`); a finding on one
+of those lines was accepted at edit time and is skipped, and any other line of that rule in
+that file is still told (a transcript marker names no line, so it accepts none). A deny or
 tell names a finding by rule, path and line, never the matched text, and so does errors.log.
 
 git runs objects only, through Repo: a system git (SYSTEM_GITS), every GIT_* variable stripped
@@ -380,6 +382,12 @@ def file_hits(rule, lines, blob, helpers=()):
     if allowed(rule["id"], blob) or (rule.get("unless") and guarded(
             rule["unless"], blob, helpers, rule["id"])):
         return []
+    return when_lines(rule, lines, helpers)
+
+
+def when_lines(rule, lines, helpers=()):
+    """[(number, line)] of the lines that a match of a rule's `when`, over the lines joined,
+    starts on."""
     lines = list(lines)
     text = "\n".join(line for _, line in lines)
     starts, pos = [], 0
@@ -1109,6 +1117,16 @@ def l1_reason(pending, rel, subagent):
     return "\n\n".join(parts)
 
 
+def l2_lines(rule, text, helpers):
+    """The lines of the new text an L2 deny names: the ones a line rule flags, or the ones a
+    file rule's `when` match starts on. A later commit, push or PR skips a finding only on these
+    lines, so one accepted deny never hides another line of the same rule in the same file."""
+    lines = enumerate(text.split("\n"), 1)
+    hits = line_hits(rule, lines, helpers) if rule.get("scope") == "line" else \
+        when_lines(rule, lines, helpers)
+    return [line for _, line in hits]
+
+
 def l2_reason(pending, rel):
     return "\n\n".join(
         f"[practices:L2:{skill['name']}:{rule['id']}:{rel}] {rule['say']}\nFix it and resend, "
@@ -1175,6 +1193,7 @@ def pre_tool_use(event):
                     continue
                 pending.append((s, r))
                 keys.append(key)
+                keys += [f"{key}|{_sha1(line.strip())}" for line in l2_lines(r, text, helpers)]
             if pending:
                 reason = l2_reason(pending, rel)
         if reason:
@@ -1249,7 +1268,8 @@ class Finding:
     def __init__(self, level, skill, rule, path, line_no, line, commit):
         self.skill, self.rule, self.path, self.line_no, self.commit = \
             skill, rule, path, line_no, commit
-        self.key = f"{level}|{skill['name']}|{rule['id']}|{path}|{_sha1(line.strip())}"
+        self.line_hash = _sha1(line.strip())
+        self.key = f"{level}|{skill['name']}|{rule['id']}|{path}|{self.line_hash}"
 
 
 def command_of(event):
@@ -1514,14 +1534,14 @@ def audited(ts):
                for inp in tool_uses(t, needle, ("Bash",)))
 
 
-def accepted_at_l2(event, ts):
-    """Keys and markers of L2 denies (this agent's and, for a subagent, the parent's): a
-    finding L2 already denied for that file and rule was accepted at edit time."""
+def accepted_at_l2(event):
+    """The deny keys of this agent and, for a subagent, the parent's: among them, one per line
+    each L2 deny named (`L2|skill|rule|path|sha1(the stripped line)`), accepted at edit time.
+    A transcript marker names no line, so it accepts none."""
     keys = set(state_keys(event))
     if event.get("agent_id"):
         keys |= state_keys({**event, "agent_id": None})
-    markers = [x for t in ts.all() for x in Window(t, 0, None).results(b"[practices:L2:")]
-    return keys, markers
+    return keys
 
 
 def commit_rules(skills, cfg, line_only=False):
@@ -1586,11 +1606,11 @@ def scan(repo, spec, rules, level, ctx, lockfiles=True):
     return found
 
 
-def fresh(findings, event, ts, repo):
-    """The findings whose key is new for this session and agent, less those L2 already denied
-    for that file and rule; one per key."""
+def fresh(findings, event, repo):
+    """The findings whose key is new for this session and agent, less those on a line L2
+    already denied for that file and rule; one per key."""
     seen = state_keys(event)
-    l2_keys, l2_markers = accepted_at_l2(event, ts)
+    l2_keys = accepted_at_l2(event)
     project = project_dir(event)
     out, keys = [], set()
     for f in findings:
@@ -1598,9 +1618,7 @@ def fresh(findings, event, ts, repo):
             continue
         if f.skill is not ENGINE:
             rel = relative(os.path.join(repo.top or repo.cwd, f.path), project)
-            if f"L2|{f.skill['name']}|{f.rule['id']}|{rel}" in l2_keys or any(
-                    f"[practices:L2:{f.skill['name']}:{f.rule['id']}:{rel}]" in x
-                    for x in l2_markers):
+            if f"L2|{f.skill['name']}|{f.rule['id']}|{rel}|{f.line_hash}" in l2_keys:
                 continue
         keys.add(f.key)
         out.append(f)
@@ -1729,7 +1747,7 @@ def post_tool_use(event):
                 found += [(f, repo) for f in scan(repo, spec, rules, "L3s", ctx)]
             new = []
             for repo in repos.values():
-                new += fresh([f for f, r in found if r is repo], event, ts, repo)
+                new += fresh([f for f, r in found if r is repo], event, repo)
         except Budget as e:
             log("budget-spent", f"after {BUDGET}s, in the L3s {e}; the commit went unchecked")
             return None
@@ -1802,7 +1820,7 @@ def push_gate(event, pushes, skills, cfg, ts, ctx, bounds):
         if not tips:
             continue
         found = scan(repo, [*tips, "--not", "--remotes"], rules, "push", ctx)
-        out += fresh(found, event, ts, repo)
+        out += fresh(found, event, repo)
     return out
 
 
@@ -1886,7 +1904,7 @@ def l3r(event, ghs, skills, cfg, ts, ctx, bounds):
                 blocks_.append(review_block(new, mb))
         rules = commit_rules(skills, cfg, line_only=True)
         found += fresh(scan(repo, [head, "--not", mb], rules, "L3r", ctx, lockfiles=False),
-                       event, ts, repo)
+                       event, repo)
     return blocks_, keys, found
 
 
