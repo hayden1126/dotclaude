@@ -1084,13 +1084,16 @@ Lead's pick: B, for redundancy over silence: a forgotten mute is a silent miss.
 | Cost | one CLI, one menu block | plus a mod (`skills/autopass` is the pattern) and its tests |
 
 Lead's pick: A. Every session on HAYPC runs in tmux, and the CLI covers the rest.
+As built (lane mute): a `!` line at a Claude prompt may run inside Claude's sandbox, which can't
+write the flag, so outside tmux the CLI runs from a shell outside Claude; `claude-mute` says so
+when the write is refused.
 
 Shared rules, whatever the picks: the flag is one JSON file in `$XDG_STATE_HOME/dotclaude/`
 (read and write it like `hooks/autopass_state.py`'s `load_json`/`write_json`); `ring_log`
 records a muted ring as `quiet muted=1`, so `ring.log` still explains a silence; the per-tab
 menus in `tmux/claude.conf` stay per tab.
 
-Files: `hooks/session-pane.sh` (a `muted` helper beside `play_ring`), `hooks/notify.sh`,
+Files: `hooks/session-pane.sh` (a `read_mute` helper beside `play_ring`), `hooks/notify.sh`,
 `hooks/stop-ring.sh`, `notify-toast.ps1`, a new `tmux/claude-mute` CLI linked by
 `setup-tmux.sh:73-78`, `tmux/base.conf`, `tmux/claude.conf`, `tests/setup/test_tmux_hooks.py`,
 and README's indicator section. None of them is a file lanes summary-retire, link-atomic or
