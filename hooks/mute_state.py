@@ -3,12 +3,15 @@ for every Claude session on the machine.
 
 Read by hooks/session-pane.sh's read_mute (for notify.sh and stop-ring.sh), which runs
 `python3 -I mute_state.py check` only when something is at the flag's path, so an unmuted machine
-starts no Python per ring. The claude-mute CLI and the tmux menu import it to flip the switches.
-Each consumer puts this file's real directory on sys.path itself, as this file does for
-autopass_state (python3 -I keeps it off). Stdlib only; keep the source ASCII. PLAN.md "Next: a
-device-wide mute" has the design; tests/setup/test_mute_state.py and test_tmux_hooks.py the cases.
+starts no Python per ring. The claude-mute CLI and the tmux menu import it to flip the switches,
+and the tab bar's mark (`claude-mute mark`, every 2 s per client) to read them. Each consumer
+puts this file's real directory on sys.path itself, as this file does for autopass_state
+(python3 -I keeps it off), which loads only on a write: it is the costly import, and reading the
+flag doesn't need it. Stdlib only; keep the source ASCII. PLAN.md "Next: a device-wide mute" has
+the design; tests/setup/test_mute_state.py, test_tmux_hooks.py and test_claude_mute.py the cases.
 
-- The flag, $XDG_STATE_HOME/dotclaude/mute.json (autopass_state.state_dir()) =
+- The flag, $XDG_STATE_HOME/dotclaude/mute.json (state_dir(), the dir autopass_state.state_dir()
+  names: a test holds the two equal) =
   {"sound": {"since": <epoch>, "until": <epoch> | null}, "toast": {...}}. A switch is muted while
   its key holds such an object and `until` is null (until unmuted) or still ahead of now; `since`
   is when that mute was set. Stamps are wall-clock epoch seconds (an hour's expiry doesn't mind
@@ -38,20 +41,23 @@ import stat
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-import autopass_state as aps  # noqa: E402
-
 NAMES = ("sound", "toast")
 MAX_BYTES = 64 * 1024  # a real flag is under 200 bytes
 USAGE = "usage: mute_state.py check"
 
 
+def state_dir() -> str:
+    """autopass_state.state_dir()'s rule, kept here so a read never imports autopass_state."""
+    return os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
+                        "dotclaude")
+
+
 def flag_path() -> str:
-    return os.path.join(aps.state_dir(), "mute.json")
+    return os.path.join(state_dir(), "mute.json")
 
 
 def lock_path() -> str:
-    return os.path.join(aps.state_dir(), "mute.lock")
+    return os.path.join(state_dir(), "mute.lock")
 
 
 def is_number(v) -> bool:
@@ -113,7 +119,7 @@ def current(now=None):
 def locked():
     """An exclusive flock on mute.lock in the state dir, held while the block runs. Nothing slow
     runs under it, so it waits as long as it takes."""
-    os.makedirs(aps.state_dir(), exist_ok=True)
+    os.makedirs(state_dir(), exist_ok=True)
     fd = os.open(lock_path(), os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
@@ -125,6 +131,10 @@ def locked():
 def store(muted: dict) -> None:
     """Write the flag, or remove it when nothing is muted."""
     if muted:
+        here = os.path.dirname(os.path.realpath(__file__))
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import autopass_state as aps  # the write path alone pays for it
         aps.write_json(flag_path(), muted)
     else:
         with contextlib.suppress(FileNotFoundError):

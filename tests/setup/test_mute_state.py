@@ -57,6 +57,18 @@ class MuteState(unittest.TestCase):
         self.assertEqual(ms.flag_path(), self.flag)
         self.assertEqual(ms.lock_path(), os.path.join(self.state, "dotclaude", "mute.lock"))
 
+    def test_the_state_dir_is_autopass_states(self):
+        # mute_state keeps its own copy of the rule so a read never imports autopass_state.
+        aspec = importlib.util.spec_from_file_location(
+            "autopass_state", os.path.join(REPO, "hooks", "autopass_state.py"))
+        aps = importlib.util.module_from_spec(aspec)
+        aspec.loader.exec_module(aps)
+        for env in ({"XDG_STATE_HOME": self.state}, {"XDG_STATE_HOME": ""}, {}):
+            with self.subTest(env=env), mock.patch.dict(os.environ, env, clear=False):
+                if not env:
+                    os.environ.pop("XDG_STATE_HOME", None)
+                self.assertEqual(ms.state_dir(), aps.state_dir())
+
     def test_no_file_mutes_nothing_without_a_note(self):
         self.assertEqual(ms.current(NOW), ({}, None))
         os.makedirs(os.path.dirname(self.flag))
