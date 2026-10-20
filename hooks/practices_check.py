@@ -53,8 +53,9 @@ Levels:
       `at` lacks "edit". A `scope = "line"` rule (a key shape) is judged per line of new: `when`,
       `unless` and the allow all on the one line, so an allow covers only its own line.
   L3s, push and L3r: the Bash levels, below.
-  L4  SessionStart(compact): a digest (under DIGEST_MAX characters) naming the practices skills
-      loaded since the previous compaction, with their gate lines, plus reloadSkills: true.
+  L4  SessionStart(compact): a digest (under DIGEST_MAX characters, shared among the skills
+      and cut only between lines) naming the practices skills loaded since the previous
+      compaction, with their gate lines, plus reloadSkills: true.
 Deny-once has two signs, and either lets the call through:
   - a tool_result in the window holding the call's own marker. The marker is this engine's own
     text, never Claude Code's "hook error" wording around it, which a release may reword;
@@ -93,26 +94,40 @@ timeout kill takes the whole process group, so a killed scan leaves it behind. S
 (startup) runs a self-test, reports leftover breadcrumbs and the errors logged since the last
 start, as one systemMessage line (shown to the user only), and prints nothing when all is well.
 
-Bash levels. settings.json sends a Bash call here only when its payload holds git with commit
-or push, or gh with pr ready or pr create (PostToolUse: git with commit), so Python never starts
-for any other call. hooks/bash_words.py reads the command as simple commands through chains,
+Bash levels. settings.json sends a Bash call here only when its command (the payload's
+"command" string, never the tool_response output) holds git with commit or push, or gh with pr
+ready or pr create (PostToolUse: git with commit), so Python never starts for any other call.
+The prefilter is one `LC_ALL=C grep -E`, linear in the payload (a bash `case` glob backtracked
+over every "git" in a large output), and it exits 0 when the shim is missing. hooks/bash_words.py reads the command as simple commands through chains,
 wrappers (`sudo -E`, `env -i`), `cd X &&` (from the payload's cwd), quotes and heredocs, and
 each git call's -C, --git-dir, --work-tree and GIT_DIR=; an expansion in one of those skips that
 call, logged. A file written by a heredoc or `cat >` escapes L1 and L2, and L3s is its backstop.
+A repo is read only inside Bounds: git runs only in (or pointed at) the project dir
+(CLAUDE_PROJECT_DIR, else the cwd recorded at the session's first SessionStart, never the call's
+own cwd) or the project's own repo, and a repo is scanned only when the realpaths of its git
+dir, common dir and every alternates entry sit there too. The project's own repo is the one its
+checkout holds, a linked worktree (a lane) only when its git dir's `gitdir` file links back to
+the project, so a lane reads its main checkout's .git while `git -C ~/vault`, a planted gitfile
+or an alternates entry outside is skipped and logged, with no path or content in the log.
 Each level reads commits, never the index or the working tree:
-  L3s   PreToolUse on a git commit records each repo's HEAD (heads/, keyed by session, agent and
-        tool_use_id); PostToolUse for that id scans recorded..HEAD, or with no record the HEAD
-        commit alone, and tells the model the findings as additionalContext.
+  L3s   PreToolUse on a git commit records each repo's git dir, worktree and HEAD (heads/, keyed
+        by session, agent and tool_use_id); PostToolUse for that id scans recorded..HEAD in
+        those repos (never a re-parse from its own cwd, which a `cd` in the command moved; no
+        record, nothing scanned, logged) and tells the model the findings as additionalContext.
   push  PreToolUse on git push scans what it would send (each refspec's source, else HEAD;
         --all, --branches, --mirror: every local branch) less what any remote has, and denies.
         Deletes and --dry-run pass. One call holding both a commit and a push is denied once,
         told to run them as separate calls (the scan can't see a commit not yet made).
-  L3r   PreToolUse on gh pr ready (not --undo) or a gh pr create without --draft: the files
-        changed since the merge base with --base, else origin/HEAD, origin/main, origin/master
-        (none: logged, allowed), matched against every skill's L1 events (paths, and content on
-        the HEAD blob). Denied once per touched skill and HEAD unless the transcript (or the
-        parent's, for a subagent) holds an Agent or Task call whose prompt has
-        `[practices:review]`; the reason carries each skill's gate lines and the marker in one
+  L3r   PreToolUse on gh pr ready (not --undo) or a gh pr create without --draft, judged at a
+        head: the branch a `ready` selector or create's --head names (origin/<branch>, else the
+        local branch; unknown: logged, allowed), else the checked-out HEAD (a PR number or URL
+        says so in the deny, since it may be another branch's PR); each choice is logged. The
+        files changed since the merge base with --base, else origin/HEAD, origin/main,
+        origin/master (none: logged, allowed), are matched against every skill's L1 events
+        (paths, and content on the head blob). Denied once per touched skill and head unless
+        the transcript (or the parent's, for a subagent) holds an Agent or Task call whose
+        prompt has that head's marker, `[practices:review:<sha12>]`, so a review clears only
+        the commit it judged; the reason carries each skill's gate lines and the marker in one
         block to paste into a reviewer brief. The line-scoped and commit-time rules also run
         over every commit in the range.
 A scan runs every rule whose `at` has "commit" (L3r: or `scope = "line"`): `when` on each
@@ -124,8 +139,10 @@ run SEC-60, the engine's own rule: a lockfile changed in the range (LOCKFILES, r
 with no audit Bash call (AUDIT) in the transcript or, for a subagent, the parent's.
 A finding's key is `<level>|<skill>|<rule>|<path>|sha1(the stripped line)`; a level denies or
 tells only the findings whose key is new for this session and agent (the denies/ state file),
-so the resend passes and a partial fix re-tells only what is new. A finding L2 already denied
-for that file and rule (its key or marker) was accepted at edit time and is skipped. A deny or
+so the resend passes and a partial fix re-tells only what is new. An L2 deny also records a
+key per line it named (`L2|<skill>|<rule>|<path>|sha1(the stripped line)`); a finding on one
+of those lines was accepted at edit time and is skipped, and any other line of that rule in
+that file is still told (a transcript marker names no line, so it accepts none). A deny or
 tell names a finding by rule, path and line, never the matched text, and so does errors.log.
 
 git runs objects only, through Repo: a system git (SYSTEM_GITS), every GIT_* variable stripped
@@ -370,6 +387,12 @@ def file_hits(rule, lines, blob, helpers=()):
     if allowed(rule["id"], blob) or (rule.get("unless") and guarded(
             rule["unless"], blob, helpers, rule["id"])):
         return []
+    return when_lines(rule, lines, helpers)
+
+
+def when_lines(rule, lines, helpers=()):
+    """[(number, line)] of the lines that a match of a rule's `when`, over the lines joined,
+    starts on."""
     lines = list(lines)
     text = "\n".join(line for _, line in lines)
     starts, pos = [], 0
@@ -783,6 +806,9 @@ def state_keys(event):
 
 
 def state_add(event, keys):
+    """Record deny keys; whether the write held (a failure is logged). The Bash levels deny
+    only after it holds: they have no transcript marker to fall back on, so a deny whose key
+    can't be kept would stop the resend too, forever."""
     path = _state_file(event)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -790,8 +816,10 @@ def state_add(event, keys):
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump({"keys": sorted(state_keys(event) | set(keys))}, f)
         os.replace(tmp, path)
+        return True
     except OSError as e:
         log("state-error", f"{path}: {e}")
+        return False
 
 
 # ---------------------------------------------------------------- git, objects only
@@ -882,8 +910,12 @@ class Repo:
             self.base.append(f"--git-dir={git_dir}")
         if work_tree:
             self.base.append(f"--work-tree={work_tree}")
-        out = self.run("rev-parse", "--absolute-git-dir")
-        self.git_dir = out.decode("utf-8", "surrogateescape").strip()
+        out = self.run("rev-parse", "--absolute-git-dir", "--git-common-dir").decode(
+            "utf-8", "surrogateescape").split("\n")
+        self.git_dir = out[0].strip()
+        # A relative common dir is relative to the cwd git ran in.
+        self.common_dir = os.path.normpath(os.path.join(cwd, out[1].strip())) \
+            if len(out) > 1 and out[1].strip() else self.git_dir
         try:
             self.top = self.run("rev-parse", "--show-toplevel").decode(
                 "utf-8", "surrogateescape").strip() or None
@@ -1090,6 +1122,16 @@ def l1_reason(pending, rel, subagent):
     return "\n\n".join(parts)
 
 
+def l2_lines(rule, text, helpers):
+    """The lines of the new text an L2 deny names: the ones a line rule flags, or the ones a
+    file rule's `when` match starts on. A later commit, push or PR skips a finding only on these
+    lines, so one accepted deny never hides another line of the same rule in the same file."""
+    lines = enumerate(text.split("\n"), 1)
+    hits = line_hits(rule, lines, helpers) if rule.get("scope") == "line" else \
+        when_lines(rule, lines, helpers)
+    return [line for _, line in hits]
+
+
 def l2_reason(pending, rel):
     return "\n\n".join(
         f"[practices:L2:{skill['name']}:{rule['id']}:{rel}] {rule['say']}\nFix it and resend, "
@@ -1156,6 +1198,7 @@ def pre_tool_use(event):
                     continue
                 pending.append((s, r))
                 keys.append(key)
+                keys += [f"{key}|{_sha1(line.strip())}" for line in l2_lines(r, text, helpers)]
             if pending:
                 reason = l2_reason(pending, rel)
         if reason:
@@ -1191,7 +1234,6 @@ SEC60 = {"id": "SEC-60", "say": (
     "(npm audit, pnpm audit, yarn npm audit, pip-audit or uv audit, cargo audit, bundle audit, "
     "composer audit, govulncheck), fix or note what it reports, and say so in your reply.")}
 ENGINE = {"name": "engine", "dir": None, "gate": []}
-REVIEW = "[practices:review]"
 HEADS = ("git", "gh")
 
 
@@ -1230,7 +1272,8 @@ class Finding:
     def __init__(self, level, skill, rule, path, line_no, line, commit):
         self.skill, self.rule, self.path, self.line_no, self.commit = \
             skill, rule, path, line_no, commit
-        self.key = f"{level}|{skill['name']}|{rule['id']}|{path}|{_sha1(line.strip())}"
+        self.line_hash = _sha1(line.strip())
+        self.key = f"{level}|{skill['name']}|{rule['id']}|{path}|{self.line_hash}"
 
 
 def command_of(event):
@@ -1239,13 +1282,29 @@ def command_of(event):
     return cmd if isinstance(cmd, str) and cmd.strip() else None
 
 
+_BASH_WORDS = []
+
+
+def load_bash_words():
+    """hooks/bash_words.py beside this file, loaded by its path and compiled from its source.
+    The hooks dir never joins sys.path (a planted shlex.py there would run outside the sandbox
+    when bash_words imports shlex), and no cached .pyc is read."""
+    if not _BASH_WORDS:
+        import importlib.util  # noqa: PLC0415 (only the Bash levels need it)
+        path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "bash_words.py")
+        with open(path, encoding="utf-8") as f:
+            source = f.read()
+        mod = importlib.util.module_from_spec(importlib.util.spec_from_file_location(
+            "bash_words", path))
+        exec(compile(source, path, "exec"), mod.__dict__)  # noqa: S102 (our own module)
+        _BASH_WORDS.append(mod)
+    return _BASH_WORDS[0]
+
+
 def bash_calls(event):
     """(git calls as (subcommand, args, where), gh calls as (args, cwd)) in the Bash command.
     Expansions in a git location, and an unparsable command, are skipped and logged."""
-    here = os.path.dirname(os.path.realpath(__file__))
-    if sys.path[:1] != [here]:  # python3 -I leaves this file's dir off sys.path
-        sys.path.insert(0, here)
-    import bash_words  # noqa: PLC0415 (only the Bash levels need it)
+    bash_words = load_bash_words()
     cmd = command_of(event)
     cwd = event.get("cwd") if isinstance(event.get("cwd"), str) else None
     gits, ghs = [], []
@@ -1270,17 +1329,163 @@ def bash_calls(event):
     return gits, ghs
 
 
-def open_repo(where, level):
-    """A Repo for a git call's location, or None (logged) when it can't be read."""
+# Where the Bash levels may read. They run outside the sandbox on a command the model wrote, and
+# what they print (paths, line numbers, rule hits) is an oracle for any repo they scan, so a repo
+# the command names (`git -C ~/vault`, `--git-dir=`, a planted gitfile, an alternates entry) is
+# read only when it is the project's.
+
+ALTERNATES_DEPTH = 5  # git follows nested alternates this deep
+
+
+def _sessions_file(event):
+    key = str(event.get("session_id"))
+    return os.path.join(state_dir(), "sessions", hashlib.sha256(key.encode()).hexdigest()[:32]
+                        + ".json")
+
+
+def record_session_cwd(event):
+    """At SessionStart: the session's cwd, kept from its first start (a later start may come
+    after a cd), as the project dir when CLAUDE_PROJECT_DIR is unset."""
+    cwd = event.get("cwd")
+    path = _sessions_file(event)
+    if not isinstance(cwd, str) or not cwd or os.path.exists(path):
+        return
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(f"{path}.{os.getpid()}", "w", encoding="utf-8") as f:
+            json.dump({"cwd": os.path.abspath(cwd)}, f)
+        os.replace(f"{path}.{os.getpid()}", path)
+    except OSError as e:
+        log("state-error", f"{path}: {e}")
+
+
+def bash_project(event):
+    """The project dir for the Bash levels: CLAUDE_PROJECT_DIR, else the cwd recorded at the
+    session's start, never the call's own cwd (a cd moves it); None when neither is known."""
+    if os.environ.get("CLAUDE_PROJECT_DIR"):
+        return os.environ["CLAUDE_PROJECT_DIR"]
+    try:
+        with open(_sessions_file(event), encoding="utf-8") as f:
+            cwd = json.load(f).get("cwd")
+    except (OSError, ValueError, RecursionError, AttributeError):
+        return None
+    return cwd if isinstance(cwd, str) and cwd else None
+
+
+def under(path, root):
+    """Whether path's realpath is root (a realpath) or inside it."""
+    p = os.path.realpath(path)
+    return p == root or p.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def alternates(objects, depth=0):
+    """The realpath of each object dir that objects/info/alternates names, then of the ones
+    each of those names (lazily, so a caller stops before reading past an outside one); None
+    for an entry this can't read (a quoted path), or past git's depth."""
+    try:
+        with open(os.path.join(objects, "info", "alternates"), "rb") as f:
+            text = f.read(GITCONFIG_MAX).decode("utf-8", "surrogateescape")
+    except FileNotFoundError:
+        return
+    except OSError:
+        yield None
+        return
+    for line in text.split("\n"):  # as git reads it: no stripping, # starts a comment
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith('"') or depth >= ALTERNATES_DEPTH:
+            yield None
+            continue
+        d = os.path.realpath(os.path.join(objects, line))  # an absolute line stays itself
+        yield d
+        yield from alternates(d, depth + 1)
+
+
+class Bounds:
+    """Where the Bash levels may read: anything under the project dir, and the project's own
+    repo (its git dir, common dir and main worktree, so a lane reads its main checkout's .git).
+    The project's repo counts as its own only when its checkout holds the project dir and, for
+    a linked worktree, its git dir's `gitdir` file links back to that checkout: a gitfile the
+    model planted at the project's top can't claim another repo."""
+
+    def __init__(self, project):
+        self.project = os.path.realpath(project)
+        self.own = self.main = None
+        try:
+            r = Repo(self.project)
+        except GitError:
+            return  # the project isn't in a repo, or git refused it
+        gd, cd = os.path.realpath(r.git_dir), os.path.realpath(r.common_dir)
+        main = os.path.dirname(cd) if os.path.basename(cd) == ".git" else cd
+        if gd == cd:  # a main checkout: the project is in its worktree
+            ok = under(self.project, main)
+        else:  # a linked worktree, like a lane
+            back = None
+            try:
+                with open(os.path.join(gd, "gitdir"), encoding="utf-8",
+                          errors="surrogateescape") as f:
+                    back = f.read(4096).strip()
+            except OSError:
+                pass
+            top = os.path.realpath(r.top) if r.top else None
+            ok = bool(back and top and under(gd, cd) and under(self.project, top)
+                      and os.path.realpath(os.path.join(gd, back))
+                      == os.path.realpath(os.path.join(top, ".git")))
+        if ok:
+            self.own, self.main = cd, main
+
+    def allows(self, path):
+        """Whether git may run in, or be pointed at, path."""
+        return any(under(path, root) for root in (self.project, self.main, self.own) if root)
+
+    def outside(self, repo):
+        """What of the repo lies outside these bounds ("its git dir", "its common dir", "an
+        alternates entry"), or None when all of it is inside."""
+        gd, cd = os.path.realpath(repo.git_dir), os.path.realpath(repo.common_dir)
+        if not (self.own and cd == self.own and under(gd, self.own)):
+            if not under(gd, self.project):
+                return "its git dir"
+            if not under(cd, self.project):
+                return "its common dir"
+        for d in alternates(os.path.join(cd, "objects")):
+            if d is None or not self.allows(d):
+                return "an alternates entry"
+        return None
+
+
+def bounds_of(event):
+    """The Bounds for this call, or None (logged by open_repo) when no project dir is known."""
+    project = bash_project(event)
+    return Bounds(project) if project else None
+
+
+def open_repo(where, level, bounds):
+    """A Repo for a git call's location, or None (logged) when it can't be read: a cd this
+    check can't follow, no project dir known, or a repo outside the project (logged without
+    its paths or contents)."""
     if where["cwd"] is None:
         log("git-skipped", f"{level}: a cd this check can't follow, so the call wasn't checked")
         return None
+    if bounds is None:
+        log("git-skipped", f"{level}: no project dir (CLAUDE_PROJECT_DIR unset and no cwd "
+            "recorded at session start), so the call wasn't checked")
+        return None
+    if not all(bounds.allows(where[k]) for k in ("cwd", "git_dir", "work_tree") if where[k]):
+        log("git-skipped", f"{level}: the call names a location outside the project, so it "
+            "wasn't checked")
+        return None
     try:
-        return Repo(where["cwd"], where["git_dir"], where["work_tree"])
+        repo = Repo(where["cwd"], where["git_dir"], where["work_tree"])
     except GitError as e:
         if "ownership" in str(e):
             log("git-skipped", f"{level}: {where['cwd']}: {e}")
         return None
+    why = bounds.outside(repo)
+    if why:
+        log("git-skipped", f"{level}: the repo's {why} is outside the project, so the call "
+            "wasn't checked")
+        return None
+    return repo
 
 
 class Transcripts:
@@ -1333,14 +1538,14 @@ def audited(ts):
                for inp in tool_uses(t, needle, ("Bash",)))
 
 
-def accepted_at_l2(event, ts):
-    """Keys and markers of L2 denies (this agent's and, for a subagent, the parent's): a
-    finding L2 already denied for that file and rule was accepted at edit time."""
+def accepted_at_l2(event):
+    """The deny keys of this agent and, for a subagent, the parent's: among them, one per line
+    each L2 deny named (`L2|skill|rule|path|sha1(the stripped line)`), accepted at edit time.
+    A transcript marker names no line, so it accepts none."""
     keys = set(state_keys(event))
     if event.get("agent_id"):
         keys |= state_keys({**event, "agent_id": None})
-    markers = [x for t in ts.all() for x in Window(t, 0, None).results(b"[practices:L2:")]
-    return keys, markers
+    return keys
 
 
 def commit_rules(skills, cfg, line_only=False):
@@ -1376,11 +1581,15 @@ def scan(repo, spec, rules, level, ctx, lockfiles=True):
     blobs, skipped = repo.blobs([x for _, _, o, n in wanted for x in (n, o)], FILE_MAX, BYTES_MAX)
     if skipped:
         log("scan-truncated", f"{level}: {len(skipped)} blobs over the size caps were not read")
+    cut = 0
     for commit, path, ooid, noid in wanted:
         new = text_of(blobs.get(noid))
         if new is None:
             continue
-        old = text_of(blobs.get(ooid)) if ooid else ""
+        if ooid and ooid not in blobs:
+            cut += 1  # unread, the old blob would make every line of the file read as added
+            continue
+        old = text_of(blobs[ooid]) if ooid else ""
         added = added_lines(old or "", new)
         if not added:
             continue
@@ -1395,14 +1604,17 @@ def scan(repo, spec, rules, level, ctx, lockfiles=True):
             return False
 
         run_patterns(mine, hits)
+    if cut:
+        log("scan-truncated", f"{level}: {cut} changed files were not scanned: their old blob "
+            "was over the size caps, so what they add can't be told")
     return found
 
 
-def fresh(findings, event, ts, repo):
-    """The findings whose key is new for this session and agent, less those L2 already denied
-    for that file and rule; one per key."""
+def fresh(findings, event, repo):
+    """The findings whose key is new for this session and agent, less those on a line L2
+    already denied for that file and rule; one per key."""
     seen = state_keys(event)
-    l2_keys, l2_markers = accepted_at_l2(event, ts)
+    l2_keys = accepted_at_l2(event)
     project = project_dir(event)
     out, keys = [], set()
     for f in findings:
@@ -1410,9 +1622,7 @@ def fresh(findings, event, ts, repo):
             continue
         if f.skill is not ENGINE:
             rel = relative(os.path.join(repo.top or repo.cwd, f.path), project)
-            if f"L2|{f.skill['name']}|{f.rule['id']}|{rel}" in l2_keys or any(
-                    f"[practices:L2:{f.skill['name']}:{f.rule['id']}:{rel}]" in x
-                    for x in l2_markers):
+            if f"L2|{f.skill['name']}|{f.rule['id']}|{rel}|{f.line_hash}" in l2_keys:
                 continue
         keys.add(f.key)
         out.append(f)
@@ -1455,28 +1665,30 @@ def _heads_file(event):
                         + ".json")
 
 
-def record_heads(event, commits):
-    """Before a commit call: {git dir: HEAD or None (unborn)} for each repo it commits in."""
-    heads = {}
+def record_heads(event, commits, bounds):
+    """Before a commit call: {git dir: HEAD or None (unborn)} and {git dir: its worktree} for
+    each repo it commits in, read where the command's cds and options lead from the call's
+    cwd. PostToolUse scans these repos: its own cwd may have moved (`cd sub && git commit`)."""
+    heads, tops = {}, {}
     for _, _, where in commits:
-        repo = open_repo(where, "L3s")
+        repo = open_repo(where, "L3s", bounds)
         if repo is not None:
             CRUMB.mark(repo.git_dir, "L3s", "record HEAD")
             heads[repo.git_dir] = repo.rev("HEAD")
-    if not heads:
-        return
+            tops[repo.git_dir] = repo.top
     path = _heads_file(event)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(f"{path}.{os.getpid()}", "w", encoding="utf-8") as f:
-            json.dump({"heads": heads}, f)
+            json.dump({"heads": heads, "tops": tops}, f)
         os.replace(f"{path}.{os.getpid()}", path)
     except OSError as e:
         log("state-error", f"{path}: {e}")
 
 
 def recorded_heads(event):
-    """The heads record_heads wrote for this tool_use_id (deleted once read), or None."""
+    """(heads, tops) that record_heads wrote for this tool_use_id (deleted once read), or None.
+    A record without tops (written before they were) reads as tops unknown."""
     path = _heads_file(event)
     try:
         with open(path, encoding="utf-8") as f:
@@ -1488,47 +1700,58 @@ def recorded_heads(event):
         log("state-error", f"{path}: unreadable ({type(e).__name__}), read as no record")
         return None
     heads = data.get("heads") if isinstance(data, dict) else None
-    return heads if isinstance(heads, dict) else None
+    tops = data.get("tops", {}) if isinstance(data, dict) else None
+    if not isinstance(heads, dict) or not isinstance(tops, dict) or not all(
+            isinstance(k, str) and (v is None or isinstance(v, str))
+            for d in (heads, tops) for k, v in d.items()):
+        log("state-error", f"{path}: not a heads record, read as no record")
+        return None
+    return heads, tops
 
 
 def post_tool_use(event):
     """L3s: after a commit call, tell the model once per new key what the commits added that a
-    rule flags (additionalContext, which reaches the model with the tool result)."""
+    rule flags (additionalContext, which reaches the model with the tool result). The repos
+    are the ones PreToolUse recorded for this tool_use_id, never a re-parse of the command
+    from this event's cwd, which the command's own cd may have moved; with no record nothing
+    is scanned, logged."""
     if event.get("tool_name") != "Bash":
         return None
     gits, _ = bash_calls(event)
-    commits = [g for g in gits if g[0] == "commit"]
-    if not commits:
+    if not any(g[0] == "commit" for g in gits):
         return None
     cfg = load_config(event)
     if not cfg["enabled"]:
         return None
-    heads = recorded_heads(event) or {}
+    record = recorded_heads(event)
+    if record is None:
+        log("git-skipped", "L3s: no repo was recorded before this commit call, so it wasn't "
+            "checked")
+        return None
+    heads, tops = record
     skills = discover(event)
     rules = commit_rules(skills, cfg)
     found, repos = [], {}
     with Transcripts(event) as ts:
         ctx = context(event, cfg, ts)
         try:
-            for _, _, where in commits:
-                repo = open_repo(where, "L3s")
+            bounds = bounds_of(event) if heads else None
+            for git_dir, before in heads.items():
+                top = tops.get(git_dir)
+                where = {"cwd": top or os.path.dirname(git_dir), "git_dir": git_dir,
+                         "work_tree": top}
+                repo = open_repo(where, "L3s", bounds)  # bounds again: the call ran since
                 if repo is None or repo.git_dir in repos:
                     continue
                 repos[repo.git_dir] = repo
                 head = repo.rev("HEAD")
-                if head is None:
-                    continue
-                if repo.git_dir in heads:
-                    before = heads[repo.git_dir]
-                    if before == head:
-                        continue  # nothing committed
-                    spec = [head, "--not", before] if before else [head]
-                else:
-                    spec = [head, "--not", f"{head}^@"]  # the commit alone; a root has no parents
+                if head is None or before == head:
+                    continue  # unborn still, or nothing committed
+                spec = [head, "--not", before] if before else [head]
                 found += [(f, repo) for f in scan(repo, spec, rules, "L3s", ctx)]
             new = []
             for repo in repos.values():
-                new += fresh([f for f, r in found if r is repo], event, ts, repo)
+                new += fresh([f for f, r in found if r is repo], event, repo)
         except Budget as e:
             log("budget-spent", f"after {BUDGET}s, in the L3s {e}; the commit went unchecked")
             return None
@@ -1582,7 +1805,7 @@ def push_sources(args):
     return srcs, None
 
 
-def push_gate(event, pushes, skills, cfg, ts, ctx):
+def push_gate(event, pushes, skills, cfg, ts, ctx, bounds):
     """(new findings, the repo) for the commits the pushes would send that no remote has."""
     rules = commit_rules(skills, cfg)
     out = []
@@ -1593,7 +1816,7 @@ def push_gate(event, pushes, skills, cfg, ts, ctx):
         if any("$" in s or "%SUBST%" in s for s in srcs):
             log("git-skipped", "push: an expansion in a refspec, so this push wasn't checked")
             continue
-        repo = open_repo(where, "push")
+        repo = open_repo(where, "push", bounds)
         if repo is None:
             continue
         tips = ["--branches"] if "--branches" in srcs else []
@@ -1601,7 +1824,7 @@ def push_gate(event, pushes, skills, cfg, ts, ctx):
         if not tips:
             continue
         found = scan(repo, [*tips, "--not", "--remotes"], rules, "push", ctx)
-        out += fresh(found, event, ts, repo)
+        out += fresh(found, event, repo)
     return out
 
 
@@ -1616,43 +1839,101 @@ def push_reason(findings):
 # L3r: a PR marked ready (or opened as one) waits for a reviewer briefed with the gate lines.
 
 def pr_ready(args):
-    """(True, the --base it names or None) for `gh pr ready` (not --undo) and a `gh pr create`
-    that isn't a draft; (False, None) for anything else."""
+    """None unless args are `gh pr ready` (not --undo) or a `gh pr create` that isn't a draft;
+    else {"base": the --base, "branch": the branch a `ready` selector or create's --head names
+    (an `owner:` prefix dropped), "pr": a `ready` selector that is a PR number or URL}, each
+    None when not given."""
     if len(args) < 2 or args[0] != "pr" or args[1] not in ("ready", "create"):
-        return False, None
-    rest = args[2:]
+        return None
+    rest, out = args[2:], {"base": None, "branch": None, "pr": None}
     if args[1] == "ready":
-        return "--undo" not in rest, None
-    base = None
+        if "--undo" in rest:
+            return None
+        k, selector = 0, None
+        while k < len(rest):
+            if rest[k] in ("-R", "--repo"):
+                k += 2
+                continue
+            if not rest[k].startswith("-") and selector is None:
+                selector = rest[k]
+            k += 1
+        if selector and (re.fullmatch(r"#?\d+", selector) or re.match(r"https?://", selector)):
+            out["pr"] = selector
+        elif selector:
+            out["branch"] = selector
+        return out
     for k, a in enumerate(rest):
+        nxt = rest[k + 1] if k + 1 < len(rest) else None
         if a in ("--draft", "-d", "--draft=true"):
-            return False, None
-        if a in ("--base", "-B") and k + 1 < len(rest):
-            base = rest[k + 1]
-        elif a.startswith("--base="):
-            base = a.split("=", 1)[1]
-        elif a.startswith("-B") and len(a) > 2:
-            base = a[2:]
-    return True, base
+            return None
+        for key, short, long_ in (("base", "-B", "--base"), ("branch", "-H", "--head")):
+            if a in (short, long_) and nxt is not None:
+                out[key] = nxt
+            elif a.startswith(long_ + "="):
+                out[key] = a.split("=", 1)[1]
+            elif a.startswith(short) and len(a) > 2:
+                out[key] = a[2:]
+    if out["branch"] and ":" in out["branch"]:
+        out["branch"] = out["branch"].split(":", 1)[1]  # --head owner:branch, a fork's
+    return out
 
 
-def reviewed(ts):
-    """Whether an Agent or Task call in the transcripts carries the review marker."""
-    return any(isinstance(inp.get("prompt"), str) and REVIEW in inp["prompt"]
-               for t in ts.all() for inp in tool_uses(t, REVIEW.encode(), ("Agent", "Task")))
+def review_marker(head):
+    """The marker a reviewer's brief carries for the commit it judges."""
+    return f"[practices:review:{head[:12]}]"
 
 
-def l3r(event, ghs, skills, cfg, ts, ctx):
-    """(the review block or None, its keys, new rule findings) for each PR call."""
-    blocks_, keys, found = [], [], []
+def reviewed(ts, marker):
+    """Whether an Agent or Task call in the transcripts carries this review marker."""
+    return any(isinstance(inp.get("prompt"), str) and marker in inp["prompt"]
+               for t in ts.all() for inp in tool_uses(t, marker.encode(), ("Agent", "Task")))
+
+
+def pr_head(repo, pr):
+    """(the commit a PR call is judged at, its branch name, a note for the deny or None), or
+    None (logged) when the named branch isn't known here. A branch (a `ready` selector,
+    create's --head) is judged at origin/<branch>, else the local branch; anything else at the
+    checked-out HEAD, and a PR number or URL says so in the deny, since it may be another
+    branch's PR."""
+    if pr["branch"]:
+        b = pr["branch"]
+        head = None if "$" in b or "%" in b else (
+            repo.rev(f"refs/remotes/origin/{b}") or repo.rev(f"refs/heads/{b}"))
+        if head is None:
+            log("git-skipped", "L3r: the PR's branch is neither an origin/<branch> nor a local "
+                "branch here, so the PR went unchecked")
+            return None
+        log("l3r-target", f"L3r: judged the named branch at {head[:12]}")
+        return head, b, None
+    head = repo.rev("HEAD")
+    if head is None:
+        return None, None, None
+    branch = repo.run("rev-parse", "--abbrev-ref", "HEAD").decode(
+        "utf-8", "surrogateescape").strip() or "HEAD"
+    if not pr["pr"]:
+        return head, branch, None
+    log("l3r-target", f"L3r: a PR named by number or URL, judged against {branch} at "
+        f"{head[:12]}")
+    return head, branch, (f"[practices:L3r] This PR was judged against {branch} at "
+                          f"{head[:12]}; run this from the PR's checkout if it is another "
+                          "branch.")
+
+
+def l3r(event, ghs, skills, cfg, ts, ctx, bounds):
+    """(review blocks, their keys, new rule findings, notes) for the PR calls."""
+    blocks_, keys, found, notes = [], [], [], []
     for args, cwd in ghs:
-        ready, base_name = pr_ready(args)
-        if not ready:
+        pr = pr_ready(args)
+        if pr is None:
             continue
-        repo = open_repo({"cwd": cwd, "git_dir": None, "work_tree": None}, "L3r")
+        repo = open_repo({"cwd": cwd, "git_dir": None, "work_tree": None}, "L3r", bounds)
         if repo is None:
             continue
-        head = repo.rev("HEAD")
+        target = pr_head(repo, pr)
+        if target is None:
+            continue
+        head, branch, note = target
+        base_name = pr["base"]
         names = ([f"refs/remotes/origin/{base_name}", base_name] if base_name else
                  ["refs/remotes/origin/HEAD", "refs/remotes/origin/main",
                   "refs/remotes/origin/master"])
@@ -1676,23 +1957,27 @@ def l3r(event, ghs, skills, cfg, ts, ctx):
             for s, _ in run_patterns(events, lambda x: event_fires(x[1], path, text,
                                                                   cfg["helpers"], CRUMB)):
                 touched.setdefault(s["name"], (s, []))[1].append(path)
-        if touched and not reviewed(ts):
+        told = (len(blocks_), len(found))
+        if touched and not reviewed(ts, review_marker(head)):
             new = [(s, paths) for s, paths in touched.values()
                    if (k := f"L3r|{s['name']}|review|-|{_sha1(head)}") not in state_keys(event)
                    and k not in keys]
             if new:
                 keys += [f"L3r|{s['name']}|review|-|{_sha1(head)}" for s, _ in new]
-                blocks_.append(review_block(new, mb))
+                blocks_.append(review_block(new, mb, head, branch))
         rules = commit_rules(skills, cfg, line_only=True)
         found += fresh(scan(repo, [head, "--not", mb], rules, "L3r", ctx, lockfiles=False),
-                       event, ts, repo)
-    return blocks_, keys, found
+                       event, repo)
+        if note and (len(blocks_), len(found)) != told:
+            notes.append(note)
+    return blocks_, keys, found, notes
 
 
-def review_block(touched, mb, shown=8):
-    parts = [f"{REVIEW} Review this branch's changes ({mb[:12]}..HEAD) against each practices "
-             "skill below. Read its SKILL.md, check every must-hold line against the changed "
-             "code, and report each one that doesn't hold, with file and line."]
+def review_block(touched, mb, head, branch, shown=8):
+    parts = [f"{review_marker(head)} Review the changes of {branch} ({mb[:12]}..{head[:12]}) "
+             "against each practices skill below. Read its SKILL.md, check every must-hold "
+             "line against the changed code, and report each one that doesn't hold, with file "
+             "and line."]
     for s, paths in touched:
         paths = list(dict.fromkeys(paths))
         more = f", and {len(paths) - shown} more" if len(paths) > shown else ""
@@ -1712,7 +1997,7 @@ def bash_pre(event):
     gits, ghs = bash_calls(event)
     commits = [g for g in gits if g[0] == "commit"]
     pushes = [g for g in gits if g[0] == "push"]
-    ghs = [g for g in ghs if pr_ready(g[0])[0]]
+    ghs = [g for g in ghs if pr_ready(g[0]) is not None]
     if not (commits or pushes or ghs):
         return None
     cfg = load_config(event)
@@ -1720,26 +2005,27 @@ def bash_pre(event):
         return None
     if commits and pushes:
         key = f"push|engine|chain|-|{_sha1(command_of(event))}"
-        if key not in state_keys(event):
-            state_add(event, [key])
+        if key not in state_keys(event) and state_add(event, [key]):
             return deny(
                 "[practices:push] This one Bash call both commits and pushes, so the push check "
                 "can't see what the commit adds. Run the commit and the push as separate Bash "
                 "calls. Resending this call unchanged passes this check, unscanned.")
     reasons, keys = [], []
     try:
+        bounds = bounds_of(event)
         if commits:
-            record_heads(event, commits)
+            record_heads(event, commits, bounds)
         if pushes or ghs:
             skills = discover(event)
             with Transcripts(event) as ts:
                 ctx = context(event, cfg, ts)
-                new = push_gate(event, pushes, skills, cfg, ts, ctx) if pushes else []
+                new = push_gate(event, pushes, skills, cfg, ts, ctx, bounds) if pushes else []
                 if new:
                     reasons.append(push_reason(new))
                     keys += [f.key for f in new]
                 if ghs:
-                    review, review_keys, found = l3r(event, ghs, skills, cfg, ts, ctx)
+                    review, review_keys, found, notes = l3r(event, ghs, skills, cfg, ts, ctx,
+                                                            bounds)
                     reasons += review
                     keys += review_keys
                     found = [f for f in found if f.key not in keys]
@@ -1750,15 +2036,15 @@ def bash_pre(event):
                             "positive, add `practices-allow: <id> <reason>` to the code. Resending "
                             "passes this check.\n" + findings_text(found))
                         keys += [f.key for f in found]
+                    reasons += notes
     except Budget as e:
         log("budget-spent", f"after {BUDGET}s, in the Bash check's {e}; the call was allowed")
         return None
     except GitError as e:
         log("git-skipped", f"Bash check: {e}")
         return None
-    if not reasons:
+    if not reasons or not state_add(event, keys):  # an unkept key: allow, logged
         return None
-    state_add(event, keys)
     return deny("\n\n".join(reasons))
 
 
@@ -1770,18 +2056,41 @@ def deny(reason):
 # ---------------------------------------------------------------- SessionStart
 
 def digest(names, skills):
-    head = ("Practices skills loaded before this compaction: " + ", ".join(names) + ".")
-    out = head
-    for n in names:
-        s = skills[n]
-        block = (f"\n{n} ({os.path.join(s['dir'], 'SKILL.md')}), its must-hold lines:"
-                 + "".join(f"\n- {line}" for line in s["gate"]))
-        if len(out) + len(block) >= DIGEST_MAX:
-            room = DIGEST_MAX - len(out) - 2
-            out += block[:max(room, 0)] + ("…" if room > 0 else "")
+    """The L4 digest, under DIGEST_MAX characters: a head naming the skills, then each one's
+    SKILL.md path and gate lines. The room after the head is shared among the skills (one that
+    needs less than its share passes the rest on), so a long gate never crowds out the next
+    skill, and a skill's lines are cut only between lines, with a note of how many it left
+    out."""
+    head = "Practices skills loaded before this compaction: " + ", ".join(names) + "."
+    blocks = [(f"\n{n} ({os.path.join(skills[n]['dir'], 'SKILL.md')}), its must-hold lines:",
+               [f"\n- {line}" for line in skills[n]["gate"]]) for n in names]
+    need = [len(title) + sum(map(len, lines)) for title, lines in blocks]
+    room, share, left = DIGEST_MAX - 1 - len(head), {}, list(range(len(blocks)))
+    while left:  # each skill's share: what it needs, or an even split of what is left
+        fair = max(room, 0) // len(left)
+        fits = [k for k in left if need[k] <= fair]
+        if not fits:
+            share.update((k, fair) for k in left)
             break
-        out += block
-    return out[:DIGEST_MAX - 1]
+        for k in fits:
+            share[k], room = need[k], room - need[k]
+        left = [k for k in left if k not in fits]
+    out = head
+    for k, (title, lines) in enumerate(blocks):
+        if need[k] <= share[k]:
+            out += title + "".join(lines)
+            continue
+        kept, used = [], len(title)
+        for line in lines:
+            note = f"\n- ({len(lines) - len(kept) - 1} more in its SKILL.md)"
+            if used + len(line) + len(note) > share[k]:
+                break
+            kept.append(line)
+            used += len(line)
+        note = f"\n- ({len(lines) - len(kept)} more in its SKILL.md)"
+        if used + len(note) <= share[k]:
+            out += title + "".join(kept) + note
+    return out[:DIGEST_MAX - 1]  # only a head naming dozens of skills reaches this cap
 
 
 def compact(event):
@@ -1875,6 +2184,7 @@ def health(event):
                         + f" since the last start (see {os.path.join(d, 'errors.log')})")
     prune(os.path.join(d, "denies"), now)
     prune(os.path.join(d, "heads"), now)
+    prune(os.path.join(d, "sessions"), now)
     if not problems:
         return None
     return {"systemMessage": "practices hooks: " + "; ".join(problems)}
@@ -1887,7 +2197,7 @@ LABELS = {"skill-disabled": ("skill disabled", "skills disabled"),
           "state-error": ("state error", "state errors"), "crash": ("crash", "crashes"),
           "git-skipped": ("git call skipped", "git calls skipped"),
           "scan-truncated": ("scan cut short", "scans cut short")}
-QUIET = {"fragment-only", "bash-unparsed"}  # logged for debugging, never an engine error
+QUIET = {"fragment-only", "bash-unparsed", "l3r-target"}  # for debugging, never an engine error
 
 
 def new_errors(d):
@@ -1937,6 +2247,7 @@ def main():
         raise ImportError("tomllib missing (python3 < 3.11)")
     name = event.get("hook_event_name")
     if name == "SessionStart" or (name is None and "source" in event):
+        record_session_cwd(event)
         source = event.get("source")
         out = health(event) if source == "startup" else compact(event) if source == "compact" \
             else None

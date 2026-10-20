@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import unittest
 
 import command_inventory as inv
@@ -290,25 +291,59 @@ class Baseline(unittest.TestCase):
     def practices_bash(event):
         return [c for c in commands(event, "Bash") if "practices-check" in c]
 
-    def run_prefilter(self, cmd, command, env):
+    def run_prefilter(self, cmd, command, env, stdout=""):
         payload = json.dumps({"session_id": "s", "transcript_path": "/x/s.jsonl", "cwd": "/w",
                               "hook_event_name": "PreToolUse", "tool_name": "Bash",
                               "tool_input": {"command": command}, "tool_use_id": "t1",
-                              "tool_response": {"stdout": "", "stderr": ""}})
+                              "tool_response": {"stdout": stdout, "stderr": ""}})
         return subprocess.run(["sh", "-c", cmd], input=payload, capture_output=True, text=True,
                               env=env, timeout=10)
+
+    def stub_home(self, name):
+        """A HOME whose practices-check.sh stub records each run in <home>/ran."""
+        home = os.path.join(os.environ.get("TMPDIR", "/tmp"), f"{name}-{os.getpid()}")
+        hooks = os.path.join(home, ".claude", "hooks")
+        os.makedirs(hooks, exist_ok=True)
+        self.addCleanup(shutil.rmtree, home, True)
+        with open(os.path.join(hooks, "practices-check.sh"), "w") as f:
+            f.write(f"cat >/dev/null; touch {os.path.join(home, 'ran')}\n")
+        return home
+
+    def test_the_practices_bash_prefilters_exit_0_when_the_shim_is_missing(self):
+        # Review round 1: `bash <missing shim>` exits 127, a hook error on every matching call.
+        home = os.path.join(os.environ.get("TMPDIR", "/tmp"), f"pc-noshim-{os.getpid()}")
+        os.makedirs(home, exist_ok=True)
+        self.addCleanup(shutil.rmtree, home, True)
+        for event in ("PreToolUse", "PostToolUse"):
+            (cmd,) = self.practices_bash(event)
+            with self.subTest(event=event):
+                p = self.run_prefilter(cmd, "git commit -m x", dict(os.environ, HOME=home))
+                self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+
+    def test_the_practices_bash_prefilters_read_only_the_command_in_linear_time(self):
+        # Review round 1: bash's `*git*commit*` glob backtracks over every "git" in a large
+        # payload, O(git count x length). grep -E's automaton is linear, and the pattern reads
+        # only the command string, so git log's output never starts python3.
+        home = self.stub_home("pc-linear")
+        ran, env = os.path.join(home, "ran"), dict(os.environ, HOME=home)
+        big = ".git/objects/pack\n" * ((1 << 20) // 18)
+        cases = (("cat <<'EOF'\n" + big + "EOF", ""), ("git log --name-only", big),
+                 ("git log -3", "commit 0123abc\nAuthor: x\n\n    git push it\n" * 3))
+        for event in ("PreToolUse", "PostToolUse"):
+            (cmd,) = self.practices_bash(event)
+            for command, stdout in cases:
+                with self.subTest(event=event, command=command[:20]):
+                    start = time.monotonic()
+                    p = self.run_prefilter(cmd, command, env, stdout=stdout)
+                    self.assertLess(time.monotonic() - start, 1.0)
+                    self.assertEqual(p.returncode, 0, p.stderr)
+                    self.assertFalse(os.path.exists(ran))
 
     def test_the_practices_bash_prefilters_start_python_only_for_their_calls(self):
         # A stub stands in for the shim and records each run: Python must not start for any
         # other Bash call, and no call is blocked either way.
-        home = os.path.join(os.environ.get("TMPDIR", "/tmp"), f"pc-home-{os.getpid()}")
-        hooks = os.path.join(home, ".claude", "hooks")
-        os.makedirs(hooks, exist_ok=True)
-        self.addCleanup(shutil.rmtree, home, True)
-        ran = os.path.join(home, "ran")
-        with open(os.path.join(hooks, "practices-check.sh"), "w") as f:
-            f.write(f"cat >/dev/null; touch {ran}\n")
-        env = dict(os.environ, HOME=home)
+        home = self.stub_home("pc-home")
+        ran, env = os.path.join(home, "ran"), dict(os.environ, HOME=home)
         fires = {"PreToolUse": ("git commit -m x", "git add -A && git commit", "git push",
                                 "git -C sub push origin x", "gh pr ready 5",
                                 "gh pr create --fill"),
@@ -339,7 +374,7 @@ class Baseline(unittest.TestCase):
         self.addCleanup(shutil.rmtree, home, True)
         os.symlink(os.path.join(REPO, "hooks", "practices-check.sh"),
                    os.path.join(hooks, "practices-check.sh"))
-        for tool in ("sh", "bash", "cat", "readlink"):
+        for tool in ("sh", "bash", "cat", "readlink", "grep"):
             os.symlink(shutil.which(tool), os.path.join(bin_, tool))
         env = dict(os.environ, HOME=home, PATH=bin_)
         for event in ("PreToolUse", "PostToolUse"):

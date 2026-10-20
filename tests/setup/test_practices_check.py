@@ -662,6 +662,23 @@ class L4(Base):
         self.assertLess(len(ctx), 2000)
         self.assertTrue(ctx.startswith("Practices skills loaded before this compaction: demo."))
 
+    def test_each_loaded_skill_gets_its_share_cut_only_between_lines(self):
+        # A long gate no longer crowds out the next skill: the 2,000 characters are shared
+        # per skill, and a skill's lines are cut only between lines, never mid-line.
+        long_ = [f"Alpha line {n}: " + "a" * 150 for n in range(12)]
+        self.skill("alpha", 'skill = "alpha"\ngate = ' + json.dumps(long_) + "\n")
+        self.skill("beta", 'skill = "beta"\ngate = ["Beta one.", "Beta two."]\n')
+        self.rows([*load("t1", "Skill", skill="alpha"), *load("t2", "Skill", skill="beta"),
+                   text()])
+        ctx = self.digest()
+        self.assertLess(len(ctx), 2000)
+        self.assertIn("\n- Beta one.\n- Beta two.", ctx)
+        self.assertIn(f"\n- {long_[0]}\n", ctx)
+        for line in (x[2:] for x in ctx.split("\n") if x.startswith("- ")):
+            with self.subTest(line=line[:20]):
+                self.assertTrue(line in long_ or line in ("Beta one.", "Beta two.")
+                                or re.fullmatch(r"\(\d+ more in its SKILL\.md\)", line), line)
+
     def test_resume_and_clear_print_nothing(self):
         self.loaded()
         self.assertIsNone(self.start("resume"))
@@ -785,6 +802,25 @@ class Failures(Base):
                            capture_output=True, text=True, env=self.env, timeout=30)
         self.assertEqual(p.returncode, 0)
         self.assertIn("practices hooks are down", json.loads(p.stdout)["systemMessage"])
+
+    def test_a_module_planted_in_the_hooks_dir_never_runs(self):
+        # Review round 1: bash_words went in by putting the hooks dir first on sys.path, so a
+        # shlex.py there ran, outside the sandbox, when bash_words imported shlex.
+        hooks = os.path.join(self.tmp, "hooks")
+        os.makedirs(hooks)
+        for name in ("practices-check.sh", "practices_check.py", "bash_words.py"):
+            shutil.copy(os.path.join(REPO, "hooks", name), hooks)
+        ran = os.path.join(self.tmp, "ran")
+        with open(os.path.join(hooks, "shlex.py"), "w") as f:
+            f.write(f"open({ran!r}, 'a').write('planted')\n")
+        event = {"session_id": SID, "transcript_path": self.transcript, "cwd": self.proj,
+                 "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_use_id": "t-pl",
+                 "tool_input": {"command": "git commit -m x && git push"}}
+        p = subprocess.run(["bash", os.path.join(hooks, "practices-check.sh")],
+                           input=json.dumps(event), capture_output=True, text=True,
+                           env=self.env, timeout=30)
+        self.assertIn("separate Bash calls", p.stdout)  # bash_words ran
+        self.assertFalse(os.path.exists(ran), "the planted shlex.py ran")
 
     def test_a_normal_exit_leaves_no_breadcrumb(self):
         self.fire("lib/actions.ts", "'use server'\n")
@@ -955,6 +991,21 @@ class Shipped(unittest.TestCase):
                     for g in item.get("paths", []):
                         PC.re.compile(PC.glob_regex(g))
 
+    def test_a_digest_of_every_shipped_skill_keeps_a_full_line_of_each(self):
+        # As installed: each skill's SKILL.md path under ~/.claude/skills.
+        skills = {}
+        for f in sorted(glob.glob(os.path.join(REPO, "skills", "*", "events.toml"))):
+            skill, why = PC.load_skill(os.path.dirname(f))
+            self.assertIsNone(why)
+            skill["dir"] = os.path.join(os.path.expanduser("~"), ".claude", "skills",
+                                        os.path.basename(os.path.dirname(f)))
+            skills[skill["name"]] = skill
+        ctx = PC.digest(sorted(skills), skills)
+        self.assertLess(len(ctx), 2000)
+        for name, skill in skills.items():
+            with self.subTest(skill=name):
+                self.assertTrue(any(f"\n- {line}\n" in ctx + "\n" for line in skill["gate"]))
+
     def test_the_lint(self):
         for bad in ("(a+)+", "(a*)*", "(.*)+", r"(?:\s*,\s*\w+)*", "(ab|ab)*", "("):
             with self.subTest(bad=bad):
@@ -1089,6 +1140,30 @@ class GitHelper(GitMixin, unittest.TestCase):
         self.assertEqual(os.path.realpath(r.top), os.path.realpath(wt))
         self.assertFalse(os.path.exists(self.canary_file))
 
+    def test_a_partial_clones_missing_blob_runs_no_transport(self):
+        # A lazy fetch of a missing blob would run the remote's transport, and ext:: runs a
+        # command. GIT_ALLOW_PROTOCOL=none refuses it; git then gives up on the blob (2.43
+        # exits 128), and the level is skipped and logged, never the transport run.
+        self.commit(**{"a.ts": "x({ ...body })\n"})
+        self.sh("config", "uploadpack.allowFilter", "true")
+        self.sh("config", "uploadpack.allowAnySHA1InWant", "true")
+        clone = os.path.join(self.tmp, "partial")
+        self.sh("-c", "protocol.file.allow=always", "clone", "-q", "--no-checkout",
+                "--filter=blob:none", f"file://{self.repo}", clone, cwd=self.tmp)
+        fetched = os.path.join(self.tmp, "fetched")
+        self.sh("config", "remote.origin.url", f"ext::sh -c touch% {fetched}", cwd=clone)
+        self.sh("config", "protocol.ext.allow", "always", cwd=clone)
+        blob = self.sh("rev-parse", "HEAD:a.ts", cwd=clone)
+        self.sh("cat-file", "-p", blob, cwd=clone, check=False)  # the trap is live
+        self.assertTrue(os.path.exists(fetched), "a plain read never ran the transport")
+        os.unlink(fetched)
+        try:
+            _, changes, blobs = self.read(cwd=clone)
+            self.assertEqual(([c[5] for c in changes], blobs), (["a.ts"], {}))
+        except PC.GitError:
+            pass
+        self.assertFalse(os.path.exists(fetched), "the engine's read ran the transport")
+
     def test_git_dir_in_the_hooks_own_env_is_ignored(self):
         self.commit(mine="1\n")
         other = self.make_repo(os.path.join(self.tmp, "other"))
@@ -1184,6 +1259,20 @@ class L3s(BashBase):
         self.assertIsNone(self.committed(**{"lib__save.ts": "x({ ...body })\n"}))
         self.assertIn("lib/other.ts:1", self.committed(**{"lib__other.ts": "x({ ...body })\n"}))
 
+    def test_an_l2_deny_accepts_only_the_lines_it_named(self):
+        # Review round 1: the L2 key had no line in it, so one deny exempted every later
+        # finding of that rule in that file.
+        self.loaded()
+        self.assertIsNotNone(self.fire("lib/save.ts", "x({ ...body })\n"))
+        told = self.committed(**{"lib__save.ts": "x({ ...body })\ny({ ...body, z })\n"})
+        self.assertIn("lib/save.ts:2", told)
+        self.assertNotIn("lib/save.ts:1", told)
+        self.skill("keys", KEYS, where="user")
+        self.assertIsNotNone(self.fire("k.ts", "a = 'TOKEN_ABCDEFGH'\n"))
+        told = self.committed(**{"k.ts": "a = 'TOKEN_ABCDEFGH'\nb = 'TOKEN_QRSTUVWX'\n"})
+        self.assertIn("KEY-1 (keys) at k.ts:2", told)
+        self.assertNotIn("k.ts:1", told)
+
     def test_a_line_scoped_allow_covers_only_its_line_and_at_picks_the_levels(self):
         self.skill("keys", KEYS, where="user")
         told = self.committed(**{"k.ts": "a = 'TOKEN_ABCDEFGH' // practices-allow: KEY-1 test\n"
@@ -1192,12 +1281,33 @@ class L3s(BashBase):
         self.assertNotIn("k.ts:1", told)
         self.assertIn("LATE-1 (keys) at k.ts:3", told)
 
-    def test_without_a_record_the_head_commit_alone_is_scanned(self):
-        self.assertIn("root.ts:1", self.committed(pre=False, **{"root.ts": "x({ ...body })\n"}))
-        self.commit(**{"old.ts": "x({ ...body })\n"})  # an earlier commit, never scanned
-        told = self.committed(pre=False, **{"new.ts": "y({ ...body })\n"})
-        self.assertIn("new.ts:1", told)
-        self.assertNotIn("old.ts", told)
+    def test_a_root_commit_is_scanned_and_without_a_record_nothing_is(self):
+        self.assertIn("root.ts:1", self.committed(**{"root.ts": "x({ ...body })\n"}))
+        before = self.log()
+        self.assertIsNone(self.committed(pre=False, **{"new.ts": "y({ ...body })\n"}))
+        self.assertIn("no repo was recorded", self.log()[len(before):])
+
+    def test_a_heads_record_without_worktrees_still_reads(self):
+        head = self.commit(**{"a.ts": "1\n"})
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            path = PC._heads_file(self.event("git commit -m x", "PostToolUse", "b-old"))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump({"heads": {os.path.join(self.proj, ".git"): head}}, f)
+        self.commit(**{"b.ts": "x({ ...body })\n"})
+        self.assertIn("b.ts:1", self.post("git commit -m x", "b-old"))
+
+    def test_post_scans_the_repo_pre_recorded_not_a_reparse_from_its_cwd(self):
+        # Review round 1: `cd sub && git commit` moves the session's cwd into sub, and a
+        # re-parse from there looked for sub/sub, so the commit went unchecked.
+        sub = self.make_repo(os.path.join(self.proj, "sub"))
+        with open(os.path.join(self.proj, ".git", "info", "exclude"), "a") as f:
+            f.write("sub/\n")
+        command = "cd sub && git commit -m x"
+        self.assertIsNone(self.pre(command, "b-cd"))
+        self.commit(repo=sub, **{"s.ts": "x({ ...body })\n"})
+        told = self.run_hook({**self.event(command, "PostToolUse", "b-cd"), "cwd": sub})
+        self.assertIn("s.ts:1", told["hookSpecificOutput"]["additionalContext"])
 
     def test_merges_and_pure_renames_are_skipped(self):
         self.commit(**{"a.ts": "x({ ...body })\n"})
@@ -1221,7 +1331,9 @@ class L3s(BashBase):
         self.assertIsNone(self.committed(**{"package-lock.json": "{\"a\": 1}\n"}))
 
     def test_the_command_names_the_repo(self):
-        sub = self.make_repo(os.path.join(self.tmp, "sub"))
+        sub = self.make_repo(os.path.join(self.proj, "sub"))  # a repo inside the project
+        with open(os.path.join(self.proj, ".git", "info", "exclude"), "a") as f:
+            f.write("sub/\n")
         self.commit(**{"seed.ts": "x({ ...body })\n"})
         told = self.committed(repo=sub, command=f"git -C {sub} commit -m x",
                               **{"s.ts": "x({ ...body })\n"})
@@ -1232,7 +1344,7 @@ class L3s(BashBase):
         told = self.committed(repo=sub, command=f"GIT_DIR={sub}/.git git commit -m x",
                               **{"u.ts": "x({ ...body })\n"})
         self.assertIn("u.ts:1", told)
-        told = self.committed(repo=sub, command="cd ../sub && git commit -m 'git push later'",
+        told = self.committed(repo=sub, command="cd sub && git commit -m 'git push later'",
                               **{"v.ts": "x({ ...body })\n"})
         self.assertIn("v.ts:1", told)
 
@@ -1274,6 +1386,107 @@ class L3s(BashBase):
         self.assertIsNone(self.post("git commit -m x", tid, agent_id=agent))
 
 
+class OutsideTheProject(BashBase):
+    """Review round 1: the Bash levels read any repo a command named and printed its paths,
+    lines and rule hits. A repo is read only when its git dir, common dir and alternates sit
+    under the project dir or the project's own repo (a lane's main checkout)."""
+
+    def setUp(self):
+        super().setUp()
+        self.vault = self.make_repo(os.path.join(self.tmp, "vault"))
+        self.secret = self.commit(repo=self.vault, **{"secret.ts": "x({ ...body })\n"})
+
+    def assert_skipped(self, before=""):
+        log = self.log()[len(before):]
+        self.assertIn("outside the project", log)
+        self.assertNotIn(self.vault, log)
+        self.assertNotIn("secret", log)
+
+    def test_a_repo_the_command_names_outside_the_project_is_never_read(self):
+        v = self.vault
+        for n, command in enumerate((f"git -C {v} commit -m x",
+                                     f"git --git-dir={v}/.git --work-tree={v} commit -m x",
+                                     f"GIT_DIR={v}/.git git commit -m x",
+                                     f"cd {v} && git commit -m x")):
+            with self.subTest(command=command):
+                before = self.log()
+                self.assertIsNone(self.committed(repo=v, command=command,
+                                                 **{f"s{n}.ts": "x({ ...body })\n"}))
+                self.assert_skipped(before)
+        self.assertIsNone(self.pre(f"git -C {v} push", session_id="s-push"))
+        self.sh("update-ref", "refs/remotes/origin/main", self.secret, cwd=v)
+        self.commit(repo=v, **{"w.ts": "y({ ...body })\n"})
+        self.assertIsNone(self.pre(f"cd {v} && gh pr ready", session_id="s-pr"))
+        self.assert_skipped()
+
+    def test_a_planted_gitfile_or_alternates_entry_is_never_read(self):
+        planted = os.path.join(self.proj, "sub")
+        os.makedirs(planted)
+        with open(os.path.join(planted, ".git"), "w") as f:
+            f.write(f"gitdir: {self.vault}/.git\n")
+        before = self.log()
+        self.assertIsNone(self.pre("cd sub && git push", session_id="s-gitfile"))
+        self.assert_skipped(before)
+        self.commit(**{"mine.ts": "y({ ...body })\n"})
+        alt = os.path.join(self.proj, ".git", "objects", "info", "alternates")
+        with open(alt, "w") as f:
+            f.write(f"{self.vault}/.git/objects\n")
+        before = self.log()
+        self.assertIsNone(self.pre("git push", session_id="s-alt"))
+        self.assertIn("alternates entry is outside", self.log()[len(before):])
+        os.unlink(alt)
+        self.assertIn("mine.ts:1", self.pre("git push", session_id="s-alt"))
+
+    def test_a_lane_reads_its_main_checkouts_git_dir(self):
+        self.skill("demo", DEMO, where="user")
+        main = self.make_repo(os.path.join(self.tmp, "main"))
+        self.commit(repo=main, seed="1\n")
+        lane = os.path.join(self.tmp, "lane")
+        self.sh("worktree", "add", "-q", "-b", "lane", lane, cwd=main)
+        self.env["CLAUDE_PROJECT_DIR"] = lane
+        tid = "b-lane"
+        self.assertIsNone(self.run_hook({**self.event("git commit -m x", "PreToolUse", tid),
+                                         "cwd": lane}))
+        self.commit(repo=lane, **{"l.ts": "x({ ...body })\n"})
+        out = self.run_hook({**self.event("git commit -m x", "PostToolUse", tid), "cwd": lane})
+        self.assertIn("l.ts:1", out["hookSpecificOutput"]["additionalContext"])
+        # Its main checkout is the project's own repo too; another repo under it is not.
+        self.commit(repo=main, **{"m.ts": "x({ ...body })\n"})
+        out = self.run_hook({**self.event(f"cd {main} && git push", "PreToolUse", "b-main"),
+                             "cwd": lane})
+        self.assertIn("m.ts:1", out["hookSpecificOutput"]["permissionDecisionReason"])
+        nested = self.make_repo(os.path.join(main, "nested"))
+        self.commit(repo=nested, **{"n.ts": "x({ ...body })\n"})
+        self.assertIsNone(self.run_hook({**self.event(f"git -C {nested} push", "PreToolUse",
+                                                      "b-nested"), "cwd": lane}))
+
+    def test_a_gitfile_planted_at_the_projects_top_claims_no_other_repo(self):
+        self.skill("demo", DEMO, where="user")
+        fake = os.path.join(self.tmp, "fake")
+        os.makedirs(fake)
+        with open(os.path.join(fake, ".git"), "w") as f:
+            f.write(f"gitdir: {self.vault}/.git\n")
+        self.env["CLAUDE_PROJECT_DIR"] = fake
+        before = self.log()
+        self.assertIsNone(self.run_hook({**self.event("git push", "PreToolUse", "b-fake"),
+                                         "cwd": fake}))
+        self.assert_skipped(before)
+
+    def test_without_claude_project_dir_the_session_start_cwd_bounds_the_reads(self):
+        self.skill("demo", DEMO, where="user")
+        del self.env["CLAUDE_PROJECT_DIR"]
+        self.commit(**{"mine.ts": "y({ ...body })\n"})
+        self.commit(repo=self.vault, **{"v.ts": "y({ ...body })\n"})
+        before = self.log()
+        self.assertIsNone(self.pre("git push"))  # no session start recorded: nothing is read
+        self.assertIn("no project dir", self.log()[len(before):])
+        self.start("startup")  # cwd: the project
+        self.start("compact", cwd=self.vault)  # a later start keeps the first cwd
+        self.assertIsNone(self.run_hook({**self.event("git push", "PreToolUse", "b-v"),
+                                         "cwd": self.vault}))
+        self.assertIn("mine.ts:1", self.pre("git push"))
+
+
 class Push(BashBase):
     """The push gate scans what a push would send (the remotes' refs set by update-ref: no
     test ever pushes)."""
@@ -1295,6 +1508,27 @@ class Push(BashBase):
         reason = self.pre("git push")
         self.assertIn("newer.ts:1", reason)
         self.assertNotIn("new.ts:1,", reason)
+
+    def test_a_push_with_a_redirection_is_scanned(self):
+        self.commit(**{"new.ts": "y({ ...body })\n"})
+        for n, command in enumerate(("git push 2>&1", "git push origin 2>&1 | tail",
+                                     "git push -q 2>/dev/null")):
+            with self.subTest(command=command):
+                self.assertIn("new.ts:1", self.pre(command, session_id=f"redir-{n}"))
+        self.assertIn("a.ts:1", self.committed(command="git commit -m x >/dev/null",
+                                               **{"a.ts": "x({ ...body })\n"}))
+
+    def test_an_unwritable_state_file_allows_the_call_and_logs(self):
+        # Review round 1: the Bash levels have no transcript marker to fall back on, so a deny
+        # whose key couldn't be written denied every resend too, forever.
+        self.commit(**{"new.ts": "y({ ...body })\n"})
+        d = os.path.join(self.state, "dotclaude", "practices")
+        os.makedirs(d)
+        open(os.path.join(d, "denies"), "w").close()  # the state dir can't be made
+        for command in ("git push", "git commit -m x && git push", "gh pr create --title x"):
+            with self.subTest(command=command):
+                self.assertIsNone(self.pre(command))
+        self.assertIn("state-error", self.log())
 
     def test_a_clean_push_deletes_and_dry_runs_pass(self):
         self.commit(**{"clean.ts": "const a = 1\n"})
@@ -1335,10 +1569,13 @@ class L3r(BashBase):
         self.sh("update-ref", "refs/remotes/origin/main", self.base)
         self.commit(**{"app__api__x__route.ts": "export const x = 1\n", "lib__u.ts": "1\n"})
 
+    def marker(self, rev="HEAD"):
+        return f"[practices:review:{self.sh('rev-parse', rev)[:12]}]"
+
     def test_denies_once_with_the_block_to_paste_and_the_resend_passes(self):
         reason = self.pre("gh pr create --title x --body y")
         self.assertTrue(reason.startswith("[practices:L3r]"), reason)
-        self.assertIn("[practices:review]", reason)
+        self.assertIn(self.marker() + " Review the changes of main", reason)
         self.assertIn("demo (" + os.path.join(self.proj, ".claude", "skills", "demo", "SKILL.md")
                       + "), for app/api/x/route.ts:", reason)
         self.assertNotIn("lib/u.ts", reason)
@@ -1354,14 +1591,48 @@ class L3r(BashBase):
 
     def test_a_marked_reviewer_brief_satisfies_it(self):
         self.add(use("t-rev", "Agent", subagent_type="reviewer",
-                     prompt="Review this.\n[practices:review] demo ..."))
+                     prompt=f"Review this.\n{self.marker()} demo ..."))
         self.assertIsNone(self.pre("gh pr ready 12"))
 
     def test_an_unmarked_agent_or_a_quoted_marker_does_not(self):
         self.add(use("t-rev", "Agent", prompt="Review this."),
-                 text("[practices:review] in prose"),
-                 use("t-b", "Bash", command="echo '[practices:review]'"))
+                 text(f"{self.marker()} in prose"),
+                 use("t-b", "Bash", command=f"echo '{self.marker()}'"))
         self.assertIsNotNone(self.pre("gh pr ready"))
+
+    def test_a_review_clears_only_the_commit_it_judged(self):
+        # Review round 1: one marked reviewer satisfied L3r for the rest of the session, for
+        # any PR. The marker names the head it judged.
+        self.add(use("t-rev", "Agent", prompt=f"{self.marker()} demo ..."))
+        self.assertIsNone(self.pre("gh pr ready"))
+        self.commit(**{"app__api__y__route.ts": "export const y = 1\n"})
+        self.assertIn(self.marker(), self.pre("gh pr ready", session_id="s-next"))
+        self.add(use("t-old", "Agent", prompt="[practices:review] the old, bare marker"))
+        self.assertIsNotNone(self.pre("gh pr ready", session_id="s-bare"))
+
+    def test_a_named_branch_is_judged_and_a_pr_number_says_what_was(self):
+        # Review round 1: L3r judged local HEAD whatever PR the call named.
+        self.sh("branch", "clean", self.base)  # a branch with nothing a skill owns
+        self.assertIsNone(self.pre("gh pr ready clean", session_id="s-clean"))
+        self.assertIsNone(self.pre("gh pr create --head clean --title t", session_id="s-c2"))
+        self.assertIsNone(self.pre("gh pr create -H me:clean --title t", session_id="s-c3"))
+        self.sh("branch", "feat", self.base)
+        self.sh("update-ref", "refs/remotes/origin/feat", self.sh("rev-parse", "HEAD"))
+        reason = self.pre("gh pr ready feat", session_id="s-feat")  # origin/feat wins
+        self.assertIn("Review the changes of feat", reason)
+        before = self.log()
+        self.assertIsNone(self.pre("gh pr ready nowhere", session_id="s-none"))
+        self.assertIn("neither an origin/<branch> nor a local branch", self.log()[len(before):])
+        head = self.sh("rev-parse", "HEAD")[:12]
+        for n, command in enumerate(("gh pr ready 142", "gh pr ready https://x.test/o/r/pull/9")):
+            with self.subTest(command=command):
+                reason = self.pre(command, session_id=f"s-num-{n}")
+                self.assertIn(f"judged against main at {head}; run this from the PR's checkout",
+                              reason)
+        self.assertIn("l3r-target", self.log())
+        health = self.start("startup")["systemMessage"]  # the target log is no engine error
+        self.assertIn("1 git call skipped", health)  # the unknown branch
+        self.assertNotIn("l3r", health)
 
     def test_a_subagent_counts_the_parents_reviewer(self):
         agent = "a0123456789abcdef"
@@ -1369,7 +1640,7 @@ class L3r(BashBase):
         os.makedirs(d)
         self.rows([], path=os.path.join(d, f"agent-{agent}.jsonl"))
         self.assertIsNotNone(self.pre("gh pr ready", agent_id=agent))
-        self.add(use("t-rev", "Task", prompt="[practices:review] go"))
+        self.add(use("t-rev", "Task", prompt=f"{self.marker()} go"))
         self.assertIsNone(self.pre("gh pr ready", agent_id=agent, session_id="s3"))
 
     def test_the_base_comes_from_the_flag_then_origin_head_main_master(self):
@@ -1388,7 +1659,7 @@ class L3r(BashBase):
         self.skill("keys", KEYS, where="user")
         self.commit(**{"k.ts": "a = 'TOKEN_ABCDEFGH'\n"})
         self.commit(**{"k.ts": "a = process.env.A\n"})  # gone at HEAD, still in the history
-        self.add(use("t-rev", "Agent", prompt="[practices:review]"))
+        self.add(use("t-rev", "Agent", prompt=self.marker()))
         reason = self.pre("gh pr ready")
         self.assertIn("KEY-1 (keys) at k.ts:1", reason)
         self.assertNotIn("TOKEN_", reason)
@@ -1430,6 +1701,7 @@ class Budgets(BashBase):
                 raise subprocess.TimeoutExpired(args[0], 1)
             return real(*args, **kw)
 
+        self.assertIsNone(self.call(PC.pre_tool_use, "git commit -m x", "b-slow"))
         self.commit(**{"b.ts": "x({ ...body })\n"})
         with mock.patch("subprocess.run", slow):
             self.assertIsNone(self.call(PC.post_tool_use, "git commit -m x", "b-slow"))
@@ -1448,6 +1720,15 @@ class Budgets(BashBase):
             PC.run()
         self.assertEqual(out.getvalue(), "")
         self.assertIn("crash RuntimeError: planted", self.log())
+
+    def test_a_file_whose_old_blob_was_cut_is_skipped_and_logged(self):
+        # Review round 1: an old blob over the caps read as empty, so every line of the new
+        # one counted as added, old flagged lines too.
+        self.commit(**{"a.ts": "x({ ...body })\n" + "// filler\n" * 20})
+        self.assertIsNone(self.call(PC.pre_tool_use, "git commit -m x", "b-cut"))
+        self.commit(**{"a.ts": "x({ ...body })\n"})
+        self.assertIsNone(self.call(PC.post_tool_use, "git commit -m x", "b-cut", FILE_MAX=100))
+        self.assertIn("1 changed files were not scanned", self.log())
 
     def test_a_large_range_is_cut_short_and_logged(self):
         self.commit(**{"seed": "1\n"})
@@ -1492,6 +1773,10 @@ class BashWords(unittest.TestCase):
             "nice -n 5 git commit; git push origin x": [("commit", []), ("push", ["origin", "x"])],
             "FOO=1 git -c a=b commit || true": [("commit", [])],
             "git status | grep x": [("status", [])],
+            "sudo -R /x git push": [("push", [])],
+            "sudo --preserve-env git commit": [("commit", [])],
+            "sudo -E -u me git push": [("push", [])],
+            "env -i GIT_DIR=/o/.git git commit": [("commit", [])],
         }
         for command, want in cases.items():
             with self.subTest(command=command):
@@ -1504,6 +1789,25 @@ class BashWords(unittest.TestCase):
         self.assertEqual(self.git("echo 'git push'"), [])
         self.assertEqual([g[0] for g, _ in self.git(
             "git commit -F- <<'EOF'\ngit push origin main\nEOF\n")], ["commit"])
+
+    def test_redirections_and_their_targets_are_no_words(self):
+        # Review round 1: `git push 2>&1` read as remote "2" and refspec ">", so no push
+        # source resolved and nothing was scanned.
+        cases = {
+            "git push 2>&1": [("push", [])],
+            "git push origin 2>&1 | tail": [("push", ["origin"])],
+            "git push -q 2>/dev/null": [("push", ["-q"])],
+            "git commit -m x >/dev/null": [("commit", ["-m", "x"])],
+            "2>err git push >>log origin main": [("push", ["origin", "main"])],
+            "git push &>/dev/null; git push >| out": [("push", []), ("push", [])],
+            'git commit -F - <<< "$msg"': [("commit", ["-F", "-"])],
+            "git push origin x>&- 3<&0": [("push", ["origin", "x"])],
+            "git push origin 2": [("push", ["origin", "2"])],  # a word, not an fd
+            'git commit -m "a > b" 2>&1': [("commit", ["-m", "a > b"])],
+        }
+        for command, want in cases.items():
+            with self.subTest(command=command):
+                self.assertEqual([g for g, _ in self.git(command)], want)
 
     def test_cd_then_commit_runs_in_the_new_dir(self):
         self.assertEqual(self.git("cd sub && git commit")[0][1], "/r/sub")

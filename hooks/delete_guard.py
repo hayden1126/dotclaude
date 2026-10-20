@@ -43,6 +43,7 @@ over-deny), a glob two levels down (`~/*/*`), an array assigned from an unset va
 Fails open: an error or an unparsable command allows the call and is logged, as is every deny,
 to $XDG_STATE_HOME/dotclaude/delete-guard.log.
 """
+import importlib.util
 import itertools
 import json
 import os
@@ -50,10 +51,22 @@ import re
 import sys
 import time
 
-# python3 -I leaves this file's directory off sys.path; the shared Bash reader sits beside it.
-sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-import bash_words  # noqa: E402
-from bash_words import ASSIGN, SUBST, segments  # noqa: E402
+
+def load_bash_words():
+    """hooks/bash_words.py beside this file, loaded by its path and compiled from its source.
+    python3 -I leaves this file's dir off sys.path, and it stays off: a planted shlex.py there
+    would run outside the sandbox when bash_words imports shlex. No cached .pyc is read."""
+    path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "bash_words.py")
+    with open(path, encoding="utf-8") as f:
+        source = f.read()
+    mod = importlib.util.module_from_spec(importlib.util.spec_from_file_location("bash_words",
+                                                                                 path))
+    exec(compile(source, path, "exec"), mod.__dict__)  # noqa: S102 (our own module)
+    return mod
+
+
+bash_words = load_bash_words()
+ASSIGN, SUBST, segments = bash_words.ASSIGN, bash_words.SUBST, bash_words.segments
 
 DELETERS = {"rm", "rmdir", "shred", "unlink"}
 STABLE = {"HOME", "USER"}
