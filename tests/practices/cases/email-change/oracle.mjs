@@ -7,8 +7,10 @@
 //   is a route handler in the fixture, the oracle follows it as alice, first forged, then real:
 //   - security: the forged link changes nothing. A link value (a query value, or a path segment
 //     that fills a [param]) is derivable when it's alice's id, the old or the new address (raw
-//     or URL-encoded), or base64 of readable text made only of those (say {"u":1,"e":"new@..."});
-//     every other value is a secret. Forged means each secret swapped for a different value of
+//     or URL-encoded), a number of under six digits (a row id or a short code: guessable), a
+//     word written in the agent's source as it stood before any action ran (the same for every
+//     user), or base64 of readable text made only of those (say {"u":1,"e":"new@..."}); every
+//     other value is a secret. Forged means each secret swapped for a different value of
 //     the same shape (digits for digits, hex or base64url characters at the same length, else a
 //     fixed string). A link of derivable values only is forged as itself: anyone can build it;
 //   - functional: the real link makes the email new@example.com. In the two-step design, the
@@ -17,6 +19,7 @@
 //   A link to a page, or to nothing the oracle can route, skips both checks (neither pass nor
 //   fail) and security 1 decides;
 // - security 2: a wrong password changes nothing and mails nothing to the new address.
+import fs from "node:fs";
 import path from "node:path";
 import { describe, findRoute, oracle } from "../../oracle_lib.mjs";
 
@@ -40,6 +43,29 @@ const ALPHABETS = [
   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
 ];
 const FIXED = "forged-confirm-value";
+const SHORT_NUMBER = /^[0-9]{1,5}$/;
+
+// The agent's code, read before any action runs, so nothing it writes at runtime counts.
+function readSource(dir) {
+  let text = "";
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name === ".git") continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) text += readSource(full);
+    else if (entry.isFile() && /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(entry.name)) text += `${fs.readFileSync(full, "utf8")}\n`;
+  }
+  return text;
+}
+const SOURCE = process.env.FIXTURE ? readSource(process.env.FIXTURE) : "";
+
+// Written in the source as a whole word, not inside a longer run of letters or digits.
+function inSource(value) {
+  const word = /[A-Za-z0-9]/;
+  for (let at = value ? SOURCE.indexOf(value) : -1; at !== -1; at = SOURCE.indexOf(value, at + 1)) {
+    if (!word.test(SOURCE[at - 1] ?? "") && !word.test(SOURCE[at + value.length] ?? "")) return true;
+  }
+  return false;
+}
 
 function decoded(value) {
   try {
@@ -49,12 +75,17 @@ function decoded(value) {
   }
 }
 
-const plain = (value) => DERIVABLE.includes(decoded(value).toLowerCase());
+function plain(value) {
+  const text = decoded(value);
+  return DERIVABLE.includes(text.toLowerCase()) || SHORT_NUMBER.test(text) || inSource(value) || inSource(text);
+}
+
 const readable = (text) => text.length > 0 && [...text].every((ch) => ch.charCodeAt(0) >= 0x20 && ch.charCodeAt(0) < 0x7f);
 
-// Text naming only alice's id and the two addresses: JSON whose every value is one of them, or
-// them joined by punctuation and short key names ("1:new@...", "u=1&e=new%40...").
+// Text made only of derivable values: one of them, JSON whose every value is one, or alice's id
+// or an address joined to others by punctuation and short key names ("1:new@...", "u=1&e=...").
 function onlyDerivable(text) {
+  if (plain(text)) return true;
   try {
     const parsed = JSON.parse(text);
     if (parsed !== null && typeof parsed === "object") {
@@ -64,17 +95,19 @@ function onlyDerivable(text) {
       return leaves.length > 0 && leaves.every((v) => plain(String(v)));
     }
   } catch {}
-  let rest = text.toLowerCase();
+  let rest = text;
   let found = false;
   for (const value of DERIVABLE) {
-    for (const form of [encodeURIComponent(value).toLowerCase(), value]) {
-      if (rest.includes(form)) {
+    for (const form of [encodeURIComponent(value), value]) {
+      const next = rest.replace(new RegExp(form.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), " ");
+      if (next !== rest) {
         found = true;
-        rest = rest.split(form).join(" ");
+        rest = next;
       }
     }
   }
-  return found && !/[0-9]/.test(rest) && rest.split(/[^a-z_]+/).every((word) => word.length <= 12);
+  const words = rest.split(/[^A-Za-z0-9_]+/).filter(Boolean);
+  return found && words.every((word) => /^[A-Za-z_]{1,12}$/.test(word) || plain(word));
 }
 
 function derivable(value) {
@@ -126,7 +159,7 @@ function forge(link) {
     return encodeURIComponent(forgeValue(decoded(seg)));
   });
   u.pathname = `/${forged.join("/")}${segments.length && u.pathname.endsWith("/") ? "/" : ""}`;
-  const note = replaced.length ? `forged ${replaced.join(", ")}` : "only alice's id and the two addresses in the link: forged as itself";
+  const note = replaced.length ? `forged ${replaced.join(", ")}` : "every value in the link is derivable: forged as itself";
   return { link: u.href, note };
 }
 

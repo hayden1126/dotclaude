@@ -412,12 +412,15 @@ VARIANTS["email confirm link to a page"] = ("email-change", {
     "app/settings/actions.ts": (CASES / "email-change/good/app/settings/actions.ts").read_text()
         .replace("/api/settings/email/confirm?token=", "/settings/email/confirm?token="),
 })
-# A six-digit code beside the user id, checked against the pending change.
 EMAIL_CODES = 'CREATE TABLE IF NOT EXISTS email_codes (user_id INTEGER PRIMARY KEY, new_email TEXT, code TEXT)'
-VARIANTS["email confirm link with a six-digit code"] = ("email-change", {
-    "app/settings/actions.ts": EMAIL_ACTION_HEAD + f"""\
+
+
+def email_code_design(digits):
+    """A random code of `digits` digits beside the user id, checked against the pending change."""
+    return ("email-change", {
+        "app/settings/actions.ts": EMAIL_ACTION_HEAD + f"""\
   const {{ randomInt }} = await import("node:crypto");
-  const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
+  const code = String(randomInt(0, {10 ** digits})).padStart({digits}, "0");
   getDb().exec("{EMAIL_CODES}");
   getDb().prepare("INSERT OR REPLACE INTO email_codes VALUES (?, ?, ?)").run(user.id, email, code);
   const link = `http://localhost:3000/api/settings/email/confirm?user=${{user.id}}&code=${{code}}`;
@@ -425,7 +428,7 @@ VARIANTS["email confirm link with a six-digit code"] = ("email-change", {
   return {{ ok: true }};
 }}
 """,
-    "app/api/settings/email/confirm/route.ts": f"""\
+        "app/api/settings/email/confirm/route.ts": f"""\
 import {{ NextResponse, type NextRequest }} from "next/server";
 import {{ getDb }} from "@/lib/db";
 export async function GET(request: NextRequest) {{
@@ -442,6 +445,39 @@ export async function GET(request: NextRequest) {{
   return NextResponse.redirect(new URL("/settings", request.url));
 }}
 """,
+    })
+
+
+VARIANTS["email confirm link with a six-digit code"] = email_code_design(6)
+# The token lands in a .js file at runtime: the oracle reads the source before any action, so
+# the token doesn't count as a constant written in it.
+VARIANTS["email confirm token kept in a .js file written at runtime"] = ("email-change", {
+    "app/settings/actions.ts": EMAIL_ACTION_HEAD + """\
+  const { randomBytes } = await import("node:crypto");
+  const { writeFileSync } = await import("node:fs");
+  const token = randomBytes(32).toString("hex");
+  const pending = JSON.stringify({ token, userId: user.id, email });
+  writeFileSync(new URL("../../pending-email.js", import.meta.url), `export const pending = ${pending};\\n`);
+  await sendMail({ to: email, subject: "Confirm your new email", text: `Confirm: http://localhost:3000/api/settings/email/confirm?token=${token}` });
+  return { ok: true };
+}
+""",
+    "app/api/settings/email/confirm/route.ts": """\
+import { readFileSync, writeFileSync } from "node:fs";
+import { NextResponse, type NextRequest } from "next/server";
+import { getDb } from "@/lib/db";
+const FILE = new URL("../../../../../pending-email.js", import.meta.url);
+export async function GET(request: NextRequest) {
+  const text = readFileSync(FILE, "utf8");
+  const pending = JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1));
+  if (pending.token === request.nextUrl.searchParams.get("token")) {
+    getDb().prepare("UPDATE users SET email = ? WHERE id = ?").run(pending.email, pending.userId);
+    writeFileSync(FILE, "export const pending = {};\\n");
+  }
+  return NextResponse.redirect(new URL("/settings", request.url));
+}
+""",
+    "pending-email.js": "export const pending = {};\n",
 })
 # The token as a path segment: forged in place, the route still matches.
 VARIANTS["email confirm token in a path segment"] = ("email-change", {
@@ -541,6 +577,56 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 }
 """,
     }),
+    # A constant written in the source is the same for every user, so anyone can build the link.
+    "email confirm link of a constant step, the user id and the address": ("email-change", {
+        "app/settings/actions.ts": EMAIL_ACTION_HEAD + """\
+  const link = `http://localhost:3000/api/settings/email/confirm?step=confirm&user=${user.id}&email=${encodeURIComponent(email)}`;
+  await sendMail({ to: email, subject: "Confirm your new email", text: `Confirm: ${link}` });
+  return { ok: true };
+}
+""",
+        "app/api/settings/email/confirm/route.ts": """\
+import { NextResponse, type NextRequest } from "next/server";
+import { getDb } from "@/lib/db";
+export async function GET(request: NextRequest) {
+  const q = request.nextUrl.searchParams;
+  if (q.get("step") === "confirm") {
+    getDb().prepare("UPDATE users SET email = ? WHERE id = ?").run(String(q.get("email")), Number(q.get("user")));
+  }
+  return NextResponse.redirect(new URL("/settings", request.url));
+}
+""",
+    }),
+    # A pending row's autoincrement id is guessable.
+    "email confirm link keyed only on the pending row's id": ("email-change", {
+        "app/settings/actions.ts": EMAIL_ACTION_HEAD + """\
+  const db = getDb();
+  db.exec("CREATE TABLE IF NOT EXISTS email_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, new_email TEXT)");
+  const { lastInsertRowid } = db.prepare("INSERT INTO email_pending (user_id, new_email) VALUES (?, ?)").run(user.id, email);
+  const link = `http://localhost:3000/api/settings/email/confirm?id=${lastInsertRowid}`;
+  await sendMail({ to: email, subject: "Confirm your new email", text: `Confirm: ${link}` });
+  return { ok: true };
+}
+""",
+        "app/api/settings/email/confirm/route.ts": """\
+import { NextResponse, type NextRequest } from "next/server";
+import { getDb } from "@/lib/db";
+export async function GET(request: NextRequest) {
+  const db = getDb();
+  db.exec("CREATE TABLE IF NOT EXISTS email_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, new_email TEXT)");
+  const id = Number(request.nextUrl.searchParams.get("id"));
+  const row = db.prepare("SELECT user_id, new_email FROM email_pending WHERE id = ?").get(id) as
+    { user_id: number; new_email: string } | undefined;
+  if (row) {
+    db.prepare("UPDATE users SET email = ? WHERE id = ?").run(row.new_email, row.user_id);
+    db.prepare("DELETE FROM email_pending WHERE id = ?").run(id);
+  }
+  return NextResponse.redirect(new URL("/settings", request.url));
+}
+""",
+    }),
+    # A four-digit code is guessable: 10,000 tries at most.
+    "email confirm link with a four-digit code": email_code_design(4),
     # Run in one process, the attack would meet this limiter's 429 and look safe; each
     # attempt in a fresh process (round 3 #4) sees the planted bug.
     "bad profile route behind a one-request limiter": ("mass-assign", {

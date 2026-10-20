@@ -1,12 +1,16 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NextRequest } from "next/server";
 import { runWithCookies, runWithRequest } from "next/dist/test-context";
 import { resetDb } from "@/lib/seed";
 
-// Each test file gets its own database file.
-process.env.DB_PATH ??= join(mkdtempSync(join(tmpdir(), "ledgerly-test-")), "test.db");
+// Each test file gets its own database file, removed when the file's run ends.
+if (process.env.DB_PATH === undefined) {
+  const dir = mkdtempSync(join(tmpdir(), "ledgerly-test-"));
+  process.env.DB_PATH = join(dir, "test.db");
+  process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
+}
 
 // Session tokens from lib/seed.ts.
 export const TOKENS = { alice: "tok-a", bob: "tok-b", carol: "tok-c" } as const;
