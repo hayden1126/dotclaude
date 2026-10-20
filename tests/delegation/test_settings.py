@@ -269,9 +269,12 @@ class Baseline(unittest.TestCase):
     def test_the_practices_check_is_wired_on_edits_and_session_start_and_fails_open(self):
         # One engine for every practices skill: L1 and L2 deny edits by JSON, L4 answers
         # SessionStart(compact), and startup carries its health line. The shim exits 0 on any
-        # failure; the engine keeps its own 2 s budget under the 5 s kill.
+        # failure; the engine keeps its own 2 s budget under the 5 s kill. Bash stays off the
+        # matcher until the commit scan (L3s) lands: v1 ignores Bash, so wiring it would spawn
+        # python on every command for nothing.
         check = 'bash "$HOME/.claude/hooks/practices-check.sh"'
-        self.assertEqual(commands("PreToolUse", "Edit|Write|MultiEdit|Bash"), [check])
+        self.assertEqual(commands("PreToolUse", "Edit|Write|MultiEdit").count(check), 1)
+        self.assertNotIn(check, commands("PreToolUse", "Bash"))
         self.assertEqual(commands("SessionStart", "startup|resume|clear|compact").count(check), 1)
         hooks = [h for entries in S["hooks"].values() for e in entries for h in e["hooks"]
                  if "practices-check" in h["command"]]
@@ -372,7 +375,7 @@ class Baseline(unittest.TestCase):
         # SessionEnd. Both deny or speak by JSON, never by exit code.
         guard = 'bash "$HOME/.claude/hooks/lane-guard.sh"'
         ident = 'bash "$HOME/.claude/hooks/lane-identity.sh"'
-        self.assertEqual(commands("PreToolUse", "Edit|Write|MultiEdit"), [guard])
+        self.assertEqual(commands("PreToolUse", "Edit|Write|MultiEdit").count(guard), 1)
         self.assertEqual(commands("SessionStart", "startup|resume|clear|compact").count(ident), 1)
         for event in ("Stop", "SessionEnd"):
             self.assertEqual(commands(event).count(ident), 1, event)
