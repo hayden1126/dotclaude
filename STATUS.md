@@ -151,11 +151,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     GDPR, session replay, CAN-SPAM, renewal terms, DMCA agent, privacy policy) and launch (store
     metadata, Open Graph, Search Console, IndexNow). Lead's pick: OWASP ASVS as the security
     backbone, the reels' concrete failures as planted-bug evals.
-  - **Gap check against AWS's agentic AI security principles: done 2026-10-20** (Hayden's ask
-    2026-10-19, run from the lead): ten gaps (ids A1 to A10, each re-checked against the code by
-    the lead) in the private findings file's "Gap check 2026-10-20" section, with severities
-    and the cheap fixes named. Nothing fixed yet: Hayden picks which become a lane. Details stay
-    there ([[dotclaude-public-repo]]).
+  - **Fixes from the AWS agentic-security gap check** (backlog, Hayden 2026-10-20: "not
+    today"). The check ran 2026-10-20 from the lead: ten gaps (ids A1 to A10, each re-checked
+    against the code) with a proposed fix per gap, in the private findings file's "Gap check
+    2026-10-20" section. The lead suggests one lane for A1, A8 and A9 (rules, a test and docs;
+    no design fork) when a slot frees; the rest need Hayden's pick first. Details stay there
+    ([[dotclaude-public-repo]]).
   - **Lanes tell the lead before an act past their worktree: merged as #136** (lead PR,
     2026-10-20, installed from main). New briefs drop the hand-written "Message the lead before
     any act..." Constraints line: the skill carries it (Lifecycle step 3).
