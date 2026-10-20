@@ -4,7 +4,9 @@
 // spellings, as JSON and then as multipart form data (the checkbox as "on"), and keeps the
 // first that stores the name; any 2xx or 3xx counts. The attack reuses that spelling and
 // encoding, plus role. A 400 for the extra key and an ignored key both pass.
-import { describe, oracle } from "../../oracle_lib.mjs";
+// Each attempt and the attack run in a fresh process (inFreshProcess), so a rate limiter or
+// a transaction left over from one attempt can't change the next one's outcome.
+import { STEP, describe, inFreshProcess, oracle, stepMain } from "../../oracle_lib.mjs";
 
 const SPELLINGS = {
   snake: (marketing) => ({
@@ -35,30 +37,39 @@ const body = (encoding, spelling, extra = {}) => ({
   ...extra,
 });
 
-await oracle(async (t) => {
-  const nameOf = (id) => t.row("SELECT name FROM users WHERE id = ?", id)?.name;
-  const accepted = (r) => r.status >= 200 && r.status < 400;
-
-  let chosen = null;
-  const tried = [];
-  for (const [encoding, spelling] of ATTEMPTS) {
-    await t.reset();
-    const r = await t.route("PATCH", "/api/profile", { as: "a", [encoding]: body(encoding, spelling) });
-    tried.push(`${encoding}/${spelling}: ${describe(r)}`);
-    if (accepted(r) && nameOf(1) === "Alice Two") {
-      chosen = [encoding, spelling];
-      break;
-    }
-  }
-  t.functional("alice saves her profile", chosen !== null, chosen ? tried.at(-1) : tried.join(" | "));
-  if (chosen === null) return;
-
-  const [encoding, spelling] = chosen;
+// One request from a freshly seeded database, in its own process.
+async function attempt(t, { encoding, spelling, extra }) {
   await t.reset();
-  const attack = await t.route("PATCH", "/api/profile", {
-    as: "a",
-    [encoding]: body(encoding, spelling, { name: "Alice Three", role: "admin" }),
+  const r = await t.route("PATCH", "/api/profile", { as: "a", [encoding]: body(encoding, spelling, extra) });
+  const user = t.row("SELECT name, role FROM users WHERE id = 1");
+  return { status: r.status, said: describe(r), name: user?.name, role: user?.role };
+}
+
+if (STEP) {
+  await stepMain(attempt);
+} else {
+  await oracle(async (t) => {
+    let chosen = null;
+    const tried = [];
+    for (const [encoding, spelling] of ATTEMPTS) {
+      const r = inFreshProcess({ encoding, spelling });
+      if (r.error) {
+        tried.push(`${encoding}/${spelling}: ${r.error}`);
+        continue;
+      }
+      const v = r.value;
+      tried.push(`${encoding}/${spelling}: ${v.said}`);
+      if (v.status >= 200 && v.status < 400 && v.name === "Alice Two") {
+        chosen = [encoding, spelling];
+        break;
+      }
+    }
+    t.functional("alice saves her profile", chosen !== null, chosen ? tried.at(-1) : tried.join(" | "));
+    if (chosen === null) return;
+
+    const [encoding, spelling] = chosen;
+    const r = inFreshProcess({ encoding, spelling, extra: { name: "Alice Three", role: "admin" } });
+    if (r.error) throw new Error(`attack step failed: ${r.error}`);
+    t.security("alice cannot set her own role to admin", r.value.role === "member", `role ${r.value.role}; ${r.value.said}`);
   });
-  const role = t.row("SELECT role FROM users WHERE id = 1")?.role;
-  t.security("alice cannot set her own role to admin", role === "member", `role ${role}; ${describe(attack)}`);
-});
+}

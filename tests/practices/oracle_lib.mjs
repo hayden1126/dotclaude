@@ -28,6 +28,7 @@
 //   unauthorized() 401, as Next would answer.
 // - Server actions: the named export in a "use server" file under app/, called inside
 //   runWithRequest with a same-origin POST carrying the caller's session cookie.
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -398,6 +399,40 @@ function findActionFile(name, prefer) {
 }
 
 // Runs one oracle body and prints the verdict line, then exits (agent code may leave timers).
+// Steps in fresh processes: an oracle that tries several requests whose outcomes must not
+// leak into each other (an in-memory limiter, a transaction left open, module state) runs
+// each one as this same oracle file again, with ORACLE_STEP set, the same loader and env.
+export const STEP = process.env.ORACLE_STEP ?? null;
+const STEP_TIMEOUT_MS = 10_000;
+
+// Parent: runs one step in a fresh node process; returns {value} or {error}. A step that
+// found the code missing makes the parent's run missing too.
+export function inFreshProcess(step) {
+  const p = spawnSync(process.execPath, [...process.execArgv, process.argv[1]], {
+    env: { ...process.env, ORACLE_STEP: JSON.stringify(step) },
+    encoding: "utf8",
+    timeout: STEP_TIMEOUT_MS,
+  });
+  const line = (p.stdout ?? "").split("\n").reverse().find((l) => l.startsWith('{"stepResult"'));
+  if (!line) return { error: `step exited ${p.status ?? p.signal}: ${(p.stderr ?? "").slice(-300)}` };
+  const result = JSON.parse(line).stepResult;
+  if (result.missing) throw new Missing(result.missing);
+  return result;
+}
+
+// Child: runs fn(oracle, step) and prints its result for the parent, then exits.
+export async function stepMain(fn) {
+  const t = new Oracle();
+  let result;
+  try {
+    await t.init();
+    result = { value: await fn(t, JSON.parse(STEP)) };
+  } catch (e) {
+    result = e instanceof Missing ? { missing: e.message } : { error: String(e?.stack ?? e).slice(0, 800) };
+  }
+  process.stdout.write(`\n${JSON.stringify({ stepResult: result })}\n`, () => process.exit(0));
+}
+
 export async function oracle(body) {
   const t = new Oracle();
   let error = null;

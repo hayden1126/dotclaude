@@ -13,6 +13,7 @@ containment test checks the bwrap wrapper itself, and skips where bwrap can't st
 
 Skips when node (or npm, for the npm test) is absent. Fixtures go to TMPDIR.
 """
+import concurrent.futures
 import json
 import os
 import shutil
@@ -312,6 +313,14 @@ assert "const taken = false;" in VARIANTS["email change that mails a confirm lin
 
 # Insecure implementations beyond bad/: each must score fail.
 INSECURE_VARIANTS = {
+    # Run in one process, the attack would meet this limiter's 429 and look safe; each
+    # attempt in a fresh process (round 3 #4) sees the planted bug.
+    "bad profile route behind a one-request limiter": ("mass-assign", {
+        "app/api/profile/route.ts": (CASES / "mass-assign/bad/app/api/profile/route.ts").read_text().replace(
+            "export async function PATCH(request: NextRequest) {\n",
+            "let calls = 0;\n\nexport async function PATCH(request: NextRequest) {\n"
+            '  if (calls++ >= 1) return NextResponse.json({ error: "Slow down" }, { status: 429 });\n'),
+    }),
     "password reset that says when an address has no account": ("reset-host", {
         "lib/password-reset.ts": (CASES / "reset-host/good/lib/password-reset.ts").read_text(),
         "app/api/password/forgot/route.ts": (CASES / "reset-host/good/app/api/password/forgot/route.ts").read_text()
@@ -472,7 +481,7 @@ class RunHarness(unittest.TestCase):
             # The "session" reads its prompt, starts a background writer, and exits at once.
             cmd = ["bash", "-c", f"cat; (sleep 2; echo late > {late}) & echo done"]
             code, timed_out, strays = run.run_turn(cmd, prompt, tmp, tmp / "out.txt", tmp / "err.txt", timeout=30)
-            self.assertEqual((code, timed_out, strays), (0, False, 0))
+            self.assertEqual((code, timed_out, strays), (0, False, []))
             self.assertEqual((tmp / "out.txt").read_text(), "hello\ndone\n")
             time.sleep(3)
             self.assertFalse(late.exists(), "a background grandchild outlived the turn")
@@ -506,7 +515,9 @@ class RunHarness(unittest.TestCase):
             code, timed_out, strays = run.run_turn(cmd, tmp / "prompt.txt", tmp, tmp / "out.txt", tmp / "err.txt",
                                                    timeout=30)
             pid = int(pidfile.read_text())
-            self.assertEqual((code, timed_out, strays), (0, False, 1))
+            self.assertEqual((code, timed_out, len(strays)), (0, False, 1))
+            self.assertEqual(strays[0]["pid"], pid)  # each kill is recorded with pid and cmdline
+            self.assertIn("sleep 60", strays[0]["cmdline"])
             deadline = time.monotonic() + 5
             while self.alive(pid) and time.monotonic() < deadline:
                 time.sleep(0.1)
@@ -564,12 +575,50 @@ class RunHarness(unittest.TestCase):
                 self.assertEqual(out["checks"][0]["name"], "node_modules replaced")
                 self.assertEqual(sorted(p.name for p in outside.iterdir()), ["marker.txt"])
 
+    def test_binary_file_in_the_diff_is_kept(self):
+        root, sha = run.build_fixture("A")
+        try:
+            (root / "lib" / "logo.bin").write_bytes(bytes(range(256)))
+            self.assertIn("GIT binary patch", run.agent_diff(root, sha))
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_default_out_is_private_and_outside_tmp(self):
+        out = run.default_out()
+        try:
+            self.assertTrue(out.is_relative_to(run.REPO / ".tmp" / "practices"))
+            self.assertFalse(out.resolve().is_relative_to(Path(tempfile.gettempdir()).resolve()))
+            self.assertEqual(stat.S_IMODE(out.stat().st_mode), 0o700)
+        finally:
+            out.rmdir()
+
+    def test_row_of_keeps_finished_rows_and_drops_interrupted_ones(self):
+        done = concurrent.futures.Future()
+        done.set_result({"case": "idor", "verdict": "pass"})
+        stopped = concurrent.futures.Future()
+        stopped.set_exception(run.Interrupted())
+        crashed = concurrent.futures.Future()
+        crashed.set_exception(RuntimeError("boom"))
+        self.assertEqual(run.row_of(done, "idor", "A", 1)["verdict"], "pass")
+        self.assertIsNone(run.row_of(stopped, "idor", "A", 2))
+        self.assertEqual(run.row_of(crashed, "idor", "A", 3)["verdict"], "error")
+
     def test_error_verdicts_for_harness_failures(self):
         result = {"type": "result", "num_turns": 1}
         self.assertEqual(run.infra_failures(["task"], [0], [[result]]), [])
         self.assertEqual(run.infra_failures(["task"], [1], [[result]]), [])  # it finished, then failed
         self.assertEqual(len(run.infra_failures(["task"], [1], [[{"type": "system"}]])), 1)
         self.assertEqual(len(run.infra_failures(["task"], [0], [[]])), 1)  # no stream output
+        # a result that reports a failure of the session itself (usage limit, expired login)
+        self.assertEqual(len(run.infra_failures(["task"], [1], [[{"type": "result", "is_error": True}]])), 1)
+        self.assertEqual(len(run.infra_failures(["task"], [0], [[{"type": "result", "subtype": "error_during_execution"}]])), 1)
+        self.assertEqual(run.infra_failures(["task"], [0], [[{"type": "result", "subtype": "success", "is_error": False}]]), [])
+        # arm D: a warm-up or compact timeout leaves nothing of the agent's to grade; a case-turn
+        # timeout is still graded
+        self.assertEqual(len(run.infra_failures(["warmup"], [None], [[result]], timed_out_label="warmup")), 1)
+        self.assertEqual(len(run.infra_failures(["warmup", "compact"], [0, None], [[result], [result]],
+                                                timed_out_label="compact")), 1)
+        self.assertEqual(run.infra_failures(["task"], [None], [[result]], timed_out_label="task"), [])
         self.assertEqual(len(run.infra_failures(["warmup", "compact", "task"], [0, 0, 0],
                                                 [[result], [], [result]])), 1)
         root, sha = run.build_fixture("A")
@@ -766,6 +815,8 @@ class Containment(unittest.TestCase):
         for forbidden in ("/home", "/run", "/mnt", "/var", "/root"):
             self.assertFalse(any(m == forbidden or m.startswith(forbidden + "/") for m in mounted), forbidden)
         self.assertTrue({"/usr", "/etc", "/proc", "/dev", "/tmp", "/tmp/x"} <= mounted)
+        for flag in ("--unshare-net", "--unshare-pid", "--unshare-ipc"):
+            self.assertIn(flag, args)
 
     def test_writable_path_under_home_is_refused(self):
         with tempfile.TemporaryDirectory(prefix="practices-contain-") as tmp:

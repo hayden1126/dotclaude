@@ -24,7 +24,9 @@ the code didn't load, or the agent pointed node_modules outside the fixture; the
 for neither side). good/ and bad/ are overlays the offline test uses. oracle_lib.mjs holds the
 shared rules. run.py adds a fourth verdict, error, for its own or the infrastructure's
 failures: a harness exception, a turn with no stream output, a claude exit that is nonzero
-with no result event, a fixture the grading sandbox refuses. broken stays agent-caused.
+with no result event, a result event with is_error or an error_* subtype (usage limit,
+expired login), an arm D warm-up or compact turn that timed out, a fixture the grading
+sandbox refuses. broken stays agent-caused.
 
 Per run:
   - Fixture: fixture/ is copied to a fresh tempfile.mkdtemp(prefix="ledgerly-"), next_stub/
@@ -41,11 +43,13 @@ Per run:
     connectors that load in some runs and not others (spike.md section 1). Each turn runs in
     its own process group with stdin, stdout and stderr on files, and PRACTICES_RUN=<uuid> in
     its env. When it exits, or times out, the whole group is killed, then any process of this
-    uid still carrying that marker (one that called setsid; counted as `strays`), so nothing
-    the session started holds the run open or writes while the oracle grades. The marker is
-    the only proof of origin used: never a name, cwd or start time.
+    uid still carrying that marker (one that called setsid; each kill's pid and cmdline go in
+    `stray_kills`), so nothing the session started holds the run open or writes while the
+    oracle grades. The marker is the only proof of origin used: never a name, cwd or start time.
   - Ctrl-C: queued runs never start, running turns are killed with everything they started
-    (by marker), finished rows are already in results.jsonl, and run.py exits 130.
+    (by marker), and run.py exits 130. Finished rows are already in results.jsonl; the oracle
+    and the harness's git run in their own sessions, so a grade in progress finishes and its
+    row is written too.
   - Grade: only after the process exits (a background agent may still be writing), run the
     oracle under the pristine checkout's loader (fixture/scripts/register.mjs here), never the
     copy the agent could edit, with a 60 s timeout. The oracle runs agent-written code, so it
@@ -54,15 +58,18 @@ Per run:
     tests/practices read-only at /practices, and the fixture and a fresh scratch dir in the
     system temp dir writable. No /home, /run, /mnt, /var or /root exist inside, so no
     credential file, Unix socket (tmux, docker, Claude Code's own) or Windows drive is
-    reachable; no network; its own pid namespace. A writable path under $HOME is refused. Its
+    reachable; no network; its own pid and IPC namespaces. A writable path under $HOME is refused. Its
     env is an allowlist: PATH, HOME, LANG, FIXTURE, DB_PATH, TMPDIR (HOME, DB_PATH and TMPDIR
     in the scratch dir, removed after grading) and a dummy LLM_API_KEY. The run dir may sit
     under $HOME; run.py writes the oracle's output there itself, outside bwrap.
     Without a usable bwrap, run.py refuses to start unless --unsafe-grade is passed.
   - Record: one line per run in <out>/results.jsonl (verdict, checks, triggered and
-    triggered_turns, turns, duration, cost, init memory_paths and skills, hook denials, the
-    harness SHA, and the paths of the saved streams, oracle output and diff under
-    <out>/<case>-<arm>-<i>/). A turn triggered when it has a Skill tool_use naming
+    triggered_turns, turns, duration, cost, is_error, init memory_paths and skills, hook
+    denials, strays, the harness SHA, and the paths of the saved streams, oracle output and
+    diff under <out>/<case>-<arm>-<i>/). <out> defaults to a fresh 0700 dir under the
+    checkout's ignored .tmp/practices/, away from the fixtures in /tmp. The diff is taken with
+    --binary; ignored paths (node_modules, data/) aren't in it, so regrading a diff needs the
+    stubs as installed. A turn triggered when it has a Skill tool_use naming
     server-code, or a Read of a path ending server-code/SKILL.md. `triggered` and
     `hook_denials` are the case turn's; arm D's other turns are reported apart
     (triggered_turns, hook_denials_turns, and the summary's warm column).
@@ -129,7 +136,9 @@ def git_env():
 
 
 def git(*args, cwd):
+    # its own session: a Ctrl-C at the terminal doesn't kill a diff mid-run (round 3 #3)
     return subprocess.run([*GIT, *args], cwd=cwd, env=git_env(), capture_output=True, text=True, errors="replace",
+                          start_new_session=True,
                           check=True).stdout
 
 
@@ -333,7 +342,7 @@ def stream_summary(events):
 # ---------------------------------------------------------------- grading
 
 BWRAP = shutil.which("bwrap")
-BWRAP_FLAGS = ["--unshare-net", "--unshare-pid", "--die-with-parent", "--new-session"]
+BWRAP_FLAGS = ["--unshare-net", "--unshare-pid", "--unshare-ipc", "--die-with-parent", "--new-session"]
 # The only host dirs the oracle sees, read-only. No /home, /run, /mnt, /var or /root: a
 # read-only mount doesn't stop connect() on a Unix socket (tmux, docker, Claude Code's own),
 # and /mnt holds the Windows drives on WSL.
@@ -452,7 +461,9 @@ def grade(fixture, case, run_dir, contain=True, home=None):
         else:
             cmd = [node_binary(), "--import", LOADER.as_uri(), str(CASES_DIR / case / "oracle.mjs")]
         try:
+            # its own session, so a Ctrl-C lets a grade in progress finish and keep its row
             p = subprocess.run(cmd, cwd=fixture, env=env, capture_output=True, text=True, errors="replace",
+                               start_new_session=True,
                                timeout=ORACLE_TIMEOUT)
             stdout, stderr = p.stdout, p.stderr
         except subprocess.TimeoutExpired as e:
@@ -473,7 +484,7 @@ def grade(fixture, case, run_dir, contain=True, home=None):
 def agent_diff(fixture, base):
     """Everything the agent changed since the harness commit `base`, committed or not."""
     git("add", "-A", cwd=fixture)
-    return git("diff", "--cached", base, cwd=fixture)
+    return git("diff", "--cached", "--binary", base, cwd=fixture)
 
 
 def _exited(pid):
@@ -513,11 +524,19 @@ def marked_processes(marker):
     return pids
 
 
+def _cmdline(pid):
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            return f.read().replace(b"\0", b" ").decode(errors="replace").strip()[:300]
+    except OSError:
+        return ""
+
+
 def kill_marked(marker, grace=2.0):
     """SIGTERM every process carrying the marker, then SIGKILL any still carrying it after
-    `grace` seconds (re-scanned, so a reused pid without the marker is never hit). Returns how
-    many were found."""
-    found = marked_processes(marker)
+    `grace` seconds (re-scanned, so a reused pid without the marker is never hit). Returns a
+    record of each one found: {pid, cmdline, signal}."""
+    found = {pid: _cmdline(pid) for pid in marked_processes(marker)}
     for pid in found:
         try:
             os.kill(pid, signal.SIGTERM)
@@ -526,12 +545,14 @@ def kill_marked(marker, grace=2.0):
     deadline = time.monotonic() + grace
     while found and time.monotonic() < deadline and marked_processes(marker):
         time.sleep(0.1)
+    killed = set()
     for pid in marked_processes(marker):
         try:
             os.kill(pid, signal.SIGKILL)
+            killed.add(pid)
         except (ProcessLookupError, PermissionError):
             pass
-    return len(found)
+    return [{"pid": pid, "cmdline": cmd, "signal": "KILL" if pid in killed else "TERM"} for pid, cmd in found.items()]
 
 
 def stop_all():
@@ -549,7 +570,7 @@ def run_turn(cmd, prompt_file, cwd, stdout_path, stderr_path, timeout, marker=No
     env. When the turn ends, times out or STOP is set, the whole group is killed, then any
     process still carrying the marker (a child that called setsid left the group): nothing
     the session started outlives it or writes while the oracle grades.
-    Returns (exit code or None, timed out, strays killed by marker)."""
+    Returns (exit code or None, timed out, the strays killed by marker: [{pid, cmdline, signal}])."""
     marker = marker or uuid.uuid4().hex
     env = dict(os.environ, **{MARKER_VAR: marker})
     with open(prompt_file) as stdin, open(stdout_path, "w") as out, open(stderr_path, "w") as err:
@@ -579,15 +600,32 @@ def run_turn(cmd, prompt_file, cwd, stdout_path, stderr_path, timeout, marker=No
 
 # ---------------------------------------------------------------- one run
 
-def infra_failures(labels, exits, events_by_turn):
+def result_event(events):
+    return next((e for e in reversed(events) if e.get("type") == "result"), None)
+
+
+def result_failed(result):
+    """A result event that reports a failure of the session itself (usage limit, expired login,
+    API error): is_error true, or an error_* subtype."""
+    return bool(result) and (result.get("is_error") is True or str(result.get("subtype", "")).startswith("error"))
+
+
+def infra_failures(labels, exits, events_by_turn, timed_out_label=None):
     """Harness or infrastructure failures in a run's turns (they score error, not broken):
-    a turn with no stream events at all, or a nonzero claude exit with no result event."""
+    a turn with no stream events at all, a nonzero claude exit with no result event, a result
+    event that reports an error, or a timeout in arm D's warm-up or compact turn (the case
+    turn hasn't run, so there is nothing of the agent's to grade)."""
     failures = []
     for label, code, events in zip(labels, exits, events_by_turn):
+        result = result_event(events)
         if not events:
             failures.append(f"{label}: no stream output (exit {code})")
-        elif code not in (0, None) and not any(e.get("type") == "result" for e in events):
+        elif code not in (0, None) and result is None:
             failures.append(f"{label}: claude exited {code} with no result event")
+        elif result_failed(result):
+            failures.append(f"{label}: result is an error ({result.get('subtype')}, is_error {result.get('is_error')})")
+    if timed_out_label and timed_out_label != "task":
+        failures.append(f"{timed_out_label}: timed out before the case turn")
     return failures
 
 
@@ -612,7 +650,7 @@ def run_one(case, arm, index, args, out):
     run_dir = out / f"{case}-{arm}-{index}"
     run_dir.mkdir(parents=True, exist_ok=True)
     fixture, harness_sha = build_fixture(arm)
-    streams, labels, exits, timed_out, strays = [], [], [], False, 0
+    streams, labels, exits, timed_out, stray_kills = [], [], [], False, []
     turns = turns_for(case, arm, args.model, args.effort)
     for n, (label, prompt, cmd) in enumerate(turns, 1):
         if STOP.is_set():
@@ -623,17 +661,17 @@ def run_one(case, arm, index, args, out):
         prompt_file.write_text(prompt)
         streams.append(str(stream))
         labels.append(label)
-        code, timed_out, turn_strays = run_turn(cmd, prompt_file, fixture, stream,
-                                                run_dir / f"stderr{suffix}.txt", SESSION_TIMEOUT)
+        code, timed_out, kills = run_turn(cmd, prompt_file, fixture, stream,
+                                          run_dir / f"stderr{suffix}.txt", SESSION_TIMEOUT)
         exits.append(code)
-        strays += turn_strays
+        stray_kills += [{"turn": label, **k} for k in kills]
         if timed_out:
             break
     if STOP.is_set():
         raise Interrupted()
 
     events_by_turn = [read_stream(s) for s in streams]
-    failures = infra_failures(labels, exits, events_by_turn)
+    failures = infra_failures(labels, exits, events_by_turn, timed_out_label=labels[-1] if timed_out else None)
     verdict, diff_error = finish_run(fixture, harness_sha, case, run_dir, args.contain, skip_grade=failures)
     diff = run_dir / "diff.patch"
 
@@ -656,7 +694,9 @@ def run_one(case, arm, index, args, out):
         **summary,
         "hook_denials": denials_turns.get("task", 0),
         "hook_denials_turns": denials_turns,
-        "exit_codes": exits, "timed_out": timed_out, "strays": strays,
+        "is_error": any(result_failed(result_event(turn)) for turn in events_by_turn),
+        "exit_codes": exits, "timed_out": timed_out,
+        "strays": len(stray_kills), "stray_kills": stray_kills,
         "harness_sha": harness_sha,
         "stream": streams, "oracle": str(run_dir / "oracle.out"), "diff": str(diff),
     }
@@ -709,6 +749,28 @@ def summarize(rows, cases, arms, n):
 
 # ---------------------------------------------------------------- main
 
+def default_out():
+    """A fresh 0700 results dir under the checkout's ignored .tmp/, not in /tmp next to the
+    fixtures, where an agent's session could read earlier runs' oracle output."""
+    base = REPO / ".tmp" / "practices"
+    base.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return Path(tempfile.mkdtemp(prefix=time.strftime("%Y%m%d-%H%M%S-"), dir=base))  # wall clock
+
+
+def row_of(fut, case, arm, i):
+    """A finished run's row; None for a run stopped by Ctrl-C before it finished. A harness
+    exception scores the run error, never drops it."""
+    try:
+        return fut.result()
+    except Interrupted:
+        return None
+    except Exception as e:
+        log(f"  {case:16} {arm} #{i}: harness error {e!r}")
+        return {"case": case, "arm": arm, "run": i, "verdict": "error",
+                "checks": [{"name": "harness", "ok": False, "detail": repr(e)[:1000]}],
+                "triggered": False, "total_cost_usd": None, "harness_error": repr(e)}
+
+
 def dry_run(cases, arms, args):
     failed = []
     for case in cases:
@@ -742,7 +804,7 @@ def main():
     ap.add_argument("--model", default="claude-opus-5-5")
     ap.add_argument("--effort", choices=("low", "medium", "high", "xhigh", "max"),
                     help="session effort (default: Claude Code's built-in default for the model)")
-    ap.add_argument("--out", help="results dir (default: a new practices-out-* temp dir)")
+    ap.add_argument("--out", help="results dir (default: a new 0700 dir under the checkout's .tmp/practices/)")
     ap.add_argument("--keep", action="store_true", help="keep each run's fixture")
     ap.add_argument("--dry-run", action="store_true", help="build fixtures, run npm test, print commands")
     ap.add_argument("--unsafe-grade", action="store_true",
@@ -761,7 +823,7 @@ def main():
     if not shutil.which("claude"):
         sys.exit("run.py: claude is not on PATH")
 
-    out = Path(a.out) if a.out else Path(tempfile.mkdtemp(prefix="practices-out-"))
+    out = Path(a.out) if a.out else default_out()
     out.mkdir(parents=True, exist_ok=True)
     print(f"results: {out / 'results.jsonl'} (model {a.model}, effort {a.effort or 'default'})")
     jobs = [(case, arm, i) for case in cases for arm in arms for i in range(1, a.n + 1)]
@@ -770,26 +832,28 @@ def main():
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, a.j))
     with open(out / "results.jsonl", "a") as results:
         futures = {pool.submit(run_one, case, arm, i, a, out): (case, arm, i) for case, arm, i in jobs}
-        try:
-            for fut in concurrent.futures.as_completed(futures):
-                case, arm, i = futures[fut]
-                try:
-                    row = fut.result()
-                except Interrupted:
-                    continue
-                except Exception as e:  # a harness exception scores the run error, never drops it
-                    row = {"case": case, "arm": arm, "run": i, "verdict": "error",
-                           "checks": [{"name": "harness", "ok": False, "detail": repr(e)[:1000]}],
-                           "triggered": False, "total_cost_usd": None, "harness_error": repr(e)}
-                    log(f"  {case:16} {arm} #{i}: harness error {e!r}")
+        recorded = set()
+
+        def record(fut):
+            recorded.add(fut)
+            row = row_of(fut, *futures[fut])
+            if row is not None:
                 rows.append(row)
                 results.write(json.dumps(row) + "\n")  # each finished row is on disk at once
                 results.flush()
+
+        try:
+            for fut in concurrent.futures.as_completed(futures):
+                record(fut)
         except KeyboardInterrupt:
             # Queued runs never start; running turns and everything they started are killed
-            # by marker; a run between turns or grading stops at its next check.
+            # by marker; a run between turns stops at its next check. A grade in progress runs
+            # in its own session, so the Ctrl-C doesn't reach it: it finishes and its row is kept.
             stop_all()
             pool.shutdown(wait=True, cancel_futures=True)
+            for fut in futures:
+                if fut not in recorded and fut.done() and not fut.cancelled():
+                    record(fut)
             print(f"\nrun.py: interrupted; {len(rows)} of {len(jobs)} runs finished and are in "
                   f"{out / 'results.jsonl'}")
             return 130
