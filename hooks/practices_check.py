@@ -109,9 +109,10 @@ checkout holds, a linked worktree (a lane) only when its git dir's `gitdir` file
 the project, so a lane reads its main checkout's .git while `git -C ~/vault`, a planted gitfile
 or an alternates entry outside is skipped and logged, with no path or content in the log.
 Each level reads commits, never the index or the working tree:
-  L3s   PreToolUse on a git commit records each repo's HEAD (heads/, keyed by session, agent and
-        tool_use_id); PostToolUse for that id scans recorded..HEAD, or with no record the HEAD
-        commit alone, and tells the model the findings as additionalContext.
+  L3s   PreToolUse on a git commit records each repo's git dir, worktree and HEAD (heads/, keyed
+        by session, agent and tool_use_id); PostToolUse for that id scans recorded..HEAD in
+        those repos (never a re-parse from its own cwd, which a `cd` in the command moved; no
+        record, nothing scanned, logged) and tells the model the findings as additionalContext.
   push  PreToolUse on git push scans what it would send (each refspec's source, else HEAD;
         --all, --branches, --mirror: every local branch) less what any remote has, and denies.
         Deletes and --dry-run pass. One call holding both a commit and a push is denied once,
@@ -1636,27 +1637,29 @@ def _heads_file(event):
 
 
 def record_heads(event, commits, bounds):
-    """Before a commit call: {git dir: HEAD or None (unborn)} for each repo it commits in."""
-    heads = {}
+    """Before a commit call: {git dir: HEAD or None (unborn)} and {git dir: its worktree} for
+    each repo it commits in, read where the command's cds and options lead from the call's
+    cwd. PostToolUse scans these repos: its own cwd may have moved (`cd sub && git commit`)."""
+    heads, tops = {}, {}
     for _, _, where in commits:
         repo = open_repo(where, "L3s", bounds)
         if repo is not None:
             CRUMB.mark(repo.git_dir, "L3s", "record HEAD")
             heads[repo.git_dir] = repo.rev("HEAD")
-    if not heads:
-        return
+            tops[repo.git_dir] = repo.top
     path = _heads_file(event)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(f"{path}.{os.getpid()}", "w", encoding="utf-8") as f:
-            json.dump({"heads": heads}, f)
+            json.dump({"heads": heads, "tops": tops}, f)
         os.replace(f"{path}.{os.getpid()}", path)
     except OSError as e:
         log("state-error", f"{path}: {e}")
 
 
 def recorded_heads(event):
-    """The heads record_heads wrote for this tool_use_id (deleted once read), or None."""
+    """(heads, tops) that record_heads wrote for this tool_use_id (deleted once read), or None.
+    A record without tops (written before they were) reads as tops unknown."""
     path = _heads_file(event)
     try:
         with open(path, encoding="utf-8") as f:
@@ -1668,44 +1671,54 @@ def recorded_heads(event):
         log("state-error", f"{path}: unreadable ({type(e).__name__}), read as no record")
         return None
     heads = data.get("heads") if isinstance(data, dict) else None
-    return heads if isinstance(heads, dict) else None
+    tops = data.get("tops", {}) if isinstance(data, dict) else None
+    if not isinstance(heads, dict) or not isinstance(tops, dict) or not all(
+            isinstance(k, str) and (v is None or isinstance(v, str))
+            for d in (heads, tops) for k, v in d.items()):
+        log("state-error", f"{path}: not a heads record, read as no record")
+        return None
+    return heads, tops
 
 
 def post_tool_use(event):
     """L3s: after a commit call, tell the model once per new key what the commits added that a
-    rule flags (additionalContext, which reaches the model with the tool result)."""
+    rule flags (additionalContext, which reaches the model with the tool result). The repos
+    are the ones PreToolUse recorded for this tool_use_id, never a re-parse of the command
+    from this event's cwd, which the command's own cd may have moved; with no record nothing
+    is scanned, logged."""
     if event.get("tool_name") != "Bash":
         return None
     gits, _ = bash_calls(event)
-    commits = [g for g in gits if g[0] == "commit"]
-    if not commits:
+    if not any(g[0] == "commit" for g in gits):
         return None
     cfg = load_config(event)
     if not cfg["enabled"]:
         return None
-    heads = recorded_heads(event) or {}
+    record = recorded_heads(event)
+    if record is None:
+        log("git-skipped", "L3s: no repo was recorded before this commit call, so it wasn't "
+            "checked")
+        return None
+    heads, tops = record
     skills = discover(event)
     rules = commit_rules(skills, cfg)
     found, repos = [], {}
     with Transcripts(event) as ts:
         ctx = context(event, cfg, ts)
         try:
-            bounds = bounds_of(event)
-            for _, _, where in commits:
-                repo = open_repo(where, "L3s", bounds)
+            bounds = bounds_of(event) if heads else None
+            for git_dir, before in heads.items():
+                top = tops.get(git_dir)
+                where = {"cwd": top or os.path.dirname(git_dir), "git_dir": git_dir,
+                         "work_tree": top}
+                repo = open_repo(where, "L3s", bounds)  # bounds again: the call ran since
                 if repo is None or repo.git_dir in repos:
                     continue
                 repos[repo.git_dir] = repo
                 head = repo.rev("HEAD")
-                if head is None:
-                    continue
-                if repo.git_dir in heads:
-                    before = heads[repo.git_dir]
-                    if before == head:
-                        continue  # nothing committed
-                    spec = [head, "--not", before] if before else [head]
-                else:
-                    spec = [head, "--not", f"{head}^@"]  # the commit alone; a root has no parents
+                if head is None or before == head:
+                    continue  # unborn still, or nothing committed
+                spec = [head, "--not", before] if before else [head]
                 found += [(f, repo) for f in scan(repo, spec, rules, "L3s", ctx)]
             new = []
             for repo in repos.values():

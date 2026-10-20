@@ -1235,12 +1235,23 @@ class L3s(BashBase):
         self.assertNotIn("k.ts:1", told)
         self.assertIn("LATE-1 (keys) at k.ts:3", told)
 
-    def test_without_a_record_the_head_commit_alone_is_scanned(self):
-        self.assertIn("root.ts:1", self.committed(pre=False, **{"root.ts": "x({ ...body })\n"}))
-        self.commit(**{"old.ts": "x({ ...body })\n"})  # an earlier commit, never scanned
-        told = self.committed(pre=False, **{"new.ts": "y({ ...body })\n"})
-        self.assertIn("new.ts:1", told)
-        self.assertNotIn("old.ts", told)
+    def test_a_root_commit_is_scanned_and_without_a_record_nothing_is(self):
+        self.assertIn("root.ts:1", self.committed(**{"root.ts": "x({ ...body })\n"}))
+        before = self.log()
+        self.assertIsNone(self.committed(pre=False, **{"new.ts": "y({ ...body })\n"}))
+        self.assertIn("no repo was recorded", self.log()[len(before):])
+
+    def test_post_scans_the_repo_pre_recorded_not_a_reparse_from_its_cwd(self):
+        # Review round 1: `cd sub && git commit` moves the session's cwd into sub, and a
+        # re-parse from there looked for sub/sub, so the commit went unchecked.
+        sub = self.make_repo(os.path.join(self.proj, "sub"))
+        with open(os.path.join(self.proj, ".git", "info", "exclude"), "a") as f:
+            f.write("sub/\n")
+        command = "cd sub && git commit -m x"
+        self.assertIsNone(self.pre(command, "b-cd"))
+        self.commit(repo=sub, **{"s.ts": "x({ ...body })\n"})
+        told = self.run_hook({**self.event(command, "PostToolUse", "b-cd"), "cwd": sub})
+        self.assertIn("s.ts:1", told["hookSpecificOutput"]["additionalContext"])
 
     def test_merges_and_pure_renames_are_skipped(self):
         self.commit(**{"a.ts": "x({ ...body })\n"})
@@ -1597,6 +1608,7 @@ class Budgets(BashBase):
                 raise subprocess.TimeoutExpired(args[0], 1)
             return real(*args, **kw)
 
+        self.assertIsNone(self.call(PC.pre_tool_use, "git commit -m x", "b-slow"))
         self.commit(**{"b.ts": "x({ ...body })\n"})
         with mock.patch("subprocess.run", slow):
             self.assertIsNone(self.call(PC.post_tool_use, "git commit -m x", "b-slow"))
