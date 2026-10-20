@@ -92,6 +92,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     from his project memories and online sources, then the security skill only; Hayden picked
     "security first"). pr-horizon merged as #135 and config-dir as #133 (2026-10-20): installed from main, both
     lanes closed.
+    2 summary-retire (`chore/retire-summary-rows`) and 3 link-atomic (`fix/setup-atomic-link`),
+    both opened 2026-10-20 on Hayden's ok (Backlog items below). The lanes cap (3) is full.
   - **Lane ask quality: done** (2026-10-19 to 2026-10-20). ask-check merged as #131 and was
     installed from main 2026-10-20: a PreToolUse hook on AskUserQuestion (`hooks/ask_check.py`)
     denies risky asks with a checklist in the reason. branch-reuse merged as #130: `lane new`
@@ -161,9 +163,14 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     don't read it anymore"). His picks: keep the tab label (the Stop hook
     `hooks/session-summary.sh` asks Haiku for the label only; the rows and
     `statusline/session-summary.py` go), and the briefing is a rule now, with a check later only
-    if asks skip it. The rule is lead PR `docs/push-briefing` (CLAUDE.md's push line, lanes
-    skill step 6). The retirement is lane-sized (`setup.sh`, `settings.json`, the hooks, tests,
-    README), and pairs with the atomic `link()` fix in the Watch item below (both `setup.sh`).
+    if asks skip it. The rule merged as #137 (2026-10-20, installed). The retirement runs in lane
+    summary-retire; at its merge the lead updates memory `dotclaude-session-summary-statusline`.
+  - **A device-wide toggle for the toast and the sound** (Hayden, 2026-10-20): one switch that
+    mutes the Windows toast and the notify ring for every session on the machine (no toggle
+    exists today). Both fire from `hooks/notify.sh` (toast plus `play_ring`) and the Stop ring
+    (`stop-ring.sh`), via `play_ring` in `hooks/session-pane.sh`. Shape to settle: a flag file
+    in the state dir (instant, every session) versus a setting, and whether toast and sound
+    toggle apart; a tmux menu entry would fit the tab bar. Lane-able (`hooks/`, `tmux/`, tests).
   - **Watch: `~/.claude/CLAUDE.md` vanished after a lane install** (2026-10-20 00:53Z). Lane
     config-dir's `setup.sh` (00:52:28 to 00:52:38, sandbox off) linked it, then it was gone by
     00:53:02, with no backup (a symlink is removed, not backed up). Hayden relinked it by hand
@@ -173,7 +180,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     sandboxed `sandbox-denials` run; that session's sandbox config listed the resolved target,
     where after the loss it listed the literal path. So the loss points at `setup.sh`'s
     `link()` gap (`rm`, then `ln -s`) meeting some session's sandboxed command. Fix (cheap, not
-    built): make `link()` atomic, `ln -s` to a temp name beside the target, then `mv -T` over
+    built, now lane link-atomic): make `link()` atomic, `ln -s` to a temp name beside the target, then `mv -T` over
     it, so the path never goes missing; lane-able (`setup.sh`, `tests/setup`). config-dir's timeline (its session 1f1393e7) rules out its code, its
     tests and install-state's prune; `~/.claude`'s mtime moved 190 ms after a sandboxed
     `delegation-ledger sandbox-denials` started. Its guess, unproven: the Bash sandbox. A
@@ -279,10 +286,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lane practices (merge order 1, carries the lead branch) runs; its state is in its record
-     (`lane ls`). Lead PR `docs/push-briefing` waits on Hayden's push approval. Then the
-     summary-retirement plus `link()` lane (Backlog), on Hayden's ok of its table. After each
-     reinstall, check `ls -la ~/.claude/CLAUDE.md` (the Watch item).
+  0. Lanes practices (merge order 1, carries the lead branch), summary-retire (2) and
+     link-atomic (3) run; their state is in their records (`lane ls`). After each reinstall,
+     check `ls -la ~/.claude/CLAUDE.md` (the Watch item). Watch that push asks open with the
+     briefing (#137); if they skip it, the Stop-hook check is the follow-up (Hayden's pick).
   1. Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
      against the code and log it in the backlog. When lanes run again, follow The lead in
      `skills/lanes/SKILL.md` (step 7 is the post-merge chain; never amend or rebase the lead
@@ -290,8 +297,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
      (lane branch-reuse); `--reuse-branch` overrides.
   - The lead's commits: `git log --first-parent main..chore/after-pr4` (STATUS only, plus merges
     of main). Session 45664d28 (2026-10-20) ran `2c28e7e..HEAD` on the lead branch: the #135
-    chain (pr-horizon closed), lead PR #136 (merged, installed), the skill-suite backlog item
-    and lane practices,
+    chain (pr-horizon closed), the #133 chain (config-dir closed), lead PRs #136 and #137
+    (merged, installed), lanes practices, summary-retire and link-atomic,
     and the CLAUDE.md watch item.
   - Open with Hayden, nothing for the lead to do: the capella-studio lead asked how a new lane
     should clear the excluded-command guard, and the lead recommended (2026-10-17) pointing
