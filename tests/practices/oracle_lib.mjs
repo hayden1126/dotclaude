@@ -32,7 +32,9 @@
 //   runWithRequest with a same-origin POST carrying the caller's session cookie.
 // - A seeded user's session cookie goes under the app's own name: the SESSION_COOKIE string
 //   that lib/auth.ts exports, read at grade time (so a rename to __Host-session is followed),
-//   else `session` (sessionCookie()).
+//   else `session` (sessionCookie()). Known gap: an app that reads its cookie under another
+//   name without exporting it as SESSION_COOKIE gets `session`, so its seeded requests are
+//   signed out and its run scores broken.
 // - A cookie set or deleted through cookies() in a route handler reaches its response as
 //   Set-Cookie, as in Next (the stub's runWithRequest), and so does one set before the handler
 //   throws redirect() (Next answers that redirect with them); route() results carry the response's
