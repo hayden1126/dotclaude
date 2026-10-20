@@ -1065,7 +1065,7 @@ subprocess.run(f"convert {filename} out.png", shell=True)
 
 [[sample]]
 kind = "rule"
-id = "SEC-13-py"
+id = "SEC-13"
 fires = true
 path = "api/session.py"
 content = '''
@@ -1466,7 +1466,7 @@ export async function GET() {
 # SEC-01: SvelteKit form actions fire; Vuex and Redux Toolkit `actions` exports don't.
 [[sample]]
 kind = "rule"
-id = "SEC-01"
+id = "SEC-01-actions"
 fires = true
 path = "src/routes/login/+page.server.ts"
 content = '''
@@ -1608,4 +1608,245 @@ fires = false
 path = "app/settings_db.py"
 content = '''
 sets = ", ".join(f"{k} = %s" for k in EDITABLE if k in data)
+'''
+
+# ------------------------------------------------------------- review round 3 samples
+
+# SEC-13-py: a safe loader quiets yaml.load, even with a nested call or a wrapped call.
+[[sample]]
+kind = "rule"
+id = "SEC-13-py"
+fires = false
+path = "app/settings.py"
+content = '''
+cfg = yaml.load(open(path), Loader=yaml.SafeLoader)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-13-py"
+fires = false
+path = "app/settings.py"
+content = '''
+cfg = yaml.load(
+    fh, Loader=yaml.SafeLoader
+)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-13-py"
+fires = true
+path = "app/settings.py"
+content = '''
+cfg = yaml.load(
+    request.data
+)
+'''
+
+# An explicit unsafe loader is SEC-13's finding (no unless), so SEC-13-py stays quiet on it.
+[[sample]]
+kind = "rule"
+id = "SEC-13-py"
+fires = false
+path = "app/settings.py"
+content = '''
+cfg = yaml.load(fh, Loader=yaml.Loader)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-13"
+fires = true
+path = "app/settings.py"
+content = '''
+cfg = yaml.load(fh, Loader=yaml.Loader)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-13"
+fires = true
+path = "app/settings.py"
+content = '''
+safe = yaml.load(a, Loader=yaml.SafeLoader)
+risky = yaml.unsafe_load(request.data)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-13"
+fires = false
+path = "app/settings.py"
+content = '''
+cfg = yaml.load(open(path), Loader=yaml.SafeLoader)
+'''
+
+# SEC-04: a schema parse of the same variable whitelists its keys.
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = false
+path = "app/api/preferences/route.ts"
+content = '''
+const data = PreferencesPatch.parse(await req.json());
+const sets = Object.keys(data).map((k) => `${k} = ?`).join(", ");
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = false
+path = "app/api/preferences/route.ts"
+content = '''
+const parsed = PreferencesPatch.safeParse(await req.json());
+if (!parsed.success) return Response.json({ error: "Invalid input" }, { status: 400 });
+const data = parsed.data;
+const sets = Object.keys(data).map((k) => `${k} = ?`).join(", ");
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = false
+path = "src/server/api/routers/settings.ts"
+content = '''
+update: protectedProcedure
+  .input(z.object({ theme: z.string().optional(), locale: z.string().optional() }))
+  .mutation(async ({ ctx, input }) => {
+    const sets = Object.keys(input).map((k) => `${k} = ?`).join(", ");
+    return ctx.db.run(`UPDATE settings SET ${sets} WHERE user_id = ?`, [...Object.values(input), ctx.user.id]);
+  }),
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = false
+path = "app/settings_api.py"
+content = '''
+@router.patch("/settings")
+def patch_settings(patch: SettingsPatch, user=Depends(current_user)):
+    data = patch.model_dump(exclude_unset=True)
+    sets = ", ".join(f"{k} = %s" for k in data)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = true
+path = "server/routes/settings.js"
+content = '''
+const data = JSON.parse(raw);
+const sets = Object.keys(data).map((k) => `${k} = ?`).join(", ");
+'''
+
+# SEC-04: only a filter against an allowlist exempts a SET clause.
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = true
+path = "server/routes/settings.js"
+content = '''
+const sets = Object.keys(body).filter((k) => body[k] !== undefined).map((k) => `${k} = ?`).join(", ");
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = false
+path = "server/routes/settings.js"
+content = '''
+const sets = Object.keys(body).filter((k) => allowed.has(k)).map((k) => `${k} = ?`).join(", ");
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = false
+path = "server/routes/settings.js"
+content = '''
+const sets = Object.keys(body).filter((k) => k in ALLOWED).map((k) => `${k} = ?`).join(", ");
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = false
+path = "app/settings_db.py"
+content = '''
+sets = ", ".join(f"{k} = %s" for k in data if k in ALLOWED)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = true
+path = "app/settings_db.py"
+content = '''
+sets = ", ".join(f"{k} = %s" for k in data if data[k] is not None)
+'''
+
+# SEC-01-actions: SvelteKit form actions in JavaScript fire by path; stores elsewhere don't.
+[[sample]]
+kind = "rule"
+id = "SEC-01-actions"
+fires = true
+path = "src/routes/notes/+page.server.js"
+content = '''
+/** @satisfies {import('./$types').Actions} */
+export const actions = {
+  default: async ({ request }) => saveNote(await request.formData()),
+};
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-01-actions"
+fires = false
+path = "src/routes/notes/+page.server.js"
+content = '''
+export const actions = {
+  default: async ({ request, locals }) => {
+    if (!locals.user) throw redirect(303, "/login");
+    return saveNote(locals.user.id, await request.formData());
+  },
+};
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-01-actions"
+fires = false
+path = "src/store/modules/cart.js"
+content = '''
+export const actions = {
+  add({ commit }, item) {
+    commit("add", item);
+  },
+};
+'''
+
+# SEC-01 leaves form actions to SEC-01-actions (one deny, not two) and accepts a locals check.
+[[sample]]
+kind = "rule"
+id = "SEC-01"
+fires = false
+path = "src/routes/login/+page.server.ts"
+content = '''
+export const actions: Actions = {
+  default: async ({ request }) => saveNote(await request.formData()),
+};
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-01"
+fires = false
+path = "src/routes/api/notes/+server.ts"
+content = '''
+export const GET: RequestHandler = async ({ locals }) => {
+  if (!locals.user) error(401, "Sign in first");
+  return json(await listNotes(locals.user.id));
+};
 '''

@@ -84,16 +84,29 @@ Never fall back to a shared placeholder such as `"unknown"`. When the header is 
 - the IP is unknown but the user is signed in: skip the IP key, and the per-user key carries the limit;
 - neither is known: use one deliberately low global bucket for anonymous traffic, so it can't run up the bill, and fix the IP header so this path stops firing.
 
+Either way the per-IP key is gone, so say so loudly: warn once at startup when the header isn't configured, and once on the first request that arrives without it. Without the header, limits are per user only, and every anonymous caller shares the one low bucket.
+
 ```ts
 // The one header your platform or proxy sets and overwrites, e.g. "cf-connecting-ip".
 const IP_HEADER = process.env.CLIENT_IP_HEADER;
+if (!IP_HEADER) {
+  console.warn(
+    "rate limit: CLIENT_IP_HEADER is unset, so there is no per-IP limit: " +
+      "signed-in callers get per-user limits only, and anonymous callers share one low bucket",
+  );
+}
+
+let warnedMissingIp = false;
 
 export function clientIp(headers: Headers): string | null {
   if (!IP_HEADER) return null;
-  return headers.get(IP_HEADER)?.trim() || null;
+  const ip = headers.get(IP_HEADER)?.trim();
+  if (!ip && !warnedMissingIp) {
+    warnedMissingIp = true;
+    console.warn(`rate limit: a request arrived without ${IP_HEADER}; it gets no per-IP limit`);
+  }
+  return ip || null;
 }
-
-let warnedNoIp = false;
 
 export async function limitPaidCall(
   store: CounterStore,
@@ -107,10 +120,6 @@ export async function limitPaidCall(
   if (ip) return checkLimit(store, `ip:${ip}`, 30, 60);
   if (userId) return { ok: true }; // signed in, IP unknown: the per-user key carries the limit
   // Anonymous and no IP: one shared bucket for all such callers, kept low on purpose.
-  if (!warnedNoIp) {
-    warnedNoIp = true;
-    console.warn("rate limit: no client IP; check CLIENT_IP_HEADER");
-  }
   return checkLimit(store, "anon:no-ip", 20, 60);
 }
 ```
