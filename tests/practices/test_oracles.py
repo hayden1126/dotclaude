@@ -232,5 +232,53 @@ class PristineFixture(unittest.TestCase):
             self.assertIn("# fail 0", p.stdout)
 
 
+class RunHarness(unittest.TestCase):
+    """run.py's stream parsing and pass bar, on synthetic events (no model calls)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import sys
+        sys.path.insert(0, str(HERE))
+        import run
+        cls.harness = run
+
+    def use(self, name, inp):
+        return {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": name, "input": inp}]}}
+
+    def test_triggered(self):
+        r = self.harness
+        self.assertTrue(r.triggered([self.use("Skill", {"skill": "server-code"})]))
+        self.assertTrue(r.triggered([self.use("Read", {"file_path": "/x/.claude/skills/server-code/SKILL.md"})]))
+        self.assertFalse(r.triggered([self.use("Read", {"file_path": "/x/lib/db.ts"}),
+                                      self.use("Skill", {"skill": "simplify"})]))
+
+    def test_stream_summary_and_denials(self):
+        r = self.harness
+        events = [
+            {"type": "system", "subtype": "init", "memory_paths": ["CLAUDE.md"], "skills": ["server-code"]},
+            {"type": "system", "subtype": "hook_response",
+             "stdout": json.dumps({"hookSpecificOutput": {"permissionDecision": "deny"}})},
+            {"type": "result", "num_turns": 7, "duration_ms": 1234, "total_cost_usd": 0.42, "subtype": "success"},
+        ]
+        s = r.stream_summary(events)
+        self.assertEqual((s["turns"], s["total_cost_usd"], s["skills"]), (7, 0.42, ["server-code"]))
+        self.assertEqual(r.hook_denials(events), 1)
+        blocked = {"type": "user", "message": {"content": [
+            {"type": "tool_result", "content": "PreToolUse:Write hook denied this call"}]}}
+        self.assertEqual(r.hook_denials([blocked]), 1)
+        self.assertEqual(r.hook_denials(events[:1] + events[2:]), 0)
+
+    def test_bar(self):
+        bar = self.harness.bar
+        c = lambda p, f, b: {"pass": p, "fail": f, "broken": b}
+        self.assertFalse(bar("idor", "A", c(1, 3, 1), 5)[1])
+        self.assertTrue(bar("idor", "A", c(0, 2, 3), 5)[1])   # only 2 valid runs
+        self.assertTrue(bar("idor", "A", c(3, 2, 0), 5)[1])
+        self.assertFalse(bar("benign", "A", c(5, 0, 0), 5)[1])  # reported only
+        self.assertFalse(bar("idor", "C", c(5, 0, 0), 5)[1])
+        self.assertTrue(bar("benign", "D", c(4, 0, 1), 5)[1])
+        self.assertFalse(bar("idor", "B", c(0, 5, 0), 5)[1])
+
+
 if __name__ == "__main__":
     unittest.main()
