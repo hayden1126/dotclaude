@@ -132,19 +132,15 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     lead drops this item at its merge)** (from lane json-depth's PR 2 plan pass,
     2026-10-19; predates it): `dc.claude_ancestor` and `dc.live_sessions` read a hard-coded
     `~/.claude/sessions`, while `dc.session_toplevel` uses `sessions_dir`.
-  - **Lanes tell the lead at workflow stages** (Hayden, 2026-10-19, in lane branch-reuse's
-    window: "when a PR is made, or similar stages"). The board already shows a draft (`lane ls`
-    reads gh); what it doesn't explain ahead of time are side effects: branch-reuse's install hold
-    and its probe lane reading "#129 merged". Hayden's refinement (2026-10-19): the problem was a
-    lane telling him the lead must run setup.sh (or similar) without saying to approve it or pass
-    it on, so he didn't know what to do. Rule: a lane never tells Hayden what the lead must do;
-    it messages the lead, before any act whose effect reaches past its worktree (an install from
-    the lane, making a lane, taking a cap slot) and with anything the lead must run. The lead asks
-    Hayden when the act needs his ok; steps under standing approval (the post-merge chain's
-    reinstall) stay no-ask unless he says otherwise. "Draft opened" and "ready asked" messages
-    are dropped: `lane ls` shows both. Seen again the same day: ask-check installed from its lane
-    without telling the lead. Home: `skills/lanes/SKILL.md` Lifecycle steps 5 and 6 and "Who asks
-    Hayden what"; ask-check's edits there merged as #131, but pr-horizon edits that file too.
+  - **Lanes tell the lead before an act past their worktree: drafted on lead branch
+    `docs/lane-notices` (01e02a2, worktree `.claude/worktrees/lane-notices`), not pushed.**
+    Hayden's rule (2026-10-19): a lane never tells Hayden what the lead must do; it messages the
+    lead before an install from the lane or a cap slot, and with anything the lead must run, then
+    waits for the reply. The lead asks Hayden only when the act needs his ok. Edits:
+    `skills/lanes/SKILL.md` (Lifecycle 3 and 5, The lead 6, "Who asks Hayden what") and
+    `docs/lanes.md` ("Who asks what"). Both files are pr-horizon's too, so the PR opens only after
+    pr-horizon merges: merge main into the branch, then ask Hayden to push and open the draft.
+    Once it merges, new briefs drop the hand-written "Message the lead before any act..." line.
   - **A custom CLAUDE_CONFIG_DIR breaks the hook layer** (from lane config-dir, 2026-10-19;
     checked: 39 hook commands in `settings.json` run `$HOME/.claude/hooks/...`, while `setup.sh`
     installs to `${CLAUDE_CONFIG_DIR:-$HOME/.claude}`, and 16 files under `hooks/` hard-code
@@ -160,6 +156,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     polish and blockfix all hit it; dotclaude reaches it near #200. Fix shape (the reporter's):
     for just those lanes, one extra `gh pr list --head <branch> --state merged` per branch
     instead of giving up. Lane-able (`lane`, `tests/lanes`, `docs/lanes.md`).
+  - **`lane ls`'s PR column reads `none` for a lane whose newest PR sits past the 200-PR
+    horizon** (cosmetic, from lane pr-horizon, 2026-10-19): a per-branch `--state all` call
+    would fix it.
   - **An untitled versioned claude's tab reads `2.1.303`** (cosmetic, from lane tab-cmd,
     2026-10-19): `tmux/claude.conf:55-56` and `tmux/tmux-tab-bar:201` fall back to
     `pane_current_command` for a pane with no title.
@@ -246,8 +245,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 ## Notes for next session
 - **Next (lead, main checkout):**
   0. Lanes pr-horizon (merge order 1, carries the lead branch) and config-dir (#133, order 2)
-     run; their state is in their records (`lane ls`). Then the lane-notices rule (Backlog),
-     now that ask-check's edits to `skills/lanes/SKILL.md` are on main.
+     run; their state is in their records (`lane ls`). The lane-notices rule is drafted
+     (Backlog): its PR follows pr-horizon's merge.
   1. Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
      against the code and log it in the backlog. When lanes run again, follow The lead in
      `skills/lanes/SKILL.md` (step 7 is the post-merge chain; never amend or rebase the lead
