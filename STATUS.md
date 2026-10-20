@@ -87,12 +87,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lanes** (opened 2026-10-19; briefs in each record). Merge order: 1 pr-horizon
-    (`handoff?` past 200 PRs, the capella report below; carries the lead's notes), 2 config-dir
-    (#133, the delegation readers that ignore CLAUDE_CONFIG_DIR, below), 3 practices
+  - **Live lanes** (opened 2026-10-19; briefs in each record). Merge order: 1 config-dir
+    (#133, the delegation readers that ignore CLAUDE_CONFIG_DIR, below; carries the lead's
+    notes), 2 practices
     (`feat/practices-suite`, opened 2026-10-19 at Hayden's ask: the skill suite below, researched
     from his project memories and online sources, then the security skill only; Hayden picked
-    "security first"). The lanes cap (3) is full.
+    "security first"). pr-horizon merged as #135 (2026-10-20): installed from main.
   - **Lane ask quality: done** (2026-10-19 to 2026-10-20). ask-check merged as #131 and was
     installed from main 2026-10-20: a PreToolUse hook on AskUserQuestion (`hooks/ask_check.py`)
     denies risky asks with a checklist in the reason. branch-reuse merged as #130: `lane new`
@@ -174,15 +174,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     `~/.claude`). Under a custom config dir every hook fails, and the `|| exit 2` ones block.
     Matters for a new device ([[hayden-new-device-goal]]); unreachable on HAYPC (unset).
     config-dir's PR covers only the delegation Python readers.
-  - **`handoff?` never clears on a switched lane past 200 PRs** (bug report from capella-studio's
-    lead, session 5788b9fb, 2026-10-19; checked against the code). `pr_states` lists the newest
-    `PR_LIMIT` (200) PRs in one gh call; once that list is full, `merges_of`
-    (`skills/lanes/scripts/lane:884`) returns unknown for any lane that switched branches (or was
-    adopted, or predates the horizon), so the flag stays on and the hand-back gate can't pass.
-    Documented as a limit in `docs/lanes.md` ("What it can't tell"), but capella's lanes keys,
-    polish and blockfix all hit it; dotclaude reaches it near #200. Fix shape (the reporter's):
-    for just those lanes, one extra `gh pr list --head <branch> --state merged` per branch
-    instead of giving up. Lane-able (`lane`, `tests/lanes`, `docs/lanes.md`).
+  - **`handoff?` past 200 PRs: fixed in #135** (lane pr-horizon, merged 2026-10-20, installed
+    from main): `merges_of` asks gh per branch for a lane that switched, was adopted or predates
+    the horizon. Tell capella-studio's lead (the reporter) once its lanes pick it up.
   - **`lane ls`'s PR column reads `none` for a lane whose newest PR sits past the 200-PR
     horizon** (cosmetic, from lane pr-horizon, 2026-10-19): a per-branch `--state all` call
     would fix it.
@@ -271,9 +265,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lanes pr-horizon (merge order 1, carries the lead branch) and config-dir (#133, order 2)
-     run; their state is in their records (`lane ls`). The lane-notices rule is drafted
-     (Backlog): its PR follows pr-horizon's merge.
+  0. Lanes config-dir (#133, merge order 1, carries the lead branch) and practices (order 2)
+     run; their state is in their records (`lane ls`). The lane-notices rule (Backlog) is
+     unblocked by #135: merge main into `docs/lane-notices`, then ask Hayden to push it.
   1. Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
      against the code and log it in the backlog. When lanes run again, follow The lead in
      `skills/lanes/SKILL.md` (step 7 is the post-merge chain; never amend or rebase the lead
