@@ -488,6 +488,17 @@ class Failures(Base):
         self.assertIsNone(self.run_hook(None, stdin="not json {"))
         self.assertIn("crash", self.log())
 
+    def test_a_module_python_cannot_run_is_reported_on_every_call(self):
+        d = os.path.join(self.tmp, "hooks")
+        os.makedirs(d)
+        shutil.copy(HOOK, d)
+        with open(os.path.join(d, "practices_check.py"), "w") as f:
+            f.write("def broken(:\n")
+        p = subprocess.run(["bash", os.path.join(d, "practices-check.sh")], input="{}",
+                           capture_output=True, text=True, env=self.env, timeout=30)
+        self.assertEqual(p.returncode, 0)
+        self.assertIn("practices hooks are down", json.loads(p.stdout)["systemMessage"])
+
     def test_a_normal_exit_leaves_no_breadcrumb(self):
         self.fire("lib/actions.ts", "'use server'\n")
         crumbs = glob.glob(os.path.join(self.state, "dotclaude", "practices", "breadcrumb*"))
