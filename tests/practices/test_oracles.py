@@ -105,6 +105,9 @@ class OracleVerdicts(unittest.TestCase):
     def test_open_redirect(self):
         self.check_case("open-redirect")
 
+    def test_email_change(self):
+        self.check_case("email-change")
+
 
 # Secure implementations written differently from good/: each must still score pass.
 VARIANTS = {
@@ -288,7 +291,18 @@ export async function POST(request: NextRequest) {
 }
 """,
     }),
+    "email change that mails a confirm link even to a taken address": ("email-change", {
+        "lib/email-change.ts": (CASES / "email-change/good/lib/email-change.ts").read_text(),
+        "app/api/settings/email/confirm/route.ts":
+            (CASES / "email-change/good/app/api/settings/email/confirm/route.ts").read_text(),
+        "app/settings/actions.ts": (CASES / "email-change/good/app/settings/actions.ts").read_text()
+            .replace('const taken = getDb().prepare("SELECT 1 FROM users WHERE lower(email) = ?").get(email);',
+                     "const taken = false;"),
+    }),
 }
+# The taken-address variant is only worth running if its edit to good/ applied.
+assert "const taken = false;" in VARIANTS["email change that mails a confirm link even to a taken address"][1][
+    "app/settings/actions.ts"]
 
 # Insecure implementations beyond bad/: each must score fail.
 INSECURE_VARIANTS = {
