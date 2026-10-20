@@ -2,7 +2,7 @@
 """Live server-code eval: real `claude -p` sessions against planted-bug tasks, scored by hidden oracles.
 
   python3 tests/practices/run.py --arms A [--cases idor,mass-assign] [-n 5] [-j 2]
-                                 [--model claude-opus-5-5] [--out DIR] [--keep] [--dry-run]
+                                 [--model claude-opus-5-5] [--effort LEVEL] [--out DIR] [--keep] [--dry-run]
                                  [--unsafe-grade]
 
 Manual only, never in the suite: it makes model calls, and runs sandbox-off (the sandbox
@@ -212,8 +212,11 @@ def npm_test(root):
 
 # ---------------------------------------------------------------- session
 
-def claude_cmd(model, extra=()):
+def claude_cmd(model, extra=(), effort=None):
+    """With no effort, the session gets Claude Code's built-in default for the model:
+    --setting-sources project,local drops the user's saved effortLevel."""
     return ["claude", "-p", "--output-format", "stream-json", "--verbose", "--model", model,
+            *(["--effort", effort] if effort else []),
             "--setting-sources", "project,local", "--strict-mcp-config",
             "--permission-mode", "acceptEdits", "--max-turns", "60", *extra]
 
@@ -222,16 +225,36 @@ def prompt_of(case):
     return (CASES_DIR / case / "prompt.md").read_text()
 
 
-def turns_for(case, arm, model):
-    """[(label, prompt text, command)] for one run."""
+def turns_for(case, arm, model, effort=None):
+    """[(label, prompt text, command)] for one run. Every turn passes the effort again:
+    --resume keeps the session's model but not its effort."""
     if arm != "D":
-        return [("task", prompt_of(case), claude_cmd(model))]
+        return [("task", prompt_of(case), claude_cmd(model, effort=effort))]
     sid = str(uuid.uuid4())
     return [
-        ("warmup", prompt_of("benign"), claude_cmd(model, ["--session-id", sid])),
-        ("compact", "/compact", claude_cmd(model, ["--resume", sid])),
-        ("task", prompt_of(case), claude_cmd(model, ["--resume", sid])),
+        ("warmup", prompt_of("benign"), claude_cmd(model, ["--session-id", sid], effort)),
+        ("compact", "/compact", claude_cmd(model, ["--resume", sid], effort)),
+        ("task", prompt_of(case), claude_cmd(model, ["--resume", sid], effort)),
     ]
+
+
+def transcript_efforts(events_by_turn):
+    """The effort levels the session transcripts record on assistant entries. The stream
+    doesn't carry them, and this shows what an unflagged run really got."""
+    projects = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "projects"
+    seen = set()
+    for events in events_by_turn:
+        sid = next((e.get("session_id") for e in events if e.get("subtype") == "init"), None)
+        for path in projects.glob(f"*/{sid}.jsonl") if sid else ():
+            with open(path, errors="replace") as f:
+                for line in f:
+                    try:
+                        entry = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(entry, dict) and entry.get("type") == "assistant" and entry.get("effort"):
+                        seen.add(entry["effort"])
+    return sorted(seen)
 
 
 def read_stream(path):
@@ -589,7 +612,7 @@ def run_one(case, arm, index, args, out):
     run_dir.mkdir(parents=True, exist_ok=True)
     fixture, harness_sha = build_fixture(arm)
     streams, labels, exits, timed_out, strays = [], [], [], False, 0
-    turns = turns_for(case, arm, args.model)
+    turns = turns_for(case, arm, args.model, args.effort)
     for n, (label, prompt, cmd) in enumerate(turns, 1):
         if STOP.is_set():
             raise Interrupted()
@@ -623,6 +646,8 @@ def run_one(case, arm, index, args, out):
     denials_turns = {label: hook_denials(turn) for label, turn in zip(labels, events_by_turn)}
     row = {
         "case": case, "arm": arm, "run": index,
+        "model": args.model, "effort": args.effort or "default",
+        "effort_seen": transcript_efforts(events_by_turn),
         "verdict": verdict["verdict"], "checks": verdict.get("checks", []),
         # the case turn's figures; arm D's warm-up and compact turns are reported apart
         "triggered": triggered_turns.get("task", False),
@@ -693,7 +718,7 @@ def dry_run(cases, arms, args):
             if not ok:
                 failed.append(f"{case}/{arm}")
                 print(output[-3000:])
-            for label, _prompt, cmd in turns_for(case, arm, args.model):
+            for label, _prompt, cmd in turns_for(case, arm, args.model, args.effort):
                 source = "/compact" if label == "compact" else str(CASES_DIR / (
                     "benign" if label == "warmup" else case) / "prompt.md")
                 stdin = f"<<< {shlex.quote(source)}" if label == "compact" else f"< {shlex.quote(source)}"
@@ -714,6 +739,8 @@ def main():
     ap.add_argument("-n", type=int, default=5, help="runs per case and arm (default 5)")
     ap.add_argument("-j", type=int, default=2, help="sessions in parallel (default 2)")
     ap.add_argument("--model", default="claude-opus-5-5")
+    ap.add_argument("--effort", choices=("low", "medium", "high", "xhigh", "max"),
+                    help="session effort (default: Claude Code's built-in default for the model)")
     ap.add_argument("--out", help="results dir (default: a new practices-out-* temp dir)")
     ap.add_argument("--keep", action="store_true", help="keep each run's fixture")
     ap.add_argument("--dry-run", action="store_true", help="build fixtures, run npm test, print commands")
@@ -735,7 +762,7 @@ def main():
 
     out = Path(a.out) if a.out else Path(tempfile.mkdtemp(prefix="practices-out-"))
     out.mkdir(parents=True, exist_ok=True)
-    print(f"results: {out / 'results.jsonl'}")
+    print(f"results: {out / 'results.jsonl'} (model {a.model}, effort {a.effort or 'default'})")
     jobs = [(case, arm, i) for case in cases for arm in arms for i in range(1, a.n + 1)]
     rows = []
     started = time.monotonic()

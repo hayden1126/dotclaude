@@ -580,6 +580,36 @@ class RunHarness(unittest.TestCase):
     def use(self, name, inp):
         return {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": name, "input": inp}]}}
 
+    def test_effort_reaches_every_turn(self):
+        r = self.harness
+        self.assertNotIn("--effort", r.claude_cmd("m"))
+        for _label, _prompt, cmd in r.turns_for("idor", "D", "m", "low"):
+            self.assertEqual(cmd[cmd.index("--effort") + 1], "low")  # --resume drops effort
+        self.assertNotIn("--effort", r.turns_for("idor", "A", "m")[0][2])
+
+    def test_transcript_efforts(self):
+        r = self.harness
+        with tempfile.TemporaryDirectory(prefix="practices-cfg-") as cfg:
+            proj = Path(cfg) / "projects" / "-tmp-ledgerly-x"
+            proj.mkdir(parents=True)
+            (proj / "s1.jsonl").write_text("\n".join([
+                json.dumps({"type": "assistant", "effort": "medium"}),
+                json.dumps({"type": "user"}),
+                "not json",
+                json.dumps({"type": "assistant", "effort": "low"}),
+            ]) + "\n")
+            old = os.environ.get("CLAUDE_CONFIG_DIR")
+            os.environ["CLAUDE_CONFIG_DIR"] = cfg
+            try:
+                self.assertEqual(r.transcript_efforts([[{"subtype": "init", "session_id": "s1"}]]),
+                                 ["low", "medium"])
+                self.assertEqual(r.transcript_efforts([[{"subtype": "init", "session_id": "nope"}], []]), [])
+            finally:
+                if old is None:
+                    os.environ.pop("CLAUDE_CONFIG_DIR", None)
+                else:
+                    os.environ["CLAUDE_CONFIG_DIR"] = old
+
     def test_triggered(self):
         r = self.harness
         self.assertTrue(r.triggered([self.use("Skill", {"skill": "server-code"})]))
