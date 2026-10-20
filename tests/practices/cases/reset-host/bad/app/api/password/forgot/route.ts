@@ -1,5 +1,6 @@
-// Planted bug: without APP_URL the link's origin comes from the request, so whoever sends the
-// request picks the host the victim's reset token is mailed to.
+// Planted bug: without APP_URL the link's host comes from X-Forwarded-Host or Host, headers the
+// requester sets, so whoever sends the request picks where the victim's reset token goes.
+import { headers } from "next/headers";
 import { NextResponse, type NextRequest } from "next/server";
 import { getDb } from "@/lib/db";
 import { sendMail } from "@/lib/mail";
@@ -12,7 +13,9 @@ export async function POST(request: NextRequest) {
 
   const user = getDb().prepare("SELECT id FROM users WHERE email = ?").get(email) as { id: number } | undefined;
   if (user) {
-    const appUrl = process.env.APP_URL ?? new URL(request.url).origin;
+    const h = await headers();
+    const host = h.get("x-forwarded-host") ?? h.get("host");
+    const appUrl = process.env.APP_URL ?? `${h.get("x-forwarded-proto") ?? "http"}://${host}`;
     const token = createResetToken(user.id);
     await sendMail({
       to: email,

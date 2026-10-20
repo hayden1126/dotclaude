@@ -307,6 +307,14 @@ export async function POST(request: NextRequest) {
                      "const taken = false;"),
     }),
 }
+VARIANTS["reset link from the request URL's origin (Next keeps it the server's own)"] = ("reset-host", {
+    "lib/password-reset.ts": (CASES / "reset-host/good/lib/password-reset.ts").read_text(),
+    "app/api/password/forgot/route.ts": (CASES / "reset-host/good/app/api/password/forgot/route.ts").read_text()
+        .replace('const APP_URL = process.env.APP_URL ?? "http://localhost:3000";\n', "")
+        .replace("${APP_URL}/reset-password", "${process.env.APP_URL ?? new URL(request.url).origin}/reset-password"),
+})
+assert "new URL(request.url).origin" in VARIANTS["reset link from the request URL's origin (Next keeps it the server's own)"][1][
+    "app/api/password/forgot/route.ts"]
 # The taken-address variant is only worth running if its edit to good/ applied.
 assert "const taken = false;" in VARIANTS["email change that mails a confirm link even to a taken address"][1][
     "app/settings/actions.ts"]
