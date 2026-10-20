@@ -157,11 +157,6 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     list what dotclaude's guards (sandbox, permission rules, delete, overwrite and excluded-command
     guards, subagent policy, lanes) don't cover. Unfixed security gaps go to the private
     findings file, not here ([[dotclaude-public-repo]]).
-  - **setup.sh's ccstatusline write crashes on an odd settings shape** (from lane json-depth's PR 1
-    writer, 2026-10-19; predates it): the heredoc's `has_ctx_widget` and `patch_paths` assume
-    `lines` is a list of lists of dicts, and a directory at the destination crashes
-    `shutil.copy`; under `set -e` either stops the install at step 5. Folded into lane
-    summary-retire (Hayden, 2026-10-20), which rewrites that block.
   - **Lanes tell the lead before an act past their worktree: merged as #136** (lead PR,
     2026-10-20, installed from main). New briefs drop the hand-written "Message the lead before
     any act..." Constraints line: the skill carries it (Lifecycle step 3).
@@ -173,10 +168,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     summary-retire; at its merge the lead updates memory `dotclaude-session-summary-statusline`.
   - **A device-wide toggle for the toast and the sound** (Hayden, 2026-10-20): one switch that
     mutes the Windows toast and the notify ring for every session on the machine (no toggle
-    exists today). Both fire from `hooks/notify.sh` (toast plus `play_ring`) and the Stop ring
-    (`stop-ring.sh`), via `play_ring` in `hooks/session-pane.sh`. Shape to settle: a flag file
-    in the state dir (instant, every session) versus a setting, and whether toast and sound
-    toggle apart; a tmux menu entry would fit the tab bar. Lane-able (`hooks/`, `tmux/`, tests).
+    exists today). Design and four forks, each with the lead's pick, in `PLAN.md` ("Next: a
+    device-wide mute"); Hayden picks, then it opens as a lane when a slot frees (`hooks/`,
+    `tmux/`, tests; no live lane's files).
   - **Watch: `~/.claude/CLAUDE.md` vanished after a lane install** (2026-10-20 00:53Z). Lane
     config-dir's `setup.sh` (00:52:28 to 00:52:38, sandbox off) linked it, then it was gone by
     00:53:02, with no backup (a symlink is removed, not backed up). Hayden relinked it by hand
