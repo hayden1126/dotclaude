@@ -221,6 +221,24 @@ class DeleteGuard(unittest.TestCase):
                 self.assertEqual(p.returncode, 0, p.stderr)
                 self.assertEqual("RAN" in p.stdout, ran, p.stdout)
 
+    def test_a_module_planted_in_the_hooks_dir_never_runs(self):
+        # Review round 1: bash_words went in by putting the hooks dir first on sys.path, so a
+        # shlex.py there ran, outside the sandbox, when bash_words imported shlex.
+        hooks = os.path.join(self.tmp, "hooks")
+        os.makedirs(hooks)
+        for name in ("delete-guard.sh", "delete_guard.py", "bash_words.py"):
+            shutil.copy(os.path.join(REPO, "hooks", name), hooks)
+        ran = os.path.join(self.tmp, "ran")
+        with open(os.path.join(hooks, "shlex.py"), "w") as f:
+            f.write(f"open({ran!r}, 'a').write('planted')\n")
+        event = {"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+                 "tool_input": {"command": "rm -rf $T", "dangerouslyDisableSandbox": True}}
+        p = subprocess.run(["bash", os.path.join(hooks, "delete-guard.sh")],
+                           input=json.dumps(event), capture_output=True, text=True,
+                           env=self.env, timeout=10)
+        self.assertIn('"deny"', p.stdout)  # bash_words ran
+        self.assertFalse(os.path.exists(ran), "the planted shlex.py ran")
+
     def test_fails_open(self):
         self.assertIsNone(self.fire("x", raw="not json"))
         self.assertIn("error", self.log())

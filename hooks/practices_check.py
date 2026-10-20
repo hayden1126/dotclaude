@@ -1252,13 +1252,29 @@ def command_of(event):
     return cmd if isinstance(cmd, str) and cmd.strip() else None
 
 
+_BASH_WORDS = []
+
+
+def load_bash_words():
+    """hooks/bash_words.py beside this file, loaded by its path and compiled from its source.
+    The hooks dir never joins sys.path (a planted shlex.py there would run outside the sandbox
+    when bash_words imports shlex), and no cached .pyc is read."""
+    if not _BASH_WORDS:
+        import importlib.util  # noqa: PLC0415 (only the Bash levels need it)
+        path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "bash_words.py")
+        with open(path, encoding="utf-8") as f:
+            source = f.read()
+        mod = importlib.util.module_from_spec(importlib.util.spec_from_file_location(
+            "bash_words", path))
+        exec(compile(source, path, "exec"), mod.__dict__)  # noqa: S102 (our own module)
+        _BASH_WORDS.append(mod)
+    return _BASH_WORDS[0]
+
+
 def bash_calls(event):
     """(git calls as (subcommand, args, where), gh calls as (args, cwd)) in the Bash command.
     Expansions in a git location, and an unparsable command, are skipped and logged."""
-    here = os.path.dirname(os.path.realpath(__file__))
-    if sys.path[:1] != [here]:  # python3 -I leaves this file's dir off sys.path
-        sys.path.insert(0, here)
-    import bash_words  # noqa: PLC0415 (only the Bash levels need it)
+    bash_words = load_bash_words()
     cmd = command_of(event)
     cwd = event.get("cwd") if isinstance(event.get("cwd"), str) else None
     gits, ghs = [], []
