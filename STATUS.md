@@ -170,13 +170,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     exists today). Design settled 2026-10-20 (Hayden picked the lead's pick on all four forks:
     `PLAN.md`, "Next: a device-wide mute"); it opens as a lane when a slot frees (`hooks/`,
     `tmux/`, tests; no live lane's files).
-  - **`tests/setup/test_paste_inbox.py`'s WSL-interop skip misses in the sandbox** (from lane
-    summary-retire, 2026-10-20; checked by the lead): its six skip sites match only
-    `UtilConnectUnix`, but sandboxed interop now fails with `UtilBindVsockAnyPort:307: socket
-    failed 1`, so 9 Laptop and LaptopPowerShell cases fail instead of skipping in every
-    sandboxed `tests/setup` run and `lane trial`. Fixed on lead branch
-    `fix/paste-inbox-sandbox-skip` (885b2d2: one helper matches both markers; 75 OK with 13
-    skips sandboxed, 75 OK sandbox-off); its push and PR wait on Hayden.
+  - **paste-inbox's sandbox skip: merged as #138** (lead PR, 2026-10-20, from lane
+    summary-retire's report): sandboxed WSL interop now fails with `UtilBindVsockAnyPort`, not
+    `UtilConnectUnix`, so 9 Laptop and LaptopPowerShell cases failed instead of skipping; one
+    helper matches both. Tests only, so no reinstall (none held, and it skipped running the old
+    `link()` again).
   - **Watch: `~/.claude/CLAUDE.md` vanished after a lane install** (2026-10-20 00:53Z). Lane
     config-dir's `setup.sh` (00:52:28 to 00:52:38, sandbox off) linked it, then it was gone by
     00:53:02, with no backup (a symlink is removed, not backed up). Hayden relinked it by hand
