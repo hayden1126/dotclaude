@@ -1,0 +1,1 @@
+Add password reset: a 'forgot password' form that posts {email} to POST /api/password/forgot, which emails a reset link (lib/mail.ts sends mail), and a page at the link where the user sets a new password.

@@ -1,0 +1,1852 @@
+# Samples for skills/server-code/events.toml: for every event and rule, edits that must
+# fire and near misses that must not. The practices engine test runs each one.
+
+# ---------------------------------------------------------------- event: route-handler
+
+[[sample]]
+kind = "event"
+id = "route-handler"
+fires = true
+path = "app/api/things/route.ts"
+content = '''
+import { db } from "@/lib/db";
+
+export async function GET() {
+  return Response.json(await db.thing.findMany());
+}
+'''
+
+[[sample]]
+kind = "event"
+id = "route-handler"
+fires = true
+path = "src/app/api/admin/users/[id]/route.js"
+content = ""
+
+[[sample]]
+kind = "event"
+id = "route-handler"
+fires = true
+path = "lib/board-actions.ts"
+content = '''
+"use server";
+
+import { db } from "@/lib/db";
+
+export async function archiveBoard(id: string) {
+  await db.board.delete({ where: { id } });
+}
+'''
+
+[[sample]]
+kind = "event"
+id = "route-handler"
+fires = true
+path = "src/routes/api/items/+server.ts"
+content = ""
+
+[[sample]]
+kind = "event"
+id = "route-handler"
+fires = true
+path = "server/index.js"
+content = '''
+app.post("/api/summarize", async (req, res) => {
+  res.json(await summarize(req.body.text));
+});
+'''
+
+[[sample]]
+kind = "event"
+id = "route-handler"
+fires = true
+path = "service/items.py"
+content = '''
+@router.post("/items")
+async def create_item(item: ItemIn):
+    return await save(item)
+'''
+
+[[sample]]
+kind = "event"
+id = "route-handler"
+fires = true
+path = "service/web.py"
+content = '''
+@users_bp.route("/users/<int:user_id>", methods=["GET"])
+def show_user(user_id):
+    return jsonify(load(user_id))
+'''
+
+[[sample]]
+kind = "event"
+id = "route-handler"
+fires = true
+path = "src/users/users.controller.ts"
+content = ""
+
+[[sample]]
+kind = "event"
+id = "route-handler"
+fires = true
+path = "src/trpc/post.ts"
+content = '''
+export const postRouter = createTRPCRouter({
+  create: protectedProcedure.input(PostIn).mutation(({ ctx, input }) => ctx.db.post.create({ data: input })),
+});
+'''
+
+[[sample]]
+kind = "event"
+id = "route-handler"
+fires = true
+path = "app/routes/notes.tsx"
+content = '''
+export async function action({ request }: ActionFunctionArgs) {
+  const form = await request.formData();
+  return createNote(form.get("title"));
+}
+'''
+
+[[sample]]
+kind = "event"
+id = "route-handler"
+fires = true
+path = "cmd/api/main.go"
+content = '''
+func main() {
+	http.HandleFunc("/api/items", itemsHandler)
+}
+'''
+
+[[sample]]
+kind = "event"
+id = "route-handler"
+fires = true
+path = "pages/api/hello.ts"
+content = ""
+
+[[sample]]
+kind = "event"
+id = "route-handler"
+fires = true
+path = "blog/views.py"
+content = ""
+
+[[sample]]
+kind = "event"
+id = "route-handler"
+fires = true
+path = "src/orders/orders.ts"
+content = '''
+@Controller("orders")
+export class OrdersController {}
+'''
+
+[[sample]]
+kind = "event"
+id = "route-handler"
+fires = false
+path = "app/dashboard/page.tsx"
+content = '''
+export default async function Page() {
+  const res = await fetch("/api/things");
+  return <List items={await res.json()} />;
+}
+'''
+
+[[sample]]
+kind = "event"
+id = "route-handler"
+fires = false
+path = "src/api/client.ts"
+content = '''
+const api = axios.create({ baseURL: "/api" });
+export const listUsers = () => api.get("/users");
+'''
+
+[[sample]]
+kind = "event"
+id = "route-handler"
+fires = false
+path = "src/mocks/handlers.ts"
+content = '''
+export const handlers = [http.get("/api/user", () => HttpResponse.json({ id: 1 }))];
+'''
+
+[[sample]]
+kind = "event"
+id = "route-handler"
+fires = false
+path = "app/api/things/route.test.ts"
+content = '''
+import { GET } from "./route";
+
+test("lists things", async () => {
+  expect((await GET()).status).toBe(200);
+});
+'''
+
+[[sample]]
+kind = "event"
+id = "route-handler"
+fires = false
+path = "src/store/actions/todo.ts"
+content = '''
+export const addTodo = (text: string) => ({ type: "todo/add", text });
+'''
+
+[[sample]]
+kind = "event"
+id = "route-handler"
+fires = false
+path = "app/routes/index.tsx"
+content = '''
+export async function loader() {
+  return json(await listPublicPosts());
+}
+'''
+
+# -------------------------------------------------------------- event: webhook-handler
+
+[[sample]]
+kind = "event"
+id = "webhook-handler"
+fires = true
+path = "app/api/webhooks/stripe/route.ts"
+content = ""
+
+[[sample]]
+kind = "event"
+id = "webhook-handler"
+fires = true
+path = "src/handlers/payments.ts"
+content = '''
+const sig = request.headers.get("stripe-signature");
+'''
+
+[[sample]]
+kind = "event"
+id = "webhook-handler"
+fires = true
+path = "server/billing.py"
+content = '''
+event = stripe.Webhook.construct_event(payload, sig_header, endpoint_secret)
+'''
+
+[[sample]]
+kind = "event"
+id = "webhook-handler"
+fires = true
+path = "services/stripe-webhook.ts"
+content = ""
+
+[[sample]]
+kind = "event"
+id = "webhook-handler"
+fires = true
+path = "src/github.ts"
+content = '''
+const signature = req.headers["X-Hub-Signature-256"];
+'''
+
+[[sample]]
+kind = "event"
+id = "webhook-handler"
+fires = false
+path = "src/lib/notify.ts"
+content = '''
+await fetch(process.env.SLACK_WEBHOOK_URL!, { method: "POST", body: JSON.stringify({ text }) });
+'''
+
+[[sample]]
+kind = "event"
+id = "webhook-handler"
+fires = false
+path = "docs/webhooks.md"
+content = '''
+Point your provider at /api/hooks and copy the signing secret.
+'''
+
+[[sample]]
+kind = "event"
+id = "webhook-handler"
+fires = false
+path = "app/settings/page.tsx"
+content = '''
+<label>Webhook URL <input name="url" /></label>
+'''
+
+# ----------------------------------------------------------------- event: job-consumer
+
+[[sample]]
+kind = "event"
+id = "job-consumer"
+fires = true
+path = "src/queue/email.ts"
+content = '''
+import { Worker } from "bullmq";
+'''
+
+[[sample]]
+kind = "event"
+id = "job-consumer"
+fires = true
+path = "app/digest.py"
+content = '''
+from celery import shared_task
+
+@shared_task
+def send_digest(user_id):
+    deliver(user_id)
+'''
+
+[[sample]]
+kind = "event"
+id = "job-consumer"
+fires = true
+path = "app/jobs/send_digest_job.rb"
+content = ""
+
+[[sample]]
+kind = "event"
+id = "job-consumer"
+fires = true
+path = "src/consumers/orders.ts"
+content = '''
+await consumer.run({
+  eachMessage: async ({ message }) => handle(message),
+});
+'''
+
+[[sample]]
+kind = "event"
+id = "job-consumer"
+fires = true
+path = "worker.ts"
+content = '''
+const out = await sqs.send(new ReceiveMessageCommand({ QueueUrl: url }));
+'''
+
+[[sample]]
+kind = "event"
+id = "job-consumer"
+fires = true
+path = "src/cron.ts"
+content = '''
+cron.schedule("0 * * * *", async () => sweep());
+'''
+
+[[sample]]
+kind = "event"
+id = "job-consumer"
+fires = false
+path = "src/workers/resize.worker.ts"
+content = '''
+self.onmessage = (e) => postMessage(resize(e.data));
+'''
+
+[[sample]]
+kind = "event"
+id = "job-consumer"
+fires = false
+path = "app/jobs/[id]/page.tsx"
+content = '''
+export default function JobPage({ params }) {
+  return <JobListing id={params.id} />;
+}
+'''
+
+[[sample]]
+kind = "event"
+id = "job-consumer"
+fires = false
+path = "src/main.ts"
+content = '''
+const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
+'''
+
+[[sample]]
+kind = "event"
+id = "job-consumer"
+fires = false
+path = "tasks/build.py"
+content = '''
+def build():
+    run(["make", "all"])
+'''
+
+# ------------------------------------------------------------------ event: data-export
+
+[[sample]]
+kind = "event"
+id = "data-export"
+fires = true
+path = "app/api/reports/export/route.ts"
+content = '''
+return new Response(csv, { headers: { "Content-Type": "text/csv; charset=utf-8" } });
+'''
+
+[[sample]]
+kind = "event"
+id = "data-export"
+fires = true
+path = "lib/report.py"
+content = '''
+writer = csv.writer(response)
+'''
+
+[[sample]]
+kind = "event"
+id = "data-export"
+fires = true
+path = "src/export.ts"
+content = '''
+import ExcelJS from "exceljs";
+'''
+
+[[sample]]
+kind = "event"
+id = "data-export"
+fires = true
+path = "ui/Download.tsx"
+content = '''
+link.download = "orders.csv";
+'''
+
+[[sample]]
+kind = "event"
+id = "data-export"
+fires = true
+path = "server/reports.ts"
+content = '''
+res.setHeader("Content-Disposition", 'attachment; filename="report.xlsx"');
+'''
+
+[[sample]]
+kind = "event"
+id = "data-export"
+fires = true
+path = "lib/table.ts"
+content = '''
+export function toCsv(rows: string[][]): string {
+  return rows.map((r) => r.join(",")).join("\n");
+}
+'''
+
+[[sample]]
+kind = "event"
+id = "data-export"
+fires = false
+path = "scripts/seed.ts"
+content = '''
+import { parse } from "csv-parse/sync";
+const rows = parse(fs.readFileSync("data/seed.csv", "utf8"));
+'''
+
+[[sample]]
+kind = "event"
+id = "data-export"
+fires = false
+path = "app/help/page.tsx"
+content = '''
+<p>Export your data as CSV from the settings page.</p>
+'''
+
+[[sample]]
+kind = "event"
+id = "data-export"
+fires = false
+path = "src/load.py"
+content = '''
+df = pd.read_csv(path)
+'''
+
+# ------------------------------------------------------------------------ event: cache
+
+[[sample]]
+kind = "event"
+id = "cache"
+fires = true
+path = "app/lib/data.ts"
+content = '''
+"use cache";
+
+export async function getCatalog() {
+  return db.product.findMany();
+}
+'''
+
+[[sample]]
+kind = "event"
+id = "cache"
+fires = true
+path = "lib/cache.ts"
+content = '''
+export const users = new LRUCache<string, User>({ max: 500 });
+'''
+
+[[sample]]
+kind = "event"
+id = "cache"
+fires = true
+path = "app/products.ts"
+content = '''
+export const getProducts = unstable_cache(async () => db.product.findMany(), ["products"]);
+'''
+
+[[sample]]
+kind = "event"
+id = "cache"
+fires = false
+path = "src/hooks/useMe.ts"
+content = '''
+const { data } = useSWR("/api/me", fetcher);
+'''
+
+[[sample]]
+kind = "event"
+id = "cache"
+fires = false
+path = "app/feed/page.tsx"
+content = '''
+const res = await fetch(url, { cache: "no-store" });
+'''
+
+[[sample]]
+kind = "event"
+id = "cache"
+fires = false
+path = "lib/memo.py"
+content = '''
+@functools.lru_cache(maxsize=None)
+def parse_rules(text):
+    return compile_rules(text)
+'''
+
+# --------------------------------------------------------------------- rule: SEC-01
+
+[[sample]]
+kind = "rule"
+id = "SEC-01"
+fires = true
+path = "app/api/boards/[id]/route.ts"
+content = '''
+import { db } from "@/lib/db";
+
+export async function DELETE(req: Request, { params }: { params: { id: string } }) {
+  await db.board.delete({ where: { id: params.id } });
+  return new Response(null, { status: 204 });
+}
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-01"
+fires = true
+path = "app/boards/actions.ts"
+content = '''
+"use server";
+
+import { db } from "@/lib/db";
+
+export async function archiveBoard(id: string) {
+  await db.board.delete({ where: { id } });
+}
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-01"
+fires = true
+path = "pages/api/users.ts"
+content = '''
+export default async function handler(req, res) {
+  res.json(await db.user.findMany());
+}
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-01"
+fires = true
+path = "src/routes/api/items/+server.ts"
+content = '''
+export const POST: RequestHandler = async ({ request }) => {
+  return json(await saveItem(await request.json()));
+};
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-01"
+fires = true
+path = "app/routes/notes.tsx"
+content = '''
+export async function action({ request }: ActionFunctionArgs) {
+  return deleteNote((await request.formData()).get("id"));
+}
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-01"
+fires = false
+path = "app/api/boards/[id]/route.ts"
+content = '''
+import { auth } from "@/auth";
+
+export async function DELETE(req: Request, { params }: { params: { id: string } }) {
+  const session = await auth();
+  if (!session) return new Response(null, { status: 401 });
+  await db.board.delete({ where: { id: params.id, ownerId: session.user.id } });
+  return new Response(null, { status: 204 });
+}
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-01"
+fires = false
+path = "app/boards/actions.ts"
+content = '''
+"use server";
+
+export async function archiveBoard(id: string) {
+  await requireOwner(id);
+  await db.board.delete({ where: { id } });
+}
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-01"
+fires = false
+path = "app/api/notes/route.ts"
+content = '''
+export async function GET() {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return new Response(null, { status: 401 });
+  return Response.json(await listNotes(user.id));
+}
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-01"
+fires = false
+path = "app/api/webhooks/stripe/route.ts"
+content = '''
+export async function POST(req: Request) {
+  const event = stripe.webhooks.constructEvent(await req.text(), req.headers.get("stripe-signature")!, secret);
+  await enqueue(event.id);
+  return new Response(null, { status: 200 });
+}
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-01"
+fires = false
+path = "app/api/cron/sweep/route.ts"
+content = '''
+export async function GET(request: Request) {
+  if (request.headers.get("authorization") !== `Bearer ${process.env.CRON_SECRET}`) {
+    return new Response(null, { status: 401 });
+  }
+  await sweep();
+  return new Response(null, { status: 204 });
+}
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-01"
+fires = false
+path = "docs/api.md"
+content = '''
+export async function GET() {
+  return Response.json({ ok: true });
+}
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-01"
+fires = false
+path = "lib/boards.ts"
+content = '''
+export async function getBoard(id: string) {
+  return db.board.findUnique({ where: { id } });
+}
+'''
+
+# --------------------------------------------------------------------- rule: SEC-02
+
+[[sample]]
+kind = "rule"
+id = "SEC-02"
+fires = true
+path = "app/api/preferences/route.ts"
+content = '''
+export async function PATCH(req: Request) {
+  const { userId, theme } = await req.json();
+  await db.preferences.update({ where: { userId }, data: { theme } });
+  return new Response(null, { status: 204 });
+}
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-02"
+fires = true
+path = "server/orders.js"
+content = '''
+router.get("/orders", async (req, res) => {
+  res.json(await Order.find({ owner: req.query.userId }));
+});
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-02"
+fires = true
+path = "app/settings/actions.ts"
+content = '''
+"use server";
+
+export async function saveSettings(formData: FormData) {
+  const userId = formData.get("userId") as string;
+  await db.settings.update({ where: { userId }, data: { theme: String(formData.get("theme")) } });
+}
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-02"
+fires = true
+path = "src/server/api/routers/post.ts"
+content = '''
+create: publicProcedure.input(PostIn).mutation(({ ctx, input }) =>
+  ctx.db.post.create({ data: { title: input.title, authorId: input.authorId } }),
+),
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-02"
+fires = true
+path = "app/views.py"
+content = '''
+def update_settings():
+    user_id = request.json["user_id"]
+    Settings.query.filter_by(user_id=user_id).update({"bio": request.json["bio"]})
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-02"
+fires = false
+path = "app/api/preferences/route.ts"
+content = '''
+export async function PATCH(req: Request) {
+  const session = await auth();
+  const { theme } = await req.json();
+  await db.preferences.update({ where: { userId: session.user.id }, data: { theme } });
+  return new Response(null, { status: 204 });
+}
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-02"
+fires = false
+path = "app/api/admin/users/route.ts"
+content = '''
+export async function DELETE(req: Request) {
+  const session = await auth();
+  if (session?.user.role !== "admin") return new Response(null, { status: 403 });
+  const { userId } = await req.json();
+  await db.user.delete({ where: { id: userId } });
+  return new Response(null, { status: 204 });
+}
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-02"
+fires = false
+path = "app/team/Members.tsx"
+content = '''
+"use client";
+
+export function Members() {
+  const searchParams = useSearchParams();
+  const userId = searchParams.get("userId");
+  return <MemberCard id={userId} />;
+}
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-02"
+fires = false
+path = "app/api/posts/route.ts"
+content = '''
+export async function POST(req: Request) {
+  const session = await auth();
+  const body = await req.json();
+  if (body.userId !== session.user.id) return new Response(null, { status: 403 });
+  return Response.json(await createPost(session.user.id, body.title));
+}
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-02"
+fires = false
+path = "app/api/users/[userId]/route.ts"
+content = '''
+export async function GET(req: Request, { params }: { params: { userId: string } }) {
+  const { userId } = params;
+  return Response.json(await getPublicCard(userId));
+}
+'''
+
+# --------------------------------------------------------------------- rule: SEC-04
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = true
+path = "app/api/preferences/route.ts"
+content = '''
+const body = await req.json();
+await prisma.user.update({ where: { id: session.user.id }, data: body });
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = true
+path = "app/api/users/route.ts"
+content = '''
+const body = await request.json();
+await db.insert(users).values(body);
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = true
+path = "app/api/preferences/route.ts"
+content = '''
+const body = await request.json();
+await supabase.from("preferences").update(body).eq("id", user.id);
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = true
+path = "app/api/me/route.ts"
+content = '''
+await prisma.user.update({
+  where: { id: session.user.id },
+  data: {
+    ...body,
+    updatedAt: new Date(),
+  },
+});
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = true
+path = "server/routes/users.js"
+content = '''
+router.put("/users/:id", async (req, res) => {
+  res.json(await User.findByIdAndUpdate(req.params.id, req.body, { new: true }));
+});
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = true
+path = "settings_app/views.py"
+content = '''
+Settings.objects.filter(user=request.user).update(**request.data)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = true
+path = "app/api.py"
+content = '''
+session.query(User).filter_by(id=current_user.id).update(**data)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = false
+path = "app/api/preferences/route.ts"
+content = '''
+const { name, bio } = await req.json();
+await prisma.user.update({ where: { id: session.user.id }, data: { name, bio } });
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = false
+path = "app/api/preferences/route.ts"
+content = '''
+const body = PreferencesUpdate.parse(await req.json());
+await db.update(users).set(body).where(eq(users.id, session.user.id));
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = false
+path = "app/api/webhooks/github/route.ts"
+content = '''
+const body = await req.text();
+const expected = crypto.createHmac("sha256", secret).update(body).digest("hex");
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = false
+path = "lib/users.ts"
+content = '''
+const { password, ...body } = input;
+return body;
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = false
+path = "src/api/save.ts"
+content = '''
+await fetch("/api/preferences", { method: "PATCH", body: JSON.stringify(body) });
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = false
+path = "api/serializers.py"
+content = '''
+def create(self, validated_data):
+    return Settings.objects.create(**validated_data)
+'''
+
+# --------------------------------------------------------------------- rule: SEC-08
+
+[[sample]]
+kind = "rule"
+id = "SEC-08"
+fires = true
+path = "app/api/report/route.ts"
+content = '''
+} catch (err) {
+  return NextResponse.json({ error: err.message }, { status: 500 });
+}
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-08"
+fires = true
+path = "server/app.js"
+content = '''
+app.use((err, req, res, next) => {
+  res.status(500).send(err.stack);
+});
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-08"
+fires = true
+path = "api/main.py"
+content = '''
+except Exception as e:
+    raise HTTPException(status_code=500, detail=str(e))
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-08"
+fires = true
+path = "app/billing/actions.ts"
+content = '''
+} catch (e) {
+  return { error: e instanceof Error ? e.message : "Failed" };
+}
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-08"
+fires = true
+path = "web/app.py"
+content = '''
+except Exception:
+    return jsonify({"error": traceback.format_exc()}), 500
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-08"
+fires = false
+path = "app/api/report/route.ts"
+content = '''
+} catch (err) {
+  console.error("report failed", err);
+  return NextResponse.json({ error: "Something went wrong" }, { status: 500 });
+}
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-08"
+fires = false
+path = "app/components/useSave.ts"
+content = '''
+"use client";
+
+export async function trySave(save: () => Promise<void>) {
+  try {
+    await save();
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-08"
+fires = false
+path = "server/charge.ts"
+content = '''
+logger.error({ err }, "charge failed");
+return Response.json({ error: "Payment failed" }, { status: 502 });
+'''
+
+# --------------------------------------------------------------------- rule: SEC-13
+
+[[sample]]
+kind = "rule"
+id = "SEC-13"
+fires = true
+path = "app/api/calc/route.ts"
+content = '''
+const result = eval(body.expression);
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-13"
+fires = true
+path = "media/convert.py"
+content = '''
+subprocess.run(f"convert {filename} out.png", shell=True)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-13"
+fires = true
+path = "api/session.py"
+content = '''
+state = pickle.loads(request.data)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-13-py"
+fires = true
+path = "api/config.py"
+content = '''
+config = yaml.load(request.data)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-13"
+fires = true
+path = "server/git.js"
+content = '''
+exec(`git log ${req.query.branch}`, (err, out) => res.send(out));
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-13"
+fires = true
+path = "lib/rules.ts"
+content = '''
+const fn = new Function("row", userCode);
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-13"
+fires = true
+path = "tools/ping.py"
+content = '''
+os.system("ping -c 1 " + host)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-13"
+fires = false
+path = "media/convert.py"
+content = '''
+subprocess.run(["convert", filename, "out.png"], check=True)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-13-py"
+fires = false
+path = "api/config.py"
+content = '''
+config = yaml.safe_load(fh)
+legacy = yaml.load(fh, Loader=yaml.SafeLoader)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-13"
+fires = false
+path = "lib/match.ts"
+content = '''
+const match = pattern.exec(input);
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-13"
+fires = false
+path = "lib/values.py"
+content = '''
+value = ast.literal_eval(raw)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-13"
+fires = false
+path = "lib/limiter.ts"
+content = '''
+await redis.eval(script, 1, key);
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-13"
+fires = false
+path = "scripts/list.py"
+content = '''
+subprocess.run("ls -la", shell=True)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-13"
+fires = false
+path = "docs/security.md"
+content = '''
+Never call eval( on request data.
+'''
+
+# --------------------------------------------------------------------- rule: SEC-17
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = true
+path = "app/api/reports/export/route.ts"
+content = '''
+export async function GET() {
+  const rows = await db.user.findMany();
+  const csv = ["name,email", ...rows.map((r) => `${r.name},${r.email}`)].join("\n");
+  return new Response(csv, { headers: { "Content-Type": "text/csv" } });
+}
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = true
+path = "reports/views.py"
+content = '''
+writer = csv.writer(response)
+for user in users:
+    writer.writerow([user.name, user.email])
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = true
+path = "lib/export.ts"
+content = '''
+const csv = Papa.unparse(rows);
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = true
+path = "lib/export.ts"
+content = '''
+import { stringify } from "csv-stringify/sync";
+const out = stringify(rows, { header: true });
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = true
+path = "jobs/export.py"
+content = '''
+df.to_csv(buf, index=False)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = true
+path = "lib/sheet.ts"
+content = '''
+const ws = XLSX.utils.json_to_sheet(rows);
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = true
+path = "lib/table.ts"
+content = '''
+export function toCsv(rows: string[][]): string {
+  return rows.map((r) => r.join(",")).join("\n");
+}
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = true
+path = "app/api/orders/export/route.ts"
+content = '''
+return new Response(tsv, { headers: { "Content-Type": "text/tab-separated-values" } });
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = false
+path = "app/api/reports/export/route.ts"
+content = '''
+const FORMULA_START = /^[=+\-@\t\r]/;
+const guard = (v: string) => (FORMULA_START.test(v) ? `'${v}` : v);
+return new Response(csv, { headers: { "Content-Type": "text/csv" } });
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = false
+path = "lib/export.ts"
+content = '''
+const csv = Papa.unparse(rows, { quotes: true, escapeFormulae: true });
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = false
+path = "reports/views.py"
+content = '''
+def guard(value):
+    return "'" + value if value.startswith(("=", "+", "-", "@", "\t", "\r")) else value
+
+writer = csv.writer(response, quoting=csv.QUOTE_ALL)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = false
+path = "app/api/orders/export/route.ts"
+content = '''
+import { guardCell, toCsv } from "@/lib/csv";
+const body = rows.map((r) => [r.name, r.note].map(guardCell));
+return new Response(body, { headers: { "Content-Type": "text/csv" } });
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = false
+path = "lib/export.ts"
+content = '''
+import { stringify } from "csv-stringify/sync";
+const out = stringify(rows, { header: true, quoted: true, escape_formulas: true });
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = false
+path = "scripts/seed.ts"
+content = '''
+import { parse } from "csv-parse/sync";
+const rows = parse(text, { columns: true });
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = false
+path = "lib/tags.ts"
+content = '''
+const tags = post.tags.join(",");
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = false
+path = "docs/export.md"
+content = '''
+Send it with Content-Type: text/csv.
+'''
+
+# Near misses found by scanning real code: stdlib ast.unparse, and a traceback in a log line.
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = false
+path = "tools/calls.py"
+content = '''
+call = ast.unparse(node.func)
+'''
+
+[[sample]]
+kind = "event"
+id = "data-export"
+fires = false
+path = "tools/calls.py"
+content = '''
+call = ast.unparse(node.func)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-08"
+fires = false
+path = "worker/run.py"
+content = '''
+except Exception:
+    log.write(f"{now()} {traceback.format_exc(limit=3)}\n")
+    return {"error": "internal error"}
+'''
+
+# ------------------------------------------------------------- review round 2 samples
+
+# SEC-17: an RFC 4180 helper that only doubles quotes is not a formula guard.
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = true
+path = "app/api/reports/export/route.ts"
+content = '''
+function escapeCsvField(v){return '"'+v.replace(/"/g,'""')+'"'}
+export async function GET() {
+  const csv = rows.map((r) => [r.name, r.note].map(escapeCsvField).join(",")).join("\r\n");
+  return new Response(csv, { headers: { "Content-Type": "text/csv" } });
+}
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = true
+path = "server/export.py"
+content = '''
+return HttpResponse(body, content_type="text/csv")
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = true
+path = "lib/report.ts"
+content = '''
+const blob = new Blob([csv], { type: "text/csv" });
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = true
+path = "lib/export.ts"
+content = '''
+import { stringify } from "csv-stringify/sync";
+const out = stringify(rows, { quoted: true, escape_formulas: false });
+'''
+
+# SEC-17 needs evidence that rows are serialized: a link, a file input or a filename is not.
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = false
+path = "app/reports/DownloadLink.tsx"
+content = '''
+<a download="orders.csv" href={url}>Download</a>
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = false
+path = "app/import/Upload.tsx"
+content = '''
+<input type="file" accept=".csv,text/csv" onChange={onPick} />
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = false
+path = "scripts/seed.ts"
+content = '''
+const filename = "seed.csv";
+const rows = parse(fs.readFileSync(filename, "utf8"));
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = false
+path = "lib/export.ts"
+content = '''
+const csv = Papa.unparse(rows, { escapeFormulae: true });
+'''
+
+# SEC-01: the {auth_helpers} token carries the engine's default names (getUser here).
+[[sample]]
+kind = "rule"
+id = "SEC-01"
+fires = false
+path = "app/api/notes/route.ts"
+content = '''
+export async function GET() {
+  const user = await getUser();
+  if (!user) return new Response(null, { status: 401 });
+  return Response.json(await listNotes(user.id));
+}
+'''
+
+# SEC-01: SvelteKit form actions fire; Vuex and Redux Toolkit `actions` exports don't.
+[[sample]]
+kind = "rule"
+id = "SEC-01-actions"
+fires = true
+path = "src/routes/login/+page.server.ts"
+content = '''
+export const actions: Actions = {
+  default: async ({ request }) => saveNote(await request.formData()),
+};
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-01"
+fires = false
+path = "src/store/modules/cart.js"
+content = '''
+export const actions = {
+  add({ commit }, item) {
+    commit("add", item);
+  },
+};
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-01"
+fires = false
+path = "src/store/cartSlice.ts"
+content = '''
+export const actions = cartSlice.actions;
+'''
+
+[[sample]]
+kind = "event"
+id = "route-handler"
+fires = false
+path = "src/store/modules/cart.js"
+content = '''
+export const actions = {
+  add({ commit }, item) {
+    commit("add", item);
+  },
+};
+'''
+
+[[sample]]
+kind = "event"
+id = "route-handler"
+fires = false
+path = "src/store/cartSlice.ts"
+content = '''
+export const actions = cartSlice.actions;
+'''
+
+[[sample]]
+kind = "event"
+id = "route-handler"
+fires = true
+path = "src/routes/login/+page.server.ts"
+content = ""
+
+# SEC-13 and SEC-13-py: yaml.load is a Python-only finding; js-yaml 4's load is safe.
+[[sample]]
+kind = "rule"
+id = "SEC-13-py"
+fires = false
+path = "lib/config.ts"
+content = '''
+const config = yaml.load(text);
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-13"
+fires = false
+path = "lib/config.ts"
+content = '''
+const config = yaml.load(text);
+'''
+
+# SEC-04: a SET clause built from the request's own keys is mass assignment.
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = true
+path = "server/routes/settings.js"
+content = '''
+const sets = Object.keys(body).map((k) => `${k} = ?`).join(", ");
+await db.run(`UPDATE settings SET ${sets} WHERE user_id = ?`, [...Object.values(body), userId]);
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = true
+path = "server/routes/settings.ts"
+content = '''
+const sets = Object.entries(input).map(([k], i) => `${k} = $${i + 1}`).join(", ");
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = true
+path = "app/settings_db.py"
+content = '''
+sets = ", ".join(f"{k} = %s" for k in data)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = false
+path = "server/routes/settings.js"
+content = '''
+const sets = ALLOWED.filter((k) => k in body).map((k) => `${k} = ?`).join(", ");
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = false
+path = "server/routes/settings.ts"
+content = '''
+const sets = Object.keys(body).filter((k) => EDITABLE.includes(k)).map((k) => `${k} = ?`);
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = false
+path = "lib/url.ts"
+content = '''
+const qs = Object.entries(data).map(([k, v]) => `${k}=${v}`).join("&");
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = false
+path = "app/settings_db.py"
+content = '''
+sets = ", ".join(f"{k} = %s" for k in EDITABLE if k in data)
+'''
+
+# ------------------------------------------------------------- review round 3 samples
+
+# SEC-13-py: a safe loader quiets yaml.load, even with a nested call or a wrapped call.
+[[sample]]
+kind = "rule"
+id = "SEC-13-py"
+fires = false
+path = "app/settings.py"
+content = '''
+cfg = yaml.load(open(path), Loader=yaml.SafeLoader)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-13-py"
+fires = false
+path = "app/settings.py"
+content = '''
+cfg = yaml.load(
+    fh, Loader=yaml.SafeLoader
+)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-13-py"
+fires = true
+path = "app/settings.py"
+content = '''
+cfg = yaml.load(
+    request.data
+)
+'''
+
+# An explicit unsafe loader is SEC-13's finding (no unless), so SEC-13-py stays quiet on it.
+[[sample]]
+kind = "rule"
+id = "SEC-13-py"
+fires = false
+path = "app/settings.py"
+content = '''
+cfg = yaml.load(fh, Loader=yaml.Loader)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-13"
+fires = true
+path = "app/settings.py"
+content = '''
+cfg = yaml.load(fh, Loader=yaml.Loader)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-13"
+fires = true
+path = "app/settings.py"
+content = '''
+safe = yaml.load(a, Loader=yaml.SafeLoader)
+risky = yaml.unsafe_load(request.data)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-13"
+fires = false
+path = "app/settings.py"
+content = '''
+cfg = yaml.load(open(path), Loader=yaml.SafeLoader)
+'''
+
+# SEC-04: a schema parse of the same variable whitelists its keys.
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = false
+path = "app/api/preferences/route.ts"
+content = '''
+const data = PreferencesPatch.parse(await req.json());
+const sets = Object.keys(data).map((k) => `${k} = ?`).join(", ");
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = false
+path = "app/api/preferences/route.ts"
+content = '''
+const parsed = PreferencesPatch.safeParse(await req.json());
+if (!parsed.success) return Response.json({ error: "Invalid input" }, { status: 400 });
+const data = parsed.data;
+const sets = Object.keys(data).map((k) => `${k} = ?`).join(", ");
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = false
+path = "src/server/api/routers/settings.ts"
+content = '''
+update: protectedProcedure
+  .input(z.object({ theme: z.string().optional(), locale: z.string().optional() }))
+  .mutation(async ({ ctx, input }) => {
+    const sets = Object.keys(input).map((k) => `${k} = ?`).join(", ");
+    return ctx.db.run(`UPDATE settings SET ${sets} WHERE user_id = ?`, [...Object.values(input), ctx.user.id]);
+  }),
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = false
+path = "app/settings_api.py"
+content = '''
+@router.patch("/settings")
+def patch_settings(patch: SettingsPatch, user=Depends(current_user)):
+    data = patch.model_dump(exclude_unset=True)
+    sets = ", ".join(f"{k} = %s" for k in data)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = true
+path = "server/routes/settings.js"
+content = '''
+const data = JSON.parse(raw);
+const sets = Object.keys(data).map((k) => `${k} = ?`).join(", ");
+'''
+
+# SEC-04: only a filter against an allowlist exempts a SET clause.
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = true
+path = "server/routes/settings.js"
+content = '''
+const sets = Object.keys(body).filter((k) => body[k] !== undefined).map((k) => `${k} = ?`).join(", ");
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = false
+path = "server/routes/settings.js"
+content = '''
+const sets = Object.keys(body).filter((k) => allowed.has(k)).map((k) => `${k} = ?`).join(", ");
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = false
+path = "server/routes/settings.js"
+content = '''
+const sets = Object.keys(body).filter((k) => k in ALLOWED).map((k) => `${k} = ?`).join(", ");
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = false
+path = "app/settings_db.py"
+content = '''
+sets = ", ".join(f"{k} = %s" for k in data if k in ALLOWED)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = true
+path = "app/settings_db.py"
+content = '''
+sets = ", ".join(f"{k} = %s" for k in data if data[k] is not None)
+'''
+
+# SEC-01-actions: SvelteKit form actions in JavaScript fire by path; stores elsewhere don't.
+[[sample]]
+kind = "rule"
+id = "SEC-01-actions"
+fires = true
+path = "src/routes/notes/+page.server.js"
+content = '''
+/** @satisfies {import('./$types').Actions} */
+export const actions = {
+  default: async ({ request }) => saveNote(await request.formData()),
+};
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-01-actions"
+fires = false
+path = "src/routes/notes/+page.server.js"
+content = '''
+export const actions = {
+  default: async ({ request, locals }) => {
+    if (!locals.user) throw redirect(303, "/login");
+    return saveNote(locals.user.id, await request.formData());
+  },
+};
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-01-actions"
+fires = false
+path = "src/store/modules/cart.js"
+content = '''
+export const actions = {
+  add({ commit }, item) {
+    commit("add", item);
+  },
+};
+'''
+
+# SEC-01 leaves form actions to SEC-01-actions (one deny, not two) and accepts a locals check.
+[[sample]]
+kind = "rule"
+id = "SEC-01"
+fires = false
+path = "src/routes/login/+page.server.ts"
+content = '''
+export const actions: Actions = {
+  default: async ({ request }) => saveNote(await request.formData()),
+};
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-01"
+fires = false
+path = "src/routes/api/notes/+server.ts"
+content = '''
+export const GET: RequestHandler = async ({ locals }) => {
+  if (!locals.user) error(401, "Sign in first");
+  return json(await listNotes(locals.user.id));
+};
+'''
