@@ -87,12 +87,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lanes** (opened 2026-10-19; briefs in each record). Merge order: 1 config-dir
-    (#133, the delegation readers that ignore CLAUDE_CONFIG_DIR, below; carries the lead's
-    notes), 2 practices
-    (`feat/practices-suite`, opened 2026-10-19 at Hayden's ask: the skill suite below, researched
+  - **Live lanes** (opened 2026-10-19; briefs in each record). Merge order: 1 practices
+    (carries the lead's notes; `feat/practices-suite`, opened 2026-10-19 at Hayden's ask: the skill suite below, researched
     from his project memories and online sources, then the security skill only; Hayden picked
-    "security first"). pr-horizon merged as #135 (2026-10-20): installed from main, lane closed.
+    "security first"). pr-horizon merged as #135 and config-dir as #133 (2026-10-20): installed from main, both
+    lanes closed.
   - **Lane ask quality: done** (2026-10-19 to 2026-10-20). ask-check merged as #131 and was
     installed from main 2026-10-20: a PreToolUse hook on AskUserQuestion (`hooks/ask_check.py`)
     denies risky asks with a checklist in the reason. branch-reuse merged as #130: `lane new`
@@ -155,13 +154,16 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **setup.sh's ccstatusline write crashes on an odd settings shape** (from lane json-depth's PR 1
     writer, 2026-10-19; predates it): the heredoc's `has_ctx_widget` assumes `lines` is a list of
     lists, and a directory at the destination crashes it too.
-  - **Two delegation readers ignore CLAUDE_CONFIG_DIR: fix in #133 (lane config-dir, open; the
-    lead drops this item at its merge)** (from lane json-depth's PR 2 plan pass,
-    2026-10-19; predates it): `dc.claude_ancestor` and `dc.live_sessions` read a hard-coded
-    `~/.claude/sessions`, while `dc.session_toplevel` uses `sessions_dir`.
   - **Lanes tell the lead before an act past their worktree: merged as #136** (lead PR,
     2026-10-20, installed from main). New briefs drop the hand-written "Message the lead before
     any act..." Constraints line: the skill carries it (Lifecycle step 3).
+  - **Retire the status-line summary rows; brief before each push** (Hayden, 2026-10-20: "I
+    don't read it anymore"). His picks: keep the tab label (the Stop hook
+    `hooks/session-summary.sh` asks Haiku for the label only; the rows and
+    `statusline/session-summary.py` go), and the briefing is a rule now, with a check later only
+    if asks skip it. The rule is lead PR `docs/push-briefing` (CLAUDE.md's push line, lanes
+    skill step 6). The retirement is lane-sized (`setup.sh`, `settings.json`, the hooks, tests,
+    README), and pairs with the atomic `link()` fix in the Watch item below (both `setup.sh`).
   - **Watch: `~/.claude/CLAUDE.md` vanished after a lane install** (2026-10-20 00:53Z). Lane
     config-dir's `setup.sh` (00:52:28 to 00:52:38, sandbox off) linked it, then it was gone by
     00:53:02, with no backup (a symlink is removed, not backed up). Hayden relinked it by hand
@@ -277,12 +279,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lanes config-dir (#133, merge order 1, carries the lead branch; its install from the lane
-     holds, so `~/.claude/CLAUDE.md` and the other links point into it) and practices (order 2)
-     run; their state is in their records (`lane ls`). On `merged #133`, run the chain (The
-     lead, step 7), then check `ls -la ~/.claude/CLAUDE.md` points at the main checkout (the
-     Watch item in Backlog). The #136 reinstall released config-dir's install hold: it
-     reinstalls from its worktree before ready.
+  0. Lane practices (merge order 1, carries the lead branch) runs; its state is in its record
+     (`lane ls`). Lead PR `docs/push-briefing` waits on Hayden's push approval. Then the
+     summary-retirement plus `link()` lane (Backlog), on Hayden's ok of its table. After each
+     reinstall, check `ls -la ~/.claude/CLAUDE.md` (the Watch item).
   1. Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
      against the code and log it in the backlog. When lanes run again, follow The lead in
      `skills/lanes/SKILL.md` (step 7 is the post-merge chain; never amend or rebase the lead
