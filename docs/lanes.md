@@ -234,12 +234,14 @@ Why it works this way:
   message to a live lane covers that window. Whatever can't be read (gh, a `mergedAt`, a session
   stamp, the last commit) leaves the flag on, so an offline or sandboxed `lane ls` shows it on
   every lane: judge the gate from a bare one. Once `ls`'s one gh call returns its full 200 PRs,
-  a lane older than the oldest of them, adopted, or switched off lane.json's branch keeps the
-  flag too, since a branch of its may hold a PR older than the lane, which the list may have
-  cut. Only two branches are judged, the checked-out one (or, detached mid-rebase, the one being
-  rebased) and lane.json's: a merge from a third branch the lane passed through is missed. A
-  session that ends with no SessionEnd stamp is skipped, as a live one is; for a merged lane the
-  `mergedAt` check still catches the merge it never recorded.
+  a lane older than the oldest of them (or within 10 s of it, for the clocks), adopted, made with
+  `new --reuse-branch`, or switched off lane.json's branch may have a PR older than the oldest,
+  which the list cut. For just those lanes `ls` also asks gh once per branch
+  (`gh pr list --head <branch> --state merged`); a call that can't answer, or returns 200 PRs
+  too, keeps the flag on. Only two branches are judged, the checked-out one (or, detached
+  mid-rebase, the one being rebased) and lane.json's: a merge from a third branch the lane passed
+  through is missed. A session that ends with no SessionEnd stamp is skipped, as a live one is;
+  for a merged lane the `mergedAt` check still catches the merge it never recorded.
 - **A nudge, never consent** (flow 13). `merged #N` says only when to look. The consent is the
   standing approval written here; the lead proves the merge with `gh pr view` before it acts,
   and `lane done` checks it again (a merged PR whose head is the tip, or the tip in the base).
@@ -659,7 +661,9 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   lane on a merged PR's old head showed as that PR merged, which can start a false post-merge
   chain (lane branch-reuse, 2026-10-19). It asks after the fetch has proved the network up, and
   refuses when gh still can't answer (no login, a remote off GitHub, a reply that won't parse),
-  as it does on a failed fetch. `--reuse-branch` skips the check (Hayden's picks). After the setup (which may set a `core.hooksPath`), `new` checks the
+  as it does on a failed fetch. `--reuse-branch` skips the check (Hayden's picks) and marks the
+  lane `reused` in `lane.json`, so `ls` judges its merges past a full PR list as an adopted
+  lane's ("What it can't tell"). After the setup (which may set a `core.hooksPath`), `new` checks the
   worktree as the excluded-command guard will judge the lane's own calls, prints the Edit deny
   rule each dir needs and seeds it into the record's Asks for Hayden, as does `adopt` finishing a
   setup-failed lane; adopting another worktree only prints them (docs/delegation.md, "The
