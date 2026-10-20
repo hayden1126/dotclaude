@@ -135,6 +135,13 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     names. Lead's flags: the name `security-review` collides with a built-in skill; dotclaude is
     public, so no capella code or unfixed gaps go in ([[dotclaude-public-repo]]); checklists in context get skipped, so a pilot should say what
     enforces it (a hook at the event, as ask-check does). Pairs with the AWS gap check below.
+    Sources so far: six Instagram reels Hayden sent (2026-10-19; transcripts via getthescript.app),
+    vibe-coding listicles. They fall into security (keys in the bundle, ids from the request, RLS,
+    server-side sign-out, user enumeration, hashing, injection, rate limits), reliability (tests,
+    retries with idempotency, circuit breakers, races, DR), legal (age checks, Google Fonts and
+    GDPR, session replay, CAN-SPAM, renewal terms, DMCA agent, privacy policy) and launch (store
+    metadata, Open Graph, Search Console, IndexNow). Lead's pick: OWASP ASVS as the security
+    backbone, the reels' concrete failures as planted-bug evals.
   - **Gap check against AWS's agentic AI security principles** (Hayden, 2026-10-19): read
     https://aws.amazon.com/blogs/security/four-security-principles-for-agentic-ai-systems/ and
     list what dotclaude's guards (sandbox, permission rules, delete, overwrite and excluded-command
