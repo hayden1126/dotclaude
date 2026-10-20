@@ -11,7 +11,7 @@ Server handlers are where a missing check becomes a breach or a bill. These rule
 
 When a rule below needs more than the user asked for (a rate limiter, an auth check, a cell guard, a pending table, a schema), build it in the same change, by default. In your final reply, list what you added and why, one line each. Never leave it out with an offer to add it later, and never stop to ask permission for it.
 
-Example reply line: "Added a per-user (10/min) and per-IP (30/min) rate limit on POST /api/chat, because each call spends LLM credits."
+Example reply line: "Added a per-user (10/min) and per-IP (30/min) rate limit on POST /api/summarize, because each call spends LLM credits."
 
 If you catch yourself writing one of these, stop and build the safeguard instead:
 - "You may want to add rate limiting" or "consider adding an auth check".
@@ -34,7 +34,7 @@ Each rule names its proof: the test that shows it holds. Write that test where t
 
 ## When a practices hook stops an edit
 
-A hook may deny an edit once and name a rule id. Fix the code. If the match is a false positive, keep the code and add a comment in the file: `practices-allow: <id> <reason>`. For example, a health check that is public on purpose gets `// practices-allow: SEC-01 public endpoint`. Never use the comment to skip a safeguard the rule asks for.
+A hook may deny an edit once and name a rule id. Fix the code. If the match is a false positive, keep the code and add a comment in the file: `practices-allow: <id> <reason>`. For example, a pricing endpoint that is public on purpose gets `// practices-allow: SEC-01 public endpoint`. Never use the comment to skip a safeguard the rule asks for. If SEC-01 doesn't recognize the repo's auth helper, add its name to `[auth] helpers` in `.claude/practices/config.toml`.
 
 ## Input, output and errors
 
@@ -42,7 +42,7 @@ A hook may deny an edit once and name a rule id. Fix the code. If the match is a
 - **SEC-06: Return a minimal DTO**, never the raw row or `select *`. Proof: the response has no internal columns (hashes, owner ids, tokens).
 - **SEC-08: Fail closed.** An error in authz or validation denies; no empty catch that carries on. Return a generic error and keep the detail in logs, never a secret or config value. Proof: a forced exception returns 4xx/5xx with no side effect, and a planted secret is absent from the output.
 - **SEC-09: Change state only with POST, PUT, PATCH or DELETE.** Cookie-authenticated mutations check `Origin` or a CSRF token; upload and forwarding endpoints check same-origin. Proof: GET never changes state, and a foreign `Origin` is refused.
-- **SEC-13: No shell strings, `eval`, `new Function` or unsafe deserializers on input** (`pickle.loads`, `yaml.load` without `SafeLoader`). Pass argv arrays; privileged helpers take data, never code. Proof: a grep finds none on input paths.
+- **SEC-13: No shell strings, `eval`, `new Function` or unsafe deserializers on input** (in Python, `pickle.loads` or `yaml.load` without `SafeLoader`). Pass argv arrays; privileged helpers take data, never code. Proof: a grep finds none on input paths.
 
 ## Calls that leave your server
 

@@ -78,26 +78,40 @@ A database table works the same way: a row per key with a count and an expiry, u
 
 Check both. The per-user key stops one account from running up the bill; the per-IP key covers signed-out callers and one person with many accounts.
 
-```ts
-// Read the client IP from the header your proxy or platform sets and overwrites.
-// Never trust a header the client can set: when a proxy appends to x-forwarded-for,
-// the leftmost entry is whatever the client sent.
-const IP_HEADER = process.env.CLIENT_IP_HEADER ?? "x-real-ip";
+The client IP must come from the platform or proxy you trust, in the one header it sets and overwrites on every request (for example `cf-connecting-ip` behind Cloudflare, or the `x-real-ip` your own nginx sets). Name that header per deployment. Never read the IP from an arbitrary request header: a client can send any header it likes, and when a proxy appends to `x-forwarded-for`, the leftmost entry is whatever the client sent.
 
-export function clientIp(headers: Headers): string {
-  return headers.get(IP_HEADER)?.trim() || "unknown";
+Never fall back to a shared placeholder such as `"unknown"`. When the header is missing, every request would land in one `ip:unknown` bucket: a global limit that answers 429 to everyone. Instead:
+- the IP is unknown but the user is signed in: skip the IP key, and the per-user key carries the limit;
+- neither is known: use one deliberately low global bucket for anonymous traffic, so it can't run up the bill, and fix the IP header so this path stops firing.
+
+```ts
+// The one header your platform or proxy sets and overwrites, e.g. "cf-connecting-ip".
+const IP_HEADER = process.env.CLIENT_IP_HEADER;
+
+export function clientIp(headers: Headers): string | null {
+  if (!IP_HEADER) return null;
+  return headers.get(IP_HEADER)?.trim() || null;
 }
+
+let warnedNoIp = false;
 
 export async function limitPaidCall(
   store: CounterStore,
   userId: string | null,
-  ip: string,
+  ip: string | null,
 ): Promise<LimitResult> {
   if (userId) {
     const perUser = await checkLimit(store, `user:${userId}`, 10, 60);
     if (!perUser.ok) return perUser;
   }
-  return checkLimit(store, `ip:${ip}`, 30, 60);
+  if (ip) return checkLimit(store, `ip:${ip}`, 30, 60);
+  if (userId) return { ok: true }; // signed in, IP unknown: the per-user key carries the limit
+  // Anonymous and no IP: one shared bucket for all such callers, kept low on purpose.
+  if (!warnedNoIp) {
+    warnedNoIp = true;
+    console.warn("rate limit: no client IP; check CLIENT_IP_HEADER");
+  }
+  return checkLimit(store, "anon:no-ip", 20, 60);
 }
 ```
 
@@ -136,11 +150,11 @@ export async function summarize(formData: FormData) {
 }
 ```
 
-Express and similar frameworks: the same check as route middleware, after the auth middleware. Set `app.set("trust proxy", 1)` (or your proxy's hop count) so `req.ip` is the client, not the proxy.
+Express and similar frameworks: the same check as route middleware, after the auth middleware. Set `app.set("trust proxy", 1)` (or your proxy's hop count) so `req.ip` is the client, not the proxy; without a trusted proxy, `req.ip` is the direct peer.
 
 ```ts
 async function limitPaid(req, res, next) {
-  const limit = await limitPaidCall(store, req.user.id, req.ip ?? "unknown");
+  const limit = await limitPaidCall(store, req.user.id, req.ip ?? null);
   if (!limit.ok) {
     res.set("Retry-After", String(limit.retryAfterSeconds));
     return res.status(429).json({ error: "Too many requests" });
@@ -148,7 +162,7 @@ async function limitPaid(req, res, next) {
   next();
 }
 
-app.post("/api/chat", requireAuth, limitPaid, chatHandler);
+app.post("/api/summarize", requireAuth, limitPaid, summarizeHandler);
 ```
 
 Python (FastAPI, Flask, Django) takes the same shape: one shared limiter function, called after auth and before the paid call, returning 429 with `Retry-After`.
@@ -162,9 +176,9 @@ Python (FastAPI, Flask, Django) takes the same shape: one shared limiter functio
 ## 7. Prove it
 
 ```ts
-test("the chat endpoint answers 429 past the per-user limit", async () => {
-  for (let i = 0; i < 10; i++) expect((await callChat(userA)).status).not.toBe(429);
-  const res = await callChat(userA);
+test("the summarize endpoint answers 429 past the per-user limit", async () => {
+  for (let i = 0; i < 10; i++) expect((await callSummarize(userA)).status).not.toBe(429);
+  const res = await callSummarize(userA);
   expect(res.status).toBe(429);
   expect(Number(res.headers.get("Retry-After"))).toBeGreaterThan(0);
   expect(paidApiMock.calls).toBe(10); // the 11th call never reached the paid API

@@ -27,14 +27,14 @@ content = ""
 kind = "event"
 id = "route-handler"
 fires = true
-path = "lib/project-actions.ts"
+path = "lib/board-actions.ts"
 content = '''
 "use server";
 
 import { db } from "@/lib/db";
 
-export async function deleteProject(id: string) {
-  await db.project.delete({ where: { id } });
+export async function archiveBoard(id: string) {
+  await db.board.delete({ where: { id } });
 }
 '''
 
@@ -51,8 +51,8 @@ id = "route-handler"
 fires = true
 path = "server/index.js"
 content = '''
-app.post("/api/chat", async (req, res) => {
-  res.json(await reply(req.body.message));
+app.post("/api/summarize", async (req, res) => {
+  res.json(await summarize(req.body.text));
 });
 '''
 
@@ -382,7 +382,7 @@ def build():
 kind = "event"
 id = "data-export"
 fires = true
-path = "app/api/users/export/route.ts"
+path = "app/api/reports/export/route.ts"
 content = '''
 return new Response(csv, { headers: { "Content-Type": "text/csv; charset=utf-8" } });
 '''
@@ -530,12 +530,12 @@ def parse_rules(text):
 kind = "rule"
 id = "SEC-01"
 fires = true
-path = "app/api/projects/[id]/route.ts"
+path = "app/api/boards/[id]/route.ts"
 content = '''
 import { db } from "@/lib/db";
 
 export async function DELETE(req: Request, { params }: { params: { id: string } }) {
-  await db.project.delete({ where: { id: params.id } });
+  await db.board.delete({ where: { id: params.id } });
   return new Response(null, { status: 204 });
 }
 '''
@@ -544,14 +544,14 @@ export async function DELETE(req: Request, { params }: { params: { id: string } 
 kind = "rule"
 id = "SEC-01"
 fires = true
-path = "app/admin/actions.ts"
+path = "app/boards/actions.ts"
 content = '''
 "use server";
 
 import { db } from "@/lib/db";
 
-export async function deleteProject(id: string) {
-  await db.project.delete({ where: { id } });
+export async function archiveBoard(id: string) {
+  await db.board.delete({ where: { id } });
 }
 '''
 
@@ -592,14 +592,14 @@ export async function action({ request }: ActionFunctionArgs) {
 kind = "rule"
 id = "SEC-01"
 fires = false
-path = "app/api/projects/[id]/route.ts"
+path = "app/api/boards/[id]/route.ts"
 content = '''
 import { auth } from "@/auth";
 
 export async function DELETE(req: Request, { params }: { params: { id: string } }) {
   const session = await auth();
   if (!session) return new Response(null, { status: 401 });
-  await db.project.delete({ where: { id: params.id, ownerId: session.user.id } });
+  await db.board.delete({ where: { id: params.id, ownerId: session.user.id } });
   return new Response(null, { status: 204 });
 }
 '''
@@ -608,13 +608,13 @@ export async function DELETE(req: Request, { params }: { params: { id: string } 
 kind = "rule"
 id = "SEC-01"
 fires = false
-path = "app/admin/actions.ts"
+path = "app/boards/actions.ts"
 content = '''
 "use server";
 
-export async function deleteProject(id: string) {
-  await requireAdmin();
-  await db.project.delete({ where: { id } });
+export async function archiveBoard(id: string) {
+  await requireOwner(id);
+  await db.board.delete({ where: { id } });
 }
 '''
 
@@ -675,10 +675,10 @@ export async function GET() {
 kind = "rule"
 id = "SEC-01"
 fires = false
-path = "lib/projects.ts"
+path = "lib/boards.ts"
 content = '''
-export async function getProject(id: string) {
-  return db.project.findUnique({ where: { id } });
+export async function getBoard(id: string) {
+  return db.board.findUnique({ where: { id } });
 }
 '''
 
@@ -688,11 +688,11 @@ export async function getProject(id: string) {
 kind = "rule"
 id = "SEC-02"
 fires = true
-path = "app/api/profile/route.ts"
+path = "app/api/preferences/route.ts"
 content = '''
 export async function PATCH(req: Request) {
-  const { userId, name } = await req.json();
-  await db.profile.update({ where: { userId }, data: { name } });
+  const { userId, theme } = await req.json();
+  await db.preferences.update({ where: { userId }, data: { theme } });
   return new Response(null, { status: 204 });
 }
 '''
@@ -739,21 +739,21 @@ id = "SEC-02"
 fires = true
 path = "app/views.py"
 content = '''
-def update_profile():
+def update_settings():
     user_id = request.json["user_id"]
-    Profile.query.filter_by(user_id=user_id).update({"bio": request.json["bio"]})
+    Settings.query.filter_by(user_id=user_id).update({"bio": request.json["bio"]})
 '''
 
 [[sample]]
 kind = "rule"
 id = "SEC-02"
 fires = false
-path = "app/api/profile/route.ts"
+path = "app/api/preferences/route.ts"
 content = '''
 export async function PATCH(req: Request) {
   const session = await auth();
-  const { name } = await req.json();
-  await db.profile.update({ where: { userId: session.user.id }, data: { name } });
+  const { theme } = await req.json();
+  await db.preferences.update({ where: { userId: session.user.id }, data: { theme } });
   return new Response(null, { status: 204 });
 }
 '''
@@ -784,7 +784,7 @@ content = '''
 export function Members() {
   const searchParams = useSearchParams();
   const userId = searchParams.get("userId");
-  return <Profile id={userId} />;
+  return <MemberCard id={userId} />;
 }
 '''
 
@@ -810,7 +810,7 @@ path = "app/api/users/[userId]/route.ts"
 content = '''
 export async function GET(req: Request, { params }: { params: { userId: string } }) {
   const { userId } = params;
-  return Response.json(await getPublicProfile(userId));
+  return Response.json(await getPublicCard(userId));
 }
 '''
 
@@ -820,7 +820,7 @@ export async function GET(req: Request, { params }: { params: { userId: string }
 kind = "rule"
 id = "SEC-04"
 fires = true
-path = "app/api/profile/route.ts"
+path = "app/api/preferences/route.ts"
 content = '''
 const body = await req.json();
 await prisma.user.update({ where: { id: session.user.id }, data: body });
@@ -840,10 +840,10 @@ await db.insert(users).values(body);
 kind = "rule"
 id = "SEC-04"
 fires = true
-path = "app/api/profile/route.ts"
+path = "app/api/preferences/route.ts"
 content = '''
 const body = await request.json();
-await supabase.from("profiles").update(body).eq("id", user.id);
+await supabase.from("preferences").update(body).eq("id", user.id);
 '''
 
 [[sample]]
@@ -876,9 +876,9 @@ router.put("/users/:id", async (req, res) => {
 kind = "rule"
 id = "SEC-04"
 fires = true
-path = "profiles/views.py"
+path = "settings_app/views.py"
 content = '''
-Profile.objects.filter(user=request.user).update(**request.data)
+Settings.objects.filter(user=request.user).update(**request.data)
 '''
 
 [[sample]]
@@ -894,7 +894,7 @@ session.query(User).filter_by(id=current_user.id).update(**data)
 kind = "rule"
 id = "SEC-04"
 fires = false
-path = "app/api/profile/route.ts"
+path = "app/api/preferences/route.ts"
 content = '''
 const { name, bio } = await req.json();
 await prisma.user.update({ where: { id: session.user.id }, data: { name, bio } });
@@ -904,9 +904,9 @@ await prisma.user.update({ where: { id: session.user.id }, data: { name, bio } }
 kind = "rule"
 id = "SEC-04"
 fires = false
-path = "app/api/profile/route.ts"
+path = "app/api/preferences/route.ts"
 content = '''
-const body = ProfileUpdate.parse(await req.json());
+const body = PreferencesUpdate.parse(await req.json());
 await db.update(users).set(body).where(eq(users.id, session.user.id));
 '''
 
@@ -936,7 +936,7 @@ id = "SEC-04"
 fires = false
 path = "src/api/save.ts"
 content = '''
-await fetch("/api/profile", { method: "PATCH", body: JSON.stringify(body) });
+await fetch("/api/preferences", { method: "PATCH", body: JSON.stringify(body) });
 '''
 
 [[sample]]
@@ -946,7 +946,7 @@ fires = false
 path = "api/serializers.py"
 content = '''
 def create(self, validated_data):
-    return Profile.objects.create(**validated_data)
+    return Settings.objects.create(**validated_data)
 '''
 
 # --------------------------------------------------------------------- rule: SEC-08
@@ -1065,7 +1065,7 @@ subprocess.run(f"convert {filename} out.png", shell=True)
 
 [[sample]]
 kind = "rule"
-id = "SEC-13"
+id = "SEC-13-py"
 fires = true
 path = "api/session.py"
 content = '''
@@ -1074,7 +1074,7 @@ state = pickle.loads(request.data)
 
 [[sample]]
 kind = "rule"
-id = "SEC-13"
+id = "SEC-13-py"
 fires = true
 path = "api/config.py"
 content = '''
@@ -1119,7 +1119,7 @@ subprocess.run(["convert", filename, "out.png"], check=True)
 
 [[sample]]
 kind = "rule"
-id = "SEC-13"
+id = "SEC-13-py"
 fires = false
 path = "api/config.py"
 content = '''
@@ -1178,7 +1178,7 @@ Never call eval( on request data.
 kind = "rule"
 id = "SEC-17"
 fires = true
-path = "app/api/users/export/route.ts"
+path = "app/api/reports/export/route.ts"
 content = '''
 export async function GET() {
   const rows = await db.user.findMany();
@@ -1259,7 +1259,7 @@ return new Response(tsv, { headers: { "Content-Type": "text/tab-separated-values
 kind = "rule"
 id = "SEC-17"
 fires = false
-path = "app/api/users/export/route.ts"
+path = "app/api/reports/export/route.ts"
 content = '''
 const FORMULA_START = /^[=+\-@\t\r]/;
 const guard = (v: string) => (FORMULA_START.test(v) ? `'${v}` : v);
@@ -1365,4 +1365,247 @@ content = '''
 except Exception:
     log.write(f"{now()} {traceback.format_exc(limit=3)}\n")
     return {"error": "internal error"}
+'''
+
+# ------------------------------------------------------------- review round 2 samples
+
+# SEC-17: an RFC 4180 helper that only doubles quotes is not a formula guard.
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = true
+path = "app/api/reports/export/route.ts"
+content = '''
+function escapeCsvField(v){return '"'+v.replace(/"/g,'""')+'"'}
+export async function GET() {
+  const csv = rows.map((r) => [r.name, r.note].map(escapeCsvField).join(",")).join("\r\n");
+  return new Response(csv, { headers: { "Content-Type": "text/csv" } });
+}
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = true
+path = "server/export.py"
+content = '''
+return HttpResponse(body, content_type="text/csv")
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = true
+path = "lib/report.ts"
+content = '''
+const blob = new Blob([csv], { type: "text/csv" });
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = true
+path = "lib/export.ts"
+content = '''
+import { stringify } from "csv-stringify/sync";
+const out = stringify(rows, { quoted: true, escape_formulas: false });
+'''
+
+# SEC-17 needs evidence that rows are serialized: a link, a file input or a filename is not.
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = false
+path = "app/reports/DownloadLink.tsx"
+content = '''
+<a download="orders.csv" href={url}>Download</a>
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = false
+path = "app/import/Upload.tsx"
+content = '''
+<input type="file" accept=".csv,text/csv" onChange={onPick} />
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = false
+path = "scripts/seed.ts"
+content = '''
+const filename = "seed.csv";
+const rows = parse(fs.readFileSync(filename, "utf8"));
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-17"
+fires = false
+path = "lib/export.ts"
+content = '''
+const csv = Papa.unparse(rows, { escapeFormulae: true });
+'''
+
+# SEC-01: the {auth_helpers} token carries the engine's default names (getUser here).
+[[sample]]
+kind = "rule"
+id = "SEC-01"
+fires = false
+path = "app/api/notes/route.ts"
+content = '''
+export async function GET() {
+  const user = await getUser();
+  if (!user) return new Response(null, { status: 401 });
+  return Response.json(await listNotes(user.id));
+}
+'''
+
+# SEC-01: SvelteKit form actions fire; Vuex and Redux Toolkit `actions` exports don't.
+[[sample]]
+kind = "rule"
+id = "SEC-01"
+fires = true
+path = "src/routes/login/+page.server.ts"
+content = '''
+export const actions: Actions = {
+  default: async ({ request }) => saveNote(await request.formData()),
+};
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-01"
+fires = false
+path = "src/store/modules/cart.js"
+content = '''
+export const actions = {
+  add({ commit }, item) {
+    commit("add", item);
+  },
+};
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-01"
+fires = false
+path = "src/store/cartSlice.ts"
+content = '''
+export const actions = cartSlice.actions;
+'''
+
+[[sample]]
+kind = "event"
+id = "route-handler"
+fires = false
+path = "src/store/modules/cart.js"
+content = '''
+export const actions = {
+  add({ commit }, item) {
+    commit("add", item);
+  },
+};
+'''
+
+[[sample]]
+kind = "event"
+id = "route-handler"
+fires = false
+path = "src/store/cartSlice.ts"
+content = '''
+export const actions = cartSlice.actions;
+'''
+
+[[sample]]
+kind = "event"
+id = "route-handler"
+fires = true
+path = "src/routes/login/+page.server.ts"
+content = ""
+
+# SEC-13 and SEC-13-py: yaml.load is a Python-only finding; js-yaml 4's load is safe.
+[[sample]]
+kind = "rule"
+id = "SEC-13-py"
+fires = false
+path = "lib/config.ts"
+content = '''
+const config = yaml.load(text);
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-13"
+fires = false
+path = "lib/config.ts"
+content = '''
+const config = yaml.load(text);
+'''
+
+# SEC-04: a SET clause built from the request's own keys is mass assignment.
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = true
+path = "server/routes/settings.js"
+content = '''
+const sets = Object.keys(body).map((k) => `${k} = ?`).join(", ");
+await db.run(`UPDATE settings SET ${sets} WHERE user_id = ?`, [...Object.values(body), userId]);
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = true
+path = "server/routes/settings.ts"
+content = '''
+const sets = Object.entries(input).map(([k], i) => `${k} = $${i + 1}`).join(", ");
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = true
+path = "app/settings_db.py"
+content = '''
+sets = ", ".join(f"{k} = %s" for k in data)
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = false
+path = "server/routes/settings.js"
+content = '''
+const sets = ALLOWED.filter((k) => k in body).map((k) => `${k} = ?`).join(", ");
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = false
+path = "server/routes/settings.ts"
+content = '''
+const sets = Object.keys(body).filter((k) => EDITABLE.includes(k)).map((k) => `${k} = ?`);
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = false
+path = "lib/url.ts"
+content = '''
+const qs = Object.entries(data).map(([k, v]) => `${k}=${v}`).join("&");
+'''
+
+[[sample]]
+kind = "rule"
+id = "SEC-04"
+fires = false
+path = "app/settings_db.py"
+content = '''
+sets = ", ".join(f"{k} = %s" for k in EDITABLE if k in data)
 '''

@@ -23,8 +23,8 @@ Why it comes first: in the repo's eval (`tests/practices`), the commonest failur
 | level | what | when |
 |---|---|---|
 | L0 | The description, written as "Use when" plus concrete triggers, with no workflow summary | the model's choice |
-| L1 | The practices hook detects an event in `events.toml` (by path or content) and denies the edit once, with the event's lines, until the skill is loaded | at the edit |
-| L2 | The hook scans the new content against a rule's pattern and denies once per file and rule. A `practices-allow: <id> <reason>` comment suppresses it | before the edit lands |
+| L1 | The practices hook detects an event in `events.toml`, by the file's path or by content anywhere in the file as it will read after the edit, and denies the edit once, with the event's lines, until the skill is loaded | at the edit |
+| L2 | The hook matches a rule's `when` against the new text the edit writes, so only newly written code triggers, and denies once per file and rule. A guard (`unless`) or a `practices-allow: <id> <reason>` comment anywhere in the file as it will read after the edit suppresses it | before the edit lands |
 | T | A test the skill tells the agent to write: the rule's proof | in the repo |
 | L3s | A staged-diff scan at `git commit` | later PR |
 | L3r | The PR-ready reviewer's checklist | later PR |
@@ -35,7 +35,7 @@ Every rule gets L0, L1 and L4 through the skill. The table below lists the furth
 ## Per-repo layer
 
 - `.claude/practices/server-code.md`: prose repo rules the skill reads first, such as "the auth helper is `requireMember()`" or "the limiter lives in `lib/rate-limit.ts`". They win over the defaults.
-- `.claude/practices/config.toml`: knobs for the hook, such as extra auth-helper names for the SEC-01 pattern, extra globs, and rules turned off with a reason.
+- `.claude/practices/config.toml`: knobs for the hook. `[auth] helpers = ["requireMember"]` adds the repo's auth helpers to SEC-01: its `unless` holds the `{auth_helpers}` token, which the engine expands to its default helper names plus these, each regex-escaped. `[[disable]]` with a `rule` and a non-empty `reason` turns one event or rule off, and `enabled = false` turns the hook off for the repo.
 
 ## Rules
 
@@ -53,7 +53,7 @@ Every rule gets L0, L1 and L4 through the skill. The table below lists the furth
 | SEC-10 | Server-side fetches of user-supplied URLs allowlist protocol, host and port, block private ranges, and don't follow redirects. | a request to 127.0.0.1, 169.254.169.254 or via a redirect is refused | T | ASVS 1.3.6, 15.3.2 |
 | SEC-11 | Uploads: cap size, check both the extension and the magic bytes, name stored files yourself, keep paths inside the upload dir, store non-executable, re-encode displayed images. | oversize, wrong-signature, `../` and script-SVG samples rejected or inert | T | ASVS 5.2.1, 5.2.2, 5.3.1, 5.3.2 |
 | SEC-12 | Webhooks verify the signature on the raw body first, compare timing-safe, reject stale timestamps, and fail closed when the secret is unset. | tampered, stale and unset-key cases return 400 with no side effect | T | [Stripe webhooks] (the timing-safe clause has no public source checked yet) |
-| SEC-13 | No shell strings, `eval`/`new Function` or unsafe deserializers on input; privileged helpers take data, never code. | a grep finds none on input paths | L2 | ASVS 1.2.5, 1.3.2, 1.5.2 |
+| SEC-13 | No shell strings, `eval`/`new Function` or unsafe deserializers on input; privileged helpers take data, never code. | a grep finds none on input paths | L2 (SEC-13 and SEC-13-py) | ASVS 1.2.5, 1.3.2, 1.5.2 |
 | SEC-15 | Enforce step order and atomicity server-side in payment, inventory, balance and verification flows; never trust the client to sequence steps. | skip-step and parallel-request tests | T | ASVS 2.3.1, 2.3.3, 2.3.4 |
 | SEC-16 | When forwarding user content to a third party (chat, email, webhook), escape its markup and turn mentions off. | a mention and Markdown input arrive inert | T | no public source |
 | SEC-17 | Spreadsheet exports (CSV, TSV, XLSX) of user-supplied text prefix any cell that starts with `=`, `+`, `-`, `@`, tab or CR with `'`, and quote every cell per RFC 4180. | an exported `=HYPERLINK(...)` cell opens as text | L2, T | [CSV Injection] |
@@ -80,12 +80,13 @@ Each pattern aims at precision over recall: a deny that fires on correct code te
 
 | rule | fires on | stays quiet when |
 |---|---|---|
-| SEC-01 | a fetch-style method handler (`export async function POST`), a Remix or SvelteKit action, a pages-API `handler(req, res)`, or a `"use server"` module | the file calls a known auth helper (`auth()`, `getServerSession`, `.auth.getUser()`, `requireX()`, `withAuth`, a token or webhook-signature check, `CRON_SECRET`); more names go in `config.toml` |
+| SEC-01 | a fetch-style method handler (`export async function POST`), a Remix action, SvelteKit form actions (`export const actions: Actions` or `satisfies Actions`), a pages-API `handler(req, res)`, or a `"use server"` module. A Vuex or Redux `export const actions` doesn't fire | the file calls an auth helper: the engine's defaults and the repo's `[auth] helpers` through `{auth_helpers}`, plus a fixed list (`getServerAuthSession`, `.auth.getUser()`, `requireX()`, `withApiAuthRequired`, a token or webhook-signature check, `CRON_SECRET`) |
 | SEC-02 | a user, owner or author id read from the body, query, form data or tRPC input | the file compares that id to the session, gates on a role, or is a client component |
-| SEC-04 | `...body`, `data: body`, `.values(body)`, `.update(body)`, `findByIdAndUpdate(id, req.body)`, `Object.assign(x, body)`, `**request.data` | the body was assigned from a schema `parse()`; an HMAC `update(body)` is excluded |
+| SEC-04 | `...body`, `data: body`, `.values(body)`, `.update(body)`, `findByIdAndUpdate(id, req.body)`, `Object.assign(x, body)`, `**request.data`, or a SQL SET clause built from the request's own keys (``Object.keys(body).map((k) => `${k} = ?`)``, `f"{k} = %s" for k in data`) | the body was assigned from a schema `parse()`; an HMAC `update(body)` is excluded; a SET clause whose keys pass an allowlist filter on the same line doesn't fire |
 | SEC-08 | an error's `message` or `stack`, `str(e)` or a traceback put into a response or returned object | the file is a client component |
-| SEC-13 | `eval(`, `new Function(`, `pickle.loads`, `yaml.load` without a safe loader, `shell=True` or `os.system` with a built string, `exec` with an interpolated string, `unserialize(` | the command is a plain literal or an argv list |
-| SEC-17 | a CSV or TSV response, a `.csv` filename, a CSV writer library or call, an XLSX writer call, or a `toCsv`-style function | a formula-character set (`[=+\-@...]`), a `startsWith` check, `escapeFormulae`/`escape_formulas`, or a named guard (`guardCell`, `sanitizeCell`, ...) is present |
+| SEC-13 | `eval(`, `new Function(`, `shell=True` or `os.system` with a built string, `exec` with an interpolated string, `unserialize(` | the command is a plain literal or an argv list |
+| SEC-13-py | in `*.py` only: `pickle.loads`, or `yaml.load` without a safe loader. js-yaml 4's `load` is safe, so TypeScript and JavaScript files are out of scope | `yaml.safe_load`, or `Loader=yaml.SafeLoader` on the call |
+| SEC-17 | evidence that rows are serialized: a CSV or TSV content type in a response, header or Blob, an `attachment; filename=...csv` header, a CSV writer library or call, an XLSX writer call, rows joined with commas then newlines, or a `toCsv`-style function. A download link, a file input's accept list or a bare filename doesn't fire (the L1 data-export event still does) | a formula-character set (`[=+\-@...]`), a `startsWith` check, `escapeFormulae: true` or `escape_formulas: true`, or a guard named for formulas (`guardCell`, `neutralizeFormula`, `escapeFormula`). An RFC 4180 helper such as `escapeCsvField` only doubles quotes, so it doesn't count |
 
 ## Sources
 
