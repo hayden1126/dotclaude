@@ -198,7 +198,7 @@ sees it.
 | `hooks/pass-notice.sh` | UserPromptSubmit and PostToolUse (main thread) hook: when `pass-respawn`'s waiter dropped a `/pass`, adds its notice (`pass-notice/<session>.json` in the state dir) once as context to the session's next prompt or tool call, so the session stops waiting and says why; exits before Python when no notice is there; a shim over `hooks/pass_notice.py`; fails open, with errors in `pass-notice.err` in the state dir | symlink `~/.claude/hooks/pass-notice.sh` and `pass_notice.py` |
 | `hooks/md_render.py` | Not a hook: the stdlib markdown-to-terminal renderer (bold, italic, code, links, headings, lists, code blocks, tables, wrapped by terminal cells) that the banner and `tmux/pass-last` load by path | symlink `~/.claude/hooks/md_render.py` |
 | `hooks/session-registry.sh` | SessionStart/SessionEnd hook: records which session is open in which tmux tab (`$XDG_STATE_HOME/dotclaude/open-sessions/`), with the window's tab bar placement (`@tab_place`, as `place`) and the `--model` and `--effort` its claude launched with (as `model` and `effort`), for `claude-restore`; deletes the entry on `/exit` or `/clear`, marks it when the window or claude is killed; then hands each payload to `claude-saved` (Star and Shelve; the star follows `/clear`); does nothing outside tmux | symlink `~/.claude/hooks/session-registry.sh` |
-| `hooks/session-summary.sh` | Stop hook: regenerates a 1-2 sentence session summary via a direct Haiku Messages-API call (`hooks/haiku.py`: Claude subscription OAuth token, stdlib urllib, no API key/jq), detached so it never blocks; caches the summary to `<config-dir>/session-summaries/<session_id>.txt` for the status-line widget and a short (`<=32`-char) tab label to `<session_id>.title.txt` for `session-title.sh` | symlink `~/.claude/hooks/session-summary.sh` |
+| `hooks/session-summary.sh` | Stop hook: regenerates the session's short (`<=32`-char) tab label via a direct Haiku Messages-API call (`hooks/haiku.py`: Claude subscription OAuth token, stdlib urllib, no API key/jq), detached so it never blocks; caches it to `<config-dir>/session-summaries/<session_id>.title.txt` for `session-title.sh` | symlink `~/.claude/hooks/session-summary.sh` |
 | `hooks/overwrite-guard.sh` | PreToolUse(Write) hook: denies a Write over a file this session hasn't read, or one that cuts a file of 1 KB or more to under a fifth; a shim over `hooks/overwrite_guard.py`; fails open | symlink `~/.claude/hooks/overwrite-guard.sh` and `overwrite_guard.py` |
 | `hooks/ask-check.sh` | PreToolUse(AskUserQuestion) hook: denies a risky ask once, before the dialog, with a 5-point checklist as the reason, and lets the resend through; a shim over `hooks/ask_check.py`; fails open | symlink `~/.claude/hooks/ask-check.sh` and `ask_check.py` |
 | `hooks/lane-identity.sh` | SessionStart/Stop/SessionEnd hook: tells a lane session its identity and registers it, prints one board line in a lanes repo's main checkout and relinks the lead record on a proven resume, /clear or /pass of the lead, mirrors a lane's record; a shim over `hooks/lane_identity.py`; fails open | symlink `~/.claude/hooks/lane-identity.sh` and `lane_identity.py` |
@@ -216,8 +216,7 @@ sees it.
 | `plugins/marketplaces.json` | Marketplaces to register | consumed by `setup.sh` |
 | `plugins/enabled.json` | Plugins to install and enable (must equal the baseline `settings.json`'s `enabledPlugins`; a test pins it) | consumed by `setup.sh` |
 | `statusline/ctx-breakdown.py` | ccstatusline widget: colored per-category context chips (system prompt, tools, agents, memory, skills, MCP, messages); the total chip colors by the auto-pass tiers, ends in `A` when auto-pass is on, and the widget writes the model's window for the watcher (imports `hooks/autopass_state.py` through its real path) | symlink `~/.config/ccstatusline/ctx-breakdown.py` |
-| `statusline/session-summary.py` | ccstatusline widget: renders the cached session summary (nothing until the first one lands), word-wrapped across two dim rows on status lines 2-3 (`--row 1` / `--row 2`) | symlink `~/.config/ccstatusline/session-summary.py` |
-| `statusline/ccstatusline-settings.json` | ccstatusline layout baseline that wires the ctx-breakdown and session-summary widgets in | installed by `setup.sh` to `~/.config/ccstatusline/settings.json` (paths patched per machine); an existing file that isn't a readable JSON object or lacks the ctx widget is backed up to `settings.json.pre-dotclaude-<ts>` first |
+| `statusline/ccstatusline-settings.json` | ccstatusline layout baseline that wires the ctx-breakdown widget in | installed by `setup.sh` to `~/.config/ccstatusline/settings.json` (paths patched per machine); an existing file that isn't a readable JSON object, has a malformed `lines` list, nests too deep to write back or lacks the ctx widget is backed up to `settings.json.pre-dotclaude-<ts>` first, and one an earlier install gave the retired session-summary rows loses them; the write goes through a copy renamed into place, and a destination that isn't a regular file (a directory, a dangling link) or can't be backed up or written is left alone with a warning |
 | `tools.json` | Standalone CLI tools (ccstatusline via bun) | consumed by `setup.sh` |
 | `docs/PLUGINS.md` | One-line description of each plugin | reference |
 | `docs/delegation.md` | Delegation hardening: design, verified facts, known gaps, install order, next stages | reference |
@@ -346,24 +345,26 @@ need nothing extra.
   brackets, since ListAgents prints a session as `<name> [<ref>]` and a leading `[repo]` read like a
   ref. The label is chosen by a cascade: the Stop-hook Haiku
   label (`session-summaries/<id>.title.txt`), else the first line of the current prompt, else the
-  first clause of the long summary, else the bare `<repo>`. (It used to read Claude Code's own
+  bare `<repo>`. (It used to read Claude Code's own
   `ai-title`, but CC 2.1.237 stops generating that once a custom title is set, so the hook was
   suppressing the very record it read; it now owns the label instead.) A subagent's or teammate's
   prompt, or injected content (a task notification, another agent's message), leaves the title as
   it is. Fail-open (exit 0, no output on any error). Needs python3 on PATH.
-- **Stop: `session-summary.sh`** (in this repo). On each substantive turn it (re)generates a 1-2
-  sentence "what is this session doing, and where does it stand" summary and caches it for the
-  status-line widget, so a developer juggling several Claude terminals can re-orient after switching
-  back. The same Haiku call also returns a short (`<=32`-char) `LABEL:` line, cached to
-  `<id>.title.txt`, that `session-title.sh` uses for the terminal tab title. Generation is a direct
-  Haiku Messages-API call authenticated with the Claude subscription
-  OAuth token read from `~/.claude/.credentials.json` (stdlib urllib, no API key, no jq), so it burns
-  a little 5h/7d subscription quota per turn but skips the system-prompt overhead of a headless
-  `claude -p`. Detached so Stop never blocks the turn; fails open (exit 0) on a missing/expired token
-  or a failed call, leaving the prior summary in place. A cadence gate skips regeneration when the
-  transcript grew < 2KB, and the prior summary is fed back in. Task notifications, agent messages
-  and skill bodies are left out of the dialogue it sends, so they aren't summarized as the user's
-  request. Needs python3 on PATH.
+- **Stop: `session-summary.sh`** (in this repo). On each substantive turn it asks Haiku for a
+  short (`<=32`-char) label naming what the session works on, cached to
+  `session-summaries/<id>.title.txt`, which `session-title.sh` uses for the terminal tab title. The
+  label is the reply's last `LABEL:` line; a reply without one is dropped, and so is one that
+  reads as the model obeying the transcript (a label opening in the first person, or a refusal,
+  "as an AI" or a request to paste or share something anywhere in the reply). Generation
+  is a direct Haiku Messages-API call authenticated with the Claude subscription OAuth token read
+  from `~/.claude/.credentials.json` (stdlib urllib, no API key, no jq), so it burns a little 5h/7d
+  subscription quota per turn but skips the system-prompt overhead of a headless `claude -p`.
+  Detached so Stop never blocks the turn; fails open (exit 0) on a missing/expired token or a failed
+  call, leaving the prior label in place. A cadence gate skips regeneration when the transcript grew
+  < 2KB, and the prior label is fed back in. Task notifications, agent messages and skill bodies are
+  left out of the dialogue it sends, so they aren't labeled as the user's request. (Until 2026-10 it
+  also wrote a 1-2 sentence summary for status lines 2-3; those rows are retired.) Needs python3 on
+  PATH.
 - **Stop / Notification sounds**: play a Windows sound and (on permission prompts) a toast. Both
   sounds ring only for a session a person sees: a tab, a plain terminal, or a background session
   mapped to its tab (see the tmux indicator). Subagents, unmapped background sessions and
@@ -891,15 +892,10 @@ on for this tab. The widget also writes the model's window into the session's ct
 no hook payload carries it, so the watcher's tiers follow a smaller window. Without
 `hooks/autopass_state.py` (a copied widget) it falls back to 50%, 66% and 83% of the window,
 with no `A`.
-`statusline/session-summary.py` adds a second custom widget on status lines 2 and 3 (previously
-empty): a 1-2 sentence plain-language summary of what the session is doing and where it stands,
-word-wrapped to the terminal width across two dim rows (`--row 1` / `--row 2`). The text is produced
-out-of-band by the `session-summary.sh` Stop hook and cached per session; the widget only reads that
-cache, so a fresh session shows nothing here until the first summary lands. Line 1 (model,
-context, git, usage) is left untouched so anything that keys on it keeps working.
 
-Both widgets live in ccstatusline's config dir, so reinstalling or upgrading ccstatusline
-never touches them.
+The widget lives in ccstatusline's config dir, so reinstalling or upgrading ccstatusline
+never touches it. The status line is one row: the session summary that once filled lines 2 and
+3 is retired, and `setup.sh` takes its two widgets out of an existing layout.
 
 ## What's deliberately not here
 

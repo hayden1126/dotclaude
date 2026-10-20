@@ -11,8 +11,7 @@
 # session-summaries/<session_id>.title.txt, which we read here. Source cascade:
 #   1. that Haiku label                          (steady state, turn 2+)
 #   2. first line of this prompt                 (turn-1 seed / fallback; keeps the repo)
-#   3. first clause of the long summary (.txt)   (degrade)
-#   4. repo only                                 (floor)
+#   3. repo only                                 (floor)
 #
 # Emits the SUPPORTED hookSpecificOutput.sessionTitle field (NOT raw OSC escapes):
 # it flows through Claude Code's own rename path, has display precedence over the
@@ -183,13 +182,6 @@ def first_line(s):
             return ln
     return ""
 
-def first_clause(s):
-    s = " ".join(s.split())
-    for i, ch in enumerate(s):
-        if ch in ";:.—":
-            return s[:i].strip()
-    return s
-
 # resolve transcript to an absolute path, then derive session_id + config dir
 tpath = transcript
 if tpath and not os.path.isabs(tpath):
@@ -199,8 +191,7 @@ if session_id.endswith(".jsonl"):
     session_id = session_id[:-len(".jsonl")]
 
 summaries = os.path.join(config_dir(tpath), "session-summaries")
-label_cache   = read_cache(os.path.join(summaries, session_id + ".title.txt")) if session_id else ""
-summary_cache = read_cache(os.path.join(summaries, session_id + ".txt")) if session_id else ""
+label_cache = read_cache(os.path.join(summaries, session_id + ".title.txt")) if session_id else ""
 
 custom_title = last_custom_title(transcript)
 
@@ -219,10 +210,8 @@ if label_cache:
     summary = label_cache                            # (1) our Haiku short label
 elif prompt:
     summary = first_line(prompt)                     # (2) this prompt's first line
-elif summary_cache:
-    summary = first_clause(summary_cache)            # (3) first clause of the long summary
 else:
-    summary = ""                                     # (4) repo only
+    summary = ""                                     # (3) repo only
 if summary:
     budget = TITLE_MAX - len(label) - len(SEP)
     title = label + SEP + clip(summary, budget) if budget >= 8 else label
