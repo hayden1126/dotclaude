@@ -80,9 +80,10 @@ lines = [
 id = "session-cookie"
 paths = []
 content = [
-  # A cookie set whose name (a literal or a constant) says session, auth or token.
-  '''(?:\bcookies\(\)\)?\.set\(|\bcookies\.set\(|\.cookie\(|\.set_cookie\(|\bsetCookie\(\s*\w+\s*,|(?<![.\w])serialize\(|\bcookie\.serialize\()\s*(?:key\s*=\s*)?(?:["'`][^"'`\n]{0,60}?(?i:session|\bsid\b|auth|token|jwt|refresh|remember)|[A-Z0-9_]{0,40}(?:SESSION|AUTH|TOKEN|SID|JWT))''',
-  '''(?i:set-cookie)["'`]?\s*[:,]\s*[`"'][^`"'\n]{0,60}?(?i:session|\bsid\b|auth|token|jwt|refresh|remember)''',
+  # A cookie set whose name (a literal or a constant) says session, auth or token; a CSRF or
+  # XSRF cookie is not a session cookie.
+  '''(?:\bcookies\(\)\)?\.set\(|\bcookies\.set\(|\.cookie\(|\.set_cookie\(|\bsetCookie\(\s*\w+\s*,|(?<![.\w])serialize\(|\bcookie\.serialize\()\s*(?:key\s*=\s*)?(?:["'`](?![^"'`\n]{0,60}?(?i:csrf|xsrf))[^"'`\n]{0,60}?(?i:session|\bsid\b|auth|token|jwt|refresh|remember)|(?![A-Z0-9_]{0,40}(?:CSRF|XSRF))[A-Z0-9_]{0,40}(?:SESSION|AUTH|TOKEN|SID|JWT|REMEMBER))''',
+  '''(?i:set-cookie)["'`]?\s*[:,]\s*[`"'](?![^=`"'\n]{0,60}?(?i:csrf|xsrf))[^`"'\n]{0,60}?(?i:session|\bsid\b|auth|token|jwt|refresh|remember)''',
   '''^\s*SESSION_COOKIE_(?:SECURE|HTTPONLY|SAMESITE|AGE|DOMAIN|NAME)\s*=''',
 ]
 lines = [
@@ -115,7 +116,7 @@ content = [
   '''\b(?:update|change)_?(?:Email|email|Phone|phone|PhoneNumber|phone_number)\b''',
   '''(?i:\bUPDATE\s+["`]?\w+["`]?\s+SET\s+[^\n;]{0,200}?\b(?:email|phone|phone_number)\s*=)''',
   '''\b(?:request\.user|current_user|currentUser)\.(?:email|phone|phone_number|phoneNumber)\s*=(?!=)''',
-  '''\.(?:set|update)\(\s*\{(?!\s*where\b)[^{}\n]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*[:,}]''',
+  '''\.(?:set|update)\(\s*\{(?!\s*where\b)[^{}\n]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*(?:[,}]|:(?!\s*(?:true|false|null)\b))''',
   '''\b(?:verifyBeforeUpdateEmail|updateEmail)\(|\.auth\.updateUser\(''',
 ]
 lines = [
@@ -131,7 +132,7 @@ paths = []
 content = [
   '''(?:\bfrom\s|\brequire\(\s*)\s*["'](?:jsonwebtoken|jose|jwt-decode|jwks-rsa|express-jwt|passport-jwt|@fastify/jwt|hono/jwt)["']''',
   '''^\s*(?:from|import)\s+(?:jwt|jose|jwcrypto|authlib\.jose)\b''',
-  '''\b(?:jwt\.(?:sign|verify|decode|encode)|jwtVerify|decodeJwt|createRemoteJWKSet)\(|\bnew\s+SignJWT\(''',
+  '''\b(?:jwt\.(?:sign|verify|decode|encode)|jwtVerify|decodeJwt|jwtDecode|jwt_decode|createRemoteJWKSet)\(|\bnew\s+SignJWT\(''',
   '''["']github\.com/golang-jwt/jwt''',
 ]
 lines = [
@@ -175,16 +176,22 @@ lines = [
 [[rule]]
 # A fast hash on the same line as a password. A line that also names a slow hash (a SHA-256
 # pre-hash before bcrypt) and a comment line stay quiet; a reset token hashed with SHA-256
-# names no password, so it never fires.
+# names no password, so it never fires. A file that queries Pwned Passwords (a SHA-1 range
+# check, never storage) stays quiet.
 id = "SEC-30"
+unless = '''(?i:pwnedpasswords|haveibeenpwned|\bhibp)'''
 when = '''^(?!\s*(?://|#|/?\*))(?![^\n]*(?i:bcrypt|argon2|scrypt|pbkdf2))[^\n]*(?:(?i:\b(?:md5|sha1|sha-1|sha224|sha256|sha-256|sha384|sha512|sha-512)\b)[^\n]{0,120}(?i:\b(?:password|passwd|pwd)\b)|(?i:\b(?:password|passwd|pwd)\b)[^\n]{0,120}(?i:\b(?:md5|sha1|sha256|sha512)\s*\())'''
 paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py,rb,php,go}"]
 say = "Build password hashing with Argon2id (19 MiB, 2 iterations, parallelism 1) or bcrypt at cost 10 or more; a fast hash such as MD5 or SHA-256 falls to a GPU in hours, salted or not (SEC-30). Code that only verifies legacy hashes to migrate them on sign-in can stay: add `practices-allow: SEC-30 legacy migration`."
 
 [[rule]]
+# A session cookie set without its flags. A CSRF or XSRF cookie never fires (double-submit needs
+# it readable). The file clears it by naming HttpOnly, Secure and SameSite, or a named options
+# object, unless it also sets secure to false or SameSite to None. httpOnly: false isn't
+# judged, since that is how a CSRF cookie in the same file reads.
 id = "SEC-34"
-when = '''(?:\bcookies\(\)\)?\.set\(|\bcookies\.set\(|\.cookie\(|\.set_cookie\(|\bsetCookie\(\s*\w+\s*,|(?<![.\w])serialize\(|\bcookie\.serialize\()\s*(?:key\s*=\s*)?(?:["'`][^"'`\n]{0,60}?(?i:session|\bsid\b|auth|token|jwt|refresh|remember)|[A-Z0-9_]{0,40}(?:SESSION|AUTH|TOKEN|SID|JWT))|(?i:set-cookie)["'`]?\s*[:,]\s*[`"'][^`"'\n]{0,60}?(?i:session|\bsid\b|auth|token|jwt|refresh|remember)'''
-unless = '''\A(?=[\s\S]*?(?i:httponly))(?=[\s\S]*?(?i:\bsecure\b|__Host-|__Secure-))(?=[\s\S]*?(?i:samesite))|\b\w{0,40}(?i:cookie)_?(?i:options|opts|attributes|attrs|config|defaults)\b'''
+when = '''(?:\bcookies\(\)\)?\.set\(|\bcookies\.set\(|\.cookie\(|\.set_cookie\(|\bsetCookie\(\s*\w+\s*,|(?<![.\w])serialize\(|\bcookie\.serialize\()\s*(?:key\s*=\s*)?(?:["'`](?![^"'`\n]{0,60}?(?i:csrf|xsrf))[^"'`\n]{0,60}?(?i:session|\bsid\b|auth|token|jwt|refresh|remember)|(?![A-Z0-9_]{0,40}(?:CSRF|XSRF))[A-Z0-9_]{0,40}(?:SESSION|AUTH|TOKEN|SID|JWT|REMEMBER))|(?i:set-cookie)["'`]?\s*[:,]\s*[`"'](?![^=`"'\n]{0,60}?(?i:csrf|xsrf))[^`"'\n]{0,60}?(?i:session|\bsid\b|auth|token|jwt|refresh|remember)'''
+unless = '''\A(?![\s\S]*?(?i:\bsecure["'`]?\s*[:=]\s*["'`]?(?:false|nil)\b|\bsamesite["'`]?\s*[:=]\s*["'`]?none\b))(?:(?=[\s\S]*?(?i:httponly))(?=[\s\S]*?(?i:\bsecure\b|__Host-|__Secure-))(?=[\s\S]*?(?i:samesite))|[\s\S]*?\b\w{0,40}(?i:cookie)_?(?i:options|opts|attributes|attrs|config|defaults)\b)'''
 paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py,rb,php,go}"]
 say = "Build this session cookie with Secure, HttpOnly and SameSite=Lax (or Strict), and name it with the __Host- prefix (Path=/, no Domain) (SEC-34). If the flags come from a shared options object, name it like `sessionCookieOptions`, or add `practices-allow: SEC-34 flags set in <module>`."
 
@@ -192,7 +199,7 @@ say = "Build this session cookie with Secure, HttpOnly and SameSite=Lax (or Stri
 # jsonwebtoken's decode and jose's decodeJwt read claims without checking anything. A file that
 # also verifies (decode to read the kid header, then verify) or a client component stays quiet.
 id = "SEC-35"
-when = '''\bjwt\.decode\(|(?<![\w])decodeJwt\('''
+when = '''\bjwt\.decode\(|(?<![\w])(?:decodeJwt|jwtDecode|jwt_decode)(?:<[^<>\n]{1,80}>)?\('''
 unless = '''\bjwt\.verify\(|\bjwtVerify\(|^\s*["']use client["']'''
 paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts}"]
 say = "Verify this JWT before trusting a claim: `jwt.verify` or jose's `jwtVerify` with a key from a trusted source, an `algorithms` allowlist and `exp`, `iss` and `aud` checks; decode checks nothing (SEC-35). If this only reads claims for display, add `practices-allow: SEC-35 display only`."
@@ -219,10 +226,13 @@ say = "Build this token from a CSPRNG at 128 bits or more (`crypto.randomBytes(3
 
 [[rule]]
 # A direct write of an email or phone to an existing account: an ORM update, a SQL UPDATE or an
-# assignment on the current user. A file that holds a pending-change flow stays quiet.
+# assignment on the current user, or a call (not a definition) of updateEmail, which switches
+# at once in Firebase. Boolean values (a notification toggle) don't fire. A file that names a
+# pending-change table or Firebase's verifyBeforeUpdateEmail stays quiet; a form handler
+# such as handleEmailChange does not count.
 id = "SEC-37"
-when = '''\.update(?:Many)?\(\s*\{[\s\S]{0,300}?\bdata\s*:\s*\{[^}]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*[:,}]|\.set\(\s*\{[^{}]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*[:,}]|\.update\(\s*\{(?!\s*where\b)[^{}]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*[:,}]|\$set\s*:\s*\{[^{}]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*[:,}]|(?i:\bUPDATE\s+["`]?\w+["`]?\s+SET\s+[^;]{0,200}?\b(?:email|phone|phone_number)\s*=)|\b(?:request\.user|current_user|currentUser|self\.request\.user)\.(?:email|phone|phone_number|phoneNumber)\s*=(?!=)|\b(?:current_user|request\.user)\.update!?\([^\n]{0,100}\b(?:email|phone):'''
-unless = '''(?i:\bpending_?\w{0,20}?(?:email|phone|change)|email_?change|phone_?change|change_?requests?\b|unconfirmed_?email|verifyBeforeUpdateEmail)'''
+when = '''\.update(?:Many)?\(\s*\{[\s\S]{0,300}?\bdata\s*:\s*\{[^}]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*(?:[,}]|:(?!\s*(?:true|false|null)\b))|\.set\(\s*\{[^{}]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*(?:[,}]|:(?!\s*(?:true|false|null)\b))|\.update\(\s*\{(?!\s*where\b)[^{}]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*(?:[,}]|:(?!\s*(?:true|false|null)\b))|\$set\s*:\s*\{[^{}]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*(?:[,}]|:(?!\s*(?:true|false|null)\b))|(?i:\bUPDATE\s+["`]?\w+["`]?\s+SET\s+[^;]{0,200}?\b(?:email|phone|phone_number)\s*=)|\b(?:request\.user|current_user|currentUser|self\.request\.user)\.(?:email|phone|phone_number|phoneNumber)\s*=(?!=)|\b(?:current_user|request\.user)\.update!?\([^\n]{0,100}\b(?:email|phone):|(?<!function )(?<![\w])updateEmail\((?![^)\n]{0,200}\)\s*(?::\s*[^{\n]{1,80})?\{)'''
+unless = '''(?i:\bpending_?(?:email|phone|contact)\w{0,30}|\b(?:email|phone|contact)_?change_?(?:requests?|tokens?)\b|\b(?:email|phone)_?changes\b|\bunconfirmed_?email\b)|\bverifyBeforeUpdateEmail\b'''
 paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py,rb,php,go,sql}"]
 say = "Don't write a new email or phone to the account directly. Build a pending change: a random single-use token, stored hashed and valid 30 minutes or less, sent to the NEW address; switch only when it is followed, with a fresh sign-in to start, a notice to the old address, a rate limit and an audit line (SEC-37, see the skill's references/email-change.md). If this is the confirm step or an audited admin tool, add `practices-allow: SEC-37 <reason>`."
 
