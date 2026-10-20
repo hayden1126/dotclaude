@@ -190,6 +190,24 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     window on every platform on a first install. Fix: reuse #140's temp-name and `os.replace`
     swap (merged). In lane mute since 2026-10-20 (Hayden folded it in, since that lane edits
     `setup-tmux.sh:73-78` anyway).
+  - **Stale worktree admin dirs break sandboxed commands now and then** (lane mute's report,
+    2026-10-20; the lead checked). `.git/worktrees/` holds 45 entries `git worktree prune
+    --dry-run` would remove ("gitdir file does not exist": closed lanes, old agent worktrees,
+    test names like `tree1`), each holding only a 0-byte `config.worktree` the sandbox planted as
+    a mount point (created about 5 s after each worktree). Claude Code's sandbox protects each
+    entry's `commondir` and `config.worktree`, so every sandboxed command mounts over paths that
+    don't exist; mute twice got bwrap's "Can't get type of source
+    .git/worktrees/excluded-guard/commondir" (and once `.git/config.lock`), and the retry ran
+    clean. Fix to try: `git worktree prune` (deletes under `.git/`: Hayden's ok first), then see
+    whether running sessions plant the dirs again. Same family as config-dir's bwrap error in the
+    Watch item below.
+  - **excluded-guard refuses an over-matched command in an agent worktree** (lane mute's report,
+    2026-10-20; checked in code, not reproduced). Candidacy splits on `|`, `;` and `&&` without
+    quotes, so a plain `grep` whose quoted pattern holds an excluded head becomes a candidate
+    (`hooks/excluded_guard.py` docstring: "an over-match only adds checks"). In an agent
+    worktree the gitdir isn't the project's, so rule 1 judges its `config.worktree`
+    (`hooks/excluded_guard.py:522-525`), finds it writable and refuses. Only delegated writers
+    hit it, and they report the denial. Fix if it recurs: a quote-aware split for candidacy.
   - **paste-inbox's sandbox skip: merged as #138** (lead PR, 2026-10-20, from lane
     summary-retire's report): sandboxed WSL interop now fails with `UtilBindVsockAnyPort`, not
     `UtilConnectUnix`, so 9 Laptop and LaptopPowerShell cases failed instead of skipping; one
