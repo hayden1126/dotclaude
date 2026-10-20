@@ -297,6 +297,17 @@ class ClaudeMute(unittest.TestCase):
         widest = cm.mark_text({"sound": timed(99 * 60), "toast": timed(99 * 60)}, None, NOW)
         self.assertEqual(cells(widest), 12)
 
+    def test_status_right_length_fits_the_widest_status_right(self):
+        # claude.conf's status-right at its widest: a space, the widest mark, the host cut to
+        # 10, two spaces, `%a %H:%M` (9) and a space. One cell short and tmux cuts a cell off it.
+        with open(os.path.join(REPO, "tmux", "claude.conf"), encoding="utf-8") as f:
+            conf = f.read()
+        self.assertIn('\nset -g status-right " #(~/.local/bin/claude-mute mark)'
+                      '#{=10:host_short}  %a %H:%M "\n', conf)
+        length = int(re.search(r"^set -g status-right-length (\d+)$", conf, re.M).group(1))
+        widest = cm.mark_text({"sound": timed(99 * 60), "toast": timed(99 * 60)}, None, NOW)
+        self.assertEqual(length, 1 + cells(widest) + 10 + 2 + len("Wed 23:59") + 1)
+
     def test_the_mark_from_the_flag(self):
         self.assertEqual(self.run_cli("mark"), (0, "", ""))  # no flag file: nothing
         self.assertFalse(os.path.lexists(self.dir))

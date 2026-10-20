@@ -343,10 +343,10 @@ class LayOut(unittest.TestCase):
         self.check_fits(lay, 188)
 
     def test_the_live_shape_on_the_desktop(self):
-        # claude.conf: status-left-length 8, status-right-length 34 (the host, the clock and
-        # claude-mute's mark). G = 8 + "dotclaude▸ " = 19, so row 0 has 188 - 19 - 34 = 135
+        # claude.conf: status-left-length 8, status-right-length 35 (the host, the clock and
+        # claude-mute's mark). G = 8 + "dotclaude▸ " = 19, so row 0 has 188 - 19 - 35 = 134
         # cells, room for dotclaude's 4 tabs at 32 and 3 separators (131).
-        lay = tb.lay_out([DOTCLAUDE], SHARED5, 188, "@4", 8, 34)
+        lay = tb.lay_out([DOTCLAUDE], SHARED5, 188, "@4", 8, 35)
         self.assertEqual([tab_ids(r) for r in lay.rows],
                          [["@4", "@6", "@7", "@8"], ["@1", "@2", "@3", "@5", "@9"]])
         self.assertEqual((lay.left, lay.head, lay.gutter), (8, 11, 19))
@@ -763,7 +763,7 @@ class Nav(unittest.TestCase):
         self.assertIn(("@tab_bar_nav", tb.nav_value(lay)), tb.session_ops(lay, tb.render(lay)))
 
     def test_the_live_shape_on_the_desktop(self):
-        rows = self.nav(tb.lay_out([DOTCLAUDE], SHARED5, 188, "@4", 8, 34))
+        rows = self.nav(tb.lay_out([DOTCLAUDE], SHARED5, 188, "@4", 8, 35))
         cases = [("@4", "right", "@6"), ("@8", "right", "@1"),     # past a row's end
                  ("@9", "right", "@4"), ("@4", "left", "@9"),      # wrapping
                  ("@1", "left", "@8"),
