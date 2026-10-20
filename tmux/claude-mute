@@ -1,0 +1,337 @@
+#!/usr/bin/python3 -I
+"""claude-mute: the device-wide mute, one switch that silences the notify ring (sound) and the
+Windows toasts (toast) for every Claude session on this machine.
+
+  claude-mute [status]
+      each switch: muted with the minutes left and the local time it ends, muted until
+      unmuted, or on
+  claude-mute on [sound|toast|all] [--for <N>m|<N>h | --until-off]
+      mute it: all for 1 hour by default, at most 24 hours; prints the new status
+  claude-mute off [sound|toast|all]
+      unmute it (default all); prints the new status
+  claude-mute mark
+      the tab bar's mark (tmux/claude.conf's status-right)
+  claude-mute menu <client>
+      the Mute menu on that tmux client (the Ctrl-b Enter menu's Mute... item)
+
+The flag is $XDG_STATE_HOME/dotclaude/mute.json; hooks/mute_state.py reads and writes it (its
+docstring has the shape), and hooks/notify.sh and stop-ring.sh obey it. This script imports
+mute_state from its own real path's ../hooks, since setup-tmux.sh links it into ~/.local/bin. A
+timed mute runs out by itself, so a forgotten one can't keep the machine silent (redundancy over
+silence); --until-off is the explicit exception. A flag that can't be read mutes nothing, and
+status says so; `off` (or `on`) writes over it.
+
+`mark` is what tmux runs every 2 s per attached client (status-interval), so with no flag file it
+prints nothing and returns before anything else loads (mute_state loads autopass_state only to
+write). Otherwise, for each muted switch, sound then toasts: its glyph (U+1F507 sound, U+1F515
+toasts), then the time left when timed (minutes rounded up, `42m`; from 100 minutes, whole hours
+rounded up, `2h`; a hand-written flag past 99 hours gets days, and past 99 days no time), joined
+by one space, then one trailing space to keep the host after it apart. A note (an unreadable or
+malformed flag) adds `?` the same way, and on its own prints the sound glyph and `?`: a mute you
+set isn't in force. Nothing muted and no note: nothing. The widest form is 12 cells (each glyph
+is 2), which is what status-right-length makes room for.
+
+`menu` opens a display-menu built like claude-saved's: -M (no mouse event behind it), -c the
+client, -t the client's own session (from list-clients), -x C and claude.conf's row-0 -y rule.
+Its title says what is muted now; its items mute both, sound or toasts for 1 hour or until
+unmuted, then unmute sound and unmute toasts (dim when that switch isn't muted) and unmute all.
+Each runs this script by its full path through run-shell, silent and exiting 0, with `--client
+<client>`, which `on` and `off` take to answer on that client's status line too.
+
+A write the OS refuses (a `!` line typed at a Claude prompt may run in Claude's sandbox, which
+can't write ~/.local/state) prints one line naming the path and the error, exit 1. Usage errors
+exit 2. tests/setup/test_claude_mute.py holds the cases.
+"""
+import errno
+import math
+import os
+import sys
+import time
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
+                                "hooks"))
+import mute_state as ms  # noqa: E402
+
+USAGE = __doc__.split("\n\n")[1]
+ME = os.path.abspath(__file__)
+HOUR = 3600
+MAX_FOR = 24 * HOUR
+TARGETS = {"sound": ["sound"], "toast": ["toast"], "all": list(ms.NAMES)}
+LABEL = {"sound": "sound", "toast": "toasts"}
+GLYPH = {"sound": chr(0x1F507), "toast": chr(0x1F515)}
+DOT = " " + chr(0xB7) + " "
+ELLIPSIS = chr(0x2026)
+REFUSED = (errno.EROFS, errno.EACCES, errno.EPERM)
+# -y's bottom edge: row 0 with the bar on top (claude.conf's @overlay_y comments say why).
+MENU_Y = "#{?#{==:#{status-position},top},0,#{popup_centre_y}}"
+
+
+class Usage(Exception):
+    pass
+
+
+def out(text: str, stream=None) -> None:
+    """One line as UTF-8 whatever the locale (tmux runs `mark` with its own environment)."""
+    stream = stream or sys.stdout
+    stream.flush()
+    stream.buffer.write((text + "\n").encode("utf-8"))
+    stream.buffer.flush()
+
+
+def left(secs: float) -> str:
+    """The time left, at most 3 characters: minutes, hours or days, rounded up."""
+    for size, unit in ((60, "m"), (HOUR, "h"), (24 * HOUR, "d")):
+        n = math.ceil(secs / size)
+        if n < 100:
+            return "%d%s" % (n, unit)
+    return ""
+
+
+def clock(until: float, now: float) -> str:
+    """The local time a mute ends, with the weekday when that isn't today."""
+    end, today = time.localtime(until), time.localtime(now)
+    return time.strftime("%H:%M" if end[:3] == today[:3] else "%a %H:%M", end)
+
+
+def mark_text(muted: dict, note, now: float) -> str:
+    parts = []
+    for name in ms.NAMES:
+        if name in muted:
+            until = muted[name]["until"]
+            parts.append(GLYPH[name] + ("" if until is None else left(until - now)))
+    if note:
+        parts.append("?" if parts else GLYPH["sound"] + "?")
+    return " ".join(parts) + " " if parts else ""
+
+
+def phrase(name: str, muted: dict, now: float) -> str:
+    """One switch, for a message: `sound muted until 15:42`, `... until unmuted` or `sound on`."""
+    if name not in muted:
+        return LABEL[name] + " on"
+    until = muted[name]["until"]
+    return LABEL[name] + " muted until " + ("unmuted" if until is None else clock(until, now))
+
+
+def short(name: str, muted: dict, now: float) -> str:
+    """One switch, for the menu's title: `sound 42m`, `sound muted` or `sound on`."""
+    if name not in muted:
+        return LABEL[name] + " on"
+    until = muted[name]["until"]
+    return LABEL[name] + " " + ("muted" if until is None else left(until - now) or "muted")
+
+
+def status_lines(muted: dict, note, now: float) -> list:
+    lines = []
+    for name in ms.NAMES:
+        head = (LABEL[name] + ":").ljust(8)
+        if name not in muted:
+            lines.append(head + "on")
+        elif muted[name]["until"] is None:
+            lines.append(head + "muted until unmuted")
+        else:
+            until = muted[name]["until"]
+            lines.append(head + "muted, %d min left (until %s)"
+                         % (math.ceil((until - now) / 60), clock(until, now)))
+    if note:
+        lines.append("note:   %s is %s, and a mute in it that can't be read is not in force "
+                     "(claude-mute off clears it)" % (ms.flag_path(), note))
+    return lines
+
+
+def status() -> int:
+    now = time.time()  # wall clock
+    muted, note = ms.current(now)
+    for line in status_lines(muted, note, now):
+        out(line)
+    return 0
+
+
+def mark() -> int:
+    if not os.path.lexists(ms.flag_path()):
+        return 0
+    now = time.time()  # wall clock
+    muted, note = ms.current(now)
+    text = mark_text(muted, note, now)
+    if text:
+        out(text)
+    return 0
+
+
+def duration(text: str) -> int:
+    """Seconds from `<N>m` or `<N>h`: more than 0, at most 24 hours."""
+    n, unit = text[:-1], text[-1:]
+    if not (n.isascii() and n.isdigit() and unit in ("m", "h")):
+        raise Usage("a duration is <N>m or <N>h, got %r" % text)
+    secs = int(n) * (60 if unit == "m" else HOUR)
+    if not 0 < secs <= MAX_FOR:
+        raise Usage("a duration is more than 0 and at most 24h, got %r" % text)
+    return secs
+
+
+def parse(args: list, timed: bool) -> tuple:
+    """(names, seconds or None for until unmuted, client) from on's or off's arguments."""
+    target = client = None
+    secs, set_for = HOUR, False
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in TARGETS and target is None:
+            target = a
+        elif timed and a == "--for" and not set_for and i + 1 < len(args):
+            secs, set_for = duration(args[i + 1]), True
+            i += 1
+        elif timed and a == "--until-off" and not set_for:
+            secs, set_for = None, True
+        elif a == "--client" and client is None and i + 1 < len(args):
+            client = args[i + 1]
+            i += 1
+        else:
+            raise Usage("unexpected %r" % a)
+        i += 1
+    return TARGETS[target or "all"], secs, client
+
+
+def tmux(*args) -> int:
+    import subprocess
+    try:
+        return subprocess.run(["tmux", *args], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL, timeout=10).returncode
+    except (OSError, subprocess.SubprocessError):
+        return 1
+
+
+def tell(client, text: str) -> None:
+    """A line on the client's status line. tmux format-expands it and draws #[...] styles, so a
+    # before a [ goes and every other # is doubled (claude-saved's msg)."""
+    if client is None:
+        return
+    text = "claude-mute: " + text
+    while "#[" in text:
+        text = text.replace("#[", "[")
+    tmux("display-message", *(["-c", client] if client else []), text.replace("#", "##"))
+
+
+def write_failed(e: OSError, client) -> int:
+    path = e.filename or ms.state_dir()
+    if os.path.basename(path).startswith(".tmp-"):  # write_json's temp file: its dir refused it
+        path = os.path.dirname(path)
+    line ="can't write %s: %s" % (path, e.strerror or e)
+    if e.errno in REFUSED:
+        line += ("; use Ctrl-b Enter, Mute%s or a shell outside Claude (a ! line at a Claude "
+                 "prompt may run in its sandbox)" % ELLIPSIS)
+    out("claude-mute: " + line, sys.stderr)
+    tell(client, line)
+    return 1
+
+
+def change(args: list, on: bool) -> int:
+    names, secs, client = parse(args, timed=on)
+    now = time.time()  # wall clock
+    try:
+        if on:
+            ms.mute(names, None if secs is None else now + secs, now)
+        else:
+            ms.unmute(names, now)
+    except OSError as e:
+        return write_failed(e, client)
+    muted, note = ms.current(now)
+    for line in status_lines(muted, note, now):
+        out(line)
+    tell(client, DOT.join(phrase(n, muted, now) for n in ms.NAMES)
+         + (DOT + "flag " + note if note else ""))
+    return 0
+
+
+def run_shell(*args) -> str:
+    """A tmux command that runs args in sh, silent and exiting 0: each arg sh-escaped, the whole
+    in tmux single quotes, which allow no escapes, so a quote, a # (tmux expands a menu item's
+    command when the menu opens) or a control character in any arg is refused."""
+    import re
+    if any(re.search(r"['#\x00-\x1f\x7f]", a) for a in args):
+        raise ValueError("can't quote %r for run-shell" % (args,))
+    line = " ".join(re.sub(r"([^\w./%@:,+=-])", r"\\\1", a) for a in args)
+    return "run-shell '%s >/dev/null 2>&1; true'" % line
+
+
+def menu_argv(client: str, session, muted: dict, note, now: float, me: str = ME) -> list:
+    """display-menu's argv (after `tmux`)."""
+    tail = ["--client", client] if client else []   # sh would drop an empty arg
+    title = "Mute: " + DOT.join(short(n, muted, now) for n in ms.NAMES)
+    if note:
+        title += DOT + "flag " + note
+    argv = ["display-menu", "-M"]
+    if client:
+        argv += ["-c", client]
+    if session:
+        argv += ["-t", session + ":"]
+    argv += ["-T", "#[align=centre]" + title.replace("#", "##"), "-x", "C", "-y", MENU_Y]
+    for label, key, target in (("both", "b", "all"), ("sound", "s", "sound"),
+                               ("toasts", "t", "toast")):
+        argv += ["Mute %s for 1 hour" % label, key,
+                 run_shell(me, "on", target, "--for", "1h", *tail),
+                 "Mute %s until unmuted" % label, key.upper(),
+                 run_shell(me, "on", target, "--until-off", *tail)]
+    argv.append("")
+    for name, key in (("sound", "u"), ("toast", "n")):
+        argv += [("" if name in muted else "-") + "Unmute " + LABEL[name], key,
+                 run_shell(me, "off", name, *tail)]
+    argv += ["Unmute all", "a", run_shell(me, "off", "all", *tail)]
+    return argv
+
+
+def client_session(client: str):
+    """The session the client is looking at (`$N`), from list-clients; None when not found."""
+    import subprocess
+    try:
+        p = subprocess.run(["tmux", "list-clients", "-F", "#{session_id} #{client_name}"],
+                           stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in p.stdout.splitlines():
+        session, _, name = line.partition(" ")
+        if name == client and session[:1] == "$" and session[1:].isdigit():
+            return session
+    return None
+
+
+def menu(client: str) -> int:
+    """Silent, exit 0: a run-shell that prints or fails would put the pane in view mode."""
+    try:
+        now = time.time()  # wall clock
+        muted, note = ms.current(now)
+        argv = menu_argv(client, client_session(client) if client else None, muted, note, now)
+    except ValueError:
+        tell(client, "can't build the menu (a quote or # in %s or the client name?)" % ME)
+        return 0
+    except Exception as e:
+        tell(client, "can't build the menu: %s" % e)
+        return 0
+    tmux(*argv)
+    return 0
+
+
+def main(argv: list) -> int:
+    args = argv[1:]
+    if args[:1] in (["-h"], ["--help"]):
+        out(USAGE)
+        return 0
+    try:
+        if args in ([], ["status"]):
+            return status()
+        if args == ["mark"]:
+            return mark()
+        if args[:1] == ["on"]:
+            return change(args[1:], on=True)
+        if args[:1] == ["off"]:
+            return change(args[1:], on=False)
+        if len(args) == 2 and args[0] == "menu":
+            return menu(args[1])
+        raise Usage("")
+    except Usage as e:
+        out("claude-mute: %s\nusage:\n%s" % (e, USAGE) if str(e) else "usage:\n" + USAGE,
+            sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
