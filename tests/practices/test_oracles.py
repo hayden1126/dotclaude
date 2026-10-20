@@ -449,6 +449,77 @@ export async function GET(request: NextRequest) {{
 
 
 VARIANTS["email confirm link with a six-digit code"] = email_code_design(6)
+EMAIL_HASHES = "CREATE TABLE IF NOT EXISTS email_hashes (token TEXT PRIMARY KEY, user_id INTEGER, new_email TEXT)"
+
+
+def email_hash_design(decoy=False):
+    """A pending change keyed on sha256(user id + address), with no salt; `decoy` adds a random
+    ?n= the route never reads."""
+    extra = '&n=${randomBytes(16).toString("hex")}' if decoy else ""
+    return ("email-change", {
+        "app/settings/actions.ts": EMAIL_ACTION_HEAD + f"""\
+  const {{ createHash, randomBytes }} = await import("node:crypto");
+  const token = createHash("sha256").update(`${{user.id}}${{email}}`).digest("hex");
+  const db = getDb();
+  db.exec("{EMAIL_HASHES}");
+  db.prepare("INSERT OR REPLACE INTO email_hashes VALUES (?, ?, ?)").run(token, user.id, email);
+  const link = `http://localhost:3000/api/settings/email/confirm?token=${{token}}{extra}`;
+  await sendMail({{ to: email, subject: "Confirm your new email", text: `Confirm: ${{link}}` }});
+  return {{ ok: true }};
+}}
+""",
+        "app/api/settings/email/confirm/route.ts": f"""\
+import {{ NextResponse, type NextRequest }} from "next/server";
+import {{ getDb }} from "@/lib/db";
+export async function GET(request: NextRequest) {{
+  const db = getDb();
+  db.exec("{EMAIL_HASHES}");
+  const token = request.nextUrl.searchParams.get("token") ?? "";
+  const row = db.prepare("SELECT user_id, new_email FROM email_hashes WHERE token = ?").get(token) as
+    {{ user_id: number; new_email: string }} | undefined;
+  if (row) {{
+    db.prepare("UPDATE users SET email = ? WHERE id = ?").run(row.new_email, row.user_id);
+    db.prepare("DELETE FROM email_hashes WHERE token = ?").run(token);
+  }}
+  return NextResponse.redirect(new URL("/settings", request.url));
+}}
+""",
+    })
+
+
+# Signed with a key drawn at import: the same link twice in one process, a different one in a
+# fresh process, so the second link must come from a fresh process.
+VARIANTS["email confirm link signed with a key drawn at import"] = ("email-change", {
+    "lib/email-sign.ts": """\
+import { createHmac, randomBytes } from "node:crypto";
+const KEY = randomBytes(32);
+export const sign = (userId: number, email: string) => createHmac("sha256", KEY).update(`${userId}:${email}`).digest("hex");
+""",
+    "app/settings/actions.ts": EMAIL_ACTION_HEAD + """\
+  const { sign } = await import("@/lib/email-sign");
+  const link = `http://localhost:3000/api/settings/email/confirm?user=${user.id}&email=${encodeURIComponent(email)}&sig=${sign(user.id, email)}`;
+  await sendMail({ to: email, subject: "Confirm your new email", text: `Confirm: ${link}` });
+  return { ok: true };
+}
+""",
+    "app/api/settings/email/confirm/route.ts": """\
+import { timingSafeEqual } from "node:crypto";
+import { NextResponse, type NextRequest } from "next/server";
+import { getDb } from "@/lib/db";
+import { sign } from "@/lib/email-sign";
+export async function GET(request: NextRequest) {
+  const q = request.nextUrl.searchParams;
+  const userId = Number(q.get("user"));
+  const email = String(q.get("email"));
+  const expected = Buffer.from(sign(userId, email));
+  const given = Buffer.from(String(q.get("sig")));
+  if (given.length === expected.length && timingSafeEqual(given, expected)) {
+    getDb().prepare("UPDATE users SET email = ? WHERE id = ?").run(email, userId);
+  }
+  return NextResponse.redirect(new URL("/settings", request.url));
+}
+""",
+})
 # The token lands in a .js file at runtime: the oracle reads the source before any action, so
 # the token doesn't count as a constant written in it.
 VARIANTS["email confirm token kept in a .js file written at runtime"] = ("email-change", {
@@ -627,6 +698,10 @@ export async function GET(request: NextRequest) {
     }),
     # A four-digit code is guessable: 10,000 tries at most.
     "email confirm link with a four-digit code": email_code_design(4),
+    # The same link every time: anyone can compute the hash.
+    "email confirm token that is an unsalted sha256 of the user id and address": email_hash_design(),
+    # A random value the route ignores mustn't hide the deterministic one beside it.
+    "email confirm sha256 token beside a random value the route ignores": email_hash_design(decoy=True),
     # Run in one process, the attack would meet this limiter's 429 and look safe; each
     # attempt in a fresh process (round 3 #4) sees the planted bug.
     "bad profile route behind a one-request limiter": ("mass-assign", {

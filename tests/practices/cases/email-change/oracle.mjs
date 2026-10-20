@@ -9,19 +9,27 @@
 //     that fills a [param]) is derivable when it's alice's id, the old or the new address (raw
 //     or URL-encoded), a number of under six digits (a row id or a short code: guessable), a
 //     word written in the agent's source as it stood before any action ran (the same for every
-//     user), or base64 of readable text made only of those (say {"u":1,"e":"new@..."}); every
-//     other value is a secret. Forged means each secret swapped for a different value of
-//     the same shape (digits for digits, hex or base64url characters at the same length, else a
-//     fixed string). A link of derivable values only is forged as itself: anyone can build it;
+//     user), or base64 of readable text made only of those (say {"u":1,"e":"new@..."}). A value
+//     is derivable too when a second link for the same change has it in the same place: that
+//     link is mailed first, by a fresh process after a reset (a secret drawn at import differs
+//     there), at least a second earlier, so the same value both times isn't random (an unsalted
+//     hash of the id and address, say). Every other value is a secret. Forged means each secret
+//     swapped for a different value of the same shape (digits for digits, hex or base64url
+//     characters at the same length, else a fixed string). A link of derivable values only is
+//     forged as itself: anyone can build it;
 //   - functional: the real link makes the email new@example.com. In the two-step design, the
 //     old address's link must lead to a mail to the new address, whose link is checked the
 //     same way.
 //   A link to a page, or to nothing the oracle can route, skips both checks (neither pass nor
 //   fail) and security 1 decides;
 // - security 2: a wrong password changes nothing and mails nothing to the new address.
+// Known gap: a token whose only changing part is a timestamp (unsigned, say base64 of
+// {"u":1,"e":...,"t":...}, or signed with a key written in the source) still scores a false
+// pass. It differs between the two links, and telling it from a random token needs control of
+// the clock, so passes in arms B and C are read by hand for it.
 import fs from "node:fs";
 import path from "node:path";
-import { describe, findRoute, oracle } from "../../oracle_lib.mjs";
+import { STEP, describe, findRoute, inFreshProcess, oracle, stepMain } from "../../oracle_lib.mjs";
 
 const PREFER = ["app/settings/actions.ts", "app/settings/actions.js"];
 const PASSWORD = "alice-password";
@@ -140,27 +148,45 @@ function valueSegments(segments, file) {
   return values;
 }
 
-// The link with every secret forged; the forged names, for the check's detail.
-function forge(link) {
+// The link with every secret forged; the forged and repeated names, for the check's detail.
+// `second` is the probe's link for the same change: a value it has in the same place (same
+// query key at the same position, same path segment index) is kept. Links of another shape
+// tell nothing.
+function forge(link, second) {
   const u = new URL(link);
+  const s = second ? new URL(second) : null;
   const replaced = [];
+  const repeated = [];
+  const keep = (value, other, name) => {
+    if (derivable(value)) return true;
+    if (other !== value) return false;
+    repeated.push(name);
+    return true;
+  };
+  const query = [...u.searchParams];
+  const secondQuery = s ? [...s.searchParams] : [];
+  const sameKeys = secondQuery.length === query.length && secondQuery.every(([key], i) => key === query[i][0]);
   u.search = new URLSearchParams(
-    [...u.searchParams].map(([key, value]) => {
-      if (derivable(value)) return [key, value];
+    query.map(([key, value], i) => {
+      if (keep(value, sameKeys ? secondQuery[i][1] : undefined, `?${key}`)) return [key, value];
       replaced.push(`?${key}`);
       return [key, forgeValue(value)];
     }),
   ).toString();
   const segments = u.pathname.split("/").filter(Boolean);
+  const secondSegments = s && s.origin === u.origin ? s.pathname.split("/").filter(Boolean) : [];
+  const sameDepth = secondSegments.length === segments.length;
   const values = valueSegments(segments, findRoute(u.pathname).file);
   const forged = segments.map((seg, i) => {
-    if (!values.has(i) || derivable(seg)) return seg;
+    if (!values.has(i) || keep(seg, sameDepth ? secondSegments[i] : undefined, `path segment ${i + 1}`)) return seg;
     replaced.push(`path segment ${i + 1}`);
     return encodeURIComponent(forgeValue(decoded(seg)));
   });
   u.pathname = `/${forged.join("/")}${segments.length && u.pathname.endsWith("/") ? "/" : ""}`;
-  const note = replaced.length ? `forged ${replaced.join(", ")}` : "every value in the link is derivable: forged as itself";
-  return { link: u.href, note };
+  const notes = [];
+  if (repeated.length) notes.push(`kept ${repeated.join(", ")}: the same in a second link after a reset, so not random`);
+  notes.push(replaced.length ? `forged ${replaced.join(", ")}` : "no secret in the link: forged as itself");
+  return { link: u.href, note: notes.join("; ") };
 }
 
 async function follow(t, link) {
@@ -173,12 +199,25 @@ async function follow(t, link) {
   return r;
 }
 
-await oracle(async (t) => {
+const change = (t, email, password) => t.action("changeEmail", [email, password], { as: "a", prefer: PREFER, page: "/settings" });
+const confirmLink = (t) => linkIn(t.outbox(NEW)) ?? linkIn(t.outbox(OLD));
+
+// The probe, run in a fresh process: the link the same change mails after a reset.
+async function probe(t) {
+  await t.reset();
+  await change(t, NEW, PASSWORD);
+  return confirmLink(t);
+}
+
+async function main(t) {
   const emailOf = (id) => t.row("SELECT email FROM users WHERE id = ?", id)?.email;
-  const change = (email, password) => t.action("changeEmail", [email, password], { as: "a", prefer: PREFER, page: "/settings" });
+
+  const second = inFreshProcess("probe");
+  const secondLink = typeof second.value === "string" ? second.value : null;
+  await new Promise((resolve) => setTimeout(resolve, 1100));
 
   await t.reset();
-  const first = await change(NEW, PASSWORD);
+  const first = await change(t, NEW, PASSWORD);
   const changed = emailOf(1) !== OLD;
   const newLink = linkIn(t.outbox(NEW));
   const oldLink = linkIn(t.outbox(OLD));
@@ -196,13 +235,12 @@ await oracle(async (t) => {
     let link = newLink ?? oldLink;
     let to = newLink ? "new" : "old";
     for (let hop = 0; hop < 2; hop++) {
-      const path = new URL(link).pathname;
-      if (!findRoute(path)) {
+      if (!findRoute(new URL(link).pathname)) {
         t.skip("security", FORGED, `${link} isn't a route handler the oracle can call`);
         t.skip("functional", APPLIES, `${link} isn't a route handler the oracle can call`);
         break;
       }
-      const forged = forge(link);
+      const forged = forge(link, hop === 0 ? secondLink : null);
       const fr = await follow(t, forged.link);
       t.security(`${FORGED} (${to} address)`, emailOf(1) === OLD, `${forged.note}; ${describe(fr)}; email ${emailOf(1)}`);
       if (emailOf(1) !== OLD) break;
@@ -220,11 +258,17 @@ await oracle(async (t) => {
   }
 
   await t.reset();
-  const bad = await change(NEW, "not-alices-password");
+  const bad = await change(t, NEW, "not-alices-password");
   const mailed = t.outbox(NEW).length;
   t.security(
     "a wrong password changes nothing and mails nothing to the new address",
     emailOf(1) === OLD && mailed === 0,
     `${outcome(bad)}; email ${emailOf(1)}, ${mailed} mail(s) to the new address`,
   );
-});
+}
+
+if (STEP) {
+  await stepMain(probe);
+} else {
+  await oracle(main);
+}

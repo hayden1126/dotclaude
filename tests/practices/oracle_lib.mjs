@@ -29,7 +29,7 @@
 // - Server actions: the named export in a "use server" file under app/, called inside
 //   runWithRequest with a same-origin POST carrying the caller's session cookie.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -41,7 +41,11 @@ export const USERS = {
 };
 
 const FIXTURE = process.env.FIXTURE ? path.resolve(process.env.FIXTURE) : null;
-process.env.DB_PATH ??= path.join(mkdtempSync(path.join(os.tmpdir(), "practices-oracle-")), "app.db");
+if (process.env.DB_PATH === undefined) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "practices-oracle-"));
+  process.env.DB_PATH = path.join(dir, "app.db");
+  process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
+}
 process.on("unhandledRejection", () => {});
 
 // The model provider lib/llm.ts calls. fetch is replaced: the provider's host gets a canned
