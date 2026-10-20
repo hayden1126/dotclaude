@@ -246,6 +246,18 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     checkout passes, so a trial failure confined to those cases is this artifact. Fix: the test
     refuses a `.tmp/` under a temp root, as it already does for `.claude/worktrees/`, or `trial`
     builds its tree outside the temp root. Lane-able; no live lane owns it.
+  - **A compact pass puts live background writers into plan mode** (a session in another repo
+    reported it, 2026-10-20; the lead checked the code and the writer's transcript). Compact
+    mode is the pass picked when background tasks run (`skills/pass/SKILL.md:23,80,103`), yet
+    its resume prompt adds "Call EnterPlanMode first" to every unapproved pass
+    (`resume_prompt`, `skills/pass/scripts/pass-respawn:1218-1222`). Subagents follow the
+    parent's permission mode, so a running writer got the plan-mode notice mid-run
+    (21:10:37Z, in a 21:02-21:11Z run), was refused its write, and handed back partial with 4
+    of 6 parts unstarted. Fix: when `--tasks` shows a live agent, the compact resume prompt
+    says to plan in chat and enter plan mode only after it hands back. Also test whether a
+    `permissionMode` in `agents/writer.md` holds against a parent's mid-run plan mode; if it
+    does, it also covers plan mode entered by hand. Lane-able (`skills/pass/`, `tests/`); no
+    live lane owns it.
   - **excluded-guard refuses an over-matched command in an agent worktree** (lane mute's report,
     2026-10-20; checked in code, not reproduced). Candidacy splits on `|`, `;` and `&&` without
     quotes, so a plain `grep` whose quoted pattern holds an excluded head becomes a candidate
