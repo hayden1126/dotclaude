@@ -16,6 +16,22 @@ HOOKS = os.path.join(REPO, "hooks")
 BIG = "x" * 200_000  # over MAX_ARG_STRLEN (128 KiB), which a payload passed as argv can't pass
 
 
+def human(text):
+    return {"type": "user", "origin": {"kind": "human"},
+            "message": {"role": "user", "content": text}}
+
+
+def assistant(text):
+    return {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}
+
+
+def bulk(size):
+    """Claude Code's own transcript entries, at least size bytes: request snapshots and the
+    skill listing, which carry no dialogue."""
+    return [{"type": "api-request-blob", "message": {"role": "user", "content": "x" * 50_000}}
+            for _ in range(size // 50_000 + 1)]
+
+
 def hook(name, payload, env=None):
     p = subprocess.run(["bash", os.path.join(HOOKS, name)], input=json.dumps(payload),
                        capture_output=True, text=True, timeout=20, env=env)
@@ -119,15 +135,18 @@ class SessionTitle(Workspace):
 class SessionSummary(Workspace):
     """Runs the hook's own script up to the dialogue it would send to Haiku, never the call."""
 
-    MARK = "dialogue = recent_dialogue(transcript)"
-
-    def dialogue(self, entries, **payload):
-        with open(self.transcript, "w") as f:
-            f.writelines(json.dumps(e) + "\n" for e in entries)
+    def dialogue(self, entries, tail_max=None, **payload):
+        # Non-ASCII stays raw, as Claude Code's JSON.stringify leaves it.
+        with open(self.transcript, "w", encoding="utf-8") as f:
+            f.writelines(json.dumps(e, ensure_ascii=False) + "\n" for e in entries)
         src = open(os.path.join(HOOKS, "session-summary.sh")).read()
         src = src.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
-        self.assertIn(self.MARK, src)
-        src = src.split(self.MARK, 1)[0] + "print(recent_dialogue(transcript))\n"
+        if tail_max is not None:
+            src, n = re.subn(r"^TAIL_MAX\s*=.*$", f"TAIL_MAX = {tail_max}", src, flags=re.M)
+            self.assertEqual(n, 1, "no TAIL_MAX line to retune")
+        mark = re.search(r"^dialogue = (recent_dialogue\(.*\))$", src, re.M)
+        self.assertIsNotNone(mark, "the hook no longer builds its dialogue in one line")
+        src = src[:mark.start()] + f"print({mark.group(1)})\n"
         # The hook passes its own directory, where it imports haiku.py from.
         p = subprocess.run(["python3", "-c", src, HOOKS], capture_output=True, text=True,
                            timeout=20,
@@ -162,10 +181,62 @@ class SessionSummary(Workspace):
                           "User: these args are not user input"])
 
     def test_a_huge_event_is_still_read(self):
-        entries = [{"type": "user", "origin": {"kind": "human"},
-                    "message": {"role": "user", "content": "fix the parser"}}]
-        self.assertEqual(self.dialogue(entries, last_assistant_message=BIG),
+        self.assertEqual(self.dialogue([human("fix the parser")], last_assistant_message=BIG),
+                         "User: fix the parser\nAssistant: " + "x" * 400)
+
+    def test_a_prompt_behind_claude_codes_own_entries_is_found(self):
+        # At a session's first Stop the prompt sits behind the skill listing and the request
+        # snapshots, past the first read: 239 KB back in a live claude -p run (2026-10-20).
+        self.assertEqual(self.dialogue([human("fix the parser")] + bulk(300_000)),
                          "User: fix the parser")
+
+    def test_the_read_back_stops_at_its_cap(self):
+        self.assertEqual(self.dialogue([human("fix the parser")] + bulk(3_000_000)), "")
+
+    def test_the_cap_holds_off_a_power_of_two(self):
+        # Retuned to 3 MB, the read grows to 2 MB and then 3 MB, never 4.
+        for size, want in ((2_500_000, "User: fix the parser"), (3_400_000, "")):
+            with self.subTest(size=size):
+                self.assertEqual(self.dialogue([human("fix the parser")] + bulk(size),
+                                               tail_max=3 << 20), want)
+
+    def test_a_cap_under_the_first_read_holds(self):
+        for size, want in ((10_000, "User: fix the parser"), (70_000, "")):
+            with self.subTest(size=size):
+                self.assertEqual(self.dialogue([human("fix the parser")] + bulk(size),
+                                               tail_max=64 << 10), want)
+
+    def test_a_line_separator_inside_a_message_keeps_it_whole(self):
+        # Claude Code leaves U+2028 raw, and str.splitlines() splits there: the pieces lost the
+        # message, and a piece that parsed as a bare number crashed the script.
+        sep = chr(0x2028)
+        for prompt, want in ((f"fix{sep}the parser", "User: fix the parser"),
+                             (f"fix{sep}1{sep}the parser", "User: fix 1 the parser")):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(self.dialogue([human(prompt)]), want)
+
+    def test_the_stop_events_reply_ends_the_dialogue(self):
+        # At Stop the transcript may not hold the turn's reply yet; the event carries it.
+        self.assertEqual(self.dialogue([human("fix the parser")],
+                                       last_assistant_message="Fixed the\nparser."),
+                         "User: fix the parser\nAssistant: Fixed the parser.")
+
+    def test_a_reply_the_transcript_already_holds_is_not_doubled(self):
+        entries = [human("fix the parser"), assistant("Fixed the parser.")]
+        self.assertEqual(self.dialogue(entries, last_assistant_message="Fixed the\nparser."),
+                         "User: fix the parser\nAssistant: Fixed the parser.")
+
+    def test_the_reply_counts_toward_the_recent_messages(self):
+        entries = [human(f"step {i}") for i in range(12)]
+        self.assertEqual(self.dialogue(entries, last_assistant_message="Done.").splitlines(),
+                         [f"User: step {i}" for i in range(3, 12)] + ["Assistant: Done."])
+
+    def test_a_reply_that_isnt_text_is_left_out(self):
+        for reply in (None, 42, ["Fixed."], {"text": "Fixed."}, "  "):
+            with self.subTest(reply=reply):
+                self.assertEqual(self.dialogue([human("fix the parser")],
+                                               last_assistant_message=reply),
+                                 "User: fix the parser")
 
     def test_the_detached_job_gets_the_whole_event_on_stdin(self):
         # A python3 shim records its first argument and how many bytes reached its stdin, so
@@ -281,6 +352,12 @@ def ask(system, user, **kw):
         os.remove(self.log)
         self.run_hook("LABEL: Something else")
         self.assertFalse(os.path.exists(self.log))
+        self.assertEqual(self.cached("sid.title.txt"), "Parser fix\n")
+
+    def test_a_first_stop_with_the_prompt_far_back_still_labels(self):
+        with open(self.transcript, "a") as f:
+            f.writelines(json.dumps(e) + "\n" for e in bulk(300_000))
+        self.run_hook("LABEL: Parser fix")
         self.assertEqual(self.cached("sid.title.txt"), "Parser fix\n")
 
     def test_a_long_label_is_clipped(self):

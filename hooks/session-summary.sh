@@ -34,6 +34,7 @@ MODEL        = "claude-haiku-4-5-20251001"
 MIN_GROWTH   = 2048     # bytes; skip regen if the transcript grew less than this
 RECENT_MSGS  = 10       # trailing user/assistant messages fed to the model
 MSG_CLIP     = 400      # chars kept per message
+TAIL_MAX     = 2 << 20  # bytes; how far back the transcript read may grow
 CALL_TIMEOUT = 30       # seconds for the API call
 MAX_TOKENS   = 64       # one short LABEL line, with room for a stray preamble before it
 LABEL_MAX    = 32       # hard clip on the tab label
@@ -53,6 +54,9 @@ session_id = (data.get("session_id") or "").strip()
 transcript = (data.get("transcript_path") or "").strip()
 if not session_id or not transcript:
     die()
+# The turn's last reply: at Stop the transcript may not hold it yet (claude -p, 2026-10-20).
+reply = data.get("last_assistant_message")
+reply = " ".join(reply.split())[:MSG_CLIP] if isinstance(reply, str) else ""
 
 cfg = haiku.config_dir(transcript)
 out_dir = os.path.join(cfg, "session-summaries")
@@ -102,23 +106,17 @@ def injected(o, text):
         return kind != "human"
     return any(m in text.lower() for m in INJECTED)
 
-def recent_dialogue(path, chunk=131072):
-    """Last RECENT_MSGS user/assistant text messages from the transcript tail."""
-    try:
-        sz = os.path.getsize(path)
-        with open(path, "rb") as f:
-            if sz > chunk:
-                f.seek(sz - chunk)
-            blob = f.read()
-    except OSError:
-        return ""
+def messages(blob):
+    """The user/assistant text messages in blob, a slice of the transcript, oldest first. Lines
+    split on newlines alone: str.splitlines() also splits at U+2028, which Claude Code leaves
+    raw inside a message."""
     msgs = []
-    for line in blob.decode("utf-8", "ignore").splitlines():
+    for line in blob.split(b"\n"):
         try:
-            o = json.loads(line)
+            o = json.loads(line.decode("utf-8", "ignore"))
         except Exception:
             continue
-        if o.get("type") not in ("user", "assistant"):
+        if not isinstance(o, dict) or o.get("type") not in ("user", "assistant"):
             continue
         content = (o.get("message") or {}).get("content")
         text = ""
@@ -132,10 +130,32 @@ def recent_dialogue(path, chunk=131072):
             continue
         if text:
             msgs.append((o["type"], text[:MSG_CLIP]))
+    return msgs
+
+def recent_dialogue(path, reply, chunk=131072):
+    """Last RECENT_MSGS user/assistant text messages from the transcript tail, ending with the
+    turn's reply from the Stop event unless the tail already does. The tail doubles from chunk
+    up to TAIL_MAX bytes until it holds RECENT_MSGS: Claude Code's own entries (the skill
+    listing, request snapshots) can fill a fixed one with no dialogue at all."""
+    chunk = min(chunk, TAIL_MAX)
+    try:
+        sz = os.path.getsize(path)
+        while True:
+            with open(path, "rb") as f:
+                if sz > chunk:
+                    f.seek(sz - chunk)
+                msgs = messages(f.read())
+            if len(msgs) >= RECENT_MSGS or chunk >= min(sz, TAIL_MAX):
+                break
+            chunk = min(chunk * 2, TAIL_MAX)
+    except OSError:
+        return ""
+    if reply and msgs[-1:] != [("assistant", reply)]:
+        msgs.append(("assistant", reply))
     msgs = msgs[-RECENT_MSGS:]
     return "\n".join(("User: " if t == "user" else "Assistant: ") + x for t, x in msgs)
 
-dialogue = recent_dialogue(transcript)
+dialogue = recent_dialogue(transcript, reply)
 if not dialogue:
     die()
 
