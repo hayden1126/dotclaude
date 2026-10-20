@@ -88,15 +88,15 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
   - **Live lanes** (briefs in each record). Merge order (Hayden's reorder, 2026-10-20: the
-    atomic link first, so no later install runs the old `link()`): 1 link-atomic
-    (`fix/setup-atomic-link`, carries the lead's notes), 2 summary-retire
-    (`chore/retire-summary-rows`, which also takes the ccstatusline crash fix, Hayden's pick the
-    same day), 3 practices (`feat/practices-suite`, opened 2026-10-19 at Hayden's ask: the skill
+    atomic link first, so no later install runs the old `link()`; link-atomic merged as #140
+    the same day): 1 summary-retire
+    (`chore/retire-summary-rows`, carries the lead's notes, and also takes the ccstatusline
+    crash fix, Hayden's pick the same day), 2 practices (`feat/practices-suite`, opened 2026-10-19 at Hayden's ask: the skill
     suite below, researched from his project memories and online sources, then the security
     skill only; Hayden picked "security first"; its spec waits on his review). link-atomic and
-    summary-retire opened 2026-10-20 on Hayden's ok (Backlog items below). pr-horizon merged as
-    #135 and config-dir as #133 (2026-10-20): installed from main, both lanes closed. The lanes
-    cap (3) is full.
+    summary-retire opened 2026-10-20 on Hayden's ok (Backlog items below). link-atomic merged as
+    #140, pr-horizon as #135 and config-dir as #133 (2026-10-20): installed from main, the lanes
+    closed. Two of the cap's 3 slots are taken.
   - **Lane ask quality: done** (2026-10-19 to 2026-10-20). ask-check merged as #131 and was
     installed from main 2026-10-20: a PreToolUse hook on AskUserQuestion (`hooks/ask_check.py`)
     denies risky asks with a checklist in the reason. branch-reuse merged as #130: `lane new`
@@ -176,12 +176,17 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     9.4 replaces a link with no missing window (the lead's race test: 0 misses in about 600k
     checks over 6000 swaps), but BSD/macOS `ln -sf` unlinks first, and the move-aside leaves a
     window on every platform on a first install. Fix: reuse #140's temp-name and `os.replace`
-    swap once it merges. The mute lane edits `setup-tmux.sh:73-78`, so it can take this.
+    swap (merged). The mute lane edits `setup-tmux.sh:73-78`, so it can take this.
   - **paste-inbox's sandbox skip: merged as #138** (lead PR, 2026-10-20, from lane
     summary-retire's report): sandboxed WSL interop now fails with `UtilBindVsockAnyPort`, not
     `UtilConnectUnix`, so 9 Laptop and LaptopPowerShell cases failed instead of skipping; one
     helper matches both. Tests only, so no reinstall (none held, and it skipped running the old
     `link()` again).
+  - **Atomic install links: merged as #140** (lane link-atomic, 2026-10-20, installed from main
+    and the lane closed). `setup.sh` builds each link under a per-pid temp name beside the target
+    and swaps it in with one `os.replace`, so an installed path never goes missing.
+    `~/.claude/CLAUDE.md` survived the lane's install (checked 77 s after) and the lead's
+    reinstall from main. Keep the after-reinstall check below until a few clean installs pass.
   - **Watch: `~/.claude/CLAUDE.md` vanished after a lane install** (2026-10-20 00:53Z). Lane
     config-dir's `setup.sh` (00:52:28 to 00:52:38, sandbox off) linked it, then it was gone by
     00:53:02, with no backup (a symlink is removed, not backed up). Hayden relinked it by hand
@@ -190,8 +195,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     sandboxed commands right after. config-dir's reinstall at 21:02 kept it too, across the same
     sandboxed `sandbox-denials` run; that session's sandbox config listed the resolved target,
     where after the loss it listed the literal path. So the loss points at `setup.sh`'s
-    `link()` gap (`rm`, then `ln -s`) meeting some session's sandboxed command. Fix (cheap, not
-    built, now lane link-atomic): make `link()` atomic, `ln -s` to a temp name beside the target, then `mv -T` over
+    `link()` gap (`rm`, then `ln -s`) meeting some session's sandboxed command. Fix (merged as
+    #140, above): make `link()` atomic, `ln -s` to a temp name beside the target, then `mv -T` over
     it, so the path never goes missing; lane-able (`setup.sh`, `tests/setup`). config-dir's timeline (its session 1f1393e7) rules out its code, its
     tests and install-state's prune; `~/.claude`'s mtime moved 190 ms after a sandboxed
     `delegation-ledger sandbox-denials` started. Its guess, unproven: the Bash sandbox. A
@@ -297,8 +302,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lanes link-atomic (merge order 1, carries the lead branch), summary-retire (2) and
-     practices (3) run; their state is in their records (`lane ls`). After each reinstall,
+  0. Lanes summary-retire (merge order 1, carries the lead branch) and practices (2) run; their state is in their records (`lane ls`). After each reinstall,
      check `ls -la ~/.claude/CLAUDE.md` (the Watch item). Watch that push asks open with the
      briefing (#137); if they skip it, the Stop-hook check is the follow-up (Hayden's pick).
   1. Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
