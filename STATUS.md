@@ -132,9 +132,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     injection and the rest; Hayden sends the list), not only agents; ux is the whole user
     experience (lag and loading, which features serve users most, convenience), with UI a small
     part, so it links `frontend-ui-discipline` for that part. Open for Hayden: the list and
-    names. Lead's flags: the name
-    `security-review` collides with a built-in skill; dotclaude is public, so no capella code or unfixed gaps go in
-    ([[dotclaude-public-repo]]); checklists in context get skipped, so a pilot should say what
+    names. Lead's flags: the name `security-review` collides with a built-in skill; dotclaude is
+    public, so no capella code or unfixed gaps go in ([[dotclaude-public-repo]]); checklists in context get skipped, so a pilot should say what
     enforces it (a hook at the event, as ask-check does). Pairs with the AWS gap check below.
   - **Gap check against AWS's agentic AI security principles** (Hayden, 2026-10-19): read
     https://aws.amazon.com/blogs/security/four-security-principles-for-agentic-ai-systems/ and
