@@ -257,6 +257,15 @@ class Baseline(unittest.TestCase):
         self.assertLessEqual(entry["hooks"][0]["timeout"], 5)
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "overwrite-guard.sh"), os.X_OK))
 
+    def test_the_ask_check_is_wired_on_askuserquestion_and_fails_open(self):
+        # A deny is the only hook output that reaches the model before the dialog; it denies by
+        # JSON, and the shim exits 0 on any failure.
+        (cmd,) = commands("PreToolUse", "AskUserQuestion")
+        self.assertEqual(cmd, 'bash "$HOME/.claude/hooks/ask-check.sh"')
+        (entry,) = [e for e in S["hooks"]["PreToolUse"] if e.get("matcher") == "AskUserQuestion"]
+        self.assertLessEqual(entry["hooks"][0]["timeout"], 5)
+        self.assertTrue(os.access(os.path.join(REPO, "hooks", "ask-check.sh"), os.X_OK))
+
     def test_the_pass_banner_is_wired_on_startup_only(self):
         # A /pass respawn starts as `startup`; the banner shows what the old session said in its
         # last turn, once. The first reply waits for SessionStart hooks, so the timeout stays
