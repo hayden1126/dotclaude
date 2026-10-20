@@ -128,11 +128,20 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     The capella lead suggests: triggers on concrete events (a migration, an `/api` route, an
     iframe, a loading state), checklist lines that name their proof, release skills call the
     checklists rather than copying them, a planted-bug eval per skill, and a security pilot first
-    (mined read-only from capella). Open for Hayden: the list and names. Lead's flags: the name
-    `security-review` collides with a built-in skill; much of the ux list already lives in
-    `frontend-ui-discipline`; dotclaude is public, so no capella code or unfixed gaps go in
-    ([[dotclaude-public-repo]]); checklists in context get skipped, so a pilot should say what
+    (mined read-only from capella). Hayden's scope (2026-10-19): security covers everything (SQL
+    injection and the rest; Hayden sends the list), not only agents; ux is the whole user
+    experience (lag and loading, which features serve users most, convenience), with UI a small
+    part, so it links `frontend-ui-discipline` for that part. Open for Hayden: the list and
+    names. Lead's flags: the name `security-review` collides with a built-in skill; dotclaude is
+    public, so no capella code or unfixed gaps go in ([[dotclaude-public-repo]]); checklists in context get skipped, so a pilot should say what
     enforces it (a hook at the event, as ask-check does). Pairs with the AWS gap check below.
+    Sources so far: six Instagram reels Hayden sent (2026-10-19; transcripts via getthescript.app),
+    vibe-coding listicles. They fall into security (keys in the bundle, ids from the request, RLS,
+    server-side sign-out, user enumeration, hashing, injection, rate limits), reliability (tests,
+    retries with idempotency, circuit breakers, races, DR), legal (age checks, Google Fonts and
+    GDPR, session replay, CAN-SPAM, renewal terms, DMCA agent, privacy policy) and launch (store
+    metadata, Open Graph, Search Console, IndexNow). Lead's pick: OWASP ASVS as the security
+    backbone, the reels' concrete failures as planted-bug evals.
   - **Gap check against AWS's agentic AI security principles** (Hayden, 2026-10-19): read
     https://aws.amazon.com/blogs/security/four-security-principles-for-agentic-ai-systems/ and
     list what dotclaude's guards (sandbox, permission rules, delete, overwrite and excluded-command
