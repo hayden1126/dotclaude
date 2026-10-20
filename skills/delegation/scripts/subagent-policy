@@ -208,6 +208,541 @@ def scan_word(value, home):
     return Lit("".join(out), dyn, glob)
 
 
+# ---------------------------------------------------------------- zsh expansions
+
+# What zsh runs and Parable, a bash parser, can't see: parameter flags such as ${(e)x}, $~
+# (GLOB_SUBST, which lets a value's glob qualifiers run code), and =(...) process substitution.
+ZSH_FLAGS = re.compile(r"\$\{\(|\$~")
+ZSH_PROCSUB = re.compile(r"=\(")
+
+
+def unexpanded_spans(cmd):
+    """The text of cmd that zsh (and bash) take literally, and the heredocs read on the way.
+
+    Spans are (start, end, kind): "single" for a single-quoted string, "double" for a
+    double-quoted one (where ${(..)} and $~ still expand but =(...) doesn't), "heredoc" for a
+    quoted heredoc's body, "midword" for an = inside a word (zsh reads =(...) as process
+    substitution only where the = opens a word, so an array assignment's x=( is literal). Heredocs are (delimiter, quoted, strip_tabs, content) as Parable
+    reads them, so the caller can check that both parsers agree.
+
+    The scan reads left to right and stops at anything it doesn't model: $'..', $"..", $(, ${,
+    $[, a backtick, <(, >(, ((, an unclosed quote or heredoc, a continued line in an unquoted
+    heredoc body, a delimiter that isn't plain text, a # right after an operator. Nothing after
+    a stop counts as literal, and that is what makes the scan safe. Each quote character
+    permutes the three quote states, so the scan can drift from zsh only through a construct it
+    reads differently; an escaped quote (\\') can then bring the two back in step with a live
+    stretch marked literal in between. So every construct is read exactly or stops the scan,
+    and a # opens a comment only at a word start, as in both shells."""
+    spans, heredocs, pending = [], [], []
+    n, i = len(cmd), 0
+    word_start = True  # False mid-word; None after an operator, where a # can't be placed
+    while i < n:
+        c, nxt = cmd[i], cmd[i + 1:i + 2]
+        if c == "\\":
+            if not nxt:
+                break
+            if nxt != "\n":  # a backslash-newline joins two lines and leaves word_start be
+                word_start = False
+            i += 2
+        elif c == "'":
+            j = cmd.find("'", i + 1)
+            if j < 0:
+                break
+            spans.append((i + 1, j, "single"))
+            i, word_start = j + 1, False
+        elif c == '"':
+            j = i + 1
+            while j < n and cmd[j] != '"':
+                if cmd[j] == "`" or (cmd[j] == "$" and cmd[j + 1:j + 2] in ("(", "{", "[")):
+                    return spans, heredocs
+                j += 2 if cmd[j] == "\\" else 1
+            if j >= n:
+                break
+            spans.append((i + 1, j, "double"))
+            i, word_start = j + 1, False
+        elif (c == "`" or (c == "$" and nxt in ("'", '"', "(", "{", "["))
+              or (c in "<>(" and nxt == "(")):
+            break
+        elif c == "#" and word_start is not False:
+            if word_start is None:
+                break
+            j = cmd.find("\n", i)
+            i = n if j < 0 else j  # the newline ends the comment and is read as one
+        elif cmd.startswith("<<<", i):
+            i, word_start = i + 3, None
+        elif cmd.startswith("<<", i):
+            op = _heredoc_operator(cmd, i)
+            if op is None:
+                break
+            i, delim, quoted, strip = op
+            pending.append((delim, quoted, strip))
+            word_start = False
+        elif c == "\n" and pending:
+            i, word_start = i + 1, True
+            for delim, quoted, strip in pending:
+                body = _heredoc_body(cmd, i, delim, quoted, strip)
+                if body is None:
+                    return spans, heredocs
+                end, content, after = body
+                if quoted:
+                    spans.append((i, end, "heredoc"))
+                heredocs.append((delim, quoted, strip, content))
+                i = after
+            pending = []
+        else:
+            if c == "=" and nxt == "(" and word_start is False:
+                spans.append((i, i + 1, "midword"))
+            if c in " \t\n":
+                word_start = True
+            elif c in ";&|(){}<>":
+                word_start = None
+            else:
+                word_start = False
+            i += 1
+    return spans, heredocs
+
+
+def _heredoc_operator(cmd, i):
+    """The heredoc operator at i (<< or <<-, then its delimiter word): (where the word ends, the
+    delimiter with its quotes removed, whether any of it was quoted, whether tabs are stripped),
+    or None for a delimiter the scan doesn't read: empty, or holding $, a backtick, a backslash
+    or a newline once its quotes are gone."""
+    n, j = len(cmd), i + 2
+    strip = cmd.startswith("-", j)
+    if strip:
+        j += 1
+    while j < n and cmd[j] in " \t":
+        j += 1
+    word, quoted = [], False
+    while j < n and cmd[j] not in " \t\n;&|<>()":
+        c = cmd[j]
+        if c in "'\"":
+            k = cmd.find(c, j + 1)
+            if k < 0:
+                return None
+            word.append(cmd[j + 1:k])
+            quoted, j = True, k + 1
+        elif c == "\\" and j + 1 < n:
+            word.append(cmd[j + 1])
+            quoted, j = True, j + 2
+        else:
+            word.append(c)
+            j += 1
+    delim = "".join(word)
+    if not delim or any(c in delim for c in "$`\\\n"):
+        return None
+    return j, delim, quoted, strip
+
+
+def _heredoc_body(cmd, i, delim, quoted, strip):
+    """The heredoc body starting at i: (where it ends, its content, where the line after its
+    delimiter line starts), or None when no line matches the delimiter or an unquoted body
+    continues a line with a backslash."""
+    lines = []
+    while i < len(cmd):
+        k = cmd.find("\n", i)
+        end = len(cmd) if k < 0 else k
+        line = cmd[i:end]
+        text = line.lstrip("\t") if strip else line
+        if text == delim:
+            return i, "".join(x + "\n" for x in lines), end + 1
+        if not quoted and (len(line) - len(line.rstrip("\\"))) % 2:
+            return None
+        lines.append(text)
+        i = end + 1
+    return None
+
+
+# ---------------------------------------------------------------- sed
+
+class SedError(Exception):
+    """A sed call or script GNU sed would refuse, or one whose script the policy can't see."""
+
+
+# GNU sed 4.9's options (sed/sed.c: SHORTOPTS and longopts). A short option takes no value (0),
+# one (1: the rest of its cluster, else the next word) or an optional one (2: the rest of its
+# cluster). A long option names the short option it stands for ("" for one with neither a short
+# form nor a value), and getopt_long takes any unique prefix of its name.
+SED_SHORT = {**dict.fromkeys("bsnrzuE", 0), **dict.fromkeys("eflV", 1), "i": 2}
+SED_LONG = {"binary": "b", "regexp-extended": "r", "debug": "", "expression": "e", "file": "f",
+            "in-place": "i", "line-length": "l", "null-data": "z", "zero-terminated": "z",
+            "quiet": "n", "posix": "", "silent": "n", "sandbox": "", "separate": "s",
+            "unbuffered": "u", "version": "", "help": "", "follow-symlinks": "F"}
+
+
+class SedCall:
+    """A sed command line read as GNU getopt_long reads it, permuting, so an option may follow
+    an operand. scripts: each -e script, else the first operand (None where it is dynamic).
+    candidates: also the first operand when an -e follows it, since with POSIXLY_CORRECT set
+    getopt stops there and sed takes it as the script. files: the input files. in_place: the -i
+    suffix ("" for none), or None without -i. follow: --follow-symlinks."""
+
+    def __init__(self, args):
+        self.scripts, self.candidates, self.in_place, self.follow = [], [], None, False
+        operands, e_after_operand = [], False
+        words = list(args[1:])
+        while words:
+            a = words.pop(0)
+            if a is None or a == "-" or not a.startswith("-"):
+                operands.append(a)
+                continue
+            if a == "--":
+                operands += words
+                break
+            for opt, value in self._options(a, words):
+                if opt == "f":
+                    raise SedError("sed -f runs a script file the policy can't read; pass the "
+                                   "script with -e")
+                if opt == "e":
+                    self.scripts.append(value)
+                    e_after_operand = e_after_operand or bool(operands)
+                elif opt == "i":
+                    self.in_place = value or ""
+                elif opt == "F":
+                    self.follow = True
+        if self.scripts:
+            if e_after_operand and operands[0] is not None:
+                self.candidates.append(operands[0])
+            self.files = operands
+        else:
+            self.scripts, self.files = operands[:1], operands[1:]
+
+    @staticmethod
+    def _options(a, words):
+        """The (option, value) pairs in the option word a, taking a value from words if one is
+        due."""
+        if a.startswith("--"):
+            name, eq, value = a[2:].partition("=")
+            hits = [name] if name in SED_LONG else [k for k in SED_LONG if k.startswith(name)]
+            if len(hits) != 1:
+                raise SedError(f"sed would refuse {a} (an unknown or ambiguous option)")
+            opt = SED_LONG[hits[0]]
+            takes = SED_SHORT.get(opt, 0)
+            if eq and not takes:
+                raise SedError(f"sed would refuse {a} (the option takes no value)")
+            if takes == 1 and not eq:
+                if not words:
+                    raise SedError(f"sed would refuse {a} (it needs a value)")
+                value = words.pop(0)
+            return [(opt, value)]
+        out = []
+        for k, c in enumerate(a[1:], 2):
+            takes = SED_SHORT.get(c)
+            if takes is None:
+                raise SedError(f"sed would refuse -{c} (an unknown option)")
+            if not takes:
+                out.append((c, None))
+                continue
+            value = a[k:]
+            if takes == 1 and not value:
+                if not words:
+                    raise SedError(f"sed would refuse -{c} (it needs a value)")
+                value = words.pop(0)
+            out.append((c, value))
+            break
+        return out
+
+
+def sed_backups(files, suffix, cwd, follow):
+    """Where sed -i<suffix> moves each file (execute.c, get_backup_file_name): the suffix with
+    every * replaced by the file's name as given, or the name plus the suffix when it has no *.
+    With --follow-symlinks sed backs up the link's target."""
+    if suffix in ("", "*"):
+        return []
+    ext = suffix if "*" in suffix else "*" + suffix
+    out = []
+    for f in files:
+        if f is not None:
+            names = [f, os.path.realpath(os.path.join(cwd, f))] if follow else [f]
+            out += [ext.replace("*", name) for name in names]
+    return out
+
+
+def sed_ops(*scripts):
+    """The e, r and w uses in a sed script given as its -e parts in order, read the way GNU sed
+    4.9 compiles them: a list of (op, arg). op is "e" for the e command or the s///e flag, "r"
+    for r and R, "w" for w, W and the s///w flag, whose arg is the file name (the rest of the
+    line, as sed reads it). sed compiles each part on its own, except that an a, i or c text
+    ending in a backslash runs on into the next part. A None part (dynamic) is skipped, and the
+    part after it read from a command start, where the most is a command. Raises SedError where
+    sed refuses the script's shape."""
+    ops, pending = [], False
+    for script in scripts:
+        if script is None:
+            pending = False
+            continue
+        part = _SedScript(script)
+        ops += part.compile(pending)
+        pending = part.pending
+    return ops
+
+
+class _SedScript:
+    """GNU sed 4.9's sed/compile.c over one script, function by function under the same names:
+    where it reads a pattern, a replacement, a text, a label or a file name, and where the next
+    command starts. Its error checks that don't move those boundaries are left out: a script
+    sed refuses runs none of its commands."""
+
+    def __init__(self, text):
+        self.s, self.i, self.ops, self.pending = text, 0, [], False
+
+    def inchar(self):
+        if self.i >= len(self.s):
+            return None  # EOF
+        self.i += 1
+        return self.s[self.i - 1]
+
+    def savchar(self, ch):
+        if ch is not None:
+            self.i -= 1
+
+    def in_nonblank(self):
+        ch = self.inchar()
+        while ch in (" ", "\t"):
+            ch = self.inchar()
+        return ch
+
+    @staticmethod
+    def is_digit(ch):
+        return ch is not None and ch in "0123456789"
+
+    def in_integer(self, ch):
+        num = 0
+        while self.is_digit(ch):
+            num = num * 10 + int(ch)
+            ch = self.inchar()
+        self.savchar(ch)
+        return num
+
+    def read_end_of_cmd(self):
+        ch = self.in_nonblank()
+        if ch in ("}", "#"):
+            self.savchar(ch)
+        elif ch not in (None, "\n", ";"):
+            raise SedError("extra characters after command")
+
+    def read_filename(self):
+        ch, name = self.in_nonblank(), []
+        while ch not in (None, "\n"):
+            name.append(ch)
+            ch = self.inchar()
+        if not name:
+            raise SedError("missing filename for r/R/w/W commands")
+        return "".join(name)
+
+    def read_label(self):
+        ch, label = self.in_nonblank(), []
+        while ch not in (None, "\n", " ", "\t", ";", "}", "#"):
+            label.append(ch)
+            ch = self.inchar()
+        self.savchar(ch)
+        return "".join(label)
+
+    def read_text(self, ch):
+        """read_text_to_slash and read_text: past the text of a, i, c or e, whose first
+        non-blank character is ch, to the first newline no backslash escapes."""
+        if ch is None:
+            raise SedError("expected \\ after a, c or i")
+        if ch == "\\":
+            if self.inchar() is None:
+                self.pending = True
+                return
+        else:
+            self.savchar(ch)
+        self.read_text_rest()
+
+    def read_text_rest(self):
+        """The rest of a text, to the first newline no backslash escapes. A backslash at the
+        end leaves it pending: the next -e part goes on with it."""
+        while True:
+            ch = self.inchar()
+            if ch in (None, "\n"):
+                return
+            if ch == "\\" and self.inchar() is None:
+                self.pending = True
+                return
+
+    def snarf_char_class(self):
+        """Past a bracket expression, from just after its [: the ] that closes it, or the
+        newline or EOF that stops it."""
+        ch = self.inchar()
+        if ch == "^":
+            ch = self.inchar()
+        if ch == "]":
+            ch = self.inchar()
+        state, delim = 0, None  # 1 after a [, 2 inside [. [: or [=, 3 after its closing . : =
+        while ch not in (None, "\n"):
+            if ch in ".:=" and (state == 1 or (state == 2 and ch == delim)):
+                if state == 1:
+                    delim = ch
+                state += 1
+            elif ch == "[":
+                state = state or 1
+            elif ch == "]" and state < 2:
+                return ch
+            else:
+                if ch == "]" and state == 3:
+                    state = 0
+                state &= ~1
+            ch = self.inchar()
+        return ch
+
+    def match_slash(self, slash, regex):
+        """Past one part of an s or y command or of an address, up to slash: False when a
+        newline or the end comes first. Only a regex part reads bracket expressions."""
+        while True:
+            ch = self.inchar()
+            if ch in (None, "\n"):
+                return False
+            if ch == slash:
+                return True
+            if ch == "\\":
+                if self.inchar() is None:
+                    return False
+            elif ch == "[" and regex and self.snarf_char_class() != "]":
+                return False
+
+    def delimiter(self):
+        """An s, y or \\c address delimiter. sed reads a multibyte one by locale; refused."""
+        slash = self.inchar()
+        if slash is not None and not slash.isascii():
+            raise SedError("a delimiter outside ASCII")
+        return slash
+
+    def mark_subst_opts(self):
+        seen = set()
+        while True:
+            ch = self.in_nonblank()
+            if ch is not None and ch in "iImMe":
+                if ch == "e":
+                    self.ops.append(("e", None))
+            elif ch in ("p", "g"):
+                if ch in seen:
+                    raise SedError(f"multiple `{ch}' options to `s' command")
+                seen.add(ch)
+            elif ch == "w":
+                self.ops.append(("w", self.read_filename()))
+                return
+            elif self.is_digit(ch):
+                if "n" in seen or not self.in_integer(ch):
+                    raise SedError("a bad number option to `s' command")
+                seen.add("n")
+            elif ch in ("}", "#"):
+                self.savchar(ch)
+                return
+            elif ch in (None, "\n", ";") or (ch == "\r" and self.inchar() == "\n"):
+                return
+            else:
+                raise SedError("unknown option to `s'")
+
+    def compile_address(self, ch):
+        """The address starting at ch, as (kind, line number), or None, having read nothing,
+        when ch starts none."""
+        if ch in ("/", "\\"):
+            if ch == "\\":
+                ch = self.delimiter()
+            if not self.match_slash(ch, True):
+                raise SedError("unterminated address regex")
+            ch = self.in_nonblank()
+            while ch in ("I", "M"):
+                ch = self.in_nonblank()
+            self.savchar(ch)
+            return "regex", None
+        if self.is_digit(ch):
+            num = self.in_integer(ch)
+            ch = self.in_nonblank()
+            if ch != "~":
+                self.savchar(ch)
+                return "num", num
+            return ("num_mod" if self.in_integer(self.in_nonblank()) else "num"), num
+        if ch in ("+", "~"):
+            return ("step" if self.in_integer(self.in_nonblank()) else "null"), None
+        if ch == "$":
+            return "last", None
+        return None
+
+    def compile(self, pending=False):
+        """compile_program: every command, then the e, r and w uses found. pending: this part
+        starts inside the text the part before it left pending."""
+        if pending:
+            self.read_text_rest()
+        while True:
+            ch = self.inchar()
+            while ch == ";" or (ch is not None and ch in " \t\n\v\f\r"):
+                ch = self.inchar()
+            if ch is None:
+                break
+            a1, a2 = self.compile_address(ch), None
+            if a1:
+                if a1[0] == "step":
+                    raise SedError("invalid usage of +N or ~N as first address")
+                ch = self.in_nonblank()
+                if ch == ",":
+                    a2 = self.compile_address(self.in_nonblank())
+                    if not a2:
+                        raise SedError("unexpected `,'")
+                    ch = self.in_nonblank()
+                if a1 == ("num", 0) and (a2[0] != "regex" if a2 else ch != "r"):
+                    raise SedError("invalid usage of line address 0")
+            if ch == "!":
+                ch = self.in_nonblank()
+                if ch == "!":
+                    raise SedError("multiple `!'s")
+            if ch is None:
+                raise SedError("missing command")
+            if ch == "#":
+                if a1:
+                    raise SedError("comments don't accept any addresses")
+                while ch not in (None, "\n"):
+                    ch = self.inchar()
+            elif ch == "v":
+                self.read_label()
+            elif ch == "{":
+                pass
+            elif ch == "}":
+                if a1:
+                    raise SedError("unexpected `}'")
+                self.read_end_of_cmd()
+            elif ch == "e":
+                self.ops.append(("e", None))
+                ch = self.in_nonblank()
+                if ch not in (None, "\n"):
+                    self.read_text(ch)
+            elif ch in "aic":
+                self.read_text(self.in_nonblank())
+            elif ch == ":":
+                if a1 or not self.read_label():
+                    raise SedError("a `:' label with an address or no name")
+            elif ch in "Tbt":
+                self.read_label()
+            elif ch in "QqLl":
+                if ch in "Qq" and a2:
+                    raise SedError("command only uses one address")
+                ch = self.in_nonblank()
+                if self.is_digit(ch):
+                    self.in_integer(ch)
+                else:
+                    self.savchar(ch)
+                self.read_end_of_cmd()
+            elif ch in "=dDFgGhHnNpPzx":
+                self.read_end_of_cmd()
+            elif ch in "rRwW":
+                self.ops.append(("r" if ch in "rR" else "w", self.read_filename()))
+            elif ch == "s":
+                slash = self.delimiter()
+                if not (self.match_slash(slash, True) and self.match_slash(slash, False)):
+                    raise SedError("unterminated `s' command")
+                self.mark_subst_opts()
+            elif ch == "y":
+                slash = self.delimiter()
+                if not (self.match_slash(slash, False) and self.match_slash(slash, False)):
+                    raise SedError("unterminated `y' command")
+                self.read_end_of_cmd()
+            else:
+                raise SedError(f"unknown command: `{ch}'")
+        return self.ops
+
+
 # ---------------------------------------------------------------- the analyzer
 
 class Analyzer:
@@ -453,17 +988,54 @@ class Analyzer:
             self.deny("too-long", "stop_and_explain", "command too long to check")
         if depth > self.p["shell"]["max_depth"]:
             self.deny("too-deep", "stop_and_explain", "commands nested too deeply to check")
-        if re.search(r"\$\{\(|\$~|=\(", cmd):
-            self.deny("zsh-expansion", "stop_and_explain",
-                      "zsh expansion flags or =(...) can run code the policy can't see")
         try:
-            nodes = parse(cmd)
+            nodes, error = parse(cmd), None
         except ParseError as e:
+            nodes, error = None, e
+        if self.zsh_expansion(cmd, nodes):
+            self.deny("zsh-expansion", "stop_and_explain",
+                      "zsh expansion flags or =(...) can run code the policy can't see; text "
+                      "meant literally goes in single quotes or a quoted heredoc (<<'EOF')")
+        if error is not None:
             self.deny("parse-error", "stop_and_explain",
-                      f"the command doesn't parse as bash ({e.message}); zsh-only syntax such as "
-                      "glob qualifiers is not allowed")
+                      f"the command doesn't parse as bash ({error.message}); zsh-only syntax "
+                      "such as glob qualifiers is not allowed")
         for n in nodes:
             cwd = self.node(n, cwd, depth)
+
+    def zsh_expansion(self, cmd, nodes):
+        """Whether cmd holds a zsh expansion Parable can't see (ZSH_FLAGS, ZSH_PROCSUB) outside
+        the text zsh takes literally. That text (unexpanded_spans) counts only when Parable
+        parsed cmd and read the scan's heredocs the same way: two readings must agree before
+        this deny rule lets anything through."""
+        joined = cmd.replace("\\\n", "")
+        if not (ZSH_FLAGS.search(joined) or ZSH_PROCSUB.search(joined)):
+            return False
+        spans, heredocs = unexpanded_spans(cmd) if nodes is not None else ([], [])
+        parsed = [(h.delimiter, h.quoted, h.strip_tabs, h.content) for h in self.heredocs(nodes)]
+        if parsed[:len(heredocs)] != heredocs:
+            spans = []
+
+        def live(kinds):
+            text = list(cmd)
+            for a, b, kind in spans:
+                if kind in kinds:
+                    text[a:b] = " " * (b - a)
+            # zsh joins a backslash-newline anywhere outside single quotes, even inside $~;
+            # joining only ever adds a match
+            return "".join(text).replace("\\\n", "")
+        return bool(ZSH_FLAGS.search(live(("single", "heredoc")))
+                    or ZSH_PROCSUB.search(live(("single", "double", "heredoc", "midword"))))
+
+    def heredocs(self, nodes):
+        """Every heredoc in Parable's tree, in source order."""
+        out, todo = [], list(nodes or [])
+        while todo:
+            n = todo.pop()
+            if getattr(n, "kind", "") == "heredoc":
+                out.append(n)
+            todo.extend(self.children(n))
+        return sorted(out, key=lambda h: h._start_pos)
 
     def children(self, n):
         for v in vars(n).values():
@@ -777,7 +1349,6 @@ class Analyzer:
 
     def write_targets(self, base, args, cwd):
         pos = [a for a in args[1:] if a is None or not a.startswith("-")]
-        opts = [a for a in args[1:] if a is not None and a.startswith("-")]
         targets = []
         tdir = None
         for i, a in enumerate(args[1:], 1):
@@ -796,31 +1367,43 @@ class Analyzer:
         elif base == "dd":
             targets = [a.split("=", 1)[1] for a in args[1:] if a and a.startswith("of=")]
         elif base == "sed":
-            if any(o == "-i" or o.startswith("-i") or o.startswith("--in-place") for o in opts):
-                targets = pos[1:]
-            targets += self.sed_writes(args)
+            targets = self.sed_writes(args, cwd)
         for t in targets:
             if t is not None:
                 self.check_write_path(t, cwd)
 
-    SED_CMD = r"(?:^|[;{}\n0-9$!,]|/[A-Za-z0-9]*)\s*"
+    def sed(self, args):
+        """A sed call (SedCall) and the e, r and w uses in its scripts (sed_ops). A script in a
+        variable stays unchecked: refusing it would refuse `sed -n "${N}p"`. A candidate that
+        doesn't parse is a file name, as sed reads it without POSIXLY_CORRECT."""
+        try:
+            call = SedCall(args)
+        except SedError as e:
+            self.deny("sed-unchecked", "stop_and_explain", str(e))
+        try:
+            ops = sed_ops(*call.scripts)
+        except SedError as e:
+            self.deny("sed-unchecked", "stop_and_explain",
+                      f"the sed script doesn't parse as GNU sed reads it ({e}), so the policy "
+                      "can't check it for e and w commands")
+        for script in call.candidates:
+            try:
+                ops += sed_ops(script)
+            except SedError:
+                pass
+        return call, ops
 
-    def sed_scripts(self, args):
-        scripts = [args[i + 1] for i, a in enumerate(args[:-1])
-                   if a in ("-e", "--expression") and args[i + 1] is not None]
-        if not scripts:
-            scripts = [a for a in args[1:] if a is not None and not a.startswith("-")][:1]
-        return scripts
-
-    def sed_writes(self, args):
-        """The files a sed script's w/W commands (or an s///w flag) write. An `e` command runs
-        a shell command the policy can't see, so it is refused outright."""
-        out = []
-        for s in self.sed_scripts(args):
-            if re.search(self.SED_CMD + r"e(?:\s|$)", s):
-                self.deny("sed-exec", "stop_and_explain",
-                          "a sed e command runs a shell command the policy can't see")
-            out += re.findall(self.SED_CMD + r"[wW]\s+([^\s;}]+)", s)
+    def sed_writes(self, args, cwd):
+        """The files a sed call writes: each w/W command's and s///w flag's file, and with -i
+        each input file and its backup. An e command runs a shell command the policy can't see,
+        so it is refused outright."""
+        call, ops = self.sed(args)
+        if any(op == "e" for op, _ in ops):
+            self.deny("sed-exec", "stop_and_explain",
+                      "a sed e command runs a shell command the policy can't see")
+        out = [arg for op, arg in ops if op == "w"]
+        if call.in_place is not None:
+            out += call.files + sed_backups(call.files, call.in_place, cwd, call.follow)
         return out
 
     def rm(self, args, globs, cwd):
@@ -1132,15 +1715,10 @@ class Analyzer:
         if base == "cd":
             return self.cd(args, cwd)
         if base == "sed":
-            scripts = [a for a in args[1:] if a and not a.startswith("-")][:1]
-            scripts += [args[i + 1] for i, a in enumerate(args[:-1]) if a in ("-e", "--expression")
-                        and args[i + 1]]
-            for s in scripts:
-                # w/W/e after a command boundary, an address (1, $, /re/, !) or an s///
-                # flag list. Errs toward denying: a false positive costs a blocked_actions line.
-                if re.search(r"(?:^|[;{}\n0-9$!,]|/[A-Za-z0-9]*)\s*[wWe](?:\s|$)", s):
-                    self.deny("researcher-flag", "scope_down",
-                              "a sed w/W/e command writes a file or runs one")
+            call, ops = self.sed(args)
+            if call.in_place is not None or any(op in ("e", "w") for op, _ in ops):
+                self.deny("researcher-flag", "scope_down",
+                          "sed -i or a sed w/W/e command writes a file or runs one")
         if base == "uniq" and len([a for a in args[1:] if a and not a.startswith("-")]) > 1:
             self.deny("researcher-flag", "scope_down", "uniq with an output file writes it")
         if base == "curl":

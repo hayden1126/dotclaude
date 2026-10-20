@@ -122,7 +122,17 @@ repo that turns the sandbox off loses subagent Bash; the policy still applies.
   - The command is parsed with Parable, and every simple command is walked (lists, pipes,
     subshells, `$( )`, backticks, control flow).
   - A parse error is stop_and_explain, which also catches zsh glob qualifiers. `${(…)`, `$~` and
-    `=(…)` are denied explicitly.
+    `=(…)` are denied explicitly, read through line continuations, except where zsh takes the
+    text literally: `${(…)` and `$~` in single quotes or a quoted heredoc body, and `=(…)` there,
+    in double quotes, or mid-word (zsh reads it only where the `=` opens a word, so `x=(a b)`
+    passes). A left-to-right scan marks that literal text and stops at anything it doesn't model
+    (`$'…'`, `$( )`, `${ }`, backticks, `<( )`, `(( ))`, an unclosed quote or heredoc), so
+    nothing after the stop is let through; heredocs count only when Parable reads them the same.
+  - **sed** is read the way GNU sed 4.9 reads it: its options as getopt does, its script as
+    sed's compiler does (bracket expressions, the s delimiter, text to the end of the line for
+    a/i/c and file names). An `e` command or `s///e` flag is denied; `w`/`W` files, and with `-i`
+    each file and its backup, are write targets. `-f` and a script sed would refuse are denied as
+    unchecked. A script in a variable stays unchecked.
   - Wrappers are peeled: `env`, `command`, `exec`, `timeout`, `nice`, `nohup`, `xargs`, `find -exec`,
     `bash`/`sh`/`zsh -c` (recursively), and `eval` with a static argument.
   - A shell reading stdin (`… | sh`) and `source` (except `*/bin/activate`) are denied.
@@ -177,7 +187,7 @@ repo that turns the sandbox off loses subagent Bash; the policy still applies.
 - **Allowed:**
   - coreutils readers;
   - grep, rg and find without their exec, write or filter flags;
-  - jq, `sed -n`, sort, uniq, diff;
+  - jq, sed without `-i`, `e` or `w`, sort, uniq, diff;
   - read-only git and its list forms;
   - curl GET and `wget -O-` to stdout;
   - `gh-public`;
