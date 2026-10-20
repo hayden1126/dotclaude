@@ -88,11 +88,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
   - **Live lanes** (briefs in each record). Merge order (2026-10-20): 1 exam-prep
-    (`feat/exam-prep-skill`, carries the lead's notes; the exam-prep skill suite below, first so
-    it can install from its lane for the dry run before round 1's go/no-go, Thu 10/22). 2 mute
+    (`feat/exam-prep-skill`, carries the lead's notes; the exam-prep skill suite below, plus
+    classifying Claude Code 2.1.305's `--profile`, first so it can install from its lane for the
+    dry run before round 1's go/no-go, Thu 10/22). 2 mute
     (`feat/device-mute`, #141: the device-wide mute below, plus `setup-tmux.sh`'s `link()`
     fix). 3 policy-fp (`fix/policy-false-denials`: the three subagent-policy false denials
-    below). 4 practices (its next PR, auth-secrets; the skill suite below). Each opened on
+    below, plus gap SP3 on Hayden's pick). 4 practices (its next PR, auth-secrets; the skill suite below). Each opened on
     Hayden's ok. practices merged #142 the same day (Hayden moved it first since it was
     finished) and stays open for more PRs. Merged and closed 2026-10-20, installed from main:
     summary-retire (#139), link-atomic (#140, which Hayden ordered first so no later install ran
@@ -223,10 +224,27 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     compact boundary met before any post-compact usage means no count yet (say nothing, write
     nothing), with a test on a transcript fixture that ends at a boundary. Lane-able
     (`hooks/context_watch.py`, `tests/`); no live lane owns it.
-  - **Subagent policy gaps SP1 and SP2** (from lane policy-fp, 2026-10-20, routed to the lead
-    on Hayden's pick; the lead re-checked both). Details and proposed fixes are in the private
-    findings file's "Subagent policy gaps 2026-10-20" section ([[dotclaude-public-repo]]). Both
-    edit lane policy-fp's files, so their lane opens after policy-fp merges.
+  - **Subagent policy gaps SP1 to SP3** (from lane policy-fp, 2026-10-20, routed to the lead
+    on Hayden's pick; the lead re-checked each). Details and proposed fixes are in the private
+    findings file's "Subagent policy gaps 2026-10-20" section ([[dotclaude-public-repo]]). SP3
+    joined lane policy-fp on Hayden's pick, with the fix he chose: a sed call with a dynamic
+    word must add `--sandbox`. SP1 and SP2 edit the same files, so their lane opens after
+    policy-fp merges.
+  - **Claude Code 2.1.305 turned `tests/delegation` red everywhere** (lane practices' report,
+    2026-10-20; the lead reproduced it on the lead branch). The update added `--profile` to
+    `claude plugin validate`, and `test_settings.Inventory.test_installed_claude_flags_and_subcommands_are_classified`
+    fails until the inventory classifies it. It's a local strictness switch like `--strict`, so
+    it goes in `CLAUDE_FLAG_OK` (`tests/delegation/command_inventory.py`). In lane exam-prep on
+    Hayden's pick, since it already edits that file and merges first.
+  - **`lane trial` fails test_subagent_policy on the merge alone** (lane policy-fp's report,
+    2026-10-20; the lead checked the code). Sandboxed, `trial` builds its scratch tree in the
+    system temp dir (`skills/lanes/scripts/lane:2341`), which is `/tmp/claude-<uid>`, one of
+    the policy's temp roots (`skills/delegation/policy.toml:145`). `_test_tmp_dir`
+    (`tests/delegation/test_subagent_policy.py:29-49`) then puts its fake homes in the tree's
+    `.tmp/`, so every fixture path reads as a temp write and about 13 deny cases pass. A real
+    checkout passes, so a trial failure confined to those cases is this artifact. Fix: the test
+    refuses a `.tmp/` under a temp root, as it already does for `.claude/worktrees/`, or `trial`
+    builds its tree outside the temp root. Lane-able; no live lane owns it.
   - **excluded-guard refuses an over-matched command in an agent worktree** (lane mute's report,
     2026-10-20; checked in code, not reproduced). Candidacy splits on `|`, `;` and `&&` without
     quotes, so a plain `grep` whose quoted pattern holds an excluded head becomes a candidate
