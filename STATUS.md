@@ -214,6 +214,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     parse the s-command (skip pattern and replacement, then read flags) and judge `=(` only at
     a word start outside quotes, keeping `1e date`, `s/a/b/e`, `s/a/b/w f`, `cat =(ls)` and
     `${(f)x}` refused. In lane policy-fp since 2026-10-20.
+  - **Subagent policy gaps SP1 and SP2** (from lane policy-fp, 2026-10-20, routed to the lead
+    on Hayden's pick; the lead re-checked both). Details and proposed fixes are in the private
+    findings file's "Subagent policy gaps 2026-10-20" section ([[dotclaude-public-repo]]). Both
+    edit lane policy-fp's files, so their lane opens after policy-fp merges.
   - **excluded-guard refuses an over-matched command in an agent worktree** (lane mute's report,
     2026-10-20; checked in code, not reproduced). Candidacy splits on `|`, `;` and `&&` without
     quotes, so a plain `grep` whose quoted pattern holds an excluded head becomes a candidate
