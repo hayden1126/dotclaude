@@ -1638,6 +1638,15 @@ class Budgets(BashBase):
         self.assertEqual(out.getvalue(), "")
         self.assertIn("crash RuntimeError: planted", self.log())
 
+    def test_a_file_whose_old_blob_was_cut_is_skipped_and_logged(self):
+        # Review round 1: an old blob over the caps read as empty, so every line of the new
+        # one counted as added, old flagged lines too.
+        self.commit(**{"a.ts": "x({ ...body })\n" + "// filler\n" * 20})
+        self.assertIsNone(self.call(PC.pre_tool_use, "git commit -m x", "b-cut"))
+        self.commit(**{"a.ts": "x({ ...body })\n"})
+        self.assertIsNone(self.call(PC.post_tool_use, "git commit -m x", "b-cut", FILE_MAX=100))
+        self.assertIn("1 changed files were not scanned", self.log())
+
     def test_a_large_range_is_cut_short_and_logged(self):
         self.commit(**{"seed": "1\n"})
         self.assertIsNone(self.call(PC.pre_tool_use, "git commit -m x", "b-big"))

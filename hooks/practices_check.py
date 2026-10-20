@@ -1557,11 +1557,15 @@ def scan(repo, spec, rules, level, ctx, lockfiles=True):
     blobs, skipped = repo.blobs([x for _, _, o, n in wanted for x in (n, o)], FILE_MAX, BYTES_MAX)
     if skipped:
         log("scan-truncated", f"{level}: {len(skipped)} blobs over the size caps were not read")
+    cut = 0
     for commit, path, ooid, noid in wanted:
         new = text_of(blobs.get(noid))
         if new is None:
             continue
-        old = text_of(blobs.get(ooid)) if ooid else ""
+        if ooid and ooid not in blobs:
+            cut += 1  # unread, the old blob would make every line of the file read as added
+            continue
+        old = text_of(blobs[ooid]) if ooid else ""
         added = added_lines(old or "", new)
         if not added:
             continue
@@ -1576,6 +1580,9 @@ def scan(repo, spec, rules, level, ctx, lockfiles=True):
             return False
 
         run_patterns(mine, hits)
+    if cut:
+        log("scan-truncated", f"{level}: {cut} changed files were not scanned: their old blob "
+            "was over the size caps, so what they add can't be told")
     return found
 
 
