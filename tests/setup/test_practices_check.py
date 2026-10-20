@@ -13,6 +13,7 @@ path, content) against skills/<file stem>/events.toml, and every shipped skills/
 must parse, keep unique ids and pass the backtracking lint.
 """
 import glob
+import hashlib
 import importlib.util
 import json
 import os
@@ -348,6 +349,26 @@ class Backstop(Base):
         self.add(*boundary())
         self.assertIsNotNone(self.fire())
 
+    def test_a_malformed_state_file_reads_as_empty_and_checking_goes_on(self):
+        d = os.path.join(self.state, "dotclaude", "practices", "denies")
+        os.makedirs(d)
+        path = os.path.join(d, hashlib.sha256(f"{SID}|main".encode()).hexdigest()[:32] + ".json")
+        for n, body in enumerate(('{"keys": null}', '{"keys": 3}', '{"keys": "L1|none"}',
+                                  '{"keys": [1]}', "[1]", "not json")):
+            with self.subTest(body=body):
+                self.rows([])
+                with open(path, "w") as f:
+                    f.write(body)
+                reason = self.fire()
+                self.assertIn("[practices:L1:demo:route-handler]", reason)
+                log = self.log()
+                self.assertIn("state-error", log)
+                self.assertNotIn("crash", log)
+                self.add(result(f"t{n}", DENY + reason, error=True))
+                with open(path, "w") as f:
+                    f.write(body)
+                self.assertIsNone(self.fire())  # the transcript marker still holds
+
     def test_an_l2_deny_holds_across_a_compaction_by_state_too(self):
         self.loaded()
         self.assertIsNotNone(self.fire("lib/save.ts", "x({ ...body })\n"))
@@ -479,6 +500,25 @@ class AfterTheEdit(Base):
             "  const viewer = await getViewer()\n", ""))
         self.assertTrue(reason.startswith("[practices:L2:server-code:SEC-01:app/api/you/route.ts]"),
                         reason)
+
+    def test_an_empty_or_blank_helper_name_is_dropped_and_sec_01_still_fires(self):
+        shutil.rmtree(os.path.join(self.proj, ".claude", "skills", "demo"))
+        self.server_code()
+        self.config_toml('[auth]\nhelpers = ["", " ", "bad name", "getViewer"]\n')
+        route = 'export async function GET() {\n  return Response.json({ ok: true })\n}\n'
+        reason = self.fire("app/api/open/route.ts", route)
+        self.assertTrue(reason.startswith("[practices:L2:server-code:SEC-01:app/api/open/route.ts]"),
+                        reason)
+        self.assertIn("auth.helpers dropped ['', ' ', 'bad name']", self.log())
+        self.assertIsNone(self.fire("app/api/me/route.ts", route.replace(
+            "  return", "  await getViewer()\n  return")))
+
+    def test_helper_names(self):
+        for good in ("getViewer", "auth.requireUser", "$session", "_check", "a.b.c"):
+            self.assertTrue(PC.HELPER.fullmatch(good), good)
+        for bad in ("", " ", "a b", "1st", "a.", ".a", "a..b", "x(", "a|b"):
+            self.assertFalse(PC.HELPER.fullmatch(bad), bad)
+        self.assertNotIn("|)", PC.expand(r"\b{auth_helpers}\(", ("", " ")))
 
     def test_when_reads_only_the_new_text(self):
         self.loaded()

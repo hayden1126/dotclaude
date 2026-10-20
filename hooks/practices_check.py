@@ -72,8 +72,9 @@ When that file is missing or empty, the state file alone carries deny-once.
 
 Per repo, <project>/.claude/practices/config.toml: `enabled = false` turns the engine off there;
 `[[disable]]` with `rule` (an event or rule id, or `<skill>:<id>`) and a non-empty `reason` turns
-one off; `[auth] helpers = [...]` feeds `{auth_helpers}`. A malformed file falls back to the
-defaults (never turning a check off) and is logged.
+one off; `[auth] helpers = [...]` feeds `{auth_helpers}`, identifier names only (dotted allowed,
+like `auth.requireUser`; an empty or blank name would match any call), others dropped and
+logged. A malformed file falls back to the defaults (never turning a check off) and is logged.
 
 Failure posture (allow and loud): a BUDGET-second run budget on time.monotonic(); patterns left
 when it is spent are skipped and logged, and a transcript read checks it on every row it parses
@@ -124,6 +125,9 @@ NOT_ENTRIES = (b'{"type":"api-request', b'{"type":"attachment"', b'{"type":"file
 AUTH_HELPERS = ("auth", "getServerSession", "getSession", "currentUser", "getCurrentUser",
                 "requireUser", "requireAuth", "verifySession", "getUser", "withAuth")
 ID = re.compile(r"[\w.-]+")
+# An [auth] helpers name: an identifier, dotted allowed (auth.requireUser). An empty or blank
+# name would turn `(?:...|)` into a match for any call and silence SEC-01.
+HELPER = re.compile(r"[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*")
 
 
 def state_dir():
@@ -251,7 +255,8 @@ def path_matches(globs, rel):
 def expand(pattern, helpers):
     if "{auth_helpers}" not in pattern:
         return pattern
-    names = sorted(set(AUTH_HELPERS) | set(helpers), key=lambda n: (-len(n), n))
+    names = sorted(set(AUTH_HELPERS) | {h for h in helpers if HELPER.fullmatch(h)},
+                   key=lambda n: (-len(n), n))
     return pattern.replace("{auth_helpers}", "(?:" + "|".join(map(re.escape, names)) + ")")
 
 
@@ -453,7 +458,11 @@ def load_config(event):
             off.add(d["rule"])
         else:
             log("config-malformed", f"{path}: a [[disable]] without rule and reason is ignored")
-    return {"enabled": enabled, "disable": off, "helpers": tuple(helpers)}
+    bad = [h for h in helpers if not HELPER.fullmatch(h)]
+    if bad:
+        log("config-malformed", f"{path}: auth.helpers dropped {bad!r}: not identifier names")
+    return {"enabled": enabled, "disable": off,
+            "helpers": tuple(h for h in helpers if HELPER.fullmatch(h))}
 
 
 def is_off(cfg, skill, item_id):
@@ -662,12 +671,22 @@ def _state_file(event):
 
 
 def state_keys(event):
+    """The deny keys recorded for this session and agent. A missing file is empty; so is a
+    malformed one (logged), and deny-once still holds through the transcript markers."""
+    path = _state_file(event)
     try:
-        with open(_state_file(event), encoding="utf-8") as f:
-            keys = json.load(f).get("keys", [])
-        return set(k for k in keys if isinstance(k, str))
-    except (OSError, ValueError, AttributeError, RecursionError):
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
         return set()
+    except (OSError, ValueError, RecursionError) as e:
+        log("state-error", f"{path}: unreadable ({type(e).__name__}), read as empty")
+        return set()
+    keys = data.get("keys") if isinstance(data, dict) else None
+    if not isinstance(keys, list) or not all(isinstance(k, str) for k in keys):
+        log("state-error", f"{path}: not {{\"keys\": [strings]}}, read as empty")
+        return set()
+    return set(keys)
 
 
 def state_add(event, keys):
