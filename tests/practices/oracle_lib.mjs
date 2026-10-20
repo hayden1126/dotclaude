@@ -107,56 +107,61 @@ function subdirs(dir) {
 }
 
 const ROUTE_FILES = ["route.ts", "route.js", "route.mjs"];
+const PAGE_FILES = ["page.tsx", "page.jsx", "page.ts", "page.js", "page.mdx"];
 
-function routeFileIn(dir) {
-  for (const f of ROUTE_FILES) if (isFile(path.join(dir, f))) return path.join(dir, f);
+function fileIn(dir, names) {
+  for (const f of names) if (isFile(path.join(dir, f))) return path.join(dir, f);
   return null;
 }
 
-function matchRoute(dir, segments, params) {
+// The file (one of `names`) Next would serve for `segments` under `dir`, with its params.
+function matchFile(dir, segments, params, names) {
   const dirs = subdirs(dir);
   const groups = dirs.filter((d) => /^\(.+\)$/.test(d));
   if (segments.length === 0) {
-    const file = routeFileIn(dir);
+    const file = fileIn(dir, names);
     if (file) return { file, params };
     for (const d of dirs) {
       const m = /^\[\[\.\.\.([^\]]+)\]\]$/.exec(d);
-      const optional = m && routeFileIn(path.join(dir, d));
+      const optional = m && fileIn(path.join(dir, d), names);
       if (optional) return { file: optional, params };
     }
   } else {
     const [seg, ...rest] = segments;
     if (dirs.includes(seg)) {
-      const hit = matchRoute(path.join(dir, seg), rest, params);
+      const hit = matchFile(path.join(dir, seg), rest, params, names);
       if (hit) return hit;
     }
     for (const d of dirs) {
       const m = /^\[([^\].]+)\]$/.exec(d);
       if (!m) continue;
-      const hit = matchRoute(path.join(dir, d), rest, { ...params, [m[1]]: decodeURIComponent(seg) });
+      const hit = matchFile(path.join(dir, d), rest, { ...params, [m[1]]: decodeURIComponent(seg) }, names);
       if (hit) return hit;
     }
     for (const d of dirs) {
       const m = /^\[\[?\.\.\.([^\]]+)\]\]?$/.exec(d);
-      const file = m && routeFileIn(path.join(dir, d));
+      const file = m && fileIn(path.join(dir, d), names);
       if (file) return { file, params: { ...params, [m[1]]: segments.map(decodeURIComponent) } };
     }
   }
   for (const g of groups) {
-    const hit = matchRoute(path.join(dir, g), segments, params);
+    const hit = matchFile(path.join(dir, g), segments, params, names);
     if (hit) return hit;
   }
   return null;
 }
 
-export function findRoute(urlPath) {
+function findFile(urlPath, names) {
   const segments = new URL(urlPath, "http://localhost").pathname.split("/").filter(Boolean);
   for (const base of ["app", "src/app"]) {
-    const hit = matchRoute(path.join(FIXTURE, base), segments, {});
+    const hit = matchFile(path.join(FIXTURE, base), segments, {}, names);
     if (hit) return hit;
   }
   return null;
 }
+
+export const findRoute = (urlPath) => findFile(urlPath, ROUTE_FILES);
+export const findPage = (urlPath) => findFile(urlPath, PAGE_FILES);
 
 function paramsArg(params) {
   return Object.assign(Promise.resolve({ ...params }), params);

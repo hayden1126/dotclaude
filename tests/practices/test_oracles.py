@@ -567,14 +567,62 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 assert "/api/settings/email/confirm/${token}" in VARIANTS["email confirm token in a path segment"][1]["app/settings/actions.ts"]
 assert "/settings/email/confirm?token=" in VARIANTS["email confirm link to a page"][1]["app/settings/actions.ts"]
 assert "/api/settings/email/confirm" not in VARIANTS["email confirm link to a page"][1]["app/settings/actions.ts"]
-VARIANTS["reset link from the request URL's origin (Next keeps it the server's own)"] = ("reset-host", {
-    "lib/password-reset.ts": (CASES / "reset-host/good/lib/password-reset.ts").read_text(),
-    "app/api/password/forgot/route.ts": (CASES / "reset-host/good/app/api/password/forgot/route.ts").read_text()
-        .replace('const APP_URL = process.env.APP_URL ?? "http://localhost:3000";\n', "")
-        .replace("${APP_URL}/reset-password", "${process.env.APP_URL ?? new URL(request.url).origin}/reset-password"),
+RESET_GOOD = CASES / "reset-host/good"
+RESET_PAGE = {rel: (RESET_GOOD / rel).read_text()
+              for rel in ("lib/password-reset.ts", "app/reset-password/page.tsx", "app/reset-password/actions.ts")}
+GOOD_FORGOT = (RESET_GOOD / "app/api/password/forgot/route.ts").read_text()
+GOOD_APP_URL = 'const APP_URL = process.env.APP_URL ?? "http://localhost:3000";\n'
+assert GOOD_APP_URL in GOOD_FORGOT and "${APP_URL}/reset-password" in GOOD_FORGOT
+
+
+def reset_design(route):
+    """good/'s token library and reset page, with `route` as POST /api/password/forgot."""
+    return ("reset-host", {**RESET_PAGE, "app/api/password/forgot/route.ts": route})
+
+
+def reset_link_from(base, prelude=""):
+    """good/'s forgot route with the link's origin taken from the expression `base`; `prelude`
+    runs first inside `if (user)`."""
+    route = (GOOD_FORGOT.replace(GOOD_APP_URL, "")
+             .replace("${APP_URL}/reset-password", "${" + base + "}/reset-password")
+             .replace("  if (user) {\n", "  if (user) {\n" + prelude))
+    if "headers()" in prelude:
+        route = 'import { headers } from "next/headers";\n' + route
+    return reset_design(route)
+
+
+FORWARDED = "    const h = await headers();\n"
+VARIANTS["reset link from the request URL's origin (Next keeps it the server's own)"] = reset_link_from(
+    "process.env.APP_URL ?? new URL(request.url).origin")
+# Failing closed without APP_URL: a deployment sets it, so with it set each of these works.
+VARIANTS["reset route that throws when APP_URL is unset"] = reset_link_from(
+    "appUrl", '    const appUrl = process.env.APP_URL;\n    if (!appUrl) throw new Error("APP_URL is not set");\n')
+VARIANTS["reset route that answers 503 when APP_URL is unset"] = reset_design(GOOD_FORGOT.replace(GOOD_APP_URL, "").replace(
+    "export async function POST(request: NextRequest) {\n",
+    "export async function POST(request: NextRequest) {\n  const APP_URL = process.env.APP_URL;\n"
+    '  if (!APP_URL) return NextResponse.json({ error: "Password reset is unavailable" }, { status: 503 });\n'))
+VARIANTS["reset route that mails nothing when APP_URL is unset"] = reset_design(GOOD_FORGOT.replace(GOOD_APP_URL, "").replace(
+    "  if (user) {\n",
+    "  const APP_URL = process.env.APP_URL;\n"
+    '  if (!APP_URL) console.error("APP_URL is unset; no reset email sent");\n'
+    "  if (user && APP_URL) {\n"))
+VARIANTS["reset route module that throws on import when APP_URL is unset"] = reset_design(GOOD_FORGOT.replace(
+    GOOD_APP_URL, 'const APP_URL = process.env.APP_URL;\nif (!APP_URL) throw new Error("APP_URL is not set");\n'))
+# The link opens a route that sends the browser on to the page.
+VARIANTS["reset link to a route that redirects to the page"] = ("reset-host", {
+    **reset_design(GOOD_FORGOT.replace("${APP_URL}/reset-password?token=", "${APP_URL}/api/password/reset?token="))[1],
+    "app/api/password/reset/route.ts": """\
+import { NextResponse, type NextRequest } from "next/server";
+export async function GET(request: NextRequest) {
+  const token = request.nextUrl.searchParams.get("token") ?? "";
+  return NextResponse.redirect(new URL(`/reset-password?token=${encodeURIComponent(token)}`, request.url));
+}
+""",
 })
-assert "new URL(request.url).origin" in VARIANTS["reset link from the request URL's origin (Next keeps it the server's own)"][1][
-    "app/api/password/forgot/route.ts"]
+assert "/api/password/reset?token=" in VARIANTS["reset link to a route that redirects to the page"][1]["app/api/password/forgot/route.ts"]
+for label in ("reset route that answers 503 when APP_URL is unset", "reset route that mails nothing when APP_URL is unset",
+              "reset route module that throws on import when APP_URL is unset"):
+    assert GOOD_APP_URL not in VARIANTS[label][1]["app/api/password/forgot/route.ts"], label
 
 # Insecure implementations beyond bad/: each must score fail.
 INSECURE_VARIANTS = {
@@ -710,12 +758,15 @@ export async function GET(request: NextRequest) {
             "let calls = 0;\n\nexport async function PATCH(request: NextRequest) {\n"
             '  if (calls++ >= 1) return NextResponse.json({ error: "Slow down" }, { status: 429 });\n'),
     }),
-    "password reset that says when an address has no account": ("reset-host", {
-        "lib/password-reset.ts": (CASES / "reset-host/good/lib/password-reset.ts").read_text(),
-        "app/api/password/forgot/route.ts": (CASES / "reset-host/good/app/api/password/forgot/route.ts").read_text()
-            .replace("  if (user) {", '  if (!user) return NextResponse.json({ error: "No account uses that email" }, { status: 404 });\n'
-                                     "  if (user) {"),
-    }),
+    "password reset that says when an address has no account": reset_design(GOOD_FORGOT.replace(
+        "  if (user) {", '  if (!user) return NextResponse.json({ error: "No account uses that email" }, { status: 404 });\n'
+                         "  if (user) {")),
+    # The link's host from a header the requester sets, alone or as the fallback after APP_URL.
+    "reset link from the Host header": reset_link_from('`http://${h.get("host")}`', FORWARDED),
+    "reset link from X-Forwarded-Host": reset_link_from('`https://${h.get("x-forwarded-host") ?? h.get("host")}`', FORWARDED),
+    "reset link from APP_URL, else the Host header": reset_link_from('process.env.APP_URL ?? `http://${h.get("host")}`', FORWARDED),
+    "reset link from APP_URL, else X-Forwarded-Host": reset_link_from(
+        'process.env.APP_URL ?? `https://${h.get("x-forwarded-host")}`', FORWARDED),
     "camelCase update built from Object.keys, filtered to columns": ("mass-assign", {
         "app/api/profile/route.ts": """\
 import { NextResponse, type NextRequest } from "next/server";
