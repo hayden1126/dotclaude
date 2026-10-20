@@ -28,8 +28,10 @@ toasts), then the time left when timed (minutes rounded up, `42m`; from 100 minu
 rounded up, `2h`; a hand-written flag past 99 hours gets days, and past 99 days no time), joined
 by one space, then one trailing space to keep the host after it apart. A note (an unreadable or
 malformed flag) adds `?` the same way, and on its own prints the sound glyph and `?`: a mute you
-set isn't in force. Nothing muted and no note: nothing. The widest form is 12 cells (each glyph
-is 2), which is what status-right-length makes room for.
+set isn't in force. Nothing muted and no note: nothing, and the flag goes (mute_state's
+prune_expired, which never waits for the lock), so a mute that ran out doesn't keep the hooks and
+the mark off their fast path. The widest form is 12 cells (each glyph is 2), which is what
+status-right-length makes room for.
 
 `menu` opens a display-menu built like claude-saved's: -M (no mouse event behind it), -c the
 client, -t the client's own session (from list-clients), -x C and claude.conf's row-0 -y rule.
@@ -154,6 +156,8 @@ def mark() -> int:
     text = mark_text(muted, note, now)
     if text:
         out(text)
+    else:  # nothing muted and no note: every mute in the flag ran out
+        ms.prune_expired(now)
     return 0
 
 

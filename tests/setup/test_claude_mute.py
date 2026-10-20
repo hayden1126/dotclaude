@@ -1,5 +1,6 @@
 """tmux/claude-mute: the device-wide mute's CLI (status, on, off), the tab bar's mark and the Mute
 menu, against a temp XDG_STATE_HOME and a stub tmux that logs its argv (stdlib only)."""
+import fcntl
 import importlib.machinery
 import importlib.util
 import json
@@ -67,9 +68,9 @@ class ClaudeMute(unittest.TestCase):
                     "PATH": stubs + os.pathsep + os.environ["PATH"], "STUB_LOG": self.log,
                     "STUB_CLIENTS": "$9 /dev/pts/1\\n$3 %s\\n" % CLIENT}
 
-    def run_cli(self, *args, env=None, py=("-I",)):
+    def run_cli(self, *args, env=None, py=("-I",), timeout=20):
         p = subprocess.run([sys.executable, *py, SCRIPT, *args], capture_output=True,
-                           timeout=20, env={**self.env, **(env or {})})
+                           timeout=timeout, env={**self.env, **(env or {})})
         return p.returncode, p.stdout.decode("utf-8"), p.stderr.decode("utf-8")
 
     def write(self, flag):
@@ -256,7 +257,7 @@ class ClaudeMute(unittest.TestCase):
                 self.assertEqual(err.count("\n"), 1)
                 self.assertEqual(err, "claude-mute: can't write %s: Is a directory\n" % self.flag)
                 self.assertNotIn("Traceback", err)
-                self.assertEqual(sorted(os.listdir(self.dir)), ["mute.json", "mute.lock"])  # no temp
+                self.assertEqual(sorted(os.listdir(self.dir)), ["mute.json", "mute.lock"])
 
     # --- the mark -------------------------------------------------------------------------
 
@@ -326,8 +327,52 @@ class ClaudeMute(unittest.TestCase):
         _, out, err = self.run_cli("mark", py=("-I", "-X", "importtime"))
         self.assertEqual(out, SOUND + " \n")
         self.assertNotIn("autopass_state", err)              # reading doesn't need it either
+        self.write({"sound": {"since": 1, "until": 2}})      # ran out long ago: pruned
+        _, out, err = self.run_cli("mark", py=("-I", "-X", "importtime"))
+        self.assertEqual(out, "")
+        self.assertFalse(os.path.lexists(self.flag))
+        self.assertNotIn("autopass_state", err)              # nor does the prune
         _, _, err = self.run_cli("on", py=("-I", "-X", "importtime"))
         self.assertIn("autopass_state", err)                 # the check can see it
+
+    def test_the_mark_prunes_a_flag_whose_mutes_ran_out(self):
+        # A timed mute that runs out leaves the flag, which cost every ring a Python start and
+        # the mark its slow path for good: the mark removes a flag that mutes nothing now and has
+        # no note.
+        now = time.time()  # wall clock
+        gone = {"since": now - 7200, "until": now - 3600}
+        self.write({"sound": gone})
+        self.assertEqual(self.run_cli("mark"), (0, "", ""))
+        self.assertFalse(os.path.lexists(self.flag))
+        live = {"sound": gone, "toast": {"since": now, "until": None}}
+        self.write(live)
+        self.assertEqual(self.run_cli("mark"), (0, TOAST + " \n", ""))
+        self.assertEqual(self.on_disk(), live)
+        self.write({"sound": gone, "toast": [1]})            # malformed: its ? keeps showing
+        self.assertEqual(self.run_cli("mark"), (0, SOUND + "? \n", ""))
+        self.assertEqual(self.on_disk(), {"sound": gone, "toast": [1]})
+
+    def test_a_held_lock_means_the_mark_skips_the_prune(self):
+        now = time.time()  # wall clock
+        self.write({"sound": {"since": now - 7200, "until": now - 3600}})
+        fd = os.open(os.path.join(self.dir, "mute.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)                   # a writer has it: never wait
+            self.assertEqual(self.run_cli("mark", timeout=5), (0, "", ""))
+            self.assertTrue(os.path.lexists(self.flag))
+        finally:
+            os.close(fd)
+        self.assertEqual(self.run_cli("mark"), (0, "", ""))
+        self.assertFalse(os.path.lexists(self.flag))
+
+    @unittest.skipIf(os.geteuid() == 0, "root writes through a read-only mode")
+    def test_a_prune_the_os_refuses_leaves_the_mark_silent(self):
+        now = time.time()  # wall clock
+        self.write({"sound": {"since": now - 7200, "until": now - 3600}})
+        os.chmod(self.dir, 0o555)
+        self.addCleanup(os.chmod, self.dir, 0o755)
+        self.assertEqual(self.run_cli("mark"), (0, "", ""))
+        self.assertTrue(os.path.lexists(self.flag))
 
     # --- the menu -------------------------------------------------------------------------
 

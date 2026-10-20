@@ -28,8 +28,15 @@ the design; tests/setup/test_mute_state.py, test_tmux_hooks.py and test_claude_m
   exclusive flock on mute.lock beside the flag (the menu and the CLI can race), starts from
   current() (a bad flag counts as empty: the person is setting the state now; expired entries
   drop out), applies the change, and writes the flag atomically (autopass_state.write_json), or
-  removes it when nothing is left muted, which keeps the hooks' fast path. An OSError (a
-  directory at the path, say) propagates. A bad name or `until` raises ValueError.
+  removes it when nothing is left muted. An OSError (a directory at the path, say) propagates.
+  A bad name or `until` raises ValueError.
+- prune_expired(now) -> whether it removed the flag. A timed mute that runs out leaves the flag
+  on disk, and while it is there every ring starts Python and the mark takes its slow path, so
+  the mark calls this when the flag mutes nothing and has no note. It takes the lock without
+  waiting (busy: it skips this round), reads the flag again under it, and removes it only if it
+  still mutes nothing with no note; a bad flag stays, so the mark's `?` keeps showing. It never
+  raises an OSError. Without tmux's bar to run the mark, an expired flag stays until the next
+  `claude-mute on` or `off`.
 - `mute_state.py check` prints `<sound> <toast> <note>`: 1 or 0 for each switch muted now, then
   the note or `-`. It exits 0 whatever the flag holds.
 """
@@ -119,13 +126,14 @@ def current(now=None):
 
 
 @contextlib.contextmanager
-def locked():
+def locked(wait=True):
     """An exclusive flock on mute.lock in the state dir, held while the block runs. Nothing slow
-    runs under it, so it waits as long as it takes."""
+    runs under it, so a writer waits as long as it takes; with wait=False, a lock another
+    process holds raises BlockingIOError at once."""
     os.makedirs(state_dir(), exist_ok=True)
     fd = os.open(lock_path(), os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        fcntl.flock(fd, fcntl.LOCK_EX if wait else fcntl.LOCK_EX | fcntl.LOCK_NB)
         yield
     finally:
         os.close(fd)
@@ -174,6 +182,25 @@ def unmute(names, now=None) -> dict:
             muted.pop(name, None)
         store(muted)
     return muted
+
+
+def prune_expired(now=None) -> bool:
+    """Remove a flag that mutes nothing now and has no note; True when it did. It never waits
+    (the lock taken with LOCK_NB: a writer holding it means skip this round), reads the flag again
+    under the lock (a mute set since the caller looked stays), and never raises an OSError: the
+    caller, the mark, has to stay silent, and its next run tries again."""
+    if not os.path.lexists(flag_path()):
+        return False
+    now = time.time() if now is None else now  # wall clock
+    try:
+        with locked(wait=False):
+            muted, note = current(now)
+            if muted or note:
+                return False
+            os.unlink(flag_path())
+            return True
+    except OSError:  # BlockingIOError too; a vanished flag (FileNotFoundError) needs nothing
+        return False
 
 
 def check_line(now=None) -> str:

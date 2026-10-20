@@ -252,6 +252,68 @@ class MuteState(unittest.TestCase):
         self.assertEqual(sorted(self.on_disk()), ["sound", "toast"])
         self.assertEqual(ms.check_line(), "1 1 -")
 
+    # --- the prune ------------------------------------------------------------------------
+
+    def test_prune_removes_a_flag_that_mutes_nothing_now(self):
+        for flag in ({"sound": {"since": NOW - 7200, "until": NOW - 3600}},
+                     {"sound": {"since": NOW - 60, "until": NOW},
+                      "toast": {"since": NOW - 60, "until": NOW - 1}}, {}, {"volume": 3}):
+            with self.subTest(flag=flag):
+                self.write(flag)
+                self.assertTrue(ms.prune_expired(NOW))
+                self.assertFalse(os.path.lexists(self.flag))
+        self.assertFalse(ms.prune_expired(NOW))              # no flag: nothing to do
+
+    def test_prune_keeps_a_flag_that_mutes_or_cant_be_read(self):
+        gone = {"since": NOW - 7200, "until": NOW - 1}
+        cases = {"a live switch": json.dumps({"sound": gone, "toast": ON}),
+                 "a malformed switch": json.dumps({"sound": gone, "toast": "yes"}),
+                 "not JSON": "{garbage"}
+        for name, raw in cases.items():
+            with self.subTest(name):
+                self.write(raw)
+                self.assertFalse(ms.prune_expired(NOW))
+                with open(self.flag, encoding="utf-8") as f:
+                    self.assertEqual(f.read(), raw)
+        os.unlink(self.flag)
+        os.mkdir(self.flag)                                  # unreadable
+        self.assertFalse(ms.prune_expired(NOW))
+        self.assertTrue(os.path.isdir(self.flag))
+
+    def test_prune_never_waits_for_the_lock(self):
+        # The mark calls it every 2 s per client, so a writer holding the lock means skip this
+        # round. It runs in a child: a prune that waited fails on the timeout, not by hanging.
+        self.write({"sound": {"since": NOW - 7200, "until": NOW - 3600}})
+        code = ("import sys; sys.path.insert(0, %r); import mute_state; "
+                "print(mute_state.prune_expired(%r))") % (os.path.dirname(SCRIPT), NOW)
+        fd = os.open(ms.lock_path(), os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            p = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True,
+                               timeout=10, env={**os.environ, "XDG_STATE_HOME": self.state})
+            self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "False\n", ""))
+            self.assertTrue(os.path.lexists(self.flag))
+        finally:
+            os.close(fd)
+        self.assertTrue(ms.prune_expired(NOW))
+        self.assertFalse(os.path.lexists(self.flag))
+
+    @unittest.skipIf(os.geteuid() == 0, "root writes through a read-only mode")
+    def test_prune_swallows_an_os_error(self):
+        # A read-only state dir: first no lock file can be made, then (with one there) no unlink.
+        self.write({"sound": {"since": NOW - 7200, "until": NOW - 3600}})
+        state = os.path.dirname(self.flag)
+        for lock in (False, True):
+            with self.subTest(lock=lock):
+                if lock:
+                    open(ms.lock_path(), "w").close()
+                os.chmod(state, 0o555)
+                try:
+                    self.assertFalse(ms.prune_expired(NOW))
+                finally:
+                    os.chmod(state, 0o755)
+                self.assertTrue(os.path.lexists(self.flag))
+
 
 if __name__ == "__main__":
     unittest.main()
