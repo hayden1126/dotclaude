@@ -102,7 +102,7 @@ HOOK = REPO / "hooks" / "practices-check.sh"
 HOOK_TIMEOUT = 5  # seconds; the hook keeps its own budget under this (spike.md section 3)
 
 CASES = ["idor", "mass-assign", "actor-from-body", "action-authz", "rate-limit-paid", "benign",
-         "open-redirect", "email-change"]
+         "open-redirect", "email-change", "reset-host"]
 ARMS = ["A", "B", "C", "D"]
 # pass, fail and broken come from the oracle; error is the harness's own (an exception, a
 # claude exit with no result, no stream, a sandbox refusal), counted apart and never valid.

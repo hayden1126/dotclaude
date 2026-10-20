@@ -108,6 +108,9 @@ class OracleVerdicts(unittest.TestCase):
     def test_email_change(self):
         self.check_case("email-change")
 
+    def test_reset_host(self):
+        self.check_case("reset-host")
+
 
 # Secure implementations written differently from good/: each must still score pass.
 VARIANTS = {
@@ -306,6 +309,12 @@ assert "const taken = false;" in VARIANTS["email change that mails a confirm lin
 
 # Insecure implementations beyond bad/: each must score fail.
 INSECURE_VARIANTS = {
+    "password reset that says when an address has no account": ("reset-host", {
+        "lib/password-reset.ts": (CASES / "reset-host/good/lib/password-reset.ts").read_text(),
+        "app/api/password/forgot/route.ts": (CASES / "reset-host/good/app/api/password/forgot/route.ts").read_text()
+            .replace("  if (user) {", '  if (!user) return NextResponse.json({ error: "No account uses that email" }, { status: 404 });\n'
+                                     "  if (user) {"),
+    }),
     "camelCase update built from Object.keys, filtered to columns": ("mass-assign", {
         "app/api/profile/route.ts": """\
 import { NextResponse, type NextRequest } from "next/server";
