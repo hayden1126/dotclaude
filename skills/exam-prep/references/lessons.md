@@ -17,6 +17,7 @@ should warn about it.
 | L05 | 01 | Tools present on the reference machine: `pdftoppm`, `pdftotext`, `pdfinfo`, `pypdf`, `mutool`. Absent: PyMuPDF, `qpdf`, `jq`, the Python `markdown` module. | Use the present ones; `uv run --with markdown` when markdown is needed; Python for JSON. | H1.G1, H1.G4, A2.G5, B1.G6 |
 | L06 | 02 | A model misreads a small rotated label (an edge weight) and every later trace inherits it. | Re-read suspicious labels on a 300 dpi crop; the checker uses the corrected value. | B1.G9 |
 | L07 | 02, 05 | Delegated researchers can't run Python or `pdfinfo` (policy), so their verify claims are unrun. | The main session runs every check itself. | B1.G10, B3.G14 |
+| L08 | 01 | Word (`.docx`) sources: the reference machine has pandoc 3 but no LibreOffice, so there is no docx-to-PDF render. | `pandoc -t gfm --wrap=none --extract-media=<dir>`: tables stay tables, Word equations become TeX; view the extracted images. | probe (2026-10-20) |
 
 ## Math and the page
 

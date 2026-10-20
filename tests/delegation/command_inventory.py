@@ -76,6 +76,8 @@ EXCLUDED = [
              ["lane lead"]),
     Excluded("pass-respawn","respawns its tmux pane", ["pass-respawn"]),
     Excluded("pass-respawn *", "respawns its tmux pane", ["pass-respawn -C /x --compact"]),
+    Excluded("ed-pull *", "reads the Ed API token in ~/.secrets.env, which the sandbox hides; GETs "
+             "only, writes only ./sources/ed", ["ed-pull pull --course \"ABC W1234\"", "ed-pull list"]),
 ] + [
     # Read-only tmux, anchored on the verb, in the spellings real use shows. A global flag
     # (-L, -S, -f, -c) or any other verb or alias matches nothing here, so it runs sandboxed,
@@ -388,6 +390,7 @@ NO_ASK = ["lane ls", "lane ls --json", "lane open chart-fix", "lane open chart-f
           "lane new chart-fix --claim 42 --goal x", "lane done chart-fix", "lane init --cap 4",
           "lane adopt ../x", "lane lead", "lane addr lead", "lane addr --repo ~/dotclaude lead",
           "pass-respawn -C /x --compact", "pass-respawn -C /x --print",
+          "ed-pull list", "ed-pull pull", "ed-pull pull --full", "ed-pull rebuild",
           "delegation-ledger wait --pid 1 --max 30", "delegation-ledger canary --quick",
           "codex-delegate run --model sol --dir /x --brief b.md", "tmux ls",
           "tmux list-panes -a -F '#{pane_id} #{pane_current_path}'",

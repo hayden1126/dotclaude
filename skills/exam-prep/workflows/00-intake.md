@@ -60,9 +60,10 @@ Every question this answers is one the student isn't asked.
 3. **The exam-details file** (an instructor's exam announcement, a syllabus), if one exists. Quote
    its rules: they are the strongest source after a staff post.
 4. **Ed Discussion**, if the course uses it. Run the Ed pull now (`workflows/01-ingest.md`, "Ed
-   Discussion") so `sources/ed/ed-digest.md` exists before the questions. Only staff-authored or
-   endorsed items can pre-fill an answer. A student post is a signal, shown as "a student asked X;
-   no staff answer". When two staff posts conflict, the later one wins and both are shown.
+   Discussion") so `sources/ed/ed-digest.md` exists before the questions. Only staff-authored text
+   and endorsed answers or comments can pre-fill an answer. A student's opening post, endorsed or
+   not, is a signal, shown as "a student asked X; no staff answer". When two staff posts conflict,
+   the later one wins and both are shown.
 5. **The profile**, `~/scratch/exam-prep/profile.md` (below). Don't ask what it holds.
 
 Record course logistics as you find them: grade weights, the number of homeworks and exams, the
@@ -198,7 +199,7 @@ answer back:
 | Asking what the details file, the hub's STATUS or a staff post already says | Read them first; confirm the pre-fill with its quote |
 | Asking a question whose answer is always the default | State the default in the plan |
 | Continuing after "I'll add them now" | Wait for the file, re-list, and ask question 2 for it |
-| Taking a student's Ed post as scope | Only staff-authored or endorsed text sets scope |
+| Taking a student's Ed post as scope | Only staff-authored text and endorsed answers set scope |
 | Restating scope in CLAUDE.md or PLAN.md | MANIFEST rows hold it; the others point to them |
 | Writing `Approved:` with a date before the setup is done | It is the last thing intake writes |
 | Overwriting a made-ahead hub's STATUS.md | Keep it and add to it |

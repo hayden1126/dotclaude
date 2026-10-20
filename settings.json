@@ -287,6 +287,7 @@
       "lane lead",
       "pass-respawn",
       "pass-respawn *",
+      "ed-pull *",
       "tmux ls",
       "tmux ls *",
       "tmux list-sessions",
@@ -469,7 +470,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "i=$(cat); printf '%s' \"$i\" | timeout 4 bash \"$HOME/.claude/hooks/excluded-guard.sh\" || { printf '%s' \"$i\" | grep -Eq '\"command\": ?\"[[:space:]]*(git|gh|lane|claude|codex|codex-delegate|delegation-ledger|pass-respawn|tmux|powershell[.]exe|cmd[.]exe)[ \"]' && { echo \"excluded-guard missing, failed or timed out: this excluded command is blocked\" >&2; exit 2; }; exit 0; }",
+            "command": "i=$(cat); printf '%s' \"$i\" | timeout 4 bash \"$HOME/.claude/hooks/excluded-guard.sh\" || { printf '%s' \"$i\" | grep -Eq '\"command\": ?\"[[:space:]]*(git|gh|lane|claude|codex|codex-delegate|delegation-ledger|pass-respawn|ed-pull|tmux|powershell[.]exe|cmd[.]exe)[ \"]' && { echo \"excluded-guard missing, failed or timed out: this excluded command is blocked\" >&2; exit 2; }; exit 0; }",
             "timeout": 5
           }
         ]

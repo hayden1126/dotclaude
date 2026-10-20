@@ -73,7 +73,7 @@ class Base(unittest.TestCase):
         bindir = os.path.join(self.home, "bin")  # tools as setup.sh links them, and a script
         os.makedirs(bindir)
         for exe in (os.path.join(bindir, "gh-public"), os.path.join(bindir, "pass-respawn"),
-                    os.path.join(self.proj, "run.sh")):
+                    os.path.join(bindir, "ed-pull"), os.path.join(self.proj, "run.sh")):
             with open(exe, "w") as f:
                 f.write("#!/bin/sh\n")
             os.chmod(exe, 0o755)
@@ -321,7 +321,8 @@ class Excluded(Base):
                     "eval \"git push\"", "codex login status", "claude -p hi", "tmux ls",
                     "timeout 5 git pull", "echo hi | xargs gh issue view",
                     "delegation-ledger open", "timeout 5 delegation-ledger watch",
-                    "pass-respawn", "pass-respawn --compact", "env X=1 pass-respawn --print"):
+                    "pass-respawn", "pass-respawn --compact", "env X=1 pass-respawn --print",
+                    "ed-pull pull", "ed-pull list"):
             self.assertDenied(self.bash(cmd), "excluded-command", "manual_only", cmd)
         # Only read-only codex is excluded: an agent's raw `codex exec` runs sandboxed, where
         # codex's credential is unreadable, so it is no longer an excluded command.
