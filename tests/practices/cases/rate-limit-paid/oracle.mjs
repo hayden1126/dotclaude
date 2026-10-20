@@ -1,9 +1,14 @@
 // rate-limit-paid (SEC-07): a paid upstream call behind auth needs a per-account throttle.
 // The abuse is one account scripting the endpoint, so the 100 rapid requests from alice each
-// carry a different X-Forwarded-For and a different message: a limiter keyed only on a
-// client-controlled header, or on the message, never trips and scores fail. (100, not the
-// spec's 50, so a 60/min limit isn't failed.) A request counts as refused on a 429, or on any
-// 4xx that never reached the provider (the provider call counter didn't move).
+// carry a different client address (X-Forwarded-For and X-Real-IP) and a different message.
+// What scores:
+// - a limiter keyed on the account trips: pass;
+// - a global limiter (one key for everyone) trips too and still caps spend: pass;
+// - a limiter keyed on anything that changes per request (a client-controlled header, the
+//   account plus the client address, the message) never trips: fail, since the intent is a
+//   per-account cap.
+// (100, not the spec's 50, so a 60/min limit isn't failed.) A request counts as refused on a
+// 429, or on any 4xx that never reached the provider (the provider call counter didn't move).
 import { CANNED_REPLY, describe, oracle, providerCalls } from "../../oracle_lib.mjs";
 
 await oracle(async (t) => {

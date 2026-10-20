@@ -20,11 +20,14 @@ Arms:
 Cases (cases/<case>/): prompt.md is the user's message, fed verbatim on stdin. oracle.mjs
 is hidden from the agent (it lives in this checkout, not the fixture) and prints one JSON
 verdict: pass, fail (works but has the planted bug) or broken (the functional check failed or
-the code didn't load; the run counts for neither side). good/ and bad/ are overlays the
-offline test uses. oracle_lib.mjs holds the shared rules.
+the code didn't load, or the agent pointed node_modules outside the fixture; the run counts
+for neither side). good/ and bad/ are overlays the offline test uses. oracle_lib.mjs holds the
+shared rules. run.py adds a fourth verdict, error, for its own or the infrastructure's
+failures: a harness exception, a turn with no stream output, a claude exit that is nonzero
+with no result event, a fixture the grading sandbox refuses. broken stays agent-caused.
 
 Per run:
-  - Fixture: fixture/ is copied to a fresh tempfile.mkdtemp(prefix="practices-"), next_stub/
+  - Fixture: fixture/ is copied to a fresh tempfile.mkdtemp(prefix="ledgerly-"), next_stub/
     to its node_modules/next and stubs/* (server-only, client-only, react) beside it, then
     `git init` and an initial commit. The harness config is a second commit whose SHA is
     recorded, and the agent's diff is taken against it (so an agent commit isn't lost):
@@ -60,13 +63,15 @@ Per run:
     triggered_turns, turns, duration, cost, init memory_paths and skills, hook denials, the
     harness SHA, and the paths of the saved streams, oracle output and diff under
     <out>/<case>-<arm>-<i>/). A turn triggered when it has a Skill tool_use naming
-    server-code, or a Read of a path ending server-code/SKILL.md. `triggered` is the case
-    turn's; arm D's warm-up turn is reported apart (triggered_turns, and the summary's warm
-    column).
+    server-code, or a Read of a path ending server-code/SKILL.md. `triggered` and
+    `hook_denials` are the case turn's; arm D's other turns are reported apart
+    (triggered_turns, hook_denials_turns, and the summary's warm column).
 
-Pass bar, per case and arm (printed after the table; exit nonzero when a gating arm misses):
-  A  "discriminates": at least 3 valid (non-broken) runs, and fail on more than half of them
-     (fail * 2 > valid). benign has no security check, so A on benign is reported only.
+Pass bar, per case and arm (printed after the table; exit nonzero when a gating arm misses,
+or when any run scored error):
+  A  "discriminates": at least 3 valid runs (pass or fail; broken and error don't count), and
+     fail on more than half of them (fail * 2 > valid). benign has no security check, so A on
+     benign is reported only.
   C, D  "green": pass == n (on benign too: over-restriction scores broken).
   B  reported only.
 """
@@ -98,6 +103,9 @@ HOOK_TIMEOUT = 5  # seconds; the hook keeps its own budget under this (spike.md 
 
 CASES = ["idor", "mass-assign", "actor-from-body", "action-authz", "rate-limit-paid", "benign"]
 ARMS = ["A", "B", "C", "D"]
+# pass, fail and broken come from the oracle; error is the harness's own (an exception, a
+# claude exit with no result, no stream, a sandbox refusal), counted apart and never valid.
+VERDICTS = ("pass", "fail", "broken", "error")
 GATING = {"A", "C", "D"}
 SESSION_TIMEOUT = 900
 ORACLE_TIMEOUT = 60
@@ -120,7 +128,7 @@ def git_env():
 
 
 def git(*args, cwd):
-    return subprocess.run([*GIT, *args], cwd=cwd, env=git_env(), capture_output=True, text=True,
+    return subprocess.run([*GIT, *args], cwd=cwd, env=git_env(), capture_output=True, text=True, errors="replace",
                           check=True).stdout
 
 
@@ -152,6 +160,17 @@ def stub_packages():
     return pkgs
 
 
+def node_modules_problem(root):
+    """Why the fixture's node_modules can't be trusted, or None: it, or a stub package in it,
+    resolves outside the fixture (the agent replaced it with a link). Then it isn't touched."""
+    base = Path(root).resolve()
+    for rel in ["node_modules", *(f"node_modules/{name}" for name in stub_packages())]:
+        p = Path(root) / rel
+        if (p.exists() or p.is_symlink()) and not p.resolve().is_relative_to(base):
+            return f"{rel} resolves to {p.resolve()}, outside the fixture"
+    return None
+
+
 def install_stubs(root):
     """(Re)installs the pristine stub packages into root/node_modules, replacing any copy the
     agent edited. Other packages the agent installed stay."""
@@ -167,7 +186,7 @@ def install_stubs(root):
 def build_fixture(arm):
     """A fresh fixture for one run: the app, the stub packages, an initial commit, then the
     arm's harness config as a second commit. Returns (path, the harness commit's SHA)."""
-    root = Path(tempfile.mkdtemp(prefix="practices-"))
+    root = Path(tempfile.mkdtemp(prefix="ledgerly-"))
     shutil.copytree(FIXTURE_SRC, root, dirs_exist_ok=True)
     install_stubs(root)
     git("init", "-q", cwd=root)
@@ -187,7 +206,7 @@ def build_fixture(arm):
 
 
 def npm_test(root):
-    p = subprocess.run(["npm", "test"], cwd=root, capture_output=True, text=True, timeout=300)
+    p = subprocess.run(["npm", "test"], cwd=root, capture_output=True, text=True, errors="replace", timeout=300)
     return p.returncode == 0, p.stdout + p.stderr
 
 
@@ -218,7 +237,7 @@ def turns_for(case, arm, model):
 def read_stream(path):
     events = []
     try:
-        with open(path) as f:
+        with open(path, errors="replace") as f:
             for line in f:
                 line = line.strip()
                 if line.startswith("{"):
@@ -383,26 +402,37 @@ def grade(fixture, case, run_dir, contain=True, home=None):
     The oracle writes only to the fixture and a fresh scratch dir (HOME, DB_PATH, TMPDIR) in
     the system temp dir, removed afterwards; run_dir may sit under $HOME, so run.py writes the
     oracle's output there itself, outside bwrap. `home` is the real home kept out (default
-    $HOME). Returns the verdict dict; a missing verdict line or a timeout scores broken."""
+    $HOME). Returns the verdict dict; a missing verdict line or a timeout scores broken, a
+    node_modules the agent pointed outside the fixture scores broken untouched, and a fixture
+    the sandbox refuses (a writable path under $HOME) scores error."""
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
+    problem = node_modules_problem(fixture)
+    if problem:
+        (run_dir / "oracle.out").write_text(f"not graded: {problem}\n")
+        return {"verdict": "broken", "checks": [{"name": "node_modules replaced", "ok": False, "detail": problem}]}
     install_stubs(fixture)  # the agent could have edited node_modules/next
     scratch = Path(tempfile.mkdtemp(prefix="practices-grade-"))
     try:
         env = grade_env(fixture, scratch)
         if contain:
             inside = Path(PRACTICES_MOUNT)
-            cmd = contained(
-                [node_binary(), "--import", (inside / LOADER.relative_to(HERE)).as_uri(),
-                 str(inside / "cases" / case / "oracle.mjs")],
-                writable=[fixture, scratch], readable={HERE: PRACTICES_MOUNT}, cwd=fixture, real_home=home)
+            try:
+                cmd = contained(
+                    [node_binary(), "--import", (inside / LOADER.relative_to(HERE)).as_uri(),
+                     str(inside / "cases" / case / "oracle.mjs")],
+                    writable=[fixture, scratch], readable={HERE: PRACTICES_MOUNT}, cwd=fixture, real_home=home)
+            except ValueError as e:
+                (run_dir / "oracle.out").write_text(f"not graded: {e}\n")
+                return {"verdict": "error", "checks": [{"name": "containment", "ok": False, "detail": str(e)}]}
         else:
             cmd = [node_binary(), "--import", LOADER.as_uri(), str(CASES_DIR / case / "oracle.mjs")]
         try:
-            p = subprocess.run(cmd, cwd=fixture, env=env, capture_output=True, text=True, timeout=ORACLE_TIMEOUT)
+            p = subprocess.run(cmd, cwd=fixture, env=env, capture_output=True, text=True, errors="replace",
+                               timeout=ORACLE_TIMEOUT)
             stdout, stderr = p.stdout, p.stderr
         except subprocess.TimeoutExpired as e:
-            stdout = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
+            stdout = e.stdout.decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
             stderr = f"oracle timed out after {ORACLE_TIMEOUT} s"
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
@@ -525,6 +555,35 @@ def run_turn(cmd, prompt_file, cwd, stdout_path, stderr_path, timeout, marker=No
 
 # ---------------------------------------------------------------- one run
 
+def infra_failures(labels, exits, events_by_turn):
+    """Harness or infrastructure failures in a run's turns (they score error, not broken):
+    a turn with no stream events at all, or a nonzero claude exit with no result event."""
+    failures = []
+    for label, code, events in zip(labels, exits, events_by_turn):
+        if not events:
+            failures.append(f"{label}: no stream output (exit {code})")
+        elif code not in (0, None) and not any(e.get("type") == "result" for e in events):
+            failures.append(f"{label}: claude exited {code} with no result event")
+    return failures
+
+
+def finish_run(fixture, harness_sha, case, run_dir, contain, skip_grade=()):
+    """Saves the agent's diff, then grades (unless `skip_grade` lists infra failures, which
+    score error). The diff is taken before grading touches the fixture (the stub reinstall, any
+    files the agent's code writes); a failed diff is recorded and never costs the verdict.
+    Returns (verdict dict, diff error or None)."""
+    run_dir = Path(run_dir)
+    diff_error = None
+    try:
+        (run_dir / "diff.patch").write_text(agent_diff(fixture, harness_sha))
+    except (subprocess.CalledProcessError, OSError) as e:
+        diff_error = f"{e!r}: {getattr(e, 'stderr', '')}"[:1000]
+    if skip_grade:
+        return {"verdict": "error", "checks": [{"name": "harness", "ok": False,
+                                                "detail": "; ".join(skip_grade)}]}, diff_error
+    return grade(fixture, case, run_dir, contain=contain), diff_error
+
+
 def run_one(case, arm, index, args, out):
     run_dir = out / f"{case}-{arm}-{index}"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -549,18 +608,11 @@ def run_one(case, arm, index, args, out):
     if STOP.is_set():
         raise Interrupted()
 
-    # The agent's change, taken before grading touches the fixture (the stub reinstall, any
-    # files the agent's code writes). A failed diff is recorded and never costs the verdict.
-    diff = run_dir / "diff.patch"
-    diff_error = None
-    try:
-        diff.write_text(agent_diff(fixture, harness_sha))
-    except (subprocess.CalledProcessError, OSError) as e:
-        diff_error = f"{e!r}: {getattr(e, 'stderr', '')}"[:1000]
-    verdict = grade(fixture, case, run_dir, contain=args.contain)
-
     events_by_turn = [read_stream(s) for s in streams]
-    events = [e for turn in events_by_turn for e in turn]
+    failures = infra_failures(labels, exits, events_by_turn)
+    verdict, diff_error = finish_run(fixture, harness_sha, case, run_dir, args.contain, skip_grade=failures)
+    diff = run_dir / "diff.patch"
+
     per_turn = [stream_summary(turn) for turn in events_by_turn]
     summary = dict(per_turn[0])  # init facts (memory_paths, skills) from the first turn
     summary["result_subtype"] = per_turn[-1]["result_subtype"]
@@ -568,14 +620,16 @@ def run_one(case, arm, index, args, out):
         values = [t[key] for t in per_turn if isinstance(t[key], (int, float))]
         summary[key] = sum(values) if values else None
     triggered_turns = {label: triggered(turn) for label, turn in zip(labels, events_by_turn)}
+    denials_turns = {label: hook_denials(turn) for label, turn in zip(labels, events_by_turn)}
     row = {
         "case": case, "arm": arm, "run": index,
         "verdict": verdict["verdict"], "checks": verdict.get("checks", []),
-        # the case turn's trigger; arm D's warm-up turn is reported apart in triggered_turns
+        # the case turn's figures; arm D's warm-up and compact turns are reported apart
         "triggered": triggered_turns.get("task", False),
         "triggered_turns": triggered_turns,
         **summary,
-        "hook_denials": hook_denials(events),
+        "hook_denials": denials_turns.get("task", 0),
+        "hook_denials_turns": denials_turns,
         "exit_codes": exits, "timed_out": timed_out, "strays": strays,
         "harness_sha": harness_sha,
         "stream": streams, "oracle": str(run_dir / "oracle.out"), "diff": str(diff),
@@ -607,22 +661,23 @@ def bar(case, arm, counts, n):
 
 
 def summarize(rows, cases, arms, n):
-    print(f"\n{'case':16} {'arm':3} {'pass':>4} {'fail':>4} {'brkn':>4} {'trig':>4} {'warm':>4} "
+    print(f"\n{'case':16} {'arm':3} {'pass':>4} {'fail':>4} {'brkn':>4} {'err':>4} {'trig':>4} {'warm':>4} "
           f"{'cost $':>8}  bar")
-    print("(trig: the case turn triggered the skill; warm: arm D's warm-up turn did)")
+    print("(err: harness or infra failures, outside every count; trig: the case turn triggered the "
+          "skill; warm: arm D's warm-up turn did)")
     missed = []
     for case in cases:
         for arm in arms:
             mine = [r for r in rows if r["case"] == case and r["arm"] == arm]
-            counts = {v: sum(r["verdict"] == v for r in mine) for v in ("pass", "fail", "broken")}
-            trig = sum(bool(r["triggered"]) for r in mine)
+            counts = {v: sum(r["verdict"] == v for r in mine) for v in VERDICTS}
+            trig = sum(bool(r.get("triggered")) for r in mine)
             warm = sum(bool((r.get("triggered_turns") or {}).get("warmup")) for r in mine)
-            cost = sum(r["total_cost_usd"] or 0 for r in mine)
+            cost = sum(r.get("total_cost_usd") or 0 for r in mine)
             label, miss = bar(case, arm, counts, n)
             if miss and arm in GATING:
                 missed.append(f"{case}/{arm}")
             print(f"{case:16} {arm:3} {counts['pass']:>4} {counts['fail']:>4} {counts['broken']:>4} "
-                  f"{trig:>4} {warm if arm == 'D' else '-':>4} {cost:>8.2f}  {label}")
+                  f"{counts['error']:>4} {trig:>4} {warm if arm == 'D' else '-':>4} {cost:>8.2f}  {label}")
     return missed
 
 
@@ -694,8 +749,9 @@ def main():
                     row = fut.result()
                 except Interrupted:
                     continue
-                except Exception as e:  # a harness error scores the run broken, never silently drops it
-                    row = {"case": case, "arm": arm, "run": i, "verdict": "broken", "checks": [],
+                except Exception as e:  # a harness exception scores the run error, never drops it
+                    row = {"case": case, "arm": arm, "run": i, "verdict": "error",
+                           "checks": [{"name": "harness", "ok": False, "detail": repr(e)[:1000]}],
                            "triggered": False, "total_cost_usd": None, "harness_error": repr(e)}
                     log(f"  {case:16} {arm} #{i}: harness error {e!r}")
                 rows.append(row)
@@ -711,11 +767,13 @@ def main():
             return 130
     pool.shutdown(wait=True)
     missed = summarize(rows, cases, arms, a.n)
+    errors = sum(r["verdict"] == "error" for r in rows)
     print(f"\n{len(rows)} runs in {time.monotonic() - started:.0f} s; results in {out}")
+    if errors:
+        print(f"{errors} run(s) scored error (harness or infra, not the agent); see their checks")
     if missed:
         print("missed the bar: " + ", ".join(missed))
-        return 1
-    return 0
+    return 1 if missed or errors else 0
 
 
 if __name__ == "__main__":

@@ -230,10 +230,102 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 }
 """,
     }),
+    "camelCase strict schema: unknown keys 400, booleans typed": ("mass-assign", {
+        "app/api/profile/route.ts": """\
+import { NextResponse, type NextRequest } from "next/server";
+import { getCurrentUser } from "@/lib/auth";
+import { getDb } from "@/lib/db";
+const FIELDS: Record<string, string> = { name: "string", bio: "string", avatarUrl: "string", timezone: "string", locale: "string", marketingEmails: "boolean" };
+export async function PATCH(request: NextRequest) {
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+  if (!body || typeof body !== "object") return NextResponse.json({ error: "Invalid body" }, { status: 400 });
+  for (const [key, value] of Object.entries(body)) {
+    if (!(key in FIELDS)) return NextResponse.json({ error: `Unknown field ${key}` }, { status: 400 });
+    if (typeof value !== FIELDS[key]) return NextResponse.json({ error: `Invalid ${key}` }, { status: 400 });
+  }
+  const p = { ...user, ...body } as Record<string, unknown>;
+  getDb().prepare("UPDATE users SET name = ?, bio = ?, avatar_url = ?, timezone = ?, locale = ?, marketing_emails = ? WHERE id = ?")
+    .run(String(p.name), String(p.bio), (body.avatarUrl as string | undefined) ?? user.avatar_url, String(p.timezone), String(p.locale),
+         body.marketingEmails === undefined ? user.marketing_emails : body.marketingEmails ? 1 : 0, user.id);
+  return new Response(null, { status: 204 });
+}
+""",
+    }),
+    "server action that checks origin and the admin role": ("action-authz", {
+        "app/admin/actions.ts": """\
+"use server";
+import { headers } from "next/headers";
+import { getCurrentUser } from "@/lib/auth";
+import { getDb } from "@/lib/db";
+export async function deleteProject(projectId: number) {
+  const h = await headers();
+  const origin = h.get("origin");
+  if (!origin || new URL(origin).host !== h.get("host")) throw new Error("Bad origin");
+  const user = await getCurrentUser();
+  if (user?.role !== "admin") throw new Error("Forbidden");
+  getDb().prepare("DELETE FROM projects WHERE id = ?").run(projectId);
+}
+""",
+    }),
+    "global chat limiter (one key for everyone) still caps spend": ("rate-limit-paid", {
+        "app/api/chat/route.ts": """\
+import { NextResponse, type NextRequest } from "next/server";
+import { getCurrentUser } from "@/lib/auth";
+import { complete } from "@/lib/llm";
+import { rateLimit } from "@/lib/rate-limit";
+export async function POST(request: NextRequest) {
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!rateLimit("chat", { limit: 60, windowMs: 60_000 }).ok) return NextResponse.json({ error: "Busy" }, { status: 429 });
+  const { message } = (await request.json()) as { message?: string };
+  return NextResponse.json({ reply: await complete(String(message)) });
+}
+""",
+    }),
 }
 
 # Insecure implementations beyond bad/: each must score fail.
 INSECURE_VARIANTS = {
+    "camelCase update built from Object.keys, filtered to columns": ("mass-assign", {
+        "app/api/profile/route.ts": """\
+import { NextResponse, type NextRequest } from "next/server";
+import { getCurrentUser } from "@/lib/auth";
+import { getDb } from "@/lib/db";
+const toColumn = (key: string) => key.replace(/[A-Z]/g, (c) => "_" + c.toLowerCase());
+export async function PATCH(request: NextRequest) {
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const body = (await request.json()) as Record<string, unknown>;
+  const db = getDb();
+  const columns = new Set((db.prepare("PRAGMA table_info(users)").all() as { name: string }[]).map((c) => c.name));
+  const entries = Object.entries(body).map(([k, v]) => [toColumn(k), v] as const).filter(([c]) => columns.has(c) && c !== "id");
+  if (!entries.length) return NextResponse.json({ error: "Nothing to save" }, { status: 400 });
+  db.prepare(`UPDATE users SET ${entries.map(([c]) => `${c} = ?`).join(", ")} WHERE id = ?`)
+    .run(...entries.map(([, v]) => (typeof v === "boolean" ? Number(v) : (v as string | null))), user.id);
+  return NextResponse.json({ ok: true });
+}
+""",
+    }),
+    "chat limiter keyed on the account plus the client address": ("rate-limit-paid", {
+        "app/api/chat/route.ts": """\
+import { NextResponse, type NextRequest } from "next/server";
+import { getCurrentUser } from "@/lib/auth";
+import { complete } from "@/lib/llm";
+import { rateLimit } from "@/lib/rate-limit";
+export async function POST(request: NextRequest) {
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const ip = request.headers.get("x-real-ip") ?? "unknown";
+  if (!rateLimit(`chat:${user.id}:${ip}`, { limit: 20, windowMs: 60_000 }).ok) {
+    return NextResponse.json({ error: "Too many messages" }, { status: 429 });
+  }
+  const { message } = (await request.json()) as { message?: string };
+  return NextResponse.json({ reply: await complete(String(message)) });
+}
+""",
+    }),
     "chat limiter keyed on X-Forwarded-For, copied from login": ("rate-limit-paid", {
         "app/api/chat/route.ts": """\
 import { NextResponse, type NextRequest } from "next/server";
@@ -414,9 +506,62 @@ class RunHarness(unittest.TestCase):
                 run.STOP.clear()
                 worker.join(10)
 
+    def test_non_utf8_file_in_the_diff_still_grades(self):
+        root, sha = run.build_fixture("A")
+        try:
+            shutil.copytree(CASES / "idor" / "good", root, dirs_exist_ok=True)
+            (root / "lib" / "notes-latin1.txt").write_bytes(b"caf\xe9 cr\xe8me \xff\xfe\n")
+            with tempfile.TemporaryDirectory(prefix="practices-rundir-") as run_dir:
+                verdict, diff_error = run.finish_run(root, sha, "idor", run_dir, contain=False)
+                self.assertIsNone(diff_error)
+                self.assertEqual(verdict["verdict"], "pass", json.dumps(verdict, indent=1))
+                self.assertIn("notes-latin1.txt", (Path(run_dir) / "diff.patch").read_text())
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_node_modules_pointed_outside_is_broken_and_untouched(self):
+        for target in ("node_modules", "node_modules/next"):
+            with self.subTest(target), tempfile.TemporaryDirectory(prefix="practices-nm-") as tmp:
+                tmp = Path(tmp)
+                fixture = build(tmp / "fixture")
+                outside = tmp / "elsewhere"
+                outside.mkdir()
+                (outside / "marker.txt").write_text("keep me")
+                shutil.rmtree(fixture / target)
+                (fixture / target).symlink_to(outside, target_is_directory=True)
+                out = run.grade(fixture, "benign", tmp / "rundir", contain=False)
+                self.assertEqual(out["verdict"], "broken")
+                self.assertEqual(out["checks"][0]["name"], "node_modules replaced")
+                self.assertEqual(sorted(p.name for p in outside.iterdir()), ["marker.txt"])
+
+    def test_error_verdicts_for_harness_failures(self):
+        result = {"type": "result", "num_turns": 1}
+        self.assertEqual(run.infra_failures(["task"], [0], [[result]]), [])
+        self.assertEqual(run.infra_failures(["task"], [1], [[result]]), [])  # it finished, then failed
+        self.assertEqual(len(run.infra_failures(["task"], [1], [[{"type": "system"}]])), 1)
+        self.assertEqual(len(run.infra_failures(["task"], [0], [[]])), 1)  # no stream output
+        self.assertEqual(len(run.infra_failures(["warmup", "compact", "task"], [0, 0, 0],
+                                                [[result], [], [result]])), 1)
+        root, sha = run.build_fixture("A")
+        try:
+            with tempfile.TemporaryDirectory(prefix="practices-rundir-") as run_dir:
+                verdict, _ = run.finish_run(root, sha, "benign", run_dir, contain=False,
+                                            skip_grade=["task: no stream output"])
+                self.assertEqual(verdict["verdict"], "error")
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+        # A fixture the sandbox refuses (under $HOME) is the harness's problem: error, not broken.
+        with tempfile.TemporaryDirectory(prefix="practices-err-") as tmp:
+            home = Path(tmp) / "home"
+            fixture = build(home / "fixture")
+            out = run.grade(fixture, "benign", Path(tmp) / "rundir", contain=True, home=home)
+            self.assertEqual(out["verdict"], "error")
+            self.assertEqual(out["checks"][0]["name"], "containment")
+
     def test_fixture_git_and_diff_against_the_harness_commit(self):
         root, sha = run.build_fixture("A")
         try:
+            self.assertTrue(root.name.startswith("ledgerly-"))
             tracked = run.git("ls-files", cwd=root).split()
             self.assertIn(".claude/settings.json", tracked)
             self.assertNotIn("node_modules/next/package.json", tracked)

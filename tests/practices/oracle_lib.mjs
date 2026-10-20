@@ -18,15 +18,16 @@
 //   anything else falls through to the handler. So a limiter or a redirect in middleware counts.
 //   Request headers a middleware forwards with NextResponse.next({ request: { headers } }) reach
 //   the handler, as in Next.
-// - Every request is a same-origin browser request (host, origin, sec-fetch-site) to
-//   http://localhost:3000, so an Origin or Host check in the app passes.
+// - Every request, and every server action call (through headers()), is a same-origin browser
+//   request (host, origin, sec-fetch-site) to http://localhost:3000, so an Origin or Host check
+//   in the app passes. The client address is in both x-forwarded-for and x-real-ip.
 // - fetch is replaced: the model provider's host (lib/llm.ts) answers CANNED_REPLY and is
 //   counted (providerCalls()); every other host fails.
 // - A handler or action that throws counts as status 500 with no body, except Next's own
 //   control-flow throws: redirect() is 307/308, notFound() 404, forbidden() 403,
 //   unauthorized() 401, as Next would answer.
 // - Server actions: the named export in a "use server" file under app/, called inside
-//   runWithCookies with the caller's session cookie.
+//   runWithRequest with a same-origin POST carrying the caller's session cookie.
 import { mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -59,6 +60,24 @@ globalThis.fetch = async (input) => {
 };
 
 const ORIGIN = "http://localhost:3000";
+const DEFAULT_IP = "203.0.113.10";
+
+// What a browser on the app's own pages sends: same-origin, with the client address in both
+// proxy headers.
+function browserHeaders(url, { as, ip }) {
+  const headers = new Headers({
+    host: url.host,
+    origin: ORIGIN,
+    referer: `${ORIGIN}/`,
+    "sec-fetch-site": "same-origin",
+    "sec-fetch-mode": "cors",
+    "x-forwarded-for": ip,
+    "x-real-ip": ip,
+    "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36",
+  });
+  if (as) headers.set("cookie", `session=${USERS[as].token}`);
+  return headers;
+}
 
 class Missing extends Error {}
 
@@ -222,19 +241,10 @@ class Oracle {
 
   // Calls the app as user `as` ("a", "b", "c"; signed out when omitted) with a JSON or
   // multipart body, as a same-origin browser request from client address `ip`.
-  async route(method, urlPath, { as, json, form, ip = "203.0.113.10" } = {}) {
+  async route(method, urlPath, { as, json, form, ip = DEFAULT_IP } = {}) {
     const url = new URL(urlPath, ORIGIN);
     const make = (override) => {
-      const headers = new Headers({
-        host: url.host,
-        origin: ORIGIN,
-        referer: `${ORIGIN}/`,
-        "sec-fetch-site": "same-origin",
-        "sec-fetch-mode": "cors",
-        "x-forwarded-for": ip,
-        "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36",
-      });
-      if (as) headers.set("cookie", `session=${USERS[as].token}`);
+      const headers = browserHeaders(url, { as, ip });
       let body;
       if (json !== undefined) {
         headers.set("content-type", "application/json");
@@ -300,15 +310,21 @@ class Oracle {
     return readResponse(res, rel);
   }
 
-  // Calls server action `name` as user `as`. `prefer` lists files to try first.
-  async action(name, args, { as, prefer = [] } = {}) {
+  // Calls server action `name` as user `as`, inside the same-origin POST a form submit makes
+  // (so headers() in the action sees host, origin and sec-fetch-site, as routes do). `prefer`
+  // lists files to try first.
+  async action(name, args, { as, prefer = [], page = "/admin" } = {}) {
     const file = findActionFile(name, prefer);
     if (!file) throw new Missing(`no "use server" file under app/ exports ${name}`);
     const mod = await import(pathToFileURL(file).href);
     if (typeof mod[name] !== "function") throw new Missing(`${path.relative(FIXTURE, file)} has no function ${name}`);
-    const cookies = as ? { session: USERS[as].token } : {};
+    const url = new URL(page, ORIGIN);
+    const headers = browserHeaders(url, { as, ip: DEFAULT_IP });
+    headers.set("next-action", name);
+    headers.set("accept", "text/x-component");
+    const request = new this.next.NextRequest(url, { method: "POST", headers });
     try {
-      const value = await this.ctx.runWithCookies(cookies, () => mod[name](...args));
+      const value = await this.ctx.runWithRequest(request, () => mod[name](...args));
       return { threw: null, value, file: path.relative(FIXTURE, file) };
     } catch (error) {
       return { threw: String(error?.message ?? error).slice(0, 300), digest: error?.digest, file: path.relative(FIXTURE, file) };
