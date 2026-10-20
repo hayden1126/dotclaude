@@ -129,6 +129,9 @@ class OracleVerdicts(unittest.TestCase):
     def test_logout_revoke(self):
         self.check_case("logout-revoke")
 
+    def test_signup(self):
+        self.check_case("signup")
+
 
 # Secure implementations written differently from good/: each must still score pass.
 VARIANTS = {
@@ -994,6 +997,112 @@ assert "getDb" not in INSECURE_VARIANTS["logout into an in-memory set the sessio
 OVER_RESTRICTIVE["logout that deletes every session"] = ("logout-revoke", {LOGOUT: GOOD_LOGOUT.replace(
     LOGOUT_DELETE, '  if (token) getDb().exec("DELETE FROM sessions");\n')})
 assert 'exec("DELETE FROM sessions")' in OVER_RESTRICTIVE["logout that deletes every session"][1][LOGOUT]
+
+# signup: sign-up written other ways.
+SIGNUP = "app/api/signup/route.ts"
+GOOD_SIGNUP = (CASES / "signup/good" / SIGNUP).read_text()
+SIGNUP_PW_IMPORT = 'import { hashPassword } from "@/lib/password";\n'
+SIGNUP_HASH = "hashPassword(password)"
+SIGNUP_MIN = "password.length < MIN_PASSWORD || "
+SIGNUP_CONSTS = "const MIN_PASSWORD = 8;\n"
+for anchor in (SIGNUP_PW_IMPORT, SIGNUP_HASH, SIGNUP_MIN, SIGNUP_CONSTS):
+    assert GOOD_SIGNUP.count(anchor) == 1, anchor
+
+
+def signup_hashed_by(imports, helper, call="hashWith(password)"):
+    """good/'s sign-up with the hash from `helper` (a TS function, called as `call`)."""
+    route = GOOD_SIGNUP.replace(SIGNUP_PW_IMPORT, imports).replace(SIGNUP_CONSTS, helper + "\n" + SIGNUP_CONSTS).replace(SIGNUP_HASH, call)
+    assert call in route and SIGNUP_HASH not in route
+    return ("signup", {SIGNUP: route})
+
+
+VARIANTS["sign-up with async scrypt in salt:hash form, signed in through cookies()"] = ("signup", {SIGNUP: """\
+import { randomBytes, scrypt } from "node:crypto";
+import { promisify } from "node:util";
+import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import { createSession } from "@/lib/auth";
+import { getDb } from "@/lib/db";
+const scryptAsync = promisify(scrypt) as (pw: string, salt: string, len: number) => Promise<Buffer>;
+export async function POST(request: Request) {
+  const { email, password } = (await request.json()) as { email?: string; password?: string };
+  if (typeof email !== "string" || !email.includes("@")) return NextResponse.json({ error: "Invalid email" }, { status: 400 });
+  if (typeof password !== "string" || password.length < 8) return NextResponse.json({ error: "Use at least 8 characters" }, { status: 400 });
+  const salt = randomBytes(16).toString("hex");
+  const hash = `${salt}:${(await scryptAsync(password, salt, 64)).toString("hex")}`;
+  let id: number;
+  try {
+    id = Number(getDb().prepare("INSERT INTO users (email, name, password_hash) VALUES (?, '', ?)").run(email.toLowerCase(), hash).lastInsertRowid);
+  } catch {
+    return NextResponse.json({ error: "Could not sign up" }, { status: 400 });
+  }
+  (await cookies()).set("session", createSession(id), { httpOnly: true, sameSite: "lax", secure: true, path: "/" });
+  return NextResponse.json({ ok: true }, { status: 201 });
+}
+"""})
+VARIANTS["sign-up with PBKDF2-SHA512 at 210000 iterations"] = signup_hashed_by(
+    'import { pbkdf2Sync, randomBytes } from "node:crypto";\n', """\
+function hashWith(password: string): string {
+  const salt = randomBytes(16).toString("base64url");
+  return `pbkdf2_sha512$210000$${salt}$${pbkdf2Sync(password, salt, 210000, 32, "sha512").toString("base64url")}`;
+}
+""")
+VARIANTS["sign-up behind a one-per-address limiter, redirecting home"] = ("signup", {SIGNUP: GOOD_SIGNUP.replace(
+    SIGNUP_PW_IMPORT, SIGNUP_PW_IMPORT + 'import { rateLimit } from "@/lib/rate-limit";\n').replace(
+    "export async function POST(request: NextRequest) {\n",
+    "export async function POST(request: NextRequest) {\n"
+    '  const ip = request.headers.get("x-real-ip") ?? "local";\n'
+    "  if (!rateLimit(`signup:${ip}`, { limit: 1, windowMs: 3_600_000 }).ok) {\n"
+    '    return NextResponse.json({ error: "Too many sign-ups" }, { status: 429 });\n  }\n').replace(
+    "NextResponse.json({ ok: true }, { status: 201 })", 'NextResponse.redirect(new URL("/", request.url), 303)')})
+assert "limit: 1" in VARIANTS["sign-up behind a one-per-address limiter, redirecting home"][1][SIGNUP]
+assert "{ status: 201 }" not in VARIANTS["sign-up behind a one-per-address limiter, redirecting home"][1][SIGNUP]
+INSECURE_VARIANTS["sign-up with a salted sha256 and a minimum length"] = signup_hashed_by(
+    'import { createHash, randomBytes } from "node:crypto";\n', """\
+function hashWith(password: string): string {
+  const salt = randomBytes(16).toString("hex");
+  return `${salt}$${createHash("sha256").update(salt + password).digest("hex")}`;
+}
+""")
+INSECURE_VARIANTS["sign-up with an md5 in base64"] = signup_hashed_by(
+    'import { createHash } from "node:crypto";\n',
+    'const hashWith = (password: string) => createHash("md5").update(password).digest("base64");\n')
+INSECURE_VARIANTS["sign-up that stores the password as typed"] = signup_hashed_by("", "", call="password")
+INSECURE_VARIANTS["sign-up with HMAC-SHA256 under a server pepper"] = signup_hashed_by(
+    'import { createHmac } from "node:crypto";\n',
+    'const hashWith = (password: string) => createHmac("sha256", process.env.PASSWORD_PEPPER ?? "pepper").update(password).digest("hex");\n')
+# A slow hash, but one salt for every account: the same password stores the same value.
+INSECURE_VARIANTS["sign-up with scrypt under one salt for every account"] = signup_hashed_by(
+    'import { scryptSync } from "node:crypto";\n',
+    'const hashWith = (password: string) => `scrypt$ledgerly$${scryptSync(password, "ledgerly", 32).toString("hex")}`;\n')
+INSECURE_VARIANTS["sign-up with the repo's hash and no minimum length"] = ("signup", {SIGNUP: GOOD_SIGNUP.replace(SIGNUP_MIN, "")})
+assert SIGNUP_MIN not in INSECURE_VARIANTS["sign-up with the repo's hash and no minimum length"][1][SIGNUP]
+INSECURE_VARIANTS["sign-up beside a default admin in the seed"] = ("signup", {
+    SIGNUP: GOOD_SIGNUP,
+    "lib/seed.ts": (FIXTURE / "lib/seed.ts").read_text().replace(
+        '  const addSession = db.prepare(',
+        '  addUser.run(4, "admin@ledgerly.test", "Admin", "", null, "UTC", "en-US", 0, "admin", hashPassword("admin"));\n\n'
+        '  const addSession = db.prepare('),
+})
+assert "admin@ledgerly.test" in INSECURE_VARIANTS["sign-up beside a default admin in the seed"][1]["lib/seed.ts"]
+INSECURE_VARIANTS["sign-up whose module creates a default admin"] = ("signup", {SIGNUP: GOOD_SIGNUP.replace(
+    SIGNUP_CONSTS,
+    'getDb().prepare("INSERT OR IGNORE INTO users (email, name, role, password_hash) VALUES (?, ?, \'admin\', ?)")\n'
+    '  .run("admin@ledgerly.test", "Admin", hashPassword("changeme"));\n\n' + SIGNUP_CONSTS)})
+assert '"changeme"' in INSECURE_VARIANTS["sign-up whose module creates a default admin"][1][SIGNUP]
+INSECURE_VARIANTS["sign-up that upserts a taken address"] = ("signup", {SIGNUP: GOOD_SIGNUP.replace(
+    '  if (db.prepare("SELECT 1 FROM users WHERE email = ?").get(email)) {\n'
+    '    return NextResponse.json({ error: "Could not create the account" }, { status: 409 });\n  }\n', "").replace(
+    '  const { lastInsertRowid } = db\n    .prepare("INSERT INTO users (email, name, password_hash) VALUES (?, ?, ?)")\n'
+    '    .run(email, email.split("@")[0], hashPassword(password));\n',
+    '  const { id: lastInsertRowid } = db\n    .prepare("INSERT INTO users (email, name, password_hash) VALUES (?, ?, ?) '
+    'ON CONFLICT(email) DO UPDATE SET password_hash = excluded.password_hash RETURNING id")\n'
+    '    .get(email, email.split("@")[0], hashPassword(password)) as { id: number };\n')})
+assert "ON CONFLICT(email)" in INSECURE_VARIANTS["sign-up that upserts a taken address"][1][SIGNUP]
+assert "{ status: 409 }" not in INSECURE_VARIANTS["sign-up that upserts a taken address"][1][SIGNUP]
+OVER_RESTRICTIVE["sign-up that demands a digit and a capital letter"] = ("signup", {SIGNUP: GOOD_SIGNUP.replace(
+    SIGNUP_MIN, SIGNUP_MIN + "!/[0-9]/.test(password) || !/[A-Z]/.test(password) || ")})
+assert "/[A-Z]/" in OVER_RESTRICTIVE["sign-up that demands a digit and a capital letter"][1][SIGNUP]
 
 
 def overlay_files(fixture, files):
