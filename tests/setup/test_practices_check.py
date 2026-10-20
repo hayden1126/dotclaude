@@ -662,6 +662,23 @@ class L4(Base):
         self.assertLess(len(ctx), 2000)
         self.assertTrue(ctx.startswith("Practices skills loaded before this compaction: demo."))
 
+    def test_each_loaded_skill_gets_its_share_cut_only_between_lines(self):
+        # A long gate no longer crowds out the next skill: the 2,000 characters are shared
+        # per skill, and a skill's lines are cut only between lines, never mid-line.
+        long_ = [f"Alpha line {n}: " + "a" * 150 for n in range(12)]
+        self.skill("alpha", 'skill = "alpha"\ngate = ' + json.dumps(long_) + "\n")
+        self.skill("beta", 'skill = "beta"\ngate = ["Beta one.", "Beta two."]\n')
+        self.rows([*load("t1", "Skill", skill="alpha"), *load("t2", "Skill", skill="beta"),
+                   text()])
+        ctx = self.digest()
+        self.assertLess(len(ctx), 2000)
+        self.assertIn("\n- Beta one.\n- Beta two.", ctx)
+        self.assertIn(f"\n- {long_[0]}\n", ctx)
+        for line in (x[2:] for x in ctx.split("\n") if x.startswith("- ")):
+            with self.subTest(line=line[:20]):
+                self.assertTrue(line in long_ or line in ("Beta one.", "Beta two.")
+                                or re.fullmatch(r"\(\d+ more in its SKILL\.md\)", line), line)
+
     def test_resume_and_clear_print_nothing(self):
         self.loaded()
         self.assertIsNone(self.start("resume"))
@@ -973,6 +990,21 @@ class Shipped(unittest.TestCase):
                 for item in skill["events"] + skill["rules"]:
                     for g in item.get("paths", []):
                         PC.re.compile(PC.glob_regex(g))
+
+    def test_a_digest_of_every_shipped_skill_keeps_a_full_line_of_each(self):
+        # As installed: each skill's SKILL.md path under ~/.claude/skills.
+        skills = {}
+        for f in sorted(glob.glob(os.path.join(REPO, "skills", "*", "events.toml"))):
+            skill, why = PC.load_skill(os.path.dirname(f))
+            self.assertIsNone(why)
+            skill["dir"] = os.path.join(os.path.expanduser("~"), ".claude", "skills",
+                                        os.path.basename(os.path.dirname(f)))
+            skills[skill["name"]] = skill
+        ctx = PC.digest(sorted(skills), skills)
+        self.assertLess(len(ctx), 2000)
+        for name, skill in skills.items():
+            with self.subTest(skill=name):
+                self.assertTrue(any(f"\n- {line}\n" in ctx + "\n" for line in skill["gate"]))
 
     def test_the_lint(self):
         for bad in ("(a+)+", "(a*)*", "(.*)+", r"(?:\s*,\s*\w+)*", "(ab|ab)*", "("):

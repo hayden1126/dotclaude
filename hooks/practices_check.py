@@ -53,8 +53,9 @@ Levels:
       `at` lacks "edit". A `scope = "line"` rule (a key shape) is judged per line of new: `when`,
       `unless` and the allow all on the one line, so an allow covers only its own line.
   L3s, push and L3r: the Bash levels, below.
-  L4  SessionStart(compact): a digest (under DIGEST_MAX characters) naming the practices skills
-      loaded since the previous compaction, with their gate lines, plus reloadSkills: true.
+  L4  SessionStart(compact): a digest (under DIGEST_MAX characters, shared among the skills
+      and cut only between lines) naming the practices skills loaded since the previous
+      compaction, with their gate lines, plus reloadSkills: true.
 Deny-once has two signs, and either lets the call through:
   - a tool_result in the window holding the call's own marker. The marker is this engine's own
     text, never Claude Code's "hook error" wording around it, which a release may reword;
@@ -2055,18 +2056,41 @@ def deny(reason):
 # ---------------------------------------------------------------- SessionStart
 
 def digest(names, skills):
-    head = ("Practices skills loaded before this compaction: " + ", ".join(names) + ".")
-    out = head
-    for n in names:
-        s = skills[n]
-        block = (f"\n{n} ({os.path.join(s['dir'], 'SKILL.md')}), its must-hold lines:"
-                 + "".join(f"\n- {line}" for line in s["gate"]))
-        if len(out) + len(block) >= DIGEST_MAX:
-            room = DIGEST_MAX - len(out) - 2
-            out += block[:max(room, 0)] + ("…" if room > 0 else "")
+    """The L4 digest, under DIGEST_MAX characters: a head naming the skills, then each one's
+    SKILL.md path and gate lines. The room after the head is shared among the skills (one that
+    needs less than its share passes the rest on), so a long gate never crowds out the next
+    skill, and a skill's lines are cut only between lines, with a note of how many it left
+    out."""
+    head = "Practices skills loaded before this compaction: " + ", ".join(names) + "."
+    blocks = [(f"\n{n} ({os.path.join(skills[n]['dir'], 'SKILL.md')}), its must-hold lines:",
+               [f"\n- {line}" for line in skills[n]["gate"]]) for n in names]
+    need = [len(title) + sum(map(len, lines)) for title, lines in blocks]
+    room, share, left = DIGEST_MAX - 1 - len(head), {}, list(range(len(blocks)))
+    while left:  # each skill's share: what it needs, or an even split of what is left
+        fair = max(room, 0) // len(left)
+        fits = [k for k in left if need[k] <= fair]
+        if not fits:
+            share.update((k, fair) for k in left)
             break
-        out += block
-    return out[:DIGEST_MAX - 1]
+        for k in fits:
+            share[k], room = need[k], room - need[k]
+        left = [k for k in left if k not in fits]
+    out = head
+    for k, (title, lines) in enumerate(blocks):
+        if need[k] <= share[k]:
+            out += title + "".join(lines)
+            continue
+        kept, used = [], len(title)
+        for line in lines:
+            note = f"\n- ({len(lines) - len(kept) - 1} more in its SKILL.md)"
+            if used + len(line) + len(note) > share[k]:
+                break
+            kept.append(line)
+            used += len(line)
+        note = f"\n- ({len(lines) - len(kept)} more in its SKILL.md)"
+        if used + len(note) <= share[k]:
+            out += title + "".join(kept) + note
+    return out[:DIGEST_MAX - 1]  # only a head naming dozens of skills reaches this cap
 
 
 def compact(event):
