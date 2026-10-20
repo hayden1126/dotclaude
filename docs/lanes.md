@@ -655,7 +655,9 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   lane on a merged PR's old head showed as that PR merged, which can start a false post-merge
   chain (lane branch-reuse, 2026-10-19). It asks after the fetch has proved the network up, and
   refuses when gh still can't answer (no login, a remote off GitHub, a reply that won't parse),
-  as it does on a failed fetch. `--reuse-branch` skips the check (Hayden's picks). After the setup (which may set a `core.hooksPath`), `new` checks the
+  as it does on a failed fetch. `--reuse-branch` skips the check (Hayden's picks) and marks the
+  lane `reused` in `lane.json`, so `ls` judges its merges past a full PR list as an adopted
+  lane's ("What it can't tell"). After the setup (which may set a `core.hooksPath`), `new` checks the
   worktree as the excluded-command guard will judge the lane's own calls, prints the Edit deny
   rule each dir needs and seeds it into the record's Asks for Hayden, as does `adopt` finishing a
   setup-failed lane; adopting another worktree only prints them (docs/delegation.md, "The
