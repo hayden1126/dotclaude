@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PreToolUse(Edit|Write|MultiEdit|Bash) and SessionStart hook: the practices engine. It denies an
+# PreToolUse(Edit|Write|MultiEdit) and SessionStart hook: the practices engine. It denies an
 # edit once until the skill that owns its event is loaded (L1), denies once per file on a
 # high-precision bad pattern (L2), and after a compaction restates the loaded skills' must-hold
 # lines (L4). Each skill's events.toml holds its triggers; the rules and why are in

@@ -21,6 +21,7 @@ import subprocess
 import tempfile
 import tomllib
 import unittest
+from unittest import mock
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HOOK = os.path.join(REPO, "hooks", "practices-check.sh")
@@ -98,9 +99,20 @@ def result(tid, content="ok", error=False, sidechain=False):
     return row
 
 
+def load(tid, name, sidechain=False, uuid=None, error=False, **inp):
+    """A Skill call or Read and its result: a load counts only with a result that isn't an
+    error."""
+    return [use(tid, name, sidechain=sidechain, uuid=uuid, **inp),
+            result(tid, "File does not exist." if error else "Launching skill", error=error,
+                   sidechain=sidechain)]
+
+
 def text(words="done"):
     return {"type": "assistant", "message": {"role": "assistant", "content": [
         {"type": "text", "text": words}]}}
+
+
+BOUNDARIES = iter(range(1, 1 << 30))
 
 
 def boundary(*kept):
@@ -110,7 +122,7 @@ def boundary(*kept):
                                      "allUuids": list(kept)}
     return [{"parentUuid": None, "isSidechain": False, "type": "system",
              "subtype": "compact_boundary", "content": "Conversation compacted",
-             "compactMetadata": meta, "uuid": "b-" + str(len(kept))},
+             "compactMetadata": meta, "uuid": f"boundary-{next(BOUNDARIES)}"},
             {"type": "user", "isCompactSummary": True, "uuid": "anchor", "message": {
                 "role": "user", "content": "This session is being continued ..."}}]
 
@@ -245,17 +257,26 @@ class L1(Base):
         self.assertIsNone(self.fire())
 
     def test_a_plugin_qualified_skill_call_loads_it(self):
-        self.rows([use("t1", "Skill", skill="plug:demo")])
+        self.rows(load("t1", "Skill", skill="plug:demo"))
         self.assertIsNone(self.fire())
 
     def test_a_read_of_its_skill_md_loads_it(self):
-        self.rows([use("t1", "Read", file_path=os.path.join(
-            self.proj, ".claude", "skills", "demo", "SKILL.md"))])
+        self.rows(load("t1", "Read", file_path=os.path.join(
+            self.proj, ".claude", "skills", "demo", "SKILL.md")))
         self.assertIsNone(self.fire())
 
+    def test_a_failed_load_does_not_count(self):
+        cases = (load("t1", "Skill", skill="demo", error=True),
+                 load("t1", "Read", file_path="/wrong/demo/SKILL.md", error=True),
+                 [use("t1", "Skill", skill="demo")])  # no result yet
+        for n, rows in enumerate(cases):
+            with self.subTest(case=n):
+                self.rows(rows)
+                self.assertIsNotNone(self.fire(session_id=f"session-{n}"))
+
     def test_another_skills_load_does_not_count(self):
-        self.rows([use("t1", "Skill", skill="demolition"),
-                   use("t2", "Read", file_path="/x/demo-old/SKILL.md")])
+        self.rows([*load("t1", "Skill", skill="demolition"),
+                   *load("t2", "Read", file_path="/x/demo-old/SKILL.md")])
         self.assertIsNotNone(self.fire())
 
     def test_the_resend_after_its_own_deny_passes(self):
@@ -276,11 +297,12 @@ class L1(Base):
         self.assertNotIn("route-handler", second)
 
     def test_a_load_before_the_last_compaction_does_not_count(self):
-        self.rows([use("t1", "Skill", skill="demo"), text(), *boundary()])
+        self.rows([*load("t1", "Skill", skill="demo"), text(), *boundary()])
         self.assertIsNotNone(self.fire())
 
     def test_a_load_the_compaction_preserved_counts(self):
-        self.rows([use("t1", "Skill", skill="demo", uuid="kept-1"), *boundary("kept-1")])
+        self.rows([*load("t1", "Skill", skill="demo", uuid="kept-1"), text(),
+                   *boundary("kept-1", "not-in-this-file")])
         self.assertIsNone(self.fire())
 
     def test_a_deny_before_the_last_compaction_does_not_count(self):
@@ -289,7 +311,7 @@ class L1(Base):
         self.assertIsNotNone(self.fire())
 
     def test_a_load_after_the_compaction_counts(self):
-        self.rows([*boundary(), use("t1", "Skill", skill="demo")])
+        self.rows([*boundary(), *load("t1", "Skill", skill="demo")])
         self.assertIsNone(self.fire())
 
     def test_one_deny_names_every_skill_that_fired(self):
@@ -302,6 +324,63 @@ class L1(Base):
     def test_a_transcript_quote_in_model_text_is_no_deny(self):
         self.rows([text("[practices:L1:demo:route-handler] quoted")])
         self.assertIsNotNone(self.fire())
+
+
+class Backstop(Base):
+    """The state file allows a resend whose deny the transcript doesn't show."""
+
+    def test_a_deny_row_without_the_marker_still_lets_the_resend_through(self):
+        self.assertIsNotNone(self.fire())
+        self.add(use("t1", "Write", file_path="x"),  # a release that moved the reason elsewhere
+                 result("t1", "PreToolUse:Write hook error: (see attachment)", error=True))
+        self.assertIsNone(self.fire())
+        self.loaded()
+        self.assertIsNotNone(self.fire("lib/save.ts", "x({ ...body })\n"))
+        self.assertIsNone(self.fire("lib/save.ts", "x({ ...body })\n"))
+        self.assertIsNotNone(self.fire("lib/other.ts", "x({ ...body })\n"))
+
+    def test_a_new_compaction_denies_l1_again(self):
+        self.assertIsNotNone(self.fire())
+        self.assertIsNone(self.fire())
+        self.add(*boundary())
+        self.assertIsNotNone(self.fire())
+        self.assertIsNone(self.fire())
+        self.add(*boundary())
+        self.assertIsNotNone(self.fire())
+
+    def test_an_l2_deny_holds_across_a_compaction_by_state_too(self):
+        self.loaded()
+        self.assertIsNotNone(self.fire("lib/save.ts", "x({ ...body })\n"))
+        self.add(*boundary(), *load("t2", "Skill", skill="demo"))
+        self.assertIsNone(self.fire("lib/save.ts", "x({ ...body })\n"))
+
+    def test_a_spent_budget_during_the_transcript_read_allows_and_logs(self):
+        self.env["PRACTICES_TEST_BUDGET"] = "0"  # the route matches by path: no pattern runs
+        self.assertIsNone(self.fire())
+        self.assertIn("budget-spent", self.log())
+        self.assertIn("transcript", self.log())
+
+    def test_the_breadcrumb_names_the_transcript_read(self):
+        seen = {}
+
+        def window(t):
+            for n in os.listdir(os.path.join(self.state, "dotclaude", "practices")):
+                if n.startswith("breadcrumb-"):
+                    with open(os.path.join(self.state, "dotclaude", "practices", n)) as f:
+                        seen.update(json.load(f))
+            return None, "none"
+
+        event = {"session_id": SID, "transcript_path": self.transcript, "cwd": self.proj,
+                 "tool_name": "Write", "tool_input": {
+                     "file_path": os.path.join(self.proj, "app/api/x/route.ts"), "content": ""}}
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "BUDGET", 1e9), mock.patch.object(PC, "l1_window", window):
+            try:
+                self.assertIsNotNone(PC.pre_tool_use(event))
+            finally:
+                PC.CRUMB.clear()
+        self.assertEqual(seen.get("level"), "transcript")
+        self.assertEqual(seen.get("file"), "app/api/x/route.ts")
 
 
 class L2(Base):
@@ -322,7 +401,7 @@ class L2(Base):
     def test_a_deny_holds_across_a_compaction(self):
         reason = self.fire("lib/save.ts", "x({ ...body })\n")
         self.add(result("t1", DENY + reason, error=True), *boundary(),
-                 use("t2", "Skill", skill="demo"))
+                 *load("t2", "Skill", skill="demo"))
         self.assertIsNone(self.fire("lib/save.ts", "x({ ...body })\n"))
 
     def test_practices_allow_suppresses_the_rule(self):
@@ -370,7 +449,7 @@ class AfterTheEdit(Base):
     def server_code(self):
         shutil.copytree(os.path.join(REPO, "skills", "server-code"),
                         os.path.join(self.proj, ".claude", "skills", "server-code"))
-        self.rows([use("t1", "Skill", skill="server-code")])
+        self.rows(load("t1", "Skill", skill="server-code"))
 
     def test_an_edit_deep_in_a_use_server_file_fires_l1(self):
         self.existing("lib/actions.ts", self.ACTION)
@@ -386,6 +465,19 @@ class AfterTheEdit(Base):
         self.existing("app/plain.py", self.EXPORT.replace("guard_cell(c)", "c"))
         reason = self.fire("app/plain.py", writer, tool="Edit", old="    pass")
         self.assertTrue(reason.startswith("[practices:L2:server-code:SEC-17:app/plain.py]"),
+                        reason)
+
+    def test_the_repos_auth_helper_satisfies_the_shipped_sec_01(self):
+        # Needs SEC-01's unless in skills/server-code/events.toml to carry {auth_helpers}.
+        shutil.rmtree(os.path.join(self.proj, ".claude", "skills", "demo"))
+        self.server_code()
+        self.config_toml('[auth]\nhelpers = ["getViewer"]\n')
+        route = ('export async function GET() {\n  const viewer = await getViewer()\n'
+                 '  return Response.json({ ok: true })\n}\n')
+        self.assertIsNone(self.fire("app/api/me/route.ts", route))
+        reason = self.fire("app/api/you/route.ts", route.replace(
+            "  const viewer = await getViewer()\n", ""))
+        self.assertTrue(reason.startswith("[practices:L2:server-code:SEC-01:app/api/you/route.ts]"),
                         reason)
 
     def test_when_reads_only_the_new_text(self):
@@ -455,8 +547,8 @@ class L4(Base):
 
     def test_names_only_the_skills_loaded_since_the_previous_compaction(self):
         self.skill("other", OTHER, where="user")
-        before = [use("t1", "Skill", skill="other"), text(), *boundary(),
-                  use("t2", "Skill", skill="demo"), text()]
+        before = [*load("t1", "Skill", skill="other"), text(), *boundary(),
+                  *load("t2", "Skill", skill="demo"), text()]
         for rows in (before, before + boundary()):  # the new boundary on disk yet or not
             with self.subTest(written=len(rows) > len(before)):
                 self.rows(rows)
@@ -505,8 +597,14 @@ class Subagents(Base):
         self.assertIsNone(self.fire(agent_id=self.AGENT))
 
     def test_an_agents_read_of_skill_md_loads_it(self):
-        self.rows([use("s1", "Read", sidechain=True, file_path=os.path.join(
-            self.proj, ".claude", "skills", "demo", "SKILL.md"))], path=self.agent_file())
+        self.rows(load("s1", "Read", sidechain=True, file_path=os.path.join(
+            self.proj, ".claude", "skills", "demo", "SKILL.md")), path=self.agent_file())
+        self.assertIsNone(self.fire(agent_id=self.AGENT))
+
+    def test_an_empty_agent_transcript_lets_the_resend_through(self):
+        self.rows([], path=self.agent_file())
+        open(self.agent_file(), "w").close()
+        self.assertIn("[practices:L1:demo:route-handler]", self.fire(agent_id=self.AGENT))
         self.assertIsNone(self.fire(agent_id=self.AGENT))
 
     def test_a_missing_agent_transcript_falls_back_to_a_state_file(self):
@@ -572,11 +670,11 @@ class Config(Base):
         self.assertIn("config-malformed", self.log())
 
     def test_a_malformed_config_falls_back_to_the_defaults(self):
-        for body in ("enabled = false\n[[disable\n", 'enabled = "no"\n',
-                     '[auth]\nhelpers = "requireMember"\n'):
+        for n, body in enumerate(("enabled = false\n[[disable\n", 'enabled = "no"\n',
+                                  '[auth]\nhelpers = "requireMember"\n')):
             with self.subTest(body=body):
                 self.config_toml(body)
-                self.assertIsNotNone(self.fire())
+                self.assertIsNotNone(self.fire(session_id=f"session-{n}"))
         self.assertIn("config-malformed", self.log())
 
 

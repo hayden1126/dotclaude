@@ -1,5 +1,5 @@
-"""The practices hook engine; hooks/practices-check.sh runs it on PreToolUse(Edit|Write|MultiEdit|
-Bash) and SessionStart. It enforces every installed practices skill at the moment code is written.
+"""The practices hook engine; hooks/practices-check.sh runs it on PreToolUse(Edit|Write|MultiEdit)
+and SessionStart. It enforces every installed practices skill at the moment code is written.
 
 Each practices skill ships an events.toml beside its SKILL.md:
 
@@ -40,7 +40,8 @@ ${CLAUDE_CONFIG_DIR:-~/.claude}/skills/*/, links followed. On a name clash the p
 Levels:
   L1  an edit that fires a skill's event, when the window (the transcript since the last
       compaction, plus the messages that compaction preserved) shows no load of the skill: a
-      Skill call naming it (`name` or `plugin:name`) or a Read of `<skill>/SKILL.md`. Denied once
+      Skill call naming it (`name` or `plugin:name`) or a Read of `<skill>/SKILL.md`, either
+      with a tool_result (same tool_use_id) that isn't an error. Denied once
       per (skill, event) per window. The reason opens with `[practices:L1:<skill>:<event>]`, says
       how to load the skill, and carries the event's lines; one deny names every skill that fired.
   L2  a fired rule, denied once per (file, rule) over the whole transcript, marker
@@ -48,21 +49,26 @@ Levels:
       after the edit suppresses it. L2 doesn't run in a call L1 denies.
   L4  SessionStart(compact): a digest (under DIGEST_MAX characters) naming the practices skills
       loaded since the previous compaction, with their gate lines, plus reloadSkills: true.
-Deny-once is stateless: a tool_result in the window that holds the call's own marker lets the
-call through. The marker is this engine's own text, never Claude Code's "hook error" wording
-around it, which a release may reword. is_error isn't required either: a release that dropped it
-must not loop, and a stray marker in some other result costs at most one missed deny.
+Deny-once has two signs, and either lets the call through:
+  - a tool_result in the window holding the call's own marker. The marker is this engine's own
+    text, never Claude Code's "hook error" wording around it, which a release may reword;
+    is_error isn't required either, so a stray marker elsewhere costs at most one missed deny;
+  - a key in the state file under $XDG_STATE_HOME/dotclaude/practices/denies/ (one file per
+    session and agent), written on every deny: L1 keyed by the newest compaction boundary's id
+    (or "none") and the skill and event, L2 by the rule and the file. It is the backstop when the
+    marker can't be seen: a release that moves the reason out of the tool_result, an agent
+    transcript that is empty or missing.
 
 Compaction boundary (2.1.304, a real /compact): a `type: system`, `subtype: compact_boundary`
-row, whose compactMetadata.preservedMessages lists uuids of earlier rows kept in context, then
-an isCompactSummary user row. At SessionStart(compact) the new boundary may or may not be on disk
+row, whose compactMetadata.preservedMessages lists uuids of earlier rows kept in context (each
+found by its own `"uuid":"<id>"`, searched back from the boundary), then an isCompactSummary
+user row. At SessionStart(compact) the new boundary may or may not be on disk
 yet: when no assistant row follows the newest boundary it is this compaction's, and the digest
 reads back to the one before it; otherwise the digest reads the L1 window.
 
 Subagents: a payload with agent_id carries the parent's transcript_path, so every transcript read
 uses <transcript_path minus .jsonl>/subagents/agent-<agent_id>.jsonl, and its sidechain rows.
-When the transcript to read is missing, deny-once falls back to a state file keyed by session,
-agent, level and id under $XDG_STATE_HOME/dotclaude/practices/denies/.
+When that file is missing or empty, the state file alone carries deny-once.
 
 Per repo, <project>/.claude/practices/config.toml: `enabled = false` turns the engine off there;
 `[[disable]]` with `rule` (an event or rule id, or `<skill>:<id>`) and a non-empty `reason` turns
@@ -70,16 +76,19 @@ one off; `[auth] helpers = [...]` feeds `{auth_helpers}`. A malformed file falls
 defaults (never turning a check off) and is logged.
 
 Failure posture (allow and loud): a BUDGET-second run budget on time.monotonic(); patterns left
-when it is spent are skipped and logged. A pattern that throws is skipped and logged; a malformed
-events.toml disables that skill only, logged. Any crash allows the call (no output) and is logged
-to $XDG_STATE_HOME/dotclaude/practices/errors.log (size-capped). Before each pattern a breadcrumb
-(file, level, pattern) is written under the state dir and removed on a normal exit; Claude Code's
+when it is spent are skipped and logged, and a transcript read checks it on every row it parses
+(once spent, the call is allowed and that is logged). A pattern that throws is skipped and
+logged; a malformed events.toml disables that skill only, logged. Any crash allows the call (no
+output) and is logged to $XDG_STATE_HOME/dotclaude/practices/errors.log (size-capped). Before
+each pattern, and before each transcript read (level "transcript"), a breadcrumb (file, level,
+pattern) is written under the state dir and removed on a normal exit; Claude Code's
 timeout kill takes the whole process group, so a killed scan leaves it behind. SessionStart
 (startup) runs a self-test, reports leftover breadcrumbs and the errors logged since the last
 start, as one systemMessage line (shown to the user only), and prints nothing when all is well.
 
-Not covered in v1: Bash. A Bash call is allowed unchecked, so a file written by a heredoc or
-`cat >` escapes L1 and L2 (the commit-time scan, L3s, is the planned backstop).
+Not covered in v1: Bash. settings.json doesn't send Bash calls here (a Bash payload that arrives
+anyway is allowed unchecked), so a file written by a heredoc or `cat >` escapes L1 and L2 (the
+commit-time scan, L3s, is the planned backstop).
 """
 import hashlib
 import json
@@ -107,6 +116,7 @@ PARSE_MAX = 1 << 20  # transcript rows bigger than this are never a load or a de
 LOG_MAX = 64 << 10
 DIGEST_MAX = 2000
 STALE_CRUMB = 10  # seconds: a live scan ends within the 5 s kill
+KEEP_MAX = 500  # preserved uuids looked up per compaction boundary
 STATE_DAYS = 7
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit")
 NOT_ENTRIES = (b'{"type":"api-request', b'{"type":"attachment"', b'{"type":"file-history',
@@ -140,6 +150,11 @@ def log(kind, detail):
 
 class Budget(Exception):
     pass
+
+
+def check_budget():
+    if time.monotonic() - START > BUDGET:
+        raise Budget("transcript read")
 
 
 class Crumb:
@@ -470,27 +485,57 @@ class Transcript:
         return d
 
     def hits(self, needle, lo=0, hi=None):
+        """(start, end, row) for each parseable row in [lo, hi) holding needle, in order."""
         hi = len(self.m) if hi is None else hi
         pos = lo
         while pos < hi and (i := self.m.find(needle, pos, hi)) != -1:
+            check_budget()
             s, e = self.line_at(i)
             d = self.parse(s, e)
             if d is not None:
-                yield s, d
+                yield s, e, d
             pos = e + 1
 
     def boundaries(self):
-        """(row start, row end, preserved uuids) per compact boundary, newest first."""
+        """(row start, row end, preserved uuids, id) per compact boundary, newest first; the id
+        is the row's uuid, or its offset when it has none."""
         end = len(self.m)
         while end > 0 and (i := self.m.rfind(b'"compact_boundary"', 0, end)) != -1:
+            check_budget()
             s, e = self.line_at(i)
             d = self.parse(s, e)
             if d and d.get("type") == "system" and d.get("subtype") == "compact_boundary":
-                yield s, e, preserved(d)
+                uid = d.get("uuid")
+                yield s, e, preserved(d), uid if isinstance(uid, str) and uid else f"@{s}"
             end = s
 
+    def rows_by_uuid(self, uuids, before):
+        """[(start, end)] of the rows before offset `before` with these uuids: each found by its
+        own `"uuid":"<id>"` (the compact JSON Claude Code writes), searched back from `before`,
+        so a preserved segment costs no rescan of the transcript."""
+        spans = set()
+        for u in sorted(uuids)[:KEEP_MAX]:
+            check_budget()
+            i = self.m.rfind(b'"uuid":' + json.dumps(u).encode(), 0, before)
+            if i != -1:
+                spans.add(self.line_at(i))
+        return sorted(spans)
+
+    def succeeded(self, tool_id, start):
+        """Whether the tool call with this id has a result after offset start that isn't an
+        error."""
+        if not isinstance(tool_id, str) or not tool_id:
+            return False
+        for _, _, d in self.hits(json.dumps(tool_id).encode(), start):
+            if d.get("type") != "user":
+                continue
+            for b in blocks(d):
+                if b.get("type") == "tool_result" and b.get("tool_use_id") == tool_id:
+                    return not b.get("is_error")
+        return False
+
     def assistant_after(self, pos):
-        return any(d.get("type") == "assistant" for _, d in self.hits(b'"assistant"', pos))
+        return any(d.get("type") == "assistant" for _, _, d in self.hits(b'"assistant"', pos))
 
 
 def preserved(boundary):
@@ -533,33 +578,41 @@ def loaded_name(b):
 
 
 class Window:
-    """The rows from lo to hi, plus earlier rows whose uuid is in keep."""
+    """The rows from lo to hi, plus the preserved rows (keep: uuids of rows before lo)."""
 
-    def __init__(self, t, lo, hi, keep):
-        self.t, self.lo, self.hi, self.keep = t, lo, hi, keep
+    def __init__(self, t, lo, hi, keep=frozenset()):
+        self.t, self.lo, self.hi = t, lo, hi
+        self.kept = t.rows_by_uuid(keep, lo) if keep else []
 
     def rows(self, needle):
-        for s, d in self.t.hits(needle, 0 if self.keep else self.lo, self.hi):
-            if s >= self.lo or d.get("uuid") in self.keep:
-                yield d
+        for s, e in self.kept:
+            if self.t.m.find(needle, s, e) != -1 and (d := self.t.parse(s, e)) is not None:
+                yield s, e, d
+        yield from self.t.hits(needle, self.lo, self.hi)
 
     def loads(self):
+        """The skills a Skill call or a Read of their SKILL.md loaded, each with a result that
+        isn't an error (a mistyped path or an unknown skill loads nothing)."""
         names = set()
         for needle in (b'"Skill"', b"SKILL.md"):
-            for d in self.rows(needle):
-                if d.get("type") == "assistant":
-                    names |= {n for b in blocks(d) if b.get("type") == "tool_use"
-                              if (n := loaded_name(b))}
+            for _, e, d in self.rows(needle):
+                if d.get("type") != "assistant":
+                    continue
+                for b in blocks(d):
+                    n = loaded_name(b) if b.get("type") == "tool_use" else None
+                    if n and n not in names and self.t.succeeded(b.get("id"), e):
+                        names.add(n)
         return names
 
     def results(self, needle):
-        return [text for d in self.rows(needle) if d.get("type") == "user"
+        return [text for _, _, d in self.rows(needle) if d.get("type") == "user"
                 for text in result_texts(d)]
 
 
 def l1_window(t):
+    """(the window since the last compaction, that boundary's id or "none")."""
     b = next(t.boundaries(), None)
-    return Window(t, b[1], None, b[2]) if b else Window(t, 0, None, frozenset())
+    return (Window(t, b[1], None, b[2]), b[3]) if b else (Window(t, 0, None), "none")
 
 
 def compact_window(t):
@@ -567,9 +620,9 @@ def compact_window(t):
     bounds = t.boundaries()
     last = next(bounds, None)
     if last is None or t.assistant_after(last[1]):
-        return l1_window(t)
+        return l1_window(t)[0]
     prev = next(bounds, None)
-    return Window(t, prev[1], last[0], prev[2]) if prev else Window(t, 0, last[0], frozenset())
+    return Window(t, prev[1], last[0], prev[2]) if prev else Window(t, 0, last[0])
 
 
 def transcript_of(event):
@@ -763,12 +816,13 @@ def pre_tool_use(event):
     fired = run_patterns(events, lambda x: event_fires(x[1], rel, after_text, helpers, CRUMB))
 
     m, f = open_transcript(event)
+    reason, keys = None, []
     try:
         t = Transcript(m, bool(event.get("agent_id"))) if m is not None else None
-        seen = state_keys(event) if t is None else None
-        reason, keys = None, []
+        seen = state_keys(event)
         if fired:
-            win = l1_window(t) if t is not None and len(m) else None
+            CRUMB.mark(rel, "transcript", "L1 loads and denies")
+            win, bid = l1_window(t) if t is not None else (None, "none")
             loads = win.loads() if win else set()
             denied = win.results(b"[practices:L1:") if win else []
             pending = {}
@@ -776,28 +830,35 @@ def pre_tool_use(event):
                 if s["name"] in loads or os.path.basename(s["dir"]) in loads:
                     continue
                 marker = f"[practices:L1:{s['name']}:{ev['id']}]"
-                if (seen is not None and marker in seen) or any(marker in x for x in denied):
+                key = f"L1|{bid}|{s['name']}|{ev['id']}"
+                if key in seen or any(marker in x for x in denied):
                     continue
                 pending.setdefault(s["name"], (s, []))[1].append(ev)
-                keys.append(marker)
+                keys.append(key)
             if pending:
                 reason = l1_reason(list(pending.values()), rel, bool(event.get("agent_id")))
         if reason is None and rules:
             hit = run_patterns(rules, lambda x: rule_fires(x[1], rel, text, helpers, CRUMB,
                                                            after_text, after))
-            denied = (Window(t, 0, None, frozenset()).results(b"[practices:L2:")
-                      if t is not None and len(m) else [])
+            denied = []
+            if hit and t is not None:
+                CRUMB.mark(rel, "transcript", "L2 denies")
+                denied = Window(t, 0, None).results(b"[practices:L2:")
             pending = []
             for s, r in hit:
                 marker = f"[practices:L2:{s['name']}:{r['id']}:{rel}]"
-                if (seen is not None and marker in seen) or any(marker in x for x in denied):
+                key = f"L2|{s['name']}|{r['id']}|{rel}"
+                if key in seen or any(marker in x for x in denied):
                     continue
                 pending.append((s, r))
-                keys.append(marker)
+                keys.append(key)
             if pending:
                 reason = l2_reason(pending, rel)
-        if reason and seen is not None:
+        if reason:
             state_add(event, keys)
+    except Budget as e:
+        log("budget-spent", f"after {BUDGET}s, in the {e} for {rel}; the edit was allowed")
+        return None
     finally:
         if isinstance(m, mmap.mmap):
             m.close()
@@ -836,12 +897,16 @@ def compact(event):
     m, f = open_transcript(event)
     try:
         if m:
+            CRUMB.mark("(compaction digest)", "transcript", "L4 loads")
             t = Transcript(m, bool(event.get("agent_id")))
             loads = compact_window(t).loads()
             names = sorted(n for n, s in skills.items()
                            if n in loads or os.path.basename(s["dir"]) in loads)
             if names:
                 out["additionalContext"] = digest(names, skills)
+    except Budget as e:
+        log("budget-spent", f"after {BUDGET}s, in the {e} for the compaction digest; "
+            "it was left out")
     finally:
         if isinstance(m, mmap.mmap):
             m.close()
