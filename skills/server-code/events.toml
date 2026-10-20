@@ -17,7 +17,7 @@
 skill = "server-code"
 
 gate = [
-  "Build a per-user and per-IP rate limit before any LLM, paid-API, email or SMS call, and on login, signup, reset and OTP; say so in your reply (SEC-07).",
+  "Build a per-user and per-IP rate limit before any LLM, paid-API, email or SMS call, and on login, signup, reset and OTP, taking the IP from the header your proxy sets, never the leftmost x-forwarded-for; say so in your reply (SEC-07).",
   "Build a guard on every user-supplied CSV, TSV or XLSX cell (prefix ' before a leading = + - @ tab or CR) and quote every cell per RFC 4180; say so in your reply (SEC-17).",
   "Build the auth and role check inside every handler and server action, deny by default (middleware or a page check doesn't count); say so in your reply (SEC-01).",
   "Build every lookup on the session's user, scoped to the caller, never a user id from the request; say so in your reply (SEC-02, SEC-03).",
@@ -67,7 +67,7 @@ lines = [
   "Build the auth and role check inside this handler, deny by default, and say so in your reply (SEC-01).",
   "Build the lookup on the session's user id, scoped to the caller, never an id from the request; say so in your reply (SEC-02, SEC-03).",
   "Build a field whitelist for every write (no request-body spread) and a strict input schema; say so in your reply (SEC-04, SEC-05).",
-  "If this endpoint calls an LLM or paid API or sends email or SMS, build a per-user and per-IP rate limit before the call, reusing the repo's limiter; say so in your reply (SEC-07).",
+  "If this endpoint calls an LLM or paid API or sends email or SMS, build a per-user and per-IP rate limit before the call, reusing the repo's limiter, with the IP from the header your proxy sets, never the leftmost x-forwarded-for; say so in your reply (SEC-07).",
   "Build a generic error response that fails closed, with the detail kept in logs; say so in your reply (SEC-08).",
 ]
 
