@@ -851,6 +851,157 @@ class Shipped(unittest.TestCase):
                 self.assertIsNone(PC.lint_regex(good))
 
 
+GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+           "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
+
+
+class GitMixin:
+    """Temp repos under $TMPDIR, built with a git that reads no user config."""
+
+    def sh(self, *args, cwd=None, check=True):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        env.update(GIT_ENV)
+        p = subprocess.run(["git", *args], cwd=cwd or self.repo, env=env, capture_output=True,
+                           text=True, timeout=30)
+        if check:
+            assert p.returncode == 0, p.stderr
+        return p.stdout.strip()
+
+    def make_repo(self, path):
+        os.makedirs(path, exist_ok=True)
+        self.sh("init", "-q", "-b", "main", path, cwd=path)
+        return path
+
+    def put(self, rel, content, repo=None):
+        path = os.path.join(repo or self.repo, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(content)
+
+    def commit(self, msg="c", repo=None, **files):
+        for rel, content in files.items():
+            self.put(rel.replace("__", "/"), content, repo)
+        self.sh("add", "-A", cwd=repo or self.repo)
+        self.sh("commit", "-q", "--allow-empty", "-m", msg, cwd=repo or self.repo)
+        return self.sh("rev-parse", "HEAD", cwd=repo or self.repo)
+
+    def canary(self):
+        """A program a hostile config names: it creates the canary file when it runs."""
+        self.canary_file = os.path.join(self.tmp, "canary")
+        script = os.path.join(self.tmp, "planted.sh")
+        with open(script, "w") as f:
+            f.write(f"#!/bin/sh\ntouch {self.canary_file}\ncat \"$@\" 2>/dev/null\n")
+        os.chmod(script, 0o755)
+        return script
+
+
+class GitHelper(GitMixin, unittest.TestCase):
+    """practices_check.Repo reads objects only and runs no program a repo's config names."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="practices-git-")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.repo = self.make_repo(os.path.join(self.tmp, "repo"))
+        self.env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        self.env.update(HOME=os.path.join(self.tmp, "home"),
+                        XDG_STATE_HOME=os.path.join(self.tmp, "state"),
+                        PRACTICES_TEST_BUDGET="30")
+        os.makedirs(self.env["HOME"])
+
+    def read(self, cwd=None, **extra):
+        with mock.patch.dict(os.environ, {**self.env, **extra}, clear=True), \
+                mock.patch.object(PC, "BUDGET", 30.0), mock.patch.object(PC, "START",
+                                                                          PC.time.monotonic()):
+            r = PC.Repo(cwd or self.repo)
+            head = r.rev("HEAD")
+            changes = r.changes(None, head)
+            blobs, _ = r.blobs([c[4] for c in changes], 1 << 20, 1 << 22)
+            return r, changes, blobs
+
+    def test_refuses_what_could_run_a_program(self):
+        self.commit(a="x\n")
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "BUDGET", 30.0):
+            r = PC.Repo(self.repo)
+            for sub, args in (("status", ()), ("diff", ()), ("diff-tree", ("-p", "HEAD")),
+                              ("diff-tree", ("-r", "HEAD")), ("cat-file", ("--filters",)),
+                              ("cat-file", ("--textconv",)), ("ls-files", ())):
+                with self.subTest(sub=sub, args=args):
+                    with self.assertRaises(PC.GitError):
+                        r.run(sub, *args)
+
+    def test_a_hostile_config_runs_nothing(self):
+        script = self.canary()
+        self.sh("config", "core.fsmonitor", script)
+        self.sh("config", "diff.external", script)
+        self.sh("config", "diff.planted.textconv", script)
+        self.sh("config", "filter.planted.smudge", script)
+        self.sh("config", "filter.planted.clean", "cat")
+        self.sh("config", "core.pager", script)
+        self.put(".gitattributes", "*.ts diff=planted filter=planted\n")
+        self.commit(**{"lib__a.ts": "x({ ...body })\n"})
+        if os.path.exists(self.canary_file):
+            os.unlink(self.canary_file)  # the setup's own git add ran the planted filter
+        _, changes, blobs = self.read()
+        self.assertIn("lib/a.ts", [c[5] for c in changes])
+        self.assertIn(b"x({ ...body })\n", blobs.values())
+        self.assertFalse(os.path.exists(self.canary_file), "a planted program ran")
+
+    def test_a_tracked_symlink_is_its_target_path_never_the_file(self):
+        outside = os.path.join(self.tmp, "outside.ts")
+        with open(outside, "w") as f:
+            f.write("x({ ...body })\n")
+        os.symlink(outside, os.path.join(self.repo, "link.ts"))
+        self.commit()
+        _, changes, blobs = self.read()
+        (c,) = [c for c in changes if c[5] == "link.ts"]
+        self.assertEqual(c[2], "120000")
+        self.assertEqual(blobs[c[4]], outside.encode())
+
+    def test_a_worktree_reads_through_its_gitfile(self):
+        script = self.canary()
+        self.commit(a="1\n")
+        self.sh("config", "core.fsmonitor", script)
+        wt = os.path.join(self.tmp, "wt")
+        self.sh("worktree", "add", "-q", "-b", "side", wt)
+        self.commit(repo=wt, b="2\n")
+        if os.path.exists(self.canary_file):
+            os.unlink(self.canary_file)  # the setup's own git commit ran fsmonitor
+        r, changes, _ = self.read(cwd=wt)
+        self.assertEqual([c[5] for c in changes], ["b"])
+        self.assertEqual(os.path.realpath(r.top), os.path.realpath(wt))
+        self.assertFalse(os.path.exists(self.canary_file))
+
+    def test_git_dir_in_the_hooks_own_env_is_ignored(self):
+        self.commit(mine="1\n")
+        other = self.make_repo(os.path.join(self.tmp, "other"))
+        self.commit(repo=other, theirs="1\n")
+        _, changes, _ = self.read(GIT_DIR=os.path.join(other, ".git"),
+                                  GIT_WORK_TREE=other)
+        self.assertEqual([c[5] for c in changes], ["mine"])
+
+    def test_a_safe_directory_mismatch_is_refused_unless_the_user_listed_it(self):
+        self.commit(a="1\n")
+        script = self.canary()
+        self.sh("config", "core.fsmonitor", script)
+        with self.assertRaises(PC.GitError) as e:
+            self.read(PRACTICES_TEST_DIFFERENT_OWNER="1")
+        self.assertIn("ownership", str(e.exception))
+        with open(os.path.join(self.env["HOME"], ".gitconfig"), "w") as f:
+            f.write(f"[user]\n\tname = x\n[safe]\n\tdirectory = {self.repo}\n")
+        _, changes, _ = self.read(PRACTICES_TEST_DIFFERENT_OWNER="1")
+        self.assertEqual([c[5] for c in changes], ["a"])
+        self.assertFalse(os.path.exists(self.canary_file))
+
+    def test_a_spent_budget_stops_before_git_runs(self):
+        self.commit(a="1\n")
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "BUDGET", 0.0):
+            with self.assertRaises(PC.Budget):
+                PC.Repo(self.repo)
+
+
 def load_bash_words():
     spec = importlib.util.spec_from_file_location(
         "bash_words", os.path.join(REPO, "hooks", "bash_words.py"))

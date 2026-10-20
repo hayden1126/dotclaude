@@ -96,6 +96,7 @@ import json
 import mmap
 import os
 import re
+import stat
 import sys
 import time
 
@@ -699,6 +700,194 @@ def state_add(event, keys):
         os.replace(tmp, path)
     except OSError as e:
         log("state-error", f"{path}: {e}")
+
+
+# ---------------------------------------------------------------- git, objects only
+
+SYSTEM_GITS = ("/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git")
+# Every subcommand the engine runs, with the options it may pass. None of them reads the index
+# or the working tree, or runs a program a config names: no patch (diff drivers, textconv), no
+# --filters or --textconv, no status (fsmonitor, untracked cache).
+GIT_FLAGS = {"rev-parse": None, "rev-list": None, "merge-base": None, "ls-tree": None,
+             "diff-tree": {"--raw", "-r", "-z", "--no-renames", "--root", "--no-commit-id"},
+             "cat-file": {"--batch", "--batch-check"}}
+GIT_MARGIN = 0.05  # seconds of the budget kept for the work after a git call
+GITCONFIG_MAX = 1 << 20
+
+
+class GitError(Exception):
+    """A git call the engine skips: no git, not a repo, a refused ownership check."""
+
+
+def git_env():
+    """The environment for every git call: no GIT_* variable from the hook's own env (a GIT_DIR
+    there names another repo), no system or global config, no transport (a partial clone's lazy
+    fetch would run one; 2.43 ignores GIT_NO_LAZY_FETCH), no replace refs, no optional locks."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_ALLOW_PROTOCOL="none",
+               GIT_NO_LAZY_FETCH="1", GIT_NO_REPLACE_OBJECTS="1", GIT_OPTIONAL_LOCKS="0",
+               GIT_TERMINAL_PROMPT="0", GIT_ATTR_NOSYSTEM="1")
+    if os.environ.get("PRACTICES_TEST_DIFFERENT_OWNER"):  # tests only: stricter, never looser
+        env["GIT_TEST_ASSUME_DIFFERENT_OWNER"] = "1"
+    return env
+
+
+def safe_directories():
+    """(the user's safe.directory values, why none could be read or None), read as plain text
+    from their real global config files, which GIT_CONFIG_GLOBAL hides from git. A file that
+    isn't a regular file owned by the user, or that others can write, is skipped."""
+    home = os.path.expanduser("~")
+    xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.join(home, ".config")
+    values, why = [], []
+    for path in (os.path.join(home, ".gitconfig"), os.path.join(xdg, "git", "config")):
+        try:
+            st = os.stat(path)
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            why.append(f"{path}: {type(e).__name__}")
+            continue
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o022 \
+                or st.st_size > GITCONFIG_MAX:
+            why.append(f"{path}: not a regular file of the user's that only they can write")
+            continue
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                text = f.read(GITCONFIG_MAX)
+        except OSError as e:
+            why.append(f"{path}: {type(e).__name__}")
+            continue
+        section = None
+        for line in text.splitlines():
+            line = line.strip()
+            if m := re.match(r"\[\s*([A-Za-z0-9.-]+)\s*(?:\"[^\"]*\")?\s*\]", line):
+                section = m.group(1).lower()
+                line = line[m.end():].strip()
+            if section == "safe" and (m := re.match(r"(?i)directory\s*=\s*(.*)$", line)):
+                v = m.group(1).strip()
+                v = v[1:-1] if len(v) >= 2 and v[0] == v[-1] == '"' else re.split(r"\s[#;]", v)[0]
+                if v:
+                    values.append(v)
+    return values, ("; ".join(why) or None)
+
+
+class Repo:
+    """One repository, read through git's object store only. Every call runs a system git with
+    git_env(), core.fsmonitor and core.untrackedCache off, the user's safe.directory entries,
+    and a timeout from what is left of the budget."""
+
+    def __init__(self, cwd, git_dir=None, work_tree=None):
+        self.git = next((g for g in SYSTEM_GITS if os.path.isfile(g)), None)
+        if not self.git:
+            raise GitError("no system git")
+        self.cwd, self.env = cwd, git_env()
+        self.safe, self.safe_why = safe_directories()
+        self.base = [self.git, "--no-pager", "-c", "core.fsmonitor=false",
+                     "-c", "core.untrackedCache=false",
+                     *(x for d in self.safe for x in ("-c", f"safe.directory={d}"))]
+        if git_dir:
+            self.base.append(f"--git-dir={git_dir}")
+        if work_tree:
+            self.base.append(f"--work-tree={work_tree}")
+        out = self.run("rev-parse", "--absolute-git-dir")
+        self.git_dir = out.decode("utf-8", "surrogateescape").strip()
+        try:
+            self.top = self.run("rev-parse", "--show-toplevel").decode(
+                "utf-8", "surrogateescape").strip() or None
+        except GitError:
+            self.top = None  # a bare repo
+        self.base = [x for x in self.base if not x.startswith(("--git-dir=", "--work-tree="))]
+        self.base.append(f"--git-dir={self.git_dir}")
+
+    def run(self, sub, *args, stdin=None, ok=(0,)):
+        """git's stdout as bytes; GitError on a refused call or a failure, Budget when the
+        budget runs out first."""
+        allowed = GIT_FLAGS.get(sub, ())
+        if sub not in GIT_FLAGS or (allowed is not None and any(
+                a.startswith("-") and a not in allowed for a in args)):
+            raise GitError(f"refused: git {sub} {' '.join(args)}")
+        if sub == "diff-tree" and not {"--raw", "-r", "-z"} <= set(args):
+            raise GitError("refused: diff-tree without --raw -r -z")
+        left = BUDGET - (time.monotonic() - START) - GIT_MARGIN
+        if left <= 0:
+            raise Budget(f"git {sub}")
+        import subprocess  # noqa: PLC0415 (only the Bash levels pay for it)
+        try:
+            p = subprocess.run([*self.base, sub, *args], cwd=self.cwd, env=self.env, input=stdin,
+                               capture_output=True, timeout=left)
+        except subprocess.TimeoutExpired as e:
+            raise Budget(f"git {sub}") from e
+        except OSError as e:
+            raise GitError(f"git {sub}: {type(e).__name__}") from e
+        if p.returncode not in ok:
+            err = p.stderr.decode("utf-8", "replace")
+            if p.returncode == 128 and ("dubious ownership" in err or "safe.directory" in err):
+                raise GitError("ownership check refused the repo" + (
+                    f" (safe.directory not forwarded: {self.safe_why})" if self.safe_why else ""))
+            raise GitError(f"git {sub} exited {p.returncode}")
+        return p.stdout
+
+    def rev(self, name):
+        """The commit name resolves to, or None."""
+        out = self.run("rev-parse", "--verify", "--quiet", "--end-of-options", f"{name}^{{commit}}",
+                       ok=(0, 1))
+        return out.decode().strip() or None
+
+    def commits(self, *spec, cap):
+        """[(commit, parent or None)] for rev-list spec, newest first, merges left out, at most
+        cap; and whether more were left out."""
+        out = self.run("rev-list", "--no-merges", "--parents", f"--max-count={cap + 1}", *spec)
+        rows = [line.split() for line in out.decode().splitlines() if line.strip()]
+        pairs = [(r[0], r[1] if len(r) > 1 else None) for r in rows]
+        return pairs[:cap], len(pairs) > cap
+
+    def changes(self, old, new):
+        """[(status, old mode, new mode, old oid, new oid, path)] from old (a tree-ish, or None
+        for a commit against its parent or the empty tree) to new, renames off."""
+        args = ["--raw", "-r", "-z", "--no-renames", "--no-commit-id"]
+        args += [old, new] if old else ["--root", new]
+        parts = self.run("diff-tree", *args).split(b"\0")
+        out, i = [], 0
+        while i + 1 < len(parts):
+            meta = parts[i].decode("ascii", "replace")
+            if not meta.startswith(":"):
+                i += 1
+                continue
+            omode, nmode, ooid, noid, status = meta[1:].split()[:5]
+            out.append((status[:1], omode, nmode, ooid, noid,
+                        parts[i + 1].decode("utf-8", "surrogateescape")))
+            i += 2
+        return out
+
+    def blobs(self, oids, each_max, total_max):
+        """({oid: bytes}, [oids left out for size]) for the blobs, each at most each_max bytes
+        and all together at most total_max."""
+        oids = list(dict.fromkeys(o for o in oids if o and set(o) != {"0"}))
+        if not oids:
+            return {}, []
+        check = self.run("cat-file", "--batch-check", stdin="\n".join(oids).encode() + b"\n")
+        keep, skipped, total = [], [], 0
+        for line in check.decode().splitlines():
+            f = line.split()
+            if len(f) == 3 and f[1] == "blob" and int(f[2]) <= each_max \
+                    and total + int(f[2]) <= total_max:
+                keep.append(f[0])
+                total += int(f[2])
+            elif f:
+                skipped.append(f[0])
+        if not keep:
+            return {}, skipped
+        data = self.run("cat-file", "--batch", stdin="\n".join(keep).encode() + b"\n")
+        out, pos = {}, 0
+        while pos < len(data):
+            nl = data.index(b"\n", pos)
+            head = data[pos:nl].decode().split()
+            if len(head) != 3:
+                break
+            size = int(head[2])
+            out[head[0]] = data[nl + 1:nl + 1 + size]
+            pos = nl + 1 + size + 1
+        return out, skipped
 
 
 # ---------------------------------------------------------------- PreToolUse
