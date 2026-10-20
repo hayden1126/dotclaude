@@ -120,6 +120,19 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     rerun the menu-clip repro and the tmux suites. If it fixes the clip, install at a quiet
     moment (a server restart; claude-restore reopens the tabs) and drop the row-0 menu rule.
     Until then, 3.7c's default menus that dotclaude doesn't own still clip under a top bar.
+  - **A development-practices skill suite (security, ux, then others)** (Hayden, 2026-10-19;
+    context handed over by capella-studio's lead, session 5788b9fb; Hayden takes it up with the
+    lead directly). Accepted so far: placement only. The suite lives in dotclaude; repo rules sit
+    in a per-repo layer the skill reads if present (e.g. `.claude/practices/<skill>.md`, since a
+    repo's `.claude/skills/` is write-denied in the sandbox); checks stay in each repo's tests.
+    The capella lead suggests: triggers on concrete events (a migration, an `/api` route, an
+    iframe, a loading state), checklist lines that name their proof, release skills call the
+    checklists rather than copying them, a planted-bug eval per skill, and a security pilot first
+    (mined read-only from capella). Open for Hayden: the list and names. Lead's flags: the name
+    `security-review` collides with a built-in skill; much of the ux list already lives in
+    `frontend-ui-discipline`; dotclaude is public, so no capella code or unfixed gaps go in
+    ([[dotclaude-public-repo]]); checklists in context get skipped, so a pilot should say what
+    enforces it (a hook at the event, as ask-check does). Pairs with the AWS gap check below.
   - **Gap check against AWS's agentic AI security principles** (Hayden, 2026-10-19): read
     https://aws.amazon.com/blogs/security/four-security-principles-for-agentic-ai-systems/ and
     list what dotclaude's guards (sandbox, permission rules, delete, overwrite and excluded-command
