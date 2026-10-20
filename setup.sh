@@ -255,13 +255,12 @@ PY
 # ---------------------------------------------------------------------------
 # 5. Status line widget (~/.config/ccstatusline)
 # ---------------------------------------------------------------------------
-# Two custom-command widgets live in ccstatusline's own config dir (they survive
-# ccstatusline reinstalls): ctx-breakdown.py (per-category context chips, line 1)
-# and session-summary.py (a 1-2 sentence session summary on lines 2-3). The
-# settings baseline carries placeholder commandPaths; we patch each here with this
+# The custom-command widget ctx-breakdown.py (per-category context chips, line 1)
+# lives in ccstatusline's own config dir, so it survives ccstatusline reinstalls.
+# The settings baseline carries a placeholder commandPath; we patch it here with this
 # machine's absolute python and script paths, because ccstatusline runs widget
 # commands through the platform shell where $HOME/%USERPROFILE% expansion is not
-# portable.
+# portable. An existing file loses the retired session-summary rows (lines 2-3).
 CC_CFG_DIR="$HOME/.config/ccstatusline"
 for pyf in "$REPO_DIR"/statusline/*.py; do
   [[ -e "$pyf" ]] || continue
@@ -272,57 +271,66 @@ import json, os, shutil, sys, time
 baseline_path, dst = sys.argv[1], sys.argv[2]
 cfgdir = os.path.dirname(dst)
 
+def give_up(why):
+    print(f"!! {dst} {why}; ccstatusline settings not installed")
+    sys.exit(0)
+
+def script_at(toks):
+    """The index of the first token naming a *.py script, or None."""
+    return next((i for i, t in enumerate(toks) if t.strip('"').endswith('.py')), None)
+
 def patch_paths(settings):
     """Rewrite every custom-command widget whose commandPath names a bare *.py
     script to this machine's absolute python + absolute script path, preserving
-    any trailing args (e.g. --row 1)."""
+    any trailing args."""
     for line in settings.get('lines', []):
         for w in line:
             if w.get('type') != 'custom-command':
                 continue
             toks = (w.get('commandPath') or '').split()
-            idx = next((i for i, t in enumerate(toks)
-                        if t.strip('"').endswith('.py')), None)
+            idx = script_at(toks)
             if idx is None:
                 continue
             script = os.path.join(cfgdir, os.path.basename(toks[idx].strip('"')))
             rest = toks[idx + 1:]
             w['commandPath'] = ' '.join([f'"{sys.executable}"', f'"{script}"'] + rest)
 
+def well_formed(settings):
+    """Whether lines has the shape the helpers here read: a list of lists of widget
+    objects, each commandPath a string when set."""
+    lines = settings.get('lines', [])
+    return isinstance(lines, list) and all(
+        isinstance(line, list) and all(isinstance(w, dict)
+                                       and isinstance(w.get('commandPath') or '', str)
+                                       for w in line)
+        for line in lines)
+
 def has_ctx_widget(settings):
     return any(w.get('type') == 'custom-command'
                and 'ctx-breakdown' in (w.get('commandPath') or '')
                for line in settings.get('lines', []) for w in line)
 
-def ensure_summary_widgets(settings, baseline):
-    """Idempotently ensure both session-summary rows exist. Existing installs
-    already carry the ctx-breakdown widget, so the re-seed below never fires for
-    them; graft the summary widgets in from the baseline instead, onto the same
-    line index, preserving the user's own line-1 customizations."""
-    lines = settings.setdefault('lines', [])
-    while len(lines) < 3:
-        lines.append([])
-    def present(row):
-        needle = f'--row {row}'
-        return any(w.get('type') == 'custom-command'
-                   and 'session-summary' in (w.get('commandPath') or '')
-                   and needle in (w.get('commandPath') or '')
-                   for line in lines for w in line)
-    for li, bline in enumerate(baseline.get('lines', [])):
-        for w in bline:
-            cp = w.get('commandPath') or ''
-            if w.get('type') != 'custom-command' or 'session-summary' not in cp:
-                continue
-            row = 1 if '--row 1' in cp else 2 if '--row 2' in cp else None
-            if not row or present(row):
-                continue
-            ids = [int(x['id']) for l in lines for x in l
-                   if str(x.get('id', '')).isdigit()]
-            nw = dict(w)
-            nw['id'] = str((max(ids) if ids else 0) + 1)
-            while len(lines) <= li:
-                lines.append([])
-            lines[li].append(nw)
+def drop_retired_widgets(settings):
+    """Remove the retired session-summary widgets, which earlier installs grafted onto
+    lines 2-3, and each line that held nothing else. Existing installs carry the
+    ctx-breakdown widget, so the re-seed below never fires for them; the user's own
+    widgets and lines stay."""
+    def retired(w):
+        toks = (w.get('commandPath') or '').split()
+        idx = script_at(toks)
+        return (w.get('type') == 'custom-command' and idx is not None
+                and os.path.basename(toks[idx].strip('"')) == 'session-summary.py')
+    kept = []
+    for line in settings.get('lines', []):
+        rest = [w for w in line if not retired(w)]
+        if rest or not line:
+            kept.append(rest)
+    settings['lines'] = kept
+
+if os.path.lexists(dst) and not os.path.isfile(dst):
+    # A directory would crash the backup copy, a FIFO would hang the read, and a
+    # dangling or looping link would crash the write or send it wherever it points.
+    give_up("isn't a regular file")
 
 with open(baseline_path) as f:
     baseline = json.load(f)
@@ -333,20 +341,51 @@ try:
         settings = json.load(f)
 except (OSError, ValueError, RecursionError):   # json recurses on nesting
     pass
-if not isinstance(settings, dict) or not has_ctx_widget(settings):
+if not isinstance(settings, dict):
+    why = "isn't a readable JSON object"
+elif not well_formed(settings):
+    why = 'has a malformed lines list'
+elif not has_ctx_widget(settings):
+    why = 'lacked the ctx widget'
+else:
+    why = None
+    try:
+        json.dumps(settings, indent=2)
+    except RecursionError:   # json.load reads deeper than the encoder writes
+        why = 'nests too deep to write back'
+if why:
     if os.path.exists(dst):
         backup = f'{dst}.pre-dotclaude-{int(time.time())}'
-        shutil.copy(dst, backup)
-        why = 'lacked the ctx widget' if isinstance(settings, dict) else "isn't a readable JSON object"
+        try:
+            shutil.copy(dst, backup)
+        except OSError as e:
+            give_up(f"couldn't be backed up ({e.strerror or e})")
         print(f'!! existing ccstatusline settings {why}; backed up to {backup}')
     settings = baseline
 
-ensure_summary_widgets(settings, baseline)
+drop_retired_widgets(settings)
 patch_paths(settings)
-os.makedirs(cfgdir, exist_ok=True)
-with open(dst, 'w') as f:
-    json.dump(settings, f, indent=2)
-print('==> ccstatusline settings installed (ctx-breakdown + session-summary widgets wired)')
+# Through a copy beside the real file, renamed over it: a write cut short leaves the
+# old file whole, and ccstatusline never reads a half-written one. The copy keeps the
+# file's mode, so a read-only file still refuses the write; a link stays a link.
+real = os.path.realpath(dst)
+new = real + '.dotclaude-new'
+try:
+    os.makedirs(cfgdir, exist_ok=True)
+    if os.path.lexists(new):   # left by a killed run, maybe read-only
+        os.unlink(new)
+    if os.path.exists(real):
+        shutil.copy(real, new)
+    with open(new, 'w') as f:
+        f.write(json.dumps(settings, indent=2))
+    os.replace(new, real)
+except OSError as e:
+    try:
+        os.unlink(new)
+    except OSError:
+        pass
+    give_up(f"couldn't be written ({e.strerror or e})")
+print('==> ccstatusline settings installed (ctx-breakdown widget wired)')
 PY
 
 # The sandbox block in settings.json sets failIfUnavailable: without these,

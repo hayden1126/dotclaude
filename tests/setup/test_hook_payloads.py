@@ -1,9 +1,11 @@
-"""session-title.sh and session-summary.sh: the event arrives on stdin at any size, and injected
-content (task notices, agent messages, skill bodies) is never taken for the user (stdlib only)."""
+"""session-title.sh and session-summary.sh: the event arrives on stdin at any size, injected
+content (task notices, agent messages, skill bodies) is never taken for the user, and only a clean
+Haiku label reaches the tab (stdlib only)."""
 import ast
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -98,6 +100,21 @@ class SessionTitle(Workspace):
     def test_a_huge_prompt_still_titles(self):
         self.assertEqual(self.title(prompt="fix the parser " + BIG)[:22], "proj · fix the parser ")
 
+    def cache(self, name, text):
+        d = os.path.join(self.tmp.name, "cfg", "session-summaries")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, name), "w") as f:
+            f.write(text + "\n")
+
+    def test_the_haiku_label_beats_the_prompt(self):
+        self.cache("sid.title.txt", "Parser fix")
+        self.assertEqual(self.title(prompt="something else"), "proj · Parser fix")
+
+    def test_a_retired_summary_never_titles(self):
+        # The long summaries are retired; one an older hook cached is not a label.
+        self.cache("sid.txt", "Fixing the parser; tests green")
+        self.assertEqual(self.title(prompt=""), "proj")
+
 
 class SessionSummary(Workspace):
     """Runs the hook's own script up to the dialogue it would send to Haiku, never the call."""
@@ -170,12 +187,114 @@ class SessionSummary(Workspace):
         with open(out) as f:
             self.assertEqual(f.read().split(), ["-I", str(len(json.dumps(event).encode()))])
 
-    def test_stdin_too_deep_for_json_draws_nothing(self):
-        # The widget, statusline/session-summary.py: "[" * 100000 is RecursionError in json.
-        widget = os.path.join(REPO, "statusline", "session-summary.py")
-        p = subprocess.run(["python3", "-I", widget, "--row", "1"], input="[" * 100000,
-                           capture_output=True, text=True, timeout=20)
-        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+
+class SessionLabel(Workspace):
+    """The hook's whole script on a fake haiku.py, which records the request and answers
+    FAKE_REPLY: what reaches the cache for each reply."""
+
+    FAKE = '''import json, os
+class HaikuError(Exception):
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+def config_dir(transcript):
+    return os.path.dirname(os.path.dirname(os.path.dirname(transcript)))
+def ask(system, user, **kw):
+    with open(os.environ["FAKE_LOG"], "w") as f:
+        json.dump({"system": system, "user": user}, f)
+    if os.environ["FAKE_REPLY"] == "<error>":
+        raise HaikuError("http-500")
+    return os.environ["FAKE_REPLY"]
+'''
+
+    def setUp(self):
+        super().setUp()
+        self.fake = os.path.join(self.tmp.name, "fake")
+        os.makedirs(self.fake)
+        with open(os.path.join(self.fake, "haiku.py"), "w") as f:
+            f.write(self.FAKE)
+        with open(self.transcript, "w") as f:
+            f.write(json.dumps({"type": "user", "origin": {"kind": "human"},
+                                "message": {"role": "user", "content": "fix the parser"}}) + "\n")
+        self.out = os.path.join(self.tmp.name, "cfg", "session-summaries")
+        self.log = os.path.join(self.tmp.name, "request.json")
+
+    def path(self, name):
+        return os.path.join(self.out, name)
+
+    def run_hook(self, reply):
+        src = open(os.path.join(HOOKS, "session-summary.sh")).read()
+        src = src.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+        p = subprocess.run(["python3", "-I", "-c", src, self.fake], capture_output=True,
+                           text=True, timeout=20,
+                           env={**self.env, "FAKE_REPLY": reply, "FAKE_LOG": self.log},
+                           input=json.dumps({"session_id": "sid",
+                                             "transcript_path": self.transcript}))
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def cached(self, name):
+        try:
+            with open(self.path(name), encoding="utf-8") as f:
+                return f.read()
+        except FileNotFoundError:
+            return None
+
+    def seed(self, name, text):
+        os.makedirs(os.path.dirname(self.path(name)), exist_ok=True)
+        with open(self.path(name), "w", encoding="utf-8") as f:
+            f.write(text + "\n")
+
+    def test_a_label_reply_caches_the_label_alone(self):
+        for reply in ("LABEL: Parser fix", "The session fixes the parser.\nLABEL: Parser fix."):
+            with self.subTest(reply=reply):
+                shutil.rmtree(self.out, ignore_errors=True)
+                self.run_hook(reply)
+                self.assertEqual(self.cached("sid.title.txt"), "Parser fix\n")
+                self.assertIsNone(self.cached("sid.txt"))
+                self.assertTrue(os.path.exists(self.path(os.path.join(".state", "sid"))))
+
+    def test_a_reply_without_a_clean_label_caches_nothing(self):
+        # Kept as it was, and no state either, so the next Stop asks again. A refusal anywhere
+        # in the reply means the model took the transcript for instructions: its label goes too.
+        for reply in ("Parser fix", "LABEL: I can't help with that", "LABEL:",
+                      "I can't read that file.\nLABEL: Parser fix",
+                      "I'm unable to see the file.\nLABEL: Parser fix", "<error>"):
+            with self.subTest(reply=reply):
+                shutil.rmtree(self.out, ignore_errors=True)
+                if os.path.exists(self.log):
+                    os.remove(self.log)
+                self.seed("sid.title.txt", "Old label")
+                self.run_hook(reply)
+                self.assertTrue(os.path.exists(self.log), "the call never ran")
+                self.assertEqual(self.cached("sid.title.txt"), "Old label\n")
+                self.assertIsNone(self.cached("sid.txt"))
+                self.assertFalse(os.path.exists(self.path(".state")))
+
+    def test_the_cadence_gate_keys_on_the_label(self):
+        size = str(os.path.getsize(self.transcript))
+        # An older hook's summary and state, with no label yet: ask.
+        self.seed("sid.txt", "An old summary")
+        self.seed(os.path.join(".state", "sid"), size)
+        self.run_hook("LABEL: Parser fix")
+        self.assertEqual(self.cached("sid.title.txt"), "Parser fix\n")
+        # A label, and the transcript grew under MIN_GROWTH since: don't.
+        os.remove(self.log)
+        self.run_hook("LABEL: Something else")
+        self.assertFalse(os.path.exists(self.log))
+        self.assertEqual(self.cached("sid.title.txt"), "Parser fix\n")
+
+    def test_a_long_label_is_clipped(self):
+        self.run_hook("LABEL: " + "x" * 40)
+        self.assertEqual(self.cached("sid.title.txt"), "x" * 31 + "…\n")
+
+    def test_the_prior_label_goes_back_and_a_retired_summary_does_not(self):
+        self.seed("sid.title.txt", "Old label")
+        self.seed("sid.txt", "An old summary from before the rows retired")
+        self.run_hook("LABEL: Parser fix")
+        with open(self.log) as f:
+            user = json.load(f)["user"]
+        self.assertIn("Old label", user)
+        self.assertNotIn("An old summary", user)
 
 
 class ProjectFilesStayOut(Workspace):
