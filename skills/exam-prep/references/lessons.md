@@ -40,7 +40,7 @@ should warn about it.
 |---|---|---|---|---|
 | L20 | 06 | chrome-devtools MCP on WSL2 times out, needs an explicit page id, gets stuck on resize and can't reach a sandboxed localhost server. | Playwright headless from a script (`verify_page.mjs`), pages opened as `file://`. | A1.G8, A2.G2, B4.G7 |
 | L21 | 06 | Headless Chromium inside the Bash sandbox ignores `HTTPS_PROXY`, so MathJax from the CDN silently never loads (`MathJax.startup` undefined, no error). | Pass the proxy with its credentials to `chromium.launch`, and give the command `allowed_domains` for cdnjs.cloudflare.com, fonts.googleapis.com and fonts.gstatic.com. | B1.G1, B4.G2 |
-| L22 | 06 | An ES module ignores `NODE_PATH`, so `import 'playwright'` fails outside a project with `node_modules`. | `verify_page.mjs` imports Playwright from an absolute path (`EXAM_PREP_PLAYWRIGHT`). | B4.G7 |
+| L22 | 06 | An ES module ignores `NODE_PATH`, so `import 'playwright'` fails outside a project with `node_modules`. | `verify_page.mjs` imports Playwright from an absolute path (`EXAM_PREP_PLAYWRIGHT`, else a probed install). | B4.G7 |
 | L23 | 06 | A full-page screenshot of a tall `pre` produced an unusable 720 by 20914 image. | Screenshot the element. | B3.G11 |
 | L24 | 06 | The Google Fonts link was missing, so every font silently fell back. | `verify_page.mjs` checks that the declared families loaded. | A1.G4 |
 

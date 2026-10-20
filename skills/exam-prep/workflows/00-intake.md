@@ -27,8 +27,8 @@ directory, and a sandboxed session commits only to a repo inside its own root. S
 - **Every case:** `<root>` must be a git repo of its own (`git init` there when
   `git -C <root> rev-parse --show-toplevel` doesn't print `<root>`), and its `.gitignore` gets
   these lines before any source lands, keeping any lines already there: `sources/`,
-  `_build/pages/`, `_build/text/`, `_build/slices/`, `_build/media/`, `node_modules/`,
-  `__pycache__/` (FB-011).
+  `_build/pages/`, `_build/text/`, `_build/slices/`, `_build/media/`, `_build/shots/`,
+  `node_modules/`, `_build/package*.json`, `__pycache__/` (FB-011).
 - **New course, no hub yet.** Name it a short subject word plus the course number, all lower case
   (`widgets1001`). With the hq skill: `hq-new <name> code --git` (one bare command), fill its
   `REGISTRY.md` summary as the hq skill says, then

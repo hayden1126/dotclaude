@@ -12,7 +12,8 @@ marks the rest `dropped`, with the reason.
   polish.
 - **Evidence:** `K-<axis>.F<n>` is a finding from the critique of the two runs' products, with
   axes `org`, `word`, `struct` and `ui`. Harvest ids work as in `feedback-log.md`. Both are private.
-- **Status:** `open`, `trying (round N)`, `kept (round N)` or `dropped (round N: why)`.
+- **Status:** `open`, `trying (round N)`, `kept (round N)` or `dropped (round N: why)`; or
+  `shipped in v1 (why)` for an item the baseline build couldn't avoid.
 - **Conflicts** name an existing rule the item would change. Ask before trying those.
 
 ## High
@@ -65,7 +66,7 @@ marks the rest `dropped`, with the reason.
 | K39 | A causal "so" or "because" names the same property everywhere it recurs; review causal claims across sections, not only within one. | word | K-word.F12 | open |
 | K40 | Inequality chains run one way; a compressed line keeps its subject, condition and result. | word | K-word.F14 | open |
 | K41 | Build the site from the markdown automatically, so a notes edit is made once instead of in the markdown and again in a hand-ported fragment. | harvest | B3.G13, B4 (section 5d) | open |
-| K42 | Ship a content-free chassis with explicit insertion markers, instead of slicing a full page by line patterns. | harvest | B4 (section 5d) | open |
+| K42 | Ship a content-free chassis with explicit insertion markers, instead of slicing a full page by line patterns. | harvest | B4 (section 5d) | shipped in v1 (a content-free chassis needs insertion points: `templates/notes-chassis.html`) |
 | K43 | The page checker reads section and figure ids from the backbone registry instead of hard-coding them. | harvest | B4 (section 5d) | open |
 | K44 | Generate the key-leak markers from the key itself. | harvest | B4 (section 5a) | open |
 

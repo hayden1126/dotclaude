@@ -17,7 +17,8 @@ the backbone doesn't have (a section left out of scope, say).
 
 HTML mode. Every href="#id" must match exactly one id="..." in the page, and no id may repeat.
 
-Exit 1 on any failure, 0 otherwise. Stdlib only."""
+Exit 1 on any failure, 2 when the backbone, the notes or the page is missing, 0 otherwise.
+Stdlib only."""
 import argparse
 import html.parser
 import os
@@ -129,6 +130,9 @@ class Ids(html.parser.HTMLParser):
 
 
 def html_mode(path):
+    if not os.path.isfile(path):
+        print(f"linkcheck: no page at {path} (assemble it first)", file=sys.stderr)
+        return 2
     p = Ids()
     with open(path, encoding="utf-8") as f:
         p.feed(f.read())

@@ -47,8 +47,11 @@ lines). What every writer is held to, beyond STYLE:
   the student hasn't attempted (`Answers: yes`) is read for its conventions (S32), never quoted,
   and the mock's key never appears: it lives in `practice/`, quarantined.
 - **Tested versus background.** Depth follows the backbone's `concise` or `full` mark and its "How
-  it's tested" lines. A slide-only derivation no practice question asks for is marked as
-  background, with that evidence (FB-077).
+  it's tested" lines. A slide-only derivation no practice question asks for goes in a
+  `> **Background:**` quote that opens with that evidence (FB-077).
+- **Out of scope, kept.** Material past the exam's scope cut that a writer's blocks still hold, or
+  that a later scope change cuts, stays under `> **Not on <exam>:** <where the scope ends,
+  cited>` (FB-121); the page shows it as a banner.
 - **Each section ends with its Must-know checklist** (FB-078), `sec-N-must-know`, every point a
   link into the section (in plain-text notes, step 6, a pointer naming the subsection).
 

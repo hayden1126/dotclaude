@@ -157,6 +157,11 @@ These are the Markdown forms the page's converter reads (06-site); use them exac
   outside an example ends with an unquoted `**Conclusion:**` line, after a blank line.
 - Each subsection ends with `**How it's tested:** <the answer shape>. Practice: [HW1 Q2c], ...`,
   then any `> **Pitfall:** ...` callouts.
+- A derivation only the slides carry, which no practice question asks for (S20): a quote that
+  opens `> **Background:** <the evidence, cited: only [D3 p.12] has it; no practice question asks
+  for it>`, the derivation inside the same quote.
+- Material in your blocks past this exam's scope cut (MANIFEST.md's Scope column) stays (FB-121):
+  open it with `> **Not on {{EXAM}}:** <where the scope ends, cited>`. Never cut it.
 - A figure the backbone lists: `<!-- FIG <id>: <what it shows, its data> -->` where it belongs;
   it is drawn later.
 - Links use backbone ids only, the text naming the target: `[§{{M}}.K <its title>](#<its id>)`.
@@ -173,7 +178,7 @@ These are the Markdown forms the page's converter reads (06-site); use them exac
   `yes, attempted`; {{UNATTEMPTED: the answer sets the student hasn't attempted yet}} are read
   for their conventions only, never quoted. No mock key appears in the notes.
 - Depth: {{concise | full}}, as the backbone marks it. A slide-only derivation that no practice
-  question asks for is marked as background, with that evidence.
+  question asks for goes in a Background quote (Format).
 - The last subsection is `## {{N}}.K Must know {#sec-{{N}}-must-know}`: one line per point, each
   ending with a link into this section, `([§{{N}}.2](#<id>))`.
 - {{PLAIN TEXT: the student reads in a plain-text tool, so no LaTeX (plain Unicode math), pipe
@@ -280,4 +285,38 @@ how those surface.
 - Out of scope: every other file. Above all, nothing else under {{ROOT}}/practice/ (the key) or
   {{ROOT}}/_build/ (the checker and the extracts hold official answers and the key's values),
   nothing under {{ROOT}}/sources/, and no file MANIFEST.md marks `reserved`.
+```
+
+## Convert (stage 06)
+
+Role: `general-purpose`, for the same reason as the extract and write briefs: it reads files and
+writes one output file. One per notes file.
+
+```text
+# Brief: convert notes/{{FILE}} (§{{N}}) into _build/frag/sec{{N}}.html
+
+## Purpose
+The notes page is how the student reads the notes, so every number, step and table must survive
+the conversion unchanged, in the chassis's look. You convert one reviewed notes file; the main
+session assembles the page and checks it in a browser.
+
+## End state
+- Done means: one `<section class="note" id="sec-{{N}}">` holding all of notes/{{FILE}},
+  converted as CONVERT.md says, with every static figure drawn.
+- Artifact path: {{ROOT}}/_build/frag/sec{{N}}.html. Write it as you go, subsection by
+  subsection, so a crash loses nothing.
+- Report: end your reply with the JSON block (status, summary, artifacts, blocked_actions). The
+  summary lists every bare reference you kept as text and anything you couldn't convert.
+
+## Scope
+- Work in: {{ROOT}}. Read only, except your one output file.
+- Read first, in full: {{ROOT}}/_build/CONVERT.md, then the component table in
+  {{ROOT}}/_build/CHASSIS.md and S11 to S13 in {{ROOT}}/_build/STYLE.md.
+- Source: {{ROOT}}/notes/{{FILE}}. Figures: draw the static ones the backbone's figure shortlist
+  lists for §{{N}} ({{STATIC FIGURES}}); leave the step-through markers ({{STEP-THROUGHS, or
+  "none"}}) as they are.
+- Out of scope: every other notes file and fragment, the chassis, sources/, _build/extract/ and
+  _build/verify/ (a figure's data comes from the notes alone), everything under practice/, and
+  every file MANIFEST.md marks `reserved`. Never add what CONVERT.md's Output paragraph forbids
+  (a script, a style, an event attribute, a class outside CHASSIS.md's table).
 ```

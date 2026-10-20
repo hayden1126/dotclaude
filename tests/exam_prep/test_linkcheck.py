@@ -167,6 +167,13 @@ class Html(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("2 in-page links, 1 ids; 0 unresolved; 0 duplicate ids", out)
 
+    def test_a_missing_page_is_a_usage_error(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = linkcheck.main(["--html", os.path.join(tempfile.gettempdir(), "no-such-page.html")])
+        self.assertEqual(code, 2)
+        self.assertIn("no page at", err.getvalue())
+
     def test_unresolved_and_duplicates_fail(self):
         code, out = self.check('<p id="a"></p><p id="a"></p><a href="#a">1</a><a href="#b">2</a>'
                                '<script>var s = \'<p id="b"></p>\';</script>')

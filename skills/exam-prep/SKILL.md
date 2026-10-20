@@ -56,6 +56,7 @@ session) when the hub has its own conventions:
 | `PLAN.md`, `STATUS.md` | the approved plan; state, judgment calls and artifact URLs | tracked |
 | `sources/` | course material as received; `sources/ed/` the Ed digest and raw pull | ignored |
 | `_build/pages/`, `_build/text/`, `_build/slices/`, `_build/media/` | renders, deck slices, extracted images | ignored |
+| `_build/shots/`, `_build/package*.json` | the browser check's screenshots, a local Playwright install | ignored |
 | `_build/` (rest) | extracts, backbone, checker, hub copies of STYLE, CHASSIS, CONVERT, page build | tracked |
 | `notes/`, `cheatsheet/`, `practice/` | the products; `practice/*-key.md` quarantined | tracked |
 
