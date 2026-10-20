@@ -97,8 +97,8 @@ def settings_tiers(project, home):
     DELEGATION_SETTINGS_EXTRA. That is the launcher's environment, which no agent can set.
     A file that exists but doesn't read as an object raises (dc.read_settings): main denies."""
     tiers = [
-        ("user", dc.read_settings(os.path.join(home, ".claude", "settings.json"))),
-        ("user", dc.read_settings(os.path.join(home, ".claude", "settings.local.json"))),
+        ("user", dc.read_settings(os.path.join(dc.config_dir(home), "settings.json"))),
+        ("user", dc.read_settings(os.path.join(dc.config_dir(home), "settings.local.json"))),
         ("project", dc.read_settings(os.path.join(project, ".claude", "settings.json"))),
         ("local", dc.read_settings(os.path.join(project, ".claude", "settings.local.json"))),
     ]
@@ -254,7 +254,7 @@ class Analyzer:
 
     def _project_dir(self):
         """The session's project directory. The hook's cwd follows the agent's `cd`, so it
-        can be a subdirectory; the transcript lives under ~/.claude/projects/<slug>/, where
+        can be a subdirectory; the transcript lives under <config dir>/projects/<slug>/, where
         the slug is the project path with every non-alphanumeric character turned into `-`.
         The nearest ancestor of cwd with that slug is the project; failing that, cwd."""
         tp = self.data.get("transcript_path") or ""
@@ -270,11 +270,9 @@ class Analyzer:
 
     def _path_dirs(self):
         dirs = os.environ.get("PATH", "").split(":")
-        snaps = sorted(
-            (os.path.join(self.home, ".claude", "shell-snapshots", f) for f in
-             os.listdir(os.path.join(self.home, ".claude", "shell-snapshots"))),
-            key=os.path.getmtime) if os.path.isdir(
-                os.path.join(self.home, ".claude", "shell-snapshots")) else []
+        snap_dir = os.path.join(dc.config_dir(self.home), "shell-snapshots")
+        snaps = sorted((os.path.join(snap_dir, f) for f in os.listdir(snap_dir)),
+                       key=os.path.getmtime) if os.path.isdir(snap_dir) else []
         if snaps:
             try:
                 with open(snaps[-1], errors="replace") as f:

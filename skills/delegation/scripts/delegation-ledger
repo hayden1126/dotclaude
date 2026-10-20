@@ -1197,8 +1197,9 @@ def cmd_sandbox_denials(args):
     Reads only the <sandbox_violations> lines Claude Code writes into tool results."""
     cutoff = time.time() - args.days * 86400
     seen = collections.Counter()
-    for p in glob.glob(os.path.expanduser("~/.claude/projects/*/*.jsonl")) + \
-            glob.glob(os.path.expanduser("~/.claude/projects/*/*/subagents/*.jsonl")):
+    projects = os.path.join(dc.config_dir(), "projects")
+    for p in glob.glob(os.path.join(projects, "*", "*.jsonl")) + \
+            glob.glob(os.path.join(projects, "*", "*", "subagents", "*.jsonl")):
         try:
             if os.path.getmtime(p) < cutoff:
                 continue

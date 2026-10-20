@@ -274,7 +274,6 @@ def check_strings(path=None, strings=CANARY_STRINGS):
     return True, f"all {len(strings)} strings present in {path}"
 
 
-GUARD_SHIM = os.path.expanduser("~/.claude/hooks/watch-guard.sh")
 NOOP_STOP = '{"hook_event_name": "Stop", "stop_hook_active": false}'  # no session: nothing to do
 
 
@@ -285,7 +284,7 @@ def check_guard_shim(shim=None):
     import, which would otherwise fail silently. It runs with a throwaway XDG_STATE_HOME, so the
     real log's other writers (a guard's routine adoption line, say) can't fail it; the detail
     quotes the last line it logged, since that log goes with the temp dir."""
-    shim = shim or GUARD_SHIM
+    shim = shim or os.path.join(dc.config_dir(), "hooks", "watch-guard.sh")
     if not os.path.exists(shim):
         return False, f"{shim} is missing"
     with tempfile.TemporaryDirectory() as state:

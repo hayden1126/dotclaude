@@ -54,6 +54,10 @@ TEST_TMP = _test_tmp_dir()
 
 class Base(unittest.TestCase):
     def setUp(self):
+        env = mock.patch.dict(os.environ)
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("CLAUDE_CONFIG_DIR", None)  # the settings and sessions live in the fake home
         self.tmp = tempfile.TemporaryDirectory(prefix="sp-test-", dir=TEST_TMP)
         self.home = os.path.realpath(self.tmp.name)
         os.makedirs(os.path.join(self.home, ".claude"))
@@ -620,10 +624,6 @@ class WriterInLane(Writer):
 
     def setUp(self):
         super().setUp()
-        env = mock.patch.dict(os.environ)
-        env.start()
-        self.addCleanup(env.stop)
-        os.environ.pop("CLAUDE_CONFIG_DIR", None)  # the sessions file lives in the fake home
         self.lane = os.path.join(self.home, "code", "proj-lanes", "chart-fix")
         os.makedirs(os.path.join(self.lane, "src"))
         subprocess.run(["git", "init", "-q", self.lane], check=True)

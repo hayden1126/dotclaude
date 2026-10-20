@@ -518,12 +518,12 @@ Allow rules on excluded commands sit behind it: an allow rule skips the classifi
   says the kill and the lapse as two items.
 - **Adoption after `/clear` needs the Claude process.** A waiter and the guard each find their
   Claude process by walking up their parents, 6 levels at most, to the nearest one whose
-  `~/.claude/sessions/<pid>.json` names its pid and procStart (`claude_ancestor`, which returns
-  that process and the file's `sessionId`). `claude_identity` decides from there, and a
-  waiter's session comes from the same walk. `CLAUDE_PID` and `CLAUDE_CODE_SESSION_ID` are
-  inherited, so on their own they can name another process's session: a nested `claude -p`
-  started from the lead's Bash may carry the lead's, and a tmux server started from a Claude
-  Bash call carries ones that go stale. So:
+  `~/.claude/sessions/<pid>.json` (under `$CLAUDE_CONFIG_DIR` when set) names its pid and
+  procStart (`claude_ancestor`, which returns that process and the file's `sessionId`).
+  `claude_identity` decides from there, and a waiter's session comes from the same walk.
+  `CLAUDE_PID` and `CLAUDE_CODE_SESSION_ID` are inherited, so on their own they can name another
+  process's session: a nested `claude -p` started from the lead's Bash may carry the lead's, and
+  a tmux server started from a Claude Bash call carries ones that go stale. So:
   - when `CLAUDE_PID` is the process the walk found and `CLAUDE_CODE_SESSION_ID` is set, that
     process set both vars for this Bash call, and the env's id is the session. The env follows a
     session change (see the verified facts), and nothing verified says the sessions file is

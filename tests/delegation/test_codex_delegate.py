@@ -366,6 +366,7 @@ class FullRun(unittest.TestCase):
         # inherited CLAUDE_PID is invisible inside the sandbox, and SANDBOX_RUNTIME is set
         # there, either of which would make every pid look hidden.
         self.env.pop("SANDBOX_RUNTIME", None)
+        self.env.pop("CLAUDE_CONFIG_DIR", None)  # the settings and sessions live in the fake home
 
     def tearDown(self):
         self.tmp.cleanup()

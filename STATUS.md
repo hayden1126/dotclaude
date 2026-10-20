@@ -87,9 +87,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lanes** (opened 2026-10-19; briefs in each record). Merge order: 1 pr-horizon
-    (`handoff?` past 200 PRs, the capella report below; carries the lead's notes), 2 config-dir
-    (#133, the delegation readers that ignore CLAUDE_CONFIG_DIR, below).
+  - **Live lanes** (opened 2026-10-19; briefs in each record). Merge order: 1 config-dir
+    (#133, the delegation readers that ignore CLAUDE_CONFIG_DIR, below; carries the lead's
+    notes), 2 practices
+    (`feat/practices-suite`, opened 2026-10-19 at Hayden's ask: the skill suite below, researched
+    from his project memories and online sources, then the security skill only; Hayden picked
+    "security first"). pr-horizon merged as #135 (2026-10-20): installed from main, lane closed.
   - **Lane ask quality: done** (2026-10-19 to 2026-10-20). ask-check merged as #131 and was
     installed from main 2026-10-20: a PreToolUse hook on AskUserQuestion (`hooks/ask_check.py`)
     denies risky asks with a checklist in the reason. branch-reuse merged as #130: `lane new`
@@ -132,9 +135,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     injection and the rest; Hayden sends the list), not only agents; ux is the whole user
     experience (lag and loading, which features serve users most, convenience), with UI a small
     part, so it links `frontend-ui-discipline` for that part. Open for Hayden: the list and
-    names. Lead's flags: the name `security-review` collides with a built-in skill; dotclaude is
-    public, so no capella code or unfixed gaps go in ([[dotclaude-public-repo]]); checklists in context get skipped, so a pilot should say what
-    enforces it (a hook at the event, as ask-check does). Pairs with the AWS gap check below.
+    names. In lane practices since 2026-10-19 (its record holds the state). Lead's flags: the
+    name `security-review` collides with a built-in skill; dotclaude is public, so no capella
+    code or unfixed gaps go in ([[dotclaude-public-repo]]); checklists in context get skipped, so
+    a pilot should say what enforces it (a hook at the event, as ask-check does). Pairs with the
+    AWS gap check below.
     Sources so far: six Instagram reels Hayden sent (2026-10-19; transcripts via getthescript.app),
     vibe-coding listicles. They fall into security (keys in the bundle, ids from the request, RLS,
     server-side sign-out, user enumeration, hashing, injection, rate limits), reliability (tests,
@@ -154,30 +159,36 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     lead drops this item at its merge)** (from lane json-depth's PR 2 plan pass,
     2026-10-19; predates it): `dc.claude_ancestor` and `dc.live_sessions` read a hard-coded
     `~/.claude/sessions`, while `dc.session_toplevel` uses `sessions_dir`.
-  - **Lanes tell the lead before an act past their worktree: drafted on lead branch
-    `docs/lane-notices` (01e02a2, worktree `.claude/worktrees/lane-notices`), not pushed.**
-    Hayden's rule (2026-10-19): a lane never tells Hayden what the lead must do; it messages the
-    lead before an install from the lane or a cap slot, and with anything the lead must run, then
-    waits for the reply. The lead asks Hayden only when the act needs his ok. Edits:
-    `skills/lanes/SKILL.md` (Lifecycle 3 and 5, The lead 6, "Who asks Hayden what") and
-    `docs/lanes.md` ("Who asks what"). Both files are pr-horizon's too, so the PR opens only after
-    pr-horizon merges: merge main into the branch, then ask Hayden to push and open the draft.
-    Once it merges, new briefs drop the hand-written "Message the lead before any act..." line.
+  - **Lanes tell the lead before an act past their worktree: merged as #136** (lead PR,
+    2026-10-20, installed from main). New briefs drop the hand-written "Message the lead before
+    any act..." Constraints line: the skill carries it (Lifecycle step 3).
+  - **Watch: `~/.claude/CLAUDE.md` vanished after a lane install** (2026-10-20 00:53Z). Lane
+    config-dir's `setup.sh` (00:52:28 to 00:52:38, sandbox off) linked it, then it was gone by
+    00:53:02, with no backup (a symlink is removed, not backed up). Hayden relinked it by hand
+    to `~/dotclaude-lanes/config-dir/CLAUDE.md` (the lead's own `ln -s` was refused as
+    self-modification), and the #136 reinstall put it back on main, where it survived the
+    sandboxed commands right after. config-dir's reinstall at 21:02 kept it too, across the same
+    sandboxed `sandbox-denials` run; that session's sandbox config listed the resolved target,
+    where after the loss it listed the literal path. So the loss points at `setup.sh`'s
+    `link()` gap (`rm`, then `ln -s`) meeting some session's sandboxed command. Fix (cheap, not
+    built): make `link()` atomic, `ln -s` to a temp name beside the target, then `mv -T` over
+    it, so the path never goes missing; lane-able (`setup.sh`, `tests/setup`). config-dir's timeline (its session 1f1393e7) rules out its code, its
+    tests and install-state's prune; `~/.claude`'s mtime moved 190 ms after a sandboxed
+    `delegation-ledger sandbox-denials` started. Its guess, unproven: the Bash sandbox. A
+    sandbox config built while `link()` sat between `rm` and `ln -s` lists the literal path in
+    denyWrite, and bwrap may plant and then clean up a mount point there. Check after each
+    reinstall (`ls -la ~/.claude/CLAUDE.md`); a repro is a `setup.sh` run beside a loop of
+    sandboxed commands. Related: the bwrap "Can't get type of source ... config.worktree" error
+    config-dir hit while ask-check's worktree was being removed.
   - **A custom CLAUDE_CONFIG_DIR breaks the hook layer** (from lane config-dir, 2026-10-19;
     checked: 39 hook commands in `settings.json` run `$HOME/.claude/hooks/...`, while `setup.sh`
     installs to `${CLAUDE_CONFIG_DIR:-$HOME/.claude}`, and 16 files under `hooks/` hard-code
     `~/.claude`). Under a custom config dir every hook fails, and the `|| exit 2` ones block.
     Matters for a new device ([[hayden-new-device-goal]]); unreachable on HAYPC (unset).
     config-dir's PR covers only the delegation Python readers.
-  - **`handoff?` never clears on a switched lane past 200 PRs** (bug report from capella-studio's
-    lead, session 5788b9fb, 2026-10-19; checked against the code). `pr_states` lists the newest
-    `PR_LIMIT` (200) PRs in one gh call; once that list is full, `merges_of`
-    (`skills/lanes/scripts/lane:884`) returns unknown for any lane that switched branches (or was
-    adopted, or predates the horizon), so the flag stays on and the hand-back gate can't pass.
-    Documented as a limit in `docs/lanes.md` ("What it can't tell"), but capella's lanes keys,
-    polish and blockfix all hit it; dotclaude reaches it near #200. Fix shape (the reporter's):
-    for just those lanes, one extra `gh pr list --head <branch> --state merged` per branch
-    instead of giving up. Lane-able (`lane`, `tests/lanes`, `docs/lanes.md`).
+  - **`handoff?` past 200 PRs: fixed in #135** (lane pr-horizon, merged 2026-10-20, installed
+    from main): `merges_of` asks gh per branch for a lane that switched, was adopted or predates
+    the horizon. Tell capella-studio's lead (the reporter) once its lanes pick it up.
   - **`lane ls`'s PR column reads `none` for a lane whose newest PR sits past the 200-PR
     horizon** (cosmetic, from lane pr-horizon, 2026-10-19): a per-branch `--state all` call
     would fix it.
@@ -266,20 +277,22 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lanes pr-horizon (merge order 1, carries the lead branch) and config-dir (#133, order 2)
-     run; their state is in their records (`lane ls`). The lane-notices rule is drafted
-     (Backlog): its PR follows pr-horizon's merge.
+  0. Lanes config-dir (#133, merge order 1, carries the lead branch; its install from the lane
+     holds, so `~/.claude/CLAUDE.md` and the other links point into it) and practices (order 2)
+     run; their state is in their records (`lane ls`). On `merged #133`, run the chain (The
+     lead, step 7), then check `ls -la ~/.claude/CLAUDE.md` points at the main checkout (the
+     Watch item in Backlog). The #136 reinstall released config-dir's install hold: it
+     reinstalls from its worktree before ready.
   1. Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
      against the code and log it in the backlog. When lanes run again, follow The lead in
      `skills/lanes/SKILL.md` (step 7 is the post-merge chain; never amend or rebase the lead
      branch). `lane new` refuses a branch name any PR used, and refuses when gh can't answer
      (lane branch-reuse); `--reuse-branch` overrides.
   - The lead's commits: `git log --first-parent main..chore/after-pr4` (STATUS only, plus merges
-    of main). Session ee8a43bd (2026-10-19 to 10-20) ran `324c937..HEAD` on the lead branch: the
-    ask-quality investigation (transcript search, Hayden's picks), lanes branch-reuse and
-    ask-check (#130, #131: chain run, both closed, the probe lane reuse-probe abandoned on his
-    ok), lead PRs #132 and #134 (the Waiting-on-you rule, smoke passed), and opened pr-horizon
-    and config-dir.
+    of main). Session 45664d28 (2026-10-20) ran `2c28e7e..HEAD` on the lead branch: the #135
+    chain (pr-horizon closed), lead PR #136 (merged, installed), the skill-suite backlog item
+    and lane practices,
+    and the CLAUDE.md watch item.
   - Open with Hayden, nothing for the lead to do: the capella-studio lead asked how a new lane
     should clear the excluded-command guard, and the lead recommended (2026-10-17) pointing
     capella's `core.hooksPath` at the main checkout's protected `.githooks` (absolute path)
