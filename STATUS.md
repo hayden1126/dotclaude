@@ -87,19 +87,19 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lanes** (all opened 2026-10-19; briefs in each record). Merge order: 1 ask-check
-    (Next item 0, carries the lead's notes; holds the install), 2 pr-horizon (`handoff?` past
-    200 PRs, the capella report below; overlaps ask-check on `docs/lanes.md`), 3 config-dir
-    (the two delegation readers that ignore CLAUDE_CONFIG_DIR, below). Lead PR #132
-    merged and installed from main 2026-10-20 (CLAUDE.md's Waiting-on-you rule; the reinstall
-    released ask-check's install, which it redoes before ready). Smoke: a fresh `claude -p`
-    ended with the label, but "checklist" made it write `- [ ]` boxes, which Hayden doesn't
-    want (plain bullets): the wording fix, lead PR #134, merged 2026-10-20 with no lead
-    reinstall (Hayden's call: it would release ask-check's install again). Live since ask-check
-    merged main (db2468c); smoke passed 2026-10-20: a fresh `claude -p` ended with a plain-bullet
-    list and skipped the inline mark on the section right before it. branch-reuse merged as #130 and was installed from main, 2026-10-19: `lane
-    new` refuses a branch name any PR used (or when gh can't answer; `--reuse-branch`
-    overrides), and handoff-check counts the checked-out branch. The three lanes opened earlier on 2026-10-19
+  - **Live lanes** (opened 2026-10-19; briefs in each record). Merge order: 1 pr-horizon
+    (`handoff?` past 200 PRs, the capella report below; carries the lead's notes), 2 config-dir
+    (#133, the delegation readers that ignore CLAUDE_CONFIG_DIR, below).
+  - **Lane ask quality: done** (2026-10-19 to 2026-10-20). ask-check merged as #131 and was
+    installed from main 2026-10-20: a PreToolUse hook on AskUserQuestion (`hooks/ask_check.py`)
+    denies risky asks with a checklist in the reason. branch-reuse merged as #130: `lane new`
+    refuses a branch name any PR used (or when gh can't answer; `--reuse-branch` overrides),
+    and handoff-check counts the checked-out branch. Lead PRs #132 and #134: CLAUDE.md's
+    Waiting-on-you rule (an inline mark per item, then one plain-bullet list at the end); smoke
+    passed 2026-10-20. Causes, rates and Hayden's picks: `~/scratch/lane-ask-quality/`
+    (private: it quotes transcripts). **Watch:** asks the hook denies wrongly, and replies that
+    skip the label (then the Stop-hook check is the follow-up).
+  - The three lanes opened earlier on 2026-10-19
     merged, were installed from main and closed: chrome-ttl as #126 (chrome-bg's TTL on a
     monotonic deadline, plus coding-practices rule 8), tab-cmd as #127 (a claude run under its
     versioned path counts as claude in the tab scripts: Hayden's "trigger + confirm" design, the
@@ -113,15 +113,6 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
 
   Backlog:
-  - **Lane ask quality: investigated, Hayden picked the fixes** (2026-10-19, session ee8a43bd).
-    A search of 1,472 asks found the problem in every kind of session, not only lanes, roughly
-    doubled in plan mode (agents' claims reach the ask unchecked). The rules were already in
-    context and were ignored; a checklist sent at ask time fixed json-depth's later rounds.
-    Hayden's picks: a PreToolUse hook on AskUserQuestion denies only risky asks, with a
-    checklist in the reason (probe the same-turn resend first); plan mode at `lane open` stays;
-    `lane new` refuses a branch name with any PR, with an override; two parallel lanes,
-    ask-check and branch-reuse. Causes and picks: `~/scratch/lane-ask-quality/MISTAKES.md`;
-    rates and precision: `SEARCH.md` beside it (both private: they quote transcripts).
   - G8 open probes (a) and (b) (Hayden's pick, 2026-10-14): Hayden runs
     `~/scratch/sandbox-audit/g8-probe/run.py` by hand with the sandbox off, because the auto-mode
     classifier refused the run. Results go into the private findings file's G8 section.
@@ -153,7 +144,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     reinstall) stay no-ask unless he says otherwise. "Draft opened" and "ready asked" messages
     are dropped: `lane ls` shows both. Seen again the same day: ask-check installed from its lane
     without telling the lead. Home: `skills/lanes/SKILL.md` Lifecycle steps 5 and 6 and "Who asks
-    Hayden what", which ask-check edits, so it opens after ask-check merges.
+    Hayden what"; ask-check's edits there merged as #131, but pr-horizon edits that file too.
   - **A custom CLAUDE_CONFIG_DIR breaks the hook layer** (from lane config-dir, 2026-10-19;
     checked: 39 hook commands in `settings.json` run `$HOME/.claude/hooks/...`, while `setup.sh`
     installs to `${CLAUDE_CONFIG_DIR:-$HOME/.claude}`, and 16 files under `hooks/` hard-code
@@ -254,10 +245,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lane ask quality (Backlog, picks made): branch-reuse merged as #130; lane ask-check
-     (`feat/ask-check`) is merge order 1 now and carries the lead branch. Its state is in its
-     record (`lane ls`).
-  1. While item 0's lanes run, Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
+  0. Lanes pr-horizon (merge order 1, carries the lead branch) and config-dir (#133, order 2)
+     run; their state is in their records (`lane ls`). Then the lane-notices rule (Backlog),
+     now that ask-check's edits to `skills/lanes/SKILL.md` are on main.
+  1. Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
      against the code and log it in the backlog. When lanes run again, follow The lead in
      `skills/lanes/SKILL.md` (step 7 is the post-merge chain; never amend or rebase the lead
      branch). `lane new` refuses a branch name any PR used, and refuses when gh can't answer
