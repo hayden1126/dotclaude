@@ -254,6 +254,7 @@ say = "This client component reaches for a privileged key or an admin SDK. Move 
 # XXXX and AWS's documented EXAMPLE ids stay quiet. practices-allow covers only its own line.
 id = "SEC-41"
 at = ["edit", "commit"]
+scope = "line"
 when = '''\b(?:AKIA|ASIA)(?![A-Z0-9]{0,12}XXXX)[A-Z0-9]{16}\b(?<!EXAMPLE)|\bgh[pousr]_[A-Za-z0-9]{36,251}\b|\bgithub_pat_[A-Za-z0-9_]{80,251}\b|\bxox[abeoprs]-[0-9]{6,16}-[0-9A-Za-z-]{8,200}|\bsk-(?:(?:proj|svcacct|admin)-)?[A-Za-z0-9_-]{16,160}T3BlbkFJ[A-Za-z0-9_-]{16,160}|\bsk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{80,300}|\bsk-ant-(?:api|admin)[0-9]{2}-[A-Za-z0-9_-]{80,200}|\b[rs]k_(?:live|test)_(?![A-Za-z0-9]{0,250}?(?:xxxx|XXXX))[A-Za-z0-9]{20,250}\b|-{5}BEGIN[ ](?:[A-Z0-9]{2,10}[ ])?PRIVATE[ ]KEY(?:[ ]BLOCK)?-{5}'''
 paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py,rb,go,php,java,kt,cs,rs,swift,vue,svelte,astro,html,json,yaml,yml,toml,ini,cfg,conf,xml,properties,tf,tfvars,sh,bash,zsh,ps1,md,mdx,txt,ipynb}", "Dockerfile", "*.dockerfile", ".env.{example,sample,template,dist,defaults}"]
 say = "This looks like a live key. Read it from env or a secret manager instead, and if it is real, tell the user to rotate it: it has left the vault (SEC-41). A fake key in a test fixture can stay with `practices-allow: SEC-41 fake test key` on the same line; the comment covers only that line."

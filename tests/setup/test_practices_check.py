@@ -834,7 +834,9 @@ def key_shapes():
         "github": "gh" + "p_" + "a1B2c3D4e5" * 3 + "F6g7H8",
         "slack": "xo" + "xb-" + "1234567890" + "-" + "9876543210123" + "-"
                  + "aB3dE6gH9jK2mN5pQ8sT1vW4",
-        "openai": "sk" + "-proj-" + "Ab3De6Gh9Jk2Mn5Pq8St1Vw4" * 2,
+        # OpenAI keys carry a fixed marker between two random runs.
+        "openai": "sk" + "-proj-" + "Ab3De6Gh9Jk2Mn5Pq8St1Vw4" + "T3Blbk" + "FJ"
+                  + "Ab3De6Gh9Jk2Mn5Pq8St1Vw4",
         "stripe": "sk" + "_live_" + "Zx9Yw8Vu7Ts6Rq5Po4Nm3Lk2",
         "pem": "-----" + "BEGIN RSA " + "PRIVATE KEY" + "-----",
     }
@@ -911,7 +913,7 @@ class Shipped(unittest.TestCase):
     def test_key_placeholders_expand_to_key_shapes(self):
         shapes = {"aws": r"\bAKIA[0-9A-Z]{16}\b", "github": r"\bghp_[A-Za-z0-9]{36}\b",
                   "slack": r"\bxoxb-[0-9]{10,13}-[0-9]{10,13}-[A-Za-z0-9]{24}\b",
-                  "openai": r"\bsk-proj-[A-Za-z0-9]{48}\b",
+                  "openai": r"\bsk-proj-[A-Za-z0-9]{24}T3BlbkFJ[A-Za-z0-9]{24}\b",
                   "stripe": r"\bsk_live_[A-Za-z0-9]{24}\b",
                   "pem": r"-----BEGIN [A-Z ]{0,20}PRIVATE KEY-----"}
         body = "skill = 'keyshape'\n" + "".join(
