@@ -89,18 +89,17 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
   - **Live lanes** (briefs in each record). Merge order (Hayden's reorder, 2026-10-20: the
     atomic link first, so no later install runs the old `link()`; link-atomic merged as #140
-    the same day): 1 summary-retire
-    (`chore/retire-summary-rows`, carries the lead's notes, and also takes the ccstatusline
-    crash fix, Hayden's pick the same day), 2 exam-prep (`feat/exam-prep-skill`, opened
-    2026-10-20 on Hayden's ok: the exam-prep skill suite below; second so it can install from its
-    lane for the dry run before round 1's go/no-go, Thu 10/22), 3 practices (`feat/practices-suite`, opened 2026-10-19 at Hayden's ask: the skill
+    the same day, summary-retire as #139): 1 exam-prep (`feat/exam-prep-skill`, carries the
+    lead's notes; opened 2026-10-20 on Hayden's ok: the exam-prep skill suite below; ahead of
+    practices and mute so it can install from its lane for the dry run before round 1's
+    go/no-go, Thu 10/22), 2 practices (`feat/practices-suite`, opened 2026-10-19 at Hayden's ask: the skill
     suite below, researched from his project memories and online sources, then the security
     skill only; Hayden picked "security first"; its spec waits on his review). link-atomic and
-    summary-retire opened 2026-10-20 on Hayden's ok (Backlog items below). link-atomic merged as
-    #140, pr-horizon as #135 and config-dir as #133 (2026-10-20): installed from main, the lanes
-    closed. 4 mute (`feat/device-mute`, opened 2026-10-20 on Hayden's ok: the device-wide mute
+    summary-retire opened 2026-10-20 on Hayden's ok (Backlog items below). summary-retire merged
+    as #139, link-atomic as #140, pr-horizon as #135 and config-dir as #133 (2026-10-20):
+    installed from main, the lanes closed. 3 mute (`feat/device-mute`, opened 2026-10-20 on Hayden's ok: the device-wide mute
     below, plus `setup-tmux.sh`'s `link()` fix, his pick the same day). Hayden raised the cap
-    from 3 to 4 on 2026-10-20 for exam-prep; it is full.
+    from 3 to 4 on 2026-10-20 for exam-prep; 3 of 4 slots are taken.
   - **Lane ask quality: done** (2026-10-19 to 2026-10-20). ask-check merged as #131 and was
     installed from main 2026-10-20: a PreToolUse hook on AskUserQuestion (`hooks/ask_check.py`)
     denies risky asks with a checklist in the reason. branch-reuse merged as #130: `lane new`
@@ -164,12 +163,14 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **Lanes tell the lead before an act past their worktree: merged as #136** (lead PR,
     2026-10-20, installed from main). New briefs drop the hand-written "Message the lead before
     any act..." Constraints line: the skill carries it (Lifecycle step 3).
-  - **Retire the status-line summary rows; brief before each push** (Hayden, 2026-10-20: "I
-    don't read it anymore"). His picks: keep the tab label (the Stop hook
-    `hooks/session-summary.sh` asks Haiku for the label only; the rows and
-    `statusline/session-summary.py` go), and the briefing is a rule now, with a check later only
-    if asks skip it. The rule merged as #137 (2026-10-20, installed). The retirement runs in lane
-    summary-retire; at its merge the lead updates memory `dotclaude-session-summary-statusline`.
+  - **Retire the status-line summary rows: merged as #139** (lane summary-retire, 2026-10-20,
+    installed from main and the lane closed; Hayden: "I don't read it anymore"). The Stop hook
+    `hooks/session-summary.sh` asks Haiku for the tab label only; the rows and
+    `statusline/session-summary.py` are gone, and `setup.sh` strips the two retired widgets from
+    an existing ccstatusline layout (the live file is one row). It also took the ccstatusline
+    crash fix: a wrongly shaped `lines` re-seeds with a backup, and a dir, FIFO or bad link at
+    the destination warns and skips. The briefing-before-push rule merged as #137; a check
+    follows only if asks skip it.
   - **The exam-prep skill suite** (Hayden's brief, `~/.claude/plans/exam-prep-skill-brief.md`,
     approved 2026-10-06, revised 2026-10-20; copied into lane exam-prep's artifacts): one
     umbrella skill, intake through tutor and retro, built from the Security I and AI 4701 runs.
@@ -181,7 +182,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     mutes the Windows toast and the notify ring for every session on the machine (no toggle
     exists today). Design settled 2026-10-20 (Hayden picked the lead's pick on all four forks:
     `PLAN.md`, "Next: a device-wide mute"). In lane mute since 2026-10-20 (its record holds the
-    state); README overlaps summary-retire.
+    state).
   - **`setup-tmux.sh`'s own `link()` has #140's gap class** (lane link-atomic's report,
     2026-10-20). `setup-tmux.sh:62-71` moves a real file aside, then runs `ln -sfn`. GNU ln
     9.4 replaces a link with no missing window (the lead's race test: 0 misses in about 600k
@@ -314,8 +315,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lanes summary-retire (merge order 1, carries the lead branch), exam-prep (2), practices
-     (3) and mute (4) run; their state is in their records (`lane ls`). After each reinstall,
+  0. Lanes exam-prep (merge order 1, carries the lead branch), practices (2) and mute (3)
+     run; their state is in their records (`lane ls`). After each reinstall,
      check `ls -la ~/.claude/CLAUDE.md` (the Watch item). Watch that push asks open with the
      briefing (#137); if they skip it, the Stop-hook check is the follow-up (Hayden's pick).
   1. Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
