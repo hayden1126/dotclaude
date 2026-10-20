@@ -1,8 +1,14 @@
-param([string]$Message = "Input needed")
+param([string]$Message = "Input needed", [switch]$Silent)
 
 # Render &, <, > literally instead of letting them break the toast XML below (LoadXml would
 # throw and the toast would silently vanish). A no-op on today's plain messages; cheap insurance.
 $Message = [System.Security.SecurityElement]::Escape($Message)
+
+# -Silent: notify.sh passes it while the device-wide mute holds the sound. A toast with no
+# <audio> element gets Windows' default chime (unless the app's sound is off in Windows'
+# notification settings), so a sound mute that only dropped the ring would still chime;
+# silent="true" turns that off. Without -Silent the XML is as it always was.
+$audio = if ($Silent) { "`n  <audio silent=`"true`"/>" } else { "" }
 
 [Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime] | Out-Null
 [Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom.XmlDocument,ContentType=WindowsRuntime] | Out-Null
@@ -14,7 +20,7 @@ $xml = @"
       <text id="1">Claude Code</text>
       <text id="2">$Message</text>
     </binding>
-  </visual>
+  </visual>$audio
 </toast>
 "@
 
