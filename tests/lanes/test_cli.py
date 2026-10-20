@@ -123,6 +123,8 @@ class RoundTrip(LanesRepo):
                 self.assertNothingMade(args[0], args[-1])
         self.lane("new", "probe", "--branch", "fix/old", "--reuse-branch")
         self.assertEqual(self.lane_json("probe")["branch"], "fix/old")
+        # Its branch may hold a PR older than the lane, which a full PR list may cut (merges_of).
+        self.assertIs(self.lane_json("probe").get("reused"), True)
         # A rerun is told the lane exists, not sent to --reuse-branch by the lane's own PR.
         self.assertIn("already registered", self.run_lane("new", "probe").stderr)
 
@@ -698,33 +700,96 @@ class HandoffFlag(LanesRepo):
         self.assertEqual(row["pr"], "none")
         self.assertIn("handoff?", row["flags"])
 
-    def test_a_lane_older_than_a_full_pr_list_lights_it(self):
+    def full_list(self, oldest, mine=None):
+        """gh's list holds its full PR_LIMIT PRs, the newest `mine` (a row's fields) when given,
+        else none the lane's; the oldest was created at `oldest` (epoch seconds, or a string
+        used as the stamp itself)."""
+        stamp = oldest if isinstance(oldest, str) else datetime.datetime.fromtimestamp(
+            oldest, datetime.timezone.utc).isoformat(timespec="seconds")
+        rows = [{"number": n, "state": "OPEN", "headRefName": f"other-{n}",
+                 "createdAt": self.iso(0)} for n in range(2, load_lane_script().PR_LIMIT + 1)]
+        if mine:
+            rows[-1].update(mine)
+        self.env["FAKE_GH_OUT"] = json.dumps(
+            rows + [{"number": 1, "state": "OPEN", "headRefName": "x", "createdAt": stamp}])
+
+    def asked(self):
+        """The branches `ls` asked gh for the merged PRs of, in order, since the last call."""
+        try:
+            with open(self.env["FAKE_GH_LOG"]) as f:
+                calls = [line.split() for line in f]
+            os.remove(self.env["FAKE_GH_LOG"])
+        except FileNotFoundError:  # no gh call at all
+            calls = []
+        calls = [c for c in calls if "merged" in c and "--head" in c]
+        for c in calls:  # gh's own default is 30, which would hide a full branch
+            self.assertIn("--limit", c)
+            self.assertEqual(c[c.index("--limit") + 1], str(load_lane_script().PR_LIMIT))
+        return [c[c.index("--head") + 1] for c in calls]
+
+    def test_a_lane_past_a_full_pr_list_asks_gh_for_its_branches(self):
         # gh lists PR_LIMIT PRs, newest first: a lane created before the oldest may have its PR
-        # cut from the list, so its merge can't be ruled out.
-        limit = load_lane_script().PR_LIMIT
+        # cut from the list, so `ls` asks gh for each of its branches' merged PRs instead.
+        self.env["FAKE_GH_LOG"] = os.path.join(self.tmp, "gh.log")
+        self.env["FAKE_GH_MERGED"] = "[]"
+        self.assertNotIn("reused", self.lane_json("chart-fix"))  # a plain `new` sets no mark
         created = lanelib.parse_iso(self.lane_json("chart-fix")["created"])
-        for name, oldest, flagged in (("lane newer", created - 3600, False),
-                                      ("lane older", created + 3600, True),
-                                      ("createdAt garbled", "soon", True),
-                                      # Its branch predates the lane, and so may its PR.
-                                      ("lane adopted", created - 3600, True),
-                                      # So may the branch it switched to (last: it stays).
-                                      ("lane switched", created - 3600, True)):
+        for name, oldest, asked in (("lane newer", created - 3600, []),
+                                    ("lane older", created + 3600, ["chart-fix"]),
+                                    # The local clock may run ahead of GitHub's: 10 s slack.
+                                    ("lane 5 s newer", created - 5, ["chart-fix"]),
+                                    ("createdAt garbled", "soon", ["chart-fix"]),
+                                    # Its branch predates the lane, and so may its PR.
+                                    ("lane adopted", created - 3600, ["chart-fix"]),
+                                    # `new --reuse-branch`: a PR may have used the name before.
+                                    ("lane reused", created - 3600, ["chart-fix"]),
+                                    # So may the branch it switched to (last: it stays).
+                                    ("lane switched", created - 3600, ["chart-more", "chart-fix"])):
             with self.subTest(name):
                 repo = lanelib.resolve(self.main)
                 with lanelib.lock(repo):
                     lanelib.update_lane(repo, "chart-fix",
-                                        lambda rec: rec.update(adopted=name == "lane adopted"))
+                                        lambda rec: rec.update(adopted=name == "lane adopted",
+                                                               reused=name == "lane reused"))
                 if name == "lane switched":
                     self.git("switch", "-q", "-c", "chart-more", cwd=self.path)
-                stamp = oldest if isinstance(oldest, str) else datetime.datetime.fromtimestamp(
-                    oldest, datetime.timezone.utc).isoformat(timespec="seconds")
-                rows = [{"number": n, "state": "OPEN", "headRefName": f"other-{n}",
-                         "createdAt": self.iso(0)} for n in range(2, limit + 1)]
-                self.env["FAKE_GH_OUT"] = json.dumps(
-                    rows + [{"number": 1, "state": "OPEN", "headRefName": "x",
-                             "createdAt": stamp}])
-                self.assertEqual("handoff?" in self.flags(), flagged)
+                self.full_list(oldest)
+                self.assertEqual(self.flags(), ["orphan"])
+                self.assertEqual(self.asked(), asked)
+
+    def test_a_switched_lane_s_merge_past_a_full_pr_list_is_still_found(self):
+        # The lane moved on to chart-more; chart-fix's PR #7 is older than the list's oldest.
+        self.env["FAKE_GH_LOG"] = os.path.join(self.tmp, "gh.log")
+        self.git("switch", "-q", "-c", "chart-more", cwd=self.path)
+        self.full_list(lanelib.parse_iso(self.lane_json("chart-fix")["created"]) - 3600)
+        merge = {"number": 7, "state": "MERGED", "headRefOid": "0" * 40}
+        self.env["FAKE_GH_MERGED"] = json.dumps([dict(merge, mergedAt=self.iso(60))])
+        self.assertIn("handoff?", self.flags())  # merged after the record's last write
+        self.assertEqual(self.asked(), ["chart-more", "chart-fix"])
+        self.env["FAKE_GH_MERGED"] = json.dumps([dict(merge, mergedAt=self.iso(-120))])
+        self.assertNotIn("handoff?", self.flags())  # the after-merge handoff came later
+
+    def test_a_branch_gh_cannot_answer_for_past_a_full_pr_list_lights_it(self):
+        self.full_list(lanelib.parse_iso(self.lane_json("chart-fix")["created"]) + 3600)
+        old = {"number": 7, "state": "MERGED", "mergedAt": self.iso(-900)}
+        cases = {
+            "gh fails": "fail",
+            "not JSON": "{",
+            # A branch's own list may be cut too, even with every merge it shows handed off.
+            "full branch list": json.dumps([old] * load_lane_script().PR_LIMIT),
+            "merged, no mergedAt": json.dumps([{"number": 7, "state": "MERGED"}]),
+        }
+        for name, reply in cases.items():
+            with self.subTest(name):
+                self.env["FAKE_GH_MERGED"] = reply
+                self.assertIn("handoff?", self.flags())
+        self.env["FAKE_GH_MERGED"] = json.dumps([old])
+        self.assertNotIn("handoff?", self.flags())
+        # A merge the full list holds still counts, though the branch's own answer lacks it.
+        self.full_list(lanelib.parse_iso(self.lane_json("chart-fix")["created"]) + 3600,
+                       {"state": "MERGED", "headRefName": "chart-fix", "mergedAt": self.iso(60)})
+        self.env["FAKE_GH_MERGED"] = "[]"
+        self.assertIn("handoff?", self.flags())
 
     def test_a_session_that_ended_without_writing_lights_it(self):
         self.sessions((-600, 20), (40, 900))
@@ -758,14 +823,19 @@ class HandoffFlag(LanesRepo):
                 setup()
                 self.assertIn("handoff?", self.flags())
 
-    def test_a_gh_reply_too_deep_for_json_reads_as_no_answer(self):
-        self.env["FAKE_GH_OUT"] = "[" * 100000  # RecursionError in json
-        p = self.run_lane("ls", "--json")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertNotIn("Traceback", p.stderr)
-        (row,) = json.loads(p.stdout)
-        self.assertEqual(row["pr"], "?")
-        self.assertIn("handoff?", row["flags"])
+    def test_a_gh_reply_that_is_no_list_of_prs_reads_as_no_answer(self):
+        # "[" * 100000 is a RecursionError in json; "\udcff" reaches gh's env as the byte 0xff,
+        # a reply that isn't UTF-8.
+        for reply in ("[" * 100000, "\udcff", "null", '{"number": 7}', "[7]",
+                      '[{"number": "a"}, {"number": 1}]', '[{"number": 1, "headRefName": []}]'):
+            with self.subTest(reply[:10]):
+                self.env["FAKE_GH_OUT"] = reply
+                p = self.run_lane("ls", "--json")
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertNotIn("Traceback", p.stderr)
+                (row,) = json.loads(p.stdout)
+                self.assertEqual(row["pr"], "?")
+                self.assertIn("handoff?", row["flags"])
 
     def test_a_branch_git_cannot_read_lights_it(self):
         # The worktree and its branch gone: the record survives in the mirror (the Stop hook's

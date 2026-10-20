@@ -787,6 +787,8 @@ def cmd_new(args) -> None:
         # `adopt` finishes or `done --abandon` removes, never an orphan worktree.
         lane = new_record(args.id, branch, os.path.realpath(path), base_sha, port, reqs)
         lane.update(state="setup-failed", setup_failed="copy")
+        if args.reuse_branch:  # its branch may hold a PR older than the lane (merges_of)
+            lane["reused"] = True
         write_json(repo.lane_json(args.id), lane)
         copied = lane_files(repo, lane, {ph: getattr(args, attr) for attr, ph in BRIEF.items()})
         lane = lanelib.update_lane(repo, args.id, mark_active)
@@ -874,7 +876,8 @@ def cmd_adopt(args) -> None:
 class PRs(NamedTuple):
     """pr_states' answer, by head branch. label: the newest PR's "#N state". merges: the mergedAt
     of each merged PR (None where unreadable). horizon: when the list hit PR_LIMIT, the oldest
-    createdAt it holds, since older PRs may be cut (inf when one won't parse); else None."""
+    createdAt it holds, since older PRs may be cut (inf when one won't parse); else None.
+    merges_of asks gh again, branch by branch, for a lane whose PRs may lie past it."""
     label: dict[str, str]
     merges: dict[str, list[float | None]]
     horizon: float | None
@@ -888,7 +891,7 @@ def pr_states(repo: Repo) -> PRs | None:
         p = subprocess.run(["gh", "pr", "list", "--state", "all", "--limit", str(PR_LIMIT),
                             "--json", "number,state,headRefName,mergedAt,createdAt"],
                            cwd=repo.toplevel, capture_output=True, text=True, timeout=30)
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError, ValueError):  # ValueError: not UTF-8
         return None
     if p.returncode != 0:
         return None
@@ -896,6 +899,10 @@ def pr_states(repo: Repo) -> PRs | None:
         rows = json.loads(p.stdout)
     except (ValueError, RecursionError):   # json recurses on nesting
         return None
+    if not (isinstance(rows, list) and all(
+            isinstance(r, dict) and isinstance(r.get("number", 0), int)
+            and isinstance(r.get("headRefName"), (str, type(None))) for r in rows)):
+        return None  # each field is sorted on or hashed below
     label, merges = {}, {}
     for row in sorted(rows, key=lambda r: r.get("number", 0)):  # the newest PR wins the label
         state, head = str(row.get("state")), row.get("headRefName")
@@ -911,12 +918,13 @@ def pr_states(repo: Repo) -> PRs | None:
 
 def branch_prs(repo: Repo, branch: str, state: str) -> tuple[list[dict] | None, str]:
     """(rows, why): the PRs whose head branch is named `branch`, in gh's `state` (merged, all,
-    ...), each with number, state and headRefOid. rows is None when gh can't answer, and why
-    then says what went wrong: gh's last stderr line, or what is wrong with its reply."""
+    ...), each with number, state, headRefOid and mergedAt, newest first and at most PR_LIMIT
+    (gh's own default is 30). rows is None when gh can't answer, and why then says what went
+    wrong: gh's last stderr line, or what is wrong with its reply."""
     try:
-        p = subprocess.run(["gh", "pr", "list", "--head", branch, "--state", state, "--json",
-                            "number,state,headRefOid"], cwd=repo.toplevel, capture_output=True,
-                           text=True, timeout=30)
+        p = subprocess.run(["gh", "pr", "list", "--head", branch, "--state", state, "--limit",
+                            str(PR_LIMIT), "--json", "number,state,headRefOid,mergedAt"],
+                           cwd=repo.toplevel, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError, ValueError) as e:  # ValueError: not UTF-8
         return None, str(e)[:200]
     if p.returncode != 0:
@@ -932,18 +940,30 @@ def branch_prs(repo: Repo, branch: str, state: str) -> tuple[list[dict] | None, 
     return rows, ""
 
 
-def merges_of(prs: PRs | None, lane: dict, guess: str) -> list[float | None] | None:
+def merges_of(repo: Repo, prs: PRs | None, lane: dict,
+              guess: str) -> list[float | None] | None:
     """The mergedAt of every merged PR from the lane's branches: the one `ls` shows the PR of,
-    and lane.json's, which a switch for a follow-up PR leaves behind. None when that can't be
-    known: gh can't answer, or a full list may have cut the lane's PRs (the lane is older than
-    its horizon, adopted, or switched branches, so a branch may hold a PR older than the lane)."""
+    and lane.json's, which a switch for a follow-up PR leaves behind. When a full list may have
+    cut the lane's PRs (the lane is older than its horizon, adopted, made on a reused branch, or
+    switched branches, so a branch may hold a PR older than the lane), one gh call per branch
+    asks for its merged PRs too. None when that can't be known: gh can't answer, or a branch's
+    own answer is full."""
     if prs is None:
         return None
+    branches = dict.fromkeys((guess, lane["branch"]))
+    merges = [m for b in branches for m in prs.merges.get(b, [])]
     created = lanelib.parse_iso(lane.get("created"))
-    if prs.horizon is not None and (lane.get("adopted") or guess != lane["branch"]
-                                    or created is None or created < prs.horizon):
-        return None
-    return [m for b in dict.fromkeys((guess, lane["branch"])) for m in prs.merges.get(b, [])]
+    # `created` is the local clock's, the horizon GitHub's: the slack covers their gap.
+    if prs.horizon is None or not (lane.get("adopted") or lane.get("reused")
+                                   or guess != lane["branch"] or created is None
+                                   or created - CLOCK_SLACK < prs.horizon):
+        return merges
+    for b in branches:  # a merge both answers hold counts twice, which can only light the flag
+        rows, _ = branch_prs(repo, b, "merged")
+        if rows is None or len(rows) >= PR_LIMIT:  # what it cut may have merged after the record
+            return None
+        merges += [lanelib.parse_iso(r.get("mergedAt")) for r in rows]
+    return merges
 
 
 def hook_module(name: str):
@@ -1279,7 +1299,7 @@ def board(repo: Repo) -> list[dict]:
             flags.append("orphan")
         if stopped:
             flags.append("stopped")
-        if needs_handoff(repo, lane, ref, merges_of(prs, lane, guess)):
+        if needs_handoff(repo, lane, ref, merges_of(repo, prs, lane, guess)):
             flags.append("handoff?")
         row["flags"] = flags
         rows.append(row)
