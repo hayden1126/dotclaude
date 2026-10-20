@@ -1035,8 +1035,10 @@ class GitHelper(GitMixin, unittest.TestCase):
 
     def test_refuses_what_could_run_a_program(self):
         self.commit(a="x\n")
+        # START too: it is the import time, minutes back by now in a full-suite run.
         with mock.patch.dict(os.environ, self.env, clear=True), \
-                mock.patch.object(PC, "BUDGET", 30.0):
+                mock.patch.object(PC, "BUDGET", 30.0), mock.patch.object(PC, "START",
+                                                                          PC.time.monotonic()):
             r = PC.Repo(self.repo)
             for sub, args in (("status", ()), ("diff", ()), ("diff-tree", ("-p", "HEAD")),
                               ("diff-tree", ("-r", "HEAD")), ("cat-file", ("--filters",)),
