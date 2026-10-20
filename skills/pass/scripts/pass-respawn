@@ -111,7 +111,9 @@ description and id and the rest counted: 'monitor "deploy events" (b0fzd27l4) ru
 it (/tasks, or ask Claude to TaskStop it), or /pass compact keeps it'; pass.log names every one
 whole) on the status line of every client attached to the pane's session,
 held until a key press (`display-message -d 0 -c <client>`), plus the Windows toast notify.sh
-sends (toast_command; best-effort). The drops Hayden caused keep the brief status-line
+sends (toast_command; best-effort), which obeys the device-wide mute as notify.sh's does, read
+as it goes out (toast): skipped while toasts are muted, sent with -Silent (no chime) while only
+the sound is; the held line shows either way. The drops Hayden caused keep the brief status-line
 message (QUIET): `cancelled`, `resumed` and `gone` (his own /clear or exit). A quiet `resumed`
 is a prompt or a new turn after the call (his prompt, which SKILL.md offers as a way to cancel,
 a queued prompt, a task notice or an agent's message) or a status change after the turn, and
@@ -258,7 +260,14 @@ the sandbox can write (docs/lanes.md S3). Every input, and why each is safe:
   - The toast (toast_command, resolved at the call against the same roots): powershell.exe and
     wslpath resolve through the sanitized PATH and are refused (no toast) when sandbox-writable,
     like tmux; notify-toast.ps1 is the config dir's, whose target the user tier's denyWrite
-    covers (~/dotclaude/notify-toast.ps1), and is checked the same way. The message is fixed
+    covers (~/dotclaude/notify-toast.ps1), and is checked the same way. So is hooks/mute_state.py
+    (mute_reader), the device-wide mute's reader, found from this script's real dir: checked
+    at the call, before anything loads it, and loaded only from that path when a toast goes
+    out (muted_now), compiled from its source, so no bytecode cache beside it stands in for
+    the bytes checked. Its read path imports only the stdlib; its writers are never called. A
+    missing or sandbox-writable one, or any error loading or reading it, mutes nothing: the
+    toast goes out as before, and the pass is never refused for it. The flag it reads can only
+    skip the toast or add -Silent before -Message. The message is fixed
     text plus tmux's window name and the stop record's tasks: ids and URLs bound by
     stop_ring's patterns, and labels (Claude Code's type names, or ours) and descriptions (the
     model's text), both made one plain line at write (stop_ring.clean: no control or format
@@ -286,6 +295,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 import unicodedata
 
 INVOKED = os.path.abspath(sys.argv[0] if __name__ == "__main__" else __file__)
@@ -294,6 +304,8 @@ sys.path.insert(0, os.path.join(HERE, "..", "..", "lanes", "scripts"))
 import lanelib  # noqa: E402
 
 HANDOFF_CHECK = os.path.join(HERE, "..", "..", "handoff", "scripts", "handoff-check")
+# The device-wide mute's reader: checked at the call (mute_reader), loaded only to toast.
+MUTE_STATE = os.path.join(HERE, "..", "..", "..", "hooks", "mute_state.py")
 MANAGED_SETTINGS = "/etc/claude-code/managed-settings.json"
 MANAGED_DIR = "/etc/claude-code/managed-settings.d"
 POLL = 0.2         # secs between session file reads
@@ -385,6 +397,7 @@ class Plan:
     timeout: float
     path: str = ""         # the sanitized PATH every child gets
     toast: list[str] | None = None  # the toast's argv less its message (toast_command)
+    mute: str | None = None  # hooks/mute_state.py once checked (mute_reader); None: no mute read
     launched: dict = dataclasses.field(default_factory=dict)  # launch_pick, checked at the call
     pick: list[str] = dataclasses.field(default_factory=list)  # lanelib.carried_pick, at act time
     argv0: str = ""        # the claude's argv[0] basename at the call: its pane_current_command
@@ -1197,7 +1210,9 @@ def toast_command(roots: list[str], path: str) -> list[str] | None:
     itself isn't called: it reads a Notification payload on stdin and rings and logs a
     permission prompt, which a refused pass is not. WSL only (wslpath; tmux and pass-respawn
     don't run under git-bash). None when anything is missing or sits where the sandbox can
-    write (the same checks as tmux's): the toast is best-effort and never refuses a pass."""
+    write (the same checks as tmux's): the toast is best-effort and never refuses a pass. The
+    device-wide mute is read only as the toast goes out (toast), which then skips it or puts
+    -Silent before -Message, as notify.sh does."""
     ps1 = os.path.join(config_dir(), TOAST_PS1)
     if not os.path.isfile(ps1):
         return None
@@ -1213,6 +1228,20 @@ def toast_command(roots: list[str], path: str) -> list[str] | None:
     if p.returncode != 0 or not winpath or "\n" in winpath:
         return None
     return [powershell, "-ExecutionPolicy", "Bypass", "-File", winpath, "-Message"]
+
+
+def mute_reader(roots: list[str]) -> str | None:
+    """hooks/mute_state.py (MUTE_STATE), the device-wide mute's reader, checked as
+    notify-toast.ps1 is before anything loads it: None when it is missing, or it, a link on its
+    way or its target sits where the sandbox can write. muted_now loads it only from this path.
+    Like the toast, the mute is best-effort and never refuses a pass."""
+    if not os.path.isfile(MUTE_STATE):
+        return None
+    try:
+        refuse_writable("mute_state.py", MUTE_STATE, roots, deny_roots())
+    except (Refuse, OSError):
+        return None
+    return MUTE_STATE
 
 
 def resume_prompt(status_rel: str, in_lane: bool, approved: bool, compact: bool) -> str:
@@ -1375,7 +1404,7 @@ def prepare(args: argparse.Namespace, procs, cmdline=lanelib.proc_cmdline) -> Pl
                      "checked); it can't tell when this session's turn ends", why)
     return Plan(mode, pane, repo.toplevel, lane is not None, status_rel, tmux, claude, claude_pid,
                 proc_start(claude_pid), sid, session, called, transcript, size, args.timeout,
-                path, toast_command(roots, path), launched,
+                path, toast_command(roots, path), mute=mute_reader(roots), launched=launched,
                 argv0=os.path.basename(claude_argv[0]) if claude_argv else "")
 
 
@@ -1497,16 +1526,45 @@ def placed(text: str, where: str) -> str:
     return f"{head} in {where}: {tail}" if sep and where else text
 
 
+def muted_now(plan: Plan) -> set[str]:
+    """The device-wide mute's switches muted now ("sound", "toast"), read as the toast goes out,
+    so a mute set or lifted while the pass waited counts. hooks/mute_state.py runs from the path
+    the call checked (plan.mute, mute_reader): its source is compiled here, not imported, so no
+    bytecode cache beside it stands in for the bytes checked and none is written sandbox-off.
+    Only its read path runs (current(), stdlib only), whose rule holds: what it can't read in
+    full (its note: unreadable or malformed) mutes nothing. No checked reader, or any error
+    loading or reading it: nothing is muted, and the toast goes out as before."""
+    if not plan.mute:
+        return set()
+    try:
+        with open(plan.mute, "rb") as f:
+            code = compile(f.read(), plan.mute, "exec")
+        mute_state = types.ModuleType("mute_state")
+        mute_state.__file__ = plan.mute
+        exec(code, mute_state.__dict__)
+        muted, _ = mute_state.current()
+        return {name for name in ("sound", "toast") if name in muted}
+    except Exception:  # best-effort, as the toast is: a broken reader mutes nothing
+        return set()
+
+
 def toast(plan: Plan, text: str) -> None:
     """The Windows toast (toast_command), detached as notify.sh detaches it (`( cmd & )`): a
     fixed /bin/sh script backgrounds it and exits, the message passed as an argument, never
-    interpolated. Best-effort: no toast command, a failed start or a toast that fails changes
-    nothing."""
+    interpolated. The device-wide mute is read now (muted_now), as notify.sh reads it before
+    its toast: a toast mute skips it, and a sound mute alone puts -Silent before -Message, so
+    Windows' own chime stays off too. Best-effort: no toast command, a failed start or a toast
+    that fails changes nothing."""
     if not plan.toast:
         return
+    muted = muted_now(plan)
+    if "toast" in muted:
+        return
+    # -Message is toast_command's last word; the message follows it.
+    command = [*plan.toast[:-1], "-Silent", plan.toast[-1]] if "sound" in muted else plan.toast
     with contextlib.suppress(OSError, subprocess.SubprocessError):
         subprocess.run(["/bin/sh", "-c", '"$@" </dev/null >/dev/null 2>&1 &', "toast",
-                        *plan.toast, text], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                        *command, text], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL, cwd="/", timeout=5,
                        env=dict(os.environ, PATH=plan.path))
 
