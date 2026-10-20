@@ -458,6 +458,55 @@ class L2(Base):
         self.assertIn("demo:SEC-17", self.log())
 
 
+KEYS = r"""
+skill = "keys"
+[[rule]]
+id = "KEY-1"
+when = '''\bTOKEN_[A-Z]{8}\b'''
+unless = '''EXAMPLE'''
+scope = "line"
+say = "A key-shaped string."
+
+[[rule]]
+id = "LATE-1"
+at = ["commit"]
+when = '''\blater\(\)'''
+say = "Only a commit checks this."
+"""
+
+
+class AtAndScope(Base):
+    """`at` picks the levels a rule runs at; `scope = "line"` judges a rule line by line."""
+
+    def setUp(self):
+        super().setUp()
+        self.skill("keys", KEYS, where="user")
+        self.loaded()
+
+    def test_a_commit_only_rule_never_runs_at_edit_time(self):
+        self.assertIsNone(self.fire("lib/a.ts", "later()\n"))
+
+    def test_a_line_scoped_allow_covers_only_its_own_line(self):
+        allow = "x = 'TOKEN_ABCDEFGH' // practices-allow: KEY-1 a test fixture\n"
+        self.assertIsNone(self.fire("lib/a.ts", allow))
+        reason = self.fire("lib/b.ts", allow + "y = 'TOKEN_QRSTUVWX'\n")
+        self.assertTrue(reason.startswith("[practices:L2:keys:KEY-1:lib/b.ts]"), reason)
+        self.assertIsNone(self.fire("lib/c.ts", "z = 'TOKEN_ABCDEFGH' // EXAMPLE\n"))
+        self.assertIsNotNone(self.fire("lib/d.ts", "// EXAMPLE\nz = 'TOKEN_ABCDEFGH'\n"))
+
+    def test_a_bad_at_or_scope_disables_only_that_skill(self):
+        for n, extra in enumerate(('at = ["push"]', "at = []", 'at = "edit"',
+                                   'at = ["edit", "edit"]', 'scope = "word"')):
+            with self.subTest(extra=extra):
+                self.skill("bad", f'skill = "bad"\n[[rule]]\nid = "B"\nwhen = "x"\nsay = "y"\n'
+                           f"{extra}\n", where="user")
+                skill, why = PC.load_skill(os.path.join(self.config, "skills", "bad"))
+                self.assertIsNone(skill)
+                self.assertIn("bad rule 'B'", why)
+        self.assertIn("[practices:L2:demo:SEC-17:lib/s.ts]",
+                      self.fire("lib/s.ts", "x({ ...body })\n"))
+
+
 class AfterTheEdit(Base):
     """Events and `unless` read the file as it will be after the edit; `when` reads the new text."""
 

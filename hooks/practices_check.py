@@ -93,6 +93,7 @@ commit-time scan, L3s, is the planned backstop).
 """
 import hashlib
 import json
+from bisect import bisect_right
 import mmap
 import os
 import re
@@ -126,6 +127,7 @@ NOT_ENTRIES = (b'{"type":"api-request', b'{"type":"attachment"', b'{"type":"file
 AUTH_HELPERS = ("auth", "getServerSession", "getSession", "currentUser", "getCurrentUser",
                 "requireUser", "requireAuth", "verifySession", "getUser", "withAuth")
 ID = re.compile(r"[\w.-]+")
+AT = ("edit", "commit")  # a [[rule]]'s `at` when it gives none: checked at both
 # An [auth] helpers name: an identifier, dotted allowed (auth.requireUser). An empty or blank
 # name would turn `(?:...|)` into a match for any call and silence SEC-01.
 HELPER = re.compile(r"[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*")
@@ -289,6 +291,10 @@ def rule_fires(rule, rel, text, helpers=(), crumb=None, after_text=None, after=N
     after_text = text if after_text is None else after_text
     if rule.get("paths") and not path_matches(rule["paths"], rel):
         return False
+    if rule.get("scope") == "line":
+        if crumb:
+            crumb.mark(rel, "L2", rule["id"])
+        return bool(line_hits(rule, enumerate(text.split("\n"), 1), helpers))
     if allowed(rule["id"], after_text if after is None else after):
         return False
     if crumb:
@@ -296,6 +302,40 @@ def rule_fires(rule, rel, text, helpers=(), crumb=None, after_text=None, after=N
     if not guarded(rule["when"], text, helpers, rule["id"]):
         return False
     return not (rule.get("unless") and guarded(rule["unless"], after_text, helpers, rule["id"]))
+
+
+def line_hits(rule, lines, helpers=()):
+    """[(number, line)] that a `scope = "line"` rule flags: `when` matches the line, and neither
+    `unless` nor `practices-allow: <id>` is on that same line."""
+    out = []
+    for n, line in lines:
+        if not guarded(rule["when"], line, helpers, rule["id"]) or allowed(rule["id"], line):
+            continue
+        if rule.get("unless") and guarded(rule["unless"], line, helpers, rule["id"]):
+            continue
+        out.append((n, line))
+    return out
+
+
+def file_hits(rule, lines, blob, helpers=()):
+    """[(number, line)] that a whole-file rule flags in a commit: `when` matches the added lines
+    (each flagged line is the one a match starts on), and neither `unless` nor
+    `practices-allow: <id>` is anywhere in the file as the commit leaves it (blob)."""
+    if allowed(rule["id"], blob) or (rule.get("unless") and guarded(
+            rule["unless"], blob, helpers, rule["id"])):
+        return []
+    lines = list(lines)
+    text = "\n".join(line for _, line in lines)
+    starts, pos = [], 0
+    for _, line in lines:
+        starts.append(pos)
+        pos += len(line) + 1
+    try:
+        found = {bisect_right(starts, m.start()) - 1
+                 for m in re.finditer(expand(rule["when"], helpers), text, re.MULTILINE)}
+    except (re.error, RecursionError, TypeError, ValueError) as e:
+        raise PatternError(f"{rule['id']}: {type(e).__name__}: {e}") from e
+    return [lines[k] for k in sorted(found)]
 
 
 def allowed(rule_id, content):
@@ -378,6 +418,11 @@ def _strs(v):
     return isinstance(v, list) and all(isinstance(x, str) for x in v)
 
 
+def _at_ok(at):
+    """A rule's `at`: a non-empty list of "edit" and "commit", each at most once."""
+    return _strs(at) and bool(at) and set(at) <= set(AT) and len(at) == len(set(at))
+
+
 def load_skill(folder):
     """(skill dict, None) for a folder's events.toml, or (None, why) when it is malformed."""
     path = os.path.join(folder, "events.toml")
@@ -402,7 +447,8 @@ def load_skill(folder):
     for r in rules:
         if not (isinstance(r, dict) and isinstance(r.get("id"), str) and ID.fullmatch(r["id"])
                 and isinstance(r.get("when"), str) and isinstance(r.get("say"), str)
-                and isinstance(r.get("unless", ""), str) and _strs(r.get("paths", []))):
+                and isinstance(r.get("unless", ""), str) and _strs(r.get("paths", []))
+                and _at_ok(r.get("at", list(AT))) and r.get("scope", "file") in ("file", "line")):
             return None, f"{path}: bad rule {r.get('id') if isinstance(r, dict) else r!r}"
         ids.append(r["id"])
     if len(ids) != len(set(ids)):
@@ -1020,7 +1066,8 @@ def pre_tool_use(event):
     text, after_text = scan_text(fragment), scan_text(after)
     helpers = cfg["helpers"]
     events = [(s, ev) for s in skills.values() for ev in s["events"] if not is_off(cfg, s, ev["id"])]
-    rules = [(s, r) for s in skills.values() for r in s["rules"] if not is_off(cfg, s, r["id"])]
+    rules = [(s, r) for s in skills.values() for r in s["rules"]
+             if "edit" in r.get("at", AT) and not is_off(cfg, s, r["id"])]
     fired = run_patterns(events, lambda x: event_fires(x[1], rel, after_text, helpers, CRUMB))
 
     m, f = open_transcript(event)
