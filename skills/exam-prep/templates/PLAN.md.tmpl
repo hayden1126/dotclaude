@@ -1,0 +1,81 @@
+<!-- exam-prep template PLAN.md.tmpl. Baseline as of 2026-10-20; changes only via `12-retro`. Drop this line in the hub copy. -->
+# PLAN: {{COURSE}} {{EXAM}} prep
+
+Approved: not yet
+<!-- 00-intake step 7 replaces "not yet" with "<YYYY-MM-DD> by the student", as its last act. -->
+
+**Every decision below is made. Execute end to end without asking the student anything.** Log
+judgment calls in `STATUS.md`. The exam is {{EXAM_DATE_TIME}}. If time runs short, ship in the
+priority order below and cut from the bottom.
+
+Scope is the rows of `MANIFEST.md` and nothing else; the exam rules and the instructor's
+exam-format statement are in `CLAUDE.md`. This plan points to both and restates neither.
+
+## Decisions
+
+Each line ends with its source: the student, `Ed #N`, `<file>:<line>`, or (default).
+
+- Scope authority: {{the graded work mirrors the exam, so scope follows it | full coverage, mock shapes beyond the review}} ({{SOURCE}})
+- Sources: the `in` rows of `MANIFEST.md`; `reserved` and `out` rows are never opened ({{SOURCE}})
+- Cheat sheet: {{allowed, as CLAUDE.md states | not allowed}} ({{SOURCE}})
+- Deliverables: the table below ({{SOURCE}})
+- Depth: weighted by how the exam tests; procedures get depth, definitions stay brief (default)
+- Figures: where prose can't carry a mechanism, plus {{N}} step-throughs: {{PROCEDURES}} (default)
+- Reader: may have skipped the lectures; assume no prior exposure (default)
+- Checker: {{what is computable: arithmetic, search traces, executed queries, rule derivations | nothing is computable, so review leans on cited sources and the cold solver}} ({{SOURCE}})
+- Priority if time runs short: notes page, then cheat sheet, then mock (default)
+- Publishing: private artifacts only; a deploy anywhere else waits for the student's go after review (default)
+- Walk-throughs and polish passes: on request after the build (default)
+
+## Deliverables
+
+| # | Product | Path | Done when |
+|---|---|---|---|
+| 1 | Topic notes, the source of truth | `notes/NN-<slug>.md` | `linkcheck.py` clean, reviews applied |
+| 2 | Notes page | `_build/notes.html`, a private artifact | `verify_page.mjs` passes, URL in STATUS |
+| 3 | Cheat sheet, only if allowed: a mock sheet with nothing derived from the mock, and a final sheet that adds those items after the attempt | `cheatsheet/` | `check_pdf.py` passes on both |
+| 4 | Mock exam, quarantined key, mock page | `practice/mock-{{EXAM_SLUG}}.md`, `practice/mock-{{EXAM_SLUG}}-key.md` | the key script asserts every value |
+| 5 | Cram order, offered the night before | `practice/cram-order.md` | every item links into the verified notes |
+| 6 | Checker | `_build/verify/` | its self-test reproduces every official solution |
+
+Out of scope: the `reserved` and `out` rows of `MANIFEST.md`; deploys beyond private artifacts;
+any push or remote.
+
+## Pipeline
+
+Each stage runs as its workflow says (`workflows/NN-*.md` in the exam-prep skill). This table holds
+only this course's choices. Waves run parallel inside and sequential across; each agent writes one
+new file; the main session merges single-threaded. Load the delegation skill before the first
+spawn, and spawn unnamed.
+
+| Stage | Who | This course | Output |
+|---|---|---|---|
+| 01 ingest | main | {{ADAPTERS: PDF, reveal.js HTML, ebook, Ed}} | `MANIFEST.md` counts, renders, Ed digest |
+| 02 extract | {{N}} agents | {{DECK SPLITS: one whole deck per agent; decks over P pages split at a section divider, 3-page overlap}} | `_build/extract/<doc>.md` |
+| 03 backbone | main | {{EXPECTED SECTIONS, final cut set by the extracts}} | `_build/backbone.md` |
+| 04 write | {{N}} writers | one per backbone section | `notes/NN-<slug>.md` |
+| 05 verify | main, {{N}} reviewers, 1 cold solver | | fixes applied single-threaded |
+| 06 site | {{N}} converters, then main | | the notes page |
+| 07 cheat sheet | {{main or 1 agent}} | {{ONLY IF ALLOWED}} | `cheatsheet/` |
+| 08 practice | {{N}} agents | {{QUESTION SHAPES}} | `practice/` |
+
+`pending` rows of `MANIFEST.md` are checked at every stage boundary: one that has arrived is
+ingested and extracted before stage 03 runs, or before the next stage when 03 is done.
+
+## Rules the build follows
+
+- Pedagogy and wording: `_build/STYLE.md`. The look: `_build/CHASSIS.md`. Markdown to HTML:
+  `_build/CONVERT.md`. All three are this hub's copies of the skill's templates, baseline
+  {{BASELINE_DATE}}.
+- Cross-references: the id registry in `_build/backbone.md`, fixed before any writer starts.
+- The mock page has three views (by paper, by question type, by topic), so every question part is
+  tagged with its type and its topic.
+
+Checked before approval: visual design, pedagogy and wording, structure and enumeration,
+cross-references, the mock views and the checker each name the rule above that governs them.
+
+## Verification (definition of done)
+
+- Every deliverable's "done when" holds.
+- `STATUS.md` lists every published artifact's URL and every judgment call.
+- Nothing under `sources/`, `_build/pages/` or `_build/text/` is tracked; no remote exists.

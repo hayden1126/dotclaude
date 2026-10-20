@@ -1,0 +1,29 @@
+<!-- exam-prep template MANIFEST.md.tmpl. Baseline as of 2026-10-20; changes only via `12-retro`. Drop this line in the hub copy. -->
+# Source manifest: {{COURSE}} {{EXAM}}
+
+One row per source file. **These rows are the one statement of scope:** `CLAUDE.md` and
+`PLAN.md` point here and never restate it. A scope change is made here, then carried to every
+product (the notes' "Not on {{EXAM}}" banners, the sheets, the cram order, the mock totals). Counts
+come from disk (`pdfinfo`, `ls`), never from memory.
+
+- Received: {{YYYY-MM-DD}}, from {{WHERE}}, selected by file name.
+- Renders: `_build/pages/<doc>/p-NNN.png` and `_build/text/<doc>/p-NNN.txt` (gitignored).
+- Originals: {{kept at WHERE | deleted YYYY-MM-DD after a SHA-256 match; `sources/` is the only copy}}.
+
+| Doc id | File | Pages | Scope | Answers | Rendered | Notes |
+|---|---|---|---|---|---|---|
+| D1 | `sources/lectures/{{FILE}}.pdf` | {{N}} | in | no | yes | |
+| D2 | `sources/lectures/{{FILE}}.pdf` | {{N}} | in, PDF pp.1-{{K}} (last in-scope slide: PDF p.{{K}} = printed {{M}}) | no | yes | {{WHY THE CUT}} |
+| HW1 | `sources/homework/{{FILE}}.pdf` | {{N}} | in | no | yes | |
+| HW1S | `sources/homework/{{FILE}}.pdf` | {{N}} | in | yes | yes | official solutions to HW1 |
+| ED | `sources/ed/ed-digest.md` | n/a | in | no | n/a | the Ed pull; cursor in `sources/ed/cursor.json` |
+| D9 | `sources/lectures/{{FILE}}.pdf` | {{N}} | reserved: {{LATER EXAM}} | no | no | raw copy only, never opened |
+| D10 | {{EXPECTED FILE}} | | pending: in, through {{LAST SLIDE}} | {{yes or no}} | no | {{WHEN IT ARRIVES}} |
+| X1 | `sources/{{FILE}}` | {{N}} | out | no | no | {{WHY}} |
+
+- **Scope:** `in`; `in, PDF pp.A-B` (with the last in-scope slide as "PDF p.N = printed M");
+  `concepts only`; `reserved: <exam>`, copied raw and never rendered, extracted or opened;
+  `pending: <planned scope>`, not here yet, its scope fixed at intake; `out`.
+- **Answers:** `yes` marks a file that holds answers (official solutions, a past exam's key). Mock
+  writers never read it, and nothing published quotes it before the student has attempted that set.
+- **Doc ids** are what citations use (`[D4 p.17]`): keep them short, and never renumber one.
