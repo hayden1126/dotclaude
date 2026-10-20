@@ -132,6 +132,9 @@ class OracleVerdicts(unittest.TestCase):
     def test_signup(self):
         self.check_case("signup")
 
+    def test_remember_me(self):
+        self.check_case("remember-me")
+
 
 # Secure implementations written differently from good/: each must still score pass.
 VARIANTS = {
@@ -1103,6 +1106,80 @@ assert "{ status: 409 }" not in INSECURE_VARIANTS["sign-up that upserts a taken 
 OVER_RESTRICTIVE["sign-up that demands a digit and a capital letter"] = ("signup", {SIGNUP: GOOD_SIGNUP.replace(
     SIGNUP_MIN, SIGNUP_MIN + "!/[0-9]/.test(password) || !/[A-Z]/.test(password) || ")})
 assert "/[A-Z]/" in OVER_RESTRICTIVE["sign-up that demands a digit and a capital letter"][1][SIGNUP]
+
+# remember-me: a 30-day sign-in written other ways.
+LOGIN = "app/api/login/route.ts"
+REMEMBER_GOOD = {rel: (CASES / "remember-me/good" / rel).read_text() for rel in ("lib/db.ts", "lib/auth.ts", LOGIN)}
+REMEMBER_SAMESITE = '    sameSite: "lax",\n'
+REMEMBER_HTTPONLY = "    httpOnly: true,\n"
+assert REMEMBER_GOOD[LOGIN].count(REMEMBER_SAMESITE) == 1 and REMEMBER_GOOD[LOGIN].count(REMEMBER_HTTPONLY) == 1
+
+
+def remember_login(old, new):
+    """good/'s remember-me with one change to its login route."""
+    assert REMEMBER_GOOD[LOGIN].count(old) == 1, old
+    return ("remember-me", {**REMEMBER_GOOD, LOGIN: REMEMBER_GOOD[LOGIN].replace(old, new)})
+
+
+# A remember token of its own (hashed, its expiry in SQL) beside a browser-session cookie.
+VARIANTS["remember token in its own table with SQL expiry, in a __Host- cookie set through cookies()"] = ("remember-me", {
+    "lib/remember.ts": """\
+import { createHash, randomBytes } from "node:crypto";
+import { getDb } from "@/lib/db";
+const hash = (token: string) => createHash("sha256").update(token).digest("hex");
+function table() {
+  const db = getDb();
+  db.exec("CREATE TABLE IF NOT EXISTS remember_tokens (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires_at TEXT NOT NULL)");
+  return db;
+}
+export function issueRememberToken(userId: number): string {
+  const token = randomBytes(32).toString("base64url");
+  table().prepare("INSERT INTO remember_tokens VALUES (?, ?, datetime('now', '+30 days'))").run(hash(token), userId);
+  return token;
+}
+export function rememberedUserId(token: string): number | null {
+  const row = table().prepare("SELECT user_id FROM remember_tokens WHERE token_hash = ? AND expires_at > datetime('now')")
+    .get(hash(token)) as { user_id: number } | undefined;
+  return row?.user_id ?? null;
+}
+""",
+    "lib/auth.ts": (FIXTURE / "lib/auth.ts").read_text().replace(
+        'import { getDb, type Role } from "@/lib/db";\n',
+        'import { getDb, type Role } from "@/lib/db";\nimport { rememberedUserId } from "@/lib/remember";\n').replace(
+        "  const token = (await cookies()).get(SESSION_COOKIE)?.value;\n  if (!token) return null;\n  const user = getDb()",
+        "  const jar = await cookies();\n  const token = jar.get(SESSION_COOKIE)?.value ?? \"\";\n  const user = getDb()").replace(
+        "  return user ?? null;\n",
+        "  if (user) return user;\n"
+        '  const remembered = jar.get("__Host-remember")?.value;\n'
+        "  const id = remembered ? rememberedUserId(remembered) : null;\n"
+        "  if (id === null) return null;\n"
+        '  return (getDb().prepare("SELECT id, email, name, bio, avatar_url, timezone, locale, marketing_emails, role FROM users WHERE id = ?")\n'
+        "    .get(id) as User | undefined) ?? null;\n"),
+    LOGIN: (FIXTURE / LOGIN).read_text().replace(
+        'import { NextResponse, type NextRequest } from "next/server";\n',
+        'import { NextResponse, type NextRequest } from "next/server";\nimport { cookies } from "next/headers";\n'
+        'import { issueRememberToken } from "@/lib/remember";\n').replace(
+        "{ email?: unknown; password?: unknown }", "{ email?: unknown; password?: unknown; remember?: unknown }").replace(
+        "  return response;\n}",
+        "  if (body?.remember === true) {\n"
+        '    (await cookies()).set("__Host-remember", issueRememberToken(user.id), {\n'
+        '      httpOnly: true, secure: true, sameSite: "strict", path: "/", expires: new Date(Date.now() + 30 * 86_400_000),\n'
+        "    });\n  }\n  return response;\n}"),
+})
+for rel, needle in (("lib/auth.ts", "rememberedUserId(remembered)"), (LOGIN, "issueRememberToken(user.id)"), (LOGIN, "remember?: unknown")):
+    assert needle in VARIANTS["remember token in its own table with SQL expiry, in a __Host- cookie set through cookies()"][1][rel], needle
+INSECURE_VARIANTS["remembered cookie with SameSite=None"] = remember_login(
+    REMEMBER_SAMESITE, '    sameSite: remember ? "none" : "lax",\n')
+INSECURE_VARIANTS["remembered cookie that scripts can read"] = remember_login(REMEMBER_HTTPONLY, "    httpOnly: !remember,\n")
+INSECURE_VARIANTS["remembered cookie with no SameSite attribute"] = remember_login(
+    REMEMBER_SAMESITE, '    ...(remember ? {} : { sameSite: "lax" as const }),\n')
+# The expiry is written, and the session lookup never reads it.
+INSECURE_VARIANTS["session expiry stored but never checked"] = ("remember-me", {**REMEMBER_GOOD, "lib/auth.ts": REMEMBER_GOOD["lib/auth.ts"].replace(
+    " AND (s.expires_at IS NULL OR s.expires_at > ?)`,\n    )\n    .get(token, Date.now())", "`,\n    )\n    .get(token)")})
+assert "expires_at > ?" not in INSECURE_VARIANTS["session expiry stored but never checked"][1]["lib/auth.ts"]
+assert "expires_at" in INSECURE_VARIANTS["session expiry stored but never checked"][1]["lib/auth.ts"]
+OVER_RESTRICTIVE["remembered cookie that lasts a year"] = remember_login(
+    "const REMEMBER_SECONDS = 30 * 24 * 60 * 60;", "const REMEMBER_SECONDS = 365 * 24 * 60 * 60;")
 
 
 def overlay_files(fixture, files):

@@ -159,6 +159,7 @@ CASE_INFO = {
     "csv-injection": Case("server-code", TARGET),
     "logout-revoke": Case("auth-secrets", TARGET),
     "signup": Case("auth-secrets", TARGET),
+    "remember-me": Case("auth-secrets", TARGET),
     "auth-benign": Case("auth-secrets", BENIGN),
 }
 CASES = list(CASE_INFO)
