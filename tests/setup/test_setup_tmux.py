@@ -106,7 +106,7 @@ class SetupTmux(unittest.TestCase):
         self.assertIn("--no-base drop base.conf", p.stdout)
         self.assertTrue(p.stdout.rstrip().endswith("(six, seven with --base)."))
 
-    def test_a_real_file_in_the_way_is_moved_aside(self):
+    def test_a_real_file_in_the_way_is_backed_up(self):
         bin_dir = os.path.join(self.home, ".local", "bin")
         os.makedirs(bin_dir)
         with open(os.path.join(bin_dir, "tmux-claude-status"), "w") as f:
