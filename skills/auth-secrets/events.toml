@@ -98,7 +98,8 @@ paths = []
 content = [
   '''(?:\.get\(\s*|\bquery\[\s*|\bargs\[\s*|\bparams\[\s*)["'](?:next|returnTo|return_to|returnUrl|return_url|redirect|redirectTo|redirect_to|redirectUrl|redirect_url|redirect_uri|callbackUrl|callback_url)["']''',
   '''\b(?:query|searchParams|args|params)\.(?:next|returnTo|return_to|returnUrl|return_url|redirect|redirectTo|redirect_to|redirectUrl|redirect_url|redirect_uri|callbackUrl|callback_url)\b''',
-  '''\{[^}\n]{0,200}\b(?:next|returnTo|return_to|returnUrl|redirect|redirectTo|redirectUrl|callbackUrl)\b[^}\n]{0,200}\}\s*=\s*(?:await\s)?\s*(?:req|request|ctx|event|context)\.(?:query|searchParams|url\.searchParams)\b''',
+  # A destructured read, from the request or from a bare (awaited) searchParams.
+  '''\{[^}\n]{0,200}\b(?:next|returnTo|return_to|returnUrl|redirect|redirectTo|redirectUrl|callbackUrl)\b[^}\n]{0,200}\}\s*=\s*(?:await\s)?\s*(?:(?:req|request|ctx|event|context|props)\.)?(?:query|searchParams|url\.searchParams)\b''',
 ]
 lines = [
   "Build a redirect validator: one string only, no backslash or control character, parsed against the configured origin, origins compared; say so in your reply (SEC-39).",
@@ -227,10 +228,12 @@ say = "Don't write a new email or phone to the account directly. Build a pending
 
 [[rule]]
 # A redirect to a request-supplied value: read inside the call, or a variable named like the
-# param in a file that reads the param. A named validator or an origin comparison clears it.
+# param in a file that reads the param (by name or destructured). A named validator, or an
+# origin comparison on a value parsed against a base (new URL(value, origin)), clears it; an
+# Origin header check (req.headers.origin, new URL(origin).origin) does not.
 id = "SEC-39"
 when = '''(?:\b(?:redirect|redirect_to|HttpResponseRedirect|RedirectResponse)|\brouter\.(?:push|replace)|\blocation\.(?:assign|replace))\(\s*[^\n)]{0,120}?(?:\.get\(\s*["']|\bquery\.|\bquery\[\s*["']|\bparams\[\s*:?["']?|\bargs\[\s*["']|\bsearchParams\.)(?:next|returnTo|return_to|returnUrl|return_url|redirect|redirectTo|redirect_to|redirectUrl|redirect_url|callbackUrl|callback_url)\b|(?:\b(?:redirect|redirect_to|HttpResponseRedirect|RedirectResponse)|\brouter\.(?:push|replace)|\blocation\.(?:assign|replace))\(\s*(?:\d{3}\s*,\s*)?(?:next|returnTo|return_to|returnUrl|return_url|redirectTo|redirect_to|redirectUrl|redirect_url|callbackUrl|callback_url)\s*(?:\)|\?\?|\|\||,|\bor\b)|\blocation\.href\s*=\s*(?:next|returnTo|returnUrl|redirectTo|redirectUrl|callbackUrl)\b'''
-unless = '''(?i:safe_?redirect|safe_?(?:next|return)\w{0,20}|valid(?:ate)?_?(?:redirect|next|return)\w{0,20}|is_?safe_?(?:url|redirect|path)|url_has_allowed_host_and_scheme|is_?same_?origin|sanitize_?(?:redirect|next|return)\w{0,20}|is_?(?:relative|local)_?url)|\.origin\s*[!=]==?|\A(?![\s\S]*?(?:\.get\(\s*|\bquery\[\s*|\bargs\[\s*|\bparams\[\s*)["'](?:next|returnTo|return_to|returnUrl|return_url|redirect|redirectTo|redirect_to|redirectUrl|redirect_url|callbackUrl|callback_url)["']|[\s\S]*?\b(?:query|searchParams|args|params)\.(?:next|returnTo|return_to|returnUrl|return_url|redirect|redirectTo|redirect_to|redirectUrl|redirect_url|callbackUrl|callback_url)\b)'''
+unless = '''(?i:safe_?redirect|safe_?(?:next|return)\w{0,20}|valid(?:ate)?_?(?:redirect|next|return)\w{0,20}|is_?safe_?(?:url|redirect|path)|url_has_allowed_host_and_scheme|is_?same_?origin|sanitize_?(?:redirect|next|return)\w{0,20}|is_?(?:relative|local)_?url)|\b(\w{1,40})(?:\s*:\s*URL)?\s*=\s*new\s+URL\([^,()\n]{1,120}(?:\([^()\n]{0,120}\)[^,()\n]{0,60})?,[\s\S]{0,400}?\b\1\.origin\s*[!=]==?|\bnew\s+URL\([^,()\n]{1,120}(?:\([^()\n]{0,120}\)[^,()\n]{0,60})?,[^()\n]{1,120}\)\.origin\s*[!=]==?|\A(?![\s\S]*?(?:\.get\(\s*|\bquery\[\s*|\bargs\[\s*|\bparams\[\s*)["'](?:next|returnTo|return_to|returnUrl|return_url|redirect|redirectTo|redirect_to|redirectUrl|redirect_url|callbackUrl|callback_url)["']|[\s\S]*?\b(?:query|searchParams|args|params)\.(?:next|returnTo|return_to|returnUrl|return_url|redirect|redirectTo|redirect_to|redirectUrl|redirect_url|callbackUrl|callback_url)\b|[\s\S]*?\{[^}\n]{0,200}\b(?:next|returnTo|return_to|returnUrl|redirect|redirectTo|redirectUrl|callbackUrl)\b[^}\n]{0,200}\}\s*=\s*(?:await\s)?\s*(?:(?:req|request|ctx|event|context|props)\.)?(?:query|searchParams|url\.searchParams)\b)'''
 paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py,rb,php,go}"]
 say = "Build a same-origin validator for this redirect target: refuse a non-string, a backslash or any control character, parse it against the configured origin, compare origins, and redirect to the validated absolute URL, never a string starting with // (SEC-39, see the skill's references/redirects.md). Name it like `safeRedirect` so the hook can see it."
 
