@@ -6,6 +6,7 @@ on PATH for the commands it runs. A shim runs the real command, then logs a line
 path is gone, so a remove-then-link shows up as `missing <path> after rm ...`."""
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 import unittest
@@ -172,24 +173,45 @@ class Swap(unittest.TestCase):
         dst = os.path.join(self.claude, "skills", "s1")
         self.plant(os.path.join(self.old, "skills", "s1"), dst)
         r = self.link(os.path.join(self.repo, "skills", "s1"), dst, INTERRUPT_TOOL="python3")
-        self.assertIn(r.returncode, (-2, 130), r.stderr)
+        # Killed by the signal: bash re-raises SIGINT after the trap. An exit 130 would be the
+        # plain set -e path, where the trap runs anyway.
+        self.assertEqual(r.returncode, -signal.SIGINT, r.stderr)
         self.assertEqual(self.gaps(), [])
         self.assertEqual(os.readlink(dst), os.path.join(self.old, "skills", "s1"))
         self.assertEqual(self.leftovers(), [])
 
-    def test_a_leftover_temp_with_this_pid_is_cleared_not_followed(self):
-        # A killed run's temp, a link to a dir: ln -s onto it would make the new link inside
-        # that dir, then the swap would install the stale link.
+    def test_a_killed_runs_temp_link_is_cleared_not_followed(self):
+        # A temp the trap never saw (SIGKILL), a link to a dir: ln -s onto it would make the new
+        # link inside that dir, then the swap would install the stale link.
         dst = os.path.join(self.claude, "CLAUDE.md")
         self.plant(os.path.join(self.old, "CLAUDE.md"), dst)
         stale = os.path.join(self.old, "skills", "s1")
-        r = self.run_sh(f'ln -s "{stale}" "{self.claude}/.CLAUDE.md.dotclaude-$$"\n'
-                        f'link "{self.repo}/CLAUDE.md" "{dst}"', watch=dst)
-        self.assertEqual(r.returncode, 0, r.stderr)
+        self.plant(stale, os.path.join(self.claude, ".CLAUDE.md.dotclaude-swap"))
+        self.link(os.path.join(self.repo, "CLAUDE.md"), dst)
         self.assertEqual(os.readlink(dst), os.path.join(self.repo, "CLAUDE.md"))
         self.assertEqual(os.listdir(stale), ["SKILL.md"])
         self.assertEqual(self.gaps(), [])
         self.assertEqual(self.leftovers(), [])
+
+    def test_a_killed_runs_temp_dir_is_cleared(self):
+        # git-bash's ln -s copies, so a skill's leftover temp is a whole dir.
+        dst = os.path.join(self.claude, "skills", "s1")
+        self.plant(os.path.join(self.old, "skills", "s1"), dst)
+        write(os.path.join(self.claude, "skills", ".s1.dotclaude-swap", "SKILL.md"), "copy\n")
+        self.link(os.path.join(self.repo, "skills", "s1"), dst)
+        self.assertEqual(os.readlink(dst), os.path.join(self.repo, "skills", "s1"))
+        self.assertEqual(self.gaps(), [])
+        self.assertEqual(self.leftovers(), [])
+
+    def test_the_merged_settings_go_on_every_exit(self):
+        for end in ("false", "true"):
+            with self.subTest(end=end):
+                r = self.run_sh(f'MERGED_SETTINGS="$(mktemp)"\necho "$MERGED_SETTINGS"\n{end}',
+                                TMPDIR=self.tmp)
+                self.assertEqual(r.returncode, 0 if end == "true" else 1, r.stderr)
+                made = r.stdout.strip()
+                self.assertTrue(made.startswith(self.tmp + os.sep), made)
+                self.assertFalse(os.path.exists(made))
 
     def test_a_windows_shell_removes_a_link_before_the_swap(self):
         # Windows won't rename over a link to a dir; the gap there is by design.
