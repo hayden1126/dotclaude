@@ -403,9 +403,18 @@ class ProjectFilesStayOut(Workspace):
                                          "cwd": self.cwd, "session_id": "sid",
                                          "transcript_path": self.transcript, "tool_input": {
                                              "file_path": os.path.join(self.cwd, "app", "route.ts"),
-                                             "content": "export const x = 1\n"}}}
-        for name, event in events.items():
-            with self.subTest(hook=name):
+                                             "content": "export const x = 1\n"}},
+                  # On Bash it imports bash_words beside it: one call that commits and pushes
+                  # is denied before any git runs.
+                  "practices-check.sh bash": {"hook_event_name": "PreToolUse",
+                                              "tool_name": "Bash", "cwd": self.cwd,
+                                              "session_id": "sid",
+                                              "transcript_path": self.transcript,
+                                              "tool_input": {"command": "git commit -m x && "
+                                                                        "git push"}}}
+        for label, event in events.items():
+            name = label.split()[0]
+            with self.subTest(hook=label):
                 p = subprocess.run(["bash", os.path.join(HOOKS, name)], input=json.dumps(event),
                                    capture_output=True, text=True, timeout=20, cwd=self.cwd,
                                    env=self.env)

@@ -266,23 +266,90 @@ class Baseline(unittest.TestCase):
         self.assertLessEqual(entry["hooks"][0]["timeout"], 5)
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "ask-check.sh"), os.X_OK))
 
-    def test_the_practices_check_is_wired_on_edits_and_session_start_and_fails_open(self):
+    def test_the_practices_check_is_wired_on_edits_bash_and_session_start_and_fails_open(self):
         # One engine for every practices skill: L1 and L2 deny edits by JSON, L4 answers
-        # SessionStart(compact), and startup carries its health line. The shim exits 0 on any
-        # failure; the engine keeps its own 2 s budget under the 5 s kill. Bash stays off the
-        # matcher until the commit scan (L3s) lands: v1 ignores Bash, so wiring it would spawn
-        # python on every command for nothing.
+        # SessionStart(compact), and startup carries its health line. On Bash, PreToolUse runs
+        # the push gate and L3r and records HEAD for L3s, and PostToolUse tells L3s's findings.
+        # The shim exits 0 on any failure; the engine keeps its own 2 s budget under the 5 s
+        # kill. Only exit code 2 blocks, so nothing here can.
         check = 'bash "$HOME/.claude/hooks/practices-check.sh"'
         self.assertEqual(commands("PreToolUse", "Edit|Write|MultiEdit").count(check), 1)
-        self.assertNotIn(check, commands("PreToolUse", "Bash"))
         self.assertEqual(commands("SessionStart", "startup|resume|clear|compact").count(check), 1)
+        self.assertEqual(len(self.practices_bash("PreToolUse")), 1)
+        self.assertEqual(len(self.practices_bash("PostToolUse")), 1)
         hooks = [h for entries in S["hooks"].values() for e in entries for h in e["hooks"]
                  if "practices-check" in h["command"]]
-        self.assertEqual(len(hooks), 2)
+        self.assertEqual(len(hooks), 4)
         for h in hooks:
-            self.assertEqual(h["command"], check)
+            self.assertIn(check, h["command"])
+            self.assertNotIn("exit 2", h["command"])
             self.assertEqual(h["timeout"], 5)
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "practices-check.sh"), os.X_OK))
+
+    @staticmethod
+    def practices_bash(event):
+        return [c for c in commands(event, "Bash") if "practices-check" in c]
+
+    def run_prefilter(self, cmd, command, env):
+        payload = json.dumps({"session_id": "s", "transcript_path": "/x/s.jsonl", "cwd": "/w",
+                              "hook_event_name": "PreToolUse", "tool_name": "Bash",
+                              "tool_input": {"command": command}, "tool_use_id": "t1",
+                              "tool_response": {"stdout": "", "stderr": ""}})
+        return subprocess.run(["sh", "-c", cmd], input=payload, capture_output=True, text=True,
+                              env=env, timeout=10)
+
+    def test_the_practices_bash_prefilters_start_python_only_for_their_calls(self):
+        # A stub stands in for the shim and records each run: Python must not start for any
+        # other Bash call, and no call is blocked either way.
+        home = os.path.join(os.environ.get("TMPDIR", "/tmp"), f"pc-home-{os.getpid()}")
+        hooks = os.path.join(home, ".claude", "hooks")
+        os.makedirs(hooks, exist_ok=True)
+        self.addCleanup(shutil.rmtree, home, True)
+        ran = os.path.join(home, "ran")
+        with open(os.path.join(hooks, "practices-check.sh"), "w") as f:
+            f.write(f"cat >/dev/null; touch {ran}\n")
+        env = dict(os.environ, HOME=home)
+        fires = {"PreToolUse": ("git commit -m x", "git add -A && git commit", "git push",
+                                "git -C sub push origin x", "gh pr ready 5",
+                                "gh pr create --fill"),
+                 "PostToolUse": ("git commit -m x", "cd a && git commit --amend")}
+        quiet = ("git status", "ls -la", "gh pr view 5", "npm test", "gh issue list",
+                 "echo commit")
+        for event, positive in fires.items():
+            (cmd,) = self.practices_bash(event)
+            for command, want in [(c, True) for c in positive] + [(c, False) for c in quiet]:
+                with self.subTest(event=event, command=command):
+                    if os.path.exists(ran):
+                        os.unlink(ran)
+                    p = self.run_prefilter(cmd, command, env)
+                    self.assertEqual(p.returncode, 0, p.stderr)
+                    self.assertEqual(os.path.exists(ran), want)
+            with self.subTest(event=event, case="push"):
+                if os.path.exists(ran):
+                    os.unlink(ran)
+                self.run_prefilter(cmd, "git push", env)
+                self.assertEqual(os.path.exists(ran), event == "PreToolUse")
+
+    def test_the_practices_bash_hooks_let_the_call_through_without_python(self):
+        # The real shim, with python3 missing from PATH: it reports the engine down and exits 0.
+        home = os.path.join(os.environ.get("TMPDIR", "/tmp"), f"pc-nopy-{os.getpid()}")
+        hooks, bin_ = os.path.join(home, ".claude", "hooks"), os.path.join(home, "bin")
+        os.makedirs(hooks, exist_ok=True)
+        os.makedirs(bin_, exist_ok=True)
+        self.addCleanup(shutil.rmtree, home, True)
+        os.symlink(os.path.join(REPO, "hooks", "practices-check.sh"),
+                   os.path.join(hooks, "practices-check.sh"))
+        for tool in ("sh", "bash", "cat", "readlink"):
+            os.symlink(shutil.which(tool), os.path.join(bin_, tool))
+        env = dict(os.environ, HOME=home, PATH=bin_)
+        for event in ("PreToolUse", "PostToolUse"):
+            (cmd,) = self.practices_bash(event)
+            with self.subTest(event=event):
+                p = subprocess.run([os.path.join(bin_, "sh"), "-c", cmd], input=json.dumps(
+                    {"tool_name": "Bash", "tool_input": {"command": "git commit -m x"}}),
+                    capture_output=True, text=True, env=env, timeout=10)
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertIn("practices hooks are down", p.stdout)
 
     def test_the_pass_banner_is_wired_on_startup_only(self):
         # A /pass respawn starts as `startup`; the banner shows what the old session said in its

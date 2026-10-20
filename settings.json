@@ -455,6 +455,16 @@
         ]
       },
       {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "i=$(cat); case \"$i\" in *git*commit*|*git*push*|*gh*pr*ready*|*gh*pr*create*) printf '%s' \"$i\" | bash \"$HOME/.claude/hooks/practices-check.sh\" ;; esac",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [
           {
@@ -521,6 +531,16 @@
           {
             "type": "command",
             "command": "i=$(cat); case \"$i\" in *'\"agent_id\"'*) ;; *) printf '%s' \"$i\" | bash \"$HOME/.claude/hooks/pass-notice.sh\" ;; esac",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "i=$(cat); case \"$i\" in *git*commit*) printf '%s' \"$i\" | bash \"$HOME/.claude/hooks/practices-check.sh\" ;; esac",
             "timeout": 5
           }
         ]
