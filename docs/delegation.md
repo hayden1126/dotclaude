@@ -1867,7 +1867,7 @@ hook fail closed, so wiring a hook before its script is reachable blocks every d
 **Permissions.** The baseline now has a `permissions` object (its allow, ask and deny rules, the
 re-arm allow rule among them; README's permissions paragraph lists the rest), so
 `setup.sh` replaces a live `permissions` object with the baseline's, and `merge-settings.py`
-names the reset on stderr. `setup.sh` moves the replaced copy to
+names the reset on stderr. `setup.sh` saves the replaced copy to
 `~/.claude/backups/pre-dotclaude-<ts>/` and prints "backing up" as it does, so a lost rule is
 recovered from there. Personal permission rules go in `settings.machine.json`, whose lists
 append to the baseline's.

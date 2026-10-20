@@ -1015,3 +1015,83 @@ busy overwrites a stale green.
 Files: `hooks/tmux-state.sh`, `hooks/stop_ring.py`, `hooks/session-summary.sh` (the shared Haiku
 call), the Stop wiring in `settings.json`, `tests/setup/test_tmux_hooks.py`,
 `tests/delegation/test_settings.py` (it pins Stop as idle), README's indicator section.
+
+## Next: a device-wide mute for the toast and the ring (2026-10-20)
+
+Hayden asked (2026-10-20) for one switch that mutes the Windows toast and the notify ring for
+every session on the machine. No toggle exists today. It waits for a free lane slot; this section
+settles its design first.
+
+**Picked (Hayden, 2026-10-20), the lead's pick on all four forks:** a flag file in the state dir;
+two switches, sound and toast; a mark in the tab bar plus a 1-hour option; the tmux menu plus a
+`claude-mute` CLI.
+
+What fires today:
+- `hooks/notify.sh`, on a Notification (`permission_prompt|elicitation_dialog`): `play_ring` when
+  a person sees the session (line 22), then the toast through `notify-toast.ps1` (line 50).
+- `hooks/stop-ring.sh`, on Stop: `play_ring` after the settle second (line 74).
+- `play_ring` (`hooks/session-pane.sh:59`) plays `C:\Windows\Media\notify.wav` through
+  powershell.exe.
+- The toast's XML has no `<audio>` element, so Windows likely adds its default chime to each
+  toast (inferred: it depends on Windows' per-app sound setting). A sound mute that skips only
+  `play_ring` would leave that chime.
+- Windows' own Do not disturb already hides the toast for the whole machine, but not
+  `play_ring`, which is a plain sound, not a notification.
+
+### Fork 1: where the switch lives
+
+| Situation | A: a flag file in the state dir | B: an env var in settings.json |
+|---|---|---|
+| Hayden flips it | every session's next ring or toast reads it | only sessions started after the edit |
+| How he flips it | a menu entry or a CLI | a by-hand edit of a protected file, then `./setup.sh` |
+| A sandboxed command tries to mute | can't: `~/.local/state` is outside the sandbox's writable paths | can't: settings.json is denyWrite |
+| The flag file is unreadable | not muted, and the ring log says why (redundancy over silence) | not applicable |
+| A new device | no file means not muted | the baseline decides |
+| Cost | one small file read per ring or toast | none at run time |
+
+Lead's pick: A. B fails the "at once, every session" part of the ask.
+
+### Fork 2: one switch or two
+
+| Situation | A: one switch, both (Hayden's words) | B: sound and toast apart | C: one switch for sound; Windows' Do not disturb hides toasts |
+|---|---|---|---|
+| A meeting, a call, the night | one flip | two flips (or a "both" entry) | two places: the menu and Windows |
+| Quiet room: see asks, hear nothing | not possible | sound off, toast on (silent) | the default when muted |
+| Toasts piling up, sound wanted | not possible | toast off, sound on | Windows' Do not disturb |
+| Menu | one entry | two entries | one entry |
+
+Lead's pick: B. The quiet-room case is the common reason to mute sound, and A can't serve it.
+While sound is muted, a toast that still shows passes a new `-Silent` switch to
+`notify-toast.ps1`, which adds `<audio silent="true"/>`.
+
+### Fork 3: noticing a forgotten mute
+
+| Situation | A: a mark in the tab bar while muted | B: A plus a timed mute (1 hour, or until off) | C: neither |
+|---|---|---|---|
+| Forgot to unmute after a meeting | the mark shows on every client | the hour runs out by itself | asks go unheard for hours |
+| Muted overnight on purpose | the mark | pick "until off" | fine |
+| A session outside tmux | no mark, still muted | the hour still runs out | same |
+| Cost | `status-right` (`tmux/claude.conf:49`) reads the flag | plus an expiry in the flag | none |
+
+Lead's pick: B, for redundancy over silence: a forgotten mute is a silent miss.
+
+### Fork 4: where to flip it
+
+| Situation | A: the global tmux menu (Ctrl-b Enter, `tmux/base.conf:40`) plus a CLI | B: A plus a `/mute` slash command (a mod, like `/autopass`) |
+|---|---|---|
+| In a tmux tab | the menu | the menu or `/mute` |
+| Outside tmux | `! claude-mute on` at any prompt | `/mute` |
+| Cost | one CLI, one menu block | plus a mod (`skills/autopass` is the pattern) and its tests |
+
+Lead's pick: A. Every session on HAYPC runs in tmux, and the CLI covers the rest.
+
+Shared rules, whatever the picks: the flag is one JSON file in `$XDG_STATE_HOME/dotclaude/`
+(read and write it like `hooks/autopass_state.py`'s `load_json`/`write_json`); `ring_log`
+records a muted ring as `quiet muted=1`, so `ring.log` still explains a silence; the per-tab
+menus in `tmux/claude.conf` stay per tab.
+
+Files: `hooks/session-pane.sh` (a `muted` helper beside `play_ring`), `hooks/notify.sh`,
+`hooks/stop-ring.sh`, `notify-toast.ps1`, a new `tmux/claude-mute` CLI linked by
+`setup-tmux.sh:73-78`, `tmux/base.conf`, `tmux/claude.conf`, `tests/setup/test_tmux_hooks.py`,
+and README's indicator section. None of them is a file lanes summary-retire, link-atomic or
+practices expect to change.
