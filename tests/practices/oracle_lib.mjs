@@ -34,7 +34,8 @@
 //   that lib/auth.ts exports, read at grade time (so a rename to __Host-session is followed),
 //   else `session` (sessionCookie()).
 // - A cookie set or deleted through cookies() in a route handler reaches its response as
-//   Set-Cookie, as in Next (the stub's runWithRequest); route() results carry the response's
+//   Set-Cookie, as in Next (the stub's runWithRequest), and so does one set before the handler
+//   throws redirect() (Next answers that redirect with them); route() results carry the response's
 //   Set-Cookie lines as setCookies (parseSetCookie and cookieHeader read them).
 // - note(): an observation kept in the checks for the reader, counted toward neither verdict.
 import { spawnSync } from "node:child_process";
@@ -276,8 +277,15 @@ function statusFromThrow(error) {
   return m ? Number(m[1]) : 500;
 }
 
-function thrown(error, source) {
-  return { status: statusFromThrow(error), text: "", json: undefined, source, setCookies: [], note: String(error?.message ?? error).slice(0, 300) };
+// A route handler's redirect() keeps the cookies the handler set before it (the stub carries
+// them on the error), as Next answers it; any other throw, or one from middleware, sends none.
+const SET_COOKIES = Symbol.for("next.stub.set-cookies");
+
+function thrown(error, source, { handler = false } = {}) {
+  const redirect = typeof error?.digest === "string" && error.digest.startsWith("NEXT_REDIRECT");
+  const carried = handler && redirect ? error[SET_COOKIES] : null;
+  const setCookies = Array.isArray(carried) ? carried.filter((l) => typeof l === "string") : [];
+  return { status: statusFromThrow(error), text: "", json: undefined, source, setCookies, note: String(error?.message ?? error).slice(0, 300) };
 }
 
 async function readResponse(res, source) {
@@ -504,7 +512,7 @@ class Oracle {
     try {
       res = await this.ctx.runWithRequest(req, () => handler(req, { params: paramsArg(found.params) }));
     } catch (error) {
-      return thrown(error, rel);
+      return thrown(error, rel, { handler: true });
     }
     if (!(res instanceof Response)) return { status: 500, text: "", json: undefined, source: rel, setCookies: [], note: "handler returned no Response" };
     return readResponse(res, rel);

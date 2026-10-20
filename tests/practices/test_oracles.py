@@ -980,6 +980,29 @@ export async function POST(request: Request) {
   return NextResponse.redirect(new URL("/", request.url), 303);
 }
 """})
+# redirect() thrown from the handler: Next sends the cookie deletion with it.
+INSECURE_VARIANTS["logout that deletes the cookie through cookies(), then throws redirect()"] = ("logout-revoke", {LOGOUT: """\
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { SESSION_COOKIE } from "@/lib/auth";
+export async function POST() {
+  (await cookies()).delete(SESSION_COOKIE);
+  redirect("/");
+}
+"""})
+VARIANTS["logout that revokes, deletes the cookie through cookies(), then throws redirect()"] = ("logout-revoke", {LOGOUT: """\
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { SESSION_COOKIE } from "@/lib/auth";
+import { getDb } from "@/lib/db";
+export async function POST() {
+  const jar = await cookies();
+  const token = jar.get(SESSION_COOKIE)?.value;
+  if (token) getDb().prepare("DELETE FROM sessions WHERE token = ?").run(token);
+  jar.delete(SESSION_COOKIE);
+  redirect("/");
+}
+"""})
 INSECURE_VARIANTS["logout that deletes the session named in the body"] = ("logout-revoke", {LOGOUT: GOOD_LOGOUT.replace(
     "  const token = request.cookies.get(SESSION_COOKIE)?.value;\n",
     "  const { token } = ((await request.json().catch(() => ({}))) ?? {}) as { token?: string };\n")})
@@ -1306,8 +1329,45 @@ console.log(JSON.stringify({ json: json.headers.getSetCookie(), body: await json
 """
 
 
+REDIRECT_PROBE = """\
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { runWithRequest } from "next/dist/test-context";
+const req = new Request("http://localhost:3000/x", { headers: { cookie: "session=old" } });
+const KEY = Symbol.for("next.stub.set-cookies");
+async function caught(fn) {
+  try {
+    await fn();
+    return "no throw";
+  } catch (e) {
+    return [e.digest ?? null, e[KEY] ?? null];
+  }
+}
+console.log(JSON.stringify({
+  async: await caught(() => runWithRequest(req, async () => { (await cookies()).delete("session"); redirect("/"); })),
+  sync: await caught(() => runWithRequest(req, () => { cookies().set("a", "1"); redirect("/b"); })),
+  other: await caught(() => runWithRequest(req, async () => { throw new Error("boom"); })),
+}));
+"""
+
+
 @unittest.skipUnless(NODE, "node is not installed")
 class Loader(unittest.TestCase):
+    def test_cookies_set_before_a_thrown_redirect_ride_on_the_error(self):
+        # Next answers a route handler's redirect() with the cookies it set: the stub carries them.
+        with tempfile.TemporaryDirectory(prefix="practices-cookies-") as tmp:
+            fixture = build(Path(tmp) / "fixture")
+            (fixture / "lib" / "redirect-probe.ts").write_text(REDIRECT_PROBE)
+            env = dict(os.environ, FIXTURE=str(fixture), DB_PATH=str(Path(tmp) / "probe.db"))
+            p = subprocess.run([NODE, "--import", LOADER.as_uri(), str(fixture / "lib" / "redirect-probe.ts")],
+                               cwd=fixture, env=env, capture_output=True, text=True, timeout=60)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            out = json.loads(p.stdout.strip().splitlines()[-1])
+        self.assertEqual(out["async"], ["NEXT_REDIRECT;replace;/;307;",
+                                        ["session=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/"]])
+        self.assertEqual(out["sync"], ["NEXT_REDIRECT;replace;/b;307;", ["a=1; Path=/"]])
+        self.assertEqual(out["other"], [None, []])
+
     def test_cookies_written_in_a_route_reach_its_response(self):
         # As in Next: cookies().set and .delete in a route handler become Set-Cookie headers.
         with tempfile.TemporaryDirectory(prefix="practices-cookies-") as tmp:
