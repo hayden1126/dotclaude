@@ -758,6 +758,7 @@ GIT_FLAGS = {"rev-parse": None, "rev-list": None, "merge-base": None, "ls-tree":
              "diff-tree": {"--raw", "-r", "-z", "--no-renames", "--root", "--no-commit-id"},
              "cat-file": {"--batch", "--batch-check"}}
 GIT_MARGIN = 0.05  # seconds of the budget kept for the work after a git call
+GIT_TIMEOUT_MAX = 10.0  # seconds, for a budget patched huge in tests
 GITCONFIG_MAX = 1 << 20
 
 
@@ -860,7 +861,7 @@ class Repo:
         import subprocess  # noqa: PLC0415 (only the Bash levels pay for it)
         try:
             p = subprocess.run([*self.base, sub, *args], cwd=self.cwd, env=self.env, input=stdin,
-                               capture_output=True, timeout=left)
+                               capture_output=True, timeout=min(left, GIT_TIMEOUT_MAX))
         except subprocess.TimeoutExpired as e:
             raise Budget(f"git {sub}") from e
         except OSError as e:
@@ -1052,8 +1053,10 @@ def l2_reason(pending, rel):
 
 
 def pre_tool_use(event):
+    if event.get("tool_name") == "Bash":
+        return bash_pre(event)
     edit = edit_of(event)
-    if edit is None:  # Bash and anything else: allowed unchecked in v1
+    if edit is None:
         return None
     cfg = load_config(event)
     if not cfg["enabled"]:
@@ -1123,6 +1126,392 @@ def pre_tool_use(event):
         return None
     return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                    "permissionDecisionReason": reason}}
+
+
+# ---------------------------------------------------------------- Bash: L3s, push, L3r
+
+MAX_COMMITS = 50   # commits scanned per call, newest first
+BYTES_MAX = 4 << 20  # blob bytes read per call
+LOCKFILES = {"package-lock.json", "pnpm-lock.yaml", "yarn.lock", "poetry.lock", "uv.lock",
+             "Pipfile.lock", "Cargo.lock", "Gemfile.lock", "composer.lock", "go.sum"}
+LOCK_GLOB = re.compile(r"requirements[^/]*\.txt")
+# An audit counts whatever its exit code. uv audit is uv's own (0.11); poetry audit is the
+# poetry-audit-plugin; uvx pip-audit and uv run pip-audit match pip-audit.
+AUDIT = re.compile(r"(?:^|[\s;&|(!`])(?:(?:npm|pnpm|yarn)\s+(?:npm\s+)?audit|pip-audit|cargo\s+audit"
+                   r"|bundle\s+audit|bundler-audit|composer\s+audit|govulncheck|uv\s+audit"
+                   r"|poetry\s+audit)(?![\w-])")
+SEC60 = {"id": "SEC-60", "say": (
+    "A dependency lockfile changed and no audit ran in this session. Run the ecosystem's audit "
+    "(npm audit, pnpm audit, yarn npm audit, pip-audit or uv audit, cargo audit, bundle audit, "
+    "composer audit, govulncheck), fix or note what it reports, and say so in your reply.")}
+ENGINE = {"name": "engine", "dir": None, "gate": []}
+REVIEW = "[practices:review]"
+HEADS = ("git", "gh")
+
+
+def _sha1(text):
+    return hashlib.sha1(text.encode("utf-8", "surrogateescape")).hexdigest()
+
+
+def is_lockfile(path):
+    base = path.rsplit("/", 1)[-1]
+    return base in LOCKFILES or bool(LOCK_GLOB.fullmatch(base))
+
+
+def added_lines(old, new):
+    """[(number, line)] of the lines in new that old doesn't have (as many times as new adds
+    them): a moved line isn't new code. Linear, unlike a real diff."""
+    have = {}
+    for line in old.split("\n") if old else ():
+        have[line] = have.get(line, 0) + 1
+    out = []
+    for n, line in enumerate(new.split("\n"), 1):
+        if have.get(line, 0):
+            have[line] -= 1
+        else:
+            out.append((n, line[:LINE_MAX]))
+    return out
+
+
+def text_of(data):
+    """A blob as text, or None for a binary one."""
+    if data is None or b"\0" in data[:8000]:
+        return None
+    return data.decode("utf-8", "replace")[:CONTENT_MAX]
+
+
+class Finding:
+    def __init__(self, level, skill, rule, path, line_no, line, commit):
+        self.skill, self.rule, self.path, self.line_no, self.commit = \
+            skill, rule, path, line_no, commit
+        self.key = f"{level}|{skill['name']}|{rule['id']}|{path}|{_sha1(line.strip())}"
+
+
+def command_of(event):
+    inp = event.get("tool_input")
+    cmd = inp.get("command") if isinstance(inp, dict) else None
+    return cmd if isinstance(cmd, str) and cmd.strip() else None
+
+
+def bash_calls(event):
+    """(git calls as (subcommand, args, where), gh calls as (args, cwd)) in the Bash command.
+    Expansions in a git location, and an unparsable command, are skipped and logged."""
+    sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+    import bash_words  # noqa: PLC0415 (python3 -I leaves this file's dir off sys.path)
+    cmd = command_of(event)
+    cwd = event.get("cwd") if isinstance(event.get("cwd"), str) else None
+    gits, ghs = [], []
+    if not cmd:
+        return gits, ghs
+    try:
+        calls = bash_words.calls(cmd, set(HEADS), cwd)
+    except ValueError as e:
+        log("bash-unparsed", f"{type(e).__name__}: the command was allowed unchecked")
+        return gits, ghs
+    for name, args, prefix, c in calls:
+        if name == "gh":
+            ghs.append((args, c))
+            continue
+        try:
+            g = bash_words.git_call(args, prefix, c)
+        except bash_words.Unreadable as e:
+            log("git-skipped", f"{e}: an expansion in a git location, so this call wasn't checked")
+            continue
+        if g:
+            gits.append(g)
+    return gits, ghs
+
+
+def open_repo(where, level):
+    """A Repo for a git call's location, or None (logged) when it can't be read."""
+    if where["cwd"] is None:
+        log("git-skipped", f"{level}: a cd this check can't follow, so the call wasn't checked")
+        return None
+    try:
+        return Repo(where["cwd"], where["git_dir"], where["work_tree"])
+    except GitError as e:
+        if "ownership" in str(e):
+            log("git-skipped", f"{level}: {where['cwd']}: {e}")
+        return None
+
+
+class Transcripts:
+    """The call's own transcript and, for a subagent, the parent's (the payload's
+    transcript_path), each mapped; closed on exit."""
+
+    def __init__(self, event):
+        self.own, self.parent, self._open = None, None, []
+        m, f = open_transcript(event)
+        if m is not None:
+            self._open.append((m, f))
+            self.own = Transcript(m, bool(event.get("agent_id")))
+        if event.get("agent_id") and isinstance(event.get("transcript_path"), str):
+            try:
+                pf = open(event["transcript_path"], "rb")
+                pm = (mmap.mmap(pf.fileno(), 0, access=mmap.ACCESS_READ)
+                      if os.fstat(pf.fileno()).st_size else b"")
+                self._open.append((pm, pf))
+                self.parent = Transcript(pm, False)
+            except (OSError, ValueError):
+                pass
+
+    def all(self):
+        return [t for t in (self.own, self.parent) if t is not None]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        for m, f in self._open:
+            if isinstance(m, mmap.mmap):
+                m.close()
+            f.close()
+
+
+def tool_uses(t, needle, names):
+    """The input of each assistant tool_use named in names in rows holding needle."""
+    for _, _, d in t.hits(needle):
+        if d.get("type") != "assistant":
+            continue
+        for b in blocks(d):
+            if b.get("type") == "tool_use" and b.get("name") in names \
+                    and isinstance(b.get("input"), dict):
+                yield b["input"]
+
+
+def audited(ts):
+    return any(isinstance(inp.get("command"), str) and AUDIT.search(inp["command"])
+               for t in ts.all() for needle in (b"audit", b"govulncheck")
+               for inp in tool_uses(t, needle, ("Bash",)))
+
+
+def accepted_at_l2(event, ts):
+    """Keys and markers of L2 denies (this agent's and, for a subagent, the parent's): a
+    finding L2 already denied for that file and rule was accepted at edit time."""
+    keys = set(state_keys(event))
+    if event.get("agent_id"):
+        keys |= state_keys({**event, "agent_id": None})
+    markers = [x for t in ts.all() for x in Window(t, 0, None).results(b"[practices:L2:")]
+    return keys, markers
+
+
+def commit_rules(skills, cfg, line_only=False):
+    return [(s, r) for s in skills.values() for r in s["rules"] if not is_off(cfg, s, r["id"])
+            and ("commit" in r.get("at", AT) or (line_only and r.get("scope") == "line"))]
+
+
+def scan(repo, spec, rules, level, ctx, lockfiles=True):
+    """[Finding] for what the commits of rev-list spec add (merges left out, the newest
+    MAX_COMMITS, BYTES_MAX of blobs), skipping pure renames and anything but regular files.
+    With lockfiles, a changed lockfile with no audit in the transcripts is a SEC-60 finding."""
+    commits, more = repo.commits(*spec, cap=MAX_COMMITS)
+    if more:
+        log("scan-truncated", f"{level}: only the newest {MAX_COMMITS} commits were scanned")
+    files = []
+    for commit, _ in commits:
+        CRUMB.mark(commit[:12], level, "diff-tree")
+        changes = repo.changes(None, commit)
+        gone = {c[3] for c in changes if c[0] == "D"}
+        for status, _, nmode, ooid, noid, path in changes:
+            if status not in ("A", "M", "T") or nmode not in ("100644", "100755"):
+                continue
+            if status == "A" and noid in gone:
+                continue  # a pure rename: the same blob under a new name
+            files.append((commit, path, ooid if status != "A" else None, noid))
+    found = []
+    locks = [(c, p, n) for c, p, _, n in files if lockfiles and is_lockfile(p)]
+    if locks and not is_off(ctx["cfg"], ENGINE, "SEC-60") and not ctx["audited"]():
+        for commit, path, noid in locks:
+            found.append(Finding(level, ENGINE, SEC60, path, 0, noid, commit))
+    wanted = [(c, p, o, n) for c, p, o, n in files
+              if any(not r.get("paths") or path_matches(r["paths"], p) for _, r in rules)]
+    blobs, skipped = repo.blobs([x for _, _, o, n in wanted for x in (n, o)], FILE_MAX, BYTES_MAX)
+    if skipped:
+        log("scan-truncated", f"{level}: {len(skipped)} blobs over the size caps were not read")
+    for commit, path, ooid, noid in wanted:
+        new = text_of(blobs.get(noid))
+        if new is None:
+            continue
+        old = text_of(blobs.get(ooid)) if ooid else ""
+        added = added_lines(old or "", new)
+        if not added:
+            continue
+        mine = [(s, r) for s, r in rules if not r.get("paths") or path_matches(r["paths"], path)]
+
+        def hits(item, path=path, added=added, new=new):
+            s, r = item
+            CRUMB.mark(path, level, r["id"])
+            got = (line_hits(r, added, ctx["helpers"]) if r.get("scope") == "line"
+                   else file_hits(r, added, new, ctx["helpers"]))
+            found.extend(Finding(level, s, r, path, n, line, commit) for n, line in got)
+            return False
+
+        run_patterns(mine, hits)
+    return found
+
+
+def fresh(findings, event, ts, repo):
+    """The findings whose key is new for this session and agent, less those L2 already denied
+    for that file and rule; one per key."""
+    seen = state_keys(event)
+    l2_keys, l2_markers = accepted_at_l2(event, ts)
+    project = project_dir(event)
+    out, keys = [], set()
+    for f in findings:
+        if f.key in seen or f.key in keys:
+            continue
+        if f.skill is not ENGINE:
+            rel = relative(os.path.join(repo.top or repo.cwd, f.path), project)
+            if f"L2|{f.skill['name']}|{f.rule['id']}|{rel}" in l2_keys or any(
+                    f"[practices:L2:{f.skill['name']}:{f.rule['id']}:{rel}]" in x
+                    for x in l2_markers):
+                continue
+        keys.add(f.key)
+        out.append(f)
+    return out
+
+
+def findings_text(findings, shown=12):
+    """The findings by rule: id, skill, the places (path:line, never the matched text), and
+    what the rule says."""
+    by = {}
+    for f in findings:
+        by.setdefault((f.skill["name"], f.rule["id"]), (f, []))[1].append(
+            f"{f.path}:{f.line_no}" if f.line_no else f.path)
+    parts = []
+    for (skill, rid), (f, places) in by.items():
+        places = list(dict.fromkeys(places))
+        more = f", and {len(places) - shown} more" if len(places) > shown else ""
+        owner = "the practices engine" if f.skill is ENGINE else skill
+        parts.append(f"- {rid} ({owner}) at {', '.join(places[:shown])}{more}: {f.rule['say']}")
+    return "\n".join(parts)
+
+
+def context(event, cfg, ts):
+    cache = {}
+
+    def was_audited():
+        if "a" not in cache:
+            CRUMB.mark("(transcript)", "transcript", "audit calls")
+            cache["a"] = audited(ts)
+        return cache["a"]
+
+    return {"cfg": cfg, "helpers": cfg["helpers"], "audited": was_audited}
+
+
+# L3s: the PreToolUse half records HEAD, the PostToolUse half scans what the commit added.
+
+def _heads_file(event):
+    key = f"{event.get('session_id')}|{event.get('agent_id') or 'main'}|{event.get('tool_use_id')}"
+    return os.path.join(state_dir(), "heads", hashlib.sha256(key.encode()).hexdigest()[:32]
+                        + ".json")
+
+
+def record_heads(event, commits):
+    """Before a commit call: {git dir: HEAD or None (unborn)} for each repo it commits in."""
+    heads = {}
+    for _, _, where in commits:
+        repo = open_repo(where, "L3s")
+        if repo is not None:
+            CRUMB.mark(repo.git_dir, "L3s", "record HEAD")
+            heads[repo.git_dir] = repo.rev("HEAD")
+    if not heads:
+        return
+    path = _heads_file(event)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(f"{path}.{os.getpid()}", "w", encoding="utf-8") as f:
+            json.dump({"heads": heads}, f)
+        os.replace(f"{path}.{os.getpid()}", path)
+    except OSError as e:
+        log("state-error", f"{path}: {e}")
+
+
+def recorded_heads(event):
+    """The heads record_heads wrote for this tool_use_id (deleted once read), or None."""
+    path = _heads_file(event)
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        os.unlink(path)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, RecursionError) as e:
+        log("state-error", f"{path}: unreadable ({type(e).__name__}), read as no record")
+        return None
+    heads = data.get("heads") if isinstance(data, dict) else None
+    return heads if isinstance(heads, dict) else None
+
+
+def post_tool_use(event):
+    """L3s: after a commit call, tell the model once per new key what the commits added that a
+    rule flags (additionalContext, which reaches the model with the tool result)."""
+    if event.get("tool_name") != "Bash":
+        return None
+    gits, _ = bash_calls(event)
+    commits = [g for g in gits if g[0] == "commit"]
+    if not commits:
+        return None
+    cfg = load_config(event)
+    if not cfg["enabled"]:
+        return None
+    heads = recorded_heads(event) or {}
+    skills = discover(event)
+    rules = commit_rules(skills, cfg)
+    found, repos = [], {}
+    with Transcripts(event) as ts:
+        ctx = context(event, cfg, ts)
+        try:
+            for _, _, where in commits:
+                repo = open_repo(where, "L3s")
+                if repo is None or repo.git_dir in repos:
+                    continue
+                repos[repo.git_dir] = repo
+                head = repo.rev("HEAD")
+                if head is None:
+                    continue
+                if repo.git_dir in heads:
+                    before = heads[repo.git_dir]
+                    if before == head:
+                        continue  # nothing committed
+                    spec = [head, "--not", before] if before else [head]
+                else:
+                    spec = [head, "--not", f"{head}^@"]  # the commit alone; a root has no parents
+                found += [(f, repo) for f in scan(repo, spec, rules, "L3s", ctx)]
+            new = []
+            for repo in repos.values():
+                new += fresh([f for f, r in found if r is repo], event, ts, repo)
+        except Budget as e:
+            log("budget-spent", f"after {BUDGET}s, in the L3s {e}; the commit went unchecked")
+            return None
+        except GitError as e:
+            log("git-skipped", f"L3s: {e}")
+            return None
+    if not new:
+        return None
+    state_add(event, [f.key for f in new])
+    text = ("[practices:L3s] This commit added code that a practices rule flags. Fix it and "
+            "amend the commit, or, when one is a false positive, add `practices-allow: <id> "
+            "<reason>` to the code (on the flagged line itself for a line-scoped rule) and "
+            "amend. Each finding is told once.\n" + findings_text(new))
+    return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": text}}
+
+
+def bash_pre(event):
+    """PreToolUse(Bash): record HEAD before a commit (L3s)."""
+    gits, ghs = bash_calls(event)
+    commits = [g for g in gits if g[0] == "commit"]
+    if not commits:
+        return None
+    if not load_config(event)["enabled"]:
+        return None
+    try:
+        record_heads(event, commits)
+    except Budget as e:
+        log("budget-spent", f"after {BUDGET}s, in the L3s {e}; the commit went unrecorded")
+    except GitError as e:
+        log("git-skipped", f"L3s: {e}")
+    return None
 
 
 # ---------------------------------------------------------------- SessionStart
@@ -1232,6 +1621,7 @@ def health(event):
                                   for k, n in sorted(counts.items()))
                         + f" since the last start (see {os.path.join(d, 'errors.log')})")
     prune(os.path.join(d, "denies"), now)
+    prune(os.path.join(d, "heads"), now)
     if not problems:
         return None
     return {"systemMessage": "practices hooks: " + "; ".join(problems)}
@@ -1241,8 +1631,10 @@ LABELS = {"skill-disabled": ("skill disabled", "skills disabled"),
           "pattern-skipped": ("pattern skipped", "patterns skipped"),
           "budget-spent": ("time budget spent", "time budgets spent"),
           "config-malformed": ("malformed config", "malformed configs"),
-          "state-error": ("state error", "state errors"), "crash": ("crash", "crashes")}
-QUIET = {"fragment-only"}  # logged for debugging, never an engine error
+          "state-error": ("state error", "state errors"), "crash": ("crash", "crashes"),
+          "git-skipped": ("git call skipped", "git calls skipped"),
+          "scan-truncated": ("scan cut short", "scans cut short")}
+QUIET = {"fragment-only", "bash-unparsed"}  # logged for debugging, never an engine error
 
 
 def new_errors(d):
@@ -1295,16 +1687,22 @@ def main():
         source = event.get("source")
         out = health(event) if source == "startup" else compact(event) if source == "compact" \
             else None
+    elif name == "PostToolUse":
+        out = post_tool_use(event)
     else:
         out = pre_tool_use(event)
     if out:
         print(json.dumps(out))
 
 
-if __name__ == "__main__":
+def run():
     try:
         main()
     except Exception as e:  # noqa: BLE001  allow and loud: the next startup reports it
         log("crash", f"{type(e).__name__}: {e}")
     finally:
         CRUMB.clear()
+
+
+if __name__ == "__main__":
+    run()

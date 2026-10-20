@@ -12,9 +12,11 @@ The samples check loads every tests/setup/practices_samples/*.toml ([[sample]] k
 path, content) against skills/<file stem>/events.toml, and every shipped skills/*/events.toml
 must parse, keep unique ids and pass the backtracking lint.
 """
+import contextlib
 import glob
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -1049,6 +1051,228 @@ class GitHelper(GitMixin, unittest.TestCase):
                 mock.patch.object(PC, "BUDGET", 0.0):
             with self.assertRaises(PC.Budget):
                 PC.Repo(self.repo)
+
+
+class BashBase(GitMixin, Base):
+    """The project is a git repo; a Bash call runs as Claude Code runs it: PreToolUse, the
+    command (done here by the test), then PostToolUse with the same tool_use_id."""
+
+    def setUp(self):
+        super().setUp()
+        self.repo = self.make_repo(self.proj)
+        with open(os.path.join(self.proj, ".git", "info", "exclude"), "a") as f:
+            f.write(".claude/\n")
+        self.ids = iter(range(1, 1 << 30))
+
+    def event(self, command, phase, tid, **extra):
+        return {"session_id": SID, "transcript_path": self.transcript, "cwd": self.proj,
+                "hook_event_name": phase, "tool_name": "Bash",
+                "tool_input": {"command": command}, "tool_use_id": tid, **extra}
+
+    def pre(self, command, tid="b-now", **extra):
+        out = self.run_hook(self.event(command, "PreToolUse", tid, **extra))
+        if out is None:
+            return None
+        hso = out["hookSpecificOutput"]
+        self.assertEqual(hso["permissionDecision"], "deny")
+        return hso["permissionDecisionReason"]
+
+    def post(self, command, tid="b-now", **extra):
+        out = self.run_hook(self.event(command, "PostToolUse", tid, **extra))
+        if out is None:
+            return None
+        self.assertEqual(out["hookSpecificOutput"]["hookEventName"], "PostToolUse")
+        return out["hookSpecificOutput"]["additionalContext"]
+
+    def committed(self, repo=None, command="git commit -m x", pre=True, **files):
+        """Run a commit as a Bash call: PreToolUse, the commit, PostToolUse; the tell or None."""
+        tid = f"b{next(self.ids)}"
+        if pre:
+            self.assertIsNone(self.pre(command, tid))
+        self.commit(repo=repo, **files)
+        return self.post(command, tid)
+
+
+class L3s(BashBase):
+    def test_a_commit_that_adds_a_flagged_line_is_told_once_without_the_text(self):
+        told = self.committed(**{"lib__a.ts": "const a = 1\nx({ ...body })\n"})
+        self.assertTrue(told.startswith("[practices:L3s]"), told)
+        self.assertIn("SEC-17 (demo) at lib/a.ts:2", told)
+        self.assertIn("Spreading the request body", told)
+        self.assertIn("amend", told)
+        self.assertNotIn("...body", told)
+        self.assertNotIn("...body", self.log())
+        self.assertIsNone(self.committed(**{"lib__b.txt": "unrelated\n"}))
+        self.assertIsNone(self.committed(**{"lib__a.ts": "const a = 2\nx({ ...body })\n"}))
+
+    def test_a_new_key_after_a_partial_fix_retells_only_the_new_finding(self):
+        told = self.committed(**{"a.ts": "x({ ...body })\n", "b.ts": "y({ ...body })\n"})
+        self.assertIn("a.ts:1", told)
+        self.assertIn("b.ts:1", told)
+        told = self.committed(**{"a.ts": "x(pick(body))\n", "b.ts": "y({ ...body, z })\n"})
+        self.assertIn("b.ts:1", told)
+        self.assertNotIn("a.ts", told)
+
+    def test_a_finding_accepted_at_l2_is_skipped(self):
+        self.loaded()
+        self.assertIsNotNone(self.fire("lib/save.ts", "x({ ...body })\n"))
+        self.assertIsNone(self.committed(**{"lib__save.ts": "x({ ...body })\n"}))
+        self.assertIn("lib/other.ts:1", self.committed(**{"lib__other.ts": "x({ ...body })\n"}))
+
+    def test_a_line_scoped_allow_covers_only_its_line_and_at_picks_the_levels(self):
+        self.skill("keys", KEYS, where="user")
+        told = self.committed(**{"k.ts": "a = 'TOKEN_ABCDEFGH' // practices-allow: KEY-1 test\n"
+                                          "b = 'TOKEN_QRSTUVWX'\nlater()\n"})
+        self.assertIn("KEY-1 (keys) at k.ts:2:", told)
+        self.assertNotIn("k.ts:1", told)
+        self.assertIn("LATE-1 (keys) at k.ts:3", told)
+
+    def test_without_a_record_the_head_commit_alone_is_scanned(self):
+        self.assertIn("root.ts:1", self.committed(pre=False, **{"root.ts": "x({ ...body })\n"}))
+        self.commit(**{"old.ts": "x({ ...body })\n"})  # an earlier commit, never scanned
+        told = self.committed(pre=False, **{"new.ts": "y({ ...body })\n"})
+        self.assertIn("new.ts:1", told)
+        self.assertNotIn("old.ts", told)
+
+    def test_merges_and_pure_renames_are_skipped(self):
+        self.commit(**{"a.ts": "x({ ...body })\n"})
+        self.sh("mv", "a.ts", "moved.ts")
+        self.assertIsNone(self.committed())
+        head = self.sh("rev-parse", "HEAD")
+        side = self.sh("commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "side")
+        self.put("m.ts", "y({ ...body })\n")
+        self.sh("add", "-A")
+        tree = self.sh("write-tree")
+        merge = self.sh("commit-tree", tree, "-p", head, "-p", side, "-m", "merge")
+        self.assertIsNone(self.pre("git commit -m m", "b-merge"))
+        self.sh("update-ref", "refs/heads/main", merge)
+        self.assertIsNone(self.post("git commit -m m", "b-merge"))
+
+    def test_sec_60_a_lockfile_change_with_no_audit(self):
+        told = self.committed(**{"package-lock.json": "{}\n", "requirements-dev.txt": "x==1\n"})
+        self.assertIn("SEC-60 (the practices engine) at package-lock.json, requirements-dev.txt",
+                      told)
+        self.add(use("t-audit", "Bash", command="cd web && npm audit --omit dev"))
+        self.assertIsNone(self.committed(**{"package-lock.json": "{\"a\": 1}\n"}))
+
+    def test_the_command_names_the_repo(self):
+        sub = self.make_repo(os.path.join(self.tmp, "sub"))
+        self.commit(**{"seed.ts": "x({ ...body })\n"})
+        told = self.committed(repo=sub, command=f"git -C {sub} commit -m x",
+                              **{"s.ts": "x({ ...body })\n"})
+        self.assertIn("s.ts:1", told)
+        self.assertIsNone(self.committed(repo=sub, command='git -C "$SUB" commit -m x',
+                                         **{"t.ts": "x({ ...body })\n"}))
+        self.assertIn("git-skipped", self.log())
+        told = self.committed(repo=sub, command=f"GIT_DIR={sub}/.git git commit -m x",
+                              **{"u.ts": "x({ ...body })\n"})
+        self.assertIn("u.ts:1", told)
+        told = self.committed(repo=sub, command="cd ../sub && git commit -m 'git push later'",
+                              **{"v.ts": "x({ ...body })\n"})
+        self.assertIn("v.ts:1", told)
+
+    def test_a_hostile_repo_runs_nothing_at_commit_time(self):
+        script = self.canary()
+        for key in ("core.fsmonitor", "diff.external", "diff.planted.textconv", "core.pager"):
+            self.sh("config", key, script)
+        self.put(".gitattributes", "*.ts diff=planted\n")
+        outside = os.path.join(self.tmp, "outside.ts")
+        with open(outside, "w") as f:
+            f.write("x({ ...body })\n")
+        os.symlink(outside, os.path.join(self.proj, "link.ts"))
+        tid = "b-hostile"
+        self.assertIsNone(self.pre("git commit -m x", tid))
+        self.commit(**{"a.ts": "x({ ...body })\n"})
+        if os.path.exists(self.canary_file):
+            os.unlink(self.canary_file)  # the test's own git commit ran fsmonitor
+        self.env["GIT_DIR"] = os.path.join(self.tmp, "nowhere")
+        told = self.post("git commit -m x", tid)
+        self.assertIn("a.ts:1", told)
+        self.assertNotIn("link.ts", told)
+        self.assertFalse(os.path.exists(self.canary_file), "a planted program ran")
+
+    def test_a_subagent_keeps_its_own_keys_and_counts_the_parents_audit(self):
+        agent = "a0123456789abcdef"
+        d = os.path.join(self.transcript[:-len(".jsonl")], "subagents")
+        os.makedirs(d)
+        self.rows([], path=os.path.join(d, f"agent-{agent}.jsonl"))
+        self.assertIn("a.ts:1", self.committed(**{"a.ts": "x({ ...body })\n"}))
+        tid = "b-agent"
+        self.assertIsNone(self.pre("git commit -m x", tid, agent_id=agent))
+        self.commit(**{"a.ts": "x({ ...body })\n// more\n", "go.sum": "x\n"})
+        told = self.post("git commit -m x", tid, agent_id=agent)
+        self.assertIn("SEC-60", told)
+        self.add(use("t-audit", "Bash", command="govulncheck ./..."))
+        tid = "b-agent-2"
+        self.assertIsNone(self.pre("git commit -m x", tid, agent_id=agent))
+        self.commit(**{"go.sum": "y\n"})
+        self.assertIsNone(self.post("git commit -m x", tid, agent_id=agent))
+
+
+class Budgets(BashBase):
+    """A spent budget, a git timeout and a crash allow the call, and leave their trace."""
+
+    def call(self, fn, command, tid, **patches):
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "BUDGET", 1e9):
+            with contextlib.ExitStack() as stack:
+                for name, value in patches.items():
+                    stack.enter_context(mock.patch.object(PC, name, value))
+                try:
+                    phase = "PreToolUse" if fn is PC.pre_tool_use else "PostToolUse"
+                    return fn(self.event(command, phase, tid))
+                finally:
+                    PC.CRUMB.clear()
+
+    def test_a_spent_budget_allows_and_logs(self):
+        self.env["PRACTICES_TEST_BUDGET"] = "0"
+        self.assertIsNone(self.committed(**{"a.ts": "x({ ...body })\n"}))
+        self.assertIn("budget-spent", self.log())
+
+    def test_a_git_timeout_leaves_a_breadcrumb_naming_the_level_and_allows(self):
+        self.commit(**{"a.ts": "1\n"})
+        seen = {}
+        real = subprocess.run
+
+        def slow(*args, **kw):
+            d = os.path.join(self.state, "dotclaude", "practices")
+            for n in os.listdir(d) if os.path.isdir(d) else ():
+                if n.startswith("breadcrumb-"):
+                    with open(os.path.join(d, n)) as f:
+                        seen.update(json.load(f))
+            if args and args[0][0] in PC.SYSTEM_GITS and "--batch" in args[0]:
+                raise subprocess.TimeoutExpired(args[0], 1)
+            return real(*args, **kw)
+
+        self.commit(**{"b.ts": "x({ ...body })\n"})
+        with mock.patch("subprocess.run", slow):
+            self.assertIsNone(self.call(PC.post_tool_use, "git commit -m x", "b-slow"))
+        self.assertEqual(seen.get("level"), "L3s")
+        self.assertIn("budget-spent", self.log())
+
+    def test_a_crash_allows_and_logs(self):
+        def boom(event):
+            raise RuntimeError("planted")
+
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "post_tool_use", boom), \
+                mock.patch("sys.stdin", io.StringIO(json.dumps(
+                    self.event("git commit -m x", "PostToolUse", "b-crash")))), \
+                mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            PC.run()
+        self.assertEqual(out.getvalue(), "")
+        self.assertIn("crash RuntimeError: planted", self.log())
+
+    def test_a_large_range_is_cut_short_and_logged(self):
+        self.commit(**{"seed": "1\n"})
+        self.assertIsNone(self.call(PC.pre_tool_use, "git commit -m x", "b-big"))
+        for n in range(4):
+            self.commit(**{f"f{n}.ts": "x({ ...body })\n"})
+        told = self.call(PC.post_tool_use, "git commit -m x", "b-big", MAX_COMMITS=2)
+        ctx = told["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("f3.ts:1", ctx)
+        self.assertNotIn("f0.ts", ctx)
+        self.assertIn("scan-truncated", self.log())
 
 
 def load_bash_words():
