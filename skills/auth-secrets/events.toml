@@ -1,0 +1,295 @@
+# auth-secrets: events and patterns for the practices hook (hooks/practices_check.py).
+#
+# [[event]] (L1): this edit is the event; the hook denies once until the skill is loaded.
+#   Fires when any path glob matches the path relative to the project OR any content regex
+#   matches the file as it will read after the edit.
+# [[rule]] (L2): denies once per file and rule when `paths` (if given) match, `when` matches
+#   the new text the edit writes, and neither `unless` nor a `practices-allow: <id> <reason>`
+#   comment appears in the file as it will read after the edit.
+# `at` (optional, on a [[rule]]): where the rule runs, "edit" and/or "commit" (the commit-time
+#   scan of new commits, L3s). It defaults to both. SEC-41's `practices-allow` covers only the
+#   line it sits on, so one allowed fixture can't hide a real key elsewhere in the file.
+#
+# Globs: `**` spans directories, `*` and `?` stay inside one, `{a,b}` alternates, and a
+# glob with no `/` matches the basename. Regexes are Python, re.MULTILINE, with no quantifier
+# inside a repeated group (no backtracking). A few span lines on purpose, always with a
+# bounded window. No pattern holds a literal key: each describes the vendor's published shape.
+# Samples for every event and rule: tests/setup/practices_samples/auth-secrets.toml, where
+# `{key:<vendor>}` stands for a key-shaped value the test builds at run time.
+
+skill = "auth-secrets"
+
+gate = [
+  "Build an email or phone change as pending: a random single-use token, stored hashed and short-lived, mailed to the NEW address, switching only when it is followed, plus a notice to the old address, a rate limit and an audit line; say so in your reply (SEC-37).",
+  "Build every request-supplied redirect to stay same-origin: refuse non-strings, backslashes and control characters, parse against the configured origin, compare origins, and redirect to the validated absolute URL, never a string starting with //; say so in your reply (SEC-39).",
+  "Build reset, invite, verification and OTP tokens from a CSPRNG (128 bits or more), stored hashed, short-lived and single-use; say so in your reply (SEC-36).",
+  "Build secret reads from env or a secret manager, never a key-shaped literal in any file, with .env* gitignored; say so in your reply (SEC-41).",
+  "Build a new session id at sign-in and a logout that revokes the session server-side; say so in your reply (SEC-33).",
+  "Build every safeguard a rule needs even when unasked, and say so in your reply; never leave it as an offer.",
+]
+
+[[event]]
+id = "auth-flow"
+paths = [
+  "**/auth/**",
+  "**/oauth/**",
+  "**/{login,logout,signin,signout,sign-in,sign-out,signup,sign-up}/**",
+  "**/{session,sessions}/**",
+  "**/*{password,Password}*/**",
+  "**/{account,settings}/{security,email,password,phone}/**",
+  "auth.{ts,tsx,js,jsx,mjs,cjs,py,rb,go,php}",
+  "auth.*.{ts,js,mjs}",
+  "*.auth.{ts,js}",
+  "{login,logout,signin,signup,session,sessions}.{ts,tsx,js,jsx,mjs,py,rb,go,php}",
+  "*{password,Password}*.{ts,tsx,js,jsx,mjs,py,rb,go,php}",
+  "middleware.{ts,js,mjs}",
+  "**/middleware/**",
+]
+content = [
+  # Server-side auth and session libraries.
+  '''(?:\bfrom\s|\brequire\(\s*)\s*["'](?:next-auth|next-auth/[\w/-]+|@auth/[\w-]+|lucia|better-auth|better-auth/[\w/-]+|passport|passport-[\w-]+|iron-session|express-session|cookie-session|@fastify/session|@fastify/secure-session)["']''',
+  '''^\s*(?:from|import)\s+(?:flask_login|django\.contrib\.auth|authlib|fastapi_users|flask_security)\b''',
+]
+lines = [
+  "Build a new session id at sign-in and every privilege change, and a logout that deletes the session server-side; say so in your reply (SEC-33).",
+  "Build one answer for 'no such account' and 'wrong password', with similar timing; say so in your reply (SEC-32).",
+  "Build a per-user and per-IP rate limit on sign-in, sign-up, reset and OTP, with the IP from the header your proxy sets; say so in your reply (server-code SEC-07).",
+  "Build every post-sign-in redirect through a same-origin validator that returns an absolute URL; say so in your reply (SEC-39).",
+  "Build any email or phone change as pending until the NEW address confirms it; say so in your reply (SEC-37).",
+]
+
+[[event]]
+id = "password"
+paths = []
+content = [
+  '''(?:\bfrom\s|\brequire\(\s*)\s*["'](?:bcrypt|bcryptjs|argon2|@node-rs/argon2|@node-rs/bcrypt|scrypt-js)["']''',
+  '''^\s*(?:from|import)\s+(?:bcrypt|argon2|passlib)\b''',
+  '''\b(?:hash|verify|compare|check|make|reset|update|change)_?[Pp]assword\b''',
+  '''\bpassword_(?:hash|verify)\(''',
+  '''\b(?:scrypt|scryptSync|pbkdf2|pbkdf2Sync|pbkdf2_hmac)\(''',
+]
+lines = [
+  "Build password hashing with Argon2id (19 MiB, 2 iterations, parallelism 1) or bcrypt at cost 10 or more, never a fast hash; say so in your reply (SEC-30).",
+  "Build the policy: at least 8 characters (15 advised), up to at least 64, no composition rules, a common-password check; say so in your reply (SEC-31).",
+  "Build one answer for 'no such account' and 'wrong password', with similar timing; say so in your reply (SEC-32).",
+  "Build a per-user and per-IP rate limit on sign-in, sign-up and reset; say so in your reply (server-code SEC-07).",
+  "Build a password change that needs the current password and ends the user's other sessions; say so in your reply (SEC-37, SEC-33).",
+]
+
+[[event]]
+id = "session-cookie"
+paths = []
+content = [
+  # A cookie set whose name (a literal or a constant) says session, auth or token.
+  '''(?:\bcookies\(\)\)?\.set\(|\bcookies\.set\(|\.cookie\(|\.set_cookie\(|\bsetCookie\(\s*\w+\s*,|(?<![.\w])serialize\(|\bcookie\.serialize\()\s*(?:key\s*=\s*)?(?:["'`][^"'`\n]{0,60}?(?i:session|\bsid\b|auth|token|jwt|refresh|remember)|[A-Z0-9_]{0,40}(?:SESSION|AUTH|TOKEN|SID|JWT))''',
+  '''(?i:set-cookie)["'`]?\s*[:,]\s*[`"'][^`"'\n]{0,60}?(?i:session|\bsid\b|auth|token|jwt|refresh|remember)''',
+  '''^\s*SESSION_COOKIE_(?:SECURE|HTTPONLY|SAMESITE|AGE|DOMAIN|NAME)\s*=''',
+]
+lines = [
+  "Build the session cookie with Secure, HttpOnly, SameSite=Lax or Strict and the __Host- prefix; say so in your reply (SEC-34).",
+  "Build a new session id at sign-in and every privilege change, and a logout that deletes the session server-side; say so in your reply (SEC-33).",
+  "Build a server-side idle and absolute expiry instead of trusting the cookie's Max-Age; say so in your reply (SEC-33).",
+  "Build token transport in a cookie or an Authorization header, never a URL; say so in your reply (SEC-34).",
+]
+
+[[event]]
+id = "redirect-param"
+paths = []
+content = [
+  '''(?:\.get\(\s*|\bquery\[\s*|\bargs\[\s*|\bparams\[\s*)["'](?:next|returnTo|return_to|returnUrl|return_url|redirect|redirectTo|redirect_to|redirectUrl|redirect_url|redirect_uri|callbackUrl|callback_url)["']''',
+  '''\b(?:query|searchParams|args|params)\.(?:next|returnTo|return_to|returnUrl|return_url|redirect|redirectTo|redirect_to|redirectUrl|redirect_url|redirect_uri|callbackUrl|callback_url)\b''',
+  '''\{[^}\n]{0,200}\b(?:next|returnTo|return_to|returnUrl|redirect|redirectTo|redirectUrl|callbackUrl)\b[^}\n]{0,200}\}\s*=\s*(?:await\s)?\s*(?:req|request|ctx|event|context)\.(?:query|searchParams|url\.searchParams)\b''',
+]
+lines = [
+  "Build a redirect validator: one string only, no backslash or control character, parsed against the configured origin, origins compared; say so in your reply (SEC-39).",
+  "Build the redirect to the validated absolute URL, never a bare path that can start with //; say so in your reply (SEC-39).",
+  "Build an exact-match allowlist for external and OAuth redirect_uri targets; say so in your reply (SEC-39).",
+  "Build tests for //, backslash, /.//host and tab/CR/LF values, plus a same-origin path with a query; say so in your reply (SEC-39).",
+]
+
+[[event]]
+id = "contact-change"
+paths = []
+content = [
+  '''\b(?:update|change)_?(?:Email|email|Phone|phone|PhoneNumber|phone_number)\b''',
+  '''(?i:\bUPDATE\s+["`]?\w+["`]?\s+SET\s+[^\n;]{0,200}?\b(?:email|phone|phone_number)\s*=)''',
+  '''\b(?:request\.user|current_user|currentUser)\.(?:email|phone|phone_number|phoneNumber)\s*=(?!=)''',
+  '''\.(?:set|update)\(\s*\{(?!\s*where\b)[^{}\n]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*[:,}]''',
+  '''\b(?:verifyBeforeUpdateEmail|updateEmail)\(|\.auth\.updateUser\(''',
+]
+lines = [
+  "Build the change as pending: a random single-use token stored hashed, valid 30 minutes or less, mailed to the NEW address; switch only when it is followed; say so in your reply (SEC-37).",
+  "Build a fresh sign-in or current-password check before the change starts; say so in your reply (SEC-37).",
+  "Build a notice to the old address that the requester can't turn off, a rate limit and an audit line; say so in your reply (SEC-37, server-code SEC-07).",
+  "Build tests: the address is unchanged until the link is followed, and a forged, reused or expired link changes nothing; say so in your reply (SEC-37).",
+]
+
+[[event]]
+id = "jwt"
+paths = []
+content = [
+  '''(?:\bfrom\s|\brequire\(\s*)\s*["'](?:jsonwebtoken|jose|jwt-decode|jwks-rsa|express-jwt|passport-jwt|@fastify/jwt|hono/jwt)["']''',
+  '''^\s*(?:from|import)\s+(?:jwt|jose|jwcrypto|authlib\.jose)\b''',
+  '''\b(?:jwt\.(?:sign|verify|decode|encode)|jwtVerify|decodeJwt|createRemoteJWKSet)\(|\bnew\s+SignJWT\(''',
+  '''["']github\.com/golang-jwt/jwt''',
+]
+lines = [
+  "Build verification before any claim is trusted: the signature with a key from a trusted source, an algorithm allowlist, and exp, nbf, iss and aud checks; say so in your reply (SEC-35).",
+  "Build short-lived access tokens, and say in your reply how long one outlives a logout or a removal (SEC-33).",
+  "Build the signing key from env or a secret manager, never a literal; say so in your reply (SEC-41).",
+  "Build tests: alg none, tampered and expired tokens get 401; say so in your reply (SEC-35).",
+]
+
+[[event]]
+id = "browser-policy"
+paths = []
+content = [
+  '''(?i:access-control-allow-(?:origin|credentials)|content-security-policy|strict-transport-security)''',
+  '''(?:\bfrom\s|\brequire\(\s*)\s*["'](?:cors|@fastify/cors|helmet|@fastify/helmet|hono/cors|hono/secure-headers)["']''',
+  '''\bCORSMiddleware\b|^\s*(?:from|import)\s+(?:flask_cors|corsheaders)\b|\bCORS_ALLOW(?:ED_ORIGINS|_ALL_ORIGINS|_CREDENTIALS)\b''',
+]
+lines = [
+  "Build CORS on fixed or allowlisted origins, never * or a reflected Origin with credentials; say so in your reply (SEC-43).",
+  "Build CSP and egress allowlists from exact hosts plus their redirect targets, never *.domain; say so in your reply (SEC-43).",
+  "Build the security headers: HSTS, a CSP with frame-ancestors, nosniff and a Referrer-Policy; say so in your reply (SEC-44).",
+  "Build a header test on a live response; say so in your reply (SEC-44).",
+]
+
+[[event]]
+id = "secret-env"
+paths = []
+content = [
+  '''\b(?:process\.env|import\.meta\.env|Bun\.env)(?:\.|\[\s*["'])[A-Z0-9_]{0,60}(?:SECRET|TOKEN|PASSWORD|PRIVATE|CREDENTIAL|(?<![A-Z])KEY)''',
+  '''\b(?:Deno\.env\.get|os\.getenv|os\.environ\.get|getenv|env|ENV\.fetch)\(\s*["'][A-Z0-9_]{0,60}(?:SECRET|TOKEN|PASSWORD|PRIVATE|CREDENTIAL|(?<![A-Z])KEY)''',
+  '''\b(?:os\.environ|ENV)\[\s*["'][A-Z0-9_]{0,60}(?:SECRET|TOKEN|PASSWORD|PRIVATE|CREDENTIAL|(?<![A-Z])KEY)''',
+]
+lines = [
+  "Build secret reads from env or a secret manager only, with no literal fallback value; say so in your reply (SEC-41).",
+  "Build the key into server-only code: never a NEXT_PUBLIC_, VITE_ or PUBLIC_ variable, a client file, a URL or a prompt; say so in your reply (SEC-40).",
+  "Build a startup check that fails closed when the secret is unset; say so in your reply (server-code SEC-08).",
+  "Build .env* into .gitignore and commit only a .env.example with empty values; say so in your reply (SEC-41).",
+  "Build dev to run without live keys that can send or post externally; say so in your reply (SEC-45).",
+]
+
+[[rule]]
+# A fast hash on the same line as a password. A line that also names a slow hash (a SHA-256
+# pre-hash before bcrypt) and a comment line stay quiet; a reset token hashed with SHA-256
+# names no password, so it never fires.
+id = "SEC-30"
+when = '''^(?!\s*(?://|#|/?\*))(?![^\n]*(?i:bcrypt|argon2|scrypt|pbkdf2))[^\n]*(?:(?i:\b(?:md5|sha1|sha-1|sha224|sha256|sha-256|sha384|sha512|sha-512)\b)[^\n]{0,120}(?i:\b(?:password|passwd|pwd)\b)|(?i:\b(?:password|passwd|pwd)\b)[^\n]{0,120}(?i:\b(?:md5|sha1|sha256|sha512)\s*\())'''
+paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py,rb,php,go}"]
+say = "Build password hashing with Argon2id (19 MiB, 2 iterations, parallelism 1) or bcrypt at cost 10 or more; a fast hash such as MD5 or SHA-256 falls to a GPU in hours, salted or not (SEC-30). Code that only verifies legacy hashes to migrate them on sign-in can stay: add `practices-allow: SEC-30 legacy migration`."
+
+[[rule]]
+id = "SEC-34"
+when = '''(?:\bcookies\(\)\)?\.set\(|\bcookies\.set\(|\.cookie\(|\.set_cookie\(|\bsetCookie\(\s*\w+\s*,|(?<![.\w])serialize\(|\bcookie\.serialize\()\s*(?:key\s*=\s*)?(?:["'`][^"'`\n]{0,60}?(?i:session|\bsid\b|auth|token|jwt|refresh|remember)|[A-Z0-9_]{0,40}(?:SESSION|AUTH|TOKEN|SID|JWT))|(?i:set-cookie)["'`]?\s*[:,]\s*[`"'][^`"'\n]{0,60}?(?i:session|\bsid\b|auth|token|jwt|refresh|remember)'''
+unless = '''\A(?=[\s\S]*?(?i:httponly))(?=[\s\S]*?(?i:\bsecure\b|__Host-|__Secure-))(?=[\s\S]*?(?i:samesite))|\b\w{0,40}(?i:cookie)_?(?i:options|opts|attributes|attrs|config|defaults)\b'''
+paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py,rb,php,go}"]
+say = "Build this session cookie with Secure, HttpOnly and SameSite=Lax (or Strict), and name it with the __Host- prefix (Path=/, no Domain) (SEC-34). If the flags come from a shared options object, name it like `sessionCookieOptions`, or add `practices-allow: SEC-34 flags set in <module>`."
+
+[[rule]]
+# jsonwebtoken's decode and jose's decodeJwt read claims without checking anything. A file that
+# also verifies (decode to read the kid header, then verify) or a client component stays quiet.
+id = "SEC-35"
+when = '''\bjwt\.decode\(|(?<![\w])decodeJwt\('''
+unless = '''\bjwt\.verify\(|\bjwtVerify\(|^\s*["']use client["']'''
+paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts}"]
+say = "Verify this JWT before trusting a claim: `jwt.verify` or jose's `jwtVerify` with a key from a trusted source, an `algorithms` allowlist and `exp`, `iss` and `aud` checks; decode checks nothing (SEC-35). If this only reads claims for display, add `practices-allow: SEC-35 display only`."
+
+[[rule]]
+id = "SEC-35-alg"
+when = '''\bjwt\.verify\('''
+unless = '''\balgorithms\s*:'''
+paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts}"]
+say = "Pass an `algorithms` allowlist to jwt.verify (such as `{ algorithms: [\"HS256\"] }` or `[\"RS256\"]`), so a token can't pick its own algorithm (SEC-35)."
+
+[[rule]]
+id = "SEC-35-off"
+when = '''["']?verify_(?:signature|exp|aud|iss)["']?\s*:\s*False\b|\bjwt\.decode\([^\n]{0,200}\bverify\s*=\s*False\b|\bignoreExpiration\s*:\s*true\b|\balgorithms\s*[:=]\s*\[[^\]\n]{0,100}["'](?i:none)["']'''
+paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py}"]
+say = "Never turn off JWT checks: keep the signature, expiry and audience verified, and never allow the `none` algorithm (SEC-35). A test that builds a deliberately bad token can add `practices-allow: SEC-35-off test fixture`."
+
+[[rule]]
+# A weak generator on a line that names a token, code, nonce or secret.
+id = "SEC-36"
+when = '''^(?=[^\n]*(?i:token|nonce|secret|passcode|csrf|api_?key|session_?id|magic_?link|invite_?code|reset_?code|verification_?code|\botp|otp\b|\bsalt\b))[^\n]*(?:\bMath\.random\(|\bcrypto\.randomUUID\(|(?<![.\w])(?:uuidv4|uuid4)\(|\buuid\.v4\(|\buuid\.uuid4\(|\brandom\.(?:random|randint|choice|choices|randrange|getrandbits|sample)\(|\bDate\.now\(\)\s*\.toString\()'''
+paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py}"]
+say = "Build this token from a CSPRNG at 128 bits or more (`crypto.randomBytes(32).toString(\"base64url\")`, `secrets.token_urlsafe(32)`), never Math.random, random, a timestamp or a UUID; store only its hash, expire it soon and consume it on first use (SEC-36)."
+
+[[rule]]
+# A direct write of an email or phone to an existing account: an ORM update, a SQL UPDATE or an
+# assignment on the current user. A file that holds a pending-change flow stays quiet.
+id = "SEC-37"
+when = '''\.update(?:Many)?\(\s*\{[\s\S]{0,300}?\bdata\s*:\s*\{[^}]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*[:,}]|\.set\(\s*\{[^{}]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*[:,}]|\.update\(\s*\{(?!\s*where\b)[^{}]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*[:,}]|\$set\s*:\s*\{[^{}]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*[:,}]|(?i:\bUPDATE\s+["`]?\w+["`]?\s+SET\s+[^;]{0,200}?\b(?:email|phone|phone_number)\s*=)|\b(?:request\.user|current_user|currentUser|self\.request\.user)\.(?:email|phone|phone_number|phoneNumber)\s*=(?!=)|\b(?:current_user|request\.user)\.update!?\([^\n]{0,100}\b(?:email|phone):'''
+unless = '''(?i:\bpending_?\w{0,20}?(?:email|phone|change)|email_?change|phone_?change|change_?requests?\b|unconfirmed_?email|verifyBeforeUpdateEmail)'''
+paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py,rb,php,go,sql}"]
+say = "Don't write a new email or phone to the account directly. Build a pending change: a random single-use token, stored hashed and valid 30 minutes or less, sent to the NEW address; switch only when it is followed, with a fresh sign-in to start, a notice to the old address, a rate limit and an audit line (SEC-37, see the skill's references/email-change.md). If this is the confirm step or an audited admin tool, add `practices-allow: SEC-37 <reason>`."
+
+[[rule]]
+# A redirect to a request-supplied value: read inside the call, or a variable named like the
+# param in a file that reads the param. A named validator or an origin comparison clears it.
+id = "SEC-39"
+when = '''(?:\b(?:redirect|redirect_to|HttpResponseRedirect|RedirectResponse)|\brouter\.(?:push|replace)|\blocation\.(?:assign|replace))\(\s*[^\n)]{0,120}?(?:\.get\(\s*["']|\bquery\.|\bquery\[\s*["']|\bparams\[\s*:?["']?|\bargs\[\s*["']|\bsearchParams\.)(?:next|returnTo|return_to|returnUrl|return_url|redirect|redirectTo|redirect_to|redirectUrl|redirect_url|callbackUrl|callback_url)\b|(?:\b(?:redirect|redirect_to|HttpResponseRedirect|RedirectResponse)|\brouter\.(?:push|replace)|\blocation\.(?:assign|replace))\(\s*(?:\d{3}\s*,\s*)?(?:next|returnTo|return_to|returnUrl|return_url|redirectTo|redirect_to|redirectUrl|redirect_url|callbackUrl|callback_url)\s*(?:\)|\?\?|\|\||,|\bor\b)|\blocation\.href\s*=\s*(?:next|returnTo|returnUrl|redirectTo|redirectUrl|callbackUrl)\b'''
+unless = '''(?i:safe_?redirect|safe_?(?:next|return)\w{0,20}|valid(?:ate)?_?(?:redirect|next|return)\w{0,20}|is_?safe_?(?:url|redirect|path)|url_has_allowed_host_and_scheme|is_?same_?origin|sanitize_?(?:redirect|next|return)\w{0,20}|is_?(?:relative|local)_?url)|\.origin\s*[!=]==?|\A(?![\s\S]*?(?:\.get\(\s*|\bquery\[\s*|\bargs\[\s*|\bparams\[\s*)["'](?:next|returnTo|return_to|returnUrl|return_url|redirect|redirectTo|redirect_to|redirectUrl|redirect_url|callbackUrl|callback_url)["']|[\s\S]*?\b(?:query|searchParams|args|params)\.(?:next|returnTo|return_to|returnUrl|return_url|redirect|redirectTo|redirect_to|redirectUrl|redirect_url|callbackUrl|callback_url)\b)'''
+paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py,rb,php,go}"]
+say = "Build a same-origin validator for this redirect target: refuse a non-string, a backslash or any control character, parse it against the configured origin, compare origins, and redirect to the validated absolute URL, never a string starting with // (SEC-39, see the skill's references/redirects.md). Name it like `safeRedirect` so the hook can see it."
+
+[[rule]]
+id = "SEC-40"
+when = '''\b(?:NEXT_PUBLIC|VITE|PUBLIC|EXPO_PUBLIC|REACT_APP|NUXT_PUBLIC|GATSBY)_[A-Z0-9_]{0,40}(?:SECRET|SERVICE_ROLE|SERVICE_KEY|PRIVATE|ADMIN_KEY|ADMIN_TOKEN|PASSWORD|DATABASE_URL|OPENAI|ANTHROPIC|RESEND|SENDGRID|MAILGUN|POSTMARK|TWILIO)'''
+paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,vue,svelte,astro,json,yaml,yml,toml}", ".env*"]
+say = "A NEXT_PUBLIC_, VITE_ or PUBLIC_ variable is built into the browser bundle, so a secret in one is public. Keep this key server-only under a name without the public prefix, and call the service from server code (SEC-40). If the value is truly public (a publishable key), rename it to say so."
+
+[[rule]]
+# A service-role key, an admin SDK or a server secret in a "use client" file.
+id = "SEC-40-client"
+when = '''\bSERVICE_ROLE\w{0,30}|(?:\bfrom\s|\brequire\(\s*)\s*["'](?:firebase-admin|firebase-admin/[\w-]+|stripe)["']|\bprocess\.env\.(?!NEXT_PUBLIC_|VITE_|PUBLIC_|EXPO_PUBLIC_|REACT_APP_)[A-Z0-9_]{0,40}(?:SECRET|PRIVATE|SERVICE_ROLE|(?<![A-Z])KEY)'''
+unless = '''\A(?![\s\S]{0,500}?^\s*["']use client["'])'''
+paths = ["*.{ts,tsx,js,jsx,mjs}"]
+say = "This client component reaches for a privileged key or an admin SDK. Move the call to a server action or route that does its own authorization, and keep the key server-only (SEC-40, server-code SEC-01)."
+
+[[rule]]
+# Key shapes from the vendors' published formats: AWS access key ids, GitHub tokens, Slack
+# tokens, OpenAI-style and Stripe secret keys, and PEM private-key headers. Placeholders with
+# XXXX and AWS's documented EXAMPLE ids stay quiet. practices-allow covers only its own line.
+id = "SEC-41"
+at = ["edit", "commit"]
+when = '''\b(?:AKIA|ASIA)(?![A-Z0-9]{0,12}XXXX)[A-Z0-9]{16}\b(?<!EXAMPLE)|\bgh[pousr]_[A-Za-z0-9]{36,251}\b|\bgithub_pat_[A-Za-z0-9_]{80,251}\b|\bxox[abeoprs]-[0-9]{6,16}-[0-9A-Za-z-]{8,200}|\bsk-(?:(?:proj|svcacct|admin)-)?[A-Za-z0-9_-]{16,160}T3BlbkFJ[A-Za-z0-9_-]{16,160}|\bsk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{80,300}|\bsk-ant-(?:api|admin)[0-9]{2}-[A-Za-z0-9_-]{80,200}|\b[rs]k_(?:live|test)_(?![A-Za-z0-9]{0,250}?(?:xxxx|XXXX))[A-Za-z0-9]{20,250}\b|-{5}BEGIN[ ](?:[A-Z0-9]{2,10}[ ])?PRIVATE[ ]KEY(?:[ ]BLOCK)?-{5}'''
+paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py,rb,go,php,java,kt,cs,rs,swift,vue,svelte,astro,html,json,yaml,yml,toml,ini,cfg,conf,xml,properties,tf,tfvars,sh,bash,zsh,ps1,md,mdx,txt,ipynb}", "Dockerfile", "*.dockerfile", ".env.{example,sample,template,dist,defaults}"]
+say = "This looks like a live key. Read it from env or a secret manager instead, and if it is real, tell the user to rotate it: it has left the vault (SEC-41). A fake key in a test fixture can stay with `practices-allow: SEC-41 fake test key` on the same line; the comment covers only that line."
+
+[[rule]]
+# A .env file holding a secret, at commit time only: writing one locally is how env works.
+id = "SEC-41-env"
+at = ["commit"]
+when = '''^\s*(?:export\s+)?[A-Z0-9_]{0,60}(?:SECRET|TOKEN|PASSWORD|PRIVATE|CREDENTIAL|(?<![A-Z])KEY)[A-Z0-9_]{0,40}\s*=\s*["']?[^\s"'#]{8,}'''
+paths = [".env", ".env.local", ".env.*.local", ".env.{development,production,test,staging,preview}", "*.env"]
+say = "Don't commit this env file: add it to .gitignore, take it out of the commit (`git rm --cached <file>`), commit a .env.example with empty values instead, and tell the user to rotate any real secret it held (SEC-41)."
+
+[[rule]]
+# A secret env read with a literal fallback: the fallback ships when the variable is unset.
+id = "SEC-41-fallback"
+when = '''\b(?:process\.env|import\.meta\.env)\.[A-Z0-9_]{0,60}(?:SECRET|TOKEN|PASSWORD|PRIVATE|(?<![A-Z])KEY)[A-Z0-9_]{0,40}\s*(?:\?\?|\|\|)\s*["'`][^"'`\n]{1,200}["'`]|\bos\.(?:getenv|environ\.get)\(\s*["'][A-Z0-9_]{0,60}(?:SECRET|TOKEN|PASSWORD|PRIVATE|(?<![A-Z])KEY)[A-Z0-9_]{0,40}["']\s*,\s*["'][^"'\n]{1,200}["']'''
+paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py}"]
+say = "Drop the literal fallback for this secret: when the variable is unset, the app would run with a value anyone can read in the source. Fail closed at startup instead (SEC-41, server-code SEC-08)."
+
+[[rule]]
+id = "SEC-42"
+when = '''(?<![.\w])createCipher\(|\bcrypto\.createCipher\(|(?<![.\w])createDecipher\(|\bcrypto\.createDecipher\(|(?i:["'](?:aes|aes-?\d{3})-ecb["'])|\bAES\.MODE_ECB\b|\bmodes\.ECB\(|["']AES/ECB/|\bCipher\.getInstance\(\s*"AES"\s*\)|(?i:["'](?:des-cbc|des-ede|des-ede3|des-ede3-cbc|des3|rc4|rc2|bf-cbc|blowfish)["'])|\b(?:DES|DES3|ARC4|ARC2|Blowfish)\.new\('''
+paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py,rb,php,go,java,kt,cs}"]
+say = "Use vetted crypto: AES-256-GCM (`createCipheriv(\"aes-256-gcm\", key, iv)` with a fresh 12-byte IV per message) or ChaCha20-Poly1305, or libsodium; never ECB, createCipher, DES, RC4 or Blowfish (SEC-42)."
+
+[[rule]]
+# A wildcard or reflected CORS origin in a file that also turns on credentials.
+id = "SEC-43"
+when = '''(?i:access-control-allow-origin)["'`]?\s*[:,]\s*["'`]\*["'`]|\borigin\s*:\s*(?:["'`]\*["'`]|true\b)|\ballow_origins\s*=\s*\[\s*["']\*["']\s*\]|\bCORS_(?:ALLOW_ALL_ORIGINS|ORIGIN_ALLOW_ALL)\s*=\s*True\b|(?i:access-control-allow-origin)["'`]?\s*,\s*(?:req|request)\.headers(?:\.origin\b|\[\s*["'`]origin["'`]|\.get\(\s*["'`]origin["'`])|\borigin\s*:\s*\(\s*\w*\s*,\s*(?:cb|callback|done)\s*\)\s*=>\s*(?:cb|callback|done)\(\s*null\s*,\s*true\s*\)|\bCORS\((?![^\n)]{0,200}\borigins\s*=)[^\n)]{0,200}\bsupports_credentials\s*=\s*True\b'''
+unless = '''\A(?![\s\S]*?(?:(?i:credentials)["'`]?\s*[:=,]\s*(?:true\b|True\b|["'`]true["'`])|\b(?:allow|supports)_credentials\s*=\s*True\b|\bCORS_ALLOW_CREDENTIALS\s*=\s*True\b))'''
+paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py,rb,php,go}"]
+say = "A wildcard or reflected origin with credentials lets any site read your users' data. Build a fixed allowlist of origins and echo the request's Origin only when it is on that list (SEC-43)."
+
+[[rule]]
+# A wildcard source in a CSP directive that can load code or send data.
+id = "SEC-43-csp"
+when = '''(?i:\b(?:default|script|connect|frame|child|worker|object)-src\b[^\n;]{0,300}?\s(?:https?://|wss?://)?\*(?:\.|[\s;"'`]|$))|(?i:\bform-action\b[^\n;]{0,300}?\s(?:https?://)?\*(?:\.|[\s;"'`]|$))|(?i:\b(?:default|script|connect|frame|child|worker|object)Src\b\s*:\s*\[[^\]\n]{0,300}?["'`](?:https?://|wss?://)?\*(?:\.|["'`]))'''
+paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py,rb,php,go,json,toml,yaml,yml,conf,html}", "_headers"]
+say = "Name exact hosts in this CSP directive, plus each one's redirect targets, never * or *.domain: a wildcard lets any subdomain, including a user-content or a taken-over one, serve script or receive data (SEC-43)."
