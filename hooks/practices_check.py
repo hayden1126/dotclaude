@@ -101,6 +101,13 @@ over every "git" in a large output), and it exits 0 when the shim is missing. ho
 wrappers (`sudo -E`, `env -i`), `cd X &&` (from the payload's cwd), quotes and heredocs, and
 each git call's -C, --git-dir, --work-tree and GIT_DIR=; an expansion in one of those skips that
 call, logged. A file written by a heredoc or `cat >` escapes L1 and L2, and L3s is its backstop.
+A repo is read only inside Bounds: git runs only in (or pointed at) the project dir
+(CLAUDE_PROJECT_DIR, else the cwd recorded at the session's first SessionStart, never the call's
+own cwd) or the project's own repo, and a repo is scanned only when the realpaths of its git
+dir, common dir and every alternates entry sit there too. The project's own repo is the one its
+checkout holds, a linked worktree (a lane) only when its git dir's `gitdir` file links back to
+the project, so a lane reads its main checkout's .git while `git -C ~/vault`, a planted gitfile
+or an alternates entry outside is skipped and logged, with no path or content in the log.
 Each level reads commits, never the index or the working tree:
   L3s   PreToolUse on a git commit records each repo's HEAD (heads/, keyed by session, agent and
         tool_use_id); PostToolUse for that id scans recorded..HEAD, or with no record the HEAD
@@ -884,8 +891,12 @@ class Repo:
             self.base.append(f"--git-dir={git_dir}")
         if work_tree:
             self.base.append(f"--work-tree={work_tree}")
-        out = self.run("rev-parse", "--absolute-git-dir")
-        self.git_dir = out.decode("utf-8", "surrogateescape").strip()
+        out = self.run("rev-parse", "--absolute-git-dir", "--git-common-dir").decode(
+            "utf-8", "surrogateescape").split("\n")
+        self.git_dir = out[0].strip()
+        # A relative common dir is relative to the cwd git ran in.
+        self.common_dir = os.path.normpath(os.path.join(cwd, out[1].strip())) \
+            if len(out) > 1 and out[1].strip() else self.git_dir
         try:
             self.top = self.run("rev-parse", "--show-toplevel").decode(
                 "utf-8", "surrogateescape").strip() or None
@@ -1272,17 +1283,163 @@ def bash_calls(event):
     return gits, ghs
 
 
-def open_repo(where, level):
-    """A Repo for a git call's location, or None (logged) when it can't be read."""
+# Where the Bash levels may read. They run outside the sandbox on a command the model wrote, and
+# what they print (paths, line numbers, rule hits) is an oracle for any repo they scan, so a repo
+# the command names (`git -C ~/vault`, `--git-dir=`, a planted gitfile, an alternates entry) is
+# read only when it is the project's.
+
+ALTERNATES_DEPTH = 5  # git follows nested alternates this deep
+
+
+def _sessions_file(event):
+    key = str(event.get("session_id"))
+    return os.path.join(state_dir(), "sessions", hashlib.sha256(key.encode()).hexdigest()[:32]
+                        + ".json")
+
+
+def record_session_cwd(event):
+    """At SessionStart: the session's cwd, kept from its first start (a later start may come
+    after a cd), as the project dir when CLAUDE_PROJECT_DIR is unset."""
+    cwd = event.get("cwd")
+    path = _sessions_file(event)
+    if not isinstance(cwd, str) or not cwd or os.path.exists(path):
+        return
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(f"{path}.{os.getpid()}", "w", encoding="utf-8") as f:
+            json.dump({"cwd": os.path.abspath(cwd)}, f)
+        os.replace(f"{path}.{os.getpid()}", path)
+    except OSError as e:
+        log("state-error", f"{path}: {e}")
+
+
+def bash_project(event):
+    """The project dir for the Bash levels: CLAUDE_PROJECT_DIR, else the cwd recorded at the
+    session's start, never the call's own cwd (a cd moves it); None when neither is known."""
+    if os.environ.get("CLAUDE_PROJECT_DIR"):
+        return os.environ["CLAUDE_PROJECT_DIR"]
+    try:
+        with open(_sessions_file(event), encoding="utf-8") as f:
+            cwd = json.load(f).get("cwd")
+    except (OSError, ValueError, RecursionError, AttributeError):
+        return None
+    return cwd if isinstance(cwd, str) and cwd else None
+
+
+def under(path, root):
+    """Whether path's realpath is root (a realpath) or inside it."""
+    p = os.path.realpath(path)
+    return p == root or p.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def alternates(objects, depth=0):
+    """The realpath of each object dir that objects/info/alternates names, then of the ones
+    each of those names (lazily, so a caller stops before reading past an outside one); None
+    for an entry this can't read (a quoted path), or past git's depth."""
+    try:
+        with open(os.path.join(objects, "info", "alternates"), "rb") as f:
+            text = f.read(GITCONFIG_MAX).decode("utf-8", "surrogateescape")
+    except FileNotFoundError:
+        return
+    except OSError:
+        yield None
+        return
+    for line in text.split("\n"):  # as git reads it: no stripping, # starts a comment
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith('"') or depth >= ALTERNATES_DEPTH:
+            yield None
+            continue
+        d = os.path.realpath(os.path.join(objects, line))  # an absolute line stays itself
+        yield d
+        yield from alternates(d, depth + 1)
+
+
+class Bounds:
+    """Where the Bash levels may read: anything under the project dir, and the project's own
+    repo (its git dir, common dir and main worktree, so a lane reads its main checkout's .git).
+    The project's repo counts as its own only when its checkout holds the project dir and, for
+    a linked worktree, its git dir's `gitdir` file links back to that checkout: a gitfile the
+    model planted at the project's top can't claim another repo."""
+
+    def __init__(self, project):
+        self.project = os.path.realpath(project)
+        self.own = self.main = None
+        try:
+            r = Repo(self.project)
+        except GitError:
+            return  # the project isn't in a repo, or git refused it
+        gd, cd = os.path.realpath(r.git_dir), os.path.realpath(r.common_dir)
+        main = os.path.dirname(cd) if os.path.basename(cd) == ".git" else cd
+        if gd == cd:  # a main checkout: the project is in its worktree
+            ok = under(self.project, main)
+        else:  # a linked worktree, like a lane
+            back = None
+            try:
+                with open(os.path.join(gd, "gitdir"), encoding="utf-8",
+                          errors="surrogateescape") as f:
+                    back = f.read(4096).strip()
+            except OSError:
+                pass
+            top = os.path.realpath(r.top) if r.top else None
+            ok = bool(back and top and under(gd, cd) and under(self.project, top)
+                      and os.path.realpath(os.path.join(gd, back))
+                      == os.path.realpath(os.path.join(top, ".git")))
+        if ok:
+            self.own, self.main = cd, main
+
+    def allows(self, path):
+        """Whether git may run in, or be pointed at, path."""
+        return any(under(path, root) for root in (self.project, self.main, self.own) if root)
+
+    def outside(self, repo):
+        """What of the repo lies outside these bounds ("its git dir", "its common dir", "an
+        alternates entry"), or None when all of it is inside."""
+        gd, cd = os.path.realpath(repo.git_dir), os.path.realpath(repo.common_dir)
+        if not (self.own and cd == self.own and under(gd, self.own)):
+            if not under(gd, self.project):
+                return "its git dir"
+            if not under(cd, self.project):
+                return "its common dir"
+        for d in alternates(os.path.join(cd, "objects")):
+            if d is None or not self.allows(d):
+                return "an alternates entry"
+        return None
+
+
+def bounds_of(event):
+    """The Bounds for this call, or None (logged by open_repo) when no project dir is known."""
+    project = bash_project(event)
+    return Bounds(project) if project else None
+
+
+def open_repo(where, level, bounds):
+    """A Repo for a git call's location, or None (logged) when it can't be read: a cd this
+    check can't follow, no project dir known, or a repo outside the project (logged without
+    its paths or contents)."""
     if where["cwd"] is None:
         log("git-skipped", f"{level}: a cd this check can't follow, so the call wasn't checked")
         return None
+    if bounds is None:
+        log("git-skipped", f"{level}: no project dir (CLAUDE_PROJECT_DIR unset and no cwd "
+            "recorded at session start), so the call wasn't checked")
+        return None
+    if not all(bounds.allows(where[k]) for k in ("cwd", "git_dir", "work_tree") if where[k]):
+        log("git-skipped", f"{level}: the call names a location outside the project, so it "
+            "wasn't checked")
+        return None
     try:
-        return Repo(where["cwd"], where["git_dir"], where["work_tree"])
+        repo = Repo(where["cwd"], where["git_dir"], where["work_tree"])
     except GitError as e:
         if "ownership" in str(e):
             log("git-skipped", f"{level}: {where['cwd']}: {e}")
         return None
+    why = bounds.outside(repo)
+    if why:
+        log("git-skipped", f"{level}: the repo's {why} is outside the project, so the call "
+            "wasn't checked")
+        return None
+    return repo
 
 
 class Transcripts:
@@ -1457,11 +1614,11 @@ def _heads_file(event):
                         + ".json")
 
 
-def record_heads(event, commits):
+def record_heads(event, commits, bounds):
     """Before a commit call: {git dir: HEAD or None (unborn)} for each repo it commits in."""
     heads = {}
     for _, _, where in commits:
-        repo = open_repo(where, "L3s")
+        repo = open_repo(where, "L3s", bounds)
         if repo is not None:
             CRUMB.mark(repo.git_dir, "L3s", "record HEAD")
             heads[repo.git_dir] = repo.rev("HEAD")
@@ -1512,8 +1669,9 @@ def post_tool_use(event):
     with Transcripts(event) as ts:
         ctx = context(event, cfg, ts)
         try:
+            bounds = bounds_of(event)
             for _, _, where in commits:
-                repo = open_repo(where, "L3s")
+                repo = open_repo(where, "L3s", bounds)
                 if repo is None or repo.git_dir in repos:
                     continue
                 repos[repo.git_dir] = repo
@@ -1584,7 +1742,7 @@ def push_sources(args):
     return srcs, None
 
 
-def push_gate(event, pushes, skills, cfg, ts, ctx):
+def push_gate(event, pushes, skills, cfg, ts, ctx, bounds):
     """(new findings, the repo) for the commits the pushes would send that no remote has."""
     rules = commit_rules(skills, cfg)
     out = []
@@ -1595,7 +1753,7 @@ def push_gate(event, pushes, skills, cfg, ts, ctx):
         if any("$" in s or "%SUBST%" in s for s in srcs):
             log("git-skipped", "push: an expansion in a refspec, so this push wasn't checked")
             continue
-        repo = open_repo(where, "push")
+        repo = open_repo(where, "push", bounds)
         if repo is None:
             continue
         tips = ["--branches"] if "--branches" in srcs else []
@@ -1644,14 +1802,14 @@ def reviewed(ts):
                for t in ts.all() for inp in tool_uses(t, REVIEW.encode(), ("Agent", "Task")))
 
 
-def l3r(event, ghs, skills, cfg, ts, ctx):
+def l3r(event, ghs, skills, cfg, ts, ctx, bounds):
     """(the review block or None, its keys, new rule findings) for each PR call."""
     blocks_, keys, found = [], [], []
     for args, cwd in ghs:
         ready, base_name = pr_ready(args)
         if not ready:
             continue
-        repo = open_repo({"cwd": cwd, "git_dir": None, "work_tree": None}, "L3r")
+        repo = open_repo({"cwd": cwd, "git_dir": None, "work_tree": None}, "L3r", bounds)
         if repo is None:
             continue
         head = repo.rev("HEAD")
@@ -1730,18 +1888,19 @@ def bash_pre(event):
                 "calls. Resending this call unchanged passes this check, unscanned.")
     reasons, keys = [], []
     try:
+        bounds = bounds_of(event)
         if commits:
-            record_heads(event, commits)
+            record_heads(event, commits, bounds)
         if pushes or ghs:
             skills = discover(event)
             with Transcripts(event) as ts:
                 ctx = context(event, cfg, ts)
-                new = push_gate(event, pushes, skills, cfg, ts, ctx) if pushes else []
+                new = push_gate(event, pushes, skills, cfg, ts, ctx, bounds) if pushes else []
                 if new:
                     reasons.append(push_reason(new))
                     keys += [f.key for f in new]
                 if ghs:
-                    review, review_keys, found = l3r(event, ghs, skills, cfg, ts, ctx)
+                    review, review_keys, found = l3r(event, ghs, skills, cfg, ts, ctx, bounds)
                     reasons += review
                     keys += review_keys
                     found = [f for f in found if f.key not in keys]
@@ -1877,6 +2036,7 @@ def health(event):
                         + f" since the last start (see {os.path.join(d, 'errors.log')})")
     prune(os.path.join(d, "denies"), now)
     prune(os.path.join(d, "heads"), now)
+    prune(os.path.join(d, "sessions"), now)
     if not problems:
         return None
     return {"systemMessage": "practices hooks: " + "; ".join(problems)}
@@ -1939,6 +2099,7 @@ def main():
         raise ImportError("tomllib missing (python3 < 3.11)")
     name = event.get("hook_event_name")
     if name == "SessionStart" or (name is None and "source" in event):
+        record_session_cwd(event)
         source = event.get("source")
         out = health(event) if source == "startup" else compact(event) if source == "compact" \
             else None

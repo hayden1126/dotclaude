@@ -1089,6 +1089,30 @@ class GitHelper(GitMixin, unittest.TestCase):
         self.assertEqual(os.path.realpath(r.top), os.path.realpath(wt))
         self.assertFalse(os.path.exists(self.canary_file))
 
+    def test_a_partial_clones_missing_blob_runs_no_transport(self):
+        # A lazy fetch of a missing blob would run the remote's transport, and ext:: runs a
+        # command. GIT_ALLOW_PROTOCOL=none refuses it; git then gives up on the blob (2.43
+        # exits 128), and the level is skipped and logged, never the transport run.
+        self.commit(**{"a.ts": "x({ ...body })\n"})
+        self.sh("config", "uploadpack.allowFilter", "true")
+        self.sh("config", "uploadpack.allowAnySHA1InWant", "true")
+        clone = os.path.join(self.tmp, "partial")
+        self.sh("-c", "protocol.file.allow=always", "clone", "-q", "--no-checkout",
+                "--filter=blob:none", f"file://{self.repo}", clone, cwd=self.tmp)
+        fetched = os.path.join(self.tmp, "fetched")
+        self.sh("config", "remote.origin.url", f"ext::sh -c touch% {fetched}", cwd=clone)
+        self.sh("config", "protocol.ext.allow", "always", cwd=clone)
+        blob = self.sh("rev-parse", "HEAD:a.ts", cwd=clone)
+        self.sh("cat-file", "-p", blob, cwd=clone, check=False)  # the trap is live
+        self.assertTrue(os.path.exists(fetched), "a plain read never ran the transport")
+        os.unlink(fetched)
+        try:
+            _, changes, blobs = self.read(cwd=clone)
+            self.assertEqual(([c[5] for c in changes], blobs), (["a.ts"], {}))
+        except PC.GitError:
+            pass
+        self.assertFalse(os.path.exists(fetched), "the engine's read ran the transport")
+
     def test_git_dir_in_the_hooks_own_env_is_ignored(self):
         self.commit(mine="1\n")
         other = self.make_repo(os.path.join(self.tmp, "other"))
@@ -1221,7 +1245,9 @@ class L3s(BashBase):
         self.assertIsNone(self.committed(**{"package-lock.json": "{\"a\": 1}\n"}))
 
     def test_the_command_names_the_repo(self):
-        sub = self.make_repo(os.path.join(self.tmp, "sub"))
+        sub = self.make_repo(os.path.join(self.proj, "sub"))  # a repo inside the project
+        with open(os.path.join(self.proj, ".git", "info", "exclude"), "a") as f:
+            f.write("sub/\n")
         self.commit(**{"seed.ts": "x({ ...body })\n"})
         told = self.committed(repo=sub, command=f"git -C {sub} commit -m x",
                               **{"s.ts": "x({ ...body })\n"})
@@ -1232,7 +1258,7 @@ class L3s(BashBase):
         told = self.committed(repo=sub, command=f"GIT_DIR={sub}/.git git commit -m x",
                               **{"u.ts": "x({ ...body })\n"})
         self.assertIn("u.ts:1", told)
-        told = self.committed(repo=sub, command="cd ../sub && git commit -m 'git push later'",
+        told = self.committed(repo=sub, command="cd sub && git commit -m 'git push later'",
                               **{"v.ts": "x({ ...body })\n"})
         self.assertIn("v.ts:1", told)
 
@@ -1272,6 +1298,107 @@ class L3s(BashBase):
         self.assertIsNone(self.pre("git commit -m x", tid, agent_id=agent))
         self.commit(**{"go.sum": "y\n"})
         self.assertIsNone(self.post("git commit -m x", tid, agent_id=agent))
+
+
+class OutsideTheProject(BashBase):
+    """Review round 1: the Bash levels read any repo a command named and printed its paths,
+    lines and rule hits. A repo is read only when its git dir, common dir and alternates sit
+    under the project dir or the project's own repo (a lane's main checkout)."""
+
+    def setUp(self):
+        super().setUp()
+        self.vault = self.make_repo(os.path.join(self.tmp, "vault"))
+        self.secret = self.commit(repo=self.vault, **{"secret.ts": "x({ ...body })\n"})
+
+    def assert_skipped(self, before=""):
+        log = self.log()[len(before):]
+        self.assertIn("outside the project", log)
+        self.assertNotIn(self.vault, log)
+        self.assertNotIn("secret", log)
+
+    def test_a_repo_the_command_names_outside_the_project_is_never_read(self):
+        v = self.vault
+        for n, command in enumerate((f"git -C {v} commit -m x",
+                                     f"git --git-dir={v}/.git --work-tree={v} commit -m x",
+                                     f"GIT_DIR={v}/.git git commit -m x",
+                                     f"cd {v} && git commit -m x")):
+            with self.subTest(command=command):
+                before = self.log()
+                self.assertIsNone(self.committed(repo=v, command=command,
+                                                 **{f"s{n}.ts": "x({ ...body })\n"}))
+                self.assert_skipped(before)
+        self.assertIsNone(self.pre(f"git -C {v} push", session_id="s-push"))
+        self.sh("update-ref", "refs/remotes/origin/main", self.secret, cwd=v)
+        self.commit(repo=v, **{"w.ts": "y({ ...body })\n"})
+        self.assertIsNone(self.pre(f"cd {v} && gh pr ready", session_id="s-pr"))
+        self.assert_skipped()
+
+    def test_a_planted_gitfile_or_alternates_entry_is_never_read(self):
+        planted = os.path.join(self.proj, "sub")
+        os.makedirs(planted)
+        with open(os.path.join(planted, ".git"), "w") as f:
+            f.write(f"gitdir: {self.vault}/.git\n")
+        before = self.log()
+        self.assertIsNone(self.pre("cd sub && git push", session_id="s-gitfile"))
+        self.assert_skipped(before)
+        self.commit(**{"mine.ts": "y({ ...body })\n"})
+        alt = os.path.join(self.proj, ".git", "objects", "info", "alternates")
+        with open(alt, "w") as f:
+            f.write(f"{self.vault}/.git/objects\n")
+        before = self.log()
+        self.assertIsNone(self.pre("git push", session_id="s-alt"))
+        self.assertIn("alternates entry is outside", self.log()[len(before):])
+        os.unlink(alt)
+        self.assertIn("mine.ts:1", self.pre("git push", session_id="s-alt"))
+
+    def test_a_lane_reads_its_main_checkouts_git_dir(self):
+        self.skill("demo", DEMO, where="user")
+        main = self.make_repo(os.path.join(self.tmp, "main"))
+        self.commit(repo=main, seed="1\n")
+        lane = os.path.join(self.tmp, "lane")
+        self.sh("worktree", "add", "-q", "-b", "lane", lane, cwd=main)
+        self.env["CLAUDE_PROJECT_DIR"] = lane
+        tid = "b-lane"
+        self.assertIsNone(self.run_hook({**self.event("git commit -m x", "PreToolUse", tid),
+                                         "cwd": lane}))
+        self.commit(repo=lane, **{"l.ts": "x({ ...body })\n"})
+        out = self.run_hook({**self.event("git commit -m x", "PostToolUse", tid), "cwd": lane})
+        self.assertIn("l.ts:1", out["hookSpecificOutput"]["additionalContext"])
+        # Its main checkout is the project's own repo too; another repo under it is not.
+        self.commit(repo=main, **{"m.ts": "x({ ...body })\n"})
+        out = self.run_hook({**self.event(f"cd {main} && git push", "PreToolUse", "b-main"),
+                             "cwd": lane})
+        self.assertIn("m.ts:1", out["hookSpecificOutput"]["permissionDecisionReason"])
+        nested = self.make_repo(os.path.join(main, "nested"))
+        self.commit(repo=nested, **{"n.ts": "x({ ...body })\n"})
+        self.assertIsNone(self.run_hook({**self.event(f"git -C {nested} push", "PreToolUse",
+                                                      "b-nested"), "cwd": lane}))
+
+    def test_a_gitfile_planted_at_the_projects_top_claims_no_other_repo(self):
+        self.skill("demo", DEMO, where="user")
+        fake = os.path.join(self.tmp, "fake")
+        os.makedirs(fake)
+        with open(os.path.join(fake, ".git"), "w") as f:
+            f.write(f"gitdir: {self.vault}/.git\n")
+        self.env["CLAUDE_PROJECT_DIR"] = fake
+        before = self.log()
+        self.assertIsNone(self.run_hook({**self.event("git push", "PreToolUse", "b-fake"),
+                                         "cwd": fake}))
+        self.assert_skipped(before)
+
+    def test_without_claude_project_dir_the_session_start_cwd_bounds_the_reads(self):
+        self.skill("demo", DEMO, where="user")
+        del self.env["CLAUDE_PROJECT_DIR"]
+        self.commit(**{"mine.ts": "y({ ...body })\n"})
+        self.commit(repo=self.vault, **{"v.ts": "y({ ...body })\n"})
+        before = self.log()
+        self.assertIsNone(self.pre("git push"))  # no session start recorded: nothing is read
+        self.assertIn("no project dir", self.log()[len(before):])
+        self.start("startup")  # cwd: the project
+        self.start("compact", cwd=self.vault)  # a later start keeps the first cwd
+        self.assertIsNone(self.run_hook({**self.event("git push", "PreToolUse", "b-v"),
+                                         "cwd": self.vault}))
+        self.assertIn("mine.ts:1", self.pre("git push"))
 
 
 class Push(BashBase):
