@@ -1,0 +1,194 @@
+# server-code: events and patterns for the practices hook.
+#
+# [[event]] (L1): this edit is the event; the hook denies once until the skill is loaded.
+#   Fires when any path glob matches the repo-relative POSIX path OR any content regex
+#   matches the new content.
+# [[rule]] (L2): denies once per file and rule when `when` matches, `unless` doesn't, and
+#   `paths` (if given) match. A `practices-allow: <id> <reason>` comment suppresses it.
+#
+# Globs: `**` spans directories, `*` and `?` stay inside one, `{a,b}` alternates, and a
+# glob with no `/` matches the basename. Regexes are Python, re.MULTILINE, written to
+# match within one line, with no quantifier inside a repeated group (no backtracking).
+# Samples for every event and rule: tests/setup/practices_samples/server-code.toml.
+
+skill = "server-code"
+
+gate = [
+  "Build a per-user and per-IP rate limit before any LLM, paid-API, email or SMS call, and on login, signup, reset and OTP; say so in your reply (SEC-07).",
+  "Guard every user-supplied CSV, TSV or XLSX cell: prefix ' before a leading = + - @ tab or CR, and quote per RFC 4180; say so in your reply (SEC-17).",
+  "Build the auth and role check inside every handler and server action, deny by default; middleware or a page check doesn't count (SEC-01).",
+  "Take the actor from the session and scope every lookup to it; never trust a user id from the request (SEC-02, SEC-03).",
+  "Whitelist the fields a write accepts; never spread a request body into an insert or update (SEC-04).",
+  "Build every safeguard a rule needs even when unasked, and list it in your reply; never leave it as an offer.",
+]
+
+[[event]]
+id = "route-handler"
+paths = [
+  "**/app/**/route.{ts,js,mjs}",
+  "**/pages/api/**",
+  "+server.{ts,js}",
+  "+page.server.{ts,js}",
+  "**/server/api/**",
+  "**/server/routes/**",
+  "**/supabase/functions/**",
+  "**/netlify/functions/**",
+  "**/controllers/**",
+  "**/Controllers/**",
+  "*.controller.{ts,js}",
+  "views.py",
+]
+content = [
+  # Server actions (Next.js and React): a "use server" directive.
+  '''^\s*["']use server["']''',
+  # Fetch-style method handlers: Next.js route handlers, SvelteKit, Astro.
+  '''^\s*export\s+(?:async\s)?\s*function\s+(?:GET|POST|PUT|PATCH|DELETE)\s*\(''',
+  '''^\s*export\s+const\s+(?:GET|POST|PUT|PATCH|DELETE)\b\s*[:=]''',
+  # Remix and React Router actions, SvelteKit form actions.
+  '''^\s*export\s+(?:async\s)?\s*function\s+action\s*\(''',
+  '''^\s*export\s+const\s+actions?\b\s*[:=]''',
+  # Express, Fastify, Hono, Koa routes on a literal path.
+  '''\b(?:app|router|fastify|server)\.(?:get|post|put|patch|delete|all)\(\s*["'`]/''',
+  # FastAPI, Flask, django-ninja and DRF decorators.
+  '''^\s*@(?:app|api|bp|\w*router|\w*blueprint)\.(?:get|post|put|patch|delete|api_route)\(''',
+  '''^\s*@\w+\.route\(''',
+  '''^\s*@api_view\(''',
+  # NestJS controllers.
+  '''^\s*@(?:Controller|Get|Post|Put|Patch|Delete)\(''',
+  # tRPC procedures.
+  '''\b(?:public|protected|admin)Procedure\b''',
+  # Go net/http, gin and echo routes on a literal path.
+  '''\.(?:HandleFunc|GET|POST|PUT|PATCH|DELETE)\(\s*"/''',
+]
+lines = [
+  "Build the auth and role check inside this handler, deny by default, and say so in your reply (SEC-01).",
+  "Build the lookup on the session's user id, scoped to the caller, never an id from the request; say so in your reply (SEC-02, SEC-03).",
+  "Build a field whitelist for every write (no request-body spread) and a strict input schema; say so in your reply (SEC-04, SEC-05).",
+  "If this endpoint calls an LLM or paid API or sends email or SMS, build a per-user and per-IP rate limit before the call, reusing the repo's limiter; say so in your reply (SEC-07).",
+  "Build a generic error response that fails closed, with the detail kept in logs; say so in your reply (SEC-08).",
+]
+
+[[event]]
+id = "webhook-handler"
+paths = [
+  "**/webhook/**",
+  "**/webhooks/**",
+  "*webhook*.{ts,js,mjs,py,rb,php,go}",
+  "*Webhook*.{ts,js,mjs,py,rb,php,go}",
+]
+content = [
+  '''(?i:["'](?:stripe|svix|paddle|webhook|typeform|linear|x-hub|x-slack|x-twilio|x-razorpay|x-webhook)-signature(?:-256)?["'])''',
+  '''(?i:["']x-shopify-hmac-sha256["'])''',
+  '''\b(?:constructEvent|constructEventAsync|construct_event)\(''',
+  '''\bWebhook\(''',
+  '''\bwebhooks\.(?:constructEvent|verify|unwrap)\(''',
+]
+lines = [
+  "Build signature verification on the raw body first, timing-safe, rejecting stale timestamps and failing closed when the secret is unset; say so in your reply (SEC-12).",
+  "Build dedupe on a persisted, unique event id, and re-fetch the current state instead of trusting delivery order; say so in your reply (REL-11).",
+  "Build the handler to enqueue the work and return 2xx fast; say so in your reply (REL-11).",
+]
+
+[[event]]
+id = "job-consumer"
+paths = [
+  "*.job.{ts,js}",
+  "*_job.rb",
+  "*_worker.rb",
+]
+content = [
+  '''(?:\bfrom\s|\brequire\(\s*)\s*["'](?:bullmq|bull|bee-queue|pg-boss|graphile-worker|agenda|inngest|@trigger\.dev/sdk|@trigger\.dev/sdk/v3|@upstash/qstash|@temporalio/worker|@temporalio/client|kafkajs|amqplib|@aws-sdk/client-sqs)["']''',
+  '''^\s*(?:from|import)\s+(?:celery|rq|dramatiq|huey|arq|kombu)\b''',
+  '''^\s*@(?:shared_task|\w+\.task)\b''',
+  '''\binclude\s+Sidekiq::(?:Job|Worker)\b''',
+  '''<\s*(?:ApplicationJob|ActiveJob::Base)\b''',
+  '''\bimplements\s+ShouldQueue\b''',
+  '''\b(?:ReceiveMessageCommand|SQSHandler|SQSEvent|basic_consume|receive_message)\b''',
+  '''\beachMessage\s*:''',
+  '''\bcron\.schedule\(''',
+  '''\bnew\s+CronJob\(''',
+  '''^\s*@Cron\(''',
+  '''\binngest\.createFunction\(''',
+]
+lines = [
+  "Build the handler to be idempotent, so a second run of the same job leaves the same end state; say so in your reply (REL-12).",
+  "Build job arguments as ids, never serialized objects, and load the record when the job runs (REL-12).",
+  "Build the enqueue after the DB commit or through an outbox, never as a separate step; say so in your reply (REL-13).",
+  "Build a budget into any loop that calls a paid or rate-limited service, stopping at the first block; say so in your reply (REL-14).",
+]
+
+[[event]]
+id = "data-export"
+paths = []
+content = [
+  '''(?i:text/csv|text/tab-separated-values|application/vnd\.openxmlformats-officedocument\.spreadsheetml|application/vnd\.ms-excel)''',
+  '''(?i:filename\s*=\s*\\?["']?[^"'\n;]*\.(?:csv|tsv|xlsx|xls)\b)''',
+  '''(?i:\bdownload\s*=\s*["'`][^"'`\n]*\.(?:csv|tsv|xlsx|xls)\b)''',
+  '''(?:\bfrom\s|\brequire\(\s*)\s*["'](?:papaparse|csv-stringify|csv-stringify/sync|json2csv|@json2csv/node|@json2csv/plainjs|fast-csv|@fast-csv/format|csv-writer|objects-to-csv|exceljs|xlsx|write-excel-file)["']''',
+  '''^\s*(?:from|import)\s+(?:openpyxl|xlsxwriter)\b''',
+  '''\bcsv\.(?:writer|DictWriter)\(''',
+  '''\.to_(?:csv|excel)\(''',
+  '''\bPapa\.unparse\(|(?<![.\w])unparse\(''',
+  '''(?i:\b(?:to|export|generate|build|make|create|download|write)_?(?:csv|xlsx|excel)\b)''',
+]
+lines = [
+  "Build a guard on every user-supplied cell (prefix ' when it starts with = + - @ tab or CR) and quote every cell per RFC 4180; say so in your reply (SEC-17).",
+  "Build the auth check into the export and scope its rows to the caller; say so in your reply (SEC-01, SEC-03).",
+  "Build a row or size cap (or paging) and a rate limit on the export, and estimate its egress; say so in your reply (SEC-07, REL-14).",
+]
+
+[[event]]
+id = "cache"
+paths = []
+content = [
+  '''^\s*["']use cache[^"'\n]{0,20}["']''',
+  '''\b(?:unstable_cache|cacheLife|cacheTag)\(''',
+  '''\bnew\s+(?:LRUCache|NodeCache|QuickLRU|TTLCache)\b''',
+  '''\bTTLCache\(''',
+]
+lines = [
+  "Build the code to work with an empty cache, and test a cold start; say so in your reply (REL-17).",
+  "Build the TTL from how much staleness is tolerable, and emit hit/miss metrics; say so in your reply (REL-17).",
+  "Build the cache key on the user or tenant for per-user data, so no caller gets another's entry; say so in your reply (SEC-03).",
+]
+
+[[rule]]
+id = "SEC-01"
+when = '''^\s*export\s+(?:async\s)?\s*function\s+(?:GET|POST|PUT|PATCH|DELETE|action)\b|^\s*export\s+const\s+(?:GET|POST|PUT|PATCH|DELETE|actions?)\b\s*[:=]|^\s*export\s+default\s+(?:async\s)?\s*function\s+handler\s*\(\s*req\b|^\s*["']use server["']'''
+unless = '''\b(?:auth|getServerSession|getServerAuthSession|getSession|getIronSession|currentUser|getCurrentUser|getAuth|getToken|validateRequest|verifySession|getKindeServerSession|withAuth|withApiAuthRequired|authenticate|authorize|jwtVerify)\s*\(|\b(?:require|ensure|assert|check)(?:Auth|User|Session|Admin|Role|Member|Owner|Login|LoggedIn|SignedIn|Permission|Access|Org|Team|Tenant)\w*\s*\(|\bis(?:Authenticated|LoggedIn|SignedIn|Admin)\s*\(|\bauth\.protect\(|\.auth\.(?:getUser|getClaims|getSession)\(|\bverify(?:Token|Jwt|JWT|IdToken|AccessToken|ApiKey|Webhook|Signature)\w*\s*\(|\bjwt\.verify\(|\bconstructEvent(?:Async)?\(|\btimingSafeEqual\(|\bCRON_SECRET\b|\.get\(\s*["'](?i:authorization)["']\s*\)|\b(?:protected|admin|authed|private|auth)(?:Procedure|Action|ActionClient)\b'''
+paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts}"]
+say = "Build the auth and role check inside this handler or server action, deny by default (SEC-01). If the repo's helper has another name, list it in .claude/practices/config.toml; if the endpoint is public on purpose (a health check), add `practices-allow: SEC-01 public endpoint`."
+
+[[rule]]
+id = "SEC-02"
+when = '''\b(?:req|request)\.(?:body|query)\.(?:userId|user_id|ownerId|owner_id|authorId|author_id)\b|\b(?:body|input)\.(?:userId|user_id|ownerId|owner_id|authorId|author_id)\b|\b(?:searchParams|formData)\.get\(\s*["'](?:userId|user_id|ownerId|owner_id|authorId|author_id)["']|\{[^}\n]*\b(?:userId|user_id|ownerId|owner_id|authorId|author_id)\b[^}\n]*\}\s*=\s*(?:await\s)?\s*(?:(?:req|request)\.(?:json\(\)|body\b|query\b)|body\b|input\b)|\brequest\.(?:json|args|form|data|GET|POST|query_params)(?:\.get\(|\[)\s*["'](?:userId|user_id|owner_id|author_id)["']'''
+unless = '''^\s*["']use client["']|\b(?:session|currentUser|user|me|viewer|actor)\??\.(?:user\.|user\?\.)?(?:id|userId|sub)\s*[!=]==?|(?:userId|user_id|ownerId|owner_id|authorId|author_id)\s*[!=]==?\s*(?:session|currentUser|user|me|viewer|actor)\b|\brequest\.user\.id\s*[!=]=|[!=]=\s*request\.user\.id\b|\b(?:requireAdmin|requireRole|assertAdmin|isAdmin)\s*\(|\.role\s*[!=]==?\s*["']\w+["']'''
+paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py}"]
+say = "Take the acting user from the verified session, not from the body, query or form (SEC-02). If this id names a target the caller may act on, check that right against the session; then add `practices-allow: SEC-02 target id, authorized`."
+
+[[rule]]
+id = "SEC-04"
+when = '''\.\.\.\s*(?:req|request|ctx\.request)\.body\b|\.\.\.\s*body\b(?!\s*\}\s*=)|\.\.\.\s*\(?\s*await\s(?:req|request)\.json\(\)|\.\.\.\s*Object\.fromEntries\(|\.(?:create|insert|upsert|set|values|insertOne|insertMany|replaceOne)\(\s*(?:req\.body|request\.body|body|await\s(?:req|request)\.json\(\))\s*[,)]|^(?![^\n]*(?:hmac|Hmac|hash|Hash|digest|cipher|Cipher))[^\n]*\.update\(\s*(?:req\.body|request\.body|body|await\s(?:req|request)\.json\(\))\s*[,)]|\.(?:create|insert|upsert|set|values|update)\(\s*Object\.fromEntries\(|\b(?:findByIdAndUpdate|findOneAndUpdate|updateOne|updateMany)\([^)\n]*,\s*(?:req\.body|request\.body|body)\s*[,)]|\bdata\s*:\s*(?:req\.body|request\.body|body|await\s(?:req|request)\.json\(\))\s*(?:[,}]|$)|\bObject\.assign\([^,\n]*,\s*(?:req\.body|request\.body|body)\s*\)|\bnew\s+[A-Z]\w*\(\s*(?:req\.body|request\.body)\s*\)|\*\*\s*request\.(?:data|json|POST|form|get_json\(\))|\.(?:create|update|insert|values|update_or_create)\(\s*\*\*\s*(?:body|payload|data)\b(?!\s*\.)'''
+unless = '''\bbody\s*=\s*(?:await\s)?\s*[\w.]+\.(?:parse|parseAsync)\('''
+paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py}"]
+say = "Build an explicit field whitelist for this write (pick the allowed keys, or parse with a schema that has only those keys); never spread or pass the raw request body (SEC-04)."
+
+[[rule]]
+id = "SEC-08"
+when = '''\bjson\(\s*\{[^}\n]*\b(?:err|error|e|ex|exc|exception)\.(?:message|stack)\b|\.send\(\s*(?:err|error|e|ex)\.(?:message|stack)\b|\bnew\s+(?:Next)?Response\([^\n]*\b(?:err|error|e|ex)\.(?:message|stack)\b|\bjson\(\s*\{[^}\n]*\bString\(\s*(?:err|error|e|ex)\s*\)|\breturn\s*\{[^}\n]*\b(?:err|error|e|ex)\.(?:message|stack)\b|\b(?:jsonify|JSONResponse|JsonResponse|HttpResponse|Response|HTTPException)\([^\n]*\b(?:str|repr)\(\s*(?:e|err|error|ex|exc|exception)\s*\)|\breturn\s*\{[^}\n]*\bstr\(\s*(?:e|err|error|ex|exc)\s*\)|\b(?:jsonify|JSONResponse|JsonResponse|HttpResponse|Response|HTTPException)\([^\n]*\btraceback\.format_exc\(|\breturn\s*\{[^}\n]*\btraceback\.format_exc\('''
+unless = '''^\s*["']use client["']'''
+paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py}"]
+say = "Build a generic error response here and log the detail server-side; an error message or stack can carry queries, paths or secrets (SEC-08). A message you wrote for the client on purpose (a validation error you threw) can stay: add `practices-allow: SEC-08 <reason>`."
+
+[[rule]]
+id = "SEC-13"
+when = '''(?<![.\w])eval\(|\bnew\s+Function\(|\bpickle\.loads\(|\byaml\.(?:unsafe_load|load_all|load)\((?![^)\n]*Loader\s*=\s*(?:yaml\.)?(?:C?SafeLoader|BaseLoader))|\bsubprocess\.\w+\(\s*(?:f["']|[A-Za-z_]\w*\s*,|["'][^"'\n]*["']\s*(?:%|\+|\.format\())[^\n]*\bshell\s*=\s*True|\bos\.(?:system|popen)\(\s*(?:f["']|[A-Za-z_]\w*\s*\)|["'][^"'\n]*["']\s*(?:%|\+|\.format\())|(?:(?<![.\w])|\b(?:child_process|childProcess|cp)\.)(?:exec|execSync)\(\s*(?:`[^`\n]*\$\{|f["']|["'][^"'\n]*["']\s*(?:\+|%|\.format\())|\bunserialize\('''
+paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py,php}"]
+say = "Pass data, never code: use an argv array instead of a shell string, a parser instead of eval or new Function, and json or yaml.safe_load instead of pickle or yaml.load (SEC-13)."
+
+[[rule]]
+id = "SEC-17"
+when = '''(?i:text/csv|text/tab-separated-values)|(?i:filename\s*=\s*\\?["']?[^"'\n;]*\.(?:csv|tsv)\b)|(?i:\bdownload\s*=\s*["'`][^"'`\n]*\.(?:csv|tsv)\b)|(?:\bfrom\s|\brequire\(\s*)\s*["'](?:csv-stringify|csv-stringify/sync|json2csv|@json2csv/node|@json2csv/plainjs|fast-csv|@fast-csv/format|csv-writer|objects-to-csv)["']|\bPapa\.unparse\(|(?<![.\w])unparse\(|\bcsv\.(?:writer|DictWriter)\(|\.to_(?:csv|excel)\(|\bXLSX\.(?:write|writeFile|writeFileXLSX|utils\.json_to_sheet|utils\.aoa_to_sheet)\(|\b(?:writeFileXLSX|json_to_sheet|aoa_to_sheet)\(|\.xlsx\.(?:writeBuffer|writeFile|write)\(|\bxlsxwriter\.Workbook\(|\bopenpyxl\.Workbook\(|^\s*from\s+openpyxl\s+import\s[^\n]*\bWorkbook\b|(?:\bfunction\s|\bdef\s|\b(?:const|let|var)\s)\s*(?i:(?:to|export|generate|build|make|create|write)_?csv)\w*\s*[=(]'''
+unless = '''[\[(](?=[^\])\n]*=)(?=[^\])\n]*\+)(?=[^\])\n]*@)|(?i:startswith\(\s*\(?\s*["'][=+@\-])|(?i:escape_?formula\w*["']?\s*[:=]\s*(?:true|/))|(?i:\b(?:escape|sanitize|sanitise|guard|neutralize|neutralise|defuse)_?(?:csv)?_?(?:cell|field|formula)s?\b)|(?i:\b(?:csv|cell|formula)_?safe\b)|(?i:\bsafe_?(?:csv)?_?cell\b)'''
+paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py,rb}"]
+say = "Build a cell guard for this export: prefix ' to any user-supplied cell that starts with = + - @ tab or CR, and quote every cell per RFC 4180 (SEC-17, see the skill's references/csv-export.md). If a shared helper already guards the cells, or no cell holds user text, add `practices-allow: SEC-17 <reason>`."
