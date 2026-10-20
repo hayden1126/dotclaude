@@ -90,7 +90,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **Live lanes** (all opened 2026-10-19; briefs in each record). Merge order: 1 ask-check
     (Next item 0, carries the lead's notes; holds the install), 2 pr-horizon (`handoff?` past
     200 PRs, the capella report below; overlaps ask-check on `docs/lanes.md`), 3 config-dir
-    (the two delegation readers that ignore CLAUDE_CONFIG_DIR, below). branch-reuse merged as #130 and was installed from main, 2026-10-19: `lane
+    (the two delegation readers that ignore CLAUDE_CONFIG_DIR, below). Lead PR #132
+    (`docs/waiting-on-you`, draft): CLAUDE.md's Waiting-on-you rule, Hayden's wording; no lane
+    edits CLAUDE.md. It can't install from its branch while ask-check holds the install. branch-reuse merged as #130 and was installed from main, 2026-10-19: `lane
     new` refuses a branch name any PR used (or when gh can't answer; `--reuse-branch`
     overrides), and handoff-check counts the checked-out branch. The three lanes opened earlier on 2026-10-19
     merged, were installed from main and closed: chrome-ttl as #126 (chrome-bg's TTL on a
