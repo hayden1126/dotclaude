@@ -1,26 +1,34 @@
 # Changing an email or phone (SEC-37)
 
-The email on an account is its recovery path: whoever controls it can reset the password. So an update that writes the new address straight to the account hands the account to anyone who reaches the settings page once (a borrowed laptop, a stolen session cookie), and a typo locks the owner out for good. A password re-check and a notice to the old address don't fix that: the switch must wait until the new address proves it can receive mail. Build the flow below whenever code changes an email or phone, without being asked, and say so in your reply.
+The email on an account is its recovery path: whoever controls it can reset the password. Each step of the flow below stops a different failure:
+- **The fresh sign-in** stops someone holding a stolen session cookie or a borrowed laptop. They control the address they type, so a confirmation link alone wouldn't stop them.
+- **The confirmation link** to the new address stops a typo, or an address the requester doesn't control, from becoming the account's recovery path.
+- **The notice to the old address**, with a link that cancels the change, lets the owner catch a change they didn't make.
+
+Build the flow whenever code changes an email or phone, without being asked, and say so in your reply.
 
 ## The flow
 
 1. **Request**: the signed-in user, after a fresh sign-in or with the current password, asks for the change. Nothing on the account changes yet.
-2. **Pending row**: store the new address with a random token, kept as a hash, valid for 30 minutes, usable once. A new request replaces any open one.
-3. **Two mails**: a confirmation link to the NEW address, and a notice to the OLD address. The notice is a security mail, so no notification setting turns it off.
+2. **Pending row**: store the new address with a random confirm token and a random cancel token, each kept as a hash, valid for 30 minutes, usable once. A new request replaces any open one.
+3. **Two mails**: a confirmation link to the NEW address, and a notice with a cancel link to the OLD address. The notice is a security mail, so no notification setting turns it off.
 4. **Confirm**: following the link consumes the token and switches the address in one transaction.
 5. **After**: a second notice to the old address, an audit line at each step.
+
+A password change or reset deletes the user's open requests (see "Passwords and recovery methods").
 
 ## Schema
 
 ```sql
 CREATE TABLE email_change_requests (
-  id          uuid PRIMARY KEY,
-  user_id     uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
-  new_email   text NOT NULL,
-  token_hash  text NOT NULL UNIQUE,
-  expires_at  timestamptz NOT NULL,
-  used_at     timestamptz,
-  created_at  timestamptz NOT NULL DEFAULT now()
+  id                 uuid PRIMARY KEY,
+  user_id            uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  new_email          text NOT NULL,
+  token_hash         text NOT NULL UNIQUE,
+  cancel_token_hash  text NOT NULL UNIQUE,
+  expires_at         timestamptz NOT NULL,
+  used_at            timestamptz,
+  created_at         timestamptz NOT NULL DEFAULT now()
 );
 ```
 
@@ -36,7 +44,8 @@ const TOKEN_MINUTES = 30;
 const FRESH_SIGN_IN_MINUTES = 10;
 
 // A 256-bit random token needs no slow hash: SHA-256 makes a leaked table useless.
-const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
+export const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
+const newToken = () => randomBytes(32).toString("base64url"); // SEC-36: a CSPRNG, 256 bits
 
 export async function requestEmailChange(session: Session, input: unknown, ip: string) {
   const user = await requireUser(session); // server-code SEC-01
@@ -47,18 +56,22 @@ export async function requestEmailChange(session: Session, input: unknown, ip: s
   await rateLimit(`email-change:user:${user.id}`, 3, 3600); // server-code SEC-07
   await rateLimit(`email-change:ip:${ip}`, 10, 3600);
 
-  const token = randomBytes(32).toString("base64url"); // SEC-36: a CSPRNG, 256 bits
+  const token = newToken();
+  const cancelToken = newToken();
   await db.transaction(async (tx) => {
     await tx.query("DELETE FROM email_change_requests WHERE user_id = $1 AND used_at IS NULL", [user.id]);
     await tx.query(
-      `INSERT INTO email_change_requests (id, user_id, new_email, token_hash, expires_at)
-       VALUES ($1, $2, $3, $4, now() + make_interval(mins => $5))`,
-      [randomUUID(), user.id, newEmail, sha256(token), TOKEN_MINUTES],
+      `INSERT INTO email_change_requests (id, user_id, new_email, token_hash, cancel_token_hash, expires_at)
+       VALUES ($1, $2, $3, $4, $5, now() + make_interval(mins => $6))`,
+      [randomUUID(), user.id, newEmail, sha256(token), sha256(cancelToken), TOKEN_MINUTES],
     );
   });
 
-  const link = new URL("/account/email/confirm", APP_ORIGIN); // the configured public origin
+  // The configured public origin, never the Host header.
+  const link = new URL("/account/email/confirm", APP_ORIGIN);
   link.searchParams.set("token", token);
+  const cancel = new URL("/account/email/cancel", APP_ORIGIN);
+  cancel.searchParams.set("token", cancelToken);
   await mailer.send({
     to: newEmail,
     subject: "Confirm your new email address",
@@ -69,7 +82,8 @@ export async function requestEmailChange(session: Session, input: unknown, ip: s
     to: user.email,
     subject: "Your account email is being changed",
     text: `Someone asked to change your account email to ${maskEmail(newEmail)}. ` +
-      "Nothing changes unless the new address confirms. If this wasn't you, change your password.",
+      `Nothing changes unless the new address confirms. If this wasn't you, cancel it here: ` +
+      `${cancel.href}\nThen change your password.`,
   });
   await audit("email_change.requested", { userId: user.id, ip });
 }
@@ -77,9 +91,9 @@ export async function requestEmailChange(session: Session, input: unknown, ip: s
 
 If the new address already belongs to another account, answer the requester exactly as above (SEC-32), and mail the new address "this address already has an account" instead of a link.
 
-## Confirm
+## Confirm and cancel
 
-A mail scanner may open every link it sees, so the link opens a page with a button, and the button's POST does the work. Serve that page with `Referrer-Policy: no-referrer` and no third-party scripts, since the token is in its URL.
+A mail scanner may open every link it sees, so each link opens a page with a button, and the button's POST does the work. Serve those pages with `Referrer-Policy: no-referrer` and no third-party scripts, since the token is in their URL.
 
 ```ts
 export async function confirmEmailChange(token: unknown) {
@@ -92,7 +106,7 @@ export async function confirmEmailChange(token: unknown) {
         RETURNING user_id, new_email`,
       [sha256(token)],
     );
-    // Forged, reused and expired links get one answer.
+    // Forged, reused, cancelled and expired links get one answer.
     if (rows.length === 0) throw new HttpError(400, "invalid_link");
     const { user_id, new_email } = rows[0];
     const [old] = await tx.query("SELECT email FROM users WHERE id = $1 FOR UPDATE", [user_id]);
@@ -101,15 +115,32 @@ export async function confirmEmailChange(token: unknown) {
     await outbox(tx, "security-notice", { to: old.email, kind: "email_changed" }); // sent after commit
   });
 }
+
+/** The old address's cancel link: it voids the open request, with no sign-in needed. */
+export async function cancelEmailChange(token: unknown) {
+  if (typeof token !== "string" || token.length > 100) throw new HttpError(400, "invalid_link");
+  const rows = await db.query(
+    "DELETE FROM email_change_requests WHERE cancel_token_hash = $1 AND used_at IS NULL RETURNING user_id",
+    [sha256(token)],
+  );
+  if (rows.length === 0) throw new HttpError(400, "invalid_link");
+  await audit("email_change.cancelled", { userId: rows[0].user_id });
+}
 ```
 
 ## Phone numbers
 
-The same flow, with a 6-digit code sent by SMS to the NEW number. Six digits hold only 20 bits, so: store the code hashed, expire it in 10 minutes, count attempts on the pending row and void it after 5 wrong tries, and rate-limit sends per user and per number. Send the notice to the old number or the account email.
+The same flow, with a 6-digit code sent by SMS to the NEW number. Six digits hold only 20 bits, so: store the code hashed, expire it in 10 minutes, count attempts on the pending row and void it after 5 wrong tries, and rate-limit sends per user and per number. Send the notice, with its cancel link, to the old number or the account email.
 
 ## Passwords and recovery methods
 
-A password change needs the current password (or a fresh sign-in through the reset flow), then ends every other session (see sessions.md) and sends a notice. Adding or removing an MFA method or a linked sign-in provider follows the same rule: fresh sign-in, notice, audit line.
+A password change needs the current password (or a fresh sign-in through the reset flow), then ends every other session (see sessions.md) and sends a notice. A password change and a completed reset also delete the user's open email and phone change requests, in the same transaction as the new hash, so a change started from a stolen session can't be confirmed after the owner takes the account back:
+
+```sql
+DELETE FROM email_change_requests WHERE user_id = $1 AND used_at IS NULL;
+```
+
+Adding or removing an MFA method or a linked sign-in provider follows the same rule: fresh sign-in, notice, audit line.
 
 ## Auth providers
 
@@ -134,12 +165,20 @@ test("the address changes only after the mailed link is followed", async () => {
 });
 
 test("a forged, reused or expired link changes nothing", async () => {
-  const token = await pendingChange(user, "new@example.com");
+  const user = await signedInUser("old@example.com");
+  await user.post("/account/email", { email: "new@example.com" });
+  const token = linkToken(mailbox("new@example.com").last());
   expect((await anonymous.post("/account/email/confirm", { token: "forged" })).status).toBe(400);
   await anonymous.post("/account/email/confirm", { token });
   expect((await anonymous.post("/account/email/confirm", { token })).status).toBe(400);
-  const late = await pendingChange(user, "other@example.com");
-  clock.advanceMinutes(31);
+
+  // The database's now() decides expiry, so insert a row that has already expired.
+  const late = "a-token-that-expired-a-minute-ago";
+  await db.query(
+    `INSERT INTO email_change_requests (id, user_id, new_email, token_hash, cancel_token_hash, expires_at)
+     VALUES ($1, $2, $3, $4, $5, now() - interval '1 minute')`,
+    [randomUUID(), user.id, "late@example.com", sha256(late), sha256(`${late}-cancel`)],
+  );
   expect((await anonymous.post("/account/email/confirm", { token: late })).status).toBe(400);
   expect((await getUser(user.id)).email).toBe("new@example.com");
 });
@@ -148,6 +187,26 @@ test("a change without a fresh sign-in is refused", async () => {
   const stale = await signedInUser("old@example.com", { signedInMinutesAgo: 60 });
   expect((await stale.post("/account/email", { email: "new@example.com" })).status).toBe(403);
 });
-```
 
-Add a race test: two parallel confirms of one token, where exactly one succeeds.
+test("two parallel confirms of one link switch the address once", async () => {
+  const user = await signedInUser("old@example.com");
+  await user.post("/account/email", { email: "new@example.com" });
+  const token = linkToken(mailbox("new@example.com").last());
+  const results = await Promise.all([1, 2].map(() => anonymous.post("/account/email/confirm", { token })));
+  expect(results.map((r) => r.status).sort()).toEqual([200, 400]);
+});
+
+test("the cancel link and a password reset each void an open change", async () => {
+  const user = await signedInUser("old@example.com");
+  await user.post("/account/email", { email: "new@example.com" });
+  await anonymous.post("/account/email/cancel", { token: cancelToken(mailbox("old@example.com").last()) });
+  const cancelled = linkToken(mailbox("new@example.com").last());
+  expect((await anonymous.post("/account/email/confirm", { token: cancelled })).status).toBe(400);
+
+  await user.post("/account/email", { email: "new@example.com" });
+  await resetPassword("old@example.com", "a new long passphrase");
+  const voided = linkToken(mailbox("new@example.com").last());
+  expect((await anonymous.post("/account/email/confirm", { token: voided })).status).toBe(400);
+  expect((await getUser(user.id)).email).toBe("old@example.com");
+});
+```
