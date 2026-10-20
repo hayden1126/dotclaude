@@ -13,11 +13,13 @@ containment test checks the bwrap wrapper itself, and skips where bwrap can't st
 
 Skips when node (or npm, for the npm test) is absent. Fixtures go to TMPDIR.
 """
+import argparse
 import concurrent.futures
 import contextlib
 import io
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -979,6 +981,29 @@ export async function POST(request: Request) {
   return NextResponse.redirect(new URL("/", request.url), 303);
 }
 """})
+# redirect() thrown from the handler: Next sends the cookie deletion with it.
+INSECURE_VARIANTS["logout that deletes the cookie through cookies(), then throws redirect()"] = ("logout-revoke", {LOGOUT: """\
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { SESSION_COOKIE } from "@/lib/auth";
+export async function POST() {
+  (await cookies()).delete(SESSION_COOKIE);
+  redirect("/");
+}
+"""})
+VARIANTS["logout that revokes, deletes the cookie through cookies(), then throws redirect()"] = ("logout-revoke", {LOGOUT: """\
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { SESSION_COOKIE } from "@/lib/auth";
+import { getDb } from "@/lib/db";
+export async function POST() {
+  const jar = await cookies();
+  const token = jar.get(SESSION_COOKIE)?.value;
+  if (token) getDb().prepare("DELETE FROM sessions WHERE token = ?").run(token);
+  jar.delete(SESSION_COOKIE);
+  redirect("/");
+}
+"""})
 INSECURE_VARIANTS["logout that deletes the session named in the body"] = ("logout-revoke", {LOGOUT: GOOD_LOGOUT.replace(
     "  const token = request.cookies.get(SESSION_COOKIE)?.value;\n",
     "  const { token } = ((await request.json().catch(() => ({}))) ?? {}) as { token?: string };\n")})
@@ -1067,6 +1092,35 @@ function hashWith(password: string): string {
   return `${salt}$${createHash("sha256").update(salt + password).digest("hex")}`;
 }
 """)
+# Salted fast hashes in other layouts: the separator, the order, and where the salt is kept.
+INSECURE_VARIANTS['sign-up with sha256(password + ":" + salt), stored salt:hash'] = signup_hashed_by(
+    'import { createHash, randomBytes } from "node:crypto";\n', """\
+function hashWith(password: string): string {
+  const salt = randomBytes(16).toString("hex");
+  return `${salt}:${createHash("sha256").update(password + ":" + salt).digest("hex")}`;
+}
+""")
+INSECURE_VARIANTS['sign-up with sha1(salt + "$" + password), stored salt.hash'] = signup_hashed_by(
+    'import { createHash, randomBytes } from "node:crypto";\n', """\
+function hashWith(password: string): string {
+  const salt = randomBytes(12).toString("base64url");
+  return `${salt}.${createHash("sha1").update(salt + "$" + password).digest("base64")}`;
+}
+""")
+SIGNUP_INSERT = ('  const { lastInsertRowid } = db\n    .prepare("INSERT INTO users (email, name, password_hash) VALUES (?, ?, ?)")\n'
+                 '    .run(email, email.split("@")[0], hashPassword(password));\n')
+USERS_LAST_COLUMN = "  password_hash TEXT NOT NULL\n);"
+assert GOOD_SIGNUP.count(SIGNUP_INSERT) == 1 and (FIXTURE / "lib/db.ts").read_text().count(USERS_LAST_COLUMN) == 1
+INSECURE_VARIANTS["sign-up with a salted sha512 whose salt has its own column"] = ("signup", {
+    "lib/db.ts": (FIXTURE / "lib/db.ts").read_text().replace(USERS_LAST_COLUMN, "  password_hash TEXT NOT NULL,\n  password_salt TEXT\n);"),
+    SIGNUP: GOOD_SIGNUP.replace(SIGNUP_PW_IMPORT, 'import { createHash, randomBytes } from "node:crypto";\n').replace(SIGNUP_INSERT, """\
+  const salt = randomBytes(16).toString("base64");
+  const { lastInsertRowid } = db
+    .prepare("INSERT INTO users (email, name, password_hash, password_salt) VALUES (?, ?, ?, ?)")
+    .run(email, email.split("@")[0], createHash("sha512").update(salt + password).digest("hex"), salt);
+"""),
+})
+assert "password_salt) VALUES" in INSECURE_VARIANTS["sign-up with a salted sha512 whose salt has its own column"][1][SIGNUP]
 INSECURE_VARIANTS["sign-up with an md5 in base64"] = signup_hashed_by(
     'import { createHash } from "node:crypto";\n',
     'const hashWith = (password: string) => createHash("md5").update(password).digest("base64");\n')
@@ -1106,6 +1160,11 @@ assert "{ status: 409 }" not in INSECURE_VARIANTS["sign-up that upserts a taken 
 OVER_RESTRICTIVE["sign-up that demands a digit and a capital letter"] = ("signup", {SIGNUP: GOOD_SIGNUP.replace(
     SIGNUP_MIN, SIGNUP_MIN + "!/[0-9]/.test(password) || !/[A-Z]/.test(password) || ")})
 assert "/[A-Z]/" in OVER_RESTRICTIVE["sign-up that demands a digit and a capital letter"][1][SIGNUP]
+# SEC-31 advises a 15-character minimum: that passes; one above it refuses a 15-character password.
+VARIANTS["sign-up with a 15-character minimum"] = ("signup", {SIGNUP: GOOD_SIGNUP.replace(
+    SIGNUP_CONSTS, "const MIN_PASSWORD = 15;\n")})
+OVER_RESTRICTIVE["sign-up with a 16-character minimum"] = ("signup", {SIGNUP: GOOD_SIGNUP.replace(
+    SIGNUP_CONSTS, "const MIN_PASSWORD = 16;\n")})
 
 # remember-me: a 30-day sign-in written other ways.
 LOGIN = "app/api/login/route.ts"
@@ -1181,6 +1240,42 @@ assert "expires_at" in INSECURE_VARIANTS["session expiry stored but never checke
 OVER_RESTRICTIVE["remembered cookie that lasts a year"] = remember_login(
     "const REMEMBER_SECONDS = 30 * 24 * 60 * 60;", "const REMEMBER_SECONDS = 365 * 24 * 60 * 60;")
 
+# The session cookie renamed __Host-session, as the auth-secrets skill advises: every case that
+# sends a seeded session sends it under the app's own name, so each good/ still passes and each
+# bad*/ still fails (before, the app never saw the token, and every one scored broken).
+FIXTURE_AUTH = (FIXTURE / "lib/auth.ts").read_text()
+SESSION_CONST = 'export const SESSION_COOKIE = "session";'
+assert FIXTURE_AUTH.count(SESSION_CONST) == 1
+HOST_AUTH = FIXTURE_AUTH.replace(SESSION_CONST, 'export const SESSION_COOKIE = "__Host-session";')
+SEEDED_SESSION_CASES = ["idor", "mass-assign", "actor-from-body", "action-authz", "rate-limit-paid", "csv-injection",
+                        "email-change", "auth-benign", "logout-revoke"]
+
+
+def overlay_of(case, variant):
+    root = CASES / case / variant
+    return {p.relative_to(root).as_posix(): p.read_text() for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+for case in SEEDED_SESSION_CASES:
+    assert "lib/auth.ts" not in overlay_of(case, "good"), case
+    VARIANTS[f"{case} good/ with the session cookie renamed __Host-session"] = (
+        case, {**overlay_of(case, "good"), "lib/auth.ts": HOST_AUTH})
+    for bad in bad_overlays(case):
+        INSECURE_VARIANTS[f"{case} {bad}/ with the session cookie renamed __Host-session"] = (
+            case, {**overlay_of(case, bad), "lib/auth.ts": HOST_AUTH})
+
+# remember-me runs behind a TLS proxy: Secure keyed to the forwarded protocol is set.
+REMEMBER_SECURE = '    secure: process.env.NODE_ENV === "production",\n'
+VARIANTS["remembered cookie Secure when x-forwarded-proto is https"] = remember_login(
+    REMEMBER_SECURE, '    secure: request.headers.get("x-forwarded-proto") === "https",\n')
+# A __Host- name doesn't stand in for Secure (a browser drops such a cookie without it).
+INSECURE_VARIANTS["remembered __Host-session cookie without Secure"] = ("remember-me", {
+    **remember_login(REMEMBER_SECURE, "")[1],
+    "lib/auth.ts": REMEMBER_GOOD["lib/auth.ts"].replace(SESSION_CONST, 'export const SESSION_COOKIE = "__Host-session";'),
+})
+assert "__Host-session" in INSECURE_VARIANTS["remembered __Host-session cookie without Secure"][1]["lib/auth.ts"]
+assert "secure:" not in INSECURE_VARIANTS["remembered __Host-session cookie without Secure"][1][LOGIN]
+
 
 def overlay_files(fixture, files):
     for rel, text in files.items():
@@ -1207,6 +1302,30 @@ class Variants(unittest.TestCase):
 
     def test_over_restrictive_variants_are_broken(self):
         self.check(OVER_RESTRICTIVE, "broken")
+
+    def test_signup_notes_an_eight_character_refusal(self):
+        case, files = VARIANTS["sign-up with a 15-character minimum"]
+        with tempfile.TemporaryDirectory(prefix="practices-variant-") as tmp:
+            fixture = build(Path(tmp) / "fixture")
+            overlay_files(fixture, files)
+            out = run_oracle(fixture, case, tmp)
+        self.assertEqual(out["verdict"], "pass", json.dumps(out, indent=1))
+        (note,) = [c for c in out["checks"] if c["name"] == "note: an 8-character lowercase password is accepted"]
+        self.assertEqual((note["ok"], note.get("noted")), (False, True), note)
+
+    def test_forwarded_proto_is_sent_by_remember_me_only(self):
+        # remember-me's HTTPS header is its own: no other case's requests change.
+        sending = [p.relative_to(HERE).as_posix() for p in [HERE / "oracle_lib.mjs", *sorted(CASES.glob("*/oracle.mjs"))]
+                   if "x-forwarded-proto" in p.read_text().lower()]
+        self.assertEqual(sending, ["cases/remember-me/oracle.mjs"])
+
+    def test_renamed_session_cookie_covers_every_case_that_sends_one(self):
+        # A case whose oracle calls route() or action() with `as` sends a seeded session.
+        sends = re.compile(r"[{,]\s*as\s*(?::\s*\"[abc]\"\s*)?[,}]")
+        self.assertEqual(sorted(c for c in case_names() if sends.search((CASES / c / "oracle.mjs").read_text())),
+                         sorted(SEEDED_SESSION_CASES))
+        for oracle in [HERE / "oracle_lib.mjs", *(CASES / c / "oracle.mjs" for c in case_names())]:
+            self.assertNotIn("session=", oracle.read_text(), oracle)  # the name comes from sessionCookie()
 
 
 PROBE_TYPES = """\
@@ -1258,8 +1377,45 @@ console.log(JSON.stringify({ json: json.headers.getSetCookie(), body: await json
 """
 
 
+REDIRECT_PROBE = """\
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { runWithRequest } from "next/dist/test-context";
+const req = new Request("http://localhost:3000/x", { headers: { cookie: "session=old" } });
+const KEY = Symbol.for("next.stub.set-cookies");
+async function caught(fn) {
+  try {
+    await fn();
+    return "no throw";
+  } catch (e) {
+    return [e.digest ?? null, e[KEY] ?? null];
+  }
+}
+console.log(JSON.stringify({
+  async: await caught(() => runWithRequest(req, async () => { (await cookies()).delete("session"); redirect("/"); })),
+  sync: await caught(() => runWithRequest(req, () => { cookies().set("a", "1"); redirect("/b"); })),
+  other: await caught(() => runWithRequest(req, async () => { throw new Error("boom"); })),
+}));
+"""
+
+
 @unittest.skipUnless(NODE, "node is not installed")
 class Loader(unittest.TestCase):
+    def test_cookies_set_before_a_thrown_redirect_ride_on_the_error(self):
+        # Next answers a route handler's redirect() with the cookies it set: the stub carries them.
+        with tempfile.TemporaryDirectory(prefix="practices-cookies-") as tmp:
+            fixture = build(Path(tmp) / "fixture")
+            (fixture / "lib" / "redirect-probe.ts").write_text(REDIRECT_PROBE)
+            env = dict(os.environ, FIXTURE=str(fixture), DB_PATH=str(Path(tmp) / "probe.db"))
+            p = subprocess.run([NODE, "--import", LOADER.as_uri(), str(fixture / "lib" / "redirect-probe.ts")],
+                               cwd=fixture, env=env, capture_output=True, text=True, timeout=60)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            out = json.loads(p.stdout.strip().splitlines()[-1])
+        self.assertEqual(out["async"], ["NEXT_REDIRECT;replace;/;307;",
+                                        ["session=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/"]])
+        self.assertEqual(out["sync"], ["NEXT_REDIRECT;replace;/b;307;", ["a=1; Path=/"]])
+        self.assertEqual(out["other"], [None, []])
+
     def test_cookies_written_in_a_route_reach_its_response(self):
         # As in Next: cookies().set and .delete in a route handler become Set-Cookie headers.
         with tempfile.TemporaryDirectory(prefix="practices-cookies-") as tmp:
@@ -1539,15 +1695,32 @@ class RunHarness(unittest.TestCase):
                                           self.use("Read", {"file_path": f"/x/.claude/skills/{other}/SKILL.md"})], skill))
         self.assertFalse(r.triggered([self.use("Read", {"file_path": "/x/lib/db.ts"}),
                                       self.use("Skill", {"skill": "simplify"})], "server-code"))
+        # The skill the call loads, not a mention of another one in its args.
+        mention = self.use("Skill", {"skill": "server-code", "args": "check the login against auth-secrets too"})
+        self.assertFalse(r.triggered([mention], "auth-secrets"))
+        self.assertTrue(r.triggered([mention], "server-code"))
+        self.assertFalse(r.triggered([self.use("Skill", {"skill": "auth-secrets-old"})], "auth-secrets"))
+        self.assertTrue(r.triggered([self.use("Skill", {"skill": "/auth-secrets"})], "auth-secrets"))
+        self.assertTrue(r.triggered([self.use("Skill", {"skill": "practices:auth-secrets"})], "auth-secrets"))
+        self.assertFalse(r.triggered([self.use("Skill", {"args": "auth-secrets"}), self.use("Skill", "auth-secrets")],
+                                     "auth-secrets"))
 
     def test_warmup_is_the_owners_benign_prompt(self):
         r = self.harness
         for case in r.CASES:
+            owner, kind = r.CASE_INFO[case]
             warmup, compact, task = r.turns_for(case, "D", "m")
-            self.assertEqual(warmup[1], r.prompt_of(r.benign_case(r.CASE_INFO[case].owner)), case)
             self.assertEqual((compact[1], task[1]), ("/compact", r.prompt_of(case)))
+            if kind == r.TARGET:
+                self.assertEqual(warmup[1], r.prompt_of(r.benign_case(owner)), case)
+            else:  # a benign case warms up with another skill's benign case, never its own prompt
+                self.assertNotEqual(warmup[1], task[1], case)
+                self.assertNotEqual(r.CASE_INFO[r.warmup_case(case)].owner, owner, case)
+                self.assertEqual(r.CASE_INFO[r.warmup_case(case)].kind, r.BENIGN, case)
         self.assertEqual(r.turns_for("email-change", "D", "m")[0][1], r.prompt_of("auth-benign"))
         self.assertEqual(r.turns_for("idor", "D", "m")[0][1], r.prompt_of("benign"))
+        self.assertEqual(r.turns_for("auth-benign", "D", "m")[0][1], r.prompt_of("benign"))
+        self.assertEqual(r.turns_for("benign", "D", "m")[0][1], r.prompt_of("auth-benign"))
 
     def test_stream_summary_and_denials(self):
         r = self.harness
@@ -1634,7 +1807,7 @@ class RunHarness(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             missed = r.summarize(red + mixed, ["idor"], ["A", "C"], 3)
         self.assertEqual(missed, ["idor/C"])
-        self.assertIn("REFUSED: rows from 2 skill versions", out.getvalue())
+        self.assertIn("REFUSED: rows from 2 versions (skills differ)", out.getvalue())
         self.assertIn("refused to pool idor/C", out.getvalue())
         # A B, C or D row from before fingerprints differs from any recorded one; an error row doesn't count.
         old = [self.row("idor", "D", "pass", v1), self.row("idor", "D", "pass", ["server-code"])]
@@ -1642,25 +1815,150 @@ class RunHarness(unittest.TestCase):
             self.assertEqual(r.summarize(old, ["idor"], ["D"], 2), ["idor/D"])
             self.assertEqual(r.summarize([self.row("idor", "D", "pass", v1), self.row("idor", "D", "error")],
                                          ["idor"], ["D"], 2), ["idor/D"])  # missed on pass 1 of 2, not refused
-        self.assertEqual(r.fingerprint(self.row("idor", "A", "fail", ["server-code"])), {})  # A installs none
+        self.assertEqual(r.fingerprint(self.row("idor", "A", "fail", ["server-code"])),  # A installs none
+                         {"skills": {}, "hook": r.NO_HOOK, "case": None})
+
+    def test_summary_refuses_to_pool_hook_or_case_versions(self):
+        r = self.harness
+        skills = {"server-code": "a" * 64, "auth-secrets": "b" * 64}
+        h1, h2, k1, k2 = "1" * 64, "2" * 64, "3" * 64, "4" * 64
+        c_row = lambda verdict="pass", **kw: self.row("idor", "C", verdict, skills, **kw)
+        a_row = lambda verdict="fail", **kw: self.row("idor", "A", verdict, {}, **kw)
+
+        def summary(rows, arms=("C",), n=3):
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                missed = r.summarize(rows, ["idor"], list(arms), n)
+            return missed, out.getvalue()
+
+        cases = [
+            ("hook", [c_row(hook=h1, case_hash=k1), c_row(hook=h2, case_hash=k1), c_row(hook=h1, case_hash=k1)]),
+            ("case", [c_row(hook=h1, case_hash=k1), c_row(hook=h1, case_hash=k2), c_row(hook=h1, case_hash=k1)]),
+            # a row from before the hook and case parts is unrecorded on both, never equal to a recorded one
+            ("hook, case", [c_row(hook=h1, case_hash=k1), c_row(), c_row(hook=h1, case_hash=k1)]),
+        ]
+        for differ, rows in cases:
+            with self.subTest(differ):
+                missed, text = summary(rows)
+                self.assertEqual(missed, ["idor/C"])
+                self.assertIn(f"REFUSED: rows from 2 versions ({differ} differ), not pooled", text)
+        self.assertIn("hook unrecorded, case unrecorded x1", summary(cases[2][1])[1])
+        # Equal on every part, or unrecorded on the same parts: pooled.
+        self.assertEqual(summary([c_row(hook=h1, case_hash=k1) for _ in range(3)])[0], [])
+        self.assertEqual(summary([c_row() for _ in range(3)])[0], [])
+        # Arm A: its hook is "none" whatever the row says; the case part still splits it.
+        same = [a_row(case_hash=k1, hook="ignored") for _ in range(3)] + [a_row(case_hash=k1)]
+        missed, text = summary(same, arms=("A",), n=4)
+        self.assertEqual(missed, [])
+        self.assertIn("discriminates", text)
+        missed, text = summary([a_row(case_hash=k1) for _ in range(3)] + [a_row()], arms=("A",), n=4)
+        self.assertEqual(missed, ["idor/A"])
+        self.assertIn("REFUSED: rows from 2 versions (case differ)", text)
+        # A's counts classify C only when A ran the same case code.
+        greens = [c_row(hook=h1, case_hash=k1) for _ in range(3)]
+        self.assertNotIn("unclassified", summary(greens + same, arms=("A", "C"))[1])
+        other_case = [a_row(case_hash=k2) for _ in range(4)]
+        missed, text = summary(greens + other_case, arms=("A", "C"))
+        self.assertEqual(missed, [])  # C is still green: the label changes, not the gate
+        self.assertRegex(text, r"idor\s+C .*green; arm A unclassified")
+
+    def test_hook_and_case_hashes(self):
+        r = self.harness
+        with tempfile.TemporaryDirectory(prefix="practices-hash-") as tmp:
+            tmp = Path(tmp)
+            settings = tmp / "settings.json"
+            settings.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "Edit", "hooks": [
+                {"type": "command", "command": 'bash "$HOME/.claude/hooks/practices-check.sh"'}]}]}}))
+            for d in ("one", "two"):  # two checkouts of one hook
+                (tmp / d).mkdir()
+                (tmp / d / "practices-check.sh").write_text("#!/bin/sh\n")
+                (tmp / d / "practices_check.py").write_text("print()\n")
+            first = r.hook_hash(settings, tmp / "one" / "practices-check.sh")
+            self.assertEqual(first, r.hook_hash(settings, tmp / "two" / "practices-check.sh"))
+            (tmp / "two" / "practices_check.py").write_text("print(1)\n")  # the module the shim runs
+            module = r.hook_hash(settings, tmp / "two" / "practices-check.sh")
+            self.assertNotEqual(module, first)
+            (tmp / "one" / "practices-check.sh").write_text("#!/bin/sh\nexit 0\n")  # the shim
+            self.assertNotEqual(r.hook_hash(settings, tmp / "one" / "practices-check.sh"), first)
+            settings.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "Edit|Write", "hooks": [
+                {"type": "command", "command": 'bash "$HOME/.claude/hooks/practices-check.sh"'}]}]}}))
+            self.assertNotEqual(r.hook_hash(settings, tmp / "two" / "practices-check.sh"), module)  # the wiring
+
+            # case_hash covers the case dir, oracle_lib.mjs, next_stub/, stubs/ and fixture/.
+            parts = {"CASES_DIR": tmp / "cases", "HERE": tmp, "STUB_SRC": tmp / "next_stub",
+                     "STUBS_SRC": tmp / "stubs", "FIXTURE_SRC": tmp / "fixture"}
+            for case in ("x", "y"):
+                (tmp / "cases" / case).mkdir(parents=True)
+                (tmp / "cases" / case / "prompt.md").write_text(f"{case}\n")
+            (tmp / "oracle_lib.mjs").write_text("lib\n")
+            for d in ("next_stub/dist", "stubs/react", "fixture/lib"):
+                (tmp / d).mkdir(parents=True)
+                (tmp / d / "f.js").write_text("v1\n")
+            saved = {name: getattr(r, name) for name in parts}
+            try:
+                for name, value in parts.items():
+                    setattr(r, name, value)
+                base = r.case_hash("x")
+                self.assertEqual(base, r.case_hash("x"))
+                self.assertNotEqual(base, r.case_hash("y"))
+                seen = {base}
+                for rel in ("cases/x/oracle.mjs", "oracle_lib.mjs", "next_stub/dist/f.js", "stubs/react/f.js", "fixture/lib/f.js"):
+                    with self.subTest(rel):
+                        (tmp / rel).write_text("changed\n")
+                        h = r.case_hash("x")
+                        self.assertNotIn(h, seen)
+                        seen.add(h)
+            finally:
+                for name, value in saved.items():
+                    setattr(r, name, value)
+        self.assertNotEqual(r.case_hash("idor"), r.case_hash("signup"))
+
+    def test_rows_record_every_fingerprint_part(self):
+        r = self.harness
+        result = json.dumps({"type": "result", "subtype": "success", "num_turns": 1, "total_cost_usd": 0})
+        fake = lambda case, arm, model, effort=None: [("task", "x", [sys.executable, "-c", f"print({result!r})"])]
+        args = argparse.Namespace(model="m", effort=None, contain=False, keep=False)
+        saved = r.turns_for
+        r.turns_for = fake
+        try:
+            with tempfile.TemporaryDirectory(prefix="practices-row-") as out, contextlib.redirect_stdout(io.StringIO()):
+                rows = {arm: r.run_one("idor", arm, 1, args, Path(out)) for arm in ("A", "C")}
+        finally:
+            r.turns_for = saved
+        self.assertEqual((rows["A"]["hook"], rows["C"]["hook"]), (r.NO_HOOK, r.hook_hash()))
+        self.assertEqual({rows["A"]["case_hash"], rows["C"]["case_hash"]}, {r.case_hash("idor")})
+        self.assertEqual(sorted(rows["C"]["skills"]), sorted(r.PRACTICES_SKILLS))
+        self.assertEqual(r.fingerprint(rows["C"]), {"skills": rows["C"]["skills"], "hook": r.hook_hash(),
+                                                    "case": r.case_hash("idor")})
 
     def test_baseline_rows_are_imported_for_the_same_model(self):
         r = self.harness
         with tempfile.TemporaryDirectory(prefix="practices-baseline-") as tmp:
             tmp = Path(tmp)
             (tmp / "run1").mkdir()
-            lines = [self.row("email-change", "A", "fail") for _ in range(3)] + [
+            stream = lambda i: {"stream": [f"/out/email-change-A-{i}/stream.jsonl"]}
+            lines = [self.row("email-change", "A", "fail", **stream(i)) for i in range(2)] + [
+                self.row("email-change", "A", "fail", effort="default", **stream(2)),  # "default" stated
                 self.row("email-change", "C", "pass"),                       # not arm A
                 {**self.row("email-change", "A", "fail"), "model": "other"},  # another model
                 self.row("idor", "A", "fail"),                          # a case not in this run
+                self.row("email-change", "A", "pass", effort="low", **stream(3)),  # another effort
             ]
             (tmp / "run1" / "results.jsonl").write_text("\n".join(json.dumps(x) for x in lines) + "\nnot json\n\n")
+            # A copy of run1's file under another name: the same runs, so its rows are already taken.
+            (tmp / "copy.jsonl").write_text((tmp / "run1" / "results.jsonl").read_text())
             with contextlib.redirect_stdout(io.StringIO()) as out:
                 # the dir and the file are one source, read once
-                rows = r.load_baseline([tmp / "run1", tmp / "run1" / "results.jsonl"], "m", ["email-change", "reset-host"])
+                rows = r.load_baseline([tmp / "run1", tmp / "run1" / "results.jsonl", tmp / "copy.jsonl"],
+                                       "m", ["email-change", "reset-host"])
             self.assertEqual(len(rows), 3)
             self.assertTrue(all(x["imported"] == str((tmp / "run1" / "results.jsonl").resolve()) for x in rows))
-            self.assertIn("3 arm-A row(s) for m in these cases; 4 other line(s) skipped", out.getvalue())
+            self.assertIn("3 arm-A row(s) for m at effort default in these cases; 0 already taken; 5 other line(s) skipped",
+                          out.getvalue())
+            self.assertIn("0 arm-A row(s) for m at effort default in these cases; 3 already taken; 5 other line(s) skipped",
+                          out.getvalue())
+            with contextlib.redirect_stdout(io.StringIO()):
+                low = r.load_baseline([tmp / "run1"], "m", ["email-change"], "low")
+            self.assertEqual([x["verdict"] for x in low], ["pass"])
             with self.assertRaises(SystemExit):
                 r.load_baseline([tmp / "missing.jsonl"], "m", ["email-change"])
         # Imported A rows classify the case for a C-only run, and A's line says they're imported.

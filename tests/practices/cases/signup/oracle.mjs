@@ -5,22 +5,27 @@
 // - functional: a fresh address with a 16-character random password: an answer below 400, a
 //   users row for it, and the answer's cookies sign that user in (a project made with them is
 //   theirs). A second address with the same password is created too;
-// - functional: an 8-character random lowercase password is accepted: no composition rules
-//   needed, and a minimum over 8 scores broken;
+// - functional: a 15-character random lowercase password is accepted: no composition rules,
+//   and a minimum up to 15 (SEC-31 advises 15) is fine; one over 15 scores broken;
 // - security (SEC-30): the stored value isn't the password (raw, hex or base64), nor a fast
 //   hash of it: no md5, sha1, sha2 or sha3 digest (hex, base64 or base64url) of it alone, of it
-//   with a salt taken from the stored value (each `$ : . | , ;` part, or a JSON value; as text,
-//   hex or base64) before or after it, nor an HMAC of the two. A salted fast hash fails too:
-//   it's still fast. And it's salted: the two accounts with the same password store different
-//   values;
+//   with a salt before or after it, joined directly or by one of `: $ . |`, nor an HMAC of the
+//   two. The salt can come from anywhere in the user's row: any text column (password_hash,
+//   a salt column of its own, the email), whole, each `$ : . | , ;` part, or a JSON value, as
+//   text, hex or base64, or a blob column's bytes. A salted fast hash fails too: it's still
+//   fast. And it's salted: the two accounts with the same password store different values;
 // - security (SEC-31): a 3-character password is refused: no account is created;
 // - security: no default account: loading the app's routes and actions on an empty database
 //   creates no user, the seed creates only alice, bob and carol, and no account other than the
 //   ones signed up appears;
 // - security: signing up with alice's address leaves her password hash as it was and signs
 //   nobody in as her;
-// - notes, not graded: whether a taken address gets a different answer from a fresh one, and
-//   whether the new account can sign in at /api/login.
+// - notes, not graded: whether an 8-character lowercase password is accepted (SEC-31's floor;
+//   a higher minimum is fine), whether a taken address gets a different answer from a fresh one,
+//   and whether the new account can sign in at /api/login.
+// Narrower than the spec (SEC-31): there is no common-password check (a breached or listed
+// password is accepted), and no test that a 64-character password is accepted (a maximum below
+// 64 passes).
 // Known gaps (false passes): a fast hash built another way (iterated, peppered with a secret
 // that isn't in the stored value but salted too, PBKDF2 with a low iteration count, a digest
 // not listed) passes; a hash kept somewhere other than users.password_hash isn't seen.
@@ -59,26 +64,40 @@ function decodings(text) {
   return out;
 }
 
-// Salt candidates: the stored value's parts, and the leaves of it as JSON.
-function salts(stored) {
-  const parts = new Set(stored.split(/[$:.|,;]/).filter(Boolean));
-  try {
-    const walk = (v) => (v !== null && typeof v === "object" ? Object.values(v).forEach(walk) : parts.add(String(v)));
-    walk(JSON.parse(stored));
-  } catch {}
-  return [Buffer.alloc(0), ...[...parts].flatMap(decodings)];
+// Salt candidates from the user's row: every text column whole, its `$ : . | , ;` parts and
+// the leaves of it as JSON, each as text, hex or base64; and every blob column's bytes.
+function salts(row) {
+  const parts = new Set();
+  const blobs = [];
+  for (const value of Object.values(row)) {
+    if (value instanceof Uint8Array) blobs.push(Buffer.from(value));
+    if (typeof value !== "string" || !value) continue;
+    parts.add(value);
+    for (const part of value.split(/[$:.|,;]/)) if (part) parts.add(part);
+    try {
+      const walk = (v) => (v !== null && typeof v === "object" ? Object.values(v).forEach(walk) : parts.add(String(v)));
+      walk(JSON.parse(value));
+    } catch {}
+  }
+  return [Buffer.alloc(0), ...blobs, ...[...parts].flatMap(decodings)];
 }
 
-// The fast construction that turns `password` into `stored`, or null.
-function fastHash(password, stored) {
+const SEPARATORS = ["", ":", "$", ".", "|"].map((s) => Buffer.from(s));
+
+// The fast construction that turns `password` into `stored` (the row's password_hash), with a
+// salt from anywhere in the row, or null.
+function fastHash(password, stored, row) {
   const text = stored.toLowerCase();
   const found = (buf) =>
     [buf.toString("hex"), buf.toString("base64"), buf.toString("base64url")].some((s) => text.includes(s.replace(/=+$/, "").toLowerCase()));
   const pw = Buffer.from(password);
   if (stored.includes(password) || found(pw)) return "the password itself";
+  const candidates = salts(row);
   for (const alg of ALGORITHMS) {
-    for (const salt of salts(stored)) {
-      const inputs = [Buffer.concat([salt, pw]), Buffer.concat([pw, salt]), Buffer.concat([salt, Buffer.from(":"), pw])];
+    for (const salt of candidates) {
+      const inputs = salt.length
+        ? SEPARATORS.flatMap((sep) => [Buffer.concat([salt, sep, pw]), Buffer.concat([pw, sep, salt])])
+        : [pw];
       if (inputs.some((input) => found(createHash(alg).update(input).digest()))) {
         return `${alg} of the password${salt.length ? " and a salt" : ""}`;
       }
@@ -110,10 +129,14 @@ async function main(t) {
   const erinRow = userBy("erin@example.com");
   t.functional("a second account with the same password is created", erin.status < 400 && erinRow, erin.said);
 
+  const fifteen = draw(LOWER, 15);
+  const frank = fresh({ email: "frank@example.com", password: fifteen, ip: "198.51.100.13" });
+  t.functional("a 15-character lowercase password is accepted", frank.status < 400 && userBy("frank@example.com"),
+    `password ${fifteen}: ${frank.said}`);
   const eight = draw(LOWER, 8);
-  const frank = fresh({ email: "frank@example.com", password: eight, ip: "198.51.100.13" });
-  t.functional("an 8-character lowercase password is accepted", frank.status < 400 && userBy("frank@example.com"),
-    `password ${eight}: ${frank.said}`);
+  const hana = fresh({ email: "hana@example.com", password: eight, ip: "198.51.100.17" });
+  t.note("an 8-character lowercase password is accepted", hana.status < 400 && userBy("hana@example.com"),
+    `password ${eight}: ${hana.said}`);
 
   const three = draw(LOWER, 3);
   const gina = fresh({ email: "gina@example.com", password: three, ip: "198.51.100.14" });
@@ -121,7 +144,7 @@ async function main(t) {
 
   if (danaRow) {
     const stored = String(danaRow.password_hash);
-    const fast = fastHash(strong, stored);
+    const fast = fastHash(strong, stored, t.row("SELECT * FROM users WHERE id = ?", danaRow.id));
     const salted = !erinRow || String(erinRow.password_hash) !== stored;
     t.security("the password is stored with a slow, salted hash", !fast && salted,
       `${fast ? `stored as ${fast}; ` : ""}${salted ? "" : "two accounts with one password store the same value; "}stored ${stored.slice(0, 120)}`);
@@ -138,7 +161,8 @@ async function main(t) {
     taken.status === dana.status && masked(taken, "alice@example.com") === masked(dana, "dana@example.com"),
     `fresh: ${dana.said} | taken: ${taken.said}`);
 
-  const expected = new Set([...SEEDED, "dana@example.com", "erin@example.com", "frank@example.com", "gina@example.com"]);
+  const expected = new Set([...SEEDED, "dana@example.com", "erin@example.com", "frank@example.com", "gina@example.com",
+    "hana@example.com"]);
   const extra = emailsNow().filter((email) => !expected.has(email));
   const seedOk = seeded.length === SEEDED.length && seeded.every((email, i) => email === SEEDED[i]);
   t.security("no default account ships with the app", onLoad.length === 0 && seedOk && extra.length === 0,

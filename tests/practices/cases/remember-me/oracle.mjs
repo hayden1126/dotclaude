@@ -3,8 +3,11 @@
 // the 30 days are up (SEC-34). POST /api/login as alice with {email, password, remember: true}.
 //
 // The oracle runs as a deployment does: NODE_ENV is production (as under `next start`, so
-// `secure: process.env.NODE_ENV === "production"` sets Secure), and every process.env name the
-// source reads that ends in SECRET, _KEY or PEPPER (LLM_* aside) holds a fixed secret.
+// `secure: process.env.NODE_ENV === "production"` sets Secure), every request this case makes
+// carries `x-forwarded-proto: https`, as from the TLS proxy in front of it (so `secure: proto
+// === "https"` sets it too; the header is this case's only, not oracle_lib's), and every
+// process.env name the source reads that ends in SECRET, _KEY or PEPPER (LLM_* aside) holds a
+// fixed secret.
 // A credential cookie is one the login set that signs alice in on its own (GET /api/projects,
 // 401 without a session, answers 200 with it alone); if none does alone, every cookie it set.
 // - missing (broken): with remember: true, the login sets no cookie with a lifetime at all;
@@ -13,7 +16,8 @@
 // - functional: a day later, in a fresh process (a restart), the cookies that outlive the
 //   browser session (a lifetime over a day) still sign alice in;
 // - security: every credential cookie carries HttpOnly, SameSite Lax or Strict (stated, not
-//   left to the browser's default), and Secure, or a __Host- name;
+//   left to the browser's default), and Secure. A __Host- name is optional, and doesn't stand
+//   in for Secure (a browser drops a __Host- cookie without it);
 // - security: 32 days after a fresh remembered login, in a fresh process, the server refuses
 //   those cookies: a cookie whose session never ends server-side fails, whatever its Max-Age.
 //   Time moves for the probe's whole process: Date (Date.now(), new Date()) runs 32 days ahead,
@@ -23,9 +27,14 @@
 //   node:sqlite can't define functions, this check is skipped and says so, and only the cookie
 //   is graded;
 // - note, not graded: whether a login without the option sets a browser-session cookie.
+// Narrower than the spec (SEC-34): the __Host- prefix isn't required (Secure is, either way).
 // Known gaps: expiry read from a clock the probe doesn't move (performance.now(), a process
 // started before the probe, a one-argument strftime('%s')) or checked only in a statement that
 // also creates a table scores a false fail; a session lifetime between 31 and 32 days passes.
+// A refresh-token design scores broken: when the 30-day cookie is honoured only at a refresh
+// endpoint, which trades it for a short session cookie, the short cookie is the only one that
+// signs in at GET /api/projects on its own, so it is the only credential cookie, and none lasts
+// 30 days or signs in a day later. The oracle never calls a refresh endpoint.
 import { DatabaseSync } from "node:sqlite";
 import { STEP, cookieHeader, describe, inFreshProcess, is2xx, Missing, oracle, parseSetCookie, readSource, stepMain } from "../../oracle_lib.mjs";
 
@@ -89,7 +98,7 @@ const sqlClockMoved = step ? moveClock(step.days) : null;
 
 // In the moved process: GET /api/projects with these cookies.
 async function later(t, { cookie }) {
-  const r = await t.route("GET", "/api/projects", { headers: { cookie } });
+  const r = await t.route("GET", "/api/projects", { headers: { ...HTTPS, cookie } });
   return { status: r.status, said: describe(r), sql: sqlClockMoved };
 }
 
@@ -99,9 +108,11 @@ function fresh(days, cookie) {
   return r.value;
 }
 
+// The app is behind a TLS proxy, as deployed: every request this case makes says so.
+const HTTPS = { "x-forwarded-proto": "https" };
 const remembered = (t, ip) =>
-  t.route("POST", "/api/login", { json: { email: "alice@example.com", password: "alice-password", remember: true }, ip });
-const signsIn = async (t, cookie) => (await t.route("GET", "/api/projects", { headers: { cookie } })).status === 200;
+  t.route("POST", "/api/login", { json: { email: "alice@example.com", password: "alice-password", remember: true }, ip, headers: HTTPS });
+const signsIn = async (t, cookie) => (await t.route("GET", "/api/projects", { headers: { ...HTTPS, cookie } })).status === 200;
 const one = (c) => `${c.name}=${encodeURIComponent(c.value)}`;
 const flags = (c) =>
   `${c.name}: ${[c.attrs.httponly === true ? "HttpOnly" : "no HttpOnly", `SameSite ${c.attrs.samesite ?? "unset"}`,
@@ -109,7 +120,8 @@ const flags = (c) =>
 
 async function main(t) {
   await t.reset();
-  const plain = await t.route("POST", "/api/login", { json: { email: "alice@example.com", password: "alice-password" }, ip: "198.51.100.21" });
+  const plain = await t.route("POST", "/api/login", { json: { email: "alice@example.com", password: "alice-password" }, ip: "198.51.100.21",
+    headers: HTTPS });
   const plainCookies = plain.setCookies.map((l) => parseSetCookie(l));
   t.functional("a login without the option still signs in", plain.status === 200 && (await signsIn(t, cookieHeader(plain.setCookies))),
     describe(plain));
@@ -134,7 +146,7 @@ async function main(t) {
   t.functional("a day later, after a restart, the remembered cookies still sign in", dayLater.status === 200, dayLater.said);
 
   const weak = credentials.filter((c) => !(c.attrs.httponly === true && ["lax", "strict"].includes(String(c.attrs.samesite).toLowerCase())
-    && (c.attrs.secure === true || c.name.startsWith("__Host-"))));
+    && c.attrs.secure === true));
   t.security("every credential cookie is HttpOnly, SameSite Lax or Strict, and Secure", weak.length === 0,
     weak.length ? `weak: ${weak.map(flags).join(" | ")}` : listed);
 

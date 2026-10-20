@@ -30,8 +30,14 @@
 //   unauthorized() 401, as Next would answer.
 // - Server actions: the named export in a "use server" file under app/, called inside
 //   runWithRequest with a same-origin POST carrying the caller's session cookie.
+// - A seeded user's session cookie goes under the app's own name: the SESSION_COOKIE string
+//   that lib/auth.ts exports, read at grade time (so a rename to __Host-session is followed),
+//   else `session` (sessionCookie()). Known gap: an app that reads its cookie under another
+//   name without exporting it as SESSION_COOKIE gets `session`, so its seeded requests are
+//   signed out and its run scores broken.
 // - A cookie set or deleted through cookies() in a route handler reaches its response as
-//   Set-Cookie, as in Next (the stub's runWithRequest); route() results carry the response's
+//   Set-Cookie, as in Next (the stub's runWithRequest), and so does one set before the handler
+//   throws redirect() (Next answers that redirect with them); route() results carry the response's
 //   Set-Cookie lines as setCookies (parseSetCookie and cookieHeader read them).
 // - note(): an observation kept in the checks for the reader, counted toward neither verdict.
 import { spawnSync } from "node:child_process";
@@ -78,7 +84,7 @@ const DEFAULT_IP = "203.0.113.10";
 // (ORACLE_PUBLIC_ORIGIN, alongside the app's own settings for it), so Host, Origin and Referer
 // name it; else they're on the server's own. The request URL stays the server's own either
 // way, as Next keeps it, and a case's own headers (a forged Host, say) still win.
-function browserHeaders(url, { as, ip }) {
+function browserHeaders(url, { as, ip, cookieName }) {
   const page = process.env.ORACLE_PUBLIC_ORIGIN ? new URL(process.env.ORACLE_PUBLIC_ORIGIN) : null;
   const origin = page?.origin ?? ORIGIN;
   const headers = new Headers({
@@ -91,8 +97,27 @@ function browserHeaders(url, { as, ip }) {
     "x-real-ip": ip,
     "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36",
   });
-  if (as) headers.set("cookie", `session=${USERS[as].token}`);
+  if (as) headers.set("cookie", `${cookieName}=${USERS[as].token}`);
   return headers;
+}
+
+// The name the app reads its session cookie under: the SESSION_COOKIE string the fixture's
+// lib/auth.ts exports, imported at grade time as the app's own code sees it, else "session"
+// (no such export, not a valid cookie name, or a module that fails to load).
+const COOKIE_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+let sessionName = null;
+export function sessionCookie() {
+  sessionName ??= (async () => {
+    const file = FIXTURE && ["lib/auth.ts", "lib/auth.js"].map((rel) => path.join(FIXTURE, rel)).find(isFile);
+    if (!file) return "session";
+    try {
+      const name = (await import(pathToFileURL(file).href)).SESSION_COOKIE;
+      return typeof name === "string" && COOKIE_NAME.test(name) ? name : "session";
+    } catch {
+      return "session";
+    }
+  })();
+  return sessionName;
 }
 
 // The fixture's source, concatenated: what the agent's code reads from process.env.
@@ -254,8 +279,15 @@ function statusFromThrow(error) {
   return m ? Number(m[1]) : 500;
 }
 
-function thrown(error, source) {
-  return { status: statusFromThrow(error), text: "", json: undefined, source, setCookies: [], note: String(error?.message ?? error).slice(0, 300) };
+// A route handler's redirect() keeps the cookies the handler set before it (the stub carries
+// them on the error), as Next answers it; any other throw, or one from middleware, sends none.
+const SET_COOKIES = Symbol.for("next.stub.set-cookies");
+
+function thrown(error, source, { handler = false } = {}) {
+  const redirect = typeof error?.digest === "string" && error.digest.startsWith("NEXT_REDIRECT");
+  const carried = handler && redirect ? error[SET_COOKIES] : null;
+  const setCookies = Array.isArray(carried) ? carried.filter((l) => typeof l === "string") : [];
+  return { status: statusFromThrow(error), text: "", json: undefined, source, setCookies, note: String(error?.message ?? error).slice(0, 300) };
 }
 
 async function readResponse(res, source) {
@@ -294,15 +326,20 @@ export function parseSetCookie(line, now = Date.now()) {
   return { name, value, attrs, lifetime };
 }
 
-// The Cookie header a browser sends back after these Set-Cookie lines: a cookie deleted (empty,
-// or a lifetime of 0 or less) drops out, a later line for a name wins.
-export function cookieHeader(lines, now = Date.now()) {
+// The cookies a browser keeps after these Set-Cookie lines ({name: value} as a Map), and the
+// Cookie header it sends back: a cookie deleted (empty, or a lifetime of 0 or less) drops out,
+// a later line for a name wins.
+export function cookieJar(lines, now = Date.now()) {
   const jar = new Map();
   for (const c of lines.map((l) => parseSetCookie(l, now))) {
     if (c.value === "" || (c.lifetime !== null && c.lifetime <= 0)) jar.delete(c.name);
     else jar.set(c.name, c.value);
   }
-  return [...jar].map(([n, v]) => `${n}=${encodeURIComponent(v)}`).join("; ");
+  return jar;
+}
+
+export function cookieHeader(lines, now = Date.now()) {
+  return [...cookieJar(lines, now)].map(([n, v]) => `${n}=${encodeURIComponent(v)}`).join("; ");
 }
 
 export function describe(r) {
@@ -414,8 +451,9 @@ class Oracle {
   // it to another origin (the Host header follows), `headers` overrides any header.
   async route(method, urlPath, { as, json, form, ip = DEFAULT_IP, base = ORIGIN, headers: extra = {} } = {}) {
     const url = new URL(urlPath, base);
+    const cookieName = as ? await sessionCookie() : null;
     const make = (override) => {
-      const headers = browserHeaders(url, { as, ip });
+      const headers = browserHeaders(url, { as, ip, cookieName });
       for (const [k, v] of Object.entries(extra)) headers.set(k, v);
       let body;
       if (json !== undefined) {
@@ -476,7 +514,7 @@ class Oracle {
     try {
       res = await this.ctx.runWithRequest(req, () => handler(req, { params: paramsArg(found.params) }));
     } catch (error) {
-      return thrown(error, rel);
+      return thrown(error, rel, { handler: true });
     }
     if (!(res instanceof Response)) return { status: 500, text: "", json: undefined, source: rel, setCookies: [], note: "handler returned no Response" };
     return readResponse(res, rel);
@@ -491,7 +529,7 @@ class Oracle {
     const mod = await import(pathToFileURL(file).href);
     if (typeof mod[name] !== "function") throw new Missing(`${path.relative(FIXTURE, file)} has no function ${name}`);
     const url = new URL(page, ORIGIN);
-    const headers = browserHeaders(url, { as, ip: DEFAULT_IP });
+    const headers = browserHeaders(url, { as, ip: DEFAULT_IP, cookieName: as ? await sessionCookie() : null });
     headers.set("next-action", name);
     headers.set("accept", "text/x-component");
     const request = new this.next.NextRequest(url, { method: "POST", headers });
