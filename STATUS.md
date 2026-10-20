@@ -90,7 +90,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **Live lanes** (all opened 2026-10-19; briefs in each record). Merge order: 1 ask-check
     (Next item 0, carries the lead's notes; holds the install), 2 pr-horizon (`handoff?` past
     200 PRs, the capella report below; overlaps ask-check on `docs/lanes.md`), 3 config-dir
-    (the two delegation readers that ignore CLAUDE_CONFIG_DIR, below). branch-reuse merged as #130 and was installed from main, 2026-10-19: `lane
+    (the two delegation readers that ignore CLAUDE_CONFIG_DIR, below). Lead PR #132
+    merged and installed from main 2026-10-20 (CLAUDE.md's Waiting-on-you rule; the reinstall
+    released ask-check's install, which it redoes before ready). Smoke: a fresh `claude -p`
+    ended with the label, but "checklist" made it write `- [ ]` boxes, which Hayden doesn't
+    want (plain bullets): a wording fix follows as a lead PR. branch-reuse merged as #130 and was installed from main, 2026-10-19: `lane
     new` refuses a branch name any PR used (or when gh can't answer; `--reuse-branch`
     overrides), and handoff-check counts the checked-out branch. The three lanes opened earlier on 2026-10-19
     merged, were installed from main and closed: chrome-ttl as #126 (chrome-bg's TTL on a
@@ -130,7 +134,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **setup.sh's ccstatusline write crashes on an odd settings shape** (from lane json-depth's PR 1
     writer, 2026-10-19; predates it): the heredoc's `has_ctx_widget` assumes `lines` is a list of
     lists, and a directory at the destination crashes it too.
-  - **Two delegation readers ignore CLAUDE_CONFIG_DIR** (from lane json-depth's PR 2 plan pass,
+  - **Two delegation readers ignore CLAUDE_CONFIG_DIR: fix in #133 (lane config-dir, open; the
+    lead drops this item at its merge)** (from lane json-depth's PR 2 plan pass,
     2026-10-19; predates it): `dc.claude_ancestor` and `dc.live_sessions` read a hard-coded
     `~/.claude/sessions`, while `dc.session_toplevel` uses `sessions_dir`.
   - **Lanes tell the lead at workflow stages** (Hayden, 2026-10-19, in lane branch-reuse's
@@ -146,6 +151,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     are dropped: `lane ls` shows both. Seen again the same day: ask-check installed from its lane
     without telling the lead. Home: `skills/lanes/SKILL.md` Lifecycle steps 5 and 6 and "Who asks
     Hayden what", which ask-check edits, so it opens after ask-check merges.
+  - **A custom CLAUDE_CONFIG_DIR breaks the hook layer** (from lane config-dir, 2026-10-19;
+    checked: 39 hook commands in `settings.json` run `$HOME/.claude/hooks/...`, while `setup.sh`
+    installs to `${CLAUDE_CONFIG_DIR:-$HOME/.claude}`, and 16 files under `hooks/` hard-code
+    `~/.claude`). Under a custom config dir every hook fails, and the `|| exit 2` ones block.
+    Matters for a new device ([[hayden-new-device-goal]]); unreachable on HAYPC (unset).
+    config-dir's PR covers only the delegation Python readers.
   - **`handoff?` never clears on a switched lane past 200 PRs** (bug report from capella-studio's
     lead, session 5788b9fb, 2026-10-19; checked against the code). `pr_states` lists the newest
     `PR_LIMIT` (200) PRs in one gh call; once that list is full, `merges_of`
