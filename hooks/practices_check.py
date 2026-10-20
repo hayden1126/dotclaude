@@ -792,6 +792,9 @@ def state_keys(event):
 
 
 def state_add(event, keys):
+    """Record deny keys; whether the write held (a failure is logged). The Bash levels deny
+    only after it holds: they have no transcript marker to fall back on, so a deny whose key
+    can't be kept would stop the resend too, forever."""
     path = _state_file(event)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -799,8 +802,10 @@ def state_add(event, keys):
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump({"keys": sorted(state_keys(event) | set(keys))}, f)
         os.replace(tmp, path)
+        return True
     except OSError as e:
         log("state-error", f"{path}: {e}")
+        return False
 
 
 # ---------------------------------------------------------------- git, objects only
@@ -1896,8 +1901,7 @@ def bash_pre(event):
         return None
     if commits and pushes:
         key = f"push|engine|chain|-|{_sha1(command_of(event))}"
-        if key not in state_keys(event):
-            state_add(event, [key])
+        if key not in state_keys(event) and state_add(event, [key]):
             return deny(
                 "[practices:push] This one Bash call both commits and pushes, so the push check "
                 "can't see what the commit adds. Run the commit and the push as separate Bash "
@@ -1933,9 +1937,8 @@ def bash_pre(event):
     except GitError as e:
         log("git-skipped", f"Bash check: {e}")
         return None
-    if not reasons:
+    if not reasons or not state_add(event, keys):  # an unkept key: allow, logged
         return None
-    state_add(event, keys)
     return deny("\n\n".join(reasons))
 
 

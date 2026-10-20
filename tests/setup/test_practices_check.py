@@ -1451,6 +1451,18 @@ class Push(BashBase):
         self.assertIn("a.ts:1", self.committed(command="git commit -m x >/dev/null",
                                                **{"a.ts": "x({ ...body })\n"}))
 
+    def test_an_unwritable_state_file_allows_the_call_and_logs(self):
+        # Review round 1: the Bash levels have no transcript marker to fall back on, so a deny
+        # whose key couldn't be written denied every resend too, forever.
+        self.commit(**{"new.ts": "y({ ...body })\n"})
+        d = os.path.join(self.state, "dotclaude", "practices")
+        os.makedirs(d)
+        open(os.path.join(d, "denies"), "w").close()  # the state dir can't be made
+        for command in ("git push", "git commit -m x && git push", "gh pr create --title x"):
+            with self.subTest(command=command):
+                self.assertIsNone(self.pre(command))
+        self.assertIn("state-error", self.log())
+
     def test_a_clean_push_deletes_and_dry_runs_pass(self):
         self.commit(**{"clean.ts": "const a = 1\n"})
         self.assertIsNone(self.pre("git push"))
