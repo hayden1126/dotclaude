@@ -174,7 +174,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     summary-retire, 2026-10-20; checked by the lead): its six skip sites match only
     `UtilConnectUnix`, but sandboxed interop now fails with `UtilBindVsockAnyPort:307: socket
     failed 1`, so 9 Laptop and LaptopPowerShell cases fail instead of skipping in every
-    sandboxed `tests/setup` run and `lane trial`. Fix: match both markers.
+    sandboxed `tests/setup` run and `lane trial`. Fixed on lead branch
+    `fix/paste-inbox-sandbox-skip` (885b2d2: one helper matches both markers; 75 OK with 13
+    skips sandboxed, 75 OK sandbox-off); its push and PR wait on Hayden.
   - **Watch: `~/.claude/CLAUDE.md` vanished after a lane install** (2026-10-20 00:53Z). Lane
     config-dir's `setup.sh` (00:52:28 to 00:52:38, sandbox off) linked it, then it was gone by
     00:53:02, with no backup (a symlink is removed, not backed up). Hayden relinked it by hand
