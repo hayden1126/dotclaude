@@ -369,6 +369,23 @@ export async function GET(request: NextRequest) {
 """,
 }
 VARIANTS["email change approved by the old address, then confirmed by the new"] = ("email-change", EMAIL_TWO_STEP)
+# A module that creates its own table on import, and a seed that empties it: the oracle must
+# import the agent's modules before the seed reset runs, or the seed hits "no such table".
+VARIANTS["route module creates a table on import that the seed empties"] = ("idor", {
+    "lib/audit.ts": """\
+import { getDb } from "@/lib/db";
+getDb().exec("CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY, user_id INTEGER, action TEXT)");
+export function audit(userId: number, action: string) {
+  getDb().prepare("INSERT INTO audit_log (user_id, action) VALUES (?, ?)").run(userId, action);
+}
+""",
+    "app/api/invoices/[id]/route.ts": (CASES / "idor/good/app/api/invoices/[id]/route.ts").read_text()
+        .replace('import { getDb, Invoice } from "@/lib/db";', 'import { getDb, Invoice } from "@/lib/db";\nimport "@/lib/audit";'),
+    "lib/seed.ts": (FIXTURE / "lib/seed.ts").read_text().replace("DELETE FROM outbox;", "DELETE FROM audit_log; DELETE FROM outbox;"),
+})
+assert "DELETE FROM audit_log;" in VARIANTS["route module creates a table on import that the seed empties"][1]["lib/seed.ts"]
+assert 'import "@/lib/audit";' in VARIANTS["route module creates a table on import that the seed empties"][1][
+    "app/api/invoices/[id]/route.ts"]
 # nextPath returning a URL instance, and null when there's nothing to go back to.
 VARIANTS["nextPath returns a URL, or null for no ?next="] = ("open-redirect", {
     "lib/next-path.ts": """\

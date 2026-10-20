@@ -239,10 +239,34 @@ class Oracle {
     return Boolean(ok);
   }
 
+  // Imports the agent's route handlers and server action files once, before the first seed
+  // reset: a table their modules create on import then exists before a seed that empties it
+  // runs. An import error here is ignored; the case's own call meets it again and scores it.
+  async preload() {
+    if (this.preloaded) return;
+    this.preloaded = true;
+    for (const base of ["app", "src/app"]) {
+      let files = [];
+      try {
+        files = walk(path.join(FIXTURE, base));
+      } catch {
+        continue;
+      }
+      for (const file of files) {
+        const isRoute = /^route\.(ts|js|mjs)$/.test(path.basename(file));
+        if (!isRoute && !/["']use server["']/.test(readFileSync(file, "utf8"))) continue;
+        try {
+          await import(pathToFileURL(file).href);
+        } catch {}
+      }
+    }
+  }
+
   // Back to the seed. Tables the agent added (pending changes, reset tokens) are emptied too,
   // with foreign keys off, so a row of theirs that points at a user can't block the seed; a
   // transaction the agent's code left open is rolled back first.
   async reset() {
+    await this.preload();
     const db = this.dbModule.getDb();
     if (db.isTransaction) db.exec("ROLLBACK");
     db.exec("PRAGMA foreign_keys = OFF");
