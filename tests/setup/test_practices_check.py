@@ -1241,6 +1241,16 @@ class L3s(BashBase):
         self.assertIsNone(self.committed(pre=False, **{"new.ts": "y({ ...body })\n"}))
         self.assertIn("no repo was recorded", self.log()[len(before):])
 
+    def test_a_heads_record_without_worktrees_still_reads(self):
+        head = self.commit(**{"a.ts": "1\n"})
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            path = PC._heads_file(self.event("git commit -m x", "PostToolUse", "b-old"))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump({"heads": {os.path.join(self.proj, ".git"): head}}, f)
+        self.commit(**{"b.ts": "x({ ...body })\n"})
+        self.assertIn("b.ts:1", self.post("git commit -m x", "b-old"))
+
     def test_post_scans_the_repo_pre_recorded_not_a_reparse_from_its_cwd(self):
         # Review round 1: `cd sub && git commit` moves the session's cwd into sub, and a
         # re-parse from there looked for sub/sub, so the commit went unchecked.
