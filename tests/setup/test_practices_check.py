@@ -851,6 +851,71 @@ class Shipped(unittest.TestCase):
                 self.assertIsNone(PC.lint_regex(good))
 
 
+def load_bash_words():
+    spec = importlib.util.spec_from_file_location(
+        "bash_words", os.path.join(REPO, "hooks", "bash_words.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+BW = load_bash_words()
+
+
+class BashWords(unittest.TestCase):
+    """hooks/bash_words.py: the shared reader finds git and gh calls inside a Bash command."""
+
+    def git(self, command, cwd="/r"):
+        out = []
+        for _, args, prefix, c in BW.calls(command, {"git"}, cwd):
+            sub, rest, where = BW.git_call(args, prefix, c)
+            out.append(((sub, rest), where["cwd"]))
+        return out
+
+    def test_chains_and_wrappers_with_options(self):
+        cases = {
+            "git add -A && git commit -m x": [("add", ["-A"]), ("commit", ["-m", "x"])],
+            "sudo -E git commit": [("commit", [])],
+            "env -i git commit -q": [("commit", ["-q"])],
+            "sudo -u me git commit": [("commit", [])],
+            "timeout -k 5 30 git push": [("push", [])],
+            "nice -n 5 git commit; git push origin x": [("commit", []), ("push", ["origin", "x"])],
+            "FOO=1 git -c a=b commit || true": [("commit", [])],
+            "git status | grep x": [("status", [])],
+        }
+        for command, want in cases.items():
+            with self.subTest(command=command):
+                self.assertEqual([g for g, _ in self.git(command)], want)
+
+    def test_a_quoted_message_naming_git_push_is_no_push(self):
+        self.assertEqual([g[0] for g, _ in self.git('git commit -m "then git push it"')],
+                         ["commit"])
+        self.assertEqual([g[0] for g, _ in self.git("git commit -m 'x; git push'")], ["commit"])
+        self.assertEqual(self.git("echo 'git push'"), [])
+        self.assertEqual([g[0] for g, _ in self.git(
+            "git commit -F- <<'EOF'\ngit push origin main\nEOF\n")], ["commit"])
+
+    def test_cd_then_commit_runs_in_the_new_dir(self):
+        self.assertEqual(self.git("cd sub && git commit")[0][1], "/r/sub")
+        self.assertEqual(self.git("cd /abs/x && git commit")[0][1], "/abs/x")
+        self.assertIsNone(self.git('cd "$D" && git commit')[0][1])
+
+    def test_git_dir_work_tree_and_dash_c(self):
+        (_, args, prefix, cwd), = BW.calls("GIT_DIR=../o/.git git -C a -C b commit", {"git"}, "/r")
+        sub, _, where = BW.git_call(args, prefix, cwd)
+        self.assertEqual((sub, where["cwd"], where["git_dir"]), ("commit", "/r/a/b", "/r/a/o/.git"))
+        _, _, where = BW.git_call(["--git-dir=/g/.git", "--work-tree", "w", "commit"], [], "/r")
+        self.assertEqual((where["git_dir"], where["work_tree"]), ("/g/.git", "/r/w"))
+        for bad in (["-C", "$D", "commit"], ["--git-dir=%SUBST%", "commit"]):
+            with self.subTest(args=bad):
+                with self.assertRaises(BW.Unreadable):
+                    BW.git_call(bad, [], "/r")
+        with self.assertRaises(BW.Unreadable):
+            BW.git_call(["commit"], [("GIT_DIR", "$G")], "/r")
+        (_, args, prefix, _), = BW.calls("env GIT_DIR=/o/.git git commit", {"git"}, "/r")
+        self.assertEqual(BW.git_call(args, prefix, "/r")[2]["git_dir"], "/o/.git")
+
+
 class Globs(unittest.TestCase):
     def test_globs(self):
         cases = [("**/app/**/route.{ts,js}", "app/api/x/route.ts", True),

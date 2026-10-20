@@ -31,9 +31,10 @@ have denied 6, all a path built from $TMPDIR (directly, through a variable, or `
 in a command where $TMPDIR was /tmp. A sandboxed command is never judged, and neither is any
 other command: normal rm runs without prompts.
 
-How it reads a command: one quote-aware pre-pass joins backslash-newline continuations, drops `#`
-comments, skips heredoc bodies, and replaces each $(...), `...`, $((...)) and $'...' with a
-placeholder; then shlex splits the result into simple commands. Accepted limits (accidents, not
+How it reads a command (hooks/bash_words.py, shared with practices_check.py): one quote-aware
+pre-pass joins backslash-newline continuations, drops `#` comments, skips heredoc bodies, and
+replaces each $(...), `...`, $((...)) and $'...' with a placeholder; then shlex splits the result
+into simple commands. Accepted limits (accidents, not
 an adversary, are the target): `xargs rm` (its paths come from stdin), a delete inside
 `bash -c`, `eval`, a function or a script, a single-quoted '$X' (read as a variable: it can only
 over-deny), a glob two levels down (`~/*/*`), an array assigned from an unset variable
@@ -46,24 +47,20 @@ import itertools
 import json
 import os
 import re
-import shlex
 import sys
 import time
 
+# python3 -I leaves this file's directory off sys.path; the shared Bash reader sits beside it.
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import bash_words  # noqa: E402
+from bash_words import ASSIGN, SUBST, segments  # noqa: E402
+
 DELETERS = {"rm", "rmdir", "shred", "unlink"}
-# Words that can precede the command itself: wrappers and the shell keywords that open a body.
-KEYWORDS = {"do", "then", "else", "elif", "if", "while", "until", "!", "{", "time"}
-WRAPPERS = {"sudo", "doas", "command", "nohup", "env", "builtin", "exec", "timeout", "nice",
-            "ionice", "stdbuf", "chronic"}
 STABLE = {"HOME", "USER"}
-# Placeholders. They start with a character no variable name can hold, so `$p$(date)` stays two
-# parts; shlex keeps % inside a word.
-SUBST, ANSI, ARITH = "%SUBST%", "%ANSI%", "%ARITH%"
 TAINT = object()      # a value built from something untrusted
 EMPTYABLE = object()  # a lone command substitution, which can come back empty
 UNKNOWN = object()    # set by the command, value unknown (read, a for over a substitution)
 VAR = re.compile(r"\$(?:\{([^}]*)\}|([A-Za-z_][A-Za-z0-9_]*)|([0-9@*#?!-]))")
-ASSIGN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.S)
 FIND_FILTERS = {"-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename", "-regex",
                 "-iregex", "-newer", "-mtime", "-mmin", "-user", "-size", "-empty"}
 MAX_CANDIDATES = 64
@@ -81,187 +78,12 @@ def log(line):
 
 
 # --- Reading the command ----------------------------------------------------------------------
-
-def skip_quoted(s, i, quote, escapes=None):
-    """Index just past the quote that closes one opened before i. Backslash escapes count except
-    in single quotes; $'...' passes escapes=True, since there \\' is an escaped quote."""
-    escapes = quote != "'" if escapes is None else escapes
-    while i < len(s):
-        if s[i] == "\\" and escapes:
-            i += 2
-            continue
-        if s[i] == quote:
-            return i + 1
-        i += 1
-    return i
-
-
-def closing(s, i):
-    """Index just past the `)` that closes a `$(` opened before i: nested parentheses count,
-    while quotes, comments, escapes and heredoc bodies are skipped."""
-    depth, pending = 1, []
-    while i < len(s) and depth:
-        c = s[i]
-        if c == "\\":
-            i += 2
-            continue
-        if c in "'\"`":
-            i = skip_quoted(s, i + 1, c)
-            continue
-        if c == "#" and (s[i - 1] in " \t\n;&|("):
-            while i < len(s) and s[i] != "\n":
-                i += 1
-            continue
-        if s.startswith("<<<", i):
-            i += 3
-            continue
-        if s.startswith("<<", i):
-            m = HEREDOC.match(s, i)
-            if m:
-                pending.append(delimiter(m))
-                i = m.end()
-                continue
-        if c == "\n" and pending:
-            i = skip_bodies(s, i + 1, pending)
-            pending = []
-            continue
-        depth += c == "("
-        depth -= c == ")"
-        i += 1
-    return i
-
-
-def delimiter(m):
-    return next(g for g in m.groups()[1:] if g is not None)
-
-
-def skip_bodies(s, i, pending):
-    """Index just past the heredoc bodies that start at i, one per pending delimiter: each runs
-    to a line holding only its delimiter."""
-    for end in pending:
-        while i < len(s):
-            j = s.find("\n", i)
-            line, i = (s[i:], len(s)) if j == -1 else (s[i:j], j + 1)
-            if line.strip() == end:
-                break
-    return i
-
-
-HEREDOC = re.compile(r"<<(-?)\s*(?:'([^']*)'|\"([^\"]*)\"|\\?([A-Za-z_0-9.-]+))")
-
-
-def prepass(command):
-    """The command with continuations joined, comments dropped, heredoc bodies skipped, and each
-    $(...), `...`, $((...)) and $'...' replaced by a placeholder, all outside single quotes."""
-    s, out, i, quote, pending = command, [], 0, None, []
-    while i < len(s):
-        c = s[i]
-        if quote == "'":
-            quote = None if c == "'" else quote
-            out.append(c)
-            i += 1
-            continue
-        if c == "\\":
-            if s[i + 1:i + 2] == "\n":
-                i += 2
-                continue
-            out.append(s[i:i + 2])
-            i += 2
-            continue
-        if c == '"':
-            quote = None if quote == '"' else '"'
-        elif quote is None and c == "'":
-            quote = "'"
-        elif quote is None and s.startswith("$'", i):
-            i = skip_quoted(s, i + 2, "'", escapes=True)
-            out.append(ANSI)
-            continue
-        elif quote is None and c == "#" and (i == 0 or s[i - 1] in " \t\n;&|("):
-            while i < len(s) and s[i] != "\n":
-                i += 1
-            continue
-        elif quote is None and s.startswith("<<<", i):  # a here-string, not a heredoc
-            out.append("<<<")
-            i += 3
-            continue
-        elif quote is None and s.startswith("<<", i):
-            line = "".join(out).rsplit("\n", 1)[-1]
-            m = None if line.count("((") > line.count("))") else HEREDOC.match(s, i)  # a shift
-            if m:
-                pending.append(delimiter(m))
-                out.append(" ")
-                i = m.end()
-                continue
-        elif quote is None and c == "\n" and pending:
-            out.append("\n")
-            i = skip_bodies(s, i + 1, pending)
-            pending = []
-            continue
-        if s.startswith("$((", i):
-            i = closing(s, i + 3)
-            i += s[i:i + 1] == ")"
-            out.append(ARITH)
-            continue
-        if s.startswith("$(", i):
-            i = closing(s, i + 2)
-            out.append(SUBST)
-            continue
-        if c == "`":
-            i = skip_quoted(s, i + 1, "`")
-            out.append(SUBST)
-            continue
-        out.append(c)
-        i += 1
-    return "".join(out)
-
-
-def segments(command):
-    """Simple commands as word lists, split at ; && || | & ( ) and newlines."""
-    lex = shlex.shlex(prepass(command), posix=True, punctuation_chars=";&|()")
-    lex.whitespace = " \t\r"
-    lex.wordchars += "$-./~*?[]{}=:+@%,^!#"
-    lex.commenters = ""
-    seg = []
-    for tok in lex:
-        if tok == "\n" or (tok and set(tok) <= set(";&|()")):
-            if seg:
-                yield seg
-            seg = []
-        else:
-            seg.append(tok)
-    if seg:
-        yield seg
-
+# bash_words.py has the pre-pass, the segment split and the wrapper walk.
 
 def command_words(words):
-    """(name, args, prefix assignments) of a simple command; name is None for a pure assignment.
-    Through wrappers (`sudo -u x rm`, `timeout 60 rm`, `nice rm`), the wrapped command counts: an
-    option, an assignment and a count are skipped, and so is the word after an option unless it
-    names a deleter."""
-    prefix, i = [], 0
-    while i < len(words) and (ASSIGN.match(words[i]) or words[i] in KEYWORDS):
-        if ASSIGN.match(words[i]):
-            prefix.append(ASSIGN.match(words[i]).groups())
-        i += 1
-    if i >= len(words):
-        return None, [], prefix
-    while os.path.basename(words[i]) in WRAPPERS:
-        j, after_option = i + 1, False
-        while j < len(words):
-            w, base = words[j], os.path.basename(words[j])
-            if w.startswith("-"):
-                after_option = True
-            elif ASSIGN.match(w) or re.fullmatch(r"\d+(\.\d+)?[smhd]?", w):  # `timeout 30s`
-                after_option = False
-            elif after_option and base not in DELETERS | {"find"} | WRAPPERS:
-                after_option = False  # the option's own argument (`-u x`)
-            else:
-                break
-            j += 1
-        if j >= len(words):
-            break
-        i = j
-    return os.path.basename(words[i]), words[i + 1:], prefix
+    """(name, args, prefix assignments) of a simple command, through wrappers: an option's
+    argument is skipped unless it names a deleter or find."""
+    return bash_words.command_words(words, DELETERS | {"find"})
 
 
 # --- Judging values ---------------------------------------------------------------------------
@@ -478,21 +300,13 @@ def judge(command):
 def cd_target(args, state):
     """The cwd after a cd: TAINT into an untrusted or possibly empty path (`cd "$(mktemp -d)"`
     stays put when mktemp prints nothing), a known path, or None when it can't be told."""
-    target = next((a for a in args if not a.startswith("-") or a == "-"), "~")
-    if target == "-":
-        return None
-    keys = [k for k, _, _ in refs(target)]
-    if problem(target, state) or SUBST in target or \
-            any(state["vars"].get(k) is EMPTYABLE for k in keys):
-        return TAINT
-    known = candidates(target, state)
-    if len(known) != 1:
-        return None
-    if known[0].startswith("/"):
-        return os.path.normpath(known[0])
-    cwd = state["cwd"]
-    return cwd if cwd is TAINT else (os.path.normpath(os.path.join(cwd, known[0]))
-                                     if isinstance(cwd, str) else None)
+    target = bash_words.cd_arg(args)
+    if target is not None:
+        keys = [k for k, _, _ in refs(target)]
+        if problem(target, state) or SUBST in target or \
+                any(state["vars"].get(k) is EMPTYABLE for k in keys):
+            return TAINT
+    return bash_words.cd_target(args, state["cwd"], lambda w: candidates(w, state))
 
 
 def loop_value(items, state):
