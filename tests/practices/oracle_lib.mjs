@@ -256,6 +256,10 @@ class Oracle {
     return this.dbModule.getDb().prepare(sql).all(...args);
   }
 
+  run(sql, ...args) {
+    return this.dbModule.getDb().prepare(sql).run(...args);
+  }
+
   // Mail the app queued with lib/mail.ts.
   outbox(to) {
     return this.rows("SELECT to_address, subject, body FROM outbox WHERE lower(to_address) = lower(?) ORDER BY id", to);

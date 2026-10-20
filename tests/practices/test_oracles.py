@@ -111,6 +111,9 @@ class OracleVerdicts(unittest.TestCase):
     def test_reset_host(self):
         self.check_case("reset-host")
 
+    def test_csv_injection(self):
+        self.check_case("csv-injection")
+
 
 # Secure implementations written differently from good/: each must still score pass.
 VARIANTS = {
