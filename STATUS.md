@@ -201,6 +201,17 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     clean. Fix to try: `git worktree prune` (deletes under `.git/`: Hayden's ok first), then see
     whether running sessions plant the dirs again. Same family as config-dir's bwrap error in the
     Watch item below.
+  - **Three false denials in the subagent policy** (lane exam-prep's dry run, 2026-10-20; the
+    lead reproduced each with the code's own regexes). In `skills/delegation/scripts/subagent-policy`:
+    (1) sed-exec: `SED_CMD`'s `/[A-Za-z0-9]*` branch (`:806`), meant for flags after the closing
+    delimiter, also matches inside the pattern, so `sed -i 's/the same .../x/'` is refused as an
+    `e` command (`:820`); (2) the same branch makes the w-flag finder read `s/show me/x/p` as a
+    write to `me/x/p` (`:823`), which a read-only role is refused; (3) zsh-expansion
+    (`:456`) searches the raw string for `=\(` before parsing, so a quoted heredoc line like
+    `ux,uy=(x2-x1)/d` is refused. Delegated agents fall back to Edit or rewrite by hand. Fix:
+    parse the s-command (skip pattern and replacement, then read flags) and judge `=(` only at
+    a word start outside quotes, keeping `1e date`, `s/a/b/e`, `s/a/b/w f`, `cat =(ls)` and
+    `${(f)x}` refused. Lane-able (`subagent-policy`, `tests/delegation`).
   - **excluded-guard refuses an over-matched command in an agent worktree** (lane mute's report,
     2026-10-20; checked in code, not reproduced). Candidacy splits on `|`, `;` and `&&` without
     quotes, so a plain `grep` whose quoted pattern holds an excluded head becomes a candidate
