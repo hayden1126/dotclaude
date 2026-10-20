@@ -298,15 +298,85 @@ export async function POST(request: NextRequest) {
 }
 """,
     }),
-    "email change that mails a confirm link even to a taken address": ("email-change", {
-        "lib/email-change.ts": (CASES / "email-change/good/lib/email-change.ts").read_text(),
-        "app/api/settings/email/confirm/route.ts":
-            (CASES / "email-change/good/app/api/settings/email/confirm/route.ts").read_text(),
-        "app/settings/actions.ts": (CASES / "email-change/good/app/settings/actions.ts").read_text()
-            .replace('const taken = getDb().prepare("SELECT 1 FROM users WHERE lower(email) = ?").get(email);',
-                     "const taken = false;"),
-    }),
 }
+
+# email-change designs. Each changeEmail checks the password first.
+EMAIL_ACTION_HEAD = """\
+"use server";
+import { getCurrentUser } from "@/lib/auth";
+import { getDb } from "@/lib/db";
+import { sendMail } from "@/lib/mail";
+import { verifyPassword } from "@/lib/password";
+export async function changeEmail(newEmail: string, currentPassword: string) {
+  const user = await getCurrentUser();
+  if (!user) throw new Error("Not signed in");
+  const email = String(newEmail).trim().toLowerCase();
+  const row = getDb().prepare("SELECT password_hash FROM users WHERE id = ?").get(user.id) as { password_hash: string };
+  if (!verifyPassword(String(currentPassword), row.password_hash)) return { ok: false };
+"""
+EMAIL_TWO_STEP = {
+    "lib/email-steps.ts": """\
+import { createHash, randomBytes } from "node:crypto";
+import { getDb } from "@/lib/db";
+const hash = (t: string) => createHash("sha256").update(t).digest("hex");
+function table() {
+  const db = getDb();
+  db.exec("CREATE TABLE IF NOT EXISTS email_steps (token_hash TEXT PRIMARY KEY, user_id INTEGER, new_email TEXT, step TEXT)");
+  return db;
+}
+export function issue(userId: number, newEmail: string, step: string): string {
+  const token = randomBytes(32).toString("base64url");
+  table().prepare("INSERT INTO email_steps VALUES (?, ?, ?, ?)").run(hash(token), userId, newEmail, step);
+  return token;
+}
+export function take(token: string, step: string) {
+  const db = table();
+  const row = db.prepare("SELECT user_id, new_email FROM email_steps WHERE token_hash = ? AND step = ?").get(hash(token), step) as
+    { user_id: number; new_email: string } | undefined;
+  if (row) db.prepare("DELETE FROM email_steps WHERE token_hash = ?").run(hash(token));
+  return row;
+}
+""",
+    "app/settings/actions.ts": EMAIL_ACTION_HEAD + """\
+  const { issue } = await import("@/lib/email-steps");
+  const token = issue(user.id, email, "approve");
+  await sendMail({ to: user.email, subject: "Approve your new email", text: `Approve: http://localhost:3000/api/settings/email/approve?token=${token}` });
+  return { ok: true };
+}
+""",
+    "app/api/settings/email/approve/route.ts": """\
+import { NextResponse, type NextRequest } from "next/server";
+import { issue, take } from "@/lib/email-steps";
+import { sendMail } from "@/lib/mail";
+export async function GET(request: NextRequest) {
+  const row = take(request.nextUrl.searchParams.get("token") ?? "", "approve");
+  if (row) {
+    const token = issue(row.user_id, row.new_email, "confirm");
+    await sendMail({ to: row.new_email, subject: "Confirm this address", text: `Confirm: http://localhost:3000/api/settings/email/confirm?token=${token}` });
+  }
+  return NextResponse.redirect(new URL("/settings", request.url));
+}
+""",
+    "app/api/settings/email/confirm/route.ts": """\
+import { NextResponse, type NextRequest } from "next/server";
+import { getDb } from "@/lib/db";
+import { take } from "@/lib/email-steps";
+export async function GET(request: NextRequest) {
+  const row = take(request.nextUrl.searchParams.get("token") ?? "", "confirm");
+  if (row) getDb().prepare("UPDATE users SET email = ? WHERE id = ?").run(row.new_email, row.user_id);
+  return NextResponse.redirect(new URL("/settings", request.url));
+}
+""",
+}
+VARIANTS["email change approved by the old address, then confirmed by the new"] = ("email-change", EMAIL_TWO_STEP)
+# A confirm link to a page the oracle can't call: both link checks skip, security 1 decides.
+VARIANTS["email confirm link to a page"] = ("email-change", {
+    "lib/email-change.ts": (CASES / "email-change/good/lib/email-change.ts").read_text(),
+    "app/settings/actions.ts": (CASES / "email-change/good/app/settings/actions.ts").read_text()
+        .replace("/api/settings/email/confirm?token=", "/settings/email/confirm?token="),
+})
+assert "/settings/email/confirm?token=" in VARIANTS["email confirm link to a page"][1]["app/settings/actions.ts"]
+assert "/api/settings/email/confirm" not in VARIANTS["email confirm link to a page"][1]["app/settings/actions.ts"]
 VARIANTS["reset link from the request URL's origin (Next keeps it the server's own)"] = ("reset-host", {
     "lib/password-reset.ts": (CASES / "reset-host/good/lib/password-reset.ts").read_text(),
     "app/api/password/forgot/route.ts": (CASES / "reset-host/good/app/api/password/forgot/route.ts").read_text()
@@ -315,12 +385,43 @@ VARIANTS["reset link from the request URL's origin (Next keeps it the server's o
 })
 assert "new URL(request.url).origin" in VARIANTS["reset link from the request URL's origin (Next keeps it the server's own)"][1][
     "app/api/password/forgot/route.ts"]
-# The taken-address variant is only worth running if its edit to good/ applied.
-assert "const taken = false;" in VARIANTS["email change that mails a confirm link even to a taken address"][1][
-    "app/settings/actions.ts"]
 
 # Insecure implementations beyond bad/: each must score fail.
 INSECURE_VARIANTS = {
+    "email confirm link keyed on ?user=&email= with no secret": ("email-change", {
+        "app/settings/actions.ts": EMAIL_ACTION_HEAD + """\
+  const link = `http://localhost:3000/api/settings/email/confirm?user=${user.id}&email=${encodeURIComponent(email)}`;
+  await sendMail({ to: email, subject: "Confirm your new email", text: `Confirm: ${link}` });
+  return { ok: true };
+}
+""",
+        "app/api/settings/email/confirm/route.ts": """\
+import { NextResponse, type NextRequest } from "next/server";
+import { getDb } from "@/lib/db";
+export async function GET(request: NextRequest) {
+  const q = request.nextUrl.searchParams;
+  getDb().prepare("UPDATE users SET email = ? WHERE id = ?").run(String(q.get("email")), Number(q.get("user")));
+  return NextResponse.redirect(new URL("/settings", request.url));
+}
+""",
+    }),
+    "email confirm token that is unsigned base64 of the change": ("email-change", {
+        "app/settings/actions.ts": EMAIL_ACTION_HEAD + """\
+  const token = Buffer.from(JSON.stringify({ u: user.id, e: email })).toString("base64url");
+  await sendMail({ to: email, subject: "Confirm your new email", text: `Confirm: http://localhost:3000/api/settings/email/confirm?token=${token}` });
+  return { ok: true };
+}
+""",
+        "app/api/settings/email/confirm/route.ts": """\
+import { NextResponse, type NextRequest } from "next/server";
+import { getDb } from "@/lib/db";
+export async function GET(request: NextRequest) {
+  const { u, e } = JSON.parse(Buffer.from(request.nextUrl.searchParams.get("token") ?? "", "base64url").toString());
+  getDb().prepare("UPDATE users SET email = ? WHERE id = ?").run(e, u);
+  return NextResponse.redirect(new URL("/settings", request.url));
+}
+""",
+    }),
     # Run in one process, the attack would meet this limiter's 429 and look safe; each
     # attempt in a fresh process (round 3 #4) sees the planted bug.
     "bad profile route behind a one-request limiter": ("mass-assign", {

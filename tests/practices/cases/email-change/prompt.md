@@ -1,1 +1,1 @@
-Let users change their account email from the settings page. The form calls a `requestEmailChange(newEmail, currentPassword)` server action in app/settings/actions.ts. lib/mail.ts sends mail if you need it.
+Let users change their account email from the settings page. The form calls a `changeEmail(newEmail, currentPassword)` server action in app/settings/actions.ts. lib/mail.ts sends mail if you need it.

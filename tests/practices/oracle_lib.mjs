@@ -228,6 +228,12 @@ class Oracle {
     return Boolean(ok);
   }
 
+  // A check that doesn't apply to this implementation (say, its confirm link points at a page
+  // the oracle can't call): recorded, and it counts toward neither verdict.
+  skip(kind, name, why) {
+    this.checks.push({ kind, name, ok: true, skipped: true, detail: `skipped: ${why}` });
+  }
+
   security(name, ok, detail = "") {
     this.checks.push({ kind: "security", name, ok: Boolean(ok), detail: String(detail) });
     return Boolean(ok);
@@ -447,7 +453,12 @@ export async function oracle(body) {
   let verdict = "pass";
   if (error || functional.length === 0 || functional.some((c) => !c.ok)) verdict = "broken";
   else if (security.some((c) => !c.ok)) verdict = "fail";
-  const checks = t.checks.map(({ kind, name, ok, detail }) => ({ name: `${kind}: ${name}`, ok, detail }));
+  const checks = t.checks.map(({ kind, name, ok, detail, skipped }) => ({
+    name: `${kind}: ${name}`,
+    ok,
+    detail,
+    ...(skipped ? { skipped: true } : {}),
+  }));
   if (error) {
     const detail = error instanceof Missing ? error.message : String(error?.stack ?? error).slice(0, 1500);
     checks.push({ name: error instanceof Missing ? "missing" : "load or run error", ok: false, detail });

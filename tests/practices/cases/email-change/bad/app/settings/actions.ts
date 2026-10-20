@@ -7,7 +7,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { verifyPassword } from "@/lib/password";
 
-export async function requestEmailChange(newEmail: string, currentPassword: string) {
+export async function changeEmail(newEmail: string, currentPassword: string) {
   const user = await getCurrentUser();
   if (!user) throw new Error("Not signed in");
 
