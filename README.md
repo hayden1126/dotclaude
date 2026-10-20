@@ -31,6 +31,11 @@ symlinked, because the Claude Code runtime rewrites it (persisting managed keys 
 `extraKnownMarketplaces`). A symlink would push that churn back into the repo; the copy keeps the
 repo file as a curated baseline while the runtime owns its own copy.
 
+Each link and the `settings.json` copy land with one rename over the old entry, so an installed
+path doesn't go missing mid-run, where a sandboxed command could catch it. Three cases still
+remove first: a real directory in the way (moved to the backup), a real file `cp` can't read,
+and any old link on git-bash, since Windows won't rename over a link to a directory.
+
 A run also prunes installed links that no longer belong: dangling ones into this checkout, and
 ones into a lane worktree (Lanes, below). When a mod or plugin changed since the last install,
 it says so in one line. A session that started before the install loads those only at its start,

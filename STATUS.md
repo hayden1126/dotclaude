@@ -87,13 +87,16 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lanes** (opened 2026-10-19; briefs in each record). Merge order: 1 practices
-    (carries the lead's notes; `feat/practices-suite`, opened 2026-10-19 at Hayden's ask: the skill suite below, researched
-    from his project memories and online sources, then the security skill only; Hayden picked
-    "security first"). pr-horizon merged as #135 and config-dir as #133 (2026-10-20): installed from main, both
-    lanes closed.
-    2 summary-retire (`chore/retire-summary-rows`) and 3 link-atomic (`fix/setup-atomic-link`),
-    both opened 2026-10-20 on Hayden's ok (Backlog items below). The lanes cap (3) is full.
+  - **Live lanes** (briefs in each record). Merge order (Hayden's reorder, 2026-10-20: the
+    atomic link first, so no later install runs the old `link()`): 1 link-atomic
+    (`fix/setup-atomic-link`, carries the lead's notes), 2 summary-retire
+    (`chore/retire-summary-rows`, which also takes the ccstatusline crash fix, Hayden's pick the
+    same day), 3 practices (`feat/practices-suite`, opened 2026-10-19 at Hayden's ask: the skill
+    suite below, researched from his project memories and online sources, then the security
+    skill only; Hayden picked "security first"; its spec waits on his review). link-atomic and
+    summary-retire opened 2026-10-20 on Hayden's ok (Backlog items below). pr-horizon merged as
+    #135 and config-dir as #133 (2026-10-20): installed from main, both lanes closed. The lanes
+    cap (3) is full.
   - **Lane ask quality: done** (2026-10-19 to 2026-10-20). ask-check merged as #131 and was
     installed from main 2026-10-20: a PreToolUse hook on AskUserQuestion (`hooks/ask_check.py`)
     denies risky asks with a checklist in the reason. branch-reuse merged as #130: `lane new`
@@ -148,14 +151,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     GDPR, session replay, CAN-SPAM, renewal terms, DMCA agent, privacy policy) and launch (store
     metadata, Open Graph, Search Console, IndexNow). Lead's pick: OWASP ASVS as the security
     backbone, the reels' concrete failures as planted-bug evals.
-  - **Gap check against AWS's agentic AI security principles** (Hayden, 2026-10-19): read
-    https://aws.amazon.com/blogs/security/four-security-principles-for-agentic-ai-systems/ and
-    list what dotclaude's guards (sandbox, permission rules, delete, overwrite and excluded-command
-    guards, subagent policy, lanes) don't cover. Unfixed security gaps go to the private
-    findings file, not here ([[dotclaude-public-repo]]).
-  - **setup.sh's ccstatusline write crashes on an odd settings shape** (from lane json-depth's PR 1
-    writer, 2026-10-19; predates it): the heredoc's `has_ctx_widget` assumes `lines` is a list of
-    lists, and a directory at the destination crashes it too.
+  - **Fixes from the AWS agentic-security gap check** (backlog, Hayden 2026-10-20: "not
+    today"). The check ran 2026-10-20 from the lead: ten gaps (ids A1 to A10, each re-checked
+    against the code) with a proposed fix per gap, in the private findings file's "Gap check
+    2026-10-20" section. The lead suggests one lane for A1, A8 and A9 (rules, a test and docs;
+    no design fork) when a slot frees; the rest need Hayden's pick first. Details stay there
+    ([[dotclaude-public-repo]]).
   - **Lanes tell the lead before an act past their worktree: merged as #136** (lead PR,
     2026-10-20, installed from main). New briefs drop the hand-written "Message the lead before
     any act..." Constraints line: the skill carries it (Lifecycle step 3).
@@ -167,10 +168,20 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     summary-retire; at its merge the lead updates memory `dotclaude-session-summary-statusline`.
   - **A device-wide toggle for the toast and the sound** (Hayden, 2026-10-20): one switch that
     mutes the Windows toast and the notify ring for every session on the machine (no toggle
-    exists today). Both fire from `hooks/notify.sh` (toast plus `play_ring`) and the Stop ring
-    (`stop-ring.sh`), via `play_ring` in `hooks/session-pane.sh`. Shape to settle: a flag file
-    in the state dir (instant, every session) versus a setting, and whether toast and sound
-    toggle apart; a tmux menu entry would fit the tab bar. Lane-able (`hooks/`, `tmux/`, tests).
+    exists today). Design settled 2026-10-20 (Hayden picked the lead's pick on all four forks:
+    `PLAN.md`, "Next: a device-wide mute"); it opens as a lane when a slot frees (`hooks/`,
+    `tmux/`, tests; no live lane's files).
+  - **`setup-tmux.sh`'s own `link()` has #140's gap class** (lane link-atomic's report,
+    2026-10-20). `setup-tmux.sh:62-71` moves a real file aside, then runs `ln -sfn`. GNU ln
+    9.4 replaces a link with no missing window (the lead's race test: 0 misses in about 600k
+    checks over 6000 swaps), but BSD/macOS `ln -sf` unlinks first, and the move-aside leaves a
+    window on every platform on a first install. Fix: reuse #140's temp-name and `os.replace`
+    swap once it merges. The mute lane edits `setup-tmux.sh:73-78`, so it can take this.
+  - **paste-inbox's sandbox skip: merged as #138** (lead PR, 2026-10-20, from lane
+    summary-retire's report): sandboxed WSL interop now fails with `UtilBindVsockAnyPort`, not
+    `UtilConnectUnix`, so 9 Laptop and LaptopPowerShell cases failed instead of skipping; one
+    helper matches both. Tests only, so no reinstall (none held, and it skipped running the old
+    `link()` again).
   - **Watch: `~/.claude/CLAUDE.md` vanished after a lane install** (2026-10-20 00:53Z). Lane
     config-dir's `setup.sh` (00:52:28 to 00:52:38, sandbox off) linked it, then it was gone by
     00:53:02, with no backup (a symlink is removed, not backed up). Hayden relinked it by hand
@@ -286,8 +297,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lanes practices (merge order 1, carries the lead branch), summary-retire (2) and
-     link-atomic (3) run; their state is in their records (`lane ls`). After each reinstall,
+  0. Lanes link-atomic (merge order 1, carries the lead branch), summary-retire (2) and
+     practices (3) run; their state is in their records (`lane ls`). After each reinstall,
      check `ls -la ~/.claude/CLAUDE.md` (the Watch item). Watch that push asks open with the
      briefing (#137); if they skip it, the Stop-hook check is the follow-up (Hayden's pick).
   1. Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
