@@ -15,7 +15,8 @@ retro. Two completed runs set the baseline. Every rule here traces to a correcti
 (`references/feedback-log.md`, ids `FB-NNN`; tool gotchas in `references/lessons.md`, ids `LNN`).
 
 Two ideas carry it. **Nothing reaches the student unverified:** extraction is verbatim, every
-computed value comes from a checker, and fresh reviewers audit every condensation. **All state lives
+computed value comes from a checker (in a course with nothing to compute, from a cited source
+that reviewers re-derive), and fresh reviewers audit every condensation. **All state lives
 in the hub's files**, so any stage resumes in a fresh session.
 
 `<skill>` below means this skill's base directory (Claude Code prints it when the skill loads). Run
@@ -54,7 +55,7 @@ session) when the hub has its own conventions:
 | `MANIFEST.md` | one row per source: the one statement of scope | tracked |
 | `PLAN.md`, `STATUS.md` | the approved plan; state, judgment calls and artifact URLs | tracked |
 | `sources/` | course material as received; `sources/ed/` the Ed digest and raw pull | ignored |
-| `_build/pages/`, `_build/text/` | per-page renders | ignored |
+| `_build/pages/`, `_build/text/`, `_build/slices/`, `_build/media/` | renders, deck slices, extracted images | ignored |
 | `_build/` (rest) | extracts, backbone, checker, hub copies of STYLE, CHASSIS, CONVERT, page build | tracked |
 | `notes/`, `cheatsheet/`, `practice/` | the products; `practice/*-key.md` quarantined | tracked |
 
@@ -66,13 +67,13 @@ Each stage is a workflow file. Load only the one you are in.
 |---|---|---|---|
 | 00 | `workflows/00-intake.md` | hub, `CLAUDE.md`, `MANIFEST.md` scope, approved `PLAN.md` | PLAN.md reads `Approved: <date>` |
 | 01 | `workflows/01-ingest.md` | `sources/`, `MANIFEST.md`, renders, Ed digest | every in-scope row has pages on disk |
-| 02 | `workflows/02-extract.md` | `_build/extract/<doc>.md` | one extract per in-scope row |
+| 02 | `workflows/02-extract.md` | `_build/extract/<name>.md` | `extract_check.py` exits 0 |
 | 03 | `workflows/03-backbone.md` | `_build/backbone.md`: order, id registry, coverage | the coverage check is clean |
-| 04 | `workflows/04-write.md` | `notes/NN-<slug>.md`, wired | `linkcheck.py` is clean |
-| 05 | `workflows/05-verify.md` | checker, reviews applied | self-test passes, no `TODO-VERIFY` left |
+| 04 | `workflows/04-write.md` | `notes/NN-<slug>.md`, wired | `linkcheck.py` is clean (plain-text notes: references checked by hand) |
+| 05 | `workflows/05-verify.md` | checker, reviews applied | self-test covers every official part (or nothing is computable), no `TODO-VERIFY` left |
 | 06 | `workflows/06-site.md` | the notes page, published | `verify_page.mjs` passes, URL in STATUS |
 | 07 | `workflows/07-cheatsheet.md` | sheet HTML and PDF (only if allowed) | `check_pdf.py` passes |
-| 08 | `workflows/08-practice.md` | mock, quarantined key, mock page | the key script asserts every value |
+| 08 | `workflows/08-practice.md` | mock, quarantined key, mock page | the key script asserts every computable value |
 | 09 | `workflows/09-tutor.md` | walk-throughs, notes patches | on demand |
 | 10 | `workflows/10-polish.md` | scan, report, apply on approval | on demand |
 | 11 | `workflows/11-next-exam.md` | the hub extended for the next exam | reconciled, new scope in MANIFEST |
@@ -85,7 +86,8 @@ Each stage is a workflow file. Load only the one you are in.
 2. **Verbatim extraction before writing.** Never WebFetch slides: it returns a summary that drops
    formulas and slide numbers. Fetch raw with curl and render PDFs page by page (FB-040, L01).
 3. **No hand-computed values.** Every trace, number and key answer comes from a checker that first
-   reproduces the official solutions (FB-090, FB-100).
+   reproduces the official solutions (FB-090, FB-100). When PLAN.md's Checker line says nothing
+   is computable, each comes from a cited source, its working shown for the reviewers to redo.
 4. **Keys are quarantined.** A key lives in its own file under a STOP header; no page build reads it
    (FB-154).
 5. **Course material is copyrighted.** `sources/` and renders stay gitignored, the hub repo stays

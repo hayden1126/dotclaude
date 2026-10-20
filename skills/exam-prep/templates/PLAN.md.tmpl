@@ -31,12 +31,12 @@ Each line ends with its source: the student, `Ed #N`, `<file>:<line>`, or (defau
 
 | # | Product | Path | Done when |
 |---|---|---|---|
-| 1 | Topic notes, the source of truth | `notes/NN-<slug>.md` | `linkcheck.py` clean, reviews applied |
+| 1 | Topic notes, the source of truth | `notes/NN-<slug>.md` | `linkcheck.py` clean (plain-text notes: references checked by hand), reviews applied |
 | 2 | Notes page | `_build/notes.html`, a private artifact | `verify_page.mjs` passes, URL in STATUS |
 | 3 | Cheat sheet, only if allowed: a mock sheet with nothing derived from the mock, and a final sheet that adds those items after the attempt | `cheatsheet/` | `check_pdf.py` passes on both |
-| 4 | Mock exam, quarantined key, mock page | `practice/mock-{{EXAM_SLUG}}.md`, `practice/mock-{{EXAM_SLUG}}-key.md` | the key script asserts every value |
+| 4 | Mock exam, quarantined key, mock page | `practice/mock-{{EXAM_SLUG}}.md`, `practice/mock-{{EXAM_SLUG}}-key.md` | the key script asserts every computable value; the cold solver's disagreements are settled |
 | 5 | Cram order, offered the night before | `practice/cram-order.md` | every item links into the verified notes |
-| 6 | Checker | `_build/verify/` | its self-test reproduces every official solution |
+| 6 | Checker, {{ONLY IF SOMETHING IS COMPUTABLE}} | `_build/verify/` | its self-test checks every official part (or skips one it can't compute) |
 
 Out of scope: the `reserved` and `out` rows of `MANIFEST.md`; deploys beyond private artifacts;
 any push or remote.
@@ -54,10 +54,10 @@ spawn, and spawn unnamed.
 | 02 extract | {{N}} agents | {{DECK SPLITS: one whole deck per agent; decks over P pages split at a section divider, 3-page overlap}} | `_build/extract/<doc>.md` |
 | 03 backbone | main | {{EXPECTED SECTIONS, final cut set by the extracts}} | `_build/backbone.md` |
 | 04 write | {{N}} writers | one per backbone section | `notes/NN-<slug>.md` |
-| 05 verify | main, {{N}} reviewers, 1 cold solver | | fixes applied single-threaded |
+| 05 verify | main, {{N}} section reviewers, {{N}} checklist auditors | | fixes applied single-threaded |
 | 06 site | {{N}} converters, then main | | the notes page |
 | 07 cheat sheet | {{main or 1 agent}} | {{ONLY IF ALLOWED}} | `cheatsheet/` |
-| 08 practice | {{N}} agents | {{QUESTION SHAPES}} | `practice/` |
+| 08 practice | {{N}} agents, then 1 cold solver | {{QUESTION SHAPES}} | `practice/` |
 
 `pending` rows of `MANIFEST.md` are checked at every stage boundary: one that has arrived is
 ingested and extracted before stage 03 runs, or before the next stage when 03 is done.
@@ -78,4 +78,5 @@ cross-references, the mock views and the checker each name the rule above that g
 
 - Every deliverable's "done when" holds.
 - `STATUS.md` lists every published artifact's URL and every judgment call.
-- Nothing under `sources/`, `_build/pages/` or `_build/text/` is tracked; no remote exists.
+- Nothing under `sources/`, `_build/pages/`, `_build/text/`, `_build/slices/` or `_build/media/` is
+  tracked; no remote exists.

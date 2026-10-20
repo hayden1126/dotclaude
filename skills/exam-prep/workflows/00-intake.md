@@ -27,7 +27,8 @@ directory, and a sandboxed session commits only to a repo inside its own root. S
 - **Every case:** `<root>` must be a git repo of its own (`git init` there when
   `git -C <root> rev-parse --show-toplevel` doesn't print `<root>`), and its `.gitignore` gets
   these lines before any source lands, keeping any lines already there: `sources/`,
-  `_build/pages/`, `_build/text/`, `node_modules/`, `__pycache__/` (FB-011).
+  `_build/pages/`, `_build/text/`, `_build/slices/`, `_build/media/`, `node_modules/`,
+  `__pycache__/` (FB-011).
 - **New course, no hub yet.** Name it a short subject word plus the course number, all lower case
   (`widgets1001`). With the hq skill: `hq-new <name> code --git` (one bare command), fill its
   `REGISTRY.md` summary as the hq skill says, then
@@ -81,7 +82,7 @@ question text, and list the option it supports first.
 | # | Ask | Options | Why |
 |---|---|---|---|
 | 1 | **Scope authority.** Does the graded work (homework, a practice exam, a review sheet) mirror the exam? | Mirrors it: scope follows it, mocks are clones with fresh numbers. / Doesn't: cover the full scope, mock shapes go beyond the review. / Unsure: treat as doesn't. | Settles everything after it (FB-021). |
-| 2 | **Which files belong to this exam?** Show the proposed split by file name: this exam, reserved for a later exam, out. Ask for the exact last in-scope slide and whether its number is the PDF page or the printed slide number. Ask which files hold answers (official solutions, a past exam's key). | The proposed split (first). / Other: the student corrects it. | Later material is copied raw and never opened (FB-023); slide and page numbers differ (FB-024, L04). |
+| 2 | **Which files belong to this exam?** Show the proposed split by file name: this exam, reserved for a later exam, out. Ask for the exact last in-scope slide and whether its number is the PDF page or the printed slide number. Ask which files hold answers (official solutions, a past exam's key), and which of those sets the student has already attempted. | The proposed split (first). / Other: the student corrects it. | Later material is copied raw and never opened (FB-023); slide and page numbers differ (FB-024, L04). |
 | 3 | **Missing sources.** Only when a source type the exam covers (homework, solutions, recitations, the last lectures) isn't on disk. | I'll add them now. / They arrive during the build. / Proceed without. / Not examined. | "Add them now": stop, wait for the file, re-list, and ask question 2 for it (FB-029). "During the build": a `pending` MANIFEST row that records its planned scope now, last in-scope slide included, since nothing is asked after approval. |
 | 4 | **Exam rules** not found on disk: date and time, length, cheat sheet allowed and its size, calculator, open or closed book, question types. | Pre-filled from the details file or Ed, else open. | Fixes the deliverables (FB-026). |
 | 5 | **Cheat-sheet preferences.** Only when a sheet is allowed and the profile lacks them: font floor in points, color or grayscale print, engine (HTML printed by Chromium, or LaTeX). | Save the answers to the profile. | Asked once per student, not per exam (FB-131). |

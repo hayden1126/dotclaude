@@ -92,6 +92,11 @@ class RevealMap(unittest.TestCase):
         for sid in ("not-a-slide", "s-cut", "s-cut-child", "after-the-deck"):
             self.assertNotIn(sid, ids)
 
+    def test_the_container_ends_at_its_own_close(self):
+        rows = reveal_slice.slides('<div class="slides"><section>A</section></div>'
+                                   '<section>after the deck</section></div>')
+        self.assertEqual([f for f, _ in rows], ["#/0"])
+
     def test_a_markdown_section_warns(self):
         deck = ('<div class="slides"><section id="m" data-markdown><textarea data-template>'
                 "## A\n---\n## B</textarea></section><section>C</section></div>")
@@ -153,6 +158,83 @@ class RevealCli(unittest.TestCase):
         self.assertNotIn("s-title", text)
         self.assertNotIn("s-last", text)
         self.assertIn("wrote", r.stdout)
+
+    def test_images_resolve_against_the_deck_and_stay_in_its_folder(self):
+        deck = os.path.join(self.tmp.name, "sources", "lectures", "d2.html")
+        os.makedirs(os.path.dirname(deck))
+        with open(deck, "w", encoding="utf-8") as f:
+            f.write('<img src="logo.png"><div class="slides">'
+                    '<section><img src="img/a b.png"><img data-src="img/lazy.png"></section>'
+                    '<section><img src="/static/root.png"><img src="https://cdn.example.org/x.svg">'
+                    '<img src="data:image/png;base64,AAAA"><img src="../../../../etc/x.png">'
+                    '<svg><image href="img/a b.png"/></svg></section>'
+                    '<section data-background-image="img/bg.jpg"><object data="img/o.svg"></object>'
+                    '<embed src="img/e.pdf"></section></div>')
+        out = os.path.join(self.tmp.name, "_build", "slices", "d2-images.tsv")
+        r = self.run_script("images", deck, "--base", "https://example.edu/c/lec/d2.html",
+                            "-o", out)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        folder = os.path.join(os.path.dirname(deck), "d2_files")
+        with open(out, encoding="utf-8") as f:
+            rows = [line.rstrip("\n").split("\t") for line in f]
+        self.assertEqual(rows, [
+            ["img/a b.png", "https://example.edu/c/lec/img/a%20b.png", f"{folder}/img/a b.png"],
+            ["img/lazy.png", "https://example.edu/c/lec/img/lazy.png", f"{folder}/img/lazy.png"],
+            ["/static/root.png", "https://example.edu/static/root.png",
+             f"{folder}/_abs/example.edu/static/root.png"],
+            ["https://cdn.example.org/x.svg", "https://cdn.example.org/x.svg",
+             f"{folder}/_abs/cdn.example.org/x.svg"],
+            ["../../../../etc/x.png", "https://example.edu/etc/x.png",
+             f"{folder}/_abs/example.edu/etc/x.png"],
+            ["img/bg.jpg", "https://example.edu/c/lec/img/bg.jpg", f"{folder}/img/bg.jpg"],
+            ["img/o.svg", "https://example.edu/c/lec/img/o.svg", f"{folder}/img/o.svg"],
+            ["img/e.pdf", "https://example.edu/c/lec/img/e.pdf", f"{folder}/img/e.pdf"]])
+        self.assertIn("skipped data:image/png", r.stderr)
+        self.assertIn("8 images, 1 skipped", r.stdout)
+
+    def test_a_src_cannot_smuggle_rows_into_the_tsv(self):
+        deck = os.path.join(self.tmp.name, "d3.html")
+        with open(deck, "w", encoding="utf-8") as f:
+            f.write('<div class="slides"><section>'
+                    '<img src="img/a.png&#10;x&#9;https://example.edu/p.png&#9;CLAUDE.md&#10;img/b">'
+                    '<img src="img/c%0Ax%09https:%2F%2Fexample.edu%2Fp.png%09CLAUDE.md">'
+                    '<img src="img/ok.png"></section></div>')
+        out = os.path.join(self.tmp.name, "d3.tsv")
+        r = self.run_script("images", deck, "--base", "https://example.edu/c/d3.html", "-o", out)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        with open(out, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        self.assertEqual(len(lines), 1, lines)
+        self.assertEqual(lines[0].split("\t")[0], "img/ok.png")
+        self.assertNotIn("CLAUDE.md", "\n".join(lines))
+        self.assertIn("a control character in its src", r.stderr)
+        self.assertIn("a control character in its URL or path", r.stderr)
+        self.assertIn("1 images, 2 skipped", r.stdout)
+
+    def test_no_row_lets_curl_glob_its_way_out_of_the_folder(self):
+        deck = os.path.join(self.tmp.name, "d4.html")
+        with open(deck, "w", encoding="utf-8") as f:
+            f.write('<div class="slides"><section>'
+                    '<img src="img/a%231?{/../../../../../CLAUDE.md}">'
+                    '<img src="img/b[1-2].png"><img src="img/c.png?v={1,2}#top">'
+                    '</section></div>')
+        out = os.path.join(self.tmp.name, "d4.tsv")
+        r = self.run_script("images", deck, "--base", "https://example.edu/c/d4.html", "-o", out)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        with open(out, encoding="utf-8") as f:
+            rows = [line.rstrip("\n").split("\t") for line in f]
+        for src, url, dest in rows:
+            self.assertNotRegex(url, r"[{}\[\]#]", src)
+            self.assertNotRegex(dest, r"[{}\[\]#]", src)
+        self.assertEqual([row[1] for row in rows],
+                         ["https://example.edu/c/img/c.png?v=%7B1,2%7D"])
+        self.assertIn("a character curl globs", r.stderr)
+
+    def test_the_fetch_loop_turns_globbing_off_and_spares_zsh_path(self):
+        with open(os.path.join(SCRIPTS, "..", "workflows", "01-ingest.md"), encoding="utf-8") as f:
+            loop = next(l for l in f if "reveal_slice.py images" in l)
+        self.assertIn('curl -g -fsSL --create-dirs "$url" -o "$dest"', loop)
+        self.assertNotIn("read -r src url path", loop)
 
     def test_empty_range_fails(self):
         r = self.run_script("slice", self.deck, "--from", "7", "--to", "9",

@@ -7,6 +7,15 @@
       Writes the raw HTML of horizontal slides H..H (inclusive, with every vertical slide under
       them) to <out> (its directory is created), each under a header naming the fragment an
       extract cites.
+  reveal_slice.py images <deck.html> --base URL -o <out.tsv>
+      Lists every image the slides use (img src or data-src, svg image href, a section's
+      data-background-image, object data, embed src), one line each: the src as written, its URL
+      resolved against the deck's URL (path and query percent-encoded, so no `{}[]` reaches
+      curl), and its local path in the deck's own folder, <deck dir>/<deck name>_files/. An image
+      under the deck's directory keeps its relative path there; one elsewhere goes under
+      _abs/<host>/. A data: URI, a non-http URL, a path that would leave the folder, a control
+      character anywhere in a row (it would split the TSV into rows the deck chose) and a path
+      holding `{}[]#` (curl's globs) are skipped with a warning. Fetch with `curl -g`.
 
 Slides are the <section> elements inside the element whose class list holds `slides` (the
 container ends where its tag closes, counted by tag name). A top-level section that holds sections
@@ -19,8 +28,20 @@ or <style> are not slides: the parser skips their content. Stdlib only."""
 import argparse
 import html.parser
 import os
+import posixpath
 import re
 import sys
+import urllib.parse
+
+# A tab or newline in a TSV field would split it into rows the deck chose (a path like CLAUDE.md).
+CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+# What stays unencoded in a URL path or query: the RFC 3986 characters, and `%` so an encoded src
+# isn't encoded twice. Never `{}[]`: curl globs them, and its `#N` in an output name takes the
+# glob's text, which can climb out of the folder (probed with curl 8.5).
+URL_SAFE = "/%:@!$&'()*+,;=-._~"
+QUERY_SAFE = URL_SAFE + "?"
+# A character curl would glob in a URL or substitute in an output name, refused in a path.
+GLOB = re.compile(r"[{}\[\]#]")
 
 
 class Slide:
@@ -43,6 +64,7 @@ class Deck(html.parser.HTMLParser):
         self.line_starts = [0] + [m.end() for m in re.finditer(r"\n", source)]
         self.container = None  # the `slides` element's tag, once found
         self.depth = 0  # open tags of that name, the container's own included
+        self.images = []  # image sources inside the container, in order
         self.stack = []
         self.tops = []
         self.feed(source)
@@ -57,9 +79,19 @@ class Deck(html.parser.HTMLParser):
         if self.container is None:
             if "slides" in (a.get("class") or "").split():
                 self.container, self.depth = tag, 1
-        elif not self.depth:
             return
-        elif tag == self.container:
+        if not self.depth:
+            return
+        if tag in ("img", "image", "source", "object", "embed", "section"):
+            if tag == "section":
+                src = a.get("data-background-image")
+            elif tag == "object":
+                src = a.get("data")
+            else:
+                src = a.get("src") or a.get("data-src") or a.get("href") or a.get("xlink:href")
+            if src and src.strip():
+                self.images.append(src.strip())
+        if tag == self.container:
             self.depth += 1
         elif tag == "section":
             slide = Slide(self.here(), a)
@@ -118,6 +150,59 @@ def cmd_map(args, source):
         print(f"{frag}\t{s.id or ''}\t{text}")
 
 
+def image_rows(source, base, folder):
+    """[(src, url, local path)] for the deck's images, and [warnings]."""
+    deck = Deck(source)
+    if deck.container is None:
+        raise SystemExit("no element with class `slides`: is this a reveal.js deck?")
+    here = urllib.parse.urljoin(base, ".")
+    rows, warnings, seen = [], [], set()
+    for src in deck.images:
+        if src in seen:
+            continue
+        seen.add(src)
+        if CONTROL.search(src):
+            warnings.append(f"skipped {src[:60]!r}: a control character in its src")
+            continue
+        url = urllib.parse.urljoin(base, src)
+        parts = urllib.parse.urlsplit(url)
+        if parts.scheme not in ("http", "https"):
+            warnings.append(f"skipped {src[:60]}: not an http(s) URL")
+            continue
+        url = urllib.parse.urlunsplit(parts._replace(
+            path=urllib.parse.quote(parts.path, safe=URL_SAFE),
+            query=urllib.parse.quote(parts.query, safe=QUERY_SAFE), fragment=""))
+        clean = urllib.parse.urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+        if clean.startswith(here):
+            rel = clean[len(here):]
+        else:
+            rel = f"_abs/{parts.netloc}{parts.path}"
+        rel = posixpath.normpath(urllib.parse.unquote(rel))
+        if rel in (".", "") or rel.startswith(("/", "..")) or "/../" in f"/{rel}/":
+            warnings.append(f"skipped {src[:60]}: its path would leave {folder}/")
+            continue
+        if CONTROL.search(url) or CONTROL.search(rel):
+            warnings.append(f"skipped {src[:60]}: a control character in its URL or path")
+            continue
+        if GLOB.search(rel):
+            warnings.append(f"skipped {src[:60]}: a character curl globs ({{}}[]#) in its path")
+            continue
+        rows.append((src, url, f"{folder}/{rel}"))
+    return rows, warnings
+
+
+def cmd_images(args, source):
+    stem = os.path.splitext(os.path.basename(args.deck))[0]
+    folder = os.path.join(os.path.dirname(args.deck), f"{stem}_files")
+    rows, warnings = image_rows(source, args.base, folder)
+    for w in warnings:
+        print(f"warning: {w}", file=sys.stderr)
+    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+    with open(args.out, "w", encoding="utf-8") as f:
+        f.writelines("\t".join(row) + "\n" for row in rows)
+    print(f"wrote {args.out}: {len(rows)} images, {len(warnings)} skipped")
+
+
 def cmd_slice(args, source):
     skip = {int(x) for x in args.skip.split(",") if x.strip()}
     chunks = []
@@ -146,10 +231,14 @@ def main(argv=None):
     s.add_argument("--skip", default="", help="horizontal indexes to leave out, comma-separated")
     s.add_argument("--base", default="", help="the deck's URL, so headers cite <base>#/h/v")
     s.add_argument("-o", "--out", required=True)
+    i = sub.add_parser("images", help="list the images the slides use, with local paths")
+    i.add_argument("deck")
+    i.add_argument("--base", required=True, help="the deck's URL, which relative src resolve against")
+    i.add_argument("-o", "--out", required=True)
     args = p.parse_args(argv)
     with open(args.deck, encoding="utf-8") as f:
         source = f.read()
-    (cmd_map if args.cmd == "map" else cmd_slice)(args, source)
+    {"map": cmd_map, "slice": cmd_slice, "images": cmd_images}[args.cmd](args, source)
 
 
 if __name__ == "__main__":

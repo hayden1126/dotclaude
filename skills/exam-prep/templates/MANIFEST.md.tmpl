@@ -18,12 +18,17 @@ come from disk (`pdfinfo`, `ls`), never from memory.
 | HW1S | `sources/homework/{{FILE}}.pdf` | {{N}} | in | yes | yes | official solutions to HW1 |
 | ED | `sources/ed/ed-digest.md` | n/a | in | no | n/a | the Ed pull; cursor in `sources/ed/cursor.json` |
 | D9 | `sources/lectures/{{FILE}}.pdf` | {{N}} | reserved: {{LATER EXAM}} | no | no | raw copy only, never opened |
-| D10 | {{EXPECTED FILE}} | | pending: in, through {{LAST SLIDE}} | {{yes or no}} | no | {{WHEN IT ARRIVES}} |
+| D10 | {{EXPECTED FILE}} | | pending: in, PDF pp.1-{{K}} (through {{LAST SLIDE}}) | {{yes or no}} | no | {{WHEN IT ARRIVES}} |
 | X1 | `sources/{{FILE}}` | {{N}} | out | no | no | {{WHY}} |
 
-- **Scope:** `in`; `in, PDF pp.A-B` (with the last in-scope slide as "PDF p.N = printed M");
-  `concepts only`; `reserved: <exam>`, copied raw and never rendered, extracted or opened;
-  `pending: <planned scope>`, not here yet, its scope fixed at intake; `out`.
-- **Answers:** `yes` marks a file that holds answers (official solutions, a past exam's key). Mock
-  writers never read it, and nothing published quotes it before the student has attempted that set.
+- **Scope:** `in`; `in, PDF pp.A-B` (with the last in-scope slide as "PDF p.N = printed M"), or
+  `in, PDF pp.A-B, C-D` for two ranges; `in, slides #/A-#/B` for a reveal deck (horizontal slide
+  indexes); `concepts only`; `reserved: <exam>`, copied raw and never rendered, extracted or
+  opened; `pending: <planned scope>`, not here yet, its scope fixed at intake and written in one
+  of the `in` forms when the file arrives; `out`. Notes go in parentheses, and never hold a page
+  range (it would go unchecked); `extract_check.py` refuses any other wording.
+- **Answers:** `yes` marks a file that holds answers (official solutions, a past exam's key), with
+  `solutions to <doc>` in Notes naming the set it answers. Mock writers never read it. Nothing
+  published quotes it until the student has attempted that set, which the cell then records as
+  `yes, attempted`.
 - **Doc ids** are what citations use (`[D4 p.17]`): keep them short, and never renumber one.

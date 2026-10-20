@@ -20,7 +20,10 @@ EM_DASH = chr(0x2014)
 
 # Paths the skill names that a later stage creates. Remove each one in the commit that adds it.
 PENDING = {
-    "workflows/02-extract.md",
+    "scripts/linkcheck.py",
+    "templates/CHASSIS.md",
+    "templates/CONVERT.md",
+    "templates/STYLE.md",
     "workflows/03-backbone.md",
     "workflows/04-write.md",
     "workflows/05-verify.md",
@@ -31,10 +34,6 @@ PENDING = {
     "workflows/10-polish.md",
     "workflows/11-next-exam.md",
     "workflows/12-retro.md",
-    "templates/STYLE.md",
-    "templates/CHASSIS.md",
-    "templates/CONVERT.md",
-    "scripts/linkcheck.py",
 }
 
 ID = re.compile(r"\b(FB-\d{3}|L\d{2}|K\d{2})\b")
@@ -43,12 +42,17 @@ PATH = re.compile(r"(?:(?<=<skill>/)|(?<![\w./~-]))"
                   r"((?:workflows|templates|scripts|references)/[A-Za-z0-9_-]+(?:\.[A-Za-z0-9]+)+)")
 
 
+BINARY = (".png", ".jpg", ".pdf")
+
+
 def files(root):
-    """Every file under root, as (relative path, text)."""
+    """Every text file under root, as (relative path, text)."""
     out = []
     for base, dirs, names in os.walk(root):
         dirs[:] = [d for d in dirs if d != "__pycache__"]
         for name in sorted(names):
+            if name.endswith(BINARY):
+                continue
             path = os.path.join(base, name)
             with open(path, encoding="utf-8", errors="replace") as f:
                 out.append((os.path.relpath(path, root), f.read()))
