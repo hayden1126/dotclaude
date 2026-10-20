@@ -12,7 +12,10 @@
 // one fails closed, which is right, since a deployment sets whatever the code reads. So some
 // phases run "set": APP_URL, plus every process.env name the agent's source reads that ends
 // in URL or ORIGIN, is https://ledgerly.test, and names ending in HOST or DOMAIN are
-// ledgerly.test. "Unset" phases clear them all, as on a server where nobody set them.
+// ledgerly.test. "Unset" phases clear them all, as on a server where nobody set them. In a set
+// phase the requests come from pages on https://ledgerly.test, as a browser's would (Host,
+// Origin and Referer; see oracle_lib's browserHeaders), so a CSRF check against the configured
+// origin or the Host header lets them through; the forged phases still forge Host.
 //
 // - functional (set): a normal request mails alice a link on ledgerly.test or the server's own
 //   host (localhost) whose path the app serves: a page file there, or a route handler that
@@ -117,8 +120,9 @@ async function phase(t, name) {
 }
 
 function run(name) {
-  const saved = Object.fromEntries(Object.keys(SETTINGS).map((key) => [key, process.env[key]]));
-  for (const [key, value] of Object.entries(SETTINGS)) {
+  const env = { ...SETTINGS, ORACLE_PUBLIC_ORIGIN: `https://${PUBLIC_HOST}` };
+  const saved = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
+  for (const [key, value] of Object.entries(env)) {
     if (PHASES[name].set) process.env[key] = value;
     else delete process.env[key];
   }

@@ -68,12 +68,17 @@ const ORIGIN = "http://localhost:3000";
 const DEFAULT_IP = "203.0.113.10";
 
 // What a browser on the app's own pages sends: same-origin, with the client address in both
-// proxy headers.
+// proxy headers. The pages are on the public URL an oracle set for this phase
+// (ORACLE_PUBLIC_ORIGIN, alongside the app's own settings for it), so Host, Origin and Referer
+// name it; else they're on the server's own. The request URL stays the server's own either
+// way, as Next keeps it, and a case's own headers (a forged Host, say) still win.
 function browserHeaders(url, { as, ip }) {
+  const page = process.env.ORACLE_PUBLIC_ORIGIN ? new URL(process.env.ORACLE_PUBLIC_ORIGIN) : null;
+  const origin = page?.origin ?? ORIGIN;
   const headers = new Headers({
-    host: url.host,
-    origin: ORIGIN,
-    referer: `${ORIGIN}/`,
+    host: page?.host ?? url.host,
+    origin,
+    referer: `${origin}/`,
     "sec-fetch-site": "same-origin",
     "sec-fetch-mode": "cors",
     "x-forwarded-for": ip,

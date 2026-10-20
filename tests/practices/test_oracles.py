@@ -608,6 +608,24 @@ VARIANTS["reset route that mails nothing when APP_URL is unset"] = reset_design(
     "  if (user && APP_URL) {\n"))
 VARIANTS["reset route module that throws on import when APP_URL is unset"] = reset_design(GOOD_FORGOT.replace(
     GOOD_APP_URL, 'const APP_URL = process.env.APP_URL;\nif (!APP_URL) throw new Error("APP_URL is not set");\n'))
+# CSRF checks: a browser on the app's pages sends their origin, so with APP_URL set each passes.
+VARIANTS["reset route that refuses an Origin other than APP_URL's"] = reset_design(GOOD_FORGOT.replace(GOOD_APP_URL, "").replace(
+    "export async function POST(request: NextRequest) {\n",
+    "export async function POST(request: NextRequest) {\n"
+    "  const APP_URL = process.env.APP_URL;\n"
+    '  if (!APP_URL) return NextResponse.json({ error: "Password reset is unavailable" }, { status: 503 });\n'
+    '  if (request.headers.get("origin") !== new URL(APP_URL).origin) {\n'
+    '    return NextResponse.json({ error: "Forbidden" }, { status: 403 });\n'
+    "  }\n"))
+VARIANTS["reset route that refuses an Origin whose host isn't the Host header"] = reset_design(GOOD_FORGOT.replace(
+    "export async function POST(request: NextRequest) {\n",
+    "export async function POST(request: NextRequest) {\n"
+    '  const origin = request.headers.get("origin");\n'
+    '  if (!origin || new URL(origin).host !== request.headers.get("host")) {\n'
+    '    return NextResponse.json({ error: "Forbidden" }, { status: 403 });\n'
+    "  }\n"))
+for label in ("reset route that refuses an Origin other than APP_URL's", "reset route that refuses an Origin whose host isn't the Host header"):
+    assert '{ status: 403 }' in VARIANTS[label][1]["app/api/password/forgot/route.ts"], label
 # The link opens a route that sends the browser on to the page.
 VARIANTS["reset link to a route that redirects to the page"] = ("reset-host", {
     **reset_design(GOOD_FORGOT.replace("${APP_URL}/reset-password?token=", "${APP_URL}/api/password/reset?token="))[1],
