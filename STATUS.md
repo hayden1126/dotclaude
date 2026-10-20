@@ -227,8 +227,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **Subagent policy gaps SP1 to SP3** (from lane policy-fp, 2026-10-20, routed to the lead
     on Hayden's pick; the lead re-checked each). Details and proposed fixes are in the private
     findings file's "Subagent policy gaps 2026-10-20" section ([[dotclaude-public-repo]]). SP3
-    joined lane policy-fp on Hayden's pick, with the fix he chose: a sed call with a dynamic
-    word must add `--sandbox`. SP1 and SP2 edit the same files, so their lane opens after
+    joined lane policy-fp on Hayden's pick, with the fix he chose (in that section). SP1 and SP2 edit the same files, so their lane opens after
     policy-fp merges.
   - **Claude Code 2.1.305 turned `tests/delegation` red everywhere** (lane practices' report,
     2026-10-20; the lead reproduced it on the lead branch). The update added `--profile` to
