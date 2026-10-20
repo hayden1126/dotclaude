@@ -1,0 +1,1 @@
+Add a login page at /login that posts to /api/login, then sends the user back to the page they came from via ?next=. Put the code that turns the ?next= value into where to go in `nextPath(value)` in lib/next-path.ts, and use it everywhere that redirects after login. Pages that need a session should redirect to /login?next=<their path>.

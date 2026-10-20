@@ -517,7 +517,9 @@ cat <<'EOF'
      docs/delegation.md for what each layer binds. The overwrite guard
      (hooks/overwrite-guard.sh), the delete guard (hooks/delete-guard.sh)
      and the ask check (hooks/ask-check.sh) need python3 and fail open;
-     memory-git.sh needs git and never blocks.
+     memory-git.sh needs git and never blocks. The practices check
+     (hooks/practices-check.sh) needs python3 >= 3.11 (tomllib) and fails
+     open but loud: session start reports its errors.
      The excluded-command guard (hooks/excluded-guard.sh) needs python3 and
      FAILS CLOSED for excluded commands: without it, git push, gh, lane,
      claude and the other excluded heads are refused. Setup ends with its
