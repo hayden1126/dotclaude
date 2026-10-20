@@ -1537,10 +1537,13 @@ class L3r(BashBase):
         self.sh("update-ref", "refs/remotes/origin/main", self.base)
         self.commit(**{"app__api__x__route.ts": "export const x = 1\n", "lib__u.ts": "1\n"})
 
+    def marker(self, rev="HEAD"):
+        return f"[practices:review:{self.sh('rev-parse', rev)[:12]}]"
+
     def test_denies_once_with_the_block_to_paste_and_the_resend_passes(self):
         reason = self.pre("gh pr create --title x --body y")
         self.assertTrue(reason.startswith("[practices:L3r]"), reason)
-        self.assertIn("[practices:review]", reason)
+        self.assertIn(self.marker() + " Review the changes of main", reason)
         self.assertIn("demo (" + os.path.join(self.proj, ".claude", "skills", "demo", "SKILL.md")
                       + "), for app/api/x/route.ts:", reason)
         self.assertNotIn("lib/u.ts", reason)
@@ -1556,14 +1559,48 @@ class L3r(BashBase):
 
     def test_a_marked_reviewer_brief_satisfies_it(self):
         self.add(use("t-rev", "Agent", subagent_type="reviewer",
-                     prompt="Review this.\n[practices:review] demo ..."))
+                     prompt=f"Review this.\n{self.marker()} demo ..."))
         self.assertIsNone(self.pre("gh pr ready 12"))
 
     def test_an_unmarked_agent_or_a_quoted_marker_does_not(self):
         self.add(use("t-rev", "Agent", prompt="Review this."),
-                 text("[practices:review] in prose"),
-                 use("t-b", "Bash", command="echo '[practices:review]'"))
+                 text(f"{self.marker()} in prose"),
+                 use("t-b", "Bash", command=f"echo '{self.marker()}'"))
         self.assertIsNotNone(self.pre("gh pr ready"))
+
+    def test_a_review_clears_only_the_commit_it_judged(self):
+        # Review round 1: one marked reviewer satisfied L3r for the rest of the session, for
+        # any PR. The marker names the head it judged.
+        self.add(use("t-rev", "Agent", prompt=f"{self.marker()} demo ..."))
+        self.assertIsNone(self.pre("gh pr ready"))
+        self.commit(**{"app__api__y__route.ts": "export const y = 1\n"})
+        self.assertIn(self.marker(), self.pre("gh pr ready", session_id="s-next"))
+        self.add(use("t-old", "Agent", prompt="[practices:review] the old, bare marker"))
+        self.assertIsNotNone(self.pre("gh pr ready", session_id="s-bare"))
+
+    def test_a_named_branch_is_judged_and_a_pr_number_says_what_was(self):
+        # Review round 1: L3r judged local HEAD whatever PR the call named.
+        self.sh("branch", "clean", self.base)  # a branch with nothing a skill owns
+        self.assertIsNone(self.pre("gh pr ready clean", session_id="s-clean"))
+        self.assertIsNone(self.pre("gh pr create --head clean --title t", session_id="s-c2"))
+        self.assertIsNone(self.pre("gh pr create -H me:clean --title t", session_id="s-c3"))
+        self.sh("branch", "feat", self.base)
+        self.sh("update-ref", "refs/remotes/origin/feat", self.sh("rev-parse", "HEAD"))
+        reason = self.pre("gh pr ready feat", session_id="s-feat")  # origin/feat wins
+        self.assertIn("Review the changes of feat", reason)
+        before = self.log()
+        self.assertIsNone(self.pre("gh pr ready nowhere", session_id="s-none"))
+        self.assertIn("neither an origin/<branch> nor a local branch", self.log()[len(before):])
+        head = self.sh("rev-parse", "HEAD")[:12]
+        for n, command in enumerate(("gh pr ready 142", "gh pr ready https://x.test/o/r/pull/9")):
+            with self.subTest(command=command):
+                reason = self.pre(command, session_id=f"s-num-{n}")
+                self.assertIn(f"judged against main at {head}; run this from the PR's checkout",
+                              reason)
+        self.assertIn("l3r-target", self.log())
+        health = self.start("startup")["systemMessage"]  # the target log is no engine error
+        self.assertIn("1 git call skipped", health)  # the unknown branch
+        self.assertNotIn("l3r", health)
 
     def test_a_subagent_counts_the_parents_reviewer(self):
         agent = "a0123456789abcdef"
@@ -1571,7 +1608,7 @@ class L3r(BashBase):
         os.makedirs(d)
         self.rows([], path=os.path.join(d, f"agent-{agent}.jsonl"))
         self.assertIsNotNone(self.pre("gh pr ready", agent_id=agent))
-        self.add(use("t-rev", "Task", prompt="[practices:review] go"))
+        self.add(use("t-rev", "Task", prompt=f"{self.marker()} go"))
         self.assertIsNone(self.pre("gh pr ready", agent_id=agent, session_id="s3"))
 
     def test_the_base_comes_from_the_flag_then_origin_head_main_master(self):
@@ -1590,7 +1627,7 @@ class L3r(BashBase):
         self.skill("keys", KEYS, where="user")
         self.commit(**{"k.ts": "a = 'TOKEN_ABCDEFGH'\n"})
         self.commit(**{"k.ts": "a = process.env.A\n"})  # gone at HEAD, still in the history
-        self.add(use("t-rev", "Agent", prompt="[practices:review]"))
+        self.add(use("t-rev", "Agent", prompt=self.marker()))
         reason = self.pre("gh pr ready")
         self.assertIn("KEY-1 (keys) at k.ts:1", reason)
         self.assertNotIn("TOKEN_", reason)

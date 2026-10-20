@@ -117,12 +117,16 @@ Each level reads commits, never the index or the working tree:
         --all, --branches, --mirror: every local branch) less what any remote has, and denies.
         Deletes and --dry-run pass. One call holding both a commit and a push is denied once,
         told to run them as separate calls (the scan can't see a commit not yet made).
-  L3r   PreToolUse on gh pr ready (not --undo) or a gh pr create without --draft: the files
-        changed since the merge base with --base, else origin/HEAD, origin/main, origin/master
-        (none: logged, allowed), matched against every skill's L1 events (paths, and content on
-        the HEAD blob). Denied once per touched skill and HEAD unless the transcript (or the
-        parent's, for a subagent) holds an Agent or Task call whose prompt has
-        `[practices:review]`; the reason carries each skill's gate lines and the marker in one
+  L3r   PreToolUse on gh pr ready (not --undo) or a gh pr create without --draft, judged at a
+        head: the branch a `ready` selector or create's --head names (origin/<branch>, else the
+        local branch; unknown: logged, allowed), else the checked-out HEAD (a PR number or URL
+        says so in the deny, since it may be another branch's PR); each choice is logged. The
+        files changed since the merge base with --base, else origin/HEAD, origin/main,
+        origin/master (none: logged, allowed), are matched against every skill's L1 events
+        (paths, and content on the head blob). Denied once per touched skill and head unless
+        the transcript (or the parent's, for a subagent) holds an Agent or Task call whose
+        prompt has that head's marker, `[practices:review:<sha12>]`, so a review clears only
+        the commit it judged; the reason carries each skill's gate lines and the marker in one
         block to paste into a reviewer brief. The line-scoped and commit-time rules also run
         over every commit in the range.
 A scan runs every rule whose `at` has "commit" (L3r: or `scope = "line"`): `when` on each
@@ -1229,7 +1233,6 @@ SEC60 = {"id": "SEC-60", "say": (
     "(npm audit, pnpm audit, yarn npm audit, pip-audit or uv audit, cargo audit, bundle audit, "
     "composer audit, govulncheck), fix or note what it reports, and say so in your reply.")}
 ENGINE = {"name": "engine", "dir": None, "gate": []}
-REVIEW = "[practices:review]"
 HEADS = ("git", "gh")
 
 
@@ -1835,43 +1838,101 @@ def push_reason(findings):
 # L3r: a PR marked ready (or opened as one) waits for a reviewer briefed with the gate lines.
 
 def pr_ready(args):
-    """(True, the --base it names or None) for `gh pr ready` (not --undo) and a `gh pr create`
-    that isn't a draft; (False, None) for anything else."""
+    """None unless args are `gh pr ready` (not --undo) or a `gh pr create` that isn't a draft;
+    else {"base": the --base, "branch": the branch a `ready` selector or create's --head names
+    (an `owner:` prefix dropped), "pr": a `ready` selector that is a PR number or URL}, each
+    None when not given."""
     if len(args) < 2 or args[0] != "pr" or args[1] not in ("ready", "create"):
-        return False, None
-    rest = args[2:]
+        return None
+    rest, out = args[2:], {"base": None, "branch": None, "pr": None}
     if args[1] == "ready":
-        return "--undo" not in rest, None
-    base = None
+        if "--undo" in rest:
+            return None
+        k, selector = 0, None
+        while k < len(rest):
+            if rest[k] in ("-R", "--repo"):
+                k += 2
+                continue
+            if not rest[k].startswith("-") and selector is None:
+                selector = rest[k]
+            k += 1
+        if selector and (re.fullmatch(r"#?\d+", selector) or re.match(r"https?://", selector)):
+            out["pr"] = selector
+        elif selector:
+            out["branch"] = selector
+        return out
     for k, a in enumerate(rest):
+        nxt = rest[k + 1] if k + 1 < len(rest) else None
         if a in ("--draft", "-d", "--draft=true"):
-            return False, None
-        if a in ("--base", "-B") and k + 1 < len(rest):
-            base = rest[k + 1]
-        elif a.startswith("--base="):
-            base = a.split("=", 1)[1]
-        elif a.startswith("-B") and len(a) > 2:
-            base = a[2:]
-    return True, base
+            return None
+        for key, short, long_ in (("base", "-B", "--base"), ("branch", "-H", "--head")):
+            if a in (short, long_) and nxt is not None:
+                out[key] = nxt
+            elif a.startswith(long_ + "="):
+                out[key] = a.split("=", 1)[1]
+            elif a.startswith(short) and len(a) > 2:
+                out[key] = a[2:]
+    if out["branch"] and ":" in out["branch"]:
+        out["branch"] = out["branch"].split(":", 1)[1]  # --head owner:branch, a fork's
+    return out
 
 
-def reviewed(ts):
-    """Whether an Agent or Task call in the transcripts carries the review marker."""
-    return any(isinstance(inp.get("prompt"), str) and REVIEW in inp["prompt"]
-               for t in ts.all() for inp in tool_uses(t, REVIEW.encode(), ("Agent", "Task")))
+def review_marker(head):
+    """The marker a reviewer's brief carries for the commit it judges."""
+    return f"[practices:review:{head[:12]}]"
+
+
+def reviewed(ts, marker):
+    """Whether an Agent or Task call in the transcripts carries this review marker."""
+    return any(isinstance(inp.get("prompt"), str) and marker in inp["prompt"]
+               for t in ts.all() for inp in tool_uses(t, marker.encode(), ("Agent", "Task")))
+
+
+def pr_head(repo, pr):
+    """(the commit a PR call is judged at, its branch name, a note for the deny or None), or
+    None (logged) when the named branch isn't known here. A branch (a `ready` selector,
+    create's --head) is judged at origin/<branch>, else the local branch; anything else at the
+    checked-out HEAD, and a PR number or URL says so in the deny, since it may be another
+    branch's PR."""
+    if pr["branch"]:
+        b = pr["branch"]
+        head = None if "$" in b or "%" in b else (
+            repo.rev(f"refs/remotes/origin/{b}") or repo.rev(f"refs/heads/{b}"))
+        if head is None:
+            log("git-skipped", "L3r: the PR's branch is neither an origin/<branch> nor a local "
+                "branch here, so the PR went unchecked")
+            return None
+        log("l3r-target", f"L3r: judged the named branch at {head[:12]}")
+        return head, b, None
+    head = repo.rev("HEAD")
+    if head is None:
+        return None, None, None
+    branch = repo.run("rev-parse", "--abbrev-ref", "HEAD").decode(
+        "utf-8", "surrogateescape").strip() or "HEAD"
+    if not pr["pr"]:
+        return head, branch, None
+    log("l3r-target", f"L3r: a PR named by number or URL, judged against {branch} at "
+        f"{head[:12]}")
+    return head, branch, (f"[practices:L3r] This PR was judged against {branch} at "
+                          f"{head[:12]}; run this from the PR's checkout if it is another "
+                          "branch.")
 
 
 def l3r(event, ghs, skills, cfg, ts, ctx, bounds):
-    """(the review block or None, its keys, new rule findings) for each PR call."""
-    blocks_, keys, found = [], [], []
+    """(review blocks, their keys, new rule findings, notes) for the PR calls."""
+    blocks_, keys, found, notes = [], [], [], []
     for args, cwd in ghs:
-        ready, base_name = pr_ready(args)
-        if not ready:
+        pr = pr_ready(args)
+        if pr is None:
             continue
         repo = open_repo({"cwd": cwd, "git_dir": None, "work_tree": None}, "L3r", bounds)
         if repo is None:
             continue
-        head = repo.rev("HEAD")
+        target = pr_head(repo, pr)
+        if target is None:
+            continue
+        head, branch, note = target
+        base_name = pr["base"]
         names = ([f"refs/remotes/origin/{base_name}", base_name] if base_name else
                  ["refs/remotes/origin/HEAD", "refs/remotes/origin/main",
                   "refs/remotes/origin/master"])
@@ -1895,23 +1956,27 @@ def l3r(event, ghs, skills, cfg, ts, ctx, bounds):
             for s, _ in run_patterns(events, lambda x: event_fires(x[1], path, text,
                                                                   cfg["helpers"], CRUMB)):
                 touched.setdefault(s["name"], (s, []))[1].append(path)
-        if touched and not reviewed(ts):
+        told = (len(blocks_), len(found))
+        if touched and not reviewed(ts, review_marker(head)):
             new = [(s, paths) for s, paths in touched.values()
                    if (k := f"L3r|{s['name']}|review|-|{_sha1(head)}") not in state_keys(event)
                    and k not in keys]
             if new:
                 keys += [f"L3r|{s['name']}|review|-|{_sha1(head)}" for s, _ in new]
-                blocks_.append(review_block(new, mb))
+                blocks_.append(review_block(new, mb, head, branch))
         rules = commit_rules(skills, cfg, line_only=True)
         found += fresh(scan(repo, [head, "--not", mb], rules, "L3r", ctx, lockfiles=False),
                        event, repo)
-    return blocks_, keys, found
+        if note and (len(blocks_), len(found)) != told:
+            notes.append(note)
+    return blocks_, keys, found, notes
 
 
-def review_block(touched, mb, shown=8):
-    parts = [f"{REVIEW} Review this branch's changes ({mb[:12]}..HEAD) against each practices "
-             "skill below. Read its SKILL.md, check every must-hold line against the changed "
-             "code, and report each one that doesn't hold, with file and line."]
+def review_block(touched, mb, head, branch, shown=8):
+    parts = [f"{review_marker(head)} Review the changes of {branch} ({mb[:12]}..{head[:12]}) "
+             "against each practices skill below. Read its SKILL.md, check every must-hold "
+             "line against the changed code, and report each one that doesn't hold, with file "
+             "and line."]
     for s, paths in touched:
         paths = list(dict.fromkeys(paths))
         more = f", and {len(paths) - shown} more" if len(paths) > shown else ""
@@ -1931,7 +1996,7 @@ def bash_pre(event):
     gits, ghs = bash_calls(event)
     commits = [g for g in gits if g[0] == "commit"]
     pushes = [g for g in gits if g[0] == "push"]
-    ghs = [g for g in ghs if pr_ready(g[0])[0]]
+    ghs = [g for g in ghs if pr_ready(g[0]) is not None]
     if not (commits or pushes or ghs):
         return None
     cfg = load_config(event)
@@ -1958,7 +2023,8 @@ def bash_pre(event):
                     reasons.append(push_reason(new))
                     keys += [f.key for f in new]
                 if ghs:
-                    review, review_keys, found = l3r(event, ghs, skills, cfg, ts, ctx, bounds)
+                    review, review_keys, found, notes = l3r(event, ghs, skills, cfg, ts, ctx,
+                                                            bounds)
                     reasons += review
                     keys += review_keys
                     found = [f for f in found if f.key not in keys]
@@ -1969,6 +2035,7 @@ def bash_pre(event):
                             "positive, add `practices-allow: <id> <reason>` to the code. Resending "
                             "passes this check.\n" + findings_text(found))
                         keys += [f.key for f in found]
+                    reasons += notes
     except Budget as e:
         log("budget-spent", f"after {BUDGET}s, in the Bash check's {e}; the call was allowed")
         return None
@@ -2106,7 +2173,7 @@ LABELS = {"skill-disabled": ("skill disabled", "skills disabled"),
           "state-error": ("state error", "state errors"), "crash": ("crash", "crashes"),
           "git-skipped": ("git call skipped", "git calls skipped"),
           "scan-truncated": ("scan cut short", "scans cut short")}
-QUIET = {"fragment-only", "bash-unparsed"}  # logged for debugging, never an engine error
+QUIET = {"fragment-only", "bash-unparsed", "l3r-target"}  # for debugging, never an engine error
 
 
 def new_errors(d):
