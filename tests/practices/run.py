@@ -23,7 +23,8 @@ Arms:
      hooks/practices-check.sh and any shell prefilter kept, so the eval runs what users get
   D  C, run as three turns on one session: the case owner's benign prompt (the hook makes it
      load the skill), then `/compact`, then the case prompt. It checks the skill survives
-     compaction.
+     compaction. A benign case warms up with the next practices skill's benign prompt instead
+     (warmup_case), so its task turn doesn't find the work already done.
 
 Cases (cases/<case>/): prompt.md is the user's message, fed verbatim on stdin. oracle.mjs
 is hidden from the agent (it lives in this checkout, not the fixture) and prints one JSON
@@ -73,21 +74,27 @@ Per run:
     Without a usable bwrap, run.py refuses to start unless --unsafe-grade is passed.
   - Record: one line per run in <out>/results.jsonl (case, owner and kind, verdict, checks,
     triggered and triggered_turns, turns, duration, cost, is_error, init memory_paths and
-    init_skills, `skills`, hook denials, strays, the harness SHA, and the paths of the saved
-    streams, oracle output and diff under <out>/<case>-<arm>-<i>/). `skills` is the
-    fingerprint of what was installed, {name: sha256 over its files' sorted relative paths
-    and bytes}, taken before the session starts, so an uncommitted edit counts; arm A's is {}.
-    (Rows before 2026-10-20 have no fingerprint, and their "skills" is the init list.) <out>
-    defaults to a fresh 0700 dir under the
-    checkout's ignored .tmp/practices/, away from the fixtures in /tmp. The diff is taken with
-    --binary; ignored paths (node_modules, data/) aren't in it, so regrading a diff needs the
-    stubs as installed. A turn triggered when it has a Skill tool_use naming the case's
-    owner, or a Read of a path ending <owner>/SKILL.md. `triggered` and
-    `hook_denials` are the case turn's; arm D's other turns are reported apart
-    (triggered_turns, hook_denials_turns, and the summary's warm column).
+    init_skills, the fingerprint, hook denials, strays, the harness SHA, and the paths of the
+    saved streams, oracle output and diff under <out>/<case>-<arm>-<i>/). The fingerprint is
+    three parts, each taken before the session starts, so an uncommitted edit counts:
+    `skills`, {name: sha256 over its files' sorted relative paths and bytes} for each skill
+    installed (arm A's is {}); `hook`, hook_hash() of the practices hook (practices-check.sh,
+    the practices_check.py it runs and hook_settings()'s wiring) for C and D, "none" for A and
+    B; and `case_hash`, case_hash() over cases/<case>/, oracle_lib.mjs, next_stub/, stubs/ and
+    fixture/. (Rows before 2026-10-20 have no fingerprint, and their "skills" is the init list;
+    rows from before the hook and case parts lack those.) <out> defaults to a fresh 0700 dir
+    under the checkout's ignored .tmp/practices/, away from the fixtures in /tmp. The diff is
+    taken with --binary; ignored paths (node_modules, data/) aren't in it, so regrading a diff
+    needs the stubs as installed. A turn triggered a skill when it has a Skill tool_use whose
+    `skill` input is that skill (its args don't count), or a Read of a path ending
+    <skill>/SKILL.md. `triggered` and `hook_denials` are the case turn's, `triggered` for the
+    case's owner; arm D's other turns are reported apart (triggered_turns, hook_denials_turns,
+    and the summary's warm column), the warm-up's `triggered` for the owner of the case it ran.
   - Baseline: each --baseline PATH (a results.jsonl, or the dir holding one) adds its arm-A
-    rows for the same model and these cases to the summary, marked "[k imported]" on A's line,
-    so a B, C or D run can reuse earlier RED rows. They aren't copied into this run's file.
+    rows for the same model, effort (a row without one counts as "default") and these cases to
+    the summary, marked "[k imported]" on A's line, so a B, C or D run can reuse earlier RED
+    rows. A row already taken (the same stream paths) is dropped. They aren't copied into this
+    run's file, and they pool as any rows do.
 
 Pass bar, per model, case and arm (printed after the table; exit nonzero when a gating arm
 misses, when the summary refuses to pool, or when any run scored error). "Valid" runs are pass
@@ -101,8 +108,11 @@ or fail; broken and error don't count.
   B  reported only.
   Off-target: a case whose owner isn't among the skills the arm's rows installed. B, C and D
      report it as "reported only (off-target)" and never miss; A keeps its bar.
-  Pooling: the rows of one model, case and arm must share one skills fingerprint (error rows
-     aside); otherwise the line reads REFUSED and the distinct fingerprints are listed.
+  Pooling: the rows of one model, case and arm must share one fingerprint, equal on every part
+     (error rows aside); a part a row didn't record is "unrecorded", equal only to another
+     unrecorded one. Otherwise the line reads REFUSED, naming the parts that differ, and the
+     distinct fingerprints are listed. Arm A's counts classify another arm's line only when A
+     pooled and its case part equals that arm's; else that line reads as A unclassified.
 """
 import argparse
 import concurrent.futures
@@ -133,7 +143,7 @@ SKILLS_DIR = REPO / "skills"
 # The practices skills arms B, C and D install, all of them in every run. Named here rather than
 # found by their events.toml, so a skill that gains one later doesn't silently change the arms.
 PRACTICES_SKILLS = ["server-code", "auth-secrets"]
-HOOK = REPO / "hooks" / "practices-check.sh"
+HOOK = REPO / "hooks" / "practices-check.sh"  # a shim: it runs practices_check.py beside it
 REPO_SETTINGS = REPO / "settings.json"  # arms C and D take the hook's wiring from here
 
 
@@ -166,9 +176,20 @@ CASES = list(CASE_INFO)
 
 
 def benign_case(owner):
-    """The benign case `owner` owns: arm D's warm-up prompt for every case of that owner."""
+    """The benign case `owner` owns."""
     (case,) = [c for c, info in CASE_INFO.items() if info == Case(owner, BENIGN)]
     return case
+
+
+def warmup_case(case):
+    """Arm D's warm-up for `case`: its owner's benign case, except for a benign case itself,
+    which warms up with the next practices skill's benign case, so its task turn doesn't find
+    the work already done."""
+    owner, kind = CASE_INFO[case]
+    if kind != BENIGN:
+        return benign_case(owner)
+    i = PRACTICES_SKILLS.index(owner)
+    return benign_case((PRACTICES_SKILLS[i + 1:] + PRACTICES_SKILLS[:i])[0])
 
 
 ARMS = ["A", "B", "C", "D"]
@@ -268,6 +289,35 @@ def tree_hash(root):
     return h.hexdigest()
 
 
+NO_HOOK = "none"  # the hook part of an A or B row's fingerprint: those arms install no hook
+FINGERPRINT_PARTS = ("skills", "hook", "case")
+
+
+def hook_hash(settings=None, hook=None):
+    """sha256 over the practices hook arms C and D run: the shim, the module beside it that the
+    shim runs (practices_check.py), and hook_settings()'s wiring. The wiring is taken with a
+    placeholder for the script's path, so two checkouts of one hook share the hash."""
+    hook = Path(hook or HOOK)
+    h = hashlib.sha256()
+    for f in (hook, hook.parent / "practices_check.py"):
+        data = f.read_bytes() if f.is_file() else b""
+        h.update(f.name.encode() + b"\0" + len(data).to_bytes(8, "big") + data)
+    wiring = hook_settings(settings, Path("/hooks/practices-check.sh"))
+    h.update(json.dumps(wiring, sort_keys=True).encode())
+    return h.hexdigest()
+
+
+def case_hash(case):
+    """sha256 over what a run of `case` starts from and is graded by: cases/<case>/ (prompt,
+    oracle, overlays), oracle_lib.mjs, the next stub, the other stubs and the fixture."""
+    h = hashlib.sha256()
+    for label, path in (("case", CASES_DIR / case), ("oracle_lib.mjs", HERE / "oracle_lib.mjs"),
+                        ("next_stub", STUB_SRC), ("stubs", STUBS_SRC), ("fixture", FIXTURE_SRC)):
+        digest = tree_hash(path) if path.is_dir() else hashlib.sha256(path.read_bytes()).hexdigest()
+        h.update(f"{label} {digest}\n".encode())
+    return h.hexdigest()
+
+
 def installed_skills(root):
     """{name: tree_hash} for each skill in a fixture's .claude/skills/: {} for arm A."""
     base = Path(root) / ".claude" / "skills"
@@ -354,7 +404,7 @@ def turns_for(case, arm, model, effort=None):
         return [("task", prompt_of(case), claude_cmd(model, effort=effort))]
     sid = str(uuid.uuid4())
     return [
-        ("warmup", prompt_of(benign_case(CASE_INFO[case].owner)), claude_cmd(model, ["--session-id", sid], effort)),
+        ("warmup", prompt_of(warmup_case(case)), claude_cmd(model, ["--session-id", sid], effort)),
         ("compact", "/compact", claude_cmd(model, ["--resume", sid], effort)),
         ("task", prompt_of(case), claude_cmd(model, ["--resume", sid], effort)),
     ]
@@ -403,12 +453,19 @@ def tool_uses(events):
                     yield item
 
 
+def skill_called(inp):
+    """The skill a Skill tool call loads: its `skill` input, without a leading slash or a
+    plugin's `name:` prefix. "" when there is none."""
+    name = inp.get("skill") if isinstance(inp, dict) else None
+    return name.strip().lstrip("/").rsplit(":", 1)[-1] if isinstance(name, str) else ""
+
+
 def triggered(events, skill):
-    """Whether a turn loaded `skill` (the case's owner): a Skill call naming it, or a Read of its
-    SKILL.md."""
+    """Whether a turn loaded `skill`: a Skill call whose skill is `skill` (its args don't count),
+    or a Read of its SKILL.md."""
     for use in tool_uses(events):
         inp = use.get("input") or {}
-        if use.get("name") == "Skill" and skill in json.dumps(inp):
+        if use.get("name") == "Skill" and skill_called(inp) == skill:
             return True
         if use.get("name") == "Read" and str(inp.get("file_path", "")).endswith(f"{skill}/SKILL.md"):
             return True
@@ -766,6 +823,8 @@ def run_one(case, arm, index, args, out):
     run_dir.mkdir(parents=True, exist_ok=True)
     fixture, harness_sha = build_fixture(arm)
     skills = installed_skills(fixture)  # before the session, which could edit its copy
+    hook = hook_hash() if arm in ("C", "D") else NO_HOOK
+    case_code = case_hash(case)
     streams, labels, exits, timed_out, stray_kills = [], [], [], False, []
     turns = turns_for(case, arm, args.model, args.effort)
     for n, (label, prompt, cmd) in enumerate(turns, 1):
@@ -798,7 +857,9 @@ def run_one(case, arm, index, args, out):
         values = [t[key] for t in per_turn if isinstance(t[key], (int, float))]
         summary[key] = sum(values) if values else None
     owner = CASE_INFO[case].owner
-    triggered_turns = {label: triggered(turn, owner) for label, turn in zip(labels, events_by_turn)}
+    # each turn against the owner of the case it ran: arm D's warm-up ran warmup_case(case)
+    turn_owner = {"warmup": CASE_INFO[warmup_case(case)].owner}
+    triggered_turns = {label: triggered(turn, turn_owner.get(label, owner)) for label, turn in zip(labels, events_by_turn)}
     denials_turns = {label: hook_denials(turn) for label, turn in zip(labels, events_by_turn)}
     row = {
         "case": case, "arm": arm, "run": index, "owner": owner, "kind": CASE_INFO[case].kind,
@@ -809,7 +870,10 @@ def run_one(case, arm, index, args, out):
         "triggered": triggered_turns.get("task", False),
         "triggered_turns": triggered_turns,
         **summary,
-        "skills": skills,  # {name: tree_hash} installed; the summary pools only equal ones
+        # the fingerprint: the summary pools only rows equal on all three parts
+        "skills": skills,  # {name: tree_hash} installed
+        "hook": hook,  # hook_hash() for C and D, NO_HOOK for A and B
+        "case_hash": case_code,  # case_hash(case)
         "hook_denials": denials_turns.get("task", 0),
         "hook_denials_turns": denials_turns,
         "is_error": any(result_failed(result_event(turn)) for turn in events_by_turn),
@@ -879,18 +943,39 @@ def bar(case, arm, counts, n, a=None, installed=None):
 
 
 def fingerprint(row):
-    """The skills a row ran with, {name: tree_hash}: {} for arm A, which installs none (rows from
-    before fingerprints included). None for a B, C or D row that didn't record it."""
-    if row.get("arm") == "A":
-        return {}
-    skills = row.get("skills")
-    return skills if isinstance(skills, dict) else None
+    """What a row ran with, part by part: {"skills": {name: tree_hash}, "hook": hook_hash() or
+    NO_HOOK, "case": case_hash()}. A part the row didn't record is None, "unrecorded", which
+    equals only another None, so old rows pool only with each other. Arm A installs no skill and
+    arms A and B no hook, so those parts are {} and NO_HOOK whatever the row says (rows from
+    before fingerprints included)."""
+    arm, skills, hook, case = row.get("arm"), row.get("skills"), row.get("hook"), row.get("case_hash")
+    return {
+        "skills": {} if arm == "A" else (skills if isinstance(skills, dict) else None),
+        "hook": NO_HOOK if arm in ("A", "B") else (hook if isinstance(hook, str) and hook else None),
+        "case": case if isinstance(case, str) and case else None,
+    }
+
+
+def short_part(value):
+    if value is None:
+        return "unrecorded"
+    if isinstance(value, dict):
+        return "{" + ", ".join(f"{k} {str(v)[:12]}" for k, v in sorted(value.items())) + "}"
+    return value if value == NO_HOOK else value[:12]
 
 
 def short(fp):
-    if fp is None:
-        return "unrecorded"
-    return "{" + ", ".join(f"{k} {v[:12]}" for k, v in sorted(fp.items())) + "}" if fp else "{}"
+    return ", ".join(f"{part} {short_part(fp[part])}" for part in FINGERPRINT_PARTS)
+
+
+def pooled_prints(rows):
+    """The distinct fingerprints among the rows that aren't error rows, in order."""
+    prints = []
+    for r in rows:
+        fp = fingerprint(r)
+        if r["verdict"] != "error" and fp not in prints:
+            prints.append(fp)
+    return prints
 
 
 def counts_of(rows):
@@ -906,26 +991,27 @@ def summarize(rows, cases, arms, n):
         print(f"{'case':16} {'arm':3} {'pass':>4} {'fail':>4} {'brkn':>4} {'err':>4} {'trig':>4} {'warm':>4} "
               f"{'cost $':>8}  bar")
         print("(err: harness or infra failures, outside every count; trig: the case turn triggered the "
-              "case's skill; warm: arm D's warm-up turn did)")
+              "case's skill; warm: arm D's warm-up turn triggered the skill of the case it ran)")
         of_model = [r for r in rows if r.get("model") == model]
         for case in cases:
             a_rows = [r for r in of_model if r["case"] == case and r["arm"] == "A"]
+            a_prints = pooled_prints(a_rows)
             shown = [arm for arm in ARMS if arm in arms or (arm == "A" and a_rows)]
             for arm in shown:
                 mine = [r for r in of_model if r["case"] == case and r["arm"] == arm]
                 counts = counts_of(mine)
-                prints = []
-                for r in mine:
-                    fp = fingerprint(r)
-                    if r["verdict"] != "error" and fp not in prints:
-                        prints.append(fp)
+                prints = pooled_prints(mine)
                 if len(prints) > 1:
-                    label, miss = f"REFUSED: rows from {len(prints)} skill versions, not pooled", True
+                    differ = [part for part in FINGERPRINT_PARTS
+                              if len({json.dumps(fp[part], sort_keys=True) for fp in prints}) > 1]
+                    label, miss = f"REFUSED: rows from {len(prints)} versions ({', '.join(differ)} differ), not pooled", True
                     refused.append((f"{case}/{arm}", [(fp, sum(fingerprint(r) == fp for r in mine)) for fp in prints]))
                 else:
-                    installed = list(prints[0]) if prints and prints[0] is not None else None
-                    label, miss = bar(case, arm, counts, n, a=counts_of(a_rows) if a_rows else None,
-                                      installed=installed)
+                    skills = prints[0]["skills"] if prints else None
+                    # A's counts classify this arm's case only when A pooled and ran the same case code.
+                    same_case = len(a_prints) == 1 and (not prints or a_prints[0]["case"] == prints[0]["case"])
+                    label, miss = bar(case, arm, counts, n, a=counts_of(a_rows) if a_rows and same_case else None,
+                                      installed=list(skills) if skills is not None else None)
                 imported = sum(bool(r.get("imported")) for r in mine)
                 if imported:
                     label += f" [{imported} imported]"
@@ -941,11 +1027,13 @@ def summarize(rows, cases, arms, n):
     return missed
 
 
-def load_baseline(paths, model, cases):
-    """Arm-A rows for `model` and `cases` from earlier results.jsonl files (each path a file, or
-    a results dir holding one), each marked `imported` with its file. A file that can't be read
-    exits; a line that isn't a row is skipped and counted."""
-    rows, seen = [], set()
+def load_baseline(paths, model, cases, effort="default"):
+    """Arm-A rows for `model`, `effort` (a row's own, "default" when it has none) and `cases`
+    from earlier results.jsonl files (each path a file, or a results dir holding one), each
+    marked `imported` with its file. A row already taken (the same stream paths: the same run,
+    from a copied file, say) is dropped and counted. A file that can't be read exits; a line
+    that isn't a row is skipped and counted."""
+    rows, seen, seen_rows = [], set(), set()
     for given in paths:
         path = Path(given)
         path = (path / "results.jsonl" if path.is_dir() else path).resolve()
@@ -956,19 +1044,26 @@ def load_baseline(paths, model, cases):
             lines = path.read_text(errors="replace").splitlines()
         except OSError as e:
             sys.exit(f"run.py: --baseline {given}: {e.strerror or e}")
-        took = skipped = 0
+        took = skipped = dups = 0
         for line in lines:
             try:
                 row = json.loads(line)
             except ValueError:
                 row = None
             if not (isinstance(row, dict) and row.get("arm") == "A" and row.get("model") == model
+                    and (row.get("effort") or "default") == effort
                     and row.get("case") in cases and row.get("verdict") in VERDICTS):
                 skipped += bool(line.strip())
                 continue
+            key = json.dumps(row.get("stream") or row, sort_keys=True)  # a harness error's row has no stream
+            if key in seen_rows:
+                dups += 1
+                continue
+            seen_rows.add(key)
             rows.append({**row, "imported": str(path)})
             took += 1
-        print(f"baseline {path}: {took} arm-A row(s) for {model} in these cases; {skipped} other line(s) skipped")
+        print(f"baseline {path}: {took} arm-A row(s) for {model} at effort {effort} in these cases; "
+              f"{dups} already taken; {skipped} other line(s) skipped")
     return rows
 
 
@@ -1009,7 +1104,7 @@ def dry_run(cases, arms, args):
                 print(output[-3000:])
             for label, _prompt, cmd in turns_for(case, arm, args.model, args.effort):
                 source = "/compact" if label == "compact" else str(CASES_DIR / (
-                    benign_case(CASE_INFO[case].owner) if label == "warmup" else case) / "prompt.md")
+                    warmup_case(case) if label == "warmup" else case) / "prompt.md")
                 stdin = f"<<< {shlex.quote(source)}" if label == "compact" else f"< {shlex.quote(source)}"
                 print(f"  ({label}) cd {shlex.quote(str(fixture))} && {shlex.join(cmd)} {stdin}")
             if not args.keep:
@@ -1046,7 +1141,7 @@ def main():
     if bad:
         ap.error(f"unknown arm or case: {', '.join(bad)}")
     check_prereqs(arms)
-    imported = load_baseline(a.baseline, a.model, cases)  # before any spend: a bad path exits here
+    imported = load_baseline(a.baseline, a.model, cases, a.effort or "default")  # before any spend: a bad path exits here
     if a.dry_run:
         return dry_run(cases, arms, a)
     a.contain = grading_contained(a.unsafe_grade)

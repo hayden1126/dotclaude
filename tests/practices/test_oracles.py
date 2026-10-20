@@ -13,6 +13,7 @@ containment test checks the bwrap wrapper itself, and skips where bwrap can't st
 
 Skips when node (or npm, for the npm test) is absent. Fixtures go to TMPDIR.
 """
+import argparse
 import concurrent.futures
 import contextlib
 import io
@@ -1676,15 +1677,32 @@ class RunHarness(unittest.TestCase):
                                           self.use("Read", {"file_path": f"/x/.claude/skills/{other}/SKILL.md"})], skill))
         self.assertFalse(r.triggered([self.use("Read", {"file_path": "/x/lib/db.ts"}),
                                       self.use("Skill", {"skill": "simplify"})], "server-code"))
+        # The skill the call loads, not a mention of another one in its args.
+        mention = self.use("Skill", {"skill": "server-code", "args": "check the login against auth-secrets too"})
+        self.assertFalse(r.triggered([mention], "auth-secrets"))
+        self.assertTrue(r.triggered([mention], "server-code"))
+        self.assertFalse(r.triggered([self.use("Skill", {"skill": "auth-secrets-old"})], "auth-secrets"))
+        self.assertTrue(r.triggered([self.use("Skill", {"skill": "/auth-secrets"})], "auth-secrets"))
+        self.assertTrue(r.triggered([self.use("Skill", {"skill": "practices:auth-secrets"})], "auth-secrets"))
+        self.assertFalse(r.triggered([self.use("Skill", {"args": "auth-secrets"}), self.use("Skill", "auth-secrets")],
+                                     "auth-secrets"))
 
     def test_warmup_is_the_owners_benign_prompt(self):
         r = self.harness
         for case in r.CASES:
+            owner, kind = r.CASE_INFO[case]
             warmup, compact, task = r.turns_for(case, "D", "m")
-            self.assertEqual(warmup[1], r.prompt_of(r.benign_case(r.CASE_INFO[case].owner)), case)
             self.assertEqual((compact[1], task[1]), ("/compact", r.prompt_of(case)))
+            if kind == r.TARGET:
+                self.assertEqual(warmup[1], r.prompt_of(r.benign_case(owner)), case)
+            else:  # a benign case warms up with another skill's benign case, never its own prompt
+                self.assertNotEqual(warmup[1], task[1], case)
+                self.assertNotEqual(r.CASE_INFO[r.warmup_case(case)].owner, owner, case)
+                self.assertEqual(r.CASE_INFO[r.warmup_case(case)].kind, r.BENIGN, case)
         self.assertEqual(r.turns_for("email-change", "D", "m")[0][1], r.prompt_of("auth-benign"))
         self.assertEqual(r.turns_for("idor", "D", "m")[0][1], r.prompt_of("benign"))
+        self.assertEqual(r.turns_for("auth-benign", "D", "m")[0][1], r.prompt_of("benign"))
+        self.assertEqual(r.turns_for("benign", "D", "m")[0][1], r.prompt_of("auth-benign"))
 
     def test_stream_summary_and_denials(self):
         r = self.harness
@@ -1771,7 +1789,7 @@ class RunHarness(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             missed = r.summarize(red + mixed, ["idor"], ["A", "C"], 3)
         self.assertEqual(missed, ["idor/C"])
-        self.assertIn("REFUSED: rows from 2 skill versions", out.getvalue())
+        self.assertIn("REFUSED: rows from 2 versions (skills differ)", out.getvalue())
         self.assertIn("refused to pool idor/C", out.getvalue())
         # A B, C or D row from before fingerprints differs from any recorded one; an error row doesn't count.
         old = [self.row("idor", "D", "pass", v1), self.row("idor", "D", "pass", ["server-code"])]
@@ -1779,25 +1797,150 @@ class RunHarness(unittest.TestCase):
             self.assertEqual(r.summarize(old, ["idor"], ["D"], 2), ["idor/D"])
             self.assertEqual(r.summarize([self.row("idor", "D", "pass", v1), self.row("idor", "D", "error")],
                                          ["idor"], ["D"], 2), ["idor/D"])  # missed on pass 1 of 2, not refused
-        self.assertEqual(r.fingerprint(self.row("idor", "A", "fail", ["server-code"])), {})  # A installs none
+        self.assertEqual(r.fingerprint(self.row("idor", "A", "fail", ["server-code"])),  # A installs none
+                         {"skills": {}, "hook": r.NO_HOOK, "case": None})
+
+    def test_summary_refuses_to_pool_hook_or_case_versions(self):
+        r = self.harness
+        skills = {"server-code": "a" * 64, "auth-secrets": "b" * 64}
+        h1, h2, k1, k2 = "1" * 64, "2" * 64, "3" * 64, "4" * 64
+        c_row = lambda verdict="pass", **kw: self.row("idor", "C", verdict, skills, **kw)
+        a_row = lambda verdict="fail", **kw: self.row("idor", "A", verdict, {}, **kw)
+
+        def summary(rows, arms=("C",), n=3):
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                missed = r.summarize(rows, ["idor"], list(arms), n)
+            return missed, out.getvalue()
+
+        cases = [
+            ("hook", [c_row(hook=h1, case_hash=k1), c_row(hook=h2, case_hash=k1), c_row(hook=h1, case_hash=k1)]),
+            ("case", [c_row(hook=h1, case_hash=k1), c_row(hook=h1, case_hash=k2), c_row(hook=h1, case_hash=k1)]),
+            # a row from before the hook and case parts is unrecorded on both, never equal to a recorded one
+            ("hook, case", [c_row(hook=h1, case_hash=k1), c_row(), c_row(hook=h1, case_hash=k1)]),
+        ]
+        for differ, rows in cases:
+            with self.subTest(differ):
+                missed, text = summary(rows)
+                self.assertEqual(missed, ["idor/C"])
+                self.assertIn(f"REFUSED: rows from 2 versions ({differ} differ), not pooled", text)
+        self.assertIn("hook unrecorded, case unrecorded x1", summary(cases[2][1])[1])
+        # Equal on every part, or unrecorded on the same parts: pooled.
+        self.assertEqual(summary([c_row(hook=h1, case_hash=k1) for _ in range(3)])[0], [])
+        self.assertEqual(summary([c_row() for _ in range(3)])[0], [])
+        # Arm A: its hook is "none" whatever the row says; the case part still splits it.
+        same = [a_row(case_hash=k1, hook="ignored") for _ in range(3)] + [a_row(case_hash=k1)]
+        missed, text = summary(same, arms=("A",), n=4)
+        self.assertEqual(missed, [])
+        self.assertIn("discriminates", text)
+        missed, text = summary([a_row(case_hash=k1) for _ in range(3)] + [a_row()], arms=("A",), n=4)
+        self.assertEqual(missed, ["idor/A"])
+        self.assertIn("REFUSED: rows from 2 versions (case differ)", text)
+        # A's counts classify C only when A ran the same case code.
+        greens = [c_row(hook=h1, case_hash=k1) for _ in range(3)]
+        self.assertNotIn("unclassified", summary(greens + same, arms=("A", "C"))[1])
+        other_case = [a_row(case_hash=k2) for _ in range(4)]
+        missed, text = summary(greens + other_case, arms=("A", "C"))
+        self.assertEqual(missed, [])  # C is still green: the label changes, not the gate
+        self.assertRegex(text, r"idor\s+C .*green; arm A unclassified")
+
+    def test_hook_and_case_hashes(self):
+        r = self.harness
+        with tempfile.TemporaryDirectory(prefix="practices-hash-") as tmp:
+            tmp = Path(tmp)
+            settings = tmp / "settings.json"
+            settings.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "Edit", "hooks": [
+                {"type": "command", "command": 'bash "$HOME/.claude/hooks/practices-check.sh"'}]}]}}))
+            for d in ("one", "two"):  # two checkouts of one hook
+                (tmp / d).mkdir()
+                (tmp / d / "practices-check.sh").write_text("#!/bin/sh\n")
+                (tmp / d / "practices_check.py").write_text("print()\n")
+            first = r.hook_hash(settings, tmp / "one" / "practices-check.sh")
+            self.assertEqual(first, r.hook_hash(settings, tmp / "two" / "practices-check.sh"))
+            (tmp / "two" / "practices_check.py").write_text("print(1)\n")  # the module the shim runs
+            module = r.hook_hash(settings, tmp / "two" / "practices-check.sh")
+            self.assertNotEqual(module, first)
+            (tmp / "one" / "practices-check.sh").write_text("#!/bin/sh\nexit 0\n")  # the shim
+            self.assertNotEqual(r.hook_hash(settings, tmp / "one" / "practices-check.sh"), first)
+            settings.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "Edit|Write", "hooks": [
+                {"type": "command", "command": 'bash "$HOME/.claude/hooks/practices-check.sh"'}]}]}}))
+            self.assertNotEqual(r.hook_hash(settings, tmp / "two" / "practices-check.sh"), module)  # the wiring
+
+            # case_hash covers the case dir, oracle_lib.mjs, next_stub/, stubs/ and fixture/.
+            parts = {"CASES_DIR": tmp / "cases", "HERE": tmp, "STUB_SRC": tmp / "next_stub",
+                     "STUBS_SRC": tmp / "stubs", "FIXTURE_SRC": tmp / "fixture"}
+            for case in ("x", "y"):
+                (tmp / "cases" / case).mkdir(parents=True)
+                (tmp / "cases" / case / "prompt.md").write_text(f"{case}\n")
+            (tmp / "oracle_lib.mjs").write_text("lib\n")
+            for d in ("next_stub/dist", "stubs/react", "fixture/lib"):
+                (tmp / d).mkdir(parents=True)
+                (tmp / d / "f.js").write_text("v1\n")
+            saved = {name: getattr(r, name) for name in parts}
+            try:
+                for name, value in parts.items():
+                    setattr(r, name, value)
+                base = r.case_hash("x")
+                self.assertEqual(base, r.case_hash("x"))
+                self.assertNotEqual(base, r.case_hash("y"))
+                seen = {base}
+                for rel in ("cases/x/oracle.mjs", "oracle_lib.mjs", "next_stub/dist/f.js", "stubs/react/f.js", "fixture/lib/f.js"):
+                    with self.subTest(rel):
+                        (tmp / rel).write_text("changed\n")
+                        h = r.case_hash("x")
+                        self.assertNotIn(h, seen)
+                        seen.add(h)
+            finally:
+                for name, value in saved.items():
+                    setattr(r, name, value)
+        self.assertNotEqual(r.case_hash("idor"), r.case_hash("signup"))
+
+    def test_rows_record_every_fingerprint_part(self):
+        r = self.harness
+        result = json.dumps({"type": "result", "subtype": "success", "num_turns": 1, "total_cost_usd": 0})
+        fake = lambda case, arm, model, effort=None: [("task", "x", [sys.executable, "-c", f"print({result!r})"])]
+        args = argparse.Namespace(model="m", effort=None, contain=False, keep=False)
+        saved = r.turns_for
+        r.turns_for = fake
+        try:
+            with tempfile.TemporaryDirectory(prefix="practices-row-") as out, contextlib.redirect_stdout(io.StringIO()):
+                rows = {arm: r.run_one("idor", arm, 1, args, Path(out)) for arm in ("A", "C")}
+        finally:
+            r.turns_for = saved
+        self.assertEqual((rows["A"]["hook"], rows["C"]["hook"]), (r.NO_HOOK, r.hook_hash()))
+        self.assertEqual({rows["A"]["case_hash"], rows["C"]["case_hash"]}, {r.case_hash("idor")})
+        self.assertEqual(sorted(rows["C"]["skills"]), sorted(r.PRACTICES_SKILLS))
+        self.assertEqual(r.fingerprint(rows["C"]), {"skills": rows["C"]["skills"], "hook": r.hook_hash(),
+                                                    "case": r.case_hash("idor")})
 
     def test_baseline_rows_are_imported_for_the_same_model(self):
         r = self.harness
         with tempfile.TemporaryDirectory(prefix="practices-baseline-") as tmp:
             tmp = Path(tmp)
             (tmp / "run1").mkdir()
-            lines = [self.row("email-change", "A", "fail") for _ in range(3)] + [
+            stream = lambda i: {"stream": [f"/out/email-change-A-{i}/stream.jsonl"]}
+            lines = [self.row("email-change", "A", "fail", **stream(i)) for i in range(2)] + [
+                self.row("email-change", "A", "fail", effort="default", **stream(2)),  # "default" stated
                 self.row("email-change", "C", "pass"),                       # not arm A
                 {**self.row("email-change", "A", "fail"), "model": "other"},  # another model
                 self.row("idor", "A", "fail"),                          # a case not in this run
+                self.row("email-change", "A", "pass", effort="low", **stream(3)),  # another effort
             ]
             (tmp / "run1" / "results.jsonl").write_text("\n".join(json.dumps(x) for x in lines) + "\nnot json\n\n")
+            # A copy of run1's file under another name: the same runs, so its rows are already taken.
+            (tmp / "copy.jsonl").write_text((tmp / "run1" / "results.jsonl").read_text())
             with contextlib.redirect_stdout(io.StringIO()) as out:
                 # the dir and the file are one source, read once
-                rows = r.load_baseline([tmp / "run1", tmp / "run1" / "results.jsonl"], "m", ["email-change", "reset-host"])
+                rows = r.load_baseline([tmp / "run1", tmp / "run1" / "results.jsonl", tmp / "copy.jsonl"],
+                                       "m", ["email-change", "reset-host"])
             self.assertEqual(len(rows), 3)
             self.assertTrue(all(x["imported"] == str((tmp / "run1" / "results.jsonl").resolve()) for x in rows))
-            self.assertIn("3 arm-A row(s) for m in these cases; 4 other line(s) skipped", out.getvalue())
+            self.assertIn("3 arm-A row(s) for m at effort default in these cases; 0 already taken; 5 other line(s) skipped",
+                          out.getvalue())
+            self.assertIn("0 arm-A row(s) for m at effort default in these cases; 3 already taken; 5 other line(s) skipped",
+                          out.getvalue())
+            with contextlib.redirect_stdout(io.StringIO()):
+                low = r.load_baseline([tmp / "run1"], "m", ["email-change"], "low")
+            self.assertEqual([x["verdict"] for x in low], ["pass"])
             with self.assertRaises(SystemExit):
                 r.load_baseline([tmp / "missing.jsonl"], "m", ["email-change"])
         # Imported A rows classify the case for a C-only run, and A's line says they're imported.
