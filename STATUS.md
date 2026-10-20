@@ -214,6 +214,16 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     parse the s-command (skip pattern and replacement, then read flags) and judge `=(` only at
     a word start outside quotes, keeping `1e date`, `s/a/b/e`, `s/a/b/w f`, `cat =(ls)` and
     `${(f)x}` refused. In lane policy-fp since 2026-10-20.
+  - **context-watch reads the pre-compact count right after a compact** (lane exam-prep's
+    report, 2026-10-20, session 89ae7cc8; the lead checked the code, not probed live).
+    `scan()` (`hooks/context_watch.py:170-200`) walks back to the last main-chain assistant
+    usage and never stops at a compact boundary: `main_chain` skips the `compact_boundary`
+    system line, and the compact-summary user entry has no usage. At the first PostToolUse after
+    a compact, that call's assistant entry wasn't on disk yet, so the nudge said "521k ... hand
+    off now" where the real count was 107k. Obeying it loops compact after compact. Fix: a
+    compact boundary met before any post-compact usage means no count yet (say nothing, write
+    nothing), with a test on a transcript fixture that ends at a boundary. Lane-able
+    (`hooks/context_watch.py`, `tests/`); no live lane owns it.
   - **Subagent policy gaps SP1 and SP2** (from lane policy-fp, 2026-10-20, routed to the lead
     on Hayden's pick; the lead re-checked both). Details and proposed fixes are in the private
     findings file's "Subagent policy gaps 2026-10-20" section ([[dotclaude-public-repo]]). Both
