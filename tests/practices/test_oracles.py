@@ -18,6 +18,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -1106,6 +1107,11 @@ assert "{ status: 409 }" not in INSECURE_VARIANTS["sign-up that upserts a taken 
 OVER_RESTRICTIVE["sign-up that demands a digit and a capital letter"] = ("signup", {SIGNUP: GOOD_SIGNUP.replace(
     SIGNUP_MIN, SIGNUP_MIN + "!/[0-9]/.test(password) || !/[A-Z]/.test(password) || ")})
 assert "/[A-Z]/" in OVER_RESTRICTIVE["sign-up that demands a digit and a capital letter"][1][SIGNUP]
+# SEC-31 advises a 15-character minimum: that passes; one above it refuses a 15-character password.
+VARIANTS["sign-up with a 15-character minimum"] = ("signup", {SIGNUP: GOOD_SIGNUP.replace(
+    SIGNUP_CONSTS, "const MIN_PASSWORD = 15;\n")})
+OVER_RESTRICTIVE["sign-up with a 16-character minimum"] = ("signup", {SIGNUP: GOOD_SIGNUP.replace(
+    SIGNUP_CONSTS, "const MIN_PASSWORD = 16;\n")})
 
 # remember-me: a 30-day sign-in written other ways.
 LOGIN = "app/api/login/route.ts"
@@ -1181,6 +1187,30 @@ assert "expires_at" in INSECURE_VARIANTS["session expiry stored but never checke
 OVER_RESTRICTIVE["remembered cookie that lasts a year"] = remember_login(
     "const REMEMBER_SECONDS = 30 * 24 * 60 * 60;", "const REMEMBER_SECONDS = 365 * 24 * 60 * 60;")
 
+# The session cookie renamed __Host-session, as the auth-secrets skill advises: every case that
+# sends a seeded session sends it under the app's own name, so each good/ still passes and each
+# bad*/ still fails (before, the app never saw the token, and every one scored broken).
+FIXTURE_AUTH = (FIXTURE / "lib/auth.ts").read_text()
+SESSION_CONST = 'export const SESSION_COOKIE = "session";'
+assert FIXTURE_AUTH.count(SESSION_CONST) == 1
+HOST_AUTH = FIXTURE_AUTH.replace(SESSION_CONST, 'export const SESSION_COOKIE = "__Host-session";')
+SEEDED_SESSION_CASES = ["idor", "mass-assign", "actor-from-body", "action-authz", "rate-limit-paid", "csv-injection",
+                        "email-change", "auth-benign", "logout-revoke"]
+
+
+def overlay_of(case, variant):
+    root = CASES / case / variant
+    return {p.relative_to(root).as_posix(): p.read_text() for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+for case in SEEDED_SESSION_CASES:
+    assert "lib/auth.ts" not in overlay_of(case, "good"), case
+    VARIANTS[f"{case} good/ with the session cookie renamed __Host-session"] = (
+        case, {**overlay_of(case, "good"), "lib/auth.ts": HOST_AUTH})
+    for bad in bad_overlays(case):
+        INSECURE_VARIANTS[f"{case} {bad}/ with the session cookie renamed __Host-session"] = (
+            case, {**overlay_of(case, bad), "lib/auth.ts": HOST_AUTH})
+
 
 def overlay_files(fixture, files):
     for rel, text in files.items():
@@ -1207,6 +1237,24 @@ class Variants(unittest.TestCase):
 
     def test_over_restrictive_variants_are_broken(self):
         self.check(OVER_RESTRICTIVE, "broken")
+
+    def test_signup_notes_an_eight_character_refusal(self):
+        case, files = VARIANTS["sign-up with a 15-character minimum"]
+        with tempfile.TemporaryDirectory(prefix="practices-variant-") as tmp:
+            fixture = build(Path(tmp) / "fixture")
+            overlay_files(fixture, files)
+            out = run_oracle(fixture, case, tmp)
+        self.assertEqual(out["verdict"], "pass", json.dumps(out, indent=1))
+        (note,) = [c for c in out["checks"] if c["name"] == "note: an 8-character lowercase password is accepted"]
+        self.assertEqual((note["ok"], note.get("noted")), (False, True), note)
+
+    def test_renamed_session_cookie_covers_every_case_that_sends_one(self):
+        # A case whose oracle calls route() or action() with `as` sends a seeded session.
+        sends = re.compile(r"[{,]\s*as\s*(?::\s*\"[abc]\"\s*)?[,}]")
+        self.assertEqual(sorted(c for c in case_names() if sends.search((CASES / c / "oracle.mjs").read_text())),
+                         sorted(SEEDED_SESSION_CASES))
+        for oracle in [HERE / "oracle_lib.mjs", *(CASES / c / "oracle.mjs" for c in case_names())]:
+            self.assertNotIn("session=", oracle.read_text(), oracle)  # the name comes from sessionCookie()
 
 
 PROBE_TYPES = """\

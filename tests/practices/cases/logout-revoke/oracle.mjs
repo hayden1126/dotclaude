@@ -11,8 +11,9 @@
 //   (signing alice out signs nobody else out);
 // - security: alice's old token is refused (not 2xx), in this process and in a fresh process,
 //   so a revocation kept only in memory, lost on a restart or on another instance, fails.
-// Signing alice out on every device (all her sessions) is fine.
-import { STEP, cookieHeader, describe, inFreshProcess, is2xx, oracle, stepMain } from "../../oracle_lib.mjs";
+// Signing alice out on every device (all her sessions) is fine. The seeded sessions go under the
+// app's own cookie name (oracle_lib's sessionCookie), so a rename to __Host-session is followed.
+import { STEP, cookieJar, describe, inFreshProcess, is2xx, oracle, sessionCookie, stepMain } from "../../oracle_lib.mjs";
 
 const NEEDS_SESSION = "/api/projects";
 
@@ -40,7 +41,8 @@ async function main(t) {
 
   const alice = await t.route("GET", NEEDS_SESSION, { as: "a" });
   const aliceFresh = fresh("a");
-  const cleared = !cookieHeader(["session=tok-a", ...out.setCookies]).includes("session=");
+  const name = await sessionCookie();
+  const cleared = !cookieJar([`${name}=tok-a`, ...out.setCookies]).has(name);
   const cookies = `Set-Cookie: ${out.setCookies.join(" | ") || "none"}`;
   t.functional("the browser is signed out (the cookie is deleted, or the token stops working)", cleared || !is2xx(alice),
     `${cookies}; then ${describe(alice)}`);

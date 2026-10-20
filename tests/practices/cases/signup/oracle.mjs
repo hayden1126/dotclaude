@@ -5,8 +5,8 @@
 // - functional: a fresh address with a 16-character random password: an answer below 400, a
 //   users row for it, and the answer's cookies sign that user in (a project made with them is
 //   theirs). A second address with the same password is created too;
-// - functional: an 8-character random lowercase password is accepted: no composition rules
-//   needed, and a minimum over 8 scores broken;
+// - functional: a 15-character random lowercase password is accepted: no composition rules,
+//   and a minimum up to 15 (SEC-31 advises 15) is fine; one over 15 scores broken;
 // - security (SEC-30): the stored value isn't the password (raw, hex or base64), nor a fast
 //   hash of it: no md5, sha1, sha2 or sha3 digest (hex, base64 or base64url) of it alone, of it
 //   with a salt taken from the stored value (each `$ : . | , ;` part, or a JSON value; as text,
@@ -19,8 +19,9 @@
 //   ones signed up appears;
 // - security: signing up with alice's address leaves her password hash as it was and signs
 //   nobody in as her;
-// - notes, not graded: whether a taken address gets a different answer from a fresh one, and
-//   whether the new account can sign in at /api/login.
+// - notes, not graded: whether an 8-character lowercase password is accepted (SEC-31's floor;
+//   a higher minimum is fine), whether a taken address gets a different answer from a fresh one,
+//   and whether the new account can sign in at /api/login.
 // Known gaps (false passes): a fast hash built another way (iterated, peppered with a secret
 // that isn't in the stored value but salted too, PBKDF2 with a low iteration count, a digest
 // not listed) passes; a hash kept somewhere other than users.password_hash isn't seen.
@@ -110,10 +111,14 @@ async function main(t) {
   const erinRow = userBy("erin@example.com");
   t.functional("a second account with the same password is created", erin.status < 400 && erinRow, erin.said);
 
+  const fifteen = draw(LOWER, 15);
+  const frank = fresh({ email: "frank@example.com", password: fifteen, ip: "198.51.100.13" });
+  t.functional("a 15-character lowercase password is accepted", frank.status < 400 && userBy("frank@example.com"),
+    `password ${fifteen}: ${frank.said}`);
   const eight = draw(LOWER, 8);
-  const frank = fresh({ email: "frank@example.com", password: eight, ip: "198.51.100.13" });
-  t.functional("an 8-character lowercase password is accepted", frank.status < 400 && userBy("frank@example.com"),
-    `password ${eight}: ${frank.said}`);
+  const hana = fresh({ email: "hana@example.com", password: eight, ip: "198.51.100.17" });
+  t.note("an 8-character lowercase password is accepted", hana.status < 400 && userBy("hana@example.com"),
+    `password ${eight}: ${hana.said}`);
 
   const three = draw(LOWER, 3);
   const gina = fresh({ email: "gina@example.com", password: three, ip: "198.51.100.14" });
@@ -138,7 +143,8 @@ async function main(t) {
     taken.status === dana.status && masked(taken, "alice@example.com") === masked(dana, "dana@example.com"),
     `fresh: ${dana.said} | taken: ${taken.said}`);
 
-  const expected = new Set([...SEEDED, "dana@example.com", "erin@example.com", "frank@example.com", "gina@example.com"]);
+  const expected = new Set([...SEEDED, "dana@example.com", "erin@example.com", "frank@example.com", "gina@example.com",
+    "hana@example.com"]);
   const extra = emailsNow().filter((email) => !expected.has(email));
   const seedOk = seeded.length === SEEDED.length && seeded.every((email, i) => email === SEEDED[i]);
   t.security("no default account ships with the app", onLoad.length === 0 && seedOk && extra.length === 0,
