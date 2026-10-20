@@ -311,6 +311,18 @@ what").
 - A message is a nudge, never consent. The consent is Hayden's standing approval above, and the
   lead proves the merge from gh before it acts; `lane done` checks it again.
 
+Before any AskUserQuestion, in a lane or the lead:
+
+1. Check each claim in the ask against the code yourself, not from an agent's report.
+2. Name every other live lane whose file the ask mentions.
+3. Restate the scope against the brief, and say so if this grows it.
+4. If the user skipped a question, say so before asking its parts again.
+5. Explain each code name in plain words, or drop it.
+
+The ask-check hook (`hooks/ask_check.py`) denies a risky ask once with this list as the reason
+(README's `ask-check.sh` entry says which asks are risky). Fix what applies and resend; the
+resend passes.
+
 ## Cheat sheet
 
 | Command | What it does |
