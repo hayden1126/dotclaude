@@ -385,6 +385,12 @@ class ProjectFilesStayOut(Workspace):
         with open(os.path.join(self.cwd, ".git", "config"), "w") as f:
             f.write("[core]\n\thooksPath = .githooks\n")
         self.env["XDG_STATE_HOME"] = os.path.join(self.tmp.name, "state")
+        # practices-check prints only on a deny: a route handler under a project skill whose
+        # events.toml owns it, never loaded.
+        skill = os.path.join(self.cwd, ".claude", "skills", "demo")
+        os.makedirs(skill)
+        with open(os.path.join(skill, "events.toml"), "w") as f:
+            f.write('skill = "demo"\n[[event]]\nid = "route"\npaths = ["**/route.ts"]\n')
         events = {"handoff-reminder.sh": {"prompt": "let's wrap up"},
                   "session-title.sh": {"cwd": self.cwd, "transcript_path": self.transcript,
                                        "prompt": "fix the parser"},
@@ -392,7 +398,12 @@ class ProjectFilesStayOut(Workspace):
                   # ask-check prints only on a deny: four backticked names.
                   "ask-check.sh": {"tool_name": "AskUserQuestion", "cwd": self.cwd,
                                    "transcript_path": self.transcript, "tool_input": {
-                                       "questions": [{"question": "`a1` `b2` `c3` `d4`?"}]}}}
+                                       "questions": [{"question": "`a1` `b2` `c3` `d4`?"}]}},
+                  "practices-check.sh": {"hook_event_name": "PreToolUse", "tool_name": "Write",
+                                         "cwd": self.cwd, "session_id": "sid",
+                                         "transcript_path": self.transcript, "tool_input": {
+                                             "file_path": os.path.join(self.cwd, "app", "route.ts"),
+                                             "content": "export const x = 1\n"}}}
         for name, event in events.items():
             with self.subTest(hook=name):
                 p = subprocess.run(["bash", os.path.join(HOOKS, name)], input=json.dumps(event),

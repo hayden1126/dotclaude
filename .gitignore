@@ -10,22 +10,23 @@ history.jsonl
 mcp-needs-auth-cache.json
 .last-cleanup
 
-# Runtime artifact dirs
-backups/
-cache/
-file-history/
-paste-cache/
-projects/
-session-data/
-session-env/
-sessions/
-shell-snapshots/
-telemetry/
-todos/
-tasks/
-metrics/
-debug/
-downloads/
+# Runtime artifact dirs, at the repo root only: unanchored, `projects/` also hid
+# tests/practices/fixture/app/projects/ from git
+/backups/
+/cache/
+/file-history/
+/paste-cache/
+/projects/
+/session-data/
+/session-env/
+/sessions/
+/shell-snapshots/
+/telemetry/
+/todos/
+/tasks/
+/metrics/
+/debug/
+/downloads/
 
 # Editor / OS
 .DS_Store
@@ -34,7 +35,7 @@ downloads/
 .vscode/
 
 # Plan mode scratch
-plans/
+/plans/
 
 # Python bytecode (skills/ ships Python tooling)
 __pycache__/
