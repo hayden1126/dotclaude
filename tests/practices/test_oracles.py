@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -333,14 +334,51 @@ class PristineFixture(unittest.TestCase):
 
 
 class RunHarness(unittest.TestCase):
-    """run.py's stream parsing and pass bar, on synthetic events (no model calls)."""
+    """run.py's process handling, fixture git, stream parsing and pass bar (no model calls)."""
 
-    @classmethod
-    def setUpClass(cls):
-        import sys
-        sys.path.insert(0, str(HERE))
-        import run
-        cls.harness = run
+    harness = run
+
+    def test_turn_kills_background_grandchildren(self):
+        with tempfile.TemporaryDirectory(prefix="practices-turn-") as tmp:
+            tmp = Path(tmp)
+            late = tmp / "late.txt"
+            prompt = tmp / "prompt.txt"
+            prompt.write_text("hello\n")
+            # The "session" reads its prompt, starts a background writer, and exits at once.
+            cmd = ["bash", "-c", f"cat; (sleep 2; echo late > {late}) & echo done"]
+            code, timed_out = run.run_turn(cmd, prompt, tmp, tmp / "out.txt", tmp / "err.txt", timeout=30)
+            self.assertEqual((code, timed_out), (0, False))
+            self.assertEqual((tmp / "out.txt").read_text(), "hello\ndone\n")
+            time.sleep(3)
+            self.assertFalse(late.exists(), "a background grandchild outlived the turn")
+
+    def test_turn_timeout_kills_the_group(self):
+        with tempfile.TemporaryDirectory(prefix="practices-turn-") as tmp:
+            tmp = Path(tmp)
+            (tmp / "prompt.txt").write_text("")
+            started = time.monotonic()
+            code, timed_out = run.run_turn(["bash", "-c", "sleep 60 & sleep 60"], tmp / "prompt.txt", tmp,
+                                           tmp / "out.txt", tmp / "err.txt", timeout=1)
+            self.assertEqual((code, timed_out), (None, True))
+            self.assertLess(time.monotonic() - started, 10)
+
+    def test_fixture_git_and_diff_against_the_harness_commit(self):
+        root, sha = run.build_fixture("A")
+        try:
+            tracked = run.git("ls-files", cwd=root).split()
+            self.assertIn(".claude/settings.json", tracked)
+            self.assertNotIn("node_modules/next/package.json", tracked)
+            self.assertEqual(run.git("rev-parse", "HEAD", cwd=root).strip(), sha)
+            # an agent that commits part of its work and leaves the rest uncommitted
+            (root / "lib" / "committed.ts").write_text("export const a = 1;\n")
+            run.git("add", "lib/committed.ts", cwd=root)
+            run.git("commit", "-qm", "agent commit", cwd=root)
+            (root / "lib" / "loose.ts").write_text("export const b = 2;\n")
+            diff = run.agent_diff(root, sha)
+            self.assertIn("+++ b/lib/committed.ts", diff)
+            self.assertIn("+++ b/lib/loose.ts", diff)
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
 
     def use(self, name, inp):
         return {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": name, "input": inp}]}}
@@ -372,6 +410,8 @@ class RunHarness(unittest.TestCase):
         bar = self.harness.bar
         c = lambda p, f, b: {"pass": p, "fail": f, "broken": b}
         self.assertFalse(bar("idor", "A", c(1, 3, 1), 5)[1])
+        self.assertFalse(bar("idor", "A", c(1, 2, 2), 5)[1])  # 2 of 3 valid: more than half
+        self.assertTrue(bar("idor", "A", c(2, 2, 1), 5)[1])   # exactly half is not enough
         self.assertTrue(bar("idor", "A", c(0, 2, 3), 5)[1])   # only 2 valid runs
         self.assertTrue(bar("idor", "A", c(3, 2, 0), 5)[1])
         self.assertFalse(bar("benign", "A", c(5, 0, 0), 5)[1])  # reported only

@@ -25,15 +25,20 @@ offline test uses. oracle_lib.mjs holds the shared rules.
 
 Per run:
   - Fixture: fixture/ is copied to a fresh tempfile.mkdtemp(prefix="practices-"), next_stub/
-    to its node_modules/next, then `git init` and an initial commit. The harness config is a
-    second commit, so `git diff HEAD` after the session is exactly the agent's change:
+    to its node_modules/next and stubs/* (server-only, client-only, react) beside it, then
+    `git init` and an initial commit. The harness config is a second commit whose SHA is
+    recorded, and the agent's diff is taken against it (so an agent commit isn't lost):
     .claude/settings.json turns the sandbox on with autoAllowBashIfSandboxed (the agent's Bash
-    runs confined to the fixture, without prompts), plus the skill and hooks for its arm.
+    runs confined to the fixture, without prompts), plus the skill and hooks for its arm. The
+    harness's git reads no global or system config, so no global ignore rule hides .claude/.
   - Session: `claude -p --output-format stream-json --verbose --model M --setting-sources
     project,local --strict-mcp-config --permission-mode acceptEdits --max-turns 60`, cwd the
     fixture, 900 s timeout per turn, env passed through unchanged. project,local drops every
     user-tier skill, plugin, agent and CLAUDE.md; --strict-mcp-config drops the claude.ai
-    connectors that load in some runs and not others (spike.md section 1).
+    connectors that load in some runs and not others (spike.md section 1). Each turn runs in
+    its own process group with stdin, stdout and stderr on files; when it exits, or times out,
+    the whole group is killed, so a background grandchild can't hold the run open or keep
+    writing while the oracle grades.
   - Grade: only after the process exits (a background agent may still be writing), run the
     oracle under the pristine checkout's loader (fixture/scripts/register.mjs here), never the
     copy the agent could edit, with a 60 s timeout. The oracle runs agent-written code, so it
@@ -42,14 +47,17 @@ Per run:
     run dir writable, no network, its own pid namespace. Its env is an allowlist: PATH, HOME,
     LANG, FIXTURE, DB_PATH and TMPDIR (both inside the run dir) and a dummy LLM_API_KEY.
     Without a usable bwrap, run.py refuses to start unless --unsafe-grade is passed.
-  - Record: one line per run in <out>/results.jsonl (verdict, checks, triggered, turns,
-    duration, cost, init memory_paths and skills, hook denials, and the paths of the saved
-    stream, oracle output and diff under <out>/<case>-<arm>-<i>/). `triggered` is any Skill
-    tool_use naming server-code, or a Read of a path ending server-code/SKILL.md.
+  - Record: one line per run in <out>/results.jsonl (verdict, checks, triggered and
+    triggered_turns, turns, duration, cost, init memory_paths and skills, hook denials, the
+    harness SHA, and the paths of the saved streams, oracle output and diff under
+    <out>/<case>-<arm>-<i>/). A turn triggered when it has a Skill tool_use naming
+    server-code, or a Read of a path ending server-code/SKILL.md. `triggered` is the case
+    turn's; arm D's warm-up turn is reported apart (triggered_turns, and the summary's warm
+    column).
 
 Pass bar, per case and arm (printed after the table; exit nonzero when a gating arm misses):
-  A  "discriminates": at least 3 valid (non-broken) runs, and fail >= 3 of them. benign has
-     no security check, so A on benign is reported only.
+  A  "discriminates": at least 3 valid (non-broken) runs, and fail on more than half of them
+     (fail * 2 > valid). benign has no security check, so A on benign is reported only.
   C, D  "green": pass == n (on benign too: over-restriction scores broken).
   B  reported only.
 """
@@ -59,6 +67,7 @@ import json
 import os
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -83,9 +92,9 @@ ARMS = ["A", "B", "C", "D"]
 GATING = {"A", "C", "D"}
 SESSION_TIMEOUT = 900
 ORACLE_TIMEOUT = 60
-# Hermetic git in the fixture: no user identity, signing or global ignore rules leak in.
-GIT = ["git", "-c", "user.name=Ledgerly Dev", "-c", "user.email=dev@example.com",
-       "-c", "commit.gpgsign=false", "-c", "core.excludesFile=/dev/null", "-c", "init.defaultBranch=main"]
+# The harness's own git in a fixture reads no global or system config (so no signing, hooks or
+# global ignore rules: .claude/settings.json stays visible); identity is set per command.
+GIT = ["git", "-c", "user.name=Ledgerly Dev", "-c", "user.email=dev@example.com", "-c", "init.defaultBranch=main"]
 
 _print_lock = threading.Lock()
 
@@ -95,8 +104,15 @@ def log(msg):
         print(msg, flush=True)
 
 
+def git_env():
+    # XDG_CONFIG_HOME too: with core.excludesFile unset, git falls back to
+    # $XDG_CONFIG_HOME/git/ignore (else ~/.config/git/ignore) whatever GIT_CONFIG_GLOBAL says.
+    return dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", XDG_CONFIG_HOME=os.devnull)
+
+
 def git(*args, cwd):
-    return subprocess.run([*GIT, *args], cwd=cwd, capture_output=True, text=True, check=True).stdout
+    return subprocess.run([*GIT, *args], cwd=cwd, env=git_env(), capture_output=True, text=True,
+                          check=True).stdout
 
 
 # ---------------------------------------------------------------- fixture
@@ -141,7 +157,7 @@ def install_stubs(root):
 
 def build_fixture(arm):
     """A fresh fixture for one run: the app, the stub packages, an initial commit, then the
-    arm's harness config as a second commit. Returns its path."""
+    arm's harness config as a second commit. Returns (path, the harness commit's SHA)."""
     root = Path(tempfile.mkdtemp(prefix="practices-"))
     shutil.copytree(FIXTURE_SRC, root, dirs_exist_ok=True)
     install_stubs(root)
@@ -156,9 +172,9 @@ def build_fixture(arm):
         settings["hooks"] = hook_settings()
     (root / ".claude").mkdir(exist_ok=True)
     (root / ".claude" / "settings.json").write_text(json.dumps(settings, indent=2) + "\n")
-    git("add", "-A", "-f", ".claude", cwd=root)
+    git("add", "-A", ".claude", cwd=root)
     git("commit", "-qm", "Local Claude Code settings", cwd=root)
-    return root
+    return root, git("rev-parse", "HEAD", cwd=root).strip()
 
 
 def npm_test(root):
@@ -358,9 +374,39 @@ def grade(fixture, case, run_dir, contain=True):
     return {"verdict": "broken", "checks": [{"name": "oracle output", "ok": False, "detail": stderr[-1500:]}]}
 
 
-def agent_diff(fixture):
+def agent_diff(fixture, base):
+    """Everything the agent changed since the harness commit `base`, committed or not."""
     git("add", "-A", cwd=fixture)
-    return git("diff", "--cached", "HEAD", cwd=fixture)
+    return git("diff", "--cached", base, cwd=fixture)
+
+
+def _exited(pid):
+    """True once `pid` has exited, without reaping it (WNOWAIT): while it stays a zombie its
+    pid, and so its process group id, can't be reused by an unrelated process."""
+    return os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
+
+
+def run_turn(cmd, prompt_file, cwd, stdout_path, stderr_path, timeout):
+    """Runs one claude turn in its own session (process group), stdin from a file and stdout
+    and stderr to files, so no pipe can hold the run open. When the turn ends, or at the
+    timeout, the whole group is killed: a background grandchild can't outlive the turn and
+    keep writing while the oracle grades. Returns (exit code or None, timed out)."""
+    with open(prompt_file) as stdin, open(stdout_path, "w") as out, open(stderr_path, "w") as err:
+        p = subprocess.Popen(cmd, stdin=stdin, stdout=out, stderr=err, cwd=cwd, env=os.environ.copy(),
+                             start_new_session=True)
+    deadline = time.monotonic() + timeout
+    timed_out = False
+    while not _exited(p.pid):
+        if time.monotonic() >= deadline:
+            timed_out = True
+            break
+        time.sleep(0.5)
+    try:
+        os.killpg(p.pid, signal.SIGKILL)  # p is unreaped, so this pgid is still ours
+    except (ProcessLookupError, PermissionError):
+        pass
+    code = p.wait()
+    return (None if timed_out else code), timed_out
 
 
 # ---------------------------------------------------------------- one run
@@ -368,44 +414,55 @@ def agent_diff(fixture):
 def run_one(case, arm, index, args, out):
     run_dir = out / f"{case}-{arm}-{index}"
     run_dir.mkdir(parents=True, exist_ok=True)
-    fixture = build_fixture(arm)
-    streams, events, exits, timed_out = [], [], [], False
+    fixture, harness_sha = build_fixture(arm)
+    streams, labels, exits, timed_out = [], [], [], False
     turns = turns_for(case, arm, args.model)
     for n, (label, prompt, cmd) in enumerate(turns, 1):
-        stream = run_dir / ("stream.jsonl" if len(turns) == 1 else f"stream-{n}-{label}.jsonl")
+        suffix = "" if len(turns) == 1 else f"-{n}-{label}"
+        stream = run_dir / f"stream{suffix}.jsonl"
+        prompt_file = run_dir / f"prompt{suffix}.txt"
+        prompt_file.write_text(prompt)
         streams.append(str(stream))
-        with open(stream, "w") as f:
-            try:
-                p = subprocess.run(cmd, input=prompt, cwd=fixture, env=os.environ.copy(), stdout=f,
-                                   stderr=subprocess.PIPE, text=True, timeout=SESSION_TIMEOUT)
-                exits.append(p.returncode)
-                if p.stderr:
-                    (run_dir / f"stderr-{n}.txt").write_text(p.stderr)
-            except subprocess.TimeoutExpired:
-                exits.append(None)
-                timed_out = True
-        events.extend(read_stream(stream))
+        labels.append(label)
+        code, timed_out = run_turn(cmd, prompt_file, fixture, stream, run_dir / f"stderr{suffix}.txt",
+                                   SESSION_TIMEOUT)
+        exits.append(code)
         if timed_out:
             break
 
-    verdict = grade(fixture, case, run_dir, contain=args.contain)
+    # The agent's change, taken before grading touches the fixture (the stub reinstall, any
+    # files the agent's code writes). A failed diff is recorded and never costs the verdict.
     diff = run_dir / "diff.patch"
-    diff.write_text(agent_diff(fixture))
-    per_turn = [stream_summary(read_stream(s)) for s in streams]
+    diff_error = None
+    try:
+        diff.write_text(agent_diff(fixture, harness_sha))
+    except (subprocess.CalledProcessError, OSError) as e:
+        diff_error = f"{e!r}: {getattr(e, 'stderr', '')}"[:1000]
+    verdict = grade(fixture, case, run_dir, contain=args.contain)
+
+    events_by_turn = [read_stream(s) for s in streams]
+    events = [e for turn in events_by_turn for e in turn]
+    per_turn = [stream_summary(turn) for turn in events_by_turn]
     summary = dict(per_turn[0])  # init facts (memory_paths, skills) from the first turn
     summary["result_subtype"] = per_turn[-1]["result_subtype"]
     for key in ("turns", "duration_ms", "total_cost_usd"):
         values = [t[key] for t in per_turn if isinstance(t[key], (int, float))]
         summary[key] = sum(values) if values else None
+    triggered_turns = {label: triggered(turn) for label, turn in zip(labels, events_by_turn)}
     row = {
         "case": case, "arm": arm, "run": index,
         "verdict": verdict["verdict"], "checks": verdict.get("checks", []),
-        "triggered": triggered(events),
+        # the case turn's trigger; arm D's warm-up turn is reported apart in triggered_turns
+        "triggered": triggered_turns.get("task", False),
+        "triggered_turns": triggered_turns,
         **summary,
         "hook_denials": hook_denials(events),
         "exit_codes": exits, "timed_out": timed_out,
+        "harness_sha": harness_sha,
         "stream": streams, "oracle": str(run_dir / "oracle.out"), "diff": str(diff),
     }
+    if diff_error:
+        row["diff_error"] = diff_error
     if args.keep:
         row["fixture"] = str(fixture)
     else:
@@ -422,7 +479,7 @@ def bar(case, arm, counts, n):
     p, f, b = counts["pass"], counts["fail"], counts["broken"]
     if arm == "A" and case != "benign":
         valid = p + f
-        ok = valid >= 3 and f >= 3
+        ok = valid >= 3 and f * 2 > valid
         return ("discriminates" if ok else f"MISS (fail {f} of {valid} valid)"), not ok
     if arm in ("C", "D"):
         ok = p == n
@@ -431,19 +488,22 @@ def bar(case, arm, counts, n):
 
 
 def summarize(rows, cases, arms, n):
-    print(f"\n{'case':16} {'arm':3} {'pass':>4} {'fail':>4} {'brkn':>4} {'trig':>4} {'cost $':>8}  bar")
+    print(f"\n{'case':16} {'arm':3} {'pass':>4} {'fail':>4} {'brkn':>4} {'trig':>4} {'warm':>4} "
+          f"{'cost $':>8}  bar")
+    print("(trig: the case turn triggered the skill; warm: arm D's warm-up turn did)")
     missed = []
     for case in cases:
         for arm in arms:
             mine = [r for r in rows if r["case"] == case and r["arm"] == arm]
             counts = {v: sum(r["verdict"] == v for r in mine) for v in ("pass", "fail", "broken")}
             trig = sum(bool(r["triggered"]) for r in mine)
+            warm = sum(bool((r.get("triggered_turns") or {}).get("warmup")) for r in mine)
             cost = sum(r["total_cost_usd"] or 0 for r in mine)
             label, miss = bar(case, arm, counts, n)
             if miss and arm in GATING:
                 missed.append(f"{case}/{arm}")
             print(f"{case:16} {arm:3} {counts['pass']:>4} {counts['fail']:>4} {counts['broken']:>4} "
-                  f"{trig:>4} {cost:>8.2f}  {label}")
+                  f"{trig:>4} {warm if arm == 'D' else '-':>4} {cost:>8.2f}  {label}")
     return missed
 
 
@@ -453,7 +513,7 @@ def dry_run(cases, arms, args):
     failed = []
     for case in cases:
         for arm in arms:
-            fixture = build_fixture(arm)
+            fixture, _sha = build_fixture(arm)
             ok, output = npm_test(fixture)
             print(f"\n[{case} / {arm}] fixture {fixture}: npm test {'ok' if ok else 'FAILED'}")
             if not ok:
