@@ -53,7 +53,8 @@ The figure shows its first frame as written; `next` is disabled at the last fram
 the first. Its handler, in `_build/frag/step-figs.js`, registers as
 `window.NotesFig['<fig-id>']`, and the page calls it with the `data-act` of the button pressed.
 Only a step-through may add unstyled hook classes for its handler, each named `fs-*`
-(`fs-status`).
+(`fs-status`). `templates/stepthrough-example/` holds one: the figure, its handler and its
+`steps.json`.
 
 ## Rules that keep it working
 

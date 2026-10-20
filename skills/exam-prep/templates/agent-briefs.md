@@ -98,7 +98,9 @@ Transcribe; never summarize.
   instead of one per page: `### [{{DOC}} Q3a] <short title>`, with a shared stem as
   `### [{{DOC}} Q3 stem] <title>`; a deeper part is `Q3b.1` or `Q3bii`, a numbered part `Q2.1`,
   and a part the source numbers in roman `Q3ii`. A page with no question on it still gets its
-  page block (`(blank)` or `(image only: ...)`). Each question block holds
+  page block (`(blank)` or `(image only: ...)`), and text on a question page outside every part
+  (the title, the instructions) goes in that page's block, `### [{{DOC}} p.N] <title>`, before
+  its parts. Each question block holds
   - `Pages: [{{DOC}} p.N]`, the page or pages the part sits on;
   - the part's text verbatim, with its points;
   - `**Shape:** <the kind of answer it asks for: formulate, trace under stated conventions, fill a
@@ -107,7 +109,9 @@ Transcribe; never summarize.
     check runs when, or how a board is numbered; or "none">`
   - {{SOLUTIONS: and its official solution under it, on a line of its own, cited to its pages:
     `Solution [{{SOLDOC}} p.N]: ...`, or `Solution [{{SOLDOC}} <its section>]: ...` for a file
-    without pages ({{SOLDOC}} is {{DOC}} when the solutions sit in the same file).}}
+    without pages ({{SOLDOC}} is {{DOC}} when the solutions sit in the same file). Only a part's
+    block holds a `Solution [` line, never a stem's or a page's: the self-test counts those lines
+    as the official parts.}}
 - Last line: `Coverage: {{RANGE}}; N blocks; K image only (<why, per page>); U flagged unreadable.`
 ```
 
@@ -225,10 +229,10 @@ main session checks each finding and applies the fixes.
   3. Direction and causation: which condition guarantees which result, which proof needs which
      property; no ambiguous implication.
   4. STYLE: the rest of STYLE.md.
-- Answers: the notes quote an answer only from a set MANIFEST.md marks `yes, attempted`. The
-  student hasn't attempted {{UNATTEMPTED SETS, or "any answer set"}}: their official answers sit
-  in the extracts for their conventions only. A quote from one in the notes is a blocker, and no
-  finding may propose adding one.
+- Answers: the notes quote an answer only from a set MANIFEST.md marks `yes, attempted`.
+  {{UNATTEMPTED: The student hasn't attempted <those sets>: their official answers sit in the
+  extracts for their conventions only, a quote from one in the notes is a blocker, and no finding
+  may propose adding one. | ALL ATTEMPTED: drop this sentence.}}
 - Out of scope: other sections' files, except to check a link's target. Never open anything under
   {{ROOT}}/practice/, which holds answer keys, or a file MANIFEST.md marks `reserved`.
 ```

@@ -53,12 +53,13 @@ from later corrections. A retired rule is struck through and keeps its number. A
   or graph example always gets a drawn figure, never ASCII art, and prose that only re-describes a
   figure goes. How a figure is drawn is `CHASSIS.md`'s and `CONVERT.md`'s.
 - **S12. Cross-references are clickable links, never bare text.** Every mention of an earlier or
-  later concept, worked example, figure, step or lettered set member links to it, such as (a
-  search course) `[§5.2 Admissible vs consistent](#sec-5-admissible-vs-consistent)`. Every target
-  has a stable id fixed in the backbone before writing starts (`sec-N-<slug>`, `ex-N-<slug>`,
-  `fig-N-<slug>`, `set-<name>-a`). Link text names the target ("Worked example 4.3", "Fig 5.1",
-  "property (b)"), never "here". Recalls ("Recall from §4") and forward pointers ("used again in
-  §7.3") are both links. In notes read in a plain-text tool (S10), a cross-reference is text
+  later concept, worked example, figure, step or lettered set member links to it, such as (a search
+  course) `[§5.2 Admissible vs consistent](#sec-5-admissible-vs-consistent)`. Every target has a
+  stable id fixed in the backbone before writing starts (`sec-N-<slug>`, `ex-N-<slug>`,
+  `fig-N-<slug>`, `set-<name>-a`). A step links only when the backbone gives it an id; otherwise the
+  link goes to its procedure's subsection. Link text names the target ("Worked example 4.3", "Fig
+  5.1", "property (b)"), never "here". Recalls ("Recall from §4") and forward pointers ("used again
+  in §7.3") are both links. In notes read in a plain-text tool (S10), a cross-reference is text
   naming the section instead.
 - **S13. The look.** Keep the approved chassis and don't regress it; `CHASSIS.md` holds its rules.
   Writers and converters add content only, into the chassis's own classes: no inline styles and no

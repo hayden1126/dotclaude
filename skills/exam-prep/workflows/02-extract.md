@@ -63,10 +63,10 @@ agent says it ran didn't run (L07).
 
 ## Step 4: Record coverage
 
-STATUS gets, per document: pages in range, pages with a block, image-only pages with the reason,
-and UNREADABLE flags resolved (paste the check's output). It also says which diagrams a checker
-trace will verify and which only reviewers will see; `05-verify` audits the second group against
-their images (FB-052, FB-104).
+STATUS gets, per document: pages in range, pages with a block, image-only pages with the reason, and
+UNREADABLE flags resolved (the check's output saved to `_build/logs/extract_check.txt`). It also
+says which diagrams a checker trace will verify and which only reviewers will see; `05-verify`
+audits the second group against their images (FB-052, FB-104).
 
 ## Done when
 

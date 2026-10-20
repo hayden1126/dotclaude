@@ -76,11 +76,19 @@ class Frontmatter(unittest.TestCase):
         self.assertTrue(desc.group(1).startswith("Use when "), desc.group(1)[:40])
 
 
+# The step-through example's figure goes into the page verbatim, where assemble.py refuses any
+# comment, so the example carries its header in its script instead.
+EXAMPLE = os.path.join("templates", "stepthrough-example")
+
+
 class BaselineHeader(unittest.TestCase):
     def test_every_doc_carries_it(self):
         missing = []
         for rel, text in files(SKILL):
-            if rel.startswith("scripts" + os.sep) or not rel.endswith((".md", ".tmpl", ".html")):
+            if rel.startswith(EXAMPLE + os.sep):
+                if not rel.endswith(".js"):
+                    continue
+            elif rel.startswith("scripts" + os.sep) or not rel.endswith((".md", ".tmpl", ".html")):
                 continue
             head = "\n".join(text.splitlines()[:10]).lower()
             if "baseline as of 20" not in head or "12-retro" not in head:

@@ -132,6 +132,8 @@ class AssembleTest(unittest.TestCase):
         self.assertNotIn("nth-of-type(3)", page)
         self.assertIn(':root[data-theme="dark"] .wrap section.note:nth-of-type(1){--sec-accent:#4cbbda}',
                       page)
+        size = os.path.getsize(os.path.join(h.root, "_build", "notes.html"))
+        self.assertIn(f"({size:,} bytes)", out)  # bytes, not characters: the page holds a §
 
     def test_accents_cycle_past_seven_sections(self):
         css = assemble.accents(9)

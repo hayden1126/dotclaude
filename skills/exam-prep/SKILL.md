@@ -62,7 +62,8 @@ session) when the hub has its own conventions:
 
 ## Stage map
 
-Each stage is a workflow file. Load only the one you are in.
+Each stage is a workflow file. Load only the one you are in, plus a section of another that it
+names (00 runs 01's Ed pull; 02 starts 05's checker).
 
 | Stage | Workflow | Produces | Done when |
 |---|---|---|---|
@@ -102,7 +103,9 @@ Each stage is a workflow file. Load only the one you are in.
 9. **During study Q&A the main session only answers.** Every edit goes to a dispatched writer
    (FB-167).
 10. **Persist everything into the hub.** The session scratchpad doesn't survive a clear (FB-006). End
-    each work block with the handoff skill and a local commit; never push (FB-005).
+    each stage, and any session that stops mid-stage, with the handoff skill and a local commit;
+    never push (FB-005). STATUS stays short: a check's full output or a long list goes in a file
+    under `_build/logs/`, and STATUS gets its last line and the path.
 11. **Visible options.** Put numbered options in the message itself (FB-009).
 12. **Latest baseline.** Start from the skill's current templates with every past correction
     applied, never from an old hub's copies (FB-010).
@@ -113,4 +116,4 @@ Browser checks run Playwright from a script, not chrome-devtools MCP (L20).
 
 `~/scratch/exam-prep/` holds what never goes in git: `profile.md` (the student's standing
 preferences, such as the cheat-sheet font floor) and the evidence `12-retro` reads. Create it on
-first use.
+first use, with the Write tool: the Bash sandbox can't write outside the hub.

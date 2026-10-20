@@ -31,4 +31,8 @@ come from disk (`pdfinfo`, `ls`), never from memory.
   `solutions to <doc>` in Notes naming the set it answers. Mock writers never read it. Nothing
   published quotes it until the student has attempted that set, which the cell then records as
   `yes, attempted`.
+- **The exam-details file** (a syllabus, an announcement) is `in`: its facts go to CLAUDE.md, and
+  `03-backbone` maps its blocks `skip`.
+- **Pages** come from `pdfinfo`, which reads a file's metadata, not its pages: a `reserved` row
+  gets its count that way and stays unopened.
 - **Doc ids** are what citations use (`[D4 p.17]`): keep them short, and never renumber one.

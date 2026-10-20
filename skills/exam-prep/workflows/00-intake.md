@@ -85,7 +85,7 @@ question text, and list the option it supports first.
 | 2 | **Which files belong to this exam?** Show the proposed split by file name: this exam, reserved for a later exam, out. Ask for the exact last in-scope slide and whether its number is the PDF page or the printed slide number. Ask which files hold answers (official solutions, a past exam's key), and which of those sets the student has already attempted. | The proposed split (first). / Other: the student corrects it. | Later material is copied raw and never opened (FB-023); slide and page numbers differ (FB-024, L04). |
 | 3 | **Missing sources.** Only when a source type the exam covers (homework, solutions, recitations, the last lectures) isn't on disk. | I'll add them now. / They arrive during the build. / Proceed without. / Not examined. | "Add them now": stop, wait for the file, re-list, and ask question 2 for it (FB-029). "During the build": a `pending` MANIFEST row that records its planned scope now, last in-scope slide included, since nothing is asked after approval. |
 | 4 | **Exam rules** not found on disk: date and time, length, cheat sheet allowed and its size, calculator, open or closed book, question types. | Pre-filled from the details file or Ed, else open. | Fixes the deliverables (FB-026). |
-| 5 | **Cheat-sheet preferences.** Only when a sheet is allowed and the profile lacks them: font floor in points, color or grayscale print, engine (HTML printed by Chromium, or LaTeX). | Save the answers to the profile. | Asked once per student, not per exam (FB-131). |
+| 5 | **Cheat-sheet preferences.** Only when a sheet is allowed and the profile lacks them: font floor in points, color or grayscale print, engine (HTML printed by Chromium, or LaTeX). | Default: a 6 pt floor, colors that still read in grayscale, HTML printed by Chromium. Save the answers to the profile. | Asked once per student, not per exam (FB-131). |
 
 If the student narrows scope ("only topic X, go deep"), check the narrowed scope against the
 sources before committing to it, and say what the check found (FB-021).
@@ -117,11 +117,13 @@ the plan:
   to them and never restate them (FB-024). `01-ingest` fills the page counts from disk.
 - **`CLAUDE.md`** from `<skill>/templates/hub-CLAUDE.md.tmpl`: the exam facts, the instructor's
   exam-format statement quoted with its source (the only basis for any claim about what the exam
-  will ask, FB-012), the logistics, and the repo rules. In the own-conventions case it sits in
-  `<root>`, under the hub's own `CLAUDE.md`.
+  will ask, FB-012), the logistics, and the repo rules. A quote that also states scope stays
+  verbatim, as evidence: MANIFEST's rows remain the one statement of scope. In the own-conventions
+  case it sits in `<root>`, under the hub's own `CLAUDE.md`.
 - **`PLAN.md`** from `<skill>/templates/PLAN.md.tmpl`, still reading `Approved: not yet`. Every
   answer goes in its Decisions block with its source: the student, an Ed thread number, the details
-  file, or (default).
+  file, or (default). Its Checker line needs the question documents' text: read them
+  (`pdftotext`) to decide what is computable.
 
 If plan mode is in use, its file is not durable: the hub's `PLAN.md` is the copy that counts.
 
@@ -157,8 +159,9 @@ On the student's approval:
    `<skill>/templates/STYLE.md`, `<skill>/templates/CHASSIS.md` and `<skill>/templates/CONVERT.md`.
    `11-next-exam` reconciles these copies against the skill later; hubs never fork them.
 3. **The approval line, last.** Replace `Approved: not yet` in `PLAN.md` with
-   `Approved: <YYYY-MM-DD> by the student`. Written last, it also means the setup is complete: a
-   session that finds it can trust the hub files exist (FB-001).
+   `Approved: <YYYY-MM-DD> by the student`, and delete the comment under it. Written last, it
+   also means the setup is complete: a session that finds it can trust the hub files exist
+   (FB-001).
 4. **Commit locally**, staging files by name. No remote (FB-011).
 
 ## Step 8: Launch the build in its own session
@@ -172,7 +175,7 @@ PLAN.md and every decision in it is final: execute it end to end, stage 01 throu
 without asking anything. Log judgment calls in STATUS.md instead of asking. If a stage's outputs
 already exist on disk, resume from the first unfinished stage instead of redoing finished work.
 The exam is [date and time]; if time runs short, ship in PLAN.md's priority order. Leave reserved
-material unopened. End each work block with the handoff skill and a local commit. Never push.
+material unopened. End each stage with the handoff skill and a local commit. Never push.
 ```
 
 With the hq skill, one bare command: `hq-open <name> "<prompt>"`, or in the own-conventions case
@@ -183,7 +186,7 @@ student the prompt in a code block and ask them to start a fresh session in `<ro
 ## The profile
 
 `~/scratch/exam-prep/profile.md` holds what holds across courses. Intake reads it and writes any new
-answer back:
+answer back, with the Write tool (the Bash sandbox can't write outside the hub):
 
 ```markdown
 # exam-prep profile

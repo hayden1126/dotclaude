@@ -268,10 +268,11 @@ def main(argv=None):
         return 1
     out = os.path.join(args.root, "_build", "notes.html")
     tmp = out + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(page)
+    data = page.encode("utf-8")
+    with open(tmp, "wb") as f:
+        f.write(data)
     os.replace(tmp, out)
-    print(f"wrote _build/notes.html ({len(page):,} bytes)")
+    print(f"wrote _build/notes.html ({len(data):,} bytes)")
     return 0
 
 

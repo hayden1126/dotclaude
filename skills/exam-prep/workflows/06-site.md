@@ -15,8 +15,9 @@ checks it in a browser and publishes it.
   refuses a fragment that still holds a `TODO-VERIFY`.
 - `_build/CHASSIS.md` and `_build/CONVERT.md` are the hub's copies of the skill's templates.
 - `_build/chassis.html` is a copy of `<skill>/templates/notes-chassis.html` with its placeholders
-  filled from PLAN.md (course, exam, the date, time, allowed materials and scope) and its opening
-  comment dropped. `assemble.py` refuses a placeholder left in it.
+  filled from CLAUDE.md's exam facts (course, exam, the date, time, allowed materials) and
+  MANIFEST.md's rows (the scope), and its opening comment dropped. `assemble.py` refuses a
+  placeholder left in it.
 - Plain-text notes (`04-write`, step 6) skip this stage: the student reads the Markdown.
 
 ## Step 2: Generate the step-throughs
@@ -35,7 +36,9 @@ for):
   `{"<fig-id>": [{"act": "<mode>", "frames": <presses of Next to the last frame>, "final": "<text
   the last frame shows>"}]}`, one entry per mode (`act` left out for a figure with one).
 
-Rerun it whenever the checker changes, so a convention change regenerates every figure.
+Start from `<skill>/templates/stepthrough-example/` (a two-mode figure, its handler and its
+`steps.json`). Rerun the script whenever the checker changes, so a convention change regenerates
+every figure.
 
 ## Step 3: Convert, one agent per section
 
@@ -46,7 +49,8 @@ each writing its own `_build/frag/secN.html`. Each converter draws its section's
 place. Converters use only the chassis's classes (FB-120).
 
 When they return, read each report's list of bare references: wire each in the notes (a link with
-the backbone's id), rerun `linkcheck.py`, and have that section converted again.
+the backbone's id), rerun `linkcheck.py`, and make the same edit in that section's fragment (a
+larger change: have the section converted again).
 
 ## Step 4: The exam-day map
 
@@ -68,17 +72,16 @@ From the hub root:
    resolves, and no id repeats.
 3. `node <skill>/scripts/verify_page.mjs _build/notes.html _build/shots --steps
    _build/frag/steps.json` (leave `--steps` out when there are no step-throughs) with
-   `allowed_domains` cdnjs.cloudflare.com, fonts.googleapis.com and fonts.gstatic.com (L20 to
-   L22). It checks math (TeX errors too), overflow (with the worked examples and the map opened
-   too), links, fonts, closed examples, scroll-spy and every step-through's runs, forward and
-   back, at 390 and 1280 px in light and dark, and saves screenshots to `_build/shots/`
-   (gitignored). It finds Playwright in
-   `_build/node_modules/`, the hub's `node_modules/` or npm's global root, or at the package
-   directory `EXAM_PREP_PLAYWRIGHT` names. With none, it says so and exits 2: install it once
-   outside the hub's tracked files (`npm install playwright` in `_build/`, whose `node_modules/`
-   and `package*.json` are gitignored, then `npx playwright install chromium`), with `allowed_domains`
-   registry.npmjs.org, cdn.playwright.dev and playwright.download.prss.microsoft.com (a sandbox
-   denial names any other host it needs).
+   `allowed_domains` cdnjs.cloudflare.com, fonts.googleapis.com and fonts.gstatic.com (L20 to L22).
+   It checks math (TeX errors too), overflow (with the worked examples and the map opened too),
+   links, fonts, closed examples, scroll-spy and every step-through's runs, forward and back, at 390
+   and 1280 px in light and dark, and saves screenshots to `_build/shots/` (gitignored). It finds
+   Playwright in `_build/node_modules/`, the hub's `node_modules/` or npm's global root, or at the
+   package directory `EXAM_PREP_PLAYWRIGHT` names. With none, it says so and exits 2: install it
+   once outside the hub's tracked files (`npm install playwright` in `_build/`, whose
+   `node_modules/` and `package*.json` are gitignored, then `npx playwright install chromium`), with
+   `allowed_domains` registry.npmjs.org, cdn.playwright.dev, playwright.download.prss.microsoft.com
+   and storage.googleapis.com (a sandbox denial names any other host it needs).
 4. Look at the screenshots yourself against `<skill>/templates/chassis-shots/`: the checks pass on
    a page that still looks wrong.
 

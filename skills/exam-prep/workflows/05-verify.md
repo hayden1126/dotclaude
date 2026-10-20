@@ -41,8 +41,9 @@ Take the list `04-write` put in STATUS (`grep -n TODO-VERIFY notes/*.md` again).
 add a `value-<slug>` section to `examples.py` that computes it (a value a worked example prints is
 already there), rerun it, and copy the value from `examples.out.md` over the marker: a rerun then
 reproduces every number the notes print. Then compare every worked example in the notes, and
-every value filled from a `value-` section, with `examples.out.md`: a number typed by hand has
-been wrong before (FB-101, L50).
+every value filled from a `value-` section, with `examples.out.md`, by a small script
+(`_build/verify/compare_notes.py`: each example's numbers against its `ex-` section), never by
+eye: a number typed by hand has been wrong before (FB-101, L50).
 
 ## Step 3: Section reviewers
 

@@ -111,11 +111,14 @@ figure shortlist says whether it is static or a step-through.
 
   The page wraps the SVG in its scroll box. Inside the SVG use only the chassis's figure classes:
   `bx` (outlined shape), `accbx` (highlighted shape), `fill-surf`, `dash`, `mono`, `mut`, `sm`
-  and `acc` (accent text). Lines and arrows use `stroke="currentColor"`; define one arrow
-  `<marker>` per figure, its id prefixed with the figure's id (ids are unique on the page). Text
+  and `acc` (accent text). Lines and arrows use `stroke="currentColor"`; a figure that draws arrows
+  defines one arrow `<marker>`, its id prefixed with the figure's id (ids are unique on the page);
+  an undirected graph needs none. Draw the edges first and the nodes over them, each node filled
+  (`fill-surf` or `accbx`), so no edge shows through a node. Text
   in an SVG is plain Unicode (α, β, ≤, ∞, ✕), never `\( \)`: MathJax doesn't typeset inside SVG
-  (L14). Every node, edge, value and label matches the Markdown exactly. Keep it readable at
-  390 px wide: a `viewBox` width of 640 or less.
+  (L14). Every node, edge, value and label matches the Markdown exactly. Below 560 px the page
+  shows a figure at least 460 px wide and scrolls it sideways in its box, so a `viewBox` width of
+  640 or less keeps the labels legible there.
 - A **step-through**: leave the marker as it is. The main session generates it from the checker's
   trace (`06-site`, step 2) in CHASSIS.md's step-through form, and `assemble.py` puts it in
   place.
