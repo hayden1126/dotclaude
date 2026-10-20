@@ -90,6 +90,9 @@ read_mute() {
 # skipped the toast) or `toast=silent` (shown without its chime while sound is muted), nothing
 # when the mute didn't touch it; read_mute's ` mute=<why>` comes last), pane, event
 # JSON. The id is the event's (a nested `claude -p` may inherit its parent's CLAUDE_CODE_SESSION_ID).
+# A line records the decision, not the delivery: `rang` doesn't check that powershell.exe exists
+# or played the sound, and `toast=muted|silent` goes in before notify.sh looks for wslpath or
+# cygpath, so off Windows it names a toast change where no toast could show.
 ring_log() {
   local dir="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude" log sid kind
   sid=$(event_session_id "${4:-}")

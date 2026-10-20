@@ -8,7 +8,10 @@
 # the ring: a sound mute drops the ring (`permission quiet muted=1` in ring.log) and shows the
 # toast with -Silent, so Windows' own toast chime stays off too (` toast=silent`); a toast mute
 # skips the toast (` toast=muted`). A flag that can't be read mutes nothing and adds its
-# ` mute=<why>`. Without session-pane.sh the toast shows as it always did.
+# ` mute=<why>`. Without session-pane.sh the toast shows as it always did. ring.log records the
+# decision, not the delivery: the toast note is logged before the wslpath or cygpath check below,
+# as `rang` is without checking for powershell.exe, so off Windows it can name a toast change
+# where no toast could show.
 #
 # settings.json invokes this as `bash "$HOME/.claude/hooks/notify.sh"`, so the
 # command in settings stays platform-agnostic and all OS detection lives here.
