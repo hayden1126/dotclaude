@@ -166,7 +166,7 @@
 
   /* ---- figures ---- */
   figure{margin:1.4rem 0;padding:1rem;border:1px solid var(--hair);border-radius:12px;background:var(--surface)}
-  figure svg{display:block;max-width:100%;height:auto;margin:0 auto}
+  figure svg{display:block;max-width:100%;height:auto;margin:0 auto;fill:currentColor}
   figure svg text{font-family:var(--f-display);fill:currentColor;font-size:13px}
   figure svg .mono{font-family:var(--f-mono)}
   figure svg .mut{fill:var(--ink-soft)}
@@ -272,6 +272,12 @@
 
 <script>
   window.MathJax = {
+    loader:{
+      load:['ui/safe'],  // MathJax's own filter on what \href, \class, \style and the like add
+      // Unset, MathJax takes the host its components load from off document.currentScript,
+      // which an element named currentScript on the page would replace.
+      paths:{mathjax:'https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.2/es5'}
+    },
     tex:{inlineMath:[['\\(','\\)']],displayMath:[['\\[','\\]']]},
     svg:{fontCache:'none'},
     options:{renderActions:{addMenu:[]}}

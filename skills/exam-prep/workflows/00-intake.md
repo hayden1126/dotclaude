@@ -81,7 +81,7 @@ question text, and list the option it supports first.
 
 | # | Ask | Options | Why |
 |---|---|---|---|
-| 1 | **Scope authority.** Does the graded work (homework, a practice exam, a review sheet) mirror the exam? | Mirrors it: scope follows it, mocks are clones with fresh numbers. / Doesn't: cover the full scope, mock shapes go beyond the review. / Unsure: treat as doesn't. | Settles everything after it (FB-021). |
+| 1 | **Scope authority.** Does the graded work (homework, a practice exam, a review sheet) mirror the exam, and which of it? | Mirrors it, naming which (a practice exam, the review sheet, every homework): scope follows it, mocks clone its questions with fresh numbers. / Doesn't: cover the full scope, mock shapes go beyond the review. / Unsure: treat as doesn't. | Settles everything after it (FB-021). |
 | 2 | **Which files belong to this exam?** Show the proposed split by file name: this exam, reserved for a later exam, out. Ask for the exact last in-scope slide and whether its number is the PDF page or the printed slide number. Ask which files hold answers (official solutions, a past exam's key), and which of those sets the student has already attempted. | The proposed split (first). / Other: the student corrects it. | Later material is copied raw and never opened (FB-023); slide and page numbers differ (FB-024, L04). |
 | 3 | **Missing sources.** Only when a source type the exam covers (homework, solutions, recitations, the last lectures) isn't on disk. | I'll add them now. / They arrive during the build. / Proceed without. / Not examined. | "Add them now": stop, wait for the file, re-list, and ask question 2 for it (FB-029). "During the build": a `pending` MANIFEST row that records its planned scope now, last in-scope slide included, since nothing is asked after approval. |
 | 4 | **Exam rules** not found on disk: date and time, length, cheat sheet allowed and its size, calculator, open or closed book, question types. | Pre-filled from the details file or Ed, else open. | Fixes the deliverables (FB-026). |
@@ -156,7 +156,8 @@ On the student's approval:
    untouched) start it from `~/.claude/templates/STATUS.md` when that exists, else with the
    headings the handoff skill uses.
 2. **Hub copies** of the skill's current templates into `_build/`:
-   `<skill>/templates/STYLE.md`, `<skill>/templates/CHASSIS.md` and `<skill>/templates/CONVERT.md`.
+   `<skill>/templates/STYLE.md`, `<skill>/templates/CHASSIS.md`, `<skill>/templates/CONVERT.md`
+   and `<skill>/templates/MOCK.md`.
    `11-next-exam` reconciles these copies against the skill later; hubs never fork them.
 3. **The approval line, last.** Replace `Approved: not yet` in `PLAN.md` with
    `Approved: <YYYY-MM-DD> by the student`, and delete the comment under it. Written last, it
@@ -182,6 +183,12 @@ With the hq skill, one bare command: `hq-open <name> "<prompt>"`, or in the own-
 `hq-open --sub exam-prep <name> "<prompt>"` (options go before the name). Without it: give the
 student the prompt in a code block and ask them to start a fresh session in `<root>` with it (or
 `/clear`, then paste it).
+
+Then tell the student, before they leave the build to run: once it reaches stage 08 (the mock
+exams), don't look at the build session's window, since it writes the mocks' answer keys; follow
+its progress in `STATUS.md` instead, whose next-step line then says so. When that line starts
+`08 step 8, the cram night`, go to the build window, type `/clear` and then "start the cram
+night", before reading anything else on screen.
 
 ## The profile
 

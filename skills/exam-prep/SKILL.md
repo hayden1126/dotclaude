@@ -43,8 +43,10 @@ call (FB-008: read these before concluding something doesn't exist). Then route:
   work: open a session in `exam-prep/` instead (`00-intake`, step 1);
 - no `PLAN.md`, or one reading `Approved: not yet`: intake (`00`);
 - an approved `PLAN.md` for an earlier exam than the one the student names: `11`;
-- an approved `PLAN.md` for this exam: the first unfinished stage that PLAN.md includes, judged by
-  what is on disk (FB-002); `09` and `10` run when the student asks.
+- an approved `PLAN.md` for this exam whose STATUS next-step line starts with a stage and step
+  (`08 step 8, the cram night`): that step;
+- else an approved `PLAN.md` for this exam: the first unfinished stage that PLAN.md includes,
+  judged by what is on disk (FB-002); `09` and `10` run when the student asks.
 
 The hub layout. `<root>` is the hub, or `<hub>/exam-prep/` (a repo of its own, with its own
 session) when the hub has its own conventions:
@@ -75,7 +77,7 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
 | 05 | `workflows/05-verify.md` | checker, reviews applied | self-test covers every official part (or nothing is computable), no `TODO-VERIFY` left |
 | 06 | `workflows/06-site.md` | the notes page, published | `verify_page.mjs` passes, URL in STATUS |
 | 07 | `workflows/07-cheatsheet.md` | sheet HTML and PDF (only if allowed) | `check_pdf.py` passes |
-| 08 | `workflows/08-practice.md` | mock, quarantined key, mock page | the key script asserts every computable value |
+| 08 | `workflows/08-practice.md` | mocks, quarantined keys, mock pages, the cram order | the key script asserts every computable value; the leak check passes |
 | 09 | `workflows/09-tutor.md` | walk-throughs, notes patches | on demand |
 | 10 | `workflows/10-polish.md` | scan, report, apply on approval | on demand |
 | 11 | `workflows/11-next-exam.md` | the hub extended for the next exam | reconciled, new scope in MANIFEST |
@@ -91,7 +93,8 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
    reproduces the official solutions (FB-090, FB-100). When PLAN.md's Checker line says nothing
    is computable, each comes from a cited source, its working shown for the reviewers to redo.
 4. **Keys are quarantined.** A key lives in its own file under a STOP header; no page build reads it
-   (FB-154).
+   (FB-154). Until the student has attempted a mock, no answer leaves the keys: STATUS,
+   `_build/logs/`, commits and replies name a part, never its value.
 5. **Course material is copyrighted.** `sources/` and renders stay gitignored, the hub repo stays
    local, and no remote is added without the student's go (FB-011).
 6. **One output file per agent.** Load the delegation skill before the first spawn; spawn unnamed

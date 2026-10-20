@@ -4,8 +4,10 @@ A synthetic hub: the skill's own chassis template with its placeholders filled, 
 notes files, their section fragments, an exam-day map and one step-through figure. The page gets
 every piece in its place and one accent rule per section; anything malformed (a placeholder left,
 a missing or misnamed fragment, a forbidden tag, attribute or link, a class outside CHASSIS.md's
-component table, a TODO-VERIFY, a FIG marker with no step-through, a step-through placed other
-than once, no map) writes nothing and leaves the last good page alone, while escaped markup in a
+component table, a TODO-VERIFY, a MathJax macro that makes HTML even split by any tag or
+comment, or across a step-through and the text at its marker, a FIG marker inside a tag or code
+or with no step-through or outside a section, a name= attribute or an id with no hyphen, a
+step-through that isn't one <figure> with its id or is placed other than once, no map) writes nothing and leaves the last good page alone, while escaped markup in a
 code block is text and passes. The skill repo's synthetic sample hub, the source of the chassis's
 reference screenshots, is the template filled, links the skill's CHASSIS.md and assembles with
 every link resolved; with EXAM_PREP_PLAYWRIGHT set, its page also passes verify_page.mjs."""
@@ -195,9 +197,20 @@ class AssembleTest(unittest.TestCase):
         for bad, attr in (('<p style="color:red">x</p>', "style"),
                           ('<p onclick="x()">x</p>', "onclick"),
                           ('<svg onload="x()"></svg>', "onload"),
-                          ('<img ONERROR=x() src="https://x.example/a.png">', "onerror")):
+                          ('<img ONERROR=x() src="https://x.example/a.png">', "onerror"),
+                          # It would stand for document.currentScript, where MathJax's loader
+                          # reads the host its components come from (round 9).
+                          ('<img name="currentScript" src="https://x.example/es5/a.png">', "name")):
             with self.subTest(bad=bad):
                 self.assertRefused(self.in_sec1(bad), f"forbidden attributes: {attr}")
+
+    def test_ids_with_no_hyphen_refused(self):
+        # window.NotesFig would be the element; rail is the chassis's own (round 9).
+        for bad in ('<p id="NotesFig">x</p>', '<h3 id="rail">x</h3>'):
+            with self.subTest(bad=bad):
+                self.assertRefused(self.in_sec1(bad), "ids with no hyphen")
+        rc, out = self.in_sec1('<p id="sec-1-extra">x</p>').run()
+        self.assertEqual(rc, 0, out)
 
     def test_links_other_than_ids_http_and_mail_refused(self):
         for bad in ('<a href="javascript:x()">x</a>', '<a href="JavaScript:x()">x</a>',
@@ -207,17 +220,50 @@ class AssembleTest(unittest.TestCase):
             with self.subTest(bad=bad):
                 self.assertRefused(self.in_sec1(bad), "links that aren't #id, http(s) or mailto")
 
+    def test_markup_that_ends_code_early_or_hides_in_raw_text_refused(self):
+        # A browser ends a <pre> at an ancestor's end tag or a block's start, and reads a
+        # raw-text tag's content to its first end tag; html.parser does neither (round 5).
+        for bad, needle in (("<div><pre>a</div><p>\\(\\style{color:red}{x}\\)</p>", "</div> inside <pre>"),
+                            ("<ul><li><pre>a<li>\\(\\class{rail}{x}\\)</li></ul>", "<li> inside <pre>"),
+                            ('<noscript><a title="</noscript><img src onerror=alert(1)>"></a></noscript>',
+                             "forbidden tags: noscript"),
+                            ("<textarea>x</textarea>", "forbidden tags: textarea")) + tuple(
+                (f"<{t}>x</{t}>", f"forbidden tags: {t}") for t in ("title", "xmp", "noembed", "noframes", "plaintext")):
+            with self.subTest(bad=bad):
+                self.assertRefused(self.in_sec1(bad), needle)
+        rc, out = self.in_sec1("<pre><code>a<br/>b <span>c</span> <a href=\"#sec-1\">d</a></code></pre>").run()
+        self.assertEqual(rc, 0, out)
+
+    def test_a_tag_left_open_at_a_fragments_end_refused(self):
+        # html.parser's close() drops it unread; a browser reads on into the next fragment (round 4).
+        for tail in ('<img src onerror=alert(1) a="', "<!-- open"):
+            with self.subTest(tail=tail):
+                self.assertRefused(self.hub(sections={1: SEC1 + "\n" + tail, 2: SEC2}), "left open at its end")
+
     def test_markup_a_browser_reads_differently_refused(self):
         for bad in ('<![CDATA[><script>x()</script><p class="rail">]]>',
                     "<!--><script>x()</script>-->", "<!-- a note -->", "<!DOCTYPE html>",
                     "<?php x ?>", "<!-- FIG fig-1-x: a > b -->"):
             with self.subTest(bad=bad):
                 self.assertRefused(self.in_sec1(bad), "markup a browser reads differently")
+        self.assertRefused(self.in_sec1("<!-- FIG fig-1-x: S->A -->"), "a FIG marker with a < or > in its text")
+        # A parser without the HTML5 comment rules ends this one at `-- >`, so the code that
+        # follows would read as code; the raw count never takes a marker across a > (round 9).
+        self.assertEqual(assemble.FIG.findall("<!-- FIG fig-2-x -- ><code> -->\\(x\\)</code>"), [])
 
     def test_tex_that_makes_html_refused_outside_code(self):
         for bad in ("\\(\\href{javascript:x()}{a}\\)", "\\(\\style{position:fixed}{a}\\)",
                     "\\(\\class{rail}{a}\\)", "\\(\\cssId{sec-1}{a}\\)",
-                    "<code>x</code> then \\(\\href{javascript:x()}{a}\\)"):
+                    '\\(\\mmlToken{mi}[href="javascript:x()"]{a}\\)', "\\(\\require{html}\\)", "\\(\\bbox[position:fixed]{a}\\)",
+                    "\\(\\data{part=Q9(a)}{a}\\)",
+                    "<code>x</code> then \\(\\href{javascript:x()}{a}\\)",
+                    # MathJax reads one string on across <wbr>, <br> and comments (round 6), and a
+                    # browser drops a stray end tag or a table tag outside a table (round 7): all
+                    # the text outside code is read as one string.
+                    "\\(\\cl<wbr>ass{rail}{a}\\)", "\\(\\sty<wbr/>le{position:fixed}{a}\\)",
+                    "\\(\\<!-- FIG fig-2-walk: x -->cssId{sec-1}{a}\\)", "\\(\\class<br>{rail}{a}\\)",
+                    "\\(\\cl</span>ass{rail}{a}\\)", "\\(\\cl<td>ass{rail}{a}\\)", "\\(\\cl</ x>ass{rail}{a}\\)",
+                    "\\(\\cl</p><p>ass{rail}{a}\\)", "\\(\\cl<code>x</code>ass{rail}{a}\\)"):
             with self.subTest(bad=bad):
                 self.assertRefused(self.in_sec1(f"<p>{bad}</p>"), "MathJax macros that make HTML")
         h = self.in_sec1("<pre><code>\\href{https://x.example}{a}</code></pre>"
@@ -270,6 +316,63 @@ class AssembleTest(unittest.TestCase):
     def test_todo_verify_refused(self):
         self.assertRefused(self.in_sec1("<p>TODO-VERIFY: the sum of 3 to 7</p>"),
                            "frag/sec1.html: a TODO-VERIFY is left")
+
+    def test_tables_nest_strictly(self):
+        # A browser moves text or a tag directly inside a table or a row out in front of the
+        # table (foster parenting), which can join a macro the check read apart (round 8).
+        for bad, needle in (("<div>\\(\\cl<table><tr><td>x</td>ass{rail}{a}\\)</tr></table></div>",
+                             "text directly inside <tr>"),
+                            ("<table><tbody><span>x</span></tbody></table>", "<span> directly inside <tbody>"),
+                            ("<p>a<td>b</td></p>", "<td> outside a <tr>"),
+                            ("<table><tr><td>x</tr></table>", "</tr> where <td> is open"),
+                            ("<table><tr><td>x</td></tr>", "<table> never closed")):
+            with self.subTest(bad=bad):
+                self.assertRefused(self.in_sec1(bad), needle)
+        rc, out = self.in_sec1('<div class="tbl-wrap"><table><colgroup><col/></colgroup><thead><tr><th>a</th></tr></thead>'
+                               '<tbody><tr><td>1 <code>x</code></td></tr></tbody></table></div>').run()
+        self.assertEqual(rc, 0, out)
+
+    def test_text_at_a_fragments_end_is_checked_too(self):
+        h = self.hub()
+        h.write("_build/frag/examnav.html", NAV + "\\(\\class{rail}{a}\\)")
+        self.assertRefused(h, "frag/examnav.html: MathJax macros that make HTML: \\class")
+
+    def test_a_step_through_is_one_figure(self):
+        # Spliced in at a marker mid-text, a step file's text would join the text beside it
+        # into one MathJax string the checks read apart (round 6).
+        marker = "<!-- FIG fig-2-walk: a walk through the gadget -->"
+        for step in ("ass", STEP + "x", "<p>" + STEP + "</p>", STEP.replace('id="fig-2-walk"', 'id="fig-2-other"'),
+                     STEP + STEP, STEP + "\\(\\cl</figure>"):
+            with self.subTest(step=step):
+                h = self.hub(sections={1: SEC1, 2: SEC2.replace(marker, "<p>\\(\\cl" + marker + "{rail}{a}\\)</p>")})
+                h.write("_build/frag/step-fig-2-walk.html", step)
+                self.assertRefused(h, 'frag/step-fig-2-walk.html: not one <figure id="fig-2-walk">')
+
+    def test_a_step_throughs_text_and_its_markers_are_checked_together(self):
+        # Each passes alone; on the page the figure's last text and the text after its marker
+        # may join (round 7).
+        marker = "<!-- FIG fig-2-walk: a walk through the gadget -->"
+        h = self.hub(sections={1: SEC1, 2: SEC2.replace(marker, "<p>" + marker + "ass{rail}{a}\\)</p>")})
+        h.write("_build/frag/step-fig-2-walk.html", STEP.replace("</figure>", "<p>\\(\\cl</p></figure>"))
+        self.assertRefused(h, "the sections as assembled, step-throughs in place: MathJax macros that make HTML: \\class")
+
+    def test_a_fig_marker_inside_a_tag_or_code_refused(self):
+        marker = "<!-- FIG fig-2-walk: a walk through the gadget -->"
+        for where in (f'<span title="{marker}">x</span>', f"<pre><code>{marker}</code></pre>"):
+            with self.subTest(where=where):
+                h = self.hub(sections={1: SEC1, 2: SEC2.replace(marker, where)})
+                self.assertRefused(h, "frag/sec2.html: a FIG marker inside a tag, an attribute or code")
+
+    def test_a_fig_marker_outside_a_section_refused(self):
+        # Only a section's markers are put in place: one in the map or a step-through stays a
+        # comment on the page (round 9).
+        marker = "<!-- FIG fig-2-walk: a walk through the gadget -->"
+        h = self.hub()
+        h.write("_build/frag/examnav.html", NAV.replace("</div>", marker + "</div>", 1))
+        self.assertRefused(h, "frag/examnav.html: a FIG marker, which only a section's text holds")
+        h = self.hub()
+        h.write("_build/frag/step-fig-2-walk.html", STEP.replace("</figure>", "<!-- FIG fig-2-other -->\n</figure>"))
+        self.assertRefused(h, "frag/step-fig-2-walk.html: a FIG marker, which only a section's text holds")
 
     def test_a_step_through_with_no_marker_refused(self):
         h = self.hub(sections={1: SEC1, 2: SEC2.replace(

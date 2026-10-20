@@ -60,6 +60,10 @@ Only a step-through may add unstyled hook classes for its handler, each named `f
 
 - MathJax 3 `tex-svg` from cdnjs, with `svg: {fontCache: 'none'}`: KaTeX's fonts are blocked by
   the artifact host, and a global font cache garbles glyphs when the host re-renders (L10, L11).
+  Its `loader` loads `ui/safe` (MathJax's own filter on the links, classes, ids and styles its
+  macros add) and pins `paths.mathjax` to the directory of its script (unpinned, an element named
+  `currentScript` on the page chooses the host its components load from); `verify_page.mjs`
+  fails a page without either.
 - Inline math is `inline-block` with its scrollbar hidden; display math keeps its scrollbar.
   Headless checks hide a stray scrollbar, so the student's screenshot outranks them (L12,
   FB-119).

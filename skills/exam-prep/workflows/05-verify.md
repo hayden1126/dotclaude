@@ -81,7 +81,8 @@ same audit when they exist.
   `yes, attempted`.
 - A change to the reference or to a convention reruns `selftest.py` and `examples.py`, then step
   2's comparison of every worked example and every filled `value-` (STATUS's TODO-VERIFY list)
-  with the new `examples.out.md`: the notes copied the old one.
+  with the new `examples.out.md`: the notes copied the old one. Once `08-practice` has keys,
+  `mock_key.py` reruns too (its step 4's rerun clause).
 - With no checker, a `TODO-VERIFY` a writer left anyway is replaced with the value its cited
   source gives, or the working that derives it.
 - Then rerun `selftest.py` (with a checker) and `linkcheck.py` (plain-text notes: the references
@@ -99,7 +100,8 @@ that changes the reference or a convention reruns the examples as in step 5.
 `08-practice` runs this once the mock is drafted. A cold solver (a `reviewer`, from the brief's
 "Cold solver" section) works the mock without the key (FB-103). Each answer where it and the key
 disagree is settled with the checker, or the source when nothing is computable (logged in
-STATUS), and the question or the key is fixed. Every computable key value is asserted by the key
+STATUS by its part and what changed, never a value: the student hasn't attempted it), and the
+question or the key is fixed. Every computable key value is asserted by the key
 script (`08-practice`).
 
 ## Done when

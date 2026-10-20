@@ -16,7 +16,7 @@ exam-format statement are in `CLAUDE.md`. This plan points to both and restates 
 
 Each line ends with its source: the student, `Ed #N`, `<file>:<line>`, or (default).
 
-- Scope authority: {{the graded work mirrors the exam, so scope follows it | full coverage, mock shapes beyond the review}} ({{SOURCE}})
+- Scope authority: {{<WORK: the document or set that mirrors the exam, e.g. PE1> mirrors the exam, so scope and the mocks follow it | full coverage, mock shapes beyond the review}} ({{SOURCE}})
 - Sources: the `in` rows of `MANIFEST.md`; `reserved` and `out` rows are never opened ({{SOURCE}})
 - Cheat sheet: {{allowed, as CLAUDE.md states | not allowed}} ({{SOURCE}})
 - Deliverables: the table below ({{SOURCE}})
@@ -35,8 +35,8 @@ Each line ends with its source: the student, `Ed #N`, `<file>:<line>`, or (defau
 | 1 | Topic notes, the source of truth | `notes/NN-<slug>.md` | `linkcheck.py` clean (plain-text notes: references checked by hand), reviews applied |
 | 2 | Notes page | `_build/notes.html`, a private artifact | `verify_page.mjs` passes, URL in STATUS |
 | 3 | Cheat sheet, only if allowed: a mock sheet with nothing derived from the mock, and a final sheet that adds those items after the attempt | `cheatsheet/` | `check_pdf.py` passes on both |
-| 4 | Mock exam, quarantined key, mock page | `practice/mock-{{EXAM_SLUG}}.md`, `practice/mock-{{EXAM_SLUG}}-key.md` | the key script asserts every computable value; the cold solver's disagreements are settled |
-| 5 | Cram order, offered the night before | `practice/cram-order.md` | every item links into the verified notes |
+| 4 | Mock exams, quarantined keys, mock pages | `practice/mock-<slug>.md` (slugs `{{EXAM_SLUG}}`, `{{EXAM_SLUG}}-<n>`, `{{EXAM_SLUG}}-harder`), each keyed by `practice/mock-<slug>-key.md` | the key script prints KEY OK for each (with a checker, every computable value asserted); the cold solver's disagreements are settled; `mock_leak.py` prints LEAK OK on each mock page |
+| 5 | Cram order, offered the night before | `practice/cram-order.md` | every item points into the verified notes (a link, or plain-text notes' `§x.y` title); `cram_check.py` prints CRAM OK |
 | 6 | Checker, {{ONLY IF SOMETHING IS COMPUTABLE}} | `_build/verify/` | its self-test checks every official part (or skips one it can't compute) |
 
 Out of scope: the `reserved` and `out` rows of `MANIFEST.md`; deploys beyond private artifacts;
@@ -58,7 +58,7 @@ spawn, and spawn unnamed.
 | 05 verify | main, {{N}} section reviewers, {{N}} checklist auditors | | fixes applied single-threaded |
 | 06 site | {{N}} converters, then main | | the notes page |
 | 07 cheat sheet | main, {{N}} content gap scanners, then 1 question-type scanner, then 1 auditor | {{ONLY IF ALLOWED}} | `cheatsheet/` |
-| 08 practice | {{N}} agents, then 1 cold solver | {{QUESTION SHAPES}} | `practice/` |
+| 08 practice | {{N}} mock writers (the harder set's included), then 1 cold solver per mock, then 1 cram order auditor | {{QUESTION SHAPES}} | `practice/` |
 
 `pending` rows of `MANIFEST.md` are checked at every stage boundary: one that has arrived is
 ingested and extracted before stage 03 runs, or before the next stage when 03 is done.
@@ -66,8 +66,8 @@ ingested and extracted before stage 03 runs, or before the next stage when 03 is
 ## Rules the build follows
 
 - Pedagogy and wording: `_build/STYLE.md`. The look: `_build/CHASSIS.md`. Markdown to HTML:
-  `_build/CONVERT.md`. All three are this hub's copies of the skill's templates, baseline
-  {{BASELINE_DATE}}.
+  `_build/CONVERT.md`. The mock format: `_build/MOCK.md`. All four are this hub's copies of the
+  skill's templates, baseline {{BASELINE_DATE}}.
 - Cross-references: the id registry in `_build/backbone.md`, fixed before any writer starts.
 - The mock page has three views (by paper, by question type, by topic), so every question part is
   tagged with its type and its topic.

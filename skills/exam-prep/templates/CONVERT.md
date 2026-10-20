@@ -14,12 +14,17 @@ you add is the section's static figures (see Figures).
 Output: `_build/frag/secN.html`, raw HTML with no `<html>`, `<head>` or `<body>`. It holds no tag
 that runs code, loads or embeds a document or restyles the page (`<script>`, `<style>`, `<link>`,
 `<meta>`, `<base>`, `<iframe>`, `<object>`, `<embed>`, `<form>`, SVG's `<foreignObject>` and
-animation tags), no `style=` or `on...=` attribute, no link but `#id`, `http(s)://` or `mailto:`,
+animation tags), no tag whose text a browser and the checker end in different places (`<title>`,
+an SVG one too: its `aria-label` names a figure; `<textarea>`, `<noscript>`, `<xmp>`, `<noembed>`,
+`<noframes>`, `<plaintext>`), no `style=` or `on...=` attribute, no link but `#id`, `http(s)://` or `mailto:`,
 and no class outside the component table in `_build/CHASSIS.md`; the chassis CSS already styles
-each. No HTML comment but a step-through's FIG marker, and no `<![CDATA[`, `<?...>` or doctype: a
-browser reads those differently from the checker. In math, none of `\href`, `\style`, `\class` or
-`\cssId`, which MathJax turns into links and styles. `assemble.py` reads every fragment tag by tag
-and refuses one that breaks any of these, or that still holds a `TODO-VERIFY`.
+each. No `name=` attribute, and every id holds a hyphen, as the registry's do (`sec-`, `ex-`,
+`fig-`, `set-`): a bare word or a name can stand for a global the page's scripts read. No HTML
+comment but a step-through's FIG marker, and no `<![CDATA[`, `<?...>` or doctype: a browser reads
+those differently from the checker. Outside code, none of `\href`, `\style`, `\class`, `\cssId`,
+`\data`, `\mmlToken`, `\require` or `\bbox`, which MathJax turns into links, styles and ids.
+`assemble.py` reads every fragment tag by tag and refuses one that breaks any of these, or that
+still holds a `TODO-VERIFY`.
 
 ## Section wrapper
 
@@ -119,9 +124,9 @@ figure shortlist says whether it is static or a step-through.
   (L14). Every node, edge, value and label matches the Markdown exactly. Below 560 px the page
   shows a figure at least 460 px wide and scrolls it sideways in its box, so a `viewBox` width of
   640 or less keeps the labels legible there.
-- A **step-through**: leave the marker as it is. The main session generates it from the checker's
-  trace (`06-site`, step 2) in CHASSIS.md's step-through form, and `assemble.py` puts it in
-  place.
+- A **step-through**: leave the marker as it is, on its own between blocks, never inside a tag,
+  an attribute or code, and with no `<` or `>` in its text. The main session generates it from the checker's trace (`06-site`, step
+  2) in CHASSIS.md's step-through form, and `assemble.py` puts it in place.
 
 ## Fidelity
 

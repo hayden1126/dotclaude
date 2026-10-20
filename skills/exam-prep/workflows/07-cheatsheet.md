@@ -72,8 +72,8 @@ sheet, delete side 2's `.page`. Write the blocks in these classes only (FB-139):
 - SVG text prints at its size times the figure's scale (its width over the viewBox's): keep that
   above the floor (FB-142). `check_pdf.py` measures it.
 - Name and id: never printed (FB-132). When the rules say the sheet is collected with a name,
-  tell the student in this stage's report, and `08-practice` puts it in the cram order's last
-  step.
+  tell the student in this stage's report, and `08-practice` puts it first under the cram
+  order's `## Tonight`.
 
 ## Step 4: Print and check
 
@@ -123,12 +123,14 @@ says: check each claim first, and fix every copy of a fact. Then step 4 again.
 `08-practice` runs this once the student has taken the mock. The mock sheet held no room back
 when it was built: it fills like any sheet. So the final sheet makes room for its items.
 
-1. Copy `<exam-slug>-mock.html` to `<exam-slug>-final.html`.
-2. Add the mock-derived items (the student's misses and the cold solver's conventions), each
-   verified like any other item. Room comes first from space a scope cut freed and left blank
-   (below), then from lowering `--fs` toward the floor, then from replacing items the attempt
-   showed the student doesn't need. Near a full page, new wording is no longer than what it
-   replaces (FB-137).
+1. Copy `<exam-slug>-mock.html` (or the student's `.tex`) to `<exam-slug>-final.html` (or
+   `.tex`). A later mock's misses start from the final sheet already built, never a new copy.
+2. Add the mock-derived items (the student's misses, and the cold solver's conventions and the
+   final-sheet items `08-practice` logged in STATUS for the mocks taken so far or for no mock),
+   each verified like any other item. Room comes first from space a scope cut freed and left
+   blank (below), then from lowering `--fs` toward the floor, then from replacing items the
+   attempt showed the student doesn't need. Near a full page, new wording is no longer than what
+   it replaces (FB-137).
 3. Steps 4 and 5 for it, the audit limited to what changed. `diff` the two sheets: it shows the
    added items, what they replaced, the `--fs` line if it moved, any block moved between sides
    and wording cut at the floor, and nothing else.
@@ -136,10 +138,12 @@ when it was built: it fills like any sheet. So the final sheet makes room for it
 
 ## After shipping
 
-- Any change to a shipped sheet, a fix or an addition: show the student the draft first
-  (FB-137); during study Q&A a dispatched writer makes it (hard rule 9). Then step 5's audit
-  limited to the change, step 4, and a republish of the published sheet as `06-site` step 6
-  says. A fix to a fact goes into both sheets.
+- Any change to a shipped sheet, a fix or an addition: show the student the draft first (FB-137;
+  while a mock is untaken, as `08-practice` says in "Changing the notes or a sheet"); during
+  study Q&A a dispatched writer makes it (hard rule 9). Then step 5's audit limited to the
+  change, step 4, and a republish of the published sheet as `06-site` step 6 says. A fix to a
+  fact goes into both sheets; an addition the mock prompted goes into the final sheet only
+  (FB-133).
 - Space a later scope cut frees stays blank for the final sheet's items. Check which sections it
   would help, list them in STATUS, and ask the student when they are next here (FB-140).
 

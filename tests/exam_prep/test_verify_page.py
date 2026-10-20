@@ -13,13 +13,17 @@ With EXAM_PREP_PLAYWRIGHT set (and MathJax's and the fonts' hosts allowed), the 
 broken one way at a time fails with the matching message: a step-through's frame count, last
 frame, missing handler, missing or stray --steps entry, mode button no run presses, missing status
 line, a status line showing the last frame from the start, a handler that throws or never ends, a
-Prev that doesn't step back, a mode button that doesn't reset, a TeX error or undefined macro, and
-an overflow that shows only with the worked examples open."""
+Prev that doesn't step back, a mode button that doesn't reset, a TeX error or undefined macro,
+an overflow that shows only with the worked examples open, a MathJax startup that never finishes
+or fails,
+and an element named currentScript, which the pinned loader path ignores but which, unpinned,
+moves MathJax's loader to its host; and --views on the mock page (its own class)."""
 import contextlib
 import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -29,6 +33,8 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 VERIFY_PAGE = os.path.join(REPO, "skills", "exam-prep", "scripts", "verify_page.mjs")
 ASSEMBLE = os.path.join(REPO, "skills", "exam-prep", "scripts", "assemble.py")
 SAMPLE = os.path.join(REPO, "tests", "exam_prep", "fixtures", "site")
+MOCK = os.path.join(REPO, "tests", "exam_prep", "fixtures", "mock")
+MOCKPAGE = os.path.join(REPO, "skills", "exam-prep", "scripts", "mockpage.py")
 NODE = shutil.which("node")
 
 
@@ -180,6 +186,12 @@ class BrowserCatchesTest(unittest.TestCase):
         shutil.rmtree(cls.tmp)
 
     def fails(self, name, want, page=None, steps="same"):
+        r = self.verify(name, page, steps)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn(want, r.stdout)
+        return r.stdout
+
+    def verify(self, name, page=None, steps="same"):
         page = self.page if page is None else page
         d = os.path.join(self.tmp, name)
         os.makedirs(d)
@@ -191,9 +203,7 @@ class BrowserCatchesTest(unittest.TestCase):
             with open(os.path.join(d, "steps.json"), "w", encoding="utf-8") as f:
                 json.dump(self.steps if steps == "same" else steps, f)
             args += ["--steps", os.path.join(d, "steps.json")]
-        r = subprocess.run(args, capture_output=True, text=True, timeout=600)
-        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
-        self.assertIn(want, r.stdout)
+        return subprocess.run(args, capture_output=True, text=True, timeout=600)
 
     def edit(self, old, new):
         self.assertEqual(self.page.count(old), 1, old)
@@ -249,10 +259,154 @@ class BrowserCatchesTest(unittest.TestCase):
         self.fails("texerr", "TeX errors", page=self.edit(
             "Count its terms: \\(b - a + 1\\).", "Count its terms: \\(\\frac{b}\\) and \\(\\foo\\)."))
 
+    def test_an_element_named_currentscript_cant_move_mathjax(self):
+        # Unpinned, MathJax takes the host its components load from off document.currentScript,
+        # which a named <img> replaces: ui/safe came from it (round 9, probed in Chromium).
+        named = self.edit('<section class="note" id="sec-1">',
+                          '<section class="note" id="sec-1"><img name="currentScript" src="https://x.example/es5/a.png" alt="">')
+        r = self.verify("named", named)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("ALL CHECKS PASS", r.stdout)
+        pin = "      paths:{mathjax:'https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.2/es5'}\n"
+        self.assertEqual(named.count(pin), 1)
+        out = self.fails("unpinned", "scripts loaded from outside MathJax's own directory: https://x.example/es5/ui/safe.js",
+                         page=named.replace(pin, ""))
+        self.assertIn("window.MathJax doesn't pin loader.paths.mathjax", out)
+
+    def test_no_mathjax_script_to_pin_to(self):
+        self.fails("noid", 'no <script id="MathJax-script" src="..."> in the page', page=self.edit(' id="MathJax-script"', ""))
+
+    def test_a_startup_that_never_finishes(self):
+        self.fails("hang", "MathJax never finished typesetting", page=self.edit(
+            "svg:{fontCache:'none'},", "svg:{fontCache:'none'}, startup:{pageReady:function(){return new Promise(function(){})}},"))
+
+    def test_a_script_loaded_while_typesetting(self):
+        # Requested after the page went quiet, so only the check once MathJax finishes sees it.
+        late = ("startup:{pageReady:function(){return new Promise(function(r){setTimeout(r,1500)}).then(function(){"
+                "var s=document.createElement('script');s.src='https://x.example/late.js';document.head.appendChild(s);"
+                "return MathJax.startup.defaultPageReady();});}},")
+        self.fails("late", "scripts loaded from outside MathJax's own directory: https://x.example/late.js",
+                   page=self.edit("svg:{fontCache:'none'},", "svg:{fontCache:'none'}, " + late))
+
+    def test_a_startup_that_fails(self):
+        self.fails("reject", "MathJax failed while starting", page=self.edit(
+            "svg:{fontCache:'none'},", "svg:{fontCache:'none'}, startup:{pageReady:function(){return Promise.reject(new Error('x'))}},"))
+
     def test_overflow_inside_an_open_worked_example(self):
         self.fails("wexwide", "with the worked examples and map open", page=self.edit(
             "<p>Setup: the range 3 to 7.</p>",
             '<p>Setup: the range 3 to 7.</p><div style="width:3000px">wide</div>'))
+
+
+@unittest.skipUnless(os.environ.get("EXAM_PREP_PLAYWRIGHT"),
+                     "set EXAM_PREP_PLAYWRIGHT (and allow MathJax's and the fonts' hosts) to run "
+                     "the browser checks")
+class ViewsTest(unittest.TestCase):
+    """--views on the fixture mock page (tests/exam_prep/fixtures/mock/, built by mockpage.py):
+    it passes, with no scroll-spy target and one screenshot per view; broken, it names the view
+    that lacks a part or holds an extra one, overflows with its stems open, has zero-size math, a
+    MathJax \\href to javascript: (put in past mockpage.py's guard) or an inline event handler,
+    shows the wrong pane,
+    leaves the wrong button pressed or has no pane, and a page with fewer than two view buttons."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp()
+        out = os.path.join(cls.tmp, "mock.html")
+        subprocess.run(["python3", MOCKPAGE, os.path.join(MOCK, "mock-exam1.md"), "--out", out,
+                        "--backbone", os.path.join(MOCK, "backbone.md")], check=True, capture_output=True)
+        with open(out, encoding="utf-8") as f:
+            cls.page = f.read()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp)
+
+    def run_views(self, name, page):
+        d = os.path.join(self.tmp, name)
+        os.makedirs(d)
+        with open(os.path.join(d, "mock.html"), "w", encoding="utf-8") as f:
+            f.write(page)
+        r = subprocess.run([NODE, VERIFY_PAGE, os.path.join(d, "mock.html"), os.path.join(d, "shots"), "--views"],
+                           capture_output=True, text=True, timeout=600)
+        return r, os.path.join(d, "shots")
+
+    def in_view(self, page, view, old, new):
+        """page with old replaced by new once, inside #view-<view>."""
+        a = page.index(f'<div id="view-{view}"')
+        self.assertIn(old, page[a:])
+        return page[:a] + page[a:].replace(old, new, 1)
+
+    def test_the_mock_page_passes(self):
+        r, shots = self.run_views("ok", self.page)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("ALL CHECKS PASS", r.stdout)
+        self.assertNotIn("spy", r.stdout)
+        self.assertEqual(sorted(n for n in os.listdir(shots) if n.startswith("390-light-view-")),
+                         ["390-light-view-paper.png", "390-light-view-topic.png", "390-light-view-type.png"])
+
+    def test_parts_and_overflow_per_view(self):
+        page = self.in_view(self.page, "type", 'data-part="Q4(d)"', 'data-gone="Q4(d)"')
+        page = self.in_view(page, "topic", "</section>",
+                            '<article class="part" data-part="Q9(a)">x</article></section>')
+        page = self.in_view(page, "topic", "</summary>", '</summary><div style="width:3000px">wide</div>')
+        page = self.in_view(page, "type", "</header>", '</header><style>#zz mjx-container{width:0!important}</style><p id="zz">\\(x\\)</p>')
+        page = page.replace("<h1>", "<h1>\\(\\href{ JavaScript:alert(1)}{x}\\) \\(\\class{rail}{y}\\) ", 1)
+        page = page.replace("<h1>", '<h1><span onmouseover="void 0"></span>', 1)
+        # Without MathJax's ui/safe the macros' links and classes reach the page (round 8).
+        self.assertEqual(page.count("load:['ui/safe'],"), 1)
+        page = page.replace("load:['ui/safe'],", "", 1)
+        r, _ = self.run_views("parts", page)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        for want in ("view type: lacks Q4(d), which view paper holds", "view topic: holds Q9(a), which view paper lacks",
+                     "view topic: horizontal overflow", "view type: 1 zero-size math", "javascript: links (a MathJax",
+                     "1 elements with an inline event handler: span", "MathJax's ui/safe isn't loaded",
+                     "elements inside math with a class, id or style"):
+            self.assertIn(want, r.stdout)
+        self.assertNotIn("view type: horizontal overflow", r.stdout)
+
+    def test_mathjax_filters_what_its_macros_add(self):
+        # The template loads ui/safe: a macro the build's text checks missed adds no link, class,
+        # id or style, and the page passes (round 8).
+        page = self.page.replace("<h1>", "<h1>\\(\\href{javascript:alert(1)}{a}\\) \\(\\class{rail}{b}\\) "
+                                 "\\(\\cssId{q1a}{c}\\) \\(\\style{position:fixed;top:0}{d}\\) "
+                                 # ui/safe keeps an mjx- id, as MathJax's own equation labels have.
+                                 "\\(\\cssId{mjx-x}{e}\\) ", 1)
+        r, _ = self.run_views("safe", page)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("ALL CHECKS PASS", r.stdout)
+
+    def test_a_javascript_link_ui_safe_lets_through(self):
+        # Its scheme check finds no scheme in java<newline>script:, which a browser's URL parser
+        # reads as javascript: (round 10): the link check still catches it.
+        page = self.page.replace("<h1>", "<h1>\\(\\href{java\nscript:alert(1)}{a}\\) ", 1)
+        r, _ = self.run_views("jsnl", page)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("javascript: links", r.stdout)
+
+    def test_a_style_in_math_that_loads_an_image(self):
+        # ui/safe keeps a cursor style; an image-set() in it loads (round 10).
+        page = self.page.replace("<h1>", '<h1>\\(\\style{cursor:image-set("https://x.example/a.png" 1x),auto}{q}\\) ', 1)
+        r, _ = self.run_views("imgset", page)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("elements inside math with a class, id or style", r.stdout)
+
+    def test_a_broken_switcher_and_a_missing_pane(self):
+        page = self.page.replace("if(pane) pane.hidden=!on;", "", 1)
+        page = page.replace("b.setAttribute('aria-pressed',on?'true':'false');", "", 1)
+        self.assertEqual(page.count('id="view-topic"'), 1)
+        page = page.replace('id="view-topic"', 'id="view-topix"')
+        r, _ = self.run_views("switch", page)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        for want in ("view type: shows view-paper", "view type: pressed buttons paper",
+                     "view topic: no #view-topic for its button"):
+            self.assertIn(want, r.stdout)
+
+    def test_fewer_than_two_buttons(self):
+        page = re.sub(r'\s*<button type="button" data-view="(type|topic)".*?</button>', "", self.page)
+        r, _ = self.run_views("buttons", page)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("--views: 1 view buttons", r.stdout)
 
 
 if __name__ == "__main__":

@@ -166,8 +166,8 @@ These are the Markdown forms the page's converter reads (06-site); use them exac
   for it>`, the derivation inside the same quote.
 - Material in your blocks past this exam's scope cut (MANIFEST.md's Scope column) stays (FB-121):
   open it with `> **Not on {{EXAM}}:** <where the scope ends, cited>`. Never cut it.
-- A figure the backbone lists: `<!-- FIG <id>: <what it shows, its data> -->` where it belongs;
-  it is drawn later.
+- A figure the backbone lists: `<!-- FIG <id>: <what it shows, its data> -->` where it belongs,
+  on its own line, with no `<` or `>` in its text (`S to A`, not `S->A`); it is drawn later.
 - Links use backbone ids only, the text naming the target: `[§{{M}}.K <its title>](#<its id>)`.
   A section another writer owns still links by its id.
 - Cite every fact from the sources: `[D5 p.23]`, `[D2 #/14]`, `[HW1 Q2c]`. A section of another
@@ -234,7 +234,8 @@ main session checks each finding and applies the fixes.
   extracts for their conventions only, a quote from one in the notes is a blocker, and no finding
   may propose adding one. | ALL ATTEMPTED: drop this sentence.}}
 - Out of scope: other sections' files, except to check a link's target. Never open anything under
-  {{ROOT}}/practice/, which holds answer keys, or a file MANIFEST.md marks `reserved`.
+  {{ROOT}}/practice/, which holds answer keys, {{ROOT}}/_build/verify/mock_key.py, which computes
+  the mocks' answers, or a file MANIFEST.md marks `reserved`.
 ```
 
 **Audit variant** (a condensation: Must-know checklists here, the cheat sheet in 07, the cram
@@ -255,9 +256,67 @@ often than any other. Every line must be true, carry its conditions, and point w
 - Audit every line of {{CONDENSATION}} ({{WHERE}}) against the notes section it summarizes and
   that section's extract blocks. Report each line that is wrong, overstated, missing a condition,
   or links somewhere that doesn't say it, and each point the section teaches as must-know that
-  the condensation leaves out.
+  the condensation leaves out (not for the cram order, whose rows each name one thing on
+  purpose).
 - Out of scope: open nothing under {{ROOT}}/practice/ but {{CONDENSATION}} itself when it lives
-  there (never a `*-key.md` file or the mock), and no file MANIFEST.md marks `reserved`.
+  there (never a `*-key.md` file or the mock), not {{ROOT}}/_build/verify/mock_key.py, and no file
+  MANIFEST.md marks `reserved`. A search (Grep, Glob) stays inside the notes, the extracts and
+  {{CONDENSATION}}: one over {{ROOT}} returns key lines.
+```
+
+## Mock writer (stage 08)
+
+Role: `general-purpose`, as for the write brief: it reads the notes and writes one output file.
+One per mock file `_build/mock-plan.md` lists; each writes only its own, so they run at once.
+
+```text
+# Brief: write the {{EXAM}} mock practice/mock-{{SLUG}}.md
+
+## Purpose
+The mock is the student's dress rehearsal: taken under the exam's time, it shows which questions
+they can't do yet while there is time to fix that. It must read and score like the real exam,
+test what the exam tests, and hold no answer: the student attempts it cold, and the key is
+written separately, from the checker.
+
+## End state
+- Done means: every question the plan gives this mock, in its order and with its points, in
+  MOCK.md's format, the parts summing to their question and the questions to the header's total.
+- Artifact path: {{ROOT}}/practice/mock-{{SLUG}}.md. Write it as you go, question by question.
+- Report: end your reply with the JSON block (status, summary, artifacts, blocked_actions). The
+  summary lists each question with the source question or How it's tested row it follows, and
+  any part where you couldn't make the numbers fresh.
+
+## Scope
+- Work in: {{ROOT}}. Read only, except your one output file.
+- Read first, in full: {{ROOT}}/_build/MOCK.md (the format; the page builder refuses any line
+  off it, naming the line), your rows of {{ROOT}}/_build/mock-plan.md, which quote each question
+  you clone, in {{ROOT}}/_build/backbone.md the How it's tested table and the section numbers
+  (`Topic: §N`), and the figure rows of {{ROOT}}/_build/CHASSIS.md.
+- Sources: the notes, {{ROOT}}/notes/*.md, and the plan's quoted questions. Nothing else: the
+  source documents and their extracts hold official solutions beside the questions.
+- Out of scope: everything under {{ROOT}}/practice/ but your own file (the keys and the other
+  mocks), {{ROOT}}/sources/, and under {{ROOT}}/_build/ everything but the four files above (the
+  extracts, renders and the checker's values hold answers). A search (Grep, Glob) stays inside the
+  files you may read: one over {{ROOT}} returns key lines.
+
+## Format
+- MOCK.md's format exactly. Header: the exam's title, its minutes and total points, its rules,
+  the write-in line, the points table. Each part's `Type:` names its answer's shape (from the
+  closed list) and its `Topic:` the backbone section it tests.
+- A clone keeps its source question's shape, wording conventions and difficulty, with fresh
+  numbers (FB-155): never a homework's, a recitation's or a worked example's (FB-071). The plan
+  flags the one harder set; title it so (`(harder than the exam)`).
+- Don't solve your numbers: {{CHECKER: the key script computes every answer and rejects a
+  degenerate instance | NO CHECKER: the main session works each answer from the sources and
+  sends back a degenerate instance}}. Pick numbers that make each step matter (no ties unless
+  the question tests the tie-break, no step that does nothing).
+- State in the question every convention its answer depends on: tie-breaks, orderings,
+  rounding, what counts as a step. The cold solver flags any it has to guess.
+- True or false: the statements the plan's matrix lists (FB-151), one part each, worded so
+  neither verdict is a giveaway.
+- No answer anywhere: no hint that settles it, no worked solution, no figure that shows the
+  result (a highlighted path, a finished table), no `Answer:` line.
+- Figures as MOCK.md's figure blocks, colored only by CHASSIS.md's figure classes.
 ```
 
 ## Cold solver (stage 08, from 05-verify "The mock")
@@ -266,7 +325,7 @@ Role: `reviewer`: it solves on paper and reports. Its scope is a list of the fil
 since the key's values also sit in the checker and the extracts.
 
 ```text
-# Brief: solve the {{EXAM}} mock cold, without the key
+# Brief: solve the {{EXAM}} mock practice/mock-{{SLUG}}.md cold, without the key
 
 ## Purpose
 A mock question with two defensible answers, an unstated convention or a wrong key teaches the
@@ -282,10 +341,11 @@ how those surface.
   summary, artifacts, blocked_actions).
 
 ## Scope
-- Work in: {{ROOT}}, read only, and open only these: the mock,
-  {{ROOT}}/practice/mock-{{EXAM_SLUG}}.md; the notes, {{ROOT}}/notes/*.md{{SHEET: ; and the
+- Work in: {{ROOT}}, read only, and open or search only these: the mock,
+  {{ROOT}}/practice/mock-{{SLUG}}.md; the notes, {{ROOT}}/notes/*.md{{SHEET: ; and the
   sheet the student may bring, {{ROOT}}/cheatsheet/{{SHEET FILE}}}}.
-- Solve the mock from those, as the student would.
+- Solve the mock from those, as the student would. A search (Grep, Glob) stays inside those
+  paths: one over {{ROOT}} would return key and extract lines.
 - Out of scope: every other file. Above all, nothing else under {{ROOT}}/practice/ (the key) or
   {{ROOT}}/_build/ (the checker and the extracts hold official answers and the key's values),
   nothing under {{ROOT}}/sources/, and no file MANIFEST.md marks `reserved`.
@@ -321,8 +381,9 @@ session assembles the page and checks it in a browser.
   "none"}}) as they are.
 - Out of scope: every other notes file and fragment, the chassis, sources/, _build/extract/ and
   _build/verify/ (a figure's data comes from the notes alone), everything under practice/, and
-  every file MANIFEST.md marks `reserved`. Never add what CONVERT.md's Output paragraph forbids
-  (a script, a style, an event attribute, a class outside CHASSIS.md's table).
+  every file MANIFEST.md marks `reserved`. A search (Grep, Glob) stays inside the files above:
+  one over {{ROOT}} returns key lines. Never add what CONVERT.md's Output paragraph forbids (a
+  script, a style, an event attribute, a class outside CHASSIS.md's table).
 ```
 
 ## Sheet gap scan (stage 07)

@@ -1,6 +1,6 @@
 // Browser checks for an assembled page (the notes page, the mock page), headless Chromium.
 //
-//   node verify_page.mjs <page.html> <outdir> [--spy id,id,...] [--steps <steps.json>]
+//   node verify_page.mjs <page.html> <outdir> [--spy id,id,...] [--steps <steps.json>] [--views]
 //
 // Playwright comes from pw.mjs: $EXAM_PREP_PLAYWRIGHT, else an install it finds, else it says how
 // to install one and exits 2. Run it with `allowed_domains` cdnjs.cloudflare.com,
@@ -10,9 +10,15 @@
 // does (L19). Then, at 390 and 1280 px wide, light and dark:
 //   - MathJax loaded and finished; no math left as raw \( \) or \[ \]; no TeX error and no
 //     undefined macro (MathJax draws both, in red, inside its output); no zero-size math;
+//   - MathJax's ui/safe loaded, its window.MathJax pinning loader.paths.mathjax to the directory
+//     of its <script id="MathJax-script">, no script loaded from anywhere else, and nothing inside
+//     the math with an id or class but mjx-* or a style that positions or loads (what \class,
+//     \cssId, \style and \bbox add); a MathJax failure (never loaded, never finished, rejected,
+//     its components from elsewhere) ends the run there;
 //   - no horizontal overflow (wide figures, tables, math and pre scroll in their own boxes), and
 //     none of either inside the worked examples and the exam-day map once they are opened;
-//   - every href="#id" resolves, and no id repeats;
+//   - every href="#id" resolves, no id repeats, no link (math's too) runs javascript:, and no
+//     element carries an inline event handler (on...=);
 //   - the fonts the chassis declares (--f-display, --f-body, --f-mono) loaded (L24);
 //   - every worked example is closed by default (FB-116);
 //   - each step-through (a figure with .fig-controls) has its window.NotesFig handler and a status
@@ -25,10 +31,15 @@
 //   - scroll-spy marks each --spy target when it is scrolled to (default: the first section, a
 //     middle subsection and the last subsection the page can scroll to the spy line), after the
 //     scroll settles (L18). A target too near the page's end to reach that line is skipped, with
-//     a note.
+//     a note. A page with no section.note (the mock page) has no default targets;
+//   - with --views (the mock page, 08-practice), each view button (nav.views button[data-view]),
+//     pressed in turn, shows its own #view-<name> and no other, reads as the only one pressed,
+//     holds the same parts (distinct data-part values) as the first view, and has no zero-size
+//     math and no horizontal overflow, its closed stems (details) opened too; fewer than two
+//     buttons fail.
 // Screenshots of the viewport (never full page, L23) go to <outdir>: <width>-<scheme>-top.png, one
 // per spy target, one per step-through at its last frame, the first worked example opened (-wex)
-// and the exam-day map opened (-map). Exit 0 when every check passes, 1 on any failure, 2 on bad
+// and the exam-day map opened (-map), and with --views one per view (-view-<name>). Exit 0 when every check passes, 1 on any failure, 2 on bad
 // usage.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -37,17 +48,19 @@ import { loadChromium, launch } from './pw.mjs';
 
 function usage(msg) {
   console.error(`verify_page: ${msg}`);
-  console.error('usage: node verify_page.mjs <page.html> <outdir> [--spy id,id] [--steps <steps.json>]');
+  console.error('usage: node verify_page.mjs <page.html> <outdir> [--spy id,id] [--steps <steps.json>] [--views]');
   process.exit(2);
 }
 
 const args = process.argv.slice(2);
 let spyArg = null;
 let stepsArg = null;
+let viewsArg = false;
 const pos = [];
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--spy') spyArg = args[++i];
   else if (args[i] === '--steps') stepsArg = args[++i];
+  else if (args[i] === '--views') viewsArg = true;
   else pos.push(args[i]);
 }
 if (pos.length !== 2) usage('need <page.html> and <outdir>');
@@ -79,11 +92,29 @@ const doc = /^\s*<!doctype/i.test(src) ? src
 const wrapped = path.resolve(outDir, 'wrapped.html');
 fs.writeFileSync(wrapped, doc);
 
+// MathJax loads its components from a root it takes off document.currentScript unless the
+// page's config pins loader.paths.mathjax, and an element named currentScript replaces that
+// (DOM clobbering): the root must be pinned to its own script's directory. Only <script> tags
+// count, which no fragment holds.
+const scriptTags = [...doc.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)];
+const mjTag = scriptTags.find((m) => /\bid=["']MathJax-script["']/.test(m[1]));
+const mjSrc = mjTag && (mjTag[1].match(/\bsrc=["']([^"']+)["']/) || [])[1];
+const mjRoot = mjSrc ? mjSrc.replace(/\/[^/]*$/, '') : null;
+const pins = scriptTags.filter((m) => !/\bsrc=/.test(m[1]))
+  .map((m) => (m[2].match(/\bpaths\s*:\s*\{\s*mathjax\s*:\s*['"]([^'"]+)['"]/) || [])[1]).filter(Boolean);
+
 const browser = await launch(chromium);
 let failures = 0;
 const fail = (m) => { failures++; console.log('  FAIL ' + m); };
+if (!mjRoot) fail('no <script id="MathJax-script" src="..."> in the page (the templates have it)');
+else if (!pins.includes(mjRoot)) {
+  fail(`window.MathJax doesn't pin loader.paths.mathjax to ${mjRoot} (the templates do): unpinned, an element ` +
+       'named currentScript chooses the host MathJax loads its components from');
+}
 
+let mathjaxDown = false;
 for (const width of [390, 1280]) {
+  if (mathjaxDown) break;
   for (const scheme of ['light', 'dark']) {
     const tag = `${width}-${scheme}`;
     console.log(`[${tag}]`);
@@ -91,14 +122,40 @@ for (const width of [390, 1280]) {
     const page = await ctx.newPage();
     const errors = [];
     page.on('pageerror', (e) => errors.push(String(e)));
+    const scripts = [];
+    page.on('request', (q) => { if (q.resourceType() === 'script') scripts.push(q.url()); });
     await page.goto(pathToFileURL(wrapped).href, { waitUntil: 'networkidle' });
-    try {
-      await page.waitForFunction(() => window.MathJax && MathJax.startup && MathJax.startup.promise, null, { timeout: 30000 });
-      await page.evaluate(() => MathJax.startup.promise);
-    } catch (e) {
-      fail('MathJax never loaded: run with allowed_domains for cdnjs.cloudflare.com (L21)');
+    // Checked again once MathJax finishes: it autoloads extensions while it typesets.
+    const outside = () => {
+      const foreign = scripts.filter((u) => !mjRoot || !u.startsWith(mjRoot + '/'));
+      return foreign.length ? `scripts loaded from outside MathJax's own directory: ${foreign.slice(0, 3).join(', ')}` : '';
+    };
+    let down = outside();
+    if (!down) {
+      try {
+        // A boolean: waitForFunction awaits a promise the predicate returns, so returning the
+        // startup promise itself would wait out a hang here and call it never loaded.
+        await page.waitForFunction(() => !!(window.MathJax && MathJax.startup && MathJax.startup.promise), null, { timeout: 30000 });
+      } catch (e) {
+        down = 'MathJax never loaded: run with allowed_domains for cdnjs.cloudflare.com (L21)';
+      }
+    }
+    // A component that never arrives (ui/safe among them) leaves the promise pending forever; one
+    // that fails to load rejects it.
+    const started = down ? '' : await page.evaluate(() => Promise.race([
+      MathJax.startup.promise.then(() => 'ok', () => 'rejected'),
+      new Promise((res) => setTimeout(() => res('timeout'), 20000))]));
+    if (started === 'timeout') down = 'MathJax never finished typesetting (a component it never got, or a startup that hangs)';
+    else if (started === 'rejected') down = 'MathJax failed while starting (a component that failed to load)';
+    // The root MathJax actually used: the pin in the page's text could sit in a comment.
+    const root = down ? '' : await page.evaluate(() => MathJax.config.loader.paths.mathjax);
+    if (!down) down = outside();
+    if (!down && root !== mjRoot) down = `MathJax loaded its components from ${root}, not its own directory ${mjRoot}`;
+    if (down) {
+      fail(down + '; nothing else checked');
+      mathjaxDown = true;
       await ctx.close();
-      continue;
+      break;
     }
     await page.evaluate(() => document.fonts.ready);
     const r = await page.evaluate(() => {
@@ -132,6 +189,16 @@ for (const width of [390, 1280]) {
         return { v, fam, loaded };
       }).filter((f) => f.fam);
       const openWex = document.querySelectorAll('details.wex[open]').length;
+      // A browser drops leading spaces and control characters and ignores case in a scheme, so
+      // " JavaScript:" runs too; MathJax's \\href puts its link inside the math's SVG.
+      const jsLinks = [...document.querySelectorAll('*')].filter((e) => {
+        const h = e.getAttribute('href') || e.getAttributeNS('http://www.w3.org/1999/xlink', 'href') || '';
+        return /^javascript:/i.test(h.replace(/[\u0000-\u0020]/g, ''));
+      }).length;
+      // The page's own scripts bind no inline handler, so any on...= is markup the build let
+      // through (a figure tag left open reads on into the page as an <img onerror>).
+      const onAttrs = [...document.querySelectorAll('*')].filter((e) => [...e.attributes].some((a) => /^on/i.test(a.name)))
+        .map((e) => e.tagName.toLowerCase());
       // MathJax typesets a TeX error as an merror node and an undefined macro as red text that
       // starts with a backslash; both sit inside its output, where the raw-TeX walk can't see them.
       const texErr = [];
@@ -144,8 +211,17 @@ for (const width of [390, 1280]) {
           }
         });
       }
-      return { mj: mj.length, zero: zero.length, raw, links: hrefs.length, broken, dup, sw, cw, wide, fonts, openWex,
-        texErr, bg: getComputedStyle(document.body).backgroundColor };
+      // ui/safe filters the links, classes, ids and styles MathJax's own parse of \\href, \\class,
+      // \\cssId, \\style and \\bbox would add, whatever text the build's checks read.
+      const safe = !!(MathJax._ && MathJax._.ui && MathJax._.ui.safe);
+      // Should it miss one: MathJax's own output carries no class or id inside its container but
+      // mjx-* (an equation label's id, with tags on, as ui/safe's own pattern allows) and no
+      // positioned style, so any of those came from a macro.
+      const mathAttrs = [...document.querySelectorAll('mjx-container *')].filter((e) => (e.id && !e.id.startsWith('mjx-'))
+        || (e.getAttribute('class') || '').split(/\s+/).some((c) => c && !c.startsWith('mjx-'))
+        || /position|url\(|image-set/i.test(e.getAttribute('style') || '')).length;
+      return { mj: mj.length, zero: zero.length, raw, links: hrefs.length, broken, dup, sw, cw, wide, fonts, openWex, jsLinks,
+        onAttrs, texErr, safe, mathAttrs, bg: getComputedStyle(document.body).backgroundColor };
     });
     console.log(`  mjx=${r.mj} zero=${r.zero} raw=${r.raw.length} links=${r.links} broken=${r.broken.length} dup=${r.dup.length} scrollW=${r.sw}/${r.cw} bg=${r.bg}`);
     if (r.zero) fail(`${r.zero} zero-size math`);
@@ -156,6 +232,10 @@ for (const width of [390, 1280]) {
     if (r.sw > r.cw + 1) fail(`horizontal overflow ${r.sw} > ${r.cw}: ${r.wide.join(' ')}`);
     for (const f of r.fonts) if (!f.loaded) fail(`font ${f.fam} (${f.v}) never loaded: the Google Fonts link, or allowed_domains (L24)`);
     if (r.openWex) fail(`${r.openWex} worked examples open by default`);
+    if (!r.safe) fail("MathJax's ui/safe isn't loaded: the page's window.MathJax lacks load:['ui/safe'] in its loader (the templates have it)");
+    if (r.mathAttrs) fail(`${r.mathAttrs} elements inside math with a class, id or style MathJax's own output never has (a \\class, \\cssId, \\style or \\bbox)`);
+    if (r.jsLinks) fail(`${r.jsLinks} javascript: links (a MathJax \\href or \\mmlToken the build let through)`);
+    if (r.onAttrs.length) fail(`${r.onAttrs.length} elements with an inline event handler: ${[...new Set(r.onAttrs)].join(', ')}`);
     if (errors.length) fail('page errors: ' + errors.join(' | '));
 
     await page.screenshot({ path: path.join(outDir, `${tag}-top.png`) });
@@ -276,6 +356,49 @@ for (const width of [390, 1280]) {
         await page.evaluate((q) => { document.querySelector(q).scrollIntoView({ block: 'start' }); window.scrollBy(0, -90); }, sel);
         await page.waitForTimeout(200);
         await page.screenshot({ path: path.join(outDir, `${tag}-${name}.png`) });
+      }
+    }
+    if (viewsArg) {
+      const views = await page.evaluate(() => [...document.querySelectorAll('nav.views button[data-view]')]
+        .map((b) => b.dataset.view));
+      if (views.length < 2) fail(`--views: ${views.length} view buttons (nav.views button[data-view]); want two or more`);
+      let first = null;
+      for (const v of views) {
+        await page.evaluate(() => window.scrollTo(0, 0));
+        await page.click(`nav.views button[data-view="${v}"]`);
+        await page.waitForTimeout(250);
+        await page.screenshot({ path: path.join(outDir, `${tag}-view-${v}.png`) });
+        const s = await page.evaluate((name) => {
+          const pane = document.getElementById('view-' + name);
+          const shown = [...document.querySelectorAll('[id^="view-"]')]
+            .filter((p) => !p.hidden && p.offsetParent !== null).map((p) => p.id);
+          const pressed = [...document.querySelectorAll('nav.views button[data-view]')]
+            .filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.dataset.view);
+          if (!pane) return { pane: false, shown, pressed };
+          pane.querySelectorAll('details').forEach((d) => { d.open = true; });
+          const parts = [...new Set([...pane.querySelectorAll('[data-part]')].map((e) => e.dataset.part))].sort();
+          const zero = [...pane.querySelectorAll('mjx-container')]
+            .filter((m) => { const b = m.getBoundingClientRect(); return b.width === 0 || b.height === 0; }).length;
+          const cw = document.documentElement.clientWidth;
+          const wide = [...pane.querySelectorAll('*')].filter((e) => e.getBoundingClientRect().right > cw + 1 &&
+            !e.closest('.figbox,.tbl-wrap,mjx-container,pre')).slice(0, 5)
+            .map((e) => e.tagName.toLowerCase() + (e.className && typeof e.className === 'string' ? '.' + e.className : ''));
+          return { pane: true, shown, pressed, parts, zero, wide, sw: document.documentElement.scrollWidth, cw };
+        }, v);
+        if (!s.pane) { fail(`view ${v}: no #view-${v} for its button`); continue; }
+        if (s.shown.join() !== `view-${v}`) fail(`view ${v}: shows ${s.shown.join(', ') || 'nothing'}`);
+        if (s.pressed.join() !== v) fail(`view ${v}: pressed buttons ${s.pressed.join(', ') || 'none'}`);
+        if (!s.parts.length) fail(`view ${v}: no parts (data-part)`);
+        if (first === null) first = { v, parts: s.parts };
+        else {
+          const missing = first.parts.filter((p) => !s.parts.includes(p));
+          const extra = s.parts.filter((p) => !first.parts.includes(p));
+          if (missing.length) fail(`view ${v}: lacks ${missing.join(', ')}, which view ${first.v} holds`);
+          if (extra.length) fail(`view ${v}: holds ${extra.join(', ')}, which view ${first.v} lacks`);
+        }
+        if (s.zero) fail(`view ${v}: ${s.zero} zero-size math`);
+        if (s.sw > s.cw + 1) fail(`view ${v}: horizontal overflow ${s.sw} > ${s.cw}: ${s.wide.join(' ')}`);
+        console.log(`  view ${v}: ${s.parts.length} parts`);
       }
     }
     await ctx.close();
