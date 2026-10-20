@@ -157,6 +157,7 @@ CASE_INFO = {
     "email-change": Case("auth-secrets", TARGET),
     "reset-host": Case("server-code", TARGET),
     "csv-injection": Case("server-code", TARGET),
+    "logout-revoke": Case("auth-secrets", TARGET),
     "auth-benign": Case("auth-secrets", BENIGN),
 }
 CASES = list(CASE_INFO)

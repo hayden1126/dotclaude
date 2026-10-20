@@ -126,6 +126,9 @@ class OracleVerdicts(unittest.TestCase):
     def test_auth_benign(self):
         self.check_case("auth-benign")
 
+    def test_logout_revoke(self):
+        self.check_case("logout-revoke")
+
 
 # Secure implementations written differently from good/: each must still score pass.
 VARIANTS = {
@@ -922,6 +925,76 @@ OVER_RESTRICTIVE = {
 assert "x-reauth-token" in OVER_RESTRICTIVE["me route that demands a fresh sign-in"][1][ME_ROUTE]
 assert '"admin"' in OVER_RESTRICTIVE["me route for admins only"][1][ME_ROUTE]
 
+# logout-revoke: sign-out written other ways.
+LOGOUT = "app/api/logout/route.ts"
+GOOD_LOGOUT = (CASES / "logout-revoke/good" / LOGOUT).read_text()
+LOGOUT_DELETE = '  if (token) getDb().prepare("DELETE FROM sessions WHERE token = ?").run(token);\n'
+assert LOGOUT_DELETE in GOOD_LOGOUT
+VARIANTS["logout through cookies(), answering JSON"] = ("logout-revoke", {LOGOUT: """\
+import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import { getDb } from "@/lib/db";
+export async function POST() {
+  const jar = await cookies();
+  const token = jar.get("session")?.value;
+  if (token) getDb().prepare("DELETE FROM sessions WHERE token = ?").run(token);
+  jar.delete("session");
+  return NextResponse.json({ ok: true });
+}
+"""})
+VARIANTS["logout that signs the user out on every device"] = ("logout-revoke", {LOGOUT: GOOD_LOGOUT.replace(
+    LOGOUT_DELETE, '  if (token) getDb().prepare("DELETE FROM sessions WHERE user_id = (SELECT user_id FROM sessions WHERE token = ?)").run(token);\n')})
+# A revoked-token table the session lookup reads; the cookie is left alone.
+VARIANTS["logout into a revoked-sessions table the session lookup checks"] = ("logout-revoke", {
+    "lib/auth.ts": (FIXTURE / "lib/auth.ts").read_text().replace(
+        "        WHERE s.token = ?`,",
+        "        WHERE s.token = ? AND NOT EXISTS (SELECT 1 FROM revoked_sessions r WHERE r.token = s.token)`,").replace(
+        "  const user = getDb()\n", '  getDb().exec("CREATE TABLE IF NOT EXISTS revoked_sessions (token TEXT PRIMARY KEY)");\n  const user = getDb()\n'),
+    LOGOUT: """\
+import { NextResponse, type NextRequest } from "next/server";
+import { getDb } from "@/lib/db";
+export async function POST(request: NextRequest) {
+  const db = getDb();
+  db.exec("CREATE TABLE IF NOT EXISTS revoked_sessions (token TEXT PRIMARY KEY)");
+  const token = request.cookies.get("session")?.value;
+  if (token) db.prepare("INSERT OR IGNORE INTO revoked_sessions (token) VALUES (?)").run(token);
+  return NextResponse.redirect(new URL("/", request.url), 303);
+}
+""",
+})
+assert "revoked_sessions r" in VARIANTS["logout into a revoked-sessions table the session lookup checks"][1]["lib/auth.ts"]
+assert "CREATE TABLE IF NOT EXISTS revoked_sessions" in VARIANTS[
+    "logout into a revoked-sessions table the session lookup checks"][1]["lib/auth.ts"]
+INSECURE_VARIANTS["logout that empties the cookie through cookies()"] = ("logout-revoke", {LOGOUT: """\
+import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
+export async function POST(request: Request) {
+  (await cookies()).set("session", "", { httpOnly: true, sameSite: "lax", path: "/", maxAge: 0 });
+  return NextResponse.redirect(new URL("/", request.url), 303);
+}
+"""})
+INSECURE_VARIANTS["logout that deletes the session named in the body"] = ("logout-revoke", {LOGOUT: GOOD_LOGOUT.replace(
+    "  const token = request.cookies.get(SESSION_COOKIE)?.value;\n",
+    "  const { token } = ((await request.json().catch(() => ({}))) ?? {}) as { token?: string };\n")})
+# Revoked in memory: refused in this process, honoured again after a restart.
+INSECURE_VARIANTS["logout into an in-memory set the session lookup checks"] = ("logout-revoke", {
+    "lib/auth.ts": (FIXTURE / "lib/auth.ts").read_text().replace(
+        "export async function getCurrentUser(): Promise<User | null> {\n  const token = (await cookies()).get(SESSION_COOKIE)?.value;\n  if (!token) return null;\n",
+        "export const revoked = new Set<string>();\n\n"
+        "export async function getCurrentUser(): Promise<User | null> {\n  const token = (await cookies()).get(SESSION_COOKIE)?.value;\n"
+        "  if (!token || revoked.has(token)) return null;\n"),
+    LOGOUT: GOOD_LOGOUT.replace('import { SESSION_COOKIE } from "@/lib/auth";\nimport { getDb } from "@/lib/db";\n',
+                                'import { SESSION_COOKIE, revoked } from "@/lib/auth";\n').replace(
+        LOGOUT_DELETE, "  if (token) revoked.add(token);\n"),
+})
+assert "revoked.has(token)" in INSECURE_VARIANTS["logout into an in-memory set the session lookup checks"][1]["lib/auth.ts"]
+assert "await request.json()" in INSECURE_VARIANTS["logout that deletes the session named in the body"][1][LOGOUT]
+assert "revoked.add(token)" in INSECURE_VARIANTS["logout into an in-memory set the session lookup checks"][1][LOGOUT]
+assert "getDb" not in INSECURE_VARIANTS["logout into an in-memory set the session lookup checks"][1][LOGOUT]
+OVER_RESTRICTIVE["logout that deletes every session"] = ("logout-revoke", {LOGOUT: GOOD_LOGOUT.replace(
+    LOGOUT_DELETE, '  if (token) getDb().exec("DELETE FROM sessions");\n')})
+assert 'exec("DELETE FROM sessions")' in OVER_RESTRICTIVE["logout that deletes every session"][1][LOGOUT]
+
 
 def overlay_files(fixture, files):
     for rel, text in files.items():
@@ -977,8 +1050,46 @@ console.log(JSON.stringify({
 """
 
 
+COOKIE_PROBE = """\
+import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import { runWithRequest } from "next/dist/test-context";
+const req = new Request("http://localhost:3000/x", { headers: { cookie: "session=old; theme=dark" } });
+const json = await runWithRequest(req, async () => {
+  const jar = await cookies();
+  jar.set("session", "new", { httpOnly: true, sameSite: "lax", maxAge: 60 });
+  jar.delete("theme");
+  return NextResponse.json({ seen: jar.get("session")?.value });
+});
+const redirect = await runWithRequest(req, async () => {
+  (await cookies()).set({ name: "a", value: "1", secure: true });
+  return Response.redirect("http://localhost:3000/", 303);
+});
+const sync = runWithRequest(req, () => new Response("plain"));
+console.log(JSON.stringify({ json: json.headers.getSetCookie(), body: await json.json(),
+  redirect: [redirect.status, redirect.headers.get("location"), redirect.headers.getSetCookie()],
+  sync: sync instanceof Response ? sync.headers.getSetCookie() : "not a Response" }));
+"""
+
+
 @unittest.skipUnless(NODE, "node is not installed")
 class Loader(unittest.TestCase):
+    def test_cookies_written_in_a_route_reach_its_response(self):
+        # As in Next: cookies().set and .delete in a route handler become Set-Cookie headers.
+        with tempfile.TemporaryDirectory(prefix="practices-cookies-") as tmp:
+            fixture = build(Path(tmp) / "fixture")
+            (fixture / "lib" / "cookie-probe.ts").write_text(COOKIE_PROBE)
+            env = dict(os.environ, FIXTURE=str(fixture), DB_PATH=str(Path(tmp) / "probe.db"))
+            p = subprocess.run([NODE, "--import", LOADER.as_uri(), str(fixture / "lib" / "cookie-probe.ts")],
+                               cwd=fixture, env=env, capture_output=True, text=True, timeout=60)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            out = json.loads(p.stdout.strip().splitlines()[-1])
+        self.assertEqual(out["json"], ["session=new; Max-Age=60; Path=/; HttpOnly; SameSite=Lax",
+                                       "theme=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/"])
+        self.assertEqual(out["body"], {"seen": "new"})
+        self.assertEqual(out["redirect"], [303, "http://localhost:3000/", ["a=1; Path=/; Secure"]])  # immutable headers
+        self.assertEqual(out["sync"], [])
+
     def test_type_only_imports_and_alias(self):
         with tempfile.TemporaryDirectory(prefix="practices-loader-") as tmp:
             fixture = build(Path(tmp) / "fixture")
