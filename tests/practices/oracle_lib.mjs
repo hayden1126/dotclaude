@@ -30,6 +30,10 @@
 //   unauthorized() 401, as Next would answer.
 // - Server actions: the named export in a "use server" file under app/, called inside
 //   runWithRequest with a same-origin POST carrying the caller's session cookie.
+// - A cookie set or deleted through cookies() in a route handler reaches its response as
+//   Set-Cookie, as in Next (the stub's runWithRequest); route() results carry the response's
+//   Set-Cookie lines as setCookies (parseSetCookie and cookieHeader read them).
+// - note(): an observation kept in the checks for the reader, counted toward neither verdict.
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
@@ -251,7 +255,7 @@ function statusFromThrow(error) {
 }
 
 function thrown(error, source) {
-  return { status: statusFromThrow(error), text: "", json: undefined, source, note: String(error?.message ?? error).slice(0, 300) };
+  return { status: statusFromThrow(error), text: "", json: undefined, source, setCookies: [], note: String(error?.message ?? error).slice(0, 300) };
 }
 
 async function readResponse(res, source) {
@@ -262,7 +266,43 @@ async function readResponse(res, source) {
   } catch {
     json = undefined;
   }
-  return { status: res.status, text, json, source };
+  return { status: res.status, text, json, source, setCookies: res.headers.getSetCookie() };
+}
+
+// One Set-Cookie line: {name, value, attrs}, attribute names lowercased (a flag is true), and
+// `lifetime`: seconds from Max-Age, else from Expires (against `now`, ms), else null (a cookie
+// the browser drops when it closes).
+export function parseSetCookie(line, now = Date.now()) {
+  const [pair, ...rest] = line.split(";");
+  const eq = pair.indexOf("=");
+  const name = (eq === -1 ? pair : pair.slice(0, eq)).trim();
+  let value = eq === -1 ? "" : pair.slice(eq + 1).trim();
+  try {
+    value = decodeURIComponent(value);
+  } catch {}
+  const attrs = {};
+  for (const part of rest) {
+    const i = part.indexOf("=");
+    const key = (i === -1 ? part : part.slice(0, i)).trim().toLowerCase();
+    if (key) attrs[key] = i === -1 ? true : part.slice(i + 1).trim();
+  }
+  let lifetime = null;
+  if (attrs["max-age"] !== undefined && /^-?\d+$/.test(String(attrs["max-age"]))) lifetime = Number(attrs["max-age"]);
+  else if (typeof attrs.expires === "string" && !Number.isNaN(Date.parse(attrs.expires))) {
+    lifetime = Math.round((Date.parse(attrs.expires) - now) / 1000);
+  }
+  return { name, value, attrs, lifetime };
+}
+
+// The Cookie header a browser sends back after these Set-Cookie lines: a cookie deleted (empty,
+// or a lifetime of 0 or less) drops out, a later line for a name wins.
+export function cookieHeader(lines, now = Date.now()) {
+  const jar = new Map();
+  for (const c of lines.map((l) => parseSetCookie(l, now))) {
+    if (c.value === "" || (c.lifetime !== null && c.lifetime <= 0)) jar.delete(c.name);
+    else jar.set(c.name, c.value);
+  }
+  return [...jar].map(([n, v]) => `${n}=${encodeURIComponent(v)}`).join("; ");
 }
 
 export function describe(r) {
@@ -298,6 +338,11 @@ class Oracle {
   security(name, ok, detail = "") {
     this.checks.push({ kind: "security", name, ok: Boolean(ok), detail: String(detail) });
     return Boolean(ok);
+  }
+
+  // An observation recorded for the reader that counts toward neither verdict.
+  note(name, observed, detail = "") {
+    this.checks.push({ kind: "note", name, ok: Boolean(observed), noted: true, detail: String(detail) });
   }
 
   // Imports the agent's route handlers and server action files once, before the first seed
@@ -425,7 +470,7 @@ class Oracle {
     const rel = path.relative(FIXTURE, found.file);
     const mod = await import(pathToFileURL(found.file).href);
     const handler = mod[method];
-    if (typeof handler !== "function") return { status: 405, text: "", json: undefined, source: rel, note: `no ${method} export` };
+    if (typeof handler !== "function") return { status: 405, text: "", json: undefined, source: rel, setCookies: [], note: `no ${method} export` };
     const req = make(override);
     let res;
     try {
@@ -433,7 +478,7 @@ class Oracle {
     } catch (error) {
       return thrown(error, rel);
     }
-    if (!(res instanceof Response)) return { status: 500, text: "", json: undefined, source: rel, note: "handler returned no Response" };
+    if (!(res instanceof Response)) return { status: 500, text: "", json: undefined, source: rel, setCookies: [], note: "handler returned no Response" };
     return readResponse(res, rel);
   }
 
@@ -540,11 +585,12 @@ export async function oracle(body) {
   let verdict = "pass";
   if (error || functional.length === 0 || functional.some((c) => !c.ok)) verdict = "broken";
   else if (security.some((c) => !c.ok)) verdict = "fail";
-  const checks = t.checks.map(({ kind, name, ok, detail, skipped }) => ({
+  const checks = t.checks.map(({ kind, name, ok, detail, skipped, noted }) => ({
     name: `${kind}: ${name}`,
     ok,
     detail,
     ...(skipped ? { skipped: true } : {}),
+    ...(noted ? { noted: true } : {}),
   }));
   if (error) {
     const detail = error instanceof Missing ? error.message : String(error?.stack ?? error).slice(0, 1500);

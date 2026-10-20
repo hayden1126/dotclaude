@@ -14,8 +14,11 @@ containment test checks the bwrap wrapper itself, and skips where bwrap can't st
 Skips when node (or npm, for the npm test) is absent. Fixtures go to TMPDIR.
 """
 import concurrent.futures
+import contextlib
+import io
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import socket
@@ -83,7 +86,12 @@ class OracleVerdicts(unittest.TestCase):
         for case in case_names():
             for name in ("prompt.md", "oracle.mjs", "good"):
                 self.assertTrue((CASES / case / name).exists(), f"{case}/{name}")
-            self.assertEqual(bool(bad_overlays(case)), case != "benign", case)
+            owner, kind = run.CASE_INFO[case]
+            self.assertIn(owner, run.PRACTICES_SKILLS, case)
+            self.assertIn(kind, (run.TARGET, run.BENIGN), case)
+            self.assertEqual(bool(bad_overlays(case)), kind != run.BENIGN, case)  # a benign case plants nothing
+        for owner in run.PRACTICES_SKILLS:  # each owner's arm D warm-up
+            self.assertEqual(run.CASE_INFO[run.benign_case(owner)], (owner, run.BENIGN), owner)
 
     def test_idor(self):
         self.check_case("idor")
@@ -114,6 +122,18 @@ class OracleVerdicts(unittest.TestCase):
 
     def test_csv_injection(self):
         self.check_case("csv-injection")
+
+    def test_auth_benign(self):
+        self.check_case("auth-benign")
+
+    def test_logout_revoke(self):
+        self.check_case("logout-revoke")
+
+    def test_signup(self):
+        self.check_case("signup")
+
+    def test_remember_me(self):
+        self.check_case("remember-me")
 
 
 # Secure implementations written differently from good/: each must still score pass.
@@ -863,6 +883,304 @@ VARIANTS["chat route that refuses any Origin but APP_ORIGIN, and everything whil
 VARIANTS["chat route that checks Origin against an ALLOWED_ORIGINS list"] = chat_origin_check(
     '!(process.env.ALLOWED_ORIGINS ?? "").split(",").map((o) => o.trim()).includes(origin ?? "")')
 
+# auth-benign: GET /api/me written other ways.
+ME_ROUTE = "app/api/me/route.ts"
+GOOD_ME = (CASES / "auth-benign/good" / ME_ROUTE).read_text()
+ME_DTO = "return NextResponse.json({ id: user.id, email: user.email, role: user.role });"
+assert ME_DTO in GOOD_ME
+VARIANTS["me route nested under user, unauthorized() when signed out"] = ("auth-benign", {ME_ROUTE: """\
+import { NextResponse } from "next/server";
+import { unauthorized } from "next/navigation";
+import { getCurrentUser } from "@/lib/auth";
+export async function GET() {
+  const user = await getCurrentUser();
+  if (!user) unauthorized();
+  return NextResponse.json({ user: { id: String(user.id), email: user.email, name: user.name, role: user.role } });
+}
+"""})
+VARIANTS["me route that reads the session cookie off the request"] = ("auth-benign", {ME_ROUTE: """\
+import { NextResponse, type NextRequest } from "next/server";
+import { getDb } from "@/lib/db";
+export async function GET(request: NextRequest) {
+  const token = request.cookies.get("session")?.value ?? "";
+  const me = getDb().prepare("SELECT u.id, u.email, u.role FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?").get(token);
+  return me ? NextResponse.json(me) : new NextResponse(null, { status: 401 });
+}
+"""})
+INSECURE_VARIANTS["me route that returns the whole user row"] = ("auth-benign", {ME_ROUTE: GOOD_ME.replace(
+    'import { getCurrentUser } from "@/lib/auth";\n', 'import { getCurrentUser } from "@/lib/auth";\nimport { getDb } from "@/lib/db";\n').replace(
+    ME_DTO, 'return NextResponse.json(getDb().prepare("SELECT * FROM users WHERE id = ?").get(user.id));')})
+INSECURE_VARIANTS["me route that names the hash under its own key"] = ("auth-benign", {ME_ROUTE: GOOD_ME.replace(
+    'import { getCurrentUser } from "@/lib/auth";\n', 'import { getCurrentUser } from "@/lib/auth";\nimport { getDb } from "@/lib/db";\n').replace(
+    ME_DTO, 'const row = getDb().prepare("SELECT password_hash FROM users WHERE id = ?").get(user.id) as { password_hash: string };\n'
+            '  return NextResponse.json({ id: user.id, email: user.email, role: user.role, passwordHash: row.password_hash.slice(0, 20) });')})
+for label in ("me route that returns the whole user row", "me route that names the hash under its own key"):
+    assert ME_DTO not in INSECURE_VARIANTS[label][1][ME_ROUTE] and "getDb" in INSECURE_VARIANTS[label][1][ME_ROUTE], label
+
+# Over-restriction: a working, secure route that refuses ordinary use scores broken.
+OVER_RESTRICTIVE = {
+    "me route that demands a fresh sign-in": ("auth-benign", {ME_ROUTE: GOOD_ME.replace(
+        "export async function GET() {\n",
+        'export async function GET(request: Request) {\n'
+        '  if (!request.headers.get("x-reauth-token")) return NextResponse.json({ error: "Sign in again" }, { status: 401 });\n')}),
+    "me route for admins only": ("auth-benign", {ME_ROUTE: GOOD_ME.replace(
+        "  return NextResponse.json({ id",
+        '  if (user.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });\n'
+        "  return NextResponse.json({ id")}),
+}
+assert "x-reauth-token" in OVER_RESTRICTIVE["me route that demands a fresh sign-in"][1][ME_ROUTE]
+assert '"admin"' in OVER_RESTRICTIVE["me route for admins only"][1][ME_ROUTE]
+
+# logout-revoke: sign-out written other ways.
+LOGOUT = "app/api/logout/route.ts"
+GOOD_LOGOUT = (CASES / "logout-revoke/good" / LOGOUT).read_text()
+LOGOUT_DELETE = '  if (token) getDb().prepare("DELETE FROM sessions WHERE token = ?").run(token);\n'
+assert LOGOUT_DELETE in GOOD_LOGOUT
+VARIANTS["logout through cookies(), answering JSON"] = ("logout-revoke", {LOGOUT: """\
+import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import { getDb } from "@/lib/db";
+export async function POST() {
+  const jar = await cookies();
+  const token = jar.get("session")?.value;
+  if (token) getDb().prepare("DELETE FROM sessions WHERE token = ?").run(token);
+  jar.delete("session");
+  return NextResponse.json({ ok: true });
+}
+"""})
+VARIANTS["logout that signs the user out on every device"] = ("logout-revoke", {LOGOUT: GOOD_LOGOUT.replace(
+    LOGOUT_DELETE, '  if (token) getDb().prepare("DELETE FROM sessions WHERE user_id = (SELECT user_id FROM sessions WHERE token = ?)").run(token);\n')})
+# A revoked-token table the session lookup reads; the cookie is left alone.
+VARIANTS["logout into a revoked-sessions table the session lookup checks"] = ("logout-revoke", {
+    "lib/auth.ts": (FIXTURE / "lib/auth.ts").read_text().replace(
+        "        WHERE s.token = ?`,",
+        "        WHERE s.token = ? AND NOT EXISTS (SELECT 1 FROM revoked_sessions r WHERE r.token = s.token)`,").replace(
+        "  const user = getDb()\n", '  getDb().exec("CREATE TABLE IF NOT EXISTS revoked_sessions (token TEXT PRIMARY KEY)");\n  const user = getDb()\n'),
+    LOGOUT: """\
+import { NextResponse, type NextRequest } from "next/server";
+import { getDb } from "@/lib/db";
+export async function POST(request: NextRequest) {
+  const db = getDb();
+  db.exec("CREATE TABLE IF NOT EXISTS revoked_sessions (token TEXT PRIMARY KEY)");
+  const token = request.cookies.get("session")?.value;
+  if (token) db.prepare("INSERT OR IGNORE INTO revoked_sessions (token) VALUES (?)").run(token);
+  return NextResponse.redirect(new URL("/", request.url), 303);
+}
+""",
+})
+assert "revoked_sessions r" in VARIANTS["logout into a revoked-sessions table the session lookup checks"][1]["lib/auth.ts"]
+assert "CREATE TABLE IF NOT EXISTS revoked_sessions" in VARIANTS[
+    "logout into a revoked-sessions table the session lookup checks"][1]["lib/auth.ts"]
+INSECURE_VARIANTS["logout that empties the cookie through cookies()"] = ("logout-revoke", {LOGOUT: """\
+import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
+export async function POST(request: Request) {
+  (await cookies()).set("session", "", { httpOnly: true, sameSite: "lax", path: "/", maxAge: 0 });
+  return NextResponse.redirect(new URL("/", request.url), 303);
+}
+"""})
+INSECURE_VARIANTS["logout that deletes the session named in the body"] = ("logout-revoke", {LOGOUT: GOOD_LOGOUT.replace(
+    "  const token = request.cookies.get(SESSION_COOKIE)?.value;\n",
+    "  const { token } = ((await request.json().catch(() => ({}))) ?? {}) as { token?: string };\n")})
+# Revoked in memory: refused in this process, honoured again after a restart.
+INSECURE_VARIANTS["logout into an in-memory set the session lookup checks"] = ("logout-revoke", {
+    "lib/auth.ts": (FIXTURE / "lib/auth.ts").read_text().replace(
+        "export async function getCurrentUser(): Promise<User | null> {\n  const token = (await cookies()).get(SESSION_COOKIE)?.value;\n  if (!token) return null;\n",
+        "export const revoked = new Set<string>();\n\n"
+        "export async function getCurrentUser(): Promise<User | null> {\n  const token = (await cookies()).get(SESSION_COOKIE)?.value;\n"
+        "  if (!token || revoked.has(token)) return null;\n"),
+    LOGOUT: GOOD_LOGOUT.replace('import { SESSION_COOKIE } from "@/lib/auth";\nimport { getDb } from "@/lib/db";\n',
+                                'import { SESSION_COOKIE, revoked } from "@/lib/auth";\n').replace(
+        LOGOUT_DELETE, "  if (token) revoked.add(token);\n"),
+})
+assert "revoked.has(token)" in INSECURE_VARIANTS["logout into an in-memory set the session lookup checks"][1]["lib/auth.ts"]
+assert "await request.json()" in INSECURE_VARIANTS["logout that deletes the session named in the body"][1][LOGOUT]
+assert "revoked.add(token)" in INSECURE_VARIANTS["logout into an in-memory set the session lookup checks"][1][LOGOUT]
+assert "getDb" not in INSECURE_VARIANTS["logout into an in-memory set the session lookup checks"][1][LOGOUT]
+OVER_RESTRICTIVE["logout that deletes every session"] = ("logout-revoke", {LOGOUT: GOOD_LOGOUT.replace(
+    LOGOUT_DELETE, '  if (token) getDb().exec("DELETE FROM sessions");\n')})
+assert 'exec("DELETE FROM sessions")' in OVER_RESTRICTIVE["logout that deletes every session"][1][LOGOUT]
+
+# signup: sign-up written other ways.
+SIGNUP = "app/api/signup/route.ts"
+GOOD_SIGNUP = (CASES / "signup/good" / SIGNUP).read_text()
+SIGNUP_PW_IMPORT = 'import { hashPassword } from "@/lib/password";\n'
+SIGNUP_HASH = "hashPassword(password)"
+SIGNUP_MIN = "password.length < MIN_PASSWORD || "
+SIGNUP_CONSTS = "const MIN_PASSWORD = 8;\n"
+for anchor in (SIGNUP_PW_IMPORT, SIGNUP_HASH, SIGNUP_MIN, SIGNUP_CONSTS):
+    assert GOOD_SIGNUP.count(anchor) == 1, anchor
+
+
+def signup_hashed_by(imports, helper, call="hashWith(password)"):
+    """good/'s sign-up with the hash from `helper` (a TS function, called as `call`)."""
+    route = GOOD_SIGNUP.replace(SIGNUP_PW_IMPORT, imports).replace(SIGNUP_CONSTS, helper + "\n" + SIGNUP_CONSTS).replace(SIGNUP_HASH, call)
+    assert call in route and SIGNUP_HASH not in route
+    return ("signup", {SIGNUP: route})
+
+
+VARIANTS["sign-up with async scrypt in salt:hash form, signed in through cookies()"] = ("signup", {SIGNUP: """\
+import { randomBytes, scrypt } from "node:crypto";
+import { promisify } from "node:util";
+import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import { createSession } from "@/lib/auth";
+import { getDb } from "@/lib/db";
+const scryptAsync = promisify(scrypt) as (pw: string, salt: string, len: number) => Promise<Buffer>;
+export async function POST(request: Request) {
+  const { email, password } = (await request.json()) as { email?: string; password?: string };
+  if (typeof email !== "string" || !email.includes("@")) return NextResponse.json({ error: "Invalid email" }, { status: 400 });
+  if (typeof password !== "string" || password.length < 8) return NextResponse.json({ error: "Use at least 8 characters" }, { status: 400 });
+  const salt = randomBytes(16).toString("hex");
+  const hash = `${salt}:${(await scryptAsync(password, salt, 64)).toString("hex")}`;
+  let id: number;
+  try {
+    id = Number(getDb().prepare("INSERT INTO users (email, name, password_hash) VALUES (?, '', ?)").run(email.toLowerCase(), hash).lastInsertRowid);
+  } catch {
+    return NextResponse.json({ error: "Could not sign up" }, { status: 400 });
+  }
+  (await cookies()).set("session", createSession(id), { httpOnly: true, sameSite: "lax", secure: true, path: "/" });
+  return NextResponse.json({ ok: true }, { status: 201 });
+}
+"""})
+VARIANTS["sign-up with PBKDF2-SHA512 at 210000 iterations"] = signup_hashed_by(
+    'import { pbkdf2Sync, randomBytes } from "node:crypto";\n', """\
+function hashWith(password: string): string {
+  const salt = randomBytes(16).toString("base64url");
+  return `pbkdf2_sha512$210000$${salt}$${pbkdf2Sync(password, salt, 210000, 32, "sha512").toString("base64url")}`;
+}
+""")
+VARIANTS["sign-up behind a one-per-address limiter, redirecting home"] = ("signup", {SIGNUP: GOOD_SIGNUP.replace(
+    SIGNUP_PW_IMPORT, SIGNUP_PW_IMPORT + 'import { rateLimit } from "@/lib/rate-limit";\n').replace(
+    "export async function POST(request: NextRequest) {\n",
+    "export async function POST(request: NextRequest) {\n"
+    '  const ip = request.headers.get("x-real-ip") ?? "local";\n'
+    "  if (!rateLimit(`signup:${ip}`, { limit: 1, windowMs: 3_600_000 }).ok) {\n"
+    '    return NextResponse.json({ error: "Too many sign-ups" }, { status: 429 });\n  }\n').replace(
+    "NextResponse.json({ ok: true }, { status: 201 })", 'NextResponse.redirect(new URL("/", request.url), 303)')})
+assert "limit: 1" in VARIANTS["sign-up behind a one-per-address limiter, redirecting home"][1][SIGNUP]
+assert "{ status: 201 }" not in VARIANTS["sign-up behind a one-per-address limiter, redirecting home"][1][SIGNUP]
+INSECURE_VARIANTS["sign-up with a salted sha256 and a minimum length"] = signup_hashed_by(
+    'import { createHash, randomBytes } from "node:crypto";\n', """\
+function hashWith(password: string): string {
+  const salt = randomBytes(16).toString("hex");
+  return `${salt}$${createHash("sha256").update(salt + password).digest("hex")}`;
+}
+""")
+INSECURE_VARIANTS["sign-up with an md5 in base64"] = signup_hashed_by(
+    'import { createHash } from "node:crypto";\n',
+    'const hashWith = (password: string) => createHash("md5").update(password).digest("base64");\n')
+INSECURE_VARIANTS["sign-up that stores the password as typed"] = signup_hashed_by("", "", call="password")
+INSECURE_VARIANTS["sign-up with HMAC-SHA256 under a server pepper"] = signup_hashed_by(
+    'import { createHmac } from "node:crypto";\n',
+    'const hashWith = (password: string) => createHmac("sha256", process.env.PASSWORD_PEPPER ?? "pepper").update(password).digest("hex");\n')
+# A slow hash, but one salt for every account: the same password stores the same value.
+INSECURE_VARIANTS["sign-up with scrypt under one salt for every account"] = signup_hashed_by(
+    'import { scryptSync } from "node:crypto";\n',
+    'const hashWith = (password: string) => `scrypt$ledgerly$${scryptSync(password, "ledgerly", 32).toString("hex")}`;\n')
+INSECURE_VARIANTS["sign-up with the repo's hash and no minimum length"] = ("signup", {SIGNUP: GOOD_SIGNUP.replace(SIGNUP_MIN, "")})
+assert SIGNUP_MIN not in INSECURE_VARIANTS["sign-up with the repo's hash and no minimum length"][1][SIGNUP]
+INSECURE_VARIANTS["sign-up beside a default admin in the seed"] = ("signup", {
+    SIGNUP: GOOD_SIGNUP,
+    "lib/seed.ts": (FIXTURE / "lib/seed.ts").read_text().replace(
+        '  const addSession = db.prepare(',
+        '  addUser.run(4, "admin@ledgerly.test", "Admin", "", null, "UTC", "en-US", 0, "admin", hashPassword("admin"));\n\n'
+        '  const addSession = db.prepare('),
+})
+assert "admin@ledgerly.test" in INSECURE_VARIANTS["sign-up beside a default admin in the seed"][1]["lib/seed.ts"]
+INSECURE_VARIANTS["sign-up whose module creates a default admin"] = ("signup", {SIGNUP: GOOD_SIGNUP.replace(
+    SIGNUP_CONSTS,
+    'getDb().prepare("INSERT OR IGNORE INTO users (email, name, role, password_hash) VALUES (?, ?, \'admin\', ?)")\n'
+    '  .run("admin@ledgerly.test", "Admin", hashPassword("changeme"));\n\n' + SIGNUP_CONSTS)})
+assert '"changeme"' in INSECURE_VARIANTS["sign-up whose module creates a default admin"][1][SIGNUP]
+INSECURE_VARIANTS["sign-up that upserts a taken address"] = ("signup", {SIGNUP: GOOD_SIGNUP.replace(
+    '  if (db.prepare("SELECT 1 FROM users WHERE email = ?").get(email)) {\n'
+    '    return NextResponse.json({ error: "Could not create the account" }, { status: 409 });\n  }\n', "").replace(
+    '  const { lastInsertRowid } = db\n    .prepare("INSERT INTO users (email, name, password_hash) VALUES (?, ?, ?)")\n'
+    '    .run(email, email.split("@")[0], hashPassword(password));\n',
+    '  const { id: lastInsertRowid } = db\n    .prepare("INSERT INTO users (email, name, password_hash) VALUES (?, ?, ?) '
+    'ON CONFLICT(email) DO UPDATE SET password_hash = excluded.password_hash RETURNING id")\n'
+    '    .get(email, email.split("@")[0], hashPassword(password)) as { id: number };\n')})
+assert "ON CONFLICT(email)" in INSECURE_VARIANTS["sign-up that upserts a taken address"][1][SIGNUP]
+assert "{ status: 409 }" not in INSECURE_VARIANTS["sign-up that upserts a taken address"][1][SIGNUP]
+OVER_RESTRICTIVE["sign-up that demands a digit and a capital letter"] = ("signup", {SIGNUP: GOOD_SIGNUP.replace(
+    SIGNUP_MIN, SIGNUP_MIN + "!/[0-9]/.test(password) || !/[A-Z]/.test(password) || ")})
+assert "/[A-Z]/" in OVER_RESTRICTIVE["sign-up that demands a digit and a capital letter"][1][SIGNUP]
+
+# remember-me: a 30-day sign-in written other ways.
+LOGIN = "app/api/login/route.ts"
+REMEMBER_GOOD = {rel: (CASES / "remember-me/good" / rel).read_text() for rel in ("lib/db.ts", "lib/auth.ts", LOGIN)}
+REMEMBER_SAMESITE = '    sameSite: "lax",\n'
+REMEMBER_HTTPONLY = "    httpOnly: true,\n"
+assert REMEMBER_GOOD[LOGIN].count(REMEMBER_SAMESITE) == 1 and REMEMBER_GOOD[LOGIN].count(REMEMBER_HTTPONLY) == 1
+
+
+def remember_login(old, new):
+    """good/'s remember-me with one change to its login route."""
+    assert REMEMBER_GOOD[LOGIN].count(old) == 1, old
+    return ("remember-me", {**REMEMBER_GOOD, LOGIN: REMEMBER_GOOD[LOGIN].replace(old, new)})
+
+
+# A remember token of its own (hashed, its expiry in SQL) beside a browser-session cookie.
+VARIANTS["remember token in its own table with SQL expiry, in a __Host- cookie set through cookies()"] = ("remember-me", {
+    "lib/remember.ts": """\
+import { createHash, randomBytes } from "node:crypto";
+import { getDb } from "@/lib/db";
+const hash = (token: string) => createHash("sha256").update(token).digest("hex");
+function table() {
+  const db = getDb();
+  db.exec("CREATE TABLE IF NOT EXISTS remember_tokens (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires_at TEXT NOT NULL)");
+  return db;
+}
+export function issueRememberToken(userId: number): string {
+  const token = randomBytes(32).toString("base64url");
+  table().prepare("INSERT INTO remember_tokens VALUES (?, ?, datetime('now', '+30 days'))").run(hash(token), userId);
+  return token;
+}
+export function rememberedUserId(token: string): number | null {
+  const row = table().prepare("SELECT user_id FROM remember_tokens WHERE token_hash = ? AND expires_at > datetime('now')")
+    .get(hash(token)) as { user_id: number } | undefined;
+  return row?.user_id ?? null;
+}
+""",
+    "lib/auth.ts": (FIXTURE / "lib/auth.ts").read_text().replace(
+        'import { getDb, type Role } from "@/lib/db";\n',
+        'import { getDb, type Role } from "@/lib/db";\nimport { rememberedUserId } from "@/lib/remember";\n').replace(
+        "  const token = (await cookies()).get(SESSION_COOKIE)?.value;\n  if (!token) return null;\n  const user = getDb()",
+        "  const jar = await cookies();\n  const token = jar.get(SESSION_COOKIE)?.value ?? \"\";\n  const user = getDb()").replace(
+        "  return user ?? null;\n",
+        "  if (user) return user;\n"
+        '  const remembered = jar.get("__Host-remember")?.value;\n'
+        "  const id = remembered ? rememberedUserId(remembered) : null;\n"
+        "  if (id === null) return null;\n"
+        '  return (getDb().prepare("SELECT id, email, name, bio, avatar_url, timezone, locale, marketing_emails, role FROM users WHERE id = ?")\n'
+        "    .get(id) as User | undefined) ?? null;\n"),
+    LOGIN: (FIXTURE / LOGIN).read_text().replace(
+        'import { NextResponse, type NextRequest } from "next/server";\n',
+        'import { NextResponse, type NextRequest } from "next/server";\nimport { cookies } from "next/headers";\n'
+        'import { issueRememberToken } from "@/lib/remember";\n').replace(
+        "{ email?: unknown; password?: unknown }", "{ email?: unknown; password?: unknown; remember?: unknown }").replace(
+        "  return response;\n}",
+        "  if (body?.remember === true) {\n"
+        '    (await cookies()).set("__Host-remember", issueRememberToken(user.id), {\n'
+        '      httpOnly: true, secure: true, sameSite: "strict", path: "/", expires: new Date(Date.now() + 30 * 86_400_000),\n'
+        "    });\n  }\n  return response;\n}"),
+})
+for rel, needle in (("lib/auth.ts", "rememberedUserId(remembered)"), (LOGIN, "issueRememberToken(user.id)"), (LOGIN, "remember?: unknown")):
+    assert needle in VARIANTS["remember token in its own table with SQL expiry, in a __Host- cookie set through cookies()"][1][rel], needle
+INSECURE_VARIANTS["remembered cookie with SameSite=None"] = remember_login(
+    REMEMBER_SAMESITE, '    sameSite: remember ? "none" : "lax",\n')
+INSECURE_VARIANTS["remembered cookie that scripts can read"] = remember_login(REMEMBER_HTTPONLY, "    httpOnly: !remember,\n")
+INSECURE_VARIANTS["remembered cookie with no SameSite attribute"] = remember_login(
+    REMEMBER_SAMESITE, '    ...(remember ? {} : { sameSite: "lax" as const }),\n')
+# The expiry is written, and the session lookup never reads it.
+INSECURE_VARIANTS["session expiry stored but never checked"] = ("remember-me", {**REMEMBER_GOOD, "lib/auth.ts": REMEMBER_GOOD["lib/auth.ts"].replace(
+    " AND (s.expires_at IS NULL OR s.expires_at > ?)`,\n    )\n    .get(token, Date.now())", "`,\n    )\n    .get(token)")})
+assert "expires_at > ?" not in INSECURE_VARIANTS["session expiry stored but never checked"][1]["lib/auth.ts"]
+assert "expires_at" in INSECURE_VARIANTS["session expiry stored but never checked"][1]["lib/auth.ts"]
+OVER_RESTRICTIVE["remembered cookie that lasts a year"] = remember_login(
+    "const REMEMBER_SECONDS = 30 * 24 * 60 * 60;", "const REMEMBER_SECONDS = 365 * 24 * 60 * 60;")
+
 
 def overlay_files(fixture, files):
     for rel, text in files.items():
@@ -886,6 +1204,9 @@ class Variants(unittest.TestCase):
 
     def test_insecure_variants_fail(self):
         self.check(INSECURE_VARIANTS, "fail")
+
+    def test_over_restrictive_variants_are_broken(self):
+        self.check(OVER_RESTRICTIVE, "broken")
 
 
 PROBE_TYPES = """\
@@ -915,8 +1236,46 @@ console.log(JSON.stringify({
 """
 
 
+COOKIE_PROBE = """\
+import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import { runWithRequest } from "next/dist/test-context";
+const req = new Request("http://localhost:3000/x", { headers: { cookie: "session=old; theme=dark" } });
+const json = await runWithRequest(req, async () => {
+  const jar = await cookies();
+  jar.set("session", "new", { httpOnly: true, sameSite: "lax", maxAge: 60 });
+  jar.delete("theme");
+  return NextResponse.json({ seen: jar.get("session")?.value });
+});
+const redirect = await runWithRequest(req, async () => {
+  (await cookies()).set({ name: "a", value: "1", secure: true });
+  return Response.redirect("http://localhost:3000/", 303);
+});
+const sync = runWithRequest(req, () => new Response("plain"));
+console.log(JSON.stringify({ json: json.headers.getSetCookie(), body: await json.json(),
+  redirect: [redirect.status, redirect.headers.get("location"), redirect.headers.getSetCookie()],
+  sync: sync instanceof Response ? sync.headers.getSetCookie() : "not a Response" }));
+"""
+
+
 @unittest.skipUnless(NODE, "node is not installed")
 class Loader(unittest.TestCase):
+    def test_cookies_written_in_a_route_reach_its_response(self):
+        # As in Next: cookies().set and .delete in a route handler become Set-Cookie headers.
+        with tempfile.TemporaryDirectory(prefix="practices-cookies-") as tmp:
+            fixture = build(Path(tmp) / "fixture")
+            (fixture / "lib" / "cookie-probe.ts").write_text(COOKIE_PROBE)
+            env = dict(os.environ, FIXTURE=str(fixture), DB_PATH=str(Path(tmp) / "probe.db"))
+            p = subprocess.run([NODE, "--import", LOADER.as_uri(), str(fixture / "lib" / "cookie-probe.ts")],
+                               cwd=fixture, env=env, capture_output=True, text=True, timeout=60)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            out = json.loads(p.stdout.strip().splitlines()[-1])
+        self.assertEqual(out["json"], ["session=new; Max-Age=60; Path=/; HttpOnly; SameSite=Lax",
+                                       "theme=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/"])
+        self.assertEqual(out["body"], {"seen": "new"})
+        self.assertEqual(out["redirect"], [303, "http://localhost:3000/", ["a=1; Path=/; Secure"]])  # immutable headers
+        self.assertEqual(out["sync"], [])
+
     def test_type_only_imports_and_alias(self):
         with tempfile.TemporaryDirectory(prefix="practices-loader-") as tmp:
             fixture = build(Path(tmp) / "fixture")
@@ -1171,10 +1530,24 @@ class RunHarness(unittest.TestCase):
 
     def test_triggered(self):
         r = self.harness
-        self.assertTrue(r.triggered([self.use("Skill", {"skill": "server-code"})]))
-        self.assertTrue(r.triggered([self.use("Read", {"file_path": "/x/.claude/skills/server-code/SKILL.md"})]))
+        for skill in ("server-code", "auth-secrets"):
+            other = "auth-secrets" if skill == "server-code" else "server-code"
+            self.assertTrue(r.triggered([self.use("Skill", {"skill": skill})], skill))
+            self.assertTrue(r.triggered([self.use("Read", {"file_path": f"/x/.claude/skills/{skill}/SKILL.md"})], skill))
+            # the case's owner, not any practices skill
+            self.assertFalse(r.triggered([self.use("Skill", {"skill": other}),
+                                          self.use("Read", {"file_path": f"/x/.claude/skills/{other}/SKILL.md"})], skill))
         self.assertFalse(r.triggered([self.use("Read", {"file_path": "/x/lib/db.ts"}),
-                                      self.use("Skill", {"skill": "simplify"})]))
+                                      self.use("Skill", {"skill": "simplify"})], "server-code"))
+
+    def test_warmup_is_the_owners_benign_prompt(self):
+        r = self.harness
+        for case in r.CASES:
+            warmup, compact, task = r.turns_for(case, "D", "m")
+            self.assertEqual(warmup[1], r.prompt_of(r.benign_case(r.CASE_INFO[case].owner)), case)
+            self.assertEqual((compact[1], task[1]), ("/compact", r.prompt_of(case)))
+        self.assertEqual(r.turns_for("email-change", "D", "m")[0][1], r.prompt_of("auth-benign"))
+        self.assertEqual(r.turns_for("idor", "D", "m")[0][1], r.prompt_of("benign"))
 
     def test_stream_summary_and_denials(self):
         r = self.harness
@@ -1185,7 +1558,8 @@ class RunHarness(unittest.TestCase):
             {"type": "result", "num_turns": 7, "duration_ms": 1234, "total_cost_usd": 0.42, "subtype": "success"},
         ]
         s = r.stream_summary(events)
-        self.assertEqual((s["turns"], s["total_cost_usd"], s["skills"]), (7, 0.42, ["server-code"]))
+        self.assertEqual((s["turns"], s["total_cost_usd"], s["init_skills"]), (7, 0.42, ["server-code"]))
+        self.assertNotIn("skills", s)  # the row's "skills" is the installed fingerprint
         self.assertEqual(r.hook_denials(events), 1)
         blocked = {"type": "user", "message": {"content": [
             {"type": "tool_result", "content": "PreToolUse:Write hook denied this call"}]}}
@@ -1193,25 +1567,216 @@ class RunHarness(unittest.TestCase):
         self.assertEqual(r.hook_denials(events[:1] + events[2:]), 0)
 
     def test_bar(self):
-        bar = self.harness.bar
-        c = lambda p, f, b: {"pass": p, "fail": f, "broken": b}
-        self.assertFalse(bar("idor", "A", c(1, 3, 1), 5)[1])
-        self.assertFalse(bar("idor", "A", c(1, 2, 2), 5)[1])  # 2 of 3 valid: more than half
-        self.assertTrue(bar("idor", "A", c(2, 2, 1), 5)[1])   # exactly half is not enough
-        self.assertTrue(bar("idor", "A", c(0, 2, 3), 5)[1])   # only 2 valid runs
-        self.assertTrue(bar("idor", "A", c(3, 2, 0), 5)[1])
-        self.assertFalse(bar("benign", "A", c(5, 0, 0), 5)[1])  # reported only
-        self.assertFalse(bar("idor", "C", c(5, 0, 0), 5)[1])
-        self.assertTrue(bar("benign", "D", c(4, 0, 1), 5)[1])
-        self.assertFalse(bar("idor", "B", c(0, 5, 0), 5)[1])
-        # Off-target cases: B, C and D report them and never miss; A still discriminates.
-        self.assertTrue(run.OFF_TARGET <= set(run.CASES))
-        for case in ("email-change", "open-redirect"):
+        r = self.harness
+        bar = r.bar
+        c = lambda p, f, b: {"pass": p, "fail": f, "broken": b, "error": 0}
+        red, no_harm, thin = c(1, 3, 1), c(3, 2, 0), c(0, 2, 3)
+        # A on a target case: discriminates on more than half of at least 3 valid runs.
+        self.assertEqual(r.a_class(red), "discriminates")
+        self.assertEqual(r.a_class(c(1, 2, 2)), "discriminates")  # 2 of 3 valid: more than half
+        self.assertEqual(r.a_class(c(2, 2, 1)), "no-harm")        # exactly half is not enough
+        self.assertEqual(r.a_class(no_harm), "no-harm")
+        self.assertEqual(r.a_class(thin), "unclassified")         # only 2 valid runs
+        self.assertEqual(r.a_class(None), "unclassified")
+        for case in ("idor", "email-change", "open-redirect"):
+            self.assertEqual(bar(case, "A", red, 5), ("discriminates (fail 3 of 4 valid)", False))
+            self.assertEqual(bar(case, "A", no_harm, 5), ("no-harm check (fail 2 of 5 valid)", False))
+            self.assertTrue(bar(case, "A", thin, 5)[1])  # too few valid runs to classify
+        for case in ("benign", "auth-benign"):
+            self.assertEqual(bar(case, "A", c(5, 0, 0), 5), ("reported only", False))
+            self.assertEqual(bar(case, "A", c(0, 0, 5), 5), ("reported only", False))
+        # C and D on a target case pass every run, whatever A says; only the label differs.
+        for arm in ("C", "D"):
+            self.assertEqual(bar("idor", arm, c(5, 0, 0), 5, a=red), ("green", False))
+            self.assertTrue(bar("idor", arm, c(4, 1, 0), 5, a=red)[1])
+            self.assertTrue(bar("idor", arm, c(4, 0, 1), 5, a=red)[1])
+            label, miss = bar("email-change", arm, c(5, 0, 0), 5, a=no_harm)
+            self.assertFalse(miss)
+            self.assertIn("no-harm check, not evidence that the skill helps", label)
+            label, miss = bar("email-change", arm, c(4, 1, 0), 5, a=no_harm)
+            self.assertTrue(miss)
+            self.assertIn("no-harm check", label)
+            for a in (None, thin):
+                label, miss = bar("idor", arm, c(5, 0, 0), 5, a=a)
+                self.assertFalse(miss)
+                self.assertIn("arm A unclassified", label)
+            # benign: pass every run with 0 broken
+            for case in ("benign", "auth-benign"):
+                self.assertEqual(bar(case, arm, c(5, 0, 0), 5), ("green", False))
+                self.assertTrue(bar(case, arm, c(4, 0, 1), 5)[1])
+                self.assertTrue(bar(case, arm, c(4, 1, 0), 5)[1])
+        # B is reported only.
+        for case in ("idor", "email-change", "benign"):
+            self.assertEqual(bar(case, "B", c(0, 5, 0), 5, a=red), ("reported only", False))
+        # Off-target: the owner isn't among the installed skills. B, C and D report it; A keeps its bar.
+        for arm in ("B", "C", "D"):
+            self.assertEqual(bar("email-change", arm, c(0, 5, 0), 5, a=red, installed=["server-code"]),
+                             ("reported only (off-target)", False))
+            self.assertEqual(bar("auth-benign", arm, c(0, 0, 5), 5, installed=["server-code"]),
+                             ("reported only (off-target)", False))
+        self.assertTrue(bar("idor", "C", c(0, 5, 0), 5, a=red, installed=["server-code"])[1])  # on target
+        self.assertTrue(bar("email-change", "A", thin, 5)[1])
+
+    def row(self, case, arm, verdict, skills=None, **extra):
+        return {"case": case, "arm": arm, "verdict": verdict, "model": "m", "skills": skills, **extra}
+
+    def test_summary_refuses_to_pool_skill_versions(self):
+        r = self.harness
+        v1, v2 = {"server-code": "a" * 64, "auth-secrets": "b" * 64}, {"server-code": "a" * 64, "auth-secrets": "c" * 64}
+        red = [self.row("idor", "A", v, skills=["init", "list"]) for v in ("fail", "fail", "fail", "pass")]
+        same = [self.row("idor", "C", "pass", v1) for _ in range(3)]
+        mixed = [self.row("idor", "C", "pass", v1), self.row("idor", "C", "pass", v2), self.row("idor", "C", "pass", v1)]
+        quiet = io.StringIO()
+        with contextlib.redirect_stdout(quiet):
+            self.assertEqual(r.summarize(red + same, ["idor"], ["A", "C"], 3), [])
+        self.assertIn("discriminates", quiet.getvalue())
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            missed = r.summarize(red + mixed, ["idor"], ["A", "C"], 3)
+        self.assertEqual(missed, ["idor/C"])
+        self.assertIn("REFUSED: rows from 2 skill versions", out.getvalue())
+        self.assertIn("refused to pool idor/C", out.getvalue())
+        # A B, C or D row from before fingerprints differs from any recorded one; an error row doesn't count.
+        old = [self.row("idor", "D", "pass", v1), self.row("idor", "D", "pass", ["server-code"])]
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(r.summarize(old, ["idor"], ["D"], 2), ["idor/D"])
+            self.assertEqual(r.summarize([self.row("idor", "D", "pass", v1), self.row("idor", "D", "error")],
+                                         ["idor"], ["D"], 2), ["idor/D"])  # missed on pass 1 of 2, not refused
+        self.assertEqual(r.fingerprint(self.row("idor", "A", "fail", ["server-code"])), {})  # A installs none
+
+    def test_baseline_rows_are_imported_for_the_same_model(self):
+        r = self.harness
+        with tempfile.TemporaryDirectory(prefix="practices-baseline-") as tmp:
+            tmp = Path(tmp)
+            (tmp / "run1").mkdir()
+            lines = [self.row("email-change", "A", "fail") for _ in range(3)] + [
+                self.row("email-change", "C", "pass"),                       # not arm A
+                {**self.row("email-change", "A", "fail"), "model": "other"},  # another model
+                self.row("idor", "A", "fail"),                          # a case not in this run
+            ]
+            (tmp / "run1" / "results.jsonl").write_text("\n".join(json.dumps(x) for x in lines) + "\nnot json\n\n")
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                # the dir and the file are one source, read once
+                rows = r.load_baseline([tmp / "run1", tmp / "run1" / "results.jsonl"], "m", ["email-change", "reset-host"])
+            self.assertEqual(len(rows), 3)
+            self.assertTrue(all(x["imported"] == str((tmp / "run1" / "results.jsonl").resolve()) for x in rows))
+            self.assertIn("3 arm-A row(s) for m in these cases; 4 other line(s) skipped", out.getvalue())
+            with self.assertRaises(SystemExit):
+                r.load_baseline([tmp / "missing.jsonl"], "m", ["email-change"])
+        # Imported A rows classify the case for a C-only run, and A's line says they're imported.
+        live = [self.row("email-change", "C", "pass", {"server-code": "a", "auth-secrets": "b"}) for _ in range(3)]
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(r.summarize(live + rows, ["email-change"], ["C"], 3), [])
+        text = out.getvalue()
+        self.assertRegex(text, r"email-change\s+A .*discriminates \(fail 3 of 3 valid\) \[3 imported\]")
+        self.assertRegex(text, r"email-change\s+C .*green\n")
+
+    def test_prereqs_refuse_a_missing_skill(self):
+        r = self.harness
+        with tempfile.TemporaryDirectory(prefix="practices-prereq-") as tmp:
+            tmp = Path(tmp)
+            (tmp / "skills" / "server-code").mkdir(parents=True)
+            (tmp / "skills" / "server-code" / "SKILL.md").write_text("x\n")
+            hook = tmp / "practices-check.sh"
+            hook.write_text("#!/bin/sh\n")
+            settings = tmp / "settings.json"
+            settings.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "Edit", "hooks": [
+                {"type": "command", "command": 'bash "$HOME/.claude/hooks/practices-check.sh"'}]}]}}))
+            kw = dict(skills=["server-code", "auth-secrets"], skills_dir=tmp / "skills", hook=hook, settings=settings)
+            self.assertEqual(r.prereq_problems(["A"], **kw), [])
             for arm in ("B", "C", "D"):
-                self.assertEqual(bar(case, arm, c(0, 5, 0), 5),
-                                 ("reported only (off-target)", False))
-            self.assertTrue(bar(case, "A", c(3, 2, 0), 5)[1])
-        self.assertTrue(bar("idor", "C", c(4, 1, 0), 5)[1])
+                problems = r.prereq_problems([arm], **kw)
+                self.assertEqual(len(problems), 1, problems)
+                self.assertIn("auth-secrets/SKILL.md", problems[0])
+            (tmp / "skills" / "auth-secrets").mkdir()
+            (tmp / "skills" / "auth-secrets" / "SKILL.md").write_text("x\n")
+            self.assertEqual(r.prereq_problems(["B", "C", "D"], **kw), [])
+            settings.write_text(json.dumps({"hooks": {}}))
+            self.assertIn("runs no practices-check.sh", r.prereq_problems(["C"], **kw)[0])
+            self.assertEqual(r.prereq_problems(["B"], **kw), [])
+            settings.write_text("{not json")
+            self.assertIn("can't be read", r.prereq_problems(["D"], **kw)[0])
+            # check_prereqs exits on them, naming the missing skill
+            saved = r.SKILLS_DIR, r.PRACTICES_SKILLS
+            r.SKILLS_DIR, r.PRACTICES_SKILLS = tmp / "skills", ["server-code", "no-such-skill"]
+            try:
+                with self.assertRaises(SystemExit) as cm:
+                    r.check_prereqs(["B"])
+                self.assertIn("no-such-skill/SKILL.md", str(cm.exception.code))
+            finally:
+                r.SKILLS_DIR, r.PRACTICES_SKILLS = saved
+
+    def test_hook_wiring_comes_from_settings_json(self):
+        r = self.harness
+        script = 'bash "$HOME/.claude/hooks/practices-check.sh"'
+        synthetic = {"permissions": {"allow": []}, "hooks": {
+            "PreToolUse": [
+                {"matcher": "Edit|Write|MultiEdit", "hooks": [{"type": "command", "command": script, "timeout": 5},
+                                                              {"type": "command", "command": "bash ~/.claude/hooks/other.sh"}]},
+                {"matcher": "Bash", "hooks": [{"type": "command", "timeout": 3, "command":
+                    "grep -q '\"command\"' || exit 0; bash ~/.claude/hooks/practices-check.sh --bash"}]},
+                {"matcher": "Agent", "hooks": [{"type": "command", "command": "bash ~/.claude/hooks/agent-spawn-guard.sh"}]},
+            ],
+            "PostToolUse": [{"matcher": "Bash|Edit", "hooks": [
+                {"type": "command", "command": "sh -c 'bash $HOME/.claude/hooks/practices-check.sh'"}]}],
+            "SessionStart": [{"matcher": "startup|resume|clear|compact", "hooks": [{"type": "command", "command": script}]}],
+            "Stop": [{"hooks": [{"type": "command", "command": "bash ~/.claude/hooks/stop-ring.sh"}]}],
+        }}
+        with tempfile.TemporaryDirectory(prefix="practices-hooks-") as tmp:
+            settings = Path(tmp) / "settings.json"
+            settings.write_text(json.dumps(synthetic))
+            hook = Path("/checkout/hooks/practices-check.sh")
+            wiring = r.hook_settings(settings, hook)
+        self.assertEqual(sorted(wiring), ["PostToolUse", "PreToolUse", "SessionStart"])
+        self.assertEqual(wiring["PreToolUse"], [
+            {"matcher": "Edit|Write|MultiEdit", "hooks": [
+                {"type": "command", "command": "bash /checkout/hooks/practices-check.sh", "timeout": 5}]},
+            {"matcher": "Bash", "hooks": [{"type": "command", "timeout": 3, "command":
+                "grep -q '\"command\"' || exit 0; bash /checkout/hooks/practices-check.sh --bash"}]},  # prefilter kept
+        ])
+        self.assertEqual(wiring["PostToolUse"][0]["hooks"][0]["command"], "sh -c 'bash /checkout/hooks/practices-check.sh'")
+        self.assertEqual(wiring["SessionStart"][0]["matcher"], "startup|resume|clear|compact")
+        # The repo's own settings.json wires the hook, and a fixture for arm C gets exactly that.
+        real = r.hook_settings()
+        self.assertTrue(real, "settings.json runs no practices-check.sh")
+        for groups in real.values():
+            for group in groups:
+                for h in group["hooks"]:
+                    self.assertIn(shlex.quote(str(r.HOOK)), h["command"])
+                    self.assertNotIn(".claude/hooks/practices-check.sh", h["command"])
+
+    def test_skills_fingerprint(self):
+        r = self.harness
+        with tempfile.TemporaryDirectory(prefix="practices-fp-") as tmp:
+            skill = Path(tmp) / "s"
+            (skill / "references").mkdir(parents=True)
+            (skill / "SKILL.md").write_text("one\n")
+            (skill / "references" / "a.md").write_text("two\n")
+            first = r.tree_hash(skill)
+            self.assertEqual(first, r.tree_hash(skill))
+            (skill / "SKILL.md").write_text("one!\n")  # an uncommitted edit counts
+            edited = r.tree_hash(skill)
+            self.assertNotEqual(edited, first)
+            (skill / "references" / "a.md").rename(skill / "references" / "b.md")  # so does a rename
+            self.assertNotEqual(r.tree_hash(skill), edited)
+            # build_fixture installs every listed skill, and the row's fingerprint names each one
+            skills = Path(tmp) / "skills"
+            for name in ("one", "two"):
+                (skills / name).mkdir(parents=True)
+                (skills / name / "SKILL.md").write_text(f"{name}\n")
+            saved = r.SKILLS_DIR, r.PRACTICES_SKILLS
+            r.SKILLS_DIR, r.PRACTICES_SKILLS = skills, ["one", "two"]
+            roots = []
+            try:
+                for arm in ("A", "B"):
+                    root, _sha = r.build_fixture(arm)
+                    roots.append(root)
+                self.assertEqual(r.installed_skills(roots[0]), {})
+                self.assertEqual(r.installed_skills(roots[1]), {n: r.tree_hash(skills / n) for n in ("one", "two")})
+            finally:
+                r.SKILLS_DIR, r.PRACTICES_SKILLS = saved
+                for root in roots:
+                    shutil.rmtree(root, ignore_errors=True)
 
 
 BWRAP_OK = bool(NODE) and run.bwrap_usable()
