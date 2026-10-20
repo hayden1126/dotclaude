@@ -87,6 +87,7 @@ class GuardEnv(unittest.TestCase):
         # is set, either of which would make the guard say nothing. The sandbox tests set them.
         os.environ.pop("CLAUDE_PID", None)
         os.environ.pop("SANDBOX_RUNTIME", None)
+        os.environ.pop("CLAUDE_CONFIG_DIR", None)  # the sessions dir lives in the fake home
         self.watches = os.path.join(self.state, "dotclaude", "watches")
         self.transcript = self.path("s1.jsonl")
         self.now = time.time()  # wall clock

@@ -585,6 +585,7 @@ class Orphans(StateTest):
         # is set, either of which would hide every watch. The sandbox test sets CLAUDE_PID.
         os.environ.pop("CLAUDE_PID", None)
         os.environ.pop("SANDBOX_RUNTIME", None)
+        os.environ.pop("CLAUDE_CONFIG_DIR", None)  # the sessions dir lives in the fake home
         for name in ("cc_version", "launch_background"):
             self.addCleanup(setattr, checks, name, getattr(checks, name))
         checks.cc_version = lambda timeout=10: "2.1.300"

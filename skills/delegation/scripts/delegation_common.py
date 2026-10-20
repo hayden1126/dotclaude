@@ -65,6 +65,12 @@ def state_dir(home=None):
     return os.path.join(base, "dotclaude")
 
 
+def config_dir(home=None):
+    """Claude Code's config dir: $CLAUDE_CONFIG_DIR, else <home>/.claude."""
+    return (os.environ.get("CLAUDE_CONFIG_DIR")
+            or os.path.join(home or os.path.expanduser("~"), ".claude"))
+
+
 REREAD_WAIT = 0.1  # seconds before a file that won't parse, or is empty, is read again
 
 
@@ -122,8 +128,8 @@ def sandbox_paths(home=None):
     would drop its lists."""
     home = home or os.path.expanduser("~")
     lists = {"denyRead": [], "denyWrite": []}
-    for path in (os.path.join(home, ".claude", "settings.json"),
-                 os.path.join(home, ".claude", "settings.local.json"),
+    for path in (os.path.join(config_dir(home), "settings.json"),
+                 os.path.join(config_dir(home), "settings.local.json"),
                  "/etc/claude-code/managed-settings.json"):
         settings = read_settings(path)
         try:
@@ -643,7 +649,7 @@ def file_pid(path):
 
 def claude_ancestor(chain=None):
     """(pid, procStart, sessionId) of the nearest process in `chain` (ancestors(), this process
-    first), at most SESSION_WALK parents up, whose ~/.claude/sessions/<pid>.json names that pid
+    first), at most SESSION_WALK parents up, whose sessions_dir()/<pid>.json names that pid
     and its procStart: the Claude Code process this one runs under, and its session as that
     file names it (None when it names none). None when there is no such process (outside Claude
     Code, or sandboxed, where no pid outside the sandbox can be seen), and when an ancestor's
@@ -657,7 +663,7 @@ def _ancestor_walk(chain):
     """(found, stopped): claude_ancestor's result for `chain`, and the pid whose sessions file
     exists but can't be read, which stopped the walk (None when none did)."""
     for pid in chain[:SESSION_WALK + 1]:
-        files, unread = session_scan([os.path.expanduser(f"~/.claude/sessions/{pid}.json")],
+        files, unread = session_scan([os.path.join(sessions_dir(), f"{pid}.json")],
                                      rule_out_dead=False)
         if unread:
             return None, pid
@@ -1288,7 +1294,7 @@ def live_sessions():
     procStart must match the process too, so a reused pid doesn't keep a gone session alive.
     None (liveness unknown) when a file that won't read (session_scan) may be a live one: it is
     named for a pid that runs, or not for a pid at all."""
-    files, unread = session_scan(glob.glob(os.path.expanduser("~/.claude/sessions/*.json")))
+    files, unread = session_scan(glob.glob(os.path.join(sessions_dir(), "*.json")))
     if any((pid := file_pid(path)) is None or pid_alive(pid) for path in unread):
         return None
     out = {}
@@ -1300,10 +1306,8 @@ def live_sessions():
 
 
 def sessions_dir(home=None):
-    """Claude Code's sessions directory: <config dir>/sessions, where the config dir is
-    $CLAUDE_CONFIG_DIR, else <home>/.claude."""
-    return os.path.join(os.environ.get("CLAUDE_CONFIG_DIR")
-                        or os.path.join(home or os.path.expanduser("~"), ".claude"), "sessions")
+    """Claude Code's sessions directory: <config dir>/sessions (config_dir)."""
+    return os.path.join(config_dir(home), "sessions")
 
 
 def session_toplevel(session_id, home=None):
