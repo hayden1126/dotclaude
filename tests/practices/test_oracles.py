@@ -587,7 +587,9 @@ class RunHarness(unittest.TestCase):
         out = run.default_out()
         try:
             self.assertTrue(out.is_relative_to(run.REPO / ".tmp" / "practices"))
-            self.assertFalse(out.resolve().is_relative_to(Path(tempfile.gettempdir()).resolve()))
+            system_tmp = Path(tempfile.gettempdir()).resolve()
+            if not run.REPO.resolve().is_relative_to(system_tmp):  # a checkout exported under /tmp can't
+                self.assertFalse(out.resolve().is_relative_to(system_tmp))
             self.assertEqual(stat.S_IMODE(out.stat().st_mode), 0o700)
         finally:
             out.rmdir()
