@@ -4,7 +4,7 @@ import { hashPassword } from "@/lib/password";
 // Demo data used in development and by the tests.
 export function resetDb(): void {
   const db = getDb();
-  db.exec("DELETE FROM invoices; DELETE FROM projects; DELETE FROM sessions; DELETE FROM users;");
+  db.exec("DELETE FROM outbox; DELETE FROM invoices; DELETE FROM projects; DELETE FROM sessions; DELETE FROM users;");
 
   const addUser = db.prepare(
     `INSERT INTO users (id, email, name, bio, avatar_url, timezone, locale, marketing_emails, role, password_hash)

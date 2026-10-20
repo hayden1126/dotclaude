@@ -231,20 +231,50 @@ class Oracle {
     return Boolean(ok);
   }
 
+  // Back to the seed. Tables the agent added (pending changes, reset tokens) are emptied too,
+  // with foreign keys off, so a row of theirs that points at a user can't block the seed; a
+  // transaction the agent's code left open is rolled back first.
   async reset() {
-    await this.seed.resetDb();
+    const db = this.dbModule.getDb();
+    if (db.isTransaction) db.exec("ROLLBACK");
+    db.exec("PRAGMA foreign_keys = OFF");
+    try {
+      const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all();
+      for (const { name } of tables) db.exec(`DELETE FROM "${String(name).replaceAll('"', '""')}"`);
+      await this.seed.resetDb();
+    } finally {
+      db.exec("PRAGMA foreign_keys = ON");
+    }
   }
 
   row(sql, ...args) {
     return this.dbModule.getDb().prepare(sql).get(...args);
   }
 
+  rows(sql, ...args) {
+    return this.dbModule.getDb().prepare(sql).all(...args);
+  }
+
+  // Mail the app queued with lib/mail.ts.
+  outbox(to) {
+    return this.rows("SELECT to_address, subject, body FROM outbox WHERE lower(to_address) = lower(?) ORDER BY id", to);
+  }
+
+  // Imports a fixture module by its path from the fixture root; a missing file is `missing`.
+  async module(rel) {
+    const file = [rel, `${rel}.ts`, `${rel}.js`].map((r) => path.join(FIXTURE, r)).find(isFile);
+    if (!file) throw new Missing(`no ${rel} in the fixture`);
+    return import(pathToFileURL(file).href);
+  }
+
   // Calls the app as user `as` ("a", "b", "c"; signed out when omitted) with a JSON or
-  // multipart body, as a same-origin browser request from client address `ip`.
-  async route(method, urlPath, { as, json, form, ip = DEFAULT_IP } = {}) {
-    const url = new URL(urlPath, ORIGIN);
+  // multipart body, as a same-origin browser request from client address `ip`. `base` sends
+  // it to another origin (the Host header follows), `headers` overrides any header.
+  async route(method, urlPath, { as, json, form, ip = DEFAULT_IP, base = ORIGIN, headers: extra = {} } = {}) {
+    const url = new URL(urlPath, base);
     const make = (override) => {
       const headers = browserHeaders(url, { as, ip });
+      for (const [k, v] of Object.entries(extra)) headers.set(k, v);
       let body;
       if (json !== undefined) {
         headers.set("content-type", "application/json");
