@@ -61,10 +61,34 @@ play_ring() {
       >/dev/null 2>&1 & )
 }
 
+# Read the device-wide mute, $XDG_STATE_HOME/dotclaude/mute.json (hooks/mute_state.py has its
+# shape and reader). Sets mute_sound and mute_toast to 1 while that switch is muted, else 0, and
+# mute_note to "" or " mute=<why>" for ring.log: unreadable or malformed (the reader's note), or
+# error (no python, or the reader crashed or printed something else). With nothing at the path,
+# the common case, no Python starts; a dangling link there still goes to the reader, so the log
+# says why. A flag that can't be read means not muted: redundancy over silence.
+read_mute() {
+  local flag="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude/mute.json" py out
+  mute_sound=0 mute_toast=0 mute_note=""
+  [ -e "$flag" ] || [ -L "$flag" ] || return 0
+  if py=$(command -v python3 || command -v python) &&
+     out=$("$py" -I "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/mute_state.py" check \
+             </dev/null 2>/dev/null) &&
+     [[ $out =~ ^([01])\ ([01])\ (unreadable|malformed|-)$ ]]; then
+    mute_sound=${BASH_REMATCH[1]} mute_toast=${BASH_REMATCH[2]}
+    [ "${BASH_REMATCH[3]}" = - ] || mute_note=" mute=${BASH_REMATCH[3]}"
+  else
+    mute_note=" mute=error"
+  fi
+}
+
 # Append one ring decision to $XDG_STATE_HOME/dotclaude/ring.log, kept under 2,000 lines, so a
 # ring from an unexpected session can be traced. Args: event, status (rang|quiet; stop-ring.sh
 # adds `busy=1` or `resumed=1` (a queued input restarted the turn) and `tasks=<labels>`:
-# comma-joined, spaces as `_`, `-` for none), pane, event
+# comma-joined, spaces as `_`, `-` for none; `muted=1` exactly when the device-wide mute
+# silenced a ring that would otherwise have played; notify.sh adds `toast=muted` (the mute
+# skipped the toast) or `toast=silent` (shown without its chime while sound is muted), nothing
+# when the mute didn't touch it; read_mute's ` mute=<why>` comes last), pane, event
 # JSON. The id is the event's (a nested `claude -p` may inherit its parent's CLAUDE_CODE_SESSION_ID).
 ring_log() {
   local dir="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude" log sid kind
