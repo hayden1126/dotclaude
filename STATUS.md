@@ -200,8 +200,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     entry's `commondir` and `config.worktree`, so every sandboxed command mounts over paths that
     don't exist; mute twice got bwrap's "Can't get type of source
     .git/worktrees/excluded-guard/commondir" (and once `.git/config.lock`), and the retry ran
-    clean. Fix to try: `git worktree prune` (deletes under `.git/`: Hayden's ok first), then see
-    whether running sessions plant the dirs again. Same family as config-dir's bwrap error in the
+    clean. Hayden ran `git worktree prune` on 2026-10-20 (50 entries by then; the lead checked
+    first that none was a live worktree's). After it, the dry run was empty, all 14 live
+    worktrees stayed, and a sandboxed command planted nothing. Still to watch: whether running
+    sessions plant the dirs again, and whether the bwrap error recurs. Same family as config-dir's bwrap error in the
     Watch item below.
   - **Three false denials in the subagent policy** (lane exam-prep's dry run, 2026-10-20; the
     lead reproduced each with the code's own regexes). In `skills/delegation/scripts/subagent-policy`:
