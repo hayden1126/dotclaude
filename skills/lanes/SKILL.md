@@ -92,7 +92,8 @@ an unregistered worktree: `lane whoami` tells you which.
    past `origin/main` (merged, or nothing committed yet): after the merge, install from the
    main checkout.
 6. **PR and merge**, each on Hayden's approval: the lane pushes, opens its PR as a draft, marks
-   it ready and merges it. Where the project STATUS has a `Lead branch:` line (or the lead's
+   it ready and merges it. Each push ask opens with the briefing CLAUDE.md's push rule describes
+   (the goal, what's done, how far along). Where the project STATUS has a `Lead branch:` line (or the lead's
    message names the branch), the lane next in merge order carries the lead's commits on that
    branch into its PR, before each push (the one that opens the draft included) and before
    ready (a carry then needs one more push). Hayden often readies and merges a draft in one
