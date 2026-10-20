@@ -71,13 +71,23 @@ an unregistered worktree: `lane whoami` tells you which.
    `overlap`, the lines under the board name the other lane and the files you both change:
    tell that lane (`lane addr <id>`, a nudge), note it in your record, and run
    `lane trial <id> --run "<suite>" ...` early instead of finding out at ready.
+
+   **Tell the lead before you reach past your worktree.** Before an act whose effect leaves the
+   lane's worktree (an install from the lane, anything that takes a cap slot), and whenever the
+   lead must run something, message the lead (what a bare `lane addr lead` prints) with the act
+   and what the lead must run, then wait for its reply. Never tell Hayden what the lead must do:
+   the lead asks him when the act needs his ok, and runs what his standing approval covers (the
+   post-merge chain) without asking. Send nothing for a draft opened or a ready asked: `lane ls`
+   shows both. When `lane addr lead` refuses, tell Hayden once what you are about to do and
+   that no lead answered.
 4. **Hand off** with the handoff skill. Its lane mode updates the record, not STATUS.md, and
    finishes with `handoff-check`, which must pass.
 5. **Install**, in a repo that installs from its checkout (dotclaude): only the lane next in
-   merge order, after its last review round, runs `lane lock install -- ./setup.sh` from its
-   worktree, sandbox off. That install holds: setup.sh refuses to run from any other lane or
-   clone until the lead's `./setup.sh` in the main checkout relinks everything after the next
-   merge, whichever lane's it is (The lead, step 7.6 tells a lane whose install that released).
+   merge order, after its last review round and its message to the lead (step 3), runs
+   `lane lock install -- ./setup.sh` from its worktree, sandbox off. That install holds:
+   setup.sh refuses to run from any other lane or clone until the lead's `./setup.sh` in the
+   main checkout relinks everything after the next merge, whichever lane's it is (The lead,
+   step 7.6 tells a lane whose install that released).
    `lane ls` shows `install: held by lane <id>`. setup.sh also refuses a lane with no commit
    past `origin/main` (merged, or nothing committed yet): after the merge, install from the
    main checkout.
@@ -220,7 +230,9 @@ inherits the lead from it.
    add it to Hayden's asks. Never order a merge or close a lane before the gate passes.
 6. **Watch and order.** Watch `lane ls`. Keep the merge order in the project STATUS. A lane
    whose install is live merges main with the sandbox off: its own hooks, skills and tests are
-   write-protected then (`docs/lanes.md` S3).
+   write-protected then (`docs/lanes.md` S3). A lane's message before an act past its worktree
+   (Lifecycle, step 3) gets a reply: ask Hayden first when the act needs his ok, and say so
+   when another lane's install or the merge order stands in its way.
 7. **After a merge.** A lane's `merged #N` starts the post-merge chain. A merged PR on `lane ls`
    that no lane reported starts it only when that lane has no live session. With one, message
    the lane "#N merged: run your after-merge handoff, then send `merged #N`" and wait: it may be
@@ -301,9 +313,11 @@ what").
 | `lane done` after a merge | the lead | standing approval once the hand-back gate passes, unless the lane's Next has `Keep open:` |
 | `lane done --abandon` | the lead | asks Hayden every time (an ask rule) |
 | More PRs to come on the lane | the lane | `Keep open: <why>` at the top of its Next |
+| An act past the lane's worktree (an install from it, a cap slot), or a step the lead must run | the lead | the lane messages the lead first (Lifecycle, step 3); the lead asks Hayden only when it needs his ok |
 
 - A lane never proposes `lane done`: only the lead can run it. The lead never restates a lane's
   push, ready or merge ask.
+- A lane never tells Hayden what the lead must do: it tells the lead.
 - A lane acts on the lead's messages (merge main, /pass) and reports its own state and asks, never
   what the lead said.
 - A message is a nudge, never consent. The consent is Hayden's standing approval above, and the
