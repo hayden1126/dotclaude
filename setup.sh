@@ -91,10 +91,11 @@ trap 'rm -rf ${SWAP_TMP:+"$SWAP_TMP"} ${MERGED_SETTINGS:+"$MERGED_SETTINGS"}' EX
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) RENAME_OVER_LINKS=0 ;; *) RENAME_OVER_LINKS=1 ;; esac
 
 # Point SWAP_TMP at this run's hidden temp beside $1: one dir, so the rename stays on one file
-# system, and named by pid, so two runs at once (no flock on macOS or git-bash) never touch each
-# other's temp. Beside $1, a temp whose run is gone (a SIGKILL or a power loss, out of the trap's
-# reach) is cleared, and so is one under this pid (a dead run's, reused): ln and cp would follow
-# it, and install-state.py would read a leftover link as a live one.
+# system, and named by pid, so two runs at once (no flock on macOS or git-bash) don't share one.
+# Temps beside $1 whose pid kill -0 can't signal (a run gone by a SIGKILL or a power loss, out of
+# the trap's reach) are cleared, and so is one under this pid: ln and cp would follow it, and
+# install-state.py would read a leftover link as a live one. A dead run's pid that another
+# process has taken keeps its temp until that process ends.
 swap_tmp() {
   local left
   SWAP_TMP="$(dirname "$1")/.$(basename "$1").dotclaude-$$"

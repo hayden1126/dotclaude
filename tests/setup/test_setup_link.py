@@ -10,6 +10,7 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import time
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -194,20 +195,20 @@ class Swap(unittest.TestCase):
         self.assertEqual(os.readlink(dst), os.path.join(self.old, "skills", "s1"))
         self.assertEqual(self.leftovers(), [])
 
-    def test_a_killed_runs_temp_link_is_cleared_not_followed(self):
-        # A temp the trap never saw (SIGKILL), a link to a dir: ln -s onto it would make the new
-        # link inside that dir, then the swap would install the stale link.
+    def test_a_killed_runs_temp_link_is_cleared(self):
+        # A temp the trap never saw (SIGKILL): install-state.py would read it as a live link.
         dst = os.path.join(self.claude, "CLAUDE.md")
         self.plant(os.path.join(self.old, "CLAUDE.md"), dst)
-        stale = os.path.join(self.old, "skills", "s1")
-        self.plant(stale, os.path.join(self.claude, f".CLAUDE.md.dotclaude-{self.dead_pid()}"))
+        self.plant(os.path.join(self.old, "skills", "s1"),
+                   os.path.join(self.claude, f".CLAUDE.md.dotclaude-{self.dead_pid()}"))
         self.link(os.path.join(self.repo, "CLAUDE.md"), dst)
         self.assertEqual(os.readlink(dst), os.path.join(self.repo, "CLAUDE.md"))
-        self.assertEqual(os.listdir(stale), ["SKILL.md"])
         self.assertEqual(self.gaps(), [])
         self.assertEqual(self.leftovers(), [])
 
     def test_a_dead_runs_temp_under_this_pid_is_cleared_not_followed(self):
+        # A link to a dir under this run's own name: ln -s onto it would make the new link inside
+        # that dir, then the swap would install the stale link.
         dst = os.path.join(self.claude, "CLAUDE.md")
         self.plant(os.path.join(self.old, "CLAUDE.md"), dst)
         stale = os.path.join(self.old, "skills", "s1")
@@ -238,14 +239,20 @@ class Swap(unittest.TestCase):
 
     def test_two_runs_at_once_never_touch_each_others_temp(self):
         # Where flock is missing (macOS, git-bash) two runs can relink one skill together. A
-        # slow ln holds each temp open: one shared temp name would let the second ln follow the
-        # first's link into its checkout.
+        # slow ln holds the first run's temp for half a second, and the second run starts inside
+        # that window: one shared temp name would let its ln follow the first's link into its
+        # checkout, or its clear remove the temp the first is about to rename.
         dst = os.path.join(self.claude, "skills", "s1")
         self.plant(os.path.join(self.repo, "skills", "s1"), dst)
         srcs = [os.path.join(root, "skills", "s1") for root in (self.repo, self.old)]
-        runs = [self.start_sh(f'link "{src}" "{dst}"', watch=dst, SLOW_TOOL="ln") for src in srcs]
-        for p in runs:
-            out, err = p.communicate(timeout=30)
+        runs = [self.start_sh(f'link "{srcs[0]}" "{dst}"', watch=dst, SLOW_TOOL="ln")]
+        deadline = time.monotonic() + 10
+        while not any(".dotclaude-" in n for n in os.listdir(os.path.dirname(dst))):
+            self.assertLess(time.monotonic(), deadline, "the first run made no temp")
+            time.sleep(0.01)
+        runs.append(self.start_sh(f'link "{srcs[1]}" "{dst}"', watch=dst, SLOW_TOOL="ln"))
+        done = [p.communicate(timeout=30) for p in runs]
+        for p, (out, err) in zip(runs, done):
             self.assertEqual(p.returncode, 0, err)
         self.assertIn(os.readlink(dst), srcs)
         for src in srcs:
