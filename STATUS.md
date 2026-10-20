@@ -97,9 +97,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     skill only; Hayden picked "security first"; its spec waits on his review). link-atomic and
     summary-retire opened 2026-10-20 on Hayden's ok (Backlog items below). summary-retire merged
     as #139, link-atomic as #140, pr-horizon as #135 and config-dir as #133 (2026-10-20):
-    installed from main, the lanes closed. 4 policy-fp (`fix/policy-false-denials`, opened
-    2026-10-20 on Hayden's ok: the three subagent-policy false denials below). 3 mute (`feat/device-mute`, opened 2026-10-20 on Hayden's ok: the device-wide mute
-    below, plus `setup-tmux.sh`'s `link()` fix, his pick the same day). Hayden raised the cap
+    installed from main, the lanes closed. 3 mute (`feat/device-mute`, opened 2026-10-20 on
+    Hayden's ok: the device-wide mute below, plus `setup-tmux.sh`'s `link()` fix, his pick the
+    same day), 4 policy-fp (`fix/policy-false-denials`, opened 2026-10-20 on Hayden's ok: the
+    three subagent-policy false denials below). Hayden raised the cap
     from 3 to 4 on 2026-10-20 for exam-prep; it is full.
   - **Lane ask quality: done** (2026-10-19 to 2026-10-20). ask-check merged as #131 and was
     installed from main 2026-10-20: a PreToolUse hook on AskUserQuestion (`hooks/ask_check.py`)
