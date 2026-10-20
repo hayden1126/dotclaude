@@ -146,6 +146,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     are dropped: `lane ls` shows both. Seen again the same day: ask-check installed from its lane
     without telling the lead. Home: `skills/lanes/SKILL.md` Lifecycle steps 5 and 6 and "Who asks
     Hayden what", which ask-check edits, so it opens after ask-check merges.
+  - **A custom CLAUDE_CONFIG_DIR breaks the hook layer** (from lane config-dir, 2026-10-19;
+    checked: 39 hook commands in `settings.json` run `$HOME/.claude/hooks/...`, while `setup.sh`
+    installs to `${CLAUDE_CONFIG_DIR:-$HOME/.claude}`, and 16 files under `hooks/` hard-code
+    `~/.claude`). Under a custom config dir every hook fails, and the `|| exit 2` ones block.
+    Matters for a new device ([[hayden-new-device-goal]]); unreachable on HAYPC (unset).
+    config-dir's PR covers only the delegation Python readers.
   - **`handoff?` never clears on a switched lane past 200 PRs** (bug report from capella-studio's
     lead, session 5788b9fb, 2026-10-19; checked against the code). `pr_states` lists the newest
     `PR_LIMIT` (200) PRs in one gh call; once that list is full, `merges_of`
