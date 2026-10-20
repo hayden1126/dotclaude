@@ -85,7 +85,7 @@ question text, and list the option it supports first.
 | 2 | **Which files belong to this exam?** Show the proposed split by file name: this exam, reserved for a later exam, out. Ask for the exact last in-scope slide and whether its number is the PDF page or the printed slide number. Ask which files hold answers (official solutions, a past exam's key), and which of those sets the student has already attempted. | The proposed split (first). / Other: the student corrects it. | Later material is copied raw and never opened (FB-023); slide and page numbers differ (FB-024, L04). |
 | 3 | **Missing sources.** Only when a source type the exam covers (homework, solutions, recitations, the last lectures) isn't on disk. | I'll add them now. / They arrive during the build. / Proceed without. / Not examined. | "Add them now": stop, wait for the file, re-list, and ask question 2 for it (FB-029). "During the build": a `pending` MANIFEST row that records its planned scope now, last in-scope slide included, since nothing is asked after approval. |
 | 4 | **Exam rules** not found on disk: date and time, length, cheat sheet allowed and its size, calculator, open or closed book, question types. | Pre-filled from the details file or Ed, else open. | Fixes the deliverables (FB-026). |
-| 5 | **Cheat-sheet preferences.** Only when a sheet is allowed and the profile lacks them: font floor in points, color or grayscale print, engine (HTML printed by Chromium, or LaTeX). | Default: a 6 pt floor, colors that still read in grayscale, HTML printed by Chromium. Save the answers to the profile. | Asked once per student, not per exam (FB-131). |
+| 5 | **Cheat-sheet preferences.** Only when a sheet is allowed and the profile lacks them: font floor in points, color or grayscale print, engine (HTML the session builds and Chromium prints, or LaTeX the student writes and the session checks), and their full name in each form they write it (given and family name in either order, with initials) and their student id, which the sheet check keeps off the sheet (FB-132); a lone name part only when it isn't an ordinary word. | Default: a 6 pt floor, colors that still read in grayscale, HTML printed by Chromium. Save the answers to the profile; the name and id go there only, never in PLAN.md, and only as the student gave them. | Asked once per student, not per exam (FB-131). |
 
 If the student narrows scope ("only topic X, go deep"), check the narrowed scope against the
 sources before committing to it, and say what the check found (FB-021).
@@ -122,7 +122,7 @@ the plan:
   case it sits in `<root>`, under the hub's own `CLAUDE.md`.
 - **`PLAN.md`** from `<skill>/templates/PLAN.md.tmpl`, still reading `Approved: not yet`. Every
   answer goes in its Decisions block with its source: the student, an Ed thread number, the details
-  file, or (default). Its Checker line needs the question documents' text: read them
+  file, or (default), except question 5's name and id, which only the profile holds. Its Checker line needs the question documents' text: read them
   (`pdftotext`) to decide what is computable.
 
 If plan mode is in use, its file is not durable: the hub's `PLAN.md` is the copy that counts.
@@ -192,8 +192,9 @@ answer back, with the Write tool (the Bash sandbox can't write outside the hub):
 # exam-prep profile
 - Cheat-sheet font floor: <pt>
 - Print: <color or grayscale>
-- Sheet engine: <HTML printed by Chromium, or LaTeX>
+- Sheet engine: <HTML built by the session, or LaTeX the student writes>
 - Name and id on sheets: never printed; a write-in box (FB-132)
+- Never print: <each form of the name, the id: one `check_pdf.py --forbid` each>
 ```
 
 ## Common mistakes

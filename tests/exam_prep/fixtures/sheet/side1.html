@@ -1,0 +1,64 @@
+<div class="span hue1">
+<table class="prop c">
+<tr><th>Alg</th><th>Finds</th><th>Time</th><th>Frontier</th><th style="text-align:left">+ / − / use when</th></tr>
+<tr><td>BFS</td><td>fewest edges</td><td>O(V+E)</td><td>FIFO queue</td><td style="text-align:left"><b class="p">+</b> layers by distance <b class="m">−</b> ignores weights</td></tr>
+<tr><td>DFS</td><td>a path</td><td>O(V+E)</td><td>stack</td><td style="text-align:left"><b class="p">+</b> discovery and finish times <b class="m">−</b> not shortest</td></tr>
+<tr><td>Dijkstra</td><td>least cost</td><td>O((V+E) log V)</td><td>PQ on d</td><td style="text-align:left"><b class="p">+</b> any weights ≥ 0 <b class="m">−</b> wrong with a negative edge</td></tr>
+</table>
+<div class="foot"><b class="hd">Pick</b> unweighted: BFS. Weights ≥ 0: Dijkstra. A negative edge: neither (say so).<br><span class="tr">Trap:</span> ties break alphabetically unless the question says otherwise.</div>
+</div>
+
+<div class="hue1">
+<h2>Graph basics<i>L1</i></h2>
+<div class="blk">
+<p class="k">Counting</p>
+<p>Sum of degrees = 2|E|, so the number of odd-degree vertices is even.</p>
+<p>Simple graph: |E| ≤ n(n−1)/2. A tree on n vertices has n−1 edges.</p>
+<p>Adjacency matrix: n<sup>2</sup> space, O(1) edge test. Lists: n+m space, O(deg) test.</p>
+</div>
+<div class="blk">
+<p class="k">Connectivity</p>
+<p>Connected: a path between every pair. Components partition V.</p>
+<p><span class="tr">Trap:</span> a directed graph is strongly connected only if every u reaches every v <span class="u">and back</span>.</p>
+</div>
+</div>
+
+<div class="hue2">
+<h2>BFS<i>L1</i></h2>
+<div class="blk">
+<pre>BFS(s): d[s]=0; Q=[s]
+while Q: u=pop front
+  for v in adj(u) sorted:
+    if v unseen: d[v]=d[u]+1; push v</pre>
+<p>Layer k holds exactly the vertices at distance k from s.</p>
+<p><b class="hd">Trace</b> write the queue after each pop; mark a vertex seen when it is pushed, not popped.</p>
+</div>
+</div>
+
+<div class="hue3">
+<h2>Shortest paths<i>L2</i></h2>
+<div class="blk">
+<p class="k">Dijkstra</p>
+<pre>d[s]=0, others ∞; PQ = all
+pop min u; for each edge (u,v,w):
+  if d[u]+w &lt; d[v]: d[v]=d[u]+w</pre>
+<p>Once popped, d[u] is final (weights ≥ 0).</p>
+<figure class="sf">
+<svg viewBox="0 0 180 70" role="img" aria-label="A four-vertex example: S to A costs 2, S to B 5, A to B 1, B to T 3">
+<line class="ed" x1="20" y1="35" x2="70" y2="12"/><line class="ed" x1="20" y1="35" x2="70" y2="58"/>
+<line class="ed" x1="70" y1="12" x2="70" y2="58"/><line class="ed" x1="70" y1="58" x2="150" y2="35"/>
+<circle class="nd" cx="20" cy="35" r="8"/><circle class="nd" cx="70" cy="12" r="8"/>
+<circle class="nd" cx="70" cy="58" r="8"/><circle class="nd" cx="150" cy="35" r="8"/>
+<text class="nl" x="16" y="38" font-size="9">S</text><text class="nl" x="66" y="15" font-size="9">A</text>
+<text class="nl" x="66" y="61" font-size="9">B</text><text class="nl" x="146" y="38" font-size="9">T</text>
+<text class="w" x="36" y="18" font-size="9">2</text><text class="w" x="36" y="58" font-size="9">5</text>
+<text class="w" x="74" y="38" font-size="9">1</text><text class="w" x="112" y="56" font-size="9">3</text>
+</svg>
+<figcaption>Pops S0 A2 B3 T6: B improves from 5 to 3 through A.</figcaption>
+</figure>
+</div>
+<div class="blk">
+<p class="k">Negative edges</p>
+<p><span class="tr">Trap:</span> Dijkstra can finalize a vertex too early; give the 3-vertex counterexample.</p>
+</div>
+</div>

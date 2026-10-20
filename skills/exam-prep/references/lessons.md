@@ -79,7 +79,7 @@ should warn about it.
 | Id | Stage | Lesson | Fix | Evidence |
 |---|---|---|---|---|
 | L60 | 07 | A `.page` with `overflow:hidden` and CSS columns clips a spilled column silently; the PDF still has two pages. | `check_pdf.py` reports per-page overflow and last-column fill. | B2.G1, B4.G10, B3.G7 |
-| L61 | 07 | The minimum-font check walks text nodes: it skips MathJax glyphs, and reads SVG text unscaled (5.1 pt reported where 5.6 pt prints). Superscripts set the floor. | Scale SVG text by its viewBox; size sup and sub separately. | B2.G3, B4.G9 |
+| L61 | 07 | The minimum-font check walks text nodes: it skips MathJax glyphs, and reads SVG text unscaled (5.1 pt reported where 5.6 pt prints). Superscripts set the floor. | Measure sizes in the PDF, as printed: `check_pdf.py` reads them with `mutool`. | B2.G3, B4.G9 |
 | L62 | 07 | `page.pdf({format:'Letter'})` is portrait; `preferCSSPageSize` lets `@page {size: Letter landscape}` win. | Set orientation in CSS only. | B2.G2 |
 | L63 | 07 | DejaVu Sans is wide; the condensed face fits about 15 percent more. | `font-stretch: condensed` with a local condensed font; check embedding with `pdffonts`. | B2.G5, B1.G14 |
 

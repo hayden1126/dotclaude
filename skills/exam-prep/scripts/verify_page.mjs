@@ -2,12 +2,10 @@
 //
 //   node verify_page.mjs <page.html> <outdir> [--spy id,id,...] [--steps <steps.json>]
 //
-// Playwright is imported from an absolute path, since an ES module ignores NODE_PATH (L22): the
-// package directory in $EXAM_PREP_PLAYWRIGHT, else the first install found in node_modules/
-// beside the page, in the working directory's _build/node_modules/ or node_modules/, then in npm's
-// global root (`npm root -g`). With none, it says how to install one and exits 2. Run
-// it with `allowed_domains` cdnjs.cloudflare.com, fonts.googleapis.com and fonts.gstatic.com: the
-// page loads MathJax and its fonts from them, and Chromium gets the sandbox's proxy passed in (L21).
+// Playwright comes from pw.mjs: $EXAM_PREP_PLAYWRIGHT, else an install it finds, else it says how
+// to install one and exits 2. Run it with `allowed_domains` cdnjs.cloudflare.com,
+// fonts.googleapis.com and fonts.gstatic.com: the page loads MathJax and its fonts from them, and
+// Chromium gets the sandbox's proxy passed in (L21).
 // A page without a doctype is wrapped in a standards-mode document first, as the artifact host
 // does (L19). Then, at 390 and 1280 px wide, light and dark:
 //   - MathJax loaded and finished; no math left as raw \( \) or \[ \]; no TeX error and no
@@ -34,8 +32,8 @@
 // usage.
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { loadChromium, launch } from './pw.mjs';
 
 function usage(msg) {
   console.error(`verify_page: ${msg}`);
@@ -71,49 +69,7 @@ if (stepsArg) {
   }
 }
 
-function findPlaywright() {
-  const env = process.env.EXAM_PREP_PLAYWRIGHT;
-  if (env) {
-    if (!fs.existsSync(path.join(env, 'index.mjs'))) usage(`EXAM_PREP_PLAYWRIGHT=${env} has no index.mjs`);
-    return env;
-  }
-  const tried = [
-    path.join(path.dirname(path.resolve(pagePath)), 'node_modules', 'playwright'),
-    path.resolve('_build', 'node_modules', 'playwright'),
-    path.resolve('node_modules', 'playwright'),
-  ];
-  try {
-    const root = execFileSync('npm', ['root', '-g'], { encoding: 'utf8', timeout: 20000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-    if (root) tried.push(path.join(root, 'playwright'));
-  } catch { /* no npm: the local candidates only */ }
-  const unique = [...new Set(tried)];
-  const found = unique.find((d) => fs.existsSync(path.join(d, 'index.mjs')));
-  if (found) return found;
-  console.error('verify_page: no Playwright found. Looked in:');
-  for (const d of unique) console.error(`  ${d}`);
-  console.error('Install it once in the hub\'s _build/ (its node_modules/ is gitignored):');
-  console.error('  cd _build && npm install playwright && npx playwright install chromium');
-  console.error('or set EXAM_PREP_PLAYWRIGHT to an existing node_modules/playwright directory.');
-  process.exit(2);
-}
-
-const pwDir = findPlaywright();
-console.log(`playwright: ${pwDir}`);
-const { chromium } = await import(pathToFileURL(path.join(pwDir, 'index.mjs')).href);
-
-function launch() {
-  const raw = process.env.HTTPS_PROXY || process.env.https_proxy;
-  if (!raw) return chromium.launch();
-  const u = new URL(raw);
-  return chromium.launch({
-    proxy: {
-      server: `${u.protocol}//${u.host}`,
-      username: decodeURIComponent(u.username),
-      password: decodeURIComponent(u.password),
-      bypass: 'localhost,127.0.0.1',
-    },
-  });
-}
+const chromium = await loadChromium('verify_page', pagePath, usage);
 
 fs.mkdirSync(outDir, { recursive: true });
 const src = fs.readFileSync(pagePath, 'utf8');
@@ -123,7 +79,7 @@ const doc = /^\s*<!doctype/i.test(src) ? src
 const wrapped = path.resolve(outDir, 'wrapped.html');
 fs.writeFileSync(wrapped, doc);
 
-const browser = await launch();
+const browser = await launch(chromium);
 let failures = 0;
 const fail = (m) => { failures++; console.log('  FAIL ' + m); };
 

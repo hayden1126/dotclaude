@@ -324,3 +324,44 @@ session assembles the page and checks it in a browser.
   every file MANIFEST.md marks `reserved`. Never add what CONVERT.md's Output paragraph forbids
   (a script, a style, an event attribute, a class outside CHASSIS.md's table).
 ```
+
+## Sheet gap scan (stage 07)
+
+Role: `reviewer`: it reads and reports; the main session ranks the candidates and picks. Two
+variants, in order (FB-136): the content variant first, one per two or three notes sections,
+spawned together; then the question-type variant, one, once the outline holds the first pass's
+picks.
+
+```text
+# Brief: find what the {{EXAM}} cheat sheet is missing {{CONTENT: for §{{SECTIONS}} | QUESTION TYPE: by question type}}
+
+## Purpose
+The student reaches for the sheet mid-question, with no notes to open. A rule, condition or
+pattern they need cold that the sheet lacks costs points, and so does an item that helps only a
+reader with the notes beside them. You report candidates; the main session ranks them and
+decides what goes on.
+
+## End state
+- Done means: every candidate, ranked must, should or could, each with the line it would add (at
+  most 25 words), why the student needs it cold, and its source (the notes line, or the extract
+  block of a question that needs it). Then each outline item for your scope that wouldn't help
+  cold, and why.
+- Artifact path: report only.
+- Report: at most 700 words, then the JSON block (status, summary, artifacts, blocked_actions).
+
+## Scope
+- Work in: {{ROOT}}, read only.
+- The sheet so far: {{ROOT}}/_build/sheet-outline.md.
+- {{CONTENT: Read {{ROOT}}/notes/{{FILES}}, their Must-know lines first. Report what a student
+  needs cold from these sections that the outline lacks: conditions, traps, formulas, decision
+  rules. | QUESTION TYPE: Read the "How it's tested" table in {{ROOT}}/_build/backbone.md and the
+  question extracts it names in {{ROOT}}/_build/extract/ ({{QUESTION DOCS}}). Per question type
+  (trace, compute, justify, prove, fill a table, true or false, formulate, as the course has
+  them), propose an answer template, the pros and cons a "compare" question needs, and a worked
+  pattern, each only where the outline lacks it.}}
+- Answers: {{UNATTEMPTED: The student hasn't attempted <those sets>: read their questions only,
+  and propose nothing from their official answers. | ALL ATTEMPTED: drop this line.}}
+- Out of scope: nothing under {{ROOT}}/practice/ (the mock sheet holds nothing derived from the
+  mock, and keys live there), nothing under {{ROOT}}/sources/, and no file MANIFEST.md marks
+  `reserved`.
+```
