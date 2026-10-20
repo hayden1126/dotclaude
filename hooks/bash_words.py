@@ -20,14 +20,12 @@ import shlex
 KEYWORDS = {"do", "then", "else", "elif", "if", "while", "until", "!", "{", "time"}
 WRAPPERS = {"sudo", "doas", "command", "nohup", "env", "builtin", "exec", "timeout", "nice",
             "ionice", "stdbuf", "chronic"}
-# The short options of each wrapper that take an argument (`sudo -u x`); any other option
-# takes none (`sudo -E`, `env -i`), and a cluster ending in one of these takes the next word.
-WRAPPER_ARGS = {"sudo": "ugCDhprtUT", "doas": "uC", "env": "uCS", "timeout": "ks", "nice": "n",
-                "ionice": "cnp", "stdbuf": "ioe", "exec": "a"}
-LONG_ARGS = {"--user", "--group", "--chdir", "--unset", "--split-string", "--kill-after",
-             "--signal", "--adjustment", "--class", "--classdata", "--prompt", "--role", "--type",
-             "--host", "--close-from", "--command-timeout", "--other-user", "--input", "--output",
-             "--error", "--pid", "--pgid", "--uid"}
+# The short options of each wrapper known to take an argument (`sudo -u x`, `sudo -R /x`). They
+# tell `-uroot` (the argument attached) from `-Eu` (the next word is the argument). The walk is
+# conservative: any other option, and any long one without `=value`, may take the next word too,
+# so that word is skipped unless it names a command the caller looks for (`sudo -E git`).
+WRAPPER_ARGS = {"sudo": "RcaDghprtTUuC", "doas": "aCu", "env": "uCS", "timeout": "ks",
+                "nice": "n", "ionice": "cnp", "stdbuf": "ioe", "exec": "a"}
 # Placeholders. They start with a character no variable name can hold, so `$p$(date)` stays two
 # parts; shlex keeps % inside a word.
 SUBST, ANSI, ARITH, REDIR = "%SUBST%", "%ANSI%", "%ARITH%", "%REDIR%"
@@ -194,22 +192,24 @@ def segments(command):
 
 
 def _option_takes_arg(wrapper, w):
-    """Whether a wrapper's option word w takes the next word as its argument."""
+    """Whether a wrapper's option word w may take the next word as its argument: every option
+    may, except one whose argument is attached (`--user=x`, `-uroot`, `-R/x`)."""
     if w.startswith("--"):
-        return "=" not in w and w in LONG_ARGS
+        return "=" not in w
     letters = WRAPPER_ARGS.get(wrapper, "")
     cluster = w[1:]
     for k, c in enumerate(cluster):
         if c in letters:
             return k == len(cluster) - 1  # `-uroot` carries its own argument
-    return False
+    return True  # an option the table doesn't know may take one (`sudo --foo /x rm`)
 
 
 def command_words(words, heads=frozenset()):
     """(name, args, prefix assignments) of a simple command; name is None for a pure assignment.
     Through wrappers (`sudo -u x git`, `env -i git`, `timeout 60 git`, `nice git`), the wrapped
-    command counts: options, assignments and counts are skipped, and so is an option's argument
-    (WRAPPER_ARGS) unless it names one of heads, the commands the caller looks for."""
+    command counts: options, assignments and counts are skipped, and so is the word after an
+    option (its argument, _option_takes_arg) unless that word names one of heads, the commands
+    the caller looks for. An option word is never taken as another option's argument."""
     prefix, i = [], 0
     while i < len(words) and (ASSIGN.match(words[i]) or words[i] in KEYWORDS):
         if ASSIGN.match(words[i]):
@@ -222,18 +222,19 @@ def command_words(words, heads=frozenset()):
         j, wants_arg = i + 1, False
         while j < len(words):
             w, base = words[j], os.path.basename(words[j])
-            if wants_arg and base not in heads | WRAPPERS:
-                wants_arg = False  # the option's own argument (`-u x`)
-            elif w == "--":
+            if w == "--":
                 j += 1
                 break
-            elif w.startswith("-") and len(w) > 1:
+            if w.startswith("-") and len(w) > 1:
                 wants_arg = _option_takes_arg(wrapper, w)
             elif ASSIGN.match(w):
+                wants_arg = False
                 if wrapper == "env":  # `env GIT_DIR=x git` sets it for the command
                     prefix.append(ASSIGN.match(w).groups())
             elif COUNT.fullmatch(w):
-                pass
+                wants_arg = False
+            elif wants_arg and base not in heads | WRAPPERS:
+                wants_arg = False  # the option's own argument (`-u x`)
             else:
                 break
             j += 1

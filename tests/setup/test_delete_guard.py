@@ -112,6 +112,21 @@ class DeleteGuard(unittest.TestCase):
                 self.assertFalse(self.denied(command))
                 self.assertTrue(self.denied(command + "\nrm -rf \"$TMPDIR\"/x"))
 
+    def test_a_wrapper_options_argument_is_never_the_command(self):
+        # Review round 1: the shared walk read `sudo -R /x rm -rf ~` as the command /x. After an
+        # option the tables don't know, the next word is skipped unless it is a deleter, as
+        # before the extraction; an option word is never another option's argument.
+        for command in ("sudo -R /x rm -rf ~", "sudo --chroot /x rm -rf ~",
+                        "sudo --chroot=/x rm -rf ~", "sudo -c cls rm -rf ~",
+                        "sudo --login-class cls rm -rf ~", "sudo -a style rm -rf ~",
+                        "sudo -D /d -g grp -h host -p pr -r role -t type -T 5 -U u -C 3 rm -rf ~",
+                        "doas -a style rm -rf ~", "doas -C /etc/doas.conf rm -rf ~",
+                        "doas -u root rm -rf ~", "env -u X -C /d -S 'a b' rm -rf ~",
+                        "sudo --some-new-flag /x rm -rf ~", "sudo -E -u root rm -rf ~",
+                        "sudo -Eu root rm -rf ~", "sudo -uroot rm -rf ~", "sudo -E rm -rf ~"):
+            with self.subTest(command=command):
+                self.assertTrue(self.denied(command))
+
     def test_values_are_followed_through_loops_braces_cd_and_reassignment(self):
         for command in ("for d in ~/*; do rm -rf \"$d\"; done", "set -- ~; rm -rf \"$1\"",
                         "rm -rf ~/{code,vault}", "rm -rf /{tmp,var}",

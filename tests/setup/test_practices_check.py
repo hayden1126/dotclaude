@@ -1501,6 +1501,10 @@ class BashWords(unittest.TestCase):
             "nice -n 5 git commit; git push origin x": [("commit", []), ("push", ["origin", "x"])],
             "FOO=1 git -c a=b commit || true": [("commit", [])],
             "git status | grep x": [("status", [])],
+            "sudo -R /x git push": [("push", [])],
+            "sudo --preserve-env git commit": [("commit", [])],
+            "sudo -E -u me git push": [("push", [])],
+            "env -i GIT_DIR=/o/.git git commit": [("commit", [])],
         }
         for command, want in cases.items():
             with self.subTest(command=command):
