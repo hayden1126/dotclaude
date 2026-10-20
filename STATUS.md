@@ -96,7 +96,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     skill only; Hayden picked "security first"; its spec waits on his review). link-atomic and
     summary-retire opened 2026-10-20 on Hayden's ok (Backlog items below). link-atomic merged as
     #140, pr-horizon as #135 and config-dir as #133 (2026-10-20): installed from main, the lanes
-    closed. Two of the cap's 3 slots are taken.
+    closed. 3 mute (`feat/device-mute`, opened 2026-10-20 on Hayden's ok: the device-wide mute
+    below, plus `setup-tmux.sh`'s `link()` fix, his pick the same day). The lanes cap (3) is
+    full.
   - **Lane ask quality: done** (2026-10-19 to 2026-10-20). ask-check merged as #131 and was
     installed from main 2026-10-20: a PreToolUse hook on AskUserQuestion (`hooks/ask_check.py`)
     denies risky asks with a checklist in the reason. branch-reuse merged as #130: `lane new`
@@ -169,14 +171,15 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **A device-wide toggle for the toast and the sound** (Hayden, 2026-10-20): one switch that
     mutes the Windows toast and the notify ring for every session on the machine (no toggle
     exists today). Design settled 2026-10-20 (Hayden picked the lead's pick on all four forks:
-    `PLAN.md`, "Next: a device-wide mute"); it opens as a lane when a slot frees (`hooks/`,
-    `tmux/`, tests; no live lane's files).
+    `PLAN.md`, "Next: a device-wide mute"). In lane mute since 2026-10-20 (its record holds the
+    state); README overlaps summary-retire.
   - **`setup-tmux.sh`'s own `link()` has #140's gap class** (lane link-atomic's report,
     2026-10-20). `setup-tmux.sh:62-71` moves a real file aside, then runs `ln -sfn`. GNU ln
     9.4 replaces a link with no missing window (the lead's race test: 0 misses in about 600k
     checks over 6000 swaps), but BSD/macOS `ln -sf` unlinks first, and the move-aside leaves a
     window on every platform on a first install. Fix: reuse #140's temp-name and `os.replace`
-    swap (merged). The mute lane edits `setup-tmux.sh:73-78`, so it can take this.
+    swap (merged). In lane mute since 2026-10-20 (Hayden folded it in, since that lane edits
+    `setup-tmux.sh:73-78` anyway).
   - **paste-inbox's sandbox skip: merged as #138** (lead PR, 2026-10-20, from lane
     summary-retire's report): sandboxed WSL interop now fails with `UtilBindVsockAnyPort`, not
     `UtilConnectUnix`, so 9 Laptop and LaptopPowerShell cases failed instead of skipping; one
@@ -302,7 +305,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lanes summary-retire (merge order 1, carries the lead branch) and practices (2) run; their state is in their records (`lane ls`). After each reinstall,
+  0. Lanes summary-retire (merge order 1, carries the lead branch), practices (2) and mute (3)
+     run; their state is in their records (`lane ls`). After each reinstall,
      check `ls -la ~/.claude/CLAUDE.md` (the Watch item). Watch that push asks open with the
      briefing (#137); if they skip it, the Stop-hook check is the follow-up (Hayden's pick).
   1. Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
