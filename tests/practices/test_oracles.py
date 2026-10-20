@@ -481,7 +481,30 @@ class Containment(unittest.TestCase):
             self.assertFalse((home / "planted-by-probe.txt").exists())
             self.assertFalse(out["readSecret"])
             self.assertFalse(out["network"])
-            self.assertEqual(out["env"], sorted(env))
+            self.assertEqual(out["env"], sorted([*env, "PWD"]))  # bwrap's --chdir sets PWD
+
+    def test_writable_path_under_home_is_refused(self):
+        with tempfile.TemporaryDirectory(prefix="practices-contain-") as tmp:
+            home = Path(tmp) / "home"
+            with self.assertRaises(ValueError):
+                run.contained(["true"], home=home, writable=[home / "deep" / "rundir"])
+            with self.assertRaises(ValueError):
+                run.contained(["true"], home=home, writable=[home])
+            run.contained(["true"], home=home, writable=[Path(tmp) / "fixture"])  # a sibling is fine
+
+    @unittest.skipUnless(NODE and run.bwrap_usable(), "bwrap can't start here (nested in Claude Code's sandbox)")
+    def test_contained_grade_with_run_dir_under_home(self):
+        # As in a live run: the fixture in the system temp dir, the run dir under $HOME.
+        with tempfile.TemporaryDirectory(prefix="practices-contain-") as tmp:
+            tmp = Path(tmp)
+            home = tmp / "home"
+            run_dir = home / "deep" / "rundir"
+            run_dir.mkdir(parents=True)
+            fixture = build(tmp / "fixture")
+            shutil.copytree(CASES / "idor" / "good", fixture, dirs_exist_ok=True)
+            out = run.grade(fixture, "idor", run_dir, contain=True, home=home)
+            self.assertEqual(out["verdict"], "pass", json.dumps(out, indent=1))
+            self.assertIn('{"verdict":"pass"', (run_dir / "oracle.out").read_text())
 
 
 if __name__ == "__main__":

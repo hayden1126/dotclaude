@@ -43,9 +43,12 @@ Per run:
     oracle under the pristine checkout's loader (fixture/scripts/register.mjs here), never the
     copy the agent could edit, with a 60 s timeout. The oracle runs agent-written code, so it
     runs under bwrap: the filesystem read-only, $HOME an empty read-only tmpfs (no credential
-    file visible), this checkout's tests/practices bound back read-only, the fixture and the
-    run dir writable, no network, its own pid namespace. Its env is an allowlist: PATH, HOME,
-    LANG, FIXTURE, DB_PATH and TMPDIR (both inside the run dir) and a dummy LLM_API_KEY.
+    file visible), this checkout's tests/practices bound back read-only, the fixture and a
+    fresh scratch dir in the system temp dir writable (nothing under $HOME can be: the home
+    remount would make it read-only, so contained() refuses it), no network, its own pid
+    namespace. Its env is an allowlist: PATH, HOME, LANG, FIXTURE, DB_PATH and TMPDIR (both in
+    the scratch dir, removed after grading) and a dummy LLM_API_KEY. The run dir may sit under
+    $HOME; run.py writes the oracle's output there itself, outside bwrap.
     Without a usable bwrap, run.py refuses to start unless --unsafe-grade is passed.
   - Record: one line per run in <out>/results.jsonl (verdict, checks, triggered and
     triggered_turns, turns, duration, cost, init memory_paths and skills, hook denials, the
@@ -302,7 +305,12 @@ def contained(cmd, home, writable, readable=(), cwd=None):
     credential file under it is visible or writable), `readable` bound back read-only and
     `writable` read-write, no network, its own pid namespace. Order matters: a later bind
     overlays an earlier one, and the home remount comes after the binds that need mount points
-    in it."""
+    in it. That remount also makes any bind nested under `home` read-only, so a writable path
+    under `home` is refused here rather than failing every write inside."""
+    home_path = Path(home).resolve()
+    for p in writable:
+        if Path(p).resolve().is_relative_to(home_path):
+            raise ValueError(f"writable path {p} is under {home}, which the sandbox remounts read-only")
     args = [BWRAP, *BWRAP_BASE, "--tmpfs", str(home)]
     node = os.path.realpath(shutil.which("node") or "/usr/bin/node")
     if node.startswith(str(home).rstrip("/") + "/"):  # e.g. an nvm install under $HOME
@@ -318,16 +326,17 @@ def contained(cmd, home, writable, readable=(), cwd=None):
     return [*args, "--", *cmd]
 
 
-def grade_env(fixture, run_dir):
-    """The oracle's whole environment: an allowlist, nothing inherited beyond it."""
-    tmp = Path(run_dir) / "tmp"
+def grade_env(fixture, scratch, home=None):
+    """The oracle's whole environment: an allowlist, nothing inherited beyond it. DB_PATH and
+    TMPDIR live in `scratch`, the oracle's only writable dir besides the fixture."""
+    tmp = Path(scratch) / "tmp"
     tmp.mkdir(parents=True, exist_ok=True)
     return {
         "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
-        "HOME": os.environ.get("HOME", "/nonexistent"),
+        "HOME": str(home or os.environ.get("HOME", "/nonexistent")),
         "LANG": os.environ.get("LANG", "C.UTF-8"),
         "FIXTURE": str(fixture),
-        "DB_PATH": str(Path(run_dir) / "oracle.db"),
+        "DB_PATH": str(Path(scratch) / "oracle.db"),
         "TMPDIR": str(tmp),
         "LLM_API_KEY": DUMMY_LLM_KEY,
     }
@@ -345,25 +354,29 @@ def grading_contained(unsafe):
              "Run sandbox-off with bwrap installed, or pass --unsafe-grade to grade uncontained.")
 
 
-def grade(fixture, case, run_dir, contain=True):
+def grade(fixture, case, run_dir, contain=True, home=None):
     """Runs the case's oracle against the fixture, under bwrap unless `contain` is False.
-    Returns its verdict dict; a missing verdict line or a timeout scores broken."""
+    The oracle writes only to the fixture and a fresh scratch dir (DB_PATH, TMPDIR) in the
+    system temp dir, removed afterwards; run_dir may sit under $HOME, so run.py writes the
+    oracle's output there itself, outside bwrap. Returns the verdict dict; a missing verdict
+    line or a timeout scores broken."""
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
-    db = run_dir / "oracle.db"
-    if db.exists():
-        db.unlink()
     install_stubs(fixture)  # the agent could have edited node_modules/next
-    env = grade_env(fixture, run_dir)
-    cmd = ["node", "--import", LOADER.as_uri(), str(CASES_DIR / case / "oracle.mjs")]
-    if contain:
-        cmd = contained(cmd, home=env["HOME"], writable=[fixture, run_dir], readable=[HERE], cwd=fixture)
+    scratch = Path(tempfile.mkdtemp(prefix="practices-grade-"))
     try:
-        p = subprocess.run(cmd, cwd=fixture, env=env, capture_output=True, text=True, timeout=ORACLE_TIMEOUT)
-        stdout, stderr = p.stdout, p.stderr
-    except subprocess.TimeoutExpired as e:
-        stdout = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
-        stderr = f"oracle timed out after {ORACLE_TIMEOUT} s"
+        env = grade_env(fixture, scratch, home)
+        cmd = ["node", "--import", LOADER.as_uri(), str(CASES_DIR / case / "oracle.mjs")]
+        if contain:
+            cmd = contained(cmd, home=env["HOME"], writable=[fixture, scratch], readable=[HERE], cwd=fixture)
+        try:
+            p = subprocess.run(cmd, cwd=fixture, env=env, capture_output=True, text=True, timeout=ORACLE_TIMEOUT)
+            stdout, stderr = p.stdout, p.stderr
+        except subprocess.TimeoutExpired as e:
+            stdout = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
+            stderr = f"oracle timed out after {ORACLE_TIMEOUT} s"
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
     (run_dir / "oracle.out").write_text(stdout + "\n--- stderr ---\n" + stderr)
     for line in reversed(stdout.splitlines()):
         if line.startswith('{"verdict"'):
