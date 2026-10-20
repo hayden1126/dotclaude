@@ -19,12 +19,20 @@ Each practices skill ships an events.toml beside its SKILL.md:
 
 Globs match the path relative to the project dir (POSIX; the absolute path for a file outside
 it): `**` spans folders, `*` and `?` stay within one, `{a,b}` is alternation, and a glob with no
-`/` matches the basename. Regexes are Python `re` with re.MULTILINE, searched in the edit's new
-content (Write `content`, Edit `new_string`, every MultiEdit `new_string`), capped at CONTENT_MAX
-characters and each line at LINE_MAX. The token `{auth_helpers}` inside a regex expands to an
-alternation of AUTH_HELPERS plus the repo's `[auth] helpers`, each regex-escaped, so SEC-01 can
-name a repo's own auth helper. An event fires when a glob matches the path or a content regex
-matches; a rule fires when `when` matches, `unless` doesn't, and `paths` (when given) match.
+`/` matches the basename. Regexes are Python `re` with re.MULTILINE. Each call has two texts:
+  new    what the call writes: Write `content`, Edit `new_string`, every MultiEdit `new_string`;
+  after  the file as it will read after the call: Write `content`, or the current file (its
+         first FILE_MAX bytes) with the Edit, or each MultiEdit edit in order, applied (the first
+         occurrence, every one with `replace_all`). When the file can't be read or an old_string
+         isn't in it, after is the new text alone, logged as `fragment-only` (not an engine
+         error, so the health line doesn't count it).
+An event fires when a glob matches the path or a content regex matches after, so an edit deep in
+an existing "use server" file is still that event. A rule fires when `paths` (when given) match,
+`when` matches new (only newly written code triggers), and neither `unless` nor an inline
+`practices-allow: <id>` is in after (a guard elsewhere in the file counts). Scanned text is capped
+at CONTENT_MAX characters and each line at LINE_MAX. The token `{auth_helpers}` inside a regex
+expands to an alternation of AUTH_HELPERS plus the repo's `[auth] helpers`, each regex-escaped,
+so SEC-01 can name a repo's own auth helper.
 
 Skills are found in $CLAUDE_PROJECT_DIR/.claude/skills/*/ (the payload's cwd without it) and in
 ${CLAUDE_CONFIG_DIR:-~/.claude}/skills/*/, links followed. On a name clash the project copy wins.
@@ -36,8 +44,8 @@ Levels:
       per (skill, event) per window. The reason opens with `[practices:L1:<skill>:<event>]`, says
       how to load the skill, and carries the event's lines; one deny names every skill that fired.
   L2  a fired rule, denied once per (file, rule) over the whole transcript, marker
-      `[practices:L2:<skill>:<rule>:<path>]`. `practices-allow: <rule>` in the new content
-      suppresses it. L2 doesn't run in a call L1 denies.
+      `[practices:L2:<skill>:<rule>:<path>]`. `practices-allow: <rule>` anywhere in the file
+      after the edit suppresses it. L2 doesn't run in a call L1 denies.
   L4  SessionStart(compact): a digest (under DIGEST_MAX characters) naming the practices skills
       loaded since the previous compaction, with their gate lines, plus reloadSkills: true.
 Deny-once is stateless: a tool_result in the window that holds the call's own marker lets the
@@ -93,6 +101,7 @@ try:  # tests only: a tiny budget proves the skip path without a slow pattern
 except ValueError:
     pass
 CONTENT_MAX = 256 << 10
+FILE_MAX = 1 << 20  # bytes of the current file read to apply an Edit; scans still cap at CONTENT_MAX
 LINE_MAX = 4000
 PARSE_MAX = 1 << 20  # transcript rows bigger than this are never a load or a deny
 LOG_MAX = 64 << 10
@@ -252,18 +261,20 @@ def event_fires(event, rel, text, helpers=(), crumb=None):
     return False
 
 
-def rule_fires(rule, rel, text, helpers=(), crumb=None, content=None):
-    """Whether a [[rule]] fires: paths (when given) match, `when` matches, `unless` doesn't, and
-    the full content holds no `practices-allow: <id>`."""
+def rule_fires(rule, rel, text, helpers=(), crumb=None, after_text=None, after=None):
+    """Whether a [[rule]] fires: paths (when given) match, `when` matches the new text, and
+    neither `unless` (in the scanned file after the edit) nor `practices-allow: <id>` (anywhere
+    in it) matches. Without after_text and after, the new text is the whole file (a Write)."""
+    after_text = text if after_text is None else after_text
     if rule.get("paths") and not path_matches(rule["paths"], rel):
         return False
-    if allowed(rule["id"], text if content is None else content):
+    if allowed(rule["id"], after_text if after is None else after):
         return False
     if crumb:
         crumb.mark(rel, "L2", rule["id"])
     if not guarded(rule["when"], text, helpers, rule["id"]):
         return False
-    return not (rule.get("unless") and guarded(rule["unless"], text, helpers, rule["id"]))
+    return not (rule.get("unless") and guarded(rule["unless"], after_text, helpers, rule["id"]))
 
 
 def allowed(rule_id, content):
@@ -620,8 +631,59 @@ def state_add(event, keys):
 
 # ---------------------------------------------------------------- PreToolUse
 
+def edits_of(tool, inp):
+    """[(old_string, new_string, replace_all)] for an Edit or MultiEdit, in order."""
+    raw = [inp] if tool == "Edit" else [e for e in inp.get("edits") or [] if isinstance(e, dict)]
+    return [(e.get("old_string") if isinstance(e.get("old_string"), str) else "",
+             e.get("new_string") if isinstance(e.get("new_string"), str) else "",
+             e.get("replace_all") is True) for e in raw]
+
+
+def apply_edits(current, edits):
+    """The content after the edits, applied in order as Claude Code applies them (the first
+    occurrence, or every one with replace_all; an empty old_string only creates an empty
+    file), or None when an edit can't apply."""
+    for old, new, every in edits:
+        if old == "":
+            if current:
+                return None
+            current = new
+        elif old not in current:
+            return None
+        else:
+            current = current.replace(old, new, -1 if every else 1)
+    return current
+
+
+def post_edit(tool, inp, path):
+    """(fragment, after): the text the call writes, and the file as it will read after the
+    call. Write's are both its content. For an Edit or MultiEdit, after is the current file
+    (its first FILE_MAX bytes) with the edits applied; when the file can't be read or an edit
+    doesn't apply, after falls back to the fragment and that is logged."""
+    if tool == "Write":
+        content = inp.get("content") if isinstance(inp.get("content"), str) else ""
+        return content, content
+    edits = edits_of(tool, inp)
+    fragment = "\n".join(new for _, new, _ in edits)
+    try:
+        with open(path, "rb") as f:
+            current = f.read(FILE_MAX).decode("utf-8", "replace")
+    except FileNotFoundError:
+        current = None
+    except OSError as e:
+        log("fragment-only", f"{path}: unreadable ({type(e).__name__}), so only the new text "
+            "was checked")
+        return fragment, fragment
+    after = apply_edits("" if current is None else current, edits)
+    if after is None:
+        why = "missing" if current is None else "an old_string isn't in it"
+        log("fragment-only", f"{path}: {why}, so only the new text was checked")
+        return fragment, fragment
+    return fragment, after
+
+
 def edit_of(event):
-    """(absolute path, new content) for an Edit, Write or MultiEdit, else None."""
+    """(absolute path, fragment, after) for an Edit, Write or MultiEdit, else None."""
     inp = event.get("tool_input")
     tool = event.get("tool_name")
     if tool not in EDIT_TOOLS or not isinstance(inp, dict):
@@ -629,15 +691,9 @@ def edit_of(event):
     fp = inp.get("file_path")
     if not isinstance(fp, str) or not fp:
         return None
-    if tool == "Write":
-        parts = [inp.get("content")]
-    elif tool == "Edit":
-        parts = [inp.get("new_string")]
-    else:
-        parts = [e.get("new_string") for e in inp.get("edits") or [] if isinstance(e, dict)]
-    content = "\n".join(p for p in parts if isinstance(p, str))
     cwd = event.get("cwd") if isinstance(event.get("cwd"), str) else os.getcwd()
-    return os.path.abspath(os.path.join(cwd, fp)), content
+    path = os.path.abspath(os.path.join(cwd, fp))
+    return (path, *post_edit(tool, inp, path))
 
 
 def relative(path, project):
@@ -698,13 +754,13 @@ def pre_tool_use(event):
     skills = discover(event)
     if not skills:
         return None
-    path, content = edit
+    path, fragment, after = edit
     rel = relative(path, project_dir(event))
-    text = scan_text(content)
+    text, after_text = scan_text(fragment), scan_text(after)
     helpers = cfg["helpers"]
     events = [(s, ev) for s in skills.values() for ev in s["events"] if not is_off(cfg, s, ev["id"])]
     rules = [(s, r) for s in skills.values() for r in s["rules"] if not is_off(cfg, s, r["id"])]
-    fired = run_patterns(events, lambda x: event_fires(x[1], rel, text, helpers, CRUMB))
+    fired = run_patterns(events, lambda x: event_fires(x[1], rel, after_text, helpers, CRUMB))
 
     m, f = open_transcript(event)
     try:
@@ -728,7 +784,7 @@ def pre_tool_use(event):
                 reason = l1_reason(list(pending.values()), rel, bool(event.get("agent_id")))
         if reason is None and rules:
             hit = run_patterns(rules, lambda x: rule_fires(x[1], rel, text, helpers, CRUMB,
-                                                           content))
+                                                           after_text, after))
             denied = (Window(t, 0, None, frozenset()).results(b"[practices:L2:")
                       if t is not None and len(m) else [])
             pending = []
@@ -866,6 +922,7 @@ LABELS = {"skill-disabled": ("skill disabled", "skills disabled"),
           "budget-spent": ("time budget spent", "time budgets spent"),
           "config-malformed": ("malformed config", "malformed configs"),
           "state-error": ("state error", "state errors"), "crash": ("crash", "crashes")}
+QUIET = {"fragment-only"}  # logged for debugging, never an engine error
 
 
 def new_errors(d):
@@ -887,7 +944,7 @@ def new_errors(d):
             fh.seek(max(start, st.st_size - LOG_MAX))
             for line in fh.read().decode("utf-8", "replace").splitlines():
                 parts = line.split(" ", 3)
-                if len(parts) >= 3:
+                if len(parts) >= 3 and parts[2] not in QUIET:
                     found.setdefault(parts[2], set()).add(parts[3] if len(parts) > 3 else "")
         os.makedirs(d, exist_ok=True)
         with open(mark, "w", encoding="utf-8") as fh:

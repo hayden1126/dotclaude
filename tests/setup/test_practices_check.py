@@ -168,12 +168,22 @@ class Base(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         return json.loads(p.stdout) if p.stdout.strip() else None
 
+    def existing(self, rel, content):
+        path = os.path.join(self.proj, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(content)
+        return path
+
     def fire(self, rel="app/api/x/route.ts", content="export const x = 1\n", tool="Write",
-             **extra):
+             old="a", edits=None, **extra):
         path = os.path.join(self.proj, rel)
         inp = ({"file_path": path, "content": content} if tool == "Write" else
-               {"file_path": path, "old_string": "a", "new_string": content} if tool == "Edit"
-               else {"file_path": path, "edits": [{"old_string": "a", "new_string": content}]})
+               {"file_path": path, "old_string": old, "new_string": content} if tool == "Edit"
+               else {"file_path": path, "edits": edits or [{"old_string": old,
+                                                            "new_string": content}]})
+        if tool == "Edit" and extra.get("replace_all"):
+            inp["replace_all"] = extra.pop("replace_all")
         event = {"session_id": SID, "transcript_path": self.transcript, "cwd": self.proj,
                  "hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": inp,
                  "tool_use_id": "t-now", **extra}
@@ -346,6 +356,93 @@ class L2(Base):
         self.assertIsNone(self.fire("lib/save.ts", "x({ ...body })\n"))
         self.assertIn("budget-spent", self.log())
         self.assertIn("demo:SEC-17", self.log())
+
+
+class AfterTheEdit(Base):
+    """Events and `unless` read the file as it will be after the edit; `when` reads the new text."""
+
+    ACTION = '"use server"\n\nimport { db } from "@/lib/db"\n\nexport async function f() {\n' \
+             '  return 1\n}\n'
+    EXPORT = ("import csv\n\n\ndef rows_for(user):\n    rows = load(user)\n"
+              "    return [[guard_cell(c) for c in r] for r in rows]\n\n\n"
+              "def export(user, f):\n    pass\n")
+
+    def server_code(self):
+        shutil.copytree(os.path.join(REPO, "skills", "server-code"),
+                        os.path.join(self.proj, ".claude", "skills", "server-code"))
+        self.rows([use("t1", "Skill", skill="server-code")])
+
+    def test_an_edit_deep_in_a_use_server_file_fires_l1(self):
+        self.existing("lib/actions.ts", self.ACTION)
+        reason = self.fire("lib/actions.ts", "  return 2", tool="Edit", old="  return 1")
+        self.assertTrue(reason.startswith("[practices:L1:demo:route-handler]"), reason)
+        self.assertNotIn("fragment-only", self.log())
+
+    def test_a_guard_elsewhere_in_the_file_keeps_sec_17_quiet(self):
+        self.server_code()
+        writer = "    w = csv.writer(f)\n    w.writerows(rows_for(user))"
+        self.existing("app/export.py", self.EXPORT)
+        self.assertIsNone(self.fire("app/export.py", writer, tool="Edit", old="    pass"))
+        self.existing("app/plain.py", self.EXPORT.replace("guard_cell(c)", "c"))
+        reason = self.fire("app/plain.py", writer, tool="Edit", old="    pass")
+        self.assertTrue(reason.startswith("[practices:L2:server-code:SEC-17:app/plain.py]"),
+                        reason)
+
+    def test_when_reads_only_the_new_text(self):
+        self.loaded()
+        self.existing("lib/save.ts", "x({ ...body })\nconst a = 1\n")
+        self.assertIsNone(self.fire("lib/save.ts", "const a = 2", tool="Edit", old="const a = 1"))
+
+    def test_practices_allow_elsewhere_in_the_file_suppresses(self):
+        self.loaded()
+        self.existing("lib/save.ts", "// practices-allow: SEC-17 parsed by zod\nconst a = 1\n")
+        self.assertIsNone(self.fire("lib/save.ts", "x({ ...body })", tool="Edit",
+                                    old="const a = 1"))
+
+    def test_a_missing_old_string_falls_back_to_the_new_text(self):
+        self.loaded()
+        self.existing("lib/save.ts", "// practices-allow: SEC-17 parsed by zod\nconst a = 1\n")
+        reason = self.fire("lib/save.ts", "x({ ...body })", tool="Edit", old="const b = 1")
+        self.assertIn("[practices:L2:demo:SEC-17:lib/save.ts]", reason)
+        self.assertIn("fragment-only", self.log())
+        self.assertIn("an old_string isn't in it", self.log())
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads a mode-000 file")
+    def test_an_unreadable_file_falls_back_to_the_new_text(self):
+        self.loaded()
+        path = self.existing("lib/save.ts", "// practices-allow: SEC-17 parsed by zod\n"
+                             "const a = 1\n")
+        os.chmod(path, 0)
+        self.addCleanup(os.chmod, path, 0o600)
+        reason = self.fire("lib/save.ts", "x({ ...body })", tool="Edit", old="const a = 1")
+        self.assertIn("[practices:L2:demo:SEC-17:lib/save.ts]", reason)
+        self.assertIn("unreadable", self.log())
+        self.assertIsNone(self.start("startup"))  # an expected fallback, not an engine error
+
+    def test_multiedit_applies_its_edits_in_order(self):
+        self.loaded()
+        self.existing("lib/save.ts", "// practices-allow: SEC-17 parsed by zod\nA\n")
+        # In order, B exists when the second edit runs, so the allow line is in the result;
+        # applied out of order it wouldn't be, and the fragment alone would deny.
+        edits = [{"old_string": "A", "new_string": "B"},
+                 {"old_string": "B", "new_string": "x({ ...body })"}]
+        self.assertIsNone(self.fire("lib/save.ts", tool="MultiEdit", edits=edits))
+        self.assertNotIn("fragment-only", self.log())
+        reason = self.fire("lib/save.ts", tool="MultiEdit", edits=edits[::-1])
+        self.assertIn("[practices:L2:demo:SEC-17:lib/save.ts]", reason)
+
+    def test_apply_edits(self):
+        self.assertEqual(PC.apply_edits("a a a", [("a", "b", False)]), "b a a")
+        self.assertEqual(PC.apply_edits("a a a", [("a", "b", True)]), "b b b")
+        self.assertEqual(PC.apply_edits("A\n", [("A", "B", False), ("B", "C", False)]), "C\n")
+        self.assertIsNone(PC.apply_edits("A\n", [("B", "C", False), ("A", "B", False)]))
+        self.assertEqual(PC.apply_edits("", [("", "new file", False)]), "new file")
+        self.assertIsNone(PC.apply_edits("exists", [("", "x", False)]))
+
+    def test_an_edit_creating_a_file_reads_its_new_text(self):
+        reason = self.fire("lib/new.ts", "'use server'\n", tool="Edit", old="")
+        self.assertIn("[practices:L1:demo:route-handler]", reason)
+        self.assertNotIn("fragment-only", self.log())
 
 
 class L4(Base):
