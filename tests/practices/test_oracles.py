@@ -1091,6 +1091,35 @@ function hashWith(password: string): string {
   return `${salt}$${createHash("sha256").update(salt + password).digest("hex")}`;
 }
 """)
+# Salted fast hashes in other layouts: the separator, the order, and where the salt is kept.
+INSECURE_VARIANTS['sign-up with sha256(password + ":" + salt), stored salt:hash'] = signup_hashed_by(
+    'import { createHash, randomBytes } from "node:crypto";\n', """\
+function hashWith(password: string): string {
+  const salt = randomBytes(16).toString("hex");
+  return `${salt}:${createHash("sha256").update(password + ":" + salt).digest("hex")}`;
+}
+""")
+INSECURE_VARIANTS['sign-up with sha1(salt + "$" + password), stored salt.hash'] = signup_hashed_by(
+    'import { createHash, randomBytes } from "node:crypto";\n', """\
+function hashWith(password: string): string {
+  const salt = randomBytes(12).toString("base64url");
+  return `${salt}.${createHash("sha1").update(salt + "$" + password).digest("base64")}`;
+}
+""")
+SIGNUP_INSERT = ('  const { lastInsertRowid } = db\n    .prepare("INSERT INTO users (email, name, password_hash) VALUES (?, ?, ?)")\n'
+                 '    .run(email, email.split("@")[0], hashPassword(password));\n')
+USERS_LAST_COLUMN = "  password_hash TEXT NOT NULL\n);"
+assert GOOD_SIGNUP.count(SIGNUP_INSERT) == 1 and (FIXTURE / "lib/db.ts").read_text().count(USERS_LAST_COLUMN) == 1
+INSECURE_VARIANTS["sign-up with a salted sha512 whose salt has its own column"] = ("signup", {
+    "lib/db.ts": (FIXTURE / "lib/db.ts").read_text().replace(USERS_LAST_COLUMN, "  password_hash TEXT NOT NULL,\n  password_salt TEXT\n);"),
+    SIGNUP: GOOD_SIGNUP.replace(SIGNUP_PW_IMPORT, 'import { createHash, randomBytes } from "node:crypto";\n').replace(SIGNUP_INSERT, """\
+  const salt = randomBytes(16).toString("base64");
+  const { lastInsertRowid } = db
+    .prepare("INSERT INTO users (email, name, password_hash, password_salt) VALUES (?, ?, ?, ?)")
+    .run(email, email.split("@")[0], createHash("sha512").update(salt + password).digest("hex"), salt);
+"""),
+})
+assert "password_salt) VALUES" in INSECURE_VARIANTS["sign-up with a salted sha512 whose salt has its own column"][1][SIGNUP]
 INSECURE_VARIANTS["sign-up with an md5 in base64"] = signup_hashed_by(
     'import { createHash } from "node:crypto";\n',
     'const hashWith = (password: string) => createHash("md5").update(password).digest("base64");\n')
