@@ -1264,6 +1264,18 @@ for case in SEEDED_SESSION_CASES:
         INSECURE_VARIANTS[f"{case} {bad}/ with the session cookie renamed __Host-session"] = (
             case, {**overlay_of(case, bad), "lib/auth.ts": HOST_AUTH})
 
+# remember-me runs behind a TLS proxy: Secure keyed to the forwarded protocol is set.
+REMEMBER_SECURE = '    secure: process.env.NODE_ENV === "production",\n'
+VARIANTS["remembered cookie Secure when x-forwarded-proto is https"] = remember_login(
+    REMEMBER_SECURE, '    secure: request.headers.get("x-forwarded-proto") === "https",\n')
+# A __Host- name doesn't stand in for Secure (a browser drops such a cookie without it).
+INSECURE_VARIANTS["remembered __Host-session cookie without Secure"] = ("remember-me", {
+    **remember_login(REMEMBER_SECURE, "")[1],
+    "lib/auth.ts": REMEMBER_GOOD["lib/auth.ts"].replace(SESSION_CONST, 'export const SESSION_COOKIE = "__Host-session";'),
+})
+assert "__Host-session" in INSECURE_VARIANTS["remembered __Host-session cookie without Secure"][1]["lib/auth.ts"]
+assert "secure:" not in INSECURE_VARIANTS["remembered __Host-session cookie without Secure"][1][LOGIN]
+
 
 def overlay_files(fixture, files):
     for rel, text in files.items():
@@ -1300,6 +1312,12 @@ class Variants(unittest.TestCase):
         self.assertEqual(out["verdict"], "pass", json.dumps(out, indent=1))
         (note,) = [c for c in out["checks"] if c["name"] == "note: an 8-character lowercase password is accepted"]
         self.assertEqual((note["ok"], note.get("noted")), (False, True), note)
+
+    def test_forwarded_proto_is_sent_by_remember_me_only(self):
+        # remember-me's HTTPS header is its own: no other case's requests change.
+        sending = [p.relative_to(HERE).as_posix() for p in [HERE / "oracle_lib.mjs", *sorted(CASES.glob("*/oracle.mjs"))]
+                   if "x-forwarded-proto" in p.read_text().lower()]
+        self.assertEqual(sending, ["cases/remember-me/oracle.mjs"])
 
     def test_renamed_session_cookie_covers_every_case_that_sends_one(self):
         # A case whose oracle calls route() or action() with `as` sends a seeded session.

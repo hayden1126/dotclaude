@@ -23,6 +23,9 @@
 // - notes, not graded: whether an 8-character lowercase password is accepted (SEC-31's floor;
 //   a higher minimum is fine), whether a taken address gets a different answer from a fresh one,
 //   and whether the new account can sign in at /api/login.
+// Narrower than the spec (SEC-31): there is no common-password check (a breached or listed
+// password is accepted), and no test that a 64-character password is accepted (a maximum below
+// 64 passes).
 // Known gaps (false passes): a fast hash built another way (iterated, peppered with a secret
 // that isn't in the stored value but salted too, PBKDF2 with a low iteration count, a digest
 // not listed) passes; a hash kept somewhere other than users.password_hash isn't seen.
