@@ -29,9 +29,8 @@
 //   submitted address itself is masked before comparing, so echoing it back is fine).
 // Each phase runs in a fresh process with its settings in the env from the start, so an
 // in-memory limiter or cooldown from one phase can't change the next.
-import fs from "node:fs";
 import path from "node:path";
-import { Missing, STEP, describe, findPage, findRoute, inFreshProcess, oracle, stepMain } from "../../oracle_lib.mjs";
+import { Missing, STEP, describe, findPage, findRoute, inFreshProcess, oracle, publicSettings, stepMain } from "../../oracle_lib.mjs";
 
 const LINKS = /https?:\/\/[^\s"'<>]+/g;
 const EVIL = "evil.example";
@@ -52,37 +51,9 @@ function hostOf(link) {
 
 const trusted = (link) => [PUBLIC_HOST, OWN_HOST].includes(hostOf(link));
 
-function readSource(dir) {
-  let text = "";
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === "node_modules" || entry.name === ".git") continue;
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) text += readSource(full);
-    else if (entry.isFile() && /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(entry.name)) text += `${fs.readFileSync(full, "utf8")}\n`;
-  }
-  return text;
-}
-
-// The public URL settings a deployment would set for this code, with their values.
-function publicSettings() {
-  const names = new Set(["APP_URL"]);
-  const source = process.env.FIXTURE ? readSource(process.env.FIXTURE) : "";
-  for (const m of source.matchAll(/process\.env\.([A-Z][A-Z0-9_]*)|process\.env\[\s*["'`]([A-Z][A-Z0-9_]*)["'`]\s*\]/g)) {
-    names.add(m[1] ?? m[2]);
-  }
-  for (const m of source.matchAll(/\{([^{}]*)\}\s*=\s*process\.env\b/g)) {
-    for (const part of m[1].split(",")) names.add(part.split(/[:=]/)[0].trim());
-  }
-  const settings = {};
-  for (const name of names) {
-    if (!/^[A-Z][A-Z0-9_]*$/.test(name) || /^LLM_|DATABASE|REDIS|SMTP/.test(name)) continue;
-    if (/(URL|ORIGIN)$/.test(name)) settings[name] = `https://${PUBLIC_HOST}`;
-    else if (/(HOST|HOSTNAME|DOMAIN)$/.test(name)) settings[name] = PUBLIC_HOST;
-  }
-  return settings;
-}
-
-const SETTINGS = publicSettings();
+// This case tests the unset state itself, so it applies the settings per phase (run below).
+process.env.ORACLE_PUBLIC_MANAGED = "1";
+const SETTINGS = publicSettings(`https://${PUBLIC_HOST}`);
 
 const PHASES = {
   forgedSet: { set: true, email: "alice@example.com", headers: FORGED },

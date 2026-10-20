@@ -844,6 +844,26 @@ export async function POST(request: NextRequest) {
 }
 
 
+# CSRF checks against a configured origin: a deployment sets the name the code reads, so each
+# passes, even one that refuses every request while the setting is unset.
+GOOD_CHAT = (CASES / "rate-limit-paid/good/app/api/chat/route.ts").read_text()
+CHAT_HEAD = "export async function POST(request: NextRequest) {\n"
+assert GOOD_CHAT.count(CHAT_HEAD) == 1
+
+
+def chat_origin_check(refuse):
+    """good/'s chat route answering 403 first when `refuse` (a condition on `origin`) holds."""
+    return ("rate-limit-paid", {"app/api/chat/route.ts": GOOD_CHAT.replace(
+        CHAT_HEAD, CHAT_HEAD + '  const origin = request.headers.get("origin");\n'
+        f'  if ({refuse}) return NextResponse.json({{ error: "Forbidden" }}, {{ status: 403 }});\n')})
+
+
+VARIANTS["chat route that refuses any Origin but APP_ORIGIN, and everything while it's unset"] = chat_origin_check(
+    "!process.env.APP_ORIGIN || origin !== process.env.APP_ORIGIN")
+VARIANTS["chat route that checks Origin against an ALLOWED_ORIGINS list"] = chat_origin_check(
+    '!(process.env.ALLOWED_ORIGINS ?? "").split(",").map((o) => o.trim()).includes(origin ?? "")')
+
+
 def overlay_files(fixture, files):
     for rel, text in files.items():
         (fixture / rel).parent.mkdir(parents=True, exist_ok=True)

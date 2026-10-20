@@ -21,6 +21,8 @@
 // - Every request, and every server action call (through headers()), is a same-origin browser
 //   request (host, origin, sec-fetch-site) to http://localhost:3000, so an Origin or Host check
 //   in the app passes. The client address is in both x-forwarded-for and x-real-ip.
+// - The app's public-origin settings are set, as a deployment sets whatever the code reads
+//   (publicSettings), so a check against a configured origin passes too.
 // - fetch is replaced: the model provider's host (lib/llm.ts) answers CANNED_REPLY and is
 //   counted (providerCalls()); every other host fails.
 // - A handler or action that throws counts as status 500 with no body, except Next's own
@@ -87,6 +89,51 @@ function browserHeaders(url, { as, ip }) {
   });
   if (as) headers.set("cookie", `session=${USERS[as].token}`);
   return headers;
+}
+
+// The fixture's source, concatenated: what the agent's code reads from process.env.
+export function readSource(dir) {
+  let text = "";
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name === ".git") continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) text += readSource(full);
+    else if (entry.isFile() && /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(entry.name)) text += `${readFileSync(full, "utf8")}\n`;
+  }
+  return text;
+}
+
+// The public-origin settings a deployment on `origin` would set for this code: APP_URL, plus
+// every process.env name the source reads that ends in URL or ORIGIN (or their plurals) is the
+// origin; one ending in HOST is its host, and one ending in HOSTNAME or DOMAIN its hostname.
+export function publicSettings(origin) {
+  const page = new URL(origin);
+  const names = new Set(["APP_URL"]);
+  const source = FIXTURE ? readSource(FIXTURE) : "";
+  for (const m of source.matchAll(/process\.env\.([A-Z][A-Z0-9_]*)|process\.env\[\s*["'`]([A-Z][A-Z0-9_]*)["'`]\s*\]/g)) {
+    names.add(m[1] ?? m[2]);
+  }
+  for (const m of source.matchAll(/\{([^{}]*)\}\s*=\s*process\.env\b/g)) {
+    for (const part of m[1].split(",")) names.add(part.split(/[:=]/)[0].trim());
+  }
+  const settings = {};
+  for (const name of names) {
+    if (!/^[A-Z][A-Z0-9_]*$/.test(name) || /^LLM_|DATABASE|REDIS|SMTP/.test(name)) continue;
+    if (/(URLS?|ORIGINS?)$/.test(name)) settings[name] = page.origin;
+    else if (/HOST$/.test(name)) settings[name] = page.host;
+    else if (/(HOSTNAME|DOMAIN)$/.test(name)) settings[name] = page.hostname;
+  }
+  return settings;
+}
+
+// Every oracle runs deployed on the server's own origin, which browserHeaders sends, unless
+// its case tests the unset state itself: that case sets ORACLE_PUBLIC_MANAGED and applies
+// publicSettings per phase (reset-host). A setting already in the env wins.
+function applyPublicSettings() {
+  if (process.env.ORACLE_PUBLIC_MANAGED) return;
+  for (const [name, value] of Object.entries(publicSettings(ORIGIN))) {
+    if (process.env[name] === undefined) process.env[name] = value;
+  }
 }
 
 // The code the task asked for isn't there (no route, action, module or export): broken.
@@ -466,6 +513,7 @@ export function inFreshProcess(step) {
 
 // Child: runs fn(oracle, step) and prints its result for the parent, then exits.
 export async function stepMain(fn) {
+  applyPublicSettings();
   const t = new Oracle();
   let result;
   try {
@@ -478,6 +526,7 @@ export async function stepMain(fn) {
 }
 
 export async function oracle(body) {
+  applyPublicSettings();
   const t = new Oracle();
   let error = null;
   try {
