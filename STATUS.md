@@ -89,7 +89,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
   - **Live lanes** (opened 2026-10-19; briefs in each record). Merge order: 1 pr-horizon
     (`handoff?` past 200 PRs, the capella report below; carries the lead's notes), 2 config-dir
-    (#133, the delegation readers that ignore CLAUDE_CONFIG_DIR, below).
+    (#133, the delegation readers that ignore CLAUDE_CONFIG_DIR, below), 3 practices
+    (`feat/practices-suite`, opened 2026-10-19 at Hayden's ask: the skill suite below, researched
+    from his project memories and online sources, then the security skill only; Hayden picked
+    "security first"). The lanes cap (3) is full.
   - **Lane ask quality: done** (2026-10-19 to 2026-10-20). ask-check merged as #131 and was
     installed from main 2026-10-20: a PreToolUse hook on AskUserQuestion (`hooks/ask_check.py`)
     denies risky asks with a checklist in the reason. branch-reuse merged as #130: `lane new`
@@ -132,7 +135,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     injection and the rest; Hayden sends the list), not only agents; ux is the whole user
     experience (lag and loading, which features serve users most, convenience), with UI a small
     part, so it links `frontend-ui-discipline` for that part. Open for Hayden: the list and
-    names. Lead's flags: the name `security-review` collides with a built-in skill; dotclaude is
+    names. In lane practices since 2026-10-19 (its record holds the state). Lead's flags: the
+    name `security-review` collides with a built-in skill; dotclaude is
     public, so no capella code or unfixed gaps go in ([[dotclaude-public-repo]]); checklists in context get skipped, so a pilot should say what
     enforces it (a hook at the event, as ask-check does). Pairs with the AWS gap check below.
     Sources so far: six Instagram reels Hayden sent (2026-10-19; transcripts via getthescript.app),
