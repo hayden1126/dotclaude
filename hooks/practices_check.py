@@ -93,9 +93,11 @@ timeout kill takes the whole process group, so a killed scan leaves it behind. S
 (startup) runs a self-test, reports leftover breadcrumbs and the errors logged since the last
 start, as one systemMessage line (shown to the user only), and prints nothing when all is well.
 
-Bash levels. settings.json sends a Bash call here only when its payload holds git with commit
-or push, or gh with pr ready or pr create (PostToolUse: git with commit), so Python never starts
-for any other call. hooks/bash_words.py reads the command as simple commands through chains,
+Bash levels. settings.json sends a Bash call here only when its command (the payload's
+"command" string, never the tool_response output) holds git with commit or push, or gh with pr
+ready or pr create (PostToolUse: git with commit), so Python never starts for any other call.
+The prefilter is one `LC_ALL=C grep -E`, linear in the payload (a bash `case` glob backtracked
+over every "git" in a large output), and it exits 0 when the shim is missing. hooks/bash_words.py reads the command as simple commands through chains,
 wrappers (`sudo -E`, `env -i`), `cd X &&` (from the payload's cwd), quotes and heredocs, and
 each git call's -C, --git-dir, --work-tree and GIT_DIR=; an expansion in one of those skips that
 call, logged. A file written by a heredoc or `cat >` escapes L1 and L2, and L3s is its backstop.
