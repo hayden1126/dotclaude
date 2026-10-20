@@ -163,7 +163,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     don't read it anymore"). His picks: keep the tab label (the Stop hook
     `hooks/session-summary.sh` asks Haiku for the label only; the rows and
     `statusline/session-summary.py` go), and the briefing is a rule now, with a check later only
-    if asks skip it. The rule is lead PR #137 (draft). The retirement runs in lane
+    if asks skip it. The rule merged as #137 (2026-10-20, installed). The retirement runs in lane
     summary-retire; at its merge the lead updates memory `dotclaude-session-summary-statusline`.
   - **A device-wide toggle for the toast and the sound** (Hayden, 2026-10-20): one switch that
     mutes the Windows toast and the notify ring for every session on the machine (no toggle
@@ -287,9 +287,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 ## Notes for next session
 - **Next (lead, main checkout):**
   0. Lanes practices (merge order 1, carries the lead branch), summary-retire (2) and
-     link-atomic (3) run; their state is in their records (`lane ls`). Lead PR #137 waits on
-     Hayden's ready and merge (docs only, no live lane's files). After each reinstall, check
-     `ls -la ~/.claude/CLAUDE.md` (the Watch item).
+     link-atomic (3) run; their state is in their records (`lane ls`). After each reinstall,
+     check `ls -la ~/.claude/CLAUDE.md` (the Watch item). Watch that push asks open with the
+     briefing (#137); if they skip it, the Stop-hook check is the follow-up (Hayden's pick).
   1. Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
      against the code and log it in the backlog. When lanes run again, follow The lead in
      `skills/lanes/SKILL.md` (step 7 is the post-merge chain; never amend or rebase the lead
@@ -297,8 +297,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
      (lane branch-reuse); `--reuse-branch` overrides.
   - The lead's commits: `git log --first-parent main..chore/after-pr4` (STATUS only, plus merges
     of main). Session 45664d28 (2026-10-20) ran `2c28e7e..HEAD` on the lead branch: the #135
-    chain (pr-horizon closed), lead PR #136 (merged, installed), the skill-suite backlog item
-    and lane practices,
+    chain (pr-horizon closed), the #133 chain (config-dir closed), lead PRs #136 and #137
+    (merged, installed), lanes practices, summary-retire and link-atomic,
     and the CLAUDE.md watch item.
   - Open with Hayden, nothing for the lead to do: the capella-studio lead asked how a new lane
     should clear the excluded-command guard, and the lead recommended (2026-10-17) pointing
