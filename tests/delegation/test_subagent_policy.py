@@ -792,7 +792,10 @@ class ReviewFindings(Base):
                     "sed '/x/W ../../../main.py' f"):
             self.assertDenied(self.decide("Bash", {"command": cmd}, atype="writer", cwd=self.wt,
                                           aid="w1"), "worktree-root", msg=cmd)
-        self.assertDenied(self.bash("sed 's/a/b/w ~/.zshrc' f"), "protected-path")
+        self.assertDenied(self.bash("sed 's/a/b/w .git/config' f"), "protected-path")
+        # sed reads ~ in a w name literally (the shell didn't expand the quoted script), so this
+        # writes ./~/.zshrc, not $HOME/.zshrc: not the protected file (F4).
+        self.assertIsNone(self.bash("sed 's/a/b/w ~/.zshrc' f"))
         self.assertDenied(self.bash("sed '1e rm -rf x' f"), "sed-exec")
         self.assertIsNone(self.bash("sed -n '1,5p' f"))
         self.assertIsNone(self.bash("sed 's/a/b/w notes.txt' f"))
@@ -812,7 +815,11 @@ class SedScripts(Base):
              "sed 'y/we/ew/' f", "sed 'a foo; e date' f", "sed '1i\\\ne w x' f",
              "sed 'a foo\\\ne' f", "sed -n ':e;b e' f", "sed 's/a/b/#e' f", "sed -n 's/a/b/;p' f",
              "sed -n \"${N}p\" f", "sed -n \"${N}p\" exam.txt", "sed \"$S\" f", "sed -n 'r in' f",
-             "sed -e 'a foo\\' -e 'e date' f", "sed -n -e '1{' -e p -e '}' f")
+             "sed -e 'a foo\\' -e 'e date' f", "sed -n -e '1{' -e p -e '}' f",
+             # A file whose name reads as a sed command when a dynamic word could make it the
+             # script: not taken for one, because the command letter isn't its own token.
+             "sed -n \"${N}p\" error.log", "sed -n \"${N}p\" write.log", "sed error.log -e p f",
+             "sed \"$S\" exam.txt")
     # Each runs a shell command: as written, or spelled so the old regexes missed it.
     EXECS = ("sed '1e date' f", "sed 's/a/b/e' f", "sed 's|a|b|e' f", "sed 's/a/b/ e' f",
              "sed 'p;e date' f", "sed 'p\ne date' f", "sed '1{e date\n}' f", "sed -n '1{p;e\n}' f",
@@ -821,7 +828,10 @@ class SedScripts(Base):
              "sed --expression='1e date' f", "sed -e'1e date' f", "sed --e='1e date' f",
              "sed --expr '1e date' f", "sed -l 5 's/a/b/e' f", "sed -ne '1e date' -e p f",
              "sed -nes/a/b/e f", "sed 's/a/b/e' -e p f", "sed \"$X\" -e '1e date' f",
-             "sed -e 'a foo' -e 'e date' f", "sed -e \"$X\" -e 'e date' f")
+             "sed -e 'a foo' -e 'e date' f", "sed -e \"$X\" -e 'e date' f",
+             # A dynamic word before a literal script can vanish or become an option, making the
+             # literal the script: its e command (letter as its own token) is still caught.
+             "sed \"$X\" '1e date' f", "sed $X 'e date' f")
     # sed can't run these, or the policy can't see the script: refused as unchecked.
     UNCHECKED = ("sed -f x.sed f", "sed --file=x.sed f", "sed -nf x.sed f", "sed 's/a/b' f",
                  "sed 's/a/b/w' f", "sed --s 's/a/b/' f", "sed -k p f", "sed 's/a/b/q' f",
@@ -874,6 +884,61 @@ class SedScripts(Base):
             self.assertDenied(self.bash(cmd), "protected-path", msg=cmd)
         for cmd in ("sed --in s/a/b/ f", "sed --in-pl=.b s/a/b/ f", "sed -si s/a/b/ f"):
             self.assertDenied(self.r(cmd), "researcher-flag", msg=cmd)
+
+    def test_a_dynamic_word_cant_smuggle_a_w_target_past_as_a_filename(self):
+        # A $VAR before a literal script can vanish or become an option, so its w command (letter
+        # as its own token) is still write-checked, not read as a filename.
+        self.assertDenied(self.wb("sed \"$X\" 'w ../../../main.py' f"), "worktree-root")
+        self.assertIsNone(self.wb("sed \"$X\" 'w out.txt' f"))  # a real w, inside the worktree
+
+    def test_a_candidate_that_opens_a_w_before_failing_still_checks_it(self):
+        # sed opens a w file as it compiles, before a later error; a candidate parse keeps the ops
+        # it found by then (F3), so the write is still checked.
+        self.assertDenied(self.wb("sed \"$X\" 'w ../../../main.py\ns/a/b' f"), "worktree-root")
+
+    def test_a_tilde_in_a_sed_write_target_is_literal_not_home(self):
+        # sed reads a ~ in a w name or -i suffix literally; checking it as $HOME would deny a
+        # write that really lands in the worktree (F4).
+        self.assertIsNone(self.wb("sed 's/a/b/w ~/out.txt' f"))
+        self.assertIsNone(self.wb("sed -i'~/*.bak' s/a/b/ f"))
+
+    def test_researcher_refuses_sed_with_a_glob_or_brace(self):
+        # A glob or brace word hides from the policy what sed's args expand to; a researcher has
+        # no sandbox backstop for a write, so refuse (F1).
+        for cmd in ("sed -n p {-e,'1e date'} f", "sed -n 1p *", "sed -n 's/a/b/p' *.log"):
+            self.assertDenied(self.r(cmd), "sed-unchecked", msg=cmd)
+        self.assertIsNone(self.r("sed \"$X\" -n p f"))  # a lone dynamic word is still fine
+
+    def test_a_writer_sed_with_a_glob_is_left_to_the_sandbox(self):
+        # For a writer the sandbox bounds the glob; the policy still checks the literal operands
+        # it can see (the brace-smuggled residual is the stated contract).
+        self.assertIsNone(self.wb("sed -n 's/a/b/p' *.log"))
+        self.assertDenied(self.wb("sed -n 'w ../../../main.py' *.log"), "worktree-root")
+
+    def test_a_glob_cant_demote_a_literal_script_to_an_unchecked_file(self):
+        # A trailing glob makes the operands ambiguous, but the first literal is still the script
+        # sed runs; it stays strictly parsed, so a no-space e/w command (GNU sed executes `edate`
+        # and writes `w.git/config` just like the spaced forms) is caught, not dropped as a name.
+        for cmd in ("sed 'edate' *.log", "sed '1erm -rf x' *.log"):
+            self.assertDenied(self.bash(cmd), "sed-exec", "stop_and_explain", cmd)
+        self.assertDenied(self.bash("sed 'w.git/config' *.log"), "protected-path")
+        self.assertDenied(self.wb("sed 'w.git/config' *.log"), "protected-path")
+        for cmd in ("sed 's/a/b/' *.txt", "sed -n 's/a/b/p' *.log"):
+            self.assertIsNone(self.bash(cmd), cmd)
+
+    def test_a_glob_doesnt_double_count_the_script_operand_as_a_file(self):
+        # With head_is_script the first operand IS the script, not an input file, so it must not
+        # reach the -i backup write-check (a latent spurious denial otherwise).
+        call = sp.SedCall(["sed", "-i.bak", "s/a/b/", "*.log"], [False, False, False, True])
+        self.assertEqual(call.scripts, ["s/a/b/"])
+        self.assertEqual(call.files, ["*.log"])
+
+    def test_sed_i_backup_names_follow_gnu_seds_symlink_handling(self):
+        # GNU sed 4.9 without --follow-symlinks writes the backup at the link path; with it, at
+        # the resolved target (which os.path.realpath matches). Verified empirically on sed 4.9.
+        self.assertEqual(sp.sed_backups(["a.txt"], ".bak", "/w", False), ["a.txt.bak"])
+        self.assertEqual(sp.sed_backups(["a.txt"], ".bak", "/w", True),
+                         ["a.txt.bak", os.path.realpath("/w/a.txt") + ".bak"])
 
 
 def _gnu_sed_sandbox():

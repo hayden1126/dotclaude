@@ -132,7 +132,9 @@ repo that turns the sandbox off loses subagent Bash; the policy still applies.
     sed's compiler does (bracket expressions, the s delimiter, text to the end of the line for
     a/i/c and file names). An `e` command or `s///e` flag is denied; `w`/`W` files, and with `-i`
     each file and its backup, are write targets. `-f` and a script sed would refuse are denied as
-    unchecked. A script in a variable stays unchecked.
+    unchecked. A script in a variable stays unchecked; a literal script beside a variable or glob
+    word is still read, but leniently, so an ordinary file name is not taken for a command. A `~`
+    in a `w` name or `-i` suffix is literal, the way sed reads it, not `$HOME`.
   - Wrappers are peeled: `env`, `command`, `exec`, `timeout`, `nice`, `nohup`, `xargs`, `find -exec`,
     `bash`/`sh`/`zsh -c` (recursively), and `eval` with a static argument.
   - A shell reading stdin (`… | sh`) and `source` (except `*/bin/activate`) are denied.
@@ -187,7 +189,8 @@ repo that turns the sandbox off loses subagent Bash; the policy still applies.
 - **Allowed:**
   - coreutils readers;
   - grep, rg and find without their exec, write or filter flags;
-  - jq, sed without `-i`, `e` or `w`, sort, uniq, diff;
+  - jq, sed without `-i`, `e` or `w` (and not with a glob or brace word, which could hide them);
+    sort, uniq, diff;
   - read-only git and its list forms;
   - curl GET and `wget -O-` to stdout;
   - `gh-public`;

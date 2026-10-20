@@ -129,9 +129,9 @@ def sandbox_view(tiers):
 
 # ---------------------------------------------------------------- paths
 
-def expand(p, home):
+def expand(p, home, tilde=True):
     p = str(p).replace("{uid}", str(os.getuid())).replace("{state_dir}", dc.state_dir(home))
-    if p == "~" or p.startswith("~/"):
+    if tilde and (p == "~" or p.startswith("~/")):
         p = home + p[1:]
     return os.path.normpath(p)
 
@@ -372,19 +372,33 @@ SED_LONG = {"binary": "b", "regexp-extended": "r", "debug": "", "expression": "e
 
 class SedCall:
     """A sed command line read as GNU getopt_long reads it, permuting, so an option may follow
-    an operand. scripts: each -e script, else the first operand (None where it is dynamic).
-    candidates: also the first operand when an -e follows it, since with POSIXLY_CORRECT set
-    getopt stops there and sed takes it as the script. files: the input files. in_place: the -i
-    suffix ("" for none), or None without -i. follow: --follow-symlinks."""
+    an operand. scripts: each -e script, else the first operand when it is a plain literal (the
+    script sed runs in the ordinary case, parsed strictly). candidates: operands that might be the
+    script but might be a file, judged leniently: the first operand when an -e follows it
+    (POSIXLY_CORRECT stops getopt there), and, when a dynamic or glob word is present, the operands
+    a vanishing or option-expanding word could promote (a later literal, or the first one when it
+    is itself dynamic or a glob). files: the input files. in_place: the -i suffix ("" for none),
+    or None without -i. follow: --follow-symlinks."""
 
-    def __init__(self, args):
+    def __init__(self, args, globs=None):
+        globs = globs if globs is not None else [False] * len(args)
         self.scripts, self.candidates, self.in_place, self.follow = [], [], None, False
-        operands, e_after_operand = [], False
-        words = list(args[1:])
+        operands, e_after_operand = [], False  # operands: (text, is_glob) pairs
+        # A dynamic ($VAR) or glob/brace word can change which word sed runs as the script, so the
+        # policy can't always be sure which operand that is. The first operand, when a plain
+        # literal, is still the script sed runs in the ordinary case (a later glob only adds input
+        # files, unless it smuggles in an option, the residual left to the sandbox), so it stays a
+        # definite script, parsed strictly and refused if it holds an e or w. The operands that a
+        # vanishing or option-expanding word could promote to the script (a later literal, or the
+        # first one when it is itself dynamic or a glob) are judged leniently in token mode
+        # (sed_candidate_ops), so an ordinary file name like error.log isn't read as a command.
+        # (A researcher, with no sandbox backstop for a write, refuses a glob or brace before here.)
+        ambiguous = any(a is None for a in args[1:]) or any(globs[1:])
+        words = list(zip(args[1:], globs[1:]))
         while words:
-            a = words.pop(0)
+            a, g = words.pop(0)
             if a is None or a == "-" or not a.startswith("-"):
-                operands.append(a)
+                operands.append((a, g))
                 continue
             if a == "--":
                 operands += words
@@ -400,12 +414,21 @@ class SedCall:
                     self.in_place = value or ""
                 elif opt == "F":
                     self.follow = True
-        if self.scripts:
-            if e_after_operand and operands[0] is not None:
-                self.candidates.append(operands[0])
-            self.files = operands
+        self.files = [a for a, g in operands]
+        head_is_script = bool(operands) and operands[0][0] is not None and not operands[0][1]
+        if self.scripts:                       # -e / --expression gives the definite scripts
+            if ambiguous:
+                self.candidates += [a for a, g in operands if a is not None]
+            elif e_after_operand and operands and operands[0][0] is not None:
+                self.candidates.append(operands[0][0])
+        elif not ambiguous:
+            self.scripts, self.files = self.files[:1], self.files[1:]
+        elif head_is_script:
+            self.scripts = [operands[0][0]]
+            self.files = [a for a, g in operands[1:]]
+            self.candidates += [a for a, g in operands[1:] if a is not None]
         else:
-            self.scripts, self.files = operands[:1], operands[1:]
+            self.candidates += [a for a, g in operands if a is not None]
 
     @staticmethod
     def _options(a, words):
@@ -423,7 +446,7 @@ class SedCall:
             if takes == 1 and not eq:
                 if not words:
                     raise SedError(f"sed would refuse {a} (it needs a value)")
-                value = words.pop(0)
+                value = words.pop(0)[0]
             return [(opt, value)]
         out = []
         for k, c in enumerate(a[1:], 2):
@@ -437,7 +460,7 @@ class SedCall:
             if takes == 1 and not value:
                 if not words:
                     raise SedError(f"sed would refuse -{c} (it needs a value)")
-                value = words.pop(0)
+                value = words.pop(0)[0]
             out.append((c, value))
             break
         return out
@@ -456,6 +479,23 @@ def sed_backups(files, suffix, cwd, follow):
             names = [f, os.path.realpath(os.path.join(cwd, f))] if follow else [f]
             out += [ext.replace("*", name) for name in names]
     return out
+
+
+def sed_candidate_ops(script):
+    """The e and w uses in a candidate operand that a dynamic or glob word might make sed run as
+    the script (SedCall.candidates). Read in token mode: a bare e, w or W command counts only
+    where its command letter stands as its own token, so an ordinary file name like error.log
+    (which GNU sed would otherwise read as an e command) is not taken for one. Returns the ops
+    opened before any parse error too, since sed opens a w file as it compiles the command,
+    before a later error could reject the script."""
+    if script is None:
+        return []
+    part = _SedScript(script, candidate=True)
+    try:
+        part.compile()
+    except SedError:
+        pass
+    return part.ops
 
 
 def sed_ops(*scripts):
@@ -480,11 +520,22 @@ def sed_ops(*scripts):
 class _SedScript:
     """GNU sed 4.9's sed/compile.c over one script, function by function under the same names:
     where it reads a pattern, a replacement, a text, a label or a file name, and where the next
-    command starts. Its error checks that don't move those boundaries are left out: a script
-    sed refuses runs none of its commands."""
+    command starts. Its error checks that don't move those boundaries are left out. candidate:
+    judge a bare e, w or W command only where its command letter stands as its own token (for an
+    operand that might be a file name, not a script). A script sed later refuses has still opened
+    the w files it compiled before the error, so compile() keeps the ops it found by then."""
 
-    def __init__(self, text):
+    def __init__(self, text, candidate=False):
         self.s, self.i, self.ops, self.pending = text, 0, [], False
+        self.candidate = candidate
+
+    def _token_end(self):
+        """True where the next character ends the current command's token (a blank, newline,
+        separator, brace, comment or end of script), so a command letter here is that command and
+        not the start of a file name like exam.txt."""
+        nxt = self.inchar()
+        self.savchar(nxt)
+        return nxt in (None, " ", "\t", "\n", "\v", "\f", "\r", ";", "}", "#")
 
     def inchar(self):
         if self.i >= len(self.s):
@@ -704,7 +755,8 @@ class _SedScript:
                     raise SedError("unexpected `}'")
                 self.read_end_of_cmd()
             elif ch == "e":
-                self.ops.append(("e", None))
+                if not self.candidate or self._token_end():
+                    self.ops.append(("e", None))
                 ch = self.in_nonblank()
                 if ch not in (None, "\n"):
                     self.read_text(ch)
@@ -727,7 +779,12 @@ class _SedScript:
             elif ch in "=dDFgGhHnNpPzx":
                 self.read_end_of_cmd()
             elif ch in "rRwW":
-                self.ops.append(("r" if ch in "rR" else "w", self.read_filename()))
+                op = "r" if ch in "rR" else "w"
+                nxt = self.inchar()  # a real `w file` has a blank before the name; wfile is a name
+                self.savchar(nxt)
+                name = self.read_filename()
+                if op == "r" or not self.candidate or nxt in (" ", "\t"):
+                    self.ops.append((op, name))
             elif ch == "s":
                 slash = self.delimiter()
                 if not (self.match_slash(slash, True) and self.match_slash(slash, False)):
@@ -940,11 +997,13 @@ class Analyzer:
             roots.append((self._parent_root, "the parent session's checkout"))
         return roots
 
-    def check_write_path(self, path, base, strict_root=False):
+    def check_write_path(self, path, base, strict_root=False, tilde=True):
         """A literal write target. strict_root: the file tools, where a writer may only
         touch its worktree and temp; Bash targets are held to the worktree only inside the
-        main checkout and the parent session's checkout (the sandbox already stops the rest)."""
-        p = resolve(expand(path, self.home), base)
+        main checkout and the parent session's checkout (the sandbox already stops the rest).
+        tilde=False for sed's own write targets: sed reads a ~ in a w name or -i suffix
+        literally, where the shell would have expanded one it meant as $HOME."""
+        p = resolve(expand(path, self.home, tilde=tilde), base)
         hit = self.protected(p)
         if hit:
             self.deny("protected-path", "hard_stop",
@@ -1334,7 +1393,7 @@ class Analyzer:
             self.curl(args)
         elif base == "wget":
             self.wget(args)
-        self.write_targets(base, args, cwd)
+        self.write_targets(base, args, globs, cwd)
         return cwd
 
     def cd(self, args, cwd):
@@ -1347,7 +1406,7 @@ class Analyzer:
                       f"cd {target} leaves your worktree ({self.root}); stay inside it")
         return new
 
-    def write_targets(self, base, args, cwd):
+    def write_targets(self, base, args, globs, cwd):
         pos = [a for a in args[1:] if a is None or not a.startswith("-")]
         targets = []
         tdir = None
@@ -1367,17 +1426,21 @@ class Analyzer:
         elif base == "dd":
             targets = [a.split("=", 1)[1] for a in args[1:] if a and a.startswith("of=")]
         elif base == "sed":
-            targets = self.sed_writes(args, cwd)
+            for t in self.sed_writes(args, globs, cwd):
+                if t is not None:
+                    self.check_write_path(t, cwd, tilde=False)
+            return
         for t in targets:
             if t is not None:
                 self.check_write_path(t, cwd)
 
-    def sed(self, args):
+    def sed(self, args, globs):
         """A sed call (SedCall) and the e, r and w uses in its scripts (sed_ops). A script in a
-        variable stays unchecked: refusing it would refuse `sed -n "${N}p"`. A candidate that
-        doesn't parse is a file name, as sed reads it without POSIXLY_CORRECT."""
+        variable stays unchecked: refusing it would refuse `sed -n "${N}p"`. A candidate operand
+        (one a dynamic or glob word might make the script) is judged leniently in token mode, so
+        an ordinary file name isn't read as a command (sed_candidate_ops)."""
         try:
-            call = SedCall(args)
+            call = SedCall(args, globs)
         except SedError as e:
             self.deny("sed-unchecked", "stop_and_explain", str(e))
         try:
@@ -1387,17 +1450,14 @@ class Analyzer:
                       f"the sed script doesn't parse as GNU sed reads it ({e}), so the policy "
                       "can't check it for e and w commands")
         for script in call.candidates:
-            try:
-                ops += sed_ops(script)
-            except SedError:
-                pass
+            ops += sed_candidate_ops(script)
         return call, ops
 
-    def sed_writes(self, args, cwd):
+    def sed_writes(self, args, globs, cwd):
         """The files a sed call writes: each w/W command's and s///w flag's file, and with -i
         each input file and its backup. An e command runs a shell command the policy can't see,
         so it is refused outright."""
-        call, ops = self.sed(args)
+        call, ops = self.sed(args, globs)
         if any(op == "e" for op, _ in ops):
             self.deny("sed-exec", "stop_and_explain",
                       "a sed e command runs a shell command the policy can't see")
@@ -1715,7 +1775,13 @@ class Analyzer:
         if base == "cd":
             return self.cd(args, cwd)
         if base == "sed":
-            call, ops = self.sed(args)
+            if any(globs[1:]):
+                # No sandbox backstop for a researcher write, and a glob or brace word hides
+                # from the policy what it expands to: it could be an option or a whole script.
+                self.deny("sed-unchecked", "stop_and_explain",
+                          "sed with a glob or brace argument could expand to an option or a "
+                          "script the policy can't check; name the files or pipe them in")
+            call, ops = self.sed(args, globs)
             if call.in_place is not None or any(op in ("e", "w") for op, _ in ops):
                 self.deny("researcher-flag", "scope_down",
                           "sed -i or a sed w/W/e command writes a file or runs one")
