@@ -132,7 +132,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **setup.sh's ccstatusline write crashes on an odd settings shape** (from lane json-depth's PR 1
     writer, 2026-10-19; predates it): the heredoc's `has_ctx_widget` assumes `lines` is a list of
     lists, and a directory at the destination crashes it too.
-  - **Two delegation readers ignore CLAUDE_CONFIG_DIR** (from lane json-depth's PR 2 plan pass,
+  - **Two delegation readers ignore CLAUDE_CONFIG_DIR: fix in #133 (lane config-dir, open; the
+    lead drops this item at its merge)** (from lane json-depth's PR 2 plan pass,
     2026-10-19; predates it): `dc.claude_ancestor` and `dc.live_sessions` read a hard-coded
     `~/.claude/sessions`, while `dc.session_toplevel` uses `sessions_dir`.
   - **Lanes tell the lead at workflow stages** (Hayden, 2026-10-19, in lane branch-reuse's
