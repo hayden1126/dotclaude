@@ -159,16 +159,15 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     lead drops this item at its merge)** (from lane json-depth's PR 2 plan pass,
     2026-10-19; predates it): `dc.claude_ancestor` and `dc.live_sessions` read a hard-coded
     `~/.claude/sessions`, while `dc.session_toplevel` uses `sessions_dir`.
-  - **Lanes tell the lead before an act past their worktree: lead PR #136 (draft,
-    `docs/lane-notices`, worktree `.claude/worktrees/lane-notices`).** Hayden's rule
-    (2026-10-19); the PR body holds the edits and the verification. Hayden approved the push and
-    the draft (2026-10-20). Once it merges, new briefs drop the hand-written "Message the lead
-    before any act..." Constraints line, and the worktree goes (`git worktree remove`).
+  - **Lanes tell the lead before an act past their worktree: merged as #136** (lead PR,
+    2026-10-20, installed from main). New briefs drop the hand-written "Message the lead before
+    any act..." Constraints line: the skill carries it (Lifecycle step 3).
   - **Watch: `~/.claude/CLAUDE.md` vanished after a lane install** (2026-10-20 00:53Z). Lane
     config-dir's `setup.sh` (00:52:28 to 00:52:38, sandbox off) linked it, then it was gone by
     00:53:02, with no backup (a symlink is removed, not backed up). Hayden relinked it by hand
     to `~/dotclaude-lanes/config-dir/CLAUDE.md` (the lead's own `ln -s` was refused as
-    self-modification). config-dir's timeline (its session 1f1393e7) rules out its code, its
+    self-modification), and the #136 reinstall put it back on main, where it survived the
+    sandboxed commands right after. config-dir's timeline (its session 1f1393e7) rules out its code, its
     tests and install-state's prune; `~/.claude`'s mtime moved 190 ms after a sandboxed
     `delegation-ledger sandbox-denials` started. Its guess, unproven: the Bash sandbox. A
     sandbox config built while `link()` sat between `rm` and `ln -s` lists the literal path in
@@ -277,8 +276,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
      holds, so `~/.claude/CLAUDE.md` and the other links point into it) and practices (order 2)
      run; their state is in their records (`lane ls`). On `merged #133`, run the chain (The
      lead, step 7), then check `ls -la ~/.claude/CLAUDE.md` points at the main checkout (the
-     Watch item in Backlog). Lead PR #136 waits on Hayden's ready and merge; it touches no live
-     lane's files.
+     Watch item in Backlog). The #136 reinstall released config-dir's install hold: it
+     reinstalls from its worktree before ready.
   1. Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
      against the code and log it in the backlog. When lanes run again, follow The lead in
      `skills/lanes/SKILL.md` (step 7 is the post-merge chain; never amend or rebase the lead
@@ -286,7 +285,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
      (lane branch-reuse); `--reuse-branch` overrides.
   - The lead's commits: `git log --first-parent main..chore/after-pr4` (STATUS only, plus merges
     of main). Session 45664d28 (2026-10-20) ran `2c28e7e..HEAD` on the lead branch: the #135
-    chain (pr-horizon closed), lead PR #136, the skill-suite backlog item and lane practices,
+    chain (pr-horizon closed), lead PR #136 (merged, installed), the skill-suite backlog item
+    and lane practices,
     and the CLAUDE.md watch item.
   - Open with Hayden, nothing for the lead to do: the capella-studio lead asked how a new lane
     should clear the excluded-command guard, and the lead recommended (2026-10-17) pointing
