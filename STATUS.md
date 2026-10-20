@@ -87,20 +87,18 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lanes** (briefs in each record). Merge order (Hayden's reorder, 2026-10-20: the
-    atomic link first, so no later install runs the old `link()`; link-atomic merged as #140
-    the same day, summary-retire as #139): 1 exam-prep (`feat/exam-prep-skill`, carries the
-    lead's notes; opened 2026-10-20 on Hayden's ok: the exam-prep skill suite below; ahead of
-    practices and mute so it can install from its lane for the dry run before round 1's
-    go/no-go, Thu 10/22), 2 practices (`feat/practices-suite`, opened 2026-10-19 at Hayden's ask: the skill
-    suite below, researched from his project memories and online sources, then the security
-    skill only; Hayden picked "security first"; its spec waits on his review). link-atomic and
-    summary-retire opened 2026-10-20 on Hayden's ok (Backlog items below). summary-retire merged
-    as #139, link-atomic as #140, pr-horizon as #135 and config-dir as #133 (2026-10-20):
-    installed from main, the lanes closed. 3 mute (`feat/device-mute`, opened 2026-10-20 on
-    Hayden's ok: the device-wide mute below, plus `setup-tmux.sh`'s `link()` fix, his pick the
-    same day), 4 policy-fp (`fix/policy-false-denials`, opened 2026-10-20 on Hayden's ok: the
-    three subagent-policy false denials below). Hayden raised the cap
+  - **Live lanes** (briefs in each record). Merge order (2026-10-20): 1 practices
+    (`feat/practices-suite`, draft #142, carries the lead's notes; opened 2026-10-19 at Hayden's
+    ask: the skill suite below, security first). Hayden moved it ahead of exam-prep the same day
+    since #142 is finished; if it hasn't merged by Wed 10/21 noon, the lead reinstalls from main
+    and exam-prep goes first again. 2 exam-prep (`feat/exam-prep-skill`, opened 2026-10-20: the
+    exam-prep skill suite below; ahead of mute and policy-fp so it can install from its lane for
+    the dry run before round 1's go/no-go, Thu 10/22). 3 mute (`feat/device-mute`, #141,
+    opened 2026-10-20: the device-wide mute below, plus `setup-tmux.sh`'s `link()` fix).
+    4 policy-fp (`fix/policy-false-denials`, opened 2026-10-20: the three subagent-policy false
+    denials below). Each opened on Hayden's ok. Merged and closed 2026-10-20, installed from
+    main: summary-retire (#139), link-atomic (#140, which Hayden ordered first so no later
+    install ran the old `link()`), pr-horizon (#135), config-dir (#133). Hayden raised the cap
     from 3 to 4 on 2026-10-20 for exam-prep; it is full.
   - **Lane ask quality: done** (2026-10-19 to 2026-10-20). ask-check merged as #131 and was
     installed from main 2026-10-20: a PreToolUse hook on AskUserQuestion (`hooks/ask_check.py`)
