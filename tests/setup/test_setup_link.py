@@ -1,5 +1,6 @@
 """setup.sh's link helpers (its section 1): each link and each settings.json copy lands with one
-rename, so an installed path never goes missing, not even between two commands (stdlib only).
+rename, so an installed path doesn't go missing, not even between two commands, outside the
+cases that still remove first (stdlib only).
 
 Each test cuts section 1 out of setup.sh and runs it in bash on a temp machine, with shims first
 on PATH for the commands it runs. A shim runs the real command, then logs a line when the watched
@@ -16,13 +17,15 @@ SETUP = os.path.join(REPO, "setup.sh")
 TOOLS = ("rm", "ln", "mv", "cp", "mkdir", "python3", "dirname", "basename", "cmp", "uname")
 
 # Runs the real tool, then checks the watched path. The tool FAKE_TOOL names prints FAKE_OUT
-# instead, FAIL_TOOL's fails at once, and INTERRUPT_TOOL's sends its process group a Ctrl-C.
+# instead, FAIL_TOOL's fails at once, INTERRUPT_TOOL's sends its process group a Ctrl-C, and
+# SLOW_TOOL's waits half a second after its work.
 SHIM = """#!/bin/bash
 [[ ${FAKE_TOOL:-} == %(name)s ]] && { printf '%%s\\n' "$FAKE_OUT"; exit 0; }
 [[ ${FAIL_TOOL:-} == %(name)s ]] && exit 1
 [[ ${INTERRUPT_TOOL:-} == %(name)s ]] && { kill -INT 0; sleep 5; }
 %(real)s "$@"
 rc=$?
+[[ ${SLOW_TOOL:-} == %(name)s ]] && sleep 0.5
 if [[ -n ${WATCH:-} && ! -e $WATCH && ! -L $WATCH ]]; then
   printf 'missing %%s after %%s %%s\\n' "$WATCH" %(name)s "$*" >> "$WATCH_LOG"
 fi
@@ -69,12 +72,23 @@ class Swap(unittest.TestCase):
         self.env = dict(os.environ, PATH=bins + os.pathsep + os.environ["PATH"],
                         CLAUDE_DIR=self.claude, BACKUP_DIR=self.backup, WATCH_LOG=self.log)
 
-    def run_sh(self, body, watch=None, **env):
-        """body after section 1, in bash -eu like setup.sh, watching watch. Its own session, so
-        an INTERRUPT_TOOL Ctrl-C reaches only the script."""
+    def start_sh(self, body, watch=None, **env):
+        """body after section 1, started in bash -eu like setup.sh, watching watch. Its own
+        session, so an INTERRUPT_TOOL Ctrl-C reaches only the script."""
         script = "set -euo pipefail\nsay() { printf '%s\\n' \"$*\"; }\n" + section() + "\n" + body
-        return subprocess.run(["bash", "-c", script], env=dict(self.env, WATCH=watch or "", **env),
-                              capture_output=True, text=True, timeout=30, start_new_session=True)
+        return subprocess.Popen(["bash", "-c", script], env=dict(self.env, WATCH=watch or "", **env),
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                start_new_session=True)
+
+    def run_sh(self, body, watch=None, **env):
+        p = self.start_sh(body, watch, **env)
+        out, err = p.communicate(timeout=30)
+        return subprocess.CompletedProcess(p.args, p.returncode, out, err)
+
+    def dead_pid(self):
+        p = subprocess.Popen(["true"])
+        p.wait()
+        return p.pid
 
     def gaps(self):
         return read(self.log).splitlines() if os.path.exists(self.log) else []
@@ -186,20 +200,56 @@ class Swap(unittest.TestCase):
         dst = os.path.join(self.claude, "CLAUDE.md")
         self.plant(os.path.join(self.old, "CLAUDE.md"), dst)
         stale = os.path.join(self.old, "skills", "s1")
-        self.plant(stale, os.path.join(self.claude, ".CLAUDE.md.dotclaude-swap"))
+        self.plant(stale, os.path.join(self.claude, f".CLAUDE.md.dotclaude-{self.dead_pid()}"))
         self.link(os.path.join(self.repo, "CLAUDE.md"), dst)
         self.assertEqual(os.readlink(dst), os.path.join(self.repo, "CLAUDE.md"))
         self.assertEqual(os.listdir(stale), ["SKILL.md"])
         self.assertEqual(self.gaps(), [])
         self.assertEqual(self.leftovers(), [])
 
+    def test_a_dead_runs_temp_under_this_pid_is_cleared_not_followed(self):
+        dst = os.path.join(self.claude, "CLAUDE.md")
+        self.plant(os.path.join(self.old, "CLAUDE.md"), dst)
+        stale = os.path.join(self.old, "skills", "s1")
+        r = self.run_sh(f'ln -s "{stale}" "{self.claude}/.CLAUDE.md.dotclaude-$$"\n'
+                        f'link "{self.repo}/CLAUDE.md" "{dst}"', watch=dst)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(os.readlink(dst), os.path.join(self.repo, "CLAUDE.md"))
+        self.assertEqual(os.listdir(stale), ["SKILL.md"])
+        self.assertEqual(self.leftovers(), [])
+
     def test_a_killed_runs_temp_dir_is_cleared(self):
         # git-bash's ln -s copies, so a skill's leftover temp is a whole dir.
         dst = os.path.join(self.claude, "skills", "s1")
         self.plant(os.path.join(self.old, "skills", "s1"), dst)
-        write(os.path.join(self.claude, "skills", ".s1.dotclaude-swap", "SKILL.md"), "copy\n")
+        write(os.path.join(self.claude, "skills", f".s1.dotclaude-{self.dead_pid()}", "SKILL.md"), "copy\n")
         self.link(os.path.join(self.repo, "skills", "s1"), dst)
         self.assertEqual(os.readlink(dst), os.path.join(self.repo, "skills", "s1"))
+        self.assertEqual(self.gaps(), [])
+        self.assertEqual(self.leftovers(), [])
+
+    def test_a_live_runs_temp_is_left_alone(self):
+        dst = os.path.join(self.claude, "CLAUDE.md")
+        live = os.path.join(self.claude, f".CLAUDE.md.dotclaude-{os.getpid()}")
+        self.plant(os.path.join(self.old, "CLAUDE.md"), live)
+        self.link(os.path.join(self.repo, "CLAUDE.md"), dst)
+        self.assertEqual(os.readlink(dst), os.path.join(self.repo, "CLAUDE.md"))
+        self.assertEqual(self.leftovers(), [live])
+
+    def test_two_runs_at_once_never_touch_each_others_temp(self):
+        # Where flock is missing (macOS, git-bash) two runs can relink one skill together. A
+        # slow ln holds each temp open: one shared temp name would let the second ln follow the
+        # first's link into its checkout.
+        dst = os.path.join(self.claude, "skills", "s1")
+        self.plant(os.path.join(self.repo, "skills", "s1"), dst)
+        srcs = [os.path.join(root, "skills", "s1") for root in (self.repo, self.old)]
+        runs = [self.start_sh(f'link "{src}" "{dst}"', watch=dst, SLOW_TOOL="ln") for src in srcs]
+        for p in runs:
+            out, err = p.communicate(timeout=30)
+            self.assertEqual(p.returncode, 0, err)
+        self.assertIn(os.readlink(dst), srcs)
+        for src in srcs:
+            self.assertEqual(os.listdir(src), ["SKILL.md"])
         self.assertEqual(self.gaps(), [])
         self.assertEqual(self.leftovers(), [])
 

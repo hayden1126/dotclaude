@@ -73,26 +73,34 @@ mkdir -p "$CLAUDE_DIR"
 # ---------------------------------------------------------------------------
 # 1. Symlink helpers — back up any real file we are about to replace
 # ---------------------------------------------------------------------------
-# An installed path is never removed and then remade: the new entry is built under a hidden temp
-# name beside it (SWAP_TMP), then renamed over it in one step, so the path never goes missing. A
-# sandboxed command that builds its config in such a gap sees the literal path, and on 2026-10-20
-# ~/.claude/CLAUDE.md vanished right after one. os.replace never follows the old entry, where a
-# plain mv would drop a new skill link inside the old skill dir. A run that stops before the
-# rename (an error under set -e, a Ctrl-C) leaves the path as the steps before it left it, and
-# the exit trap removes the temp, along with section 2's merged settings. rm -rf, since on
-# git-bash, where ln -s copies, a skill's temp is a dir; it never follows a link.
+# An installed path is replaced, not removed and then remade: the new entry is built under a
+# hidden temp name beside it (SWAP_TMP), then renamed over it in one step, so the path doesn't go
+# missing (the cases that still remove first are named below). A sandboxed command that builds
+# its config in such a gap sees the literal path, and on 2026-10-20 ~/.claude/CLAUDE.md vanished
+# right after one. os.replace never follows the old entry, where a plain mv would drop a new
+# skill link inside the old skill dir. A run that stops before the rename (an error under set -e,
+# a Ctrl-C) leaves the path as the steps before it left it, and the exit trap removes the temp,
+# along with section 2's merged settings: one rm, so a failure on one can't skip the other under
+# set -e. rm -rf, since on git-bash, where ln -s copies, a skill's temp is a dir; it never
+# follows a link.
 SWAP_TMP="" MERGED_SETTINGS=""
-trap 'rm -rf ${SWAP_TMP:+"$SWAP_TMP"}; rm -f ${MERGED_SETTINGS:+"$MERGED_SETTINGS"}' EXIT
+trap 'rm -rf ${SWAP_TMP:+"$SWAP_TMP"} ${MERGED_SETTINGS:+"$MERGED_SETTINGS"}' EXIT
 # Windows refuses to rename over a link to a dir (git-bash with native symlinks), so a Windows
 # shell removes the old link first. The gap is back there, but no Bash sandbox runs on native
 # Windows to trip on it.
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) RENAME_OVER_LINKS=0 ;; *) RENAME_OVER_LINKS=1 ;; esac
 
-# Point SWAP_TMP at the hidden temp beside $1 (one dir, so the rename stays on one file system),
-# clearing a leftover of a run the trap couldn't clean up after (SIGKILL, a power loss): ln and cp
-# would follow it. One fixed name, so every run clears what any earlier one left.
+# Point SWAP_TMP at this run's hidden temp beside $1: one dir, so the rename stays on one file
+# system, and named by pid, so two runs at once (no flock on macOS or git-bash) never touch each
+# other's temp. Beside $1, a temp whose run is gone (a SIGKILL or a power loss, out of the trap's
+# reach) is cleared, and so is one under this pid (a dead run's, reused): ln and cp would follow
+# it, and install-state.py would read a leftover link as a live one.
 swap_tmp() {
-  SWAP_TMP="$(dirname "$1")/.$(basename "$1").dotclaude-swap"
+  local left
+  SWAP_TMP="$(dirname "$1")/.$(basename "$1").dotclaude-$$"
+  for left in "$(dirname "$1")/.$(basename "$1").dotclaude-"*; do
+    kill -0 "${left##*-}" 2>/dev/null || rm -rf "$left"
+  done
   rm -rf "$SWAP_TMP"
 }
 
