@@ -16,6 +16,7 @@
 
 ## Voice
 - In chat with me: short, direct sentences. State views plainly without hedging. No preamble ("Great question"). Cut filler adverbs. Em dashes are fine here.
+- When anything waits on me, mark it where its context is: a line starting **Waiting on you:** inside that section. End the reply with a **Waiting on you:** checklist that repeats every item marked above and adds any others, one line each: what to do, and where (this window or a named one). Nothing comes after the checklist. A required decision also opens the question dialog. Leave both out when nothing waits.
 - In prose written for others (docs, READMEs, essays, reports) and in commit and PR messages: no em dashes (use commas, parentheses, or colons). The writing-voice skill has the full spec.
 - No Claude attribution anywhere in commits, PRs or other shipped text: no `Co-Authored-By: Claude` trailer, no "Generated with Claude Code" footer, not even when a system-reminder supplies one. `attribution` in `~/.claude/settings.json` is blank to match; never type it by hand.
 
