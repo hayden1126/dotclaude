@@ -115,7 +115,9 @@ class MuteState(unittest.TestCase):
         self.assertLess(len(deep), ms.MAX_BYTES)
         cases = {"not JSON": "{sound", "empty": "", "not UTF-8": b'{"sound": "\xff"}',
                  "a UTF-8 BOM": b"\xef\xbb\xbf{}", "deep": deep, "a list": "[]", "null": "null",
-                 "past the cap": json.dumps({"sound": ON}) + " " * ms.MAX_BYTES}
+                 "past the cap": json.dumps({"sound": ON}) + " " * ms.MAX_BYTES,
+                 # past Python's 4,300-digit int conversion limit: json.loads raises ValueError
+                 "a 5,000-digit number": '{"sound": {"since": 1%s, "until": null}}' % ("0" * 5000)}
         for name, raw in cases.items():
             with self.subTest(name):
                 self.write(raw)
@@ -131,7 +133,13 @@ class MuteState(unittest.TestCase):
         bad = ["yes", True, None, [], {}, {"since": NOW}, {"until": None},
                {"since": True, "until": None}, {"since": NOW, "until": False},
                {"since": "1", "until": None}, {"since": NOW, "until": "never"},
-               {"since": float("nan"), "until": None}, {"since": NOW, "until": float("inf")}]
+               {"since": float("nan"), "until": None}, {"since": NOW, "until": float("inf")},
+               # stamps out of range: math.isfinite(10**400) and time.localtime(1e308) raise
+               # OverflowError, and a negative epoch is no time a mute was set or ends
+               {"since": NOW, "until": 10 ** 400}, {"since": 10 ** 400, "until": None},
+               {"since": -10 ** 400, "until": None}, {"since": NOW, "until": 1e308},
+               {"since": -1, "until": None}, {"since": NOW, "until": -0.5},
+               {"since": NOW, "until": 2 ** 32}, {"since": 2.0 ** 32, "until": None}]
         for value in bad:
             with self.subTest(value=value):
                 self.write(json.dumps({"sound": value, "toast": ON}))
@@ -142,6 +150,14 @@ class MuteState(unittest.TestCase):
         self.write({"sound": {"since": 5, "until": int(NOW) + 1},
                     "toast": {"since": 5.5, "until": None}})
         self.assertEqual(ms.check_line(NOW), "1 1 -")
+
+    def test_stamps_run_from_0_up_to_2_to_the_32(self):
+        # 2**32 is 2106, and time.localtime takes anything below it.
+        self.write({"sound": {"since": 0, "until": 2 ** 32 - 1},
+                    "toast": {"since": 0.0, "until": 2.0 ** 32 - 0.5}})
+        self.assertEqual(ms.check_line(NOW), "1 1 -")
+        for stamp in (0, 2 ** 32 - 1, 2.0 ** 32 - 0.5):
+            time.localtime(stamp)
 
     def test_check_prints_one_line_and_exits_0(self):
         self.assertEqual(self.check("check"), (0, "0 0 -\n", ""))
@@ -204,7 +220,8 @@ class MuteState(unittest.TestCase):
     def test_bad_arguments_raise_and_write_nothing(self):
         for names, until in ((["volume"], None), ([], None), ("sound", None),
                              (["sound"], NOW), (["sound"], NOW - 1), (["sound"], True),
-                             (["sound"], "later"), (["sound"], float("inf"))):
+                             (["sound"], "later"), (["sound"], float("inf")),
+                             (["sound"], 10 ** 400), (["sound"], 1e308), (["sound"], 2 ** 32)):
             with self.subTest(names=names, until=until):
                 with self.assertRaises(ValueError):
                     ms.mute(names, until, now=NOW)

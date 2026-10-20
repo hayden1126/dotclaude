@@ -212,7 +212,8 @@ def tell(client, text: str) -> None:
 
 
 def write_failed(e: OSError, client) -> int:
-    path = e.filename or ms.state_dir()
+    # A failed os.replace(temp, flag) names the temp as filename and the flag as filename2.
+    path = e.filename2 or e.filename or ms.state_dir()
     if os.path.basename(path).startswith(".tmp-"):  # write_json's temp file: its dir refused it
         path = os.path.dirname(path)
     line = "can't write %s: %s" % (path, e.strerror or e)

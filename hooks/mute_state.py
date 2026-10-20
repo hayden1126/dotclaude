@@ -15,14 +15,15 @@ the design; tests/setup/test_mute_state.py, test_tmux_hooks.py and test_claude_m
   {"sound": {"since": <epoch>, "until": <epoch> | null}, "toast": {...}}. A switch is muted while
   its key holds such an object and `until` is null (until unmuted) or still ahead of now; `since`
   is when that mute was set. Stamps are wall-clock epoch seconds (an hour's expiry doesn't mind
-  the WSL clock's steps), and a bool is not a number. Unknown keys are ignored. No file, or no
-  key, means not muted.
+  the WSL clock's steps): an int or float from 0 up to, not including, MAX_STAMP (2**32, in
+  2106), so every consumer can do float math and time.localtime on one; a bool is not a number.
+  Unknown keys are ignored. No file, or no key, means not muted.
 - current(now) -> (muted, note): the switches muted now, name -> {"since", "until"}, and why the
   flag couldn't be read in full: None; "unreadable" (an OSError other than a missing file, a
   dangling link, or no regular file: a directory, a FIFO); or "malformed" (not UTF-8 JSON, nested
-  too deep, past MAX_BYTES, not an object, or a switch of the wrong shape). A switch that can't
-  be read is not muted (redundancy over silence: a ring too many beats a silent miss), and a good
-  switch beside a bad one still counts.
+  too deep, past MAX_BYTES, not an object, or a switch of the wrong shape, a stamp out of range
+  included). A switch that can't be read is not muted (redundancy over silence: a ring too many
+  beats a silent miss), and a good switch beside a bad one still counts.
 - mute(names, until, now) and unmute(names, now) -> the switches muted afterwards. Each holds an
   exclusive flock on mute.lock beside the flag (the menu and the CLI can race), starts from
   current() (a bad flag counts as empty: the person is setting the state now; expired entries
@@ -35,7 +36,6 @@ the design; tests/setup/test_mute_state.py, test_tmux_hooks.py and test_claude_m
 import contextlib
 import fcntl
 import json
-import math
 import os
 import stat
 import sys
@@ -43,6 +43,7 @@ import time
 
 NAMES = ("sound", "toast")
 MAX_BYTES = 64 * 1024  # a real flag is under 200 bytes
+MAX_STAMP = 2 ** 32  # 2106-02-07: time.localtime takes anything below it
 USAGE = "usage: mute_state.py check"
 
 
@@ -60,15 +61,17 @@ def lock_path() -> str:
     return os.path.join(state_dir(), "mute.lock")
 
 
-def is_number(v) -> bool:
-    """A finite int or float; a bool is not a number here."""
-    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+def is_stamp(v) -> bool:
+    """An epoch the flag can hold: an int or float, not a bool, with 0 <= v < MAX_STAMP. Python
+    compares an int with an int or a float exactly, so a 400-digit int is never made a float
+    (math.isfinite on one raises OverflowError), and NaN and the infinities fail the range."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v < MAX_STAMP
 
 
 def well_formed(entry) -> bool:
-    """A switch's value: {"since": <number>, "until": <number> | null}, other keys ignored."""
-    return (isinstance(entry, dict) and is_number(entry.get("since")) and "until" in entry
-            and (entry["until"] is None or is_number(entry["until"])))
+    """A switch's value: {"since": <stamp>, "until": <stamp> | null}, other keys ignored."""
+    return (isinstance(entry, dict) and is_stamp(entry.get("since")) and "until" in entry
+            and (entry["until"] is None or is_stamp(entry["until"])))
 
 
 def read_flag():
@@ -153,8 +156,8 @@ def mute(names, until, now=None) -> dict:
     (None)."""
     now = time.time() if now is None else now  # wall clock
     names = checked(names)
-    if until is not None and not (is_number(until) and until > now):
-        raise ValueError("until must be None or an epoch ahead of now, got %r" % (until,))
+    if until is not None and not (is_stamp(until) and until > now):
+        raise ValueError("until must be None or a stamp ahead of now, got %r" % (until,))
     with locked():
         muted, _ = current(now)
         for name in names:

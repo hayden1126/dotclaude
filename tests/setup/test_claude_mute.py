@@ -175,6 +175,38 @@ class ClaudeMute(unittest.TestCase):
         self.assertEqual(out.splitlines()[:2], ["sound:  on", "toasts: on"])
         self.assertIn("%s is unreadable" % self.flag, out)
 
+    def test_a_stamp_out_of_range_is_malformed_and_off_clears_it(self):
+        # math.isfinite(10**400) raised OverflowError under mute_state's lock, and
+        # time.localtime(1e308) in status: each crashed with a traceback, so `off` couldn't
+        # clear the flag and the menu wouldn't open.
+        huge = "1" + "0" * 400
+        flags = {"a 400-digit until": '{"sound": {"since": 1, "until": %s}}' % huge,
+                 "a 400-digit since": '{"sound": {"since": %s, "until": null}}' % huge,
+                 "until 1e308": '{"sound": {"since": 1, "until": 1e308}}',
+                 "a negative since": '{"sound": {"since": -1, "until": null}}'}
+        for name, raw in flags.items():
+            with self.subTest(name):
+                self.write(raw)
+                rc, out, err = self.run_cli("status")
+                self.assertEqual((rc, err), (0, ""))
+                self.assertEqual(out.splitlines()[:2], ["sound:  on", "toasts: on"])
+                self.assertIn("%s is malformed" % self.flag, out)
+                self.assertEqual(self.run_cli("mark"), (0, SOUND + "? \n", ""))
+                argv = self.menu()
+                self.assertTrue(argv[argv.index("-T") + 1].endswith(DOT + "flag malformed"), argv)
+                self.assertEqual(self.run_cli("off"), (0, "sound:  on\ntoasts: on\n", ""))
+                self.assertFalse(os.path.lexists(self.flag))
+
+    def test_on_over_a_huge_until_answers(self):
+        # The menu's items run `on` with --client, whose answer named the end with
+        # time.localtime: 1e308 is out of range now, so the switch reads as malformed and drops.
+        self.write('{"sound": {"since": 1, "until": 1e308}}')
+        rc, out, err = self.run_cli("on", "toast", "--until-off", "--client", CLIENT)
+        self.assertEqual((rc, out, err), (0, "sound:  on\ntoasts: muted until unmuted\n", ""))
+        self.assertEqual(sorted(self.on_disk()), ["toast"])
+        [m] = self.calls("display-message")
+        self.assertEqual(m[3], "claude-mute: sound on" + DOT + "toasts muted until unmuted")
+
     def test_the_end_shows_the_weekday_when_it_isnt_today(self):
         self.addCleanup(time.tzset)                           # runs once TZ is restored
         with mock.patch.dict(os.environ, {"TZ": "UTC"}):
@@ -215,12 +247,16 @@ class ClaudeMute(unittest.TestCase):
 
     def test_another_write_error_is_one_line_without_the_sandbox_hint(self):
         os.makedirs(self.flag)                               # a directory where the flag goes
-        rc, out, err = self.run_cli("off")
-        self.assertEqual((rc, out), (1, ""))
-        self.assertEqual(err.count("\n"), 1)
-        self.assertTrue(err.startswith("claude-mute: can't write %s: " % self.flag), err)
-        self.assertNotIn("Ctrl-b Enter", err)
-        self.assertNotIn("Traceback", err)
+        # `off` fails on the unlink; `on` on os.replace(temp, flag), whose error has the temp as
+        # filename and the flag as filename2: the line names the flag either way.
+        for args in (("off",), ("on",), ("on", "toast", "--for", "5m")):
+            with self.subTest(args=args):
+                rc, out, err = self.run_cli(*args)
+                self.assertEqual((rc, out), (1, ""))
+                self.assertEqual(err.count("\n"), 1)
+                self.assertEqual(err, "claude-mute: can't write %s: Is a directory\n" % self.flag)
+                self.assertNotIn("Traceback", err)
+                self.assertEqual(sorted(os.listdir(self.dir)), ["mute.json", "mute.lock"])  # no temp
 
     # --- the mark -------------------------------------------------------------------------
 
