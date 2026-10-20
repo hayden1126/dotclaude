@@ -87,13 +87,16 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lanes** (opened 2026-10-19; briefs in each record). Merge order: 1 practices
-    (carries the lead's notes; `feat/practices-suite`, opened 2026-10-19 at Hayden's ask: the skill suite below, researched
-    from his project memories and online sources, then the security skill only; Hayden picked
-    "security first"). pr-horizon merged as #135 and config-dir as #133 (2026-10-20): installed from main, both
-    lanes closed.
-    2 summary-retire (`chore/retire-summary-rows`) and 3 link-atomic (`fix/setup-atomic-link`),
-    both opened 2026-10-20 on Hayden's ok (Backlog items below). The lanes cap (3) is full.
+  - **Live lanes** (briefs in each record). Merge order (Hayden's reorder, 2026-10-20: the
+    atomic link first, so no later install runs the old `link()`): 1 link-atomic
+    (`fix/setup-atomic-link`, carries the lead's notes), 2 summary-retire
+    (`chore/retire-summary-rows`, which also takes the ccstatusline crash fix, Hayden's pick the
+    same day), 3 practices (`feat/practices-suite`, opened 2026-10-19 at Hayden's ask: the skill
+    suite below, researched from his project memories and online sources, then the security
+    skill only; Hayden picked "security first"; its spec waits on his review). link-atomic and
+    summary-retire opened 2026-10-20 on Hayden's ok (Backlog items below). pr-horizon merged as
+    #135 and config-dir as #133 (2026-10-20): installed from main, both lanes closed. The lanes
+    cap (3) is full.
   - **Lane ask quality: done** (2026-10-19 to 2026-10-20). ask-check merged as #131 and was
     installed from main 2026-10-20: a PreToolUse hook on AskUserQuestion (`hooks/ask_check.py`)
     denies risky asks with a checklist in the reason. branch-reuse merged as #130: `lane new`
@@ -148,14 +151,17 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     GDPR, session replay, CAN-SPAM, renewal terms, DMCA agent, privacy policy) and launch (store
     metadata, Open Graph, Search Console, IndexNow). Lead's pick: OWASP ASVS as the security
     backbone, the reels' concrete failures as planted-bug evals.
-  - **Gap check against AWS's agentic AI security principles** (Hayden, 2026-10-19): read
+  - **Gap check against AWS's agentic AI security principles** (Hayden, 2026-10-19; running
+    from the lead since 2026-10-20, Hayden's pick, no lane slot): read
     https://aws.amazon.com/blogs/security/four-security-principles-for-agentic-ai-systems/ and
     list what dotclaude's guards (sandbox, permission rules, delete, overwrite and excluded-command
     guards, subagent policy, lanes) don't cover. Unfixed security gaps go to the private
     findings file, not here ([[dotclaude-public-repo]]).
   - **setup.sh's ccstatusline write crashes on an odd settings shape** (from lane json-depth's PR 1
-    writer, 2026-10-19; predates it): the heredoc's `has_ctx_widget` assumes `lines` is a list of
-    lists, and a directory at the destination crashes it too.
+    writer, 2026-10-19; predates it): the heredoc's `has_ctx_widget` and `patch_paths` assume
+    `lines` is a list of lists of dicts, and a directory at the destination crashes
+    `shutil.copy`; under `set -e` either stops the install at step 5. Folded into lane
+    summary-retire (Hayden, 2026-10-20), which rewrites that block.
   - **Lanes tell the lead before an act past their worktree: merged as #136** (lead PR,
     2026-10-20, installed from main). New briefs drop the hand-written "Message the lead before
     any act..." Constraints line: the skill carries it (Lifecycle step 3).
@@ -286,8 +292,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lanes practices (merge order 1, carries the lead branch), summary-retire (2) and
-     link-atomic (3) run; their state is in their records (`lane ls`). After each reinstall,
+  0. Lanes link-atomic (merge order 1, carries the lead branch), summary-retire (2) and
+     practices (3) run; their state is in their records (`lane ls`). After each reinstall,
      check `ls -la ~/.claude/CLAUDE.md` (the Watch item). Watch that push asks open with the
      briefing (#137); if they skip it, the Stop-hook check is the follow-up (Hayden's pick).
   1. Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
