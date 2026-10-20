@@ -1261,6 +1261,75 @@ class Push(BashBase):
         self.assertIsNone(self.pre('git commit -m "then git push"'))
 
 
+class L3r(BashBase):
+    """gh pr ready, and gh pr create without --draft, wait for a briefed reviewer."""
+
+    def setUp(self):
+        super().setUp()
+        self.base = self.commit(**{"README": "x\n"})
+        self.sh("update-ref", "refs/remotes/origin/main", self.base)
+        self.commit(**{"app__api__x__route.ts": "export const x = 1\n", "lib__u.ts": "1\n"})
+
+    def test_denies_once_with_the_block_to_paste_and_the_resend_passes(self):
+        reason = self.pre("gh pr create --title x --body y")
+        self.assertTrue(reason.startswith("[practices:L3r]"), reason)
+        self.assertIn("[practices:review]", reason)
+        self.assertIn("demo (" + os.path.join(self.proj, ".claude", "skills", "demo", "SKILL.md")
+                      + "), for app/api/x/route.ts:", reason)
+        self.assertNotIn("lib/u.ts", reason)
+        self.assertIn("- An id from the request body is never trusted.", reason)
+        self.assertIn("resend", reason)
+        self.assertIsNone(self.pre("gh pr create --title x --body y"))
+
+    def test_drafts_undo_and_other_gh_calls_pass(self):
+        for command in ("gh pr create --draft --title x", "gh pr create -d", "gh pr ready --undo",
+                        "gh pr view 5", "gh issue create", "echo 'gh pr ready'"):
+            with self.subTest(command=command):
+                self.assertIsNone(self.pre(command))
+
+    def test_a_marked_reviewer_brief_satisfies_it(self):
+        self.add(use("t-rev", "Agent", subagent_type="reviewer",
+                     prompt="Review this.\n[practices:review] demo ..."))
+        self.assertIsNone(self.pre("gh pr ready 12"))
+
+    def test_an_unmarked_agent_or_a_quoted_marker_does_not(self):
+        self.add(use("t-rev", "Agent", prompt="Review this."),
+                 text("[practices:review] in prose"),
+                 use("t-b", "Bash", command="echo '[practices:review]'"))
+        self.assertIsNotNone(self.pre("gh pr ready"))
+
+    def test_a_subagent_counts_the_parents_reviewer(self):
+        agent = "a0123456789abcdef"
+        d = os.path.join(self.transcript[:-len(".jsonl")], "subagents")
+        os.makedirs(d)
+        self.rows([], path=os.path.join(d, f"agent-{agent}.jsonl"))
+        self.assertIsNotNone(self.pre("gh pr ready", agent_id=agent))
+        self.add(use("t-rev", "Task", prompt="[practices:review] go"))
+        self.assertIsNone(self.pre("gh pr ready", agent_id=agent, session_id="s3"))
+
+    def test_the_base_comes_from_the_flag_then_origin_head_main_master(self):
+        self.sh("update-ref", "-d", "refs/remotes/origin/main")
+        self.assertIsNone(self.pre("gh pr ready"))
+        self.assertIn("no base branch", self.log())
+        self.sh("update-ref", "refs/remotes/origin/master", self.base)
+        self.assertIsNotNone(self.pre("gh pr ready", session_id="s1"))
+        self.sh("update-ref", "refs/remotes/origin/dev", self.sh("rev-parse", "HEAD"))
+        self.assertIsNone(self.pre("gh pr create --base dev", session_id="s2"))
+        self.assertIsNotNone(self.pre("gh pr create -B master", session_id="s2"))
+        self.sh("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/dev")
+        self.assertIsNone(self.pre("gh pr ready", session_id="s4"))
+
+    def test_line_scoped_rules_run_over_every_commit_in_the_range(self):
+        self.skill("keys", KEYS, where="user")
+        self.commit(**{"k.ts": "a = 'TOKEN_ABCDEFGH'\n"})
+        self.commit(**{"k.ts": "a = process.env.A\n"})  # gone at HEAD, still in the history
+        self.add(use("t-rev", "Agent", prompt="[practices:review]"))
+        reason = self.pre("gh pr ready")
+        self.assertIn("KEY-1 (keys) at k.ts:1", reason)
+        self.assertNotIn("TOKEN_", reason)
+        self.assertIsNone(self.pre("gh pr ready"))
+
+
 class Budgets(BashBase):
     """A spent budget, a git timeout and a crash allow the call, and leave their trace."""
 

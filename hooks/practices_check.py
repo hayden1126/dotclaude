@@ -1565,13 +1565,107 @@ def push_reason(findings):
             "passes this check.\n" + findings_text(findings))
 
 
+# L3r: a PR marked ready (or opened as one) waits for a reviewer briefed with the gate lines.
+
+def pr_ready(args):
+    """(True, the --base it names or None) for `gh pr ready` (not --undo) and a `gh pr create`
+    that isn't a draft; (False, None) for anything else."""
+    if len(args) < 2 or args[0] != "pr" or args[1] not in ("ready", "create"):
+        return False, None
+    rest = args[2:]
+    if args[1] == "ready":
+        return "--undo" not in rest, None
+    base = None
+    for k, a in enumerate(rest):
+        if a in ("--draft", "-d", "--draft=true"):
+            return False, None
+        if a in ("--base", "-B") and k + 1 < len(rest):
+            base = rest[k + 1]
+        elif a.startswith("--base="):
+            base = a.split("=", 1)[1]
+        elif a.startswith("-B") and len(a) > 2:
+            base = a[2:]
+    return True, base
+
+
+def reviewed(ts):
+    """Whether an Agent or Task call in the transcripts carries the review marker."""
+    return any(isinstance(inp.get("prompt"), str) and REVIEW in inp["prompt"]
+               for t in ts.all() for inp in tool_uses(t, REVIEW.encode(), ("Agent", "Task")))
+
+
+def l3r(event, ghs, skills, cfg, ts, ctx):
+    """(the review block or None, its keys, new rule findings) for each PR call."""
+    blocks_, keys, found = [], [], []
+    for args, cwd in ghs:
+        ready, base_name = pr_ready(args)
+        if not ready:
+            continue
+        repo = open_repo({"cwd": cwd, "git_dir": None, "work_tree": None}, "L3r")
+        if repo is None:
+            continue
+        head = repo.rev("HEAD")
+        names = ([f"refs/remotes/origin/{base_name}", base_name] if base_name else
+                 ["refs/remotes/origin/HEAD", "refs/remotes/origin/main",
+                  "refs/remotes/origin/master"])
+        base = next((oid for n in names if "$" not in n and (oid := repo.rev(n))), None)
+        if head is None or base is None:
+            log("git-skipped", f"L3r: no base branch found ({', '.join(names)}), so the PR "
+                "went unchecked")
+            continue
+        mb = repo.run("merge-base", base, head, ok=(0, 1)).decode().strip()
+        if not mb:
+            log("git-skipped", "L3r: the branch shares no history with its base, unchecked")
+            continue
+        files = [(c[5], c[4]) for c in repo.changes(mb, head)
+                 if c[0] in ("A", "M", "T") and c[2] in ("100644", "100755")]
+        blobs, _ = repo.blobs([oid for _, oid in files], FILE_MAX, BYTES_MAX)
+        touched = {}
+        events = [(s, ev) for s in skills.values() for ev in s["events"]
+                  if not is_off(cfg, s, ev["id"])]
+        for path, oid in files:
+            text = scan_text(text_of(blobs.get(oid)) or "")
+            for s, _ in run_patterns(events, lambda x: event_fires(x[1], path, text,
+                                                                  cfg["helpers"], CRUMB)):
+                touched.setdefault(s["name"], (s, []))[1].append(path)
+        if touched and not reviewed(ts):
+            new = [(s, paths) for s, paths in touched.values()
+                   if (k := f"L3r|{s['name']}|review|-|{_sha1(head)}") not in state_keys(event)
+                   and k not in keys]
+            if new:
+                keys += [f"L3r|{s['name']}|review|-|{_sha1(head)}" for s, _ in new]
+                blocks_.append(review_block(new, mb))
+        rules = commit_rules(skills, cfg, line_only=True)
+        found += fresh(scan(repo, [head, "--not", mb], rules, "L3r", ctx, lockfiles=False),
+                       event, ts, repo)
+    return blocks_, keys, found
+
+
+def review_block(touched, mb, shown=8):
+    parts = [f"{REVIEW} Review this branch's changes ({mb[:12]}..HEAD) against each practices "
+             "skill below. Read its SKILL.md, check every must-hold line against the changed "
+             "code, and report each one that doesn't hold, with file and line."]
+    for s, paths in touched:
+        paths = list(dict.fromkeys(paths))
+        more = f", and {len(paths) - shown} more" if len(paths) > shown else ""
+        parts.append(f"{s['name']} ({os.path.join(s['dir'], 'SKILL.md')}), for "
+                     f"{', '.join(paths[:shown])}{more}:" + "".join(
+                         f"\n- {line}" for line in s["gate"]))
+    return ("[practices:L3r] This PR changes code that practices skills own, and no reviewer "
+            "agent has checked it against them in this session. Start a reviewer (the Agent "
+            "tool) with the block below in its prompt, fix what it reports, then resend; this "
+            "check won't stop the resend.\n\n" + "\n\n".join(parts))
+
+
 def bash_pre(event):
     """PreToolUse(Bash): deny a call that both commits and pushes once, record HEAD before a
-    commit (L3s), and deny a push once per new finding in what it would send."""
+    commit (L3s), deny a push once per new finding in what it would send, and deny a PR's
+    `ready` once until a reviewer ran with the gate lines of the skills it touches (L3r)."""
     gits, ghs = bash_calls(event)
     commits = [g for g in gits if g[0] == "commit"]
     pushes = [g for g in gits if g[0] == "push"]
-    if not (commits or pushes):
+    ghs = [g for g in ghs if pr_ready(g[0])[0]]
+    if not (commits or pushes or ghs):
         return None
     cfg = load_config(event)
     if not cfg["enabled"]:
@@ -1588,13 +1682,26 @@ def bash_pre(event):
     try:
         if commits:
             record_heads(event, commits)
-        if pushes:
+        if pushes or ghs:
             skills = discover(event)
             with Transcripts(event) as ts:
-                new = push_gate(event, pushes, skills, cfg, ts, context(event, cfg, ts))
-            if new:
-                reasons.append(push_reason(new))
-                keys += [f.key for f in new]
+                ctx = context(event, cfg, ts)
+                new = push_gate(event, pushes, skills, cfg, ts, ctx) if pushes else []
+                if new:
+                    reasons.append(push_reason(new))
+                    keys += [f.key for f in new]
+                if ghs:
+                    review, review_keys, found = l3r(event, ghs, skills, cfg, ts, ctx)
+                    reasons += review
+                    keys += review_keys
+                    found = [f for f in found if f.key not in keys]
+                    if found:
+                        reasons.append(
+                            "[practices:L3r] This PR's commits add code that a practices rule "
+                            "flags. Fix it in a new commit and push, or, when one is a false "
+                            "positive, add `practices-allow: <id> <reason>` to the code. Resending "
+                            "passes this check.\n" + findings_text(found))
+                        keys += [f.key for f in found]
     except Budget as e:
         log("budget-spent", f"after {BUDGET}s, in the Bash check's {e}; the call was allowed")
         return None
