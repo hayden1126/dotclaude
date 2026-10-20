@@ -71,6 +71,7 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 FIXTURE_SRC = HERE / "fixture"
 STUB_SRC = HERE / "next_stub"
+STUBS_SRC = HERE / "stubs"  # server-only, client-only, react
 CASES_DIR = HERE / "cases"
 LOADER = FIXTURE_SRC / "scripts" / "register.mjs"
 SKILL_SRC = REPO / "skills" / "server-code"
@@ -119,12 +120,31 @@ def hook_settings():
     return {"PreToolUse": [entry("Edit|Write|MultiEdit|Bash")], "SessionStart": [entry("compact")]}
 
 
+def stub_packages():
+    """{package name: source dir} for every stub installed into a fixture's node_modules."""
+    pkgs = {"next": STUB_SRC}
+    pkgs.update({d.name: d for d in sorted(STUBS_SRC.iterdir()) if (d / "package.json").is_file()})
+    return pkgs
+
+
+def install_stubs(root):
+    """(Re)installs the pristine stub packages into root/node_modules, replacing any copy the
+    agent edited. Other packages the agent installed stay."""
+    for name, src in stub_packages().items():
+        dest = Path(root) / "node_modules" / name
+        if dest.is_symlink() or dest.is_file():
+            dest.unlink()
+        elif dest.exists():
+            shutil.rmtree(dest)
+        shutil.copytree(src, dest)
+
+
 def build_fixture(arm):
-    """A fresh fixture for one run: the app, the next stub, an initial commit, then the arm's
-    harness config as a second commit. Returns its path."""
+    """A fresh fixture for one run: the app, the stub packages, an initial commit, then the
+    arm's harness config as a second commit. Returns its path."""
     root = Path(tempfile.mkdtemp(prefix="practices-"))
     shutil.copytree(FIXTURE_SRC, root, dirs_exist_ok=True)
-    shutil.copytree(STUB_SRC, root / "node_modules" / "next")
+    install_stubs(root)
     git("init", "-q", cwd=root)
     git("add", "-A", cwd=root)
     git("commit", "-qm", "Initial commit", cwd=root)
@@ -317,6 +337,7 @@ def grade(fixture, case, run_dir, contain=True):
     db = run_dir / "oracle.db"
     if db.exists():
         db.unlink()
+    install_stubs(fixture)  # the agent could have edited node_modules/next
     env = grade_env(fixture, run_dir)
     cmd = ["node", "--import", LOADER.as_uri(), str(CASES_DIR / case / "oracle.mjs")]
     if contain:

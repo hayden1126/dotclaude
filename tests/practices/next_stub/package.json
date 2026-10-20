@@ -1,7 +1,7 @@
 {
   "name": "next",
   "version": "15.1.6",
-  "description": "Minimal stand-in for next: the server-side modules route handlers and server actions import, enough to run them under node:test.",
+  "description": "The React Framework",
   "type": "module",
   "exports": {
     ".": "./dist/index.js",

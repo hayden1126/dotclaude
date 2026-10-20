@@ -9,6 +9,10 @@ export type User = {
   email: string;
   name: string;
   bio: string;
+  avatar_url: string | null;
+  timezone: string;
+  locale: string;
+  marketing_emails: 0 | 1;
   role: Role;
 };
 
@@ -17,7 +21,7 @@ export async function getCurrentUser(): Promise<User | null> {
   if (!token) return null;
   const user = getDb()
     .prepare(
-      `SELECT u.id, u.email, u.name, u.bio, u.role
+      `SELECT u.id, u.email, u.name, u.bio, u.avatar_url, u.timezone, u.locale, u.marketing_emails, u.role
          FROM sessions s JOIN users u ON u.id = s.user_id
         WHERE s.token = ?`,
     )

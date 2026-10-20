@@ -7,11 +7,12 @@ export function resetDb(): void {
   db.exec("DELETE FROM invoices; DELETE FROM projects; DELETE FROM sessions; DELETE FROM users;");
 
   const addUser = db.prepare(
-    "INSERT INTO users (id, email, name, bio, role, password_hash) VALUES (?, ?, ?, ?, ?, ?)",
+    `INSERT INTO users (id, email, name, bio, avatar_url, timezone, locale, marketing_emails, role, password_hash)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
-  addUser.run(1, "alice@example.com", "Alice", "Freelance designer", "member", hashPassword("alice-password"));
-  addUser.run(2, "bob@example.com", "Bob", "Photographer", "member", hashPassword("bob-password"));
-  addUser.run(3, "carol@example.com", "Carol", "Runs Ledgerly support", "admin", hashPassword("carol-password"));
+  addUser.run(1, "alice@example.com", "Alice Moreau", "Freelance designer", null, "Europe/Paris", "fr-FR", 1, "member", hashPassword("alice-password"));
+  addUser.run(2, "bob@example.com", "Bob Okafor", "Photographer", null, "Africa/Lagos", "en-GB", 0, "member", hashPassword("bob-password"));
+  addUser.run(3, "carol@example.com", "Carol Lindqvist", "Runs Ledgerly support", null, "Europe/Stockholm", "sv-SE", 0, "admin", hashPassword("carol-password"));
 
   const addSession = db.prepare("INSERT INTO sessions (token, user_id) VALUES (?, ?)");
   addSession.run("tok-a", 1);

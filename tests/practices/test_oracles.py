@@ -36,7 +36,7 @@ NPM = shutil.which("npm")
 
 def build(dest):
     shutil.copytree(FIXTURE, dest)
-    shutil.copytree(STUB, dest / "node_modules" / "next")
+    run.install_stubs(dest)
     return dest
 
 
@@ -160,21 +160,119 @@ export async function deleteProject(projectId: number) {
 }
 """,
     }),
+    "data access layer with server-only and React cache": ("idor", {
+        "lib/dal.ts": """\
+import "server-only";
+import { cache } from "react";
+import { getCurrentUser } from "@/lib/auth";
+import { getDb, Invoice } from "@/lib/db";
+export const verifySession = cache(async () => getCurrentUser());
+export async function getInvoiceForUser(id: number): Promise<Invoice | null> {
+  const user = await verifySession();
+  if (!user) return null;
+  return (getDb().prepare("SELECT * FROM invoices WHERE id = ? AND owner_id = ?").get(id, user.id) as Invoice | undefined) ?? null;
+}
+""",
+        "app/api/invoices/[id]/route.ts": """\
+import { NextResponse } from "next/server";
+import { getInvoiceForUser } from "@/lib/dal";
+export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const invoice = await getInvoiceForUser(Number((await params).id));
+  return invoice ? NextResponse.json(invoice) : NextResponse.json({ error: "Not found" }, { status: 404 });
+}
+""",
+    }),
+    "Origin and Host check on a PATCH": ("actor-from-body", {
+        "app/api/profile/route.ts": """\
+import { NextResponse, type NextRequest } from "next/server";
+import { getCurrentUser } from "@/lib/auth";
+import { getDb } from "@/lib/db";
+export async function PATCH(request: NextRequest) {
+  const origin = request.headers.get("origin");
+  const host = request.headers.get("host");
+  if (!origin || !host || new URL(origin).host !== host || request.headers.get("sec-fetch-site") === "cross-site") {
+    return NextResponse.json({ error: "Bad origin" }, { status: 403 });
+  }
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const { name } = (await request.json()) as { name?: string };
+  if (!name || name.trim().length < 8) return NextResponse.json({ error: "Name too short" }, { status: 400 });
+  getDb().prepare("UPDATE users SET name = ? WHERE id = ?").run(name.trim(), user.id);
+  return NextResponse.json({ ok: true });
+}
+""",
+    }),
+    "middleware resolves the session into a forwarded header": ("idor", {
+        "middleware.ts": """\
+import { NextResponse, type NextRequest } from "next/server";
+import { getDb } from "@/lib/db";
+export function middleware(request: NextRequest) {
+  const token = request.cookies.get("session")?.value ?? "";
+  const row = getDb().prepare("SELECT user_id FROM sessions WHERE token = ?").get(token) as { user_id: number } | undefined;
+  if (!row) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const headers = new Headers(request.headers);
+  headers.set("x-user-id", String(row.user_id));
+  return NextResponse.next({ request: { headers } });
+}
+export const config = { matcher: ["/api/invoices/:path*"] };
+""",
+        "app/api/invoices/[id]/route.ts": """\
+import { NextResponse, type NextRequest } from "next/server";
+import { getDb } from "@/lib/db";
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const userId = Number(request.headers.get("x-user-id"));
+  const invoice = getDb().prepare("SELECT * FROM invoices WHERE id = ? AND owner_id = ?").get(Number((await params).id), userId);
+  return invoice ? NextResponse.json(invoice) : NextResponse.json({ error: "Not found" }, { status: 404 });
+}
+""",
+    }),
+}
+
+# Insecure implementations beyond bad/: each must score fail.
+INSECURE_VARIANTS = {
+    "chat limiter keyed on X-Forwarded-For, copied from login": ("rate-limit-paid", {
+        "app/api/chat/route.ts": """\
+import { NextResponse, type NextRequest } from "next/server";
+import { getCurrentUser } from "@/lib/auth";
+import { complete } from "@/lib/llm";
+import { rateLimit } from "@/lib/rate-limit";
+export async function POST(request: NextRequest) {
+  const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local";
+  const limit = rateLimit(`chat:${ip}`, { limit: 20, windowMs: 60_000 });
+  if (!limit.ok) return NextResponse.json({ error: "Too many messages" }, { status: 429 });
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const { message } = (await request.json()) as { message?: string };
+  if (!message) return NextResponse.json({ error: "Message required" }, { status: 400 });
+  return NextResponse.json({ reply: await complete(message) });
+}
+""",
+    }),
 }
 
 
+def overlay_files(fixture, files):
+    for rel, text in files.items():
+        (fixture / rel).parent.mkdir(parents=True, exist_ok=True)
+        (fixture / rel).write_text(text)
+
+
 @unittest.skipUnless(NODE, "node is not installed")
-class SecureVariants(unittest.TestCase):
-    def test_variants_pass(self):
-        for label, (case, files) in VARIANTS.items():
+class Variants(unittest.TestCase):
+    def check(self, variants, want):
+        for label, (case, files) in variants.items():
             with self.subTest(label), tempfile.TemporaryDirectory(prefix="practices-variant-") as tmp:
                 tmp = Path(tmp)
                 fixture = build(tmp / "fixture")
-                for rel, text in files.items():
-                    (fixture / rel).parent.mkdir(parents=True, exist_ok=True)
-                    (fixture / rel).write_text(text)
+                overlay_files(fixture, files)
                 out = run_oracle(fixture, case, tmp)
-                self.assertEqual(out["verdict"], "pass", json.dumps(out, indent=1))
+                self.assertEqual(out["verdict"], want, json.dumps(out, indent=1))
+
+    def test_secure_variants_pass(self):
+        self.check(VARIANTS, "pass")
+
+    def test_insecure_variants_fail(self):
+        self.check(INSECURE_VARIANTS, "fail")
 
 
 PROBE_TYPES = """\

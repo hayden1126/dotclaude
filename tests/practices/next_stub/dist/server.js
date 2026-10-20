@@ -88,10 +88,23 @@ export class NextResponse extends Response {
     return new NextResponse(JSON.stringify(body), { ...options, headers });
   }
 
+  // Like Next, request headers passed as `{ request: { headers } }` travel on the response as
+  // x-middleware-override-headers plus one x-middleware-request-<name> per header, and the
+  // router applies them to the request the handler sees.
   static next(init = {}) {
-    const headers = new Headers(init.headers);
+    const { request, ...rest } = init;
+    const headers = new Headers(rest.headers);
     headers.set("x-middleware-next", "1");
-    return new NextResponse(null, { ...init, headers });
+    if (request?.headers) {
+      const forwarded = new Headers(request.headers);
+      const names = [];
+      forwarded.forEach((value, name) => {
+        names.push(name);
+        headers.set(`x-middleware-request-${name}`, value);
+      });
+      headers.set("x-middleware-override-headers", names.join(","));
+    }
+    return new NextResponse(null, { ...rest, headers });
   }
 
   static rewrite(destination, init = {}) {
@@ -107,6 +120,19 @@ export class NextResponse extends Response {
     return new NextResponse(null, { status, headers });
   }
 }
+
+export class NextFetchEvent {
+  #pending = [];
+  constructor({ page } = {}) {
+    this.sourcePage = page;
+  }
+  waitUntil(promise) {
+    this.#pending.push(Promise.resolve(promise).catch(() => {}));
+  }
+}
+
+// Opts the request into dynamic rendering in Next; nothing to wait for here.
+export async function connection() {}
 
 export function after(task) {
   Promise.resolve()

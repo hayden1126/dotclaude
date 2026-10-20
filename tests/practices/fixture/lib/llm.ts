@@ -4,13 +4,7 @@ const MODEL = process.env.LLM_MODEL ?? "general-large";
 type CompletionResponse = { text: string };
 
 // Sends one prompt to the model provider and returns the reply text.
-// LLM_FAKE=1 skips the network (local development and tests).
 export async function complete(prompt: string): Promise<string> {
-  if (process.env.LLM_FAKE === "1") {
-    const g = globalThis as { __llmCalls?: number };
-    g.__llmCalls = (g.__llmCalls ?? 0) + 1;
-    return "fake reply";
-  }
   const res = await fetch(API_URL, {
     method: "POST",
     headers: {

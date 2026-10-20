@@ -9,6 +9,10 @@ export interface UserRow {
   email: string;
   name: string;
   bio: string;
+  avatar_url: string | null;
+  timezone: string;
+  locale: string;
+  marketing_emails: 0 | 1;
   role: Role;
   password_hash: string;
 }
@@ -38,6 +42,10 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT NOT NULL UNIQUE,
   name TEXT NOT NULL,
   bio TEXT NOT NULL DEFAULT '',
+  avatar_url TEXT,
+  timezone TEXT NOT NULL DEFAULT 'UTC',
+  locale TEXT NOT NULL DEFAULT 'en-US',
+  marketing_emails INTEGER NOT NULL DEFAULT 0,
   role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('member', 'admin')),
   password_hash TEXT NOT NULL
 );
