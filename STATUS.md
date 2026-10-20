@@ -151,12 +151,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     GDPR, session replay, CAN-SPAM, renewal terms, DMCA agent, privacy policy) and launch (store
     metadata, Open Graph, Search Console, IndexNow). Lead's pick: OWASP ASVS as the security
     backbone, the reels' concrete failures as planted-bug evals.
-  - **Gap check against AWS's agentic AI security principles** (Hayden, 2026-10-19; running
-    from the lead since 2026-10-20, Hayden's pick, no lane slot): read
-    https://aws.amazon.com/blogs/security/four-security-principles-for-agentic-ai-systems/ and
-    list what dotclaude's guards (sandbox, permission rules, delete, overwrite and excluded-command
-    guards, subagent policy, lanes) don't cover. Unfixed security gaps go to the private
-    findings file, not here ([[dotclaude-public-repo]]).
+  - **Gap check against AWS's agentic AI security principles: done 2026-10-20** (Hayden's ask
+    2026-10-19, run from the lead): ten gaps (ids A1 to A10, each re-checked against the code by
+    the lead) in the private findings file's "Gap check 2026-10-20" section, with severities
+    and the cheap fixes named. Nothing fixed yet: Hayden picks which become a lane. Details stay
+    there ([[dotclaude-public-repo]]).
   - **Lanes tell the lead before an act past their worktree: merged as #136** (lead PR,
     2026-10-20, installed from main). New briefs drop the hand-written "Message the lead before
     any act..." Constraints line: the skill carries it (Lifecycle step 3).
