@@ -171,6 +171,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     exists today). Design settled 2026-10-20 (Hayden picked the lead's pick on all four forks:
     `PLAN.md`, "Next: a device-wide mute"); it opens as a lane when a slot frees (`hooks/`,
     `tmux/`, tests; no live lane's files).
+  - **`setup-tmux.sh`'s own `link()` has #140's gap class** (lane link-atomic's report,
+    2026-10-20). `setup-tmux.sh:62-71` moves a real file aside, then runs `ln -sfn`. GNU ln
+    9.4 replaces a link with no missing window (the lead's race test: 0 misses in about 600k
+    checks over 6000 swaps), but BSD/macOS `ln -sf` unlinks first, and the move-aside leaves a
+    window on every platform on a first install. Fix: reuse #140's temp-name and `os.replace`
+    swap once it merges. The mute lane edits `setup-tmux.sh:73-78`, so it can take this.
   - **paste-inbox's sandbox skip: merged as #138** (lead PR, 2026-10-20, from lane
     summary-retire's report): sandboxed WSL interop now fails with `UtilBindVsockAnyPort`, not
     `UtilConnectUnix`, so 9 Laptop and LaptopPowerShell cases failed instead of skipping; one
