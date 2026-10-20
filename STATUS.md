@@ -94,7 +94,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     merged and installed from main 2026-10-20 (CLAUDE.md's Waiting-on-you rule; the reinstall
     released ask-check's install, which it redoes before ready). Smoke: a fresh `claude -p`
     ended with the label, but "checklist" made it write `- [ ]` boxes, which Hayden doesn't
-    want (plain bullets): a wording fix follows as a lead PR. branch-reuse merged as #130 and was installed from main, 2026-10-19: `lane
+    want (plain bullets): the wording fix is lead PR #134 (`docs/waiting-on-you-bullets`).
+    Hayden's call: no lead reinstall at its merge (it would release ask-check's install again);
+    ask-check picks the line up by merging main, then a fresh session's list should use plain
+    bullets. branch-reuse merged as #130 and was installed from main, 2026-10-19: `lane
     new` refuses a branch name any PR used (or when gh can't answer; `--reuse-branch`
     overrides), and handoff-check counts the checked-out branch. The three lanes opened earlier on 2026-10-19
     merged, were installed from main and closed: chrome-ttl as #126 (chrome-bg's TTL on a
