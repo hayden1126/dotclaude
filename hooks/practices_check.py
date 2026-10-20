@@ -1,5 +1,6 @@
-"""The practices hook engine; hooks/practices-check.sh runs it on PreToolUse(Edit|Write|MultiEdit)
-and SessionStart. It enforces every installed practices skill at the moment code is written.
+"""The practices hook engine; hooks/practices-check.sh runs it on PreToolUse(Edit|Write|MultiEdit),
+PreToolUse(Bash), PostToolUse(Bash) and SessionStart. It enforces every installed practices skill
+at the moment code is written, committed, pushed and put up for review.
 
 Each practices skill ships an events.toml beside its SKILL.md:
 
@@ -15,6 +16,8 @@ Each practices skill ships an events.toml beside its SKILL.md:
   when = '''regex'''
   unless = '''optional regex'''
   paths = ["optional globs"]
+  at = ["edit", "commit"]   # optional: the levels it runs at, both by default
+  scope = "line"            # optional: judged line by line (default "file")
   say = "one line"
 
 Globs match the path relative to the project dir (POSIX; the absolute path for a file outside
@@ -46,7 +49,10 @@ Levels:
       how to load the skill, and carries the event's lines; one deny names every skill that fired.
   L2  a fired rule, denied once per (file, rule) over the whole transcript, marker
       `[practices:L2:<skill>:<rule>:<path>]`. `practices-allow: <rule>` anywhere in the file
-      after the edit suppresses it. L2 doesn't run in a call L1 denies.
+      after the edit suppresses it. L2 doesn't run in a call L1 denies, nor for a rule whose
+      `at` lacks "edit". A `scope = "line"` rule (a key shape) is judged per line of new: `when`,
+      `unless` and the allow all on the one line, so an allow covers only its own line.
+  L3s, push and L3r: the Bash levels, below.
   L4  SessionStart(compact): a digest (under DIGEST_MAX characters) naming the practices skills
       loaded since the previous compaction, with their gate lines, plus reloadSkills: true.
 Deny-once has two signs, and either lets the call through:
@@ -87,9 +93,49 @@ timeout kill takes the whole process group, so a killed scan leaves it behind. S
 (startup) runs a self-test, reports leftover breadcrumbs and the errors logged since the last
 start, as one systemMessage line (shown to the user only), and prints nothing when all is well.
 
-Not covered in v1: Bash. settings.json doesn't send Bash calls here (a Bash payload that arrives
-anyway is allowed unchecked), so a file written by a heredoc or `cat >` escapes L1 and L2 (the
-commit-time scan, L3s, is the planned backstop).
+Bash levels. settings.json sends a Bash call here only when its payload holds git with commit
+or push, or gh with pr ready or pr create (PostToolUse: git with commit), so Python never starts
+for any other call. hooks/bash_words.py reads the command as simple commands through chains,
+wrappers (`sudo -E`, `env -i`), `cd X &&` (from the payload's cwd), quotes and heredocs, and
+each git call's -C, --git-dir, --work-tree and GIT_DIR=; an expansion in one of those skips that
+call, logged. A file written by a heredoc or `cat >` escapes L1 and L2, and L3s is its backstop.
+Each level reads commits, never the index or the working tree:
+  L3s   PreToolUse on a git commit records each repo's HEAD (heads/, keyed by session, agent and
+        tool_use_id); PostToolUse for that id scans recorded..HEAD, or with no record the HEAD
+        commit alone, and tells the model the findings as additionalContext.
+  push  PreToolUse on git push scans what it would send (each refspec's source, else HEAD;
+        --all, --branches, --mirror: every local branch) less what any remote has, and denies.
+        Deletes and --dry-run pass. One call holding both a commit and a push is denied once,
+        told to run them as separate calls (the scan can't see a commit not yet made).
+  L3r   PreToolUse on gh pr ready (not --undo) or a gh pr create without --draft: the files
+        changed since the merge base with --base, else origin/HEAD, origin/main, origin/master
+        (none: logged, allowed), matched against every skill's L1 events (paths, and content on
+        the HEAD blob). Denied once per touched skill and HEAD unless the transcript (or the
+        parent's, for a subagent) holds an Agent or Task call whose prompt has
+        `[practices:review]`; the reason carries each skill's gate lines and the marker in one
+        block to paste into a reviewer brief. The line-scoped and commit-time rules also run
+        over every commit in the range.
+A scan runs every rule whose `at` has "commit" (L3r: or `scope = "line"`): `when` on each
+commit's added lines (lines its blob has that the parent's doesn't, by count: a moved line isn't
+new) of regular files matching `paths`, `unless` and practices-allow on the blob the commit
+leaves. Merges, pure renames (the same blob), symlinks and binaries are skipped; at most
+MAX_COMMITS commits and BYTES_MAX blob bytes, a cut logged as scan-truncated. L3s and push also
+run SEC-60, the engine's own rule: a lockfile changed in the range (LOCKFILES, requirements*.txt)
+with no audit Bash call (AUDIT) in the transcript or, for a subagent, the parent's.
+A finding's key is `<level>|<skill>|<rule>|<path>|sha1(the stripped line)`; a level denies or
+tells only the findings whose key is new for this session and agent (the denies/ state file),
+so the resend passes and a partial fix re-tells only what is new. A finding L2 already denied
+for that file and rule (its key or marker) was accepted at edit time and is skipped. A deny or
+tell names a finding by rule, path and line, never the matched text, and so does errors.log.
+
+git runs objects only, through Repo: a system git (SYSTEM_GITS), every GIT_* variable stripped
+from the env, no system or global config, GIT_ALLOW_PROTOCOL=none (a partial clone's lazy fetch
+would run a transport; 2.43 ignores GIT_NO_LAZY_FETCH), no replace refs, no optional locks,
+core.fsmonitor and core.untrackedCache off, and only rev-parse, rev-list, merge-base, ls-tree,
+diff-tree --raw -r -z and cat-file --batch (GIT_FLAGS). So no program a repo's config names
+runs, and a tracked symlink is read as its target path. The user's safe.directory entries are
+forwarded with -c, read as plain text from their global config files (one not theirs alone is
+skipped, and named when git refuses the repo). Each call's timeout is what is left of the budget.
 """
 import hashlib
 import json
@@ -1196,8 +1242,10 @@ def command_of(event):
 def bash_calls(event):
     """(git calls as (subcommand, args, where), gh calls as (args, cwd)) in the Bash command.
     Expansions in a git location, and an unparsable command, are skipped and logged."""
-    sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-    import bash_words  # noqa: PLC0415 (python3 -I leaves this file's dir off sys.path)
+    here = os.path.dirname(os.path.realpath(__file__))
+    if sys.path[:1] != [here]:  # python3 -I leaves this file's dir off sys.path
+        sys.path.insert(0, here)
+    import bash_words  # noqa: PLC0415 (only the Bash levels need it)
     cmd = command_of(event)
     cwd = event.get("cwd") if isinstance(event.get("cwd"), str) else None
     gits, ghs = [], []
