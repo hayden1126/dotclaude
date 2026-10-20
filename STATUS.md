@@ -92,7 +92,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     notes), 2 practices
     (`feat/practices-suite`, opened 2026-10-19 at Hayden's ask: the skill suite below, researched
     from his project memories and online sources, then the security skill only; Hayden picked
-    "security first"). pr-horizon merged as #135 (2026-10-20): installed from main.
+    "security first"). pr-horizon merged as #135 (2026-10-20): installed from main, lane closed.
   - **Lane ask quality: done** (2026-10-19 to 2026-10-20). ask-check merged as #131 and was
     installed from main 2026-10-20: a PreToolUse hook on AskUserQuestion (`hooks/ask_check.py`)
     denies risky asks with a checklist in the reason. branch-reuse merged as #130: `lane new`
