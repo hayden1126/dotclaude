@@ -1,7 +1,7 @@
 """The direct Haiku call the Stop hooks share: the subscription OAuth token from Claude Code's
 credentials file, one Messages API request, the reply's text.
 
-hooks/session-summary.sh (the status-line summary and tab label) and hooks/wants_input.py (the
+hooks/session-summary.sh (the tab label) and hooks/wants_input.py (the
 tab glyph's "does this reply want Hayden?") import it from this file's own directory. There is
 no API key on this machine: the token is claudeAiOauth.accessToken in
 <config-dir>/.credentials.json, sent as a Bearer token with the oauth beta header (verified
