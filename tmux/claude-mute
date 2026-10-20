@@ -215,7 +215,7 @@ def write_failed(e: OSError, client) -> int:
     path = e.filename or ms.state_dir()
     if os.path.basename(path).startswith(".tmp-"):  # write_json's temp file: its dir refused it
         path = os.path.dirname(path)
-    line ="can't write %s: %s" % (path, e.strerror or e)
+    line = "can't write %s: %s" % (path, e.strerror or e)
     if e.errno in REFUSED:
         line += ("; use Ctrl-b Enter, Mute%s or a shell outside Claude (a ! line at a Claude "
                  "prompt may run in its sandbox)" % ELLIPSIS)
