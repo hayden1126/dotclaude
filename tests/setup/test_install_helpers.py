@@ -566,7 +566,7 @@ class SetupWiring(unittest.TestCase):
                       calls["setup.sh"])
         self.assertIn('python3 -I "$REPO_DIR/install-state.py" plugins '
                       '|| warn "the plugin change check failed (see above)"', calls["setup.sh"])
-        self.assertEqual(len(calls["setup.sh"]), 11)
+        self.assertEqual(len(calls["setup.sh"]), 12)
         self.assertEqual(len(calls["sync.sh"]), 2)
         self.assertEqual(len(calls["setup-tmux.sh"]), 1)
 
