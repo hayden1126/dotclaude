@@ -167,7 +167,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     00:53:02, with no backup (a symlink is removed, not backed up). Hayden relinked it by hand
     to `~/dotclaude-lanes/config-dir/CLAUDE.md` (the lead's own `ln -s` was refused as
     self-modification), and the #136 reinstall put it back on main, where it survived the
-    sandboxed commands right after. config-dir's timeline (its session 1f1393e7) rules out its code, its
+    sandboxed commands right after. config-dir's reinstall at 21:02 kept it too, across the same
+    sandboxed `sandbox-denials` run; that session's sandbox config listed the resolved target,
+    where after the loss it listed the literal path. So the loss points at `setup.sh`'s
+    `link()` gap (`rm`, then `ln -s`) meeting some session's sandboxed command. Fix (cheap, not
+    built): make `link()` atomic, `ln -s` to a temp name beside the target, then `mv -T` over
+    it, so the path never goes missing; lane-able (`setup.sh`, `tests/setup`). config-dir's timeline (its session 1f1393e7) rules out its code, its
     tests and install-state's prune; `~/.claude`'s mtime moved 190 ms after a sandboxed
     `delegation-ledger sandbox-denials` started. Its guess, unproven: the Bash sandbox. A
     sandbox config built while `link()` sat between `rm` and `ln -s` lists the literal path in
