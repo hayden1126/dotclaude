@@ -3,7 +3,8 @@
 #
 # Idempotent: safe to re-run. Existing non-symlink files are backed up to
 # ~/.claude/backups/pre-dotclaude-<unix-ts>/ before being replaced with symlinks
-# back to this repo, so future edits in either place stay in sync.
+# back to this repo, so future edits in either place stay in sync. Each replacement
+# is one rename, so an installed path never goes missing mid-run.
 #
 # It runs outside the sandbox, so every python3 it starts runs isolated (-I): no path it imports
 # from comes from the cwd, the script's dir or the environment.
@@ -71,22 +72,59 @@ mkdir -p "$CLAUDE_DIR"
 # ---------------------------------------------------------------------------
 # 1. Symlink helpers — back up any real file we are about to replace
 # ---------------------------------------------------------------------------
+# An installed path is never removed and then remade: the new entry is built under a hidden temp
+# name beside it (SWAP_TMP), then renamed over it in one step, so the path never goes missing. A
+# sandboxed command that builds its config in such a gap sees the literal path, and on 2026-10-20
+# ~/.claude/CLAUDE.md vanished right after one. os.replace never follows the old entry, where a
+# plain mv would drop a new skill link inside the old skill dir. A run that stops mid-swap (an
+# error under set -e, a Ctrl-C) keeps the old entry, and the exit trap removes the temp, along
+# with section 2's merged settings.
+SWAP_TMP="" MERGED_SETTINGS=""
+trap 'rm -f ${SWAP_TMP:+"$SWAP_TMP"} ${MERGED_SETTINGS:+"$MERGED_SETTINGS"}' EXIT
+# Windows refuses to rename over a link to a dir (git-bash with native symlinks), so a Windows
+# shell removes the old link first. The gap is back there, but no Bash sandbox runs on native
+# Windows to trip on it.
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) RENAME_OVER_LINKS=0 ;; *) RENAME_OVER_LINKS=1 ;; esac
+
+# Point SWAP_TMP at the hidden temp beside $1 (one dir, so the rename stays on one file system),
+# clearing any leftover of a killed run that had this pid: ln and cp would follow it.
+swap_tmp() {
+  SWAP_TMP="$(dirname "$1")/.$(basename "$1").dotclaude-$$"
+  rm -f "$SWAP_TMP"
+}
+
+# Rename SWAP_TMP over $1.
+swap_in() {
+  if [[ $RENAME_OVER_LINKS -eq 0 && -L "$1" ]]; then rm -f "$1"; fi
+  python3 -I -c 'import os, sys; os.replace(sys.argv[1], sys.argv[2])' "$SWAP_TMP" "$1"
+  SWAP_TMP=""
+}
+
+# A real file is copied to the backup, so it stays in place until the swap replaces it. Any other
+# real entry is moved there, the one gap left: a dir (a hand-made one, or every skill on git-bash
+# where ln -s copies), since rename can't put a link or a file over a dir, or a file cp can't
+# read. A link needs nothing.
 backup_if_present() {
-  local target="$1"
+  local target="$1" dir
   if [[ -e "$target" && ! -L "$target" ]]; then
-    mkdir -p "$BACKUP_DIR$(dirname "${target#"$CLAUDE_DIR"}")"
+    dir="$BACKUP_DIR$(dirname "${target#"$CLAUDE_DIR"}")"
+    mkdir -p "$dir"
     say "backing up $target"
-    mv "$target" "$BACKUP_DIR$(dirname "${target#"$CLAUDE_DIR"}")/"
-  elif [[ -L "$target" ]]; then
-    rm "$target"
+    if [[ -f "$target" && -r "$target" ]]; then
+      cp -p "$target" "$dir/"
+    else
+      mv "$target" "$dir/"
+    fi
   fi
 }
 
 link() {
   local src="$1" dst="$2"
-  backup_if_present "$dst"
   mkdir -p "$(dirname "$dst")"
-  ln -s "$src" "$dst"
+  backup_if_present "$dst"
+  swap_tmp "$dst"
+  ln -s "$src" "$SWAP_TMP"
+  swap_in "$dst"
   say "linked ${dst#"$CLAUDE_DIR/"} -> repo"
 }
 
@@ -102,9 +140,11 @@ copy_managed() {
   if [[ -e "$dst" && ! -L "$dst" ]] && cmp -s "$src" "$dst"; then
     say "${dst#"$CLAUDE_DIR/"} already current"; return
   fi
-  backup_if_present "$dst"
   mkdir -p "$(dirname "$dst")"
-  cp "$src" "$dst"
+  backup_if_present "$dst"
+  swap_tmp "$dst"
+  cp "$src" "$SWAP_TMP"
+  swap_in "$dst"
   say "copied ${dst#"$CLAUDE_DIR/"} (runtime-managed, not symlinked)"
 }
 
@@ -118,8 +158,7 @@ copy_managed() {
 # kept; a live value the baseline overrides is named on stderr. Installed from a checkout other
 # than ~/dotclaude (a lane), that checkout's copies of the write-protected paths join denyWrite.
 # Without an overlay, such a key or another checkout, the baseline is copied byte for byte.
-MERGED_SETTINGS="$(mktemp)"
-trap 'rm -f "$MERGED_SETTINGS"' EXIT
+MERGED_SETTINGS="$(mktemp)"  # section 1's exit trap removes it
 chmod 644 "$MERGED_SETTINGS"  # mktemp's 0600 would carry over to the installed copy
 python3 -I "$REPO_DIR/merge-settings.py" --checkout "$REPO_DIR" "$REPO_DIR/settings.json" \
   "$CLAUDE_DIR/settings.machine.json" "$CLAUDE_DIR/settings.json" > "$MERGED_SETTINGS" \
