@@ -369,6 +369,26 @@ export async function GET(request: NextRequest) {
 """,
 }
 VARIANTS["email change approved by the old address, then confirmed by the new"] = ("email-change", EMAIL_TWO_STEP)
+# nextPath returning a URL instance, and null when there's nothing to go back to.
+VARIANTS["nextPath returns a URL, or null for no ?next="] = ("open-redirect", {
+    "lib/next-path.ts": """\
+const ORIGIN = "http://localhost:3000";
+export function nextPath(value: unknown): URL | null {
+  if (typeof value !== "string" || value === "") return null;
+  if ([...value].some((ch) => ch.charCodeAt(0) < 0x20 || ch.charCodeAt(0) === 0x7f)) return new URL("/", ORIGIN);
+  let url: URL;
+  try {
+    url = new URL(value, ORIGIN);
+  } catch {
+    return new URL("/", ORIGIN);
+  }
+  if (url.origin !== ORIGIN || url.pathname.startsWith("//") || url.pathname.startsWith("/" + String.fromCharCode(92))) {
+    return new URL("/", ORIGIN);
+  }
+  return url;
+}
+""",
+})
 # A confirm link to a page the oracle can't call: both link checks skip, security 1 decides.
 VARIANTS["email confirm link to a page"] = ("email-change", {
     "lib/email-change.ts": (CASES / "email-change/good/lib/email-change.ts").read_text(),
