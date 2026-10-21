@@ -120,7 +120,7 @@ id = "contact-change"
 paths = []
 content = [
   '''\b(?:update|change)_?(?:Email|email|Phone|phone|PhoneNumber|phone_number)\b''',
-  '''(?i:\bUPDATE\s+["`]?\w+["`]?\s+SET\s+[^\n;]{0,200}?\b(?:email|phone|phone_number)\s*=)''',
+  '''(?i:\bUPDATE\s+["`]?\w+["`]?\s+SET\s+(?:[^\n;]{0,200}?,\s*)?(?:\w+\.)?["`]?(?:email|phone|phone_number)["`]?\s*=)''',
   '''\b(?:request\.user|current_user|currentUser)\.(?:email|phone|phone_number|phoneNumber)\s*=(?!=)''',
   '''\.(?:set|update)\(\s*\{(?!\s*where\b)[^{}\n]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*(?:[,}]|:(?!\s*(?:true|false|null)\b))''',
   '''\b(?:verifyBeforeUpdateEmail|updateEmail)\(|\.auth\.updateUser\(''',
@@ -237,7 +237,7 @@ say = "Build this token from a CSPRNG at 128 bits or more (`crypto.randomBytes(3
 # pending-change table or Firebase's verifyBeforeUpdateEmail stays quiet; a form handler
 # such as handleEmailChange does not count.
 id = "SEC-37"
-when = '''\.update(?:Many)?\(\s*\{[\s\S]{0,300}?\bdata\s*:\s*\{[^}]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*(?:[,}]|:(?!\s*(?:true|false|null)\b))|\.set\(\s*\{[^{}]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*(?:[,}]|:(?!\s*(?:true|false|null)\b))|\.update\(\s*\{(?!\s*where\b)[^{}]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*(?:[,}]|:(?!\s*(?:true|false|null)\b))|\$set\s*:\s*\{[^{}]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*(?:[,}]|:(?!\s*(?:true|false|null)\b))|(?i:\bUPDATE\s+["`]?\w+["`]?\s+SET\s+[^;]{0,200}?\b(?:email|phone|phone_number)\s*=)|\b(?:request\.user|current_user|currentUser|self\.request\.user)\.(?:email|phone|phone_number|phoneNumber)\s*=(?!=)|\b(?:current_user|request\.user)\.update!?\([^\n]{0,100}\b(?:email|phone):|(?<!function )(?<![\w])updateEmail\((?![^)\n]{0,200}\)\s*(?::\s*[^{\n]{1,80})?\{)'''
+when = '''\.update(?:Many)?\(\s*\{[^;]{0,300}?\bdata\s*:\s*\{[^}]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*(?:[,}]|:(?!\s*(?:true|false|null)\b))|\.set\(\s*\{[^{}]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*(?:[,}]|:(?!\s*(?:true|false|null)\b))|\.update\(\s*\{(?!\s*where\b)[^{}]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*(?:[,}]|:(?!\s*(?:true|false|null)\b))|\$set\s*:\s*\{[^{}]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*(?:[,}]|:(?!\s*(?:true|false|null)\b))|(?i:\bUPDATE\s+["`]?\w+["`]?\s+SET\s+(?:[^;]{0,200}?,\s*)?(?:\w+\.)?["`]?(?:email|phone|phone_number)["`]?\s*=)|\b(?:request\.user|current_user|currentUser|self\.request\.user)\.(?:email|phone|phone_number|phoneNumber)\s*=(?!=)|\b(?:current_user|request\.user)\.update!?\([^\n]{0,100}\b(?:email|phone):|(?<!function )(?<![\w])updateEmail\((?![^)\n]{0,200}\)\s*(?::\s*[^{\n]{1,80})?\{)'''
 unless = '''(?i:\bpending_?(?:email|phone|contact)\w{0,30}|\b(?:email|phone|contact)_?change_?(?:requests?|tokens?)\b|\b(?:email|phone)_?changes\b|\bunconfirmed_?email\b)|\bverifyBeforeUpdateEmail\b'''
 paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py,rb,php,go,sql}"]
 say = "Don't write a new email or phone to the account directly. Build a pending change: a random single-use token, stored hashed and valid 30 minutes or less, sent to the NEW address; switch only when it is followed, with a fresh sign-in to start, a notice to the old address with a link that cancels the change, a rate limit and an audit line (SEC-37, see the skill's references/email-change.md). On Firebase, use verifyBeforeUpdateEmail, never updateEmail. If this is the confirm step or an audited admin tool, add `practices-allow: SEC-37 <reason>`."
