@@ -803,6 +803,131 @@ export async function confirmEmail(token: string) {
 }
 """,
 })
+# The forged values reach inside a bound object, and a value derived from the token (its hash, in
+# a bound argument or a hidden input) is forged too: the forged link's holder never saw it.
+NOT_FOUND_PAGE_HEAD = 'import { notFound } from "next/navigation";\nimport { findPending } from "@/lib/email-pending";\n'
+BY_HASH_ACTIONS = """\
+"use server";
+import { redirect } from "next/navigation";
+import { getDb } from "@/lib/db";
+
+export async function confirmByHash(hash: string) {
+  const db = getDb();
+  const row = db.prepare("SELECT user_id, new_email, expires_at FROM email_changes WHERE token_hash = ?")
+    .get(hash) as { user_id: number; new_email: string; expires_at: number } | undefined;
+  if (!row || row.expires_at < Date.now()) redirect("/settings?email=invalid");
+  db.prepare("DELETE FROM email_changes WHERE token_hash = ?").run(hash);
+  db.prepare("UPDATE users SET email = ? WHERE id = ?").run(row.new_email, row.user_id);
+  redirect("/settings?email=changed");
+}
+
+export async function confirmHashField(formData: FormData) {
+  await confirmByHash(String(formData.get("h") ?? ""));
+}
+"""
+VARIANTS["email confirm page that answers notFound() to a bad token, its action bound to an object holding it"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: NOT_FOUND_PAGE_HEAD + 'import { confirmEmail } from "./actions";\n\n' + TOKEN_PAGE_HEAD + """\
+  if (!findPending(token)) notFound();
+  return (
+    <form action={confirmEmail.bind(null, { change: [token] })}>
+      <button type="submit">Confirm</button>
+    </form>
+  );
+}
+""",
+    "app/settings/email/confirm/actions.ts": """\
+"use server";
+import { redirect } from "next/navigation";
+import { confirmPendingChange } from "@/lib/email-change";
+
+export async function confirmEmail(bound: { change: string[] }, _formData: FormData) {
+  redirect(confirmPendingChange(bound.change[0]) ? "/settings?email=changed" : "/settings?email=invalid");
+}
+""",
+})
+VARIANTS["email confirm page that answers notFound() to a bad token, its action bound to the token's hash"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: NOT_FOUND_PAGE_HEAD + 'import { hashToken } from "@/lib/email-change";\nimport { confirmByHash } from "./actions";\n\n'
+        + TOKEN_PAGE_HEAD + """\
+  if (!findPending(token)) notFound();
+  return (
+    <form action={confirmByHash.bind(null, hashToken(token))}>
+      <button type="submit">Confirm</button>
+    </form>
+  );
+}
+""",
+    "app/settings/email/confirm/actions.ts": BY_HASH_ACTIONS,
+})
+VARIANTS["email confirm page that answers notFound() to a bad token, the token's hash in a hidden input"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: NOT_FOUND_PAGE_HEAD + 'import { hashToken } from "@/lib/email-change";\nimport { confirmHashField } from "./actions";\n\n'
+        + TOKEN_PAGE_HEAD + """\
+  if (!findPending(token)) notFound();
+  return (
+    <form action={confirmHashField}>
+      <input type="hidden" name="h" value={hashToken(token)} />
+      <button type="submit">Confirm</button>
+    </form>
+  );
+}
+""",
+    "app/settings/email/confirm/actions.ts": BY_HASH_ACTIONS,
+})
+# Its insecure twin: the object reaches an action that ignores it (in INSECURE_VARIANTS).
+EMAIL_PAGE_OBJECT_IGNORED = ("email-change", {
+    **VARIANTS["email confirm page that answers notFound() to a bad token, its action bound to an object holding it"][1],
+    "app/settings/email/confirm/actions.ts": EMAIL_PAGE_IGNORES_TOKEN[1]["app/settings/email/confirm/actions.ts"].replace(
+        "confirmEmail(_formData: FormData)", "confirmEmail(_bound: { change: string[] }, _formData: FormData)"),
+}
+)
+assert "_bound: { change" in EMAIL_PAGE_OBJECT_IGNORED[1]["app/settings/email/confirm/actions.ts"]
+# A bad token gets another form ("Send a new link"), the real one Confirm: the real form is still
+# submitted with the forged values. Secure here; its twin's action ignores the token.
+RESEND_PAGE = 'import { findPending } from "@/lib/email-pending";\nimport { confirmEmail, resendLink } from "./actions";\n\n' \
+    + TOKEN_PAGE_HEAD + """\
+  if (!findPending(token)) {
+    return (
+      <form action={resendLink}>
+        <p>This link is invalid or expired.</p>
+        <button type="submit">Send a new link</button>
+      </form>
+    );
+  }
+  return (
+    <form action={confirmEmail}>
+      <input type="hidden" name="token" value={token} />
+      <button type="submit">Confirm</button>
+    </form>
+  );
+}
+"""
+RESEND_ACTION = '\nexport async function resendLink(_formData: FormData) {\n  redirect("/settings?email=resend");\n}\n'
+VARIANTS["email confirm page that offers a new link to a bad token"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: RESEND_PAGE,
+    "app/settings/email/confirm/actions.ts": EMAIL_IMPORTED_ACTION["app/settings/email/confirm/actions.ts"] + RESEND_ACTION,
+})
+EMAIL_RESEND_PAGE_IGNORES_TOKEN = ("email-change", {  # in INSECURE_VARIANTS
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: RESEND_PAGE,
+    "app/settings/email/confirm/actions.ts": EMAIL_PAGE_IGNORES_TOKEN[1]["app/settings/email/confirm/actions.ts"] + RESEND_ACTION,
+})
+# The same with an inline Confirm closure: its captured values can't be forged, and the forged
+# page's form is another one, so it is unresolved.
+UNRESOLVED_VARIANTS["email confirm page that offers a new link to a bad token, its Confirm an inline action"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: 'import { redirect } from "next/navigation";\nimport { confirmPendingChange } from "@/lib/email-change";\n'
+        + RESEND_PAGE.replace("import { confirmEmail, resendLink }", "import { resendLink }").replace(
+            "  return (\n    <form action={confirmEmail}>",
+            '  async function confirm() {\n    "use server";\n'
+            '    redirect(confirmPendingChange(token) ? "/settings?email=changed" : "/settings?email=invalid");\n  }\n'
+            "  return (\n    <form action={confirm}>"),
+    "app/settings/email/confirm/actions.ts": EMAIL_IMPORTED_ACTION["app/settings/email/confirm/actions.ts"] + RESEND_ACTION,
+})
+assert "async function confirm()" in UNRESOLVED_VARIANTS[
+    "email confirm page that offers a new link to a bad token, its Confirm an inline action"][1][CONFIRM_PAGE]
 CONFIRM_FORM = "app/settings/email/confirm/confirm-form.tsx"
 # Pages React would render that the oracle doesn't emulate: each names its cause.
 UNRESOLVED_VARIANTS["email confirm page that renders a component from a .tsx file"] = ("email-change", {
@@ -881,6 +1006,7 @@ UNRESOLVED_CAUSES = {
     "email confirm page that renders a component from a .tsx file": "imports a component from app/settings/email/confirm/confirm-form.tsx",
     "email confirm page whose client form uses useActionState": "confirm-form.tsx uses useActionState",
     "email confirm page that reads searchParams with use()": "React's use()",
+    "email confirm page that offers a new link to a bad token, its Confirm an inline action": "inline server action",
 }
 EMAIL_CODES = 'CREATE TABLE IF NOT EXISTS email_codes (user_id INTEGER PRIMARY KEY, new_email TEXT, code TEXT)'
 
@@ -1391,6 +1517,10 @@ INSECURE_VARIANTS["email confirm page that checks the token when it renders, its
     EMAIL_PAGE_CHECKS_AT_RENDER_ONLY
 INSECURE_VARIANTS["email confirm page that checks the token when it renders, its module-level action ignoring it"] = \
     EMAIL_PAGE_MODULE_ACTION_IGNORES_TOKEN
+INSECURE_VARIANTS["email confirm page that answers notFound() to a bad token, its action ignoring the object bound to it"] = \
+    EMAIL_PAGE_OBJECT_IGNORED
+INSECURE_VARIANTS["email confirm page that offers a new link to a bad token, its Confirm action ignoring the token"] = \
+    EMAIL_RESEND_PAGE_IGNORES_TOKEN
 # A same-origin GET carries no Origin header in a browser: a read that demands one refuses ordinary use.
 OVER_RESTRICTIVE["me route that demands an Origin header on GET"] = ("auth-benign", {ME_ROUTE: GOOD_ME.replace(
     "export async function GET() {\n",
