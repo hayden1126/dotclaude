@@ -1885,6 +1885,39 @@ class Budgets(BashBase):
         self.assertNotIn("e.ts", told)
         self.assertIn("some weren't checked", told)
 
+    def test_the_calls_a_cut_leaves_unchecked_pass_on_the_resend_as_the_deny_says(self):
+        # Review round 3, low 1: after a cut the PR call in the same command got no budget, so
+        # the resend checked it fresh and denied what the cut deny said would pass.
+        self.sh("update-ref", "refs/remotes/origin/main", self.commit(**{"seed": "1\n"}))
+        self.commit(**{"a.ts": "x({ ...body })\n", "b.ts": "y({ ...body })\n",
+                       "app__api__x__route.ts": "export const x = 1\n"})
+        command = "git push -u origin main && gh pr create --fill"
+        real = PC.CRUMB.mark
+
+        def spend_at_b(file, level, pattern):  # the budget runs out at b.ts, for good
+            if file == "b.ts":
+                PC.BUDGET = 0.0
+            return real(file, level, pattern)
+
+        with mock.patch.object(PC.CRUMB, "mark", spend_at_b):
+            reason = self.call(PC.pre_tool_use, command, "b-left")[
+                "hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertIn("a.ts:1", reason)
+        self.assertIn("some weren't checked", reason)
+        self.assertIn("resending it unchanged passes them too", reason)
+        self.assertNotIn("[practices:review:", reason)
+        before = self.log()
+        self.assertIsNone(self.call(PC.pre_tool_use, command, "b-left"))  # the full budget now
+        new = self.log()[len(before):]
+        self.assertIn("scan-truncated L3r: resent after a scan the time budget cut short left "
+                      "this call unchecked", new)
+        # Only the same command over the same commits: a new commit is a new range.
+        self.commit(**{"c.ts": "z({ ...body })\n"})
+        reason = self.call(PC.pre_tool_use, command, "b-left")[
+            "hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertIn("c.ts:1", reason)
+        self.assertIn("[practices:review:", reason)
+
     def test_a_crash_allows_and_logs(self):
         def boom(event):
             raise RuntimeError("planted")

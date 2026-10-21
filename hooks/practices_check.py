@@ -1637,6 +1637,7 @@ def scan(repo, spec, rules, level, ctx, lockfiles=True):
         commits, more = repo.commits(*spec, cap=MAX_COMMITS)
         key = f"{level}|engine|cut|-|" + _sha1("\n".join([repo.git_dir, *(c for c, _ in commits)]))
         if key in ctx["seen"]:
+            ctx["cut"] = key  # the calls the cut left unchecked pass too (unchecked_key)
             log("scan-truncated", f"{level}: resent after a scan the time budget cut short, so "
                 "it passed unscanned")
             return [], None
@@ -1644,8 +1645,26 @@ def scan(repo, spec, rules, level, ctx, lockfiles=True):
     except Budget as e:
         log("scan-truncated", f"{level}: the time budget ran out in the {e}, so what came after "
             "it wasn't scanned")
+        ctx["cut"] = key
         return found, key
     return found, None
+
+
+def unchecked_key(ctx, level, n):
+    """The key of the command's call number n (pushes first, then PR calls), which a cut scan
+    earlier in the same command left unchecked: tied to that scan's cut key and the command, so
+    only the resend of the same command over the same commits passes it."""
+    return f"{level}|engine|cut|-|" + _sha1(f"{ctx['cut']}\n{n}\n{ctx['command']}")
+
+
+def resent_unchecked(ctx, level, n):
+    """Whether call n is one a cut scan left unchecked on this command's earlier run, whose
+    deny said the resend passes: once this run met that scan's cut key, it passes, logged."""
+    if ctx.get("cut") and unchecked_key(ctx, level, n) in ctx["seen"]:
+        log("scan-truncated", f"{level}: resent after a scan the time budget cut short left "
+            "this call unchecked, so it passed unscanned")
+        return True
+    return False
 
 
 def _scan(repo, commits, more, rules, level, ctx, lockfiles, found):
@@ -1757,11 +1776,14 @@ def context(event, cfg, ts, project):
         return cache["a"]
 
     return {"cfg": cfg, "helpers": cfg["helpers"], "audited": was_audited,
-            "seen": state_keys(event), "project": project}
+            "seen": state_keys(event), "project": project, "command": command_of(event),
+            "cut": None, "cut_at": None}
 
 
 CUT_NOTE = ("The time budget ran out before this check read every commit, so some weren't "
             "checked; these are the findings it read.")
+LEFT_NOTE = ("The pushes and PR calls after that point in this command weren't checked either; "
+             "resending it unchanged passes them too.")
 
 
 # L3s: the PreToolUse half records HEAD, the PostToolUse half scans what the commit added.
@@ -1932,7 +1954,9 @@ def push_gate(event, pushes, skills, cfg, ts, ctx, bounds):
     rules = commit_rules(skills, cfg)
     out, cuts = [], []
     try:
-        for _, args, where in pushes:
+        for n, (_, args, where) in enumerate(pushes):
+            if resent_unchecked(ctx, "push", n):
+                continue
             srcs, skip = push_sources(args)
             if skip:
                 log("push-unscanned", f"push: {skip} sends no commits, so it wasn't scanned")
@@ -1957,6 +1981,7 @@ def push_gate(event, pushes, skills, cfg, ts, ctx, bounds):
             out += fresh(found, event, repo, ctx["project"])
             if cut:
                 cuts.append(cut)
+                ctx["cut_at"] = n
                 break
     except Budget as e:
         log("budget-spent", f"after {BUDGET}s, in the push {e}; the pushes left went unchecked")
@@ -2074,22 +2099,25 @@ def pr_head(repo, pr):
                           "branch.")
 
 
-def l3r(event, ghs, skills, cfg, ts, ctx, bounds):
+def l3r(event, ghs, skills, cfg, ts, ctx, bounds, first=0):
     """(review blocks, their keys, new rule findings, notes, the cut keys of a scan the budget
-    cut short) for the PR calls. Once the budget is spent the PR calls left go unchecked,
-    logged, and what was found so far still counts."""
+    cut short) for the PR calls, numbered from first among the command's calls. Once the
+    budget is spent the PR calls left go unchecked, logged, and what was found so far still
+    counts."""
     out = ([], [], [], [], [])
     try:
-        _l3r(event, ghs, skills, cfg, ts, ctx, bounds, *out)
+        _l3r(event, ghs, skills, cfg, ts, ctx, bounds, first, *out)
     except Budget as e:
         log("budget-spent", f"after {BUDGET}s, in the L3r {e}; the PR calls left went "
             "unchecked")
     return out
 
 
-def _l3r(event, ghs, skills, cfg, ts, ctx, bounds, blocks_, keys, found, notes, cuts):
+def _l3r(event, ghs, skills, cfg, ts, ctx, bounds, first, blocks_, keys, found, notes, cuts):
     """l3r's body: appends to its lists as it goes, so a spent budget keeps what was found."""
-    for args, cwd in ghs:
+    for n, (args, cwd) in enumerate(ghs, first):
+        if resent_unchecked(ctx, "L3r", n):
+            continue
         pr = pr_ready(args)
         if pr is None:
             continue
@@ -2139,6 +2167,7 @@ def _l3r(event, ghs, skills, cfg, ts, ctx, bounds, blocks_, keys, found, notes, 
             notes.append(note)
         if cut:
             cuts.append(cut)
+            ctx["cut_at"] = n
             return
 
 
@@ -2200,9 +2229,9 @@ def bash_pre(event):
                 if new:
                     reasons.append(push_reason(new, bool(cuts)))
                     keys += [f.key for f in new]
-                if ghs:
+                if ghs and ctx["cut_at"] is None:  # after a cut the budget is spent
                     review, review_keys, found, notes, cuts = l3r(event, ghs, skills, cfg, ts,
-                                                                  ctx, bounds)
+                                                                  ctx, bounds, len(pushes))
                     cut_keys += cuts
                     reasons += review
                     keys += review_keys
@@ -2216,6 +2245,18 @@ def bash_pre(event):
                             + findings_text(found))
                         keys += [f.key for f in found]
                     reasons += notes
+                # The calls after a cut go unchecked; each gets a key tied to the cut, so the
+                # resend of this command over the same commits passes them, as the deny says.
+                if ctx["cut_at"] is not None:
+                    levels = ["push"] * len(pushes) + ["L3r"] * len(ghs)
+                    left = [unchecked_key(ctx, lv, n) for n, lv in enumerate(levels)
+                            if n > ctx["cut_at"]]
+                    if left:
+                        log("scan-truncated", f"{len(left)} later calls in this command went "
+                            "unchecked after the cut; a resend passes them unscanned")
+                        cut_keys += left
+                        if reasons:
+                            reasons.append(LEFT_NOTE)
     except Budget as e:
         log("budget-spent", f"after {BUDGET}s, in the Bash check's {e}; the call was allowed")
         return None
