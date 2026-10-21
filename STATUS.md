@@ -87,18 +87,19 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lanes** (briefs in each record). Merge order (2026-10-20): 1 practices
-    (`feat/practices-suite`, draft #142, carries the lead's notes; opened 2026-10-19 at Hayden's
-    ask: the skill suite below, security first). Hayden moved it ahead of exam-prep the same day
-    since #142 is finished; if it hasn't merged by Wed 10/21 noon, the lead reinstalls from main
-    and exam-prep goes first again. 2 exam-prep (`feat/exam-prep-skill`, opened 2026-10-20: the
-    exam-prep skill suite below; ahead of mute and policy-fp so it can install from its lane for
-    the dry run before round 1's go/no-go, Thu 10/22). 3 mute (`feat/device-mute`, #141,
-    opened 2026-10-20: the device-wide mute below, plus `setup-tmux.sh`'s `link()` fix).
-    4 policy-fp (`fix/policy-false-denials`, opened 2026-10-20: the three subagent-policy false
-    denials below). Each opened on Hayden's ok. Merged and closed 2026-10-20, installed from
-    main: summary-retire (#139), link-atomic (#140, which Hayden ordered first so no later
-    install ran the old `link()`), pr-horizon (#135), config-dir (#133). Hayden raised the cap
+  - **Live lanes** (briefs in each record). Merge order (Hayden, 2026-10-21, by readiness, since
+    exam-prep had stages left while mute and policy-fp were nearly done): 1 mute
+    (`feat/device-mute`, #141, carries the lead's notes: the device-wide mute below, plus
+    `setup-tmux.sh`'s `link()` fix). 2 policy-fp (`fix/policy-false-denials`: the three
+    subagent-policy false denials below, plus gap SP3 on Hayden's pick, plus a copy of
+    exam-prep's `--profile` line so main's delegation tests go green at its merge). 3 exam-prep
+    (`feat/exam-prep-skill`: the exam-prep skill suite below, plus classifying Claude Code
+    2.1.305's `--profile`; its dry run passed without an install, and it needs its install turn
+    before round 1's go/no-go, Thu 10/22). 4 practices (its next PR, auth-secrets; the skill
+    suite below). Each opened on Hayden's ok. practices merged #142 the same day (Hayden moved it first since it was
+    finished) and stays open for more PRs. Merged and closed 2026-10-20, installed from main:
+    summary-retire (#139), link-atomic (#140, which Hayden ordered first so no later install ran
+    the old `link()`), pr-horizon (#135), config-dir (#133). Hayden raised the cap
     from 3 to 4 on 2026-10-20 for exam-prep; it is full.
   - **Lane ask quality: done** (2026-10-19 to 2026-10-20). ask-check merged as #131 and was
     installed from main 2026-10-20: a PreToolUse hook on AskUserQuestion (`hooks/ask_check.py`)
@@ -142,7 +143,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     injection and the rest; Hayden sends the list), not only agents; ux is the whole user
     experience (lag and loading, which features serve users most, convenience), with UI a small
     part, so it links `frontend-ui-discipline` for that part. Open for Hayden: the list and
-    names. In lane practices since 2026-10-19 (its record holds the state). Lead's flags: the
+    names. In lane practices since 2026-10-19 (its record holds the state). First PR merged as
+    #142 (2026-10-20, installed from main): the `server-code` skill, its `practices-check` gate
+    hook (PreToolUse on Edit/Write/MultiEdit plus SessionStart) and a planted-bug eval. More PRs
+    follow from the same lane (auth-secrets next). Lead's flags: the
     name `security-review` collides with a built-in skill; dotclaude is public, so no capella
     code or unfixed gaps go in ([[dotclaude-public-repo]]); checklists in context get skipped, so
     a pilot should say what enforces it (a hook at the event, as ask-check does). Pairs with the
@@ -198,8 +202,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     entry's `commondir` and `config.worktree`, so every sandboxed command mounts over paths that
     don't exist; mute twice got bwrap's "Can't get type of source
     .git/worktrees/excluded-guard/commondir" (and once `.git/config.lock`), and the retry ran
-    clean. Fix to try: `git worktree prune` (deletes under `.git/`: Hayden's ok first), then see
-    whether running sessions plant the dirs again. Same family as config-dir's bwrap error in the
+    clean. Hayden ran `git worktree prune` on 2026-10-20 (50 entries by then; the lead checked
+    first that none was a live worktree's). After it, the dry run was empty, all 14 live
+    worktrees stayed, and a sandboxed command planted nothing. Still to watch: whether running
+    sessions plant the dirs again, and whether the bwrap error recurs. Same family as config-dir's bwrap error in the
     Watch item below.
   - **Three false denials in the subagent policy** (lane exam-prep's dry run, 2026-10-20; the
     lead reproduced each with the code's own regexes). In `skills/delegation/scripts/subagent-policy`:
@@ -222,10 +228,38 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     compact boundary met before any post-compact usage means no count yet (say nothing, write
     nothing), with a test on a transcript fixture that ends at a boundary. Lane-able
     (`hooks/context_watch.py`, `tests/`); no live lane owns it.
-  - **Subagent policy gaps SP1 and SP2** (from lane policy-fp, 2026-10-20, routed to the lead
-    on Hayden's pick; the lead re-checked both). Details and proposed fixes are in the private
-    findings file's "Subagent policy gaps 2026-10-20" section ([[dotclaude-public-repo]]). Both
-    edit lane policy-fp's files, so their lane opens after policy-fp merges.
+  - **Subagent policy gaps SP1 to SP3** (from lane policy-fp, 2026-10-20, routed to the lead
+    on Hayden's pick; the lead re-checked each). Details and proposed fixes are in the private
+    findings file's "Subagent policy gaps 2026-10-20" section ([[dotclaude-public-repo]]). SP3
+    joined lane policy-fp on Hayden's pick, with the fix he chose (in that section). SP1 and SP2 edit the same files, so their lane opens after
+    policy-fp merges.
+  - **Claude Code 2.1.305 turned `tests/delegation` red everywhere** (lane practices' report,
+    2026-10-20; the lead reproduced it on the lead branch). The update added `--profile` to
+    `claude plugin validate`, and `test_settings.Inventory.test_installed_claude_flags_and_subcommands_are_classified`
+    fails until the inventory classifies it. It's a local strictness switch like `--strict`, so
+    it goes in `CLAUDE_FLAG_OK` (`tests/delegation/command_inventory.py`). In lane exam-prep on
+    Hayden's pick, since it already edits that file and merges first.
+  - **`lane trial` fails test_subagent_policy on the merge alone** (lane policy-fp's report,
+    2026-10-20; the lead checked the code). Sandboxed, `trial` builds its scratch tree in the
+    system temp dir (`skills/lanes/scripts/lane:2341`), which is `/tmp/claude-<uid>`, one of
+    the policy's temp roots (`skills/delegation/policy.toml:145`). `_test_tmp_dir`
+    (`tests/delegation/test_subagent_policy.py:29-49`) then puts its fake homes in the tree's
+    `.tmp/`, so every fixture path reads as a temp write and about 13 deny cases pass. A real
+    checkout passes, so a trial failure confined to those cases is this artifact. Fix: the test
+    refuses a `.tmp/` under a temp root, as it already does for `.claude/worktrees/`, or `trial`
+    builds its tree outside the temp root. Lane-able; no live lane owns it.
+  - **A compact pass puts live background writers into plan mode** (a session in another repo
+    reported it, 2026-10-20; the lead checked the code and the writer's transcript). Compact
+    mode is the pass picked when background tasks run (`skills/pass/SKILL.md:23,80,103`), yet
+    its resume prompt adds "Call EnterPlanMode first" to every unapproved pass
+    (`resume_prompt`, `skills/pass/scripts/pass-respawn:1218-1222`). Subagents follow the
+    parent's permission mode, so a running writer got the plan-mode notice mid-run
+    (21:10:37Z, in a 21:02-21:11Z run), was refused its write, and handed back partial with 4
+    of 6 parts unstarted. Fix: when `--tasks` shows a live agent, the compact resume prompt
+    says to plan in chat and enter plan mode only after it hands back. Also test whether a
+    `permissionMode` in `agents/writer.md` holds against a parent's mid-run plan mode; if it
+    does, it also covers plan mode entered by hand. Lane-able (`skills/pass/`, `tests/`); no
+    live lane owns it.
   - **excluded-guard refuses an over-matched command in an agent worktree** (lane mute's report,
     2026-10-20; checked in code, not reproduced). Candidacy splits on `|`, `;` and `&&` without
     quotes, so a plain `grep` whose quoted pattern holds an excluded head becomes a candidate
@@ -358,9 +392,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lanes practices (merge order 1, carries the lead branch), exam-prep (2), mute (3) and
-     policy-fp (4) run; if #142 hasn't merged by Wed 10/21 noon, reinstall from main and put
-     exam-prep first; their state is in their records (`lane ls`). After each reinstall,
+  0. Lanes mute (merge order 1, carries the lead branch), policy-fp (2), exam-prep (3) and
+     practices (4, its next PR) run; their state is in their records (`lane ls`). After each reinstall,
      check `ls -la ~/.claude/CLAUDE.md` (the Watch item). Watch that push asks open with the
      briefing (#137); if they skip it, the Stop-hook check is the follow-up (Hayden's pick).
   1. Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
