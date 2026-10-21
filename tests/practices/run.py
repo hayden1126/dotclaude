@@ -28,9 +28,12 @@ Arms:
 
 Cases (cases/<case>/): prompt.md is the user's message, fed verbatim on stdin. oracle.mjs
 is hidden from the agent (it lives in this checkout, not the fixture) and prints one JSON
-verdict: pass, fail (works but has the planted bug) or broken (the functional check failed or
+verdict: pass, fail (works but has the planted bug), broken (the functional check failed or
 the code didn't load, or the agent pointed node_modules outside the fixture; the run counts
-for neither side). good/ and bad/ are overlays the offline test uses. oracle_lib.mjs holds the
+for neither side) or unresolved (the oracle couldn't determine the result: a confirm page it
+can't render or submit, say; never for something it observed, so an address that changed on a
+forged step is still fail; a person grades it from the diff). good/ and bad/ are overlays the
+offline test uses. oracle_lib.mjs holds the
 shared rules. run.py adds a fourth verdict, error, for its own or the infrastructure's
 failures: a harness exception, a turn with no stream output, a claude exit that is nonzero
 with no result event, a result event with is_error or an error_* subtype (usage limit,
@@ -38,13 +41,17 @@ expired login), an arm D warm-up or compact turn that timed out, a fixture the g
 sandbox refuses. broken stays agent-caused.
 
 Per run:
-  - Fixture: fixture/ is copied to a fresh tempfile.mkdtemp(prefix="ledgerly-"), next_stub/
+  - Fixture: fixture/ is copied to a fresh tempfile.mkdtemp(prefix=FIXTURE_PREFIX), a prefix
+    used nowhere else (the fixture's own test dirs are ledgerly-test-*), next_stub/
     to its node_modules/next and stubs/* (server-only, client-only, react) beside it, then
     `git init` and an initial commit. The harness config is a second commit, the last the
     agent's own repo gets from the harness. The same tree is also the baseline commit of the
-    harness's private git dir, beside the fixture and never in it, whose SHA is recorded; the
-    agent's diff is that git dir's view of the work tree against the baseline (so an agent
-    commit isn't lost, and no config the agent can write, such as a filter driver, is read):
+    harness's private git dir, <run dir>/harness-git under the 0700 results dir (never in the
+    fixture or the system temp dir, where the agent's sandbox could write its config), whose SHA
+    is recorded; the agent's diff is that git dir's view of the work tree against the baseline
+    (so an agent commit isn't lost, and no config the agent can write, such as a filter driver,
+    is read). The tripwire's suspect words are read from a --text diff (diff-text.patch), so a
+    .gitattributes marking files -diff can't hide added lines:
     .claude/settings.json turns the sandbox on with autoAllowBashIfSandboxed (the agent's Bash
     runs confined to the fixture, without prompts), plus the skill and hooks for its arm. The
     harness's git reads no global or system config, so no global ignore rule hides .claude/.
@@ -86,16 +93,20 @@ Per run:
         init event), is_error, exit_codes, timed_out, strays and stray_kills;
       the fingerprint: skills, hook, case_hash, warmup_hash and harness_hash (below);
       tripwires: suspect (the SUSPECT_WORDS the agent's added lines contain, words that could
-        forge the oracle's verdict from inside its process) and contaminated (up to 5 paths a
-        tool call named outside the run's own fixture that hold .claude/skills or SKILL.md, or
-        another ledgerly-* fixture), each [] when clean;
+        forge the oracle's verdict from inside its process) and contaminated (a mismatch in the
+        skills the session listed at init, init_skills: an arm-A row that lists a practices
+        skill, or a B, C or D row that lacks the case owner's; then up to 5 paths a tool call
+        named outside the run's own fixture that hold .claude/skills or SKILL.md, or another
+        fixture), each [] when clean;
       harness_sha (the baseline commit the diff is taken against), hook_errors (the run's hook
         errors.log, "none" when empty or for A and B), and the paths stream (one per turn),
         oracle and diff, under <out>/<case>-<arm>-<i>/;
       only sometimes: diff_error (the diff failed; the verdict stands), fixture (with --keep),
         harness_error (an exception in the harness: an error row, with few other fields), and
-        reviewed, which no run writes: a person sets "reviewed": true in a tripwire row's line
-        once they have read its diff and stream, and the bar then counts it again.
+        three fields no run writes, which a person sets after reading a row's diff and stream:
+        reviewed (true clears a tripwire row, which the bar then counts again), hand_verdict
+        ("pass", "fail" or "broken": with reviewed true it replaces verdict for the bar, which
+        is how an unresolved row gets graded) and hand_note (why, in a sentence).
     An --out that already holds results.jsonl is refused: a rerun would overwrite the run dirs
     its rows point at. Arms C and D run the hook with CLAUDE_CONFIG_DIR an empty dir and
     XDG_STATE_HOME its own, both in the run dir, so it sees no user-tier skill and keeps its
@@ -144,11 +155,25 @@ or fail; broken and error don't count.
      versions only print a warning. Arm A's counts classify another arm's line only when A
      pooled and its case part equals that arm's; else that line reads as A unclassified, and a
      C or D line is then a regression check (it still has to pass every run), never REFUSED.
-  Tripwires: a row with a non-empty suspect or contaminated list, and no "reviewed": true, is
-     unresolved. It counts under no verdict (so a C or D line can't be green while it stands,
-     and A's valid runs leave it out), its line says how many are unresolved, and each is
-     listed after the table with its diff path. Setting "reviewed": true in its line in
-     results.jsonl, after reading its diff and stream, clears it.
+  Unresolved: a row whose verdict is unresolved, or whose suspect or contaminated list is
+     non-empty (a tripwire), is unresolved until a person marks it reviewed. It counts under no
+     verdict, never a pass and never a fail (so a C or D line can't be green while it stands,
+     and A's valid runs leave it out); its line says how many are unresolved, and each is listed
+     after the table with its diff path. After reading its diff and stream, a person sets
+     "reviewed": true in its line in results.jsonl (a tripwire row then counts under its own
+     verdict) and, to grade it, "hand_verdict" and "hand_note": a reviewed row's hand_verdict
+     replaces its verdict for the bar, and an unresolved verdict stays unresolved without one.
+     --summarize then prints the bar again from the edited files, with no model calls.
+
+  python3 tests/practices/run.py --summarize PATH [PATH ...] [--cases ...] [--arms ...] [-n N]
+
+--summarize loads the rows of every arm from each PATH (a results.jsonl, or the dir holding
+one; a row already taken, the same stream paths, is dropped), applies reviewed, hand_verdict
+and the tripwires, and prints the same table and bar as a live run, with the same pooling and
+fingerprint rules and exit status, and no model calls. --cases and --arms default to those the
+rows hold. The summary groups rows by model and effort (a row without an effort reads
+"default"). A line's n, the runs a C or D line must pass, is the number of rows it holds, or
+-n when that is larger (so a run cut short misses until its rows are there).
 """
 import argparse
 import concurrent.futures
@@ -229,9 +254,11 @@ def warmup_case(case):
 
 
 ARMS = ["A", "B", "C", "D"]
-# pass, fail and broken come from the oracle; error is the harness's own (an exception, a
-# claude exit with no result, no stream, a sandbox refusal), counted apart and never valid.
-VERDICTS = ("pass", "fail", "broken", "error")
+# pass, fail, broken and unresolved come from the oracle; error is the harness's own (an
+# exception, a claude exit with no result, no stream, a sandbox refusal), counted apart and
+# never valid. A person's hand_verdict on a reviewed row is one of HAND_VERDICTS.
+VERDICTS = ("pass", "fail", "broken", "unresolved", "error")
+HAND_VERDICTS = ("pass", "fail", "broken")
 GATING = {"A", "C", "D"}
 SESSION_TIMEOUT = 900
 ORACLE_TIMEOUT = 60
@@ -430,11 +457,27 @@ def hook_errors(run_dir):
     return text[-4000:] or "none"
 
 
+PRIVATE_BASE = REPO / ".tmp" / "practices"  # ignored by git, away from the fixtures in /tmp
+# Each run's fixture dir name starts with this, in the system temp dir. Used nowhere else, so
+# the contamination tripwire (another fixture named in a tool call) can't match the fixture's
+# own test dirs (ledgerly-test-*, fixture/tests/helpers.ts) or anything else.
+FIXTURE_PREFIX = "ledgerly-app-"
+
+
+def private_dir(prefix):
+    """A fresh 0700 dir under the checkout's ignored .tmp/practices/, never the system temp dir."""
+    PRIVATE_BASE.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return Path(tempfile.mkdtemp(prefix=prefix, dir=PRIVATE_BASE))
+
+
+_git_dirs = {}  # fixture path -> (its harness git dir, the private dir made to hold it, or None)
+
+
 def harness_git_dir(fixture):
-    """The harness's own git dir for a fixture: beside it, never in it, so the agent can't
-    write its config (a filter driver, an fsmonitor) and git reads none of the fixture's."""
-    fixture = Path(fixture)
-    return fixture.parent / f".{fixture.name}.harness-git"
+    """The harness's own git dir for a fixture build_fixture made: harness-git in its run dir
+    (else in a private dir of its own), never in the fixture or the system temp dir, so the agent
+    can't write its config (a filter driver, an fsmonitor) and git reads none of the fixture's."""
+    return _git_dirs[str(Path(fixture))][0]
 
 
 def harness_git(fixture, *args):
@@ -443,9 +486,11 @@ def harness_git(fixture, *args):
 
 
 def remove_fixture(fixture):
-    """Removes a fixture and the harness's git dir beside it."""
-    shutil.rmtree(harness_git_dir(fixture), ignore_errors=True)
-    shutil.rmtree(fixture, ignore_errors=True)
+    """Removes a fixture and the harness's git dir (and the private dir made for it)."""
+    git_dir, own = _git_dirs.pop(str(Path(fixture)), (None, None))
+    for d in (git_dir, own, fixture):
+        if d is not None:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 def build_fixture(arm, run_dir=None):
@@ -456,7 +501,10 @@ def build_fixture(arm, run_dir=None):
     hook with hook_dirs(run_dir), so they need one."""
     if arm in ("C", "D") and run_dir is None:
         raise ValueError(f"arm {arm} wires the hook with dirs in the run dir, and none was given")
-    root = Path(tempfile.mkdtemp(prefix="ledgerly-"))
+    root = Path(tempfile.mkdtemp(prefix=FIXTURE_PREFIX))
+    own = private_dir("harness-") if run_dir is None else None
+    _git_dirs[str(root)] = (Path(run_dir if run_dir is not None else own) / "harness-git", own)
+    harness_git_dir(root).parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(FIXTURE_SRC, root, dirs_exist_ok=True)
     install_stubs(root)
     git("init", "-q", cwd=root)
@@ -766,11 +814,13 @@ def git_dir_problem(fixture):
     return None
 
 
-def agent_diff(fixture, base):
+def agent_diff(fixture, base, text=False):
     """Everything the agent changed in the work tree since the baseline commit `base`, committed
-    or not, through the harness's own git dir: no config the agent could write is read."""
+    or not, through the harness's own git dir: no config the agent could write is read. --binary
+    (for regrading) by default; `text` takes --text instead, every file as text lines, so a
+    .gitattributes marking a file -diff can't hide its added lines from suspect_words."""
     harness_git(fixture, "add", "-A")
-    return harness_git(fixture, "diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv", base)
+    return harness_git(fixture, "diff", "--cached", "--text" if text else "--binary", "--no-ext-diff", "--no-textconv", base)
 
 
 # Words in the agent's added lines that could forge the oracle's verdict from inside its
@@ -789,9 +839,10 @@ PATH_TOKEN = re.compile(r"""[^\s"'`;|&<>()=,]+""")
 
 def contamination(events_by_turn, fixture, tmp=None):
     """Paths the session's tool calls named outside its own fixture that hold practices skills
-    (.claude/skills, SKILL.md) or another fixture (ledgerly-* in the system temp dir), up to 5."""
+    (.claude/skills, SKILL.md) or another fixture (FIXTURE_PREFIX* in the system temp dir), up
+    to 5. The fixture's own test dirs (ledgerly-test-*) don't share the prefix, so they never count."""
     fixture = os.path.normpath(str(fixture))
-    others = os.path.join(tmp or tempfile.gettempdir(), "ledgerly-")
+    others = os.path.join(tmp or tempfile.gettempdir(), FIXTURE_PREFIX)
     found = []
 
     def strings(v):
@@ -812,7 +863,7 @@ def contamination(events_by_turn, fixture, tmp=None):
                 texts += [os.path.join(inp["path"], inp[k]) for k in ("pattern", "glob") if isinstance(inp.get(k), str)]
             for text in texts:
                 for token in PATH_TOKEN.findall(text):
-                    if not (".claude/skills" in token or "SKILL.md" in token or "ledgerly-" in token):
+                    if not (".claude/skills" in token or "SKILL.md" in token or FIXTURE_PREFIX in token):
                         continue
                     full = os.path.normpath(os.path.join(fixture, os.path.expanduser(token)))
                     if full == fixture or full.startswith(fixture + os.sep):
@@ -821,6 +872,18 @@ def contamination(events_by_turn, fixture, tmp=None):
                     if (skills or full.startswith(others)) and full not in found:
                         found.append(full)
     return found[:5]
+
+
+def skill_mismatch(arm, owner, init_skills):
+    """What's wrong with the skills a session listed at init: an arm-A session that lists a
+    practices skill (it installs none), or a B, C or D session that lacks the case owner's.
+    [] when they match, or when the row recorded none."""
+    if not isinstance(init_skills, list):
+        return []
+    names = {skill_called({"skill": s.get("name") if isinstance(s, dict) else s}) for s in init_skills} - {""}
+    if arm == "A":
+        return [f"init_skills lists {name} (arm A installs none)" for name in PRACTICES_SKILLS if name in names]
+    return [] if owner in names else [f"init_skills lacks {owner} (arm {arm} installs it)"]
 
 
 def _exited(pid):
@@ -977,6 +1040,7 @@ def finish_run(fixture, harness_sha, case, run_dir, contain, skip_grade=()):
         return {"verdict": "error", "checks": [{"name": "fixture .git", "ok": False, "detail": problem}]}, problem
     try:
         (run_dir / "diff.patch").write_text(agent_diff(fixture, harness_sha))
+        (run_dir / "diff-text.patch").write_text(agent_diff(fixture, harness_sha, text=True))
     except (subprocess.CalledProcessError, OSError) as e:
         diff_error = f"{e!r}: {getattr(e, 'stderr', '')}"[:1000]
     if skip_grade:
@@ -1019,13 +1083,12 @@ def run_one(case, arm, index, args, out):
     verdict, diff_error = finish_run(fixture, harness_sha, case, run_dir, args.contain, skip_grade=failures)
     diff = run_dir / "diff.patch"
     try:
-        suspect = suspect_words(diff.read_text(errors="replace"))
+        suspect = suspect_words((run_dir / "diff-text.patch").read_text(errors="replace"))
     except OSError:
         suspect = []
-    contaminated = contamination(events_by_turn, fixture)
-
     per_turn = [stream_summary(turn) for turn in events_by_turn]
     summary = dict(per_turn[0])  # init facts (memory_paths, skills) from the first turn
+    contaminated = skill_mismatch(arm, CASE_INFO[case].owner, summary["init_skills"]) + contamination(events_by_turn, fixture)
     summary["result_subtype"] = per_turn[-1]["result_subtype"]
     for key in ("turns", "duration_ms", "total_cost_usd"):
         values = [t[key] for t in per_turn if isinstance(t[key], (int, float))]
@@ -1095,7 +1158,7 @@ def bar(case, arm, counts, n, a=None, installed=None):
     `installed` the skills the arm's rows ran with (default: PRACTICES_SKILLS)."""
     label, missed = _bar(case, arm, counts, n, a, installed)
     held = counts.get("unresolved", 0)
-    return (f"{label}; {held} unresolved (suspect or contaminated: review by hand)", missed) if held else (label, missed)
+    return (f"{label}; {held} unresolved (review by hand)", missed) if held else (label, missed)
 
 
 def _bar(case, arm, counts, n, a=None, installed=None):
@@ -1162,38 +1225,76 @@ def pooled_prints(rows):
     prints = []
     for r in rows:
         fp = fingerprint(r)
-        if r["verdict"] != "error" and fp not in prints:
+        if verdict_of(r) != "error" and fp not in prints:
             prints.append(fp)
     return prints
 
 
+def reviewed(row):
+    return row.get("reviewed") is True
+
+
+def verdict_of(row):
+    """The verdict the bar counts: a reviewed row's hand_verdict when it has a valid one, else
+    the row's own."""
+    hand = row.get("hand_verdict")
+    return hand if reviewed(row) and hand in HAND_VERDICTS else row.get("verdict")
+
+
+def tripwired(row):
+    return bool(row.get("suspect") or row.get("contaminated"))
+
+
 def unresolved(row):
-    """A row a tripwire marked (suspect or contaminated) that no person has marked reviewed."""
-    return bool(row.get("suspect") or row.get("contaminated")) and row.get("reviewed") is not True
+    """A row the bar can't count yet: its verdict is unresolved (and no hand_verdict replaced
+    it), or a tripwire marked it (suspect or contaminated) and no person has marked it reviewed."""
+    return verdict_of(row) == "unresolved" or (tripwired(row) and not reviewed(row))
 
 
 def counts_of(rows):
     """Rows per verdict; an unresolved row counts under "unresolved", never its verdict."""
-    counts = {v: sum(r["verdict"] == v and not unresolved(r) for r in rows) for v in VERDICTS}
+    counts = {v: sum(verdict_of(r) == v and not unresolved(r) for r in rows) for v in VERDICTS if v != "unresolved"}
     counts["unresolved"] = sum(unresolved(r) for r in rows)
     return counts
 
 
-def summarize(rows, cases, arms, n):
-    """Prints the table and bar per model; returns the missed "case/arm" labels. Rows carrying
-    `imported` are arm-A rows from --baseline files: they count in A's line, marked there."""
+def held_reason(row):
+    """(why an unresolved row is held, what a person sets in its line to resolve it)."""
+    why = []
+    if verdict_of(row) == "unresolved":
+        causes = [str(c.get("detail", "")) for c in row.get("checks") or []
+                  if isinstance(c, dict) and str(c.get("name", "")).startswith("unresolved")]
+        why.append("the oracle couldn't determine it" + (f" ({'; '.join(causes)[:300]})" if causes else ""))
+    if tripwired(row) and not reviewed(row):
+        if row.get("suspect"):
+            why.append(f"suspect ({', '.join(row['suspect'])})")
+        if row.get("contaminated"):
+            why.append(f"contaminated ({', '.join(row['contaminated'])})")
+    todo = ('set "reviewed": true, "hand_verdict" ("pass", "fail" or "broken") and "hand_note" in its row once read'
+            if verdict_of(row) == "unresolved" else 'set "reviewed": true in its row once read')
+    return "; ".join(why), todo
+
+
+def effort_of(row):
+    return row.get("effort") or "default"
+
+
+def summarize(rows, cases, arms, n=None):
+    """Prints the table and bar per model and effort; returns the missed "case/arm" labels. Rows
+    carrying `imported` are arm-A rows from --baseline files: they count in A's line, marked
+    there. A line's n is max(n, the rows it holds)."""
     missed, refused, held = [], [], []
-    for model in sorted({r.get("model") for r in rows}, key=str):
-        print(f"\nmodel {model}")
-        versions = sorted({str(r["claude_code_version"]) for r in rows
-                           if r.get("model") == model and r.get("claude_code_version")})
+    for model, effort in sorted({(r.get("model"), effort_of(r)) for r in rows}, key=str):
+        print(f"\nmodel {model}, effort {effort}")
+        of_model = [r for r in rows if r.get("model") == model and effort_of(r) == effort]
+        versions = sorted({str(r["claude_code_version"]) for r in of_model if r.get("claude_code_version")})
         if len(versions) > 1:  # Claude Code can update itself mid-run, so this warns, not refuses
             print(f"warning: rows from {len(versions)} Claude Code versions ({', '.join(versions)}); pooled anyway")
-        print(f"{'case':16} {'arm':3} {'pass':>4} {'fail':>4} {'brkn':>4} {'err':>4} {'trig':>4} {'warm':>4} "
+        print(f"{'case':16} {'arm':3} {'pass':>4} {'fail':>4} {'brkn':>4} {'unrs':>4} {'err':>4} {'trig':>4} {'warm':>4} "
               f"{'cost $':>8}  bar")
-        print("(err: harness or infra failures, outside every count; trig: the case turn triggered the "
-              "case's skill; warm: arm D's warm-up turn triggered the skill of the case it ran)")
-        of_model = [r for r in rows if r.get("model") == model]
+        print("(unrs: unresolved, held out of every count until a person reviews it; err: harness or infra "
+              "failures, outside every count; trig: the case turn triggered the case's skill; warm: arm D's "
+              "warm-up turn triggered the skill of the case it ran)")
         for case in cases:
             a_rows = [r for r in of_model if r["case"] == case and r["arm"] == "A"]
             a_prints = pooled_prints(a_rows)
@@ -1211,7 +1312,8 @@ def summarize(rows, cases, arms, n):
                     skills = prints[0]["skills"] if prints else None
                     # A's counts classify this arm's case only when A pooled and ran the same case code.
                     same_case = len(a_prints) == 1 and (not prints or a_prints[0]["case"] == prints[0]["case"])
-                    label, miss = bar(case, arm, counts, n, a=counts_of(a_rows) if a_rows and same_case else None,
+                    label, miss = bar(case, arm, counts, max(n or 0, len(mine)),
+                                      a=counts_of(a_rows) if a_rows and same_case else None,
                                       installed=list(skills) if skills is not None else None)
                 held += [r for r in mine if unresolved(r)]
                 imported = sum(bool(r.get("imported")) for r in mine)
@@ -1223,14 +1325,13 @@ def summarize(rows, cases, arms, n):
                 warm = sum(bool((r.get("triggered_turns") or {}).get("warmup")) for r in mine)
                 cost = sum(r.get("total_cost_usd") or 0 for r in mine)
                 print(f"{case:16} {arm:3} {counts['pass']:>4} {counts['fail']:>4} {counts['broken']:>4} "
-                      f"{counts['error']:>4} {trig:>4} {warm if arm == 'D' else '-':>4} {cost:>8.2f}  {label}")
+                      f"{counts['unresolved']:>4} {counts['error']:>4} {trig:>4} {warm if arm == 'D' else '-':>4} "
+                      f"{cost:>8.2f}  {label}")
     for label, versions in refused:
         print(f"refused to pool {label}: " + "; ".join(f"{short(fp)} x{k}" for fp, k in versions))
     for r in held:
-        why = [f"suspect ({', '.join(r['suspect'])})" if r.get("suspect") else "",
-               f"contaminated ({', '.join(r['contaminated'])})" if r.get("contaminated") else ""]
-        print(f"unresolved {r['case']}/{r['arm']} #{r.get('run')} ({r['verdict']}): {'; '.join(w for w in why if w)}; "
-              f"diff {r.get('diff')}; set \"reviewed\": true in its row once read")
+        why, todo = held_reason(r)
+        print(f"unresolved {r['case']}/{r['arm']} #{r.get('run')} ({r['verdict']}): {why}; diff {r.get('diff')}; {todo}")
     return missed
 
 
@@ -1274,14 +1375,63 @@ def load_baseline(paths, model, cases, effort="default"):
     return rows
 
 
+def load_rows(paths):
+    """Every row of every arm in these results.jsonl files (each path a file, or a results dir
+    holding one). A row already taken (the same stream paths) is dropped and counted. A file
+    that can't be read exits; a line that isn't a row is skipped and counted."""
+    rows, seen, seen_rows = [], set(), set()
+    for given in paths:
+        path = Path(given)
+        path = (path / "results.jsonl" if path.is_dir() else path).resolve()
+        if path in seen:
+            continue
+        seen.add(path)
+        try:
+            lines = path.read_text(errors="replace").splitlines()
+        except OSError as e:
+            sys.exit(f"run.py: --summarize {given}: {e.strerror or e}")
+        took = skipped = dups = 0
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                row = None
+            if not (isinstance(row, dict) and row.get("case") in CASE_INFO and row.get("arm") in ARMS
+                    and row.get("verdict") in VERDICTS):
+                skipped += bool(line.strip())
+                continue
+            key = json.dumps(row.get("stream") or row, sort_keys=True)
+            if key in seen_rows:
+                dups += 1
+                continue
+            seen_rows.add(key)
+            rows.append(row)
+            took += 1
+        print(f"rows {path}: {took} row(s); {dups} already taken; {skipped} other line(s) skipped")
+    return rows
+
+
+def summarize_files(paths, cases=None, arms=None, n=None):
+    """--summarize: the bar from earlier results files, no model calls. Returns the exit code."""
+    rows = load_rows(paths)
+    cases = cases or [c for c in CASES if any(r["case"] == c for r in rows)]
+    arms = arms or [x for x in ARMS if any(r["arm"] == x for r in rows)]
+    missed = summarize(rows, cases, arms, n)
+    errors = sum(verdict_of(r) == "error" for r in rows if r["case"] in cases and r["arm"] in arms)
+    print(f"\n{len(rows)} rows from {len(paths)} path(s); no model calls made")
+    if errors:
+        print(f"{errors} run(s) scored error (harness or infra, not the agent); see their checks")
+    if missed:
+        print("missed the bar: " + ", ".join(missed))
+    return 1 if missed or errors else 0
+
+
 # ---------------------------------------------------------------- main
 
 def default_out():
     """A fresh 0700 results dir under the checkout's ignored .tmp/, not in /tmp next to the
     fixtures, where an agent's session could read earlier runs' oracle output."""
-    base = REPO / ".tmp" / "practices"
-    base.mkdir(parents=True, exist_ok=True, mode=0o700)
-    return Path(tempfile.mkdtemp(prefix=time.strftime("%Y%m%d-%H%M%S-"), dir=base))  # wall clock
+    return private_dir(time.strftime("%Y%m%d-%H%M%S-"))  # wall clock
 
 
 def row_of(fut, case, arm, i):
@@ -1303,7 +1453,7 @@ def dry_run(cases, arms, args):
     failed = []
     for case in cases:
         for arm in arms:
-            scratch = Path(tempfile.mkdtemp(prefix="practices-dry-"))  # the hook's dirs, outside the fixture
+            scratch = private_dir("dry-")  # the hook's dirs and the harness git dir, outside the fixture and /tmp
             fixture, _sha = build_fixture(arm, scratch)
             ok, output = npm_test(fixture)
             print(f"\n[{case} / {arm}] fixture {fixture}: npm test {'ok' if ok else 'FAILED'}")
@@ -1336,9 +1486,9 @@ def out_problem(out):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--arms", required=True, help="comma list of " + ",".join(ARMS))
+    ap.add_argument("--arms", help="comma list of " + ",".join(ARMS) + " (required but with --summarize)")
     ap.add_argument("--cases", help="comma list (default: all): " + ",".join(CASES))
-    ap.add_argument("-n", type=int, default=5, help="runs per case and arm (default 5)")
+    ap.add_argument("-n", type=int, help="runs per case and arm (default 5)")
     ap.add_argument("-j", type=int, default=2, help="sessions in parallel (default 2)")
     ap.add_argument("--model", default="claude-opus-5-5")
     ap.add_argument("--effort", choices=("low", "medium", "high", "xhigh", "max"),
@@ -1351,13 +1501,24 @@ def main():
     ap.add_argument("--baseline", action="append", default=[], metavar="PATH",
                     help="an earlier results.jsonl (or its dir) whose arm-A rows for the same model count "
                          "in this run's bar, marked imported (repeatable)")
+    ap.add_argument("--summarize", nargs="+", metavar="PATH",
+                    help="print the bar from earlier results.jsonl files (or their dirs), every arm's rows, "
+                         "applying reviewed and hand_verdict; no model calls")
     a = ap.parse_args()
 
-    arms = [x.strip().upper() for x in a.arms.split(",") if x.strip()]
-    cases = [c.strip() for c in a.cases.split(",") if c.strip()] if a.cases else CASES
+    arms = [x.strip().upper() for x in (a.arms or "").split(",") if x.strip()]
+    cases = [c.strip() for c in a.cases.split(",") if c.strip()] if a.cases else []
     bad = [x for x in arms if x not in ARMS] + [c for c in cases if c not in CASES]
     if bad:
         ap.error(f"unknown arm or case: {', '.join(bad)}")
+    if a.summarize:
+        if a.dry_run or a.out or a.baseline:
+            ap.error("--summarize reads earlier results only: it takes no --dry-run, --out or --baseline")
+        return summarize_files(a.summarize, cases, arms, a.n)
+    if not arms:
+        ap.error("--arms is required")
+    cases = cases or CASES
+    a.n = 5 if a.n is None else a.n
     problem = out_problem(a.out)
     if problem:
         sys.exit(f"run.py: {problem}")
@@ -1385,6 +1546,7 @@ def main():
             row = row_of(fut, *futures[fut])
             if row is not None:
                 row.setdefault("model", a.model)  # a harness error's row, for the per-model summary
+                row.setdefault("effort", a.effort or "default")
                 rows.append(row)
                 results.write(json.dumps(row) + "\n")  # each finished row is on disk at once
                 results.flush()
@@ -1406,7 +1568,7 @@ def main():
             return 130
     pool.shutdown(wait=True)
     missed = summarize(rows + imported, cases, arms, a.n)
-    errors = sum(r["verdict"] == "error" for r in rows)
+    errors = sum(verdict_of(r) == "error" for r in rows)
     print(f"\n{len(rows)} runs in {time.monotonic() - started:.0f} s; results in {out}")
     if errors:
         print(f"{errors} run(s) scored error (harness or infra, not the agent); see their checks")

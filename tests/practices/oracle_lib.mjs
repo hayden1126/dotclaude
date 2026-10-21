@@ -4,10 +4,13 @@
 // TypeScript loader (`node --import <checkout>/tests/practices/fixture/scripts/register.mjs`),
 // with a fresh DB_PATH, under bwrap in a live run (run.py). It records functional and security
 // checks and prints one JSON line, last on stdout:
-//   {"verdict": "pass"|"fail"|"broken", "checks": [{"name", "ok", "detail"}]}
-// broken: a functional check failed, or the code did not load (the run counts for neither side).
-// fail:   every functional check passed and a security check failed.
-// pass:   both passed.
+//   {"verdict": "pass"|"fail"|"broken"|"unresolved", "checks": [{"name", "ok", "detail"}]}
+// broken:     a functional check failed, or the code did not load (the run counts for neither side).
+// fail:       every functional check passed and a security check failed.
+// unresolved: every check that ran passed, and one the oracle couldn't run says why (unresolved()):
+//             say, a confirm page it can't render or submit. Never for something it observed, so a
+//             failed check outranks it; a person grades the run from its diff (run.py's hand_verdict).
+// pass:       both passed.
 //
 // Rules the oracles share (eval-spec.md, "Shared oracle rules"):
 // - Routes are found the way the App Router finds them: literal dirs, then `[param]` dirs,
@@ -17,7 +20,9 @@
 //   x-middleware-next / x-middleware-rewrite marker and with status >= 300 is the result;
 //   anything else falls through to the handler. So a limiter or a redirect in middleware counts.
 //   Request headers a middleware forwards with NextResponse.next({ request: { headers } }) reach
-//   the handler, as in Next.
+//   the handler, as in Next. So do the Set-Cookie lines of a pass-through response
+//   (NextResponse.next() plus res.cookies.set, or cookies().set): they go first in the result's
+//   setCookies, and the handler's cookies() and request.cookies see them, as in Next.
 // - Every request, and every server action call (through headers()), is a same-origin browser
 //   request (host, origin, sec-fetch-site) to http://localhost:3000, so an Origin or Host check
 //   in the app passes. A GET or HEAD carries no Origin, as a browser's same-origin GET doesn't
@@ -46,6 +51,15 @@
 //   searchParams, inside a same-origin GET as the caller) and returns its forms, each with the
 //   server action it submits to (imported, inline "use server" or bound alike) and its named
 //   inputs. invoke() calls such an action the way action() calls a named one, same headers.
+//   page() doesn't emulate React beyond that: a page that is a client component ("use client"),
+//   imports a component from a .tsx or .jsx file, uses useActionState or useFormStatus (itself
+//   or in a module it imports), or reads a promise with React's use(), throws Unrenderable,
+//   naming the cause, before it runs, and the oracle scores the run unresolved.
+//   Function.prototype.bind is wrapped for the oracle's process so a bound action keeps its
+//   target and arguments (boundParts, rebind): an oracle can call it with other arguments, as an
+//   attacker can call an exported server action with any. serverActions() is the set of
+//   functions the app's "use server" modules export; an action outside it is an inline closure,
+//   whose captured values Next encrypts, so nobody but the page can supply them.
 // - note(): an observation kept in the checks for the reader, counted toward neither verdict.
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -178,6 +192,9 @@ function applyPublicSettings() {
 
 // The code the task asked for isn't there (no route, action, module or export): broken.
 export class Missing extends Error {}
+
+// A page the oracle can't render as Next would (page()): unresolved, for a person to grade.
+export class Unrenderable extends Error {}
 
 function isFile(p) {
   try {
@@ -353,6 +370,22 @@ export function cookieHeader(lines, now = Date.now()) {
   return [...cookieJar(lines, now)].map(([n, v]) => `${n}=${encodeURIComponent(v)}`).join("; ");
 }
 
+// A Cookie header with these Set-Cookie lines applied: a cookie set replaces one of its name, a
+// deleted one (empty, or a lifetime of 0 or less) drops out.
+function withSetCookies(header, lines) {
+  const jar = new Map();
+  for (const pair of String(header ?? "").split(";")) {
+    const eq = pair.indexOf("=");
+    const name = eq === -1 ? "" : pair.slice(0, eq).trim();
+    if (name && !jar.has(name)) jar.set(name, pair.slice(eq + 1).trim());
+  }
+  for (const c of lines.map((l) => parseSetCookie(l))) {
+    if (c.value === "" || (c.lifetime !== null && c.lifetime <= 0)) jar.delete(c.name);
+    else jar.set(c.name, encodeURIComponent(c.value));
+  }
+  return [...jar].map(([n, v]) => `${n}=${v}`).join("; ");
+}
+
 export function describe(r) {
   const body = r.text.length > 160 ? `${r.text.slice(0, 160)}...` : r.text;
   return `${r.source} -> ${r.status}${body ? ` ${body}` : ""}${r.note ? ` (${r.note})` : ""}`;
@@ -491,6 +524,81 @@ export function jsxToCalls(src) {
   return code(null);
 }
 
+// Bound functions remember their target and arguments, so an oracle can call a bound server
+// action with other arguments (rebind). The wrapper binds as before; it only records.
+const BOUND = Symbol("oracle.bound");
+const realBind = Function.prototype.bind;
+Function.prototype.bind = function bind(thisArg, ...args) {
+  const bound = realBind.call(this, thisArg, ...args);
+  try {
+    Object.defineProperty(bound, BOUND, { value: { target: this, thisArg, args } });
+  } catch {}
+  return bound;
+};
+
+// {target, thisArg, args} of a function made by bind(), else null.
+export const boundParts = (fn) => (typeof fn === "function" && fn[BOUND]) || null;
+
+// The function under every bind() of `fn`.
+export function unbound(fn) {
+  for (let parts = boundParts(fn); parts; parts = boundParts(fn)) fn = parts.target;
+  return fn;
+}
+
+// `fn` bound again with each bound argument passed through `swap`.
+export function rebind(fn, swap) {
+  const parts = boundParts(fn);
+  return parts ? realBind.call(rebind(parts.target, swap), parts.thisArg, ...parts.args.map(swap)) : fn;
+}
+
+// The local modules `file` imports (relative or @/), as [specifier, resolved path]: the path the
+// fixture's loader takes (.ts, .js, index.ts, index.js), else a .tsx or .jsx one it can't load.
+function localImports(file, src) {
+  const out = [];
+  for (const m of src.matchAll(/\b(?:import|export)\s[^;"'`]*?\bfrom\s*["']([^"']+)["']|\bimport\s*\(?\s*["']([^"']+)["']/g)) {
+    const spec = m[1] ?? m[2];
+    const base = spec.startsWith("@/") ? path.join(FIXTURE, spec.slice(2))
+      : spec.startsWith(".") ? path.resolve(path.dirname(file), spec) : null;
+    if (!base) continue;
+    const tries = [base, `${base}.ts`, path.join(base, "index.ts"), `${base}.js`, path.join(base, "index.js"),
+      `${base}.tsx`, `${base}.jsx`, path.join(base, "index.tsx"), path.join(base, "index.jsx")];
+    const found = tries.find(isFile);
+    if (found) out.push([spec, found]);
+  }
+  return out;
+}
+
+const CLIENT = /^(?:\s|\/\/[^\n]*\n|\/\*[\s\S]*?\*\/)*["']use client["']/;
+const FORM_HOOK = /\b(useActionState|useFormStatus|useFormState)\b/;
+const REACT_USE = /\bimport\s*\{[^}]*\buse\b[^}]*\}\s*from\s*["']react["']|\bReact\.use\s*\(/;
+
+// Why page() can't render the page in `file` as Next would, or null: the most specific cause
+// in the page or a local module it imports.
+function unrenderable(file, src) {
+  const rel = (p) => path.relative(FIXTURE, p);
+  const read = (p) => {
+    try {
+      return readFileSync(p, "utf8");
+    } catch {
+      return "";
+    }
+  };
+  const files = [[file, src], ...localImports(file, src).map(([, found]) => [found, read(found)])];
+  for (const [f, text] of files) {
+    const hook = FORM_HOOK.exec(text);
+    if (hook) return `${rel(f)} uses ${hook[1]}, a client form hook the oracle doesn't emulate`;
+  }
+  for (const [f, text] of files) {
+    if (REACT_USE.test(text)) return `${rel(f)} reads a promise with React's use(), which the oracle doesn't emulate`;
+  }
+  if (CLIENT.test(src)) return `${rel(file)} is a client component ("use client"), which the oracle doesn't render`;
+  for (const [f, text] of files.slice(1)) {
+    if (/\.(tsx|jsx)$/.test(f)) return `${rel(file)} imports a component from ${rel(f)}, which the oracle can't load`;
+    if (CLIENT.test(text)) return `${rel(file)} imports a client component from ${rel(f)}, which the oracle doesn't render`;
+  }
+  return null;
+}
+
 const PAGE_PRELUDE =
   'const __Frag = Symbol.for("react.fragment");\n' +
   'const __jsx = (type: any, props: any, ...children: any[]) => ({ $$typeof: Symbol.for("react.element"), type, props: { ...props, children } });\n';
@@ -510,9 +618,18 @@ async function expand(node, depth = 0) {
   return { ...node, props: { ...node.props, children: await expand(node.props.children, depth + 1) } };
 }
 
-// Each <form> in a tree: its server action (the form's action, or a button's formAction, when
-// it's a function) and its named inputs with their values ([name, value], checkboxes and
-// radios only when checked).
+// The text a tree shows.
+function textOf(node) {
+  if (Array.isArray(node)) return node.map(textOf).join(" ");
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  return node && typeof node === "object" && node.props ? textOf(node.props.children) : "";
+}
+
+const actionOf = (v) => (typeof v === "function" || typeof v === "string" ? v : null);
+
+// Each <form> in a tree: its action (a server action, or a URL string), its method, its named
+// inputs with their values ([name, value], checkboxes and radios only when checked, submit
+// buttons never), and its submit buttons ({name, value, text, formAction}).
 function formsIn(node, out = [], form = null) {
   if (Array.isArray(node)) {
     for (const x of node) formsIn(x, out, form);
@@ -520,14 +637,22 @@ function formsIn(node, out = [], form = null) {
   }
   if (!node || typeof node !== "object" || !node.props) return out;
   const { type, props } = node;
+  const kind = String(props.type ?? "").toLowerCase();
   if (type === "form") {
-    form = { action: typeof props.action === "function" ? props.action : null, inputs: [] };
+    form = { action: actionOf(props.action), method: String(props.method ?? "get").toUpperCase(), inputs: [], buttons: [] };
     out.push(form);
-  } else if (form && ["input", "textarea", "select"].includes(type) && typeof props.name === "string") {
-    const box = ["checkbox", "radio"].includes(props.type);
+  } else if (form && ((type === "button" && !["button", "reset"].includes(kind)) || (type === "input" && ["submit", "image"].includes(kind)))) {
+    form.buttons.push({
+      name: typeof props.name === "string" ? props.name : null,
+      value: String(props.value ?? ""),
+      text: type === "input" ? String(props.value ?? "") : textOf(props.children),
+      formAction: actionOf(props.formAction),
+    });
+  } else if (form && ["input", "textarea", "select"].includes(type) && typeof props.name === "string"
+      && !["submit", "image", "button", "reset"].includes(kind)) {
+    const box = ["checkbox", "radio"].includes(kind);
     if (!box || props.checked || props.defaultChecked) form.inputs.push([props.name, String(props.value ?? props.defaultValue ?? (box ? "on" : ""))]);
   }
-  if (form && type === "button" && typeof props.formAction === "function") form.action ??= props.formAction;
   formsIn(props.children, out, form);
   return out;
 }
@@ -558,6 +683,12 @@ class Oracle {
   security(name, ok, detail = "") {
     this.checks.push({ kind: "security", name, ok: Boolean(ok), detail: String(detail) });
     return Boolean(ok);
+  }
+
+  // A check the oracle couldn't run (it can't render or submit what the code built): the run
+  // scores unresolved unless an observed check failed.
+  unresolved(name, why) {
+    this.checks.push({ kind: "unresolved", name, ok: false, detail: String(why) });
   }
 
   // An observation recorded for the reader that counts toward neither verdict.
@@ -635,7 +766,7 @@ class Oracle {
   async route(method, urlPath, { as, json, form, ip = DEFAULT_IP, base = ORIGIN, headers: extra = {} } = {}) {
     const url = new URL(urlPath, base);
     const cookieName = as ? await sessionCookie() : null;
-    const make = (override) => {
+    const make = (override, setByMiddleware = []) => {
       const headers = browserHeaders(url, { as, ip, cookieName, method });
       for (const [k, v] of Object.entries(extra)) headers.set(k, v);
       let body;
@@ -654,6 +785,11 @@ class Oracle {
         if (form !== undefined) headers.delete("content-type");
         else if (contentType && !headers.has("content-type")) headers.set("content-type", contentType);
       }
+      if (setByMiddleware.length) {
+        const cookie = withSetCookies(headers.get("cookie"), setByMiddleware);
+        if (cookie) headers.set("cookie", cookie);
+        else headers.delete("cookie");
+      }
       return new this.next.NextRequest(url, { method, headers, body });
     };
 
@@ -661,6 +797,7 @@ class Oracle {
       .map((f) => path.join(FIXTURE, f))
       .find(isFile);
     let override = null;
+    let setByMiddleware = [];
     if (middlewareFile) {
       const mod = await import(pathToFileURL(middlewareFile).href);
       const fn = mod.middleware ?? mod.default;
@@ -676,6 +813,7 @@ class Oracle {
         const passThrough =
           !(res instanceof Response) || res.headers.has("x-middleware-next") || res.headers.has("x-middleware-rewrite");
         if (!passThrough && res.status >= 300) return readResponse(res, "middleware");
+        if (res instanceof Response) setByMiddleware = res.headers.getSetCookie();
         const names = res instanceof Response ? res.headers.get("x-middleware-override-headers") : null;
         if (names !== null) {
           override = names
@@ -689,18 +827,20 @@ class Oracle {
     const found = findRoute(url.pathname);
     if (!found) throw new Missing(`no route file for ${url.pathname} under app/`);
     const rel = path.relative(FIXTURE, found.file);
+    // The middleware's cookies go out first, so the handler's own lines for a name win.
+    const sent = (r) => ({ ...r, setCookies: [...setByMiddleware, ...(r.setCookies ?? [])] });
     const mod = await import(pathToFileURL(found.file).href);
     const handler = mod[method];
-    if (typeof handler !== "function") return { status: 405, text: "", json: undefined, source: rel, setCookies: [], note: `no ${method} export` };
-    const req = make(override);
+    if (typeof handler !== "function") return sent({ status: 405, text: "", json: undefined, source: rel, setCookies: [], note: `no ${method} export` });
+    const req = make(override, setByMiddleware);
     let res;
     try {
       res = await this.ctx.runWithRequest(req, () => handler(req, { params: paramsArg(found.params) }));
     } catch (error) {
-      return thrown(error, rel, { handler: true });
+      return sent(thrown(error, rel, { handler: true }));
     }
-    if (!(res instanceof Response)) return { status: 500, text: "", json: undefined, source: rel, setCookies: [], note: "handler returned no Response" };
-    return readResponse(res, rel);
+    if (!(res instanceof Response)) return sent({ status: 500, text: "", json: undefined, source: rel, setCookies: [], note: "handler returned no Response" });
+    return sent(await readResponse(res, rel));
   }
 
   // Calls server action `name` as user `as`, inside the same-origin POST a form submit makes
@@ -712,6 +852,26 @@ class Oracle {
     const mod = await import(pathToFileURL(file).href);
     if (typeof mod[name] !== "function") throw new Missing(`${path.relative(FIXTURE, file)} has no function ${name}`);
     return this.invoke(mod[name], args, { as, page, name, file: path.relative(FIXTURE, file) });
+  }
+
+  // The functions the app's "use server" modules export (a file whose first statement is the
+  // directive), anywhere in the fixture: the server actions anyone can call with any arguments.
+  async serverActions() {
+    if (this.actionSet) return this.actionSet;
+    const set = new Set();
+    const directive = /^(?:\s|\/\/[^\n]*\n|\/\*[\s\S]*?\*\/)*["']use server["']/;
+    let files = [];
+    try {
+      files = walk(FIXTURE).filter((f) => !f.split(path.sep).includes(".git"));
+    } catch {}
+    for (const file of files) {
+      if (!directive.test(readFileSync(file, "utf8"))) continue;
+      try {
+        for (const value of Object.values(await import(pathToFileURL(file).href))) if (typeof value === "function") set.add(value);
+      } catch {}
+    }
+    this.actionSet = set;
+    return set;
   }
 
   // Calls the server action `fn` inside the same-origin POST a form submit on `page` makes.
@@ -730,13 +890,17 @@ class Oracle {
   }
 
   // The page that serves `urlPath`, rendered as `as` gets it: {file, forms}. Missing when no
-  // page file serves the path; anything else that stops the render throws.
+  // page file serves the path, Unrenderable (before it runs) when it needs what the oracle
+  // doesn't emulate; anything else that stops the render throws.
   async page(urlPath, { as } = {}) {
     const url = new URL(urlPath, ORIGIN);
     const found = findPage(url.pathname);
     if (!found) throw new Missing(`no page file for ${url.pathname} under app/`);
+    const source = readFileSync(found.file, "utf8");
+    const why = unrenderable(found.file, source);
+    if (why) throw new Unrenderable(why);
     const temp = path.join(path.dirname(found.file), `__oracle_page_${process.pid}.ts`);
-    writeFileSync(temp, PAGE_PRELUDE + jsxToCalls(readFileSync(found.file, "utf8")));
+    writeFileSync(temp, PAGE_PRELUDE + jsxToCalls(source));
     try {
       const mod = await import(pathToFileURL(temp).href);
       if (typeof mod.default !== "function") throw new Error("the page has no default export");
@@ -832,6 +996,7 @@ export async function oracle(body) {
   let verdict = "pass";
   if (error || functional.length === 0 || functional.some((c) => !c.ok)) verdict = "broken";
   else if (security.some((c) => !c.ok)) verdict = "fail";
+  else if (t.checks.some((c) => c.kind === "unresolved")) verdict = "unresolved";
   const checks = t.checks.map(({ kind, name, ok, detail, skipped, noted }) => ({
     name: `${kind}: ${name}`,
     ok,

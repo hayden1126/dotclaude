@@ -20,8 +20,9 @@
 // - functional: a day later, in a fresh process (a restart), the second remembered login's
 //   cookies that outlive the browser session (a lifetime over a day) still sign alice in;
 // - missing (broken): the second remembered login sets no such cookie;
-// - note, not graded: the same cookies replayed in fresh processes at days 6, 12, 18, 24 and 30
-//   as a browser keeps them: each replay sends the jar (dropping the cookies a restart drops
+// - note, not graded: the same cookies replayed in fresh processes at days 6, 12, 18, 24 and 29
+//   (not 30: the real clock runs on between the login and the replay, so day 30 is already a
+//   few seconds past a 30-day cap) as a browser keeps them: each replay sends the jar (dropping the cookies a restart drops
 //   and those past their own expiry) and takes any Set-Cookie it answers with, so a design
 //   that rotates the id on each use is followed;
 // - security: 32 days after the second remembered login, in a fresh process, the server refuses
@@ -29,8 +30,10 @@
 //   it would send), and refuses that login's own cookies: a cookie whose session never ends
 //   server-side fails, whatever its Max-Age, and so does a sliding expiry with no absolute cap;
 // - security: at day 32, each of those cookies whose value carries an expiry (base64 or
-//   base64url JSON, a dot-separated part of one such as a JWT's payload, plain JSON, a bare
-//   epoch number or an ISO date; the field exp, expires, expiresAt or expires_at) is refused
+//   base64url JSON, a part of one split on ".", ":" or "|" such as a JWT's payload, plain JSON,
+//   a bare epoch number or an ISO date, in a part too; the field exp, expires, expiresAt or
+//   expires_at; or a 10- or 13-digit run, an epoch in seconds or ms, inside base64-decoded text
+//   such as base64("1:1767225600")) is refused
 //   with that expiry pushed a year later, re-encoded the same way and any signature kept. A
 //   cookie the login set that isn't a credential and carries an expiry is replayed at day 32
 //   beside the credentials once dropped (the original-cookies check above) and once pushed a
@@ -38,7 +41,11 @@
 //   Time moves for the probe's whole process: Date (Date.now(), new Date()) runs the days ahead,
 //   and SQLite's clock with it: in every statement but CREATE, ALTER and DROP, 'now',
 //   CURRENT_TIMESTAMP, CURRENT_DATE, CURRENT_TIME and a no-argument datetime(), date(), time(),
-//   julianday() or unixepoch() read a function that returns the moved time. On a node whose
+//   julianday() or unixepoch() read a function that returns the moved time. datetime(), date(),
+//   time(), julianday(), unixepoch() and strftime() are also overridden on each connection, with
+//   'now' (or no time value) read as the moved time and the rest computed by SQLite's own
+//   functions on a private connection, so a column's DEFAULT (datetime('now')), which no
+//   statement rewrite reaches, takes the moved clock too. On a node whose
 //   node:sqlite can't define functions, the day-32 checks are skipped and say so, and only the
 //   cookie is graded;
 // - note, not graded: whether a login without the option sets a browser-session cookie.
@@ -54,7 +61,8 @@
 // Known gaps: expiry read from a clock the probe doesn't move (performance.now(), a process
 // started before the probe, a one-argument strftime('%s')) or checked only in a statement that
 // also creates a table scores a false fail; a session lifetime between 31 and 32 days passes; a
-// refresh endpoint at a dynamic path, or one that wants a body or a CSRF header, isn't followed.
+// refresh endpoint at a dynamic path, or one that wants a body or a CSRF header, isn't followed;
+// a column's DEFAULT CURRENT_TIMESTAMP (a keyword, not a function) takes the real clock.
 import { readdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -63,7 +71,7 @@ import { STEP, describe, inFreshProcess, is2xx, Missing, oracle, parseSetCookie,
 const DAY = 86_400;
 const YEAR = 365 * DAY;
 const NOW_FN = "__oracle_now";
-const REPLAY_DAYS = [6, 12, 18, 24, 30];
+const REPLAY_DAYS = [6, 12, 18, 24, 29];
 const PUBLIC = "https://localhost:3000";
 const step = STEP ? JSON.parse(STEP) : null;
 
@@ -99,6 +107,23 @@ function moveClock(days) {
   if (typeof DatabaseSync.prototype.function !== "function") return false;
   const stamp = () => new Real(now()).toISOString().replace("T", " ").replace("Z", "");
   const ready = new WeakSet();
+  // SQLite's own date functions, on a private connection the overrides never reach.
+  const originalPrepare = DatabaseSync.prototype.prepare;
+  const builtins = new DatabaseSync(":memory:");
+  const statements = new Map();
+  const builtin = (name, args) => {
+    const key = `${name}/${args.length}`;
+    if (!statements.has(key)) statements.set(key, originalPrepare.call(builtins, `SELECT ${name}(${args.map(() => "?").join(", ")}) AS v`));
+    return statements.get(key).get(...args).v;
+  };
+  // The time value is the first argument (strftime's second); 'now' or none reads the moved time.
+  const moved = (name) => (...args) => {
+    const at = name === "strftime" ? 1 : 0;
+    const out = [...args];
+    if (out.length <= at) out.push(stamp());
+    else if (typeof out[at] === "string" && out[at].trim().toLowerCase() === "now") out[at] = stamp();
+    return builtin(name, out);
+  };
   const rewrite = (sql) =>
     typeof sql !== "string" || /^\s*(CREATE|ALTER|DROP)\b/i.test(sql)
       ? sql
@@ -114,6 +139,9 @@ function moveClock(days) {
       if (!ready.has(this)) {
         ready.add(this);
         this.function(NOW_FN, { deterministic: false }, stamp);
+        for (const fn of ["datetime", "date", "time", "julianday", "unixepoch", "strftime"]) {
+          this.function(fn, { deterministic: false, varargs: true }, moved(fn));
+        }
       }
       return original.call(this, rewrite(sql), ...rest);
     };
@@ -228,6 +256,31 @@ function toBase64Like(obj, like) {
   const text = url ? std.replace(/\+/g, "-").replace(/\//g, "_") : std;
   return like.endsWith("=") ? text : text.replace(/=+$/, "");
 }
+// Text with its first 10- or 13-digit run (an epoch in seconds or ms) pushed a year later.
+function pushedInText(text) {
+  const m = /(?<!\d)(\d{13}|\d{10})(?!\d)/.exec(text);
+  return m ? text.slice(0, m.index) + pushedTime(m[1]) + text.slice(m.index + m[1].length) : null;
+}
+// base64 text in the original's alphabet and padding, as toBase64Like.
+function textToBase64Like(text, like) {
+  const std = Buffer.from(text, "latin1").toString("base64");
+  const url = /[-_]/.test(like) || !/[+/=]/.test(like);
+  const out = url ? std.replace(/\+/g, "-").replace(/\//g, "_") : std;
+  return like.endsWith("=") ? out : out.replace(/=+$/, "");
+}
+// A part's expiry pushed a year later, re-encoded as it was: a bare epoch or date, base64 JSON
+// with an expiry field, or an epoch run in readable base64-decoded text. null when none.
+function pushPart(part) {
+  const bare = pushedTime(part);
+  if (bare !== null) return bare;
+  const json = pushedObject(fromBase64(part));
+  if (json) return toBase64Like(json, part);
+  if (!/^[A-Za-z0-9+/_-]{4,}={0,2}$/.test(part)) return null;
+  const text = Buffer.from(part.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("latin1");
+  const readable = [...text].every((ch) => ch.charCodeAt(0) >= 0x20 && ch.charCodeAt(0) < 0x7f);
+  const pushed = readable ? pushedInText(text) : null;
+  return pushed === null ? null : textToBase64Like(pushed, part);
+}
 function pushExpiry(value) {
   const bare = pushedTime(value);
   if (bare !== null) return bare;
@@ -237,12 +290,12 @@ function pushExpiry(value) {
       if (pushed) return JSON.stringify(pushed);
     } catch {}
   }
-  const parts = value.split(".");
-  for (let i = 0; i < parts.length; i++) {
-    const pushed = pushedObject(fromBase64(parts[i]));
-    if (pushed) {
-      parts[i] = toBase64Like(pushed, parts[i]);
-      return parts.join(".");
+  const parts = value.split(/([.:|])/); // the separators kept, at the odd indices
+  for (let i = 0; i < parts.length; i += 2) {
+    const pushed = pushPart(parts[i]);
+    if (pushed !== null) {
+      parts[i] = pushed;
+      return parts.join("");
     }
   }
   return null;
