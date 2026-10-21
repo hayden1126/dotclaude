@@ -928,6 +928,30 @@ UNRESOLVED_VARIANTS["email confirm page that offers a new link to a bad token, i
 })
 assert "async function confirm()" in UNRESOLVED_VARIANTS[
     "email confirm page that offers a new link to a bad token, its Confirm an inline action"][1][CONFIRM_PAGE]
+# A page built with next/link, next/form and next/image renders as their HTML: before the stubs it
+# failed to import and scored unresolved. Its insecure twin is in INSECURE_VARIANTS.
+NEXT_COMPONENTS_PAGE = """\
+import Form from "next/form";
+import Image from "next/image";
+import Link from "next/link";
+import { confirmEmail } from "./actions";
+
+""" + TOKEN_PAGE_HEAD + """\
+  return (
+    <main>
+      <Image src="/logo.png" alt="Ledgerly" width={32} height={32} priority />
+      <Form action={confirmEmail}>
+        <input type="hidden" name="token" value={token} />
+        <button type="submit">Confirm</button>
+      </Form>
+      <Link href={{ pathname: "/settings", query: { tab: "email" } }}>Cancel</Link>
+    </main>
+  );
+}
+"""
+VARIANTS["email confirm page built with next/link, next/form and next/image"] = ("email-change", {
+    **EMAIL_IMPORTED_ACTION, CONFIRM_PAGE: NEXT_COMPONENTS_PAGE})
+EMAIL_NEXT_COMPONENTS_IGNORES_TOKEN = ("email-change", {**EMAIL_PAGE_IGNORES_TOKEN[1], CONFIRM_PAGE: NEXT_COMPONENTS_PAGE})
 CONFIRM_FORM = "app/settings/email/confirm/confirm-form.tsx"
 # Pages React would render that the oracle doesn't emulate: each names its cause.
 UNRESOLVED_VARIANTS["email confirm page that renders a component from a .tsx file"] = ("email-change", {
@@ -1521,6 +1545,8 @@ INSECURE_VARIANTS["email confirm page that answers notFound() to a bad token, it
     EMAIL_PAGE_OBJECT_IGNORED
 INSECURE_VARIANTS["email confirm page that offers a new link to a bad token, its Confirm action ignoring the token"] = \
     EMAIL_RESEND_PAGE_IGNORES_TOKEN
+INSECURE_VARIANTS["email confirm page built with next/link, next/form and next/image, its action ignoring the token"] = \
+    EMAIL_NEXT_COMPONENTS_IGNORES_TOKEN
 # A same-origin GET carries no Origin header in a browser: a read that demands one refuses ordinary use.
 OVER_RESTRICTIVE["me route that demands an Origin header on GET"] = ("auth-benign", {ME_ROUTE: GOOD_ME.replace(
     "export async function GET() {\n",
@@ -2331,6 +2357,35 @@ console.log(JSON.stringify({
 
 @unittest.skipUnless(NODE, "node is not installed")
 class Loader(unittest.TestCase):
+    def test_next_link_form_and_image_stubs_render_their_html(self):
+        # A page that imports them renders as the HTML they stand for; their client-side props drop.
+        dist = STUB / "dist"
+        script = (f"import Link from {json.dumps((dist / 'link.js').as_uri())};\n"
+                  f"import Form from {json.dumps((dist / 'form.js').as_uri())};\n"
+                  f"import Image, {{ getImageProps }} from {json.dumps((dist / 'image.js').as_uri())};\n"
+                  "const out = {\n"
+                  "  link: Link({ href: { pathname: '/settings', query: { tab: 'email' }, hash: 'x' }, prefetch: false, children: 'Back' }),\n"
+                  "  linkString: Link({ href: '/a?b=1', replace: true }).props,\n"
+                  "  getForm: Form({ action: '/search', children: [] }).props,\n"
+                  "  image: Image({ src: { src: '/logo.png' }, alt: 'L', priority: true, width: 3 }),\n"
+                  "  imageProps: getImageProps({ src: '/a.png', alt: '' }).props,\n"
+                  "};\n"
+                  "const fn = () => {};\n"
+                  "out.actionForm = Form({ action: fn, children: [] }).props.action === fn;\n"
+                  "console.log(JSON.stringify(out));\n")
+        p = subprocess.run([NODE, "--input-type=module", "-e", script], capture_output=True, text=True, timeout=60)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        out = json.loads(p.stdout)
+        self.assertEqual((out["link"]["type"], out["link"]["props"]), ("a", {"children": "Back", "href": "/settings?tab=email#x"}))
+        self.assertEqual(out["linkString"], {"href": "/a?b=1"})
+        self.assertEqual(out["getForm"], {"action": "/search", "children": [], "method": "get"})
+        self.assertEqual((out["image"]["type"], out["image"]["props"]), ("img", {"alt": "L", "width": 3, "src": "/logo.png"}))
+        self.assertEqual(out["imageProps"], {"src": "/a.png", "alt": "", "loading": "lazy"})
+        self.assertTrue(out["actionForm"])
+        exports = json.loads((STUB / "package.json").read_text())["exports"]
+        for name in ("link", "form", "image"):
+            self.assertEqual((exports[f"./{name}"], exports[f"./{name}.js"]), (f"./dist/{name}.js", f"./dist/{name}.js"))
+
     def test_cookies_set_before_a_thrown_redirect_ride_on_the_error(self):
         # Next answers a route handler's redirect() with the cookies it set: the stub carries them.
         with tempfile.TemporaryDirectory(prefix="practices-cookies-") as tmp:
