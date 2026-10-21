@@ -41,7 +41,8 @@ expired login), an arm D warm-up or compact turn that timed out, a fixture the g
 sandbox refuses. broken stays agent-caused.
 
 Per run:
-  - Fixture: fixture/ is copied to a fresh tempfile.mkdtemp(prefix="ledgerly-"), next_stub/
+  - Fixture: fixture/ is copied to a fresh tempfile.mkdtemp(prefix=FIXTURE_PREFIX), a prefix
+    used nowhere else (the fixture's own test dirs are ledgerly-test-*), next_stub/
     to its node_modules/next and stubs/* (server-only, client-only, react) beside it, then
     `git init` and an initial commit. The harness config is a second commit, the last the
     agent's own repo gets from the harness. The same tree is also the baseline commit of the
@@ -457,6 +458,10 @@ def hook_errors(run_dir):
 
 
 PRIVATE_BASE = REPO / ".tmp" / "practices"  # ignored by git, away from the fixtures in /tmp
+# Each run's fixture dir name starts with this, in the system temp dir. Used nowhere else, so
+# the contamination tripwire (another fixture named in a tool call) can't match the fixture's
+# own test dirs (ledgerly-test-*, fixture/tests/helpers.ts) or anything else.
+FIXTURE_PREFIX = "ledgerly-app-"
 
 
 def private_dir(prefix):
@@ -496,7 +501,7 @@ def build_fixture(arm, run_dir=None):
     hook with hook_dirs(run_dir), so they need one."""
     if arm in ("C", "D") and run_dir is None:
         raise ValueError(f"arm {arm} wires the hook with dirs in the run dir, and none was given")
-    root = Path(tempfile.mkdtemp(prefix="ledgerly-"))
+    root = Path(tempfile.mkdtemp(prefix=FIXTURE_PREFIX))
     own = private_dir("harness-") if run_dir is None else None
     _git_dirs[str(root)] = (Path(run_dir if run_dir is not None else own) / "harness-git", own)
     harness_git_dir(root).parent.mkdir(parents=True, exist_ok=True)
@@ -834,9 +839,10 @@ PATH_TOKEN = re.compile(r"""[^\s"'`;|&<>()=,]+""")
 
 def contamination(events_by_turn, fixture, tmp=None):
     """Paths the session's tool calls named outside its own fixture that hold practices skills
-    (.claude/skills, SKILL.md) or another fixture (ledgerly-* in the system temp dir), up to 5."""
+    (.claude/skills, SKILL.md) or another fixture (FIXTURE_PREFIX* in the system temp dir), up
+    to 5. The fixture's own test dirs (ledgerly-test-*) don't share the prefix, so they never count."""
     fixture = os.path.normpath(str(fixture))
-    others = os.path.join(tmp or tempfile.gettempdir(), "ledgerly-")
+    others = os.path.join(tmp or tempfile.gettempdir(), FIXTURE_PREFIX)
     found = []
 
     def strings(v):
@@ -857,7 +863,7 @@ def contamination(events_by_turn, fixture, tmp=None):
                 texts += [os.path.join(inp["path"], inp[k]) for k in ("pattern", "glob") if isinstance(inp.get(k), str)]
             for text in texts:
                 for token in PATH_TOKEN.findall(text):
-                    if not (".claude/skills" in token or "SKILL.md" in token or "ledgerly-" in token):
+                    if not (".claude/skills" in token or "SKILL.md" in token or FIXTURE_PREFIX in token):
                         continue
                     full = os.path.normpath(os.path.join(fixture, os.path.expanduser(token)))
                     if full == fixture or full.startswith(fixture + os.sep):

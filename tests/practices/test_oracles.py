@@ -2378,7 +2378,7 @@ class RunHarness(unittest.TestCase):
     def test_fixture_git_and_diff_against_the_harness_commit(self):
         root, sha = run.build_fixture("A")
         try:
-            self.assertTrue(root.name.startswith("ledgerly-"))
+            self.assertTrue(root.name.startswith(run.FIXTURE_PREFIX))
             tracked = run.git("ls-files", cwd=root).split()
             self.assertIn(".claude/settings.json", tracked)
             self.assertNotIn("node_modules/next/package.json", tracked)
@@ -2937,17 +2937,26 @@ class RunHarness(unittest.TestCase):
         self.assertEqual(r.suspect_words("+  process.stdout.write(x);\n+process.on('exit', f)\n"),
                          ["process.on('exit'", "process.stdout.write"])
         tmp = tempfile.gettempdir()
-        own = os.path.join(tmp, "ledgerly-own")
+        p = r.FIXTURE_PREFIX
+        own = os.path.join(tmp, f"{p}own")
         use = lambda name, inp: {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": name, "input": inp}]}}
         clean = [use("Read", {"file_path": f"{own}/.claude/skills/server-code/SKILL.md"}), use("Grep", {"path": "app/"}),
-                 use("Bash", {"command": "cat .claude/skills/auth-secrets/SKILL.md"})]
+                 use("Bash", {"command": "cat .claude/skills/auth-secrets/SKILL.md"}),
+                 # the fixture's own test dirs (fixture/tests/helpers.ts) never count
+                 use("Bash", {"command": f"ls {tmp}/ledgerly-test-abc123 && sqlite3 {tmp}/ledgerly-test-abc123/test.db .tables"})]
         self.assertEqual(r.contamination([clean], own), [])
         dirty = [use("Read", {"file_path": "/home/someone/.claude/skills/server-code/SKILL.md"}),
-                 use("Bash", {"command": f"ls ../ledgerly-other/app && cat {tmp}/ledgerly-third/lib/auth.ts"}),
+                 use("Bash", {"command": f"ls ../{p}other/app && cat {tmp}/{p}third/lib/auth.ts"}),
                  use("Glob", {"pattern": "**/SKILL.md", "path": "/opt/x"})]
         self.assertEqual(r.contamination([clean, dirty], own), [
-            "/home/someone/.claude/skills/server-code/SKILL.md", os.path.join(tmp, "ledgerly-other/app"),
-            os.path.join(tmp, "ledgerly-third/lib/auth.ts"), "/opt/x/**/SKILL.md"])
+            "/home/someone/.claude/skills/server-code/SKILL.md", os.path.join(tmp, f"{p}other/app"),
+            os.path.join(tmp, f"{p}third/lib/auth.ts"), "/opt/x/**/SKILL.md"])
+        # The prefix is used nowhere else: not by the fixture's test dirs, nor in anything a fixture holds.
+        self.assertFalse("ledgerly-test-".startswith(p) or p.startswith("ledgerly-test-"))
+        for src in (FIXTURE, STUB, HERE / "stubs", CASES):
+            for f in src.rglob("*"):
+                if f.is_file():
+                    self.assertNotIn(p, f.read_text(errors="replace"), f)
         # The bar holds a marked row out of every count until a person marks it reviewed.
         rows = [self.row("idor", "C", "pass", run=i) for i in (1, 2, 3)]
         rows[1]["suspect"] = ["verdict"]
