@@ -771,9 +771,21 @@ class Discovery(Base):
         self.assertIn(os.path.join("broken", "events.toml"), log)
         self.assertIn("duplicate ids", log)
 
-    def test_cwd_stands_in_for_a_missing_project_dir(self):
+    def test_the_session_start_cwd_stands_in_for_a_missing_project_dir(self):
+        # Review round 3, low 10: the edit levels read the config, the project skills and the
+        # L2 key paths from the call's cwd, which a cd moves.
         del self.env["CLAUDE_PROJECT_DIR"]
-        self.assertIn("[practices:L1:demo:route-handler]", self.fire())
+        sub = os.path.join(self.proj, "sub")
+        os.makedirs(os.path.join(sub, ".claude", "practices"))
+        with open(os.path.join(sub, ".claude", "practices", "config.toml"), "w") as f:
+            f.write("enabled = false\n")
+        self.assertIsNone(self.fire(cwd=sub))  # no project known: user skills only, logged
+        self.assertIn("project-unknown edit: no project dir", self.log())
+        self.start("startup")  # records the project as the session's cwd
+        self.assertIn("[practices:L1:demo:route-handler]", self.fire(cwd=sub))
+        self.loaded()
+        self.assertIn("[practices:L2:demo:SEC-17:lib/a.ts]",
+                      self.fire("lib/a.ts", "x({ ...body })\n", cwd=sub))
 
 
 class Config(Base):

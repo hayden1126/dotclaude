@@ -37,8 +37,11 @@ at CONTENT_MAX characters and each line at LINE_MAX. The token `{auth_helpers}` 
 expands to an alternation of AUTH_HELPERS plus the repo's `[auth] helpers`, each regex-escaped,
 so SEC-01 can name a repo's own auth helper.
 
-Skills are found in $CLAUDE_PROJECT_DIR/.claude/skills/*/ (the payload's cwd without it) and in
-${CLAUDE_CONFIG_DIR:-~/.claude}/skills/*/, links followed. On a name clash the project copy wins.
+Skills are found in <project>/.claude/skills/*/ and in ${CLAUDE_CONFIG_DIR:-~/.claude}/skills/*/,
+links followed. On a name clash the project copy wins. The project dir, for the edit and Bash
+levels alike, is CLAUDE_PROJECT_DIR, else the cwd recorded at the session's first SessionStart,
+never the call's own cwd (a cd moves it); with neither, an edit is checked against the user's
+skills alone with the default config, logged as project-unknown.
 
 Levels:
   L1  an edit that fires a skill's event, when the window (the transcript since the last
@@ -1189,7 +1192,10 @@ def pre_tool_use(event):
     edit = edit_of(event)
     if edit is None:
         return None
-    project = project_dir(event)
+    project = bash_project(event)  # as the Bash levels read it: never a cwd a cd moved
+    if project is None:
+        log("project-unknown", "edit: no project dir (CLAUDE_PROJECT_DIR unset and no cwd "
+            "recorded at session start), so only the user's skills were checked")
     cfg = load_config(project)
     if not cfg["enabled"]:
         return None
@@ -1197,7 +1203,7 @@ def pre_tool_use(event):
     if not skills:
         return None
     path, fragment, after = edit
-    rel = relative(path, project)
+    rel = relative(path, project) if project else path
     text, after_text = scan_text(fragment), scan_text(after)
     helpers = cfg["helpers"]
     events = [(s, ev) for s in skills.values() for ev in s["events"] if not is_off(cfg, s, ev["id"])]
@@ -1448,7 +1454,8 @@ def record_session_cwd(event):
 
 
 def bash_project(event):
-    """The project dir for the Bash levels: CLAUDE_PROJECT_DIR, else the cwd recorded at the
+    """The project dir for the Bash and edit levels (config, project skills, and the paths L2
+    keys and the Bash levels match them by): CLAUDE_PROJECT_DIR, else the cwd recorded at the
     session's start, never the call's own cwd (a cd moves it); None when neither is known."""
     if os.environ.get("CLAUDE_PROJECT_DIR"):
         return os.environ["CLAUDE_PROJECT_DIR"]
@@ -2444,7 +2451,8 @@ LABELS = {"skill-disabled": ("skill disabled", "skills disabled"),
           "config-malformed": ("malformed config", "malformed configs"),
           "state-error": ("state error", "state errors"), "crash": ("crash", "crashes"),
           "git-skipped": ("git call skipped", "git calls skipped"),
-          "scan-truncated": ("scan cut short", "scans cut short")}
+          "scan-truncated": ("scan cut short", "scans cut short"),
+          "project-unknown": ("edit without a project dir", "edits without a project dir")}
 # For debugging, never an engine error: a deliberate choice (a delete push sends nothing to
 # scan), not a check that failed open.
 QUIET = {"fragment-only", "bash-unparsed", "l3r-target", "push-unscanned"}

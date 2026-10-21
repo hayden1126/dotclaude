@@ -414,10 +414,14 @@ class ProjectFilesStayOut(Workspace):
                                                                         "git push"}}}
         for label, event in events.items():
             name = label.split()[0]
+            # Claude Code sets CLAUDE_PROJECT_DIR for every hook; practices-check reads the
+            # project's skills from it (never the payload's cwd, which a cd moves).
+            env = {**self.env, "CLAUDE_PROJECT_DIR": self.cwd} \
+                if name == "practices-check.sh" else self.env
             with self.subTest(hook=label):
                 p = subprocess.run(["bash", os.path.join(HOOKS, name)], input=json.dumps(event),
                                    capture_output=True, text=True, timeout=20, cwd=self.cwd,
-                                   env=self.env)
+                                   env=env)
                 self.assertEqual(p.returncode, 0, p.stderr)
                 self.assertFalse(os.path.exists(ran), f"{name} imported the project's json.py")
                 self.assertTrue(p.stdout, f"{name} printed nothing")
@@ -440,7 +444,8 @@ class PracticesEntries(Workspace):
         os.makedirs(os.path.dirname(self.shim))
         os.symlink(os.path.join(HOOKS, "practices-check.sh"), self.shim)
         self.env.update(XDG_STATE_HOME=os.path.join(self.tmp.name, "state"),
-                        CLAUDE_CONFIG_DIR=os.path.join(self.tmp.name, "cfg"))
+                        CLAUDE_CONFIG_DIR=os.path.join(self.tmp.name, "cfg"),
+                        CLAUDE_PROJECT_DIR=self.cwd)  # as Claude Code sets it for hooks
         skill = os.path.join(self.cwd, ".claude", "skills", "demo")
         os.makedirs(skill)
         with open(os.path.join(skill, "SKILL.md"), "w") as f:
