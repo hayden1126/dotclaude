@@ -28,9 +28,12 @@ Arms:
 
 Cases (cases/<case>/): prompt.md is the user's message, fed verbatim on stdin. oracle.mjs
 is hidden from the agent (it lives in this checkout, not the fixture) and prints one JSON
-verdict: pass, fail (works but has the planted bug) or broken (the functional check failed or
+verdict: pass, fail (works but has the planted bug), broken (the functional check failed or
 the code didn't load, or the agent pointed node_modules outside the fixture; the run counts
-for neither side). good/ and bad/ are overlays the offline test uses. oracle_lib.mjs holds the
+for neither side) or unresolved (the oracle couldn't determine the result: a confirm page it
+can't render or submit, say; never for something it observed, so an address that changed on a
+forged step is still fail; a person grades it from the diff). good/ and bad/ are overlays the
+offline test uses. oracle_lib.mjs holds the
 shared rules. run.py adds a fourth verdict, error, for its own or the infrastructure's
 failures: a harness exception, a turn with no stream output, a claude exit that is nonzero
 with no result event, a result event with is_error or an error_* subtype (usage limit,
@@ -94,8 +97,10 @@ Per run:
         oracle and diff, under <out>/<case>-<arm>-<i>/;
       only sometimes: diff_error (the diff failed; the verdict stands), fixture (with --keep),
         harness_error (an exception in the harness: an error row, with few other fields), and
-        reviewed, which no run writes: a person sets "reviewed": true in a tripwire row's line
-        once they have read its diff and stream, and the bar then counts it again.
+        three fields no run writes, which a person sets after reading a row's diff and stream:
+        reviewed (true clears a tripwire row, which the bar then counts again), hand_verdict
+        ("pass", "fail" or "broken": with reviewed true it replaces verdict for the bar, which
+        is how an unresolved row gets graded) and hand_note (why, in a sentence).
     An --out that already holds results.jsonl is refused: a rerun would overwrite the run dirs
     its rows point at. Arms C and D run the hook with CLAUDE_CONFIG_DIR an empty dir and
     XDG_STATE_HOME its own, both in the run dir, so it sees no user-tier skill and keeps its
@@ -144,11 +149,14 @@ or fail; broken and error don't count.
      versions only print a warning. Arm A's counts classify another arm's line only when A
      pooled and its case part equals that arm's; else that line reads as A unclassified, and a
      C or D line is then a regression check (it still has to pass every run), never REFUSED.
-  Tripwires: a row with a non-empty suspect or contaminated list, and no "reviewed": true, is
-     unresolved. It counts under no verdict (so a C or D line can't be green while it stands,
-     and A's valid runs leave it out), its line says how many are unresolved, and each is
-     listed after the table with its diff path. Setting "reviewed": true in its line in
-     results.jsonl, after reading its diff and stream, clears it.
+  Unresolved: a row whose verdict is unresolved, or whose suspect or contaminated list is
+     non-empty (a tripwire), is unresolved until a person marks it reviewed. It counts under no
+     verdict, never a pass and never a fail (so a C or D line can't be green while it stands,
+     and A's valid runs leave it out); its line says how many are unresolved, and each is listed
+     after the table with its diff path. After reading its diff and stream, a person sets
+     "reviewed": true in its line in results.jsonl (a tripwire row then counts under its own
+     verdict) and, to grade it, "hand_verdict" and "hand_note": a reviewed row's hand_verdict
+     replaces its verdict for the bar, and an unresolved verdict stays unresolved without one.
 """
 import argparse
 import concurrent.futures
@@ -229,9 +237,11 @@ def warmup_case(case):
 
 
 ARMS = ["A", "B", "C", "D"]
-# pass, fail and broken come from the oracle; error is the harness's own (an exception, a
-# claude exit with no result, no stream, a sandbox refusal), counted apart and never valid.
-VERDICTS = ("pass", "fail", "broken", "error")
+# pass, fail, broken and unresolved come from the oracle; error is the harness's own (an
+# exception, a claude exit with no result, no stream, a sandbox refusal), counted apart and
+# never valid. A person's hand_verdict on a reviewed row is one of HAND_VERDICTS.
+VERDICTS = ("pass", "fail", "broken", "unresolved", "error")
+HAND_VERDICTS = ("pass", "fail", "broken")
 GATING = {"A", "C", "D"}
 SESSION_TIMEOUT = 900
 ORACLE_TIMEOUT = 60
@@ -1095,7 +1105,7 @@ def bar(case, arm, counts, n, a=None, installed=None):
     `installed` the skills the arm's rows ran with (default: PRACTICES_SKILLS)."""
     label, missed = _bar(case, arm, counts, n, a, installed)
     held = counts.get("unresolved", 0)
-    return (f"{label}; {held} unresolved (suspect or contaminated: review by hand)", missed) if held else (label, missed)
+    return (f"{label}; {held} unresolved (review by hand)", missed) if held else (label, missed)
 
 
 def _bar(case, arm, counts, n, a=None, installed=None):
@@ -1162,21 +1172,54 @@ def pooled_prints(rows):
     prints = []
     for r in rows:
         fp = fingerprint(r)
-        if r["verdict"] != "error" and fp not in prints:
+        if verdict_of(r) != "error" and fp not in prints:
             prints.append(fp)
     return prints
 
 
+def reviewed(row):
+    return row.get("reviewed") is True
+
+
+def verdict_of(row):
+    """The verdict the bar counts: a reviewed row's hand_verdict when it has a valid one, else
+    the row's own."""
+    hand = row.get("hand_verdict")
+    return hand if reviewed(row) and hand in HAND_VERDICTS else row.get("verdict")
+
+
+def tripwired(row):
+    return bool(row.get("suspect") or row.get("contaminated"))
+
+
 def unresolved(row):
-    """A row a tripwire marked (suspect or contaminated) that no person has marked reviewed."""
-    return bool(row.get("suspect") or row.get("contaminated")) and row.get("reviewed") is not True
+    """A row the bar can't count yet: its verdict is unresolved (and no hand_verdict replaced
+    it), or a tripwire marked it (suspect or contaminated) and no person has marked it reviewed."""
+    return verdict_of(row) == "unresolved" or (tripwired(row) and not reviewed(row))
 
 
 def counts_of(rows):
     """Rows per verdict; an unresolved row counts under "unresolved", never its verdict."""
-    counts = {v: sum(r["verdict"] == v and not unresolved(r) for r in rows) for v in VERDICTS}
+    counts = {v: sum(verdict_of(r) == v and not unresolved(r) for r in rows) for v in VERDICTS if v != "unresolved"}
     counts["unresolved"] = sum(unresolved(r) for r in rows)
     return counts
+
+
+def held_reason(row):
+    """(why an unresolved row is held, what a person sets in its line to resolve it)."""
+    why = []
+    if verdict_of(row) == "unresolved":
+        causes = [str(c.get("detail", "")) for c in row.get("checks") or []
+                  if isinstance(c, dict) and str(c.get("name", "")).startswith("unresolved")]
+        why.append("the oracle couldn't determine it" + (f" ({'; '.join(causes)[:300]})" if causes else ""))
+    if tripwired(row) and not reviewed(row):
+        if row.get("suspect"):
+            why.append(f"suspect ({', '.join(row['suspect'])})")
+        if row.get("contaminated"):
+            why.append(f"contaminated ({', '.join(row['contaminated'])})")
+    todo = ('set "reviewed": true, "hand_verdict" ("pass", "fail" or "broken") and "hand_note" in its row once read'
+            if verdict_of(row) == "unresolved" else 'set "reviewed": true in its row once read')
+    return "; ".join(why), todo
 
 
 def summarize(rows, cases, arms, n):
@@ -1189,10 +1232,11 @@ def summarize(rows, cases, arms, n):
                            if r.get("model") == model and r.get("claude_code_version")})
         if len(versions) > 1:  # Claude Code can update itself mid-run, so this warns, not refuses
             print(f"warning: rows from {len(versions)} Claude Code versions ({', '.join(versions)}); pooled anyway")
-        print(f"{'case':16} {'arm':3} {'pass':>4} {'fail':>4} {'brkn':>4} {'err':>4} {'trig':>4} {'warm':>4} "
+        print(f"{'case':16} {'arm':3} {'pass':>4} {'fail':>4} {'brkn':>4} {'unrs':>4} {'err':>4} {'trig':>4} {'warm':>4} "
               f"{'cost $':>8}  bar")
-        print("(err: harness or infra failures, outside every count; trig: the case turn triggered the "
-              "case's skill; warm: arm D's warm-up turn triggered the skill of the case it ran)")
+        print("(unrs: unresolved, held out of every count until a person reviews it; err: harness or infra "
+              "failures, outside every count; trig: the case turn triggered the case's skill; warm: arm D's "
+              "warm-up turn triggered the skill of the case it ran)")
         of_model = [r for r in rows if r.get("model") == model]
         for case in cases:
             a_rows = [r for r in of_model if r["case"] == case and r["arm"] == "A"]
@@ -1223,14 +1267,13 @@ def summarize(rows, cases, arms, n):
                 warm = sum(bool((r.get("triggered_turns") or {}).get("warmup")) for r in mine)
                 cost = sum(r.get("total_cost_usd") or 0 for r in mine)
                 print(f"{case:16} {arm:3} {counts['pass']:>4} {counts['fail']:>4} {counts['broken']:>4} "
-                      f"{counts['error']:>4} {trig:>4} {warm if arm == 'D' else '-':>4} {cost:>8.2f}  {label}")
+                      f"{counts['unresolved']:>4} {counts['error']:>4} {trig:>4} {warm if arm == 'D' else '-':>4} "
+                      f"{cost:>8.2f}  {label}")
     for label, versions in refused:
         print(f"refused to pool {label}: " + "; ".join(f"{short(fp)} x{k}" for fp, k in versions))
     for r in held:
-        why = [f"suspect ({', '.join(r['suspect'])})" if r.get("suspect") else "",
-               f"contaminated ({', '.join(r['contaminated'])})" if r.get("contaminated") else ""]
-        print(f"unresolved {r['case']}/{r['arm']} #{r.get('run')} ({r['verdict']}): {'; '.join(w for w in why if w)}; "
-              f"diff {r.get('diff')}; set \"reviewed\": true in its row once read")
+        why, todo = held_reason(r)
+        print(f"unresolved {r['case']}/{r['arm']} #{r.get('run')} ({r['verdict']}): {why}; diff {r.get('diff')}; {todo}")
     return missed
 
 
@@ -1406,7 +1449,7 @@ def main():
             return 130
     pool.shutdown(wait=True)
     missed = summarize(rows + imported, cases, arms, a.n)
-    errors = sum(r["verdict"] == "error" for r in rows)
+    errors = sum(verdict_of(r) == "error" for r in rows)
     print(f"\n{len(rows)} runs in {time.monotonic() - started:.0f} s; results in {out}")
     if errors:
         print(f"{errors} run(s) scored error (harness or infra, not the agent); see their checks")

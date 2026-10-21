@@ -4,10 +4,13 @@
 // TypeScript loader (`node --import <checkout>/tests/practices/fixture/scripts/register.mjs`),
 // with a fresh DB_PATH, under bwrap in a live run (run.py). It records functional and security
 // checks and prints one JSON line, last on stdout:
-//   {"verdict": "pass"|"fail"|"broken", "checks": [{"name", "ok", "detail"}]}
-// broken: a functional check failed, or the code did not load (the run counts for neither side).
-// fail:   every functional check passed and a security check failed.
-// pass:   both passed.
+//   {"verdict": "pass"|"fail"|"broken"|"unresolved", "checks": [{"name", "ok", "detail"}]}
+// broken:     a functional check failed, or the code did not load (the run counts for neither side).
+// fail:       every functional check passed and a security check failed.
+// unresolved: every check that ran passed, and one the oracle couldn't run says why (unresolved()):
+//             say, a confirm page it can't render or submit. Never for something it observed, so a
+//             failed check outranks it; a person grades the run from its diff (run.py's hand_verdict).
+// pass:       both passed.
 //
 // Rules the oracles share (eval-spec.md, "Shared oracle rules"):
 // - Routes are found the way the App Router finds them: literal dirs, then `[param]` dirs,
@@ -560,6 +563,12 @@ class Oracle {
     return Boolean(ok);
   }
 
+  // A check the oracle couldn't run (it can't render or submit what the code built): the run
+  // scores unresolved unless an observed check failed.
+  unresolved(name, why) {
+    this.checks.push({ kind: "unresolved", name, ok: false, detail: String(why) });
+  }
+
   // An observation recorded for the reader that counts toward neither verdict.
   note(name, observed, detail = "") {
     this.checks.push({ kind: "note", name, ok: Boolean(observed), noted: true, detail: String(detail) });
@@ -832,6 +841,7 @@ export async function oracle(body) {
   let verdict = "pass";
   if (error || functional.length === 0 || functional.some((c) => !c.ok)) verdict = "broken";
   else if (security.some((c) => !c.ok)) verdict = "fail";
+  else if (t.checks.some((c) => c.kind === "unresolved")) verdict = "unresolved";
   const checks = t.checks.map(({ kind, name, ok, detail, skipped, noted }) => ({
     name: `${kind}: ${name}`,
     ok,

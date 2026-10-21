@@ -2248,7 +2248,7 @@ class RunHarness(unittest.TestCase):
                                                     "harness": r.harness_hash()})
         # The module docstring names every field a row holds, and the ones only some rows hold.
         doc = set(re.findall(r"[A-Za-z_]+", r.__doc__))
-        for key in [*rows["A"], *rows["C"], "diff_error", "fixture", "harness_error", "reviewed"]:
+        for key in [*rows["A"], *rows["C"], "diff_error", "fixture", "harness_error", "reviewed", "hand_verdict", "hand_note"]:
             self.assertIn(key, doc, f"run.py's docstring doesn't name the row field {key}")
         self.assertIn("five parts", r.__doc__)
 
@@ -2501,14 +2501,48 @@ class RunHarness(unittest.TestCase):
         missed, text = self.summary_of(rows, ["idor"], ["C"], 3)
         self.assertEqual(missed, ["idor/C"])
         self.assertIn("MISS (pass 1 of 3)", text)
-        self.assertIn("2 unresolved (suspect or contaminated: review by hand)", text)
+        self.assertIn("2 unresolved (review by hand)", text)
         self.assertIn("unresolved idor/C #2 (pass): suspect (verdict)", text)
         self.assertIn("unresolved idor/C #3 (pass): contaminated (", text)
         for row in rows:
             row["reviewed"] = True
         missed, text = self.summary_of(rows, ["idor"], ["C"], 3)
         self.assertEqual(missed, [])
-        self.assertNotIn("unresolved", text)
+        self.assertNotIn("unresolved", text.split("bar\n", 1)[1].split("\n", 1)[1])
+        # A reviewed tripwire row's hand_verdict replaces its verdict.
+        rows[1]["hand_verdict"] = "fail"
+        missed, text = self.summary_of(rows, ["idor"], ["C"], 3)
+        self.assertEqual(missed, ["idor/C"])
+        self.assertIn("MISS (pass 2 of 3)", text)
+
+    def test_unresolved_verdict_rows_wait_for_a_hand_verdict(self):
+        r = self.harness
+        self.assertIn("unresolved", r.VERDICTS)
+        page = {"name": "unresolved: the confirm link applies the change", "ok": False,
+                "detail": "the page imports a component from app/x/confirm-form.tsx"}
+        rows = [self.row("email-change", "C", "pass", run=i) for i in (1, 2, 3)]
+        rows[2].update(verdict="unresolved", checks=[page], diff="/out/email-change-C-3/diff.patch")
+        missed, text = self.summary_of(rows, ["email-change"], ["C"], 3)
+        self.assertEqual(missed, ["email-change/C"])  # never a pass
+        self.assertRegex(text, r"MISS \(pass 2 of 3\);.*; 1 unresolved \(review by hand\)\n")
+        self.assertRegex(text, r"email-change\s+C\s+2\s+0\s+0\s+1\s+0 ")  # pass fail brkn unrs err
+        self.assertIn("unresolved email-change/C #3 (unresolved): the oracle couldn't determine it "
+                      "(the page imports a component from app/x/confirm-form.tsx); diff /out/email-change-C-3/diff.patch; "
+                      'set "reviewed": true, "hand_verdict"', text)
+        rows[2]["reviewed"] = True  # reviewed, but not graded: still held
+        self.assertEqual(r.counts_of(rows)["unresolved"], 1)
+        rows[2]["hand_verdict"] = "unresolved"  # not a hand verdict
+        self.assertEqual(r.counts_of(rows)["unresolved"], 1)
+        rows[2].update(hand_verdict="pass", hand_note="the form posts the token back; the action checks it")
+        missed, text = self.summary_of(rows, ["email-change"], ["C"], 3)
+        self.assertEqual(missed, [])
+        self.assertRegex(text, r"email-change\s+C\s+3\s+0\s+0\s+0\s+0 .*  green;")
+        # A hand verdict counts only on a reviewed row; in arm A it is valid like any other.
+        a = [self.row("email-change", "A", "unresolved", hand_verdict="fail") for _ in range(3)]
+        self.assertEqual(r.counts_of(a)["unresolved"], 3)
+        for x in a:
+            x["reviewed"] = True
+        self.assertEqual((r.counts_of(a)["fail"], r.a_class(r.counts_of(a))), (3, "discriminates"))
 
     def test_agent_diff_runs_no_filter_driver_the_fixture_repo_defines(self):
         r = self.harness
