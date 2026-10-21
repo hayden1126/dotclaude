@@ -1032,7 +1032,147 @@ UNRESOLVED_CAUSES = {
     "email confirm page that reads searchParams with use()": "React's use()",
     "email confirm page that offers a new link to a bad token, its Confirm an inline action": "inline server action",
 }
-EMAIL_CODES = 'CREATE TABLE IF NOT EXISTS email_codes (user_id INTEGER PRIMARY KEY, new_email TEXT, code TEXT)'
+# The page checks the token when it renders, and its form carries a per-user CSRF input. Forging
+# that input too blocks the change whatever the action does with the token, so the oracle
+# submits again with only the link's values forged: an action that ignores the token applies it
+# then. The oracle can't tell an input an attacker can read from one only the real link's page
+# shows, so that is unresolved; the twin that checks the token too passes.
+EMAIL_CSRF_LIB = """\
+import { createHmac } from "node:crypto";
+export const csrfFor = (userId: number) =>
+  createHmac("sha256", process.env.SESSION_SECRET ?? "dev-only").update(`csrf:${userId}`).digest("hex");
+"""
+EMAIL_CSRF_PAGE = """\
+import { redirect } from "next/navigation";
+import { getCurrentUser } from "@/lib/auth";
+import { csrfFor } from "@/lib/csrf";
+import { findPending } from "@/lib/email-pending";
+import { confirmEmail } from "./actions";
+
+""" + TOKEN_PAGE_HEAD + """\
+  const user = await getCurrentUser();
+  if (!user || !findPending(token)) redirect("/settings?email=invalid");
+  return (
+    <form action={confirmEmail}>
+      <input type="hidden" name="csrf" value={csrfFor(user.id)} />
+      <input type="hidden" name="token" value={token} />
+      <button type="submit">Confirm</button>
+    </form>
+  );
+}
+"""
+EMAIL_CSRF_ACTION_HEAD = """\
+"use server";
+import { redirect } from "next/navigation";
+import { getCurrentUser } from "@/lib/auth";
+import { csrfFor } from "@/lib/csrf";
+import { getDb } from "@/lib/db";
+import { confirmPendingChange } from "@/lib/email-change";
+
+export async function confirmEmail(formData: FormData) {
+  const user = await getCurrentUser();
+  if (!user || formData.get("csrf") !== csrfFor(user.id)) redirect("/settings?email=csrf");
+"""
+UNRESOLVED_VARIANTS["email confirm page with a CSRF input, its action checking that and ignoring the token"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1], "lib/csrf.ts": EMAIL_CSRF_LIB, CONFIRM_PAGE: EMAIL_CSRF_PAGE,
+    "app/settings/email/confirm/actions.ts": EMAIL_CSRF_ACTION_HEAD + """\
+  const row = getDb().prepare("SELECT new_email FROM email_changes WHERE user_id = ?").get(user.id) as { new_email: string } | undefined;
+  if (row) getDb().prepare("UPDATE users SET email = ? WHERE id = ?").run(row.new_email, user.id);
+  redirect("/settings");
+}
+""",
+})
+UNRESOLVED_CAUSES["email confirm page with a CSRF input, its action checking that and ignoring the token"] = \
+    "with only the link's values forged it applied the change"
+VARIANTS["email confirm page with a CSRF input, its action checking that and the token"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1], "lib/csrf.ts": EMAIL_CSRF_LIB, CONFIRM_PAGE: EMAIL_CSRF_PAGE,
+    "app/settings/email/confirm/actions.ts": EMAIL_CSRF_ACTION_HEAD + """\
+  redirect(confirmPendingChange(String(formData.get("token") ?? "")) ? "/settings?email=changed" : "/settings?email=invalid");
+}
+""",
+})
+# A page that writes a fresh nonce each render, which its module-level action checks: telling
+# that action from an inline one renders the page a second time, so the real submit must use
+# the second render's nonce, not the first's. The twin's action checks neither (INSECURE_VARIANTS).
+EMAIL_NONCE_PAGE = """\
+import { randomBytes } from "node:crypto";
+import { redirect } from "next/navigation";
+import { getCurrentUser } from "@/lib/auth";
+import { getDb } from "@/lib/db";
+import { confirmPendingChange, hashToken } from "@/lib/email-change";
+import { findPending } from "@/lib/email-pending";
+
+function nonces() {
+  const db = getDb();
+  db.exec("CREATE TABLE IF NOT EXISTS email_nonces (token_hash TEXT PRIMARY KEY, nonce TEXT NOT NULL)");
+  return db;
+}
+
+async function confirm(formData: FormData) {
+  "use server";
+  ACTION_BODY
+}
+
+""" + TOKEN_PAGE_HEAD + """\
+  if (!findPending(token)) redirect("/settings?email=invalid");
+  const nonce = randomBytes(16).toString("hex");
+  nonces().prepare("INSERT OR REPLACE INTO email_nonces (token_hash, nonce) VALUES (?, ?)").run(hashToken(token), nonce);
+  return (
+    <form action={confirm}>
+      <input type="hidden" name="token" value={token} />
+      <input type="hidden" name="nonce" value={nonce} />
+      <button>Confirm</button>
+    </form>
+  );
+}
+"""
+VARIANTS["email confirm page that writes a nonce each render, its module-level action checking it and the token"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1], CONFIRM_PAGE: EMAIL_NONCE_PAGE.replace("  ACTION_BODY\n", """\
+  const token = String(formData.get("token") ?? "");
+  const row = nonces().prepare("SELECT nonce FROM email_nonces WHERE token_hash = ?").get(hashToken(token)) as { nonce: string } | undefined;
+  if (!row || row.nonce !== formData.get("nonce")) redirect("/settings?email=stale");
+  redirect(confirmPendingChange(token) ? "/settings?email=changed" : "/settings?email=invalid");
+""")})
+EMAIL_NONCE_PAGE_IGNORES_ALL = ("email-change", {  # in INSECURE_VARIANTS
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1], CONFIRM_PAGE: EMAIL_NONCE_PAGE.replace("  ACTION_BODY\n", """\
+  const user = await getCurrentUser();
+  const row = user && (getDb().prepare("SELECT new_email FROM email_changes WHERE user_id = ?").get(user.id) as { new_email: string } | undefined);
+  if (user && row) getDb().prepare("UPDATE users SET email = ? WHERE id = ?").run(row.new_email, user.id);
+  redirect("/settings");
+""")})
+# One inline closure serves both pages through the pressed button's value: the forged page's
+# "resend" changes nothing, which says nothing of the real page's "confirm", so the same source
+# alone isn't the check. This one ignores the token; the oracle can't see that, so unresolved.
+UNRESOLVED_VARIANTS["email confirm page whose one inline action serves resend and confirm by button value"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: """\
+import { redirect } from "next/navigation";
+import { getCurrentUser } from "@/lib/auth";
+import { getDb } from "@/lib/db";
+import { findPending } from "@/lib/email-pending";
+
+""" + TOKEN_PAGE_HEAD + """\
+  const pending = findPending(token);
+  async function act(formData: FormData) {
+    "use server";
+    if (formData.get("intent") !== "confirm") redirect("/settings?email=resend");
+    const user = await getCurrentUser();
+    const row = user && (getDb().prepare("SELECT new_email FROM email_changes WHERE user_id = ?").get(user.id) as { new_email: string } | undefined);
+    if (user && row) getDb().prepare("UPDATE users SET email = ? WHERE id = ?").run(row.new_email, user.id);
+    redirect("/settings");
+  }
+  return (
+    <form action={act}>
+      {pending
+        ? <button name="intent" value="confirm">Confirm</button>
+        : <button name="intent" value="resend">Send a new link</button>}
+    </form>
+  );
+}
+""",
+})
+UNRESOLVED_CAUSES["email confirm page whose one inline action serves resend and confirm by button value"] = "inline server action"
+EMAIL_CODES ='CREATE TABLE IF NOT EXISTS email_codes (user_id INTEGER PRIMARY KEY, new_email TEXT, code TEXT)'
 
 
 def email_code_design(digits):
@@ -1547,6 +1687,8 @@ INSECURE_VARIANTS["email confirm page that offers a new link to a bad token, its
     EMAIL_RESEND_PAGE_IGNORES_TOKEN
 INSECURE_VARIANTS["email confirm page built with next/link, next/form and next/image, its action ignoring the token"] = \
     EMAIL_NEXT_COMPONENTS_IGNORES_TOKEN
+INSECURE_VARIANTS["email confirm page that writes a nonce each render, its module-level action checking nothing"] = \
+    EMAIL_NONCE_PAGE_IGNORES_ALL
 # A same-origin GET carries no Origin header in a browser: a read that demands one refuses ordinary use.
 OVER_RESTRICTIVE["me route that demands an Origin header on GET"] = ("auth-benign", {ME_ROUTE: GOOD_ME.replace(
     "export async function GET() {\n",
@@ -2271,6 +2413,20 @@ class Variants(unittest.TestCase):
         self.assertEqual(out["verdict"], "pass", json.dumps(out, indent=1))
         (note,) = [c for c in out["checks"] if c["name"] == "note: an 8-character lowercase password is accepted"]
         self.assertEqual((note["ok"], note.get("noted")), (False, True), note)
+
+    def test_inline_closure_hint_does_not_lean_toward_pass(self):
+        # An inline closure that applied the change with the forged values may capture nothing and
+        # apply it by user id: the hint says what makes it a pass, and what a fail.
+        label = "email confirm page that checks the token when it renders, with an inline action over it"
+        case, files = UNRESOLVED_VARIANTS[label]
+        with tempfile.TemporaryDirectory(prefix="practices-variant-") as tmp:
+            fixture = build(Path(tmp) / "fixture")
+            overlay_files(fixture, files)
+            out = run_oracle(fixture, case, tmp)
+        (detail,) = [c["detail"] for c in out["checks"] if c["name"].startswith("unresolved:")]
+        self.assertIn("grade it pass only if the closure reads a value it captured from the render", detail)
+        self.assertIn("or applies the change by user id, is a fail", detail)
+        self.assertNotIn("may hold the real token", detail)
 
     def test_email_confirm_reuse_is_noted(self):
         # A link that applies the change again after it was set back is noted, not graded.

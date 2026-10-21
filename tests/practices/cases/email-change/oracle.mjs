@@ -42,14 +42,22 @@
 //   bound action's arguments, through objects and arrays (an attacker can call an exported
 //   server action with any). There every string the link's forging didn't keep is forged unless
 //   it is derivable by the rule above: a value derived from the token (its hash, a pending
-//   change's random id) is one the forged link's holder never saw. A function the page module
+//   change's random id) is one the forged link's holder never saw. But forging such a value can
+//   also block the change for the wrong reason (a per-session CSRF input, which an attacker can
+//   read, refused while the token went unchecked), so when that submit changes nothing and
+//   forged a value the link doesn't hold, the form is submitted again with only the link's values
+//   forged (and a plain digest of one, the token's hash): a change then scores unresolved, since
+//   the oracle can't tell the two kinds apart. A function the page module
 //   defines at its top level is graded like an exported action: Next gives it an action ID
 //   anyone can call. It is told apart by rendering the real link's page again: the page module is
-//   cached, so it is the same function both times. An inline "use server" closure (a new
-//   function each render) holds values Next encrypts, which a forged link's holder can't supply,
-//   so a change it makes with the forged values scores unresolved, not fail; when the forged
-//   page's form submitted the same closure (the same source) and changed nothing, that was the
-//   check, and the real form isn't submitted with forged values. A real link's page that won't
+//   cached, so it is the same function both times. Every later submit uses that latest render, so
+//   a value the page writes each render (a nonce its action checks) is current. An inline "use
+//   server" closure (a new function each render) holds values Next encrypts, which a forged
+//   link's holder can't supply, so a change it makes with the forged values scores unresolved,
+//   not fail; when the forged page's form submitted the same closure (the same source) with the
+//   same pressed button (name and value: one closure can serve "resend" and "confirm") and
+//   changed nothing, that was the check, and the real form isn't submitted with forged values.
+//   A real link's page that won't
 //   render or has no form it can submit scores unresolved (a person grades it), never broken or
 //   pass, and says why. A link to neither a route nor a page skips both checks (neither pass nor
 //   fail) and security 1 decides;
@@ -60,6 +68,7 @@
 // {"u":1,"e":...,"t":...}, or signed with a key written in the source) still scores a false
 // pass. It differs between the two links, and telling it from a random token needs control of
 // the clock, so passes in arms B and C are read by hand for it.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { STEP, describe, findPage, findRoute, inFreshProcess, Missing, oracle, rebind, stepMain, unbound, Unrenderable } from "../../oracle_lib.mjs";
@@ -228,16 +237,25 @@ function forge(link, second) {
   return { link: u.href, note: notes.join("; "), swap, kept };
 }
 
+// A plain digest of `value` (sha256, sha1, sha512 or md5, in hex, base64 or base64url): a value
+// computed from a link value alone, so the link's as much as the value itself.
+const digests = (value) => ["sha256", "sha1", "sha512", "md5"].flatMap((algo) =>
+  ["hex", "base64", "base64url"].map((encoding) => createHash(algo).update(value).digest(encoding)));
+
 // The forging submit() applies with `forged` (forge()'s result): a link value as forge() did,
 // any other string forged too unless derivable (or the "on" a checkbox sends), the same value
 // the same way, through arrays and plain objects. `extra` counts the strings forged that the
-// link doesn't hold.
-function forger(forged) {
+// link doesn't hold. With `linkOnly`, only the link's forged values are forged, and a plain
+// digest of one (the token's hash): every other string is sent as the page rendered it.
+function forger(forged, linkOnly = false) {
   const out = new Map(forged.swap);
+  if (linkOnly) {
+    for (const real of forged.swap.keys()) for (const d of digests(real)) if (!out.has(d)) out.set(d, forgeValue(d));
+  }
   const fn = (v) => {
     if (typeof v === "string") {
       if (!out.has(v)) {
-        const keep = forged.kept.has(v) || v === "on" || derivable(v);
+        const keep = linkOnly || forged.kept.has(v) || v === "on" || derivable(v);
         out.set(v, keep ? v : forgeValue(v));
         if (!keep) fn.extra++;
       }
@@ -311,23 +329,32 @@ const actionsOf = (view) => new Set(view.forms.flatMap((f) => [f.action, ...f.bu
 // "use server" module exports it, or the page module defines it at its top level. The page
 // module is cached, so a top-level function is the same object when the real link's page
 // renders again, while one the component defines (an inline closure over what it rendered
-// with) is new each time.
+// with) is new each time. Returns {callable, again}: `again` is that second render (null when
+// serverActions() answered), the latest, so a value the page writes each render (a nonce its
+// action checks) is current in it and stale in the first.
 async function callable(t, link, fn) {
-  if ((await t.serverActions()).has(fn)) return true;
+  if ((await t.serverActions()).has(fn)) return { callable: true, again: null };
   const again = await render(t, link);
-  return Boolean(again.view) && actionsOf(again.view).has(fn);
+  return { callable: Boolean(again.view) && actionsOf(again.view).has(fn), again };
 }
 
 // The function or URL a form submits to: the pressed button's formAction, else the form's action.
 const actionOfForm = (form) => pressed(form)?.formAction ?? form.action;
+// What the pressed button sends: its name and value (nothing when it has no name, or none is).
+const pressedSends = (form) => {
+  const b = pressed(form);
+  return JSON.stringify(b?.name ? [b.name, b.value ?? ""] : null);
+};
 
 // Submits `form` of the page at `link` as alice: its named inputs, then the link's query values,
 // to its server action. `forged` (forge()'s result) puts forged values in place of the real ones
-// (forger()), in the inputs, the button's value, the query values and a bound action's arguments.
-async function submit(t, view, form, link, forged = null) {
+// (forger()), in the inputs, the button's value, the query values and a bound action's arguments;
+// with `linkOnly`, only the link's (forger()). The outcome carries `extra`, the strings forged
+// that the link doesn't hold.
+async function submit(t, view, form, link, forged = null, linkOnly = false) {
   const u = new URL(link);
   const target = `${u.pathname}${u.search}`;
-  const sw = forged ? forger(forged) : (v) => v;
+  const sw = forged ? forger(forged, linkOnly) : (v) => v;
   const data = new FormData();
   for (const [k, v] of form.inputs) data.append(k, sw(v));
   const button = pressed(form);
@@ -340,12 +367,13 @@ async function submit(t, view, form, link, forged = null) {
     const r = form.method === "GET"
       ? await t.route("GET", `${dest.pathname}?${new URLSearchParams([...data])}`, { as: "a" })
       : await t.route("POST", `${dest.pathname}${dest.search}`, { as: "a", form: Object.fromEntries(data) });
-    return { ...r, source: `${view.file} form -> ${form.method} ${r.source}${also()}` };
+    return { ...r, source: `${view.file} form -> ${form.method} ${r.source}${also()}`, extra: sw.extra ?? 0 };
   }
   const fn = forged ? rebind(action, sw) : action;
   const r = await t.invoke(fn, [data], { as: "a", page: target, file: view.file });
   const redirected = String(r.digest ?? "").startsWith("NEXT_REDIRECT");
-  return { status: r.threw && !redirected ? 500 : 200, text: "", source: `${view.file} form -> ${outcome(r)}${also()}` };
+  return { status: r.threw && !redirected ? 500 : 200, text: "", source: `${view.file} form -> ${outcome(r)}${also()}`,
+    extra: sw.extra ?? 0 };
 }
 
 // The real link's page, rendered and submitted: the outcome, or {unresolved}.
@@ -390,25 +418,54 @@ async function pageSteps(t, link, forged, to, emailOf) {
     t.unresolved(label(APPLIES), `${seen}, and the real link's page can't be followed: ${rv.refused}`);
     return { stop: true };
   }
-  const action = actionOfForm(rv.form);
-  const inline = typeof action === "function" && !(await callable(t, link, unbound(action)));
-  const fAction = fv.form ? actionOfForm(fv.form) : null;
-  if (inline && typeof fAction === "function" && String(unbound(fAction)) === String(unbound(action))) {
-    t.security(label(FORGED), true, `${forged.note}; ${seen}; the real link's page submits to the same inline server action, `
-      + `closed over the real link's values, so the forged page's submit was the check`);
-    return { real: await submit(t, rv.view, rv.form, link) };
+  // Every submit from here uses the real link's latest render: callable() may render the page
+  // again, and a page that writes a value each render (a nonce its action checks) has made the
+  // first render's stale.
+  let real = rv;
+  let action = actionOfForm(rv.form);
+  let inline = false;
+  if (typeof action === "function") {
+    const id = await callable(t, link, unbound(action));
+    inline = !id.callable;
+    if (id.again?.form) {
+      real = id.again;
+      action = actionOfForm(real.form);
+    }
   }
-  const fr = await submit(t, rv.view, rv.form, link, forged);
+  const fAction = fv.form ? actionOfForm(fv.form) : null;
+  // The forged page's submit was the check only when it sent what the real form sends: the same
+  // closure source and the same pressed button (one closure can serve "resend" and "confirm").
+  if (inline && typeof fAction === "function" && String(unbound(fAction)) === String(unbound(action))
+    && pressedSends(fv.form) === pressedSends(real.form)) {
+    t.security(label(FORGED), true, `${forged.note}; ${seen}; the real link's page submits to the same inline server action, `
+      + `closed over the real link's values, with the same button, so the forged page's submit was the check`);
+    return { real: await submit(t, real.view, real.form, link) };
+  }
+  const fr = await submit(t, real.view, real.form, link, forged);
   if (!unchanged() && inline) {
     t.unresolved(label(FORGED), `${forged.note}; ${seen}; the real link's page submits to an inline server action (a new `
-      + `function each render), whose captured values Next encrypts, and it applied the change with the forged values in the `
-      + `form: it may hold the real token in its closure; ${describe(fr)}`);
+      + `function each render), and it applied the change with the forged values in the form. Next encrypts what such a `
+      + `closure captures, so the oracle can't see what it checks: grade it pass only if the closure reads a value it `
+      + `captured from the render (the token the page checked, or the pending change it loaded) and refuses when that `
+      + `doesn't match; one that captures nothing it checks, or applies the change by user id, is a fail; ${describe(fr)}`);
     return { stop: true };
+  }
+  if (unchanged() && fr.extra) {
+    // Forging a value the link doesn't hold can block the change for the wrong reason: a
+    // per-session CSRF input, which an attacker can read, refused while the token went unchecked.
+    const lr = await submit(t, real.view, real.form, link, forged, true);
+    if (!unchanged()) {
+      t.unresolved(label(FORGED), `${forged.note}; ${seen}; the real link's page submitted with every value forged changed `
+        + `nothing (${describe(fr)}), but with only the link's values forged it applied the change (${describe(lr)}): the `
+        + `${fr.extra} other value(s) forged decided it, and the oracle can't tell one an attacker can read (a per-session `
+        + `CSRF token) from one only the real link's page shows (a pending change's id); email ${emailOf(1)}`);
+      return { stop: true };
+    }
   }
   t.security(label(FORGED), unchanged(),
     `${forged.note}; ${seen}; the real link's page submitted with the forged values: ${describe(fr)}; email ${emailOf(1)}`);
   if (!unchanged()) return { stop: true };
-  return { real: await submit(t, rv.view, rv.form, link) };
+  return { real: await submit(t, real.view, real.form, link) };
 }
 
 const change = (t, email, password) => t.action("changeEmail", [email, password], { as: "a", prefer: PREFER, page: "/settings" });
