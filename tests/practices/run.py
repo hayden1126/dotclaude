@@ -671,8 +671,9 @@ def hook_denials(events):
     """Hook denials seen in the stream. Heuristic, kept in one function to tune against the
     real hook: hook_response events carrying a deny or block decision; failing those, tool
     results that are errors carrying the engine's `[practices:` tag (how Claude Code 2.1.305
-    renders a PreToolUse deny: "PreToolUse:Write hook error: [practices:L2:...] ..."), or whose
-    text says a hook denied or blocked the call."""
+    renders a PreToolUse deny: "PreToolUse:Write hook error: [practices:L2:...] ..."). Not text
+    that says "hook" and "denied": a ugrep listing ("Permission denied" beside a hooks path)
+    read as a deny in smoke2-auth-haiku, and no real deny was ever worded that way."""
     responses = 0
     for e in events:
         if e.get("type") == "system" and "hook" in str(e.get("subtype", "")):
@@ -688,10 +689,7 @@ def hook_denials(events):
             continue
         for item in (e.get("message") or {}).get("content") or []:
             if isinstance(item, dict) and item.get("type") == "tool_result":
-                text = json.dumps(item.get("content", ""))
-                low = text.lower()
-                if (item.get("is_error") is True and "[practices:" in text) \
-                        or ("hook" in low and ("denied" in low or "blocked" in low)):
+                if item.get("is_error") is True and "[practices:" in json.dumps(item.get("content", "")):
                     results += 1
     return results
 

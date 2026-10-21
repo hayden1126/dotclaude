@@ -2959,9 +2959,6 @@ class RunHarness(unittest.TestCase):
         self.assertEqual((s["turns"], s["total_cost_usd"], s["init_skills"]), (7, 0.42, ["server-code"]))
         self.assertNotIn("skills", s)  # the row's "skills" is the installed fingerprint
         self.assertEqual(r.hook_denials(events), 1)
-        blocked = {"type": "user", "message": {"content": [
-            {"type": "tool_result", "content": "PreToolUse:Write hook denied this call"}]}}
-        self.assertEqual(r.hook_denials([blocked]), 1)
         self.assertEqual(r.hook_denials(events[:1] + events[2:]), 0)
 
     def test_denials_count_the_engines_error_results(self):
@@ -2982,6 +2979,10 @@ class RunHarness(unittest.TestCase):
         self.assertEqual(r.hook_denials([result([{"type": "text", "text": text}])]), 1)
         self.assertEqual(r.hook_denials([result(text, is_error=False)]), 0)  # a Read of a file quoting the tag
         self.assertEqual(r.hook_denials([result("Error: ENOENT, no such file")]), 0)
+        # Text that names a hook and a denial is not a deny (smoke2-auth-haiku, email-change-C-1, line 21).
+        listing = "ugrep: warning: cannot read .zshrc: Permission denied\n./.claude/hooks/practices-check.sh"
+        self.assertEqual(r.hook_denials([result(listing, is_error=False), result(listing)]), 0)
+        self.assertEqual(r.hook_denials([result("PreToolUse:Write hook denied this call", is_error=False)]), 0)
 
     def test_bar(self):
         r = self.harness
