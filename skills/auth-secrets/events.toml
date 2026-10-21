@@ -72,7 +72,7 @@ content = [
 ]
 lines = [
   "Build password hashing with Argon2id (19 MiB, 2 iterations, parallelism 1) or bcrypt at cost 10 or more, never a fast hash; say so in your reply (SEC-30).",
-  "Build the policy: at least 8 characters (15 advised), up to at least 64, no composition rules, a common-password check; say so in your reply (SEC-31).",
+  "Build the policy: at least 15 characters for a single-factor password (8 only as one factor of MFA), up to at least 64, no composition rules, a common-password check; say so in your reply (SEC-31).",
   "Build one answer for 'no such account' and 'wrong password', with similar timing; say so in your reply (SEC-32).",
   "Build a per-user and per-IP rate limit on sign-in, sign-up and reset; say so in your reply (server-code SEC-07).",
   "Build a password change that needs the current password, and make it or a reset end the user's other sessions and void any open email or phone change; say so in your reply (SEC-37, SEC-33).",

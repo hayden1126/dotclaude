@@ -39,7 +39,7 @@ SEC-41 (a key-shaped value) is stricter: its comment covers only the line it sit
 ## Passwords and sign-in
 
 - **SEC-30: Hash passwords with Argon2id (19 MiB memory, 2 iterations, parallelism 1) or bcrypt at cost 10 or more**, or leave them to the auth provider. Never MD5, SHA-1, SHA-256 or any other fast hash, salted or not. Proof: each stored value carries an algorithm marker and a salt (`$argon2id$`, `$2b$`).
-- **SEC-31: Accept passwords of at least 8 characters (15 advised) and up to at least 64**, with no composition rules, paste allowed, and a check against a list of common passwords (the top 3,000 or more). Seed no default accounts: dev auto-login and seeded owners stay dev-only and gitignored. Proof: a policy test, and no seeded admin credentials in migrations.
+- **SEC-31: Require at least 15 characters for a password that is the only factor (8 only when it is one factor of MFA), and accept up to at least 64** (NIST SP 800-63B-4), with no composition rules, paste allowed, and a check against a list of common passwords (the top 3,000 or more). Seed no default accounts: dev auto-login and seeded owners stay dev-only and gitignored. Proof: a policy test, and no seeded admin credentials in migrations.
 - **SEC-32: Answer "no such account" and "wrong password" the same way** at sign-in, sign-up and reset: one message, one status and similar timing (verify against a dummy hash when the user is missing). Reset says "if that address has an account, we sent a link". Proof: both responses match in status and body.
 - Sign-in, sign-up, reset and OTP endpoints get server-code's rate limit (SEC-07).
 
