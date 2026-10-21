@@ -260,8 +260,11 @@ paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py,rb,php,go}"]
 say = "Build a same-origin validator for this redirect target: refuse a non-string, a backslash or any control character, parse it against the configured origin, compare origins, and redirect to the validated absolute URL, never a string starting with // (SEC-39, see the skill's references/redirects.md). If the code already has, or the task names, its own validator, keep that name and route the value through it: wrap the read in the call, or assign the call's result and redirect to that."
 
 [[rule]]
+# A public-prefixed name holding a secret. A vendor name counts only before KEY, TOKEN or SECRET,
+# PRIVATE only as PRIVATE_KEY and PASSWORD only at the end, so NEXT_PUBLIC_OTP_RESEND_SECONDS,
+# NEXT_PUBLIC_PRIVATE_BETA and NEXT_PUBLIC_PASSWORD_MIN_LENGTH stay quiet.
 id = "SEC-40"
-when = '''\b(?:NEXT_PUBLIC|VITE|PUBLIC|EXPO_PUBLIC|REACT_APP|NUXT_PUBLIC|GATSBY)_[A-Z0-9_]{0,40}(?:SECRET|SERVICE_ROLE|SERVICE_KEY|PRIVATE|ADMIN_KEY|ADMIN_TOKEN|PASSWORD|DATABASE_URL|OPENAI|ANTHROPIC|RESEND|SENDGRID|MAILGUN|POSTMARK|TWILIO)'''
+when = '''\b(?:NEXT_PUBLIC|VITE|PUBLIC|EXPO_PUBLIC|REACT_APP|NUXT_PUBLIC|GATSBY)_[A-Z0-9_]{0,40}(?:SECRET|SERVICE_ROLE|SERVICE_KEY|PRIVATE_KEY|ADMIN_KEY|ADMIN_TOKEN|PASSWORD\b|DATABASE_URL|(?:OPENAI|ANTHROPIC|RESEND|SENDGRID|MAILGUN|POSTMARK|TWILIO)[A-Z0-9_]{0,20}(?:KEY|TOKEN|SECRET))'''
 paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,vue,svelte,astro,json,yaml,yml,toml}", ".env*"]
 say = "A NEXT_PUBLIC_, VITE_ or PUBLIC_ variable is built into the browser bundle, so a secret in one is public. Keep this key server-only under a name without the public prefix, and call the service from server code (SEC-40). If the value is truly public (a publishable key), rename it to say so."
 
