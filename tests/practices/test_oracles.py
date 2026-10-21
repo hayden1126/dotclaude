@@ -3642,8 +3642,12 @@ class RunHarness(unittest.TestCase):
             code, text = self.summarize_main(path)
             self.assertEqual(code, 0, text)
             self.assertNotRegex(text, r"idor\s+C ")
-            # Listed by --arms, the empty line misses: these rows record no plan, so every line shown can.
+            # --arms alone filters: these rows record no plan, and their file holds idor/A only, so idor/C
+            # is past what they can say their run planned. Both flags name the line, and it misses.
             code, text = self.summarize_main(path, "--arms", "A,C")
+            self.assertEqual(code, 0, text)
+            self.assertNotRegex(text, r"idor\s+C ")
+            code, text = self.summarize_main(path, "--cases", "idor", "--arms", "A,C")
             self.assertEqual(code, 1, text)
             self.assertIn("MISS (no rows: none of its runs finished)", text)  # nor its n
             # Old rows, as round 5 found them: another case holds C rows, so C is listed, and idor's empty C
@@ -3678,14 +3682,35 @@ class RunHarness(unittest.TestCase):
         self.assertIn('row.setdefault("planned_cases", cases)', source)
         self.assertIn('row.setdefault("planned_arms", arms)', source)
 
-    def plan_rows(self, model, cases, arms, n, short=None, ran=None):
+    def plan_rows(self, model, cases, arms, n, short=None, ran=None, **extra):
         """The rows one run of `model` writes: n passing runs of each case and arm it planned (of
         `ran`, the cases it got to, when a Ctrl-C stopped it), `short` a (case, arm) whose last run
-        never finished."""
+        never finished, `extra` more fields on every row."""
         skills = {"server-code": "a" * 64, "auth-secrets": "b" * 64}
         return [self.row(case, arm, "pass", skills, model=model, run=i, planned_n=n, planned_cases=cases,
-                         planned_arms=arms, stream=[f"/out/{model}/{case}-{arm}-{i}/stream.jsonl"])
+                         planned_arms=arms, stream=[f"/out/{model}/{case}-{arm}-{i}/stream.jsonl"], **extra)
                 for case in (ran or cases) for arm in arms for i in range(1, n + 1) if (case, arm, i) != (*(short or ()), n)]
+
+    STEP_7 = ((("open-redirect", "email-change", "logout-revoke", "signup", "remember-me", "auth-benign"), ("B", "C", "D")),
+              (("rate-limit-paid", "csv-injection", "reset-host", "benign"), ("C",)))
+
+    def step_7_pool(self, tmp, models, short=None, **extra):
+        """The next eval's dirs under `tmp`, one per model and plan: the auth cases on B, C and D,
+        and the cross-skill cases on C only, two runs each; `short` a (model, case, arm) whose last
+        run never finished."""
+        paths = []
+        for model in models:
+            for name, (cases, arms) in zip(("auth", "cross"), self.STEP_7):
+                paths.append(tmp / f"{model}-{name}")
+                paths[-1].mkdir()
+                cut = short[1:] if short and short[0] == model and short[1] in cases and short[2] in arms else None
+                rows = self.plan_rows(model, list(cases), list(arms), 2, cut, **extra)
+                (paths[-1] / "results.jsonl").write_text("".join(json.dumps(x) + "\n" for x in rows))
+        return paths
+
+    def missed_of(self, text):
+        """The "case/arm" labels a summary's last line says missed the bar."""
+        return text.split("missed the bar: ")[1].split("\n")[0].split(", ") if "missed the bar: " in text else []
 
     def test_pooled_runs_gate_only_the_lines_their_model_planned(self):
         # Round 6's case: one run planned email-change on B, C and D, another rate-limit-paid on C
@@ -3722,32 +3747,96 @@ class RunHarness(unittest.TestCase):
             write(auth, self.plan_rows("m", ["email-change"], ["B", "C", "D"], 5))
             code, text = self.summarize_main(auth, cross)
             self.assertEqual(code, 0, text)
-            # A model with a row that records no plan (the old form) says nothing of what its runs left
-            # out: every line shown can miss, as before.
-            write(cross, [{k: v for k, v in x.items() if k not in ("planned_cases", "planned_arms")}
-                          for x in self.plan_rows("m", ["rate-limit-paid"], ["C"], 5)])
+            # A row that records no plan (the old form) says nothing of what its run left out, so its
+            # file's rows stand for that plan: it gates the cross of the cases and arms its own file
+            # holds for its model. Before, it gated every line of its model, and rate-limit-paid/D,
+            # which no file holds or plans, missed.
+            old = lambda rows: [{k: v for k, v in x.items() if k not in ("planned_cases", "planned_arms")} for x in rows]
+            write(cross, old(self.plan_rows("m", ["rate-limit-paid"], ["C"], 5)))
+            code, text = self.summarize_main(auth, cross)
+            self.assertEqual(code, 0, text)
+            self.assertNotRegex(text, r"rate-limit-paid\s+[BD] ")
+            # Its file holding rate-limit-paid/C and csv-injection/D, the two other lines of that cross
+            # miss, and no line past it does.
+            write(cross, old(self.plan_rows("m", ["rate-limit-paid"], ["C"], 5) + self.plan_rows("m", ["csv-injection"], ["D"], 5)))
             code, text = self.summarize_main(auth, cross)
             self.assertEqual(code, 1, text)
-            self.assertIn("missed the bar: rate-limit-paid/D\n", text)
+            self.assertEqual(sorted(self.missed_of(text)), ["csv-injection/C", "rate-limit-paid/D"], text)
+            # Another model's old rows in the same file reach only that model's lines.
+            write(cross, old(self.plan_rows("m", ["rate-limit-paid"], ["C"], 5) + self.plan_rows("n", ["csv-injection"], ["D"], 5)))
+            code, text = self.summarize_main(auth, cross)
+            self.assertEqual(code, 0, text)
 
     def test_a_step_7_pool_misses_only_the_line_cut_short(self):
         # The next eval's shape: per model, the auth cases on B, C and D and the cross-skill cases on
         # C only, two runs each. Haiku's auth run lost its last signup/C run.
-        auth = ["open-redirect", "email-change", "logout-revoke", "signup", "remember-me", "auth-benign"]
-        cross = ["rate-limit-paid", "csv-injection", "reset-host", "benign"]
         with tempfile.TemporaryDirectory(prefix="practices-step7-") as tmp:
-            paths = []
-            for model in ("opus", "sonnet", "haiku"):
-                for name, cases, arms in (("auth", auth, ["B", "C", "D"]), ("cross", cross, ["C"])):
-                    paths.append(Path(tmp) / f"{model}-{name}")
-                    paths[-1].mkdir()
-                    rows = self.plan_rows(model, cases, arms, 2, ("signup", "C") if (model, name) == ("haiku", "auth") else None)
-                    (paths[-1] / "results.jsonl").write_text("".join(json.dumps(x) + "\n" for x in rows))
+            paths = self.step_7_pool(Path(tmp), ("opus", "sonnet", "haiku"), ("haiku", "signup", "C"))
             code, text = self.summarize_main(*paths)
             self.assertEqual(code, 1, text)
             self.assertIn("missed the bar: signup/C\n", text)
             self.assertEqual(text.count("MISS"), 1, text)
             self.assertIn("MISS (pass 1 of 2)", text.split("model haiku")[1].split("model ")[0])
+
+    def test_a_step_7_pool_with_old_red_a_rows_misses_only_the_line_cut_short(self):
+        # Round 7's case: the step-7 pool plus each model's RED email-change/A and open-redirect/A rows,
+        # from before planned_cases and planned_arms, each in its own file. Each old row gates only
+        # the cross of what its file holds; before, one made every line of its model one that could
+        # miss, and rate-limit-paid/D, logout-revoke/A and the like missed for every model.
+        with tempfile.TemporaryDirectory(prefix="practices-step7-red-") as tmp:
+            tmp = Path(tmp)
+            paths = self.step_7_pool(tmp, ("opus", "sonnet", "haiku"), ("haiku", "signup", "C"))
+            for model in ("opus", "sonnet", "haiku"):
+                for case in ("email-change", "open-redirect"):
+                    paths.append(tmp / f"{model}-red-{case}")
+                    paths[-1].mkdir()
+                    rows = [self.row(case, "A", "fail", model=model, run=i, stream=[f"/red/{model}/{case}-A-{i}/stream.jsonl"])
+                            for i in range(1, 6)]
+                    (paths[-1] / "results.jsonl").write_text("".join(json.dumps(x) + "\n" for x in rows))
+            before = {p: (p / "results.jsonl").read_bytes() for p in paths}
+            code, text = self.summarize_main(*paths)
+            self.assertEqual(code, 1, text)
+            self.assertIn("missed the bar: signup/C\n", text)
+            self.assertEqual(text.count("MISS"), 1, text)
+            for model in ("opus", "sonnet", "haiku"):
+                of_model = text.split(f"model {model}")[1].split("model ")[0]
+                self.assertRegex(of_model, r"email-change\s+A\s+0\s+5 .*discriminates")
+                self.assertRegex(of_model, r"open-redirect\s+A\s+0\s+5 .*discriminates")
+                self.assertNotRegex(of_model, r"(?m)^(logout-revoke|signup|remember-me|rate-limit-paid)\s+A ")
+                self.assertNotRegex(of_model, r"(?m)^(rate-limit-paid|csv-injection|reset-host|benign)\s+D ")
+            # The summary tags each row with its file in memory only: every file reads as it was.
+            self.assertEqual({p: (p / "results.jsonl").read_bytes() for p in paths}, before)
+            # Round 5's shape still misses: one old file holding idor/A and mass-assign/C gates idor/C.
+            red = tmp / "red-idor"
+            red.mkdir()
+            (red / "results.jsonl").write_text("".join(json.dumps(self.row(case, arm, v, model="opus", run=i,
+                                                                            stream=[f"/r5/{case}-{arm}-{i}"])) + "\n"
+                                                       for case, arm, v in (("idor", "A", "fail"), ("mass-assign", "C", "pass"))
+                                                       for i in range(1, 6)))
+            code, text = self.summarize_main(red)
+            self.assertEqual(code, 1, text)
+            self.assertEqual(sorted(self.missed_of(text)), ["idor/C", "mass-assign/A"], text)
+
+    @unittest.skipUnless(os.environ.get("PRACTICES_REAL_RESULTS"),
+                         "set PRACTICES_REAL_RESULTS to a real run's results.jsonl to pool it with a step-7 shape")
+    def test_a_real_old_file_pooled_with_step_7_rows_misses_no_line_neither_holds_or_plans(self):
+        # A real results.jsonl from before planned_cases and planned_arms, copied (never changed), with
+        # step-7 rows of its model and effort; one signup/C run cut short. A MISS names only a line
+        # one of them holds or planned.
+        real = Path(os.environ["PRACTICES_REAL_RESULTS"])
+        held = [json.loads(x) for x in real.read_text(encoding="utf-8").splitlines() if x.strip()]
+        model, effort = held[0]["model"], held[0].get("effort")
+        with tempfile.TemporaryDirectory(prefix="practices-real-") as tmp:
+            tmp = Path(tmp)
+            (tmp / "real").mkdir()
+            (tmp / "real" / "results.jsonl").write_bytes(real.read_bytes())
+            paths = self.step_7_pool(tmp, (model,), (model, "signup", "C"), **({"effort": effort} if effort else {}))
+            code, text = self.summarize_main(tmp / "real", *paths)
+            lines = {f"{r['case']}/{r['arm']}" for r in held if r.get("model") == model and r.get("effort") == effort}
+            lines |= {f"{case}/{arm}" for cases, arms in self.STEP_7 for case in cases for arm in arms}
+            self.assertEqual(code, 1, text)
+            self.assertIn("signup/C", self.missed_of(text), text)
+            self.assertEqual([m for m in self.missed_of(text) if m not in lines], [], text)
 
     def test_a_path_with_no_rows_fails_the_summary(self):
         # A run killed before its first row leaves an empty results.jsonl, and its plan is only in
