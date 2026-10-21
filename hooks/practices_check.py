@@ -1560,17 +1560,18 @@ class Bounds:
         return any(under(path, root) for root in (self.project, self.main, self.own) if root)
 
     def outside(self, repo):
-        """What of the repo lies outside these bounds ("its git dir", "its common dir", "an
-        alternates entry"), or None when all of it is inside."""
+        """What of the repo lies outside these bounds ("git dir", "common dir" or "alternates
+        entry", as the log says "the repo's <what> is outside"), or None when all of it is
+        inside."""
         gd, cd = os.path.realpath(repo.git_dir), os.path.realpath(repo.common_dir)
         if not (self.own and cd == self.own and under(gd, self.own)):
             if not under(gd, self.project):
-                return "its git dir"
+                return "git dir"
             if not under(cd, self.project):
-                return "its common dir"
+                return "common dir"
         for d in alternates(os.path.join(cd, "objects")):
             if d is None or not self.allows(d):
-                return "an alternates entry"
+                return "alternates entry"
         return None
 
 

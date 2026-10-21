@@ -1625,7 +1625,8 @@ class OutsideTheProject(BashBase):
                          os.path.realpath(os.path.join(self.vault, ".git")))  # the trap is live
         before = self.log()
         self.assertIsNone(self.pre("cd sub && git push", session_id="s-common"))
-        self.assertIn("the repo's its common dir is outside the project", self.log()[len(before):])
+        self.assertIn("push: the repo's common dir is outside the project",
+                      self.log()[len(before):])
         self.assert_skipped(before)
         # A relative alternates entry resolves from the objects dir, and outside is outside.
         self.commit(**{"mine.ts": "y({ ...body })\n"})
@@ -1634,7 +1635,9 @@ class OutsideTheProject(BashBase):
             f.write(os.path.relpath(os.path.join(self.vault, ".git", "objects"), objects) + "\n")
         before = self.log()
         self.assertIsNone(self.pre("git push", session_id="s-rel-alt"))
-        self.assertIn("alternates entry is outside", self.log()[len(before):])
+        self.assertIn("push: the repo's alternates entry is outside", self.log()[len(before):])
+        self.assertNotIn("repo's its", self.log())
+        self.assertNotIn("repo's an", self.log())
 
     def test_a_lane_reads_its_main_checkouts_git_dir(self):
         self.skill("demo", DEMO, where="user")
