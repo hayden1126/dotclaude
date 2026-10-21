@@ -67,7 +67,7 @@
 // Known gap: a token whose only changing part is a timestamp (unsigned, say base64 of
 // {"u":1,"e":...,"t":...}, or signed with a key written in the source) still scores a false
 // pass. It differs between the two links, and telling it from a random token needs control of
-// the clock, so passes in arms B and C are read by hand for it.
+// the clock, so passes in arms B, C and D are read by hand for it.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
