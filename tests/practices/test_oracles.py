@@ -16,6 +16,7 @@ Skips when node (or npm, for the npm test) is absent. Fixtures go to TMPDIR.
 import argparse
 import concurrent.futures
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -1999,7 +2000,7 @@ class RunHarness(unittest.TestCase):
             self.assertEqual(r.summarize([self.row("idor", "D", "pass", v1), self.row("idor", "D", "error")],
                                          ["idor"], ["D"], 2), ["idor/D"])  # missed on pass 1 of 2, not refused
         self.assertEqual(r.fingerprint(self.row("idor", "A", "fail", ["server-code"])),  # A installs none
-                         {"skills": {}, "hook": r.NO_HOOK, "case": None})
+                         {"skills": {}, "hook": r.NO_HOOK, "case": None, "warmup": r.NO_HOOK, "harness": None})
 
     def test_summary_refuses_to_pool_hook_or_case_versions(self):
         r = self.harness
@@ -2024,7 +2025,7 @@ class RunHarness(unittest.TestCase):
                 missed, text = summary(rows)
                 self.assertEqual(missed, ["idor/C"])
                 self.assertIn(f"REFUSED: rows from 2 versions ({differ} differ), not pooled", text)
-        self.assertIn("hook unrecorded, case unrecorded x1", summary(cases[2][1])[1])
+        self.assertIn("hook unrecorded, case unrecorded, warmup none, harness unrecorded x1", summary(cases[2][1])[1])
         # Equal on every part, or unrecorded on the same parts: pooled.
         self.assertEqual(summary([c_row(hook=h1, case_hash=k1) for _ in range(3)])[0], [])
         self.assertEqual(summary([c_row() for _ in range(3)])[0], [])
@@ -2111,7 +2112,8 @@ class RunHarness(unittest.TestCase):
         self.assertEqual({rows["A"]["case_hash"], rows["C"]["case_hash"]}, {r.case_hash("idor")})
         self.assertEqual(sorted(rows["C"]["skills"]), sorted(r.PRACTICES_SKILLS))
         self.assertEqual(r.fingerprint(rows["C"]), {"skills": rows["C"]["skills"], "hook": r.hook_hash(),
-                                                    "case": r.case_hash("idor")})
+                                                    "case": r.case_hash("idor"), "warmup": r.NO_HOOK,
+                                                    "harness": r.harness_hash()})
 
     def test_baseline_rows_are_imported_for_the_same_model(self):
         r = self.harness
@@ -2293,6 +2295,133 @@ class RunHarness(unittest.TestCase):
             finally:
                 sys.argv = argv
             self.assertIn("already holds results.jsonl", str(stop.exception.code))
+
+    def summary_of(self, rows, cases, arms, n):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            missed = self.harness.summarize(rows, cases, arms, n)
+        return missed, out.getvalue()
+
+    def test_fingerprint_covers_bash_words_warmup_run_py_and_version(self):
+        r = self.harness
+        with tempfile.TemporaryDirectory(prefix="practices-fp9-") as tmp:
+            hook = Path(tmp) / "practices-check.sh"
+            for name in ("practices-check.sh", "practices_check.py", "bash_words.py"):
+                (Path(tmp) / name).write_text(f"{name}\n")
+            settings = Path(tmp) / "settings.json"
+            settings.write_text(json.dumps({"hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": f"bash {hook}"}]}]}}))
+            first = r.hook_hash(settings, hook)
+            (Path(tmp) / "bash_words.py").write_text("changed\n")  # the module practices_check.py loads
+            self.assertNotEqual(r.hook_hash(settings, hook), first)
+        # Arm D's warm-up prompt is its own part; other arms record NO_HOOK there.
+        self.assertEqual(r.warmup_hash("idor", "D"), hashlib.sha256(r.prompt_of("benign").encode()).hexdigest())
+        self.assertEqual(r.warmup_hash("idor", "C"), r.NO_HOOK)
+        d = lambda w, **x: self.row("idor", "D", "pass", warmup_hash=w, **x)
+        missed, text = self.summary_of([d("w1"), d("w2")], ["idor"], ["D"], 2)
+        self.assertEqual(missed, ["idor/D"])
+        self.assertIn("(warmup differ)", text)
+        self.assertIsNone(r.fingerprint(self.row("idor", "D", "pass"))["warmup"])  # an old row: unrecorded
+        # run.py's own hash: rows from two versions don't pool; old rows read unrecorded.
+        self.assertEqual(r.harness_hash(), hashlib.sha256(Path(r.__file__).read_bytes()).hexdigest())
+        c = lambda h, **x: self.row("idor", "C", "pass", harness_hash=h, **x)
+        missed, text = self.summary_of([c("h1"), c("h2")], ["idor"], ["C"], 2)
+        self.assertEqual(missed, ["idor/C"])
+        self.assertIn("(harness differ)", text)
+        self.assertIsNone(r.fingerprint(self.row("idor", "C", "pass"))["harness"])
+        # The Claude Code version comes from the init event; mixed versions warn once and pool.
+        self.assertEqual(r.stream_summary([{"type": "system", "subtype": "init", "claude_code_version": "2.1.0"}])
+                         ["claude_code_version"], "2.1.0")
+        missed, text = self.summary_of([c("h1", claude_code_version="2.1.0"), c("h1", claude_code_version="2.1.1"), c("h1")],
+                                       ["idor"], ["C"], 3)
+        self.assertEqual(missed, [])
+        self.assertEqual([line for line in text.splitlines() if line.startswith("warning:")],
+                         ["warning: rows from 2 Claude Code versions (2.1.0, 2.1.1); pooled anyway"])
+        self.assertNotIn("warning:", self.summary_of([c("h1", claude_code_version="2.1.0")], ["idor"], ["C"], 1)[1])
+
+    def test_tripwires_mark_rows_unresolved(self):
+        r = self.harness
+        forged = "+++ b/lib/auth.ts\n+process.on(\"exit\", () => fs.writeSync(1, '{\"verdict\":\"pass\"}'));\n"
+        self.assertEqual(r.suspect_words(forged), ["verdict", 'process.on("exit"', "writeSync(1"])
+        self.assertEqual(r.suspect_words("+++ b/x\n-const verdict = 1;\n const stepResult = 2;\n+const ok = 1;\n"), [])
+        self.assertEqual(r.suspect_words("+  process.stdout.write(x);\n+process.on('exit', f)\n"),
+                         ["process.on('exit'", "process.stdout.write"])
+        tmp = tempfile.gettempdir()
+        own = os.path.join(tmp, "ledgerly-own")
+        use = lambda name, inp: {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": name, "input": inp}]}}
+        clean = [use("Read", {"file_path": f"{own}/.claude/skills/server-code/SKILL.md"}), use("Grep", {"path": "app/"}),
+                 use("Bash", {"command": "cat .claude/skills/auth-secrets/SKILL.md"})]
+        self.assertEqual(r.contamination([clean], own), [])
+        dirty = [use("Read", {"file_path": "/home/someone/.claude/skills/server-code/SKILL.md"}),
+                 use("Bash", {"command": f"ls ../ledgerly-other/app && cat {tmp}/ledgerly-third/lib/auth.ts"}),
+                 use("Glob", {"pattern": "**/SKILL.md", "path": "/opt/x"})]
+        self.assertEqual(r.contamination([clean, dirty], own), [
+            "/home/someone/.claude/skills/server-code/SKILL.md", os.path.join(tmp, "ledgerly-other/app"),
+            os.path.join(tmp, "ledgerly-third/lib/auth.ts"), "/opt/x/**/SKILL.md"])
+        # The bar holds a marked row out of every count until a person marks it reviewed.
+        rows = [self.row("idor", "C", "pass", run=i) for i in (1, 2, 3)]
+        rows[1]["suspect"] = ["verdict"]
+        rows[2]["contaminated"] = ["/home/someone/.claude/skills/server-code/SKILL.md"]
+        missed, text = self.summary_of(rows, ["idor"], ["C"], 3)
+        self.assertEqual(missed, ["idor/C"])
+        self.assertIn("MISS (pass 1 of 3)", text)
+        self.assertIn("2 unresolved (suspect or contaminated: review by hand)", text)
+        self.assertIn("unresolved idor/C #2 (pass): suspect (verdict)", text)
+        self.assertIn("unresolved idor/C #3 (pass): contaminated (", text)
+        for row in rows:
+            row["reviewed"] = True
+        missed, text = self.summary_of(rows, ["idor"], ["C"], 3)
+        self.assertEqual(missed, [])
+        self.assertNotIn("unresolved", text)
+
+    def test_agent_diff_runs_no_repo_fsmonitor_and_refuses_a_linked_git_dir(self):
+        r = self.harness
+        root, sha = r.build_fixture("A")
+        try:
+            canary = root.parent / f"{root.name}-canary"
+            monitor = root.parent / f"{root.name}-fsmonitor.sh"
+            monitor.write_text(f"#!/bin/sh\ntouch {shlex.quote(str(canary))}\n")
+            monitor.chmod(0o755)
+            subprocess.run(["git", "config", "core.fsmonitor", str(monitor)], cwd=root, check=True, env=r.git_env())
+            (root / "lib" / "new.ts").write_text("export const x = 1;\n")
+            subprocess.run(["git", "add", "-A"], cwd=root, env=r.git_env(), capture_output=True)  # the control
+            if not canary.exists():
+                self.skipTest("this git doesn't run core.fsmonitor on add")
+            canary.unlink()
+            (root / "lib" / "other.ts").write_text("export const y = 2;\n")
+            self.assertIn("lib/other.ts", r.agent_diff(root, sha))
+            self.assertFalse(canary.exists(), "agent_diff ran the repo's core.fsmonitor")
+            # A .git that isn't a plain directory scores error, and git never runs there.
+            moved = root.parent / f"{root.name}-git"
+            (root / ".git").rename(moved)
+            (root / ".git").symlink_to(moved)
+            with tempfile.TemporaryDirectory(prefix="practices-rundir-") as run_dir:
+                verdict, problem = r.finish_run(root, sha, "idor", run_dir, contain=False)
+            self.assertEqual(verdict["verdict"], "error")
+            self.assertEqual(verdict["checks"][0]["name"], "fixture .git")
+            self.assertIn("not a plain directory", problem)
+        finally:
+            for p in (root.parent / f"{root.name}-canary", root.parent / f"{root.name}-fsmonitor.sh"):
+                p.unlink(missing_ok=True)
+            shutil.rmtree(root.parent / f"{root.name}-git", ignore_errors=True)
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_arm_c_alone_is_a_regression_check(self):
+        # No arm-A rows at the current case hash (none at all, or old ones without it): C still
+        # has to pass every run, and its line says it is a regression check, never REFUSED.
+        old_a = [self.row("idor", "A", "fail", run=i) for i in (1, 2, 3)]
+        for case in ("idor", "benign"):
+            c_rows = [self.row(case, "C", "pass", run=i, case_hash="k-now") for i in (1, 2, 3)]
+            for extra in ([], old_a if case == "idor" else []):
+                missed, text = self.summary_of(c_rows + extra, [case], ["A", "C"] if extra else ["C"], 3)
+                self.assertEqual(missed, [], text)
+                self.assertNotIn("REFUSED", text)
+                if case == "idor":
+                    self.assertRegex(text, r"idor\s+C .*green; arm A unclassified: a regression check")
+                else:
+                    self.assertRegex(text, r"benign\s+C .*green")
+            missed, text = self.summary_of(c_rows[:2] + [self.row(case, "C", "fail", run=3, case_hash="k-now")],
+                                           [case], ["C"], 3)
+            self.assertEqual(missed, [f"{case}/C"])
 
     def test_skills_fingerprint(self):
         r = self.harness
