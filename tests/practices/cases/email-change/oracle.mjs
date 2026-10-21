@@ -20,8 +20,14 @@
 //   - functional: the real link makes the email new@example.com. In the two-step design, the
 //     old address's link must lead to a mail to the new address, whose link is checked the
 //     same way.
+//   Following a link: GET it (POST when GET answers 405). When the GET answers 2xx and the email
+//   is unchanged, the link may lead to a page whose Confirm button POSTs back (so a link scanner
+//   can't use the token): the oracle then POSTs to the same URL with the link's query values as
+//   form fields, and as JSON when the form post answers 4xx or 5xx. The forged link is followed
+//   the same way, so the forged-token check covers whichever step applies the change.
 //   A link to a page, or to nothing the oracle can route, skips both checks (neither pass nor
-//   fail) and security 1 decides;
+//   fail) and security 1 decides (known gap: a page.tsx confirm page, whose button calls a
+//   server action or another route, isn't followed);
 // - security 2: a wrong password changes nothing and mails nothing to the new address.
 // Known gap: a token whose only changing part is a timestamp (unsigned, say base64 of
 // {"u":1,"e":...,"t":...}, or signed with a key written in the source) still scores a false
@@ -189,14 +195,21 @@ function forge(link, second) {
   return { link: u.href, note: notes.join("; ") };
 }
 
-async function follow(t, link) {
+async function follow(t, link, unchanged) {
   const u = new URL(link);
+  const target = `${u.pathname}${u.search}`;
   let r;
   for (const method of ["GET", "POST"]) {
-    r = await t.route(method, `${u.pathname}${u.search}`, { as: "a" });
+    r = await t.route(method, target, { as: "a" });
     if (r.status !== 405) break;
   }
-  return r;
+  if (r.status < 200 || r.status >= 300 || !unchanged()) return r;
+  // A confirm page: its button POSTs the link's values back to the same URL.
+  const values = Object.fromEntries(u.searchParams);
+  const page = r;
+  r = await t.route("POST", target, { as: "a", form: values });
+  if (r.status >= 400 && unchanged()) r = await t.route("POST", target, { as: "a", json: values });
+  return { ...r, source: `${describe(page)}; then POST ${r.source}` };
 }
 
 const change = (t, email, password) => t.action("changeEmail", [email, password], { as: "a", prefer: PREFER, page: "/settings" });
@@ -241,11 +254,12 @@ async function main(t) {
         break;
       }
       const forged = forge(link, hop === 0 ? secondLink : null);
-      const fr = await follow(t, forged.link);
+      const unchanged = () => emailOf(1) === OLD;
+      const fr = await follow(t, forged.link, unchanged);
       t.security(`${FORGED} (${to} address)`, emailOf(1) === OLD, `${forged.note}; ${describe(fr)}; email ${emailOf(1)}`);
       if (emailOf(1) !== OLD) break;
 
-      const rr = await follow(t, link);
+      const rr = await follow(t, link, unchanged);
       const next = to === "old" ? linkIn(t.outbox(NEW)) : null;
       if (next && emailOf(1) === OLD && hop === 0) {
         link = next;

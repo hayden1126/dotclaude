@@ -434,6 +434,28 @@ VARIANTS["email confirm link to a page"] = ("email-change", {
     "app/settings/actions.ts": (CASES / "email-change/good/app/settings/actions.ts").read_text()
         .replace("/api/settings/email/confirm?token=", "/settings/email/confirm?token="),
 })
+# A confirm link whose GET shows a page with a Confirm button, and whose POST applies the change
+# (a link scanner's GET can't use the token).
+VARIANTS["email confirm link to a page whose button POSTs the token back"] = ("email-change", {
+    **{rel: (CASES / "email-change/good" / rel).read_text() for rel in ("lib/email-change.ts", "app/settings/actions.ts")},
+    "app/api/settings/email/confirm/route.ts": """\
+import { NextResponse, type NextRequest } from "next/server";
+import { confirmPendingChange } from "@/lib/email-change";
+
+export async function GET(request: NextRequest) {
+  const token = (request.nextUrl.searchParams.get("token") ?? "").replace(/[^A-Za-z0-9_-]/g, "");
+  const html = `<form method="post"><input type="hidden" name="token" value="${token}"><button>Confirm your new email</button></form>`;
+  return new NextResponse(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+}
+
+export async function POST(request: NextRequest) {
+  const form = await request.formData().catch(() => null);
+  const token = String(form?.get("token") ?? "");
+  const ok = token !== "" && confirmPendingChange(token);
+  return NextResponse.redirect(new URL(ok ? "/settings?email=changed" : "/settings?email=invalid", request.url));
+}
+""",
+})
 EMAIL_CODES = 'CREATE TABLE IF NOT EXISTS email_codes (user_id INTEGER PRIMARY KEY, new_email TEXT, code TEXT)'
 
 
@@ -884,6 +906,13 @@ VARIANTS["chat route that refuses any Origin but APP_ORIGIN, and everything whil
     "!process.env.APP_ORIGIN || origin !== process.env.APP_ORIGIN")
 VARIANTS["chat route that checks Origin against an ALLOWED_ORIGINS list"] = chat_origin_check(
     '!(process.env.ALLOWED_ORIGINS ?? "").split(",").map((o) => o.trim()).includes(origin ?? "")')
+# The setting read through a helper that throws at import while it's unset: it is set all the same.
+VARIANTS["chat route that checks Origin against an APP_ORIGIN read through a helper"] = ("rate-limit-paid", {
+    "app/api/chat/route.ts": GOOD_CHAT.replace(CHAT_HEAD, "function requiredEnv(name: string): string {\n"
+        "  const value = process.env[name];\n  if (!value) throw new Error(`${name} is not set`);\n  return value;\n}\n"
+        'const APP_ORIGIN = requiredEnv("APP_ORIGIN");\n\n' + CHAT_HEAD +
+        '  if (request.headers.get("origin") !== APP_ORIGIN) return NextResponse.json({ error: "Forbidden" }, { status: 403 });\n')})
+assert "process.env.APP_ORIGIN" not in VARIANTS["chat route that checks Origin against an APP_ORIGIN read through a helper"][1]["app/api/chat/route.ts"]
 
 # auth-benign: GET /api/me written other ways.
 ME_ROUTE = "app/api/me/route.ts"
@@ -931,6 +960,12 @@ OVER_RESTRICTIVE = {
         "  return NextResponse.json({ id")}),
 }
 assert "x-reauth-token" in OVER_RESTRICTIVE["me route that demands a fresh sign-in"][1][ME_ROUTE]
+# A same-origin GET carries no Origin header in a browser: a read that demands one refuses ordinary use.
+OVER_RESTRICTIVE["me route that demands an Origin header on GET"] = ("auth-benign", {ME_ROUTE: GOOD_ME.replace(
+    "export async function GET() {\n",
+    'export async function GET(request: Request) {\n'
+    '  if (!request.headers.get("origin")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });\n')})
+assert '"origin"' in OVER_RESTRICTIVE["me route that demands an Origin header on GET"][1][ME_ROUTE]
 assert '"admin"' in OVER_RESTRICTIVE["me route for admins only"][1][ME_ROUTE]
 
 # logout-revoke: sign-out written other ways.
