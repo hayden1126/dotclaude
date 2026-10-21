@@ -118,7 +118,9 @@ gh pr ready or create, and grep or rg (`xargs git push`, `find -exec`, `git subm
 a `bash -c` script with an expansion), a heredoc body a shell runs (`bash <<EOF`, `cat <<EOF |
 sh`; not `cat > f <<EOF`), and a substitution body or script that won't parse (a shlex error,
 nesting past NEST_MAX), while the rest of the command is still read. A command whose top level
-won't parse is logged as git-skipped when it names a call, else as the quiet bash-unparsed.
+won't parse is logged as git-skipped when it names a call, else as the quiet bash-unparsed; so
+is one over CMD_MAX characters, which isn't parsed at all (else allowed with no log), so a long
+command never runs the parse into the 5 s kill.
 Accepted limits beyond those logs: `eval`, an alias, a function or a script file
 that runs git with nothing naming it in the command; a command inside an unquoted heredoc's
 $(...); a function body's cd, read as if it ran. A file written by a heredoc or `cat >`
@@ -1353,6 +1355,13 @@ def command_of(event):
     return cmd if isinstance(cmd, str) and cmd.strip() else None
 
 
+# Characters of a Bash command the reader parses. shlex builds a long word in quadratic time and
+# a `bash -c` script is parsed once per level it is nested, so a 1 MB command nested 8 deep took
+# 9 to 11 s, past the 5 s kill. At this cap the worst shape measured (`bash -c` nested 8 deep)
+# parses in about 0.5 s. A longer command isn't parsed: logged as git-skipped when it names a
+# call, else allowed quietly.
+CMD_MAX = 64 << 10
+
 _BASH_WORDS = []
 
 
@@ -1405,6 +1414,12 @@ def bash_calls(event):
     cwd = event.get("cwd") if isinstance(event.get("cwd"), str) else None
     gits, ghs, rest = [], [], []
     if not cmd:
+        return gits, ghs, False
+    if len(cmd) > CMD_MAX:  # parsing it could outlast the budget, or the kill
+        if names_a_call(cmd):
+            log("git-skipped", f"the command names git commit or push, or gh pr ready or "
+                f"create, but is over {CMD_MAX} characters, too long to parse in time, so it "
+                "wasn't checked")
         return gits, ghs, False
     try:
         CRUMB.mark("(the command)", "bash", "parse")  # a parse the kill ends leaves a trace

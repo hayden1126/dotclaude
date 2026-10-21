@@ -1772,6 +1772,26 @@ class Push(BashBase):
                 self.pre(command, session_id=f"s-quiet-{n}")
                 self.assertNotIn("git-skipped", self.log()[len(before):])
 
+    def test_a_command_over_the_parse_cap_isnt_parsed_and_never_meets_the_kill(self):
+        # Follow-up to review round 3, low 11: a 1 MB command nested 8 deep parsed for 9 to
+        # 11 s, past Claude Code's 5 s kill.
+        self.commit(**{"new.ts": "y({ ...body })\n"})
+        self.assertIn("new.ts:1", self.pre("git push origin main # " + "x" * (PC.CMD_MAX - 100),
+                                           session_id="s-cap-under"))  # under the cap: read
+        before = self.log()
+        self.assertIsNone(self.pre("git push origin main # " + "x" * PC.CMD_MAX,
+                                   session_id="s-cap-over"))
+        nested = "echo " + "$(echo " * 8 + "x" * (1 << 20) + ")" * 8 + "; git push"
+        start = time.monotonic()
+        self.assertIsNone(self.pre(nested, session_id="s-cap-nested"))
+        self.assertLess(time.monotonic() - start, 2.0)
+        new = self.log()[len(before):]
+        self.assertEqual(new.count("too long to parse in time, so it wasn't checked"), 2, new)
+        self.assertNotIn("xxx", new)
+        before = self.log()
+        self.assertIsNone(self.pre("echo " + "x" * PC.CMD_MAX + " git log", session_id="s-cap-q"))
+        self.assertEqual(self.log()[len(before):], "")  # names no call: allowed quietly
+
     def test_an_unwritable_state_file_allows_the_call_and_logs(self):
         # Review round 1: the Bash levels have no transcript marker to fall back on, so a deny
         # whose key couldn't be written denied every resend too, forever.
