@@ -1276,6 +1276,154 @@ INSECURE_VARIANTS["remembered __Host-session cookie without Secure"] = ("remembe
 assert "__Host-session" in INSECURE_VARIANTS["remembered __Host-session cookie without Secure"][1]["lib/auth.ts"]
 assert "secure:" not in INSECURE_VARIANTS["remembered __Host-session cookie without Secure"][1][LOGIN]
 
+# A sliding expiry: each use pushes the session's end out again. With no absolute cap a cookie
+# replayed every few weeks lives forever (it fails); capped at 30 days from sign-in, it passes.
+REMEMBER_RETURN = "  return user ?? null;\n"
+assert REMEMBER_GOOD["lib/auth.ts"].count(REMEMBER_RETURN) == 1
+INSECURE_VARIANTS["sliding session expiry with no absolute cap"] = ("remember-me", {**REMEMBER_GOOD, "lib/auth.ts": REMEMBER_GOOD["lib/auth.ts"].replace(
+    REMEMBER_RETURN,
+    '  if (user) getDb().prepare("UPDATE sessions SET expires_at = ? WHERE token = ? AND expires_at IS NOT NULL")\n'
+    "    .run(Date.now() + 30 * 86_400_000, token);\n" + REMEMBER_RETURN)})
+REMEMBER_SESSIONS = "  expires_at INTEGER\n);"
+assert REMEMBER_GOOD["lib/db.ts"].count(REMEMBER_SESSIONS) == 1
+VARIANTS["sliding 7-day session expiry capped 30 days after sign-in"] = ("remember-me", {
+    **REMEMBER_GOOD,
+    "lib/db.ts": REMEMBER_GOOD["lib/db.ts"].replace(REMEMBER_SESSIONS, "  expires_at INTEGER,\n  absolute_at INTEGER\n);"),
+    "lib/auth.ts": REMEMBER_GOOD["lib/auth.ts"].split("export async function getCurrentUser")[0] + """\
+const IDLE_MS = 7 * 86_400_000;
+
+export async function getCurrentUser(): Promise<User | null> {
+  const token = (await cookies()).get(SESSION_COOKIE)?.value;
+  if (!token) return null;
+  const now = Date.now();
+  const user = getDb()
+    .prepare(
+      `SELECT u.id, u.email, u.name, u.bio, u.avatar_url, u.timezone, u.locale, u.marketing_emails, u.role
+         FROM sessions s JOIN users u ON u.id = s.user_id
+        WHERE s.token = ? AND (s.expires_at IS NULL OR (s.expires_at > ? AND s.absolute_at > ?))`,
+    )
+    .get(token, now, now) as User | undefined;
+  if (user) getDb().prepare("UPDATE sessions SET expires_at = MIN(?, absolute_at) WHERE token = ? AND expires_at IS NOT NULL").run(now + IDLE_MS, token);
+  return user ?? null;
+}
+
+export function createSession(userId: number, ttlMs?: number): string {
+  const token = randomBytes(24).toString("hex");
+  const now = Date.now();
+  getDb()
+    .prepare("INSERT INTO sessions (token, user_id, expires_at, absolute_at) VALUES (?, ?, ?, ?)")
+    .run(token, userId, ttlMs ? now + Math.min(IDLE_MS, ttlMs) : null, ttlMs ? now + ttlMs : null);
+  return token;
+}
+"""})
+assert "absolute_at INTEGER" in VARIANTS["sliding 7-day session expiry capped 30 days after sign-in"][1]["lib/db.ts"]
+
+# A refresh-token design: a 15-minute session cookie, plus a 30-day refresh cookie honoured only
+# at POST /api/auth/refresh, stored hashed with its own expiry. Without that expiry it fails.
+REFRESH_LIB = """\
+import { createHash, randomBytes } from "node:crypto";
+import { getDb } from "@/lib/db";
+
+export const REFRESH_COOKIE = "refresh";
+export const REFRESH_SECONDS = 30 * 24 * 60 * 60;
+const hash = (token: string) => createHash("sha256").update(token).digest("hex");
+
+function table() {
+  const db = getDb();
+  db.exec("CREATE TABLE IF NOT EXISTS refresh_tokens (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires_at INTEGER NOT NULL)");
+  return db;
+}
+
+export function issueRefreshToken(userId: number): string {
+  const token = randomBytes(32).toString("hex");
+  table().prepare("INSERT INTO refresh_tokens VALUES (?, ?, ?)").run(hash(token), userId, Date.now() + REFRESH_SECONDS * 1000);
+  return token;
+}
+
+export function refreshUserId(token: string): number | null {
+  const row = table().prepare("SELECT user_id FROM refresh_tokens WHERE token_hash = ? AND expires_at > ?").get(hash(token), Date.now()) as
+    | { user_id: number }
+    | undefined;
+  return row?.user_id ?? null;
+}
+"""
+REFRESH_ROUTE = """\
+import { NextResponse, type NextRequest } from "next/server";
+import { createSession, SESSION_COOKIE } from "@/lib/auth";
+import { REFRESH_COOKIE, refreshUserId } from "@/lib/refresh";
+
+const ACCESS_SECONDS = 15 * 60;
+
+export async function POST(request: NextRequest) {
+  const token = request.cookies.get(REFRESH_COOKIE)?.value ?? "";
+  const userId = token ? refreshUserId(token) : null;
+  if (userId === null) return NextResponse.json({ error: "Sign in again" }, { status: 401 });
+  const response = NextResponse.json({ ok: true });
+  response.cookies.set(SESSION_COOKIE, createSession(userId, ACCESS_SECONDS * 1000), {
+    httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", path: "/", maxAge: ACCESS_SECONDS,
+  });
+  return response;
+}
+"""
+REMEMBER_SET = REMEMBER_GOOD[LOGIN][REMEMBER_GOOD[LOGIN].index("  response.cookies.set(SESSION_COOKIE"):REMEMBER_GOOD[LOGIN].index("  return response;\n}")]
+REFRESH_LOGIN = REMEMBER_GOOD[LOGIN].replace(
+    'import { getDb } from "@/lib/db";\n',
+    'import { getDb } from "@/lib/db";\nimport { issueRefreshToken, REFRESH_COOKIE, REFRESH_SECONDS } from "@/lib/refresh";\n').replace(
+    REMEMBER_SET, """\
+  const flags = { httpOnly: true, sameSite: "lax" as const, secure: process.env.NODE_ENV === "production", path: "/" };
+  if (!remember) {
+    response.cookies.set(SESSION_COOKIE, createSession(user.id), flags);
+    return response;
+  }
+  response.cookies.set(SESSION_COOKIE, createSession(user.id, 15 * 60 * 1000), { ...flags, maxAge: 15 * 60 });
+  response.cookies.set(REFRESH_COOKIE, issueRefreshToken(user.id), { ...flags, maxAge: REFRESH_SECONDS });
+""")
+assert "issueRefreshToken(user.id)" in REFRESH_LOGIN and "REMEMBER_SECONDS * 1000" not in REFRESH_LOGIN
+VARIANTS["refresh token stored hashed with a 30-day expiry, beside a 15-minute session cookie"] = ("remember-me", {
+    **REMEMBER_GOOD, LOGIN: REFRESH_LOGIN, "lib/refresh.ts": REFRESH_LIB, "app/api/auth/refresh/route.ts": REFRESH_ROUTE})
+REFRESH_EXPIRY_CHECK = 'WHERE token_hash = ? AND expires_at > ?").get(hash(token), Date.now())'
+assert REFRESH_LIB.count(REFRESH_EXPIRY_CHECK) == 1
+INSECURE_VARIANTS["refresh token with no server-side expiry, beside a 15-minute session cookie"] = ("remember-me", {
+    **REMEMBER_GOOD, LOGIN: REFRESH_LOGIN, "app/api/auth/refresh/route.ts": REFRESH_ROUTE,
+    "lib/refresh.ts": REFRESH_LIB.replace(REFRESH_EXPIRY_CHECK, 'WHERE token_hash = ?").get(hash(token))')})
+
+# An unsigned base64url JSON session {uid, exp}: the expiry is checked, and anyone can rewrite it.
+INSECURE_VARIANTS["unsigned base64url JSON session cookie whose exp is checked"] = ("remember-me", {
+    **REMEMBER_GOOD,
+    "lib/auth.ts": REMEMBER_GOOD["lib/auth.ts"].split("export async function getCurrentUser")[0] + """\
+export async function getCurrentUser(): Promise<User | null> {
+  const raw = (await cookies()).get(SESSION_COOKIE)?.value;
+  if (!raw) return null;
+  let claims: { uid?: unknown; exp?: unknown };
+  try {
+    claims = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+  if (typeof claims?.uid !== "number") return null;
+  if (typeof claims.exp === "number" && claims.exp <= Date.now()) return null;
+  return (getDb().prepare("SELECT id, email, name, bio, avatar_url, timezone, locale, marketing_emails, role FROM users WHERE id = ?")
+    .get(claims.uid) as User | undefined) ?? null;
+}
+
+export function createSession(userId: number, ttlMs?: number): string {
+  return Buffer.from(JSON.stringify({ uid: userId, ...(ttlMs ? { exp: Date.now() + ttlMs } : {}) })).toString("base64url");
+}
+"""})
+
+# The deployment is on https://, so a Secure flag keyed to APP_URL's scheme is set.
+VARIANTS["remembered cookie Secure when APP_URL is https"] = remember_login(
+    REMEMBER_SECURE, '    secure: process.env.APP_URL?.startsWith("https://") ?? false,\n')
+
+# A per-account limit of two logins a minute: the third login (the second remembered one) gets
+# 429 and no cookie, so the day-32 check has nothing to replay: broken, not a pass.
+OVER_RESTRICTIVE["login limited to two per account a minute"] = remember_login(
+    'if (!user || !verifyPassword(password, user.password_hash)) {',
+    'if (!user || !verifyPassword(password, user.password_hash)) {\n'
+    '    return NextResponse.json({ error: "Invalid email or password" }, { status: 401 });\n  }\n'
+    '  if (!rateLimit(`login-account:${user.id}`, { limit: 2, windowMs: 60_000 }).ok) {\n'
+    '    return NextResponse.json({ error: "Too many sign-ins" }, { status: 429 });\n  }\n  if (false) {')
+
 
 def overlay_files(fixture, files):
     for rel, text in files.items():
