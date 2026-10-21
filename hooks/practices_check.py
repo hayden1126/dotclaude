@@ -1831,22 +1831,29 @@ def post_tool_use(event):
 
 # The push gate: what a git push would send, scanned before it goes.
 
-PUSH_ARG_OPTS = {"--repo", "--receive-pack", "--exec", "-o", "--push-option"}
+PUSH_ARG_OPTS = {"--repo", "--receive-pack", "--exec", "--push-option"}
 
 
 def push_sources(args):
     """(the source refs a git push sends, why it is skipped or None). No refspec sends HEAD;
     --all, --branches and --mirror send every local branch ("--branches"); a delete
-    (--delete, `:ref`) and --dry-run send nothing."""
+    (--delete, -d, `:ref`) and a dry run (--dry-run, -n) send nothing. In a short-option
+    cluster, -o takes the rest of the word as its value (`-onodeploy`), or the next word."""
     srcs, positional, every, i = [], [], False, 0
     while i < len(args):
         a = args[i]
         if a == "--":
             positional += args[i + 1:]
             break
-        if a in ("--delete", "--dry-run") or (a.startswith("-") and not a.startswith("--")
-                                               and set(a[1:]) & {"d", "n"}):
+        if a in ("--delete", "--dry-run"):
             return [], "a delete or a dry run"
+        if a.startswith("-") and not a.startswith("--") and len(a) > 1:
+            letters = a[1:]
+            k = letters.find("o")
+            if set(letters if k < 0 else letters[:k]) & {"d", "n"}:
+                return [], "a delete or a dry run"
+            i += 2 if k == len(letters) - 1 else 1
+            continue
         if a in ("--all", "--branches", "--mirror"):
             every = True
         elif a in PUSH_ARG_OPTS:
@@ -1875,7 +1882,10 @@ def push_gate(event, pushes, skills, cfg, ts, ctx, bounds):
     try:
         for _, args, where in pushes:
             srcs, skip = push_sources(args)
-            if skip or not srcs:
+            if skip:
+                log("push-unscanned", f"push: {skip} sends no commits, so it wasn't scanned")
+                continue
+            if not srcs:
                 continue
             if any("$" in s or "%SUBST%" in s for s in srcs):
                 log("git-skipped", "push: an expansion in a refspec, so this push wasn't checked")
@@ -2310,7 +2320,9 @@ LABELS = {"skill-disabled": ("skill disabled", "skills disabled"),
           "state-error": ("state error", "state errors"), "crash": ("crash", "crashes"),
           "git-skipped": ("git call skipped", "git calls skipped"),
           "scan-truncated": ("scan cut short", "scans cut short")}
-QUIET = {"fragment-only", "bash-unparsed", "l3r-target"}  # for debugging, never an engine error
+# For debugging, never an engine error: a deliberate choice (a delete push sends nothing to
+# scan), not a check that failed open.
+QUIET = {"fragment-only", "bash-unparsed", "l3r-target", "push-unscanned"}
 
 
 def new_errors(d):

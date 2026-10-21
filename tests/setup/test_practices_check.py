@@ -1585,6 +1585,22 @@ class Push(BashBase):
             with self.subTest(command=command):
                 self.assertIsNone(self.pre(command))
 
+    def test_an_attached_push_option_is_no_delete_or_dry_run(self):
+        # Review round 2, low 3: `-onodeploy` held an n and a d, so the push read as a dry run
+        # and a delete and passed unscanned, with no log.
+        self.commit(**{"bad.ts": "y({ ...body })\n"})
+        for n, command in enumerate(("git push -onodeploy origin main",
+                                     "git push -o nodeploy origin main", "git push -fo x",
+                                     "git push -qon origin main")):
+            with self.subTest(command=command):
+                self.assertIn("bad.ts:1", self.pre(command, session_id=f"s-o-{n}"))
+        before = self.log()
+        for command in ("git push -no x origin main", "git push -d origin old"):
+            with self.subTest(command=command):
+                self.assertIsNone(self.pre(command, session_id="s-o-skip"))
+        self.assertEqual(self.log()[len(before):].count(
+            "push-unscanned push: a delete or a dry run sends no commits"), 2)
+
     def test_named_sources_and_every_branch(self):
         tip = self.commit(**{"main.ts": "y({ ...body })\n"})
         self.sh("update-ref", "refs/remotes/origin/main", tip)
