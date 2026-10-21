@@ -2191,6 +2191,74 @@ class RunHarness(unittest.TestCase):
                     self.assertIn(shlex.quote(str(r.HOOK)), h["command"])
                     self.assertNotIn(".claude/hooks/practices-check.sh", h["command"])
 
+    def test_fixture_hook_gets_its_own_config_and_state_dirs(self):
+        r = self.harness
+        with tempfile.TemporaryDirectory(prefix="practices-hookdirs-") as tmp:
+            run_dir = Path(tmp) / "run"
+            root, _sha = r.build_fixture("C", run_dir)
+            try:
+                wiring = json.loads((root / ".claude" / "settings.json").read_text())["hooks"]
+                config, state = run_dir / "hook-config", run_dir / "hook-state"
+                self.assertEqual(list(config.iterdir()), [])  # no user-tier skill to discover
+                self.assertFalse(state.resolve().is_relative_to(root.resolve()))
+                commands = [h["command"] for groups in wiring.values() for g in groups for h in g["hooks"]]
+                self.assertTrue(commands)
+                prefix = f"export CLAUDE_CONFIG_DIR={shlex.quote(str(config))} XDG_STATE_HOME={shlex.quote(str(state))}; "
+                for command in commands:
+                    self.assertTrue(command.startswith(prefix), command)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            with self.assertRaises(ValueError):
+                r.build_fixture("D")
+            # The hash takes placeholders: two runs' dirs share it.
+            self.assertEqual(r.hook_hash(), r.hook_hash())
+            self.assertNotIn(str(run_dir), json.dumps(r.hook_settings(None, None, r.HOOK_CONFIG_PLACEHOLDER, r.HOOK_STATE_PLACEHOLDER)))
+            # The export reaches the hook, through a prefilter's `i=$(cat); ... | bash <hook>` too.
+            fake = Path(tmp) / "hooks" / "practices-check.sh"
+            fake.parent.mkdir()
+            fake.write_text('printf "%s %s\\n" "$CLAUDE_CONFIG_DIR" "$XDG_STATE_HOME" >> "$(dirname "$0")/seen"\n')
+            payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git commit -m x"}})
+            ran = 0
+            for groups in r.hook_settings(None, fake, "/cfg dir", "/state").values():
+                for g in groups:
+                    for h in g["hooks"]:
+                        subprocess.run(["bash", "-c", h["command"]], input=payload, text=True, timeout=20,
+                                       env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": tmp})
+                        ran += 1
+            self.assertEqual((fake.parent / "seen").read_text().splitlines(), ["/cfg dir /state"] * ran)
+            # A C-arm dry run builds its fixture with the wiring, and npm test is green.
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = r.dry_run(["auth-benign"], ["C"], argparse.Namespace(model="m", effort=None, keep=False))
+            self.assertEqual(code, 0, out.getvalue())
+            self.assertIn("npm test ok", out.getvalue())
+
+    def test_hook_errors_are_recorded(self):
+        r = self.harness
+        with tempfile.TemporaryDirectory(prefix="practices-hookerr-") as tmp:
+            self.assertEqual(r.hook_errors(tmp), "none")
+            log = Path(tmp) / "hook-state" / "dotclaude" / "practices" / "errors.log"
+            log.parent.mkdir(parents=True)
+            log.write_text("")
+            self.assertEqual(r.hook_errors(tmp), "none")
+            log.write_text("2026-10-20 crash: rule x\n")
+            self.assertEqual(r.hook_errors(tmp), "2026-10-20 crash: rule x\n")
+
+    def test_out_that_holds_results_is_refused(self):
+        with tempfile.TemporaryDirectory(prefix="practices-out-") as tmp:
+            self.assertIsNone(run.out_problem(None))
+            self.assertIsNone(run.out_problem(tmp))
+            (Path(tmp) / "results.jsonl").write_text("")
+            self.assertIn("Use a new dir", run.out_problem(tmp))
+            argv = sys.argv
+            sys.argv = ["run.py", "--arms", "A", "--cases", "idor", "--out", tmp, "--dry-run"]
+            try:
+                with self.assertRaises(SystemExit) as stop:
+                    run.main()
+            finally:
+                sys.argv = argv
+            self.assertIn("already holds results.jsonl", str(stop.exception.code))
+
     def test_skills_fingerprint(self):
         r = self.harness
         with tempfile.TemporaryDirectory(prefix="practices-fp-") as tmp:

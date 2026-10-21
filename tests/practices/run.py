@@ -74,8 +74,12 @@ Per run:
     Without a usable bwrap, run.py refuses to start unless --unsafe-grade is passed.
   - Record: one line per run in <out>/results.jsonl (case, owner and kind, verdict, checks,
     triggered and triggered_turns, turns, duration, cost, is_error, init memory_paths and
-    init_skills, the fingerprint, hook denials, strays, the harness SHA, and the paths of the
-    saved streams, oracle output and diff under <out>/<case>-<arm>-<i>/). The fingerprint is
+    init_skills, the fingerprint, hook denials, the hook's errors.log (hook_errors, "none" when
+    empty), strays, the harness SHA, and the paths of the saved streams, oracle output and diff
+    under <out>/<case>-<arm>-<i>/). An --out that already holds results.jsonl is refused: a
+    rerun would overwrite the run dirs its rows point at. Arms C and D run the hook with
+    CLAUDE_CONFIG_DIR an empty dir and XDG_STATE_HOME its own, both in the run dir, so it sees
+    no user-tier skill and keeps its state and errors.log out of the real ones. The fingerprint is
     three parts, each taken before the session starts, so an uncommitted edit counts:
     `skills`, {name: sha256 over its files' sorted relative paths and bytes} for each skill
     installed (arm A's is {}); `hook`, hook_hash() of the practices hook (practices-check.sh,
@@ -260,17 +264,23 @@ def check_prereqs(arms):
 HOOK_PATH = re.compile(r"""(["']?)([^\s"';&|()<>]*practices-check\.sh)\1""")
 
 
-def hook_settings(settings=None, hook=None):
+def hook_settings(settings=None, hook=None, config_dir=None, state_dir=None):
     """The practices hook's wiring for arms C and D, taken from the repo's settings.json, so the
     eval runs what users get: every hook entry, under any event and matcher, whose command runs
     practices-check.sh, with the script's path pointed at this checkout's copy. The rest of the
     command (a shell prefilter that skips the hook, say) and the entry's other keys (timeout)
-    stay as written. A matcher group keeps only its practices hooks; one with none is dropped."""
+    stay as written. A matcher group keeps only its practices hooks; one with none is dropped.
+    With `config_dir` and `state_dir`, each command starts `export CLAUDE_CONFIG_DIR=<config_dir>
+    XDG_STATE_HOME=<state_dir>; `: the hook then finds no user-tier skill (an empty config dir)
+    and writes its deny state and errors.log in the run, never the real ones. An export, not a
+    bare assignment, so it reaches a prefilter's `i=$(cat); ... | bash <hook>` too."""
     hook = shlex.quote(str(hook or HOOK))
+    prefix = (f"export CLAUDE_CONFIG_DIR={shlex.quote(str(config_dir))} XDG_STATE_HOME={shlex.quote(str(state_dir))}; "
+              if config_dir is not None and state_dir is not None else "")
     wiring = {}
     for event, groups in (json.loads(Path(settings or REPO_SETTINGS).read_text()).get("hooks") or {}).items():
         for group in groups or []:
-            kept = [{**h, "command": HOOK_PATH.sub(lambda _m: hook, h["command"])}
+            kept = [{**h, "command": prefix + HOOK_PATH.sub(lambda _m: hook, h["command"])}
                     for h in group.get("hooks") or []
                     if isinstance(h.get("command"), str) and "practices-check.sh" in h["command"]]
             if kept:
@@ -289,6 +299,8 @@ def tree_hash(root):
     return h.hexdigest()
 
 
+# hook_hash() takes the wiring with these in place of a run's own dirs, so runs share the hash.
+HOOK_CONFIG_PLACEHOLDER, HOOK_STATE_PLACEHOLDER = "/hook-config", "/hook-state"
 NO_HOOK = "none"  # the hook part of an A or B row's fingerprint: those arms install no hook
 FINGERPRINT_PARTS = ("skills", "hook", "case")
 
@@ -302,7 +314,7 @@ def hook_hash(settings=None, hook=None):
     for f in (hook, hook.parent / "practices_check.py"):
         data = f.read_bytes() if f.is_file() else b""
         h.update(f.name.encode() + b"\0" + len(data).to_bytes(8, "big") + data)
-    wiring = hook_settings(settings, Path("/hooks/practices-check.sh"))
+    wiring = hook_settings(settings, Path("/hooks/practices-check.sh"), HOOK_CONFIG_PLACEHOLDER, HOOK_STATE_PLACEHOLDER)
     h.update(json.dumps(wiring, sort_keys=True).encode())
     return h.hexdigest()
 
@@ -354,9 +366,30 @@ def install_stubs(root):
         shutil.copytree(src, dest)
 
 
-def build_fixture(arm):
+def hook_dirs(run_dir):
+    """(config dir, state dir) the hook of a run in `run_dir` gets: an empty CLAUDE_CONFIG_DIR and
+    its own XDG_STATE_HOME, both in the run dir, outside the fixture."""
+    config, state = Path(run_dir) / "hook-config", Path(run_dir) / "hook-state"
+    for d in (config, state):
+        d.mkdir(parents=True, exist_ok=True)
+    return config, state
+
+
+def hook_errors(run_dir):
+    """The run's hook errors.log, or "none" when it logged nothing."""
+    try:
+        text = (Path(run_dir) / "hook-state" / "dotclaude" / "practices" / "errors.log").read_text(errors="replace")
+    except OSError:
+        return "none"
+    return text[-4000:] or "none"
+
+
+def build_fixture(arm, run_dir=None):
     """A fresh fixture for one run: the app, the stub packages, an initial commit, then the
-    arm's harness config as a second commit. Returns (path, the harness commit's SHA)."""
+    arm's harness config as a second commit. Returns (path, the harness commit's SHA). Arms C
+    and D wire the hook with hook_dirs(run_dir), so they need one."""
+    if arm in ("C", "D") and run_dir is None:
+        raise ValueError(f"arm {arm} wires the hook with dirs in the run dir, and none was given")
     root = Path(tempfile.mkdtemp(prefix="ledgerly-"))
     shutil.copytree(FIXTURE_SRC, root, dirs_exist_ok=True)
     install_stubs(root)
@@ -369,7 +402,7 @@ def build_fixture(arm):
         for name in PRACTICES_SKILLS:
             shutil.copytree(SKILLS_DIR / name, root / ".claude" / "skills" / name)
     if arm in ("C", "D"):
-        settings["hooks"] = hook_settings()
+        settings["hooks"] = hook_settings(None, None, *hook_dirs(run_dir))
     (root / ".claude").mkdir(exist_ok=True)
     (root / ".claude" / "settings.json").write_text(json.dumps(settings, indent=2) + "\n")
     git("add", "-A", ".claude", cwd=root)
@@ -821,7 +854,7 @@ def finish_run(fixture, harness_sha, case, run_dir, contain, skip_grade=()):
 def run_one(case, arm, index, args, out):
     run_dir = out / f"{case}-{arm}-{index}"
     run_dir.mkdir(parents=True, exist_ok=True)
-    fixture, harness_sha = build_fixture(arm)
+    fixture, harness_sha = build_fixture(arm, run_dir)
     skills = installed_skills(fixture)  # before the session, which could edit its copy
     hook = hook_hash() if arm in ("C", "D") else NO_HOOK
     case_code = case_hash(case)
@@ -880,6 +913,7 @@ def run_one(case, arm, index, args, out):
         "exit_codes": exits, "timed_out": timed_out,
         "strays": len(stray_kills), "stray_kills": stray_kills,
         "harness_sha": harness_sha,
+        "hook_errors": hook_errors(run_dir) if arm in ("C", "D") else "none",
         "stream": streams, "oracle": str(run_dir / "oracle.out"), "diff": str(diff),
     }
     if diff_error:
@@ -1096,7 +1130,8 @@ def dry_run(cases, arms, args):
     failed = []
     for case in cases:
         for arm in arms:
-            fixture, _sha = build_fixture(arm)
+            scratch = Path(tempfile.mkdtemp(prefix="practices-dry-"))  # the hook's dirs, outside the fixture
+            fixture, _sha = build_fixture(arm, scratch)
             ok, output = npm_test(fixture)
             print(f"\n[{case} / {arm}] fixture {fixture}: npm test {'ok' if ok else 'FAILED'}")
             if not ok:
@@ -1109,11 +1144,21 @@ def dry_run(cases, arms, args):
                 print(f"  ({label}) cd {shlex.quote(str(fixture))} && {shlex.join(cmd)} {stdin}")
             if not args.keep:
                 shutil.rmtree(fixture, ignore_errors=True)
+                shutil.rmtree(scratch, ignore_errors=True)
     print("\ngrading sandbox: " + ("bwrap works here" if bwrap_usable() else
           "bwrap can't start here; a live run needs it (sandbox-off) or --unsafe-grade"))
     print(f"dry run: {len(cases) * len(arms) - len(failed)}/{len(cases) * len(arms)} fixtures built "
           "with npm test green; no model calls made")
     return 1 if failed else 0
+
+
+def out_problem(out):
+    """Why `out` can't take this run's results, or None: it already holds a results.jsonl, so a
+    rerun into it would overwrite the run dirs earlier rows point at."""
+    if out is not None and (Path(out) / "results.jsonl").exists():
+        return (f"--out {out} already holds results.jsonl; reusing it would overwrite the run dirs its rows "
+                "point at. Use a new dir (or leave --out off for a fresh one).")
+    return None
 
 
 def main():
@@ -1140,6 +1185,9 @@ def main():
     bad = [x for x in arms if x not in ARMS] + [c for c in cases if c not in CASES]
     if bad:
         ap.error(f"unknown arm or case: {', '.join(bad)}")
+    problem = out_problem(a.out)
+    if problem:
+        sys.exit(f"run.py: {problem}")
     check_prereqs(arms)
     imported = load_baseline(a.baseline, a.model, cases, a.effort or "default")  # before any spend: a bad path exits here
     if a.dry_run:
