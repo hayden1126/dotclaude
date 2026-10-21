@@ -2096,9 +2096,37 @@ export function createSession(userId: number, ttlMs?: number): string {
 }
 """})
 
+# The same rotation aged by a DEFAULT CURRENT_TIMESTAMP column: a keyword no statement rewrite
+# or function override reaches, so the replays' rows are dated by the real clock and the day-32
+# check refuses the jar. The oracle can't tell, so a table with such a default leaves a passing
+# day-32 grade unresolved (it can still fail).
+CURRENT_DEFAULT = "  expires_at INTEGER,\n  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP\n);"
+UNRESOLVED_VARIANTS["rotation into fresh rows aged by a DEFAULT CURRENT_TIMESTAMP column"] = ("remember-me", {
+    **INSECURE_VARIANTS["rotation into fresh rows aged by a DEFAULT (datetime('now')) column"][1],
+    "lib/db.ts": REMEMBER_GOOD["lib/db.ts"].replace(REMEMBER_SESSIONS, CURRENT_DEFAULT),
+})
+UNRESOLVED_VARIANTS["good/ with an unused DEFAULT CURRENT_TIMESTAMP column on sessions"] = ("remember-me", {
+    **REMEMBER_GOOD, "lib/db.ts": REMEMBER_GOOD["lib/db.ts"].replace(REMEMBER_SESSIONS, CURRENT_DEFAULT)})
+for label in ("rotation into fresh rows aged by a DEFAULT CURRENT_TIMESTAMP column",
+              "good/ with an unused DEFAULT CURRENT_TIMESTAMP column on sessions"):
+    UNRESOLVED_CAUSES[label] = "sessions.created_at DEFAULT CURRENT_TIMESTAMP"
+INSECURE_VARIANTS["session expiry stored but never checked, beside a DEFAULT CURRENT_TIMESTAMP column"] = ("remember-me", {
+    **INSECURE_VARIANTS["session expiry stored but never checked"][1],
+    "lib/db.ts": REMEMBER_GOOD["lib/db.ts"].replace(REMEMBER_SESSIONS, CURRENT_DEFAULT)})
+# An ISO expiry after a "|": the tamper probe pushes the whole date, not a piece split at ":" or ".".
+# Unsigned it fails; signed (an HMAC over uid|expiry) it passes.
+ISO_ENCODE = '`${uid}|${exp ? new Date(exp).toISOString() : ""}`'
+ISO_PARTS = "(p: string[]) => [Number(p[0]), p[1] ? Date.parse(p[1]) || -1 : 0]"
+INSECURE_VARIANTS["unsigned uid|ISO-expiry session cookie"] = unsigned_epoch_session(
+    ISO_ENCODE, f'({ISO_PARTS})(raw.split("|"))')
+HMAC = 'process.getBuiltinModule("node:crypto").createHmac("sha256", process.env.SESSION_SECRET ?? "").update(s).digest("base64url")'
+VARIANTS["signed uid|ISO-expiry|hmac session cookie"] = unsigned_epoch_session(
+    f'((s: string) => `${{s}}|${{{HMAC}}}`)({ISO_ENCODE})',
+    f'((p: string[], s: string) => (p.length === 3 && {HMAC} === p[2] ? ({ISO_PARTS})(p) : [NaN, 0]))'
+    '(raw.split("|"), raw.split("|").slice(0, 2).join("|"))')
 # Middleware that sets a cookie on a pass-through response (NextResponse.next()): the browser
 # takes it, and the handler's cookies() sees it in the same request, as in Next.
-REMEMBER_AUTH_HEAD = REMEMBER_GOOD["lib/auth.ts"].split("export async function getCurrentUser")[0]
+REMEMBER_AUTH_HEAD =REMEMBER_GOOD["lib/auth.ts"].split("export async function getCurrentUser")[0]
 REMEMBER_FLAGS = 'httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", path: "/"'
 # A signed JWT-like session whose middleware re-signs it to now + 30 days on every request, with
 # no absolute cap (the widely copied updateSession pattern): it slides forever, so it fails.

@@ -31,13 +31,17 @@
 //   server-side fails, whatever its Max-Age, and so does a sliding expiry with no absolute cap;
 // - security: at day 32, each of those cookies whose value carries an expiry (base64 or
 //   base64url JSON, a part of one split on ".", ":" or "|" such as a JWT's payload, plain JSON,
-//   a bare epoch number or an ISO date, in a part too; the field exp, expires, expiresAt or
+//   a bare epoch number or an ISO date, in a part too: a part split on "|" alone is tried
+//   first, so an ISO date's own ":" and "." don't break it; the field exp, expires, expiresAt or
 //   expires_at; or a 10- or 13-digit run, an epoch in seconds or ms, inside base64-decoded text
 //   such as base64("1:1767225600")) is refused
 //   with that expiry pushed a year later, re-encoded the same way and any signature kept. A
 //   cookie the login set that isn't a credential and carries an expiry is replayed at day 32
 //   beside the credentials once dropped (the original-cookies check above) and once pushed a
-//   year later, and both must be refused.
+//   year later, and both must be refused. When every day-32 check passed and a table's column
+//   defaults to CURRENT_TIMESTAMP, CURRENT_DATE or CURRENT_TIME (sqlite_master), the run scores
+//   unresolved: that keyword takes the real clock (below), so a design that inserts fresh rows
+//   and ages them by it reads as refused when it may not be.
 //   Time moves for the probe's whole process: Date (Date.now(), new Date()) runs the days ahead,
 //   and SQLite's clock with it: in every statement but CREATE, ALTER and DROP, 'now',
 //   CURRENT_TIMESTAMP, CURRENT_DATE, CURRENT_TIME and a no-argument datetime(), date(), time(),
@@ -62,7 +66,8 @@
 // started before the probe, a one-argument strftime('%s')) or checked only in a statement that
 // also creates a table scores a false fail; a session lifetime between 31 and 32 days passes; a
 // refresh endpoint at a dynamic path, or one that wants a body or a CSRF header, isn't followed;
-// a column's DEFAULT CURRENT_TIMESTAMP (a keyword, not a function) takes the real clock.
+// a column's DEFAULT CURRENT_TIMESTAMP (a keyword, not a function) takes the real clock, which
+// is why it leaves a passing day-32 grade unresolved.
 import { readdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -290,6 +295,15 @@ function pushExpiry(value) {
       if (pushed) return JSON.stringify(pushed);
     } catch {}
   }
+  // A part between "|" is tried whole first: an ISO date's ":" and "." would break it.
+  const bars = value.split(/(\|)/);
+  for (let i = 0; i < bars.length; i += 2) {
+    const pushed = pushedTime(bars[i]);
+    if (pushed !== null) {
+      bars[i] = pushed;
+      return bars.join("");
+    }
+  }
   const parts = value.split(/([.:|])/); // the separators kept, at the odd indices
   for (let i = 0; i < parts.length; i += 2) {
     const pushed = pushPart(parts[i]);
@@ -299,6 +313,32 @@ function pushExpiry(value) {
     }
   }
   return null;
+}
+
+// Each column whose DEFAULT is the CURRENT_TIMESTAMP, CURRENT_DATE or CURRENT_TIME keyword, as
+// "table.column DEFAULT KEYWORD", from sqlite_master. A column list is split on commas outside
+// parentheses.
+function currentDefaults(t) {
+  const found = [];
+  for (const { name, sql } of t.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' AND sql IS NOT NULL")) {
+    const text = String(sql);
+    const parts = [""];
+    let depth = 0;
+    for (const ch of text.slice(text.indexOf("(") + 1, text.lastIndexOf(")"))) {
+      if (ch === "," && depth === 0) parts.push("");
+      else {
+        depth += ch === "(" ? 1 : ch === ")" ? -1 : 0;
+        parts[parts.length - 1] += ch;
+      }
+    }
+    for (const col of parts) {
+      const m = /\bDEFAULT\s*\(?\s*(CURRENT_(?:TIMESTAMP|DATE|TIME))\b/i.exec(col);
+      if (!m) continue;
+      const column = col.trim().split(/\s+/)[0].replace(/^["'[]|["'\]]$/g, "");
+      found.push(`${name}.${column} DEFAULT ${m[1].toUpperCase()}`);
+    }
+  }
+  return found;
 }
 
 const remembered = (t, ip) =>
@@ -383,6 +423,13 @@ async function main(t) {
     t.security(`${REFUSED} the credentials with ${c.name}, which carries an expiry, dropped`, !is2xx(atOriginal), atOriginal.said);
     const v = fresh(32, [...original, { ...entry(c), value: pushed }], refresh);
     t.security(`${REFUSED} the credentials with ${c.name}, which carries an expiry, pushed a year later`, !is2xx(v), `${c.name}=${pushed.slice(0, 120)}; ${v.said}`);
+  }
+  const keywords = currentDefaults(t);
+  const day32 = t.checks.filter((c) => c.kind === "security" && c.name.startsWith(REFUSED));
+  if (keywords.length && day32.every((c) => c.ok)) {
+    t.unresolved(`${REFUSED} the remembered cookies by the moved clock`, `${keywords.join(", ")}: that keyword takes the real `
+      + `clock, so a row the replays inserted is dated day 0, and a design that ages fresh rows by it reads as refused at day 32 `
+      + `when it may not be; every day-32 check passed, so a person grades it`);
   }
 }
 
