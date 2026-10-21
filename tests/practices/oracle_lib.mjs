@@ -618,9 +618,18 @@ async function expand(node, depth = 0) {
   return { ...node, props: { ...node.props, children: await expand(node.props.children, depth + 1) } };
 }
 
-// Each <form> in a tree: its server action (the form's action, or a button's formAction, when
-// it's a function) and its named inputs with their values ([name, value], checkboxes and
-// radios only when checked).
+// The text a tree shows.
+function textOf(node) {
+  if (Array.isArray(node)) return node.map(textOf).join(" ");
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  return node && typeof node === "object" && node.props ? textOf(node.props.children) : "";
+}
+
+const actionOf = (v) => (typeof v === "function" || typeof v === "string" ? v : null);
+
+// Each <form> in a tree: its action (a server action, or a URL string), its method, its named
+// inputs with their values ([name, value], checkboxes and radios only when checked, submit
+// buttons never), and its submit buttons ({name, value, text, formAction}).
 function formsIn(node, out = [], form = null) {
   if (Array.isArray(node)) {
     for (const x of node) formsIn(x, out, form);
@@ -628,14 +637,22 @@ function formsIn(node, out = [], form = null) {
   }
   if (!node || typeof node !== "object" || !node.props) return out;
   const { type, props } = node;
+  const kind = String(props.type ?? "").toLowerCase();
   if (type === "form") {
-    form = { action: typeof props.action === "function" ? props.action : null, inputs: [] };
+    form = { action: actionOf(props.action), method: String(props.method ?? "get").toUpperCase(), inputs: [], buttons: [] };
     out.push(form);
-  } else if (form && ["input", "textarea", "select"].includes(type) && typeof props.name === "string") {
-    const box = ["checkbox", "radio"].includes(props.type);
+  } else if (form && ((type === "button" && !["button", "reset"].includes(kind)) || (type === "input" && ["submit", "image"].includes(kind)))) {
+    form.buttons.push({
+      name: typeof props.name === "string" ? props.name : null,
+      value: String(props.value ?? ""),
+      text: type === "input" ? String(props.value ?? "") : textOf(props.children),
+      formAction: actionOf(props.formAction),
+    });
+  } else if (form && ["input", "textarea", "select"].includes(type) && typeof props.name === "string"
+      && !["submit", "image", "button", "reset"].includes(kind)) {
+    const box = ["checkbox", "radio"].includes(kind);
     if (!box || props.checked || props.defaultChecked) form.inputs.push([props.name, String(props.value ?? props.defaultValue ?? (box ? "on" : ""))]);
   }
-  if (form && type === "button" && typeof props.formAction === "function") form.action ??= props.formAction;
   formsIn(props.children, out, form);
   return out;
 }

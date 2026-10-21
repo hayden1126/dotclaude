@@ -666,6 +666,88 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ t
     }),
 }
 EMAIL_IMPORTED_ACTION = VARIANTS["email confirm page whose form submits to an imported server action"][1]
+TOKEN_PAGE_HEAD = """\
+export default async function Page({ searchParams }: { searchParams: Promise<{ token?: string }> }) {
+  const { token = "" } = await searchParams;
+"""
+# The pressed button's name and value are sent: the action applies the change only for "confirm".
+VARIANTS["email confirm page whose button sends name=decision value=confirm"] = ("email-change", {
+    **EMAIL_IMPORTED_ACTION,
+    CONFIRM_PAGE: 'import { confirmEmail } from "./actions";\n\n' + TOKEN_PAGE_HEAD + """\
+  return (
+    <form action={confirmEmail}>
+      <input type="hidden" name="token" value={token} />
+      <button type="submit" name="decision" value="confirm">Yes, use this address</button>
+    </form>
+  );
+}
+""",
+    "app/settings/email/confirm/actions.ts": """\
+"use server";
+import { redirect } from "next/navigation";
+import { confirmPendingChange } from "@/lib/email-change";
+
+export async function confirmEmail(formData: FormData) {
+  if (formData.get("decision") !== "confirm") redirect("/settings");
+  redirect(confirmPendingChange(String(formData.get("token") ?? "")) ? "/settings?email=changed" : "/settings?email=invalid");
+}
+""",
+})
+# A form whose action is a route: posted there as a browser would.
+VARIANTS["email confirm page whose form posts to a route"] = ("email-change", {
+    **EMAIL_PAGE_LINK,
+    CONFIRM_PAGE: TOKEN_PAGE_HEAD + """\
+  return (
+    <form action="/api/settings/email/confirm" method="post">
+      <input type="hidden" name="token" value={token} />
+      <button type="submit">Confirm</button>
+    </form>
+  );
+}
+""",
+    "app/api/settings/email/confirm/route.ts": """\
+import { NextResponse, type NextRequest } from "next/server";
+import { confirmPendingChange } from "@/lib/email-change";
+
+export async function POST(request: NextRequest) {
+  const form = await request.formData().catch(() => null);
+  const ok = confirmPendingChange(String(form?.get("token") ?? ""));
+  return NextResponse.redirect(new URL(ok ? "/settings?email=changed" : "/settings?email=invalid", request.url), 303);
+}
+""",
+})
+# Cancel first, Confirm second, each its own form with a bound action: Confirm is the one pressed.
+VARIANTS["email confirm page with Cancel and Confirm forms, actions bound to the token"] = ("email-change", {
+    **EMAIL_PAGE_LINK,
+    CONFIRM_PAGE: 'import { cancelEmailChange, confirmEmail } from "./actions";\n\n' + TOKEN_PAGE_HEAD + """\
+  return (
+    <main>
+      <form action={cancelEmailChange.bind(null, token)}>
+        <button type="submit">Cancel</button>
+      </form>
+      <form action={confirmEmail.bind(null, token)}>
+        <button type="submit">Confirm new email</button>
+      </form>
+    </main>
+  );
+}
+""",
+    "app/settings/email/confirm/actions.ts": """\
+"use server";
+import { redirect } from "next/navigation";
+import { getDb } from "@/lib/db";
+import { confirmPendingChange, hashToken } from "@/lib/email-change";
+
+export async function cancelEmailChange(token: string) {
+  getDb().prepare("DELETE FROM email_changes WHERE token_hash = ?").run(hashToken(token));
+  redirect("/settings");
+}
+
+export async function confirmEmail(token: string) {
+  redirect(confirmPendingChange(token) ? "/settings?email=changed" : "/settings?email=invalid");
+}
+""",
+})
 CONFIRM_FORM = "app/settings/email/confirm/confirm-form.tsx"
 # Pages React would render that the oracle doesn't emulate: each names its cause.
 UNRESOLVED_VARIANTS["email confirm page that renders a component from a .tsx file"] = ("email-change", {

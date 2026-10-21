@@ -26,9 +26,12 @@
 //   form fields, and as JSON when the form post answers 4xx or 5xx. The forged link is followed
 //   the same way, so the forged-token check covers whichever step applies the change.
 //   A link to a page (page.tsx) is followed as a browser would: the page is rendered as alice
-//   (oracle_lib's page()) and its form submitted, its named inputs plus the link's query values
-//   as FormData, to the server action the form names (imported, inline or bound), with the same
-//   headers as any action call. The forged link goes first: rendering its page must change
+//   (oracle_lib's page()) and its form submitted, its named inputs, the submit button's name and
+//   value, then the link's query values, as FormData, to the server action the form names
+//   (imported, inline or bound), with the same headers as any action call, or, when its action
+//   is a URL, as a request to that route. With several forms, the one whose buttons read confirm,
+//   verify or apply (and not cancel) goes first, then one carrying a link value; within a form,
+//   such a button is the one pressed. The forged link goes first: rendering its page must change
 //   nothing, and when it shows a form, submitting that form must change nothing. A forged page
 //   that refuses to show a form (notFound(), redirect(), a throw, or no form: it checks the token
 //   when it renders) is no failure. The real link's page is rendered instead (applying the
@@ -245,12 +248,24 @@ async function render(t, link) {
     if (e instanceof Unrenderable) return { unrenderable: e.message, refused: e.message };
     return { refused: `the page at ${u.pathname} didn't render: ${String(e?.digest ?? e?.message ?? e).slice(0, 200)}` };
   }
-  const forms = view.forms.filter((f) => f.action);
+  const forms = view.forms.filter((f) => f.action || f.buttons.some((b) => b.formAction));
   const query = new Set(u.searchParams.values());
-  const form = forms.find((f) => f.inputs.some(([, v]) => query.has(v))) ?? forms[0];
-  if (!form) return { view, refused: `${view.file} has no form that submits to a server action (${view.forms.length} form(s))` };
+  const score = (f) => {
+    const text = f.buttons.map((b) => b.text).join(" ");
+    return (confirmLike(text) ? 4 : 0) + (f.inputs.some(([, v]) => query.has(v)) ? 2 : 0) - (cancelOnly(text) ? 4 : 0);
+  };
+  const form = forms.reduce((best, f) => (best === null || score(f) > score(best) ? f : best), null);
+  if (!form) return { view, refused: `${view.file} has no form that submits (${view.forms.length} form(s))` };
   return { view, form };
 }
+
+const CONFIRMS = /\b(confirm|verify|apply)/i;
+const CANCELS = /\bcancel/i;
+const confirmLike = (text) => CONFIRMS.test(text) && !CANCELS.test(text);
+const cancelOnly = (text) => CANCELS.test(text) && !CONFIRMS.test(text);
+// The button pressed: one that reads confirm, verify or apply, else one that doesn't read
+// cancel, else the first; null for a form with none (submitted as Enter would).
+const pressed = (form) => form.buttons.find((b) => confirmLike(b.text)) ?? form.buttons.find((b) => !cancelOnly(b.text)) ?? form.buttons[0] ?? null;
 
 // Submits `form` of the page at `link` as alice: its named inputs, then the link's query values,
 // to its server action. `swap` (a real value to its forged one) puts the forged values in place
@@ -262,9 +277,19 @@ async function submit(t, view, form, link, swap = null) {
   const sw = (v) => (swap && typeof v === "string" && swap.has(v) ? swap.get(v) : v);
   const data = new FormData();
   for (const [k, v] of form.inputs) data.append(k, sw(v));
+  const button = pressed(form);
+  if (button?.name) data.append(button.name, sw(button.value));
   for (const [k, v] of u.searchParams) if (!data.has(k)) data.append(k, sw(v));
-  const closure = !(await t.serverActions()).has(unbound(form.action));
-  const r = await t.invoke(swap ? rebind(form.action, sw) : form.action, [data], { as: "a", page: target, file: view.file });
+  const action = button?.formAction ?? form.action;
+  if (typeof action === "string") { // a route: anyone can send it anything
+    const dest = new URL(action, link);
+    const r = form.method === "GET"
+      ? await t.route("GET", `${dest.pathname}?${new URLSearchParams([...data])}`, { as: "a" })
+      : await t.route("POST", `${dest.pathname}${dest.search}`, { as: "a", form: Object.fromEntries(data) });
+    return { ...r, source: `${view.file} form -> ${form.method} ${r.source}`, closure: false };
+  }
+  const closure = !(await t.serverActions()).has(unbound(action));
+  const r = await t.invoke(swap ? rebind(action, sw) : action, [data], { as: "a", page: target, file: view.file });
   const redirected = String(r.digest ?? "").startsWith("NEXT_REDIRECT");
   return { status: r.threw && !redirected ? 500 : 200, text: "", source: `${view.file} form -> ${outcome(r)}`, closure };
 }
