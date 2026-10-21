@@ -429,7 +429,7 @@ export function nextPath(value: unknown): URL | null {
 }
 """,
 })
-# A confirm link to a page the oracle can't call: both link checks skip, security 1 decides.
+# A confirm link to neither a route nor a page: both link checks skip, security 1 decides.
 VARIANTS["email confirm link to a page"] = ("email-change", {
     "lib/email-change.ts": (CASES / "email-change/good/lib/email-change.ts").read_text(),
     "app/settings/actions.ts": (CASES / "email-change/good/app/settings/actions.ts").read_text()
@@ -454,6 +454,121 @@ export async function POST(request: NextRequest) {
   const token = String(form?.get("token") ?? "");
   const ok = token !== "" && confirmPendingChange(token);
   return NextResponse.redirect(new URL(ok ? "/settings?email=changed" : "/settings?email=invalid", request.url));
+}
+""",
+})
+# A confirm link that opens a page whose form's button submits to a server action, which
+# applies the change: the oracle renders the page and submits its form.
+EMAIL_PAGE_LINK = {
+    "lib/email-change.ts": (CASES / "email-change/good/lib/email-change.ts").read_text(),
+    "app/settings/actions.ts": (CASES / "email-change/good/app/settings/actions.ts").read_text()
+        .replace("/api/settings/email/confirm?token=", "/settings/email/confirm?token="),
+}
+CONFIRM_PAGE = "app/settings/email/confirm/page.tsx"
+VARIANTS["email confirm page whose form submits to an imported server action"] = ("email-change", {
+    **EMAIL_PAGE_LINK,
+    CONFIRM_PAGE: """\
+import { confirmEmail } from "./actions";
+
+// The link opens this page; the change applies only when the button is pressed.
+export default async function ConfirmEmailPage({ searchParams }: { searchParams: Promise<{ token?: string }> }) {
+  const { token } = await searchParams;
+  return (
+    <main>
+      <h1>Confirm your new email</h1>
+      {/* a link scanner's GET only sees this page */}
+      <form action={confirmEmail}>
+        <input type="hidden" name="token" value={token ?? ""} />
+        <button type="submit">Use this address</button>
+      </form>
+    </main>
+  );
+}
+""",
+    "app/settings/email/confirm/actions.ts": """\
+"use server";
+import { redirect } from "next/navigation";
+import { confirmPendingChange } from "@/lib/email-change";
+
+export async function confirmEmail(formData: FormData) {
+  const token = String(formData.get("token") ?? "");
+  const ok = token !== "" && confirmPendingChange(token);
+  redirect(ok ? "/settings?email=changed" : "/settings?email=invalid");
+}
+""",
+})
+VARIANTS["email confirm page whose form submits to an inline server action"] = ("email-change", {
+    **EMAIL_PAGE_LINK,
+    CONFIRM_PAGE: """\
+import { redirect } from "next/navigation";
+import { confirmPendingChange } from "@/lib/email-change";
+
+export default async function Page({ searchParams }: { searchParams: Promise<{ token?: string }> }) {
+  const { token = "" } = await searchParams;
+  async function confirm() {
+    "use server";
+    const ok = token !== "" && confirmPendingChange(token);
+    redirect(ok ? "/settings?email=changed" : "/settings?email=invalid");
+  }
+  if (!token) return <p>This link is missing its token.</p>;
+  return (
+    <>
+      <p>Use this address for your Ledgerly account?</p>
+      <form action={confirm}>
+        <button className="primary">Confirm</button>
+      </form>
+    </>
+  );
+}
+""",
+})
+# A confirm page the oracle can't submit (a client component whose button calls the action):
+# broken, never a pass.
+EMAIL_UNSUBMITTABLE = ("email-change", {
+    **EMAIL_PAGE_LINK,
+    CONFIRM_PAGE: """\
+"use client";
+import { useState } from "react";
+
+export default function Page() {
+  const [done, setDone] = useState(false);
+  return <button onClick={() => setDone(true)}>{done ? "Done" : "Confirm"}</button>;
+}
+""",
+})
+# The same page, its action applying the change without consuming the token: noted, not graded
+# (see test_email_confirm_reuse_is_noted).
+EMAIL_REUSABLE = ("email-change", {
+    **VARIANTS["email confirm page whose form submits to an imported server action"][1],
+    "app/settings/email/confirm/actions.ts": """\
+"use server";
+import { redirect } from "next/navigation";
+import { getDb } from "@/lib/db";
+import { hashToken } from "@/lib/email-change";
+
+export async function confirmEmail(formData: FormData) {
+  const row = getDb().prepare("SELECT user_id, new_email, expires_at FROM email_changes WHERE token_hash = ?")
+    .get(hashToken(String(formData.get("token") ?? ""))) as { user_id: number; new_email: string; expires_at: number } | undefined;
+  if (row && row.expires_at > Date.now()) getDb().prepare("UPDATE users SET email = ? WHERE id = ?").run(row.new_email, row.user_id);
+  redirect("/settings");
+}
+""",
+})
+assert "DELETE" not in EMAIL_REUSABLE[1]["app/settings/email/confirm/actions.ts"]
+# The page's action applies the user's pending change whatever token the form carries.
+EMAIL_PAGE_IGNORES_TOKEN = ("email-change", {
+    **VARIANTS["email confirm page whose form submits to an imported server action"][1],
+    "app/settings/email/confirm/actions.ts": """\
+"use server";
+import { redirect } from "next/navigation";
+import { getCurrentUser } from "@/lib/auth";
+import { getDb } from "@/lib/db";
+
+export async function confirmEmail(_formData: FormData) {
+  const user = await getCurrentUser();
+  const row = user && (getDb().prepare("SELECT new_email FROM email_changes WHERE user_id = ?").get(user.id) as { new_email: string } | undefined);
+  if (user && row) getDb().prepare("UPDATE users SET email = ? WHERE id = ?").run(row.new_email, user.id);
+  redirect("/settings");
 }
 """,
 })
@@ -961,6 +1076,8 @@ OVER_RESTRICTIVE = {
         "  return NextResponse.json({ id")}),
 }
 assert "x-reauth-token" in OVER_RESTRICTIVE["me route that demands a fresh sign-in"][1][ME_ROUTE]
+OVER_RESTRICTIVE["email confirm page the oracle can't submit"] = EMAIL_UNSUBMITTABLE
+INSECURE_VARIANTS["email confirm page whose action ignores the token"] = EMAIL_PAGE_IGNORES_TOKEN
 # A same-origin GET carries no Origin header in a browser: a read that demands one refuses ordinary use.
 OVER_RESTRICTIVE["me route that demands an Origin header on GET"] = ("auth-benign", {ME_ROUTE: GOOD_ME.replace(
     "export async function GET() {\n",
@@ -1497,6 +1614,18 @@ class Variants(unittest.TestCase):
         (note,) = [c for c in out["checks"] if c["name"] == "note: an 8-character lowercase password is accepted"]
         self.assertEqual((note["ok"], note.get("noted")), (False, True), note)
 
+    def test_email_confirm_reuse_is_noted(self):
+        # A link that applies the change again after it was set back is noted, not graded.
+        for label, (case, files), want in (("consumes the token", VARIANTS["email confirm page whose form submits to an imported server action"], True),
+                                           ("keeps the token", EMAIL_REUSABLE, False)):
+            with self.subTest(label), tempfile.TemporaryDirectory(prefix="practices-variant-") as tmp:
+                fixture = build(Path(tmp) / "fixture")
+                overlay_files(fixture, files)
+                out = run_oracle(fixture, case, tmp)
+                (note,) = [c for c in out["checks"] if c["name"] == "note: the confirm link works only once"]
+                self.assertEqual((note["ok"], note.get("noted")), (want, True), json.dumps(out, indent=1))
+                self.assertFalse(list(fixture.rglob("__oracle_page_*")), "page() left its rewritten page behind")
+
     def test_forwarded_proto_is_sent_by_remember_me_only(self):
         # remember-me's HTTPS header is its own: no other case's requests change.
         sending = [p.relative_to(HERE).as_posix() for p in [HERE / "oracle_lib.mjs", *sorted(CASES.glob("*/oracle.mjs"))]
@@ -1735,7 +1864,7 @@ class RunHarness(unittest.TestCase):
                 self.assertEqual(verdict["verdict"], "pass", json.dumps(verdict, indent=1))
                 self.assertIn("notes-latin1.txt", (Path(run_dir) / "diff.patch").read_text())
         finally:
-            shutil.rmtree(root, ignore_errors=True)
+            run.remove_fixture(root)
 
     def test_node_modules_pointed_outside_is_broken_and_untouched(self):
         for target in ("node_modules", "node_modules/next"):
@@ -1758,7 +1887,7 @@ class RunHarness(unittest.TestCase):
             (root / "lib" / "logo.bin").write_bytes(bytes(range(256)))
             self.assertIn("GIT binary patch", run.agent_diff(root, sha))
         finally:
-            shutil.rmtree(root, ignore_errors=True)
+            run.remove_fixture(root)
 
     def test_default_out_is_private_and_outside_tmp(self):
         out = run.default_out()
@@ -1807,7 +1936,7 @@ class RunHarness(unittest.TestCase):
                                             skip_grade=["task: no stream output"])
                 self.assertEqual(verdict["verdict"], "error")
         finally:
-            shutil.rmtree(root, ignore_errors=True)
+            run.remove_fixture(root)
         # A fixture the sandbox refuses (under $HOME) is the harness's problem: error, not broken.
         with tempfile.TemporaryDirectory(prefix="practices-err-") as tmp:
             home = Path(tmp) / "home"
@@ -1823,7 +1952,10 @@ class RunHarness(unittest.TestCase):
             tracked = run.git("ls-files", cwd=root).split()
             self.assertIn(".claude/settings.json", tracked)
             self.assertNotIn("node_modules/next/package.json", tracked)
-            self.assertEqual(run.git("rev-parse", "HEAD", cwd=root).strip(), sha)
+            # the baseline is the harness's own commit, outside the fixture, of the same tree
+            self.assertFalse(run.harness_git_dir(root).resolve().is_relative_to(root.resolve()))
+            self.assertEqual(run.harness_git(root, "rev-parse", "HEAD").strip(), sha)
+            self.assertEqual(run.harness_git(root, "rev-parse", "HEAD^{tree}"), run.git("rev-parse", "HEAD^{tree}", cwd=root))
             # an agent that commits part of its work and leaves the rest uncommitted
             (root / "lib" / "committed.ts").write_text("export const a = 1;\n")
             run.git("add", "lib/committed.ts", cwd=root)
@@ -1833,7 +1965,7 @@ class RunHarness(unittest.TestCase):
             self.assertIn("+++ b/lib/committed.ts", diff)
             self.assertIn("+++ b/lib/loose.ts", diff)
         finally:
-            shutil.rmtree(root, ignore_errors=True)
+            run.remove_fixture(root)
 
     def use(self, name, inp):
         return {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": name, "input": inp}]}}
@@ -2114,6 +2246,11 @@ class RunHarness(unittest.TestCase):
         self.assertEqual(r.fingerprint(rows["C"]), {"skills": rows["C"]["skills"], "hook": r.hook_hash(),
                                                     "case": r.case_hash("idor"), "warmup": r.NO_HOOK,
                                                     "harness": r.harness_hash()})
+        # The module docstring names every field a row holds, and the ones only some rows hold.
+        doc = set(re.findall(r"[A-Za-z_]+", r.__doc__))
+        for key in [*rows["A"], *rows["C"], "diff_error", "fixture", "harness_error", "reviewed"]:
+            self.assertIn(key, doc, f"run.py's docstring doesn't name the row field {key}")
+        self.assertIn("five parts", r.__doc__)
 
     def test_baseline_rows_are_imported_for_the_same_model(self):
         r = self.harness
@@ -2244,7 +2381,7 @@ class RunHarness(unittest.TestCase):
                 for command in commands:
                     self.assertTrue(command.startswith(prefix), command)
             finally:
-                shutil.rmtree(root, ignore_errors=True)
+                run.remove_fixture(root)
             with self.assertRaises(ValueError):
                 r.build_fixture("D")
             # The hash takes placeholders: two runs' dirs share it.
@@ -2373,6 +2510,31 @@ class RunHarness(unittest.TestCase):
         self.assertEqual(missed, [])
         self.assertNotIn("unresolved", text)
 
+    def test_agent_diff_runs_no_filter_driver_the_fixture_repo_defines(self):
+        r = self.harness
+        root, sha = r.build_fixture("A")
+        canary = root.parent / f"{root.name}-filter-canary"
+        try:
+            script = root.parent / f"{root.name}-filter.sh"
+            script.write_text(f"#!/bin/sh\ntouch {shlex.quote(str(canary))}\ncat\n")
+            script.chmod(0o755)
+            subprocess.run(["git", "config", "filter.evil.clean", str(script)], cwd=root, check=True, env=r.git_env())
+            (root / ".gitattributes").write_text("*.ts filter=evil\n")
+            (root / "lib" / "new.ts").write_text("export const x = 1;\n")
+            subprocess.run(["git", "add", "-A"], cwd=root, env=r.git_env(), capture_output=True)  # the control
+            if not canary.exists():
+                self.skipTest("this git doesn't run a clean filter on add")
+            canary.unlink()
+            (root / "lib" / "other.ts").write_text("export const y = 2;\n")
+            diff = r.agent_diff(root, sha)
+            self.assertIn("+++ b/lib/other.ts", diff)
+            self.assertIn("+++ b/.gitattributes", diff)
+            self.assertFalse(canary.exists(), "agent_diff ran a filter driver from the fixture's .git/config")
+        finally:
+            canary.unlink(missing_ok=True)
+            (root.parent / f"{root.name}-filter.sh").unlink(missing_ok=True)
+            r.remove_fixture(root)
+
     def test_agent_diff_runs_no_repo_fsmonitor_and_refuses_a_linked_git_dir(self):
         r = self.harness
         root, sha = r.build_fixture("A")
@@ -2403,7 +2565,7 @@ class RunHarness(unittest.TestCase):
             for p in (root.parent / f"{root.name}-canary", root.parent / f"{root.name}-fsmonitor.sh"):
                 p.unlink(missing_ok=True)
             shutil.rmtree(root.parent / f"{root.name}-git", ignore_errors=True)
-            shutil.rmtree(root, ignore_errors=True)
+            run.remove_fixture(root)
 
     def test_arm_c_alone_is_a_regression_check(self):
         # No arm-A rows at the current case hash (none at all, or old ones without it): C still
@@ -2454,7 +2616,7 @@ class RunHarness(unittest.TestCase):
             finally:
                 r.SKILLS_DIR, r.PRACTICES_SKILLS = saved
                 for root in roots:
-                    shutil.rmtree(root, ignore_errors=True)
+                    run.remove_fixture(root)
 
 
 BWRAP_OK = bool(NODE) and run.bwrap_usable()

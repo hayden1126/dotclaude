@@ -40,8 +40,11 @@ sandbox refuses. broken stays agent-caused.
 Per run:
   - Fixture: fixture/ is copied to a fresh tempfile.mkdtemp(prefix="ledgerly-"), next_stub/
     to its node_modules/next and stubs/* (server-only, client-only, react) beside it, then
-    `git init` and an initial commit. The harness config is a second commit whose SHA is
-    recorded, and the agent's diff is taken against it (so an agent commit isn't lost):
+    `git init` and an initial commit. The harness config is a second commit, the last the
+    agent's own repo gets from the harness. The same tree is also the baseline commit of the
+    harness's private git dir, beside the fixture and never in it, whose SHA is recorded; the
+    agent's diff is that git dir's view of the work tree against the baseline (so an agent
+    commit isn't lost, and no config the agent can write, such as a filter driver, is read):
     .claude/settings.json turns the sandbox on with autoAllowBashIfSandboxed (the agent's Bash
     runs confined to the fixture, without prompts), plus the skill and hooks for its arm. The
     harness's git reads no global or system config, so no global ignore rule hides .claude/.
@@ -72,25 +75,47 @@ Per run:
     in the scratch dir, removed after grading) and a dummy LLM_API_KEY. The run dir may sit
     under $HOME; run.py writes the oracle's output there itself, outside bwrap.
     Without a usable bwrap, run.py refuses to start unless --unsafe-grade is passed.
-  - Record: one line per run in <out>/results.jsonl (case, owner and kind, verdict, checks,
-    triggered and triggered_turns, turns, duration, cost, is_error, init memory_paths and
-    init_skills, the fingerprint, hook denials, the hook's errors.log (hook_errors, "none" when
-    empty), strays, the harness SHA, and the paths of the saved streams, oracle output and diff
-    under <out>/<case>-<arm>-<i>/). An --out that already holds results.jsonl is refused: a
-    rerun would overwrite the run dirs its rows point at. Arms C and D run the hook with
-    CLAUDE_CONFIG_DIR an empty dir and XDG_STATE_HOME its own, both in the run dir, so it sees
-    no user-tier skill and keeps its state and errors.log out of the real ones. The fingerprint is
-    three parts, each taken before the session starts, so an uncommitted edit counts:
-    `skills`, {name: sha256 over its files' sorted relative paths and bytes} for each skill
-    installed (arm A's is {}); `hook`, hook_hash() of the practices hook (practices-check.sh,
-    the practices_check.py it runs and hook_settings()'s wiring) for C and D, "none" for A and
-    B; and `case_hash`, case_hash() over cases/<case>/, oracle_lib.mjs, next_stub/, stubs/ and
-    fixture/. (Rows before 2026-10-20 have no fingerprint, and their "skills" is the init list;
-    rows from before the hook and case parts lack those.) <out> defaults to a fresh 0700 dir
-    under the checkout's ignored .tmp/practices/, away from the fixtures in /tmp. The diff is
-    taken with --binary; ignored paths (node_modules, data/) aren't in it, so regrading a diff
-    needs the stubs as installed. A turn triggered a skill when it has a Skill tool_use whose
-    `skill` input is that skill (its args don't count), or a Read of a path ending
+  - Record: one line per run in <out>/results.jsonl, written as the run finishes. Its fields:
+      run identity: case, arm, run (the index), owner and kind (CASE_INFO), model, effort (the
+        flag, "default" without one) and effort_seen (the levels the transcripts record);
+      verdict and checks (the oracle's, or the harness's own for an error row);
+      the case turn: triggered (the case's owner skill) and hook_denials, and per turn
+        triggered_turns and hook_denials_turns (arm D's warm-up, compact and task apart);
+      the session: turns, duration_ms and total_cost_usd (summed over turns), result_subtype
+        (the last turn's), memory_paths, init_skills and claude_code_version (the first turn's
+        init event), is_error, exit_codes, timed_out, strays and stray_kills;
+      the fingerprint: skills, hook, case_hash, warmup_hash and harness_hash (below);
+      tripwires: suspect (the SUSPECT_WORDS the agent's added lines contain, words that could
+        forge the oracle's verdict from inside its process) and contaminated (up to 5 paths a
+        tool call named outside the run's own fixture that hold .claude/skills or SKILL.md, or
+        another ledgerly-* fixture), each [] when clean;
+      harness_sha (the baseline commit the diff is taken against), hook_errors (the run's hook
+        errors.log, "none" when empty or for A and B), and the paths stream (one per turn),
+        oracle and diff, under <out>/<case>-<arm>-<i>/;
+      only sometimes: diff_error (the diff failed; the verdict stands), fixture (with --keep),
+        harness_error (an exception in the harness: an error row, with few other fields), and
+        reviewed, which no run writes: a person sets "reviewed": true in a tripwire row's line
+        once they have read its diff and stream, and the bar then counts it again.
+    An --out that already holds results.jsonl is refused: a rerun would overwrite the run dirs
+    its rows point at. Arms C and D run the hook with CLAUDE_CONFIG_DIR an empty dir and
+    XDG_STATE_HOME its own, both in the run dir, so it sees no user-tier skill and keeps its
+    state and errors.log out of the real ones.
+    The fingerprint is five parts, each taken before the session starts, so an uncommitted edit
+    counts: `skills`, {name: sha256 over its files' sorted relative paths and bytes} for each
+    skill installed (arm A's is {}); `hook`, hook_hash() of the practices hook (practices-check.sh,
+    the practices_check.py it runs, the bash_words.py that loads, and hook_settings()'s wiring
+    with placeholder dirs) for C and D, "none" for A and B; `case` (the row's case_hash),
+    case_hash() over cases/<case>/, oracle_lib.mjs, next_stub/, stubs/ and fixture/; `warmup`
+    (warmup_hash), the sha256 of arm D's warm-up prompt, "none" for A, B and C; and `harness`
+    (harness_hash), the sha256 of this run.py. Pooling refuses on any of the five; the Claude
+    Code version is recorded but only warned on (one line per model when rows hold more than
+    one), since Claude Code can update itself mid-run. A row without a part reads it as
+    "unrecorded": rows before 2026-10-20 have no fingerprint (their "skills" is the init list),
+    and later ones may lack the hook, case, warmup or harness part. <out> defaults to a fresh
+    0700 dir under the checkout's ignored .tmp/practices/, away from the fixtures in /tmp. The
+    diff is taken with --binary; ignored paths (node_modules, data/) aren't in it, so regrading a
+    diff needs the stubs as installed. A turn triggered a skill when it has a Skill tool_use
+    whose `skill` input is that skill (its args don't count), or a Read of a path ending
     <skill>/SKILL.md. `triggered` and `hook_denials` are the case turn's, `triggered` for the
     case's owner; arm D's other turns are reported apart (triggered_turns, hook_denials_turns,
     and the summary's warm column), the warm-up's `triggered` for the owner of the case it ran.
@@ -112,11 +137,18 @@ or fail; broken and error don't count.
   B  reported only.
   Off-target: a case whose owner isn't among the skills the arm's rows installed. B, C and D
      report it as "reported only (off-target)" and never miss; A keeps its bar.
-  Pooling: the rows of one model, case and arm must share one fingerprint, equal on every part
-     (error rows aside); a part a row didn't record is "unrecorded", equal only to another
-     unrecorded one. Otherwise the line reads REFUSED, naming the parts that differ, and the
-     distinct fingerprints are listed. Arm A's counts classify another arm's line only when A
-     pooled and its case part equals that arm's; else that line reads as A unclassified.
+  Pooling: the rows of one model, case and arm must share one fingerprint, equal on all five
+     parts (skills, hook, case, warmup, harness; error rows aside); a part a row didn't record
+     is "unrecorded", equal only to another unrecorded one. Otherwise the line reads REFUSED,
+     naming the parts that differ, and the distinct fingerprints are listed. Mixed Claude Code
+     versions only print a warning. Arm A's counts classify another arm's line only when A
+     pooled and its case part equals that arm's; else that line reads as A unclassified, and a
+     C or D line is then a regression check (it still has to pass every run), never REFUSED.
+  Tripwires: a row with a non-empty suspect or contaminated list, and no "reviewed": true, is
+     unresolved. It counts under no verdict (so a C or D line can't be green while it stands,
+     and A's valid runs leave it out), its line says how many are unresolved, and each is
+     listed after the table with its diff path. Setting "reviewed": true in its line in
+     results.jsonl, after reading its diff and stream, clears it.
 """
 import argparse
 import concurrent.futures
@@ -398,10 +430,30 @@ def hook_errors(run_dir):
     return text[-4000:] or "none"
 
 
+def harness_git_dir(fixture):
+    """The harness's own git dir for a fixture: beside it, never in it, so the agent can't
+    write its config (a filter driver, an fsmonitor) and git reads none of the fixture's."""
+    fixture = Path(fixture)
+    return fixture.parent / f".{fixture.name}.harness-git"
+
+
+def harness_git(fixture, *args):
+    """git on the fixture's work tree through the harness's own git dir."""
+    return git("--git-dir", str(harness_git_dir(fixture)), "--work-tree", str(fixture), *args, cwd=fixture)
+
+
+def remove_fixture(fixture):
+    """Removes a fixture and the harness's git dir beside it."""
+    shutil.rmtree(harness_git_dir(fixture), ignore_errors=True)
+    shutil.rmtree(fixture, ignore_errors=True)
+
+
 def build_fixture(arm, run_dir=None):
     """A fresh fixture for one run: the app, the stub packages, an initial commit, then the
-    arm's harness config as a second commit. Returns (path, the harness commit's SHA). Arms C
-    and D wire the hook with hook_dirs(run_dir), so they need one."""
+    arm's harness config as a second commit, in the fixture's own repo for the agent. The same
+    tree is also the baseline commit of the harness's private git dir (harness_git_dir), which
+    the diff is taken against. Returns (path, the baseline commit's SHA). Arms C and D wire the
+    hook with hook_dirs(run_dir), so they need one."""
     if arm in ("C", "D") and run_dir is None:
         raise ValueError(f"arm {arm} wires the hook with dirs in the run dir, and none was given")
     root = Path(tempfile.mkdtemp(prefix="ledgerly-"))
@@ -421,7 +473,10 @@ def build_fixture(arm, run_dir=None):
     (root / ".claude" / "settings.json").write_text(json.dumps(settings, indent=2) + "\n")
     git("add", "-A", ".claude", cwd=root)
     git("commit", "-qm", "Local Claude Code settings", cwd=root)
-    return root, git("rev-parse", "HEAD", cwd=root).strip()
+    harness_git(root, "init", "-q")
+    harness_git(root, "add", "-A")
+    harness_git(root, "commit", "-qm", "Harness baseline")
+    return root, harness_git(root, "rev-parse", "HEAD").strip()
 
 
 def npm_test(root):
@@ -702,8 +757,9 @@ def grade(fixture, case, run_dir, contain=True, home=None):
 
 
 def git_dir_problem(fixture):
-    """Why the fixture's .git can't be trusted, or None: it isn't a plain directory (a symlink,
-    or a gitfile pointing elsewhere)."""
+    """Why the fixture's .git looks tampered with, or None: it isn't a plain directory (a
+    symlink, or a gitfile pointing elsewhere). The diff never reads it (harness_git_dir), so
+    this is a tripwire on the run, not what keeps git safe."""
     d = Path(fixture) / ".git"
     if d.is_symlink() or not d.is_dir():
         return f"{d} is not a plain directory"
@@ -711,9 +767,10 @@ def git_dir_problem(fixture):
 
 
 def agent_diff(fixture, base):
-    """Everything the agent changed since the harness commit `base`, committed or not."""
-    git("add", "-A", cwd=fixture)
-    return git("diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv", base, cwd=fixture)
+    """Everything the agent changed in the work tree since the baseline commit `base`, committed
+    or not, through the harness's own git dir: no config the agent could write is read."""
+    harness_git(fixture, "add", "-A")
+    return harness_git(fixture, "diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv", base)
 
 
 # Words in the agent's added lines that could forge the oracle's verdict from inside its
@@ -987,7 +1044,7 @@ def run_one(case, arm, index, args, out):
         "triggered": triggered_turns.get("task", False),
         "triggered_turns": triggered_turns,
         **summary,
-        # the fingerprint: the summary pools only rows equal on all three parts
+        # the fingerprint: the summary pools only rows equal on all five parts
         "skills": skills,  # {name: tree_hash} installed
         "hook": hook,  # hook_hash() for C and D, NO_HOOK for A and B
         "case_hash": case_code,  # case_hash(case)
@@ -1009,7 +1066,7 @@ def run_one(case, arm, index, args, out):
     if args.keep:
         row["fixture"] = str(fixture)
     else:
-        shutil.rmtree(fixture, ignore_errors=True)
+        remove_fixture(fixture)
     log(f"  {case:16} {arm} #{index}: {row['verdict']:7} triggered={row['triggered']} "
         f"cost={row['total_cost_usd']}")
     return row
@@ -1259,7 +1316,7 @@ def dry_run(cases, arms, args):
                 stdin = f"<<< {shlex.quote(source)}" if label == "compact" else f"< {shlex.quote(source)}"
                 print(f"  ({label}) cd {shlex.quote(str(fixture))} && {shlex.join(cmd)} {stdin}")
             if not args.keep:
-                shutil.rmtree(fixture, ignore_errors=True)
+                remove_fixture(fixture)
                 shutil.rmtree(scratch, ignore_errors=True)
     print("\ngrading sandbox: " + ("bwrap works here" if bwrap_usable() else
           "bwrap can't start here; a live run needs it (sandbox-off) or --unsafe-grade"))
