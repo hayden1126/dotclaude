@@ -1598,6 +1598,32 @@ class Push(BashBase):
         self.assertIsNone(self.pre("echo 'unbalanced", session_id="s-none"))
         self.assertNotIn("git-skipped", self.log()[len(before):])
 
+    def test_the_skip_log_sees_past_a_read_call_and_ignores_what_runs_nothing(self):
+        # Review round 3, low 2: a command that read a commit never logged its foreach pushes,
+        # while a heredoc written to a file and a grep pattern logged false skips.
+        logged = ("git commit -am x && git submodule foreach git push",
+                  "git push origin main; printf x | xargs git push",
+                  "cat <<'EOF' | bash\ngit push\nEOF", "sh -s <<'EOF'\ngit push\nEOF",
+                  "echo `echo \"x`; bash <<'EOF'\ngit commit -m y\nEOF")
+        for n, command in enumerate(logged):
+            with self.subTest(command=command):
+                before = self.log()
+                self.pre(command, session_id=f"s-log-{n}")
+                new = self.log()[len(before):]
+                self.assertIn("git-skipped the command names git commit or push", new)
+                self.assertEqual(len(new.strip().split("\n")), 1, new)
+                for text_ in ("foreach", "printf", "-am", "-m y", "EOF"):  # no command text
+                    self.assertNotIn(text_, new)
+        quiet = ("cat > d.sh <<'EOF'\ngit push\nEOF", 'grep -rn "git push" .',
+                 "rg -l 'gh pr create' src", "git grep -n 'git push'",
+                 "git commit -m 'then git push'", "git commit -F - <<'EOF'\nfix: git push\nEOF",
+                 "gh pr create --draft --title 'git push'", "bash script.sh <<'EOF'\ngit push\nEOF")
+        for n, command in enumerate(quiet):
+            with self.subTest(command=command):
+                before = self.log()
+                self.pre(command, session_id=f"s-quiet-{n}")
+                self.assertNotIn("git-skipped", self.log()[len(before):])
+
     def test_an_unwritable_state_file_allows_the_call_and_logs(self):
         # Review round 1: the Bash levels have no transcript marker to fall back on, so a deny
         # whose key couldn't be written denied every resend too, forever.
@@ -2124,6 +2150,28 @@ class BashWords(unittest.TestCase):
                 self.assertTrue(any(body in r for r in rest), rest)
         with self.assertRaises(ValueError):  # the top level itself: the caller logs it
             BW.calls("git push 'origin", {"git"}, "/r", [])
+
+    def test_rest_holds_what_was_left_unread(self):
+        # Review round 3, low 2: rest held every heredoc body and every argument, a read
+        # call's and a grep pattern's too.
+        cases = {
+            "git commit -m 'git push later'": [],  # a head call's args: the caller's
+            "xargs git push": ["git push"],
+            'grep -rn "git push" .': [],
+            "cat > d.sh <<'EOF'\ngit push\nEOF": [""],  # written, never run
+            "sh <<'EOF'\ngit push\nEOF": ["git push\n", ""],
+            "bash -s x <<'EOF'\ngit push\nEOF": ["git push\n", "-s x"],
+            "bash -e - <<'EOF'\ngit push\nEOF": ["git push\n", "-e -"],
+            "bash run.sh <<'EOF'\ngit push\nEOF": ["run.sh"],  # data for the script
+            "cat <<'EOF' | bash\ngit push\nEOF": ["", "git push\n", ""],
+            "cat <<A > f; bash <<B\nnot run\nA\ngit push\nB": ["", "git push\n", ""],
+            "cat <<'EOF'; bash\ngit push\nEOF": ["", ""],  # `;` feeds nothing on
+        }
+        for command, want in cases.items():
+            with self.subTest(command=command):
+                rest = []
+                BW.calls(command, {"git"}, "/r", rest)
+                self.assertEqual(rest, want)
         # delete_guard's segments keep their shape: a process substitution's body still splits.
         self.assertEqual(list(BW.segments("diff <(rm -rf x) y")), [["diff", "<"], ["rm", "-rf", "x"],
                                                                   ["y"]])

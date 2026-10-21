@@ -107,10 +107,15 @@ hooks/bash_words.py reads the command as simple commands through chains, wrapper
 payload's cwd; a cd inside `( ... )` ends with it), quotes and heredocs, the body of each
 $(...), backtick, <(...) and >(...) (from the cwd where it sits), a `bash -c` script with no
 expansion in it, and each git call's -C, --git-dir, --work-tree and GIT_DIR=; an expansion in
-one of those skips that call, logged. When no commit, push, pr ready or pr create was read but
-an argument or a heredoc body names one, word by word (`xargs git push`, `find -exec`,
-`git submodule foreach`, a `bash -c` script with an expansion, `bash <<EOF`), it is logged as
-git-skipped. Accepted limits beyond those logs: `eval`, an alias, a function or a script file
+one of those skips that call, logged. When what the parser left unread names a commit, push,
+pr ready or pr create, word by word, it is logged as git-skipped (one line, no command text),
+whatever else the command read: the arguments of any command but a git commit, push or grep, a
+gh pr ready or create, and grep or rg (`xargs git push`, `find -exec`, `git submodule foreach`,
+a `bash -c` script with an expansion), a heredoc body a shell runs (`bash <<EOF`, `cat <<EOF |
+sh`; not `cat > f <<EOF`), and a substitution body or script that won't parse (a shlex error,
+nesting past NEST_MAX), while the rest of the command is still read. A command whose top level
+won't parse is logged as git-skipped when it names a call, else as the quiet bash-unparsed.
+Accepted limits beyond those logs: `eval`, an alias, a function or a script file
 that runs git with nothing naming it in the command; a command inside an unquoted heredoc's
 $(...); a function body's cd, read as if it ran. A file written by a heredoc or `cat >`
 escapes L1 and L2, and L3s is its backstop.
@@ -1370,10 +1375,12 @@ def names_a_call(text):
 
 
 def bash_calls(event):
-    """(git calls as (subcommand, args, where), gh calls as (args, cwd), whether a word the
-    parser didn't read as a command names one: an argument (`xargs git push`, `find -exec`,
-    `git submodule foreach`) or a heredoc body) in the Bash command. Expansions in a git
-    location, and an unparsable command, are skipped and logged."""
+    """(git calls as (subcommand, args, where), gh calls as (args, cwd), whether what the
+    parser left unread names one) in the Bash command. Unread: the arguments of every command
+    but a git commit, push or grep, a gh pr ready or create, and grep or rg (`xargs git push`,
+    `find -exec`, `git submodule foreach`), a heredoc body a shell runs, and a substitution
+    body that won't parse. Expansions in a git location, and an unparsable command, are
+    skipped and logged."""
     bash_words = load_bash_words()
     cmd = command_of(event)
     cwd = event.get("cwd") if isinstance(event.get("cwd"), str) else None
@@ -1392,6 +1399,8 @@ def bash_calls(event):
     for name, args, prefix, c in calls:
         if name == "gh":
             ghs.append((args, c))
+            if without_repo(args)[:2] not in (["pr", "ready"], ["pr", "create"]):
+                rest.append(" ".join(args))  # what a PR call says is its own; others aren't read
             continue
         try:
             g = bash_words.git_call(args, prefix, c)
@@ -1400,6 +1409,8 @@ def bash_calls(event):
             continue
         if g:
             gits.append(g)
+        if not g or g[0] not in ("commit", "push", "grep"):  # `git submodule foreach git push`
+            rest.append(" ".join(args))
     return gits, ghs, any(names_a_call(t) for t in rest)
 
 
@@ -2206,10 +2217,11 @@ def bash_pre(event):
     cfg = load_config(project)
     if not cfg["enabled"]:
         return None
-    if not (commits or pushes or ghs):  # the backstop for a launcher this parser can't read
+    if named:  # the backstop for a launcher this parser can't read, beside any call it read
         log("git-skipped", "the command names git commit or push, or gh pr ready or create, "
             "in a form this check can't read (a launcher such as xargs, find -exec or a "
-            "script), so it wasn't checked")
+            "script), so that part wasn't checked")
+    if not (commits or pushes or ghs):
         return None
     if commits and pushes:
         key = f"push|engine|chain|-|{_sha1(command_of(event))}"
