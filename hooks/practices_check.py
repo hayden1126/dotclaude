@@ -139,7 +139,8 @@ Each level reads commits, never the index or the working tree:
         (`-onodeploy`). A source that names no commit here (a glob refspec) is logged as
         git-skipped, and the rest are still scanned. One call holding both a commit and a push
         is denied once, told to run them as separate calls (the scan can't see a commit not
-        yet made).
+        yet made); its resend passes that check, and the push gate still scans the commits
+        already made, as for any push.
   L3r   PreToolUse on gh pr ready (not --undo) or a gh pr create without --draft (a -R or
         --repo before the pr subcommand dropped first), judged at a
         head: the branch a `ready` selector or create's --head names (origin/<branch>, else the
@@ -2236,7 +2237,10 @@ def bash_pre(event):
             return deny(
                 "[practices:push] This one Bash call both commits and pushes, so the push check "
                 "can't see what the commit adds. Run the commit and the push as separate Bash "
-                "calls. Resending this call unchanged passes this check, unscanned.")
+                "calls. Resending this call unchanged passes this check, but the push check "
+                "still scans the commits already made that no remote has, and stops the resend "
+                "once for any finding in them; what the new commit adds is only told after it "
+                "is made.")
     reasons, keys, cut_keys = [], [], []
     try:
         bounds = bounds_of(project)

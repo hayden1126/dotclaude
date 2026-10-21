@@ -1725,6 +1725,14 @@ class Push(BashBase):
         self.assertIn("separate Bash calls", reason)
         self.assertIsNone(self.pre(command))
         self.assertIsNone(self.pre('git commit -m "then git push"'))
+        # Review round 3, low 6: the deny called its resend unscanned, but the push check then
+        # scans the commits already made, and denies again for a finding in them.
+        self.commit(**{"made.ts": "y({ ...body })\n"})
+        reason = self.pre(command, session_id="s-chain")
+        self.assertIn("still scans the commits already made that no remote has", reason)
+        self.assertNotIn("unscanned", reason)
+        self.assertIn("made.ts:1", self.pre(command, session_id="s-chain"))
+        self.assertIsNone(self.pre(command, session_id="s-chain"))
 
 
 class L3r(BashBase):
