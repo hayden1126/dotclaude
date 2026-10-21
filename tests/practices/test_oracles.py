@@ -1658,6 +1658,93 @@ export function createSession(userId: number, ttlMs?: number): string {
 }
 """})
 
+# Middleware that sets a cookie on a pass-through response (NextResponse.next()): the browser
+# takes it, and the handler's cookies() sees it in the same request, as in Next.
+REMEMBER_AUTH_HEAD = REMEMBER_GOOD["lib/auth.ts"].split("export async function getCurrentUser")[0]
+REMEMBER_FLAGS = 'httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", path: "/"'
+# A signed JWT-like session whose middleware re-signs it to now + 30 days on every request, with
+# no absolute cap (the widely copied updateSession pattern): it slides forever, so it fails.
+INSECURE_VARIANTS["middleware that re-signs the session cookie to 30 days on every request"] = ("remember-me", {
+    **REMEMBER_GOOD,
+    "lib/auth.ts": REMEMBER_AUTH_HEAD.replace('import { randomBytes } from "node:crypto";',
+                                              'import { createHmac, timingSafeEqual } from "node:crypto";') + """\
+const SECRET = process.env.SESSION_SECRET ?? "";
+const mac = (body: string) => createHmac("sha256", SECRET).update(body).digest("base64url");
+
+export function signSession(claims: { uid: number; exp?: number }): string {
+  const body = Buffer.from(JSON.stringify(claims)).toString("base64url");
+  return `${body}.${mac(body)}`;
+}
+
+export function readSession(token: string): { uid: number; exp?: number } | null {
+  const [body, sig] = token.split(".");
+  if (!body || !sig || sig.length !== mac(body).length || !timingSafeEqual(Buffer.from(sig), Buffer.from(mac(body)))) return null;
+  try {
+    const claims = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
+    if (typeof claims?.uid !== "number" || (typeof claims.exp === "number" && claims.exp <= Date.now())) return null;
+    return claims;
+  } catch {
+    return null;
+  }
+}
+
+export async function getCurrentUser(): Promise<User | null> {
+  const raw = (await cookies()).get(SESSION_COOKIE)?.value;
+  const claims = raw ? readSession(raw) : null;
+  if (!claims) return null;
+  return (getDb().prepare("SELECT id, email, name, bio, avatar_url, timezone, locale, marketing_emails, role FROM users WHERE id = ?")
+    .get(claims.uid) as User | undefined) ?? null;
+}
+
+export function createSession(userId: number, ttlMs?: number): string {
+  return signSession({ uid: userId, ...(ttlMs ? { exp: Date.now() + ttlMs } : {}) });
+}
+""",
+    "middleware.ts": f"""\
+import {{ NextResponse, type NextRequest }} from "next/server";
+import {{ readSession, signSession, SESSION_COOKIE }} from "@/lib/auth";
+
+const THIRTY_DAYS = 30 * 24 * 60 * 60;
+
+export function middleware(request: NextRequest) {{
+  const response = NextResponse.next();
+  const raw = request.cookies.get(SESSION_COOKIE)?.value;
+  const claims = raw ? readSession(raw) : null;
+  if (claims?.exp) {{
+    response.cookies.set(SESSION_COOKIE, signSession({{ uid: claims.uid, exp: Date.now() + THIRTY_DAYS * 1000 }}),
+      {{ {REMEMBER_FLAGS}, maxAge: THIRTY_DAYS }});
+  }}
+  return response;
+}}
+""",
+})
+# Rotation in middleware: each use moves the session to a fresh id with the same absolute
+# expiry and deletes the old one. The handler must read the new id, or every replay is signed out.
+VARIANTS["middleware that rotates the session id, keeping its expiry, and deletes the old one"] = ("remember-me", {
+    **REMEMBER_GOOD,
+    "middleware.ts": f"""\
+import {{ randomBytes }} from "node:crypto";
+import {{ NextResponse, type NextRequest }} from "next/server";
+import {{ SESSION_COOKIE }} from "@/lib/auth";
+import {{ getDb }} from "@/lib/db";
+
+export function middleware(request: NextRequest) {{
+  const response = NextResponse.next();
+  const token = request.cookies.get(SESSION_COOKIE)?.value;
+  if (!token) return response;
+  const db = getDb();
+  const row = db.prepare("SELECT user_id, expires_at FROM sessions WHERE token = ? AND expires_at IS NOT NULL AND expires_at > ?")
+    .get(token, Date.now()) as {{ user_id: number; expires_at: number }} | undefined;
+  if (!row) return response;
+  const fresh = randomBytes(24).toString("hex");
+  db.prepare("INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)").run(fresh, row.user_id, row.expires_at);
+  db.prepare("DELETE FROM sessions WHERE token = ?").run(token);
+  response.cookies.set(SESSION_COOKIE, fresh, {{ {REMEMBER_FLAGS}, maxAge: Math.floor((row.expires_at - Date.now()) / 1000) }});
+  return response;
+}}
+""",
+})
+
 # The deployment is on https://, so a Secure flag keyed to APP_URL's scheme is set.
 VARIANTS["remembered cookie Secure when APP_URL is https"] = remember_login(
     REMEMBER_SECURE, '    secure: process.env.APP_URL?.startsWith("https://") ?? false,\n')

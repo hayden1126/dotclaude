@@ -20,7 +20,9 @@
 //   x-middleware-next / x-middleware-rewrite marker and with status >= 300 is the result;
 //   anything else falls through to the handler. So a limiter or a redirect in middleware counts.
 //   Request headers a middleware forwards with NextResponse.next({ request: { headers } }) reach
-//   the handler, as in Next.
+//   the handler, as in Next. So do the Set-Cookie lines of a pass-through response
+//   (NextResponse.next() plus res.cookies.set, or cookies().set): they go first in the result's
+//   setCookies, and the handler's cookies() and request.cookies see them, as in Next.
 // - Every request, and every server action call (through headers()), is a same-origin browser
 //   request (host, origin, sec-fetch-site) to http://localhost:3000, so an Origin or Host check
 //   in the app passes. A GET or HEAD carries no Origin, as a browser's same-origin GET doesn't
@@ -361,6 +363,22 @@ export function cookieHeader(lines, now = Date.now()) {
   return [...cookieJar(lines, now)].map(([n, v]) => `${n}=${encodeURIComponent(v)}`).join("; ");
 }
 
+// A Cookie header with these Set-Cookie lines applied: a cookie set replaces one of its name, a
+// deleted one (empty, or a lifetime of 0 or less) drops out.
+function withSetCookies(header, lines) {
+  const jar = new Map();
+  for (const pair of String(header ?? "").split(";")) {
+    const eq = pair.indexOf("=");
+    const name = eq === -1 ? "" : pair.slice(0, eq).trim();
+    if (name && !jar.has(name)) jar.set(name, pair.slice(eq + 1).trim());
+  }
+  for (const c of lines.map((l) => parseSetCookie(l))) {
+    if (c.value === "" || (c.lifetime !== null && c.lifetime <= 0)) jar.delete(c.name);
+    else jar.set(c.name, encodeURIComponent(c.value));
+  }
+  return [...jar].map(([n, v]) => `${n}=${v}`).join("; ");
+}
+
 export function describe(r) {
   const body = r.text.length > 160 ? `${r.text.slice(0, 160)}...` : r.text;
   return `${r.source} -> ${r.status}${body ? ` ${body}` : ""}${r.note ? ` (${r.note})` : ""}`;
@@ -676,7 +694,7 @@ class Oracle {
   async route(method, urlPath, { as, json, form, ip = DEFAULT_IP, base = ORIGIN, headers: extra = {} } = {}) {
     const url = new URL(urlPath, base);
     const cookieName = as ? await sessionCookie() : null;
-    const make = (override) => {
+    const make = (override, setByMiddleware = []) => {
       const headers = browserHeaders(url, { as, ip, cookieName, method });
       for (const [k, v] of Object.entries(extra)) headers.set(k, v);
       let body;
@@ -695,6 +713,11 @@ class Oracle {
         if (form !== undefined) headers.delete("content-type");
         else if (contentType && !headers.has("content-type")) headers.set("content-type", contentType);
       }
+      if (setByMiddleware.length) {
+        const cookie = withSetCookies(headers.get("cookie"), setByMiddleware);
+        if (cookie) headers.set("cookie", cookie);
+        else headers.delete("cookie");
+      }
       return new this.next.NextRequest(url, { method, headers, body });
     };
 
@@ -702,6 +725,7 @@ class Oracle {
       .map((f) => path.join(FIXTURE, f))
       .find(isFile);
     let override = null;
+    let setByMiddleware = [];
     if (middlewareFile) {
       const mod = await import(pathToFileURL(middlewareFile).href);
       const fn = mod.middleware ?? mod.default;
@@ -717,6 +741,7 @@ class Oracle {
         const passThrough =
           !(res instanceof Response) || res.headers.has("x-middleware-next") || res.headers.has("x-middleware-rewrite");
         if (!passThrough && res.status >= 300) return readResponse(res, "middleware");
+        if (res instanceof Response) setByMiddleware = res.headers.getSetCookie();
         const names = res instanceof Response ? res.headers.get("x-middleware-override-headers") : null;
         if (names !== null) {
           override = names
@@ -730,18 +755,20 @@ class Oracle {
     const found = findRoute(url.pathname);
     if (!found) throw new Missing(`no route file for ${url.pathname} under app/`);
     const rel = path.relative(FIXTURE, found.file);
+    // The middleware's cookies go out first, so the handler's own lines for a name win.
+    const sent = (r) => ({ ...r, setCookies: [...setByMiddleware, ...(r.setCookies ?? [])] });
     const mod = await import(pathToFileURL(found.file).href);
     const handler = mod[method];
-    if (typeof handler !== "function") return { status: 405, text: "", json: undefined, source: rel, setCookies: [], note: `no ${method} export` };
-    const req = make(override);
+    if (typeof handler !== "function") return sent({ status: 405, text: "", json: undefined, source: rel, setCookies: [], note: `no ${method} export` });
+    const req = make(override, setByMiddleware);
     let res;
     try {
       res = await this.ctx.runWithRequest(req, () => handler(req, { params: paramsArg(found.params) }));
     } catch (error) {
-      return thrown(error, rel, { handler: true });
+      return sent(thrown(error, rel, { handler: true }));
     }
-    if (!(res instanceof Response)) return { status: 500, text: "", json: undefined, source: rel, setCookies: [], note: "handler returned no Response" };
-    return readResponse(res, rel);
+    if (!(res instanceof Response)) return sent({ status: 500, text: "", json: undefined, source: rel, setCookies: [], note: "handler returned no Response" });
+    return sent(await readResponse(res, rel));
   }
 
   // Calls server action `name` as user `as`, inside the same-origin POST a form submit makes
