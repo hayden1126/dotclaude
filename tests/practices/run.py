@@ -1579,19 +1579,29 @@ def load_rows(paths):
     return rows, empty, live
 
 
+LOCK_PAUSES = (0.05, 0.1, 0.15, 0.2, 0.25, 0.25)  # seconds between results_lock's tries, ~1 s in all
+
+
 @contextlib.contextmanager
 def results_lock(directory, refusal):
     """Holds an exclusive flock on the dir that holds a results.jsonl for the with block, or exits
     with `refusal` when another process holds it. The lock is on the dir, never the file:
     --grade replaces the file, so a lock on it would leave a run that opened it a moment before
     appending to the replaced inode. A run holds it for its whole life (open_results), --grade
-    while it reads and replaces; it ends with the process, so a killed run leaves none behind."""
+    while it reads and replaces; it ends with the process, so a killed run leaves none behind.
+    A --summarize probe (held_by_a_run) holds a shared flock for an instant, so a held lock is
+    tried again, never waited on, LOCK_PAUSES apart before the refusal: a probe is gone by then,
+    and a run's lock isn't."""
     fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)  # not inherited: subprocesses can't keep it
     try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            sys.exit(f"run.py: {refusal}")
+        for pause in (*LOCK_PAUSES, None):
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if pause is None:
+                    sys.exit(f"run.py: {refusal}")
+                time.sleep(pause)
         yield
     finally:
         os.close(fd)

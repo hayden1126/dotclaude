@@ -16,6 +16,7 @@ Skips when node (or npm, for the npm test) is absent. Fixtures go to TMPDIR.
 import argparse
 import concurrent.futures
 import contextlib
+import fcntl
 import hashlib
 import io
 import json
@@ -3977,6 +3978,40 @@ class RunHarness(unittest.TestCase):
             self.assertEqual(after[4]["hand_verdict"], "pass")
             self.assertEqual(sorted(p.name for p in out.iterdir()), ["results.jsonl"])  # the lock leaves no file
         self.assertIn("with open_results(out) as results:", Path(r.__file__).read_text())
+
+    def test_grade_waits_out_a_summary_probe_but_not_a_run(self):
+        # A --summarize probe holds a shared flock on the dir for an instant (held_by_a_run). A --grade
+        # that lands in it tries again for about a second instead of saying a live run holds the dir.
+        # A lock held past that, as a run holds its own for its whole life, is refused, and soon.
+        with tempfile.TemporaryDirectory(prefix="practices-probe-") as tmp:
+            out = Path(tmp)
+            path = out / "results.jsonl"
+            path.write_text("".join(json.dumps(x) + "\n" for x in self.graded_rows()))
+            fd = os.open(out, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                letgo = threading.Timer(0.2, fcntl.flock, (fd, fcntl.LOCK_UN))
+                letgo.start()
+                code, text = self.grade_main(out, "email-change-C-5", "pass", "read it")
+                letgo.join()
+            finally:
+                os.close(fd)
+            self.assertEqual(code, 0, text)
+            self.assertEqual(json.loads(path.read_text().splitlines()[4])["hand_verdict"], "pass")
+            before = path.read_bytes()
+            for kind in (fcntl.LOCK_EX, fcntl.LOCK_SH):
+                with self.subTest(kind=kind):
+                    fd = os.open(out, os.O_RDONLY | os.O_DIRECTORY)
+                    try:
+                        fcntl.flock(fd, kind | fcntl.LOCK_NB)
+                        start = time.monotonic()
+                        with self.assertRaises(SystemExit) as stop:
+                            self.grade_main(out, "email-change-C-5", "fail", "read again")
+                        self.assertLess(time.monotonic() - start, 5)
+                    finally:
+                        os.close(fd)
+                    self.assertIn(f"--grade: a live run holds {out.resolve()}", str(stop.exception.code))
+                    self.assertEqual(path.read_bytes(), before)
 
     def test_init_skills_that_dont_match_the_arm_mark_the_row_contaminated(self):
         r = self.harness
