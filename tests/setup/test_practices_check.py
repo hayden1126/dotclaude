@@ -696,6 +696,24 @@ class L4(Base):
                 self.assertTrue(line in long_ or line in ("Beta one.", "Beta two.")
                                 or re.fullmatch(r"\(\d+ more in its SKILL\.md\)", line), line)
 
+    def test_the_digest_and_the_health_check_read_the_session_start_project(self):
+        # Follow-up to review round 3, low 10: compact() and health() still read the config
+        # and the project skills from the payload's cwd, which a cd moves.
+        del self.env["CLAUDE_PROJECT_DIR"]
+        sub = os.path.join(self.proj, "sub")
+        os.makedirs(os.path.join(sub, ".claude", "practices"))
+        with open(os.path.join(sub, ".claude", "practices", "config.toml"), "w") as f:
+            f.write("enabled = false\n")
+        bad = os.path.join(sub, ".claude", "skills", "bad")
+        os.makedirs(bad)
+        with open(os.path.join(bad, "events.toml"), "w") as f:
+            f.write("skill = [unclosed\n")
+        self.assertIsNone(self.start("startup"))  # records the project; all is well
+        self.loaded()
+        out = self.start("compact", cwd=sub)
+        self.assertIn("demo", out["hookSpecificOutput"]["additionalContext"])
+        self.assertIsNone(self.start("startup", cwd=sub))  # sub's broken skill isn't read
+
     def test_resume_and_clear_print_nothing(self):
         self.loaded()
         self.assertIsNone(self.start("resume"))
@@ -771,9 +789,21 @@ class Discovery(Base):
         self.assertIn(os.path.join("broken", "events.toml"), log)
         self.assertIn("duplicate ids", log)
 
-    def test_cwd_stands_in_for_a_missing_project_dir(self):
+    def test_the_session_start_cwd_stands_in_for_a_missing_project_dir(self):
+        # Review round 3, low 10: the edit levels read the config, the project skills and the
+        # L2 key paths from the call's cwd, which a cd moves.
         del self.env["CLAUDE_PROJECT_DIR"]
-        self.assertIn("[practices:L1:demo:route-handler]", self.fire())
+        sub = os.path.join(self.proj, "sub")
+        os.makedirs(os.path.join(sub, ".claude", "practices"))
+        with open(os.path.join(sub, ".claude", "practices", "config.toml"), "w") as f:
+            f.write("enabled = false\n")
+        self.assertIsNone(self.fire(cwd=sub))  # no project known: user skills only, logged
+        self.assertIn("project-unknown edit: no project dir", self.log())
+        self.start("startup")  # records the project as the session's cwd
+        self.assertIn("[practices:L1:demo:route-handler]", self.fire(cwd=sub))
+        self.loaded()
+        self.assertIn("[practices:L2:demo:SEC-17:lib/a.ts]",
+                      self.fire("lib/a.ts", "x({ ...body })\n", cwd=sub))
 
 
 class Config(Base):
@@ -1115,6 +1145,25 @@ class GitHelper(GitMixin, unittest.TestCase):
                     with self.assertRaises(PC.GitError):
                         r.run(sub, *args)
 
+    def test_every_subcommand_takes_only_its_listed_flags(self):
+        # Review round 3, low 7: rev-parse, rev-list, merge-base and ls-tree took any option.
+        head = self.commit(a="x\n")
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "BUDGET", 30.0), mock.patch.object(PC, "START",
+                                                                          PC.time.monotonic()):
+            r = PC.Repo(self.repo)
+            for sub, args in (("rev-parse", ("--git-path", "x")), ("rev-parse", ("--all",)),
+                              ("rev-list", ("--all",)), ("rev-list", ("--output=x", head)),
+                              ("merge-base", ("--octopus", head)), ("ls-tree", (head,)),
+                              ("rev-list", ("--end-of-options", "--all"))):
+                with self.subTest(sub=sub, args=args):
+                    with self.assertRaises(PC.GitError):
+                        r.run(sub, *args)
+            self.assertIsNone(r.rev("-x"))  # past --end-of-options, a name, never an option
+            self.assertEqual(r.rev("HEAD"), head)
+            self.assertEqual(r.commits(head, cap=5), ([(head, None)], False))
+            self.assertEqual(r.run("merge-base", head, head).decode().strip(), head)
+
     def test_a_hostile_config_runs_nothing(self):
         script = self.canary()
         self.sh("config", "core.fsmonitor", script)
@@ -1201,6 +1250,96 @@ class GitHelper(GitMixin, unittest.TestCase):
         _, changes, _ = self.read(PRACTICES_TEST_DIFFERENT_OWNER="1")
         self.assertEqual([c[5] for c in changes], ["a"])
         self.assertFalse(os.path.exists(self.canary_file))
+
+    # Review round 3, low 8: the guard table's rows with no test.
+
+    def test_git_env_sets_its_values_and_strips_every_git_variable_of_the_hooks(self):
+        hook = {**self.env, "GIT_DIR": "/elsewhere", "GIT_EXEC_PATH": "/elsewhere",
+                "GIT_ALLOW_PROTOCOL": "ext", "GIT_CONFIG_GLOBAL": "/elsewhere/config",
+                "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "safe.directory",
+                "GIT_CONFIG_VALUE_0": "*", "GIT_CONFIG_PARAMETERS": "'core.pager'='x'"}
+        with mock.patch.dict(os.environ, hook, clear=True):
+            env = PC.git_env()
+        self.assertEqual({k: v for k, v in env.items() if k.startswith("GIT_")}, {
+            "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_ALLOW_PROTOCOL": "none", "GIT_NO_LAZY_FETCH": "1", "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0", "GIT_ATTR_NOSYSTEM": "1"})
+        self.assertEqual(env["HOME"], self.env["HOME"])  # the rest passes through
+        # End to end: config the hook's env carries (safe.directory=*) never reaches git.
+        self.commit(a="1\n")
+        with self.assertRaises(PC.GitError) as e:
+            self.read(PRACTICES_TEST_DIFFERENT_OWNER="1", GIT_CONFIG_COUNT="1",
+                      GIT_CONFIG_KEY_0="safe.directory", GIT_CONFIG_VALUE_0="*")
+        self.assertIn("ownership", str(e.exception))
+
+    def test_a_git_first_on_path_never_runs(self):
+        self.commit(a="1\n")
+        script = self.canary()
+        bin_ = os.path.join(self.tmp, "bin")
+        os.makedirs(bin_)
+        os.symlink(script, os.path.join(bin_, "git"))
+        _, changes, _ = self.read(PATH=bin_ + os.pathsep + os.environ.get("PATH", ""))
+        self.assertEqual([c[5] for c in changes], ["a"])
+        self.assertFalse(os.path.exists(self.canary_file), "a git on PATH ran")
+
+    def test_a_replace_ref_leaves_the_scanned_blob_unchanged(self):
+        self.commit(**{"a.ts": "x({ ...body })\n"})
+        real = self.sh("rev-parse", "HEAD:a.ts")
+        self.put("clean.txt", "const clean = 1\n")
+        fake = self.sh("hash-object", "-w", "clean.txt")
+        self.sh("replace", real, fake)
+        self.assertEqual(self.sh("cat-file", "-p", real), "const clean = 1")  # the trap is live
+        _, changes, blobs = self.read()
+        self.assertEqual([c[4] for c in changes], [real])
+        self.assertEqual(blobs[real], b"x({ ...body })\n")
+
+    def test_a_global_gitconfig_others_can_write_or_own_isnt_forwarded(self):
+        self.commit(a="1\n")
+        path = os.path.join(self.env["HOME"], ".gitconfig")
+        with open(path, "w") as f:
+            f.write(f"[safe]\n\tdirectory = {self.repo}\n")
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            os.chmod(path, 0o644)
+            self.assertEqual(PC.safe_directories(), ([self.repo], None))
+            os.chmod(path, 0o664)  # group-writable
+            values, why = PC.safe_directories()
+            self.assertEqual(values, [])
+            self.assertIn("only they can write", why)
+            os.chmod(path, 0o644)
+            with mock.patch.object(PC.os, "getuid", return_value=os.getuid() + 1):  # foreign
+                self.assertEqual(PC.safe_directories()[0], [])
+        os.chmod(path, 0o664)
+        with self.assertRaises(PC.GitError) as e:
+            self.read(PRACTICES_TEST_DIFFERENT_OWNER="1")
+        self.assertIn("safe.directory not forwarded", str(e.exception))
+
+    def test_alternates_entries_relative_nested_quoted_and_deep(self):
+        def objects(name, *lines):
+            d = os.path.join(self.tmp, name, "objects")
+            os.makedirs(os.path.join(d, "info"), exist_ok=True)
+            if lines:
+                with open(os.path.join(d, "info", "alternates"), "w") as f:
+                    f.write("".join(line + "\n" for line in lines))
+            return os.path.realpath(d)
+
+        c = objects("c")
+        b = objects("b", c)  # absolute, nested under a's relative entry
+        a = objects("a", "# a comment", "../../b/objects", '"/quoted path/objects"')
+        self.assertEqual(list(PC.alternates(a)), [b, c, None])
+        chain = [objects("d7")]
+        for n in range(6, -1, -1):  # d0 -> d1 -> ... -> d7: past git's depth of 5
+            chain.insert(0, objects(f"d{n}", f"../../d{n + 1}/objects"))
+        self.assertEqual(list(PC.alternates(chain[0])), chain[1:6] + [None])
+
+    def test_the_total_blob_cap_leaves_the_rest_unread(self):
+        self.commit(a="1234\n", b="56789\n")
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "BUDGET", 30.0), mock.patch.object(PC, "START",
+                                                                          PC.time.monotonic()):
+            r = PC.Repo(self.repo)
+            oa, ob = (self.sh("rev-parse", f"HEAD:{n}") for n in "ab")
+            self.assertEqual(r.blobs([oa, ob], 1 << 20, 5), ({oa: b"1234\n"}, [ob]))
+            self.assertEqual(r.blobs([oa, ob], 1 << 20, 11)[1], [])
 
     def test_a_spent_budget_stops_before_git_runs(self):
         self.commit(a="1\n")
@@ -1470,6 +1609,36 @@ class OutsideTheProject(BashBase):
         os.unlink(alt)
         self.assertIn("mine.ts:1", self.pre("git push", session_id="s-alt"))
 
+    def test_a_common_dir_or_a_relative_alternates_entry_outside_is_never_read(self):
+        # Review round 3, low 8: a git dir inside the project whose common dir is outside it.
+        wt = os.path.join(self.tmp, "vault-wt")
+        self.sh("worktree", "add", "-q", "-b", "wt", wt, cwd=self.vault)
+        planted = os.path.join(self.proj, "planted-gd")
+        shutil.copytree(os.path.join(self.vault, ".git", "worktrees", "vault-wt"), planted)
+        with open(os.path.join(planted, "commondir"), "w") as f:
+            f.write(os.path.join(self.vault, ".git") + "\n")
+        sub = os.path.join(self.proj, "sub")
+        os.makedirs(sub)
+        with open(os.path.join(sub, ".git"), "w") as f:
+            f.write(f"gitdir: {planted}\n")
+        self.assertEqual(os.path.realpath(self.sh("rev-parse", "--git-common-dir", cwd=sub)),
+                         os.path.realpath(os.path.join(self.vault, ".git")))  # the trap is live
+        before = self.log()
+        self.assertIsNone(self.pre("cd sub && git push", session_id="s-common"))
+        self.assertIn("push: the repo's common dir is outside the project",
+                      self.log()[len(before):])
+        self.assert_skipped(before)
+        # A relative alternates entry resolves from the objects dir, and outside is outside.
+        self.commit(**{"mine.ts": "y({ ...body })\n"})
+        objects = os.path.join(self.proj, ".git", "objects")
+        with open(os.path.join(objects, "info", "alternates"), "w") as f:
+            f.write(os.path.relpath(os.path.join(self.vault, ".git", "objects"), objects) + "\n")
+        before = self.log()
+        self.assertIsNone(self.pre("git push", session_id="s-rel-alt"))
+        self.assertIn("push: the repo's alternates entry is outside", self.log()[len(before):])
+        self.assertNotIn("repo's its", self.log())
+        self.assertNotIn("repo's an", self.log())
+
     def test_a_lane_reads_its_main_checkouts_git_dir(self):
         self.skill("demo", DEMO, where="user")
         main = self.make_repo(os.path.join(self.tmp, "main"))
@@ -1580,6 +1749,72 @@ class Push(BashBase):
                 self.assertIsNone(self.pre(command))
                 self.assertNotIn("git-skipped", self.log()[len(before):])
 
+    def test_a_body_that_cant_be_parsed_leaves_the_top_level_push_checked_and_logs(self):
+        # Review round 3, low 3: a shlex error in a body dropped a top-level push that parsed
+        # fine, logged only as the quiet bash-unparsed.
+        self.commit(**{"new.ts": "y({ ...body })\n"})
+        before = self.log()
+        reason = self.pre("echo `echo \"x`; git push origin main", session_id="s-body")
+        self.assertIn("new.ts:1", reason)
+        deep = "$(" * 12 + "git push" + ")" * 12
+        self.assertIsNone(self.pre(f"echo {deep}", session_id="s-deep"))
+        self.assertIsNone(self.pre("git push 'origin", session_id="s-top"))
+        new = self.log()[len(before):]
+        self.assertEqual(new.count("git-skipped"), 2, new)
+        self.assertIn("couldn't be parsed (ValueError)", new)
+        self.assertNotIn("bash-unparsed", new)
+        before = self.log()
+        self.assertIsNone(self.pre("echo 'unbalanced", session_id="s-none"))
+        self.assertNotIn("git-skipped", self.log()[len(before):])
+
+    def test_the_skip_log_sees_past_a_read_call_and_ignores_what_runs_nothing(self):
+        # Review round 3, low 2: a command that read a commit never logged its foreach pushes,
+        # while a heredoc written to a file and a grep pattern logged false skips.
+        logged = ("git commit -am x && git submodule foreach git push",
+                  "git push origin main; printf x | xargs git push",
+                  "cat <<'EOF' | bash\ngit push\nEOF", "sh -s <<'EOF'\ngit push\nEOF",
+                  "echo `echo \"x`; bash <<'EOF'\ngit commit -m y\nEOF",
+                  'bash <<< "git push origin main"')
+        for n, command in enumerate(logged):
+            with self.subTest(command=command):
+                before = self.log()
+                self.pre(command, session_id=f"s-log-{n}")
+                new = self.log()[len(before):]
+                self.assertIn("git-skipped the command names git commit or push", new)
+                self.assertEqual(len(new.strip().split("\n")), 1, new)
+                for text_ in ("foreach", "printf", "-am", "-m y", "EOF"):  # no command text
+                    self.assertNotIn(text_, new)
+        quiet = ("cat > d.sh <<'EOF'\ngit push\nEOF", 'grep -rn "git push" .',
+                 "rg -l 'gh pr create' src", "git grep -n 'git push'",
+                 "git commit -m 'then git push'", "git commit -F - <<'EOF'\nfix: git push\nEOF",
+                 "gh pr create --draft --title 'git push'", "bash script.sh <<'EOF'\ngit push\nEOF",
+                 'cat <<< "git push"')
+        for n, command in enumerate(quiet):
+            with self.subTest(command=command):
+                before = self.log()
+                self.pre(command, session_id=f"s-quiet-{n}")
+                self.assertNotIn("git-skipped", self.log()[len(before):])
+
+    def test_a_command_over_the_parse_cap_isnt_parsed_and_never_meets_the_kill(self):
+        # Follow-up to review round 3, low 11: a 1 MB command nested 8 deep parsed for 9 to
+        # 11 s, past Claude Code's 5 s kill.
+        self.commit(**{"new.ts": "y({ ...body })\n"})
+        self.assertIn("new.ts:1", self.pre("git push origin main # " + "x" * (PC.CMD_MAX - 100),
+                                           session_id="s-cap-under"))  # under the cap: read
+        before = self.log()
+        self.assertIsNone(self.pre("git push origin main # " + "x" * PC.CMD_MAX,
+                                   session_id="s-cap-over"))
+        nested = "echo " + "$(echo " * 8 + "x" * (1 << 20) + ")" * 8 + "; git push"
+        start = time.monotonic()
+        self.assertIsNone(self.pre(nested, session_id="s-cap-nested"))
+        self.assertLess(time.monotonic() - start, 2.0)
+        new = self.log()[len(before):]
+        self.assertEqual(new.count("too long to parse in time, so it wasn't checked"), 2, new)
+        self.assertNotIn("xxx", new)
+        before = self.log()
+        self.assertIsNone(self.pre("echo " + "x" * PC.CMD_MAX + " git log", session_id="s-cap-q"))
+        self.assertEqual(self.log()[len(before):], "")  # names no call: allowed quietly
+
     def test_an_unwritable_state_file_allows_the_call_and_logs(self):
         # Review round 1: the Bash levels have no transcript marker to fall back on, so a deny
         # whose key couldn't be written denied every resend too, forever.
@@ -1617,6 +1852,11 @@ class Push(BashBase):
                 self.assertIsNone(self.pre(command, session_id="s-o-skip"))
         self.assertEqual(self.log()[len(before):].count(
             "push-unscanned push: a delete or a dry run sends no commits"), 2)
+        # Review round 3, low 9: a delete refspec with no source passed with no log.
+        before = self.log()
+        self.assertIsNone(self.pre("git push origin :old", session_id="s-o-colon"))
+        self.assertIn("push-unscanned push: a delete refspec sends no commits",
+                      self.log()[len(before):])
 
     def test_without_claude_project_dir_a_cd_moves_neither_the_config_nor_the_skills(self):
         # Review round 2, leftover 1: the Bash levels read config.toml and the project skills
@@ -1648,6 +1888,21 @@ class Push(BashBase):
                 self.assertIn(mine, reason)
                 self.assertNotIn(other, reason)
 
+    def test_a_push_after_popd_is_judged_back_in_the_dir_it_left(self):
+        # Review round 3, low 5: the push after a popd was judged in the submodule pushd went
+        # to, so the parent's push went unscanned with no log.
+        sub = self.make_repo(os.path.join(self.proj, "sub"))
+        with open(os.path.join(self.proj, ".git", "info", "exclude"), "a") as f:
+            f.write("sub/\n")
+        self.commit(repo=sub, **{"s.ts": "x({ ...body })\n"})
+        self.commit(**{"p.ts": "y({ ...body })\n"})
+        reason = self.pre("pushd sub && git status && popd && git push", session_id="s-popd")
+        self.assertIn("p.ts:1", reason)
+        self.assertNotIn("s.ts", reason)
+        before = self.log()
+        self.assertIsNone(self.pre("popd && git push", session_id="s-popd-2"))
+        self.assertIn("a cd this check can't follow", self.log()[len(before):])
+
     def test_a_source_that_names_no_commit_is_logged(self):
         # Review round 2, low 4: a glob refspec left nothing to scan, and nothing was logged.
         self.commit(**{"bad.ts": "y({ ...body })\n"})
@@ -1676,6 +1931,14 @@ class Push(BashBase):
         self.assertIn("separate Bash calls", reason)
         self.assertIsNone(self.pre(command))
         self.assertIsNone(self.pre('git commit -m "then git push"'))
+        # Review round 3, low 6: the deny called its resend unscanned, but the push check then
+        # scans the commits already made, and denies again for a finding in them.
+        self.commit(**{"made.ts": "y({ ...body })\n"})
+        reason = self.pre(command, session_id="s-chain")
+        self.assertIn("still scans the commits already made that no remote has", reason)
+        self.assertNotIn("unscanned", reason)
+        self.assertIn("made.ts:1", self.pre(command, session_id="s-chain"))
+        self.assertIsNone(self.pre(command, session_id="s-chain"))
 
 
 class L3r(BashBase):
@@ -1885,6 +2148,74 @@ class Budgets(BashBase):
         self.assertNotIn("e.ts", told)
         self.assertIn("some weren't checked", told)
 
+    def test_the_calls_a_cut_leaves_unchecked_pass_on_the_resend_as_the_deny_says(self):
+        # Review round 3, low 1: after a cut the PR call in the same command got no budget, so
+        # the resend checked it fresh and denied what the cut deny said would pass.
+        self.sh("update-ref", "refs/remotes/origin/main", self.commit(**{"seed": "1\n"}))
+        self.commit(**{"a.ts": "x({ ...body })\n", "b.ts": "y({ ...body })\n",
+                       "app__api__x__route.ts": "export const x = 1\n"})
+        command = "git push -u origin main && gh pr create --fill"
+        real = PC.CRUMB.mark
+
+        def spend_at_b(file, level, pattern):  # the budget runs out at b.ts, for good
+            if file == "b.ts":
+                PC.BUDGET = 0.0
+            return real(file, level, pattern)
+
+        with mock.patch.object(PC.CRUMB, "mark", spend_at_b):
+            reason = self.call(PC.pre_tool_use, command, "b-left")[
+                "hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertIn("a.ts:1", reason)
+        self.assertIn("some weren't checked", reason)
+        self.assertIn("resending it unchanged passes them too", reason)
+        self.assertNotIn("[practices:review:", reason)
+        before = self.log()
+        self.assertIsNone(self.call(PC.pre_tool_use, command, "b-left"))  # the full budget now
+        new = self.log()[len(before):]
+        self.assertIn("scan-truncated L3r: resent after a scan the time budget cut short left "
+                      "this call unchecked", new)
+        # Only the same command over the same commits: a new commit is a new range.
+        self.commit(**{"c.ts": "z({ ...body })\n"})
+        reason = self.call(PC.pre_tool_use, command, "b-left")[
+            "hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertIn("c.ts:1", reason)
+        self.assertIn("[practices:review:", reason)
+
+    def test_the_parse_leaves_a_breadcrumb_and_checks_the_budget_per_body(self):
+        # Review round 3, low 11: parsing had no budget check and no breadcrumb, so a parse
+        # the 5 s kill ended left no trace.
+        crumb, real = {}, PC.load_bash_words()
+
+        class Spy:
+            def __getattr__(self, name):
+                return getattr(real, name)
+
+            def calls(self, *args, **kw):
+                d = os.path.join(self.state, "dotclaude", "practices")
+                for n in os.listdir(d):
+                    if n.startswith("breadcrumb-"):
+                        with open(os.path.join(d, n)) as f:
+                            crumb.update(json.load(f))
+                return real.calls(*args, **kw)
+
+        spy = Spy()
+        spy.state = self.state
+        self.assertIsNone(self.call(PC.pre_tool_use, "git status", "b-parse",
+                                    load_bash_words=lambda: spy))
+        self.assertEqual((crumb.get("level"), crumb.get("pattern")), ("bash", "parse"))
+        self.assertIsNone(self.call(PC.pre_tool_use, "x=$(git push)", "b-parse", BUDGET=0.0))
+        self.assertIn("in the bash parse; the call was allowed unchecked", self.log())
+        seen = []
+        BW.calls("a $(b $(c)) `d`; bash -c 'e'", {"git"}, "/r", [],
+                 check=lambda: seen.append(1))
+        self.assertEqual(len(seen), 4)  # each $(...), the backtick, the bash -c script
+
+        def spent():
+            raise PC.Budget("command parse")
+
+        with self.assertRaises(PC.Budget):  # never swallowed as an unparsable body
+            BW.calls("x=$(git push)", {"git"}, "/r", [], check=spent)
+
     def test_a_crash_allows_and_logs(self):
         def boom(event):
             raise RuntimeError("planted")
@@ -1906,6 +2237,17 @@ class Budgets(BashBase):
         self.commit(**{"a.ts": "x({ ...body })\n"})
         self.assertIsNone(self.call(PC.post_tool_use, "git commit -m x", "b-cut", FILE_MAX=100))
         self.assertIn("1 changed files were not scanned", self.log())
+
+    def test_a_file_paired_by_basename_with_an_unread_blob_is_scanned_as_all_new(self):
+        # Review round 3, low 4: a new file paired with a deleted blob over the size caps was
+        # skipped whole, so a flagged line in it went unscanned.
+        self.commit(**{"dist__index.js": "// built\n" * 20})
+        self.assertIsNone(self.call(PC.pre_tool_use, "git commit -m x", "b-pair"))
+        os.unlink(os.path.join(self.proj, "dist", "index.js"))
+        self.commit(**{"src__index.js": "x({ ...body })\n"})
+        told = self.call(PC.post_tool_use, "git commit -m x", "b-pair", FILE_MAX=100)
+        self.assertIn("src/index.js:1", told["hookSpecificOutput"]["additionalContext"])
+        self.assertNotIn("changed files were not scanned", self.log())
 
     def test_a_large_range_is_cut_short_and_logged(self):
         self.commit(**{"seed": "1\n"})
@@ -2057,8 +2399,50 @@ class BashWords(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(self.git(command), want)
         (_, _, _, _), = BW.calls("PR=$(gh pr create --title t --body b)", {"git", "gh"}, "/r")
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError):  # without rest, an unread body still raises
             BW.calls("$(" * 12 + "git push" + ")" * 12, {"git"}, "/r")
+
+    def test_a_body_that_cant_be_parsed_drops_only_itself_into_rest(self):
+        # Review round 3, low 3: nesting past NEST_MAX, or a shlex error in any body, dropped
+        # the whole command, a top-level push that parses fine included, with a quiet log.
+        for command, body in (("echo `echo \"x`; git push origin main", 'echo "x'),
+                              ("$(" * 12 + "git push" + ")" * 12 + "; git push origin main",
+                               "git push")):
+            with self.subTest(command=command):
+                rest = []
+                got = BW.calls(command, {"git"}, "/r", rest)
+                self.assertEqual([a for _, a, _, _ in got], [["push", "origin", "main"]])
+                self.assertTrue(any(body in r for r in rest), rest)
+        with self.assertRaises(ValueError):  # the top level itself: the caller logs it
+            BW.calls("git push 'origin", {"git"}, "/r", [])
+
+    def test_rest_holds_what_was_left_unread(self):
+        # Review round 3, low 2: rest held every heredoc body and every argument, a read
+        # call's and a grep pattern's too.
+        cases = {
+            "git commit -m 'git push later'": [],  # a head call's args: the caller's
+            "xargs git push": ["git push"],
+            'grep -rn "git push" .': [],
+            "cat > d.sh <<'EOF'\ngit push\nEOF": [""],  # written, never run
+            "sh <<'EOF'\ngit push\nEOF": ["git push\n", ""],
+            "bash -s x <<'EOF'\ngit push\nEOF": ["git push\n", "-s x"],
+            "bash -e - <<'EOF'\ngit push\nEOF": ["git push\n", "-e -"],
+            "bash run.sh <<'EOF'\ngit push\nEOF": ["run.sh"],  # data for the script
+            "cat <<'EOF' | bash\ngit push\nEOF": ["", "git push\n", ""],
+            "cat <<A > f; bash <<B\nnot run\nA\ngit push\nB": ["", "git push\n", ""],
+            "cat <<'EOF'; bash\ngit push\nEOF": ["", ""],  # `;` feeds nothing on
+            # A here-string a shell runs counts too (follow-up to round 3).
+            'bash <<< "git push"': ["git push", ""],
+            'cat <<< "git push" | sh -s': ["", "git push", "-s"],
+            'cat <<< "git push"': [""],
+            'git commit -F - <<< "git push"': [],
+            'bash -c "x" <<< "git push"': [""],  # -c: x is the script, stdin isn't
+        }
+        for command, want in cases.items():
+            with self.subTest(command=command):
+                rest = []
+                BW.calls(command, {"git"}, "/r", rest)
+                self.assertEqual(rest, want)
         # delete_guard's segments keep their shape: a process substitution's body still splits.
         self.assertEqual(list(BW.segments("diff <(rm -rf x) y")), [["diff", "<"], ["rm", "-rf", "x"],
                                                                   ["y"]])
@@ -2109,6 +2493,26 @@ class BashWords(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual([c for _, c in self.git(command)], want)
 
+    def test_pushd_and_popd_keep_a_stack(self):
+        # Review round 3, low 5: popd wasn't followed, so a push after it was judged in the
+        # dir pushd went to.
+        cases = {
+            "pushd sub && git commit -m x && popd && git push": ["/r/sub", "/r"],
+            "pushd a; pushd b; git commit; popd; git push": ["/r/a/b", "/r/a"],
+            "pushd a; pushd; git push": ["/r"],  # no dir: swap with the saved one
+            "popd; git push": [None],  # nothing saved in this command: unknown, never a guess
+            "pushd a && popd && popd; git push": [None],
+            "pushd +1; git push": [None],
+            "pushd a; popd -n; git push": [None],
+            "pushd a; cd /abs; popd; git push": ["/r"],
+            "(pushd sub); git push": ["/r"],
+            "pushd sub; x=$(popd; git push)": ["/r"],  # a substitution inherits the stack
+            "pushd sub; bash -c 'popd; git push'": [None],  # a new shell starts with none
+        }
+        for command, want in cases.items():
+            with self.subTest(command=command):
+                self.assertEqual([c for _, c in self.git(command)], want)
+
     def test_cd_then_commit_runs_in_the_new_dir(self):
         self.assertEqual(self.git("cd sub && git commit")[0][1], "/r/sub")
         self.assertEqual(self.git("cd /abs/x && git commit")[0][1], "/abs/x")
@@ -2145,6 +2549,38 @@ class Globs(unittest.TestCase):
         for glob_, path, want in cases:
             with self.subTest(glob=glob_, path=path):
                 self.assertEqual(PC.path_matches([glob_], path), want)
+
+
+class FileHits(unittest.TestCase):
+    """A commit scan's whole-file rule: `when` on the added lines, then the blob checks."""
+
+    RULE = {"id": "R-1", "when": r"\bsave\(", "unless": r"\bguard\("}
+
+    def test_the_results_stay_the_same(self):
+        added = [(1, "save(x)"), (2, "other()")]
+        cases = (("save(x)\nother()\n", [(1, "save(x)")]),
+                 ("save(x)\nother()\nguard()\n", []),  # unless in the blob
+                 ("save(x) // practices-allow: R-1 ok\n", []))
+        for blob, want in cases:
+            with self.subTest(blob=blob):
+                self.assertEqual(PC.file_hits(self.RULE, added, blob), want)
+        # An unless match with no when match: the same empty result as before.
+        self.assertEqual(PC.file_hits(self.RULE, [(1, "other()")], "other()\nguard()\n"), [])
+
+    def test_the_blob_checks_run_only_when_when_matched(self):
+        # The commit scan paid every rule's `unless` (a pass over the whole blob) on every
+        # changed file before checking `when`.
+        seen = []
+        real = PC.guarded
+
+        def guarded(pattern, text_, helpers, owner):
+            seen.append(pattern)
+            return real(pattern, text_, helpers, owner)
+
+        with mock.patch.object(PC, "guarded", guarded), \
+                mock.patch.object(PC, "allowed", side_effect=AssertionError("allow read")):
+            self.assertEqual(PC.file_hits(self.RULE, [(1, "other()")], "other()\nguard()\n"), [])
+        self.assertNotIn(self.RULE["unless"], seen)
 
 
 if __name__ == "__main__":
