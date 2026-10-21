@@ -22,12 +22,12 @@ skill = "auth-secrets"
 # The gate lines stay near 600 characters in all: the post-compaction digest holds every
 # loaded skill's gate in DIGEST_MAX (2,000) characters, and server-code's takes about 900.
 gate = [
-  "Build an email or phone change as pending until a hashed single-use link to the NEW address is followed (SEC-37).",
-  "Build a same-origin check on every request-supplied redirect, refusing non-strings, backslashes and control characters (SEC-39).",
-  "Build sessions that rotate at sign-in, end at logout and expire on the server, not by cookie Max-Age (SEC-33).",
-  "Build reset, invite and OTP tokens from a CSPRNG, hashed, short-lived and single-use (SEC-36).",
-  "Build secret reads from env, never a key-shaped literal, with .env* gitignored (SEC-41).",
-  "Build each safeguard unasked and name it in your reply; never offer it.",
+  "Build email or phone changes as pending until a hashed single-use link to the NEW address is followed (SEC-37).",
+  "Build a same-origin check on each redirect param: strings only, no backslash or control character, stored paths start with exactly one / (SEC-39).",
+  "Build sessions that rotate at sign-in, end at logout and expire server-side, not by Max-Age (SEC-33).",
+  "Build reset, invite and OTP tokens from a CSPRNG: hashed, short-lived, single-use (SEC-36).",
+  "Build secret reads from env, never key-shaped literals, with .env* gitignored (SEC-41).",
+  "Build each safeguard unasked, name it in your reply, never offer it.",
 ]
 
 [[event]]
@@ -72,7 +72,7 @@ content = [
 ]
 lines = [
   "Build password hashing with Argon2id (19 MiB, 2 iterations, parallelism 1) or bcrypt at cost 10 or more, never a fast hash; say so in your reply (SEC-30).",
-  "Build the policy: at least 8 characters (15 advised), up to at least 64, no composition rules, a common-password check; say so in your reply (SEC-31).",
+  "Build the policy: at least 15 characters for a single-factor password (8 only as one factor of MFA), up to at least 64, no composition rules, a common-password check; say so in your reply (SEC-31).",
   "Build one answer for 'no such account' and 'wrong password', with similar timing; say so in your reply (SEC-32).",
   "Build a per-user and per-IP rate limit on sign-in, sign-up and reset; say so in your reply (server-code SEC-07).",
   "Build a password change that needs the current password, and make it or a reset end the user's other sessions and void any open email or phone change; say so in your reply (SEC-37, SEC-33).",
@@ -103,10 +103,10 @@ lines = [
 id = "redirect-param"
 paths = []
 content = [
-  '''(?:\.get\(\s*|\bquery\[\s*|\bargs\[\s*|\bparams\[\s*)["'](?:next|returnTo|return_to|returnUrl|return_url|redirect|redirectTo|redirect_to|redirectUrl|redirect_url|redirect_uri|callbackUrl|callback_url)["']''',
-  '''\b(?:query|searchParams|args|params)\.(?:next|returnTo|return_to|returnUrl|return_url|redirect|redirectTo|redirect_to|redirectUrl|redirect_url|redirect_uri|callbackUrl|callback_url)\b''',
-  # A destructured read, from the request or from a bare (awaited) searchParams.
-  '''\{[^}\n]{0,200}\b(?:next|returnTo|return_to|returnUrl|redirect|redirectTo|redirectUrl|callbackUrl)\b[^}\n]{0,200}\}\s*=\s*(?:await\s)?\s*(?:(?:req|request|ctx|event|context|props)\.)?(?:query|searchParams|url\.searchParams)\b''',
+  '''(?:\.get\(\s*|\bquery\[\s*|\bargs\[\s*|\bparams\[\s*|\bbody\[\s*)[\"'](?:next|returnTo|return_to|returnUrl|return_url|redirect|redirectTo|redirect_to|redirectUrl|redirect_url|redirect_uri|callbackUrl|callback_url)[\"']''',
+  '''\b(?:query|searchParams|args|params|body)\??\.(?:next|returnTo|return_to|returnUrl|return_url|redirect|redirectTo|redirect_to|redirectUrl|redirect_url|redirect_uri|callbackUrl|callback_url)\b''',
+  # A destructured read, from the request, its body, the router or a bare (awaited) searchParams.
+  '''\{[^}\n]{0,200}\b(?:next|returnTo|return_to|returnUrl|redirect|redirectTo|redirectUrl|callbackUrl)\b[^}\n]{0,200}\}\s*=\s*(?:await\s)?\s*(?:(?:req|request|ctx|event|context|props|router)\.|useRouter\(\)\.)?(?:query|searchParams|url\.searchParams|body)\b''',
 ]
 lines = [
   "Build a redirect validator: one string only, no backslash or control character, parsed against the configured origin, origins compared; say so in your reply (SEC-39).",
@@ -120,7 +120,7 @@ id = "contact-change"
 paths = []
 content = [
   '''\b(?:update|change)_?(?:Email|email|Phone|phone|PhoneNumber|phone_number)\b''',
-  '''(?i:\bUPDATE\s+["`]?\w+["`]?\s+SET\s+[^\n;]{0,200}?\b(?:email|phone|phone_number)\s*=)''',
+  '''(?i:\bUPDATE\s+["`]?\w+["`]?\s+SET\s+(?:[^\n;]{0,200}?,\s*)?(?:\w+\.)?["`]?(?:email|phone|phone_number)["`]?\s*=)''',
   '''\b(?:request\.user|current_user|currentUser)\.(?:email|phone|phone_number|phoneNumber)\s*=(?!=)''',
   '''\.(?:set|update)\(\s*\{(?!\s*where\b)[^{}\n]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*(?:[,}]|:(?!\s*(?:true|false|null)\b))''',
   '''\b(?:verifyBeforeUpdateEmail|updateEmail)\(|\.auth\.updateUser\(''',
@@ -192,12 +192,13 @@ say = "Build password hashing with Argon2id (19 MiB, 2 iterations, parallelism 1
 
 [[rule]]
 # A session cookie set without its flags. A CSRF or XSRF cookie never fires (double-submit needs
-# it readable). The file clears it by naming HttpOnly, Secure and SameSite, or a named options
-# object, unless it also sets secure to false or SameSite to None. httpOnly: false isn't
-# judged, since that is how a CSRF cookie in the same file reads.
+# it readable). The file clears it by naming HttpOnly, Secure and SameSite, or by passing a
+# lowercase options object as an argument (sessionCookieOptions, ...cookieOpts; an imported
+# CookieOptions type doesn't count), unless it also sets secure to false, SameSite to None, or
+# httpOnly to false on a session-named cookie (on its line or inside its set call).
 id = "SEC-34"
 when = '''(?:\bcookies\(\)\)?\.set\(|\bcookies\.set\(|\.cookie\(|\.set_cookie\(|\bsetCookie\(\s*\w+\s*,|(?<![.\w])serialize\(|\bcookie\.serialize\()\s*(?:key\s*=\s*)?(?:["'`](?![^"'`\n]{0,60}?(?i:csrf|xsrf))[^"'`\n]{0,60}?(?i:session|\bsid\b|auth|token|jwt|refresh|remember)|(?![A-Z0-9_]{0,40}(?:CSRF|XSRF))[A-Z0-9_]{0,40}(?:SESSION|AUTH|TOKEN|SID|JWT|REMEMBER))|(?i:set-cookie)["'`]?\s*[:,]\s*[`"'](?![^=`"'\n]{0,60}?(?i:csrf|xsrf))[^`"'\n]{0,60}?(?i:session|\bsid\b|auth|token|jwt|refresh|remember)'''
-unless = '''\A(?![\s\S]*?(?i:\bsecure["'`]?\s*[:=]\s*["'`]?(?:false|nil)\b|\bsamesite["'`]?\s*[:=]\s*["'`]?none\b))(?:(?=[\s\S]*?(?i:httponly))(?=[\s\S]*?(?i:\bsecure\b|__Host-|__Secure-))(?=[\s\S]*?(?i:samesite))|[\s\S]*?\b\w{0,40}(?i:cookie)_?(?i:options|opts|attributes|attrs|config|defaults)\b)'''
+unless = '''\A(?![\s\S]*?(?i:\bsecure[\"'`]?\s*[:=]\s*[\"'`]?(?:false|nil)\b|\bsamesite[\"'`]?\s*[:=]\s*[\"'`]?none\b)|[\s\S]*?^(?![^\n]*(?i:csrf|xsrf))(?=[^\n]*(?i:session|\bsid\b|auth|token|jwt|refresh|remember))[^\n]*(?i:\bhttp_?only)[\"'`]?\s*[:=]\s*[\"'`]?(?i:false|nil)\b|[\s\S]*?(?:\bcookies\(\)\)?\.set\(|\bcookies\.set\(|\.cookie\(|\.set_cookie\(|\bsetCookie\(\s*\w+\s*,|(?<![.\w])serialize\(|\bcookie\.serialize\()\s*(?:key\s*=\s*)?(?:["'`](?![^"'`\n]{0,60}?(?i:csrf|xsrf))[^"'`\n]{0,60}?(?i:session|\bsid\b|auth|token|jwt|refresh|remember)|(?![A-Z0-9_]{0,40}(?:CSRF|XSRF))[A-Z0-9_]{0,40}(?:SESSION|AUTH|TOKEN|SID|JWT|REMEMBER))[^;)]{0,300}?(?i:\bhttp_?only)[\"'`]?\s*[:=]\s*[\"'`]?(?i:false|nil)\b)(?:(?=[\s\S]*?(?i:httponly))(?=[\s\S]*?(?i:\bsecure\b|__Host-|__Secure-))(?=[\s\S]*?(?i:samesite))|[\s\S]*?(?:[(,]|\.\.\.|\*\*)\s*(?=[a-z_$])[\w$.]{0,40}?(?i:cookie)_?(?i:options|opts|attributes|attrs|config|defaults)\b)'''
 paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py,rb,php,go}"]
 say = "Build this session cookie with Secure, HttpOnly and SameSite=Lax (or Strict), and name it with the __Host- prefix (Path=/, no Domain) (SEC-34). If the flags come from a shared options object, name it like `sessionCookieOptions`, or add `practices-allow: SEC-34 flags set in <module>`."
 
@@ -224,9 +225,12 @@ paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py}"]
 say = "Never turn off JWT checks: keep the signature, expiry and audience verified, and never allow the `none` algorithm (SEC-35). A test that builds a deliberately bad token can add `practices-allow: SEC-35-off test fixture`."
 
 [[rule]]
-# A weak generator on a line that names a token, code, nonce or secret.
+# A weak generator in the value given to a name that says token, code, nonce or secret: an
+# assignment, an object key or a call's argument, up to the next statement or key, so
+# { id: crypto.randomUUID(), tokens } stays quiet. A UUID for a CSP nonce (Next's documented
+# Buffer.from(crypto.randomUUID())) is a CSPRNG value and stays quiet too.
 id = "SEC-36"
-when = '''^(?=[^\n]*(?i:token|nonce|secret|passcode|csrf|api_?key|session_?id|magic_?link|invite_?code|reset_?code|verification_?code|\botp|otp\b|\bsalt\b))[^\n]*(?:\bMath\.random\(|\bcrypto\.randomUUID\(|(?<![.\w])(?:uuidv4|uuid4)\(|\buuid\.v4\(|\buuid\.uuid4\(|\brandom\.(?:random|randint|choice|choices|randrange|getrandbits|sample)\(|\bDate\.now\(\)\s*\.toString\()'''
+when = '''(?<![\w$])[\w$]{0,40}?(?i:token|nonce|secret|passcode|csrf|api_?key|session_?id|magic_?link|invite_?code|reset_?code|verification_?code|\botp|otp\b|\bsalt\b|\bcode\b|(?:sms|email|mfa|login|confirm\w{0,8})_?code)[\w$]{0,40}(?:[\"'`]?\s*[:=](?![=>])|\s*\()[^\n;,]{0,120}?(?:,[^\n;,:]{0,60}?)?(?:\bMath\.random\(|\brandom\.(?:random|randint|choice|choices|randrange|getrandbits|sample)\(|\bDate\.now\(\)\s*\.toString\()|(?<![\w$])(?![\w$]{0,40}(?i:nonce))[\w$]{0,40}?(?i:token|nonce|secret|passcode|csrf|api_?key|session_?id|magic_?link|invite_?code|reset_?code|verification_?code|\botp|otp\b|\bsalt\b|\bcode\b|(?:sms|email|mfa|login|confirm\w{0,8})_?code)[\w$]{0,40}(?:[\"'`]?\s*[:=](?![=>])|\s*\()[^\n;,]{0,120}?(?:,[^\n;,:]{0,60}?)?(?:\bcrypto\.randomUUID\(|(?<![.\w])(?:uuidv4|uuid4)\(|\buuid\.v4\(|\buuid\.uuid4\()'''
 paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py}"]
 say = "Build this token from a CSPRNG at 128 bits or more (`crypto.randomBytes(32).toString(\"base64url\")`, `secrets.token_urlsafe(32)`), never Math.random, random, a timestamp or a UUID; store only its hash, expire it soon and consume it on first use (SEC-36)."
 
@@ -237,25 +241,30 @@ say = "Build this token from a CSPRNG at 128 bits or more (`crypto.randomBytes(3
 # pending-change table or Firebase's verifyBeforeUpdateEmail stays quiet; a form handler
 # such as handleEmailChange does not count.
 id = "SEC-37"
-when = '''\.update(?:Many)?\(\s*\{[\s\S]{0,300}?\bdata\s*:\s*\{[^}]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*(?:[,}]|:(?!\s*(?:true|false|null)\b))|\.set\(\s*\{[^{}]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*(?:[,}]|:(?!\s*(?:true|false|null)\b))|\.update\(\s*\{(?!\s*where\b)[^{}]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*(?:[,}]|:(?!\s*(?:true|false|null)\b))|\$set\s*:\s*\{[^{}]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*(?:[,}]|:(?!\s*(?:true|false|null)\b))|(?i:\bUPDATE\s+["`]?\w+["`]?\s+SET\s+[^;]{0,200}?\b(?:email|phone|phone_number)\s*=)|\b(?:request\.user|current_user|currentUser|self\.request\.user)\.(?:email|phone|phone_number|phoneNumber)\s*=(?!=)|\b(?:current_user|request\.user)\.update!?\([^\n]{0,100}\b(?:email|phone):|(?<!function )(?<![\w])updateEmail\((?![^)\n]{0,200}\)\s*(?::\s*[^{\n]{1,80})?\{)'''
+when = '''\.update(?:Many)?\(\s*\{[^;]{0,300}?\bdata\s*:\s*\{[^}]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*(?:[,}]|:(?!\s*(?:true|false|null)\b))|\.set\(\s*\{[^{}]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*(?:[,}]|:(?!\s*(?:true|false|null)\b))|\.update\(\s*\{(?!\s*where\b)[^{}]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*(?:[,}]|:(?!\s*(?:true|false|null)\b))|\$set\s*:\s*\{[^{}]{0,200}?\b(?:email|phone|phoneNumber|phone_number)\b\s*(?:[,}]|:(?!\s*(?:true|false|null)\b))|(?i:\bUPDATE\s+["`]?\w+["`]?\s+SET\s+(?:[^;]{0,200}?,\s*)?(?:\w+\.)?["`]?(?:email|phone|phone_number)["`]?\s*=)|\b(?:request\.user|current_user|currentUser|self\.request\.user)\.(?:email|phone|phone_number|phoneNumber)\s*=(?!=)|\b(?:current_user|request\.user)\.update!?\([^\n]{0,100}\b(?:email|phone):|(?<!function )(?<![\w])updateEmail\((?![^)\n]{0,200}\)\s*(?::\s*[^{\n]{1,80})?\{)'''
 unless = '''(?i:\bpending_?(?:email|phone|contact)\w{0,30}|\b(?:email|phone|contact)_?change_?(?:requests?|tokens?)\b|\b(?:email|phone)_?changes\b|\bunconfirmed_?email\b)|\bverifyBeforeUpdateEmail\b'''
 paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py,rb,php,go,sql}"]
 say = "Don't write a new email or phone to the account directly. Build a pending change: a random single-use token, stored hashed and valid 30 minutes or less, sent to the NEW address; switch only when it is followed, with a fresh sign-in to start, a notice to the old address with a link that cancels the change, a rate limit and an audit line (SEC-37, see the skill's references/email-change.md). On Firebase, use verifyBeforeUpdateEmail, never updateEmail. If this is the confirm step or an audited admin tool, add `practices-allow: SEC-37 <reason>`."
 
 [[rule]]
 # A redirect to a request-supplied value: read inside the call, or a variable named like the
-# param in a file that reads the param (by name or destructured). A named validator, or an
-# origin comparison on a value parsed against a base (new URL(value, origin)), clears it; an
-# Origin header check (req.headers.origin, new URL(origin).origin) does not.
+# param in a file that reads the param (by name, from the body, or destructured). Wrapping or
+# assigning the value through any call clears it, whatever the validator's name, except
+# String, decodeURI(Component), encodeURI(Component) and new URL, which validate nothing. So
+# do a validator named like safeRedirect and an origin comparison on a value parsed against a
+# base (new URL(value, origin)); an Origin header check (req.headers.origin) does not.
 id = "SEC-39"
-when = '''(?:\b(?:redirect|redirect_to|HttpResponseRedirect|RedirectResponse)|\brouter\.(?:push|replace)|\blocation\.(?:assign|replace))\(\s*[^\n)]{0,120}?(?:\.get\(\s*["']|\bquery\.|\bquery\[\s*["']|\bparams\[\s*:?["']?|\bargs\[\s*["']|\bsearchParams\.)(?:next|returnTo|return_to|returnUrl|return_url|redirect|redirectTo|redirect_to|redirectUrl|redirect_url|callbackUrl|callback_url)\b|(?:\b(?:redirect|redirect_to|HttpResponseRedirect|RedirectResponse)|\brouter\.(?:push|replace)|\blocation\.(?:assign|replace))\(\s*(?:\d{3}\s*,\s*)?(?:next|returnTo|return_to|returnUrl|return_url|redirectTo|redirect_to|redirectUrl|redirect_url|callbackUrl|callback_url)\s*(?:\)|\?\?|\|\||,|\bor\b)|\blocation\.href\s*=\s*(?:next|returnTo|returnUrl|redirectTo|redirectUrl|callbackUrl)\b'''
-unless = '''(?i:safe_?redirect|safe_?(?:next|return)\w{0,20}|valid(?:ate)?_?(?:redirect|next|return)\w{0,20}|is_?safe_?(?:url|redirect|path)|url_has_allowed_host_and_scheme|is_?same_?origin|sanitize_?(?:redirect|next|return)\w{0,20}|is_?(?:relative|local)_?url)|\b(\w{1,40})(?:\s*:\s*URL)?\s*=\s*new\s+URL\([^,()\n]{1,120}(?:\([^()\n]{0,120}\)[^,()\n]{0,60})?,[\s\S]{0,400}?\b\1\.origin\s*[!=]==?|\bnew\s+URL\([^,()\n]{1,120}(?:\([^()\n]{0,120}\)[^,()\n]{0,60})?,[^()\n]{1,120}\)\.origin\s*[!=]==?|\A(?![\s\S]*?(?:\.get\(\s*|\bquery\[\s*|\bargs\[\s*|\bparams\[\s*)["'](?:next|returnTo|return_to|returnUrl|return_url|redirect|redirectTo|redirect_to|redirectUrl|redirect_url|callbackUrl|callback_url)["']|[\s\S]*?\b(?:query|searchParams|args|params)\.(?:next|returnTo|return_to|returnUrl|return_url|redirect|redirectTo|redirect_to|redirectUrl|redirect_url|callbackUrl|callback_url)\b|[\s\S]*?\{[^}\n]{0,200}\b(?:next|returnTo|return_to|returnUrl|redirect|redirectTo|redirectUrl|callbackUrl)\b[^}\n]{0,200}\}\s*=\s*(?:await\s)?\s*(?:(?:req|request|ctx|event|context|props)\.)?(?:query|searchParams|url\.searchParams)\b)'''
+when = '''(?:\b(?:redirect|redirect_to|HttpResponseRedirect|RedirectResponse)|\brouter\.(?:push|replace)|\blocation\.(?:assign|replace))\(\s*(?:[^\n()]{0,60}?(?:\b(?:String|decodeURI|decodeURIComponent|encodeURI|encodeURIComponent)|\bnew\s+URL\s*|(?<![\w$\s]))\(\s*)?(?:[^\n()]{0,60}?(?:\b(?:String|decodeURI|decodeURIComponent|encodeURI|encodeURIComponent)|\bnew\s+URL\s*|(?<![\w$\s]))\(\s*)?[^\n()]{0,120}?(?:\.get\(\s*[\"']|\bquery\??\.|\bquery\[\s*[\"']|\bparams\[\s*:?[\"']?|\bargs\[\s*[\"']|\bsearchParams\??\.|\bbody\??\.|\bbody\[\s*[\"'])(?:next|returnTo|return_to|returnUrl|return_url|redirect|redirectTo|redirect_to|redirectUrl|redirect_url|callbackUrl|callback_url)\b|(?:\b(?:redirect|redirect_to|HttpResponseRedirect|RedirectResponse)|\brouter\.(?:push|replace)|\blocation\.(?:assign|replace))\(\s*(?:\d{3}\s*,\s*)?(?:(?:\b(?:String|decodeURI|decodeURIComponent|encodeURI|encodeURIComponent)|\bnew\s+URL)\s*\(\s*)?(?:(?:\b(?:String|decodeURI|decodeURIComponent|encodeURI|encodeURIComponent)|\bnew\s+URL)\s*\(\s*)?(?:next|returnTo|return_to|returnUrl|return_url|redirectTo|redirect_to|redirectUrl|redirect_url|callbackUrl|callback_url)\s*(?:\)|\?\?|\|\||,|\bor\b)|\blocation\.href\s*=\s*(?:next|returnTo|returnUrl|redirectTo|redirectUrl|callbackUrl)\b'''
+unless = '''(?i:safe_?redirect|safe_?(?:next|return)\w{0,20}|valid(?:ate)?_?(?:redirect|next|return)\w{0,20}|is_?safe_?(?:url|redirect)|url_has_allowed_host_and_scheme|is_?same_?origin|sanitize_?(?:redirect|next|return)\w{0,20})|\b(next|returnTo|return_to|returnUrl|return_url|redirectTo|redirect_to|redirectUrl|redirect_url|callbackUrl|callback_url)\b\s*(?::\s*[\w$<>|\[\]. ]{1,40}?)?=(?![=>])\s*(?:await\s+)?(?!(?:String|decodeURI|decodeURIComponent|encodeURI|encodeURIComponent)\s*\(|new\s+URL\b)(?:new\s+)?[A-Za-z_$][\w$.]{0,80}(?<!\.get)(?<!\.getAll)(?<!\.param)\([\s\S]{0,3000}?(?:(?:\b(?:redirect|redirect_to|HttpResponseRedirect|RedirectResponse)|\brouter\.(?:push|replace)|\blocation\.(?:assign|replace))\(\s*(?:\d{3}\s*,\s*)?|\blocation\.href\s*=\s*)\1\b|\b(\w{1,40})(?:\s*:\s*URL)?\s*=\s*new\s+URL\([^,()\n]{1,120}(?:\([^()\n]{0,120}\)[^,()\n]{0,60})?,[\s\S]{0,400}?\b\2\.origin\s*[!=]==?|\bnew\s+URL\([^,()\n]{1,120}(?:\([^()\n]{0,120}\)[^,()\n]{0,60})?,[^()\n]{1,120}\)\.origin\s*[!=]==?|\A(?![\s\S]*?(?:\.get\(\s*|\bquery\[\s*|\bargs\[\s*|\bparams\[\s*|\bbody\[\s*)[\"'](?:next|returnTo|return_to|returnUrl|return_url|redirect|redirectTo|redirect_to|redirectUrl|redirect_url|callbackUrl|callback_url)[\"']|[\s\S]*?\b(?:query|searchParams|args|params|body)\??\.(?:next|returnTo|return_to|returnUrl|return_url|redirect|redirectTo|redirect_to|redirectUrl|redirect_url|callbackUrl|callback_url)\b|[\s\S]*?\{[^}\n]{0,200}\b(?:next|returnTo|return_to|returnUrl|redirect|redirectTo|redirectUrl|callbackUrl)\b[^}\n]{0,200}\}\s*=\s*(?:await\s)?\s*(?:(?:req|request|ctx|event|context|props|router)\.|useRouter\(\)\.)?(?:query|searchParams|url\.searchParams|body)\b)'''
 paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py,rb,php,go}"]
-say = "Build a same-origin validator for this redirect target: refuse a non-string, a backslash or any control character, parse it against the configured origin, compare origins, and redirect to the validated absolute URL, never a string starting with // (SEC-39, see the skill's references/redirects.md). Name it like `safeRedirect` so the hook can see it."
+say = "Build a same-origin validator for this redirect target: refuse a non-string, a backslash or any control character, parse it against the configured origin, compare origins, and redirect to the validated absolute URL, never a string starting with // (SEC-39, see the skill's references/redirects.md). If the code already has, or the task names, its own validator, keep that name and route the value through it: wrap the read in the call, or assign the call's result and redirect to that."
 
 [[rule]]
+# A public-prefixed name holding a secret. A vendor name counts only before KEY, TOKEN or SECRET,
+# PRIVATE only as PRIVATE_KEY and PASSWORD only at the end, so NEXT_PUBLIC_OTP_RESEND_SECONDS,
+# NEXT_PUBLIC_PRIVATE_BETA and NEXT_PUBLIC_PASSWORD_MIN_LENGTH stay quiet.
 id = "SEC-40"
-when = '''\b(?:NEXT_PUBLIC|VITE|PUBLIC|EXPO_PUBLIC|REACT_APP|NUXT_PUBLIC|GATSBY)_[A-Z0-9_]{0,40}(?:SECRET|SERVICE_ROLE|SERVICE_KEY|PRIVATE|ADMIN_KEY|ADMIN_TOKEN|PASSWORD|DATABASE_URL|OPENAI|ANTHROPIC|RESEND|SENDGRID|MAILGUN|POSTMARK|TWILIO)'''
+when = '''\b(?:NEXT_PUBLIC|VITE|PUBLIC|EXPO_PUBLIC|REACT_APP|NUXT_PUBLIC|GATSBY)_[A-Z0-9_]{0,40}(?:SECRET|SERVICE_ROLE|SERVICE_KEY|PRIVATE_KEY|ADMIN_KEY|ADMIN_TOKEN|PASSWORD\b|DATABASE_URL|(?:OPENAI|ANTHROPIC|RESEND|SENDGRID|MAILGUN|POSTMARK|TWILIO)[A-Z0-9_]{0,20}(?:KEY|TOKEN|SECRET))'''
 paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,vue,svelte,astro,json,yaml,yml,toml}", ".env*"]
 say = "A NEXT_PUBLIC_, VITE_ or PUBLIC_ variable is built into the browser bundle, so a secret in one is public. Keep this key server-only under a name without the public prefix, and call the service from server code (SEC-40). If the value is truly public (a publishable key), rename it to say so."
 
@@ -308,8 +317,9 @@ paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py,rb,php,go}"]
 say = "A wildcard or reflected origin with credentials lets any site read your users' data. Build a fixed allowlist of origins and echo the request's Origin only when it is on that list (SEC-43)."
 
 [[rule]]
-# A wildcard source in a CSP directive that can load code or send data.
+# A wildcard source in a CSP directive that can load code or send data. A helmet directive
+# array may span lines.
 id = "SEC-43-csp"
-when = '''(?i:\b(?:default|script|connect|frame|child|worker|object)-src\b[^\n;]{0,300}?\s(?:https?://|wss?://)?\*(?:\.|[\s;"'`]|$))|(?i:\bform-action\b[^\n;]{0,300}?\s(?:https?://)?\*(?:\.|[\s;"'`]|$))|(?i:\b(?:default|script|connect|frame|child|worker|object)Src\b\s*:\s*\[[^\]\n]{0,300}?["'`](?:https?://|wss?://)?\*(?:\.|["'`]))'''
+when = '''(?i:\b(?:default|script|connect|frame|child|worker|object)-src\b[^\n;]{0,300}?\s(?:https?://|wss?://)?\*(?:\.|[\s;"'`]|$))|(?i:\bform-action\b[^\n;]{0,300}?\s(?:https?://)?\*(?:\.|[\s;"'`]|$))|(?i:\b(?:default|script|connect|frame|child|worker|object)Src\b\s*:\s*\[[^\]]{0,300}?["'`](?:https?://|wss?://)?\*(?:\.|["'`]))'''
 paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py,rb,php,go,json,toml,yaml,yml,conf,html}", "_headers"]
 say = "Name exact hosts in this CSP directive, plus each one's redirect targets, never * or *.domain: a wildcard lets any subdomain, including a user-content or a taken-over one, serve script or receive data (SEC-43)."
