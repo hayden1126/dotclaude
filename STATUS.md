@@ -87,14 +87,16 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lanes** (briefs in each record). Merge order (2026-10-20): 1 exam-prep
-    (`feat/exam-prep-skill`, carries the lead's notes; the exam-prep skill suite below, plus
-    classifying Claude Code 2.1.305's `--profile`, first so it can install from its lane for the
-    dry run before round 1's go/no-go, Thu 10/22). 2 mute
-    (`feat/device-mute`, #141: the device-wide mute below, plus `setup-tmux.sh`'s `link()`
-    fix). 3 policy-fp (`fix/policy-false-denials`: the three subagent-policy false denials
-    below, plus gap SP3 on Hayden's pick). 4 practices (its next PR, auth-secrets; the skill suite below). Each opened on
-    Hayden's ok. practices merged #142 the same day (Hayden moved it first since it was
+  - **Live lanes** (briefs in each record). Merge order (Hayden, 2026-10-21, by readiness, since
+    exam-prep had stages left while mute and policy-fp were nearly done): 1 mute
+    (`feat/device-mute`, #141, carries the lead's notes: the device-wide mute below, plus
+    `setup-tmux.sh`'s `link()` fix). 2 policy-fp (`fix/policy-false-denials`: the three
+    subagent-policy false denials below, plus gap SP3 on Hayden's pick, plus a copy of
+    exam-prep's `--profile` line so main's delegation tests go green at its merge). 3 exam-prep
+    (`feat/exam-prep-skill`: the exam-prep skill suite below, plus classifying Claude Code
+    2.1.305's `--profile`; its dry run passed without an install, and it needs its install turn
+    before round 1's go/no-go, Thu 10/22). 4 practices (its next PR, auth-secrets; the skill
+    suite below). Each opened on Hayden's ok. practices merged #142 the same day (Hayden moved it first since it was
     finished) and stays open for more PRs. Merged and closed 2026-10-20, installed from main:
     summary-retire (#139), link-atomic (#140, which Hayden ordered first so no later install ran
     the old `link()`), pr-horizon (#135), config-dir (#133). Hayden raised the cap
@@ -390,7 +392,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lanes exam-prep (merge order 1, carries the lead branch), mute (2), policy-fp (3) and
+  0. Lanes mute (merge order 1, carries the lead branch), policy-fp (2), exam-prep (3) and
      practices (4, its next PR) run; their state is in their records (`lane ls`). After each reinstall,
      check `ls -la ~/.claude/CLAUDE.md` (the Watch item). Watch that push asks open with the
      briefing (#137); if they skip it, the Stop-hook check is the follow-up (Hayden's pick).
