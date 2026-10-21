@@ -1089,9 +1089,10 @@ def relative(path, project):
     return path if rel.startswith("..") else rel.replace(os.sep, "/")
 
 
-def run_patterns(items, fn):
+def run_patterns(items, fn, cut=False):
     """[item for item in items if fn(item)], each inside its own guard; a throwing pattern is
-    logged and skipped, and once the budget is spent the rest are skipped and logged."""
+    logged and skipped, and once the budget is spent the rest are skipped and logged (with
+    cut, the Budget then goes on up, so a scan knows it was cut short)."""
     out = []
     for n, item in enumerate(items):
         try:
@@ -1102,6 +1103,8 @@ def run_patterns(items, fn):
         except Budget:
             left = ", ".join(f"{s['name']}:{x['id']}" for s, x in items[n:])
             log("budget-spent", f"after {BUDGET}s, skipped {left}")
+            if cut:
+                raise
             break
     return out
 
@@ -1582,10 +1585,32 @@ def commit_rules(skills, cfg, line_only=False):
 
 
 def scan(repo, spec, rules, level, ctx, lockfiles=True):
-    """[Finding] for what the commits of rev-list spec add (merges left out, the newest
+    """([Finding], cut) for what the commits of rev-list spec add (merges left out, the newest
     MAX_COMMITS, BYTES_MAX of blobs), skipping pure renames and anything but regular files.
-    With lockfiles, a changed lockfile with no audit in the transcripts is a SEC-60 finding."""
-    commits, more = repo.commits(*spec, cap=MAX_COMMITS)
+    With lockfiles, a changed lockfile with no audit in the transcripts is a SEC-60 finding.
+    cut is None when the scan read all it meant to. When the time budget ran out mid-scan
+    (logged as scan-truncated), the findings are those read before it and cut is the range's
+    cut key, `<level>|engine|cut|-|sha1(git dir and commits)`: a level that denies on them
+    keeps it, and a resend of the same range then passes unscanned (logged), rather than
+    getting further and being denied again."""
+    found, key = [], f"{level}|engine|cut|-|unread"
+    try:
+        commits, more = repo.commits(*spec, cap=MAX_COMMITS)
+        key = f"{level}|engine|cut|-|" + _sha1("\n".join([repo.git_dir, *(c for c, _ in commits)]))
+        if key in ctx["seen"]:
+            log("scan-truncated", f"{level}: resent after a scan the time budget cut short, so "
+                "it passed unscanned")
+            return [], None
+        _scan(repo, commits, more, rules, level, ctx, lockfiles, found)
+    except Budget as e:
+        log("scan-truncated", f"{level}: the time budget ran out in the {e}, so what came after "
+            "it wasn't scanned")
+        return found, key
+    return found, None
+
+
+def _scan(repo, commits, more, rules, level, ctx, lockfiles, found):
+    """scan's body: appends each Finding to found as it is read, so a cut keeps them."""
     if more:
         log("scan-truncated", f"{level}: only the newest {MAX_COMMITS} commits were scanned")
     files = []
@@ -1599,7 +1624,6 @@ def scan(repo, spec, rules, level, ctx, lockfiles=True):
             if status == "A" and noid in gone:
                 continue  # a pure rename: the same blob under a new name
             files.append((commit, path, ooid if status != "A" else None, noid))
-    found = []
     locks = [(c, p, n) for c, p, _, n in files if lockfiles and is_lockfile(p)]
     if locks and not is_off(ctx["cfg"], ENGINE, "SEC-60") and not ctx["audited"]():
         for commit, path, noid in locks:
@@ -1631,11 +1655,10 @@ def scan(repo, spec, rules, level, ctx, lockfiles=True):
             found.extend(Finding(level, s, r, path, n, line, commit) for n, line in got)
             return False
 
-        run_patterns(mine, hits)
+        run_patterns(mine, hits, cut=True)
     if cut:
         log("scan-truncated", f"{level}: {cut} changed files were not scanned: their old blob "
             "was over the size caps, so what they add can't be told")
-    return found
 
 
 def fresh(findings, event, repo):
@@ -1682,7 +1705,12 @@ def context(event, cfg, ts):
             cache["a"] = audited(ts)
         return cache["a"]
 
-    return {"cfg": cfg, "helpers": cfg["helpers"], "audited": was_audited}
+    return {"cfg": cfg, "helpers": cfg["helpers"], "audited": was_audited,
+            "seen": state_keys(event)}
+
+
+CUT_NOTE = ("The time budget ran out before this check read every commit, so some weren't "
+            "checked; these are the findings it read.")
 
 
 # L3s: the PreToolUse half records HEAD, the PostToolUse half scans what the commit added.
@@ -1759,7 +1787,7 @@ def post_tool_use(event):
     heads, tops = record
     skills = discover(event)
     rules = commit_rules(skills, cfg)
-    found, repos = [], {}
+    found, repos, cuts = [], {}, []
     with Transcripts(event) as ts:
         ctx = context(event, cfg, ts)
         try:
@@ -1776,23 +1804,28 @@ def post_tool_use(event):
                 if head is None or before == head:
                     continue  # unborn still, or nothing committed
                 spec = [head, "--not", before] if before else [head]
-                found += [(f, repo) for f in scan(repo, spec, rules, "L3s", ctx)]
-            new = []
-            for repo in repos.values():
-                new += fresh([f for f, r in found if r is repo], event, repo)
+                got, cut = scan(repo, spec, rules, "L3s", ctx)
+                found += [(f, repo) for f in got]
+                if cut:
+                    cuts.append(cut)
+                    break  # the budget is spent: tell what was read
         except Budget as e:
-            log("budget-spent", f"after {BUDGET}s, in the L3s {e}; the commit went unchecked")
-            return None
+            log("budget-spent", f"after {BUDGET}s, in the L3s {e}; the repos left went "
+                "unchecked")
         except GitError as e:
             log("git-skipped", f"L3s: {e}")
             return None
+    new = []
+    for repo in repos.values():
+        new += fresh([f for f, r in found if r is repo], event, repo)
     if not new:
         return None
-    state_add(event, [f.key for f in new])
+    state_add(event, [f.key for f in new] + cuts)
     text = ("[practices:L3s] This commit added code that a practices rule flags. Fix it and "
             "amend the commit, or, when one is a false positive, add `practices-allow: <id> "
             "<reason>` to the code (on the flagged line itself for a line-scoped rule) and "
-            "amend. Each finding is told once.\n" + findings_text(new))
+            "amend. Each finding is told once.\n" + (CUT_NOTE + "\n" if cuts else "")
+            + findings_text(new))
     return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": text}}
 
 
@@ -1834,34 +1867,42 @@ def push_sources(args):
 
 
 def push_gate(event, pushes, skills, cfg, ts, ctx, bounds):
-    """(new findings, the repo) for the commits the pushes would send that no remote has."""
+    """(new findings, the cut keys of a scan the budget cut short) for the commits the pushes
+    would send that no remote has. Once the budget is spent the pushes left go unchecked,
+    logged, and the findings read so far still count."""
     rules = commit_rules(skills, cfg)
-    out = []
-    for _, args, where in pushes:
-        srcs, skip = push_sources(args)
-        if skip or not srcs:
-            continue
-        if any("$" in s or "%SUBST%" in s for s in srcs):
-            log("git-skipped", "push: an expansion in a refspec, so this push wasn't checked")
-            continue
-        repo = open_repo(where, "push", bounds)
-        if repo is None:
-            continue
-        tips = ["--branches"] if "--branches" in srcs else []
-        tips += [oid for s in srcs if s != "--branches" and (oid := repo.rev(s))]
-        if not tips:
-            continue
-        found = scan(repo, [*tips, "--not", "--remotes"], rules, "push", ctx)
-        out += fresh(found, event, repo)
-    return out
+    out, cuts = [], []
+    try:
+        for _, args, where in pushes:
+            srcs, skip = push_sources(args)
+            if skip or not srcs:
+                continue
+            if any("$" in s or "%SUBST%" in s for s in srcs):
+                log("git-skipped", "push: an expansion in a refspec, so this push wasn't checked")
+                continue
+            repo = open_repo(where, "push", bounds)
+            if repo is None:
+                continue
+            tips = ["--branches"] if "--branches" in srcs else []
+            tips += [oid for s in srcs if s != "--branches" and (oid := repo.rev(s))]
+            if not tips:
+                continue
+            found, cut = scan(repo, [*tips, "--not", "--remotes"], rules, "push", ctx)
+            out += fresh(found, event, repo)
+            if cut:
+                cuts.append(cut)
+                break
+    except Budget as e:
+        log("budget-spent", f"after {BUDGET}s, in the push {e}; the pushes left went unchecked")
+    return out, cuts
 
 
-def push_reason(findings):
+def push_reason(findings, cut=False):
     return ("[practices:push] The commits this push would send add code that a practices rule "
             "flags. Fix it in a new commit (or amend one that isn't pushed yet) and push again, "
             "or, when one is a false positive, add `practices-allow: <id> <reason>` to the code "
             "(on the flagged line itself for a line-scoped rule). Resending this push unchanged "
-            "passes this check.\n" + findings_text(findings))
+            "passes this check.\n" + (CUT_NOTE + "\n" if cut else "") + findings_text(findings))
 
 
 # L3r: a PR marked ready (or opened as one) waits for a reviewer briefed with the gate lines.
@@ -1948,8 +1989,20 @@ def pr_head(repo, pr):
 
 
 def l3r(event, ghs, skills, cfg, ts, ctx, bounds):
-    """(review blocks, their keys, new rule findings, notes) for the PR calls."""
-    blocks_, keys, found, notes = [], [], [], []
+    """(review blocks, their keys, new rule findings, notes, the cut keys of a scan the budget
+    cut short) for the PR calls. Once the budget is spent the PR calls left go unchecked,
+    logged, and what was found so far still counts."""
+    out = ([], [], [], [], [])
+    try:
+        _l3r(event, ghs, skills, cfg, ts, ctx, bounds, *out)
+    except Budget as e:
+        log("budget-spent", f"after {BUDGET}s, in the L3r {e}; the PR calls left went "
+            "unchecked")
+    return out
+
+
+def _l3r(event, ghs, skills, cfg, ts, ctx, bounds, blocks_, keys, found, notes, cuts):
+    """l3r's body: appends to its lists as it goes, so a spent budget keeps what was found."""
     for args, cwd in ghs:
         pr = pr_ready(args)
         if pr is None:
@@ -1994,11 +2047,13 @@ def l3r(event, ghs, skills, cfg, ts, ctx, bounds):
                 keys += [f"L3r|{s['name']}|review|-|{_sha1(head)}" for s, _ in new]
                 blocks_.append(review_block(new, mb, head, branch))
         rules = commit_rules(skills, cfg, line_only=True)
-        found += fresh(scan(repo, [head, "--not", mb], rules, "L3r", ctx, lockfiles=False),
-                       event, repo)
+        got, cut = scan(repo, [head, "--not", mb], rules, "L3r", ctx, lockfiles=False)
+        found += fresh(got, event, repo)
         if note and (len(blocks_), len(found)) != told:
             notes.append(note)
-    return blocks_, keys, found, notes
+        if cut:
+            cuts.append(cut)
+            return
 
 
 def review_block(touched, mb, head, branch, shown=8):
@@ -2043,7 +2098,7 @@ def bash_pre(event):
                 "[practices:push] This one Bash call both commits and pushes, so the push check "
                 "can't see what the commit adds. Run the commit and the push as separate Bash "
                 "calls. Resending this call unchanged passes this check, unscanned.")
-    reasons, keys = [], []
+    reasons, keys, cut_keys = [], [], []
     try:
         bounds = bounds_of(event)
         if commits:
@@ -2052,13 +2107,16 @@ def bash_pre(event):
             skills = discover(event)
             with Transcripts(event) as ts:
                 ctx = context(event, cfg, ts)
-                new = push_gate(event, pushes, skills, cfg, ts, ctx, bounds) if pushes else []
+                new, cuts = (push_gate(event, pushes, skills, cfg, ts, ctx, bounds) if pushes
+                             else ([], []))
+                cut_keys += cuts
                 if new:
-                    reasons.append(push_reason(new))
+                    reasons.append(push_reason(new, bool(cuts)))
                     keys += [f.key for f in new]
                 if ghs:
-                    review, review_keys, found, notes = l3r(event, ghs, skills, cfg, ts, ctx,
-                                                            bounds)
+                    review, review_keys, found, notes, cuts = l3r(event, ghs, skills, cfg, ts,
+                                                                  ctx, bounds)
+                    cut_keys += cuts
                     reasons += review
                     keys += review_keys
                     found = [f for f in found if f.key not in keys]
@@ -2067,7 +2125,8 @@ def bash_pre(event):
                             "[practices:L3r] This PR's commits add code that a practices rule "
                             "flags. Fix it in a new commit and push, or, when one is a false "
                             "positive, add `practices-allow: <id> <reason>` to the code. Resending "
-                            "passes this check.\n" + findings_text(found))
+                            "passes this check.\n" + (CUT_NOTE + "\n" if cuts else "")
+                            + findings_text(found))
                         keys += [f.key for f in found]
                     reasons += notes
     except Budget as e:
@@ -2076,7 +2135,8 @@ def bash_pre(event):
     except GitError as e:
         log("git-skipped", f"Bash check: {e}")
         return None
-    if not reasons or not state_add(event, keys):  # an unkept key: allow, logged
+    # A cut scan's key rides on any deny of this call, so its resend passes that range unscanned.
+    if not reasons or not state_add(event, keys + cut_keys):  # an unkept key: allow, logged
         return None
     return deny("\n\n".join(reasons))
 

@@ -1756,7 +1756,51 @@ class Budgets(BashBase):
         with mock.patch("subprocess.run", slow):
             self.assertIsNone(self.call(PC.post_tool_use, "git commit -m x", "b-slow"))
         self.assertEqual(seen.get("level"), "L3s")
-        self.assertIn("budget-spent", self.log())
+        self.assertIn("scan-truncated L3s: the time budget ran out in the git cat-file", self.log())
+
+    def cut_at(self, path):
+        """CRUMB.mark spending the budget when a scan reaches path's patterns."""
+        real = PC.CRUMB.mark
+
+        def mark(file, level, pattern):
+            if file == path:
+                raise PC.Budget(f"{level} {pattern}")
+            return real(file, level, pattern)
+
+        return mock.patch.object(PC.CRUMB, "mark", mark)
+
+    def test_a_scan_cut_short_denies_once_on_what_it_read_and_the_resend_passes(self):
+        # Review round 2, low 5: a partial scan denied, and a resend that got further was
+        # denied again. Now a cut scan denies once on what it read, keyed on repo and range.
+        self.sh("update-ref", "refs/remotes/origin/main", self.commit(**{"seed": "1\n"}))
+        self.commit(**{"a.ts": "x({ ...body })\n", "b.ts": "y({ ...body })\n"})
+        with self.cut_at("a.ts"):  # nothing read yet: allowed, logged
+            self.assertIsNone(self.call(PC.pre_tool_use, "git push", "b-cut"))
+        self.assertIn("scan-truncated push: the time budget ran out", self.log())
+        with self.cut_at("b.ts"):
+            reason = self.call(PC.pre_tool_use, "git push", "b-cut")[
+                "hookSpecificOutput"]["permissionDecisionReason"]
+            self.assertIn("a.ts:1", reason)
+            self.assertNotIn("b.ts", reason)
+            self.assertIn("some weren't checked", reason)
+            self.assertIsNone(self.call(PC.pre_tool_use, "git push", "b-cut"))
+        self.assertIn("resent after a scan the time budget cut short", self.log())
+        self.assertIsNone(self.call(PC.pre_tool_use, "git push", "b-cut"))  # same range
+        self.commit(**{"c.ts": "z({ ...body })\n"})  # a new range is scanned whole
+        reason = self.call(PC.pre_tool_use, "git push", "b-cut")[
+            "hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertIn("b.ts:1", reason)
+        self.assertIn("c.ts:1", reason)
+        self.assertNotIn("some weren't checked", reason)
+        # L3s tells what a cut scan read, with the same note.
+        self.assertIsNone(self.call(PC.pre_tool_use, "git commit -m x", "b-cut-c"))
+        self.commit(**{"d.ts": "x({ ...body })\n", "e.ts": "y({ ...body })\n"})
+        with self.cut_at("e.ts"):
+            told = self.call(PC.post_tool_use, "git commit -m x", "b-cut-c")[
+                "hookSpecificOutput"]["additionalContext"]
+        self.assertIn("d.ts:1", told)
+        self.assertNotIn("e.ts", told)
+        self.assertIn("some weren't checked", told)
 
     def test_a_crash_allows_and_logs(self):
         def boom(event):
