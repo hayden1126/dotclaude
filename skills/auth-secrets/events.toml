@@ -317,8 +317,9 @@ paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py,rb,php,go}"]
 say = "A wildcard or reflected origin with credentials lets any site read your users' data. Build a fixed allowlist of origins and echo the request's Origin only when it is on that list (SEC-43)."
 
 [[rule]]
-# A wildcard source in a CSP directive that can load code or send data.
+# A wildcard source in a CSP directive that can load code or send data. A helmet directive
+# array may span lines.
 id = "SEC-43-csp"
-when = '''(?i:\b(?:default|script|connect|frame|child|worker|object)-src\b[^\n;]{0,300}?\s(?:https?://|wss?://)?\*(?:\.|[\s;"'`]|$))|(?i:\bform-action\b[^\n;]{0,300}?\s(?:https?://)?\*(?:\.|[\s;"'`]|$))|(?i:\b(?:default|script|connect|frame|child|worker|object)Src\b\s*:\s*\[[^\]\n]{0,300}?["'`](?:https?://|wss?://)?\*(?:\.|["'`]))'''
+when = '''(?i:\b(?:default|script|connect|frame|child|worker|object)-src\b[^\n;]{0,300}?\s(?:https?://|wss?://)?\*(?:\.|[\s;"'`]|$))|(?i:\bform-action\b[^\n;]{0,300}?\s(?:https?://)?\*(?:\.|[\s;"'`]|$))|(?i:\b(?:default|script|connect|frame|child|worker|object)Src\b\s*:\s*\[[^\]]{0,300}?["'`](?:https?://|wss?://)?\*(?:\.|["'`]))'''
 paths = ["*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,py,rb,php,go,json,toml,yaml,yml,conf,html}", "_headers"]
 say = "Name exact hosts in this CSP directive, plus each one's redirect targets, never * or *.domain: a wildcard lets any subdomain, including a user-content or a taken-over one, serve script or receive data (SEC-43)."
