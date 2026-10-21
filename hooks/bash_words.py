@@ -102,9 +102,20 @@ def skip_bodies(s, i, pending):
     return i
 
 
-def prepass(command):
+def _body(s, start, end, close):
+    """The text from start to the closing character just before end, or to end when the text
+    ran out first (an unclosed substitution)."""
+    return s[start:end - 1] if end - 1 >= start and s[end - 1:end] == close else s[start:end]
+
+
+def prepass(command, bodies=None, heredocs=None):
     """The command with continuations joined, comments dropped, heredoc bodies skipped, and each
-    $(...), `...`, $((...)) and $'...' replaced by a placeholder, all outside single quotes."""
+    $(...), `...`, $((...)) and $'...' replaced by a placeholder, all outside single quotes.
+    With bodies (a list), the text inside each $(...), `...`, <(...) and >(...) is appended to
+    it in order, one per SUBST placeholder, and a process substitution is replaced too; without,
+    a process substitution stays in the text, where its parentheses split the segments
+    (delete_guard reads its body that way). With heredocs (a list), each skipped heredoc body
+    is appended to it."""
     s, out, i, quote, pending = command, [], 0, None, []
     while i < len(s):
         c = s[i]
@@ -132,6 +143,12 @@ def prepass(command):
             while i < len(s) and s[i] != "\n":
                 i += 1
             continue
+        elif quote is None and bodies is not None and s.startswith(("<(", ">("), i):
+            end = closing(s, i + 2)
+            bodies.append(_body(s, i + 2, end, ")"))
+            out.append(SUBST)
+            i = end
+            continue
         elif quote is None and (m := REDIRECT.match(s, i)) and (
                 not m.group(1) or i == 0 or s[i - 1] in " \t\n;&|()"):
             out.append(f" {REDIR} ")  # segments() drops it and its target word
@@ -147,8 +164,10 @@ def prepass(command):
                 continue
         elif quote is None and c == "\n" and pending:
             out.append("\n")
-            i = skip_bodies(s, i + 1, pending)
-            pending = []
+            end = skip_bodies(s, i + 1, pending)
+            if heredocs is not None:
+                heredocs.append(s[i + 1:end])
+            i, pending = end, []
             continue
         if s.startswith("$((", i):
             i = closing(s, i + 3)
@@ -156,39 +175,58 @@ def prepass(command):
             out.append(ARITH)
             continue
         if s.startswith("$(", i):
-            i = closing(s, i + 2)
+            end = closing(s, i + 2)
+            if bodies is not None:
+                bodies.append(_body(s, i + 2, end, ")"))
             out.append(SUBST)
+            i = end
             continue
         if c == "`":
-            i = skip_quoted(s, i + 1, "`")
+            end = skip_quoted(s, i + 1, "`")
+            if bodies is not None:  # inside backticks, \\, \` and \$ stand for the character
+                bodies.append(re.sub(r"\\([\\`$])", r"\1", _body(s, i + 1, end, "`")))
             out.append(SUBST)
+            i = end
             continue
         out.append(c)
         i += 1
     return "".join(out)
 
 
-def segments(command):
-    """Simple commands as word lists, split at ; && || | & ( ) and newlines, each redirection
-    and its target word left out. Raises ValueError (from shlex) on an unbalanced quote."""
-    lex = shlex.shlex(prepass(command), posix=True, punctuation_chars=";&|()")
+def _split(text):
+    """Pre-passed text as ("words", words, n) for each simple command, n being how many SUBST
+    placeholders its words and redirection targets hold, and ("(", None, 0) or (")", None, 0)
+    for each parenthesis, in order. Each redirection and its target word are left out of the
+    words. Raises ValueError (from shlex) on an unbalanced quote."""
+    lex = shlex.shlex(text, posix=True, punctuation_chars=";&|()")
     lex.whitespace = " \t\r"
     lex.wordchars += "$-./~*?[]{}=:+@%,^!#"
     lex.commenters = ""
-    seg, target = [], False
+    seg, target, n = [], False, 0
     for tok in lex:
         if tok == "\n" or (tok and set(tok) <= set(";&|()")):
-            if seg:
-                yield seg
-            seg, target = [], False
+            if seg or n:
+                yield "words", seg, n
+            seg, target, n = [], False, 0
+            yield from ((c, None, 0) for c in tok if c in "()")
         elif tok == REDIR:
             target = True
         elif target:
             target = False  # the redirection's file or fd (`>out`, `2>&1`, `<<< "$msg"`)
+            n += tok.count(SUBST)
         else:
             seg.append(tok)
-    if seg:
-        yield seg
+            n += tok.count(SUBST)
+    if seg or n:
+        yield "words", seg, n
+
+
+def segments(command):
+    """Simple commands as word lists, split at ; && || | & ( ) and newlines, each redirection
+    and its target word left out. Raises ValueError (from shlex) on an unbalanced quote."""
+    for kind, words, _ in _split(prepass(command)):
+        if kind == "words" and words:
+            yield words
 
 
 def _option_takes_arg(wrapper, w):
@@ -340,16 +378,36 @@ def git_call(args, prefix, cwd):
     return args[i], args[i + 1:], where
 
 
-def calls(command, heads, cwd):
+NEST_MAX = 8  # substitutions nested this deep are read; deeper is an unparsable command
+
+
+def calls(command, heads, cwd, rest=None, depth=0):
     """[(name, args, prefix, cwd)] for each simple command whose name is in heads, with the cwd
-    each starts in (None once a cd can't be followed). Raises ValueError on an unparsable
-    command."""
-    out = []
-    for words in segments(command):
+    each starts in (None once a cd can't be followed). The body of each $(...), `...`, <(...)
+    and >(...) is read as commands too, from the cwd in force where it sits, before the command
+    holding it (it runs first); a cd inside one stays inside. With rest (a list), the words
+    after each simple command's name, joined, and each heredoc body are appended to it, so a
+    caller can tell a command it can't read (`xargs git push`) from no command at all. Raises
+    ValueError on an unparsable command, or one nested deeper than NEST_MAX."""
+    if depth > NEST_MAX:
+        raise ValueError(f"substitutions nested over {NEST_MAX} deep")
+    bodies, out, k = [], [], 0
+    for kind, words, n in _split(prepass(command, bodies, rest)):
+        if kind != "words":
+            continue
+        for body in bodies[k:k + n]:
+            out += calls(body, heads, cwd, rest, depth + 1)
+        k += n
+        if not words:
+            continue
         name, args, prefix = command_words(words, heads)
+        if rest is not None:
+            rest.append(" ".join(args))
         if name in ("cd", "pushd"):
             cwd = cd_target(args, cwd)
             continue
         if name in heads:
             out.append((name, args, prefix, cwd))
+    for body in bodies[k:]:  # a literal %SUBST% in the command leaves the count short
+        out += calls(body, heads, cwd, rest, depth + 1)
     return out

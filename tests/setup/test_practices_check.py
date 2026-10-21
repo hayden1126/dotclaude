@@ -1518,6 +1518,14 @@ class Push(BashBase):
         self.assertIn("a.ts:1", self.committed(command="git commit -m x >/dev/null",
                                                **{"a.ts": "x({ ...body })\n"}))
 
+    def test_a_push_inside_a_command_substitution_is_scanned(self):
+        # Review round 2, medium 1: `out=$(git push ...)` ran with no scan and no log.
+        self.commit(**{"new.ts": "y({ ...body })\n"})
+        for n, command in enumerate(('out=$(git push origin main 2>&1); echo "$out"',
+                                     "echo `git push`", "cat <(git push)")):
+            with self.subTest(command=command):
+                self.assertIn("new.ts:1", self.pre(command, session_id=f"subst-{n}"))
+
     def test_an_unwritable_state_file_allows_the_call_and_logs(self):
         # Review round 1: the Bash levels have no transcript marker to fall back on, so a deny
         # whose key couldn't be written denied every resend too, forever.
@@ -1582,6 +1590,11 @@ class L3r(BashBase):
         self.assertIn("- An id from the request body is never trusted.", reason)
         self.assertIn("resend", reason)
         self.assertIsNone(self.pre("gh pr create --title x --body y"))
+
+    def test_a_pr_created_inside_a_command_substitution_is_judged(self):
+        # Review round 2, medium 1: capturing the PR URL this way skipped L3r with no log.
+        reason = self.pre("PR=$(gh pr create --title t --body b) && echo $PR")
+        self.assertIn(self.marker() + " Review the changes of main", reason)
 
     def test_drafts_undo_and_other_gh_calls_pass(self):
         for command in ("gh pr create --draft --title x", "gh pr create -d", "gh pr ready --undo",
@@ -1808,6 +1821,31 @@ class BashWords(unittest.TestCase):
         for command, want in cases.items():
             with self.subTest(command=command):
                 self.assertEqual([g for g, _ in self.git(command)], want)
+
+    def test_substitution_bodies_are_read_from_the_cwd_where_they_sit(self):
+        # Review round 2, medium 1: each $(...) and backtick body was a placeholder, never read.
+        cases = {
+            'out=$(git push origin feat 2>&1); echo "$out"': [(("push", ["origin", "feat"]), "/r")],
+            "cd sub && x=$(git push)": [(("push", []), "/r/sub")],
+            "x=$(cd sub && git push); git commit": [(("push", []), "/r/sub"),
+                                                     (("commit", []), "/r")],
+            "echo `git push`": [(("push", []), "/r")],
+            'echo "$(echo $(git push x))"': [(("push", ["x"]), "/r")],
+            "diff <(git push) >(git commit)": [(("push", []), "/r"), (("commit", []), "/r")],
+            "git commit -m \"$(cat <<'EOF'\nfix: git push later\nEOF\n)\"": [
+                (("commit", ["-m", "%SUBST%"]), "/r")],
+            "echo '$(git push)'": [],
+            "echo `echo \\`git push\\``": [(("push", []), "/r")],
+        }
+        for command, want in cases.items():
+            with self.subTest(command=command):
+                self.assertEqual(self.git(command), want)
+        (_, _, _, _), = BW.calls("PR=$(gh pr create --title t --body b)", {"git", "gh"}, "/r")
+        with self.assertRaises(ValueError):
+            BW.calls("$(" * 12 + "git push" + ")" * 12, {"git"}, "/r")
+        # delete_guard's segments keep their shape: a process substitution's body still splits.
+        self.assertEqual(list(BW.segments("diff <(rm -rf x) y")), [["diff", "<"], ["rm", "-rf", "x"],
+                                                                  ["y"]])
 
     def test_cd_then_commit_runs_in_the_new_dir(self):
         self.assertEqual(self.git("cd sub && git commit")[0][1], "/r/sub")
