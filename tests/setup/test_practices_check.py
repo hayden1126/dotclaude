@@ -1526,6 +1526,27 @@ class Push(BashBase):
             with self.subTest(command=command):
                 self.assertIn("new.ts:1", self.pre(command, session_id=f"subst-{n}"))
 
+    def test_a_launcher_this_parser_cannot_read_is_logged(self):
+        # Review round 2, low 2: xargs, find -exec, submodule foreach and bash -c passed with
+        # no log. Words that name a call no parser read are the backstop.
+        unread = ("printf x | xargs git push", "find . -name x -exec git commit -m y {} +",
+                  "git submodule foreach git push", 'bash -c "git push $R"',
+                  "sh <<'EOF'\ngit push\nEOF", "nohup xargs -n1 gh pr ready < prs")
+        for command in unread:
+            with self.subTest(command=command):
+                before = self.log()
+                self.assertIsNone(self.pre(command))
+                new = self.log()[len(before):]
+                self.assertIn("git-skipped the command names git commit or push", new)
+                for text_ in ("git push", "-m y", "foreach", "-n1", "$R"):  # no command text
+                    self.assertNotIn(text_, new)
+        for command in ("git log --grep push", "echo ok # git push", "gh pr view 5",
+                        "gh pr create --draft", "git status"):
+            with self.subTest(command=command):
+                before = self.log()
+                self.assertIsNone(self.pre(command))
+                self.assertNotIn("git-skipped", self.log()[len(before):])
+
     def test_an_unwritable_state_file_allows_the_call_and_logs(self):
         # Review round 1: the Bash levels have no transcript marker to fall back on, so a deny
         # whose key couldn't be written denied every resend too, forever.

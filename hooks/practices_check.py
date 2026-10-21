@@ -1301,20 +1301,43 @@ def load_bash_words():
     return _BASH_WORDS[0]
 
 
+# The prefilter's words, matched as words in order (git, then commit or push; gh, then pr, then
+# ready or create), each chain one forward search per word, so linear in the text.
+NAMED = ((re.compile(r"(?<![\w.-])git(?![\w-])"), re.compile(r"(?<![\w-])(?:commit|push)(?![\w-])")),
+         (re.compile(r"(?<![\w.-])gh(?![\w-])"), re.compile(r"(?<![\w-])pr(?![\w-])"),
+          re.compile(r"(?<![\w-])(?:ready|create)(?![\w-])")))
+
+
+def names_a_call(text):
+    """Whether text names git commit or push, or gh pr ready or create, word by word in order."""
+    for chain in NAMED:
+        pos = 0
+        for rx in chain:
+            m = rx.search(text, pos)
+            if not m:
+                break
+            pos = m.end()
+        else:
+            return True
+    return False
+
+
 def bash_calls(event):
-    """(git calls as (subcommand, args, where), gh calls as (args, cwd)) in the Bash command.
-    Expansions in a git location, and an unparsable command, are skipped and logged."""
+    """(git calls as (subcommand, args, where), gh calls as (args, cwd), whether a word the
+    parser didn't read as a command names one: an argument (`xargs git push`, `find -exec`,
+    `git submodule foreach`) or a heredoc body) in the Bash command. Expansions in a git
+    location, and an unparsable command, are skipped and logged."""
     bash_words = load_bash_words()
     cmd = command_of(event)
     cwd = event.get("cwd") if isinstance(event.get("cwd"), str) else None
-    gits, ghs = [], []
+    gits, ghs, rest = [], [], []
     if not cmd:
-        return gits, ghs
+        return gits, ghs, False
     try:
-        calls = bash_words.calls(cmd, set(HEADS), cwd)
+        calls = bash_words.calls(cmd, set(HEADS), cwd, rest)
     except ValueError as e:
         log("bash-unparsed", f"{type(e).__name__}: the command was allowed unchecked")
-        return gits, ghs
+        return gits, ghs, False
     for name, args, prefix, c in calls:
         if name == "gh":
             ghs.append((args, c))
@@ -1326,7 +1349,7 @@ def bash_calls(event):
             continue
         if g:
             gits.append(g)
-    return gits, ghs
+    return gits, ghs, any(names_a_call(t) for t in rest)
 
 
 # Where the Bash levels may read. They run outside the sandbox on a command the model wrote, and
@@ -1717,7 +1740,7 @@ def post_tool_use(event):
     is scanned, logged."""
     if event.get("tool_name") != "Bash":
         return None
-    gits, _ = bash_calls(event)
+    gits, _, _ = bash_calls(event)
     if not any(g[0] == "commit" for g in gits):
         return None
     cfg = load_config(event)
@@ -1994,14 +2017,19 @@ def bash_pre(event):
     """PreToolUse(Bash): deny a call that both commits and pushes once, record HEAD before a
     commit (L3s), deny a push once per new finding in what it would send, and deny a PR's
     `ready` once until a reviewer ran with the gate lines of the skills it touches (L3r)."""
-    gits, ghs = bash_calls(event)
+    gits, ghs, named = bash_calls(event)
     commits = [g for g in gits if g[0] == "commit"]
     pushes = [g for g in gits if g[0] == "push"]
     ghs = [g for g in ghs if pr_ready(g[0]) is not None]
-    if not (commits or pushes or ghs):
+    if not (commits or pushes or ghs or named):
         return None
     cfg = load_config(event)
     if not cfg["enabled"]:
+        return None
+    if not (commits or pushes or ghs):  # the backstop for a launcher this parser can't read
+        log("git-skipped", "the command names git commit or push, or gh pr ready or create, "
+            "in a form this check can't read (a launcher such as xargs, find -exec or a "
+            "script), so it wasn't checked")
         return None
     if commits and pushes:
         key = f"push|engine|chain|-|{_sha1(command_of(event))}"
