@@ -1981,7 +1981,9 @@ def push_gate(event, pushes, skills, cfg, ts, ctx, bounds):
             if skip:
                 log("push-unscanned", f"push: {skip} sends no commits, so it wasn't scanned")
                 continue
-            if not srcs:
+            if not srcs:  # every refspec is a delete (`:old`)
+                log("push-unscanned", "push: a delete refspec sends no commits, so it wasn't "
+                    "scanned")
                 continue
             if any("$" in s or "%SUBST%" in s for s in srcs):
                 log("git-skipped", "push: an expansion in a refspec, so this push wasn't checked")

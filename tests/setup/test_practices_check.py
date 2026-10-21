@@ -1661,6 +1661,11 @@ class Push(BashBase):
                 self.assertIsNone(self.pre(command, session_id="s-o-skip"))
         self.assertEqual(self.log()[len(before):].count(
             "push-unscanned push: a delete or a dry run sends no commits"), 2)
+        # Review round 3, low 9: a delete refspec with no source passed with no log.
+        before = self.log()
+        self.assertIsNone(self.pre("git push origin :old", session_id="s-o-colon"))
+        self.assertIn("push-unscanned push: a delete refspec sends no commits",
+                      self.log()[len(before):])
 
     def test_without_claude_project_dir_a_cd_moves_neither_the_config_nor_the_skills(self):
         # Review round 2, leftover 1: the Bash levels read config.toml and the project skills
