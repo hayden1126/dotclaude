@@ -75,25 +75,47 @@ Per run:
     in the scratch dir, removed after grading) and a dummy LLM_API_KEY. The run dir may sit
     under $HOME; run.py writes the oracle's output there itself, outside bwrap.
     Without a usable bwrap, run.py refuses to start unless --unsafe-grade is passed.
-  - Record: one line per run in <out>/results.jsonl (case, owner and kind, verdict, checks,
-    triggered and triggered_turns, turns, duration, cost, is_error, init memory_paths and
-    init_skills, the fingerprint, hook denials, the hook's errors.log (hook_errors, "none" when
-    empty), strays, the harness SHA, and the paths of the saved streams, oracle output and diff
-    under <out>/<case>-<arm>-<i>/). An --out that already holds results.jsonl is refused: a
-    rerun would overwrite the run dirs its rows point at. Arms C and D run the hook with
-    CLAUDE_CONFIG_DIR an empty dir and XDG_STATE_HOME its own, both in the run dir, so it sees
-    no user-tier skill and keeps its state and errors.log out of the real ones. The fingerprint is
-    three parts, each taken before the session starts, so an uncommitted edit counts:
-    `skills`, {name: sha256 over its files' sorted relative paths and bytes} for each skill
-    installed (arm A's is {}); `hook`, hook_hash() of the practices hook (practices-check.sh,
-    the practices_check.py it runs and hook_settings()'s wiring) for C and D, "none" for A and
-    B; and `case_hash`, case_hash() over cases/<case>/, oracle_lib.mjs, next_stub/, stubs/ and
-    fixture/. (Rows before 2026-10-20 have no fingerprint, and their "skills" is the init list;
-    rows from before the hook and case parts lack those.) <out> defaults to a fresh 0700 dir
-    under the checkout's ignored .tmp/practices/, away from the fixtures in /tmp. The diff is
-    taken with --binary; ignored paths (node_modules, data/) aren't in it, so regrading a diff
-    needs the stubs as installed. A turn triggered a skill when it has a Skill tool_use whose
-    `skill` input is that skill (its args don't count), or a Read of a path ending
+  - Record: one line per run in <out>/results.jsonl, written as the run finishes. Its fields:
+      run identity: case, arm, run (the index), owner and kind (CASE_INFO), model, effort (the
+        flag, "default" without one) and effort_seen (the levels the transcripts record);
+      verdict and checks (the oracle's, or the harness's own for an error row);
+      the case turn: triggered (the case's owner skill) and hook_denials, and per turn
+        triggered_turns and hook_denials_turns (arm D's warm-up, compact and task apart);
+      the session: turns, duration_ms and total_cost_usd (summed over turns), result_subtype
+        (the last turn's), memory_paths, init_skills and claude_code_version (the first turn's
+        init event), is_error, exit_codes, timed_out, strays and stray_kills;
+      the fingerprint: skills, hook, case_hash, warmup_hash and harness_hash (below);
+      tripwires: suspect (the SUSPECT_WORDS the agent's added lines contain, words that could
+        forge the oracle's verdict from inside its process) and contaminated (up to 5 paths a
+        tool call named outside the run's own fixture that hold .claude/skills or SKILL.md, or
+        another ledgerly-* fixture), each [] when clean;
+      harness_sha (the baseline commit the diff is taken against), hook_errors (the run's hook
+        errors.log, "none" when empty or for A and B), and the paths stream (one per turn),
+        oracle and diff, under <out>/<case>-<arm>-<i>/;
+      only sometimes: diff_error (the diff failed; the verdict stands), fixture (with --keep),
+        harness_error (an exception in the harness: an error row, with few other fields), and
+        reviewed, which no run writes: a person sets "reviewed": true in a tripwire row's line
+        once they have read its diff and stream, and the bar then counts it again.
+    An --out that already holds results.jsonl is refused: a rerun would overwrite the run dirs
+    its rows point at. Arms C and D run the hook with CLAUDE_CONFIG_DIR an empty dir and
+    XDG_STATE_HOME its own, both in the run dir, so it sees no user-tier skill and keeps its
+    state and errors.log out of the real ones.
+    The fingerprint is five parts, each taken before the session starts, so an uncommitted edit
+    counts: `skills`, {name: sha256 over its files' sorted relative paths and bytes} for each
+    skill installed (arm A's is {}); `hook`, hook_hash() of the practices hook (practices-check.sh,
+    the practices_check.py it runs, the bash_words.py that loads, and hook_settings()'s wiring
+    with placeholder dirs) for C and D, "none" for A and B; `case` (the row's case_hash),
+    case_hash() over cases/<case>/, oracle_lib.mjs, next_stub/, stubs/ and fixture/; `warmup`
+    (warmup_hash), the sha256 of arm D's warm-up prompt, "none" for A, B and C; and `harness`
+    (harness_hash), the sha256 of this run.py. Pooling refuses on any of the five; the Claude
+    Code version is recorded but only warned on (one line per model when rows hold more than
+    one), since Claude Code can update itself mid-run. A row without a part reads it as
+    "unrecorded": rows before 2026-10-20 have no fingerprint (their "skills" is the init list),
+    and later ones may lack the hook, case, warmup or harness part. <out> defaults to a fresh
+    0700 dir under the checkout's ignored .tmp/practices/, away from the fixtures in /tmp. The
+    diff is taken with --binary; ignored paths (node_modules, data/) aren't in it, so regrading a
+    diff needs the stubs as installed. A turn triggered a skill when it has a Skill tool_use
+    whose `skill` input is that skill (its args don't count), or a Read of a path ending
     <skill>/SKILL.md. `triggered` and `hook_denials` are the case turn's, `triggered` for the
     case's owner; arm D's other turns are reported apart (triggered_turns, hook_denials_turns,
     and the summary's warm column), the warm-up's `triggered` for the owner of the case it ran.
@@ -115,11 +137,18 @@ or fail; broken and error don't count.
   B  reported only.
   Off-target: a case whose owner isn't among the skills the arm's rows installed. B, C and D
      report it as "reported only (off-target)" and never miss; A keeps its bar.
-  Pooling: the rows of one model, case and arm must share one fingerprint, equal on every part
-     (error rows aside); a part a row didn't record is "unrecorded", equal only to another
-     unrecorded one. Otherwise the line reads REFUSED, naming the parts that differ, and the
-     distinct fingerprints are listed. Arm A's counts classify another arm's line only when A
-     pooled and its case part equals that arm's; else that line reads as A unclassified.
+  Pooling: the rows of one model, case and arm must share one fingerprint, equal on all five
+     parts (skills, hook, case, warmup, harness; error rows aside); a part a row didn't record
+     is "unrecorded", equal only to another unrecorded one. Otherwise the line reads REFUSED,
+     naming the parts that differ, and the distinct fingerprints are listed. Mixed Claude Code
+     versions only print a warning. Arm A's counts classify another arm's line only when A
+     pooled and its case part equals that arm's; else that line reads as A unclassified, and a
+     C or D line is then a regression check (it still has to pass every run), never REFUSED.
+  Tripwires: a row with a non-empty suspect or contaminated list, and no "reviewed": true, is
+     unresolved. It counts under no verdict (so a C or D line can't be green while it stands,
+     and A's valid runs leave it out), its line says how many are unresolved, and each is
+     listed after the table with its diff path. Setting "reviewed": true in its line in
+     results.jsonl, after reading its diff and stream, clears it.
 """
 import argparse
 import concurrent.futures
@@ -1015,7 +1044,7 @@ def run_one(case, arm, index, args, out):
         "triggered": triggered_turns.get("task", False),
         "triggered_turns": triggered_turns,
         **summary,
-        # the fingerprint: the summary pools only rows equal on all three parts
+        # the fingerprint: the summary pools only rows equal on all five parts
         "skills": skills,  # {name: tree_hash} installed
         "hook": hook,  # hook_hash() for C and D, NO_HOOK for A and B
         "case_hash": case_code,  # case_hash(case)

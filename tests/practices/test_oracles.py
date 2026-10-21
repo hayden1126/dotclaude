@@ -2246,6 +2246,11 @@ class RunHarness(unittest.TestCase):
         self.assertEqual(r.fingerprint(rows["C"]), {"skills": rows["C"]["skills"], "hook": r.hook_hash(),
                                                     "case": r.case_hash("idor"), "warmup": r.NO_HOOK,
                                                     "harness": r.harness_hash()})
+        # The module docstring names every field a row holds, and the ones only some rows hold.
+        doc = set(re.findall(r"[A-Za-z_]+", r.__doc__))
+        for key in [*rows["A"], *rows["C"], "diff_error", "fixture", "harness_error", "reviewed"]:
+            self.assertIn(key, doc, f"run.py's docstring doesn't name the row field {key}")
+        self.assertIn("five parts", r.__doc__)
 
     def test_baseline_rows_are_imported_for_the_same_model(self):
         r = self.harness
