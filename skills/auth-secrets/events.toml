@@ -22,12 +22,12 @@ skill = "auth-secrets"
 # The gate lines stay near 600 characters in all: the post-compaction digest holds every
 # loaded skill's gate in DIGEST_MAX (2,000) characters, and server-code's takes about 900.
 gate = [
-  "Build an email or phone change as pending until a hashed single-use link to the NEW address is followed (SEC-37).",
-  "Build a same-origin check on every request-supplied redirect, refusing non-strings, backslashes and control characters (SEC-39).",
-  "Build sessions that rotate at sign-in, end at logout and expire on the server, not by cookie Max-Age (SEC-33).",
-  "Build reset, invite and OTP tokens from a CSPRNG, hashed, short-lived and single-use (SEC-36).",
-  "Build secret reads from env, never a key-shaped literal, with .env* gitignored (SEC-41).",
-  "Build each safeguard unasked and name it in your reply; never offer it.",
+  "Build email or phone changes as pending until a hashed single-use link to the NEW address is followed (SEC-37).",
+  "Build a same-origin check on each redirect param: strings only, no backslash or control character, stored paths start with exactly one / (SEC-39).",
+  "Build sessions that rotate at sign-in, end at logout and expire server-side, not by Max-Age (SEC-33).",
+  "Build reset, invite and OTP tokens from a CSPRNG: hashed, short-lived, single-use (SEC-36).",
+  "Build secret reads from env, never key-shaped literals, with .env* gitignored (SEC-41).",
+  "Build each safeguard unasked, name it in your reply, never offer it.",
 ]
 
 [[event]]
