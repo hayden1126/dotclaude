@@ -1127,6 +1127,25 @@ class GitHelper(GitMixin, unittest.TestCase):
                     with self.assertRaises(PC.GitError):
                         r.run(sub, *args)
 
+    def test_every_subcommand_takes_only_its_listed_flags(self):
+        # Review round 3, low 7: rev-parse, rev-list, merge-base and ls-tree took any option.
+        head = self.commit(a="x\n")
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "BUDGET", 30.0), mock.patch.object(PC, "START",
+                                                                          PC.time.monotonic()):
+            r = PC.Repo(self.repo)
+            for sub, args in (("rev-parse", ("--git-path", "x")), ("rev-parse", ("--all",)),
+                              ("rev-list", ("--all",)), ("rev-list", ("--output=x", head)),
+                              ("merge-base", ("--octopus", head)), ("ls-tree", (head,)),
+                              ("rev-list", ("--end-of-options", "--all"))):
+                with self.subTest(sub=sub, args=args):
+                    with self.assertRaises(PC.GitError):
+                        r.run(sub, *args)
+            self.assertIsNone(r.rev("-x"))  # past --end-of-options, a name, never an option
+            self.assertEqual(r.rev("HEAD"), head)
+            self.assertEqual(r.commits(head, cap=5), ([(head, None)], False))
+            self.assertEqual(r.run("merge-base", head, head).decode().strip(), head)
+
     def test_a_hostile_config_runs_nothing(self):
         script = self.canary()
         self.sh("config", "core.fsmonitor", script)

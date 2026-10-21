@@ -184,8 +184,9 @@ tell names a finding by rule, path and line, never the matched text, and so does
 git runs objects only, through Repo: a system git (SYSTEM_GITS), every GIT_* variable stripped
 from the env, no system or global config, GIT_ALLOW_PROTOCOL=none (a partial clone's lazy fetch
 would run a transport; 2.43 ignores GIT_NO_LAZY_FETCH), no replace refs, no optional locks,
-core.fsmonitor and core.untrackedCache off, and only rev-parse, rev-list, merge-base, ls-tree,
-diff-tree --raw -r -z and cat-file --batch (GIT_FLAGS). So no program a repo's config names
+core.fsmonitor and core.untrackedCache off, and only rev-parse, rev-list, merge-base,
+diff-tree --raw -r -z and cat-file --batch, each with the options it lists and no other
+(GIT_FLAGS). So no program a repo's config names
 runs, and a tracked symlink is read as its target path. The user's safe.directory entries are
 forwarded with -c, read as plain text from their global config files (one not theirs alone is
 skipped, and named when git refuses the repo). Each call's timeout is what is left of the budget.
@@ -869,10 +870,16 @@ def state_add(event, keys):
 # ---------------------------------------------------------------- git, objects only
 
 SYSTEM_GITS = ("/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git")
-# Every subcommand the engine runs, with the options it may pass. None of them reads the index
-# or the working tree, or runs a program a config names: no patch (diff drivers, textconv), no
-# --filters or --textconv, no status (fsmonitor, untracked cache).
-GIT_FLAGS = {"rev-parse": None, "rev-list": None, "merge-base": None, "ls-tree": None,
+# Every subcommand the engine runs, with the options it may pass (one ending in = takes its
+# value attached). None of them reads the index or the working tree, or runs a program a config
+# names: no patch (diff drivers, textconv), no --filters or --textconv, no status (fsmonitor,
+# untracked cache). After --end-of-options, where a subcommand's set allows it, every word is a
+# name, never an option (rev() passes a name that may start with -).
+GIT_FLAGS = {"rev-parse": {"--absolute-git-dir", "--git-common-dir", "--show-toplevel",
+                           "--verify", "--quiet", "--abbrev-ref", "--end-of-options"},
+             "rev-list": {"--no-merges", "--parents", "--max-count=", "--not", "--branches",
+                          "--remotes"},
+             "merge-base": set(),
              "diff-tree": {"--raw", "-r", "-z", "--no-renames", "--root", "--no-commit-id"},
              "cat-file": {"--batch", "--batch-check"}}
 GIT_MARGIN = 0.05  # seconds of the budget kept for the work after a git call
@@ -971,9 +978,11 @@ class Repo:
     def run(self, sub, *args, stdin=None, ok=(0,)):
         """git's stdout as bytes; GitError on a refused call or a failure, Budget when the
         budget runs out first."""
-        allowed = GIT_FLAGS.get(sub, ())
-        if sub not in GIT_FLAGS or (allowed is not None and any(
-                a.startswith("-") and a not in allowed for a in args)):
+        allowed = GIT_FLAGS.get(sub)
+        opts = args[:args.index("--end-of-options")] if allowed and "--end-of-options" in \
+            allowed and "--end-of-options" in args else args
+        if allowed is None or any(a.startswith("-") and a not in allowed and not (
+                "=" in a and a.split("=", 1)[0] + "=" in allowed) for a in opts):
             raise GitError(f"refused: git {sub} {' '.join(args)}")
         if sub == "diff-tree" and not {"--raw", "-r", "-z"} <= set(args):
             raise GitError("refused: diff-tree without --raw -r -z")
