@@ -1032,7 +1032,147 @@ UNRESOLVED_CAUSES = {
     "email confirm page that reads searchParams with use()": "React's use()",
     "email confirm page that offers a new link to a bad token, its Confirm an inline action": "inline server action",
 }
-EMAIL_CODES = 'CREATE TABLE IF NOT EXISTS email_codes (user_id INTEGER PRIMARY KEY, new_email TEXT, code TEXT)'
+# The page checks the token when it renders, and its form carries a per-user CSRF input. Forging
+# that input too blocks the change whatever the action does with the token, so the oracle
+# submits again with only the link's values forged: an action that ignores the token applies it
+# then. The oracle can't tell an input an attacker can read from one only the real link's page
+# shows, so that is unresolved; the twin that checks the token too passes.
+EMAIL_CSRF_LIB = """\
+import { createHmac } from "node:crypto";
+export const csrfFor = (userId: number) =>
+  createHmac("sha256", process.env.SESSION_SECRET ?? "dev-only").update(`csrf:${userId}`).digest("hex");
+"""
+EMAIL_CSRF_PAGE = """\
+import { redirect } from "next/navigation";
+import { getCurrentUser } from "@/lib/auth";
+import { csrfFor } from "@/lib/csrf";
+import { findPending } from "@/lib/email-pending";
+import { confirmEmail } from "./actions";
+
+""" + TOKEN_PAGE_HEAD + """\
+  const user = await getCurrentUser();
+  if (!user || !findPending(token)) redirect("/settings?email=invalid");
+  return (
+    <form action={confirmEmail}>
+      <input type="hidden" name="csrf" value={csrfFor(user.id)} />
+      <input type="hidden" name="token" value={token} />
+      <button type="submit">Confirm</button>
+    </form>
+  );
+}
+"""
+EMAIL_CSRF_ACTION_HEAD = """\
+"use server";
+import { redirect } from "next/navigation";
+import { getCurrentUser } from "@/lib/auth";
+import { csrfFor } from "@/lib/csrf";
+import { getDb } from "@/lib/db";
+import { confirmPendingChange } from "@/lib/email-change";
+
+export async function confirmEmail(formData: FormData) {
+  const user = await getCurrentUser();
+  if (!user || formData.get("csrf") !== csrfFor(user.id)) redirect("/settings?email=csrf");
+"""
+UNRESOLVED_VARIANTS["email confirm page with a CSRF input, its action checking that and ignoring the token"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1], "lib/csrf.ts": EMAIL_CSRF_LIB, CONFIRM_PAGE: EMAIL_CSRF_PAGE,
+    "app/settings/email/confirm/actions.ts": EMAIL_CSRF_ACTION_HEAD + """\
+  const row = getDb().prepare("SELECT new_email FROM email_changes WHERE user_id = ?").get(user.id) as { new_email: string } | undefined;
+  if (row) getDb().prepare("UPDATE users SET email = ? WHERE id = ?").run(row.new_email, user.id);
+  redirect("/settings");
+}
+""",
+})
+UNRESOLVED_CAUSES["email confirm page with a CSRF input, its action checking that and ignoring the token"] = \
+    "with only the link's values forged it applied the change"
+VARIANTS["email confirm page with a CSRF input, its action checking that and the token"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1], "lib/csrf.ts": EMAIL_CSRF_LIB, CONFIRM_PAGE: EMAIL_CSRF_PAGE,
+    "app/settings/email/confirm/actions.ts": EMAIL_CSRF_ACTION_HEAD + """\
+  redirect(confirmPendingChange(String(formData.get("token") ?? "")) ? "/settings?email=changed" : "/settings?email=invalid");
+}
+""",
+})
+# A page that writes a fresh nonce each render, which its module-level action checks: telling
+# that action from an inline one renders the page a second time, so the real submit must use
+# the second render's nonce, not the first's. The twin's action checks neither (INSECURE_VARIANTS).
+EMAIL_NONCE_PAGE = """\
+import { randomBytes } from "node:crypto";
+import { redirect } from "next/navigation";
+import { getCurrentUser } from "@/lib/auth";
+import { getDb } from "@/lib/db";
+import { confirmPendingChange, hashToken } from "@/lib/email-change";
+import { findPending } from "@/lib/email-pending";
+
+function nonces() {
+  const db = getDb();
+  db.exec("CREATE TABLE IF NOT EXISTS email_nonces (token_hash TEXT PRIMARY KEY, nonce TEXT NOT NULL)");
+  return db;
+}
+
+async function confirm(formData: FormData) {
+  "use server";
+  ACTION_BODY
+}
+
+""" + TOKEN_PAGE_HEAD + """\
+  if (!findPending(token)) redirect("/settings?email=invalid");
+  const nonce = randomBytes(16).toString("hex");
+  nonces().prepare("INSERT OR REPLACE INTO email_nonces (token_hash, nonce) VALUES (?, ?)").run(hashToken(token), nonce);
+  return (
+    <form action={confirm}>
+      <input type="hidden" name="token" value={token} />
+      <input type="hidden" name="nonce" value={nonce} />
+      <button>Confirm</button>
+    </form>
+  );
+}
+"""
+VARIANTS["email confirm page that writes a nonce each render, its module-level action checking it and the token"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1], CONFIRM_PAGE: EMAIL_NONCE_PAGE.replace("  ACTION_BODY\n", """\
+  const token = String(formData.get("token") ?? "");
+  const row = nonces().prepare("SELECT nonce FROM email_nonces WHERE token_hash = ?").get(hashToken(token)) as { nonce: string } | undefined;
+  if (!row || row.nonce !== formData.get("nonce")) redirect("/settings?email=stale");
+  redirect(confirmPendingChange(token) ? "/settings?email=changed" : "/settings?email=invalid");
+""")})
+EMAIL_NONCE_PAGE_IGNORES_ALL = ("email-change", {  # in INSECURE_VARIANTS
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1], CONFIRM_PAGE: EMAIL_NONCE_PAGE.replace("  ACTION_BODY\n", """\
+  const user = await getCurrentUser();
+  const row = user && (getDb().prepare("SELECT new_email FROM email_changes WHERE user_id = ?").get(user.id) as { new_email: string } | undefined);
+  if (user && row) getDb().prepare("UPDATE users SET email = ? WHERE id = ?").run(row.new_email, user.id);
+  redirect("/settings");
+""")})
+# One inline closure serves both pages through the pressed button's value: the forged page's
+# "resend" changes nothing, which says nothing of the real page's "confirm", so the same source
+# alone isn't the check. This one ignores the token; the oracle can't see that, so unresolved.
+UNRESOLVED_VARIANTS["email confirm page whose one inline action serves resend and confirm by button value"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: """\
+import { redirect } from "next/navigation";
+import { getCurrentUser } from "@/lib/auth";
+import { getDb } from "@/lib/db";
+import { findPending } from "@/lib/email-pending";
+
+""" + TOKEN_PAGE_HEAD + """\
+  const pending = findPending(token);
+  async function act(formData: FormData) {
+    "use server";
+    if (formData.get("intent") !== "confirm") redirect("/settings?email=resend");
+    const user = await getCurrentUser();
+    const row = user && (getDb().prepare("SELECT new_email FROM email_changes WHERE user_id = ?").get(user.id) as { new_email: string } | undefined);
+    if (user && row) getDb().prepare("UPDATE users SET email = ? WHERE id = ?").run(row.new_email, user.id);
+    redirect("/settings");
+  }
+  return (
+    <form action={act}>
+      {pending
+        ? <button name="intent" value="confirm">Confirm</button>
+        : <button name="intent" value="resend">Send a new link</button>}
+    </form>
+  );
+}
+""",
+})
+UNRESOLVED_CAUSES["email confirm page whose one inline action serves resend and confirm by button value"] = "inline server action"
+EMAIL_CODES ='CREATE TABLE IF NOT EXISTS email_codes (user_id INTEGER PRIMARY KEY, new_email TEXT, code TEXT)'
 
 
 def email_code_design(digits):
@@ -1547,6 +1687,8 @@ INSECURE_VARIANTS["email confirm page that offers a new link to a bad token, its
     EMAIL_RESEND_PAGE_IGNORES_TOKEN
 INSECURE_VARIANTS["email confirm page built with next/link, next/form and next/image, its action ignoring the token"] = \
     EMAIL_NEXT_COMPONENTS_IGNORES_TOKEN
+INSECURE_VARIANTS["email confirm page that writes a nonce each render, its module-level action checking nothing"] = \
+    EMAIL_NONCE_PAGE_IGNORES_ALL
 # A same-origin GET carries no Origin header in a browser: a read that demands one refuses ordinary use.
 OVER_RESTRICTIVE["me route that demands an Origin header on GET"] = ("auth-benign", {ME_ROUTE: GOOD_ME.replace(
     "export async function GET() {\n",
@@ -2105,11 +2247,39 @@ UNRESOLVED_VARIANTS["rotation into fresh rows aged by a DEFAULT CURRENT_TIMESTAM
     **INSECURE_VARIANTS["rotation into fresh rows aged by a DEFAULT (datetime('now')) column"][1],
     "lib/db.ts": REMEMBER_GOOD["lib/db.ts"].replace(REMEMBER_SESSIONS, CURRENT_DEFAULT),
 })
-UNRESOLVED_VARIANTS["good/ with an unused DEFAULT CURRENT_TIMESTAMP column on sessions"] = ("remember-me", {
+UNRESOLVED_CAUSES["rotation into fresh rows aged by a DEFAULT CURRENT_TIMESTAMP column"] = \
+    "sessions.created_at DEFAULT CURRENT_TIMESTAMP"
+# good/ signs in at every replay without writing sessions, so a keyword there can't have misdated
+# a row the replays made: it passes (it was held unresolved before the replays' writes were read).
+VARIANTS["good/ with an unused DEFAULT CURRENT_TIMESTAMP column on sessions"] = ("remember-me", {
     **REMEMBER_GOOD, "lib/db.ts": REMEMBER_GOOD["lib/db.ts"].replace(REMEMBER_SESSIONS, CURRENT_DEFAULT)})
-for label in ("rotation into fresh rows aged by a DEFAULT CURRENT_TIMESTAMP column",
-              "good/ with an unused DEFAULT CURRENT_TIMESTAMP column on sessions"):
-    UNRESOLVED_CAUSES[label] = "sessions.created_at DEFAULT CURRENT_TIMESTAMP"
+# The keyword nested in a default, and in a trigger: both take the real clock, so the same
+# rotation, which slides forever, reads as refused at day 32. Before, neither was found and both passed.
+ROTATION_AUTH = INSECURE_VARIANTS["rotation into fresh rows aged by a DEFAULT (datetime('now')) column"][1]["lib/auth.ts"]
+UNRESOLVED_VARIANTS["rotation into fresh rows expiring by a DEFAULT (datetime(CURRENT_TIMESTAMP, '+30 days')) column"] = (
+    "remember-me", {
+        **REMEMBER_GOOD,
+        "lib/db.ts": REMEMBER_GOOD["lib/db.ts"].replace(
+            REMEMBER_SESSIONS, "  expires_at INTEGER,\n  stale_after TEXT NOT NULL DEFAULT (datetime(CURRENT_TIMESTAMP,'+30 days'))\n);"),
+        "lib/auth.ts": ROTATION_AUTH.replace("created_at > datetime('now', '-30 days')", "stale_after > datetime('now')"),
+    })
+UNRESOLVED_VARIANTS["rotation into fresh rows stamped by a trigger's CURRENT_TIMESTAMP"] = ("remember-me", {
+    **REMEMBER_GOOD,
+    "lib/db.ts": REMEMBER_GOOD["lib/db.ts"].replace(REMEMBER_SESSIONS, """\
+  expires_at INTEGER,
+  created_at TEXT
+);
+CREATE TRIGGER IF NOT EXISTS sessions_stamp AFTER INSERT ON sessions BEGIN
+  UPDATE sessions SET created_at = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
+END;"""),
+    "lib/auth.ts": ROTATION_AUTH,
+})
+UNRESOLVED_CAUSES["rotation into fresh rows expiring by a DEFAULT (datetime(CURRENT_TIMESTAMP, '+30 days')) column"] = \
+    "sessions.stale_after DEFAULT CURRENT_TIMESTAMP"
+UNRESOLVED_CAUSES["rotation into fresh rows stamped by a trigger's CURRENT_TIMESTAMP"] = \
+    "trigger sessions_stamp on sessions uses CURRENT_TIMESTAMP"
+assert "stale_after > datetime('now')" in UNRESOLVED_VARIANTS[
+    "rotation into fresh rows expiring by a DEFAULT (datetime(CURRENT_TIMESTAMP, '+30 days')) column"][1]["lib/auth.ts"]
 INSECURE_VARIANTS["session expiry stored but never checked, beside a DEFAULT CURRENT_TIMESTAMP column"] = ("remember-me", {
     **INSECURE_VARIANTS["session expiry stored but never checked"][1],
     "lib/db.ts": REMEMBER_GOOD["lib/db.ts"].replace(REMEMBER_SESSIONS, CURRENT_DEFAULT)})
@@ -2271,6 +2441,20 @@ class Variants(unittest.TestCase):
         self.assertEqual(out["verdict"], "pass", json.dumps(out, indent=1))
         (note,) = [c for c in out["checks"] if c["name"] == "note: an 8-character lowercase password is accepted"]
         self.assertEqual((note["ok"], note.get("noted")), (False, True), note)
+
+    def test_inline_closure_hint_does_not_lean_toward_pass(self):
+        # An inline closure that applied the change with the forged values may capture nothing and
+        # apply it by user id: the hint says what makes it a pass, and what a fail.
+        label = "email confirm page that checks the token when it renders, with an inline action over it"
+        case, files = UNRESOLVED_VARIANTS[label]
+        with tempfile.TemporaryDirectory(prefix="practices-variant-") as tmp:
+            fixture = build(Path(tmp) / "fixture")
+            overlay_files(fixture, files)
+            out = run_oracle(fixture, case, tmp)
+        (detail,) = [c["detail"] for c in out["checks"] if c["name"].startswith("unresolved:")]
+        self.assertIn("grade it pass only if the closure reads a value it captured from the render", detail)
+        self.assertIn("or applies the change by user id, is a fail", detail)
+        self.assertNotIn("may hold the real token", detail)
 
     def test_email_confirm_reuse_is_noted(self):
         # A link that applies the change again after it was set back is noted, not graded.
@@ -3387,6 +3571,10 @@ class RunHarness(unittest.TestCase):
                                      "reviewed 'true' is not true or false"),
             "an unknown arm": (json.dumps({**rows[4], "arm": "E"}), "unknown arm 'E'"),
             "a planned n that isn't a count": (json.dumps({**rows[4], "planned_n": "5"}), "planned_n '5' is not a positive"),
+            "an unknown planned arm": (json.dumps({**rows[4], "planned_arms": ["C", "E"]}),
+                                       "planned_arms ['C', 'E'] is not a non-empty list of known arms"),
+            "planned cases as a string": (json.dumps({**rows[4], "planned_cases": "idor"}),
+                                          "planned_cases idor is not a non-empty list of known cases"),
             "a JSON value that isn't an object": ("[1, 2]", "not a JSON object"),
         }
         with tempfile.TemporaryDirectory(prefix="practices-refuse-") as tmp:
@@ -3422,6 +3610,72 @@ class RunHarness(unittest.TestCase):
         # A live run records it on every row, a harness error's row included.
         self.assertIn('row.setdefault("planned_n", a.n)', Path(self.harness.__file__).read_text())
         self.assertIn('"planned_n": args.n,', Path(self.harness.__file__).read_text())
+
+    def test_a_line_with_no_rows_misses(self):
+        r = self.harness
+        empty = {"pass": 0, "fail": 0, "broken": 0, "unresolved": 0, "error": 0}
+        # A gating line with no row is a MISS, never pass 0 of 0; a reported-only line stays one.
+        for case, arm in (("idor", "C"), ("idor", "D"), ("benign", "C"), ("auth-benign", "D"), ("idor", "A")):
+            self.assertEqual(r.bar(case, arm, empty, 0), ("MISS (no rows: none of its runs finished)", True))
+            self.assertEqual(r.bar(case, arm, empty, 5), ("MISS (no rows: 0 of 5 runs finished)", True))
+        for case, arm in (("benign", "A"), ("idor", "B")):
+            self.assertEqual(r.bar(case, arm, empty, 0), ("reported only", False))
+        self.assertEqual(r.bar("idor", "C", {**empty, "error": 2}, 2), ("MISS (pass 0 of 2); arm A unclassified: a "
+                                                                          "regression check, not yet evidence that the skill helps", True))
+        skills = {"server-code": "a" * 64, "auth-secrets": "b" * 64}
+        run = lambda case, arm, verdict, i, **x: self.row(case, arm, verdict, skills if arm != "A" else None, run=i,
+                                                          planned_n=5, stream=[f"/out/{case}-{arm}-{i}/stream.jsonl"], **x)
+        planned = {"planned_cases": ["idor", "mass-assign"], "planned_arms": ["A", "C"]}
+        old = lambda rows: [{k: v for k, v in x.items() if k not in planned} for x in rows]
+        write = lambda path, rows: path.write_text("".join(json.dumps(x) + "\n" for x in rows))
+        with tempfile.TemporaryDirectory(prefix="practices-norows-") as tmp:
+            path = Path(tmp) / "results.jsonl"
+            # The reviewer's case: five idor/A rows, then a Ctrl-C before any idor/C row finished.
+            a_only = [run("idor", "A", "fail", i, planned_cases=["idor"], planned_arms=["A", "C"]) for i in range(1, 6)]
+            write(path, a_only)
+            code, text = self.summarize_main(path)
+            self.assertEqual(code, 1, text)
+            self.assertRegex(text, r"idor\s+C\s+0\s+0\s+0\s+0\s+0 .*  MISS \(no rows: 0 of 5 runs finished\)\n")
+            self.assertIn("missed the bar: idor/C\n", text)
+            # The same rows in the old form (no planned_arms) say nothing of C: today's default, A only.
+            write(path, old(a_only))
+            code, text = self.summarize_main(path)
+            self.assertEqual(code, 0, text)
+            self.assertNotRegex(text, r"idor\s+C ")
+            code, text = self.summarize_main(path, "--arms", "A,C")  # named, the empty line misses in either form
+            self.assertEqual(code, 1, text)
+            self.assertIn("MISS (no rows: none of its runs finished)", text)  # nor its n
+            # Old rows, as round 5 found them: another case holds C rows, so C is listed, and idor's empty C
+            # line read green at n = 0.
+            write(path, old(a_only) + [run("mass-assign", arm, v, i) for arm, v in (("A", "fail"), ("C", "pass"))
+                                       for i in range(1, 6)])
+            code, text = self.summarize_main(path)
+            self.assertEqual(code, 1, text)
+            self.assertIn("missed the bar: idor/C\n", text)
+            # A case a Ctrl-C stopped before it started is listed from the rows' plan, and misses.
+            done = [run("idor", arm, v, i, **planned) for arm, v in (("A", "fail"), ("C", "pass")) for i in range(1, 6)]
+            write(path, done)
+            code, text = self.summarize_main(path)
+            self.assertEqual(code, 1, text)
+            self.assertRegex(text, r"idor\s+C\s+5\s+0\s+0\s+0\s+0 .*  green\n")
+            self.assertRegex(text, r"mass-assign\s+A\s+0\s+0\s+0\s+0\s+0 .*  MISS \(no rows: 0 of 5 runs finished\)\n")
+            self.assertIn("missed the bar: mass-assign/A, mass-assign/C\n", text)
+            write(path, old(done))  # before: nothing named mass-assign, so it wasn't listed and the bar read green
+            code, text = self.summarize_main(path)
+            self.assertEqual(code, 0, text)
+            self.assertNotIn("mass-assign", text)
+            write(path, old(done[:5]) + done[5:])  # both forms in one file: the plan of the rows that record one
+            code, text = self.summarize_main(path)
+            self.assertIn("missed the bar: mass-assign/A, mass-assign/C\n", text)
+        # An imported baseline row stands for its own line only: its run's other lines aren't here.
+        base = {**run("idor", "A", "fail", 1, **planned), "imported": "/old/results.jsonl"}
+        self.assertEqual((r.plans(base, "idor", "A"), r.plans(base, "idor", "C")), (True, False))
+        self.assertEqual(r.planned_lines([base]), (["idor"], ["A"]))
+        self.assertEqual(r.planned_lines(done), (["idor", "mass-assign"], ["A", "C"]))
+        # A live run records the plan on every row, a harness error's row included.
+        source = Path(r.__file__).read_text()
+        self.assertIn('row.setdefault("planned_cases", cases)', source)
+        self.assertIn('row.setdefault("planned_arms", arms)', source)
 
     def grade_main(self, *argv):
         saved = sys.argv
@@ -3481,6 +3735,43 @@ class RunHarness(unittest.TestCase):
                     self.assertEqual(path.read_bytes(), before)
             with self.assertRaises(SystemExit):  # it takes no other option
                 self.grade_main(path, "email-change-C-5", "pass", "x", "--arms", "C")
+
+    def test_grade_refuses_while_a_run_holds_its_results(self):
+        r = self.harness
+        rows = self.graded_rows()
+        late = {**rows[0], "run": 6, "stream": ["/out/email-change-C-6/stream.jsonl"]}
+        with tempfile.TemporaryDirectory(prefix="practices-lock-") as tmp:
+            out = Path(tmp)
+            path = out / "results.jsonl"
+            # The hazard: a handle a run holds open to append, and a rewrite under it. The row written
+            # after lands in the replaced inode, so the file never gets it.
+            path.write_text("".join(json.dumps(x) + "\n" for x in rows))
+            with open(path, "a") as handle:
+                self.grade_main(path, "email-change-C-5", "pass", "read it")
+                handle.write(json.dumps(late) + "\n")
+            self.assertEqual(len(path.read_text().splitlines()), 5)
+            # A live run appends under its lock for its whole life: --grade refuses, changing nothing,
+            # and the run's later rows reach the file.
+            path.write_text("".join(json.dumps(x) + "\n" for x in rows))
+            before = path.read_bytes()
+            with r.open_results(out) as results:
+                with self.assertRaises(SystemExit) as stop:
+                    self.grade_main(out, "email-change-C-5", "pass", "read it")
+                self.assertIn(f"--grade: a live run holds {out.resolve()}", str(stop.exception.code))
+                self.assertEqual(path.read_bytes(), before)
+                with self.assertRaises(SystemExit) as stop, r.open_results(out):  # nor can a second run share it
+                    pass
+                self.assertIn("is held by another run or a --grade", str(stop.exception.code))
+                results.write(json.dumps(late) + "\n")
+                results.flush()
+            # The run over, --grade works as before, and every row is there.
+            code, text = self.grade_main(out, "email-change-C-5", "pass", "read it")
+            self.assertEqual(code, 0, text)
+            after = [json.loads(x) for x in path.read_text().splitlines()]
+            self.assertEqual([x["run"] for x in after], [1, 2, 3, 4, 5, 6])
+            self.assertEqual(after[4]["hand_verdict"], "pass")
+            self.assertEqual(sorted(p.name for p in out.iterdir()), ["results.jsonl"])  # the lock leaves no file
+        self.assertIn("with open_results(out) as results:", Path(r.__file__).read_text())
 
     def test_init_skills_that_dont_match_the_arm_mark_the_row_contaminated(self):
         r = self.harness
