@@ -484,8 +484,9 @@ def install_stubs(root):
 
 def hook_dirs(run_dir):
     """(config dir, state dir) the hook of a run in `run_dir` gets: an empty CLAUDE_CONFIG_DIR and
-    its own XDG_STATE_HOME, both in the run dir, outside the fixture."""
-    config, state = Path(run_dir) / "hook-config", Path(run_dir) / "hook-state"
+    its own XDG_STATE_HOME, both in the run dir, outside the fixture. Absolute: the hook runs with
+    the fixture as its cwd."""
+    config, state = Path(run_dir).resolve() / "hook-config", Path(run_dir).resolve() / "hook-state"
     for d in (config, state):
         d.mkdir(parents=True, exist_ok=True)
     return config, state
@@ -546,7 +547,8 @@ def build_fixture(arm, run_dir=None):
         raise ValueError(f"arm {arm} wires the hook with dirs in the run dir, and none was given")
     root = Path(tempfile.mkdtemp(prefix=FIXTURE_PREFIX))
     own = private_dir("harness-") if run_dir is None else None
-    _git_dirs[str(root)] = (Path(run_dir if run_dir is not None else own) / "harness-git", own)
+    # absolute, since harness_git runs git with the fixture as its cwd
+    _git_dirs[str(root)] = (Path(run_dir if run_dir is not None else own).resolve() / "harness-git", own)
     harness_git_dir(root).parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(FIXTURE_SRC, root, dirs_exist_ok=True)
     install_stubs(root)
@@ -1835,7 +1837,7 @@ def main():
     if not shutil.which("claude"):
         sys.exit("run.py: claude is not on PATH")
 
-    out = Path(a.out) if a.out else default_out()
+    out = Path(a.out).resolve() if a.out else default_out()  # run dirs reach git, the hook and bwrap
     out.mkdir(parents=True, exist_ok=True)
     print(f"results: {out / 'results.jsonl'} (model {a.model}, effort {a.effort or 'default'})")
     jobs = [(case, arm, i) for case in cases for arm in arms for i in range(1, a.n + 1)]

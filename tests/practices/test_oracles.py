@@ -3299,6 +3299,31 @@ class RunHarness(unittest.TestCase):
                     self.assertIn(shlex.quote(str(r.HOOK)), h["command"])
                     self.assertNotIn(".claude/hooks/practices-check.sh", h["command"])
 
+    def test_a_relative_run_dir_stays_outside_the_fixture(self):
+        # `--out .lane/...` from the repo root: git and the hook run with the fixture as their cwd,
+        # so a relative path would land in the fixture (git init exited 128 in smoke2-auth-haiku).
+        r = self.harness
+        cwd = os.getcwd()
+        with tempfile.TemporaryDirectory(prefix="practices-relrun-") as tmp:
+            os.chdir(tmp)
+            try:
+                root, sha = r.build_fixture("C", Path("out") / "email-change-C-1")
+                try:
+                    run_dir = (Path(tmp) / "out" / "email-change-C-1").resolve()
+                    self.assertEqual(r.harness_git_dir(root), run_dir / "harness-git")
+                    self.assertEqual(r.harness_git(root, "rev-parse", "HEAD").strip(), sha)
+                    self.assertFalse((root / "out").exists())
+                    wiring = json.loads((root / ".claude" / "settings.json").read_text())["hooks"]
+                    config = shlex.quote(str(run_dir / "hook-config"))
+                    commands = [h["command"] for groups in wiring.values() for g in groups for h in g["hooks"]]
+                    self.assertTrue(commands)
+                    for command in commands:
+                        self.assertIn(f"CLAUDE_CONFIG_DIR={config} ", command)
+                finally:
+                    r.remove_fixture(root)
+            finally:
+                os.chdir(cwd)
+
     def test_fixture_hook_gets_its_own_config_and_state_dirs(self):
         r = self.harness
         with tempfile.TemporaryDirectory(prefix="practices-hookdirs-") as tmp:
