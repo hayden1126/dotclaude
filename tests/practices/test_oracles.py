@@ -3818,6 +3818,38 @@ class RunHarness(unittest.TestCase):
             self.assertEqual(code, 1, text)
             self.assertEqual(sorted(self.missed_of(text)), ["idor/C", "mass-assign/A"], text)
 
+    def write_results(self, tmp, name, rows):
+        (tmp / name).mkdir()
+        (tmp / name / "results.jsonl").write_text("".join(json.dumps(x) + "\n" for x in rows))
+        return tmp / name
+
+    def test_an_old_file_gates_the_cross_of_every_row_it_holds_in_any_path_order(self):
+        # Round 8's first low. F2 holds old idor/A and mass-assign/C rows; F1 is a copy of just its
+        # idor/A rows. A row an earlier path took is still one its later file holds: before, `F1 F2`
+        # left F2 only mass-assign/C to cross and exited 0, while `F2 F1` missed.
+        with tempfile.TemporaryDirectory(prefix="practices-reach-order-") as tmp:
+            tmp = Path(tmp)
+            held = [self.row(case, arm, v, run=i, stream=[f"/r5/{case}-{arm}-{i}"])
+                    for case, arm, v in (("idor", "A", "fail"), ("mass-assign", "C", "pass")) for i in range(1, 6)]
+            f2, f1 = self.write_results(tmp, "f2", held), self.write_results(tmp, "f1", held[:5])
+            for paths in ((f2, f1), (f1, f2)):
+                code, text = self.summarize_main(*paths)
+                self.assertEqual(code, 1, text)
+                self.assertEqual(sorted(self.missed_of(text)), ["idor/C", "mass-assign/A"], text)
+
+    def test_a_mixed_file_gates_only_the_cross_of_its_old_rows(self):
+        # Round 8's second low. One file holds old email-change/A rows and a newer run's
+        # rate-limit-paid/C rows, which record their plan. Only its old rows are crossed: before,
+        # rate-limit-paid/A and email-change/C, which no run planned, missed.
+        with tempfile.TemporaryDirectory(prefix="practices-reach-mixed-") as tmp:
+            old = [self.row("email-change", "A", "fail", run=i, stream=[f"/old/email-change-A-{i}"]) for i in range(1, 6)]
+            mixed = self.write_results(Path(tmp), "mixed", old + self.plan_rows("m", ["rate-limit-paid"], ["C"], 5))
+            code, text = self.summarize_main(mixed)
+            self.assertEqual(code, 0, text)
+            self.assertRegex(text, r"email-change\s+A\s+0\s+5 .*discriminates")
+            self.assertRegex(text, r"rate-limit-paid\s+C\s+5\s+0 .*  green")
+            self.assertNotRegex(text, r"(?m)^(rate-limit-paid\s+A|email-change\s+C) ")
+
     @unittest.skipUnless(os.environ.get("PRACTICES_REAL_RESULTS"),
                          "set PRACTICES_REAL_RESULTS to a real run's results.jsonl to pool it with a step-7 shape")
     def test_a_real_old_file_pooled_with_step_7_rows_misses_no_line_neither_holds_or_plans(self):

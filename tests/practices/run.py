@@ -188,10 +188,11 @@ a run cut short, by Ctrl-C say, misses until its rows are there; a row from befo
 leaves it to the other two). A line that can miss (A on a target case, C or D on target) and
 holds no row is a MISS ("no rows"), never pass 0 of 0, when a run of its model planned it,
 when both --cases and --arms are given (together they name the lines wanted; one alone only
-filters), or when it is in the cross of the cases and arms one file holds for that model and
-that file has a row without planned_cases or planned_arms (which says nothing of what its run
-left out). Such a row gates only what its own file holds, never the rest of the pool, so an
-old arm-A file pooled with newer runs adds no line. Any other empty line isn't shown, so runs of different plans pooled
+filters), or when it is in the cross of the cases and arms of the rows one file holds for that
+model without planned_cases or planned_arms (which say nothing of what their run left out; a
+row an earlier PATH already took is still one its file holds). Such rows gate only that cross,
+never the rest of the pool or their file's rows that record a plan, so an old arm-A file
+pooled with newer runs adds no line. Any other empty line isn't shown, so runs of different plans pooled
 together don't miss the lines no run planned. A PATH that holds no row (an empty file, or a run
 killed before its first row finished) exits 1, naming it after the bar, so that model can't drop
 out of a pooled bar unseen. A PATH in the --out dir of a live run (see --grade) gets a warning
@@ -1357,25 +1358,23 @@ def planned_lines(rows):
     return cases, arms
 
 
-READ_FROM = "read_from"  # the file load_rows read a row from: in memory only, never written back
+READ_FROM = "read_from"  # the files load_rows found a row in: in memory only, never written back
 
 
 def old_form_reach(rows):
     """The (case, arm) lines the rows that record no plan may gate. Such a row, from before
-    planned_cases and planned_arms, says nothing of what its run left out, so the rows of its
-    own file (READ_FROM, from load_rows; one group for rows without it) stand for that plan: the
-    cross of the cases and arms they hold. `rows` are one model's at one effort, so another
-    model's rows in the file add nothing. Reaching past the file would gate lines no run of
-    it planned, as pooling an old arm-A file with newer runs of the same model did."""
+    planned_cases and planned_arms, says nothing of what its run left out, so the old rows of
+    each file that holds it (READ_FROM, from load_rows; one group for rows without it) stand
+    for that plan: the cross of the cases and arms they hold. A row that records its plan adds
+    nothing (plans() covers it), nor does another model's (`rows` are one model's at one effort).
+    Reaching past those would gate lines no run planned, as pooling an old arm-A file with newer
+    runs of the same model did, in other files or in the same one."""
     by_file = {}
     for r in rows:
-        if not r.get("imported"):
-            by_file.setdefault(r.get(READ_FROM), []).append(r)
-    reach = set()
-    for of_file in by_file.values():
-        if any(not ("planned_cases" in r and "planned_arms" in r) for r in of_file):
-            reach |= {(r.get("case"), x.get("arm")) for r in of_file for x in of_file}
-    return reach
+        if not (r.get("imported") or ("planned_cases" in r and "planned_arms" in r)):
+            for path in r.get(READ_FROM) or (None,):
+                by_file.setdefault(path, []).append(r)
+    return {(r.get("case"), x.get("arm")) for old in by_file.values() for r in old for x in old}
 
 
 def summarize(rows, cases, arms, n=None, named=True):
@@ -1386,7 +1385,7 @@ def summarize(rows, cases, arms, n=None, named=True):
     was recorded, adds nothing). A line that could miss and holds no row is a MISS when a run
     of its model planned it (plans()), when `named` (`cases` and `arms` are the plan: a live
     run's, or both --cases and --arms), or when a row of its model that records no plan reaches
-    it (old_form_reach: the cross of what that row's own file holds). Any other empty line
+    it (old_form_reach: the cross of the old rows its files hold). Any other empty line
     isn't shown: no run of that model planned it, so nothing was cut short."""
     missed, refused, held = [], [], []
     for model, effort in sorted({(r.get("model"), effort_of(r)) for r in rows}, key=str):
@@ -1546,13 +1545,14 @@ def load_baseline(paths, model, cases, effort="default"):
 
 def load_rows(paths):
     """(rows, empty, live): every row of every arm in these results.jsonl files (each path a
-    file, or a results dir holding one), tagged with the file it came from (READ_FROM, in
+    file, or a results dir holding one), tagged with the files that hold it (READ_FROM, in
     memory only), the files that hold no row (a run killed before its
     first row leaves one, and its plan is only in rows), and the files a live run is still
     writing (held_by_a_run). A row already taken (the same stream paths) is dropped and
-    counted; its file still holds a row. A file that can't be read exits, and so does a
+    counted, and its file joins the taken row's tag: that file still holds the row, whatever
+    the path order. A file that can't be read exits, and so does a
     non-empty line that isn't a row (refuse_lines), before any bar is printed."""
-    rows, seen, seen_rows, problems, empty, live = [], set(), set(), [], [], []
+    rows, seen, taken, problems, empty, live = [], set(), {}, [], [], []
     for given in paths:
         path = results_path(given)
         if path in seen:
@@ -1566,11 +1566,13 @@ def load_rows(paths):
                 problems.append((path, number, problem))
                 continue
             key = json.dumps(row.get("stream") or row, sort_keys=True)
-            if key in seen_rows:
+            if key in taken:
                 dups += 1
+                if str(path) not in taken[key][READ_FROM]:
+                    taken[key][READ_FROM].append(str(path))
                 continue
-            seen_rows.add(key)
-            rows.append({**row, READ_FROM: str(path)})  # summarize's old_form_reach; no reader writes rows back
+            taken[key] = {**row, READ_FROM: [str(path)]}  # summarize's old_form_reach; no reader writes rows back
+            rows.append(taken[key])
             took += 1
         if not took + dups:
             empty.append(path)
