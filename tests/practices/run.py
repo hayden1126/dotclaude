@@ -110,7 +110,9 @@ Per run:
         is how an unresolved row gets graded) and hand_note (why, in a sentence); --grade sets
         all three;
       planned_n: the -n the run was started with, so a run cut short still reads as short
-        (rows before 2026-10-21 have none).
+        (rows before 2026-10-21 have none); planned_cases and planned_arms, the cases and arms it
+        was started with, so a summary lists a case or arm a Ctrl-C stopped before it started
+        (older rows have none).
     An --out that already holds results.jsonl is refused: a rerun would overwrite the run dirs
     its rows point at. Arms C and D run the hook with CLAUDE_CONFIG_DIR an empty dir and
     XDG_STATE_HOME its own, both in the run dir, so it sees no user-tier skill and keeps its
@@ -178,26 +180,33 @@ or fail; broken and error don't count.
 one; a row already taken, the same stream paths, is dropped), applies reviewed, hand_verdict
 and the tripwires, and prints the same table and bar as a live run, with the same pooling and
 fingerprint rules and exit status, and no model calls. --cases and --arms default to those the
-rows hold. The summary groups rows by model and effort (a row without an effort reads
-"default"). A line's n, the runs a C or D line must pass, is the largest of the rows it holds,
--n and the planned_n its rows record (so a run cut short, by Ctrl-C say, misses until its rows
-are there; a row from before planned_n leaves it to the other two). It exits 1 before printing
+rows' runs planned: each row's own case and arm and its planned_cases and planned_arms (a row
+without them adds its own only). The summary groups rows by model and effort (a row without an
+effort reads "default"). A line's n, the runs a C or D line must pass, is the largest of the
+rows it holds, -n and the planned_n of the model's rows whose run planned that case and arm (so
+a run cut short, by Ctrl-C say, misses until its rows are there; a row from before planned_n
+leaves it to the other two). A line that can miss (A on a target case, C or D on target) and
+holds no row is a MISS ("no rows"), never pass 0 of 0. It exits 1 before printing
 any bar, naming each file:line, when a non-empty line is not a row: it won't parse as a JSON
 object, its case, arm or verdict is unknown, or a field a person or the run sets is malformed
 (a hand_verdict outside "pass", "fail" and "broken", a reviewed that isn't true or false, a
-planned_n that isn't a positive whole number). --baseline files are held to the same, except
+planned_n that isn't a positive whole number, a planned_cases or planned_arms that isn't a
+non-empty list of known ones). --baseline files are held to the same, except
 that a row of another arm, model, effort or case is skipped.
 
 --grade marks one row graded by hand: it sets "reviewed": true, "hand_verdict": VERDICT ("pass",
 "fail" or "broken") and "hand_note": NOTE on the row whose RUN key is <case>-<arm>-<run>, the
 name of its run dir (email-change-C-5, say), in PATH (a results.jsonl, or the dir holding one),
 and rewrites the file atomically, every other line as it was. It refuses, changing nothing, an
-unknown or repeated RUN key, a VERDICT outside those three, an empty NOTE, and a file with a
-line --summarize would refuse.
+unknown or repeated RUN key, a VERDICT outside those three, an empty NOTE, a file with a line
+--summarize would refuse, and a file in the dir of a live run: a run holds an flock on its
+--out dir (never on results.jsonl, which --grade replaces) while it appends, and --grade takes it
+without waiting, so a rewrite can't leave the run's later rows in the replaced file.
 """
 import argparse
 import concurrent.futures
 import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -1183,12 +1192,21 @@ def bar(case, arm, counts, n, a=None, installed=None):
     return (f"{label}; {held} unresolved (review by hand)", missed) if held else (label, missed)
 
 
+def no_rows(n):
+    """The label of a line that could miss and holds no row (a case or arm that never ran, or
+    whose runs a Ctrl-C stopped): a MISS, never pass 0 of 0."""
+    return "MISS (no rows" + (f": 0 of {n} runs finished)" if n else ": none of its runs finished)")
+
+
 def _bar(case, arm, counts, n, a=None, installed=None):
     owner, kind = CASE_INFO[case]
     p, f, b = counts["pass"], counts["fail"], counts["broken"]
+    empty = not sum(counts.values())  # every row counts under exactly one key
     if arm == "A":
         if kind == BENIGN:
             return "reported only", False
+        if empty:
+            return no_rows(n), True
         cls, valid = a_class(counts), p + f
         if cls == "unclassified":
             return f"MISS (too few valid runs: {valid} of the {MIN_VALID} needed)", True
@@ -1199,6 +1217,8 @@ def _bar(case, arm, counts, n, a=None, installed=None):
         return "reported only (off-target)", False
     if arm not in ("C", "D"):
         return "reported only", False
+    if empty:
+        return no_rows(n), True
     if kind == BENIGN:
         ok = p == n and b == 0
         return ("green" if ok else f"MISS (pass {p} of {n}, broken {b})"), not ok
@@ -1307,11 +1327,31 @@ def effort_of(row):
     return row.get("effort") or "default"
 
 
+def plans(row, case, arm):
+    """Whether the run that wrote `row` planned `case` and `arm`: its planned_cases and
+    planned_arms, or, for a row from before they were recorded, its own case and arm. An
+    imported row (--baseline) stands for its own line only: its run's other lines aren't here."""
+    if row.get("imported"):
+        return case == row.get("case") and arm == row.get("arm")
+    cases, arms = row.get("planned_cases"), row.get("planned_arms")
+    return (case == row.get("case") or case in (cases or ())) and (arm == row.get("arm") or arm in (arms or ()))
+
+
+def planned_lines(rows):
+    """(cases, arms) the rows' runs planned, in CASES and ARMS order: each row's own case and arm
+    and its planned_cases and planned_arms, so a case or arm a run planned but never started
+    (a Ctrl-C) is still listed. A row from before they were recorded adds its own only."""
+    cases = [c for c in CASES if any(plans(r, c, r.get("arm")) for r in rows)]
+    arms = [x for x in ARMS if any(plans(r, r.get("case"), x) for r in rows)]
+    return cases, arms
+
+
 def summarize(rows, cases, arms, n=None):
     """Prints the table and bar per model and effort; returns the missed "case/arm" labels. Rows
     carrying `imported` are arm-A rows from --baseline files: they count in A's line, marked
-    there. A line's n is the largest of n, the rows it holds and their planned_n (a row
-    without one, from before it was recorded, adds nothing)."""
+    there. A line's n is the largest of n, the rows it holds and the planned_n of the model's
+    rows whose run planned that case and arm (plans(); a row without planned_n, from before it
+    was recorded, adds nothing). A line that could miss and holds no row is a MISS."""
     missed, refused, held = [], [], []
     for model, effort in sorted({(r.get("model"), effort_of(r)) for r in rows}, key=str):
         print(f"\nmodel {model}, effort {effort}")
@@ -1341,7 +1381,8 @@ def summarize(rows, cases, arms, n=None):
                     skills = prints[0]["skills"] if prints else None
                     # A's counts classify this arm's case only when A pooled and ran the same case code.
                     same_case = len(a_prints) == 1 and (not prints or a_prints[0]["case"] == prints[0]["case"])
-                    planned = max((r["planned_n"] for r in mine if is_count(r.get("planned_n"))), default=0)
+                    planned = max((r["planned_n"] for r in of_model
+                                   if plans(r, case, arm) and is_count(r.get("planned_n"))), default=0)
                     label, miss = bar(case, arm, counts, max(n or 0, len(mine), planned),
                                       a=counts_of(a_rows) if a_rows and same_case else None,
                                       installed=list(skills) if skills is not None else None)
@@ -1392,6 +1433,10 @@ def row_problem(row):
         return f"reviewed {row['reviewed']!r} is not true or false"
     if "planned_n" in row and not is_count(row["planned_n"]):
         return f"planned_n {row['planned_n']!r} is not a positive whole number"
+    for field, known in (("planned_cases", CASES), ("planned_arms", ARMS)):
+        if field in row and not (isinstance(row[field], list) and row[field]
+                                 and all(isinstance(x, str) and x in known for x in row[field])):
+            return f"{field} {str(row[field])[:80]} is not a non-empty list of known {field.split('_')[1]}"
     return None
 
 
@@ -1488,6 +1533,34 @@ def load_rows(paths):
     return rows
 
 
+@contextlib.contextmanager
+def results_lock(directory, refusal):
+    """Holds an exclusive flock on the dir that holds a results.jsonl for the with block, or exits
+    with `refusal` when another process holds it. The lock is on the dir, never the file:
+    --grade replaces the file, so a lock on it would leave a run that opened it a moment before
+    appending to the replaced inode. A run holds it for its whole life (open_results), --grade
+    while it reads and replaces; it ends with the process, so a killed run leaves none behind."""
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)  # not inherited: subprocesses can't keep it
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            sys.exit(f"run.py: {refusal}")
+        yield
+    finally:
+        os.close(fd)
+
+
+@contextlib.contextmanager
+def open_results(out):
+    """A live run's results.jsonl, open to append, under results_lock(out) for the run's whole
+    life, so --grade refuses while the run can still add rows (a rewrite then would leave every
+    later row in an unlinked file)."""
+    with results_lock(out, f"{out} is held by another run or a --grade; use a new --out"):
+        with open(out / "results.jsonl", "a") as results:
+            yield results
+
+
 def run_key(row):
     """A row's RUN key for --grade: <case>-<arm>-<run>, the name of its run dir."""
     return f"{row.get('case')}-{row.get('arm')}-{row.get('run')}"
@@ -1497,13 +1570,22 @@ def grade_row(given, key, verdict, note):
     """--grade: sets reviewed, hand_verdict and hand_note on the one row whose run_key is `key`
     in the results file at `given`, and rewrites the file atomically, every other line byte for
     byte. Refuses, changing nothing, an unknown or repeated key, a verdict outside
-    HAND_VERDICTS, an empty note, and a file with a line --summarize would refuse. Returns the
-    exit code."""
+    HAND_VERDICTS, an empty note, a file with a line --summarize would refuse, and a file whose
+    dir a live run holds (results_lock). Returns the exit code."""
     if verdict not in HAND_VERDICTS:
         sys.exit(f"run.py: --grade: verdict {verdict!r} is not one of {', '.join(HAND_VERDICTS)}")
     if not note.strip():
         sys.exit("run.py: --grade: the note is empty; say why in a sentence")
     path = results_path(given)
+    if not path.parent.is_dir():
+        sys.exit(f"run.py: --grade {given}: no such results file")
+    refusal = (f"--grade: a live run holds {path.parent}; it appends to its results.jsonl until it ends, and a "
+               "rewrite now would drop every row it writes after. Grade once it finishes.")
+    with results_lock(path.parent, refusal):
+        return _grade_row(path, given, key, verdict, note)
+
+
+def _grade_row(path, given, key, verdict, note):
     rows = read_results(path, "--grade", given)
     refuse_lines("--grade", [(path, number, why) for number, _row, why in rows if why])
     found = [(number, row) for number, row, _why in rows if run_key(row) == key]
@@ -1538,8 +1620,8 @@ def grade_row(given, key, verdict, note):
 def summarize_files(paths, cases=None, arms=None, n=None):
     """--summarize: the bar from earlier results files, no model calls. Returns the exit code."""
     rows = load_rows(paths)
-    cases = cases or [c for c in CASES if any(r["case"] == c for r in rows)]
-    arms = arms or [x for x in ARMS if any(r["arm"] == x for r in rows)]
+    planned_cases, planned_arms = planned_lines(rows)
+    cases, arms = cases or planned_cases, arms or planned_arms
     missed = summarize(rows, cases, arms, n)
     errors = sum(verdict_of(r) == "error" for r in rows if r["case"] in cases and r["arm"] in arms)
     print(f"\n{len(rows)} rows from {len(paths)} path(s); no model calls made")
@@ -1668,7 +1750,7 @@ def main():
     rows = []
     started = time.monotonic()
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, a.j))
-    with open(out / "results.jsonl", "a") as results:
+    with open_results(out) as results:
         futures = {pool.submit(run_one, case, arm, i, a, out): (case, arm, i) for case, arm, i in jobs}
         recorded = set()
 
@@ -1679,6 +1761,9 @@ def main():
                 row.setdefault("model", a.model)  # a harness error's row, for the per-model summary
                 row.setdefault("effort", a.effort or "default")
                 row.setdefault("planned_n", a.n)
+                # so a summary lists a case or arm this run planned but never started (a Ctrl-C)
+                row.setdefault("planned_cases", cases)
+                row.setdefault("planned_arms", arms)
                 rows.append(row)
                 results.write(json.dumps(row) + "\n")  # each finished row is on disk at once
                 results.flush()

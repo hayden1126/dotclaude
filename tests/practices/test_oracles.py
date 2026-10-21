@@ -3387,6 +3387,10 @@ class RunHarness(unittest.TestCase):
                                      "reviewed 'true' is not true or false"),
             "an unknown arm": (json.dumps({**rows[4], "arm": "E"}), "unknown arm 'E'"),
             "a planned n that isn't a count": (json.dumps({**rows[4], "planned_n": "5"}), "planned_n '5' is not a positive"),
+            "an unknown planned arm": (json.dumps({**rows[4], "planned_arms": ["C", "E"]}),
+                                       "planned_arms ['C', 'E'] is not a non-empty list of known arms"),
+            "planned cases as a string": (json.dumps({**rows[4], "planned_cases": "idor"}),
+                                          "planned_cases idor is not a non-empty list of known cases"),
             "a JSON value that isn't an object": ("[1, 2]", "not a JSON object"),
         }
         with tempfile.TemporaryDirectory(prefix="practices-refuse-") as tmp:
@@ -3422,6 +3426,72 @@ class RunHarness(unittest.TestCase):
         # A live run records it on every row, a harness error's row included.
         self.assertIn('row.setdefault("planned_n", a.n)', Path(self.harness.__file__).read_text())
         self.assertIn('"planned_n": args.n,', Path(self.harness.__file__).read_text())
+
+    def test_a_line_with_no_rows_misses(self):
+        r = self.harness
+        empty = {"pass": 0, "fail": 0, "broken": 0, "unresolved": 0, "error": 0}
+        # A gating line with no row is a MISS, never pass 0 of 0; a reported-only line stays one.
+        for case, arm in (("idor", "C"), ("idor", "D"), ("benign", "C"), ("auth-benign", "D"), ("idor", "A")):
+            self.assertEqual(r.bar(case, arm, empty, 0), ("MISS (no rows: none of its runs finished)", True))
+            self.assertEqual(r.bar(case, arm, empty, 5), ("MISS (no rows: 0 of 5 runs finished)", True))
+        for case, arm in (("benign", "A"), ("idor", "B")):
+            self.assertEqual(r.bar(case, arm, empty, 0), ("reported only", False))
+        self.assertEqual(r.bar("idor", "C", {**empty, "error": 2}, 2), ("MISS (pass 0 of 2); arm A unclassified: a "
+                                                                          "regression check, not yet evidence that the skill helps", True))
+        skills = {"server-code": "a" * 64, "auth-secrets": "b" * 64}
+        run = lambda case, arm, verdict, i, **x: self.row(case, arm, verdict, skills if arm != "A" else None, run=i,
+                                                          planned_n=5, stream=[f"/out/{case}-{arm}-{i}/stream.jsonl"], **x)
+        planned = {"planned_cases": ["idor", "mass-assign"], "planned_arms": ["A", "C"]}
+        old = lambda rows: [{k: v for k, v in x.items() if k not in planned} for x in rows]
+        write = lambda path, rows: path.write_text("".join(json.dumps(x) + "\n" for x in rows))
+        with tempfile.TemporaryDirectory(prefix="practices-norows-") as tmp:
+            path = Path(tmp) / "results.jsonl"
+            # The reviewer's case: five idor/A rows, then a Ctrl-C before any idor/C row finished.
+            a_only = [run("idor", "A", "fail", i, planned_cases=["idor"], planned_arms=["A", "C"]) for i in range(1, 6)]
+            write(path, a_only)
+            code, text = self.summarize_main(path)
+            self.assertEqual(code, 1, text)
+            self.assertRegex(text, r"idor\s+C\s+0\s+0\s+0\s+0\s+0 .*  MISS \(no rows: 0 of 5 runs finished\)\n")
+            self.assertIn("missed the bar: idor/C\n", text)
+            # The same rows in the old form (no planned_arms) say nothing of C: today's default, A only.
+            write(path, old(a_only))
+            code, text = self.summarize_main(path)
+            self.assertEqual(code, 0, text)
+            self.assertNotRegex(text, r"idor\s+C ")
+            code, text = self.summarize_main(path, "--arms", "A,C")  # named, the empty line misses in either form
+            self.assertEqual(code, 1, text)
+            self.assertIn("MISS (no rows: none of its runs finished)", text)  # nor its n
+            # Old rows, as round 5 found them: another case holds C rows, so C is listed, and idor's empty C
+            # line read green at n = 0.
+            write(path, old(a_only) + [run("mass-assign", arm, v, i) for arm, v in (("A", "fail"), ("C", "pass"))
+                                       for i in range(1, 6)])
+            code, text = self.summarize_main(path)
+            self.assertEqual(code, 1, text)
+            self.assertIn("missed the bar: idor/C\n", text)
+            # A case a Ctrl-C stopped before it started is listed from the rows' plan, and misses.
+            done = [run("idor", arm, v, i, **planned) for arm, v in (("A", "fail"), ("C", "pass")) for i in range(1, 6)]
+            write(path, done)
+            code, text = self.summarize_main(path)
+            self.assertEqual(code, 1, text)
+            self.assertRegex(text, r"idor\s+C\s+5\s+0\s+0\s+0\s+0 .*  green\n")
+            self.assertRegex(text, r"mass-assign\s+A\s+0\s+0\s+0\s+0\s+0 .*  MISS \(no rows: 0 of 5 runs finished\)\n")
+            self.assertIn("missed the bar: mass-assign/A, mass-assign/C\n", text)
+            write(path, old(done))  # before: nothing named mass-assign, so it wasn't listed and the bar read green
+            code, text = self.summarize_main(path)
+            self.assertEqual(code, 0, text)
+            self.assertNotIn("mass-assign", text)
+            write(path, old(done[:5]) + done[5:])  # both forms in one file: the plan of the rows that record one
+            code, text = self.summarize_main(path)
+            self.assertIn("missed the bar: mass-assign/A, mass-assign/C\n", text)
+        # An imported baseline row stands for its own line only: its run's other lines aren't here.
+        base = {**run("idor", "A", "fail", 1, **planned), "imported": "/old/results.jsonl"}
+        self.assertEqual((r.plans(base, "idor", "A"), r.plans(base, "idor", "C")), (True, False))
+        self.assertEqual(r.planned_lines([base]), (["idor"], ["A"]))
+        self.assertEqual(r.planned_lines(done), (["idor", "mass-assign"], ["A", "C"]))
+        # A live run records the plan on every row, a harness error's row included.
+        source = Path(r.__file__).read_text()
+        self.assertIn('row.setdefault("planned_cases", cases)', source)
+        self.assertIn('row.setdefault("planned_arms", arms)', source)
 
     def grade_main(self, *argv):
         saved = sys.argv
@@ -3481,6 +3551,43 @@ class RunHarness(unittest.TestCase):
                     self.assertEqual(path.read_bytes(), before)
             with self.assertRaises(SystemExit):  # it takes no other option
                 self.grade_main(path, "email-change-C-5", "pass", "x", "--arms", "C")
+
+    def test_grade_refuses_while_a_run_holds_its_results(self):
+        r = self.harness
+        rows = self.graded_rows()
+        late = {**rows[0], "run": 6, "stream": ["/out/email-change-C-6/stream.jsonl"]}
+        with tempfile.TemporaryDirectory(prefix="practices-lock-") as tmp:
+            out = Path(tmp)
+            path = out / "results.jsonl"
+            # The hazard: a handle a run holds open to append, and a rewrite under it. The row written
+            # after lands in the replaced inode, so the file never gets it.
+            path.write_text("".join(json.dumps(x) + "\n" for x in rows))
+            with open(path, "a") as handle:
+                self.grade_main(path, "email-change-C-5", "pass", "read it")
+                handle.write(json.dumps(late) + "\n")
+            self.assertEqual(len(path.read_text().splitlines()), 5)
+            # A live run appends under its lock for its whole life: --grade refuses, changing nothing,
+            # and the run's later rows reach the file.
+            path.write_text("".join(json.dumps(x) + "\n" for x in rows))
+            before = path.read_bytes()
+            with r.open_results(out) as results:
+                with self.assertRaises(SystemExit) as stop:
+                    self.grade_main(out, "email-change-C-5", "pass", "read it")
+                self.assertIn(f"--grade: a live run holds {out.resolve()}", str(stop.exception.code))
+                self.assertEqual(path.read_bytes(), before)
+                with self.assertRaises(SystemExit) as stop, r.open_results(out):  # nor can a second run share it
+                    pass
+                self.assertIn("is held by another run or a --grade", str(stop.exception.code))
+                results.write(json.dumps(late) + "\n")
+                results.flush()
+            # The run over, --grade works as before, and every row is there.
+            code, text = self.grade_main(out, "email-change-C-5", "pass", "read it")
+            self.assertEqual(code, 0, text)
+            after = [json.loads(x) for x in path.read_text().splitlines()]
+            self.assertEqual([x["run"] for x in after], [1, 2, 3, 4, 5, 6])
+            self.assertEqual(after[4]["hand_verdict"], "pass")
+            self.assertEqual(sorted(p.name for p in out.iterdir()), ["results.jsonl"])  # the lock leaves no file
+        self.assertIn("with open_results(out) as results:", Path(r.__file__).read_text())
 
     def test_init_skills_that_dont_match_the_arm_mark_the_row_contaminated(self):
         r = self.harness
