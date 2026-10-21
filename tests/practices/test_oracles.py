@@ -1,4 +1,4 @@
-"""Offline checks for the server-code eval (no model calls).
+"""Offline checks for the practices eval, its server-code and auth-secrets cases (no model calls).
 
 For every case in cases/: the known-good overlay scores `pass`, the known-bad overlay scores
 `fail` (benign has none), and the pristine fixture, where nothing was written, scores

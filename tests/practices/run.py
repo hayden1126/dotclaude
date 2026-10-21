@@ -4,6 +4,8 @@
   python3 tests/practices/run.py --arms A [--cases idor,mass-assign] [-n 5] [-j 2]
                                  [--model claude-opus-5-5] [--effort LEVEL] [--out DIR] [--keep] [--dry-run]
                                  [--unsafe-grade] [--baseline PATH ...]
+  python3 tests/practices/run.py --summarize PATH ... [--cases ...] [--arms ...] [-n N]
+  python3 tests/practices/run.py --grade PATH RUN VERDICT NOTE
 
 Manual only, never in the suite: it makes model calls, and runs sandbox-off (the sandbox
 hides the credential). `--dry-run` makes none: it builds one fixture per case and arm, runs
@@ -210,8 +212,9 @@ name of its run dir (email-change-C-5, say), in PATH (a results.jsonl, or the di
 and rewrites the file atomically, every other line as it was. It refuses, changing nothing, an
 unknown or repeated RUN key, a VERDICT outside those three, an empty NOTE, a file with a line
 --summarize would refuse, and a file in the dir of a live run: a run holds an flock on its
---out dir (never on results.jsonl, which --grade replaces) while it appends, and --grade takes it
-without waiting, so a rewrite can't leave the run's later rows in the replaced file.
+--out dir (never on results.jsonl, which --grade replaces) while it appends. --grade tries it for
+about a second and never blocks on it (a --summarize probe holds it for an instant, a live run
+until it ends), so a rewrite can't leave the run's later rows in the replaced file.
 """
 import argparse
 import concurrent.futures
@@ -1778,8 +1781,8 @@ def out_problem(out):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--arms", help="comma list of " + ",".join(ARMS) + " (required but with --summarize)")
-    ap.add_argument("--cases", help="comma list (default: all): " + ",".join(CASES))
-    ap.add_argument("-n", type=int, help="runs per case and arm (default 5)")
+    ap.add_argument("--cases", help="comma list (default: all; with --summarize, what the rows planned): " + ",".join(CASES))
+    ap.add_argument("-n", type=int, help="runs per case and arm (default 5; with --summarize, what the rows planned)")
     ap.add_argument("-j", type=int, default=2, help="sessions in parallel (default 2)")
     ap.add_argument("--model", default="claude-opus-5-5")
     ap.add_argument("--effort", choices=("low", "medium", "high", "xhigh", "max"),
