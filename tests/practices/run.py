@@ -101,7 +101,8 @@ Per run:
       harness_sha (the baseline commit the diff is taken against), hook_errors (the run's hook
         errors.log, "none" when empty or for A and B), and the paths stream (one per turn),
         oracle and diff, under <out>/<case>-<arm>-<i>/;
-      only sometimes: diff_error (the diff failed; the verdict stands), fixture (with --keep),
+      only sometimes: diff_error (the diff failed, so no suspect words were read: a tripwire
+        too; the verdict stands), fixture (with --keep),
         harness_error (an exception in the harness: an error row, with few other fields), and
         three fields no run writes, which a person sets after reading a row's diff and stream:
         reviewed (true clears a tripwire row, which the bar then counts again), hand_verdict
@@ -159,7 +160,8 @@ or fail; broken and error don't count.
      pooled and its case part equals that arm's; else that line reads as A unclassified, and a
      C or D line is then a regression check (it still has to pass every run), never REFUSED.
   Unresolved: a row whose verdict is unresolved, or whose suspect or contaminated list is
-     non-empty (a tripwire), is unresolved until a person marks it reviewed. It counts under no
+     non-empty or that has a diff_error (a tripwire), is unresolved until a person marks it
+     reviewed. It counts under no
      verdict, never a pass and never a fail (so a C or D line can't be green while it stands,
      and A's valid runs leave it out); its line says how many are unresolved, and each is listed
      after the table with its diff path. After reading its diff and stream, a person sets
@@ -1262,12 +1264,15 @@ def verdict_of(row):
 
 
 def tripwired(row):
-    return bool(row.get("suspect") or row.get("contaminated"))
+    """Suspect words in the diff, a contaminated session, or a diff that failed (so its suspect
+    words were never read)."""
+    return bool(row.get("suspect") or row.get("contaminated") or row.get("diff_error"))
 
 
 def unresolved(row):
     """A row the bar can't count yet: its verdict is unresolved (and no hand_verdict replaced
-    it), or a tripwire marked it (suspect or contaminated) and no person has marked it reviewed."""
+    it), or a tripwire marked it (suspect, contaminated or diff_error) and no person has marked it
+    reviewed."""
     return verdict_of(row) == "unresolved" or (tripwired(row) and not reviewed(row))
 
 
@@ -1290,7 +1295,10 @@ def held_reason(row):
             why.append(f"suspect ({', '.join(row['suspect'])})")
         if row.get("contaminated"):
             why.append(f"contaminated ({', '.join(row['contaminated'])})")
+        if row.get("diff_error"):
+            why.append(f"the diff failed, so its suspect words weren't read ({str(row['diff_error'])[:200]})")
     todo = ('set "reviewed": true, "hand_verdict" ("pass", "fail" or "broken") and "hand_note" in its row once read'
+            f" (--grade PATH {run_key(row)} VERDICT NOTE sets the three)"
             if verdict_of(row) == "unresolved" else 'set "reviewed": true in its row once read')
     return "; ".join(why), todo
 

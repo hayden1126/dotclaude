@@ -3226,6 +3226,24 @@ class RunHarness(unittest.TestCase):
         self.assertEqual(missed, ["idor/C"])
         self.assertIn("MISS (pass 2 of 3)", text)
 
+    def test_a_failed_diff_is_a_tripwire(self):
+        # A diff that failed (a chmod 000 file breaks `git add`, say) wrote no diff-text.patch, so
+        # suspect is [] without the words ever being read: the row is held until reviewed.
+        rows = [self.row("idor", "C", "pass", run=i) for i in (1, 2, 3)]
+        rows[2]["diff_error"] = "CalledProcessError(128, ['git', 'add']): error: open(\"x\"): Permission denied"
+        self.assertTrue(self.harness.tripwired(rows[2]))
+        self.assertFalse(self.harness.tripwired(rows[1]))
+        missed, text = self.summary_of(rows, ["idor"], ["C"], 3)
+        self.assertEqual(missed, ["idor/C"])
+        self.assertIn("MISS (pass 2 of 3); arm A unclassified", text)
+        self.assertIn("1 unresolved (review by hand)", text)
+        self.assertIn("unresolved idor/C #3 (pass): the diff failed, so its suspect words weren't read "
+                      "(CalledProcessError(128", text)
+        rows[2]["reviewed"] = True
+        missed, text = self.summary_of(rows, ["idor"], ["C"], 3)
+        self.assertEqual(missed, [])
+        self.assertNotIn("unresolved idor", text)
+
     def test_unresolved_verdict_rows_wait_for_a_hand_verdict(self):
         r = self.harness
         self.assertIn("unresolved", r.VERDICTS)
