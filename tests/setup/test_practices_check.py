@@ -2002,6 +2002,41 @@ class Budgets(BashBase):
         self.assertIn("c.ts:1", reason)
         self.assertIn("[practices:review:", reason)
 
+    def test_the_parse_leaves_a_breadcrumb_and_checks_the_budget_per_body(self):
+        # Review round 3, low 11: parsing had no budget check and no breadcrumb, so a parse
+        # the 5 s kill ended left no trace.
+        crumb, real = {}, PC.load_bash_words()
+
+        class Spy:
+            def __getattr__(self, name):
+                return getattr(real, name)
+
+            def calls(self, *args, **kw):
+                d = os.path.join(self.state, "dotclaude", "practices")
+                for n in os.listdir(d):
+                    if n.startswith("breadcrumb-"):
+                        with open(os.path.join(d, n)) as f:
+                            crumb.update(json.load(f))
+                return real.calls(*args, **kw)
+
+        spy = Spy()
+        spy.state = self.state
+        self.assertIsNone(self.call(PC.pre_tool_use, "git status", "b-parse",
+                                    load_bash_words=lambda: spy))
+        self.assertEqual((crumb.get("level"), crumb.get("pattern")), ("bash", "parse"))
+        self.assertIsNone(self.call(PC.pre_tool_use, "x=$(git push)", "b-parse", BUDGET=0.0))
+        self.assertIn("in the bash parse; the call was allowed unchecked", self.log())
+        seen = []
+        BW.calls("a $(b $(c)) `d`; bash -c 'e'", {"git"}, "/r", [],
+                 check=lambda: seen.append(1))
+        self.assertEqual(len(seen), 4)  # each $(...), the backtick, the bash -c script
+
+        def spent():
+            raise PC.Budget("command parse")
+
+        with self.assertRaises(PC.Budget):  # never swallowed as an unparsable body
+            BW.calls("x=$(git push)", {"git"}, "/r", [], check=spent)
+
     def test_a_crash_allows_and_logs(self):
         def boom(event):
             raise RuntimeError("planted")

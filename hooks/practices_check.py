@@ -93,7 +93,8 @@ when it is spent are skipped and logged, and a transcript read checks it on ever
 (once spent, the call is allowed and that is logged). A pattern that throws is skipped and
 logged; a malformed events.toml disables that skill only, logged. Any crash allows the call (no
 output) and is logged to $XDG_STATE_HOME/dotclaude/practices/errors.log (size-capped). Before
-each pattern, and before each transcript read (level "transcript"), a breadcrumb (file, level,
+each pattern, each transcript read (level "transcript") and a Bash command's parse (level
+"bash", which also checks the budget before each substitution body), a breadcrumb (file, level,
 pattern) is written under the state dir and removed on a normal exit; Claude Code's
 timeout kill takes the whole process group, so a killed scan leaves it behind. SessionStart
 (startup) runs a self-test, reports leftover breadcrumbs and the errors logged since the last
@@ -257,9 +258,9 @@ class Budget(Exception):
     pass
 
 
-def check_budget():
+def check_budget(what="transcript read"):
     if time.monotonic() - START > BUDGET:
-        raise Budget("transcript read")
+        raise Budget(what)
 
 
 class Crumb:
@@ -1397,7 +1398,12 @@ def bash_calls(event):
     if not cmd:
         return gits, ghs, False
     try:
-        calls = bash_words.calls(cmd, set(HEADS), cwd, rest)
+        CRUMB.mark("(the command)", "bash", "parse")  # a parse the kill ends leaves a trace
+        calls = bash_words.calls(cmd, set(HEADS), cwd, rest,
+                                 check=lambda: check_budget("command parse"))
+    except Budget as e:
+        log("budget-spent", f"after {BUDGET}s, in the {e}; the call was allowed unchecked")
+        return [], [], False
     except ValueError as e:
         if names_a_call(cmd):  # a check that failed open, so it counts
             log("git-skipped", f"the command names git commit or push, or gh pr ready or "

@@ -504,7 +504,7 @@ def dir_stack(name, args, cwd, stack):
     return stack[-1], stack[:-1]
 
 
-def calls(command, heads, cwd, rest=None, depth=0, stack=()):
+def calls(command, heads, cwd, rest=None, depth=0, stack=(), check=None):
     """[(name, args, prefix, cwd)] for each simple command whose name is in heads, with the cwd
     each starts in (None once a cd can't be followed). A cd is followed, and so are pushd and
     popd (dir_stack; stack is the dirs saved before the command, None when unknown). The body of
@@ -519,7 +519,8 @@ def calls(command, heads, cwd, rest=None, depth=0, stack=()):
     reads (`cat > f <<EOF`); and each body or script that can't be parsed (a shlex error, or
     nested deeper than NEST_MAX), whole, while the rest of the command is still read. Raises
     ValueError when the command itself can't be parsed, and, without rest, when a body or
-    script can't."""
+    script can't. check, when given, runs before each body or script is parsed (the caller's
+    time budget), and whatever it raises goes up."""
     if depth > NEST_MAX:
         raise ValueError(f"substitutions nested over {NEST_MAX} deep")
     bodies, out, k, outer = [], [], 0, []
@@ -528,8 +529,10 @@ def calls(command, heads, cwd, rest=None, depth=0, stack=()):
     stack = None if stack is None else list(stack)
 
     def inner(text, where, saved):
+        if check:
+            check()
         try:
-            return calls(text, heads, where, rest, depth + 1, saved)
+            return calls(text, heads, where, rest, depth + 1, saved, check)
         except ValueError:
             if rest is None:
                 raise
