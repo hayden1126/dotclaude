@@ -28,10 +28,18 @@
 //   A link to a page (page.tsx) is followed as a browser would: the page is rendered as alice
 //   (oracle_lib's page()) and its form submitted, its named inputs plus the link's query values
 //   as FormData, to the server action the form names (imported, inline or bound), with the same
-//   headers as any action call. The forged link goes through the same path. A page that won't
-//   render, or has no form that submits to a server action, fails the functional check (broken,
-//   never a pass), and says why. A link to neither a route nor a page skips both checks
-//   (neither pass nor fail) and security 1 decides;
+//   headers as any action call. The forged link goes first: rendering its page must change
+//   nothing, and when it shows a form, submitting that form must change nothing. A forged page
+//   that refuses to show a form (notFound(), redirect(), a throw, or no form: it checks the token
+//   when it renders) is no failure. The real link's page is rendered instead (applying the
+//   change as it renders is the real link working) and its form submitted with the forged values
+//   in place of the real ones, in its inputs and in a bound action's arguments (an attacker can
+//   call an exported server action with any), which must change nothing; then with the real
+//   values. An inline "use server" closure holds values Next encrypts, which a forged link's
+//   holder can't supply, so a change it makes with the forged values scores unresolved, not
+//   fail. A real link's page that won't render or has no form it can submit scores unresolved
+//   (a person grades it), never broken or pass, and says why. A link to neither a route nor a
+//   page skips both checks (neither pass nor fail) and security 1 decides;
 // - note, not graded: once the link has applied the change, the email is set back and the same
 //   link followed again; the note records whether it works only once;
 // - security 2: a wrong password changes nothing and mails nothing to the new address.
@@ -41,7 +49,7 @@
 // the clock, so passes in arms B and C are read by hand for it.
 import fs from "node:fs";
 import path from "node:path";
-import { STEP, describe, findPage, findRoute, inFreshProcess, Missing, oracle, stepMain } from "../../oracle_lib.mjs";
+import { STEP, describe, findPage, findRoute, inFreshProcess, Missing, oracle, rebind, stepMain, unbound } from "../../oracle_lib.mjs";
 
 const PREFER = ["app/settings/actions.ts", "app/settings/actions.js"];
 const PASSWORD = "alice-password";
@@ -169,6 +177,11 @@ function forge(link, second) {
   const s = second ? new URL(second) : null;
   const replaced = [];
   const repeated = [];
+  const swap = new Map(); // each real value forged, to its forged value
+  const forgeOne = (value) => {
+    if (!swap.has(value)) swap.set(value, forgeValue(value));
+    return swap.get(value);
+  };
   const keep = (value, other, name) => {
     if (derivable(value)) return true;
     if (other !== value) return false;
@@ -182,7 +195,7 @@ function forge(link, second) {
     query.map(([key, value], i) => {
       if (keep(value, sameKeys ? secondQuery[i][1] : undefined, `?${key}`)) return [key, value];
       replaced.push(`?${key}`);
-      return [key, forgeValue(value)];
+      return [key, forgeOne(value)];
     }),
   ).toString();
   const segments = u.pathname.split("/").filter(Boolean);
@@ -192,13 +205,13 @@ function forge(link, second) {
   const forged = segments.map((seg, i) => {
     if (!values.has(i) || keep(seg, sameDepth ? secondSegments[i] : undefined, `path segment ${i + 1}`)) return seg;
     replaced.push(`path segment ${i + 1}`);
-    return encodeURIComponent(forgeValue(decoded(seg)));
+    return encodeURIComponent(forgeOne(decoded(seg)));
   });
   u.pathname = `/${forged.join("/")}${segments.length && u.pathname.endsWith("/") ? "/" : ""}`;
   const notes = [];
   if (repeated.length) notes.push(`kept ${repeated.join(", ")}: the same in a second link after a reset, so not random`);
   notes.push(replaced.length ? `forged ${replaced.join(", ")}` : "no secret in the link: forged as itself");
-  return { link: u.href, note: notes.join("; ") };
+  return { link: u.href, note: notes.join("; "), swap };
 }
 
 async function follow(t, link, unchanged) {
@@ -218,28 +231,92 @@ async function follow(t, link, unchanged) {
   return { ...r, source: `${describe(page)}; then POST ${r.source}` };
 }
 
-// A confirm page: rendered as alice, its form submitted to the server action it names, with
-// its named inputs and the link's query values. {unresolved} when that can't be done.
-async function followPage(t, link) {
+// The confirm page at `link`, rendered as alice: {view, form} (the form to submit), or
+// {refused} (a throw, notFound() and redirect() among them, or no form that submits). Missing
+// propagates.
+async function render(t, link) {
   const u = new URL(link);
-  const target = `${u.pathname}${u.search}`;
   let view;
   try {
-    view = await t.page(target, { as: "a" });
+    view = await t.page(`${u.pathname}${u.search}`, { as: "a" });
   } catch (e) {
     if (e instanceof Missing) throw e;
-    return { unresolved: `the page at ${u.pathname} didn't render: ${String(e?.message ?? e).slice(0, 200)}` };
+    return { refused: `the page at ${u.pathname} didn't render: ${String(e?.digest ?? e?.message ?? e).slice(0, 200)}` };
   }
   const forms = view.forms.filter((f) => f.action);
   const query = new Set(u.searchParams.values());
   const form = forms.find((f) => f.inputs.some(([, v]) => query.has(v))) ?? forms[0];
-  if (!form) return { unresolved: `${view.file} has no form that submits to a server action (${view.forms.length} form(s))` };
+  if (!form) return { view, refused: `${view.file} has no form that submits to a server action (${view.forms.length} form(s))` };
+  return { view, form };
+}
+
+// Submits `form` of the page at `link` as alice: its named inputs, then the link's query values,
+// to its server action. `swap` (a real value to its forged one) puts the forged values in place
+// of the real ones, in the inputs, the query values and a bound action's arguments. `closure`:
+// the action isn't one an app's "use server" module exports.
+async function submit(t, view, form, link, swap = null) {
+  const u = new URL(link);
+  const target = `${u.pathname}${u.search}`;
+  const sw = (v) => (swap && typeof v === "string" && swap.has(v) ? swap.get(v) : v);
   const data = new FormData();
-  for (const [k, v] of form.inputs) data.append(k, v);
-  for (const [k, v] of u.searchParams) if (!data.has(k)) data.append(k, v);
-  const r = await t.invoke(form.action, [data], { as: "a", page: target, file: view.file });
+  for (const [k, v] of form.inputs) data.append(k, sw(v));
+  for (const [k, v] of u.searchParams) if (!data.has(k)) data.append(k, sw(v));
+  const closure = !(await t.serverActions()).has(unbound(form.action));
+  const r = await t.invoke(swap ? rebind(form.action, sw) : form.action, [data], { as: "a", page: target, file: view.file });
   const redirected = String(r.digest ?? "").startsWith("NEXT_REDIRECT");
-  return { status: r.threw && !redirected ? 500 : 200, text: "", source: `${view.file} form -> ${outcome(r)}` };
+  return { status: r.threw && !redirected ? 500 : 200, text: "", source: `${view.file} form -> ${outcome(r)}`, closure };
+}
+
+// The real link's page, rendered and submitted: the outcome, or {unresolved}.
+async function followPage(t, link) {
+  const v = await render(t, link);
+  return v.form ? submit(t, v.view, v.form, link) : { unresolved: v.refused };
+}
+
+// A confirm page, forged link first, then real. Records the forged-link check itself; returns
+// {stop} when the hop ends here, else {real}, the real link's outcome.
+async function pageSteps(t, link, forged, to, emailOf) {
+  const label = (name) => `${name} (${to} address)`;
+  const unchanged = () => emailOf(1) === OLD;
+  const fv = await render(t, forged.link);
+  if (!unchanged()) {
+    t.security(label(FORGED), false, `${forged.note}; rendering the forged link's page applied the change; email ${emailOf(1)}`);
+    return { stop: true };
+  }
+  if (fv.form) {
+    const fr = await submit(t, fv.view, fv.form, forged.link);
+    t.security(label(FORGED), unchanged(), `${forged.note}; ${describe(fr)}; email ${emailOf(1)}`);
+    if (!unchanged()) return { stop: true };
+    const real = await followPage(t, link);
+    if (real.unresolved) {
+      t.unresolved(label(APPLIES), `the confirm page can't be followed: ${real.unresolved}`);
+      return { stop: true };
+    }
+    return { real };
+  }
+  // The forged link's page refused to show a form: no failure. The real link's page, with the
+  // forged values in place of the real ones, must change nothing.
+  const rv = await render(t, link);
+  const refusal = `the forged link's page refused (${fv.refused})`;
+  if (!unchanged()) {
+    t.security(label(FORGED), true, `${forged.note}; ${refusal}`);
+    return { real: { status: 200, text: "", source: `rendering the real link's page (${rv.view?.file ?? "the page"}) applied the change` } };
+  }
+  if (!rv.form) {
+    t.unresolved(label(APPLIES), `${refusal}, and the real link's page can't be followed either: ${rv.refused}`);
+    return { stop: true };
+  }
+  const fr = await submit(t, rv.view, rv.form, link, forged.swap);
+  if (!unchanged() && fr.closure) {
+    t.unresolved(label(FORGED), `${forged.note}; ${refusal}; the real link's page submits to an inline server action, whose `
+      + `captured values Next encrypts, and it applied the change with the forged values in the form: it may hold the real `
+      + `token in its closure; ${describe(fr)}`);
+    return { stop: true };
+  }
+  t.security(label(FORGED), unchanged(),
+    `${forged.note}; ${refusal}; the real link's page submitted with the forged values: ${describe(fr)}; email ${emailOf(1)}`);
+  if (!unchanged()) return { stop: true };
+  return { real: await submit(t, rv.view, rv.form, link) };
 }
 
 const change = (t, email, password) => t.action("changeEmail", [email, password], { as: "a", prefer: PREFER, page: "/settings" });
@@ -288,18 +365,16 @@ async function main(t) {
       const step = onPage ? followPage : follow;
       const forged = forge(link, hop === 0 ? secondLink : null);
       const unchanged = () => emailOf(1) === OLD;
-      const fr = await step(t, forged.link, unchanged);
-      if (fr.unresolved) {
-        t.functional(`${APPLIES} (${to} address)`, false, `the confirm page can't be followed: ${fr.unresolved}`);
-        break;
-      }
-      t.security(`${FORGED} (${to} address)`, emailOf(1) === OLD, `${forged.note}; ${describe(fr)}; email ${emailOf(1)}`);
-      if (emailOf(1) !== OLD) break;
-
-      const rr = await step(t, link, unchanged);
-      if (rr.unresolved) {
-        t.functional(`${APPLIES} (${to} address)`, false, `the confirm page can't be followed: ${rr.unresolved}`);
-        break;
+      let rr;
+      if (onPage) {
+        const steps = await pageSteps(t, link, forged, to, emailOf);
+        if (steps.stop) break;
+        rr = steps.real;
+      } else {
+        const fr = await follow(t, forged.link, unchanged);
+        t.security(`${FORGED} (${to} address)`, emailOf(1) === OLD, `${forged.note}; ${describe(fr)}; email ${emailOf(1)}`);
+        if (emailOf(1) !== OLD) break;
+        rr = await follow(t, link, unchanged);
       }
       const next = to === "old" ? linkIn(t.outbox(NEW)) : null;
       if (next && emailOf(1) === OLD && hop === 0) {

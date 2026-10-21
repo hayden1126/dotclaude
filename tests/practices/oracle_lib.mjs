@@ -49,6 +49,11 @@
 //   searchParams, inside a same-origin GET as the caller) and returns its forms, each with the
 //   server action it submits to (imported, inline "use server" or bound alike) and its named
 //   inputs. invoke() calls such an action the way action() calls a named one, same headers.
+//   Function.prototype.bind is wrapped for the oracle's process so a bound action keeps its
+//   target and arguments (boundParts, rebind): an oracle can call it with other arguments, as an
+//   attacker can call an exported server action with any. serverActions() is the set of
+//   functions the app's "use server" modules export; an action outside it is an inline closure,
+//   whose captured values Next encrypts, so nobody but the page can supply them.
 // - note(): an observation kept in the checks for the reader, counted toward neither verdict.
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -494,6 +499,33 @@ export function jsxToCalls(src) {
   return code(null);
 }
 
+// Bound functions remember their target and arguments, so an oracle can call a bound server
+// action with other arguments (rebind). The wrapper binds as before; it only records.
+const BOUND = Symbol("oracle.bound");
+const realBind = Function.prototype.bind;
+Function.prototype.bind = function bind(thisArg, ...args) {
+  const bound = realBind.call(this, thisArg, ...args);
+  try {
+    Object.defineProperty(bound, BOUND, { value: { target: this, thisArg, args } });
+  } catch {}
+  return bound;
+};
+
+// {target, thisArg, args} of a function made by bind(), else null.
+export const boundParts = (fn) => (typeof fn === "function" && fn[BOUND]) || null;
+
+// The function under every bind() of `fn`.
+export function unbound(fn) {
+  for (let parts = boundParts(fn); parts; parts = boundParts(fn)) fn = parts.target;
+  return fn;
+}
+
+// `fn` bound again with each bound argument passed through `swap`.
+export function rebind(fn, swap) {
+  const parts = boundParts(fn);
+  return parts ? realBind.call(rebind(parts.target, swap), parts.thisArg, ...parts.args.map(swap)) : fn;
+}
+
 const PAGE_PRELUDE =
   'const __Frag = Symbol.for("react.fragment");\n' +
   'const __jsx = (type: any, props: any, ...children: any[]) => ({ $$typeof: Symbol.for("react.element"), type, props: { ...props, children } });\n';
@@ -721,6 +753,26 @@ class Oracle {
     const mod = await import(pathToFileURL(file).href);
     if (typeof mod[name] !== "function") throw new Missing(`${path.relative(FIXTURE, file)} has no function ${name}`);
     return this.invoke(mod[name], args, { as, page, name, file: path.relative(FIXTURE, file) });
+  }
+
+  // The functions the app's "use server" modules export (a file whose first statement is the
+  // directive), anywhere in the fixture: the server actions anyone can call with any arguments.
+  async serverActions() {
+    if (this.actionSet) return this.actionSet;
+    const set = new Set();
+    const directive = /^(?:\s|\/\/[^\n]*\n|\/\*[\s\S]*?\*\/)*["']use server["']/;
+    let files = [];
+    try {
+      files = walk(FIXTURE).filter((f) => !f.split(path.sep).includes(".git"));
+    } catch {}
+    for (const file of files) {
+      if (!directive.test(readFileSync(file, "utf8"))) continue;
+      try {
+        for (const value of Object.values(await import(pathToFileURL(file).href))) if (typeof value === "function") set.add(value);
+      } catch {}
+    }
+    this.actionSet = set;
+    return set;
   }
 
   // Calls the server action `fn` inside the same-origin POST a form submit on `page` makes.

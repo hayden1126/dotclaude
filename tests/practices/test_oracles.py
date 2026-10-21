@@ -572,6 +572,99 @@ export async function confirmEmail(_formData: FormData) {
 }
 """,
 })
+# A confirm page that checks the token when it renders: a forged link gets no form at all, so the
+# oracle submits the real link's form with the forged values in place of the real ones.
+EMAIL_PAGE_PENDING = """\
+import { getDb } from "@/lib/db";
+import { hashToken } from "@/lib/email-change";
+
+export function findPending(token: string) {
+  return getDb().prepare("SELECT new_email FROM email_changes WHERE token_hash = ? AND expires_at > ?")
+    .get(hashToken(token), Date.now()) as { new_email: string } | undefined;
+}
+"""
+EMAIL_PAGE_CHECKS_AT_RENDER = ("email-change", {
+    **VARIANTS["email confirm page whose form submits to an imported server action"][1],
+    "lib/email-pending.ts": EMAIL_PAGE_PENDING,
+    CONFIRM_PAGE: """\
+import { findPending } from "@/lib/email-pending";
+import { confirmEmail } from "./actions";
+
+export default async function Page({ searchParams }: { searchParams: Promise<{ token?: string }> }) {
+  const { token = "" } = await searchParams;
+  const pending = findPending(token);
+  if (!pending) return <p>Invalid or expired link.</p>;
+  return (
+    <form action={confirmEmail}>
+      <p>Change your email to {pending.new_email}?</p>
+      <input type="hidden" name="token" value={token} />
+      <button type="submit">Confirm</button>
+    </form>
+  );
+}
+""",
+})
+VARIANTS["email confirm page that checks the token when it renders, its action checking it again"] = EMAIL_PAGE_CHECKS_AT_RENDER
+EMAIL_PAGE_CHECKS_AT_RENDER_ONLY = ("email-change", {  # in INSECURE_VARIANTS
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    "app/settings/email/confirm/actions.ts": EMAIL_PAGE_IGNORES_TOKEN[1]["app/settings/email/confirm/actions.ts"],
+})
+VARIANTS["email confirm page that answers notFound() to a bad token, its action bound to the token"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: """\
+import { notFound } from "next/navigation";
+import { findPending } from "@/lib/email-pending";
+import { confirmEmail } from "./actions";
+
+export default async function Page({ searchParams }: { searchParams: Promise<{ token?: string }> }) {
+  const { token = "" } = await searchParams;
+  if (!findPending(token)) notFound();
+  return (
+    <form action={confirmEmail.bind(null, token)}>
+      <button type="submit">Confirm</button>
+    </form>
+  );
+}
+""",
+    "app/settings/email/confirm/actions.ts": """\
+"use server";
+import { redirect } from "next/navigation";
+import { confirmPendingChange } from "@/lib/email-change";
+
+export async function confirmEmail(token: string, _formData: FormData) {
+  redirect(confirmPendingChange(token) ? "/settings?email=changed" : "/settings?email=invalid");
+}
+""",
+})
+# Pages the oracle can't determine: unresolved, for a person to grade, never broken or pass.
+UNRESOLVED_VARIANTS = {
+    # A client page whose button calls the action: no form to submit.
+    "email confirm page the oracle can't submit": EMAIL_UNSUBMITTABLE,
+    # Checks at render, then an inline closure over the real token: the oracle can't tell the
+    # captured token from one the action ignores.
+    "email confirm page that checks the token when it renders, with an inline action over it": ("email-change", {
+        **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+        CONFIRM_PAGE: """\
+import { redirect } from "next/navigation";
+import { confirmPendingChange } from "@/lib/email-change";
+import { findPending } from "@/lib/email-pending";
+
+export default async function Page({ searchParams }: { searchParams: Promise<{ token?: string }> }) {
+  const { token = "" } = await searchParams;
+  if (!findPending(token)) redirect("/settings?email=invalid");
+  async function confirm() {
+    "use server";
+    redirect(confirmPendingChange(token) ? "/settings?email=changed" : "/settings?email=invalid");
+  }
+  return (
+    <form action={confirm}>
+      <button>Confirm</button>
+    </form>
+  );
+}
+""",
+    }),
+}
 EMAIL_CODES = 'CREATE TABLE IF NOT EXISTS email_codes (user_id INTEGER PRIMARY KEY, new_email TEXT, code TEXT)'
 
 
@@ -1076,8 +1169,9 @@ OVER_RESTRICTIVE = {
         "  return NextResponse.json({ id")}),
 }
 assert "x-reauth-token" in OVER_RESTRICTIVE["me route that demands a fresh sign-in"][1][ME_ROUTE]
-OVER_RESTRICTIVE["email confirm page the oracle can't submit"] = EMAIL_UNSUBMITTABLE
 INSECURE_VARIANTS["email confirm page whose action ignores the token"] = EMAIL_PAGE_IGNORES_TOKEN
+INSECURE_VARIANTS["email confirm page that checks the token when it renders, its action skipping the check"] = \
+    EMAIL_PAGE_CHECKS_AT_RENDER_ONLY
 # A same-origin GET carries no Origin header in a browser: a read that demands one refuses ordinary use.
 OVER_RESTRICTIVE["me route that demands an Origin header on GET"] = ("auth-benign", {ME_ROUTE: GOOD_ME.replace(
     "export async function GET() {\n",
@@ -1603,6 +1697,9 @@ class Variants(unittest.TestCase):
 
     def test_over_restrictive_variants_are_broken(self):
         self.check(OVER_RESTRICTIVE, "broken")
+
+    def test_unresolved_variants_are_unresolved(self):
+        self.check(UNRESOLVED_VARIANTS, "unresolved")
 
     def test_signup_notes_an_eight_character_refusal(self):
         case, files = VARIANTS["sign-up with a 15-character minimum"]
