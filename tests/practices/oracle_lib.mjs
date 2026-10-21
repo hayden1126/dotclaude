@@ -41,9 +41,14 @@
 //   Set-Cookie, as in Next (the stub's runWithRequest), and so does one set before the handler
 //   throws redirect() (Next answers that redirect with them); route() results carry the response's
 //   Set-Cookie lines as setCookies (parseSetCookie and cookieHeader read them).
+// - Pages: page() renders a page.tsx as the server would (its JSX rewritten to plain calls,
+//   since the loader only strips types; server components expanded, with the link's params and
+//   searchParams, inside a same-origin GET as the caller) and returns its forms, each with the
+//   server action it submits to (imported, inline "use server" or bound alike) and its named
+//   inputs. invoke() calls such an action the way action() calls a named one, same headers.
 // - note(): an observation kept in the checks for the reader, counted toward neither verdict.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -355,6 +360,178 @@ export function describe(r) {
 
 export const is2xx = (r) => r.status >= 200 && r.status < 300;
 
+// ---------------------------------------------------------------- pages
+// A page (page.tsx) is JSX, and the loader only strips types, so page() rewrites the JSX into
+// calls of __jsx(type, props, ...children) first. A subset of JSX: elements, fragments,
+// attributes (string, {expr}, bare, {...spread}), text and {expr} children; strings, template
+// literals and comments are skipped over. A regex literal holding a quote can derail it (the
+// page then fails to render, which scores broken, never pass).
+export function jsxToCalls(src) {
+  let i = 0;
+  const n = src.length;
+  const space = () => {
+    while (i < n && /\s/.test(src[i])) i++;
+  };
+  function quoted(q) {
+    const start = i++;
+    while (i < n && src[i] !== q) i += src[i] === "\\" ? 2 : 1;
+    i++;
+    return src.slice(start, i);
+  }
+  function template() {
+    let out = "`";
+    i++;
+    while (i < n && src[i] !== "`") {
+      if (src[i] === "\\") {
+        out += src.slice(i, i + 2);
+        i += 2;
+      } else if (src[i] === "$" && src[i + 1] === "{") {
+        i += 2;
+        out += `\${${code("}")}}`;
+        i++;
+      } else out += src[i++];
+    }
+    i++;
+    return `${out}\``;
+  }
+  function jsxStarts(before) {
+    if (!/[A-Za-z_$>]/.test(src[i + 1] ?? "")) return false;
+    const prev = before.trimEnd();
+    return prev === "" || /(?:[(,=:?&|[{};!]|=>|\b(?:return|yield|await|default|else|do|case))$/.test(prev);
+  }
+  // Code up to `stop` at depth 0 (left unconsumed), its JSX rewritten.
+  function code(stop) {
+    let out = "";
+    let depth = 0;
+    while (i < n) {
+      const c = src[i];
+      if (stop && depth === 0 && c === stop) return out;
+      if (c === '"' || c === "'") out += quoted(c);
+      else if (c === "`") out += template();
+      else if (c === "/" && (src[i + 1] === "/" || src[i + 1] === "*")) {
+        const end = src[i + 1] === "/" ? src.indexOf("\n", i) : src.indexOf("*/", i + 2) + 2;
+        const stopAt = end <= 1 ? n : end;
+        out += src.slice(i, stopAt);
+        i = stopAt;
+      } else if (c === "<" && jsxStarts(out)) out += element();
+      else {
+        if ("([{".includes(c)) depth++;
+        else if (")]}".includes(c)) depth--;
+        out += c;
+        i++;
+      }
+    }
+    return out;
+  }
+  function braced() {
+    i++;
+    const e = code("}");
+    i++;
+    return e;
+  }
+  function element() {
+    i++;
+    let tag = "";
+    while (i < n && /[\w$.:-]/.test(src[i])) tag += src[i++];
+    const type = tag === "" ? "__Frag" : /^[a-z][\w:-]*$/.test(tag) ? JSON.stringify(tag) : tag;
+    const props = [];
+    const call = (children) => `__jsx(${type}, {${props.join(", ")}}${children.length ? `, ${children.join(", ")}` : ""})`;
+    for (;;) {
+      space();
+      if (i >= n) throw new Error(`unterminated <${tag}>`);
+      if (src[i] === "/" && src[i + 1] === ">") {
+        i += 2;
+        return call([]);
+      }
+      if (src[i] === ">") {
+        i++;
+        break;
+      }
+      if (src[i] === "{") {
+        const e = braced().trim();
+        props.push(e.startsWith("...") ? e : `...(${e})`);
+        continue;
+      }
+      let name = "";
+      while (i < n && /[\w$:-]/.test(src[i])) name += src[i++];
+      if (!name) throw new Error(`unexpected ${JSON.stringify(src[i])} in <${tag}>`);
+      space();
+      if (src[i] !== "=") {
+        props.push(`${JSON.stringify(name)}: true`);
+        continue;
+      }
+      i++;
+      space();
+      if (src[i] === '"' || src[i] === "'") {
+        const end = src.indexOf(src[i], i + 1);
+        props.push(`${JSON.stringify(name)}: ${JSON.stringify(src.slice(i + 1, end))}`);
+        i = end + 1;
+      } else if (src[i] === "{") props.push(`${JSON.stringify(name)}: (${braced()})`);
+      else throw new Error(`unexpected value for ${name} in <${tag}>`);
+    }
+    const children = [];
+    for (;;) {
+      if (i >= n) throw new Error(`unterminated <${tag}>`);
+      if (src[i] === "<" && src[i + 1] === "/") {
+        i = src.indexOf(">", i) + 1;
+        return call(children);
+      }
+      if (src[i] === "<") children.push(element());
+      else if (src[i] === "{") {
+        const e = braced();
+        if (e.replace(/\/\*[\s\S]*?\*\//g, "").trim()) children.push(`(${e})`);
+      } else {
+        let text = "";
+        while (i < n && src[i] !== "<" && src[i] !== "{") text += src[i++];
+        const t = text.replace(/\s*\n\s*/g, " ").trim();
+        if (t) children.push(JSON.stringify(t));
+      }
+    }
+  }
+  return code(null);
+}
+
+const PAGE_PRELUDE =
+  'const __Frag = Symbol.for("react.fragment");\n' +
+  'const __jsx = (type: any, props: any, ...children: any[]) => ({ $$typeof: Symbol.for("react.element"), type, props: { ...props, children } });\n';
+
+// A rendered tree, server components expanded: a function element is called with its props
+// (awaited); one that throws (a client component's hooks) stays as it is, its children expanded.
+async function expand(node, depth = 0) {
+  node = await node;
+  if (depth > 60) return node;
+  if (Array.isArray(node)) return Promise.all(node.map((x) => expand(x, depth + 1)));
+  if (!node || typeof node !== "object" || !node.props) return node;
+  if (typeof node.type === "function") {
+    try {
+      return await expand(node.type(node.props), depth + 1);
+    } catch {}
+  }
+  return { ...node, props: { ...node.props, children: await expand(node.props.children, depth + 1) } };
+}
+
+// Each <form> in a tree: its server action (the form's action, or a button's formAction, when
+// it's a function) and its named inputs with their values ([name, value], checkboxes and
+// radios only when checked).
+function formsIn(node, out = [], form = null) {
+  if (Array.isArray(node)) {
+    for (const x of node) formsIn(x, out, form);
+    return out;
+  }
+  if (!node || typeof node !== "object" || !node.props) return out;
+  const { type, props } = node;
+  if (type === "form") {
+    form = { action: typeof props.action === "function" ? props.action : null, inputs: [] };
+    out.push(form);
+  } else if (form && ["input", "textarea", "select"].includes(type) && typeof props.name === "string") {
+    const box = ["checkbox", "radio"].includes(props.type);
+    if (!box || props.checked || props.defaultChecked) form.inputs.push([props.name, String(props.value ?? props.defaultValue ?? (box ? "on" : ""))]);
+  }
+  if (form && type === "button" && typeof props.formAction === "function") form.action ??= props.formAction;
+  formsIn(props.children, out, form);
+  return out;
+}
+
 class Oracle {
   checks = [];
 
@@ -534,16 +711,42 @@ class Oracle {
     if (!file) throw new Missing(`no "use server" file under app/ exports ${name}`);
     const mod = await import(pathToFileURL(file).href);
     if (typeof mod[name] !== "function") throw new Missing(`${path.relative(FIXTURE, file)} has no function ${name}`);
+    return this.invoke(mod[name], args, { as, page, name, file: path.relative(FIXTURE, file) });
+  }
+
+  // Calls the server action `fn` inside the same-origin POST a form submit on `page` makes.
+  async invoke(fn, args, { as, page = "/admin", name = fn.name || "action", file = "" } = {}) {
     const url = new URL(page, ORIGIN);
     const headers = browserHeaders(url, { as, ip: DEFAULT_IP, cookieName: as ? await sessionCookie() : null });
     headers.set("next-action", name);
     headers.set("accept", "text/x-component");
     const request = new this.next.NextRequest(url, { method: "POST", headers });
     try {
-      const value = await this.ctx.runWithRequest(request, () => mod[name](...args));
-      return { threw: null, value, file: path.relative(FIXTURE, file) };
+      const value = await this.ctx.runWithRequest(request, () => fn(...args));
+      return { threw: null, value, file };
     } catch (error) {
-      return { threw: String(error?.message ?? error).slice(0, 300), digest: error?.digest, file: path.relative(FIXTURE, file) };
+      return { threw: String(error?.message ?? error).slice(0, 300), digest: error?.digest, file };
+    }
+  }
+
+  // The page that serves `urlPath`, rendered as `as` gets it: {file, forms}. Missing when no
+  // page file serves the path; anything else that stops the render throws.
+  async page(urlPath, { as } = {}) {
+    const url = new URL(urlPath, ORIGIN);
+    const found = findPage(url.pathname);
+    if (!found) throw new Missing(`no page file for ${url.pathname} under app/`);
+    const temp = path.join(path.dirname(found.file), `__oracle_page_${process.pid}.ts`);
+    writeFileSync(temp, PAGE_PRELUDE + jsxToCalls(readFileSync(found.file, "utf8")));
+    try {
+      const mod = await import(pathToFileURL(temp).href);
+      if (typeof mod.default !== "function") throw new Error("the page has no default export");
+      const headers = browserHeaders(url, { as, ip: DEFAULT_IP, cookieName: as ? await sessionCookie() : null, method: "GET" });
+      const request = new this.next.NextRequest(url, { method: "GET", headers });
+      const props = { params: paramsArg(found.params), searchParams: paramsArg(Object.fromEntries(url.searchParams)) };
+      const tree = await this.ctx.runWithRequest(request, async () => expand(await mod.default(props)));
+      return { file: path.relative(FIXTURE, found.file), forms: formsIn(tree) };
+    } finally {
+      rmSync(temp, { force: true });
     }
   }
 }

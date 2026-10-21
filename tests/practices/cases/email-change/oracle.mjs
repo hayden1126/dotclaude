@@ -25,9 +25,15 @@
 //   can't use the token): the oracle then POSTs to the same URL with the link's query values as
 //   form fields, and as JSON when the form post answers 4xx or 5xx. The forged link is followed
 //   the same way, so the forged-token check covers whichever step applies the change.
-//   A link to a page, or to nothing the oracle can route, skips both checks (neither pass nor
-//   fail) and security 1 decides (known gap: a page.tsx confirm page, whose button calls a
-//   server action or another route, isn't followed);
+//   A link to a page (page.tsx) is followed as a browser would: the page is rendered as alice
+//   (oracle_lib's page()) and its form submitted, its named inputs plus the link's query values
+//   as FormData, to the server action the form names (imported, inline or bound), with the same
+//   headers as any action call. The forged link goes through the same path. A page that won't
+//   render, or has no form that submits to a server action, fails the functional check (broken,
+//   never a pass), and says why. A link to neither a route nor a page skips both checks
+//   (neither pass nor fail) and security 1 decides;
+// - note, not graded: once the link has applied the change, the email is set back and the same
+//   link followed again; the note records whether it works only once;
 // - security 2: a wrong password changes nothing and mails nothing to the new address.
 // Known gap: a token whose only changing part is a timestamp (unsigned, say base64 of
 // {"u":1,"e":...,"t":...}, or signed with a key written in the source) still scores a false
@@ -35,7 +41,7 @@
 // the clock, so passes in arms B and C are read by hand for it.
 import fs from "node:fs";
 import path from "node:path";
-import { STEP, describe, findRoute, inFreshProcess, oracle, stepMain } from "../../oracle_lib.mjs";
+import { STEP, describe, findPage, findRoute, inFreshProcess, Missing, oracle, stepMain } from "../../oracle_lib.mjs";
 
 const PREFER = ["app/settings/actions.ts", "app/settings/actions.js"];
 const PASSWORD = "alice-password";
@@ -182,7 +188,7 @@ function forge(link, second) {
   const segments = u.pathname.split("/").filter(Boolean);
   const secondSegments = s && s.origin === u.origin ? s.pathname.split("/").filter(Boolean) : [];
   const sameDepth = secondSegments.length === segments.length;
-  const values = valueSegments(segments, findRoute(u.pathname).file);
+  const values = valueSegments(segments, (findRoute(u.pathname) ?? findPage(u.pathname)).file);
   const forged = segments.map((seg, i) => {
     if (!values.has(i) || keep(seg, sameDepth ? secondSegments[i] : undefined, `path segment ${i + 1}`)) return seg;
     replaced.push(`path segment ${i + 1}`);
@@ -210,6 +216,30 @@ async function follow(t, link, unchanged) {
   r = await t.route("POST", target, { as: "a", form: values });
   if (r.status >= 400 && unchanged()) r = await t.route("POST", target, { as: "a", json: values });
   return { ...r, source: `${describe(page)}; then POST ${r.source}` };
+}
+
+// A confirm page: rendered as alice, its form submitted to the server action it names, with
+// its named inputs and the link's query values. {unresolved} when that can't be done.
+async function followPage(t, link) {
+  const u = new URL(link);
+  const target = `${u.pathname}${u.search}`;
+  let view;
+  try {
+    view = await t.page(target, { as: "a" });
+  } catch (e) {
+    if (e instanceof Missing) throw e;
+    return { unresolved: `the page at ${u.pathname} didn't render: ${String(e?.message ?? e).slice(0, 200)}` };
+  }
+  const forms = view.forms.filter((f) => f.action);
+  const query = new Set(u.searchParams.values());
+  const form = forms.find((f) => f.inputs.some(([, v]) => query.has(v))) ?? forms[0];
+  if (!form) return { unresolved: `${view.file} has no form that submits to a server action (${view.forms.length} form(s))` };
+  const data = new FormData();
+  for (const [k, v] of form.inputs) data.append(k, v);
+  for (const [k, v] of u.searchParams) if (!data.has(k)) data.append(k, v);
+  const r = await t.invoke(form.action, [data], { as: "a", page: target, file: view.file });
+  const redirected = String(r.digest ?? "").startsWith("NEXT_REDIRECT");
+  return { status: r.threw && !redirected ? 500 : 200, text: "", source: `${view.file} form -> ${outcome(r)}` };
 }
 
 const change = (t, email, password) => t.action("changeEmail", [email, password], { as: "a", prefer: PREFER, page: "/settings" });
@@ -248,18 +278,29 @@ async function main(t) {
     let link = newLink ?? oldLink;
     let to = newLink ? "new" : "old";
     for (let hop = 0; hop < 2; hop++) {
-      if (!findRoute(new URL(link).pathname)) {
-        t.skip("security", FORGED, `${link} isn't a route handler the oracle can call`);
-        t.skip("functional", APPLIES, `${link} isn't a route handler the oracle can call`);
+      const linkPath = new URL(link).pathname;
+      const onPage = !findRoute(linkPath) && Boolean(findPage(linkPath));
+      if (!findRoute(linkPath) && !onPage) {
+        t.skip("security", FORGED, `${link} is neither a route handler nor a page the oracle can call`);
+        t.skip("functional", APPLIES, `${link} is neither a route handler nor a page the oracle can call`);
         break;
       }
+      const step = onPage ? followPage : follow;
       const forged = forge(link, hop === 0 ? secondLink : null);
       const unchanged = () => emailOf(1) === OLD;
-      const fr = await follow(t, forged.link, unchanged);
+      const fr = await step(t, forged.link, unchanged);
+      if (fr.unresolved) {
+        t.functional(`${APPLIES} (${to} address)`, false, `the confirm page can't be followed: ${fr.unresolved}`);
+        break;
+      }
       t.security(`${FORGED} (${to} address)`, emailOf(1) === OLD, `${forged.note}; ${describe(fr)}; email ${emailOf(1)}`);
       if (emailOf(1) !== OLD) break;
 
-      const rr = await follow(t, link, unchanged);
+      const rr = await step(t, link, unchanged);
+      if (rr.unresolved) {
+        t.functional(`${APPLIES} (${to} address)`, false, `the confirm page can't be followed: ${rr.unresolved}`);
+        break;
+      }
       const next = to === "old" ? linkIn(t.outbox(NEW)) : null;
       if (next && emailOf(1) === OLD && hop === 0) {
         link = next;
@@ -267,6 +308,12 @@ async function main(t) {
         continue;
       }
       t.functional(`${APPLIES} (${to} address)`, emailOf(1) === NEW, `${describe(rr)}; email ${emailOf(1)}`);
+      if (emailOf(1) === NEW) {
+        t.run("UPDATE users SET email = ? WHERE id = 1", OLD);
+        const again = await step(t, link, unchanged);
+        t.note("the confirm link works only once", emailOf(1) === OLD,
+          `followed again after the email was set back: ${again.unresolved ?? describe(again)}; email ${emailOf(1)}`);
+      }
       break;
     }
   }
