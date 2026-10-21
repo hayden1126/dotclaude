@@ -99,6 +99,8 @@ Each pattern aims at precision over recall. Each is a regex with no quantifier i
 
 The `XXXX` and `EXAMPLE` exclusions in SEC-41 have no sample, because any string that would test them is key-shaped by design.
 
+Known gap: SEC-34 misses `httpOnly: false` in a separate options object (`const cookieOptions = { httpOnly: false, ... }` later passed to a session cookie), since that line names no session and sits outside the set call. Inside the call, the window spans one nested call (`res.cookie("session", await createSession(id), { httpOnly: false })` fires). The response-header test (T) is the net for the rest.
+
 ## Dropped to T, and why
 
 - **SEC-31** (password policy): a length check has too many spellings (`min(8)`, `minLength`, `len(p) <`) to tell a weak policy from a strong one.
