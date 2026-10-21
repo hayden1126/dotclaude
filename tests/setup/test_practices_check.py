@@ -1580,6 +1580,24 @@ class Push(BashBase):
                 self.assertIsNone(self.pre(command))
                 self.assertNotIn("git-skipped", self.log()[len(before):])
 
+    def test_a_body_that_cant_be_parsed_leaves_the_top_level_push_checked_and_logs(self):
+        # Review round 3, low 3: a shlex error in a body dropped a top-level push that parsed
+        # fine, logged only as the quiet bash-unparsed.
+        self.commit(**{"new.ts": "y({ ...body })\n"})
+        before = self.log()
+        reason = self.pre("echo `echo \"x`; git push origin main", session_id="s-body")
+        self.assertIn("new.ts:1", reason)
+        deep = "$(" * 12 + "git push" + ")" * 12
+        self.assertIsNone(self.pre(f"echo {deep}", session_id="s-deep"))
+        self.assertIsNone(self.pre("git push 'origin", session_id="s-top"))
+        new = self.log()[len(before):]
+        self.assertEqual(new.count("git-skipped"), 2, new)
+        self.assertIn("couldn't be parsed (ValueError)", new)
+        self.assertNotIn("bash-unparsed", new)
+        before = self.log()
+        self.assertIsNone(self.pre("echo 'unbalanced", session_id="s-none"))
+        self.assertNotIn("git-skipped", self.log()[len(before):])
+
     def test_an_unwritable_state_file_allows_the_call_and_logs(self):
         # Review round 1: the Bash levels have no transcript marker to fall back on, so a deny
         # whose key couldn't be written denied every resend too, forever.
@@ -2090,8 +2108,22 @@ class BashWords(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(self.git(command), want)
         (_, _, _, _), = BW.calls("PR=$(gh pr create --title t --body b)", {"git", "gh"}, "/r")
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError):  # without rest, an unread body still raises
             BW.calls("$(" * 12 + "git push" + ")" * 12, {"git"}, "/r")
+
+    def test_a_body_that_cant_be_parsed_drops_only_itself_into_rest(self):
+        # Review round 3, low 3: nesting past NEST_MAX, or a shlex error in any body, dropped
+        # the whole command, a top-level push that parses fine included, with a quiet log.
+        for command, body in (("echo `echo \"x`; git push origin main", 'echo "x'),
+                              ("$(" * 12 + "git push" + ")" * 12 + "; git push origin main",
+                               "git push")):
+            with self.subTest(command=command):
+                rest = []
+                got = BW.calls(command, {"git"}, "/r", rest)
+                self.assertEqual([a for _, a, _, _ in got], [["push", "origin", "main"]])
+                self.assertTrue(any(body in r for r in rest), rest)
+        with self.assertRaises(ValueError):  # the top level itself: the caller logs it
+            BW.calls("git push 'origin", {"git"}, "/r", [])
         # delete_guard's segments keep their shape: a process substitution's body still splits.
         self.assertEqual(list(BW.segments("diff <(rm -rf x) y")), [["diff", "<"], ["rm", "-rf", "x"],
                                                                   ["y"]])

@@ -1383,7 +1383,11 @@ def bash_calls(event):
     try:
         calls = bash_words.calls(cmd, set(HEADS), cwd, rest)
     except ValueError as e:
-        log("bash-unparsed", f"{type(e).__name__}: the command was allowed unchecked")
+        if names_a_call(cmd):  # a check that failed open, so it counts
+            log("git-skipped", f"the command names git commit or push, or gh pr ready or "
+                f"create, but couldn't be parsed ({type(e).__name__}), so it wasn't checked")
+        else:
+            log("bash-unparsed", f"{type(e).__name__}: the command was allowed unchecked")
         return gits, ghs, False
     for name, args, prefix, c in calls:
         if name == "gh":

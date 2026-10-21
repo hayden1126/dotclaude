@@ -460,11 +460,23 @@ def calls(command, heads, cwd, rest=None, depth=0):
     holding it (it runs first), and so is a literal `bash -c` script (shell_script); a cd
     inside either stays inside. With rest (a list), the words
     after each simple command's name, joined, and each heredoc body are appended to it, so a
-    caller can tell a command it can't read (`xargs git push`) from no command at all. Raises
-    ValueError on an unparsable command, or one nested deeper than NEST_MAX."""
+    caller can tell a command it can't read (`xargs git push`) from no command at all; a body
+    or script that can't be parsed (a shlex error, or nested deeper than NEST_MAX) goes to rest
+    whole, and the rest of the command is still read. Raises ValueError when the command itself
+    can't be parsed, and, without rest, when a body or script can't."""
     if depth > NEST_MAX:
         raise ValueError(f"substitutions nested over {NEST_MAX} deep")
     bodies, out, k, outer = [], [], 0, []
+
+    def inner(text, where):
+        try:
+            return calls(text, heads, where, rest, depth + 1)
+        except ValueError:
+            if rest is None:
+                raise
+            rest.append(text)  # unread: the caller's log sees any call it names
+            return []
+
     for kind, words, n in _split(prepass(command, bodies, rest)):
         if kind == "(":  # a subshell: a cd inside it ends with it
             outer.append(cwd)
@@ -473,7 +485,7 @@ def calls(command, heads, cwd, rest=None, depth=0):
             cwd = outer.pop() if outer else cwd  # a case pattern's ) opens nothing
             continue
         for body in bodies[k:k + n]:
-            out += calls(body, heads, cwd, rest, depth + 1)
+            out += inner(body, cwd)
         k += n
         if not words:
             continue
@@ -487,12 +499,12 @@ def calls(command, heads, cwd, rest=None, depth=0):
             here = cd_target([d], here) if not d.startswith("-") else None
         script = shell_script(args) if name in SHELLS else None
         if script is not None:
-            out += calls(script, heads, here, rest, depth + 1)
+            out += inner(script, here)
             continue
         if rest is not None:
             rest.append(" ".join(args))
         if name in heads:
             out.append((name, args, prefix, here))
     for body in bodies[k:]:  # a literal %SUBST% in the command leaves the count short
-        out += calls(body, heads, cwd, rest, depth + 1)
+        out += inner(body, cwd)
     return out
