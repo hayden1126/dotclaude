@@ -1735,7 +1735,7 @@ class RunHarness(unittest.TestCase):
                 self.assertEqual(verdict["verdict"], "pass", json.dumps(verdict, indent=1))
                 self.assertIn("notes-latin1.txt", (Path(run_dir) / "diff.patch").read_text())
         finally:
-            shutil.rmtree(root, ignore_errors=True)
+            run.remove_fixture(root)
 
     def test_node_modules_pointed_outside_is_broken_and_untouched(self):
         for target in ("node_modules", "node_modules/next"):
@@ -1758,7 +1758,7 @@ class RunHarness(unittest.TestCase):
             (root / "lib" / "logo.bin").write_bytes(bytes(range(256)))
             self.assertIn("GIT binary patch", run.agent_diff(root, sha))
         finally:
-            shutil.rmtree(root, ignore_errors=True)
+            run.remove_fixture(root)
 
     def test_default_out_is_private_and_outside_tmp(self):
         out = run.default_out()
@@ -1807,7 +1807,7 @@ class RunHarness(unittest.TestCase):
                                             skip_grade=["task: no stream output"])
                 self.assertEqual(verdict["verdict"], "error")
         finally:
-            shutil.rmtree(root, ignore_errors=True)
+            run.remove_fixture(root)
         # A fixture the sandbox refuses (under $HOME) is the harness's problem: error, not broken.
         with tempfile.TemporaryDirectory(prefix="practices-err-") as tmp:
             home = Path(tmp) / "home"
@@ -1823,7 +1823,10 @@ class RunHarness(unittest.TestCase):
             tracked = run.git("ls-files", cwd=root).split()
             self.assertIn(".claude/settings.json", tracked)
             self.assertNotIn("node_modules/next/package.json", tracked)
-            self.assertEqual(run.git("rev-parse", "HEAD", cwd=root).strip(), sha)
+            # the baseline is the harness's own commit, outside the fixture, of the same tree
+            self.assertFalse(run.harness_git_dir(root).resolve().is_relative_to(root.resolve()))
+            self.assertEqual(run.harness_git(root, "rev-parse", "HEAD").strip(), sha)
+            self.assertEqual(run.harness_git(root, "rev-parse", "HEAD^{tree}"), run.git("rev-parse", "HEAD^{tree}", cwd=root))
             # an agent that commits part of its work and leaves the rest uncommitted
             (root / "lib" / "committed.ts").write_text("export const a = 1;\n")
             run.git("add", "lib/committed.ts", cwd=root)
@@ -1833,7 +1836,7 @@ class RunHarness(unittest.TestCase):
             self.assertIn("+++ b/lib/committed.ts", diff)
             self.assertIn("+++ b/lib/loose.ts", diff)
         finally:
-            shutil.rmtree(root, ignore_errors=True)
+            run.remove_fixture(root)
 
     def use(self, name, inp):
         return {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": name, "input": inp}]}}
@@ -2244,7 +2247,7 @@ class RunHarness(unittest.TestCase):
                 for command in commands:
                     self.assertTrue(command.startswith(prefix), command)
             finally:
-                shutil.rmtree(root, ignore_errors=True)
+                run.remove_fixture(root)
             with self.assertRaises(ValueError):
                 r.build_fixture("D")
             # The hash takes placeholders: two runs' dirs share it.
@@ -2373,6 +2376,31 @@ class RunHarness(unittest.TestCase):
         self.assertEqual(missed, [])
         self.assertNotIn("unresolved", text)
 
+    def test_agent_diff_runs_no_filter_driver_the_fixture_repo_defines(self):
+        r = self.harness
+        root, sha = r.build_fixture("A")
+        canary = root.parent / f"{root.name}-filter-canary"
+        try:
+            script = root.parent / f"{root.name}-filter.sh"
+            script.write_text(f"#!/bin/sh\ntouch {shlex.quote(str(canary))}\ncat\n")
+            script.chmod(0o755)
+            subprocess.run(["git", "config", "filter.evil.clean", str(script)], cwd=root, check=True, env=r.git_env())
+            (root / ".gitattributes").write_text("*.ts filter=evil\n")
+            (root / "lib" / "new.ts").write_text("export const x = 1;\n")
+            subprocess.run(["git", "add", "-A"], cwd=root, env=r.git_env(), capture_output=True)  # the control
+            if not canary.exists():
+                self.skipTest("this git doesn't run a clean filter on add")
+            canary.unlink()
+            (root / "lib" / "other.ts").write_text("export const y = 2;\n")
+            diff = r.agent_diff(root, sha)
+            self.assertIn("+++ b/lib/other.ts", diff)
+            self.assertIn("+++ b/.gitattributes", diff)
+            self.assertFalse(canary.exists(), "agent_diff ran a filter driver from the fixture's .git/config")
+        finally:
+            canary.unlink(missing_ok=True)
+            (root.parent / f"{root.name}-filter.sh").unlink(missing_ok=True)
+            r.remove_fixture(root)
+
     def test_agent_diff_runs_no_repo_fsmonitor_and_refuses_a_linked_git_dir(self):
         r = self.harness
         root, sha = r.build_fixture("A")
@@ -2403,7 +2431,7 @@ class RunHarness(unittest.TestCase):
             for p in (root.parent / f"{root.name}-canary", root.parent / f"{root.name}-fsmonitor.sh"):
                 p.unlink(missing_ok=True)
             shutil.rmtree(root.parent / f"{root.name}-git", ignore_errors=True)
-            shutil.rmtree(root, ignore_errors=True)
+            run.remove_fixture(root)
 
     def test_arm_c_alone_is_a_regression_check(self):
         # No arm-A rows at the current case hash (none at all, or old ones without it): C still
@@ -2454,7 +2482,7 @@ class RunHarness(unittest.TestCase):
             finally:
                 r.SKILLS_DIR, r.PRACTICES_SKILLS = saved
                 for root in roots:
-                    shutil.rmtree(root, ignore_errors=True)
+                    run.remove_fixture(root)
 
 
 BWRAP_OK = bool(NODE) and run.bwrap_usable()

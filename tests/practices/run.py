@@ -40,8 +40,11 @@ sandbox refuses. broken stays agent-caused.
 Per run:
   - Fixture: fixture/ is copied to a fresh tempfile.mkdtemp(prefix="ledgerly-"), next_stub/
     to its node_modules/next and stubs/* (server-only, client-only, react) beside it, then
-    `git init` and an initial commit. The harness config is a second commit whose SHA is
-    recorded, and the agent's diff is taken against it (so an agent commit isn't lost):
+    `git init` and an initial commit. The harness config is a second commit, the last the
+    agent's own repo gets from the harness. The same tree is also the baseline commit of the
+    harness's private git dir, beside the fixture and never in it, whose SHA is recorded; the
+    agent's diff is that git dir's view of the work tree against the baseline (so an agent
+    commit isn't lost, and no config the agent can write, such as a filter driver, is read):
     .claude/settings.json turns the sandbox on with autoAllowBashIfSandboxed (the agent's Bash
     runs confined to the fixture, without prompts), plus the skill and hooks for its arm. The
     harness's git reads no global or system config, so no global ignore rule hides .claude/.
@@ -398,10 +401,30 @@ def hook_errors(run_dir):
     return text[-4000:] or "none"
 
 
+def harness_git_dir(fixture):
+    """The harness's own git dir for a fixture: beside it, never in it, so the agent can't
+    write its config (a filter driver, an fsmonitor) and git reads none of the fixture's."""
+    fixture = Path(fixture)
+    return fixture.parent / f".{fixture.name}.harness-git"
+
+
+def harness_git(fixture, *args):
+    """git on the fixture's work tree through the harness's own git dir."""
+    return git("--git-dir", str(harness_git_dir(fixture)), "--work-tree", str(fixture), *args, cwd=fixture)
+
+
+def remove_fixture(fixture):
+    """Removes a fixture and the harness's git dir beside it."""
+    shutil.rmtree(harness_git_dir(fixture), ignore_errors=True)
+    shutil.rmtree(fixture, ignore_errors=True)
+
+
 def build_fixture(arm, run_dir=None):
     """A fresh fixture for one run: the app, the stub packages, an initial commit, then the
-    arm's harness config as a second commit. Returns (path, the harness commit's SHA). Arms C
-    and D wire the hook with hook_dirs(run_dir), so they need one."""
+    arm's harness config as a second commit, in the fixture's own repo for the agent. The same
+    tree is also the baseline commit of the harness's private git dir (harness_git_dir), which
+    the diff is taken against. Returns (path, the baseline commit's SHA). Arms C and D wire the
+    hook with hook_dirs(run_dir), so they need one."""
     if arm in ("C", "D") and run_dir is None:
         raise ValueError(f"arm {arm} wires the hook with dirs in the run dir, and none was given")
     root = Path(tempfile.mkdtemp(prefix="ledgerly-"))
@@ -421,7 +444,10 @@ def build_fixture(arm, run_dir=None):
     (root / ".claude" / "settings.json").write_text(json.dumps(settings, indent=2) + "\n")
     git("add", "-A", ".claude", cwd=root)
     git("commit", "-qm", "Local Claude Code settings", cwd=root)
-    return root, git("rev-parse", "HEAD", cwd=root).strip()
+    harness_git(root, "init", "-q")
+    harness_git(root, "add", "-A")
+    harness_git(root, "commit", "-qm", "Harness baseline")
+    return root, harness_git(root, "rev-parse", "HEAD").strip()
 
 
 def npm_test(root):
@@ -702,8 +728,9 @@ def grade(fixture, case, run_dir, contain=True, home=None):
 
 
 def git_dir_problem(fixture):
-    """Why the fixture's .git can't be trusted, or None: it isn't a plain directory (a symlink,
-    or a gitfile pointing elsewhere)."""
+    """Why the fixture's .git looks tampered with, or None: it isn't a plain directory (a
+    symlink, or a gitfile pointing elsewhere). The diff never reads it (harness_git_dir), so
+    this is a tripwire on the run, not what keeps git safe."""
     d = Path(fixture) / ".git"
     if d.is_symlink() or not d.is_dir():
         return f"{d} is not a plain directory"
@@ -711,9 +738,10 @@ def git_dir_problem(fixture):
 
 
 def agent_diff(fixture, base):
-    """Everything the agent changed since the harness commit `base`, committed or not."""
-    git("add", "-A", cwd=fixture)
-    return git("diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv", base, cwd=fixture)
+    """Everything the agent changed in the work tree since the baseline commit `base`, committed
+    or not, through the harness's own git dir: no config the agent could write is read."""
+    harness_git(fixture, "add", "-A")
+    return harness_git(fixture, "diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv", base)
 
 
 # Words in the agent's added lines that could forge the oracle's verdict from inside its
@@ -1009,7 +1037,7 @@ def run_one(case, arm, index, args, out):
     if args.keep:
         row["fixture"] = str(fixture)
     else:
-        shutil.rmtree(fixture, ignore_errors=True)
+        remove_fixture(fixture)
     log(f"  {case:16} {arm} #{index}: {row['verdict']:7} triggered={row['triggered']} "
         f"cost={row['total_cost_usd']}")
     return row
@@ -1259,7 +1287,7 @@ def dry_run(cases, arms, args):
                 stdin = f"<<< {shlex.quote(source)}" if label == "compact" else f"< {shlex.quote(source)}"
                 print(f"  ({label}) cd {shlex.quote(str(fixture))} && {shlex.join(cmd)} {stdin}")
             if not args.keep:
-                shutil.rmtree(fixture, ignore_errors=True)
+                remove_fixture(fixture)
                 shutil.rmtree(scratch, ignore_errors=True)
     print("\ngrading sandbox: " + ("bwrap works here" if bwrap_usable() else
           "bwrap can't start here; a live run needs it (sandbox-off) or --unsafe-grade"))
