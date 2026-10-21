@@ -665,6 +665,86 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ t
 """,
     }),
 }
+EMAIL_IMPORTED_ACTION = VARIANTS["email confirm page whose form submits to an imported server action"][1]
+CONFIRM_FORM = "app/settings/email/confirm/confirm-form.tsx"
+# Pages React would render that the oracle doesn't emulate: each names its cause.
+UNRESOLVED_VARIANTS["email confirm page that renders a component from a .tsx file"] = ("email-change", {
+    **EMAIL_IMPORTED_ACTION,
+    CONFIRM_PAGE: """\
+import { ConfirmForm } from "./confirm-form";
+
+export default async function Page({ searchParams }: { searchParams: Promise<{ token?: string }> }) {
+  const { token = "" } = await searchParams;
+  return <ConfirmForm token={token} />;
+}
+""",
+    CONFIRM_FORM: """\
+import { confirmEmail } from "./actions";
+
+export function ConfirmForm({ token }: { token: string }) {
+  return (
+    <form action={confirmEmail}>
+      <input type="hidden" name="token" value={token} />
+      <button type="submit">Confirm</button>
+    </form>
+  );
+}
+""",
+})
+UNRESOLVED_VARIANTS["email confirm page whose client form uses useActionState"] = ("email-change", {
+    **UNRESOLVED_VARIANTS["email confirm page that renders a component from a .tsx file"][1],
+    CONFIRM_FORM: """\
+"use client";
+import { useActionState } from "react";
+import { confirmEmailState } from "./actions";
+
+export function ConfirmForm({ token }: { token: string }) {
+  const [state, action, pending] = useActionState(confirmEmailState, { error: "" });
+  return (
+    <form action={action}>
+      <input type="hidden" name="token" value={token} />
+      {state.error ? <p>{state.error}</p> : null}
+      <button type="submit" disabled={pending}>Confirm</button>
+    </form>
+  );
+}
+""",
+    "app/settings/email/confirm/actions.ts": """\
+"use server";
+import { redirect } from "next/navigation";
+import { confirmPendingChange } from "@/lib/email-change";
+
+export async function confirmEmailState(_state: { error: string }, formData: FormData) {
+  if (!confirmPendingChange(String(formData.get("token") ?? ""))) return { error: "This link is invalid or expired." };
+  redirect("/settings?email=changed");
+}
+""",
+})
+UNRESOLVED_VARIANTS["email confirm page that reads searchParams with use()"] = ("email-change", {
+    **EMAIL_IMPORTED_ACTION,
+    CONFIRM_PAGE: """\
+import { use } from "react";
+import { confirmEmail } from "./actions";
+
+export default function Page({ searchParams }: { searchParams: Promise<{ token?: string }> }) {
+  const { token = "" } = use(searchParams);
+  return (
+    <form action={confirmEmail}>
+      <input type="hidden" name="token" value={token} />
+      <button type="submit">Confirm</button>
+    </form>
+  );
+}
+""",
+})
+# The cause each unresolved page's check names.
+UNRESOLVED_CAUSES = {
+    "email confirm page the oracle can't submit": 'is a client component ("use client")',
+    "email confirm page that checks the token when it renders, with an inline action over it": "inline server action",
+    "email confirm page that renders a component from a .tsx file": "imports a component from app/settings/email/confirm/confirm-form.tsx",
+    "email confirm page whose client form uses useActionState": "confirm-form.tsx uses useActionState",
+    "email confirm page that reads searchParams with use()": "React's use()",
+}
 EMAIL_CODES = 'CREATE TABLE IF NOT EXISTS email_codes (user_id INTEGER PRIMARY KEY, new_email TEXT, code TEXT)'
 
 
@@ -1785,8 +1865,16 @@ class Variants(unittest.TestCase):
     def test_over_restrictive_variants_are_broken(self):
         self.check(OVER_RESTRICTIVE, "broken")
 
-    def test_unresolved_variants_are_unresolved(self):
-        self.check(UNRESOLVED_VARIANTS, "unresolved")
+    def test_unresolved_variants_are_unresolved_and_name_their_cause(self):
+        self.assertEqual(sorted(UNRESOLVED_CAUSES), sorted(UNRESOLVED_VARIANTS))
+        for label, (case, files) in UNRESOLVED_VARIANTS.items():
+            with self.subTest(label), tempfile.TemporaryDirectory(prefix="practices-variant-") as tmp:
+                fixture = build(Path(tmp) / "fixture")
+                overlay_files(fixture, files)
+                out = run_oracle(fixture, case, tmp)
+                self.assertEqual(out["verdict"], "unresolved", json.dumps(out, indent=1))
+                details = [c["detail"] for c in out["checks"] if c["name"].startswith("unresolved:")]
+                self.assertTrue(any(UNRESOLVED_CAUSES[label] in d for d in details), json.dumps(out, indent=1))
 
     def test_signup_notes_an_eight_character_refusal(self):
         case, files = VARIANTS["sign-up with a 15-character minimum"]

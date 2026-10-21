@@ -49,7 +49,7 @@
 // the clock, so passes in arms B and C are read by hand for it.
 import fs from "node:fs";
 import path from "node:path";
-import { STEP, describe, findPage, findRoute, inFreshProcess, Missing, oracle, rebind, stepMain, unbound } from "../../oracle_lib.mjs";
+import { STEP, describe, findPage, findRoute, inFreshProcess, Missing, oracle, rebind, stepMain, unbound, Unrenderable } from "../../oracle_lib.mjs";
 
 const PREFER = ["app/settings/actions.ts", "app/settings/actions.js"];
 const PASSWORD = "alice-password";
@@ -231,9 +231,10 @@ async function follow(t, link, unchanged) {
   return { ...r, source: `${describe(page)}; then POST ${r.source}` };
 }
 
-// The confirm page at `link`, rendered as alice: {view, form} (the form to submit), or
-// {refused} (a throw, notFound() and redirect() among them, or no form that submits). Missing
-// propagates.
+// The confirm page at `link`, rendered as alice: {view, form} (the form to submit), {refused}
+// (a throw, notFound() and redirect() among them, or no form that submits), or {unrenderable}
+// (a page the oracle can't render: a client component, a .tsx component, a form hook, use()).
+// Missing propagates.
 async function render(t, link) {
   const u = new URL(link);
   let view;
@@ -241,6 +242,7 @@ async function render(t, link) {
     view = await t.page(`${u.pathname}${u.search}`, { as: "a" });
   } catch (e) {
     if (e instanceof Missing) throw e;
+    if (e instanceof Unrenderable) return { unrenderable: e.message, refused: e.message };
     return { refused: `the page at ${u.pathname} didn't render: ${String(e?.digest ?? e?.message ?? e).slice(0, 200)}` };
   }
   const forms = view.forms.filter((f) => f.action);
@@ -279,6 +281,10 @@ async function pageSteps(t, link, forged, to, emailOf) {
   const label = (name) => `${name} (${to} address)`;
   const unchanged = () => emailOf(1) === OLD;
   const fv = await render(t, forged.link);
+  if (fv.unrenderable) {
+    t.unresolved(label(APPLIES), `the confirm page can't be rendered: ${fv.unrenderable}`);
+    return { stop: true };
+  }
   if (!unchanged()) {
     t.security(label(FORGED), false, `${forged.note}; rendering the forged link's page applied the change; email ${emailOf(1)}`);
     return { stop: true };

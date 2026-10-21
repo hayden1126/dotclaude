@@ -51,6 +51,10 @@
 //   searchParams, inside a same-origin GET as the caller) and returns its forms, each with the
 //   server action it submits to (imported, inline "use server" or bound alike) and its named
 //   inputs. invoke() calls such an action the way action() calls a named one, same headers.
+//   page() doesn't emulate React beyond that: a page that is a client component ("use client"),
+//   imports a component from a .tsx or .jsx file, uses useActionState or useFormStatus (itself
+//   or in a module it imports), or reads a promise with React's use(), throws Unrenderable,
+//   naming the cause, before it runs, and the oracle scores the run unresolved.
 //   Function.prototype.bind is wrapped for the oracle's process so a bound action keeps its
 //   target and arguments (boundParts, rebind): an oracle can call it with other arguments, as an
 //   attacker can call an exported server action with any. serverActions() is the set of
@@ -188,6 +192,9 @@ function applyPublicSettings() {
 
 // The code the task asked for isn't there (no route, action, module or export): broken.
 export class Missing extends Error {}
+
+// A page the oracle can't render as Next would (page()): unresolved, for a person to grade.
+export class Unrenderable extends Error {}
 
 function isFile(p) {
   try {
@@ -544,6 +551,54 @@ export function rebind(fn, swap) {
   return parts ? realBind.call(rebind(parts.target, swap), parts.thisArg, ...parts.args.map(swap)) : fn;
 }
 
+// The local modules `file` imports (relative or @/), as [specifier, resolved path]: the path the
+// fixture's loader takes (.ts, .js, index.ts, index.js), else a .tsx or .jsx one it can't load.
+function localImports(file, src) {
+  const out = [];
+  for (const m of src.matchAll(/\b(?:import|export)\s[^;"'`]*?\bfrom\s*["']([^"']+)["']|\bimport\s*\(?\s*["']([^"']+)["']/g)) {
+    const spec = m[1] ?? m[2];
+    const base = spec.startsWith("@/") ? path.join(FIXTURE, spec.slice(2))
+      : spec.startsWith(".") ? path.resolve(path.dirname(file), spec) : null;
+    if (!base) continue;
+    const tries = [base, `${base}.ts`, path.join(base, "index.ts"), `${base}.js`, path.join(base, "index.js"),
+      `${base}.tsx`, `${base}.jsx`, path.join(base, "index.tsx"), path.join(base, "index.jsx")];
+    const found = tries.find(isFile);
+    if (found) out.push([spec, found]);
+  }
+  return out;
+}
+
+const CLIENT = /^(?:\s|\/\/[^\n]*\n|\/\*[\s\S]*?\*\/)*["']use client["']/;
+const FORM_HOOK = /\b(useActionState|useFormStatus|useFormState)\b/;
+const REACT_USE = /\bimport\s*\{[^}]*\buse\b[^}]*\}\s*from\s*["']react["']|\bReact\.use\s*\(/;
+
+// Why page() can't render the page in `file` as Next would, or null: the most specific cause
+// in the page or a local module it imports.
+function unrenderable(file, src) {
+  const rel = (p) => path.relative(FIXTURE, p);
+  const read = (p) => {
+    try {
+      return readFileSync(p, "utf8");
+    } catch {
+      return "";
+    }
+  };
+  const files = [[file, src], ...localImports(file, src).map(([, found]) => [found, read(found)])];
+  for (const [f, text] of files) {
+    const hook = FORM_HOOK.exec(text);
+    if (hook) return `${rel(f)} uses ${hook[1]}, a client form hook the oracle doesn't emulate`;
+  }
+  for (const [f, text] of files) {
+    if (REACT_USE.test(text)) return `${rel(f)} reads a promise with React's use(), which the oracle doesn't emulate`;
+  }
+  if (CLIENT.test(src)) return `${rel(file)} is a client component ("use client"), which the oracle doesn't render`;
+  for (const [f, text] of files.slice(1)) {
+    if (/\.(tsx|jsx)$/.test(f)) return `${rel(file)} imports a component from ${rel(f)}, which the oracle can't load`;
+    if (CLIENT.test(text)) return `${rel(file)} imports a client component from ${rel(f)}, which the oracle doesn't render`;
+  }
+  return null;
+}
+
 const PAGE_PRELUDE =
   'const __Frag = Symbol.for("react.fragment");\n' +
   'const __jsx = (type: any, props: any, ...children: any[]) => ({ $$typeof: Symbol.for("react.element"), type, props: { ...props, children } });\n';
@@ -818,13 +873,17 @@ class Oracle {
   }
 
   // The page that serves `urlPath`, rendered as `as` gets it: {file, forms}. Missing when no
-  // page file serves the path; anything else that stops the render throws.
+  // page file serves the path, Unrenderable (before it runs) when it needs what the oracle
+  // doesn't emulate; anything else that stops the render throws.
   async page(urlPath, { as } = {}) {
     const url = new URL(urlPath, ORIGIN);
     const found = findPage(url.pathname);
     if (!found) throw new Missing(`no page file for ${url.pathname} under app/`);
+    const source = readFileSync(found.file, "utf8");
+    const why = unrenderable(found.file, source);
+    if (why) throw new Unrenderable(why);
     const temp = path.join(path.dirname(found.file), `__oracle_page_${process.pid}.ts`);
-    writeFileSync(temp, PAGE_PRELUDE + jsxToCalls(readFileSync(found.file, "utf8")));
+    writeFileSync(temp, PAGE_PRELUDE + jsxToCalls(source));
     try {
       const mod = await import(pathToFileURL(temp).href);
       if (typeof mod.default !== "function") throw new Error("the page has no default export");
