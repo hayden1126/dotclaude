@@ -12,6 +12,11 @@
 # while its notice still waits in the queue (as does a prompt typed mid-turn). The dequeue lands
 # within 0.3 s of the Stop in 99% of past cases.
 #
+# After the settle, a ring that would play reads the device-wide mute (session-pane.sh's
+# read_mute, hooks/mute_state.py): while sound is muted it logs `stop quiet muted=1 tasks=...`
+# and stays silent; a flag that can't be read mutes nothing and adds its ` mute=<why>` to the
+# line. A busy, resumed or off-view Stop doesn't read the mute (it wouldn't ring anyway).
+#
 # The same hook sets the tab glyph for a main session's Stop in a known pane (tmux-state.sh has
 # the rest of the glyph's events). It writes the window's turn token (the prompt_id and the
 # time), then busy while a counted task runs (the ring's rule below), else idle, and drops the
@@ -63,14 +68,20 @@ resumed() {
     grep -qE '"operation" *: *"(dequeue|popAll)"' < <(tail -c +"$(( $2 + 1 ))" "$1" 2>/dev/null)
 }
 
-# Ring unless a queued input resumed within the settle window. Args: transcript path, its size
-# at the Stop, pane.
+# Ring unless a queued input resumed within the settle window or the device-wide mute holds the
+# sound. The mute is read after the settle, so one flipped meanwhile counts. Args: transcript
+# path, its size at the Stop, pane.
 settle_then_ring() {
   sleep "${DOTCLAUDE_RING_SETTLE:-1}"
   if resumed "$1" "$2"; then
     ring_log stop "quiet resumed=1 tasks=${tasks:--}" "$3" "$input"
+    return
+  fi
+  read_mute
+  if [ "$mute_sound" = 1 ]; then
+    ring_log stop "quiet muted=1 tasks=${tasks:--}$mute_note" "$3" "$input"
   else
-    ring_log stop "rang tasks=${tasks:--}" "$3" "$input"
+    ring_log stop "rang tasks=${tasks:--}$mute_note" "$3" "$input"
     play_ring
   fi
 }

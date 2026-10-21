@@ -54,6 +54,11 @@
   AFTER /pass
     C-b Up       the replies before the pass (popup; also in the menus)
 
+  MUTE  (the ring and the toasts, every Claude session on this PC)
+    C-b Enter    Mute…: sound, toasts or both, for 1 hour or until unmuted;
+                 or unmute. The bar's top right shows 🔇 / 🔕 and the time left
+    claude-mute  the same from a shell (claude-mute --help)
+
   SESSION
     C-b d        detach (keeps running)
     C-b s        list / switch sessions

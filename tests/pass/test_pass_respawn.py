@@ -438,9 +438,10 @@ class Base(LanesRepo):
             time.sleep(0.05)
         return argvs
 
-    def assertLoud(self, words, toast=True):
+    def assertLoud(self, words, toast=True, silent=False):
         """One held message per client of the pane's session (-d 0 -c <client> -t %4) holding
-        words and naming the tab, and, with toast, one toast holding them too."""
+        words and naming the tab, and, with toast, one toast holding them too (with silent, sent
+        with -Silent before -Message: the device-wide mute holds the sound)."""
         msgs = self.notices()
         self.assertEqual([m[:7] for m in msgs],
                          [["tmux", "display-message", "-d", "0", "-c", c, "-t"]
@@ -451,12 +452,12 @@ class Base(LanesRepo):
             self.assertIn(" in tab 3: ", m[-1])
         if toast:
             (argv,) = self.toasts()
-            self.assertEqual(argv[1:6], ["-ExecutionPolicy", "Bypass", "-File", WINPATH,
-                                         "-Message"])
+            self.assertEqual(argv[:-1], ["powershell.exe", "-ExecutionPolicy", "Bypass", "-File",
+                                         WINPATH, *(["-Silent"] if silent else []), "-Message"])
             # The toast names the window too: no status bar beside it says which tab.
             self.assertIn(words.replace(" in tab 3: ", " in tab 3 ([repo] chart work): "),
-                          argv[6])
-            self.assertIn(" in tab 3 ([repo] chart work): ", argv[6])
+                          argv[-1])
+            self.assertIn(" in tab 3 ([repo] chart work): ", argv[-1])
 
     def assertDropped(self, outcome, words):
         self.assertEqual(self.calls("tmux", "respawn-pane"), [])
@@ -2421,6 +2422,151 @@ class Lane(Base):
         self.assertNoTypedPath(respawns + keys)
         self.assertEqual(len(respawns), 1)
         self.assertTrue(any(".lane/STATUS.md" in a[-1] for a in keys))
+
+
+class Mute(Base):
+    """A loud drop's toast obeys the device-wide mute (hooks/mute_state.py's flag,
+    $XDG_STATE_HOME/dotclaude/mute.json) as notify.sh's does, read as the toast goes out:
+    skipped while toasts are muted, sent with -Silent before -Message while only the sound is.
+    The held status-line message shows either way. A flag or a reader it can't use mutes
+    nothing and refuses nothing."""
+
+    WORDS = "pass dropped in tab 3: the turn didn't end before the timeout"
+    UNREADABLE = object()  # a directory at the flag's path
+
+    def setUp(self):
+        super().setUp()
+        self.commit("STATUS.md", GOOD, msg="Handoff")
+        self.flag = os.path.join(self.state, "mute.json")
+
+    def held(self, until=None):
+        """A switch muted since a moment ago, until `until` (None: until unmuted)."""
+        return {"since": time.time() - 5, "until": until}  # wall clock
+
+    def plant(self, flag):
+        """The flag: an object as JSON, a string as is, or UNREADABLE."""
+        if flag is self.UNREADABLE:
+            os.makedirs(self.flag)
+        else:
+            self.write(self.flag, flag if isinstance(flag, str) else json.dumps(flag))
+
+    def unplant(self):
+        if os.path.isdir(self.flag):
+            os.rmdir(self.flag)
+        else:
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(self.flag)
+
+    def timed_out(self, flag, reader=None):
+        """A loud drop (timeout) of a pass called with no flag (and with reader as MUTE_STATE),
+        the flag (None: none) planted after the call: the plan."""
+        self.reset()
+        self.unplant()
+        with mock.patch.object(self.mod, "MUTE_STATE", reader or self.mod.MUTE_STATE):
+            plan = self.plan()
+        if flag is not None:
+            self.plant(flag)
+        self.mod.drop(plan, "timeout")
+        return plan
+
+    def assertNoToast(self):
+        self.assertEqual(self.toasts(tries=10), [])
+
+    def test_the_reader_is_the_checkouts_own(self):
+        self.assertEqual(os.path.realpath(self.plan().mute),
+                         os.path.join(os.path.realpath(REPO), "hooks", "mute_state.py"))
+
+    def test_a_sound_mute_sends_the_toast_silent(self):
+        for until in (None, time.time() + 3600):  # wall clock
+            with self.subTest(until=until):
+                self.timed_out({"sound": self.held(until)})
+                self.assertLoud(self.WORDS, silent=True)
+
+    def test_a_toast_mute_skips_the_toast_and_keeps_the_held_line(self):
+        later = time.time() + 3600  # wall clock
+        for flag in ({"toast": self.held()}, {"sound": self.held(), "toast": self.held(later)}):
+            with self.subTest(flag=sorted(flag)):
+                self.timed_out(flag)
+                self.assertLoud(self.WORDS, toast=False)
+                self.assertNoToast()
+
+    def test_a_good_switch_beside_a_bad_one_still_counts(self):
+        # mute_state.current()'s rule, which notify.sh follows too: the bad switch (and the
+        # note) mutes nothing, the good one still mutes.
+        self.timed_out({"sound": self.held(), "toast": {"since": "x", "until": None}})
+        self.assertLoud(self.WORDS, silent=True)
+
+    def test_a_flag_that_mutes_nothing_leaves_the_toast_as_it_was(self):
+        past = time.time() - 60  # wall clock
+        for name, flag in (("no flag", None), ("no switch", {}),
+                           ("expired", {"sound": self.held(past), "toast": self.held(past)}),
+                           ("not JSON", "{"), ("not an object", "[]"),
+                           ("bad switches", {"sound": {"since": True, "until": None},
+                                             "toast": {"since": 1}}),
+                           ("unreadable", self.UNREADABLE)):
+            with self.subTest(name):
+                self.timed_out(flag)
+                self.assertLoud(self.WORDS)
+
+    def test_the_mute_is_read_as_the_toast_goes_out(self):
+        # Every other case here plants the flag after the call; one lifted after it no longer
+        # counts either.
+        self.plant({"sound": self.held(), "toast": self.held()})
+        plan = self.plan()
+        self.unplant()
+        self.mod.drop(plan, "timeout")
+        self.assertLoud(self.WORDS)
+
+    def test_a_reader_the_sandbox_can_write_or_none_mutes_nothing_and_refuses_nothing(self):
+        # A reader planted where the sandbox can write would skip the toast, and leave a mark,
+        # if it ever ran. It is checked before anything loads it, as notify-toast.ps1 is.
+        sandbox = os.path.join(self.tmp, "sandbox")
+        roots = self.mod.writable_roots
+        self.mod.writable_roots = lambda *a, **kw: [*roots(*a, **kw), sandbox]
+        mark = os.path.join(self.tmp, "ran")
+        planted = os.path.join(sandbox, "hooks", "mute_state.py")
+        self.write(planted, f"open({mark!r}, 'w').close()\n\n\ndef current(now=None):\n"
+                            "    return {'toast': {'since': 0, 'until': None}}, None\n")
+        link = os.path.join(self.tmp, "trusted", "mute_state.py")  # a link into the sandbox's
+        os.makedirs(os.path.dirname(link))
+        os.symlink(planted, link)
+        for name, reader in (("sandbox-writable", planted), ("a link into one", link),
+                             ("missing", os.path.join(self.tmp, "trusted", "gone.py"))):
+            with self.subTest(name):
+                plan = self.timed_out({"toast": self.held()}, reader)
+                self.assertIsNone(plan.mute)
+                self.assertLoud(self.WORDS)
+                self.assertFalse(os.path.exists(mark))
+        # And the pass itself goes on: the reader is never a reason to refuse.
+        self.reset()
+        with mock.patch.object(self.mod, "MUTE_STATE", planted):
+            code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(self.calls("tmux", "respawn-pane")), 1)
+        self.assertFalse(os.path.exists(mark))
+
+    def test_a_reader_that_fails_mutes_nothing(self):
+        for i, body in enumerate(("raise RuntimeError('boom')\n",
+                                  "def current(now=None):\n    raise OSError('no flag')\n",
+                                  "def current(now=None):\n    return None\n",
+                                  "def current(\n")):
+            with self.subTest(body=body):
+                reader = os.path.join(self.tmp, f"reader{i}", "mute_state.py")
+                self.write(reader, body)
+                plan = self.timed_out({"sound": self.held(), "toast": self.held()}, reader)
+                self.assertEqual(plan.mute, reader)
+                self.assertLoud(self.WORDS)
+
+    def test_a_refused_pass_toasts_silent_while_the_sound_is_muted(self):
+        # The whole way: a monitor at the stop refuses a plain pass, loud. pass.log logs no
+        # toast, so the mute adds nothing there.
+        self.stop_tasks = ["monitor"]
+        self.plant({"sound": self.held()})
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 1, out)
+        self.assertIn("mode=plain outcome=busy busy: tasks: monitor", self.log())
+        self.assertNotIn("mute", self.log())
+        self.assertLoud("pass refused in tab 3: 1 monitor running", silent=True)
 
 
 class Units(unittest.TestCase):

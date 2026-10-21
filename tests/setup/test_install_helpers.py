@@ -723,7 +723,7 @@ class SetupWiring(unittest.TestCase):
                       '|| warn "the plugin change check failed (see above)"', calls["setup.sh"])
         self.assertEqual(len(calls["setup.sh"]), 12)
         self.assertEqual(len(calls["sync.sh"]), 2)
-        self.assertEqual(len(calls["setup-tmux.sh"]), 1)
+        self.assertEqual(len(calls["setup-tmux.sh"]), 2)  # swap_in's os.replace and the .tmux.conf write
 
     def test_the_isolation_scan_flags_every_other_way_to_start_python(self):
         planted = [

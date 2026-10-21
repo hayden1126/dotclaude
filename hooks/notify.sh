@@ -4,6 +4,15 @@
 # person sees the session (session-pane.sh: a tab, a plain terminal, or a background session
 # mapped to its tab). An unmapped background session blocked on a prompt gets the toast only.
 #
+# The device-wide mute (session-pane.sh's read_mute, hooks/mute_state.py) is read once, before
+# the ring: a sound mute drops the ring (`permission quiet muted=1` in ring.log) and shows the
+# toast with -Silent, so Windows' own toast chime stays off too (` toast=silent`); a toast mute
+# skips the toast (` toast=muted`). A flag that can't be read mutes nothing and adds its
+# ` mute=<why>`. Without session-pane.sh the toast shows as it always did. ring.log records the
+# decision, not the delivery: the toast note is logged before the wslpath or cygpath check below,
+# as `rang` is without checking for powershell.exe, so off Windows it can name a toast change
+# where no toast could show.
+#
 # settings.json invokes this as `bash "$HOME/.claude/hooks/notify.sh"`, so the
 # command in settings stays platform-agnostic and all OS detection lives here.
 # That also keeps the settings.json baseline the same on every machine, so setup.sh
@@ -15,16 +24,24 @@
 set -uo pipefail
 
 input=$(cat 2>/dev/null)
+mute_sound=0 mute_toast=0
 
 if . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/session-pane.sh" 2>/dev/null; then
   pane=$(session_pane "$input")
-  if session_in_view "$pane"; then
-    play_ring
-    ring_log permission rang "$pane" "$input"
+  read_mute
+  toast_note=""
+  if [ "$mute_toast" = 1 ]; then toast_note=" toast=muted"
+  elif [ "$mute_sound" = 1 ]; then toast_note=" toast=silent"; fi
+  if ! session_in_view "$pane"; then
+    ring_log permission "quiet$toast_note$mute_note" "$pane" "$input"
+  elif [ "$mute_sound" = 1 ]; then
+    ring_log permission "quiet muted=1$toast_note$mute_note" "$pane" "$input"
   else
-    ring_log permission quiet "$pane" "$input"
+    play_ring
+    ring_log permission "rang$toast_note$mute_note" "$pane" "$input"
   fi
 fi
+[ "$mute_toast" = 1 ] && exit 0
 
 # Message: prefer python3, fall back to python. Either way, default if absent.
 py=$(command -v python3 || command -v python || true)
@@ -47,5 +64,8 @@ else
   exit 0
 fi
 
-( powershell.exe -ExecutionPolicy Bypass -File "$winpath" -Message "$msg" >/dev/null 2>&1 & )
+silent=()
+[ "$mute_sound" = 1 ] && silent=(-Silent)
+( powershell.exe -ExecutionPolicy Bypass -File "$winpath" ${silent[@]+"${silent[@]}"} \
+    -Message "$msg" >/dev/null 2>&1 & )
 exit 0
