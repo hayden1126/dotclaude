@@ -61,7 +61,7 @@ should warn about it.
 | L43 | all | `git commit --amend` and resets are denied to the agent. | Give the student the exact keystrokes. | A1.C34, A1.G12 |
 | L44 | all | zsh fails the whole command on a glob that matches nothing. | Quote the glob or run the producer first. | B2.G4 |
 | L45 | all | A named Agent spawn becomes an agent-team teammate and is denied. | Spawn unnamed. | A2.G1, B4.G18 |
-| L46 | 09 | Parallel writer worktrees that each rebuild a PDF conflict on the binary at merge; `git worktree remove` can fail with "Device or resource busy". | Take one side and re-render; `git worktree prune`. | B3.G8, B3.G9 |
+| L46 | 09 | Parallel writer worktrees that each rebuild a PDF conflict on the binary at merge; `git worktree remove` can fail with "Device or resource busy". | One open patch at a time (`09-tutor` step 5, "One open patch"). Remove a worktree with the sandbox off: Claude Code's Bash sandbox mounts over parts of it, so a sandboxed `git worktree remove` can fail busy or leave it half removed; a sandbox-off `git worktree prune` clears one `git worktree list` marks prunable. A process of the session's own that holds it is ended first. | B3.G8, B3.G9 |
 | L47 | all | A message to a running session is read only after its current step. | Put any change that matters in the files too. | H1.G11 |
 | L48 | all | Edits that carry LaTeX break in heredocs and `perl` (escapes, multibyte glyphs). | Use the Edit tool, with an assert-before-write script for bulk changes. | A1.G10 |
 | L49 | all | A blanket em-dash strip rewrote headings. | Review a mechanical rewrite's diff on headings and ids. | A1.G11 |

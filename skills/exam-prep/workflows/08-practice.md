@@ -22,6 +22,12 @@ of `practice/` or `_build/verify/`: a diff of those files prints values.
 
 ## Step 1: Check the inputs
 
+- No notes patch is open (`09-tutor` step 5, "One open patch", in `_build/logs/tutor.md`), since its
+  hand-back would land inside this stage's build. With one open, take out the `Build running` line,
+  log in STATUS that this stage waits for the patch and stop: a tutor tab finishes it, and the
+  student starts this stage again. Run alone (STATUS has no `Build running` line, SKILL.md hard rule
+  1), add the line now, then check again: a patch dispatched in between takes the line out and stops
+  this stage the same way.
 - `06-site` is done: `_build/notes.html` is built and the notes page's URL is in STATUS (steps 4
   to 7 need both). Plain-text notes (`04-write` step 6) skip 06: each leak check below on
   `_build/notes.html` reads `notes/combined.md` instead (build it now from the section files), a
@@ -235,7 +241,9 @@ Then:
 4. The cram order isn't published. Hand off and commit (Done when's list, up to here) as this
    stage's opening says, the next-step line kept as step 4 set it. The student acts on the new
    line, so it comes last, after the handoff's own STATUS edits and just before its commit: set
-   the next-step line to `08 step 8, the cram night`, with the cram order's path; run
+   the next-step line to `08 step 8, the cram night`, with the cram order's path, and replace the
+   `Build running` line with `Stage 08 built: <exam-slug>, <date>` (`09-tutor` step 1 reads the
+   build's end from it); run
    `mock_leak.py STATUS.md practice/*-key.md` until it prints LEAK OK (a mention of the course's
    answer keys is reworded, since the phrase is a key's marker); commit. The last reply is one
    line, nothing above it worth reading: `Stage 08 is built: type /clear, then "start the cram
@@ -244,39 +252,51 @@ Then:
 ## Step 8: The cram night
 
 The student types `/clear` when step 7.4's last line asks, before reading anything else on that
-screen, so nothing on it shows a key they haven't reached; this fresh session reads STATUS,
-commits what step 7.4 left uncommitted (an early `/clear` can cut its commit short; `git status`
-and `git diff --stat` only), and gives them the cram order's path. The next-step line stays `08
-step 8, the cram night` while a mock is untaken, and STATUS's check (step 4's opening) uses the
-untaken mocks' keys only, none once all are taken: a miss logged after an attempt may state that
-mock's answer. From here the student is present: a question they ask is study Q&A, answered
-first, and an edit it prompts goes to a dispatched writer (hard rule 9); steps 8.3 and 8.4 are
-this stage's build, which the main session runs. While a mock is untaken, every notes or sheet
-change runs "Changing the notes or a sheet" with the untaken mocks' keys, and a one-line sheet
-addition (FB-166) goes into the final sheet, or before the first attempt is logged in STATUS as a
-final-sheet item with no mock, for step 8.3. This session opens only the taken mock's key, never
-an untaken one, `practice/mock-values-key.md` or `_build/verify/mock_key.py` (they hold every
-mock's answers; the one exception is step 4's rerun clause, which prints a taken mock's section
-of the values file alone), and keeps every search inside `notes/`, `cheatsheet/` and
-`_build/frag/`: one over the hub root prints key lines. A writer it dispatches makes that
-section's item 2 alone (the Write brief's shape, the change as its purpose), fenced as the Mock
-writer brief is: no file under `practice/`, not `_build/verify/mock_key.py` (its numbers come
-from `_build/verify/examples.out.md`, which holds no mock instance: step 3.4), and no search
-over the hub root. The main session runs the other items.
+screen, so nothing on it shows a key they haven't reached; this fresh session reads STATUS, commits
+what step 7.4 left uncommitted (an early `/clear` can cut its commit short; `git status` and `git
+diff --stat` only), gives them the cram order's path, and then dispatches the patches the build
+held and offers the checks it held (`09-tutor` step 1's Patches and Waiting checks bullets). One
+tab runs the cram night: any later session that resumes it first asks the student whether another
+tab still runs it, and if one does, stops before any commit, since two would commit each other's
+half-done steps (a step 8.4 that has deleted a mock's line but not yet moved its rows) and
+dispatch patches twice. The next-step line stays `08 step 8, the cram night` while a mock is
+untaken, and STATUS's check (step 4's opening) uses the untaken mocks' keys only, none once all are
+taken: a miss logged after an attempt may state that mock's answer. From here the student is
+present: a question they ask, and
+any patch it prompts, runs `09-tutor` step 5 under this step's rules (hard rule 9); steps 8.3 and
+8.4 are this stage's build, which the main session runs. While a mock is untaken, every notes or
+sheet change runs "Changing the notes or a sheet" with the untaken mocks' keys, and a one-line
+sheet addition (FB-166) goes into the final sheet once step 8.3 has built it, and until then is
+logged in STATUS as a final-sheet item with no mock, for step 8.3. Of the mocks' keys, this
+session opens only a taken mock's, never an untaken one's, `practice/mock-values-key.md` or
+`_build/verify/mock_key.py` (they hold every mock's answers; the one exception is step 4's rerun
+clause, which prints a taken mock's section of the values file alone), and keeps every search
+inside `notes/`, `cheatsheet/`, `_build/frag/` and `_build/extract/` (which holds no mock): one
+over the hub root prints key lines. The writer `09-tutor` step 5 dispatches (the "Notes patch"
+brief) makes the change of "Changing the notes or a sheet" item 2 and, for the notes, item 3's
+rebuild, fenced from `practice/`, from `_build/verify/` but `examples.out.md` (its numbers come
+from there, and it holds no mock instance: step 3.4) and from any search over the hub root; the
+main session runs the other items and the merge, as that step says.
 
-1. Before an attempt, a mock sheet STATUS logs as changed is shown to the student, changes and
-   all (FB-137), and printed again; with the LaTeX engine, the student compiles it first and this
-   session checks the PDF as `07-cheatsheet` checks a LaTeX sheet (`check_pdf.py --no-layout`).
-   The student takes each mock under exam conditions, its minutes and the mock sheet only, in the
-   cram order's order (the harder set last, since its key holds the Variants), then opens its
-   key, or brings it here first when its cram order line says so (step 4's rerun clause).
-2. Record their misses in STATUS: the part, and why it went wrong.
+1. Before an attempt, no notes patch is open (`09-tutor` step 5, "One open patch"), so a sheet it
+   changed is logged, and the log's pending lines are offered first, as `09-tutor` step 5.5.9 offers
+   them (the patch now, or the mock first with them marked `held: mock first`); a mock sheet STATUS
+   logs as changed is shown to the student, changes and all (FB-137), and printed again; with the
+   LaTeX engine, the student compiles it first and this session checks the PDF as `07-cheatsheet`
+   checks a LaTeX sheet (`check_pdf.py --no-layout`). The student takes each mock under exam
+   conditions, its minutes and the mock sheet only, in the cram order's order (the harder set last,
+   since its key holds the Variants), then opens its key, or brings it here first when its cram
+   order line says so (step 4's rerun clause).
+2. Record the attempt in STATUS: the mock, then each miss (the part, and why it went wrong), or
+   `no misses`, or `misses: from the walk-through` while `09-tutor` walks the student through it
+   (its log's misses replace that before step 3). From here the mock counts as taken.
 3. Run `07-cheatsheet`, section "The final sheet", with the misses, and the cold solver's
-   conventions and final-sheet items STATUS logs for the taken mocks or for no mock: an item
-   logged against an untaken mock waits for its attempt. A later mock's misses and items add to
-   the final sheet already built. While a mock is untaken, the final sheet's first build and
-   every change to it run as "Changing the notes or a sheet" says, with the untaken mocks' keys
-   (before the first build, its baseline has no hits).
+   conventions and final-sheet items STATUS logs for the taken mocks or for no mock: an item logged
+   against an untaken mock waits for its attempt. A later mock's misses and items add to the final
+   sheet already built. While a mock is untaken, the final sheet's first build and every change to
+   it run as "Changing the notes or a sheet" says, with the untaken mocks' keys (before the first
+   build, its baseline has no hits). It starts once no patch is open (`09-tutor` step 5, "One open
+   patch"), and a patch approved meanwhile waits until its work is committed.
 4. In the cram order, delete the taken mock's line and move a section the misses point at to the
    first reading rows after it, before the next mock's line (renumbered, its tier's minutes and
    the intro's total adjusted), since the student has read the rows above it. With no reading row
@@ -284,7 +304,9 @@ over the hub root. The main session runs the other items.
    `## Tier <n>: Misses (<M> min)`, the tiers after it renumbered and the intro's tier count up by
    one. Then step 7's item 1 again, and while a mock is untaken item 2 with the untaken mocks'
    keys.
-5. Commit and hand off as this stage's opening says.
+5. Commit and hand off as this stage's opening says, then clear each `held: mock first` mark
+   (`09-tutor` step 5.5.9), its fields kept, and dispatch the oldest pending patch (`09-tutor` step
+   1's Patches bullet).
 
 ## Changing the notes or a sheet
 
@@ -311,7 +333,9 @@ attempt, `practice/*-key.md`):
 4. Run item 1 again and compare the hit lines with the baseline's (count them, since every hit
    on the notes reads "(the page)" and a second copy of an answer adds one). A new hit on a
    number, order or table answer is a leak: reword the change and repeat from item 2. Judge and
-   log any other new hit as step 4.5 does.
+   log any other new hit as step 4.5 does. During the build (steps 2 to 7.4), commit a change
+   only once this item passes, and a session that must end first finishes it: a `09-tutor` tab
+   running meanwhile reads the notes and the sheets as committed (its step 1).
 5. Republish what is published (`06-site` step 6; the mock sheet as `07-cheatsheet` publishes it).
    The student may have printed the mock sheet at `07-cheatsheet`: a changed one is logged in
    STATUS, and the cram order's next mock line says to print it again, or with the LaTeX engine
@@ -322,19 +346,19 @@ Log each change in STATUS by its part and what changed, never a value.
 
 ## Done when
 
-Each mock's instances are compared across the mocks and with the notes' worked examples (step
-3.4); each mock's `mock_key.py` line says KEY OK (with no checker, every key value cited too); the
-cold solver's disagreements are settled and logged, and a changed notes page or mock sheet is
+Each mock's instances are compared across the mocks and with the notes' worked examples (step 3.4);
+each mock's `mock_key.py` line says KEY OK (with no checker, every key value cited too); the cold
+solver's disagreements are settled and logged, and a changed notes page or mock sheet is
 republished; `mockpage.py`, `mock_leak.py`, `linkcheck.py --html` and `verify_page.mjs --views`
-pass, and you looked at the screenshots; the page is published privately and its URL is in
-STATUS; `cram_check.py` prints CRAM OK; `mock_leak.py` prints LEAK OK on the cram order and
-STATUS, and on the notes and the mock sheet every hit is judged and logged (step 4.5); each key
-but the last one's prints LEAK OK with `--no-markers` against the keys taken after it; the
-audit's findings are applied; the mocks, keys, `practice/mock-values-key.md`,
-`_build/mock-plan.md`, `_build/verify/mock_key.py`, the mock pages and the cram order are
-committed, handed off, STATUS's next-step line starts `08 step 8, the cram night`, and step
-7.4's last line asks for `/clear`. Then, on the cram night: STATUS LEAK OK against the untaken
-mocks' keys after each write; before each attempt the changed mock sheet shown and reprinted (with
-LaTeX, its PDF checked first); after it, the misses in STATUS, the final sheet (changed as
-"Changing the notes or a sheet" says while a mock is untaken), the cram order updated with CRAM OK
-(and LEAK OK while a mock is untaken), and a commit and handoff.
+pass, and you looked at the screenshots; the page is published privately and its URL is in STATUS;
+`cram_check.py` prints CRAM OK; `mock_leak.py` prints LEAK OK on the cram order and STATUS, and on
+the notes and the mock sheet every hit is judged and logged (step 4.5); each key but the last one's
+prints LEAK OK with `--no-markers` against the keys taken after it; the audit's findings are
+applied; the mocks, keys, `practice/mock-values-key.md`, `_build/mock-plan.md`,
+`_build/verify/mock_key.py`, the mock pages and the cram order are committed, handed off, STATUS's
+next-step line starts `08 step 8, the cram night` and it records `Stage 08 built: <exam-slug>,
+<date>`, and step 7.4's last line asks for `/clear`. Then, on the cram night: STATUS LEAK OK
+against the untaken mocks' keys after each write; before each attempt the changed mock sheet shown
+and reprinted (with LaTeX, its PDF checked first); after it, the attempt and its misses in STATUS,
+the final sheet (changed as "Changing the notes or a sheet" says while a mock is untaken), the cram
+order updated with CRAM OK (and LEAK OK while a mock is untaken), and a commit and handoff.

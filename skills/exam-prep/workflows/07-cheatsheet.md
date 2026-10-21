@@ -14,7 +14,7 @@ attempt ("The final sheet" below, which 08 runs). Without a mock there is one sh
 
 - CLAUDE.md's rules allow a sheet. Quote the rule in STATUS: its size, one side or two, whether
   it is collected and whether it must carry a name (FB-130). Not allowed: skip this stage and log
-  it.
+  it (as the build's last stage, or run alone, removing the `Build running` line).
 - `05-verify` is done. The sheet derives from the notes and the checker's output
   (`_build/verify/examples.out.md`) only: never from a key, the mock, or a source MANIFEST marks
   `reserved`, and never an answer from a set it doesn't mark `yes, attempted`.
@@ -24,6 +24,12 @@ attempt ("The final sheet" below, which 08 runs). Without a mock there is one sh
   the student's own LaTeX, they write the sheet and this stage checks it: step 2's gap scans,
   then `check_pdf.py --no-layout`, the page images (an Overfull line in LaTeX's log is an
   overflow), and step 5's audit.
+- No notes patch is open (`09-tutor` step 5, "One open patch", in `_build/logs/tutor.md`), since
+  this stage writes the sheet and fixes the notes in place. With one open, take out the `Build
+  running` line, log in STATUS that this stage waits for the patch and stop: a tutor tab finishes
+  it, and the student starts this stage again. Run alone (STATUS has no `Build running` line,
+  SKILL.md hard rule 1), add the line now, then check again: a patch dispatched in between takes the
+  line out and stops this stage the same way.
 
 ## Step 2: Find what goes on it
 
@@ -115,8 +121,10 @@ says: check each claim first, and fix every copy of a fact. Then step 4 again.
   6 does, and put its URL in STATUS. A LaTeX sheet isn't published: the student has it.
 - Give the print settings in the report: color or grayscale as the profile says, 100% scale with
   fit-to-page off, and for two sides, double-sided, flipped on the short edge.
-- Commit the sheet's source (the HTML, or the student's LaTeX), its PDF and, for HTML, its
-  layout file; hand off.
+- Commit the sheet's source (the HTML, or the student's LaTeX), its PDF and, for HTML, its layout
+  file, run alone or as the build's last stage with the `Build running` line removed in that same
+  commit (hard rule 1), and hand off. A tutor tab dispatches the patches the student approved
+  meanwhile.
 
 ## The final sheet (after the mock attempt)
 
@@ -140,10 +148,10 @@ when it was built: it fills like any sheet. So the final sheet makes room for it
 
 - Any change to a shipped sheet, a fix or an addition: show the student the draft first (FB-137;
   while a mock is untaken, as `08-practice` says in "Changing the notes or a sheet"); during
-  study Q&A a dispatched writer makes it (hard rule 9). Then step 5's audit limited to the
-  change, step 4, and a republish of the published sheet as `06-site` step 6 says. A fix to a
-  fact goes into both sheets; an addition the mock prompted goes into the final sheet only
-  (FB-133).
+  study Q&A a dispatched writer makes it (hard rule 9; `09-tutor` step 5). Then step 5's audit
+  limited to the change, step 4, and a republish of the published sheet as `06-site` step 6 says.
+  A fix to a fact goes into both sheets; an addition the mock prompted goes into the final sheet
+  only (FB-133).
 - Space a later scope cut frees stays blank for the final sheet's items. Check which sections it
   would help, list them in STATUS, and ask the student when they are next here (FB-140).
 

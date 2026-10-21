@@ -43,8 +43,15 @@ call (FB-008: read these before concluding something doesn't exist). Then route:
   work: open a session in `exam-prep/` instead (`00-intake`, step 1);
 - no `PLAN.md`, or one reading `Approved: not yet`: intake (`00`);
 - an approved `PLAN.md` for an earlier exam than the one the student names: `11`;
+- a build is running: STATUS has a `Build running` line (hard rule 1): `09` alone, within its Step
+  1's limits for the build, never a build stage (from `08-practice` step 2 its output shows mocks
+  and keys); only when the student says the build stopped and asks to resume it, looking away, the
+  build from what is on disk, the line kept; on their word that it won't resume, the line removed. A
+  session launched with `00-intake` step 8's prompt is the build itself and goes on from the first
+  unfinished stage;
 - an approved `PLAN.md` for this exam whose STATUS next-step line starts with a stage and step
-  (`08 step 8, the cram night`): that step;
+  (`08 step 8, the cram night`): that step, and a walk-through, a quiz or a question the student
+  brings there runs `09` inside its rules;
 - else an approved `PLAN.md` for this exam: the first unfinished stage that PLAN.md includes,
   judged by what is on disk (FB-002); `09` and `10` run when the student asks.
 
@@ -60,7 +67,7 @@ session) when the hub has its own conventions:
 | `_build/pages/`, `_build/text/`, `_build/slices/`, `_build/media/` | renders, deck slices, extracted images | ignored |
 | `_build/shots/`, `_build/package*.json` | the browser check's screenshots, a local Playwright install | ignored |
 | `_build/` (rest) | extracts, backbone, checker, hub copies of STYLE, CHASSIS, CONVERT, page build | tracked |
-| `notes/`, `cheatsheet/`, `practice/` | the products; `practice/*-key.md` quarantined | tracked |
+| `notes/`, `cheatsheet/`, `practice/` | the products; `practice/*-key.md` and `practice/tutor/` quarantined | tracked |
 
 ## Stage map
 
@@ -78,7 +85,7 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
 | 06 | `workflows/06-site.md` | the notes page, published | `verify_page.mjs` passes, URL in STATUS |
 | 07 | `workflows/07-cheatsheet.md` | sheet HTML and PDF (only if allowed) | `check_pdf.py` passes |
 | 08 | `workflows/08-practice.md` | mocks, quarantined keys, mock pages, the cram order | the key script asserts every computable value; the leak check passes |
-| 09 | `workflows/09-tutor.md` | walk-throughs, notes patches | on demand |
+| 09 | `workflows/09-tutor.md` | walk-throughs, quizzes, notes patches, `_build/logs/tutor.md` | on demand |
 | 10 | `workflows/10-polish.md` | scan, report, apply on approval | on demand |
 | 11 | `workflows/11-next-exam.md` | the hub extended for the next exam | reconciled, new scope in MANIFEST |
 | 12 | `workflows/12-retro.md` | skill diffs, `CHANGELOG.md` entry | after every exam |
@@ -86,7 +93,14 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
 ## Hard rules
 
 1. **Plan, then run unattended.** Intake asks everything up front; after the student approves
-   PLAN.md, ask nothing and log judgment calls in STATUS (FB-001, FB-020).
+   PLAN.md, ask nothing and log judgment calls in STATUS (FB-001, FB-020). The build session
+   (`00-intake` step 8) adds the STATUS line `Build running: <date>` before its first stage, and its
+   last stage removes it (`08-practice` step 7.4 puts `Stage 08 built` in its place); a build stage
+   run alone on request (07, 08) adds and removes its own. Any end of a build removes it: a last
+   stage that is skipped or cut short, a stop at a stage's step 1, a stage that stops to wait for a
+   notes patch. While the line stands, a `09-tutor` tab runs within its Step 1's limits, and no
+   session dispatches a notes patch: the build session never does, since it can't show the student a
+   change or ask them.
 2. **Verbatim extraction before writing.** Never WebFetch slides: it returns a summary that drops
    formulas and slide numbers. Fetch raw with curl and render PDFs page by page (FB-040, L01).
 3. **No hand-computed values.** Every trace, number and key answer comes from a checker that first
@@ -103,8 +117,9 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
    endorsed answers or comments set scope; a student's opening post is a signal, endorsed or not,
    and is labeled so.
 8. **No exam prediction without a source.** Cite the instructor's statement (FB-012).
-9. **During study Q&A the main session only answers.** Every edit goes to a dispatched writer
-   (FB-167).
+9. **During study Q&A the main session only answers.** Every change to the notes or a sheet that
+   a question prompts goes to a dispatched writer (FB-167); the main session keeps the
+   bookkeeping (STATUS, `_build/logs/`, MANIFEST.md) and the build steps a workflow gives it.
 10. **Persist everything into the hub.** The session scratchpad doesn't survive a clear (FB-006). End
     each stage, and any session that stops mid-stage, with the handoff skill and a local commit;
     never push (FB-005). STATUS stays short: a check's full output or a long list goes in a file

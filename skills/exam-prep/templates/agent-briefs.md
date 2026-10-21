@@ -426,3 +426,72 @@ decides what goes on.
   mock, and keys live there), nothing under {{ROOT}}/sources/, and no file MANIFEST.md marks
   `reserved`.
 ```
+
+## Notes patch (stages 08 and 09)
+
+Role: `writer`, spawned with `isolation: "worktree"` on the Agent call (the spawn guard denies a
+writer without it): it edits the hub's tracked files in a worktree of its own and commits on its
+own branch, and the main session merges. One per patch, or per follow-up pass with every fix it
+carries (`09-tutor` step 5.5.6), and one at a time: the next waits until this one's line is struck
+through (`09-tutor` step 5, "One open patch").
+
+```text
+# Brief: {{WHAT}}, in {{§N.M of the notes | the {{EXAM}} sheets | §N.M of the notes and the
+{{EXAM}} sheets}}
+
+## Purpose
+The student asked about {{TOPIC}} while studying, and the answer showed that {{the notes don't
+say it at the point they were reading | the notes say it unclearly there | the sheet lacks it}}.
+They approved the text below. Put it in exactly, everywhere the fact appears, so what they study
+from carries it. {{FOLLOW-UP: An earlier change to the same place needs the fixes below: each is
+the student's approved text, or what a check reported and where (an overflow, a TeX error in a
+fragment), to fix without changing what the text says.}} The main session keeps answering them
+meanwhile and merges your branch when you report.
+
+## End state
+- Done means: the change below made in every copy of the fact{{PAGE: , the section's fragment
+  matching and the page rebuilt}}, in one commit on your branch.
+- Artifact path: your branch, in your worktree of {{ROOT}}.
+- Report: end your reply with the JSON block (status, summary, artifacts, blocked_actions), with
+  artifacts[0] `<branch>@<sha>`. The summary lists each file and line number you changed, never the
+  text, and anything that looked wrong elsewhere, unfixed.
+
+## Scope
+- Work in: your worktree of {{ROOT}}. Write only inside `notes/`, `_build/frag/` and
+  `cheatsheet/`{{PAGE:, plus the rebuilt `_build/notes.html`}}.
+- The change, exactly as the student approved it, in the notes, a sheet or both:
+  - {{NOTES: `notes/{{FILE}}`, {{WHERE: after the line that starts "<its first words>" |
+    replacing the sentence "<old>"}}: {{NEW TEXT}}}}
+  - {{PAGE: The same change in `_build/frag/sec{{N}}.html`, in the fragment's markup
+    (`_build/CONVERT.md`): the chassis's classes only, math as the notes write it.}}
+  - {{SHEET: `cheatsheet/{{NAME}}.html` (with the LaTeX engine, `.tex`), {{WHERE}}: {{SHEET TEXT}}.
+    Edit the source only: the main session prints and checks an HTML sheet, and the student
+    compiles a LaTeX one.}}
+  - {{FOLLOW-UP: one bullet per fix, each with its file, where, and its new text or the check's
+    report.}}
+  - {{RESTORE: The student dropped an earlier change: put each file below back as it stood at
+    commit `{{BEFORE}}`, `git show {{BEFORE}}:<path> > <path>`, then rebuild as below
+    (`_build/notes.html` is rebuilt, never restored): {{THE FILES `git diff --name-only {{BEFORE}}
+    HEAD -- notes/ _build/frag/ cheatsheet/` LISTS}}.}}
+- Every copy (FB-106): search `notes/`, `_build/frag/` and `cheatsheet/` for {{THE OLD PHRASE OR
+  FACT}}, and make the same change wherever the fact is stated (a Must-know line, a pitfall box,
+  a sheet line). A wrong fact is fixed on both sheets; a line a mock prompted goes on the final
+  sheet only.
+- {{PAGE: From the worktree root, `python3 -I {{SKILL}}/scripts/assemble.py` and `python3 -I
+  {{SKILL}}/scripts/linkcheck.py --html _build/notes.html` both exit 0. | PLAIN TEXT: There is no
+  page and no link check (the notes have no anchors): check by eye that each `§N.M` reference you
+  write names a section the backbone numbers, and when `notes/combined.md` exists, rebuild it
+  from the section files in order. | SHEET ONLY: Every copy of a corrected fact means both sheets,
+  and an addition goes only where the change above names: nothing under `notes/` or
+  `_build/frag/` changes, so nothing is rebuilt.}}
+- Commit what you changed in one commit, subject `Notes {{N.M}}: {{WHAT}}` (`Sheets: {{WHAT}}`
+  for a sheet alone), and only once every copy is changed and the checks above pass: a run that
+  stops short (blocked, partial) commits nothing and reports what is left. Change existing files
+  only: add or delete none.
+- A number or a trace comes from the text above or `_build/verify/examples.out.md`, never computed
+  by you, and an example is the notes' own or a fresh one from that file: never a homework's, a
+  recitation's or a mock's numbers.
+- Out of scope: everything under `practice/` (quarantined keys), `_build/verify/` but
+  `examples.out.md`, `sources/`, and any search outside the three directories above: one over the
+  hub root returns key lines. Note anything else that looks wrong in your report; don't fix it.
+```
