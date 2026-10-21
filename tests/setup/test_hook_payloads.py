@@ -423,6 +423,66 @@ class ProjectFilesStayOut(Workspace):
                 self.assertTrue(p.stdout, f"{name} printed nothing")
 
 
+class PracticesEntries(Workspace):
+    """settings.json's edit and SessionStart practices entries, run as Claude Code runs them
+    (sh -c, the event on stdin) against the real shim: a deny and the L4 digest still reach
+    stdout through the `[ -f ] && ...; exit 0` guard, and a missing shim is silent."""
+
+    def setUp(self):
+        super().setUp()
+        with open(os.path.join(REPO, "settings.json")) as f:
+            hooks = json.load(f)["hooks"]
+        self.cmd = {event: next(h["command"] for e in hooks[event] if e.get("matcher") == m
+                                for h in e["hooks"] if "practices-check" in h["command"])
+                    for event, m in (("PreToolUse", "Edit|Write|MultiEdit"),
+                                     ("SessionStart", "startup|resume|clear|compact"))}
+        self.shim = os.path.join(self.tmp.name, ".claude", "hooks", "practices-check.sh")
+        os.makedirs(os.path.dirname(self.shim))
+        os.symlink(os.path.join(HOOKS, "practices-check.sh"), self.shim)
+        self.env.update(XDG_STATE_HOME=os.path.join(self.tmp.name, "state"),
+                        CLAUDE_CONFIG_DIR=os.path.join(self.tmp.name, "cfg"))
+        skill = os.path.join(self.cwd, ".claude", "skills", "demo")
+        os.makedirs(skill)
+        with open(os.path.join(skill, "SKILL.md"), "w") as f:
+            f.write("---\nname: demo\n---\n")
+        with open(os.path.join(skill, "events.toml"), "w") as f:
+            f.write('skill = "demo"\ngate = ["The one demo line."]\n'
+                    '[[event]]\nid = "route"\npaths = ["**/route.ts"]\n')
+
+    def run_entry(self, event, payload):
+        return subprocess.run(["sh", "-c", self.cmd[event]], input=json.dumps(payload),
+                              capture_output=True, text=True, timeout=20, cwd=self.cwd,
+                              env=self.env)
+
+    def test_a_deny_and_the_digest_reach_stdout_and_a_missing_shim_is_silent(self):
+        write = {"hook_event_name": "PreToolUse", "tool_name": "Write", "cwd": self.cwd,
+                 "session_id": "sid", "transcript_path": self.transcript,
+                 "tool_input": {"file_path": os.path.join(self.cwd, "app", "route.ts"),
+                                "content": "export const x = 1\n"}}
+        p = self.run_entry("PreToolUse", write)
+        self.assertEqual((p.returncode, p.stderr), (0, ""))
+        self.assertEqual(json.loads(p.stdout)["hookSpecificOutput"]["permissionDecision"], "deny")
+        with open(self.transcript, "w") as f:
+            for row in ({"type": "assistant", "message": {"content": [
+                            {"type": "tool_use", "id": "t1", "name": "Skill",
+                             "input": {"skill": "demo"}}]}},
+                        {"type": "user", "message": {"content": [
+                            {"type": "tool_result", "tool_use_id": "t1",
+                             "content": "Launching skill"}]}}):
+                f.write(json.dumps(row) + "\n")
+        compact = {"hook_event_name": "SessionStart", "source": "compact", "cwd": self.cwd,
+                   "session_id": "sid", "transcript_path": self.transcript}
+        p = self.run_entry("SessionStart", compact)
+        self.assertEqual((p.returncode, p.stderr), (0, ""))
+        self.assertIn("The one demo line.",
+                      json.loads(p.stdout)["hookSpecificOutput"]["additionalContext"])
+        os.unlink(self.shim)
+        for event, payload in (("PreToolUse", write), ("SessionStart", compact)):
+            with self.subTest(event=event):
+                p = self.run_entry(event, payload)
+                self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+
+
 class InjectedMarkers(unittest.TestCase):
     """handoff-reminder, session-title and session-summary skip the same markers."""
 

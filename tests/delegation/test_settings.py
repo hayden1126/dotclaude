@@ -271,11 +271,15 @@ class Baseline(unittest.TestCase):
         # One engine for every practices skill: L1 and L2 deny edits by JSON, L4 answers
         # SessionStart(compact), and startup carries its health line. On Bash, PreToolUse runs
         # the push gate and L3r and records HEAD for L3s, and PostToolUse tells L3s's findings.
-        # The shim exits 0 on any failure; the engine keeps its own 2 s budget under the 5 s
-        # kill. Only exit code 2 blocks, so nothing here can.
+        # The shim exits 0 on any failure, and every entry runs it only when it exists and then
+        # exits 0 (review round 2, low 8: a missing shim exited 127 on every edit). A deny
+        # travels as JSON on stdout, so the exit 0 can't swallow it. The engine keeps its own
+        # 2 s budget under the 5 s kill. Only exit code 2 blocks, so nothing here can.
         check = 'bash "$HOME/.claude/hooks/practices-check.sh"'
-        self.assertEqual(commands("PreToolUse", "Edit|Write|MultiEdit").count(check), 1)
-        self.assertEqual(commands("SessionStart", "startup|resume|clear|compact").count(check), 1)
+        guarded = '[ -f "$HOME/.claude/hooks/practices-check.sh" ] && ' + check + "; exit 0"
+        self.assertEqual(commands("PreToolUse", "Edit|Write|MultiEdit").count(guarded), 1)
+        self.assertEqual(commands("SessionStart", "startup|resume|clear|compact").count(guarded),
+                         1)
         self.assertEqual(len(self.practices_bash("PreToolUse")), 1)
         self.assertEqual(len(self.practices_bash("PostToolUse")), 1)
         hooks = [h for entries in S["hooks"].values() for e in entries for h in e["hooks"]
@@ -283,6 +287,8 @@ class Baseline(unittest.TestCase):
         self.assertEqual(len(hooks), 4)
         for h in hooks:
             self.assertIn(check, h["command"])
+            self.assertIn('[ -f "$HOME/.claude/hooks/practices-check.sh" ] && ', h["command"])
+            self.assertTrue(h["command"].endswith("; exit 0"), h["command"])
             self.assertNotIn("exit 2", h["command"])
             self.assertEqual(h["timeout"], 5)
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "practices-check.sh"), os.X_OK))
@@ -309,14 +315,17 @@ class Baseline(unittest.TestCase):
             f.write(f"cat >/dev/null; touch {os.path.join(home, 'ran')}\n")
         return home
 
-    def test_the_practices_bash_prefilters_exit_0_when_the_shim_is_missing(self):
-        # Review round 1: `bash <missing shim>` exits 127, a hook error on every matching call.
+    def test_every_practices_entry_exits_0_when_the_shim_is_missing(self):
+        # Review rounds 1 and 2: `bash <missing shim>` exits 127, a hook error on every
+        # matching call, the Bash entries first and then the edit and SessionStart ones.
         home = os.path.join(os.environ.get("TMPDIR", "/tmp"), f"pc-noshim-{os.getpid()}")
         os.makedirs(home, exist_ok=True)
         self.addCleanup(shutil.rmtree, home, True)
-        for event in ("PreToolUse", "PostToolUse"):
-            (cmd,) = self.practices_bash(event)
-            with self.subTest(event=event):
+        entries = [(event, c) for event in ("PreToolUse", "PostToolUse", "SessionStart")
+                   for c in commands(event) if "practices-check" in c]
+        self.assertEqual(len(entries), 4)
+        for event, cmd in entries:
+            with self.subTest(event=event, cmd=cmd[:30]):
                 p = self.run_prefilter(cmd, "git commit -m x", dict(os.environ, HOME=home))
                 self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
 

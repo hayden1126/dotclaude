@@ -56,7 +56,9 @@ Levels:
   L4  SessionStart(compact): a digest (under DIGEST_MAX characters, shared among the skills
       and cut only between lines) naming the practices skills loaded since the previous
       compaction, with their gate lines, plus reloadSkills: true.
-Deny-once has two signs, and either lets the call through:
+Deny-once has two signs, and either lets the call through (an edit level denies only when
+one can hold: with an unwritable state dir and an empty or missing transcript, the edit is
+allowed, logged as state-error):
   - a tool_result in the window holding the call's own marker. The marker is this engine's own
     text, never Claude Code's "hook error" wording around it, which a release may reword;
     is_error isn't required either, so a stray marker elsewhere costs at most one missed deny;
@@ -98,13 +100,24 @@ Bash levels. settings.json sends a Bash call here only when its command (the pay
 "command" string, never the tool_response output) holds git with commit or push, or gh with pr
 ready or pr create (PostToolUse: git with commit), so Python never starts for any other call.
 The prefilter is one `LC_ALL=C grep -E`, linear in the payload (a bash `case` glob backtracked
-over every "git" in a large output), and it exits 0 when the shim is missing. hooks/bash_words.py reads the command as simple commands through chains,
-wrappers (`sudo -E`, `env -i`), `cd X &&` (from the payload's cwd), quotes and heredocs, and
-each git call's -C, --git-dir, --work-tree and GIT_DIR=; an expansion in one of those skips that
-call, logged. A file written by a heredoc or `cat >` escapes L1 and L2, and L3s is its backstop.
+over every "git" in a large output). Every practices entry in settings.json (edit, Bash and
+SessionStart) runs the shim only when it exists and then exits 0; a deny is JSON on stdout.
+hooks/bash_words.py reads the command as simple commands through chains, wrappers (`sudo -E`,
+`env -i`, `time -p`; `env -C` and `sudo -D` move that command's cwd), `cd X &&` (from the
+payload's cwd; a cd inside `( ... )` ends with it), quotes and heredocs, the body of each
+$(...), backtick, <(...) and >(...) (from the cwd where it sits), a `bash -c` script with no
+expansion in it, and each git call's -C, --git-dir, --work-tree and GIT_DIR=; an expansion in
+one of those skips that call, logged. When no commit, push, pr ready or pr create was read but
+an argument or a heredoc body names one, word by word (`xargs git push`, `find -exec`,
+`git submodule foreach`, a `bash -c` script with an expansion, `bash <<EOF`), it is logged as
+git-skipped. Accepted limits beyond those logs: `eval`, an alias, a function or a script file
+that runs git with nothing naming it in the command; a command inside an unquoted heredoc's
+$(...); a function body's cd, read as if it ran. A file written by a heredoc or `cat >`
+escapes L1 and L2, and L3s is its backstop.
 A repo is read only inside Bounds: git runs only in (or pointed at) the project dir
 (CLAUDE_PROJECT_DIR, else the cwd recorded at the session's first SessionStart, never the call's
-own cwd) or the project's own repo, and a repo is scanned only when the realpaths of its git
+own cwd; the Bash levels read config.toml and the project skills from it too, so a cd moves
+neither) or the project's own repo, and a repo is scanned only when the realpaths of its git
 dir, common dir and every alternates entry sit there too. The project's own repo is the one its
 checkout holds, a linked worktree (a lane) only when its git dir's `gitdir` file links back to
 the project, so a lane reads its main checkout's .git while `git -C ~/vault`, a planted gitfile
@@ -116,9 +129,14 @@ Each level reads commits, never the index or the working tree:
         record, nothing scanned, logged) and tells the model the findings as additionalContext.
   push  PreToolUse on git push scans what it would send (each refspec's source, else HEAD;
         --all, --branches, --mirror: every local branch) less what any remote has, and denies.
-        Deletes and --dry-run pass. One call holding both a commit and a push is denied once,
-        told to run them as separate calls (the scan can't see a commit not yet made).
-  L3r   PreToolUse on gh pr ready (not --undo) or a gh pr create without --draft, judged at a
+        A delete (--delete, -d, `:ref`) and a dry run (--dry-run, -n) pass, logged as
+        push-unscanned; in a short-option cluster -o takes the rest as its value
+        (`-onodeploy`). A source that names no commit here (a glob refspec) is logged as
+        git-skipped, and the rest are still scanned. One call holding both a commit and a push
+        is denied once, told to run them as separate calls (the scan can't see a commit not
+        yet made).
+  L3r   PreToolUse on gh pr ready (not --undo) or a gh pr create without --draft (a -R or
+        --repo before the pr subcommand dropped first), judged at a
         head: the branch a `ready` selector or create's --head names (origin/<branch>, else the
         local branch; unknown: logged, allowed), else the checked-out HEAD (a PR number or URL
         says so in the deny, since it may be another branch's PR); each choice is logged. The
@@ -131,10 +149,16 @@ Each level reads commits, never the index or the working tree:
         block to paste into a reviewer brief. The line-scoped and commit-time rules also run
         over every commit in the range.
 A scan runs every rule whose `at` has "commit" (L3r: or `scope = "line"`): `when` on each
-commit's added lines (lines its blob has that the parent's doesn't, by count: a moved line isn't
-new) of regular files matching `paths`, `unless` and practices-allow on the blob the commit
-leaves. Merges, pure renames (the same blob), symlinks and binaries are skipped; at most
-MAX_COMMITS commits and BYTES_MAX blob bytes, a cut logged as scan-truncated. L3s and push also
+commit's added lines (lines its blob has that the parent's doesn't, by count and without a
+trailing \\r: a moved line isn't new, nor is a CRLF rewrite) of regular files matching `paths`,
+`unless` and practices-allow on the blob the commit leaves. A file added where the same commit
+deleted one with the same basename (a rename with edits) is diffed against the deleted blob.
+Merges, pure renames (the same blob), symlinks and binaries are skipped; at most MAX_COMMITS
+commits and BYTES_MAX blob bytes, a cut logged as scan-truncated. When the time budget runs
+out mid-scan (logged as scan-truncated), the level denies or tells once on what it read,
+saying some commits weren't read, and keeps the range's cut key
+(`<level>|engine|cut|-|sha1(the git dir and the commits)`), so a resend of the same range
+passes unscanned; with nothing read the call is allowed. L3s and push also
 run SEC-60, the engine's own rule: a lockfile changed in the range (LOCKFILES, requirements*.txt)
 with no audit Bash call (AUDIT) in the transcript or, for a subagent, the parent's.
 A finding's key is `<level>|<skill>|<rule>|<path>|sha1(the stripped line)`; a level denies or
@@ -526,11 +550,13 @@ def load_skill(folder):
             "rules": rules}, None
 
 
-def discover(event):
-    """{name: skill} from the user's skills, then the project's, which win a clash."""
+def discover(project):
+    """{name: skill} from the user's skills, then the project's (none when project is None),
+    which win a clash."""
     skills = {}
-    roots = [os.path.join(config_home(), "skills"),
-             os.path.join(project_dir(event), ".claude", "skills")]
+    roots = [os.path.join(config_home(), "skills")]
+    if project:
+        roots.append(os.path.join(project, ".claude", "skills"))
     for root in roots:
         try:
             names = sorted(os.listdir(root))
@@ -548,10 +574,13 @@ def discover(event):
     return skills
 
 
-def load_config(event):
-    """{"enabled", "disable" (a set of ids and skill:ids), "helpers"}; defaults on any fault."""
+def load_config(project):
+    """{"enabled", "disable" (a set of ids and skill:ids), "helpers"} from the project's
+    config.toml; defaults on any fault, or when project is None."""
     default = {"enabled": True, "disable": set(), "helpers": ()}
-    path = os.path.join(project_dir(event), ".claude", "practices", "config.toml")
+    if not project:
+        return default
+    path = os.path.join(project, ".claude", "practices", "config.toml")
     try:
         with open(path, "rb") as f:
             data = tomllib.load(f)
@@ -1089,9 +1118,10 @@ def relative(path, project):
     return path if rel.startswith("..") else rel.replace(os.sep, "/")
 
 
-def run_patterns(items, fn):
+def run_patterns(items, fn, cut=False):
     """[item for item in items if fn(item)], each inside its own guard; a throwing pattern is
-    logged and skipped, and once the budget is spent the rest are skipped and logged."""
+    logged and skipped, and once the budget is spent the rest are skipped and logged (with
+    cut, the Budget then goes on up, so a scan knows it was cut short)."""
     out = []
     for n, item in enumerate(items):
         try:
@@ -1102,6 +1132,8 @@ def run_patterns(items, fn):
         except Budget:
             left = ", ".join(f"{s['name']}:{x['id']}" for s, x in items[n:])
             log("budget-spent", f"after {BUDGET}s, skipped {left}")
+            if cut:
+                raise
             break
     return out
 
@@ -1146,14 +1178,15 @@ def pre_tool_use(event):
     edit = edit_of(event)
     if edit is None:
         return None
-    cfg = load_config(event)
+    project = project_dir(event)
+    cfg = load_config(project)
     if not cfg["enabled"]:
         return None
-    skills = discover(event)
+    skills = discover(project)
     if not skills:
         return None
     path, fragment, after = edit
-    rel = relative(path, project_dir(event))
+    rel = relative(path, project)
     text, after_text = scan_text(fragment), scan_text(after)
     helpers = cfg["helpers"]
     events = [(s, ev) for s in skills.values() for ev in s["events"] if not is_off(cfg, s, ev["id"])]
@@ -1201,8 +1234,13 @@ def pre_tool_use(event):
                 keys += [f"{key}|{_sha1(line.strip())}" for line in l2_lines(r, text, helpers)]
             if pending:
                 reason = l2_reason(pending, rel)
-        if reason:
-            state_add(event, keys)
+        # A deny needs a way for its resend through: the state key, or a transcript that will
+        # hold the marker. With neither (an unwritable state dir and an empty or missing
+        # transcript), every resend would be denied too, so the edit is allowed, logged.
+        if reason and not state_add(event, keys) and not m:
+            log("state-error", f"{rel}: the deny couldn't be kept and the transcript is empty "
+                "or missing, so the edit was allowed")
+            reason = None
     except Budget as e:
         log("budget-spent", f"after {BUDGET}s, in the {e} for {rel}; the edit was allowed")
         return None
@@ -1246,16 +1284,22 @@ def is_lockfile(path):
     return base in LOCKFILES or bool(LOCK_GLOB.fullmatch(base))
 
 
+def _eol(line):
+    """A line as added_lines compares it: a trailing \\r dropped, so LF to CRLF adds nothing."""
+    return line[:-1] if line.endswith("\r") else line
+
+
 def added_lines(old, new):
     """[(number, line)] of the lines in new that old doesn't have (as many times as new adds
-    them): a moved line isn't new code. Linear, unlike a real diff."""
+    them), compared without a trailing \\r: a moved line isn't new code, and neither is a line
+    whose ending changed. Linear, unlike a real diff."""
     have = {}
     for line in old.split("\n") if old else ():
-        have[line] = have.get(line, 0) + 1
+        have[_eol(line)] = have.get(_eol(line), 0) + 1
     out = []
     for n, line in enumerate(new.split("\n"), 1):
-        if have.get(line, 0):
-            have[line] -= 1
+        if have.get(_eol(line), 0):
+            have[_eol(line)] -= 1
         else:
             out.append((n, line[:LINE_MAX]))
     return out
@@ -1301,20 +1345,43 @@ def load_bash_words():
     return _BASH_WORDS[0]
 
 
+# The prefilter's words, matched as words in order (git, then commit or push; gh, then pr, then
+# ready or create), each chain one forward search per word, so linear in the text.
+NAMED = ((re.compile(r"(?<![\w.-])git(?![\w-])"), re.compile(r"(?<![\w-])(?:commit|push)(?![\w-])")),
+         (re.compile(r"(?<![\w.-])gh(?![\w-])"), re.compile(r"(?<![\w-])pr(?![\w-])"),
+          re.compile(r"(?<![\w-])(?:ready|create)(?![\w-])")))
+
+
+def names_a_call(text):
+    """Whether text names git commit or push, or gh pr ready or create, word by word in order."""
+    for chain in NAMED:
+        pos = 0
+        for rx in chain:
+            m = rx.search(text, pos)
+            if not m:
+                break
+            pos = m.end()
+        else:
+            return True
+    return False
+
+
 def bash_calls(event):
-    """(git calls as (subcommand, args, where), gh calls as (args, cwd)) in the Bash command.
-    Expansions in a git location, and an unparsable command, are skipped and logged."""
+    """(git calls as (subcommand, args, where), gh calls as (args, cwd), whether a word the
+    parser didn't read as a command names one: an argument (`xargs git push`, `find -exec`,
+    `git submodule foreach`) or a heredoc body) in the Bash command. Expansions in a git
+    location, and an unparsable command, are skipped and logged."""
     bash_words = load_bash_words()
     cmd = command_of(event)
     cwd = event.get("cwd") if isinstance(event.get("cwd"), str) else None
-    gits, ghs = [], []
+    gits, ghs, rest = [], [], []
     if not cmd:
-        return gits, ghs
+        return gits, ghs, False
     try:
-        calls = bash_words.calls(cmd, set(HEADS), cwd)
+        calls = bash_words.calls(cmd, set(HEADS), cwd, rest)
     except ValueError as e:
         log("bash-unparsed", f"{type(e).__name__}: the command was allowed unchecked")
-        return gits, ghs
+        return gits, ghs, False
     for name, args, prefix, c in calls:
         if name == "gh":
             ghs.append((args, c))
@@ -1326,7 +1393,7 @@ def bash_calls(event):
             continue
         if g:
             gits.append(g)
-    return gits, ghs
+    return gits, ghs, any(names_a_call(t) for t in rest)
 
 
 # Where the Bash levels may read. They run outside the sandbox on a command the model wrote, and
@@ -1453,9 +1520,9 @@ class Bounds:
         return None
 
 
-def bounds_of(event):
-    """The Bounds for this call, or None (logged by open_repo) when no project dir is known."""
-    project = bash_project(event)
+def bounds_of(project):
+    """The Bounds for the Bash levels' project (bash_project), or None (logged by open_repo)
+    when no project dir is known."""
     return Bounds(project) if project else None
 
 
@@ -1554,10 +1621,32 @@ def commit_rules(skills, cfg, line_only=False):
 
 
 def scan(repo, spec, rules, level, ctx, lockfiles=True):
-    """[Finding] for what the commits of rev-list spec add (merges left out, the newest
+    """([Finding], cut) for what the commits of rev-list spec add (merges left out, the newest
     MAX_COMMITS, BYTES_MAX of blobs), skipping pure renames and anything but regular files.
-    With lockfiles, a changed lockfile with no audit in the transcripts is a SEC-60 finding."""
-    commits, more = repo.commits(*spec, cap=MAX_COMMITS)
+    With lockfiles, a changed lockfile with no audit in the transcripts is a SEC-60 finding.
+    cut is None when the scan read all it meant to. When the time budget ran out mid-scan
+    (logged as scan-truncated), the findings are those read before it and cut is the range's
+    cut key, `<level>|engine|cut|-|sha1(git dir and commits)`: a level that denies on them
+    keeps it, and a resend of the same range then passes unscanned (logged), rather than
+    getting further and being denied again."""
+    found, key = [], f"{level}|engine|cut|-|unread"
+    try:
+        commits, more = repo.commits(*spec, cap=MAX_COMMITS)
+        key = f"{level}|engine|cut|-|" + _sha1("\n".join([repo.git_dir, *(c for c, _ in commits)]))
+        if key in ctx["seen"]:
+            log("scan-truncated", f"{level}: resent after a scan the time budget cut short, so "
+                "it passed unscanned")
+            return [], None
+        _scan(repo, commits, more, rules, level, ctx, lockfiles, found)
+    except Budget as e:
+        log("scan-truncated", f"{level}: the time budget ran out in the {e}, so what came after "
+            "it wasn't scanned")
+        return found, key
+    return found, None
+
+
+def _scan(repo, commits, more, rules, level, ctx, lockfiles, found):
+    """scan's body: appends each Finding to found as it is read, so a cut keeps them."""
     if more:
         log("scan-truncated", f"{level}: only the newest {MAX_COMMITS} commits were scanned")
     files = []
@@ -1565,13 +1654,24 @@ def scan(repo, spec, rules, level, ctx, lockfiles=True):
         CRUMB.mark(commit[:12], level, "diff-tree")
         changes = repo.changes(None, commit)
         gone = {c[3] for c in changes if c[0] == "D"}
+        moved = {c[4] for c in changes if c[0] == "A" and c[4] in gone}
+        # A rename with edits shows as a delete and an add: the add is diffed against a
+        # regular file this commit deleted with the same basename, so only what it truly
+        # adds counts. (diff-tree -M would pair them by content, but its content reads aren't
+        # shown to stay objects-only, as GIT_FLAGS requires, so it isn't allowed.)
+        deleted = {}
+        for status, omode, _, ooid, _, path in changes:
+            if status == "D" and omode in ("100644", "100755") and ooid not in moved:
+                deleted.setdefault(path.rsplit("/", 1)[-1], []).append(ooid)
         for status, _, nmode, ooid, noid, path in changes:
             if status not in ("A", "M", "T") or nmode not in ("100644", "100755"):
                 continue
             if status == "A" and noid in gone:
                 continue  # a pure rename: the same blob under a new name
-            files.append((commit, path, ooid if status != "A" else None, noid))
-    found = []
+            old = ooid if status != "A" else None
+            if status == "A" and deleted.get(path.rsplit("/", 1)[-1]):
+                old = deleted[path.rsplit("/", 1)[-1]].pop(0)
+            files.append((commit, path, old, noid))
     locks = [(c, p, n) for c, p, _, n in files if lockfiles and is_lockfile(p)]
     if locks and not is_off(ctx["cfg"], ENGINE, "SEC-60") and not ctx["audited"]():
         for commit, path, noid in locks:
@@ -1603,19 +1703,18 @@ def scan(repo, spec, rules, level, ctx, lockfiles=True):
             found.extend(Finding(level, s, r, path, n, line, commit) for n, line in got)
             return False
 
-        run_patterns(mine, hits)
+        run_patterns(mine, hits, cut=True)
     if cut:
         log("scan-truncated", f"{level}: {cut} changed files were not scanned: their old blob "
             "was over the size caps, so what they add can't be told")
-    return found
 
 
-def fresh(findings, event, repo):
+def fresh(findings, event, repo, project):
     """The findings whose key is new for this session and agent, less those on a line L2
-    already denied for that file and rule; one per key."""
+    already denied for that file and rule (its path relative to project, the Bash levels'
+    project dir, as L2 keyed it); one per key."""
     seen = state_keys(event)
     l2_keys = accepted_at_l2(event)
-    project = project_dir(event)
     out, keys = [], set()
     for f in findings:
         if f.key in seen or f.key in keys:
@@ -1645,7 +1744,7 @@ def findings_text(findings, shown=12):
     return "\n".join(parts)
 
 
-def context(event, cfg, ts):
+def context(event, cfg, ts, project):
     cache = {}
 
     def was_audited():
@@ -1654,7 +1753,12 @@ def context(event, cfg, ts):
             cache["a"] = audited(ts)
         return cache["a"]
 
-    return {"cfg": cfg, "helpers": cfg["helpers"], "audited": was_audited}
+    return {"cfg": cfg, "helpers": cfg["helpers"], "audited": was_audited,
+            "seen": state_keys(event), "project": project}
+
+
+CUT_NOTE = ("The time budget ran out before this check read every commit, so some weren't "
+            "checked; these are the findings it read.")
 
 
 # L3s: the PreToolUse half records HEAD, the PostToolUse half scans what the commit added.
@@ -1717,10 +1821,11 @@ def post_tool_use(event):
     is scanned, logged."""
     if event.get("tool_name") != "Bash":
         return None
-    gits, _ = bash_calls(event)
+    gits, _, _ = bash_calls(event)
     if not any(g[0] == "commit" for g in gits):
         return None
-    cfg = load_config(event)
+    project = bash_project(event)
+    cfg = load_config(project)
     if not cfg["enabled"]:
         return None
     record = recorded_heads(event)
@@ -1729,13 +1834,13 @@ def post_tool_use(event):
             "checked")
         return None
     heads, tops = record
-    skills = discover(event)
+    skills = discover(project)
     rules = commit_rules(skills, cfg)
-    found, repos = [], {}
+    found, repos, cuts = [], {}, []
     with Transcripts(event) as ts:
-        ctx = context(event, cfg, ts)
+        ctx = context(event, cfg, ts, project)
         try:
-            bounds = bounds_of(event) if heads else None
+            bounds = bounds_of(project) if heads else None
             for git_dir, before in heads.items():
                 top = tops.get(git_dir)
                 where = {"cwd": top or os.path.dirname(git_dir), "git_dir": git_dir,
@@ -1748,44 +1853,56 @@ def post_tool_use(event):
                 if head is None or before == head:
                     continue  # unborn still, or nothing committed
                 spec = [head, "--not", before] if before else [head]
-                found += [(f, repo) for f in scan(repo, spec, rules, "L3s", ctx)]
-            new = []
-            for repo in repos.values():
-                new += fresh([f for f, r in found if r is repo], event, repo)
+                got, cut = scan(repo, spec, rules, "L3s", ctx)
+                found += [(f, repo) for f in got]
+                if cut:
+                    cuts.append(cut)
+                    break  # the budget is spent: tell what was read
         except Budget as e:
-            log("budget-spent", f"after {BUDGET}s, in the L3s {e}; the commit went unchecked")
-            return None
+            log("budget-spent", f"after {BUDGET}s, in the L3s {e}; the repos left went "
+                "unchecked")
         except GitError as e:
             log("git-skipped", f"L3s: {e}")
             return None
+    new = []
+    for repo in repos.values():
+        new += fresh([f for f, r in found if r is repo], event, repo, project)
     if not new:
         return None
-    state_add(event, [f.key for f in new])
+    state_add(event, [f.key for f in new] + cuts)
     text = ("[practices:L3s] This commit added code that a practices rule flags. Fix it and "
             "amend the commit, or, when one is a false positive, add `practices-allow: <id> "
             "<reason>` to the code (on the flagged line itself for a line-scoped rule) and "
-            "amend. Each finding is told once.\n" + findings_text(new))
+            "amend. Each finding is told once.\n" + (CUT_NOTE + "\n" if cuts else "")
+            + findings_text(new))
     return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": text}}
 
 
 # The push gate: what a git push would send, scanned before it goes.
 
-PUSH_ARG_OPTS = {"--repo", "--receive-pack", "--exec", "-o", "--push-option"}
+PUSH_ARG_OPTS = {"--repo", "--receive-pack", "--exec", "--push-option"}
 
 
 def push_sources(args):
     """(the source refs a git push sends, why it is skipped or None). No refspec sends HEAD;
     --all, --branches and --mirror send every local branch ("--branches"); a delete
-    (--delete, `:ref`) and --dry-run send nothing."""
+    (--delete, -d, `:ref`) and a dry run (--dry-run, -n) send nothing. In a short-option
+    cluster, -o takes the rest of the word as its value (`-onodeploy`), or the next word."""
     srcs, positional, every, i = [], [], False, 0
     while i < len(args):
         a = args[i]
         if a == "--":
             positional += args[i + 1:]
             break
-        if a in ("--delete", "--dry-run") or (a.startswith("-") and not a.startswith("--")
-                                               and set(a[1:]) & {"d", "n"}):
+        if a in ("--delete", "--dry-run"):
             return [], "a delete or a dry run"
+        if a.startswith("-") and not a.startswith("--") and len(a) > 1:
+            letters = a[1:]
+            k = letters.find("o")
+            if set(letters if k < 0 else letters[:k]) & {"d", "n"}:
+                return [], "a delete or a dry run"
+            i += 2 if k == len(letters) - 1 else 1
+            continue
         if a in ("--all", "--branches", "--mirror"):
             every = True
         elif a in PUSH_ARG_OPTS:
@@ -1806,43 +1923,78 @@ def push_sources(args):
 
 
 def push_gate(event, pushes, skills, cfg, ts, ctx, bounds):
-    """(new findings, the repo) for the commits the pushes would send that no remote has."""
+    """(new findings, the cut keys of a scan the budget cut short) for the commits the pushes
+    would send that no remote has. Once the budget is spent the pushes left go unchecked,
+    logged, and the findings read so far still count."""
     rules = commit_rules(skills, cfg)
-    out = []
-    for _, args, where in pushes:
-        srcs, skip = push_sources(args)
-        if skip or not srcs:
-            continue
-        if any("$" in s or "%SUBST%" in s for s in srcs):
-            log("git-skipped", "push: an expansion in a refspec, so this push wasn't checked")
-            continue
-        repo = open_repo(where, "push", bounds)
-        if repo is None:
-            continue
-        tips = ["--branches"] if "--branches" in srcs else []
-        tips += [oid for s in srcs if s != "--branches" and (oid := repo.rev(s))]
-        if not tips:
-            continue
-        found = scan(repo, [*tips, "--not", "--remotes"], rules, "push", ctx)
-        out += fresh(found, event, repo)
-    return out
+    out, cuts = [], []
+    try:
+        for _, args, where in pushes:
+            srcs, skip = push_sources(args)
+            if skip:
+                log("push-unscanned", f"push: {skip} sends no commits, so it wasn't scanned")
+                continue
+            if not srcs:
+                continue
+            if any("$" in s or "%SUBST%" in s for s in srcs):
+                log("git-skipped", "push: an expansion in a refspec, so this push wasn't checked")
+                continue
+            repo = open_repo(where, "push", bounds)
+            if repo is None:
+                continue
+            tips = ["--branches"] if "--branches" in srcs else []
+            named = [(s, repo.rev(s)) for s in srcs if s != "--branches"]
+            tips += [oid for _, oid in named if oid]
+            if any(oid is None for _, oid in named):
+                log("git-skipped", "push: a source names no commit here (a glob refspec, say), "
+                    "so what it sends wasn't checked")
+            if not tips:
+                continue
+            found, cut = scan(repo, [*tips, "--not", "--remotes"], rules, "push", ctx)
+            out += fresh(found, event, repo, ctx["project"])
+            if cut:
+                cuts.append(cut)
+                break
+    except Budget as e:
+        log("budget-spent", f"after {BUDGET}s, in the push {e}; the pushes left went unchecked")
+    return out, cuts
 
 
-def push_reason(findings):
+def push_reason(findings, cut=False):
     return ("[practices:push] The commits this push would send add code that a practices rule "
             "flags. Fix it in a new commit (or amend one that isn't pushed yet) and push again, "
             "or, when one is a false positive, add `practices-allow: <id> <reason>` to the code "
             "(on the flagged line itself for a line-scoped rule). Resending this push unchanged "
-            "passes this check.\n" + findings_text(findings))
+            "passes this check.\n" + (CUT_NOTE + "\n" if cut else "") + findings_text(findings))
 
 
 # L3r: a PR marked ready (or opened as one) waits for a reviewer briefed with the gate lines.
+
+def without_repo(args):
+    """gh's args less -R/--repo and its value wherever it sits before the pr subcommand
+    (`gh -R o/r pr ready`, `gh pr --repo o/r ready`); after it, pr_ready reads it itself."""
+    out, i, words = [], 0, 0
+    while i < len(args):
+        a = args[i]
+        if words < 2:  # `pr`, then its subcommand
+            if a in ("-R", "--repo"):
+                i += 2
+                continue
+            if a.startswith("--repo=") or (a.startswith("-R") and len(a) > 2):
+                i += 1
+                continue
+            words += not a.startswith("-")
+        out.append(a)
+        i += 1
+    return out
+
 
 def pr_ready(args):
     """None unless args are `gh pr ready` (not --undo) or a `gh pr create` that isn't a draft;
     else {"base": the --base, "branch": the branch a `ready` selector or create's --head names
     (an `owner:` prefix dropped), "pr": a `ready` selector that is a PR number or URL}, each
-    None when not given."""
+    None when not given. A -R/--repo before the subcommand is dropped first."""
+    args = without_repo(args)
     if len(args) < 2 or args[0] != "pr" or args[1] not in ("ready", "create"):
         return None
     rest, out = args[2:], {"base": None, "branch": None, "pr": None}
@@ -1920,8 +2072,20 @@ def pr_head(repo, pr):
 
 
 def l3r(event, ghs, skills, cfg, ts, ctx, bounds):
-    """(review blocks, their keys, new rule findings, notes) for the PR calls."""
-    blocks_, keys, found, notes = [], [], [], []
+    """(review blocks, their keys, new rule findings, notes, the cut keys of a scan the budget
+    cut short) for the PR calls. Once the budget is spent the PR calls left go unchecked,
+    logged, and what was found so far still counts."""
+    out = ([], [], [], [], [])
+    try:
+        _l3r(event, ghs, skills, cfg, ts, ctx, bounds, *out)
+    except Budget as e:
+        log("budget-spent", f"after {BUDGET}s, in the L3r {e}; the PR calls left went "
+            "unchecked")
+    return out
+
+
+def _l3r(event, ghs, skills, cfg, ts, ctx, bounds, blocks_, keys, found, notes, cuts):
+    """l3r's body: appends to its lists as it goes, so a spent budget keeps what was found."""
     for args, cwd in ghs:
         pr = pr_ready(args)
         if pr is None:
@@ -1966,11 +2130,13 @@ def l3r(event, ghs, skills, cfg, ts, ctx, bounds):
                 keys += [f"L3r|{s['name']}|review|-|{_sha1(head)}" for s, _ in new]
                 blocks_.append(review_block(new, mb, head, branch))
         rules = commit_rules(skills, cfg, line_only=True)
-        found += fresh(scan(repo, [head, "--not", mb], rules, "L3r", ctx, lockfiles=False),
-                       event, repo)
+        got, cut = scan(repo, [head, "--not", mb], rules, "L3r", ctx, lockfiles=False)
+        found += fresh(got, event, repo, ctx["project"])
         if note and (len(blocks_), len(found)) != told:
             notes.append(note)
-    return blocks_, keys, found, notes
+        if cut:
+            cuts.append(cut)
+            return
 
 
 def review_block(touched, mb, head, branch, shown=8):
@@ -1994,14 +2160,20 @@ def bash_pre(event):
     """PreToolUse(Bash): deny a call that both commits and pushes once, record HEAD before a
     commit (L3s), deny a push once per new finding in what it would send, and deny a PR's
     `ready` once until a reviewer ran with the gate lines of the skills it touches (L3r)."""
-    gits, ghs = bash_calls(event)
+    gits, ghs, named = bash_calls(event)
     commits = [g for g in gits if g[0] == "commit"]
     pushes = [g for g in gits if g[0] == "push"]
     ghs = [g for g in ghs if pr_ready(g[0]) is not None]
-    if not (commits or pushes or ghs):
+    if not (commits or pushes or ghs or named):
         return None
-    cfg = load_config(event)
+    project = bash_project(event)  # never the call's cwd, which an earlier cd moved
+    cfg = load_config(project)
     if not cfg["enabled"]:
+        return None
+    if not (commits or pushes or ghs):  # the backstop for a launcher this parser can't read
+        log("git-skipped", "the command names git commit or push, or gh pr ready or create, "
+            "in a form this check can't read (a launcher such as xargs, find -exec or a "
+            "script), so it wasn't checked")
         return None
     if commits and pushes:
         key = f"push|engine|chain|-|{_sha1(command_of(event))}"
@@ -2010,22 +2182,25 @@ def bash_pre(event):
                 "[practices:push] This one Bash call both commits and pushes, so the push check "
                 "can't see what the commit adds. Run the commit and the push as separate Bash "
                 "calls. Resending this call unchanged passes this check, unscanned.")
-    reasons, keys = [], []
+    reasons, keys, cut_keys = [], [], []
     try:
-        bounds = bounds_of(event)
+        bounds = bounds_of(project)
         if commits:
             record_heads(event, commits, bounds)
         if pushes or ghs:
-            skills = discover(event)
+            skills = discover(project)
             with Transcripts(event) as ts:
-                ctx = context(event, cfg, ts)
-                new = push_gate(event, pushes, skills, cfg, ts, ctx, bounds) if pushes else []
+                ctx = context(event, cfg, ts, project)
+                new, cuts = (push_gate(event, pushes, skills, cfg, ts, ctx, bounds) if pushes
+                             else ([], []))
+                cut_keys += cuts
                 if new:
-                    reasons.append(push_reason(new))
+                    reasons.append(push_reason(new, bool(cuts)))
                     keys += [f.key for f in new]
                 if ghs:
-                    review, review_keys, found, notes = l3r(event, ghs, skills, cfg, ts, ctx,
-                                                            bounds)
+                    review, review_keys, found, notes, cuts = l3r(event, ghs, skills, cfg, ts,
+                                                                  ctx, bounds)
+                    cut_keys += cuts
                     reasons += review
                     keys += review_keys
                     found = [f for f in found if f.key not in keys]
@@ -2034,7 +2209,8 @@ def bash_pre(event):
                             "[practices:L3r] This PR's commits add code that a practices rule "
                             "flags. Fix it in a new commit and push, or, when one is a false "
                             "positive, add `practices-allow: <id> <reason>` to the code. Resending "
-                            "passes this check.\n" + findings_text(found))
+                            "passes this check.\n" + (CUT_NOTE + "\n" if cuts else "")
+                            + findings_text(found))
                         keys += [f.key for f in found]
                     reasons += notes
     except Budget as e:
@@ -2043,7 +2219,8 @@ def bash_pre(event):
     except GitError as e:
         log("git-skipped", f"Bash check: {e}")
         return None
-    if not reasons or not state_add(event, keys):  # an unkept key: allow, logged
+    # A cut scan's key rides on any deny of this call, so its resend passes that range unscanned.
+    if not reasons or not state_add(event, keys + cut_keys):  # an unkept key: allow, logged
         return None
     return deny("\n\n".join(reasons))
 
@@ -2094,9 +2271,9 @@ def digest(names, skills):
 
 
 def compact(event):
-    if not load_config(event)["enabled"]:
+    if not load_config(project_dir(event))["enabled"]:
         return None
-    skills = discover(event)
+    skills = discover(project_dir(event))
     if not skills:
         return None
     out = {"hookEventName": "SessionStart", "reloadSkills": True}
@@ -2156,7 +2333,7 @@ def health(event):
     if broken:
         problems.append(f"down ({broken}); edits are not checked")
     else:
-        discover(event)  # logs a malformed events.toml, counted below
+        discover(project_dir(event))  # logs a malformed events.toml, counted below
     now = time.time()  # wall clock: compared with file mtimes
     try:
         crumbs = sorted(n for n in os.listdir(d) if n.startswith("breadcrumb-"))
@@ -2197,7 +2374,9 @@ LABELS = {"skill-disabled": ("skill disabled", "skills disabled"),
           "state-error": ("state error", "state errors"), "crash": ("crash", "crashes"),
           "git-skipped": ("git call skipped", "git calls skipped"),
           "scan-truncated": ("scan cut short", "scans cut short")}
-QUIET = {"fragment-only", "bash-unparsed", "l3r-target"}  # for debugging, never an engine error
+# For debugging, never an engine error: a deliberate choice (a delete push sends nothing to
+# scan), not a check that failed open.
+QUIET = {"fragment-only", "bash-unparsed", "l3r-target", "push-unscanned"}
 
 
 def new_errors(d):

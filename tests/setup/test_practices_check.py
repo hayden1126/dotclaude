@@ -23,6 +23,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import tomllib
 import unittest
 from unittest import mock
@@ -377,6 +378,22 @@ class Backstop(Base):
         self.assertIsNotNone(self.fire("lib/save.ts", "x({ ...body })\n"))
         self.add(*boundary(), *load("t2", "Skill", skill="demo"))
         self.assertIsNone(self.fire("lib/save.ts", "x({ ...body })\n"))
+
+    def test_an_unkept_deny_with_an_empty_transcript_allows_the_edit_and_logs(self):
+        # Review round 2, leftover 2: with an unwritable state dir and an empty transcript, an
+        # L1 or L2 deny could never be seen again, so every resend was denied too.
+        d = os.path.join(self.state, "dotclaude", "practices")
+        os.makedirs(d)
+        open(os.path.join(d, "denies"), "w").close()  # the state dir can't be made
+        self.assertIsNotNone(self.fire())  # the transcript has rows: its marker lets it through
+        open(self.transcript, "w").close()
+        for _ in range(2):
+            self.assertIsNone(self.fire())
+        self.loaded()
+        self.assertIsNotNone(self.fire("lib/save.ts", "x({ ...body })\n"))
+        open(self.transcript, "w").close()
+        self.assertIsNone(self.fire("lib/save.ts", "x({ ...body })\n"))
+        self.assertIn("the deny couldn't be kept and the transcript is empty", self.log())
 
     def test_a_spent_budget_during_the_transcript_read_allows_and_logs(self):
         self.env["PRACTICES_TEST_BUDGET"] = "0"  # the route matches by path: no pattern runs
@@ -1323,6 +1340,22 @@ class L3s(BashBase):
         self.sh("update-ref", "refs/heads/main", merge)
         self.assertIsNone(self.post("git commit -m m", "b-merge"))
 
+    def test_a_rename_with_edits_and_a_crlf_rewrite_add_only_new_lines(self):
+        # Review round 2, low 6: a rename with edits was a delete plus an add, so every line
+        # under the new path counted as added; a whole-file LF to CRLF change did the same.
+        self.commit(**{"a.ts": "x({ ...body })\n" + "// filler\n" * 3})
+        os.unlink(os.path.join(self.proj, "a.ts"))  # moved to lib/ with a line added
+        told = self.committed(**{"lib__a.ts": "x({ ...body })\n" + "// filler\n" * 3
+                                               + "y({ ...body })\n"})
+        self.assertIn("SEC-17 (demo) at lib/a.ts:5", told)
+        self.assertNotIn("lib/a.ts:1", told)
+        self.commit(**{"c.ts": "z({ ...body })\nconst c = 1\n"})
+        tid = "b-crlf"
+        self.assertIsNone(self.pre("git commit -m x", tid, session_id="s-crlf"))
+        self.commit(**{"c.ts": "z({ ...body })\r\nconst c = 1\r\n"})
+        self.assertIsNone(self.post("git commit -m x", tid, session_id="s-crlf"))
+        self.assertEqual(PC.added_lines("a\nb\n", "a\r\nb\r\nc\r\n"), [(3, "c\r")])
+
     def test_sec_60_a_lockfile_change_with_no_audit(self):
         told = self.committed(**{"package-lock.json": "{}\n", "requirements-dev.txt": "x==1\n"})
         self.assertIn("SEC-60 (the practices engine) at package-lock.json, requirements-dev.txt",
@@ -1518,6 +1551,35 @@ class Push(BashBase):
         self.assertIn("a.ts:1", self.committed(command="git commit -m x >/dev/null",
                                                **{"a.ts": "x({ ...body })\n"}))
 
+    def test_a_push_inside_a_command_substitution_is_scanned(self):
+        # Review round 2, medium 1: `out=$(git push ...)` ran with no scan and no log.
+        self.commit(**{"new.ts": "y({ ...body })\n"})
+        for n, command in enumerate(('out=$(git push origin main 2>&1); echo "$out"',
+                                     "echo `git push`", "cat <(git push)")):
+            with self.subTest(command=command):
+                self.assertIn("new.ts:1", self.pre(command, session_id=f"subst-{n}"))
+
+    def test_a_launcher_this_parser_cannot_read_is_logged(self):
+        # Review round 2, low 2: xargs, find -exec, submodule foreach and bash -c passed with
+        # no log. Words that name a call no parser read are the backstop.
+        unread = ("printf x | xargs git push", "find . -name x -exec git commit -m y {} +",
+                  "git submodule foreach git push", 'bash -c "git push $R"',
+                  "sh <<'EOF'\ngit push\nEOF", "nohup xargs -n1 gh pr ready < prs")
+        for command in unread:
+            with self.subTest(command=command):
+                before = self.log()
+                self.assertIsNone(self.pre(command))
+                new = self.log()[len(before):]
+                self.assertIn("git-skipped the command names git commit or push", new)
+                for text_ in ("git push", "-m y", "foreach", "-n1", "$R"):  # no command text
+                    self.assertNotIn(text_, new)
+        for command in ("git log --grep push", "echo ok # git push", "gh pr view 5",
+                        "gh pr create --draft", "git status"):
+            with self.subTest(command=command):
+                before = self.log()
+                self.assertIsNone(self.pre(command))
+                self.assertNotIn("git-skipped", self.log()[len(before):])
+
     def test_an_unwritable_state_file_allows_the_call_and_logs(self):
         # Review round 1: the Bash levels have no transcript marker to fall back on, so a deny
         # whose key couldn't be written denied every resend too, forever.
@@ -1539,6 +1601,62 @@ class Push(BashBase):
                         "git push origin '$(echo main)'"):
             with self.subTest(command=command):
                 self.assertIsNone(self.pre(command))
+
+    def test_an_attached_push_option_is_no_delete_or_dry_run(self):
+        # Review round 2, low 3: `-onodeploy` held an n and a d, so the push read as a dry run
+        # and a delete and passed unscanned, with no log.
+        self.commit(**{"bad.ts": "y({ ...body })\n"})
+        for n, command in enumerate(("git push -onodeploy origin main",
+                                     "git push -o nodeploy origin main", "git push -fo x",
+                                     "git push -qon origin main")):
+            with self.subTest(command=command):
+                self.assertIn("bad.ts:1", self.pre(command, session_id=f"s-o-{n}"))
+        before = self.log()
+        for command in ("git push -no x origin main", "git push -d origin old"):
+            with self.subTest(command=command):
+                self.assertIsNone(self.pre(command, session_id="s-o-skip"))
+        self.assertEqual(self.log()[len(before):].count(
+            "push-unscanned push: a delete or a dry run sends no commits"), 2)
+
+    def test_without_claude_project_dir_a_cd_moves_neither_the_config_nor_the_skills(self):
+        # Review round 2, leftover 1: the Bash levels read config.toml and the project skills
+        # from the call's cwd, so a config there turned them off after a cd.
+        del self.env["CLAUDE_PROJECT_DIR"]
+        self.start("startup")  # records the project as the session's cwd
+        sub = os.path.join(self.proj, "sub")
+        os.makedirs(os.path.join(sub, ".claude", "practices"))
+        with open(os.path.join(sub, ".claude", "practices", "config.toml"), "w") as f:
+            f.write("enabled = false\n")
+        self.commit(**{"new.ts": "y({ ...body })\n"})
+        out = self.run_hook({**self.event("git push", "PreToolUse", "b-sub"), "cwd": sub})
+        self.assertIn("SEC-17 (demo) at new.ts:1",
+                      out["hookSpecificOutput"]["permissionDecisionReason"])
+
+    def test_the_gate_judges_the_repo_a_wrapper_dir_or_a_subshell_leaves(self):
+        # Review round 2, low 7: the gate judged the wrong repo (still inside the bounds).
+        sub = self.make_repo(os.path.join(self.proj, "sub"))
+        with open(os.path.join(self.proj, ".git", "info", "exclude"), "a") as f:
+            f.write("sub/\n")
+        self.commit(repo=sub, **{"s.ts": "x({ ...body })\n"})
+        self.commit(**{"p.ts": "y({ ...body })\n"})
+        for n, (command, mine, other) in enumerate((
+                ("(cd sub && git status); git push", "p.ts:1", "s.ts"),
+                ("env -C sub git push", "s.ts:1", "p.ts"),
+                ("sudo -D sub git push", "s.ts:1", "p.ts"))):
+            with self.subTest(command=command):
+                reason = self.pre(command, session_id=f"s-dir-{n}")
+                self.assertIn(mine, reason)
+                self.assertNotIn(other, reason)
+
+    def test_a_source_that_names_no_commit_is_logged(self):
+        # Review round 2, low 4: a glob refspec left nothing to scan, and nothing was logged.
+        self.commit(**{"bad.ts": "y({ ...body })\n"})
+        before = self.log()
+        self.assertIsNone(self.pre("git push origin 'refs/heads/*:refs/heads/*'"))
+        self.assertIn("git-skipped push: a source names no commit here", self.log()[len(before):])
+        self.assertNotIn("refs/heads", self.log())
+        reason = self.pre("git push origin nowhere main", session_id="s-mixed")
+        self.assertIn("bad.ts:1", reason)  # what resolves is still scanned
 
     def test_named_sources_and_every_branch(self):
         tip = self.commit(**{"main.ts": "y({ ...body })\n"})
@@ -1582,6 +1700,21 @@ class L3r(BashBase):
         self.assertIn("- An id from the request body is never trusted.", reason)
         self.assertIn("resend", reason)
         self.assertIsNone(self.pre("gh pr create --title x --body y"))
+
+    def test_a_repo_flag_before_the_subcommand_is_dropped(self):
+        # Review round 2, low 2: `gh -R o/r pr ready 12` needed pr and ready at fixed places.
+        for n, command in enumerate(("gh -R o/r pr ready", "gh --repo o/r pr ready",
+                                     "gh pr --repo o/r ready", "gh --repo=o/r pr create -t x",
+                                     "gh -Ro/r pr -R o/r create -t x", "bash -c 'gh pr ready'",
+                                     "time -p gh pr ready")):
+            with self.subTest(command=command):
+                self.assertIn(self.marker(), self.pre(command, session_id=f"s-repo-{n}"))
+        self.assertIsNone(self.pre("gh -R o/r pr create --draft", session_id="s-repo-d"))
+
+    def test_a_pr_created_inside_a_command_substitution_is_judged(self):
+        # Review round 2, medium 1: capturing the PR URL this way skipped L3r with no log.
+        reason = self.pre("PR=$(gh pr create --title t --body b) && echo $PR")
+        self.assertIn(self.marker() + " Review the changes of main", reason)
 
     def test_drafts_undo_and_other_gh_calls_pass(self):
         for command in ("gh pr create --draft --title x", "gh pr create -d", "gh pr ready --undo",
@@ -1706,7 +1839,51 @@ class Budgets(BashBase):
         with mock.patch("subprocess.run", slow):
             self.assertIsNone(self.call(PC.post_tool_use, "git commit -m x", "b-slow"))
         self.assertEqual(seen.get("level"), "L3s")
-        self.assertIn("budget-spent", self.log())
+        self.assertIn("scan-truncated L3s: the time budget ran out in the git cat-file", self.log())
+
+    def cut_at(self, path):
+        """CRUMB.mark spending the budget when a scan reaches path's patterns."""
+        real = PC.CRUMB.mark
+
+        def mark(file, level, pattern):
+            if file == path:
+                raise PC.Budget(f"{level} {pattern}")
+            return real(file, level, pattern)
+
+        return mock.patch.object(PC.CRUMB, "mark", mark)
+
+    def test_a_scan_cut_short_denies_once_on_what_it_read_and_the_resend_passes(self):
+        # Review round 2, low 5: a partial scan denied, and a resend that got further was
+        # denied again. Now a cut scan denies once on what it read, keyed on repo and range.
+        self.sh("update-ref", "refs/remotes/origin/main", self.commit(**{"seed": "1\n"}))
+        self.commit(**{"a.ts": "x({ ...body })\n", "b.ts": "y({ ...body })\n"})
+        with self.cut_at("a.ts"):  # nothing read yet: allowed, logged
+            self.assertIsNone(self.call(PC.pre_tool_use, "git push", "b-cut"))
+        self.assertIn("scan-truncated push: the time budget ran out", self.log())
+        with self.cut_at("b.ts"):
+            reason = self.call(PC.pre_tool_use, "git push", "b-cut")[
+                "hookSpecificOutput"]["permissionDecisionReason"]
+            self.assertIn("a.ts:1", reason)
+            self.assertNotIn("b.ts", reason)
+            self.assertIn("some weren't checked", reason)
+            self.assertIsNone(self.call(PC.pre_tool_use, "git push", "b-cut"))
+        self.assertIn("resent after a scan the time budget cut short", self.log())
+        self.assertIsNone(self.call(PC.pre_tool_use, "git push", "b-cut"))  # same range
+        self.commit(**{"c.ts": "z({ ...body })\n"})  # a new range is scanned whole
+        reason = self.call(PC.pre_tool_use, "git push", "b-cut")[
+            "hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertIn("b.ts:1", reason)
+        self.assertIn("c.ts:1", reason)
+        self.assertNotIn("some weren't checked", reason)
+        # L3s tells what a cut scan read, with the same note.
+        self.assertIsNone(self.call(PC.pre_tool_use, "git commit -m x", "b-cut-c"))
+        self.commit(**{"d.ts": "x({ ...body })\n", "e.ts": "y({ ...body })\n"})
+        with self.cut_at("e.ts"):
+            told = self.call(PC.post_tool_use, "git commit -m x", "b-cut-c")[
+                "hookSpecificOutput"]["additionalContext"]
+        self.assertIn("d.ts:1", told)
+        self.assertNotIn("e.ts", told)
+        self.assertIn("some weren't checked", told)
 
     def test_a_crash_allows_and_logs(self):
         def boom(event):
@@ -1740,6 +1917,58 @@ class Budgets(BashBase):
         self.assertIn("f3.ts:1", ctx)
         self.assertNotIn("f0.ts", ctx)
         self.assertIn("scan-truncated", self.log())
+
+
+class Timing(BashBase):
+    """Review round 2: a 50-commit push of about 4 MB of added text, under the shipped skills,
+    run as Claude Code runs it with the real 2 s budget. It either finishes in time or takes
+    the cut path: a deny that says some commits weren't read, whose resend passes."""
+
+    LINES = ("export async function POST(req: Request) {{",
+             "  const row{n} = await db.select().from(items).where(eq(items.id, id{n}))",
+             "  const parsed{n} = schema.safeParse(await req.json())",
+             "  if (!parsed{n}.success) return new Response('bad', {{ status: 400 }})",
+             "  const url{n} = new URL(`/v1/items/${{id{n}}}`, process.env.API_BASE)",
+             "  await fetch(url{n}, {{ method: 'POST', body: JSON.stringify(parsed{n}.data) }})",
+             "  logger.info('item {n} saved', {{ id: id{n} }})",
+             "}}")
+
+    def test_a_50_commit_4_mb_push_finishes_or_is_cut_correctly(self):
+        for name in ("server-code", "auth-secrets"):
+            os.symlink(os.path.join(REPO, "skills", name),
+                       os.path.join(self.config, "skills", name))
+        self.sh("update-ref", "refs/remotes/origin/main", self.commit(**{"seed": "1\n"}))
+        size, n = 0, 0
+        for c in range(50):
+            lines = []
+            while sum(map(len, lines)) < 80_000:
+                lines += [t.format(n=n) for t in self.LINES]
+                n += 1
+            lines.append(f"db.insert(items).values({{ ...body }}) // file {c}")
+            text_ = "\n".join(lines) + "\n"
+            size += len(text_)
+            path = f"app__api__r{c}__route.ts" if c % 2 else f"lib__f{c}.ts"
+            self.commit(**{path: text_})
+        self.assertGreater(size, 3_900_000)
+        self.assertLess(size, PC.BYTES_MAX)
+        start = time.monotonic()
+        out = self.run_hook(self.event("git push", "PreToolUse", "b-time"))
+        elapsed = time.monotonic() - start
+        cut = "the time budget ran out" in self.log()
+        reason = out and out["hookSpecificOutput"]["permissionDecisionReason"]
+        if os.environ.get("PRACTICES_TIMING"):  # opt-in: the measurement, for a report
+            where = re.findall(r"ran out in the (.*?), so", self.log())
+            print(f"\npractices timing: 50 commits, {size / 1e6:.2f} MB, {elapsed:.2f} s, "
+                  f"cut: {cut} {where}, denied: {bool(reason)}", flush=True)
+        self.assertLess(elapsed, 5.0)  # Claude Code's kill
+        if cut:
+            self.assertTrue(reason is None or "some weren't checked" in reason, reason)
+            if reason:
+                self.assertIsNone(self.run_hook(self.event("git push", "PreToolUse", "b-t2")))
+        else:
+            self.assertLess(elapsed, PC.BUDGET + 1.0)  # the budget, plus Python's start-up
+            self.assertIn("SEC-04 (server-code)", reason)
+            self.assertNotIn("some weren't checked", reason)
 
 
 def load_bash_words():
@@ -1808,6 +2037,77 @@ class BashWords(unittest.TestCase):
         for command, want in cases.items():
             with self.subTest(command=command):
                 self.assertEqual([g for g, _ in self.git(command)], want)
+
+    def test_substitution_bodies_are_read_from_the_cwd_where_they_sit(self):
+        # Review round 2, medium 1: each $(...) and backtick body was a placeholder, never read.
+        cases = {
+            'out=$(git push origin feat 2>&1); echo "$out"': [(("push", ["origin", "feat"]), "/r")],
+            "cd sub && x=$(git push)": [(("push", []), "/r/sub")],
+            "x=$(cd sub && git push); git commit": [(("push", []), "/r/sub"),
+                                                     (("commit", []), "/r")],
+            "echo `git push`": [(("push", []), "/r")],
+            'echo "$(echo $(git push x))"': [(("push", ["x"]), "/r")],
+            "diff <(git push) >(git commit)": [(("push", []), "/r"), (("commit", []), "/r")],
+            "git commit -m \"$(cat <<'EOF'\nfix: git push later\nEOF\n)\"": [
+                (("commit", ["-m", "%SUBST%"]), "/r")],
+            "echo '$(git push)'": [],
+            "echo `echo \\`git push\\``": [(("push", []), "/r")],
+        }
+        for command, want in cases.items():
+            with self.subTest(command=command):
+                self.assertEqual(self.git(command), want)
+        (_, _, _, _), = BW.calls("PR=$(gh pr create --title t --body b)", {"git", "gh"}, "/r")
+        with self.assertRaises(ValueError):
+            BW.calls("$(" * 12 + "git push" + ")" * 12, {"git"}, "/r")
+        # delete_guard's segments keep their shape: a process substitution's body still splits.
+        self.assertEqual(list(BW.segments("diff <(rm -rf x) y")), [["diff", "<"], ["rm", "-rf", "x"],
+                                                                  ["y"]])
+
+    def test_a_literal_shell_script_and_time_options(self):
+        # Review round 2, low 2: `bash -c` was a documented limit, and `time -p` made -p the
+        # command name.
+        cases = {
+            "bash -c 'git push'": [(("push", []), "/r")],
+            "sh -c 'cd sub && git commit -q'; git push": [(("commit", ["-q"]), "/r/sub"),
+                                                          (("push", []), "/r")],
+            "bash -lc 'git push origin x'": [(("push", ["origin", "x"]), "/r")],
+            "zsh -e -o pipefail -c 'git push' name arg": [(("push", []), "/r")],
+            "sudo -E bash -c 'git push'": [(("push", []), "/r")],
+            'bash -c "git push $R"': [],  # the outer shell expands it: item 2's log
+            "bash -c 'git -C \"$D\" push'": [],
+            "bash script.sh": [],
+            "time -p git push": [(("push", []), "/r")],
+            "time git commit": [(("commit", []), "/r")],
+            "/usr/bin/time -f %e -o out git push": [(("push", []), "/r")],
+            "time GIT_DIR=/g/.git git commit": [(("commit", []), "/r")],
+        }
+        for command, want in cases.items():
+            with self.subTest(command=command):
+                self.assertEqual(self.git(command), want)
+        (_, args, prefix, _), = BW.calls("time GIT_DIR=/g/.git git commit", {"git"}, "/r")
+        self.assertEqual(BW.git_call(args, prefix, "/r")[2]["git_dir"], "/g/.git")
+
+    def test_a_wrappers_dir_and_a_subshells_cd(self):
+        # Review round 2, low 7: env -C and sudo -D weren't followed, and a cd inside ( ... )
+        # leaked past the parentheses.
+        cases = {
+            "env -C sub git push": ["/r/sub"],
+            "env --chdir=/abs git commit": ["/abs"],
+            "env -iC sub git push": ["/r/sub"],
+            "env --chdir sub git push": ["/r/sub"],
+            "sudo -D /x git push": ["/x"],
+            "sudo -Dsub -u me git push": ["/r/sub"],
+            'env -C "$D" git push': [None],
+            "env -C git git push": ["/r/git"],
+            "env -C sub git commit; git push": ["/r/sub", "/r"],
+            "(cd sub && git commit); git push": ["/r/sub", "/r"],
+            "(cd sub; (cd deeper && git push); git commit) && git push": [
+                "/r/sub/deeper", "/r/sub", "/r"],
+            "case x in a) cd sub;; esac; git push": ["/r/sub"],
+        }
+        for command, want in cases.items():
+            with self.subTest(command=command):
+                self.assertEqual([c for _, c in self.git(command)], want)
 
     def test_cd_then_commit_runs_in_the_new_dir(self):
         self.assertEqual(self.git("cd sub && git commit")[0][1], "/r/sub")
