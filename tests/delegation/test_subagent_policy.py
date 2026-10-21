@@ -814,12 +814,7 @@ class SedScripts(Base):
              "sed 's/we/ew/g' f", "sed -n '/new e/p' f", "sed 's/[/]/x/' f", "sed 's/x/\\/w/' f",
              "sed 'y/we/ew/' f", "sed 'a foo; e date' f", "sed '1i\\\ne w x' f",
              "sed 'a foo\\\ne' f", "sed -n ':e;b e' f", "sed 's/a/b/#e' f", "sed -n 's/a/b/;p' f",
-             "sed -n \"${N}p\" f", "sed -n \"${N}p\" exam.txt", "sed \"$S\" f", "sed -n 'r in' f",
-             "sed -e 'a foo\\' -e 'e date' f", "sed -n -e '1{' -e p -e '}' f",
-             # A file whose name reads as a sed command when a dynamic word could make it the
-             # script: not taken for one, because the command letter isn't its own token.
-             "sed -n \"${N}p\" error.log", "sed -n \"${N}p\" write.log", "sed error.log -e p f",
-             "sed \"$S\" exam.txt")
+             "sed -n 'r in' f", "sed -e 'a foo\\' -e 'e date' f", "sed -n -e '1{' -e p -e '}' f")
     # Each runs a shell command: as written, or spelled so the old regexes missed it.
     EXECS = ("sed '1e date' f", "sed 's/a/b/e' f", "sed 's|a|b|e' f", "sed 's/a/b/ e' f",
              "sed 'p;e date' f", "sed 'p\ne date' f", "sed '1{e date\n}' f", "sed -n '1{p;e\n}' f",
@@ -827,15 +822,42 @@ class SedScripts(Base):
              "sed 's/[/]/x/e' f", "sed -e p -e e f", "sed 's/a/b/;s/c/d/3e' f",
              "sed --expression='1e date' f", "sed -e'1e date' f", "sed --e='1e date' f",
              "sed --expr '1e date' f", "sed -l 5 's/a/b/e' f", "sed -ne '1e date' -e p f",
-             "sed -nes/a/b/e f", "sed 's/a/b/e' -e p f", "sed \"$X\" -e '1e date' f",
-             "sed -e 'a foo' -e 'e date' f", "sed -e \"$X\" -e 'e date' f",
-             # A dynamic word before a literal script can vanish or become an option, making the
-             # literal the script: its e command (letter as its own token) is still caught.
-             "sed \"$X\" '1e date' f", "sed $X 'e date' f")
+             "sed -nes/a/b/e f", "sed 's/a/b/e' -e p f", "sed -e 'a foo' -e 'e date' f",
+             # A filename before -e: under POSIXLY_CORRECT getopt stops at it, so sed takes it as
+             # the script; it is checked strictly (no token-mode leniency now), so the e is caught.
+             "sed error.log -e p f")
     # sed can't run these, or the policy can't see the script: refused as unchecked.
     UNCHECKED = ("sed -f x.sed f", "sed --file=x.sed f", "sed -nf x.sed f", "sed 's/a/b' f",
                  "sed 's/a/b/w' f", "sed --s 's/a/b/' f", "sed -k p f", "sed 's/a/b/q' f",
                  "sed 's§a§b§' f", "sed '1}' f")
+    # A $var or glob/brace word hides the script and could expand to an option (even -i); the policy
+    # requires sed's own --sandbox AND each dynamic word only as an -e value or after --. Otherwise
+    # it is refused use_alternative, for every role (SP3: an agent-built script ran unchecked before).
+    NEEDS_SANDBOX = (
+        # a dynamic script or file in a bare operand (allowed or exec'd under the old token heuristic)
+        "sed -n \"${N}p\" f", "sed -n \"${N}p\" exam.txt", "sed -n \"${N}p\" error.log",
+        "sed -n \"${N}p\" write.log", "sed \"$S\" f", "sed \"$S\" exam.txt",
+        "sed \"$X\" '1e date' f", "sed $X 'e date' f", "sed \"$X\" -e '1e date' f",
+        "sed -e \"$X\" -e 'e date' f",
+        # FINDINGS: a script the agent BUILDS, unchecked for any role before SP3 (pinned one by one)
+        "sed \"$(printf wout.txt)\" f",          # printf-built w target
+        "sed \"$(printf '1e touch y')\" f",      # printf-built e command
+        "sed \"${X:-wout.txt}\" f",              # default-value w target
+        "sed $X 'wout.txt' f",                   # $X vanishes, 'wout.txt' becomes the script
+        "sed \"${X:--i}\" 's/h/H/' f",           # expands to -i, editing f in place
+        "sed --sandbox \"$pat\" f",              # --sandbox present, but the $var is in script position
+        # --sandbox does not disable -i, and these can still become a bare -i at runtime:
+        "sed --sandbox 's/x/y/' {-i,.git/config}",   # a brace operand expands to `-i .git/config`
+        "sed --sandbox -e $X f",                      # an unquoted -e value word-splits a -i off its tail
+        "sed --sandbox -n -e $N'p' f",               # an unquoted computed script, same split
+        "sed --sandbox -l $X 's/h/H/' f",            # ANY value-taking option's split value, not just -e
+        "sed --sandbox --line-length $X 's/h/H/' f", # the long form of the same
+        "sed --sandbox 's/a/b/' *.txt")              # a glob before -- could match a file named -i
+    # --sandbox (sed refuses every e/r/w) with each dynamic word in a safe slot - a quoted
+    # single-word -e value, or a file after -- (where sed can't read it as an option) - is allowed.
+    SANDBOXED_OK = ("sed --sandbox -e \"${N}p\" exam.txt", "sed --sandbox -n -e \"$pat\" error.log",
+                    "sed --sa -e \"$x\" f", "sed --sandbox p -- \"$file\"",
+                    "sed --sandbox -e \"$x\" -- \"$f\"", "sed --sandbox 's/a/b/' -- *.txt")
 
     def r(self, cmd):
         return self.bash(cmd, atype="researcher")
@@ -885,16 +907,27 @@ class SedScripts(Base):
         for cmd in ("sed --in s/a/b/ f", "sed --in-pl=.b s/a/b/ f", "sed -si s/a/b/ f"):
             self.assertDenied(self.r(cmd), "researcher-flag", msg=cmd)
 
-    def test_a_dynamic_word_cant_smuggle_a_w_target_past_as_a_filename(self):
-        # A $VAR before a literal script can vanish or become an option, so its w command (letter
-        # as its own token) is still write-checked, not read as a filename.
-        self.assertDenied(self.wb("sed \"$X\" 'w ../../../main.py' f"), "worktree-root")
-        self.assertIsNone(self.wb("sed \"$X\" 'w out.txt' f"))  # a real w, inside the worktree
+    def test_dynamic_or_glob_sed_needs_sandbox(self):
+        # Without --sandbox (or with a dynamic/glob word out of place) a $var/glob sed is refused for
+        # every role - writer included, since its worktree writes have no sandbox backstop - so an
+        # agent can't build an e, w or -i the policy never sees (SP3). Each case is pinned here.
+        for cmd in self.NEEDS_SANDBOX:
+            self.assertDenied(self.bash(cmd), "sed-unchecked", "use_alternative", cmd)
+            self.assertDenied(self.r(cmd), "sed-unchecked", "use_alternative", cmd)
+            self.assertDenied(self.wb(cmd), "sed-unchecked", "use_alternative", cmd)
 
-    def test_a_candidate_that_opens_a_w_before_failing_still_checks_it(self):
-        # sed opens a w file as it compiles, before a later error; a candidate parse keeps the ops
-        # it found by then (F3), so the write is still checked.
-        self.assertDenied(self.wb("sed \"$X\" 'w ../../../main.py\ns/a/b' f"), "worktree-root")
+    def test_a_for_loop_built_sed_script_is_refused(self):
+        # A loop variable is a dynamic word like any other: the inner sed call still needs --sandbox.
+        cmd = "for X in wout.txt; do sed \"$X\" f; done"
+        self.assertDenied(self.bash(cmd), "sed-unchecked", "use_alternative", cmd)
+        self.assertDenied(self.r(cmd), "sed-unchecked", "use_alternative", cmd)
+
+    def test_sandbox_lets_a_dynamic_or_glob_sed_through(self):
+        # With --sandbox (sed refuses every e/r/w) and each dynamic word as an -e value or after --,
+        # the call is allowed for a writer or general-purpose agent (only a literal -i would remain).
+        for cmd in self.SANDBOXED_OK:
+            self.assertIsNone(self.bash(cmd), cmd)
+            self.assertIsNone(self.wb(cmd), cmd)
 
     def test_a_tilde_in_a_sed_write_target_is_literal_not_home(self):
         # sed reads a ~ in a w name or -i suffix literally; checking it as $HOME would deny a
@@ -903,35 +936,16 @@ class SedScripts(Base):
         self.assertIsNone(self.wb("sed -i'~/*.bak' s/a/b/ f"))
 
     def test_researcher_refuses_sed_with_a_glob_or_brace(self):
-        # A glob or brace word hides from the policy what sed's args expand to; a researcher has
-        # no sandbox backstop for a write, so refuse (F1).
-        for cmd in ("sed -n p {-e,'1e date'} f", "sed -n 1p *", "sed -n 's/a/b/p' *.log"):
-            self.assertDenied(self.r(cmd), "sed-unchecked", msg=cmd)
-        self.assertIsNone(self.r("sed \"$X\" -n p f"))  # a lone dynamic word is still fine
-
-    def test_a_writer_sed_with_a_glob_is_left_to_the_sandbox(self):
-        # For a writer the sandbox bounds the glob; the policy still checks the literal operands
-        # it can see (the brace-smuggled residual is the stated contract).
-        self.assertIsNone(self.wb("sed -n 's/a/b/p' *.log"))
-        self.assertDenied(self.wb("sed -n 'w ../../../main.py' *.log"), "worktree-root")
-
-    def test_a_glob_cant_demote_a_literal_script_to_an_unchecked_file(self):
-        # A trailing glob makes the operands ambiguous, but the first literal is still the script
-        # sed runs; it stays strictly parsed, so a no-space e/w command (GNU sed executes `edate`
-        # and writes `w.git/config` just like the spaced forms) is caught, not dropped as a name.
-        for cmd in ("sed 'edate' *.log", "sed '1erm -rf x' *.log"):
-            self.assertDenied(self.bash(cmd), "sed-exec", "stop_and_explain", cmd)
-        self.assertDenied(self.bash("sed 'w.git/config' *.log"), "protected-path")
-        self.assertDenied(self.wb("sed 'w.git/config' *.log"), "protected-path")
-        for cmd in ("sed 's/a/b/' *.txt", "sed -n 's/a/b/p' *.log"):
-            self.assertIsNone(self.bash(cmd), cmd)
-
-    def test_a_glob_doesnt_double_count_the_script_operand_as_a_file(self):
-        # With head_is_script the first operand IS the script, not an input file, so it must not
-        # reach the -i backup write-check (a latent spurious denial otherwise).
-        call = sp.SedCall(["sed", "-i.bak", "s/a/b/", "*.log"], [False, False, False, True])
-        self.assertEqual(call.scripts, ["s/a/b/"])
-        self.assertEqual(call.files, ["*.log"])
+        # A glob or brace word hides what sed's args expand to, and --sandbox does not disable -i;
+        # a researcher has no sandbox backstop for a write, so it refuses every glob/brace, even
+        # with --sandbox.
+        for cmd in ("sed -n p {-e,'1e date'} f", "sed -n 1p *", "sed -n 's/a/b/p' *.log",
+                    "sed --sandbox 's/a/b/' *.log"):
+            self.assertDenied(self.r(cmd), "sed-unchecked", "use_alternative", cmd)
+        # A lone dynamic word is no longer "fine": it needs --sandbox and an -e / after-- slot.
+        self.assertDenied(self.r("sed \"$X\" -n p f"), "sed-unchecked", "use_alternative")
+        self.assertDenied(self.r("sed \"${X:--i}\" 's/h/H/' f"), "sed-unchecked", "use_alternative")
+        self.assertIsNone(self.r("sed --sandbox -e \"$x\" f"))  # --sandbox + an -e value: allowed
 
     def test_sed_i_backup_names_follow_gnu_seds_symlink_handling(self):
         # GNU sed 4.9 without --follow-symlinks writes the backup at the link path; with it, at

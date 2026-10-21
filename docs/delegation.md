@@ -132,9 +132,11 @@ repo that turns the sandbox off loses subagent Bash; the policy still applies.
     sed's compiler does (bracket expressions, the s delimiter, text to the end of the line for
     a/i/c and file names). An `e` command or `s///e` flag is denied; `w`/`W` files, and with `-i`
     each file and its backup, are write targets. `-f` and a script sed would refuse are denied as
-    unchecked. A script in a variable stays unchecked; a literal script beside a variable or glob
-    word is still read, but leniently, so an ordinary file name is not taken for a command. A `~`
-    in a `w` name or `-i` suffix is literal, the way sed reads it, not `$HOME`.
+    unchecked. When a `$var` or a glob is among the arguments, the policy can't read the script, so
+    it requires sed's own `--sandbox` (sed then refuses every `e`, `r` and `w`) and that each
+    dynamic word be a quoted `-e` value or a file after `--`; a glob or an unquoted expansion before
+    `--` is refused, since it could expand to an option the policy can't check. A `~` in a `w` name
+    or `-i` suffix is literal, the way sed reads it, not `$HOME`.
   - Wrappers are peeled: `env`, `command`, `exec`, `timeout`, `nice`, `nohup`, `xargs`, `find -exec`,
     `bash`/`sh`/`zsh -c` (recursively), and `eval` with a static argument.
   - A shell reading stdin (`… | sh`) and `source` (except `*/bin/activate`) are denied.
