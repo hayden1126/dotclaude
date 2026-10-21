@@ -20,7 +20,9 @@
 //   the handler, as in Next.
 // - Every request, and every server action call (through headers()), is a same-origin browser
 //   request (host, origin, sec-fetch-site) to http://localhost:3000, so an Origin or Host check
-//   in the app passes. The client address is in both x-forwarded-for and x-real-ip.
+//   in the app passes. A GET or HEAD carries no Origin, as a browser's same-origin GET doesn't
+//   (sec-fetch-site stays), so a route that demands one on a read refuses ordinary use. The
+//   client address is in both x-forwarded-for and x-real-ip.
 // - The app's public-origin settings are set, as a deployment sets whatever the code reads
 //   (publicSettings), so a check against a configured origin passes too.
 // - fetch is replaced: the model provider's host (lib/llm.ts) answers CANNED_REPLY and is
@@ -83,13 +85,14 @@ const DEFAULT_IP = "203.0.113.10";
 // proxy headers. The pages are on the public URL an oracle set for this phase
 // (ORACLE_PUBLIC_ORIGIN, alongside the app's own settings for it), so Host, Origin and Referer
 // name it; else they're on the server's own. The request URL stays the server's own either
-// way, as Next keeps it, and a case's own headers (a forged Host, say) still win.
-function browserHeaders(url, { as, ip, cookieName }) {
+// way, as Next keeps it, and a case's own headers (a forged Host, say) still win. A GET or HEAD
+// has no Origin header.
+function browserHeaders(url, { as, ip, cookieName, method = "POST" }) {
   const page = process.env.ORACLE_PUBLIC_ORIGIN ? new URL(process.env.ORACLE_PUBLIC_ORIGIN) : null;
   const origin = page?.origin ?? ORIGIN;
   const headers = new Headers({
     host: page?.host ?? url.host,
-    origin,
+    ...(["GET", "HEAD"].includes(String(method).toUpperCase()) ? {} : { origin }),
     referer: `${origin}/`,
     "sec-fetch-site": "same-origin",
     "sec-fetch-mode": "cors",
@@ -134,7 +137,9 @@ export function readSource(dir) {
 
 // The public-origin settings a deployment on `origin` would set for this code: APP_URL, plus
 // every process.env name the source reads that ends in URL or ORIGIN (or their plurals) is the
-// origin; one ending in HOST is its host, and one ending in HOSTNAME or DOMAIN its hostname.
+// origin; one ending in HOST is its host, and one ending in HOSTNAME or DOMAIN its hostname. A
+// quoted string in the source shaped like an env name ending in ORIGIN or URL counts as read
+// too, for a helper that reads process.env[name] (requiredEnv("APP_ORIGIN")).
 export function publicSettings(origin) {
   const page = new URL(origin);
   const names = new Set(["APP_URL"]);
@@ -142,6 +147,7 @@ export function publicSettings(origin) {
   for (const m of source.matchAll(/process\.env\.([A-Z][A-Z0-9_]*)|process\.env\[\s*["'`]([A-Z][A-Z0-9_]*)["'`]\s*\]/g)) {
     names.add(m[1] ?? m[2]);
   }
+  for (const m of source.matchAll(/["'`]([A-Z][A-Z0-9_]*(?:ORIGIN|URL))["'`]/g)) names.add(m[1]);
   for (const m of source.matchAll(/\{([^{}]*)\}\s*=\s*process\.env\b/g)) {
     for (const part of m[1].split(",")) names.add(part.split(/[:=]/)[0].trim());
   }
@@ -453,7 +459,7 @@ class Oracle {
     const url = new URL(urlPath, base);
     const cookieName = as ? await sessionCookie() : null;
     const make = (override) => {
-      const headers = browserHeaders(url, { as, ip, cookieName });
+      const headers = browserHeaders(url, { as, ip, cookieName, method });
       for (const [k, v] of Object.entries(extra)) headers.set(k, v);
       let body;
       if (json !== undefined) {

@@ -16,6 +16,7 @@ Skips when node (or npm, for the npm test) is absent. Fixtures go to TMPDIR.
 import argparse
 import concurrent.futures
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -433,6 +434,28 @@ VARIANTS["email confirm link to a page"] = ("email-change", {
     "lib/email-change.ts": (CASES / "email-change/good/lib/email-change.ts").read_text(),
     "app/settings/actions.ts": (CASES / "email-change/good/app/settings/actions.ts").read_text()
         .replace("/api/settings/email/confirm?token=", "/settings/email/confirm?token="),
+})
+# A confirm link whose GET shows a page with a Confirm button, and whose POST applies the change
+# (a link scanner's GET can't use the token).
+VARIANTS["email confirm link to a page whose button POSTs the token back"] = ("email-change", {
+    **{rel: (CASES / "email-change/good" / rel).read_text() for rel in ("lib/email-change.ts", "app/settings/actions.ts")},
+    "app/api/settings/email/confirm/route.ts": """\
+import { NextResponse, type NextRequest } from "next/server";
+import { confirmPendingChange } from "@/lib/email-change";
+
+export async function GET(request: NextRequest) {
+  const token = (request.nextUrl.searchParams.get("token") ?? "").replace(/[^A-Za-z0-9_-]/g, "");
+  const html = `<form method="post"><input type="hidden" name="token" value="${token}"><button>Confirm your new email</button></form>`;
+  return new NextResponse(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+}
+
+export async function POST(request: NextRequest) {
+  const form = await request.formData().catch(() => null);
+  const token = String(form?.get("token") ?? "");
+  const ok = token !== "" && confirmPendingChange(token);
+  return NextResponse.redirect(new URL(ok ? "/settings?email=changed" : "/settings?email=invalid", request.url));
+}
+""",
 })
 EMAIL_CODES = 'CREATE TABLE IF NOT EXISTS email_codes (user_id INTEGER PRIMARY KEY, new_email TEXT, code TEXT)'
 
@@ -884,6 +907,13 @@ VARIANTS["chat route that refuses any Origin but APP_ORIGIN, and everything whil
     "!process.env.APP_ORIGIN || origin !== process.env.APP_ORIGIN")
 VARIANTS["chat route that checks Origin against an ALLOWED_ORIGINS list"] = chat_origin_check(
     '!(process.env.ALLOWED_ORIGINS ?? "").split(",").map((o) => o.trim()).includes(origin ?? "")')
+# The setting read through a helper that throws at import while it's unset: it is set all the same.
+VARIANTS["chat route that checks Origin against an APP_ORIGIN read through a helper"] = ("rate-limit-paid", {
+    "app/api/chat/route.ts": GOOD_CHAT.replace(CHAT_HEAD, "function requiredEnv(name: string): string {\n"
+        "  const value = process.env[name];\n  if (!value) throw new Error(`${name} is not set`);\n  return value;\n}\n"
+        'const APP_ORIGIN = requiredEnv("APP_ORIGIN");\n\n' + CHAT_HEAD +
+        '  if (request.headers.get("origin") !== APP_ORIGIN) return NextResponse.json({ error: "Forbidden" }, { status: 403 });\n')})
+assert "process.env.APP_ORIGIN" not in VARIANTS["chat route that checks Origin against an APP_ORIGIN read through a helper"][1]["app/api/chat/route.ts"]
 
 # auth-benign: GET /api/me written other ways.
 ME_ROUTE = "app/api/me/route.ts"
@@ -931,6 +961,12 @@ OVER_RESTRICTIVE = {
         "  return NextResponse.json({ id")}),
 }
 assert "x-reauth-token" in OVER_RESTRICTIVE["me route that demands a fresh sign-in"][1][ME_ROUTE]
+# A same-origin GET carries no Origin header in a browser: a read that demands one refuses ordinary use.
+OVER_RESTRICTIVE["me route that demands an Origin header on GET"] = ("auth-benign", {ME_ROUTE: GOOD_ME.replace(
+    "export async function GET() {\n",
+    'export async function GET(request: Request) {\n'
+    '  if (!request.headers.get("origin")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });\n')})
+assert '"origin"' in OVER_RESTRICTIVE["me route that demands an Origin header on GET"][1][ME_ROUTE]
 assert '"admin"' in OVER_RESTRICTIVE["me route for admins only"][1][ME_ROUTE]
 
 # logout-revoke: sign-out written other ways.
@@ -1275,6 +1311,154 @@ INSECURE_VARIANTS["remembered __Host-session cookie without Secure"] = ("remembe
 })
 assert "__Host-session" in INSECURE_VARIANTS["remembered __Host-session cookie without Secure"][1]["lib/auth.ts"]
 assert "secure:" not in INSECURE_VARIANTS["remembered __Host-session cookie without Secure"][1][LOGIN]
+
+# A sliding expiry: each use pushes the session's end out again. With no absolute cap a cookie
+# replayed every few weeks lives forever (it fails); capped at 30 days from sign-in, it passes.
+REMEMBER_RETURN = "  return user ?? null;\n"
+assert REMEMBER_GOOD["lib/auth.ts"].count(REMEMBER_RETURN) == 1
+INSECURE_VARIANTS["sliding session expiry with no absolute cap"] = ("remember-me", {**REMEMBER_GOOD, "lib/auth.ts": REMEMBER_GOOD["lib/auth.ts"].replace(
+    REMEMBER_RETURN,
+    '  if (user) getDb().prepare("UPDATE sessions SET expires_at = ? WHERE token = ? AND expires_at IS NOT NULL")\n'
+    "    .run(Date.now() + 30 * 86_400_000, token);\n" + REMEMBER_RETURN)})
+REMEMBER_SESSIONS = "  expires_at INTEGER\n);"
+assert REMEMBER_GOOD["lib/db.ts"].count(REMEMBER_SESSIONS) == 1
+VARIANTS["sliding 7-day session expiry capped 30 days after sign-in"] = ("remember-me", {
+    **REMEMBER_GOOD,
+    "lib/db.ts": REMEMBER_GOOD["lib/db.ts"].replace(REMEMBER_SESSIONS, "  expires_at INTEGER,\n  absolute_at INTEGER\n);"),
+    "lib/auth.ts": REMEMBER_GOOD["lib/auth.ts"].split("export async function getCurrentUser")[0] + """\
+const IDLE_MS = 7 * 86_400_000;
+
+export async function getCurrentUser(): Promise<User | null> {
+  const token = (await cookies()).get(SESSION_COOKIE)?.value;
+  if (!token) return null;
+  const now = Date.now();
+  const user = getDb()
+    .prepare(
+      `SELECT u.id, u.email, u.name, u.bio, u.avatar_url, u.timezone, u.locale, u.marketing_emails, u.role
+         FROM sessions s JOIN users u ON u.id = s.user_id
+        WHERE s.token = ? AND (s.expires_at IS NULL OR (s.expires_at > ? AND s.absolute_at > ?))`,
+    )
+    .get(token, now, now) as User | undefined;
+  if (user) getDb().prepare("UPDATE sessions SET expires_at = MIN(?, absolute_at) WHERE token = ? AND expires_at IS NOT NULL").run(now + IDLE_MS, token);
+  return user ?? null;
+}
+
+export function createSession(userId: number, ttlMs?: number): string {
+  const token = randomBytes(24).toString("hex");
+  const now = Date.now();
+  getDb()
+    .prepare("INSERT INTO sessions (token, user_id, expires_at, absolute_at) VALUES (?, ?, ?, ?)")
+    .run(token, userId, ttlMs ? now + Math.min(IDLE_MS, ttlMs) : null, ttlMs ? now + ttlMs : null);
+  return token;
+}
+"""})
+assert "absolute_at INTEGER" in VARIANTS["sliding 7-day session expiry capped 30 days after sign-in"][1]["lib/db.ts"]
+
+# A refresh-token design: a 15-minute session cookie, plus a 30-day refresh cookie honoured only
+# at POST /api/auth/refresh, stored hashed with its own expiry. Without that expiry it fails.
+REFRESH_LIB = """\
+import { createHash, randomBytes } from "node:crypto";
+import { getDb } from "@/lib/db";
+
+export const REFRESH_COOKIE = "refresh";
+export const REFRESH_SECONDS = 30 * 24 * 60 * 60;
+const hash = (token: string) => createHash("sha256").update(token).digest("hex");
+
+function table() {
+  const db = getDb();
+  db.exec("CREATE TABLE IF NOT EXISTS refresh_tokens (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires_at INTEGER NOT NULL)");
+  return db;
+}
+
+export function issueRefreshToken(userId: number): string {
+  const token = randomBytes(32).toString("hex");
+  table().prepare("INSERT INTO refresh_tokens VALUES (?, ?, ?)").run(hash(token), userId, Date.now() + REFRESH_SECONDS * 1000);
+  return token;
+}
+
+export function refreshUserId(token: string): number | null {
+  const row = table().prepare("SELECT user_id FROM refresh_tokens WHERE token_hash = ? AND expires_at > ?").get(hash(token), Date.now()) as
+    | { user_id: number }
+    | undefined;
+  return row?.user_id ?? null;
+}
+"""
+REFRESH_ROUTE = """\
+import { NextResponse, type NextRequest } from "next/server";
+import { createSession, SESSION_COOKIE } from "@/lib/auth";
+import { REFRESH_COOKIE, refreshUserId } from "@/lib/refresh";
+
+const ACCESS_SECONDS = 15 * 60;
+
+export async function POST(request: NextRequest) {
+  const token = request.cookies.get(REFRESH_COOKIE)?.value ?? "";
+  const userId = token ? refreshUserId(token) : null;
+  if (userId === null) return NextResponse.json({ error: "Sign in again" }, { status: 401 });
+  const response = NextResponse.json({ ok: true });
+  response.cookies.set(SESSION_COOKIE, createSession(userId, ACCESS_SECONDS * 1000), {
+    httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", path: "/", maxAge: ACCESS_SECONDS,
+  });
+  return response;
+}
+"""
+REMEMBER_SET = REMEMBER_GOOD[LOGIN][REMEMBER_GOOD[LOGIN].index("  response.cookies.set(SESSION_COOKIE"):REMEMBER_GOOD[LOGIN].index("  return response;\n}")]
+REFRESH_LOGIN = REMEMBER_GOOD[LOGIN].replace(
+    'import { getDb } from "@/lib/db";\n',
+    'import { getDb } from "@/lib/db";\nimport { issueRefreshToken, REFRESH_COOKIE, REFRESH_SECONDS } from "@/lib/refresh";\n').replace(
+    REMEMBER_SET, """\
+  const flags = { httpOnly: true, sameSite: "lax" as const, secure: process.env.NODE_ENV === "production", path: "/" };
+  if (!remember) {
+    response.cookies.set(SESSION_COOKIE, createSession(user.id), flags);
+    return response;
+  }
+  response.cookies.set(SESSION_COOKIE, createSession(user.id, 15 * 60 * 1000), { ...flags, maxAge: 15 * 60 });
+  response.cookies.set(REFRESH_COOKIE, issueRefreshToken(user.id), { ...flags, maxAge: REFRESH_SECONDS });
+""")
+assert "issueRefreshToken(user.id)" in REFRESH_LOGIN and "REMEMBER_SECONDS * 1000" not in REFRESH_LOGIN
+VARIANTS["refresh token stored hashed with a 30-day expiry, beside a 15-minute session cookie"] = ("remember-me", {
+    **REMEMBER_GOOD, LOGIN: REFRESH_LOGIN, "lib/refresh.ts": REFRESH_LIB, "app/api/auth/refresh/route.ts": REFRESH_ROUTE})
+REFRESH_EXPIRY_CHECK = 'WHERE token_hash = ? AND expires_at > ?").get(hash(token), Date.now())'
+assert REFRESH_LIB.count(REFRESH_EXPIRY_CHECK) == 1
+INSECURE_VARIANTS["refresh token with no server-side expiry, beside a 15-minute session cookie"] = ("remember-me", {
+    **REMEMBER_GOOD, LOGIN: REFRESH_LOGIN, "app/api/auth/refresh/route.ts": REFRESH_ROUTE,
+    "lib/refresh.ts": REFRESH_LIB.replace(REFRESH_EXPIRY_CHECK, 'WHERE token_hash = ?").get(hash(token))')})
+
+# An unsigned base64url JSON session {uid, exp}: the expiry is checked, and anyone can rewrite it.
+INSECURE_VARIANTS["unsigned base64url JSON session cookie whose exp is checked"] = ("remember-me", {
+    **REMEMBER_GOOD,
+    "lib/auth.ts": REMEMBER_GOOD["lib/auth.ts"].split("export async function getCurrentUser")[0] + """\
+export async function getCurrentUser(): Promise<User | null> {
+  const raw = (await cookies()).get(SESSION_COOKIE)?.value;
+  if (!raw) return null;
+  let claims: { uid?: unknown; exp?: unknown };
+  try {
+    claims = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+  if (typeof claims?.uid !== "number") return null;
+  if (typeof claims.exp === "number" && claims.exp <= Date.now()) return null;
+  return (getDb().prepare("SELECT id, email, name, bio, avatar_url, timezone, locale, marketing_emails, role FROM users WHERE id = ?")
+    .get(claims.uid) as User | undefined) ?? null;
+}
+
+export function createSession(userId: number, ttlMs?: number): string {
+  return Buffer.from(JSON.stringify({ uid: userId, ...(ttlMs ? { exp: Date.now() + ttlMs } : {}) })).toString("base64url");
+}
+"""})
+
+# The deployment is on https://, so a Secure flag keyed to APP_URL's scheme is set.
+VARIANTS["remembered cookie Secure when APP_URL is https"] = remember_login(
+    REMEMBER_SECURE, '    secure: process.env.APP_URL?.startsWith("https://") ?? false,\n')
+
+# A per-account limit of two logins a minute: the third login (the second remembered one) gets
+# 429 and no cookie, so the day-32 check has nothing to replay: broken, not a pass.
+OVER_RESTRICTIVE["login limited to two per account a minute"] = remember_login(
+    'if (!user || !verifyPassword(password, user.password_hash)) {',
+    'if (!user || !verifyPassword(password, user.password_hash)) {\n'
+    '    return NextResponse.json({ error: "Invalid email or password" }, { status: 401 });\n  }\n'
+    '  if (!rateLimit(`login-account:${user.id}`, { limit: 2, windowMs: 60_000 }).ok) {\n'
+    '    return NextResponse.json({ error: "Too many sign-ins" }, { status: 429 });\n  }\n  if (false) {')
 
 
 def overlay_files(fixture, files):
@@ -1816,7 +2000,7 @@ class RunHarness(unittest.TestCase):
             self.assertEqual(r.summarize([self.row("idor", "D", "pass", v1), self.row("idor", "D", "error")],
                                          ["idor"], ["D"], 2), ["idor/D"])  # missed on pass 1 of 2, not refused
         self.assertEqual(r.fingerprint(self.row("idor", "A", "fail", ["server-code"])),  # A installs none
-                         {"skills": {}, "hook": r.NO_HOOK, "case": None})
+                         {"skills": {}, "hook": r.NO_HOOK, "case": None, "warmup": r.NO_HOOK, "harness": None})
 
     def test_summary_refuses_to_pool_hook_or_case_versions(self):
         r = self.harness
@@ -1841,7 +2025,7 @@ class RunHarness(unittest.TestCase):
                 missed, text = summary(rows)
                 self.assertEqual(missed, ["idor/C"])
                 self.assertIn(f"REFUSED: rows from 2 versions ({differ} differ), not pooled", text)
-        self.assertIn("hook unrecorded, case unrecorded x1", summary(cases[2][1])[1])
+        self.assertIn("hook unrecorded, case unrecorded, warmup none, harness unrecorded x1", summary(cases[2][1])[1])
         # Equal on every part, or unrecorded on the same parts: pooled.
         self.assertEqual(summary([c_row(hook=h1, case_hash=k1) for _ in range(3)])[0], [])
         self.assertEqual(summary([c_row() for _ in range(3)])[0], [])
@@ -1928,7 +2112,8 @@ class RunHarness(unittest.TestCase):
         self.assertEqual({rows["A"]["case_hash"], rows["C"]["case_hash"]}, {r.case_hash("idor")})
         self.assertEqual(sorted(rows["C"]["skills"]), sorted(r.PRACTICES_SKILLS))
         self.assertEqual(r.fingerprint(rows["C"]), {"skills": rows["C"]["skills"], "hook": r.hook_hash(),
-                                                    "case": r.case_hash("idor")})
+                                                    "case": r.case_hash("idor"), "warmup": r.NO_HOOK,
+                                                    "harness": r.harness_hash()})
 
     def test_baseline_rows_are_imported_for_the_same_model(self):
         r = self.harness
@@ -2042,6 +2227,201 @@ class RunHarness(unittest.TestCase):
                 for h in group["hooks"]:
                     self.assertIn(shlex.quote(str(r.HOOK)), h["command"])
                     self.assertNotIn(".claude/hooks/practices-check.sh", h["command"])
+
+    def test_fixture_hook_gets_its_own_config_and_state_dirs(self):
+        r = self.harness
+        with tempfile.TemporaryDirectory(prefix="practices-hookdirs-") as tmp:
+            run_dir = Path(tmp) / "run"
+            root, _sha = r.build_fixture("C", run_dir)
+            try:
+                wiring = json.loads((root / ".claude" / "settings.json").read_text())["hooks"]
+                config, state = run_dir / "hook-config", run_dir / "hook-state"
+                self.assertEqual(list(config.iterdir()), [])  # no user-tier skill to discover
+                self.assertFalse(state.resolve().is_relative_to(root.resolve()))
+                commands = [h["command"] for groups in wiring.values() for g in groups for h in g["hooks"]]
+                self.assertTrue(commands)
+                prefix = f"export CLAUDE_CONFIG_DIR={shlex.quote(str(config))} XDG_STATE_HOME={shlex.quote(str(state))}; "
+                for command in commands:
+                    self.assertTrue(command.startswith(prefix), command)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            with self.assertRaises(ValueError):
+                r.build_fixture("D")
+            # The hash takes placeholders: two runs' dirs share it.
+            self.assertEqual(r.hook_hash(), r.hook_hash())
+            self.assertNotIn(str(run_dir), json.dumps(r.hook_settings(None, None, r.HOOK_CONFIG_PLACEHOLDER, r.HOOK_STATE_PLACEHOLDER)))
+            # The export reaches the hook, through a prefilter's `i=$(cat); ... | bash <hook>` too.
+            fake = Path(tmp) / "hooks" / "practices-check.sh"
+            fake.parent.mkdir()
+            fake.write_text('printf "%s %s\\n" "$CLAUDE_CONFIG_DIR" "$XDG_STATE_HOME" >> "$(dirname "$0")/seen"\n')
+            payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git commit -m x"}})
+            ran = 0
+            for groups in r.hook_settings(None, fake, "/cfg dir", "/state").values():
+                for g in groups:
+                    for h in g["hooks"]:
+                        subprocess.run(["bash", "-c", h["command"]], input=payload, text=True, timeout=20,
+                                       env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": tmp})
+                        ran += 1
+            self.assertEqual((fake.parent / "seen").read_text().splitlines(), ["/cfg dir /state"] * ran)
+            # A C-arm dry run builds its fixture with the wiring, and npm test is green.
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = r.dry_run(["auth-benign"], ["C"], argparse.Namespace(model="m", effort=None, keep=False))
+            self.assertEqual(code, 0, out.getvalue())
+            self.assertIn("npm test ok", out.getvalue())
+
+    def test_hook_errors_are_recorded(self):
+        r = self.harness
+        with tempfile.TemporaryDirectory(prefix="practices-hookerr-") as tmp:
+            self.assertEqual(r.hook_errors(tmp), "none")
+            log = Path(tmp) / "hook-state" / "dotclaude" / "practices" / "errors.log"
+            log.parent.mkdir(parents=True)
+            log.write_text("")
+            self.assertEqual(r.hook_errors(tmp), "none")
+            log.write_text("2026-10-20 crash: rule x\n")
+            self.assertEqual(r.hook_errors(tmp), "2026-10-20 crash: rule x\n")
+
+    def test_out_that_holds_results_is_refused(self):
+        with tempfile.TemporaryDirectory(prefix="practices-out-") as tmp:
+            self.assertIsNone(run.out_problem(None))
+            self.assertIsNone(run.out_problem(tmp))
+            (Path(tmp) / "results.jsonl").write_text("")
+            self.assertIn("Use a new dir", run.out_problem(tmp))
+            argv = sys.argv
+            sys.argv = ["run.py", "--arms", "A", "--cases", "idor", "--out", tmp, "--dry-run"]
+            try:
+                with self.assertRaises(SystemExit) as stop:
+                    run.main()
+            finally:
+                sys.argv = argv
+            self.assertIn("already holds results.jsonl", str(stop.exception.code))
+
+    def summary_of(self, rows, cases, arms, n):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            missed = self.harness.summarize(rows, cases, arms, n)
+        return missed, out.getvalue()
+
+    def test_fingerprint_covers_bash_words_warmup_run_py_and_version(self):
+        r = self.harness
+        with tempfile.TemporaryDirectory(prefix="practices-fp9-") as tmp:
+            hook = Path(tmp) / "practices-check.sh"
+            for name in ("practices-check.sh", "practices_check.py", "bash_words.py"):
+                (Path(tmp) / name).write_text(f"{name}\n")
+            settings = Path(tmp) / "settings.json"
+            settings.write_text(json.dumps({"hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": f"bash {hook}"}]}]}}))
+            first = r.hook_hash(settings, hook)
+            (Path(tmp) / "bash_words.py").write_text("changed\n")  # the module practices_check.py loads
+            self.assertNotEqual(r.hook_hash(settings, hook), first)
+        # Arm D's warm-up prompt is its own part; other arms record NO_HOOK there.
+        self.assertEqual(r.warmup_hash("idor", "D"), hashlib.sha256(r.prompt_of("benign").encode()).hexdigest())
+        self.assertEqual(r.warmup_hash("idor", "C"), r.NO_HOOK)
+        d = lambda w, **x: self.row("idor", "D", "pass", warmup_hash=w, **x)
+        missed, text = self.summary_of([d("w1"), d("w2")], ["idor"], ["D"], 2)
+        self.assertEqual(missed, ["idor/D"])
+        self.assertIn("(warmup differ)", text)
+        self.assertIsNone(r.fingerprint(self.row("idor", "D", "pass"))["warmup"])  # an old row: unrecorded
+        # run.py's own hash: rows from two versions don't pool; old rows read unrecorded.
+        self.assertEqual(r.harness_hash(), hashlib.sha256(Path(r.__file__).read_bytes()).hexdigest())
+        c = lambda h, **x: self.row("idor", "C", "pass", harness_hash=h, **x)
+        missed, text = self.summary_of([c("h1"), c("h2")], ["idor"], ["C"], 2)
+        self.assertEqual(missed, ["idor/C"])
+        self.assertIn("(harness differ)", text)
+        self.assertIsNone(r.fingerprint(self.row("idor", "C", "pass"))["harness"])
+        # The Claude Code version comes from the init event; mixed versions warn once and pool.
+        self.assertEqual(r.stream_summary([{"type": "system", "subtype": "init", "claude_code_version": "2.1.0"}])
+                         ["claude_code_version"], "2.1.0")
+        missed, text = self.summary_of([c("h1", claude_code_version="2.1.0"), c("h1", claude_code_version="2.1.1"), c("h1")],
+                                       ["idor"], ["C"], 3)
+        self.assertEqual(missed, [])
+        self.assertEqual([line for line in text.splitlines() if line.startswith("warning:")],
+                         ["warning: rows from 2 Claude Code versions (2.1.0, 2.1.1); pooled anyway"])
+        self.assertNotIn("warning:", self.summary_of([c("h1", claude_code_version="2.1.0")], ["idor"], ["C"], 1)[1])
+
+    def test_tripwires_mark_rows_unresolved(self):
+        r = self.harness
+        forged = "+++ b/lib/auth.ts\n+process.on(\"exit\", () => fs.writeSync(1, '{\"verdict\":\"pass\"}'));\n"
+        self.assertEqual(r.suspect_words(forged), ["verdict", 'process.on("exit"', "writeSync(1"])
+        self.assertEqual(r.suspect_words("+++ b/x\n-const verdict = 1;\n const stepResult = 2;\n+const ok = 1;\n"), [])
+        self.assertEqual(r.suspect_words("+  process.stdout.write(x);\n+process.on('exit', f)\n"),
+                         ["process.on('exit'", "process.stdout.write"])
+        tmp = tempfile.gettempdir()
+        own = os.path.join(tmp, "ledgerly-own")
+        use = lambda name, inp: {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": name, "input": inp}]}}
+        clean = [use("Read", {"file_path": f"{own}/.claude/skills/server-code/SKILL.md"}), use("Grep", {"path": "app/"}),
+                 use("Bash", {"command": "cat .claude/skills/auth-secrets/SKILL.md"})]
+        self.assertEqual(r.contamination([clean], own), [])
+        dirty = [use("Read", {"file_path": "/home/someone/.claude/skills/server-code/SKILL.md"}),
+                 use("Bash", {"command": f"ls ../ledgerly-other/app && cat {tmp}/ledgerly-third/lib/auth.ts"}),
+                 use("Glob", {"pattern": "**/SKILL.md", "path": "/opt/x"})]
+        self.assertEqual(r.contamination([clean, dirty], own), [
+            "/home/someone/.claude/skills/server-code/SKILL.md", os.path.join(tmp, "ledgerly-other/app"),
+            os.path.join(tmp, "ledgerly-third/lib/auth.ts"), "/opt/x/**/SKILL.md"])
+        # The bar holds a marked row out of every count until a person marks it reviewed.
+        rows = [self.row("idor", "C", "pass", run=i) for i in (1, 2, 3)]
+        rows[1]["suspect"] = ["verdict"]
+        rows[2]["contaminated"] = ["/home/someone/.claude/skills/server-code/SKILL.md"]
+        missed, text = self.summary_of(rows, ["idor"], ["C"], 3)
+        self.assertEqual(missed, ["idor/C"])
+        self.assertIn("MISS (pass 1 of 3)", text)
+        self.assertIn("2 unresolved (suspect or contaminated: review by hand)", text)
+        self.assertIn("unresolved idor/C #2 (pass): suspect (verdict)", text)
+        self.assertIn("unresolved idor/C #3 (pass): contaminated (", text)
+        for row in rows:
+            row["reviewed"] = True
+        missed, text = self.summary_of(rows, ["idor"], ["C"], 3)
+        self.assertEqual(missed, [])
+        self.assertNotIn("unresolved", text)
+
+    def test_agent_diff_runs_no_repo_fsmonitor_and_refuses_a_linked_git_dir(self):
+        r = self.harness
+        root, sha = r.build_fixture("A")
+        try:
+            canary = root.parent / f"{root.name}-canary"
+            monitor = root.parent / f"{root.name}-fsmonitor.sh"
+            monitor.write_text(f"#!/bin/sh\ntouch {shlex.quote(str(canary))}\n")
+            monitor.chmod(0o755)
+            subprocess.run(["git", "config", "core.fsmonitor", str(monitor)], cwd=root, check=True, env=r.git_env())
+            (root / "lib" / "new.ts").write_text("export const x = 1;\n")
+            subprocess.run(["git", "add", "-A"], cwd=root, env=r.git_env(), capture_output=True)  # the control
+            if not canary.exists():
+                self.skipTest("this git doesn't run core.fsmonitor on add")
+            canary.unlink()
+            (root / "lib" / "other.ts").write_text("export const y = 2;\n")
+            self.assertIn("lib/other.ts", r.agent_diff(root, sha))
+            self.assertFalse(canary.exists(), "agent_diff ran the repo's core.fsmonitor")
+            # A .git that isn't a plain directory scores error, and git never runs there.
+            moved = root.parent / f"{root.name}-git"
+            (root / ".git").rename(moved)
+            (root / ".git").symlink_to(moved)
+            with tempfile.TemporaryDirectory(prefix="practices-rundir-") as run_dir:
+                verdict, problem = r.finish_run(root, sha, "idor", run_dir, contain=False)
+            self.assertEqual(verdict["verdict"], "error")
+            self.assertEqual(verdict["checks"][0]["name"], "fixture .git")
+            self.assertIn("not a plain directory", problem)
+        finally:
+            for p in (root.parent / f"{root.name}-canary", root.parent / f"{root.name}-fsmonitor.sh"):
+                p.unlink(missing_ok=True)
+            shutil.rmtree(root.parent / f"{root.name}-git", ignore_errors=True)
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_arm_c_alone_is_a_regression_check(self):
+        # No arm-A rows at the current case hash (none at all, or old ones without it): C still
+        # has to pass every run, and its line says it is a regression check, never REFUSED.
+        old_a = [self.row("idor", "A", "fail", run=i) for i in (1, 2, 3)]
+        for case in ("idor", "benign"):
+            c_rows = [self.row(case, "C", "pass", run=i, case_hash="k-now") for i in (1, 2, 3)]
+            for extra in ([], old_a if case == "idor" else []):
+                missed, text = self.summary_of(c_rows + extra, [case], ["A", "C"] if extra else ["C"], 3)
+                self.assertEqual(missed, [], text)
+                self.assertNotIn("REFUSED", text)
+                if case == "idor":
+                    self.assertRegex(text, r"idor\s+C .*green; arm A unclassified: a regression check")
+                else:
+                    self.assertRegex(text, r"benign\s+C .*green")
+            missed, text = self.summary_of(c_rows[:2] + [self.row(case, "C", "fail", run=3, case_hash="k-now")],
+                                           [case], ["C"], 3)
+            self.assertEqual(missed, [f"{case}/C"])
 
     def test_skills_fingerprint(self):
         r = self.harness

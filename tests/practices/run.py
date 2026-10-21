@@ -74,8 +74,12 @@ Per run:
     Without a usable bwrap, run.py refuses to start unless --unsafe-grade is passed.
   - Record: one line per run in <out>/results.jsonl (case, owner and kind, verdict, checks,
     triggered and triggered_turns, turns, duration, cost, is_error, init memory_paths and
-    init_skills, the fingerprint, hook denials, strays, the harness SHA, and the paths of the
-    saved streams, oracle output and diff under <out>/<case>-<arm>-<i>/). The fingerprint is
+    init_skills, the fingerprint, hook denials, the hook's errors.log (hook_errors, "none" when
+    empty), strays, the harness SHA, and the paths of the saved streams, oracle output and diff
+    under <out>/<case>-<arm>-<i>/). An --out that already holds results.jsonl is refused: a
+    rerun would overwrite the run dirs its rows point at. Arms C and D run the hook with
+    CLAUDE_CONFIG_DIR an empty dir and XDG_STATE_HOME its own, both in the run dir, so it sees
+    no user-tier skill and keeps its state and errors.log out of the real ones. The fingerprint is
     three parts, each taken before the session starts, so an uncommitted edit counts:
     `skills`, {name: sha256 over its files' sorted relative paths and bytes} for each skill
     installed (arm A's is {}); `hook`, hook_hash() of the practices hook (practices-check.sh,
@@ -201,7 +205,10 @@ SESSION_TIMEOUT = 900
 ORACLE_TIMEOUT = 60
 # The harness's own git in a fixture reads no global or system config (so no signing, hooks or
 # global ignore rules: .claude/settings.json stays visible); identity is set per command.
-GIT = ["git", "-c", "user.name=Ledgerly Dev", "-c", "user.email=dev@example.com", "-c", "init.defaultBranch=main"]
+# The agent wrote the fixture's repo, so no repo-level setting may run a program here: no
+# fsmonitor, no hooks; diffs take --no-ext-diff --no-textconv (agent_diff).
+GIT = ["git", "-c", "user.name=Ledgerly Dev", "-c", "user.email=dev@example.com", "-c", "init.defaultBranch=main",
+       "-c", "core.fsmonitor=", "-c", "core.hooksPath=/dev/null"]
 
 _print_lock = threading.Lock()
 
@@ -260,17 +267,23 @@ def check_prereqs(arms):
 HOOK_PATH = re.compile(r"""(["']?)([^\s"';&|()<>]*practices-check\.sh)\1""")
 
 
-def hook_settings(settings=None, hook=None):
+def hook_settings(settings=None, hook=None, config_dir=None, state_dir=None):
     """The practices hook's wiring for arms C and D, taken from the repo's settings.json, so the
     eval runs what users get: every hook entry, under any event and matcher, whose command runs
     practices-check.sh, with the script's path pointed at this checkout's copy. The rest of the
     command (a shell prefilter that skips the hook, say) and the entry's other keys (timeout)
-    stay as written. A matcher group keeps only its practices hooks; one with none is dropped."""
+    stay as written. A matcher group keeps only its practices hooks; one with none is dropped.
+    With `config_dir` and `state_dir`, each command starts `export CLAUDE_CONFIG_DIR=<config_dir>
+    XDG_STATE_HOME=<state_dir>; `: the hook then finds no user-tier skill (an empty config dir)
+    and writes its deny state and errors.log in the run, never the real ones. An export, not a
+    bare assignment, so it reaches a prefilter's `i=$(cat); ... | bash <hook>` too."""
     hook = shlex.quote(str(hook or HOOK))
+    prefix = (f"export CLAUDE_CONFIG_DIR={shlex.quote(str(config_dir))} XDG_STATE_HOME={shlex.quote(str(state_dir))}; "
+              if config_dir is not None and state_dir is not None else "")
     wiring = {}
     for event, groups in (json.loads(Path(settings or REPO_SETTINGS).read_text()).get("hooks") or {}).items():
         for group in groups or []:
-            kept = [{**h, "command": HOOK_PATH.sub(lambda _m: hook, h["command"])}
+            kept = [{**h, "command": prefix + HOOK_PATH.sub(lambda _m: hook, h["command"])}
                     for h in group.get("hooks") or []
                     if isinstance(h.get("command"), str) and "practices-check.sh" in h["command"]]
             if kept:
@@ -289,20 +302,23 @@ def tree_hash(root):
     return h.hexdigest()
 
 
+# hook_hash() takes the wiring with these in place of a run's own dirs, so runs share the hash.
+HOOK_CONFIG_PLACEHOLDER, HOOK_STATE_PLACEHOLDER = "/hook-config", "/hook-state"
 NO_HOOK = "none"  # the hook part of an A or B row's fingerprint: those arms install no hook
-FINGERPRINT_PARTS = ("skills", "hook", "case")
+# warmup: the prompt of arm D's warm-up turn (NO_HOOK for other arms); harness: run.py itself.
+FINGERPRINT_PARTS = ("skills", "hook", "case", "warmup", "harness")
 
 
 def hook_hash(settings=None, hook=None):
     """sha256 over the practices hook arms C and D run: the shim, the module beside it that the
-    shim runs (practices_check.py), and hook_settings()'s wiring. The wiring is taken with a
+    shim runs (practices_check.py) and the bash_words.py it loads, and hook_settings()'s wiring. The wiring is taken with a
     placeholder for the script's path, so two checkouts of one hook share the hash."""
     hook = Path(hook or HOOK)
     h = hashlib.sha256()
-    for f in (hook, hook.parent / "practices_check.py"):
+    for f in (hook, hook.parent / "practices_check.py", hook.parent / "bash_words.py"):
         data = f.read_bytes() if f.is_file() else b""
         h.update(f.name.encode() + b"\0" + len(data).to_bytes(8, "big") + data)
-    wiring = hook_settings(settings, Path("/hooks/practices-check.sh"))
+    wiring = hook_settings(settings, Path("/hooks/practices-check.sh"), HOOK_CONFIG_PLACEHOLDER, HOOK_STATE_PLACEHOLDER)
     h.update(json.dumps(wiring, sort_keys=True).encode())
     return h.hexdigest()
 
@@ -316,6 +332,16 @@ def case_hash(case):
         digest = tree_hash(path) if path.is_dir() else hashlib.sha256(path.read_bytes()).hexdigest()
         h.update(f"{label} {digest}\n".encode())
     return h.hexdigest()
+
+
+def warmup_hash(case, arm):
+    """sha256 of the prompt arm D's warm-up turn sends for `case`; NO_HOOK for other arms."""
+    return hashlib.sha256(prompt_of(warmup_case(case)).encode()).hexdigest() if arm == "D" else NO_HOOK
+
+
+def harness_hash():
+    """sha256 of this run.py, which builds the fixtures, runs the turns and reads the rows."""
+    return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
 def installed_skills(root):
@@ -354,9 +380,30 @@ def install_stubs(root):
         shutil.copytree(src, dest)
 
 
-def build_fixture(arm):
+def hook_dirs(run_dir):
+    """(config dir, state dir) the hook of a run in `run_dir` gets: an empty CLAUDE_CONFIG_DIR and
+    its own XDG_STATE_HOME, both in the run dir, outside the fixture."""
+    config, state = Path(run_dir) / "hook-config", Path(run_dir) / "hook-state"
+    for d in (config, state):
+        d.mkdir(parents=True, exist_ok=True)
+    return config, state
+
+
+def hook_errors(run_dir):
+    """The run's hook errors.log, or "none" when it logged nothing."""
+    try:
+        text = (Path(run_dir) / "hook-state" / "dotclaude" / "practices" / "errors.log").read_text(errors="replace")
+    except OSError:
+        return "none"
+    return text[-4000:] or "none"
+
+
+def build_fixture(arm, run_dir=None):
     """A fresh fixture for one run: the app, the stub packages, an initial commit, then the
-    arm's harness config as a second commit. Returns (path, the harness commit's SHA)."""
+    arm's harness config as a second commit. Returns (path, the harness commit's SHA). Arms C
+    and D wire the hook with hook_dirs(run_dir), so they need one."""
+    if arm in ("C", "D") and run_dir is None:
+        raise ValueError(f"arm {arm} wires the hook with dirs in the run dir, and none was given")
     root = Path(tempfile.mkdtemp(prefix="ledgerly-"))
     shutil.copytree(FIXTURE_SRC, root, dirs_exist_ok=True)
     install_stubs(root)
@@ -369,7 +416,7 @@ def build_fixture(arm):
         for name in PRACTICES_SKILLS:
             shutil.copytree(SKILLS_DIR / name, root / ".claude" / "skills" / name)
     if arm in ("C", "D"):
-        settings["hooks"] = hook_settings()
+        settings["hooks"] = hook_settings(None, None, *hook_dirs(run_dir))
     (root / ".claude").mkdir(exist_ok=True)
     (root / ".claude" / "settings.json").write_text(json.dumps(settings, indent=2) + "\n")
     git("add", "-A", ".claude", cwd=root)
@@ -506,6 +553,7 @@ def stream_summary(events):
         "total_cost_usd": result.get("total_cost_usd"),
         "result_subtype": result.get("subtype"),
         "memory_paths": init.get("memory_paths"),
+        "claude_code_version": init.get("claude_code_version"),
         # the skills the session listed at init; rows before 2026-10-20 have this as "skills"
         "init_skills": init.get("skills"),
     }
@@ -653,10 +701,69 @@ def grade(fixture, case, run_dir, contain=True, home=None):
     return {"verdict": "broken", "checks": [{"name": "oracle output", "ok": False, "detail": stderr[-1500:]}]}
 
 
+def git_dir_problem(fixture):
+    """Why the fixture's .git can't be trusted, or None: it isn't a plain directory (a symlink,
+    or a gitfile pointing elsewhere)."""
+    d = Path(fixture) / ".git"
+    if d.is_symlink() or not d.is_dir():
+        return f"{d} is not a plain directory"
+    return None
+
+
 def agent_diff(fixture, base):
     """Everything the agent changed since the harness commit `base`, committed or not."""
     git("add", "-A", cwd=fixture)
-    return git("diff", "--cached", "--binary", base, cwd=fixture)
+    return git("diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv", base, cwd=fixture)
+
+
+# Words in the agent's added lines that could forge the oracle's verdict from inside its
+# process (the agent's code runs there): a tripwire, the diff review is the backstop.
+SUSPECT_WORDS = ("verdict", "stepResult", 'process.on("exit"', "process.on('exit'", "writeSync(1", "process.stdout.write")
+
+
+def suspect_words(diff):
+    """The SUSPECT_WORDS the diff's added lines contain, in order; [] when none."""
+    added = "\n".join(line for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++"))
+    return [w for w in SUSPECT_WORDS if w in added]
+
+
+PATH_TOKEN = re.compile(r"""[^\s"'`;|&<>()=,]+""")
+
+
+def contamination(events_by_turn, fixture, tmp=None):
+    """Paths the session's tool calls named outside its own fixture that hold practices skills
+    (.claude/skills, SKILL.md) or another fixture (ledgerly-* in the system temp dir), up to 5."""
+    fixture = os.path.normpath(str(fixture))
+    others = os.path.join(tmp or tempfile.gettempdir(), "ledgerly-")
+    found = []
+
+    def strings(v):
+        if isinstance(v, str):
+            yield v
+        elif isinstance(v, dict):
+            for x in v.values():
+                yield from strings(x)
+        elif isinstance(v, list):
+            for x in v:
+                yield from strings(x)
+
+    for events in events_by_turn:
+        for use in tool_uses(events):
+            inp = use.get("input")
+            texts = list(strings(inp))
+            if isinstance(inp, dict) and isinstance(inp.get("path"), str):  # Glob and Grep: pattern under path
+                texts += [os.path.join(inp["path"], inp[k]) for k in ("pattern", "glob") if isinstance(inp.get(k), str)]
+            for text in texts:
+                for token in PATH_TOKEN.findall(text):
+                    if not (".claude/skills" in token or "SKILL.md" in token or "ledgerly-" in token):
+                        continue
+                    full = os.path.normpath(os.path.join(fixture, os.path.expanduser(token)))
+                    if full == fixture or full.startswith(fixture + os.sep):
+                        continue
+                    skills = ".claude/skills" in full or full.endswith("SKILL.md") or "/SKILL.md" in full
+                    if (skills or full.startswith(others)) and full not in found:
+                        found.append(full)
+    return found[:5]
 
 
 def _exited(pid):
@@ -808,6 +915,9 @@ def finish_run(fixture, harness_sha, case, run_dir, contain, skip_grade=()):
     Returns (verdict dict, diff error or None)."""
     run_dir = Path(run_dir)
     diff_error = None
+    problem = git_dir_problem(fixture)
+    if problem:  # git there could read the agent's own config: no diff, no grade
+        return {"verdict": "error", "checks": [{"name": "fixture .git", "ok": False, "detail": problem}]}, problem
     try:
         (run_dir / "diff.patch").write_text(agent_diff(fixture, harness_sha))
     except (subprocess.CalledProcessError, OSError) as e:
@@ -821,10 +931,12 @@ def finish_run(fixture, harness_sha, case, run_dir, contain, skip_grade=()):
 def run_one(case, arm, index, args, out):
     run_dir = out / f"{case}-{arm}-{index}"
     run_dir.mkdir(parents=True, exist_ok=True)
-    fixture, harness_sha = build_fixture(arm)
+    fixture, harness_sha = build_fixture(arm, run_dir)
     skills = installed_skills(fixture)  # before the session, which could edit its copy
     hook = hook_hash() if arm in ("C", "D") else NO_HOOK
     case_code = case_hash(case)
+    warmup_code = warmup_hash(case, arm)
+    harness_code = harness_hash()
     streams, labels, exits, timed_out, stray_kills = [], [], [], False, []
     turns = turns_for(case, arm, args.model, args.effort)
     for n, (label, prompt, cmd) in enumerate(turns, 1):
@@ -849,6 +961,11 @@ def run_one(case, arm, index, args, out):
     failures = infra_failures(labels, exits, events_by_turn, timed_out_label=labels[-1] if timed_out else None)
     verdict, diff_error = finish_run(fixture, harness_sha, case, run_dir, args.contain, skip_grade=failures)
     diff = run_dir / "diff.patch"
+    try:
+        suspect = suspect_words(diff.read_text(errors="replace"))
+    except OSError:
+        suspect = []
+    contaminated = contamination(events_by_turn, fixture)
 
     per_turn = [stream_summary(turn) for turn in events_by_turn]
     summary = dict(per_turn[0])  # init facts (memory_paths, skills) from the first turn
@@ -874,12 +991,17 @@ def run_one(case, arm, index, args, out):
         "skills": skills,  # {name: tree_hash} installed
         "hook": hook,  # hook_hash() for C and D, NO_HOOK for A and B
         "case_hash": case_code,  # case_hash(case)
+        "warmup_hash": warmup_code,  # warmup_hash(case, arm): arm D's warm-up prompt
+        "harness_hash": harness_code,  # harness_hash(): run.py
+        # tripwires: the bar counts such a row unresolved until a person sets "reviewed": true
+        "suspect": suspect, "contaminated": contaminated,
         "hook_denials": denials_turns.get("task", 0),
         "hook_denials_turns": denials_turns,
         "is_error": any(result_failed(result_event(turn)) for turn in events_by_turn),
         "exit_codes": exits, "timed_out": timed_out,
         "strays": len(stray_kills), "stray_kills": stray_kills,
         "harness_sha": harness_sha,
+        "hook_errors": hook_errors(run_dir) if arm in ("C", "D") else "none",
         "stream": streams, "oracle": str(run_dir / "oracle.out"), "diff": str(diff),
     }
     if diff_error:
@@ -914,6 +1036,12 @@ def bar(case, arm, counts, n, a=None, installed=None):
     """(label, missed) for one case and arm of one model against the pass bar. `a` is arm A's
     counts for the same case and model (imported rows included; None when there are none), and
     `installed` the skills the arm's rows ran with (default: PRACTICES_SKILLS)."""
+    label, missed = _bar(case, arm, counts, n, a, installed)
+    held = counts.get("unresolved", 0)
+    return (f"{label}; {held} unresolved (suspect or contaminated: review by hand)", missed) if held else (label, missed)
+
+
+def _bar(case, arm, counts, n, a=None, installed=None):
     owner, kind = CASE_INFO[case]
     p, f, b = counts["pass"], counts["fail"], counts["broken"]
     if arm == "A":
@@ -938,7 +1066,7 @@ def bar(case, arm, counts, n, a=None, installed=None):
     if cls == "no-harm":
         label += "; no-harm check, not evidence that the skill helps"
     elif cls == "unclassified":
-        label += "; arm A unclassified, not yet evidence that the skill helps"
+        label += "; arm A unclassified: a regression check, not yet evidence that the skill helps"
     return label, not ok
 
 
@@ -949,10 +1077,14 @@ def fingerprint(row):
     arms A and B no hook, so those parts are {} and NO_HOOK whatever the row says (rows from
     before fingerprints included)."""
     arm, skills, hook, case = row.get("arm"), row.get("skills"), row.get("hook"), row.get("case_hash")
+    warmup, harness = row.get("warmup_hash"), row.get("harness_hash")
+    text = lambda v: v if isinstance(v, str) and v else None
     return {
         "skills": {} if arm == "A" else (skills if isinstance(skills, dict) else None),
-        "hook": NO_HOOK if arm in ("A", "B") else (hook if isinstance(hook, str) and hook else None),
-        "case": case if isinstance(case, str) and case else None,
+        "hook": NO_HOOK if arm in ("A", "B") else text(hook),
+        "case": text(case),
+        "warmup": NO_HOOK if arm != "D" else text(warmup),
+        "harness": text(harness),
     }
 
 
@@ -978,16 +1110,28 @@ def pooled_prints(rows):
     return prints
 
 
+def unresolved(row):
+    """A row a tripwire marked (suspect or contaminated) that no person has marked reviewed."""
+    return bool(row.get("suspect") or row.get("contaminated")) and row.get("reviewed") is not True
+
+
 def counts_of(rows):
-    return {v: sum(r["verdict"] == v for r in rows) for v in VERDICTS}
+    """Rows per verdict; an unresolved row counts under "unresolved", never its verdict."""
+    counts = {v: sum(r["verdict"] == v and not unresolved(r) for r in rows) for v in VERDICTS}
+    counts["unresolved"] = sum(unresolved(r) for r in rows)
+    return counts
 
 
 def summarize(rows, cases, arms, n):
     """Prints the table and bar per model; returns the missed "case/arm" labels. Rows carrying
     `imported` are arm-A rows from --baseline files: they count in A's line, marked there."""
-    missed, refused = [], []
+    missed, refused, held = [], [], []
     for model in sorted({r.get("model") for r in rows}, key=str):
         print(f"\nmodel {model}")
+        versions = sorted({str(r["claude_code_version"]) for r in rows
+                           if r.get("model") == model and r.get("claude_code_version")})
+        if len(versions) > 1:  # Claude Code can update itself mid-run, so this warns, not refuses
+            print(f"warning: rows from {len(versions)} Claude Code versions ({', '.join(versions)}); pooled anyway")
         print(f"{'case':16} {'arm':3} {'pass':>4} {'fail':>4} {'brkn':>4} {'err':>4} {'trig':>4} {'warm':>4} "
               f"{'cost $':>8}  bar")
         print("(err: harness or infra failures, outside every count; trig: the case turn triggered the "
@@ -1012,6 +1156,7 @@ def summarize(rows, cases, arms, n):
                     same_case = len(a_prints) == 1 and (not prints or a_prints[0]["case"] == prints[0]["case"])
                     label, miss = bar(case, arm, counts, n, a=counts_of(a_rows) if a_rows and same_case else None,
                                       installed=list(skills) if skills is not None else None)
+                held += [r for r in mine if unresolved(r)]
                 imported = sum(bool(r.get("imported")) for r in mine)
                 if imported:
                     label += f" [{imported} imported]"
@@ -1024,6 +1169,11 @@ def summarize(rows, cases, arms, n):
                       f"{counts['error']:>4} {trig:>4} {warm if arm == 'D' else '-':>4} {cost:>8.2f}  {label}")
     for label, versions in refused:
         print(f"refused to pool {label}: " + "; ".join(f"{short(fp)} x{k}" for fp, k in versions))
+    for r in held:
+        why = [f"suspect ({', '.join(r['suspect'])})" if r.get("suspect") else "",
+               f"contaminated ({', '.join(r['contaminated'])})" if r.get("contaminated") else ""]
+        print(f"unresolved {r['case']}/{r['arm']} #{r.get('run')} ({r['verdict']}): {'; '.join(w for w in why if w)}; "
+              f"diff {r.get('diff')}; set \"reviewed\": true in its row once read")
     return missed
 
 
@@ -1096,7 +1246,8 @@ def dry_run(cases, arms, args):
     failed = []
     for case in cases:
         for arm in arms:
-            fixture, _sha = build_fixture(arm)
+            scratch = Path(tempfile.mkdtemp(prefix="practices-dry-"))  # the hook's dirs, outside the fixture
+            fixture, _sha = build_fixture(arm, scratch)
             ok, output = npm_test(fixture)
             print(f"\n[{case} / {arm}] fixture {fixture}: npm test {'ok' if ok else 'FAILED'}")
             if not ok:
@@ -1109,11 +1260,21 @@ def dry_run(cases, arms, args):
                 print(f"  ({label}) cd {shlex.quote(str(fixture))} && {shlex.join(cmd)} {stdin}")
             if not args.keep:
                 shutil.rmtree(fixture, ignore_errors=True)
+                shutil.rmtree(scratch, ignore_errors=True)
     print("\ngrading sandbox: " + ("bwrap works here" if bwrap_usable() else
           "bwrap can't start here; a live run needs it (sandbox-off) or --unsafe-grade"))
     print(f"dry run: {len(cases) * len(arms) - len(failed)}/{len(cases) * len(arms)} fixtures built "
           "with npm test green; no model calls made")
     return 1 if failed else 0
+
+
+def out_problem(out):
+    """Why `out` can't take this run's results, or None: it already holds a results.jsonl, so a
+    rerun into it would overwrite the run dirs earlier rows point at."""
+    if out is not None and (Path(out) / "results.jsonl").exists():
+        return (f"--out {out} already holds results.jsonl; reusing it would overwrite the run dirs its rows "
+                "point at. Use a new dir (or leave --out off for a fresh one).")
+    return None
 
 
 def main():
@@ -1140,6 +1301,9 @@ def main():
     bad = [x for x in arms if x not in ARMS] + [c for c in cases if c not in CASES]
     if bad:
         ap.error(f"unknown arm or case: {', '.join(bad)}")
+    problem = out_problem(a.out)
+    if problem:
+        sys.exit(f"run.py: {problem}")
     check_prereqs(arms)
     imported = load_baseline(a.baseline, a.model, cases, a.effort or "default")  # before any spend: a bad path exits here
     if a.dry_run:
