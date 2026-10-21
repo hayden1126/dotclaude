@@ -609,18 +609,21 @@ need nothing extra.
     scans every unpushed commit the same way and denies the push once per new finding. A commit and
     a push in one call are denied once, so the commit gets its scan first.
   - **L3r:** `gh pr ready` (or `gh pr create` without `--draft`) is denied once unless this session
-    ran a reviewer agent whose brief carries the `[practices:review]` marker. The deny holds the
-    gate lines of every skill whose events the branch touched, ready to paste into that brief.
+    ran a reviewer agent whose brief carries the head commit's `[practices:review:<sha12>]`
+    marker, so a review clears only the commit it judged. The deny holds the marker and the gate
+    lines of every skill whose events the branch touched, ready to paste into that brief.
   - **L4:** after a compaction, it re-injects the loaded skills' must-hold lines and asks Claude
     Code to reload the skill listing (`reloadSkills`).
 
   Events match on the path or on the file as it will read after the edit. L1 and L2 don't judge a
   file written through Bash; L3s sees its content at commit and push. The Bash levels read git
   objects only (no index, no working tree, no program a repo's config names), never echo a matched
-  value, and sit behind a shell prefilter, so Python starts only for commit, push and PR commands.
-  A PR readied in the GitHub web UI never reaches the hook. A repo turns it off with `enabled = false` in `.claude/practices/config.toml`, or
-  turns one rule off there with a reason. The engine keeps a 2 s budget under the 5 s kill. Fails
-  open but loud: a crash lets the edit through, and the next session start names the error.
+  value, and sit behind a shell prefilter, so Python starts only for a command that names git
+  with commit or push, or gh with pr ready or create.
+  A PR readied in the GitHub web UI never reaches the hook. A repo turns it off with
+  `enabled = false` in `.claude/practices/config.toml`, or turns one rule off there with a reason.
+  The engine keeps a 2 s budget under the 5 s kill. Fails open but loud: a crash lets the edit
+  through, and the next session start names the error.
   Errors go to `$XDG_STATE_HOME/dotclaude/practices/errors.log`.
 - **PreToolUse(`Bash`): `delete-guard.sh`** (in this repo), for commands run with
   `dangerouslyDisableSandbox` only (the settings command skips Python for every other call).
