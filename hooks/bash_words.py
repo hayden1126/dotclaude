@@ -49,6 +49,7 @@ SHELL_ARG_OPTS = {"-o", "+o", "-O", "+O", "--rcfile", "--init-file"}
 # Placeholders. They start with a character no variable name can hold, so `$p$(date)` stays two
 # parts; shlex keeps % inside a word.
 SUBST, ANSI, ARITH, REDIR, DOC = "%SUBST%", "%ANSI%", "%ARITH%", "%REDIR%", "%HEREDOC%"
+HERESTR = "%HERESTR%"  # a `<<<` redirection, whose word is the command's stdin
 # Commands whose arguments are text, never a command they run (`grep -rn "git push" .`).
 TEXT_COMMANDS = {"grep", "egrep", "fgrep", "rg"}
 ASSIGN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.S)
@@ -179,7 +180,9 @@ def prepass(command, bodies=None, heredocs=None):
             continue
         elif quote is None and (m := REDIRECT.match(s, i)) and (
                 not m.group(1) or i == 0 or s[i - 1] in " \t\n;&|()"):
-            out.append(f" {REDIR} ")  # segments() drops it and its target word
+            # segments() drops it and its target word; calls() keeps a here-string's word
+            here = heredocs is not None and m.group(0).endswith("<<<")
+            out.append(f" {HERESTR if here else REDIR} ")
             i = m.end()
             continue
         elif quote is None and s.startswith("<<", i):
@@ -219,35 +222,39 @@ def prepass(command, bodies=None, heredocs=None):
 
 
 def _split(text):
-    """Pre-passed text as ("words", words, n, h) for each simple command, n being how many SUBST
-    placeholders its words and redirection targets hold and h how many DOC ones it has, and
-    ("(", None, 0, 0), (")", None, 0, 0) or ("|", None, 0, 0) for each parenthesis and pipe, in
-    order. Each redirection and its target word, and each heredoc operator, are left out of the
-    words. Raises ValueError (from shlex) on an unbalanced quote."""
+    """Pre-passed text as ("words", words, n, feeds) for each simple command, n being how many
+    SUBST placeholders its words and redirection targets hold, and feeds what its stdin gets in
+    order: None for each DOC placeholder (a heredoc, its body in prepass's list) and the word of
+    each HERESTR one (`<<< "text"`). Then ("(", None, 0, ()), (")", None, 0, ()) or
+    ("|", None, 0, ()) for each parenthesis and pipe, in order. Each redirection and its target
+    word, and each heredoc operator, are left out of the words. Raises ValueError (from shlex)
+    on an unbalanced quote."""
     lex = shlex.shlex(text, posix=True, punctuation_chars=";&|()")
     lex.whitespace = " \t\r"
     lex.wordchars += "$-./~*?[]{}=:+@%,^!#"
     lex.commenters = ""
-    seg, target, n, h = [], False, 0, 0
+    seg, target, n, feeds = [], False, 0, []
     for tok in lex:
         if tok == "\n" or (tok and set(tok) <= set(";&|()")):
-            if seg or n or h:
-                yield "words", seg, n, h
-            seg, target, n, h = [], False, 0, 0
+            if seg or n or feeds:
+                yield "words", seg, n, feeds
+            seg, target, n, feeds = [], False, 0, []
             pipe = tok.replace("(", "").replace(")", "") in ("|", "|&")
-            yield from ((c, None, 0, 0) for c in tok if c in "()" or (c == "|" and pipe))
-        elif tok == REDIR:
-            target = True
+            yield from ((c, None, 0, ()) for c in tok if c in "()" or (c == "|" and pipe))
+        elif tok in (REDIR, HERESTR):
+            target = tok
         elif tok == DOC:
-            h += 1
+            feeds.append(None)
         elif target:
+            if target == HERESTR:
+                feeds.append(tok)
             target = False  # the redirection's file or fd (`>out`, `2>&1`, `<<< "$msg"`)
             n += tok.count(SUBST)
         else:
             seg.append(tok)
             n += tok.count(SUBST)
-    if seg or n or h:
-        yield "words", seg, n, h
+    if seg or n or feeds:
+        yield "words", seg, n, feeds
 
 
 def segments(command):
@@ -514,9 +521,10 @@ def calls(command, heads, cwd, rest=None, depth=0, stack=(), check=None):
     inside. With rest (a list), what the reader leaves unread is appended
     to it, so a caller can tell a command it can't read (`xargs git push`) from no command at
     all: the words after each simple command's name, joined, except for a command in heads
-    (the caller judges those) or in TEXT_COMMANDS; each heredoc body a shell runs, fed to it
-    directly or through a pipe (`bash <<EOF`, `cat <<EOF | sh`), never one a command only
-    reads (`cat > f <<EOF`); and each body or script that can't be parsed (a shlex error, or
+    (the caller judges those) or in TEXT_COMMANDS; each heredoc body or here-string a shell
+    runs, fed to it directly or through a pipe (`bash <<EOF`, `sh <<< "..."`, `cat <<EOF | sh`),
+    never one a command only reads (`cat > f <<EOF`); and each body or script that can't be
+    parsed (a shlex error, or
     nested deeper than NEST_MAX), whole, while the rest of the command is still read. Raises
     ValueError when the command itself can't be parsed, and, without rest, when a body or
     script can't. check, when given, runs before each body or script is parsed (the caller's
@@ -539,7 +547,7 @@ def calls(command, heads, cwd, rest=None, depth=0, stack=(), check=None):
             rest.append(text)  # unread: the caller's log sees any call it names
             return []
 
-    for kind, words, n, h in _split(prepass(command, bodies, docs)):
+    for kind, words, n, feeds in _split(prepass(command, bodies, docs)):
         if kind == "|":  # the last command's heredocs flow on into the next one
             piped = last
             continue
@@ -553,7 +561,13 @@ def calls(command, heads, cwd, rest=None, depth=0, stack=(), check=None):
         for body in bodies[k:k + n]:
             out += inner(body, cwd, stack)
         k += n
-        last, kd = (docs or [])[kd:kd + h], kd + h
+        last = []  # what this command's stdin gets: heredoc bodies and here-string words
+        for f in feeds:
+            if f is None:
+                last.append(docs[kd] if kd < len(docs) else "")
+                kd += 1
+            else:
+                last.append(f)
         feed, piped = last + piped, []
         if not words:
             continue

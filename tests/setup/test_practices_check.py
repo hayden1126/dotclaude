@@ -1752,7 +1752,8 @@ class Push(BashBase):
         logged = ("git commit -am x && git submodule foreach git push",
                   "git push origin main; printf x | xargs git push",
                   "cat <<'EOF' | bash\ngit push\nEOF", "sh -s <<'EOF'\ngit push\nEOF",
-                  "echo `echo \"x`; bash <<'EOF'\ngit commit -m y\nEOF")
+                  "echo `echo \"x`; bash <<'EOF'\ngit commit -m y\nEOF",
+                  'bash <<< "git push origin main"')
         for n, command in enumerate(logged):
             with self.subTest(command=command):
                 before = self.log()
@@ -1765,7 +1766,8 @@ class Push(BashBase):
         quiet = ("cat > d.sh <<'EOF'\ngit push\nEOF", 'grep -rn "git push" .',
                  "rg -l 'gh pr create' src", "git grep -n 'git push'",
                  "git commit -m 'then git push'", "git commit -F - <<'EOF'\nfix: git push\nEOF",
-                 "gh pr create --draft --title 'git push'", "bash script.sh <<'EOF'\ngit push\nEOF")
+                 "gh pr create --draft --title 'git push'", "bash script.sh <<'EOF'\ngit push\nEOF",
+                 'cat <<< "git push"')
         for n, command in enumerate(quiet):
             with self.subTest(command=command):
                 before = self.log()
@@ -2408,6 +2410,12 @@ class BashWords(unittest.TestCase):
             "cat <<'EOF' | bash\ngit push\nEOF": ["", "git push\n", ""],
             "cat <<A > f; bash <<B\nnot run\nA\ngit push\nB": ["", "git push\n", ""],
             "cat <<'EOF'; bash\ngit push\nEOF": ["", ""],  # `;` feeds nothing on
+            # A here-string a shell runs counts too (follow-up to round 3).
+            'bash <<< "git push"': ["git push", ""],
+            'cat <<< "git push" | sh -s': ["", "git push", "-s"],
+            'cat <<< "git push"': [""],
+            'git commit -F - <<< "git push"': [],
+            'bash -c "x" <<< "git push"': [""],  # -c: x is the script, stdin isn't
         }
         for command, want in cases.items():
             with self.subTest(command=command):
