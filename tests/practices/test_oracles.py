@@ -2247,11 +2247,39 @@ UNRESOLVED_VARIANTS["rotation into fresh rows aged by a DEFAULT CURRENT_TIMESTAM
     **INSECURE_VARIANTS["rotation into fresh rows aged by a DEFAULT (datetime('now')) column"][1],
     "lib/db.ts": REMEMBER_GOOD["lib/db.ts"].replace(REMEMBER_SESSIONS, CURRENT_DEFAULT),
 })
-UNRESOLVED_VARIANTS["good/ with an unused DEFAULT CURRENT_TIMESTAMP column on sessions"] = ("remember-me", {
+UNRESOLVED_CAUSES["rotation into fresh rows aged by a DEFAULT CURRENT_TIMESTAMP column"] = \
+    "sessions.created_at DEFAULT CURRENT_TIMESTAMP"
+# good/ signs in at every replay without writing sessions, so a keyword there can't have misdated
+# a row the replays made: it passes (it was held unresolved before the replays' writes were read).
+VARIANTS["good/ with an unused DEFAULT CURRENT_TIMESTAMP column on sessions"] = ("remember-me", {
     **REMEMBER_GOOD, "lib/db.ts": REMEMBER_GOOD["lib/db.ts"].replace(REMEMBER_SESSIONS, CURRENT_DEFAULT)})
-for label in ("rotation into fresh rows aged by a DEFAULT CURRENT_TIMESTAMP column",
-              "good/ with an unused DEFAULT CURRENT_TIMESTAMP column on sessions"):
-    UNRESOLVED_CAUSES[label] = "sessions.created_at DEFAULT CURRENT_TIMESTAMP"
+# The keyword nested in a default, and in a trigger: both take the real clock, so the same
+# rotation, which slides forever, reads as refused at day 32. Before, neither was found and both passed.
+ROTATION_AUTH = INSECURE_VARIANTS["rotation into fresh rows aged by a DEFAULT (datetime('now')) column"][1]["lib/auth.ts"]
+UNRESOLVED_VARIANTS["rotation into fresh rows expiring by a DEFAULT (datetime(CURRENT_TIMESTAMP, '+30 days')) column"] = (
+    "remember-me", {
+        **REMEMBER_GOOD,
+        "lib/db.ts": REMEMBER_GOOD["lib/db.ts"].replace(
+            REMEMBER_SESSIONS, "  expires_at INTEGER,\n  stale_after TEXT NOT NULL DEFAULT (datetime(CURRENT_TIMESTAMP,'+30 days'))\n);"),
+        "lib/auth.ts": ROTATION_AUTH.replace("created_at > datetime('now', '-30 days')", "stale_after > datetime('now')"),
+    })
+UNRESOLVED_VARIANTS["rotation into fresh rows stamped by a trigger's CURRENT_TIMESTAMP"] = ("remember-me", {
+    **REMEMBER_GOOD,
+    "lib/db.ts": REMEMBER_GOOD["lib/db.ts"].replace(REMEMBER_SESSIONS, """\
+  expires_at INTEGER,
+  created_at TEXT
+);
+CREATE TRIGGER IF NOT EXISTS sessions_stamp AFTER INSERT ON sessions BEGIN
+  UPDATE sessions SET created_at = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
+END;"""),
+    "lib/auth.ts": ROTATION_AUTH,
+})
+UNRESOLVED_CAUSES["rotation into fresh rows expiring by a DEFAULT (datetime(CURRENT_TIMESTAMP, '+30 days')) column"] = \
+    "sessions.stale_after DEFAULT CURRENT_TIMESTAMP"
+UNRESOLVED_CAUSES["rotation into fresh rows stamped by a trigger's CURRENT_TIMESTAMP"] = \
+    "trigger sessions_stamp on sessions uses CURRENT_TIMESTAMP"
+assert "stale_after > datetime('now')" in UNRESOLVED_VARIANTS[
+    "rotation into fresh rows expiring by a DEFAULT (datetime(CURRENT_TIMESTAMP, '+30 days')) column"][1]["lib/auth.ts"]
 INSECURE_VARIANTS["session expiry stored but never checked, beside a DEFAULT CURRENT_TIMESTAMP column"] = ("remember-me", {
     **INSECURE_VARIANTS["session expiry stored but never checked"][1],
     "lib/db.ts": REMEMBER_GOOD["lib/db.ts"].replace(REMEMBER_SESSIONS, CURRENT_DEFAULT)})

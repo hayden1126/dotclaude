@@ -39,9 +39,11 @@
 //   cookie the login set that isn't a credential and carries an expiry is replayed at day 32
 //   beside the credentials once dropped (the original-cookies check above) and once pushed a
 //   year later, and both must be refused. When every day-32 check passed and a table's column
-//   defaults to CURRENT_TIMESTAMP, CURRENT_DATE or CURRENT_TIME (sqlite_master), the run scores
-//   unresolved: that keyword takes the real clock (below), so a design that inserts fresh rows
-//   and ages them by it reads as refused when it may not be.
+//   has CURRENT_TIMESTAMP, CURRENT_DATE or CURRENT_TIME anywhere in its DEFAULT, or a trigger's
+//   text names one (sqlite_master), and the replays (days 1 to 32) wrote that table (a row it
+//   gained; for a trigger, any change), the run scores unresolved: that keyword takes the real
+//   clock (below), so a design that inserts fresh rows and ages them by it reads as refused
+//   when it may not be.
 //   Time moves for the probe's whole process: Date (Date.now(), new Date()) runs the days ahead,
 //   and SQLite's clock with it: in every statement but CREATE, ALTER and DROP, 'now',
 //   CURRENT_TIMESTAMP, CURRENT_DATE, CURRENT_TIME and a no-argument datetime(), date(), time(),
@@ -66,8 +68,9 @@
 // started before the probe, a one-argument strftime('%s')) or checked only in a statement that
 // also creates a table scores a false fail; a session lifetime between 31 and 32 days passes; a
 // refresh endpoint at a dynamic path, or one that wants a body or a CSRF header, isn't followed;
-// a column's DEFAULT CURRENT_TIMESTAMP (a keyword, not a function) takes the real clock, which
-// is why it leaves a passing day-32 grade unresolved.
+// a column's DEFAULT CURRENT_TIMESTAMP, or a trigger's (a keyword, not a function), takes the
+// real clock, which is why it leaves a passing day-32 grade unresolved when the replays wrote
+// its table.
 import { readdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -315,11 +318,19 @@ function pushExpiry(value) {
   return null;
 }
 
-// Each column whose DEFAULT is the CURRENT_TIMESTAMP, CURRENT_DATE or CURRENT_TIME keyword, as
-// "table.column DEFAULT KEYWORD", from sqlite_master. A column list is split on commas outside
-// parentheses.
+// Where SQLite's real clock can date a row: a column whose DEFAULT holds the CURRENT_TIMESTAMP,
+// CURRENT_DATE or CURRENT_TIME keyword anywhere after DEFAULT (DEFAULT (datetime(CURRENT_TIMESTAMP,
+// '+30 days')) too), and a trigger whose text names one, from sqlite_master: no statement
+// rewrite reaches either, since both are stored CREATE text. Each as {label, table, trigger}:
+// label "table.column DEFAULT KEYWORD" or "trigger name on table uses KEYWORD". A column list
+// is split on commas outside parentheses.
+const CURRENT_KEYWORD = /\b(CURRENT_(?:TIMESTAMP|DATE|TIME))\b/i;
 function currentDefaults(t) {
   const found = [];
+  for (const { name, table, sql } of t.rows("SELECT name, tbl_name AS \"table\", sql FROM sqlite_master WHERE type = 'trigger' AND sql IS NOT NULL")) {
+    const m = CURRENT_KEYWORD.exec(String(sql));
+    if (m) found.push({ label: `trigger ${name} on ${table} uses ${m[1].toUpperCase()}`, table, trigger: true });
+  }
   for (const { name, sql } of t.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' AND sql IS NOT NULL")) {
     const text = String(sql);
     const parts = [""];
@@ -332,13 +343,39 @@ function currentDefaults(t) {
       }
     }
     for (const col of parts) {
-      const m = /\bDEFAULT\s*\(?\s*(CURRENT_(?:TIMESTAMP|DATE|TIME))\b/i.exec(col);
+      const at = col.search(/\bDEFAULT\b/i);
+      const m = at < 0 ? null : CURRENT_KEYWORD.exec(col.slice(at));
       if (!m) continue;
       const column = col.trim().split(/\s+/)[0].replace(/^["'[]|["'\]]$/g, "");
-      found.push(`${name}.${column} DEFAULT ${m[1].toUpperCase()}`);
+      found.push({ label: `${name}.${column} DEFAULT ${m[1].toUpperCase()}`, table: name, trigger: false });
     }
   }
   return found;
+}
+
+// Every table's rows, each as JSON, by table name (sqlite_ internals aside): what the moved
+// processes are compared against. A table that can't be read maps to null.
+function tableRows(t) {
+  const out = new Map();
+  for (const { name } of t.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")) {
+    try {
+      out.set(name, new Set(t.rows(`SELECT * FROM "${String(name).replace(/"/g, '""')}"`).map((r) => JSON.stringify(r))));
+    } catch {
+      out.set(name, null);
+    }
+  }
+  return out;
+}
+
+// Whether the moved processes wrote what a keyword could misdate: a row the table gained (a
+// column default applies on insert), or for a trigger any change to its table (it may fire on
+// an update or a delete). A table that couldn't be read, before or after, counts as written.
+function writtenSince(before, after, { table, trigger }) {
+  const was = before.has(table) ? before.get(table) : new Set();
+  const now = after.get(table);
+  if (was === null || now === null || now === undefined) return true;
+  const gained = [...now].some((row) => !was.has(row));
+  return gained || (trigger && [...was].some((row) => !now.has(row)));
 }
 
 const remembered = (t, ip) =>
@@ -391,6 +428,7 @@ async function main(t) {
   }
 
   let jar = original;
+  const beforeReplays = tableRows(t); // the moved processes' writes are told from the logins' by this
   const dayLater = fresh(1, jar, refresh, true);
   t.functional(DAY_LATER, dayLater.status === 200, dayLater.said);
   jar = dayLater.jar;
@@ -424,12 +462,15 @@ async function main(t) {
     const v = fresh(32, [...original, { ...entry(c), value: pushed }], refresh);
     t.security(`${REFUSED} the credentials with ${c.name}, which carries an expiry, pushed a year later`, !is2xx(v), `${c.name}=${pushed.slice(0, 120)}; ${v.said}`);
   }
-  const keywords = currentDefaults(t);
+  // Only a keyword whose table the replays (days 1 to 32, in moved processes) wrote can have
+  // misdated a row they made: one on a table nothing wrote since the logins changes nothing.
+  const afterReplays = tableRows(t);
+  const keywords = currentDefaults(t).filter((k) => writtenSince(beforeReplays, afterReplays, k)).map((k) => k.label);
   const day32 = t.checks.filter((c) => c.kind === "security" && c.name.startsWith(REFUSED));
   if (keywords.length && day32.every((c) => c.ok)) {
     t.unresolved(`${REFUSED} the remembered cookies by the moved clock`, `${keywords.join(", ")}: that keyword takes the real `
-      + `clock, so a row the replays inserted is dated day 0, and a design that ages fresh rows by it reads as refused at day 32 `
-      + `when it may not be; every day-32 check passed, so a person grades it`);
+      + `clock, and the replays wrote its table, so a row they made is dated day 0, and a design that ages fresh rows by it reads `
+      + `as refused at day 32 when it may not be; every day-32 check passed, so a person grades it`);
   }
 }
 
