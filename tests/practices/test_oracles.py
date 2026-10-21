@@ -2743,7 +2743,7 @@ class RunHarness(unittest.TestCase):
         r = self.harness
         result = json.dumps({"type": "result", "subtype": "success", "num_turns": 1, "total_cost_usd": 0})
         fake = lambda case, arm, model, effort=None: [("task", "x", [sys.executable, "-c", f"print({result!r})"])]
-        args = argparse.Namespace(model="m", effort=None, contain=False, keep=False)
+        args = argparse.Namespace(model="m", effort=None, contain=False, keep=False, n=5)
         saved = r.turns_for
         r.turns_for = fake
         try:
@@ -2752,6 +2752,7 @@ class RunHarness(unittest.TestCase):
         finally:
             r.turns_for = saved
         self.assertEqual((rows["A"]["hook"], rows["C"]["hook"]), (r.NO_HOOK, r.hook_hash()))
+        self.assertEqual((rows["A"]["planned_n"], rows["C"]["planned_n"]), (5, 5))
         self.assertEqual({rows["A"]["case_hash"], rows["C"]["case_hash"]}, {r.case_hash("idor")})
         self.assertEqual(sorted(rows["C"]["skills"]), sorted(r.PRACTICES_SKILLS))
         self.assertEqual(r.fingerprint(rows["C"]), {"skills": rows["C"]["skills"], "hook": r.hook_hash(),
@@ -2776,7 +2777,7 @@ class RunHarness(unittest.TestCase):
                 self.row("idor", "A", "fail"),                          # a case not in this run
                 self.row("email-change", "A", "pass", effort="low", **stream(3)),  # another effort
             ]
-            (tmp / "run1" / "results.jsonl").write_text("\n".join(json.dumps(x) for x in lines) + "\nnot json\n\n")
+            (tmp / "run1" / "results.jsonl").write_text("\n".join(json.dumps(x) for x in lines) + "\n\n")
             # A copy of run1's file under another name: the same runs, so its rows are already taken.
             (tmp / "copy.jsonl").write_text((tmp / "run1" / "results.jsonl").read_text())
             with contextlib.redirect_stdout(io.StringIO()) as out:
@@ -2785,10 +2786,15 @@ class RunHarness(unittest.TestCase):
                                        "m", ["email-change", "reset-host"])
             self.assertEqual(len(rows), 3)
             self.assertTrue(all(x["imported"] == str((tmp / "run1" / "results.jsonl").resolve()) for x in rows))
-            self.assertIn("3 arm-A row(s) for m at effort default in these cases; 0 already taken; 5 other line(s) skipped",
+            self.assertIn("3 arm-A row(s) for m at effort default in these cases; 0 already taken; 4 other row(s) skipped",
                           out.getvalue())
-            self.assertIn("0 arm-A row(s) for m at effort default in these cases; 3 already taken; 5 other line(s) skipped",
+            self.assertIn("0 arm-A row(s) for m at effort default in these cases; 3 already taken; 4 other row(s) skipped",
                           out.getvalue())
+            # A line that isn't a row exits, naming file:line, as --summarize does: it could be a dropped A row.
+            (tmp / "bad.jsonl").write_text(json.dumps(lines[0]) + "\n" + json.dumps(lines[1])[:-1] + ",}\n")
+            with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as stop:
+                r.load_baseline([tmp / "bad.jsonl"], "m", ["email-change"])
+            self.assertIn(f"{(tmp / 'bad.jsonl').resolve()}:2: not JSON", str(stop.exception.code))
             with contextlib.redirect_stdout(io.StringIO()):
                 low = r.load_baseline([tmp / "run1"], "m", ["email-change"], "low")
             self.assertEqual([x["verdict"] for x in low], ["pass"])
@@ -3090,12 +3096,12 @@ class RunHarness(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="practices-summarize-") as tmp:
             tmp = Path(tmp)
             (tmp / "run1").mkdir()
-            (tmp / "run1" / "results.jsonl").write_text("".join(json.dumps(x) + "\n" for x in first) + "not json\n")
+            (tmp / "run1" / "results.jsonl").write_text("".join(json.dumps(x) + "\n" for x in first) + "\n")
             (tmp / "more.jsonl").write_text("".join(json.dumps(x) + "\n" for x in second))
             code, text = self.summarize_main(tmp / "run1", tmp / "more.jsonl")
             self.assertEqual(code, 1, text)
-            self.assertIn("6 row(s); 0 already taken; 1 other line(s) skipped", text)
-            self.assertIn("1 row(s); 1 already taken; 0 other line(s) skipped", text)
+            self.assertIn("6 row(s); 0 already taken\n", text)  # an empty line is no row and no problem
+            self.assertIn("1 row(s); 1 already taken\n", text)
             self.assertRegex(text, r"email-change\s+A .*discriminates \(fail 3 of 3 valid\)")
             self.assertRegex(text, r"email-change\s+C\s+2\s+0\s+0\s+2\s+0 .*MISS \(pass 2 of 4\).*2 unresolved")
             self.assertIn("unresolved email-change/C #2 (unresolved): the oracle couldn't determine it (the page uses "
@@ -3128,6 +3134,123 @@ class RunHarness(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 self.summarize_main(tmp / "missing.jsonl")
 
+    def graded_rows(self):
+        """Five arm-C email-change rows as a run writes them, #5 unresolved."""
+        skills = {"server-code": "a" * 64, "auth-secrets": "b" * 64}
+        rows = [self.row("email-change", "C", "pass", skills, run=i, planned_n=5,
+                         stream=[f"/out/email-change-C-{i}/stream.jsonl"], diff=f"/out/email-change-C-{i}/diff.patch")
+                for i in range(1, 6)]
+        rows[4].update(verdict="unresolved", checks=[{"name": "unresolved: x", "ok": False, "detail": "a page"}])
+        return rows
+
+    def test_summarize_refuses_a_line_it_would_skip(self):
+        # A hand edit that breaks a line, or misspells a verdict, exits naming file:line: skipping
+        # it would drop that row from the bar, and a green line could follow.
+        rows = self.graded_rows()
+        graded = json.dumps({**rows[4], "reviewed": True, "hand_verdict": "fail"})
+        edits = {
+            "a trailing comma": (graded[:-1] + ', }', "not JSON"),
+            "a misspelled hand verdict": (json.dumps({**rows[4], "reviewed": True, "hand_verdict": "fial"}),
+                                          "hand_verdict 'fial' is not one of 'pass', 'fail', 'broken'"),
+            "reviewed as a string": (json.dumps({**rows[4], "reviewed": "true", "hand_verdict": "fail"}),
+                                     "reviewed 'true' is not true or false"),
+            "an unknown arm": (json.dumps({**rows[4], "arm": "E"}), "unknown arm 'E'"),
+            "a planned n that isn't a count": (json.dumps({**rows[4], "planned_n": "5"}), "planned_n '5' is not a positive"),
+            "a JSON value that isn't an object": ("[1, 2]", "not a JSON object"),
+        }
+        with tempfile.TemporaryDirectory(prefix="practices-refuse-") as tmp:
+            path = Path(tmp) / "results.jsonl"
+            for label, (line, why) in edits.items():
+                with self.subTest(label):
+                    path.write_text("".join(json.dumps(x) + "\n" for x in rows[:4]) + line + "\n")
+                    with self.assertRaises(SystemExit) as stop:
+                        self.summarize_main(path)
+                    self.assertIn(f"{path.resolve()}:5: {why}", str(stop.exception.code))
+                    self.assertIn("no bar is printed", str(stop.exception.code))
+            # The same edit made right reads 4 pass and 1 fail: a miss, the row counted.
+            path.write_text("".join(json.dumps(x) + "\n" for x in rows[:4]) + graded + "\n")
+            code, text = self.summarize_main(path)
+            self.assertEqual(code, 1, text)
+            self.assertRegex(text, r"email-change\s+C\s+4\s+1\s+0\s+0\s+0 .*MISS \(pass 4 of 5\)")
+
+    def test_summarize_wants_the_planned_runs(self):
+        # A run cut short (Ctrl-C after 4 of 5) reads as short without -n, from planned_n.
+        rows = self.graded_rows()[:4]
+        missed, text = self.summary_of(rows, ["email-change"], ["C"], None)
+        self.assertEqual(missed, ["email-change/C"])
+        self.assertIn("MISS (pass 4 of 5)", text)
+        # Rows from before planned_n (the old form) still read: n is the rows a line holds, or -n.
+        old = [{k: v for k, v in x.items() if k != "planned_n"} for x in rows]
+        self.assertEqual(self.summary_of(old, ["email-change"], ["C"], None)[0], [])
+        self.assertIn("MISS (pass 4 of 5)", self.summary_of(old, ["email-change"], ["C"], 5)[1])
+        # Both forms in one line: the largest planned_n stands.
+        self.assertIn("MISS (pass 4 of 5)", self.summary_of(old[:3] + rows[3:], ["email-change"], ["C"], None)[1])
+        # More rows than planned (two files pooled): every row must pass, as before.
+        extra = [self.row("email-change", "C", verdict, rows[0]["skills"], planned_n=5) for verdict in ("pass", "fail")]
+        self.assertIn("MISS (pass 5 of 6)", self.summary_of(rows + extra, ["email-change"], ["C"], None)[1])
+        # A live run records it on every row, a harness error's row included.
+        self.assertIn('row.setdefault("planned_n", a.n)', Path(self.harness.__file__).read_text())
+        self.assertIn('"planned_n": args.n,', Path(self.harness.__file__).read_text())
+
+    def grade_main(self, *argv):
+        saved = sys.argv
+        sys.argv = ["run.py", "--grade", *map(str, argv)]
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                code = self.harness.main()
+        finally:
+            sys.argv = saved
+        return code, out.getvalue()
+
+    def test_grade_sets_one_row_and_rewrites_the_file_atomically(self):
+        rows = self.graded_rows()
+        with tempfile.TemporaryDirectory(prefix="practices-grade-") as tmp:
+            run_dir = Path(tmp) / "run1"
+            run_dir.mkdir()
+            path = run_dir / "results.jsonl"
+            # Another line's own spacing is kept byte for byte.
+            lines = [json.dumps(x) + "\n" for x in rows[:4]] + [json.dumps(rows[4], indent=None, separators=(",", ":")) + "\n"]
+            lines[1] = json.dumps(rows[1], separators=(", ", ":  ")) + "\n"
+            path.write_text("".join(lines))
+            path.chmod(0o600)
+            before = path.read_bytes()
+            refusals = {
+                "an unknown run": (("email-change-C-9", "pass", "read it"), "no row 'email-change-C-9'"),
+                "an unknown verdict": (("email-change-C-5", "unresolved", "read it"), "is not one of pass, fail, broken"),
+                "an empty note": (("email-change-C-5", "pass", "  "), "the note is empty"),
+            }
+            for label, (args, why) in refusals.items():
+                with self.subTest(label), self.assertRaises(SystemExit) as stop:
+                    self.grade_main(run_dir, *args)
+                self.assertIn(why, str(stop.exception.code))
+                self.assertEqual(path.read_bytes(), before)
+            with self.assertRaises(SystemExit):  # the RUN key's parts aren't enough on their own
+                self.grade_main(path, "email-change-5", "pass", "read it")
+            code, text = self.grade_main(run_dir, "email-change-C-5", "pass", "the form posts the token; the action checks it")
+            self.assertEqual(code, 0, text)
+            self.assertIn("graded email-change-C-5", text)
+            after = path.read_text().splitlines(keepends=True)
+            self.assertEqual(after[:4], lines[:4])
+            self.assertEqual(json.loads(after[4]), {**rows[4], "reviewed": True, "hand_verdict": "pass",
+                                                    "hand_note": "the form posts the token; the action checks it"})
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+            self.assertEqual(sorted(p.name for p in run_dir.iterdir()), ["results.jsonl"])  # no temp file left
+            code, text = self.summarize_main(path)
+            self.assertEqual(code, 0, text)
+            self.assertRegex(text, r"email-change\s+C\s+5\s+0\s+0\s+0\s+0 .*  green[;\n]")
+            # A repeated key, or a file --summarize would refuse, is refused and left as it is.
+            for label, extra in (("a repeated key", after[4]), ("a broken line", "{\n")):
+                with self.subTest(label):
+                    path.write_text("".join(after) + extra)
+                    before = path.read_bytes()
+                    with self.assertRaises(SystemExit) as stop:
+                        self.grade_main(path, "email-change-C-5", "fail", "read again")
+                    self.assertIn("2 rows are" if extra != "{\n" else ":6: not JSON", str(stop.exception.code))
+                    self.assertEqual(path.read_bytes(), before)
+            with self.assertRaises(SystemExit):  # it takes no other option
+                self.grade_main(path, "email-change-C-5", "pass", "x", "--arms", "C")
+
     def test_init_skills_that_dont_match_the_arm_mark_the_row_contaminated(self):
         r = self.harness
         self.assertEqual(r.skill_mismatch("A", "server-code", ["init", "review"]), [])
@@ -3140,7 +3263,7 @@ class RunHarness(unittest.TestCase):
         init = json.dumps({"type": "system", "subtype": "init", "skills": ["server-code"]})
         result = json.dumps({"type": "result", "subtype": "success", "num_turns": 1, "total_cost_usd": 0})
         fake = lambda case, arm, model, effort=None: [("task", "x", [sys.executable, "-c", f"print({init!r}); print({result!r})"])]
-        args = argparse.Namespace(model="m", effort=None, contain=False, keep=False)
+        args = argparse.Namespace(model="m", effort=None, contain=False, keep=False, n=5)
         saved = r.turns_for
         r.turns_for = fake
         try:
