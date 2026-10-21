@@ -81,7 +81,7 @@ question text, and list the option it supports first.
 
 | # | Ask | Options | Why |
 |---|---|---|---|
-| 1 | **Scope authority.** Does the graded work (homework, a practice exam, a review sheet) mirror the exam, and which of it? | Mirrors it, naming which (a practice exam, the review sheet, every homework): scope follows it, mocks clone its questions with fresh numbers. / Doesn't: cover the full scope, mock shapes go beyond the review. / Unsure: treat as doesn't. | Settles everything after it (FB-021). |
+| 1 | **Scope authority.** Does the graded work (homework, a practice exam, a review sheet) mirror the exam, and which of it? | Mirrors it, naming which (a practice exam, the review sheet, every homework): scope follows it, mocks clone its questions with fresh numbers. / Doesn't: cover the full scope, mock shapes go beyond the review. / Unsure, or no answer: treat as doesn't. | Settles everything after it (FB-021). |
 | 2 | **Which files belong to this exam?** Show the proposed split by file name: this exam, reserved for a later exam, out. Ask for the exact last in-scope slide and whether its number is the PDF page or the printed slide number. Ask which files hold answers (official solutions, a past exam's key), and which of those sets the student has already attempted. | The proposed split (first). / Other: the student corrects it. | Later material is copied raw and never opened (FB-023); slide and page numbers differ (FB-024, L04). |
 | 3 | **Missing sources.** Only when a source type the exam covers (homework, solutions, recitations, the last lectures) isn't on disk. | I'll add them now. / They arrive during the build. / Proceed without. / Not examined. | "Add them now": stop, wait for the file, re-list, and ask question 2 for it (FB-029). "During the build": a `pending` MANIFEST row that records its planned scope now, last in-scope slide included, since nothing is asked after approval. |
 | 4 | **Exam rules** not found on disk: date and time, length, cheat sheet allowed and its size, calculator, open or closed book, question types. | Pre-filled from the details file or Ed, else open. | Fixes the deliverables (FB-026). |
@@ -104,7 +104,9 @@ student can change it while reviewing:
 - Ship priority if time runs short: notes page, then cheat sheet, then mock (FB-004).
 - Publishing: private artifacts only. A deploy to the student's own site waits for an explicit go
   after review (FB-114).
-- Walk-throughs (`09-tutor`) and polish passes (`10-polish`) run on request after the build.
+- Walk-throughs, quizzes and questions (`09-tutor`) run on request, during the build too, within
+  its limits while STATUS's `Build running` line stands (notes fixes wait for the build's end);
+  polish passes (`10-polish`) after the build.
 
 ## Step 4: Draft the hub files
 
@@ -114,7 +116,8 @@ the plan:
 - **`MANIFEST.md`** from `<skill>/templates/MANIFEST.md.tmpl`: one row per source file with its
   scope (`in`, a page range ending at the last in-scope slide, `reserved`, `out`, `pending`) and
   whether it holds answers. These rows are the one statement of scope: CLAUDE.md and PLAN.md point
-  to them and never restate them (FB-024). `01-ingest` fills the page counts from disk.
+  to them and never restate them (FB-024). `01-ingest` fills the page counts from disk. A staff
+  statement that cuts a topic inside an `in` range goes under its Topic cuts.
 - **`CLAUDE.md`** from `<skill>/templates/hub-CLAUDE.md.tmpl`: the exam facts, the instructor's
   exam-format statement quoted with its source (the only basis for any claim about what the exam
   will ask, FB-012), the logistics, and the repo rules. A quote that also states scope stays
@@ -175,8 +178,10 @@ Read CLAUDE.md, PLAN.md and STATUS.md, then load the exam-prep skill. The studen
 PLAN.md and every decision in it is final: execute it end to end, stage 01 through [last stage],
 without asking anything. Log judgment calls in STATUS.md instead of asking. If a stage's outputs
 already exist on disk, resume from the first unfinished stage instead of redoing finished work.
-The exam is [date and time]; if time runs short, ship in PLAN.md's priority order. Leave reserved
-material unopened. End each stage with the handoff skill and a local commit. Never push.
+First add the STATUS line `Build running: <date>` (SKILL.md hard rule 1, which says when it comes
+out). The exam is [date and time]; if time runs short, ship in PLAN.md's priority order. Leave
+reserved material unopened. End each stage with STATUS current, a local commit and
+handoff-check, and the session with the handoff skill. Never push.
 ```
 
 With the hq skill, one bare command: `hq-open <name> "<prompt>"`, or in the own-conventions case

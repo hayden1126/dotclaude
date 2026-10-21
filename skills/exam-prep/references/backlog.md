@@ -11,7 +11,8 @@ marks the rest `dropped`, with the reason.
 - **Sev:** `high` costs exam points or study time on every use, `medium` is real friction, `low` is
   polish.
 - **Evidence:** `K-<axis>.F<n>` is a finding from the critique of the two runs' products, with
-  axes `org`, `word`, `struct` and `ui`. Harvest ids work as in `feedback-log.md`. Both are private.
+  axes `org`, `word`, `struct` and `ui`. Harvest ids work as in `feedback-log.md`. `dry run 2,
+  point N` is a point in the report of the skill's second dry run. All three are private.
 - **Status:** `open`, `trying (round N)`, `kept (round N)` or `dropped (round N: why)`; or
   `shipped in v1 (why)` for an item the baseline build couldn't avoid.
 - **Conflicts** name an existing rule the item would change. Ask before trying those.
@@ -69,6 +70,8 @@ marks the rest `dropped`, with the reason.
 | K42 | Ship a content-free chassis with explicit insertion markers, instead of slicing a full page by line patterns. | harvest | B4 (section 5d) | shipped in v1 (a content-free chassis needs insertion points: `templates/notes-chassis.html`) |
 | K43 | The page checker reads section and figure ids from the backbone registry instead of hard-coding them. | harvest | B4 (section 5d) | open |
 | K44 | Generate the key-leak markers from the key itself. | harvest | B4 (section 5a) | open |
+| K67 | Ship a template for `05-verify` step 2's notes-to-checker comparison, with its planted-error test. The dry run's first hand-written one passed a wrong distance and a wrong visit order; only its own mutation test caught them. | dry run | dry run 2, point 10 | open |
+| K68 | Ship a fragment fidelity checker for `06-site` step 3 (CONVERT.md's rule that a fragment says what its section says), with its planted-error test. The dry run wrote its own. | dry run | dry run 2, point 10 | open |
 
 ## Low
 

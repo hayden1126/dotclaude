@@ -41,8 +41,9 @@ from later corrections. A retired rule is struck through and keeps its number. A
   backbone names, and every use says which convention applies, with a link there. Example (a
   search course): the tie-break order; goal test at expansion or at generation; an explored set or
   none; successor order and the push order.
-- **S9. How it's tested.** Each subsection has a "How it's tested" line: the answer shape the
-  exam asks for and the practice questions that drill it ("Practice: [HW1 Q2c], [Rec5 Q6]").
+- **S9. How it's tested.** Each subsection but the Must-know list has a "How it's tested" line:
+  the answer shape the exam asks for and the practice questions that drill it ("Practice: [HW1
+  Q2c], [Rec5 Q6]").
   Pitfall callouts mark the classic mistakes.
 - **S10. Citations and notation.** Cite as `[D5 p.23]`, `[D2 #/14]` or `[HW1 Q2c]`; no external
   slide links (the sources are local). A section of another document is cited in brackets too
@@ -59,8 +60,9 @@ from later corrections. A retired rule is struck through and keeps its number. A
   `fig-N-<slug>`, `set-<name>-a`). A step links only when the backbone gives it an id; otherwise the
   link goes to its procedure's subsection. Link text names the target ("Worked example 4.3", "Fig
   5.1", "property (b)"), never "here". Recalls ("Recall from §4") and forward pointers ("used again
-  in §7.3") are both links. In notes read in a plain-text tool (S10), a cross-reference is text
-  naming the section instead.
+  in §7.3") are both links. A mention inside the subsection it points into ("Step 4" of the steps
+  just above, "rule (a)" of its own list) stays text. In notes read in a plain-text tool (S10), a
+  cross-reference is text naming the section instead.
 - **S13. The look.** Keep the approved chassis and don't regress it; `CHASSIS.md` holds its rules.
   Writers and converters add content only, into the chassis's own classes: no inline styles and no
   new CSS. Any CSS change is the main session's, checked against the chassis screenshots.

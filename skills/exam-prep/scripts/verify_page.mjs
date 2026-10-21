@@ -38,7 +38,8 @@
 //     math and no horizontal overflow, its closed stems (details) opened too; fewer than two
 //     buttons fail.
 // Screenshots of the viewport (never full page, L23) go to <outdir>: <width>-<scheme>-top.png, one
-// per spy target, one per step-through at its last frame, the first worked example opened (-wex)
+// per spy target, one per step-through at its last frame, one per static figure (its id; one inside
+// a closed worked example is shot with it opened), the first worked example opened (-wex)
 // and the exam-day map opened (-map), and with --views one per view (-view-<name>). Exit 0 when every check passes, 1 on any failure, 2 on bad
 // usage.
 import fs from 'node:fs';
@@ -327,6 +328,31 @@ for (const width of [390, 1280]) {
       await page.evaluate((i) => document.getElementById(i).scrollIntoView({ block: 'center' }), f.id);
       await page.waitForTimeout(200);
       await page.screenshot({ path: path.join(outDir, `${tag}-${f.id}.png`) });
+    }
+
+    // Every static figure too: only a look catches an edge drawn through a node or a label on a line.
+    const statics = await page.evaluate(() => [...document.querySelectorAll('figure[id]')]
+      .filter((f) => !f.querySelector('.fig-controls')).map((f) => f.id));
+    for (const id of statics) {
+      await page.evaluate((i) => {
+        const fig = document.getElementById(i);
+        for (let d = fig.closest('details'); d; d = d.parentElement.closest('details')) {
+          if (!d.open) { d.open = true; d.dataset.vpShot = '1'; }
+        }
+        fig.scrollIntoView({ block: 'center' });
+      }, id);
+      await page.waitForTimeout(200);
+      // A shot of the wrong place would still get the figure's name, so it must be on screen.
+      const seen = await page.evaluate((i) => {
+        const r = document.getElementById(i).getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && r.top < innerHeight && r.bottom > 0;
+      }, id);
+      if (!seen) fail(`${tag}: static figure #${id} not visible for its shot`);
+      await page.screenshot({ path: path.join(outDir, `${tag}-${id}.png`) });
+      await page.evaluate(() => document.querySelectorAll('details[data-vp-shot]').forEach((d) => {
+        d.open = false;
+        delete d.dataset.vpShot;
+      }));
     }
 
     // A closed worked example or exam-day map has no layout, so its math and width are measured

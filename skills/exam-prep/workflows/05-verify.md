@@ -42,8 +42,12 @@ add a `value-<slug>` section to `examples.py` that computes it (a value a worked
 already there), rerun it, and copy the value from `examples.out.md` over the marker: a rerun then
 reproduces every number the notes print. Then compare every worked example in the notes, and
 every value filled from a `value-` section, with `examples.out.md`, by a small script
-(`_build/verify/compare_notes.py`: each example's numbers against its `ex-` section), never by
-eye: a number typed by hand has been wrong before (FB-101, L50).
+(`_build/verify/compare_notes.py`: each example's numbers against its `ex-` section, and every
+order or path it prints, in order), never by eye: a number typed by hand has been wrong before
+(FB-101, L50). Before trusting the script, run it on a scratch copy of the notes with one
+example's number changed, again with two of its steps swapped, and again with two entries of a
+printed order or path swapped: it must fail all three (a first version passed a wrong number and
+a wrong visit order).
 
 ## Step 3: Section reviewers
 
@@ -66,7 +70,8 @@ the page image (FB-104).
 
 ## Step 4: Audit the condensations
 
-Fresh reviewers, not the section reviewers, check every condensation against the sources: here
+Fresh reviewers, not the section reviewers, spawned together with step 3's (they read different
+things), check every condensation against the sources: here
 the Must-know checklists, one reviewer per two or three sections, from the brief's "Audit"
 variant (FB-105). The cheat sheet (`07-cheatsheet`) and the cram order (`08-practice`) get the
 same audit when they exist.

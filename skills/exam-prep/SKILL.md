@@ -121,12 +121,15 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
    a question prompts goes to a dispatched writer (FB-167); the main session keeps the
    bookkeeping (STATUS, `_build/logs/`, MANIFEST.md) and the build steps a workflow gives it.
 10. **Persist everything into the hub.** The session scratchpad doesn't survive a clear (FB-006). End
-    each stage, and any session that stops mid-stage, with the handoff skill and a local commit;
-    never push (FB-005). STATUS stays short: a check's full output or a long list goes in a file
+    each stage with STATUS current, a local commit and `handoff-check` (the handoff skill's
+    script), and a session that ends, mid-stage or not, with the full handoff skill; never push
+    (FB-005). STATUS stays short: a check's full output or a long list goes in a file
     under `_build/logs/`, and STATUS gets its last line and the path.
 11. **Visible options.** Put numbered options in the message itself (FB-009).
 12. **Latest baseline.** Start from the skill's current templates with every past correction
-    applied, never from an old hub's copies (FB-010).
+    applied, never from an old hub's copies (FB-010). Copy one with `cat <src> > <dest>`, never
+    `cp`: the skill's folder is a symlink outside the hub, and `cp`'s source read through it counts
+    as a write target (L71).
 
 Browser checks run Playwright from a script, not chrome-devtools MCP (L20).
 

@@ -74,7 +74,8 @@ Transcribe; never summarize.
 
 ## Format
 - First lines: `# {{DOC}} {{TITLE}}, {{RANGE}} (extract)`, then `Sources:` naming each document
-  and its page or slide count, then `Every page image was viewed.`
+  and its page or slide count as given here, from MANIFEST.md, which you don't open: {{DOC}}
+  {{COUNT}}{{SOLUTIONS: , {{SOLDOC}} {{SOLCOUNT}}}}. Then `Every page image was viewed.`
 - One block per unit, its header naming the unit: a page `### [{{DOC}} p.N] <the page's own
   title>`; a reveal slide `### [{{DOC}} #/h/v] <title>`; a source without pages (a Word file,
   code), one block per section or file, `### [{{DOC}} <section or file name>] <title>`. A run of
@@ -159,12 +160,14 @@ These are the Markdown forms the page's converter reads (06-site); use them exac
   {#<id>}` on one line, then `> Setup: ...`, `> Step 1: ...`, `> **Result:** ...`, and last
   `> **Conclusion:** ...`, inside the quote (the page folds the whole example). A construction
   outside an example ends with an unquoted `**Conclusion:**` line, after a blank line.
-- Each subsection ends with `**How it's tested:** <the answer shape>. Practice: [HW1 Q2c], ...`,
+- Each subsection but the Must-know list ends with `**How it's tested:** <the answer shape>.
+  Practice: [HW1 Q2c], ...`,
   then any `> **Pitfall:** ...` callouts.
 - A derivation only the slides carry, which no practice question asks for (S20): a quote that
   opens `> **Background:** <the evidence, cited: only [D3 p.12] has it; no practice question asks
   for it>`, the derivation inside the same quote.
-- Material in your blocks past this exam's scope cut (MANIFEST.md's Scope column) stays (FB-121):
+- Material in your blocks past this exam's scope cut (MANIFEST.md's Scope column, or one of its
+  topic cuts: {{TOPIC CUTS, or "none"}}) stays (FB-121):
   open it with `> **Not on {{EXAM}}:** <where the scope ends, cited>`. Never cut it.
 - A figure the backbone lists: `<!-- FIG <id>: <what it shows, its data> -->` where it belongs,
   on its own line, with no `<` or `>` in its text (`S to A`, not `S->A`); it is drawn later.
@@ -373,7 +376,8 @@ session assembles the page and checks it in a browser.
   summary lists every bare reference you kept as text and anything you couldn't convert.
 
 ## Scope
-- Work in: {{ROOT}}. Read only, except your one output file.
+- Work in: {{ROOT}}. Read only, except your one output file. Never run `assemble.py` or any
+  other build: the main session builds the page from every fragment (`06-site` step 5).
 - Read first, in full: {{ROOT}}/_build/CONVERT.md, then the component table in
   {{ROOT}}/_build/CHASSIS.md and S11 to S13 in {{ROOT}}/_build/STYLE.md.
 - Source: {{ROOT}}/notes/{{FILE}}. Figures: draw the static ones the backbone's figure shortlist

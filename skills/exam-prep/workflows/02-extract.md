@@ -33,13 +33,16 @@ write) plus ten; a budget too low truncates the extract. Fan out wide here: extr
 cross-references. Stages that do (the writers' links) work from the backbone's fixed id registry
 (FB-054).
 
-While the wave runs, the main session starts the checker (`05-verify`, step 1): it needs only the
-official solutions, and it must reproduce them before anything uses it (FB-100).
+While the wave runs, the main session starts the checker (`05-verify`, step 1) from the first
+extract that holds official solutions, once its agent reports done and that extract's
+`UNREADABLE:` flags are resolved (step 3.2 for that file): the checker needs only those (a course's
+instances arrive with them), and it must reproduce them before anything uses it (FB-100).
 
 ## Step 3: Check what came back
 
 The main session runs every check: delegated agents can't run Python or `pdfinfo`, so a check an
-agent says it ran didn't run (L07).
+agent says it ran didn't run (L07). First `git status`: it names nothing but the extracts (an
+agent that wrote anywhere else broke its brief: undo that and say so in STATUS).
 
 1. `python3 -I <skill>/scripts/extract_check.py`. It checks every in-scope MANIFEST row against
    the blocks: each in-scope page of a PDF rendered and with a block, each in-scope slide of a

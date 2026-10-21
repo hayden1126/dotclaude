@@ -14,7 +14,10 @@ The main session reads all of `_build/extract/`, every staff item in the Ed dige
 such as a tie-break may be tagged `scope` or `format`, not only `hint`) and the practice
 questions. When an extract got something wrong, re-check it on the page image, then fix it in the
 extract itself (writers read the extracts), list it at the top of the backbone, and carry it into
-the checker.
+the checker. Read MANIFEST.md's topic cuts too: under the backbone's Conventions block, one line
+per cut, naming the subsections it reaches and what of it stays in scope (04-write banners them).
+A cut first seen in the Ed digest during the build goes under MANIFEST.md's Topic cuts too, logged
+in STATUS as a judgment call.
 
 ## Step 2: Order by concept
 
@@ -55,7 +58,8 @@ line.
 
 Every practice question part gets a row in the How it's tested table: its shape and conventions
 (from its extract block's `**Shape:**` and `**Conventions:**` lines) and the subsection that
-teaches it. Every subsection lists its practice and a "How it's tested" line (FB-063). A claim
+teaches it. Every subsection but the Must-know list lists its practice and a "How it's tested"
+line (FB-063). A claim
 about the exam itself (what it will ask, its format, what it stresses) cites the instructor's
 exam-format statement or an item in the Ed digest's tag sections (staff-authored, or an endorsed
 answer), never a student signal or a guess (FB-012).

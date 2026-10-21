@@ -267,14 +267,15 @@ At each set's end, its score in the reply and the log: verdicts right, and reaso
       path>` (the branch has merged, so only what the writer left uncommitted goes; a sandboxed
       remove can fail busy or leave it half removed, and a sandbox-off `git worktree prune` clears
       one `git worktree list` marks prunable, L46), and `git branch -d <branch>`.
-4. The checks follow what the stat named. Under `notes/` or `_build/frag/`: `06-site` step 5, all
-   of it, the browser check in the background so the next answer isn't held, its result and the
-   patched section's screenshots seen. With plain-text notes, instead: the touched references
-   checked by eye (`04-write` step 6), and `notes/combined.md` rebuilt whenever it exists. Under
-   `cheatsheet/`: `07-cheatsheet`'s "After shipping", its audit and step 4 (the refit the main
-   session's, Step 7), its republish waiting for item 8; a LaTeX sheet is checked as its `.tex`
-   here (`08-practice`'s "Changing the notes or a sheet" item 3), and the student compiles it only
-   at item 8, after the leak compare.
+   4. The checks follow what the stat named. Under `notes/` or `_build/frag/`: `06-site` step 3's
+      fidelity compare (`_build/verify/fidelity.py`) of the patched section's fragment with its
+      notes file, then `06-site` step 5, all of it, the browser check in the background so the next
+      answer isn't held, its result and the patched section's screenshots seen. With plain-text
+      notes, instead: the touched references checked by eye (`04-write` step 6), and
+      `notes/combined.md` rebuilt whenever it exists. Under `cheatsheet/`: `07-cheatsheet`'s "After
+      shipping", its audit and step 4 (the refit the main session's, Step 7), its republish waiting
+      for item 8; a LaTeX sheet is checked as its `.tex` here (`08-practice`'s "Changing the notes
+      or a sheet" item 3), and the student compiles it only at item 8, after the leak compare.
    5. While a mock is untaken: "Changing the notes or a sheet" item 4, the compare with the
       baseline in `_build/logs/patch-baseline.txt`.
    6. A check in item 4 that fails, a new leak hit in item 5, a wording cut or an audit finding is

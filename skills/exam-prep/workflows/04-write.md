@@ -49,9 +49,10 @@ lines). What every writer is held to, beyond STYLE:
 - **Tested versus background.** Depth follows the backbone's `concise` or `full` mark and its "How
   it's tested" lines. A slide-only derivation no practice question asks for goes in a
   `> **Background:**` quote that opens with that evidence (FB-077).
-- **Out of scope, kept.** Material past the exam's scope cut that a writer's blocks still hold, or
-  that a later scope change cuts, stays under `> **Not on <exam>:** <where the scope ends,
-  cited>` (FB-121); the page shows it as a banner.
+- **Out of scope, kept.** Material past the exam's scope cut (a MANIFEST row's Scope, or a topic
+  cut listed under the table) that a writer's blocks still hold, or that a later scope change
+  cuts, stays under `> **Not on <exam>:** <where the scope ends, cited>` (FB-121); the page shows
+  it as a banner.
 - **Each section ends with its Must-know checklist** (FB-078), `sec-N-must-know`, every point a
   link into the section (in plain-text notes, step 6, a pointer naming the subsection).
 
@@ -59,7 +60,9 @@ lines). What every writer is held to, beyond STYLE:
 
 The main session runs these, since delegated agents can't run scripts (L07):
 
-1. Every planned file exists and holds every heading its backbone section lists.
+1. Every planned file exists and holds every heading its backbone section lists, and `git
+   status` names nothing but the notes files (a writer that changed another section's file or the
+   backbone broke its brief: undo that and say so in STATUS).
 2. `grep -n TODO-VERIFY notes/*.md`: copy the list into STATUS for `05-verify`.
 3. `grep -nE '\b(T[0-9]+|Tree [A-Z])\b' notes/*.md` for coined example labels (S17). Check each
    hit against `_build/extract/`: a label the course's own sources use (T1 for a transaction in a

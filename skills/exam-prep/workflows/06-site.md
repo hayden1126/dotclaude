@@ -48,9 +48,14 @@ each writing its own `_build/frag/secN.html`. Each converter draws its section's
 (every tree or graph example gets one, never ASCII: FB-115) and leaves step-through markers in
 place. Converters use only the chassis's classes (FB-120).
 
-When they return, read each report's list of bare references: wire each in the notes (a link with
-the backbone's id), rerun `linkcheck.py`, and make the same edit in that section's fragment (a
-larger change: have the section converted again).
+When they return, `git status` names nothing but the fragments and steps 1 and 2's files (a
+converter that ran `assemble.py` left a page: delete it; step 5 builds it). Compare each fragment's
+text with its notes file by a script (`_build/verify/fidelity.py`: the words in order, markup
+aside), never by eye, after checking it fails on a scratch copy of a fragment with a word dropped
+and with two sentences swapped. Then read each report's list of bare references: wire each in the
+notes (a link with the backbone's id; a mention inside its own subsection stays text, S12), rerun
+`linkcheck.py`, and make the same edit in that section's fragment (a larger change: have the section
+converted again), then run `fidelity.py` again on the sections touched.
 
 ## Step 4: The exam-day map
 

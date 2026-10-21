@@ -40,7 +40,7 @@ of `practice/` or `_build/verify/`: a diff of those files prints values.
   at the attempt, step 8.3).
 - PLAN.md's Deliverables row for the mock, and its "08 practice" row: how many mocks and the
   question shapes they follow. Its Scope authority line says what the mocks cover (FB-021);
-  MANIFEST.md's Scope column holds the cut.
+  MANIFEST.md's Scope column and its topic cuts hold the cut.
 - `_build/MOCK.md` is the hub's copy of `<skill>/templates/MOCK.md` (`00-intake` step 7, item 2),
   and the hub CLAUDE.md's Repo rules hold the practice keys rule of
   `<skill>/templates/hub-CLAUDE.md.tmpl`. A hub made before either existed copies it now. A hub
@@ -218,7 +218,8 @@ The night before, the student gets a reading list into the verified notes, never
   set last. The line says to bring the misses back: the session moves the sections they point at
   to just after the line (step 8.4) and, with a sheet, builds the final sheet while the student
   reads on.
-- The skip list names each section the exam doesn't reach and why; the Out of time line links
+- The skip list names each section the exam doesn't reach and why, a MANIFEST.md topic cut's
+  subsections and `Not on <exam>` material among them; the Out of time line links
   the Must-know lists (plain-text notes: names them).
 - `## Tonight`: when `07-cheatsheet` found the sheet is collected with a name, its first item
   tells the student to write their name on before handing it in (FB-132). Then the exam's date,

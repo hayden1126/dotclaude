@@ -292,6 +292,27 @@ class BrowserCatchesTest(unittest.TestCase):
         self.fails("reject", "MathJax failed while starting", page=self.edit(
             "svg:{fontCache:'none'},", "svg:{fontCache:'none'}, startup:{pageReady:function(){return Promise.reject(new Error('x'))}},"))
 
+    def test_every_static_figure_is_shot(self):
+        # Dry run 2: only a look catches an edge through a node, and static figures had no shot.
+        page = self.edit("<p>Setup: the range 3 to 7.</p>",
+                         '<p>Setup: the range 3 to 7.</p><figure id="fig-1-in-wex"><svg viewBox="0 0 120 60" '
+                         'role="img" aria-label="A dot"><circle cx="60" cy="30" r="18" class="bx fill-surf"/>'
+                         '</svg></figure>')
+        r = self.verify("statics", page)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        shots = set(os.listdir(os.path.join(self.tmp, "statics", "shots")))
+        for tag in ("1280-light", "1280-dark", "390-light", "390-dark"):
+            for fig in ("fig-2-triangle", "fig-1-in-wex"):
+                self.assertIn(f"{tag}-{fig}.png", shots)
+
+    def test_a_static_figure_that_cannot_be_seen(self):
+        # Its shot would show some other part of the page under the figure's name.
+        self.fails("hidden", "static figure #fig-1-hidden not visible for its shot", page=self.edit(
+            "<p>Setup: the range 3 to 7.</p>",
+            '<p>Setup: the range 3 to 7.</p><figure id="fig-1-hidden" style="display:none"><svg '
+            'viewBox="0 0 10 10" role="img" aria-label="A dot"><circle cx="5" cy="5" r="4"/></svg>'
+            '</figure>'))
+
     def test_overflow_inside_an_open_worked_example(self):
         self.fails("wexwide", "with the worked examples and map open", page=self.edit(
             "<p>Setup: the range 3 to 7.</p>",

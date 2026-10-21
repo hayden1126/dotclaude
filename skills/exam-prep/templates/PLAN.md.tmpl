@@ -26,7 +26,7 @@ Each line ends with its source: the student, `Ed #N`, `<file>:<line>`, or (defau
 - Checker: {{what is computable: arithmetic, search traces, executed queries, rule derivations | nothing is computable, so review leans on cited sources and the cold solver}} ({{SOURCE}})
 - Priority if time runs short: notes page, then cheat sheet, then mock (default)
 - Publishing: private artifacts only; a deploy anywhere else waits for the student's go after review (default)
-- Walk-throughs and polish passes: on request after the build (default)
+- Walk-throughs, quizzes and questions: on request, during the build too, within `09-tutor`'s limits while STATUS's `Build running` line stands (notes fixes wait for its end); polish passes: after the build (default)
 
 ## Deliverables
 
@@ -54,7 +54,7 @@ spawn, and spawn unnamed.
 | 01 ingest | main | {{ADAPTERS: PDF, reveal.js HTML, ebook, Ed}} | `MANIFEST.md` counts, renders, Ed digest |
 | 02 extract | {{N}} agents | {{DECK SPLITS: one whole deck per agent; decks over P pages split at a section divider, 3-page overlap}} | `_build/extract/<doc>.md` |
 | 03 backbone | main | {{EXPECTED SECTIONS, final cut set by the extracts}} | `_build/backbone.md` |
-| 04 write | {{N}} writers | one per backbone section | `notes/NN-<slug>.md` |
+| 04 write | {{N}} writers, or the main session alone (two or three short sections, `04-write`) | one per backbone section | `notes/NN-<slug>.md` |
 | 05 verify | main, {{N}} section reviewers, {{N}} checklist auditors | | fixes applied single-threaded |
 | 06 site | {{N}} converters, then main | | the notes page |
 | 07 cheat sheet | main, {{N}} content gap scanners, then 1 question-type scanner, then 1 auditor | {{ONLY IF ALLOWED}} | `cheatsheet/` |

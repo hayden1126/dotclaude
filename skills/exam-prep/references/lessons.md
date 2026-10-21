@@ -65,6 +65,7 @@ should warn about it.
 | L47 | all | A message to a running session is read only after its current step. | Put any change that matters in the files too. | H1.G11 |
 | L48 | all | Edits that carry LaTeX break in heredocs and `perl` (escapes, multibyte glyphs). | Use the Edit tool, with an assert-before-write script for bulk changes. | A1.G10 |
 | L49 | all | A blanket em-dash strip rewrote headings. | Review a mechanical rewrite's diff on headings and ids. | A1.G11 |
+| L71 | 00 | `cp` from the skill's templates folder is refused: the skill folder is a symlink outside the hub, and Claude Code's permission check reads `cp`'s source through it as a write target. | Copy with `cat <src> > <dest>` (hard rule 12). | dry run (2026-10-20) |
 
 ## Content generation
 

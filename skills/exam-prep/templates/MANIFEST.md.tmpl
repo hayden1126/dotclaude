@@ -21,6 +21,10 @@ come from disk (`pdfinfo`, `ls`), never from memory.
 | D10 | {{EXPECTED FILE}} | | pending: in, PDF pp.1-{{K}} (through {{LAST SLIDE}}) | {{yes or no}} | no | {{WHEN IT ARRIVES}} |
 | X1 | `sources/{{FILE}}` | {{N}} | out | no | no | {{WHY}} |
 
+Topic cuts: {{none | one line each:}}
+- {{TOPIC}}: not on {{EXAM}} ({{SOURCE: Ed #N, a staff post, date | the syllabus, its line}});
+  {{WHAT STAYS, if part of it does}}.
+
 - **Scope:** `in`; `in, PDF pp.A-B` (with the last in-scope slide as "PDF p.N = printed M"), or
   `in, PDF pp.A-B, C-D` for two ranges; `in, slides #/A-#/B` for a reveal deck (horizontal slide
   indexes); `concepts only`; `reserved: <exam>`, copied raw and never rendered, extracted or
@@ -31,6 +35,11 @@ come from disk (`pdfinfo`, `ls`), never from memory.
   `solutions to <doc>` in Notes naming the set it answers. Mock writers never read it. Nothing
   published quotes it until the student has attempted that set, which the cell then records as
   `yes, attempted`.
+- **Topic cuts** name what the exam leaves out inside an `in` range, which no page range can say
+  ("negative weights are not on Exam 1", from a staff post). They are a list under the table,
+  never a second table, and scope like the rows: `03-backbone` marks the subsections a cut
+  reaches, the notes keep that material under a `Not on <exam>` banner (`04-write`), and the
+  sheets, mocks and cram order leave it out.
 - **The exam-details file** (a syllabus, an announcement) is `in`: its facts go to CLAUDE.md, and
   `03-backbone` maps its blocks `skip`.
 - **Pages** come from `pdfinfo`, which reads a file's metadata, not its pages: a `reserved` row
