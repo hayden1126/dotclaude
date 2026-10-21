@@ -3,8 +3,8 @@
 
 One row per source file. **These rows are the one statement of scope:** `CLAUDE.md` and
 `PLAN.md` point here and never restate it. A scope change is made here, then carried to every
-product (the notes' "Not on {{EXAM}}" banners, the sheets, the cram order, the mock totals). Counts
-come from disk (`pdfinfo`, `ls`), never from memory.
+product (the notes' "Not on {{EXAM}}" banners, the sheets, the cram order and its mock lines).
+Counts come from disk (`pdfinfo`, `ls`), never from memory.
 
 - Received: {{YYYY-MM-DD}}, from {{WHERE}}, selected by file name.
 - Renders: `_build/pages/<doc>/p-NNN.png` and `_build/text/<doc>/p-NNN.txt` (gitignored).
@@ -36,10 +36,11 @@ Topic cuts: {{none | one line each:}}
   published quotes it until the student has attempted that set, which the cell then records as
   `yes, attempted`.
 - **Topic cuts** name what the exam leaves out inside an `in` range, which no page range can say
-  ("negative weights are not on Exam 1", from a staff post). They are a list under the table,
-  never a second table, and scope like the rows: `03-backbone` marks the subsections a cut
-  reaches, the notes keep that material under a `Not on <exam>` banner (`04-write`), and the
-  sheets, mocks and cram order leave it out.
+  ("negative weights are not on Exam 1", from a staff post). They are a list under the table, never
+  a second table, and scope like the rows: `03-backbone` marks the subsections a cut reaches and
+  what of them stays, the notes keep the material it takes out under a `Not on <exam>` banner
+  (`04-write`), and the sheets, mocks and cram order leave that material out (a mock written before
+  a later cut keeps it, and the cram order's line for that mock says to skip it: `10-polish`).
 - **The exam-details file** (a syllabus, an announcement) is `in`: its facts go to CLAUDE.md, and
   `03-backbone` maps its blocks `skip`.
 - **Pages** come from `pdfinfo`, which reads a file's metadata, not its pages: a `reserved` row

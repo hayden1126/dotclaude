@@ -43,11 +43,11 @@ attempt ("The final sheet" below, which 08 runs). Without a mock there is one sh
    - then by question type: one agent, the question-type variant (answer templates, pros and
      cons, a worked pattern per type), over the outline as it now stands, so it adds to the first
      pass's picks instead of repeating them. Pick again.
-3. Picking: nothing a MANIFEST.md topic cut reaches, and nothing under a `Not on <exam>` banner,
-   goes on a sheet. Every item must help cold. It states its purpose first, and a number says what
-   it is for (FB-135). Nothing points into the notes: the student can't open them (FB-134). When the
-   exam asks for proofs, a proof-techniques block goes in (FB-079). Log each suggestion you reject,
-   and why, in `_build/logs/sheet-gaps.md`.
+3. Picking: nothing a MANIFEST.md topic cut takes out (what its backbone Conventions line says stays
+   is in), and nothing under a `Not on <exam>` banner, goes on a sheet. Every item must help cold.
+   It states its purpose first, and a number says what it is for (FB-135). Nothing points into the
+   notes: the student can't open them (FB-134). When the exam asks for proofs, a proof-techniques
+   block goes in (FB-079). Log each suggestion you reject, and why, in `_build/logs/sheet-gaps.md`.
 
 ## Step 3: Write it
 

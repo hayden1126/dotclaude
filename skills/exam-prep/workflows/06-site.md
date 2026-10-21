@@ -64,7 +64,8 @@ Write `_build/frag/examnav.html` from the backbone's "How it's tested" table (FB
 line (the conventions that change every answer, linked), a `.egrid` of `.eq` groups (an `.eqh`
 heading, then one `<li>` per question shape: the shape in `<b>`, its section as an `xref`, its
 practice questions), and an `.edrill` line naming what to drill hardest. Every link uses a
-backbone id.
+backbone id. A shape that tests only what a topic cut takes out (the backbone's Conventions cut
+lines) stays out of the map.
 
 ## Step 5: Assemble and check
 

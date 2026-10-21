@@ -499,3 +499,99 @@ meanwhile and merges your branch when you report.
   `examples.out.md`, `sources/`, and any search outside the three directories above: one over the
   hub root returns key lines. Note anything else that looks wrong in your report; don't fix it.
 ```
+
+## Polish reader (stage 10)
+
+Role: `reviewer`, with `model: "haiku"` on the Agent call: it reads and reports; the main session
+checks each finding against the file, ranks them and reports to the student (`10-polish` step 4).
+One per section file, spawned together. Two variants below: numbering (one reader over every
+section) and fidelity (after the fixes, no model set).
+
+```text
+# Brief: find where a reader stalls in §{{N}} {{TITLE}} of the notes: {{PASS}}
+
+## Purpose
+The student reads these notes alone, closed book, the week of the exam: smart, fresh to the
+material, the procedures memorized. A sentence that makes them stop and reread costs time they
+don't have. Find the places in §{{N}} where they stall on the pattern below. You report; the main
+session checks each finding and the student decides what changes.
+
+## End state
+- Done means: at most 4 findings, the ones that cost the most first. Fewer is better: report
+  none rather than invent one. Each with LOCATION (notes/{{FILE}}:<line> and the words quoted,
+  or the figure and its label quoted), STALL (in one sentence, what
+  the reader can't tell) and FIX (a concrete one-line change).
+- Artifact path: report only.
+- Report: at most 500 words, then the JSON block (status, summary, artifacts, blocked_actions).
+
+## Scope
+- Work in: {{ROOT}}, read only.
+- Read {{ROOT}}/notes/{{FILE}}{{PAGE:, then the text of each figure in
+  {{ROOT}}/_build/frag/sec{{N}}.html (its SVG labels and captions: the student reads them as
+  prose)}}, and no other section's files. {{ROOT}}/_build/STYLE.md holds the rules the notes
+  follow.
+- The pattern: {{PATTERN: the student's words, quoted, and the exemplar that stalled them, quoted
+  with its place | a ## Patterns line from the tutor log, quoted | DEFAULT: a construction or
+  worked example that ends with no Conclusion: line; a cause stated after its effect, or an
+  implication that doesn't say which way it runs; a symbol used before it is defined; a step a
+  reader would ask "why" about, left unexplained; an "it" or "this" whose referent isn't clear |
+  CAUSATION DEFAULT: a cause stated after its effect, or an implication that doesn't say which way
+  it runs (STYLE.md S5)}}.
+- Don't flag: typos, whether a fact is correct, rendering, layout, citations and links. Other
+  reviews own those.
+- Out of scope: never open anything under {{ROOT}}/practice/, which holds answer keys,
+  {{ROOT}}/_build/verify/, or {{ROOT}}/_build/mock-plan.md; a search (Grep, Glob) stays inside
+  {{ROOT}}/notes/, {{ROOT}}/_build/frag/ and {{ROOT}}/cheatsheet/: one over {{ROOT}} returns key
+  lines.
+```
+
+**Numbering variant** (one reader, every section). Replace the title, Purpose, the End state's
+"Done means" and Report lines, and the Scope's reading, pattern and don't-flag lines with:
+
+```text
+# Brief: inventory how the {{EXAM}} notes number and letter things
+
+## Purpose
+Numbers mark a procedure's steps and letters a fixed set, each set lettered once with an anchor
+the other mentions link to (STYLE.md S3). Where the notes depart from that, the student can't
+tell a recipe from a list, or finds the same set lettered two ways. List every departure; the
+main session reports them and the student picks how far to standardize.
+
+- Done means: an inventory under these headings, each item with its notes/<file>:<line> and the
+  words quoted: recipes not written as numbered steps; fixed sets lettered twice, in a section the
+  registry doesn't name, or with a member that has no anchor; mentions of a set member that don't
+  link to its anchor; worked examples whose step numbers reuse a recipe's; figures whose own
+  numbering disagrees with the text beside them; anything else numbered or lettered that follows
+  no scheme. Then a count per heading.
+- Report: at most 900 words, then the JSON block (status, summary, artifacts, blocked_actions).
+- Read every file in {{ROOT}}/notes/ in order, the "Lettered sets" lines of the registry in
+  {{ROOT}}/_build/backbone.md{{PAGE:, the figure text in {{ROOT}}/_build/frag/}}, and S3 in
+  {{ROOT}}/_build/STYLE.md.
+- Never propose renumbering a section or subsection: the cram order, the exam-day map and the
+  Must-know lines link to its id.
+```
+
+**Fidelity variant** (one fresh reader after the fixes, no model set). Replace the title, Purpose,
+the End state's "Done means" and Report lines, and the Scope's Work in, reading, pattern and
+don't-flag lines with:
+
+```text
+# Brief: check that the approved {{PASS}} fixes went in as approved, and nothing else changed
+
+## Purpose
+The student approved a list of fixes to the notes and sheets. Each must be in, as approved, in
+every copy of the fact, and no other change may alter what the notes say. You report; the main
+session settles each finding.
+
+- Done means: per approved item, `in` or what is missing or different, with its file and line;
+  then every hunk of the diff that no approved item explains, and whether it changes meaning.
+- Report: at most 700 words, then the JSON block (status, summary, artifacts, blocked_actions).
+- Work in: {{ROOT}} and {{DIFF FILE}}, read only.
+- Read the approved list in {{LOG}}, with each item's logged outcome (a reword logged as `changed`
+  is the approved text now), and the change in {{DIFF FILE}}: the pass's changes to the notes, the
+  fragments, the sheets' sources, MANIFEST.md, the backbone, the chassis and the cram order. An item
+  whose outcome the log puts in STATUS (a final-sheet item added or struck) or the tutor log (a line
+  dropped) is checked in {{ROOT}}/STATUS.md or {{ROOT}}/_build/logs/tutor.md. For context, read the
+  changed files under {{ROOT}}/notes/, {{ROOT}}/_build/frag/ and {{ROOT}}/cheatsheet/, and
+  {{ROOT}}/MANIFEST.md.
+```

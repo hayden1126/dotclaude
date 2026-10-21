@@ -202,7 +202,7 @@ same rule.
 
 | Id | Rule | Home | Evidence |
 |---|---|---|---|
-| FB-180 | When the scope changes after the build, mark the sections "Not on Exam N" and re-trim the sheets, the cram order and the mock totals in the same pass. | w11 | B4.C14, B3.C3 |
+| FB-180 | When the scope changes after the build, mark the sections "Not on Exam N" and re-trim the sheets, the cram order and what the mocks count in the same pass. | w10, w11 | B4.C14, B3.C3 |
 | FB-181 | Don't copy schedule data into the hub: point to its single home. | w11 | B4.C18 |
 
 ## 12-retro

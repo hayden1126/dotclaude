@@ -46,12 +46,13 @@ call (FB-008: read these before concluding something doesn't exist). Then route:
 - a build is running: STATUS has a `Build running` line (hard rule 1): `09` alone, within its Step
   1's limits for the build, never a build stage (from `08-practice` step 2 its output shows mocks
   and keys); only when the student says the build stopped and asks to resume it, looking away, the
-  build from what is on disk, the line kept; on their word that it won't resume, the line removed. A
-  session launched with `00-intake` step 8's prompt is the build itself and goes on from the first
-  unfinished stage;
+  build from what is on disk, the line kept; on their word that it won't resume, the line removed.
+  Beside a `Polish: <pass>, started` line the build is a polish pass, and `10-polish`'s "A pass that
+  stops" says both. A session launched with `00-intake` step 8's prompt is the build itself and goes
+  on from the first unfinished stage;
 - an approved `PLAN.md` for this exam whose STATUS next-step line starts with a stage and step
   (`08 step 8, the cram night`): that step, and a walk-through, a quiz or a question the student
-  brings there runs `09` inside its rules;
+  brings there runs `09` inside its rules, and a polish pass `10`, between attempts;
 - else an approved `PLAN.md` for this exam: the first unfinished stage that PLAN.md includes,
   judged by what is on disk (FB-002); `09` and `10` run when the student asks.
 
@@ -96,11 +97,11 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
    PLAN.md, ask nothing and log judgment calls in STATUS (FB-001, FB-020). The build session
    (`00-intake` step 8) adds the STATUS line `Build running: <date>` before its first stage, and its
    last stage removes it (`08-practice` step 7.4 puts `Stage 08 built` in its place); a build stage
-   run alone on request (07, 08) adds and removes its own. Any end of a build removes it: a last
-   stage that is skipped or cut short, a stop at a stage's step 1, a stage that stops to wait for a
-   notes patch. While the line stands, a `09-tutor` tab runs within its Step 1's limits, and no
-   session dispatches a notes patch: the build session never does, since it can't show the student a
-   change or ask them.
+   run alone on request (07, 08) and a `10-polish` pass add and remove their own. Any end of a build
+   removes it: a last stage that is skipped or cut short, a stop at a stage's step 1, a stage that
+   stops to wait for a notes patch. While the line stands, a `09-tutor` tab runs within its Step 1's
+   limits, and no session dispatches a notes patch: the build session never does, since it can't
+   show the student a change or ask them.
 2. **Verbatim extraction before writing.** Never WebFetch slides: it returns a summary that drops
    formulas and slide numbers. Fetch raw with curl and render PDFs page by page (FB-040, L01).
 3. **No hand-computed values.** Every trace, number and key answer comes from a checker that first
