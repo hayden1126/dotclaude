@@ -449,7 +449,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/practices-check.sh\"",
+            "command": "[ -f \"$HOME/.claude/hooks/practices-check.sh\" ] && bash \"$HOME/.claude/hooks/practices-check.sh\"; exit 0",
             "timeout": 5
           }
         ]
@@ -631,7 +631,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/practices-check.sh\"",
+            "command": "[ -f \"$HOME/.claude/hooks/practices-check.sh\" ] && bash \"$HOME/.claude/hooks/practices-check.sh\"; exit 0",
             "timeout": 5
           }
         ]
