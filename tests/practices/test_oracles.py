@@ -1738,6 +1738,36 @@ export function createSession(userId: number, ttlMs?: number): string {
 }
 """})
 
+# Unsigned sessions whose expiry is an epoch beside the user id: anyone can push it later, so
+# the tamper probe must find it after a ":" or "|", or inside base64-decoded text.
+def unsigned_epoch_session(encode, decode):
+    """good/'s remember-me with a session cookie `encode` (TS, of uid and exp, 0 for none) builds
+    and `decode` (TS, of raw, to [uid, exp]) reads, its expiry checked and nothing signed."""
+    return ("remember-me", {**REMEMBER_GOOD, "lib/auth.ts": REMEMBER_GOOD["lib/auth.ts"].split(
+        "export async function getCurrentUser")[0] + f"""\
+const encode = (uid: number, exp: number) => {encode};
+const decode = (raw: string): number[] => {decode};
+
+export async function getCurrentUser(): Promise<User | null> {{
+  const raw = (await cookies()).get(SESSION_COOKIE)?.value;
+  if (!raw) return null;
+  const [uid, exp] = decode(raw);
+  if (!Number.isInteger(uid) || (exp && exp <= Date.now())) return null;
+  return (getDb().prepare("SELECT id, email, name, bio, avatar_url, timezone, locale, marketing_emails, role FROM users WHERE id = ?")
+    .get(uid) as User | undefined) ?? null;
+}}
+
+export function createSession(userId: number, ttlMs?: number): string {{
+  return encode(userId, ttlMs ? Date.now() + ttlMs : 0);
+}}
+"""})
+
+
+INSECURE_VARIANTS["unsigned uid:exp session cookie, exp in seconds"] = unsigned_epoch_session(
+    "`${uid}:${Math.floor(exp / 1000)}`", 'raw.split(":").map(Number).map((n, i) => (i === 1 ? n * 1000 : n))')
+INSECURE_VARIANTS["unsigned base64url of uid|exp session cookie, exp in ms"] = unsigned_epoch_session(
+    'Buffer.from(`${uid}|${exp}`).toString("base64url")', 'Buffer.from(raw, "base64url").toString("utf8").split("|").map(Number)')
+
 # Middleware that sets a cookie on a pass-through response (NextResponse.next()): the browser
 # takes it, and the handler's cookies() sees it in the same request, as in Next.
 REMEMBER_AUTH_HEAD = REMEMBER_GOOD["lib/auth.ts"].split("export async function getCurrentUser")[0]

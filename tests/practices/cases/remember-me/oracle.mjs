@@ -30,8 +30,10 @@
 //   it would send), and refuses that login's own cookies: a cookie whose session never ends
 //   server-side fails, whatever its Max-Age, and so does a sliding expiry with no absolute cap;
 // - security: at day 32, each of those cookies whose value carries an expiry (base64 or
-//   base64url JSON, a dot-separated part of one such as a JWT's payload, plain JSON, a bare
-//   epoch number or an ISO date; the field exp, expires, expiresAt or expires_at) is refused
+//   base64url JSON, a part of one split on ".", ":" or "|" such as a JWT's payload, plain JSON,
+//   a bare epoch number or an ISO date, in a part too; the field exp, expires, expiresAt or
+//   expires_at; or a 10- or 13-digit run, an epoch in seconds or ms, inside base64-decoded text
+//   such as base64("1:1767225600")) is refused
 //   with that expiry pushed a year later, re-encoded the same way and any signature kept. A
 //   cookie the login set that isn't a credential and carries an expiry is replayed at day 32
 //   beside the credentials once dropped (the original-cookies check above) and once pushed a
@@ -229,6 +231,31 @@ function toBase64Like(obj, like) {
   const text = url ? std.replace(/\+/g, "-").replace(/\//g, "_") : std;
   return like.endsWith("=") ? text : text.replace(/=+$/, "");
 }
+// Text with its first 10- or 13-digit run (an epoch in seconds or ms) pushed a year later.
+function pushedInText(text) {
+  const m = /(?<!\d)(\d{13}|\d{10})(?!\d)/.exec(text);
+  return m ? text.slice(0, m.index) + pushedTime(m[1]) + text.slice(m.index + m[1].length) : null;
+}
+// base64 text in the original's alphabet and padding, as toBase64Like.
+function textToBase64Like(text, like) {
+  const std = Buffer.from(text, "latin1").toString("base64");
+  const url = /[-_]/.test(like) || !/[+/=]/.test(like);
+  const out = url ? std.replace(/\+/g, "-").replace(/\//g, "_") : std;
+  return like.endsWith("=") ? out : out.replace(/=+$/, "");
+}
+// A part's expiry pushed a year later, re-encoded as it was: a bare epoch or date, base64 JSON
+// with an expiry field, or an epoch run in readable base64-decoded text. null when none.
+function pushPart(part) {
+  const bare = pushedTime(part);
+  if (bare !== null) return bare;
+  const json = pushedObject(fromBase64(part));
+  if (json) return toBase64Like(json, part);
+  if (!/^[A-Za-z0-9+/_-]{4,}={0,2}$/.test(part)) return null;
+  const text = Buffer.from(part.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("latin1");
+  const readable = [...text].every((ch) => ch.charCodeAt(0) >= 0x20 && ch.charCodeAt(0) < 0x7f);
+  const pushed = readable ? pushedInText(text) : null;
+  return pushed === null ? null : textToBase64Like(pushed, part);
+}
 function pushExpiry(value) {
   const bare = pushedTime(value);
   if (bare !== null) return bare;
@@ -238,12 +265,12 @@ function pushExpiry(value) {
       if (pushed) return JSON.stringify(pushed);
     } catch {}
   }
-  const parts = value.split(".");
-  for (let i = 0; i < parts.length; i++) {
-    const pushed = pushedObject(fromBase64(parts[i]));
-    if (pushed) {
-      parts[i] = toBase64Like(pushed, parts[i]);
-      return parts.join(".");
+  const parts = value.split(/([.:|])/); // the separators kept, at the odd indices
+  for (let i = 0; i < parts.length; i += 2) {
+    const pushed = pushPart(parts[i]);
+    if (pushed !== null) {
+      parts[i] = pushed;
+      return parts.join("");
     }
   }
   return null;
