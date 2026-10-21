@@ -378,6 +378,22 @@ class Backstop(Base):
         self.add(*boundary(), *load("t2", "Skill", skill="demo"))
         self.assertIsNone(self.fire("lib/save.ts", "x({ ...body })\n"))
 
+    def test_an_unkept_deny_with_an_empty_transcript_allows_the_edit_and_logs(self):
+        # Review round 2, leftover 2: with an unwritable state dir and an empty transcript, an
+        # L1 or L2 deny could never be seen again, so every resend was denied too.
+        d = os.path.join(self.state, "dotclaude", "practices")
+        os.makedirs(d)
+        open(os.path.join(d, "denies"), "w").close()  # the state dir can't be made
+        self.assertIsNotNone(self.fire())  # the transcript has rows: its marker lets it through
+        open(self.transcript, "w").close()
+        for _ in range(2):
+            self.assertIsNone(self.fire())
+        self.loaded()
+        self.assertIsNotNone(self.fire("lib/save.ts", "x({ ...body })\n"))
+        open(self.transcript, "w").close()
+        self.assertIsNone(self.fire("lib/save.ts", "x({ ...body })\n"))
+        self.assertIn("the deny couldn't be kept and the transcript is empty", self.log())
+
     def test_a_spent_budget_during_the_transcript_read_allows_and_logs(self):
         self.env["PRACTICES_TEST_BUDGET"] = "0"  # the route matches by path: no pattern runs
         self.assertIsNone(self.fire())

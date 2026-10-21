@@ -1201,8 +1201,13 @@ def pre_tool_use(event):
                 keys += [f"{key}|{_sha1(line.strip())}" for line in l2_lines(r, text, helpers)]
             if pending:
                 reason = l2_reason(pending, rel)
-        if reason:
-            state_add(event, keys)
+        # A deny needs a way for its resend through: the state key, or a transcript that will
+        # hold the marker. With neither (an unwritable state dir and an empty or missing
+        # transcript), every resend would be denied too, so the edit is allowed, logged.
+        if reason and not state_add(event, keys) and not m:
+            log("state-error", f"{rel}: the deny couldn't be kept and the transcript is empty "
+                "or missing, so the edit was allowed")
+            reason = None
     except Budget as e:
         log("budget-spent", f"after {BUDGET}s, in the {e} for {rel}; the edit was allowed")
         return None
