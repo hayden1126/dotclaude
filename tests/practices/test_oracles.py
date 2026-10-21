@@ -2964,6 +2964,25 @@ class RunHarness(unittest.TestCase):
         self.assertEqual(r.hook_denials([blocked]), 1)
         self.assertEqual(r.hook_denials(events[:1] + events[2:]), 0)
 
+    def test_denials_count_the_engines_error_results(self):
+        # A practices deny as Claude Code 2.1.305 renders it (smoke-auth-haiku-c, email-change-C-1,
+        # stream line 90): an error tool result carrying the engine's tag, with no "denied" in it.
+        r = self.harness
+        text = ("PreToolUse:Write hook error: [practices:L2:server-code:SEC-01:app/api/account/email/confirm/route.ts]"
+                " Build the auth and role check inside this handler or server action, deny by default (SEC-01)."
+                " If the repo's auth helper has another name, add it to `[auth] helpers` in"
+                " .claude/practices/config.toml; if the endpoint is public on purpose (a public pricing endpoint),"
+                " add `practices-allow: SEC-01 public endpoint`.\nFix it and resend, or, when this is a false"
+                " positive, add a comment `practices-allow: SEC-01 <reason>` to the code; this check won't stop"
+                " this file for SEC-01 again.")
+        result = lambda content, is_error=True: {"type": "user", "message": {"content": [
+            {"type": "tool_result", "content": content, "is_error": is_error, "tool_use_id": "toolu_01"}]}}
+        self.assertEqual(r.hook_denials([result(text)]), 1)
+        self.assertEqual(r.hook_denials([result(text), result(text.replace("confirm", "cancel"))]), 2)
+        self.assertEqual(r.hook_denials([result([{"type": "text", "text": text}])]), 1)
+        self.assertEqual(r.hook_denials([result(text, is_error=False)]), 0)  # a Read of a file quoting the tag
+        self.assertEqual(r.hook_denials([result("Error: ENOENT, no such file")]), 0)
+
     def test_bar(self):
         r = self.harness
         bar = r.bar
