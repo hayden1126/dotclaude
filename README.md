@@ -619,11 +619,18 @@ need nothing extra.
   file written through Bash; L3s sees its content at commit and push. The Bash levels read git
   objects only (no index, no working tree, no program a repo's config names), never echo a matched
   value, and sit behind a shell prefilter, so Python starts only for a command that names git
-  with commit or push, or gh with pr ready or create.
+  with commit or push, or gh with pr ready or create. The Bash reader follows chains, wrappers
+  (`sudo`, `env`, `time`; `env -C` and `sudo -D` move the cwd), a `cd` (only to the end of its
+  subshell), `$(...)` and backtick bodies, process substitutions and a literal `bash -c` script.
+  A form it can't read (an alias, a function, `eval`, a script file, `xargs`) passes, logged as
+  `git-skipped`.
   A PR readied in the GitHub web UI never reaches the hook. A repo turns it off with
   `enabled = false` in `.claude/practices/config.toml`, or turns one rule off there with a reason.
-  The engine keeps a 2 s budget under the 5 s kill. Fails open but loud: a crash lets the edit
-  through, and the next session start names the error.
+  The engine keeps a 2 s budget under the 5 s kill. A scan the budget cuts short denies once on
+  what it read and says so, and the resend of that range passes unscanned; a push adding about
+  4 MB of text reaches that cut. Fails open but loud: a crash lets the edit through, the next
+  session start names the error, and a deny whose resend couldn't pass (its state write failed,
+  with no transcript to fall back on) is dropped and logged rather than repeated.
   Errors go to `$XDG_STATE_HOME/dotclaude/practices/errors.log`.
 - **PreToolUse(`Bash`): `delete-guard.sh`** (in this repo), for commands run with
   `dangerouslyDisableSandbox` only (the settings command skips Python for every other call).
