@@ -696,6 +696,24 @@ class L4(Base):
                 self.assertTrue(line in long_ or line in ("Beta one.", "Beta two.")
                                 or re.fullmatch(r"\(\d+ more in its SKILL\.md\)", line), line)
 
+    def test_the_digest_and_the_health_check_read_the_session_start_project(self):
+        # Follow-up to review round 3, low 10: compact() and health() still read the config
+        # and the project skills from the payload's cwd, which a cd moves.
+        del self.env["CLAUDE_PROJECT_DIR"]
+        sub = os.path.join(self.proj, "sub")
+        os.makedirs(os.path.join(sub, ".claude", "practices"))
+        with open(os.path.join(sub, ".claude", "practices", "config.toml"), "w") as f:
+            f.write("enabled = false\n")
+        bad = os.path.join(sub, ".claude", "skills", "bad")
+        os.makedirs(bad)
+        with open(os.path.join(bad, "events.toml"), "w") as f:
+            f.write("skill = [unclosed\n")
+        self.assertIsNone(self.start("startup"))  # records the project; all is well
+        self.loaded()
+        out = self.start("compact", cwd=sub)
+        self.assertIn("demo", out["hookSpecificOutput"]["additionalContext"])
+        self.assertIsNone(self.start("startup", cwd=sub))  # sub's broken skill isn't read
+
     def test_resume_and_clear_print_nothing(self):
         self.loaded()
         self.assertIsNone(self.start("resume"))

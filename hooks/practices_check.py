@@ -38,10 +38,11 @@ expands to an alternation of AUTH_HELPERS plus the repo's `[auth] helpers`, each
 so SEC-01 can name a repo's own auth helper.
 
 Skills are found in <project>/.claude/skills/*/ and in ${CLAUDE_CONFIG_DIR:-~/.claude}/skills/*/,
-links followed. On a name clash the project copy wins. The project dir, for the edit and Bash
-levels alike, is CLAUDE_PROJECT_DIR, else the cwd recorded at the session's first SessionStart,
-never the call's own cwd (a cd moves it); with neither, an edit is checked against the user's
-skills alone with the default config, logged as project-unknown.
+links followed. On a name clash the project copy wins. The project dir, for every level and the
+startup health check alike, is CLAUDE_PROJECT_DIR, else the cwd recorded at the session's first
+SessionStart, never the call's own cwd (a cd moves it); with neither, an edit is checked against
+the user's skills alone with the default config, logged as project-unknown, and the L4 digest
+reads the user's skills alone.
 
 Levels:
   L1  an edit that fires a skill's event, when the window (the transcript since the last
@@ -515,11 +516,6 @@ def lint_regex(pattern):
 
 
 # ---------------------------------------------------------------- skills and config
-
-def project_dir(event):
-    d = os.environ.get("CLAUDE_PROJECT_DIR") or event.get("cwd") or os.getcwd()
-    return os.path.abspath(d)
-
 
 def config_home():
     return os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
@@ -1484,7 +1480,7 @@ def record_session_cwd(event):
 
 
 def bash_project(event):
-    """The project dir for the Bash and edit levels (config, project skills, and the paths L2
+    """The project dir for every level and the health check (config, project skills, the paths L2
     keys and the Bash levels match them by): CLAUDE_PROJECT_DIR, else the cwd recorded at the
     session's start, never the call's own cwd (a cd moves it); None when neither is known."""
     if os.environ.get("CLAUDE_PROJECT_DIR"):
@@ -2379,9 +2375,10 @@ def digest(names, skills):
 
 
 def compact(event):
-    if not load_config(project_dir(event))["enabled"]:
+    project = bash_project(event)  # as every level reads it: never a cwd a cd moved
+    if not load_config(project)["enabled"]:
         return None
-    skills = discover(project_dir(event))
+    skills = discover(project)
     if not skills:
         return None
     out = {"hookEventName": "SessionStart", "reloadSkills": True}
@@ -2441,7 +2438,7 @@ def health(event):
     if broken:
         problems.append(f"down ({broken}); edits are not checked")
     else:
-        discover(project_dir(event))  # logs a malformed events.toml, counted below
+        discover(bash_project(event))  # logs a malformed events.toml, counted below
     now = time.time()  # wall clock: compared with file mtimes
     try:
         crumbs = sorted(n for n in os.listdir(d) if n.startswith("breadcrumb-"))
