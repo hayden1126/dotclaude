@@ -9,6 +9,7 @@ nor rings, unless tmux/tmux-claude-status mapped the background session to the t
 the tmux one (fake_tmux.py) also keeps window options and evaluates the hooks' formats, so the
 glyph tests assert the window's state and wait set. hooks/wants_input.py never runs here: the
 python3 shim answers it with $STUB_INPUT, and HOME is an empty dir, so no test reaches the API.
+The shim logs each hooks/mute_state.py run (the device-wide mute's reader) and runs it for real.
 The real-tmux tests repeat the glyph sequences on a tmux server when one can start."""
 import importlib.util
 import json
@@ -53,12 +54,14 @@ ASCII_LOCALE = {"LC_ALL": "C", "LANG": "C", "PYTHONCOERCECLOCALE": "0", "PYTHONU
                 "FAKE_PY_ASCII": "1"}
 FAKE_PYTHON = """#!/usr/bin/env bash
 for a in "$@"; do
-  case "$a" in */wants_input.py)
-    cat > /dev/null
-    printf 'wants_input\\n' >> "$STUB_LOG"
-    sleep "${STUB_INPUT_DELAY:-0}"
-    printf '%%s\\n' "${STUB_INPUT-no - 7}"
-    exit 0 ;;
+  case "$a" in
+    */wants_input.py)
+      cat > /dev/null
+      printf 'wants_input\\n' >> "$STUB_LOG"
+      sleep "${STUB_INPUT_DELAY:-0}"
+      printf '%%s\\n' "${STUB_INPUT-no - 7}"
+      exit 0 ;;
+    */mute_state.py) printf 'mute_state\\n' >> "$STUB_LOG" ;;  # logged, then run for real
   esac
 done
 if [ -n "${FAKE_PY_ASCII:-}" ]; then
@@ -148,7 +151,8 @@ class Hooks(unittest.TestCase):
         return self.seen("SoundPlayer")
 
     def toasted(self):
-        return self.seen("notify-toast.ps1")
+        # powershell.exe's call; wslpath's (`wslpath -w .../notify-toast.ps1`) ends at the name.
+        return self.seen("notify-toast.ps1 -")
 
     def no_ring(self):
         # The run's own new line is the decision: notify.sh logs before it exits, and run_hook
@@ -1210,6 +1214,203 @@ class Hooks(unittest.TestCase):
         self.assertTrue(self.toasted())
         self.run_hook("stop-ring.sh", TAB)
         self.assertEqual(len(self.ring_log()), 2)
+
+    # --- the device-wide mute (hooks/mute_state.py): notify.sh and stop-ring.sh obey it -----
+
+    ON = {"since": 1, "until": None}   # muted until unmuted
+
+    def set_mute(self, flag):
+        """Write $XDG_STATE_HOME/dotclaude/mute.json (a dict as JSON, a str as it is), and start
+        a fresh calls log. Returns the path."""
+        path = os.path.join(self.state, "dotclaude", "mute.json")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(flag if isinstance(flag, str) else json.dumps(flag))
+        self.fresh_calls()
+        return path
+
+    def fresh_calls(self):
+        if os.path.exists(self.log):
+            os.remove(self.log)
+
+    def heard(self, mark, settle=0.3):
+        """Whether any call holds mark, once a detached one the hook started had time to log."""
+        return any(mark in c for c in self.calls(settle))
+
+    def toasts(self, settle=0.3):
+        """Each toast's arguments after the script path (powershell.exe's calls only)."""
+        return [c.split("notify-toast.ps1 ", 1)[1] for c in self.calls(settle)
+                if c.startswith("powershell.exe ") and "notify-toast.ps1 " in c]
+
+    def test_a_sound_mute_drops_the_ring_and_silences_the_toast(self):
+        for until in (None, time.time() + 3600):  # wall clock
+            with self.subTest(until=until):
+                self.set_mute({"sound": {"since": 1, "until": until}})
+                self.run_hook("notify.sh", TAB, {"message": "m"})
+                self.assertTrue(self.toasted())
+                self.assertEqual(self.toasts(), ["-Silent -Message m"])
+                self.assertFalse(self.heard("SoundPlayer"))
+                self.assertIn("permission quiet muted=1 toast=silent session=", self.ring_log()[-1])
+
+    def test_a_sound_mute_off_view_logs_no_muted_ring(self):
+        # muted=1 only when the mute silenced a ring that would have played.
+        self.set_mute({"sound": self.ON})
+        self.run_hook("notify.sh", BG, {"message": "m"})
+        self.assertEqual(self.toasts(1), ["-Silent -Message m"])
+        self.assertIn("permission quiet toast=silent session=", self.ring_log()[-1])
+
+    def test_a_toast_mute_skips_the_toast_and_still_rings(self):
+        self.set_mute({"toast": self.ON})
+        self.run_hook("notify.sh", TAB, {"message": "m"})
+        self.assertTrue(self.rang())
+        self.assertEqual(self.toasts(), [])
+        self.assertIn("permission rang toast=muted session=", self.ring_log()[-1])
+
+    def test_both_muted_is_silent(self):
+        soon = time.time() + 60  # wall clock
+        self.set_mute({"sound": self.ON, "toast": {"since": 1, "until": soon}})
+        self.run_hook("notify.sh", TAB, {"message": "m"})
+        self.assertFalse(self.heard("SoundPlayer", settle=0.5))
+        self.assertEqual(self.toasts(0), [])
+        self.assertIn("permission quiet muted=1 toast=muted session=", self.ring_log()[-1])
+        self.run_hook("stop-ring.sh", TAB)
+        self.assertIn("stop quiet muted=1 tasks=- session=", self.ring_log()[-1])
+        self.assertFalse(self.heard("SoundPlayer"))
+
+    def test_an_expired_mute_rings_and_toasts_as_before(self):
+        then = time.time() - 1  # wall clock
+        self.set_mute({"sound": {"since": 1, "until": then}, "toast": {"since": 1, "until": then}})
+        self.run_hook("notify.sh", TAB, {"message": "m"})
+        self.assertTrue(self.rang())
+        self.assertTrue(self.toasted())
+        self.assertEqual(self.toasts(), ["-Message m"])
+        self.assertIn("permission rang session=", self.ring_log()[-1])
+        self.run_hook("stop-ring.sh", TAB)
+        self.assertIn("stop rang tasks=- session=", self.ring_log()[-1])
+
+    def test_a_flag_that_cannot_be_read_mutes_nothing_and_says_why(self):
+        path = os.path.join(self.state, "dotclaude", "mute.json")
+        cases = [("a directory", lambda: os.makedirs(path), "unreadable"),
+                 ("a dangling link", lambda: os.symlink(os.path.join(self.tmp, "gone"), path),
+                  "unreadable"),
+                 ("not JSON", lambda: self.set_mute("{nope"), "malformed"),
+                 ("a bad switch", lambda: self.set_mute({"sound": True}), "malformed")]
+        if os.geteuid() != 0:   # root reads a mode-000 file
+            cases.append(("mode 000", lambda: os.chmod(self.set_mute({"sound": self.ON}), 0),
+                          "unreadable"))
+        os.makedirs(os.path.dirname(path))
+        for name, make, note in cases:
+            with self.subTest(name):
+                make()
+                self.fresh_calls()
+                try:
+                    self.run_hook("notify.sh", TAB, {"message": "m"})
+                    self.assertTrue(self.rang())
+                    self.assertEqual(self.toasts(), ["-Message m"])
+                    self.assertIn(f"permission rang mute={note} session=", self.ring_log()[-1])
+                    self.run_hook("stop-ring.sh", TAB)
+                    self.assertIn(f"stop rang tasks=- mute={note} session=", self.ring_log()[-1])
+                finally:
+                    if os.path.isdir(path) and not os.path.islink(path):
+                        os.rmdir(path)
+                    else:
+                        os.unlink(path)
+
+    def test_a_bad_switch_beside_a_good_one(self):
+        self.set_mute({"sound": self.ON, "toast": "yes"})
+        self.run_hook("notify.sh", TAB, {"message": "m"})
+        self.assertEqual(self.toasts(1), ["-Silent -Message m"])
+        self.assertFalse(self.heard("SoundPlayer", settle=0))
+        self.assertIn("permission quiet muted=1 toast=silent mute=malformed session=",
+                      self.ring_log()[-1])
+        self.run_hook("stop-ring.sh", TAB)
+        self.assertIn("stop quiet muted=1 tasks=- mute=malformed session=", self.ring_log()[-1])
+        self.set_mute({"sound": [], "toast": self.ON})
+        self.run_hook("notify.sh", TAB, {"message": "m"})
+        self.assertTrue(self.rang())
+        self.assertEqual(self.toasts(), [])
+        self.assertIn("permission rang toast=muted mute=malformed session=", self.ring_log()[-1])
+
+    def test_no_flag_starts_no_reader(self):
+        self.run_hook("notify.sh", TAB, {"message": "m"})
+        self.assertTrue(self.rang())
+        self.assertEqual(self.toasts(), ["-Message m"])
+        self.assertIn("permission rang session=", self.ring_log()[-1])
+        self.run_hook("stop-ring.sh", TAB)
+        self.assertIn("stop rang tasks=- session=", self.ring_log()[-1])
+        self.assertTrue(self.rang())
+        self.assertNotIn("mute_state", self.calls())
+        # The probe sees the reader when a flag is there.
+        self.set_mute({"toast": self.ON})
+        self.run_hook("stop-ring.sh", TAB)
+        self.assertIn("mute_state", self.calls())
+
+    def test_a_reader_that_cannot_run_mutes_nothing(self):
+        # A copy of the hooks without mute_state.py: python3 fails, so not muted, mute=error.
+        hooks = os.path.join(self.tmp, "hooks")
+        os.mkdir(hooks)
+        for name in ("notify.sh", "session-pane.sh"):
+            shutil.copy(os.path.join(HOOKS, name), hooks)
+        self.set_mute({"sound": self.ON, "toast": self.ON})
+        self.logged_before = len(self.ring_log())
+        p = subprocess.run(["bash", os.path.join(hooks, "notify.sh")],
+                           input=json.dumps({"session_id": "abcdef12-0000", "message": "m"}),
+                           capture_output=True, text=True, timeout=10, env={**self.env, **TAB})
+        self.assertEqual((p.returncode, p.stderr), (0, ""))
+        self.assertTrue(self.rang())
+        self.assertEqual(self.toasts(), ["-Message m"])
+        self.assertIn("permission rang mute=error session=", self.ring_log()[-1])
+
+    def test_without_session_pane_notify_toasts_as_before(self):
+        # notify.sh alone can't read the mute: the toast shows with its chime, as it always did.
+        hooks = os.path.join(self.tmp, "hooks")
+        os.mkdir(hooks)
+        shutil.copy(os.path.join(HOOKS, "notify.sh"), hooks)
+        self.set_mute({"sound": self.ON, "toast": self.ON})
+        p = subprocess.run(["bash", os.path.join(hooks, "notify.sh")],
+                           input=json.dumps({"session_id": "abcdef12-0000", "message": "m"}),
+                           capture_output=True, text=True, timeout=10, env={**self.env, **TAB})
+        self.assertEqual((p.returncode, p.stderr), (0, ""))
+        self.assertTrue(self.toasted())
+        self.assertEqual(self.toasts(), ["-Message m"])
+        self.assertEqual(self.ring_log(), [])
+
+    def test_a_sound_mute_keeps_a_stop_quiet(self):
+        self.set_mute({"sound": self.ON})
+        self.run_hook("stop-ring.sh", TAB)
+        self.assertTrue(self.no_ring())
+        self.assertIn("stop quiet muted=1 tasks=- session=", self.ring_log()[-1])
+        self.assertFalse(self.heard("SoundPlayer"))
+
+    def test_a_toast_mute_still_rings_on_stop(self):
+        self.set_mute({"toast": self.ON})
+        self.run_hook("stop-ring.sh", TAB)
+        self.assertTrue(self.rang())
+        self.assertIn("stop rang tasks=- session=", self.ring_log()[-1])
+
+    def test_a_mute_set_during_the_settle_counts(self):
+        self.env["DOTCLAUDE_RING_SETTLE"] = "1"
+        self.run_hook("stop-ring.sh", TAB, wait=False)
+        self.set_mute({"sound": self.ON})
+        self.decided()
+        self.assertIn("stop quiet muted=1 tasks=- session=", self.ring_log()[-1])
+        self.assertFalse(self.heard("SoundPlayer"))
+
+    def test_stops_that_would_not_ring_never_read_the_mute(self):
+        # muted=1 only marks a ring the mute silenced: a busy, off-view or resumed Stop has none.
+        self.set_mute({"sound": self.ON})
+        self.run_hook("stop-ring.sh", TAB,
+                      {"background_tasks": [{"id": "a1", "type": "subagent", "status": "running"}]})
+        self.assertIn("stop quiet busy=1 tasks=subagent session=", self.ring_log()[-1])
+        self.run_hook("stop-ring.sh", P_RUN)
+        self.assertIn("stop quiet tasks=- session=", self.ring_log()[-1])
+        path = self.transcript({"type": "assistant", "message": {"content": "done"}})
+        self.run_hook("stop-ring.sh", TAB, {"transcript_path": path}, wait=False)
+        self.transcript(self.DEQUEUE)
+        self.decided()
+        self.assertIn("stop quiet resumed=1 tasks=- session=", self.ring_log()[-1])
+        self.assertNotIn("mute_state", self.calls(0.3))
+        self.assertFalse([x for x in self.ring_log() if "muted=1" in x])
 
 
 class RealTmux(unittest.TestCase):

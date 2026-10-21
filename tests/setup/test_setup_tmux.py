@@ -1,5 +1,5 @@
-"""setup-tmux.sh: links the status, restore, saved-chats, pass-last, paste-inbox and tab-bar
-scripts, upserts one marked source-file block into ~/.tmux.conf, keeps the user's own lines,
+"""setup-tmux.sh: links the status, restore, saved-chats, pass-last, paste-inbox, tab-bar and
+mute scripts, upserts one marked source-file block into ~/.tmux.conf, keeps the user's own lines,
 and is idempotent (stdlib only)."""
 import glob
 import os
@@ -42,14 +42,15 @@ class SetupTmux(unittest.TestCase):
                      os.path.join(REPO, "tmux", "claude-saved"),
                      os.path.join(REPO, "tmux", "pass-last"),
                      os.path.join(REPO, "tmux", "paste-inbox"),
-                     os.path.join(REPO, "tmux", "tmux-tab-bar")):
+                     os.path.join(REPO, "tmux", "tmux-tab-bar"),
+                     os.path.join(REPO, "tmux", "claude-mute")):
             with self.subTest(path=path):
                 self.assertTrue(os.access(path, os.X_OK))
 
     def test_a_fresh_home_gets_the_link_and_the_claude_block(self):
         self.run_setup()
         for name in ("tmux-claude-status", "claude-restore", "claude-saved", "pass-last",
-                     "paste-inbox", "tmux-tab-bar"):
+                     "paste-inbox", "tmux-tab-bar", "claude-mute"):
             link = os.path.join(self.home, ".local", "bin", name)
             self.assertEqual(os.readlink(link), os.path.join(REPO, "tmux", name))
         conf = self.read()
@@ -103,10 +104,12 @@ class SetupTmux(unittest.TestCase):
 
     def test_help_prints_the_whole_header(self):
         p = self.run_setup("--help")
+        self.assertTrue(p.stdout.startswith("# setup-tmux.sh: "))
         self.assertIn("--no-base drop base.conf", p.stdout)
-        self.assertTrue(p.stdout.rstrip().endswith("(six, seven with --base)."))
+        self.assertIn("tmux-tab-bar and claude-mute into ~/.local/bin", p.stdout)
+        self.assertTrue(p.stdout.rstrip().endswith("(seven, eight with --base)."))
 
-    def test_a_real_file_in_the_way_is_moved_aside(self):
+    def test_a_real_file_in_the_way_is_backed_up(self):
         bin_dir = os.path.join(self.home, ".local", "bin")
         os.makedirs(bin_dir)
         with open(os.path.join(bin_dir, "tmux-claude-status"), "w") as f:
