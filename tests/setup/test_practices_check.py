@@ -1233,6 +1233,96 @@ class GitHelper(GitMixin, unittest.TestCase):
         self.assertEqual([c[5] for c in changes], ["a"])
         self.assertFalse(os.path.exists(self.canary_file))
 
+    # Review round 3, low 8: the guard table's rows with no test.
+
+    def test_git_env_sets_its_values_and_strips_every_git_variable_of_the_hooks(self):
+        hook = {**self.env, "GIT_DIR": "/elsewhere", "GIT_EXEC_PATH": "/elsewhere",
+                "GIT_ALLOW_PROTOCOL": "ext", "GIT_CONFIG_GLOBAL": "/elsewhere/config",
+                "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "safe.directory",
+                "GIT_CONFIG_VALUE_0": "*", "GIT_CONFIG_PARAMETERS": "'core.pager'='x'"}
+        with mock.patch.dict(os.environ, hook, clear=True):
+            env = PC.git_env()
+        self.assertEqual({k: v for k, v in env.items() if k.startswith("GIT_")}, {
+            "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_ALLOW_PROTOCOL": "none", "GIT_NO_LAZY_FETCH": "1", "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0", "GIT_ATTR_NOSYSTEM": "1"})
+        self.assertEqual(env["HOME"], self.env["HOME"])  # the rest passes through
+        # End to end: config the hook's env carries (safe.directory=*) never reaches git.
+        self.commit(a="1\n")
+        with self.assertRaises(PC.GitError) as e:
+            self.read(PRACTICES_TEST_DIFFERENT_OWNER="1", GIT_CONFIG_COUNT="1",
+                      GIT_CONFIG_KEY_0="safe.directory", GIT_CONFIG_VALUE_0="*")
+        self.assertIn("ownership", str(e.exception))
+
+    def test_a_git_first_on_path_never_runs(self):
+        self.commit(a="1\n")
+        script = self.canary()
+        bin_ = os.path.join(self.tmp, "bin")
+        os.makedirs(bin_)
+        os.symlink(script, os.path.join(bin_, "git"))
+        _, changes, _ = self.read(PATH=bin_ + os.pathsep + os.environ.get("PATH", ""))
+        self.assertEqual([c[5] for c in changes], ["a"])
+        self.assertFalse(os.path.exists(self.canary_file), "a git on PATH ran")
+
+    def test_a_replace_ref_leaves_the_scanned_blob_unchanged(self):
+        self.commit(**{"a.ts": "x({ ...body })\n"})
+        real = self.sh("rev-parse", "HEAD:a.ts")
+        self.put("clean.txt", "const clean = 1\n")
+        fake = self.sh("hash-object", "-w", "clean.txt")
+        self.sh("replace", real, fake)
+        self.assertEqual(self.sh("cat-file", "-p", real), "const clean = 1")  # the trap is live
+        _, changes, blobs = self.read()
+        self.assertEqual([c[4] for c in changes], [real])
+        self.assertEqual(blobs[real], b"x({ ...body })\n")
+
+    def test_a_global_gitconfig_others_can_write_or_own_isnt_forwarded(self):
+        self.commit(a="1\n")
+        path = os.path.join(self.env["HOME"], ".gitconfig")
+        with open(path, "w") as f:
+            f.write(f"[safe]\n\tdirectory = {self.repo}\n")
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            os.chmod(path, 0o644)
+            self.assertEqual(PC.safe_directories(), ([self.repo], None))
+            os.chmod(path, 0o664)  # group-writable
+            values, why = PC.safe_directories()
+            self.assertEqual(values, [])
+            self.assertIn("only they can write", why)
+            os.chmod(path, 0o644)
+            with mock.patch.object(PC.os, "getuid", return_value=os.getuid() + 1):  # foreign
+                self.assertEqual(PC.safe_directories()[0], [])
+        os.chmod(path, 0o664)
+        with self.assertRaises(PC.GitError) as e:
+            self.read(PRACTICES_TEST_DIFFERENT_OWNER="1")
+        self.assertIn("safe.directory not forwarded", str(e.exception))
+
+    def test_alternates_entries_relative_nested_quoted_and_deep(self):
+        def objects(name, *lines):
+            d = os.path.join(self.tmp, name, "objects")
+            os.makedirs(os.path.join(d, "info"), exist_ok=True)
+            if lines:
+                with open(os.path.join(d, "info", "alternates"), "w") as f:
+                    f.write("".join(line + "\n" for line in lines))
+            return os.path.realpath(d)
+
+        c = objects("c")
+        b = objects("b", c)  # absolute, nested under a's relative entry
+        a = objects("a", "# a comment", "../../b/objects", '"/quoted path/objects"')
+        self.assertEqual(list(PC.alternates(a)), [b, c, None])
+        chain = [objects("d7")]
+        for n in range(6, -1, -1):  # d0 -> d1 -> ... -> d7: past git's depth of 5
+            chain.insert(0, objects(f"d{n}", f"../../d{n + 1}/objects"))
+        self.assertEqual(list(PC.alternates(chain[0])), chain[1:6] + [None])
+
+    def test_the_total_blob_cap_leaves_the_rest_unread(self):
+        self.commit(a="1234\n", b="56789\n")
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "BUDGET", 30.0), mock.patch.object(PC, "START",
+                                                                          PC.time.monotonic()):
+            r = PC.Repo(self.repo)
+            oa, ob = (self.sh("rev-parse", f"HEAD:{n}") for n in "ab")
+            self.assertEqual(r.blobs([oa, ob], 1 << 20, 5), ({oa: b"1234\n"}, [ob]))
+            self.assertEqual(r.blobs([oa, ob], 1 << 20, 11)[1], [])
+
     def test_a_spent_budget_stops_before_git_runs(self):
         self.commit(a="1\n")
         with mock.patch.dict(os.environ, self.env, clear=True), \
@@ -1500,6 +1590,33 @@ class OutsideTheProject(BashBase):
         self.assertIn("alternates entry is outside", self.log()[len(before):])
         os.unlink(alt)
         self.assertIn("mine.ts:1", self.pre("git push", session_id="s-alt"))
+
+    def test_a_common_dir_or_a_relative_alternates_entry_outside_is_never_read(self):
+        # Review round 3, low 8: a git dir inside the project whose common dir is outside it.
+        wt = os.path.join(self.tmp, "vault-wt")
+        self.sh("worktree", "add", "-q", "-b", "wt", wt, cwd=self.vault)
+        planted = os.path.join(self.proj, "planted-gd")
+        shutil.copytree(os.path.join(self.vault, ".git", "worktrees", "vault-wt"), planted)
+        with open(os.path.join(planted, "commondir"), "w") as f:
+            f.write(os.path.join(self.vault, ".git") + "\n")
+        sub = os.path.join(self.proj, "sub")
+        os.makedirs(sub)
+        with open(os.path.join(sub, ".git"), "w") as f:
+            f.write(f"gitdir: {planted}\n")
+        self.assertEqual(os.path.realpath(self.sh("rev-parse", "--git-common-dir", cwd=sub)),
+                         os.path.realpath(os.path.join(self.vault, ".git")))  # the trap is live
+        before = self.log()
+        self.assertIsNone(self.pre("cd sub && git push", session_id="s-common"))
+        self.assertIn("the repo's its common dir is outside the project", self.log()[len(before):])
+        self.assert_skipped(before)
+        # A relative alternates entry resolves from the objects dir, and outside is outside.
+        self.commit(**{"mine.ts": "y({ ...body })\n"})
+        objects = os.path.join(self.proj, ".git", "objects")
+        with open(os.path.join(objects, "info", "alternates"), "w") as f:
+            f.write(os.path.relpath(os.path.join(self.vault, ".git", "objects"), objects) + "\n")
+        before = self.log()
+        self.assertIsNone(self.pre("git push", session_id="s-rel-alt"))
+        self.assertIn("alternates entry is outside", self.log()[len(before):])
 
     def test_a_lane_reads_its_main_checkouts_git_dir(self):
         self.skill("demo", DEMO, where="user")
