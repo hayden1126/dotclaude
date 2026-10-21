@@ -3642,7 +3642,8 @@ class RunHarness(unittest.TestCase):
             code, text = self.summarize_main(path)
             self.assertEqual(code, 0, text)
             self.assertNotRegex(text, r"idor\s+C ")
-            code, text = self.summarize_main(path, "--arms", "A,C")  # named, the empty line misses in either form
+            # Listed by --arms, the empty line misses: these rows record no plan, so every line shown can.
+            code, text = self.summarize_main(path, "--arms", "A,C")
             self.assertEqual(code, 1, text)
             self.assertIn("MISS (no rows: none of its runs finished)", text)  # nor its n
             # Old rows, as round 5 found them: another case holds C rows, so C is listed, and idor's empty C
@@ -3676,6 +3677,121 @@ class RunHarness(unittest.TestCase):
         source = Path(r.__file__).read_text()
         self.assertIn('row.setdefault("planned_cases", cases)', source)
         self.assertIn('row.setdefault("planned_arms", arms)', source)
+
+    def plan_rows(self, model, cases, arms, n, short=None, ran=None):
+        """The rows one run of `model` writes: n passing runs of each case and arm it planned (of
+        `ran`, the cases it got to, when a Ctrl-C stopped it), `short` a (case, arm) whose last run
+        never finished."""
+        skills = {"server-code": "a" * 64, "auth-secrets": "b" * 64}
+        return [self.row(case, arm, "pass", skills, model=model, run=i, planned_n=n, planned_cases=cases,
+                         planned_arms=arms, stream=[f"/out/{model}/{case}-{arm}-{i}/stream.jsonl"])
+                for case in (ran or cases) for arm in arms for i in range(1, n + 1) if (case, arm, i) != (*(short or ()), n)]
+
+    def test_pooled_runs_gate_only_the_lines_their_model_planned(self):
+        # Round 6's case: one run planned email-change on B, C and D, another rate-limit-paid on C
+        # only. No run planned rate-limit-paid/D, so its empty line is no miss; before, the summary
+        # crossed every case with every arm and missed it.
+        write = lambda path, rows: path.write_text("".join(json.dumps(x) + "\n" for x in rows))
+        with tempfile.TemporaryDirectory(prefix="practices-pool-") as tmp:
+            auth, cross = Path(tmp) / "auth.jsonl", Path(tmp) / "cross.jsonl"
+            write(auth, self.plan_rows("m", ["email-change"], ["B", "C", "D"], 5))
+            write(cross, self.plan_rows("m", ["rate-limit-paid"], ["C"], 5))
+            code, text = self.summarize_main(auth, cross)
+            self.assertEqual(code, 0, text)
+            self.assertNotIn("MISS", text)
+            self.assertNotRegex(text, r"rate-limit-paid\s+[BD] ")
+            self.assertRegex(text, r"email-change\s+D\s+5 .*  green")
+            self.assertRegex(text, r"rate-limit-paid\s+C\s+5 .*  green")
+            # One flag alone filters the lines; what the runs planned still says which can miss.
+            for flag in (("--arms", "D"), ("--cases", "rate-limit-paid"), ("--arms", "C,D")):
+                with self.subTest(flag):
+                    code, text = self.summarize_main(auth, cross, *flag)
+                    self.assertEqual(code, 0, text)
+            # Both flags name the lines wanted: an empty one misses, planned or not.
+            code, text = self.summarize_main(auth, cross, "--cases", "rate-limit-paid", "--arms", "C,D")
+            self.assertEqual(code, 1, text)
+            self.assertIn("missed the bar: rate-limit-paid/D\n", text)
+            # A line a run planned and never reached misses, pooled or not.
+            write(auth, self.plan_rows("m", ["email-change", "logout-revoke"], ["B", "C", "D"], 5, ran=["email-change"]))
+            code, text = self.summarize_main(auth, cross)
+            self.assertEqual(code, 1, text)
+            self.assertRegex(text, r"logout-revoke\s+C\s+0 .*  MISS \(no rows: 0 of 5 runs finished\)\n")
+            self.assertIn("missed the bar: logout-revoke/C, logout-revoke/D\n", text)
+            # Another model's plan says nothing of this one's: the same rows as model n's run only.
+            write(cross, self.plan_rows("n", ["rate-limit-paid"], ["C"], 5))
+            write(auth, self.plan_rows("m", ["email-change"], ["B", "C", "D"], 5))
+            code, text = self.summarize_main(auth, cross)
+            self.assertEqual(code, 0, text)
+            # A model with a row that records no plan (the old form) says nothing of what its runs left
+            # out: every line shown can miss, as before.
+            write(cross, [{k: v for k, v in x.items() if k not in ("planned_cases", "planned_arms")}
+                          for x in self.plan_rows("m", ["rate-limit-paid"], ["C"], 5)])
+            code, text = self.summarize_main(auth, cross)
+            self.assertEqual(code, 1, text)
+            self.assertIn("missed the bar: rate-limit-paid/D\n", text)
+
+    def test_a_step_7_pool_misses_only_the_line_cut_short(self):
+        # The next eval's shape: per model, the auth cases on B, C and D and the cross-skill cases on
+        # C only, two runs each. Haiku's auth run lost its last signup/C run.
+        auth = ["open-redirect", "email-change", "logout-revoke", "signup", "remember-me", "auth-benign"]
+        cross = ["rate-limit-paid", "csv-injection", "reset-host", "benign"]
+        with tempfile.TemporaryDirectory(prefix="practices-step7-") as tmp:
+            paths = []
+            for model in ("opus", "sonnet", "haiku"):
+                for name, cases, arms in (("auth", auth, ["B", "C", "D"]), ("cross", cross, ["C"])):
+                    paths.append(Path(tmp) / f"{model}-{name}")
+                    paths[-1].mkdir()
+                    rows = self.plan_rows(model, cases, arms, 2, ("signup", "C") if (model, name) == ("haiku", "auth") else None)
+                    (paths[-1] / "results.jsonl").write_text("".join(json.dumps(x) + "\n" for x in rows))
+            code, text = self.summarize_main(*paths)
+            self.assertEqual(code, 1, text)
+            self.assertIn("missed the bar: signup/C\n", text)
+            self.assertEqual(text.count("MISS"), 1, text)
+            self.assertIn("MISS (pass 1 of 2)", text.split("model haiku")[1].split("model ")[0])
+
+    def test_a_path_with_no_rows_fails_the_summary(self):
+        # A run killed before its first row leaves an empty results.jsonl, and its plan is only in
+        # rows: the path fails the summary, so that model can't drop out of a green pool.
+        with tempfile.TemporaryDirectory(prefix="practices-empty-") as tmp:
+            died = Path(tmp) / "died"
+            died.mkdir()
+            full = Path(tmp) / "full.jsonl"
+            full.write_text("".join(json.dumps(x) + "\n" for x in self.plan_rows("m", ["email-change"], ["C"], 5)))
+            self.assertEqual(self.summarize_main(full)[0], 0)
+            for body in ("", "\n\n"):
+                (died / "results.jsonl").write_text(body)
+                for paths in ((died,), (died, "--cases", "idor", "--arms", "C"), (died, "--arms", "C"), (full, died)):
+                    with self.subTest(body=body, paths=paths):
+                        code, text = self.summarize_main(*paths)
+                        self.assertEqual(code, 1, text)
+                        self.assertIn(f"no rows in {(died / 'results.jsonl').resolve()}", text)
+            # A path whose rows another path already gave holds rows: no failure for that alone.
+            (died / "results.jsonl").write_text(full.read_text())
+            self.assertEqual(self.summarize_main(full, died)[0], 0)
+
+    def test_summarize_warns_while_a_run_writes_the_file(self):
+        # A hand edit while a run appends loses rows (a save by rename sends them to the unlinked
+        # file), so a summary of a live run's file says a run is writing it. The probe doesn't
+        # wait and lets go at once, and the warning alone doesn't change the exit code.
+        r = self.harness
+        with tempfile.TemporaryDirectory(prefix="practices-live-") as tmp:
+            out = Path(tmp)
+            (out / "results.jsonl").write_text("".join(json.dumps(x) + "\n" for x in self.graded_rows()[:4]))
+            with r.open_results(out):
+                code, text = self.summarize_main(out)
+                self.assertEqual(code, 1, text)  # 4 of 5: the run isn't done
+                self.assertIn(f"warning: a run is still writing {(out / 'results.jsonl').resolve()}", text)
+                self.assertIn("don't hand-edit it", text)
+                self.assertIn("--grade", text.split("warning: a run is still writing")[1])
+            code, text = self.summarize_main(out)
+            self.assertNotIn("warning: a run", text)
+            with r.open_results(out):  # the summary's probe holds nothing after it
+                pass
+            (out / "results.jsonl").write_text("".join(json.dumps(x) + "\n" for x in self.plan_rows("m", ["email-change"], ["C"], 5)))
+            with r.open_results(out):
+                code, text = self.summarize_main(out)
+                self.assertEqual(code, 0, text)
+                self.assertIn("warning: a run is still writing", text)
 
     def grade_main(self, *argv):
         saved = sys.argv

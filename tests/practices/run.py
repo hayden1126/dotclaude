@@ -186,8 +186,15 @@ effort reads "default"). A line's n, the runs a C or D line must pass, is the la
 rows it holds, -n and the planned_n of the model's rows whose run planned that case and arm (so
 a run cut short, by Ctrl-C say, misses until its rows are there; a row from before planned_n
 leaves it to the other two). A line that can miss (A on a target case, C or D on target) and
-holds no row is a MISS ("no rows"), never pass 0 of 0. It exits 1 before printing
-any bar, naming each file:line, when a non-empty line is not a row: it won't parse as a JSON
+holds no row is a MISS ("no rows"), never pass 0 of 0, when a run of its model planned it,
+when both --cases and --arms are given (together they name the lines wanted; one alone only
+filters), or when its model has a row without planned_cases or planned_arms (which says nothing
+of what its runs left out). Any other empty line isn't shown, so runs of different plans pooled
+together don't miss the lines no run planned. A PATH that holds no row (an empty file, or a run
+killed before its first row finished) exits 1, naming it after the bar, so that model can't drop
+out of a pooled bar unseen. A PATH in the --out dir of a live run (see --grade) gets a warning
+that the run is still writing it: don't hand-edit it, and use --grade once the run ends. It
+exits 1 before printing any bar, naming each file:line, when a non-empty line is not a row: it won't parse as a JSON
 object, its case, arm or verdict is unknown, or a field a person or the run sets is malformed
 (a hand_verdict outside "pass", "fail" and "broken", a reviewed that isn't true or false, a
 planned_n that isn't a positive whole number, a planned_cases or planned_arms that isn't a
@@ -1340,22 +1347,30 @@ def plans(row, case, arm):
 def planned_lines(rows):
     """(cases, arms) the rows' runs planned, in CASES and ARMS order: each row's own case and arm
     and its planned_cases and planned_arms, so a case or arm a run planned but never started
-    (a Ctrl-C) is still listed. A row from before they were recorded adds its own only."""
+    (a Ctrl-C) is still listed. A row from before they were recorded adds its own only. These are
+    the lines --summarize may show; which of them can miss with no row is summarize's call, per
+    model, from the plans themselves (crossing these two unions would name lines no run planned)."""
     cases = [c for c in CASES if any(plans(r, c, r.get("arm")) for r in rows)]
     arms = [x for x in ARMS if any(plans(r, r.get("case"), x) for r in rows)]
     return cases, arms
 
 
-def summarize(rows, cases, arms, n=None):
+def summarize(rows, cases, arms, n=None, named=True):
     """Prints the table and bar per model and effort; returns the missed "case/arm" labels. Rows
     carrying `imported` are arm-A rows from --baseline files: they count in A's line, marked
     there. A line's n is the largest of n, the rows it holds and the planned_n of the model's
     rows whose run planned that case and arm (plans(); a row without planned_n, from before it
-    was recorded, adds nothing). A line that could miss and holds no row is a MISS."""
+    was recorded, adds nothing). A line that could miss and holds no row is a MISS when a run
+    of its model planned it (plans()), when `named` (`cases` and `arms` are the plan: a live
+    run's, or both --cases and --arms), or when the model has a row that records no plan (one
+    from before planned_cases and planned_arms says nothing of what its runs left out). Any
+    other empty line isn't shown: no run of that model planned it, so nothing was cut short."""
     missed, refused, held = [], [], []
     for model, effort in sorted({(r.get("model"), effort_of(r)) for r in rows}, key=str):
         print(f"\nmodel {model}, effort {effort}")
         of_model = [r for r in rows if r.get("model") == model and effort_of(r) == effort]
+        every_line = named or any(not r.get("imported") and not ("planned_cases" in r and "planned_arms" in r)
+                                  for r in of_model)
         versions = sorted({str(r["claude_code_version"]) for r in of_model if r.get("claude_code_version")})
         if len(versions) > 1:  # Claude Code can update itself mid-run, so this warns, not refuses
             print(f"warning: rows from {len(versions)} Claude Code versions ({', '.join(versions)}); pooled anyway")
@@ -1370,6 +1385,8 @@ def summarize(rows, cases, arms, n=None):
             shown = [arm for arm in ARMS if arm in arms or (arm == "A" and a_rows)]
             for arm in shown:
                 mine = [r for r in of_model if r["case"] == case and r["arm"] == arm]
+                if not mine and not (every_line or any(plans(r, case, arm) for r in of_model)):
+                    continue  # pooled runs of other plans listed it; none of this model's planned it
                 counts = counts_of(mine)
                 prints = pooled_prints(mine)
                 if len(prints) > 1:
@@ -1506,16 +1523,20 @@ def load_baseline(paths, model, cases, effort="default"):
 
 
 def load_rows(paths):
-    """Every row of every arm in these results.jsonl files (each path a file, or a results dir
-    holding one). A row already taken (the same stream paths) is dropped and counted. A file
-    that can't be read exits, and so does a non-empty line that isn't a row (refuse_lines),
-    before any bar is printed."""
-    rows, seen, seen_rows, problems = [], set(), set(), []
+    """(rows, empty, live): every row of every arm in these results.jsonl files (each path a
+    file, or a results dir holding one), the files that hold no row (a run killed before its
+    first row leaves one, and its plan is only in rows), and the files a live run is still
+    writing (held_by_a_run). A row already taken (the same stream paths) is dropped and
+    counted; its file still holds a row. A file that can't be read exits, and so does a
+    non-empty line that isn't a row (refuse_lines), before any bar is printed."""
+    rows, seen, seen_rows, problems, empty, live = [], set(), set(), [], [], []
     for given in paths:
         path = results_path(given)
         if path in seen:
             continue
         seen.add(path)
+        if held_by_a_run(path.parent):
+            live.append(path)
         took = dups = 0
         for number, row, problem in read_results(path, "--summarize", given):
             if problem:
@@ -1528,9 +1549,11 @@ def load_rows(paths):
             seen_rows.add(key)
             rows.append(row)
             took += 1
+        if not took + dups:
+            empty.append(path)
         print(f"rows {path}: {took} row(s); {dups} already taken")
     refuse_lines("--summarize", problems)
-    return rows
+    return rows, empty, live
 
 
 @contextlib.contextmanager
@@ -1549,6 +1572,26 @@ def results_lock(directory, refusal):
         yield
     finally:
         os.close(fd)
+
+
+def held_by_a_run(directory):
+    """Whether a live run (or a --grade) holds results_lock on `directory` now. It tries a shared
+    flock without waiting and lets go at once, so it never blocks, and keeps a run from taking
+    the dir for that instant only. A dir it can't open or flock reads as not held: the answer
+    is a warning, and the summary goes on either way."""
+    try:
+        fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    except OSError:
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    except OSError:
+        return False
+    finally:
+        os.close(fd)  # closing the only fd on it drops the flock
+    return False
 
 
 @contextlib.contextmanager
@@ -1619,17 +1662,24 @@ def _grade_row(path, given, key, verdict, note):
 
 def summarize_files(paths, cases=None, arms=None, n=None):
     """--summarize: the bar from earlier results files, no model calls. Returns the exit code."""
-    rows = load_rows(paths)
+    rows, empty, live = load_rows(paths)
     planned_cases, planned_arms = planned_lines(rows)
+    named = bool(cases and arms)  # both name the lines wanted; one alone filters what the runs planned
     cases, arms = cases or planned_cases, arms or planned_arms
-    missed = summarize(rows, cases, arms, n)
+    missed = summarize(rows, cases, arms, n, named=named)
     errors = sum(verdict_of(r) == "error" for r in rows if r["case"] in cases and r["arm"] in arms)
     print(f"\n{len(rows)} rows from {len(paths)} path(s); no model calls made")
     if errors:
         print(f"{errors} run(s) scored error (harness or infra, not the agent); see their checks")
     if missed:
         print("missed the bar: " + ", ".join(missed))
-    return 1 if missed or errors else 0
+    for path in empty:
+        print(f"no rows in {path}: an empty file, or a run that ended before its first row finished; "
+              "its model and plan are missing from the bar")
+    for path in live:
+        print(f"warning: a run is still writing {path}: don't hand-edit it while the run lasts (an editor's "
+              "save can drop the rows it appends); once the run ends, use --grade PATH RUN VERDICT NOTE")
+    return 1 if missed or errors or empty else 0
 
 
 # ---------------------------------------------------------------- main
