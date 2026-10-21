@@ -1601,6 +1601,16 @@ class Push(BashBase):
         self.assertEqual(self.log()[len(before):].count(
             "push-unscanned push: a delete or a dry run sends no commits"), 2)
 
+    def test_a_source_that_names_no_commit_is_logged(self):
+        # Review round 2, low 4: a glob refspec left nothing to scan, and nothing was logged.
+        self.commit(**{"bad.ts": "y({ ...body })\n"})
+        before = self.log()
+        self.assertIsNone(self.pre("git push origin 'refs/heads/*:refs/heads/*'"))
+        self.assertIn("git-skipped push: a source names no commit here", self.log()[len(before):])
+        self.assertNotIn("refs/heads", self.log())
+        reason = self.pre("git push origin nowhere main", session_id="s-mixed")
+        self.assertIn("bad.ts:1", reason)  # what resolves is still scanned
+
     def test_named_sources_and_every_branch(self):
         tip = self.commit(**{"main.ts": "y({ ...body })\n"})
         self.sh("update-ref", "refs/remotes/origin/main", tip)

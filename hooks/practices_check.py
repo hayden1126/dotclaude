@@ -1894,7 +1894,11 @@ def push_gate(event, pushes, skills, cfg, ts, ctx, bounds):
             if repo is None:
                 continue
             tips = ["--branches"] if "--branches" in srcs else []
-            tips += [oid for s in srcs if s != "--branches" and (oid := repo.rev(s))]
+            named = [(s, repo.rev(s)) for s in srcs if s != "--branches"]
+            tips += [oid for _, oid in named if oid]
+            if any(oid is None for _, oid in named):
+                log("git-skipped", "push: a source names no commit here (a glob refspec, say), "
+                    "so what it sends wasn't checked")
             if not tips:
                 continue
             found, cut = scan(repo, [*tips, "--not", "--remotes"], rules, "push", ctx)
