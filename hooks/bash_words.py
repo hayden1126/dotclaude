@@ -26,6 +26,8 @@ WRAPPERS = {"sudo", "doas", "command", "nohup", "env", "builtin", "exec", "timeo
 # so that word is skipped unless it names a command the caller looks for (`sudo -E git`).
 WRAPPER_ARGS = {"sudo": "RcaDghprtTUuC", "doas": "aCu", "env": "uCS", "timeout": "ks",
                 "nice": "n", "ionice": "cnp", "stdbuf": "ioe", "exec": "a", "time": "fo"}
+# The short option that names the dir a wrapper runs the command in (also --chdir).
+CHDIR = {"env": "C", "sudo": "D"}
 # The shells whose `-c 'script'` calls() reads as commands, and the options that take a word.
 SHELLS = {"bash", "sh", "zsh"}
 SHELL_ARG_OPTS = {"-o", "+o", "-O", "+O", "--rcfile", "--init-file"}
@@ -245,12 +247,33 @@ def _option_takes_arg(wrapper, w):
     return True  # an option the table doesn't know may take one (`sudo --foo /x rm`)
 
 
-def command_words(words, heads=frozenset()):
+def _chdir(wrapper, w):
+    """(the dir a wrapper's option word runs the command in, or None; whether the next word is
+    that dir): `env -C dir`, `env -Cdir`, `sudo -D dir`, `--chdir=dir`, `--chdir dir`."""
+    letter = CHDIR.get(wrapper)
+    if letter is None or (w.startswith("--") and not w.startswith("--chdir")):
+        return None, False
+    if w == "--chdir":
+        return None, True
+    if w.startswith("--chdir="):
+        return w.split("=", 1)[1], False
+    cluster = w[1:]
+    for k, c in enumerate(cluster):
+        if c in WRAPPER_ARGS.get(wrapper, ""):
+            if c != letter:
+                return None, False  # another option takes the rest of the cluster
+            return (cluster[k + 1:], False) if cluster[k + 1:] else (None, True)
+    return None, False
+
+
+def command_words(words, heads=frozenset(), dirs=None):
     """(name, args, prefix assignments) of a simple command; name is None for a pure assignment.
     Through wrappers (`sudo -u x git`, `env -i git`, `timeout 60 git`, `nice git`), the wrapped
     command counts: options, assignments and counts are skipped, and so is the word after an
     option (its argument, _option_takes_arg) unless that word names one of heads, the commands
-    the caller looks for. An option word is never taken as another option's argument."""
+    the caller looks for. An option word is never taken as another option's argument. With
+    dirs (a list), each dir a wrapper runs the command in (`env -C d`, `sudo -D d`) is
+    appended to it, in order."""
     prefix, i = [], 0
     while i < len(words) and (ASSIGN.match(words[i]) or words[i] in KEYWORDS):
         if ASSIGN.match(words[i]):
@@ -260,14 +283,21 @@ def command_words(words, heads=frozenset()):
         return None, [], prefix
     while os.path.basename(words[i]) in WRAPPERS:
         wrapper = os.path.basename(words[i])
-        j, wants_arg = i + 1, False
+        j, wants_arg, wants_dir = i + 1, False, False
         while j < len(words):
             w, base = words[j], os.path.basename(words[j])
             if w == "--":
                 j += 1
                 break
-            if w.startswith("-") and len(w) > 1:
+            if wants_dir and not (w.startswith("-") and len(w) > 1):
+                if dirs is not None:
+                    dirs.append(w)  # `env -C git git push`: the dir, whatever it is named
+                wants_arg = wants_dir = False
+            elif w.startswith("-") and len(w) > 1:
                 wants_arg = _option_takes_arg(wrapper, w)
+                d, wants_dir = _chdir(wrapper, w)
+                if d is not None and dirs is not None:
+                    dirs.append(d)
             elif ASSIGN.match(w):
                 wants_arg = False
                 if wrapper in ("env", "time"):  # `env GIT_DIR=x git` sets it for the command
@@ -421,27 +451,35 @@ def calls(command, heads, cwd, rest=None, depth=0):
     ValueError on an unparsable command, or one nested deeper than NEST_MAX."""
     if depth > NEST_MAX:
         raise ValueError(f"substitutions nested over {NEST_MAX} deep")
-    bodies, out, k = [], [], 0
+    bodies, out, k, outer = [], [], 0, []
     for kind, words, n in _split(prepass(command, bodies, rest)):
-        if kind != "words":
+        if kind == "(":  # a subshell: a cd inside it ends with it
+            outer.append(cwd)
+            continue
+        if kind == ")":
+            cwd = outer.pop() if outer else cwd  # a case pattern's ) opens nothing
             continue
         for body in bodies[k:k + n]:
             out += calls(body, heads, cwd, rest, depth + 1)
         k += n
         if not words:
             continue
-        name, args, prefix = command_words(words, set(heads) | SHELLS)
+        dirs = []
+        name, args, prefix = command_words(words, set(heads) | SHELLS, dirs)
         if name in ("cd", "pushd"):
             cwd = cd_target(args, cwd)
             continue
+        here = cwd
+        for d in dirs:  # `env -C d`, `sudo -D d`: this command only
+            here = cd_target([d], here) if not d.startswith("-") else None
         script = shell_script(args) if name in SHELLS else None
         if script is not None:
-            out += calls(script, heads, cwd, rest, depth + 1)
+            out += calls(script, heads, here, rest, depth + 1)
             continue
         if rest is not None:
             rest.append(" ".join(args))
         if name in heads:
-            out.append((name, args, prefix, cwd))
+            out.append((name, args, prefix, here))
     for body in bodies[k:]:  # a literal %SUBST% in the command leaves the count short
         out += calls(body, heads, cwd, rest, depth + 1)
     return out

@@ -1631,6 +1631,22 @@ class Push(BashBase):
         self.assertIn("SEC-17 (demo) at new.ts:1",
                       out["hookSpecificOutput"]["permissionDecisionReason"])
 
+    def test_the_gate_judges_the_repo_a_wrapper_dir_or_a_subshell_leaves(self):
+        # Review round 2, low 7: the gate judged the wrong repo (still inside the bounds).
+        sub = self.make_repo(os.path.join(self.proj, "sub"))
+        with open(os.path.join(self.proj, ".git", "info", "exclude"), "a") as f:
+            f.write("sub/\n")
+        self.commit(repo=sub, **{"s.ts": "x({ ...body })\n"})
+        self.commit(**{"p.ts": "y({ ...body })\n"})
+        for n, (command, mine, other) in enumerate((
+                ("(cd sub && git status); git push", "p.ts:1", "s.ts"),
+                ("env -C sub git push", "s.ts:1", "p.ts"),
+                ("sudo -D sub git push", "s.ts:1", "p.ts"))):
+            with self.subTest(command=command):
+                reason = self.pre(command, session_id=f"s-dir-{n}")
+                self.assertIn(mine, reason)
+                self.assertNotIn(other, reason)
+
     def test_a_source_that_names_no_commit_is_logged(self):
         # Review round 2, low 4: a glob refspec left nothing to scan, and nothing was logged.
         self.commit(**{"bad.ts": "y({ ...body })\n"})
@@ -2017,6 +2033,28 @@ class BashWords(unittest.TestCase):
                 self.assertEqual(self.git(command), want)
         (_, args, prefix, _), = BW.calls("time GIT_DIR=/g/.git git commit", {"git"}, "/r")
         self.assertEqual(BW.git_call(args, prefix, "/r")[2]["git_dir"], "/g/.git")
+
+    def test_a_wrappers_dir_and_a_subshells_cd(self):
+        # Review round 2, low 7: env -C and sudo -D weren't followed, and a cd inside ( ... )
+        # leaked past the parentheses.
+        cases = {
+            "env -C sub git push": ["/r/sub"],
+            "env --chdir=/abs git commit": ["/abs"],
+            "env -iC sub git push": ["/r/sub"],
+            "env --chdir sub git push": ["/r/sub"],
+            "sudo -D /x git push": ["/x"],
+            "sudo -Dsub -u me git push": ["/r/sub"],
+            'env -C "$D" git push': [None],
+            "env -C git git push": ["/r/git"],
+            "env -C sub git commit; git push": ["/r/sub", "/r"],
+            "(cd sub && git commit); git push": ["/r/sub", "/r"],
+            "(cd sub; (cd deeper && git push); git commit) && git push": [
+                "/r/sub/deeper", "/r/sub", "/r"],
+            "case x in a) cd sub;; esac; git push": ["/r/sub"],
+        }
+        for command, want in cases.items():
+            with self.subTest(command=command):
+                self.assertEqual([c for _, c in self.git(command)], want)
 
     def test_cd_then_commit_runs_in_the_new_dir(self):
         self.assertEqual(self.git("cd sub && git commit")[0][1], "/r/sub")
