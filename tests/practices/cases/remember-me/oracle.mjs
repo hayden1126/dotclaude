@@ -41,7 +41,11 @@
 //   Time moves for the probe's whole process: Date (Date.now(), new Date()) runs the days ahead,
 //   and SQLite's clock with it: in every statement but CREATE, ALTER and DROP, 'now',
 //   CURRENT_TIMESTAMP, CURRENT_DATE, CURRENT_TIME and a no-argument datetime(), date(), time(),
-//   julianday() or unixepoch() read a function that returns the moved time. On a node whose
+//   julianday() or unixepoch() read a function that returns the moved time. datetime(), date(),
+//   time(), julianday(), unixepoch() and strftime() are also overridden on each connection, with
+//   'now' (or no time value) read as the moved time and the rest computed by SQLite's own
+//   functions on a private connection, so a column's DEFAULT (datetime('now')), which no
+//   statement rewrite reaches, takes the moved clock too. On a node whose
 //   node:sqlite can't define functions, the day-32 checks are skipped and say so, and only the
 //   cookie is graded;
 // - note, not graded: whether a login without the option sets a browser-session cookie.
@@ -57,7 +61,8 @@
 // Known gaps: expiry read from a clock the probe doesn't move (performance.now(), a process
 // started before the probe, a one-argument strftime('%s')) or checked only in a statement that
 // also creates a table scores a false fail; a session lifetime between 31 and 32 days passes; a
-// refresh endpoint at a dynamic path, or one that wants a body or a CSRF header, isn't followed.
+// refresh endpoint at a dynamic path, or one that wants a body or a CSRF header, isn't followed;
+// a column's DEFAULT CURRENT_TIMESTAMP (a keyword, not a function) takes the real clock.
 import { readdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -102,6 +107,23 @@ function moveClock(days) {
   if (typeof DatabaseSync.prototype.function !== "function") return false;
   const stamp = () => new Real(now()).toISOString().replace("T", " ").replace("Z", "");
   const ready = new WeakSet();
+  // SQLite's own date functions, on a private connection the overrides never reach.
+  const originalPrepare = DatabaseSync.prototype.prepare;
+  const builtins = new DatabaseSync(":memory:");
+  const statements = new Map();
+  const builtin = (name, args) => {
+    const key = `${name}/${args.length}`;
+    if (!statements.has(key)) statements.set(key, originalPrepare.call(builtins, `SELECT ${name}(${args.map(() => "?").join(", ")}) AS v`));
+    return statements.get(key).get(...args).v;
+  };
+  // The time value is the first argument (strftime's second); 'now' or none reads the moved time.
+  const moved = (name) => (...args) => {
+    const at = name === "strftime" ? 1 : 0;
+    const out = [...args];
+    if (out.length <= at) out.push(stamp());
+    else if (typeof out[at] === "string" && out[at].trim().toLowerCase() === "now") out[at] = stamp();
+    return builtin(name, out);
+  };
   const rewrite = (sql) =>
     typeof sql !== "string" || /^\s*(CREATE|ALTER|DROP)\b/i.test(sql)
       ? sql
@@ -117,6 +139,9 @@ function moveClock(days) {
       if (!ready.has(this)) {
         ready.add(this);
         this.function(NOW_FN, { deterministic: false }, stamp);
+        for (const fn of ["datetime", "date", "time", "julianday", "unixepoch", "strftime"]) {
+          this.function(fn, { deterministic: false, varargs: true }, moved(fn));
+        }
       }
       return original.call(this, rewrite(sql), ...rest);
     };

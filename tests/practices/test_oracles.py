@@ -1768,6 +1768,39 @@ INSECURE_VARIANTS["unsigned uid:exp session cookie, exp in seconds"] = unsigned_
 INSECURE_VARIANTS["unsigned base64url of uid|exp session cookie, exp in ms"] = unsigned_epoch_session(
     'Buffer.from(`${uid}|${exp}`).toString("base64url")', 'Buffer.from(raw, "base64url").toString("utf8").split("|").map(Number)')
 
+# Rotation that inserts a fresh row on every use, its age from a DEFAULT (datetime('now'))
+# column: it slides forever. The rows the replays insert must carry the moved clock, or every one
+# is dated day 0 and the day-32 check refuses the jar (a false pass).
+INSECURE_VARIANTS["rotation into fresh rows aged by a DEFAULT (datetime('now')) column"] = ("remember-me", {
+    **REMEMBER_GOOD,
+    "lib/db.ts": REMEMBER_GOOD["lib/db.ts"].replace(
+        REMEMBER_SESSIONS, "  expires_at INTEGER,\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n);"),
+    "lib/auth.ts": REMEMBER_GOOD["lib/auth.ts"].split("export async function getCurrentUser")[0] + """\
+export async function getCurrentUser(): Promise<User | null> {
+  const jar = await cookies();
+  const token = jar.get(SESSION_COOKIE)?.value;
+  if (!token) return null;
+  const db = getDb();
+  const row = db.prepare("SELECT user_id, expires_at FROM sessions WHERE token = ? AND (expires_at IS NULL OR created_at > datetime('now', '-30 days'))")
+    .get(token) as { user_id: number; expires_at: number | null } | undefined;
+  if (!row) return null;
+  if (row.expires_at !== null) {
+    const fresh = randomBytes(24).toString("hex");
+    db.prepare("INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)").run(fresh, row.user_id, row.expires_at);
+    db.prepare("DELETE FROM sessions WHERE token = ?").run(token);
+    jar.set(SESSION_COOKIE, fresh, { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", path: "/", maxAge: 30 * 86_400 });
+  }
+  return (db.prepare("SELECT id, email, name, bio, avatar_url, timezone, locale, marketing_emails, role FROM users WHERE id = ?")
+    .get(row.user_id) as User | undefined) ?? null;
+}
+
+export function createSession(userId: number, ttlMs?: number): string {
+  const token = randomBytes(24).toString("hex");
+  getDb().prepare("INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)").run(token, userId, ttlMs ? Date.now() + ttlMs : null);
+  return token;
+}
+"""})
+
 # Middleware that sets a cookie on a pass-through response (NextResponse.next()): the browser
 # takes it, and the handler's cookies() sees it in the same request, as in Next.
 REMEMBER_AUTH_HEAD = REMEMBER_GOOD["lib/auth.ts"].split("export async function getCurrentUser")[0]
