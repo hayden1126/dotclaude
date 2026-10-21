@@ -157,6 +157,17 @@ or fail; broken and error don't count.
      "reviewed": true in its line in results.jsonl (a tripwire row then counts under its own
      verdict) and, to grade it, "hand_verdict" and "hand_note": a reviewed row's hand_verdict
      replaces its verdict for the bar, and an unresolved verdict stays unresolved without one.
+     --summarize then prints the bar again from the edited files, with no model calls.
+
+  python3 tests/practices/run.py --summarize PATH [PATH ...] [--cases ...] [--arms ...] [-n N]
+
+--summarize loads the rows of every arm from each PATH (a results.jsonl, or the dir holding
+one; a row already taken, the same stream paths, is dropped), applies reviewed, hand_verdict
+and the tripwires, and prints the same table and bar as a live run, with the same pooling and
+fingerprint rules and exit status, and no model calls. --cases and --arms default to those the
+rows hold. The summary groups rows by model and effort (a row without an effort reads
+"default"). A line's n, the runs a C or D line must pass, is the number of rows it holds, or
+-n when that is larger (so a run cut short misses until its rows are there).
 """
 import argparse
 import concurrent.futures
@@ -1222,14 +1233,19 @@ def held_reason(row):
     return "; ".join(why), todo
 
 
-def summarize(rows, cases, arms, n):
-    """Prints the table and bar per model; returns the missed "case/arm" labels. Rows carrying
-    `imported` are arm-A rows from --baseline files: they count in A's line, marked there."""
+def effort_of(row):
+    return row.get("effort") or "default"
+
+
+def summarize(rows, cases, arms, n=None):
+    """Prints the table and bar per model and effort; returns the missed "case/arm" labels. Rows
+    carrying `imported` are arm-A rows from --baseline files: they count in A's line, marked
+    there. A line's n is max(n, the rows it holds)."""
     missed, refused, held = [], [], []
-    for model in sorted({r.get("model") for r in rows}, key=str):
-        print(f"\nmodel {model}")
-        versions = sorted({str(r["claude_code_version"]) for r in rows
-                           if r.get("model") == model and r.get("claude_code_version")})
+    for model, effort in sorted({(r.get("model"), effort_of(r)) for r in rows}, key=str):
+        print(f"\nmodel {model}, effort {effort}")
+        of_model = [r for r in rows if r.get("model") == model and effort_of(r) == effort]
+        versions = sorted({str(r["claude_code_version"]) for r in of_model if r.get("claude_code_version")})
         if len(versions) > 1:  # Claude Code can update itself mid-run, so this warns, not refuses
             print(f"warning: rows from {len(versions)} Claude Code versions ({', '.join(versions)}); pooled anyway")
         print(f"{'case':16} {'arm':3} {'pass':>4} {'fail':>4} {'brkn':>4} {'unrs':>4} {'err':>4} {'trig':>4} {'warm':>4} "
@@ -1237,7 +1253,6 @@ def summarize(rows, cases, arms, n):
         print("(unrs: unresolved, held out of every count until a person reviews it; err: harness or infra "
               "failures, outside every count; trig: the case turn triggered the case's skill; warm: arm D's "
               "warm-up turn triggered the skill of the case it ran)")
-        of_model = [r for r in rows if r.get("model") == model]
         for case in cases:
             a_rows = [r for r in of_model if r["case"] == case and r["arm"] == "A"]
             a_prints = pooled_prints(a_rows)
@@ -1255,7 +1270,8 @@ def summarize(rows, cases, arms, n):
                     skills = prints[0]["skills"] if prints else None
                     # A's counts classify this arm's case only when A pooled and ran the same case code.
                     same_case = len(a_prints) == 1 and (not prints or a_prints[0]["case"] == prints[0]["case"])
-                    label, miss = bar(case, arm, counts, n, a=counts_of(a_rows) if a_rows and same_case else None,
+                    label, miss = bar(case, arm, counts, max(n or 0, len(mine)),
+                                      a=counts_of(a_rows) if a_rows and same_case else None,
                                       installed=list(skills) if skills is not None else None)
                 held += [r for r in mine if unresolved(r)]
                 imported = sum(bool(r.get("imported")) for r in mine)
@@ -1315,6 +1331,57 @@ def load_baseline(paths, model, cases, effort="default"):
         print(f"baseline {path}: {took} arm-A row(s) for {model} at effort {effort} in these cases; "
               f"{dups} already taken; {skipped} other line(s) skipped")
     return rows
+
+
+def load_rows(paths):
+    """Every row of every arm in these results.jsonl files (each path a file, or a results dir
+    holding one). A row already taken (the same stream paths) is dropped and counted. A file
+    that can't be read exits; a line that isn't a row is skipped and counted."""
+    rows, seen, seen_rows = [], set(), set()
+    for given in paths:
+        path = Path(given)
+        path = (path / "results.jsonl" if path.is_dir() else path).resolve()
+        if path in seen:
+            continue
+        seen.add(path)
+        try:
+            lines = path.read_text(errors="replace").splitlines()
+        except OSError as e:
+            sys.exit(f"run.py: --summarize {given}: {e.strerror or e}")
+        took = skipped = dups = 0
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                row = None
+            if not (isinstance(row, dict) and row.get("case") in CASE_INFO and row.get("arm") in ARMS
+                    and row.get("verdict") in VERDICTS):
+                skipped += bool(line.strip())
+                continue
+            key = json.dumps(row.get("stream") or row, sort_keys=True)
+            if key in seen_rows:
+                dups += 1
+                continue
+            seen_rows.add(key)
+            rows.append(row)
+            took += 1
+        print(f"rows {path}: {took} row(s); {dups} already taken; {skipped} other line(s) skipped")
+    return rows
+
+
+def summarize_files(paths, cases=None, arms=None, n=None):
+    """--summarize: the bar from earlier results files, no model calls. Returns the exit code."""
+    rows = load_rows(paths)
+    cases = cases or [c for c in CASES if any(r["case"] == c for r in rows)]
+    arms = arms or [x for x in ARMS if any(r["arm"] == x for r in rows)]
+    missed = summarize(rows, cases, arms, n)
+    errors = sum(verdict_of(r) == "error" for r in rows if r["case"] in cases and r["arm"] in arms)
+    print(f"\n{len(rows)} rows from {len(paths)} path(s); no model calls made")
+    if errors:
+        print(f"{errors} run(s) scored error (harness or infra, not the agent); see their checks")
+    if missed:
+        print("missed the bar: " + ", ".join(missed))
+    return 1 if missed or errors else 0
 
 
 # ---------------------------------------------------------------- main
@@ -1379,9 +1446,9 @@ def out_problem(out):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--arms", required=True, help="comma list of " + ",".join(ARMS))
+    ap.add_argument("--arms", help="comma list of " + ",".join(ARMS) + " (required but with --summarize)")
     ap.add_argument("--cases", help="comma list (default: all): " + ",".join(CASES))
-    ap.add_argument("-n", type=int, default=5, help="runs per case and arm (default 5)")
+    ap.add_argument("-n", type=int, help="runs per case and arm (default 5)")
     ap.add_argument("-j", type=int, default=2, help="sessions in parallel (default 2)")
     ap.add_argument("--model", default="claude-opus-5-5")
     ap.add_argument("--effort", choices=("low", "medium", "high", "xhigh", "max"),
@@ -1394,13 +1461,24 @@ def main():
     ap.add_argument("--baseline", action="append", default=[], metavar="PATH",
                     help="an earlier results.jsonl (or its dir) whose arm-A rows for the same model count "
                          "in this run's bar, marked imported (repeatable)")
+    ap.add_argument("--summarize", nargs="+", metavar="PATH",
+                    help="print the bar from earlier results.jsonl files (or their dirs), every arm's rows, "
+                         "applying reviewed and hand_verdict; no model calls")
     a = ap.parse_args()
 
-    arms = [x.strip().upper() for x in a.arms.split(",") if x.strip()]
-    cases = [c.strip() for c in a.cases.split(",") if c.strip()] if a.cases else CASES
+    arms = [x.strip().upper() for x in (a.arms or "").split(",") if x.strip()]
+    cases = [c.strip() for c in a.cases.split(",") if c.strip()] if a.cases else []
     bad = [x for x in arms if x not in ARMS] + [c for c in cases if c not in CASES]
     if bad:
         ap.error(f"unknown arm or case: {', '.join(bad)}")
+    if a.summarize:
+        if a.dry_run or a.out or a.baseline:
+            ap.error("--summarize reads earlier results only: it takes no --dry-run, --out or --baseline")
+        return summarize_files(a.summarize, cases, arms, a.n)
+    if not arms:
+        ap.error("--arms is required")
+    cases = cases or CASES
+    a.n = 5 if a.n is None else a.n
     problem = out_problem(a.out)
     if problem:
         sys.exit(f"run.py: {problem}")
@@ -1428,6 +1506,7 @@ def main():
             row = row_of(fut, *futures[fut])
             if row is not None:
                 row.setdefault("model", a.model)  # a harness error's row, for the per-model summary
+                row.setdefault("effort", a.effort or "default")
                 rows.append(row)
                 results.write(json.dumps(row) + "\n")  # each finished row is on disk at once
                 results.flush()

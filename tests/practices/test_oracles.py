@@ -2544,6 +2544,70 @@ class RunHarness(unittest.TestCase):
             x["reviewed"] = True
         self.assertEqual((r.counts_of(a)["fail"], r.a_class(r.counts_of(a))), (3, "discriminates"))
 
+    def summarize_main(self, *argv):
+        saved = sys.argv
+        sys.argv = ["run.py", "--summarize", *map(str, argv)]
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                code = self.harness.main()
+        finally:
+            sys.argv = saved
+        return code, out.getvalue()
+
+    def test_summarize_prints_the_bar_from_results_files(self):
+        r = self.harness
+        skills = {"server-code": "a" * 64, "auth-secrets": "b" * 64}
+        row = lambda arm, verdict, i, **x: {**self.row("email-change", arm, verdict, skills if arm == "C" else None, run=i,
+                                                       stream=[f"/out/email-change-{arm}-{i}/stream.jsonl"],
+                                                       diff=f"/out/email-change-{arm}-{i}/diff.patch"), **x}
+        first = [row("A", "fail", i) for i in (1, 2, 3)] + [
+            row("C", "pass", 1),
+            row("C", "unresolved", 2, checks=[{"name": "unresolved: the confirm link applies the change", "ok": False,
+                                               "detail": "the page uses useActionState"}]),
+            row("C", "pass", 3, suspect=["verdict"])]
+        second = [row("C", "pass", 4), row("C", "pass", 1)]  # #1 again: the same run, taken once
+        with tempfile.TemporaryDirectory(prefix="practices-summarize-") as tmp:
+            tmp = Path(tmp)
+            (tmp / "run1").mkdir()
+            (tmp / "run1" / "results.jsonl").write_text("".join(json.dumps(x) + "\n" for x in first) + "not json\n")
+            (tmp / "more.jsonl").write_text("".join(json.dumps(x) + "\n" for x in second))
+            code, text = self.summarize_main(tmp / "run1", tmp / "more.jsonl")
+            self.assertEqual(code, 1, text)
+            self.assertIn("6 row(s); 0 already taken; 1 other line(s) skipped", text)
+            self.assertIn("1 row(s); 1 already taken; 0 other line(s) skipped", text)
+            self.assertRegex(text, r"email-change\s+A .*discriminates \(fail 3 of 3 valid\)")
+            self.assertRegex(text, r"email-change\s+C\s+2\s+0\s+0\s+2\s+0 .*MISS \(pass 2 of 4\).*2 unresolved")
+            self.assertIn("unresolved email-change/C #2 (unresolved): the oracle couldn't determine it (the page uses "
+                          "useActionState)", text)
+            self.assertIn("unresolved email-change/C #3 (pass): suspect (verdict)", text)
+            self.assertIn("no model calls made", text)
+            # A person reads both and edits their lines; the bar is printed again, green.
+            first[4].update(reviewed=True, hand_verdict="pass", hand_note="the client form posts the token; the action checks it")
+            first[5].update(reviewed=True)
+            (tmp / "run1" / "results.jsonl").write_text("".join(json.dumps(x) + "\n" for x in first))
+            code, text = self.summarize_main(tmp / "run1", tmp / "more.jsonl")
+            self.assertEqual(code, 0, text)
+            self.assertRegex(text, r"email-change\s+C\s+4\s+0\s+0\s+0\s+0 .*  green\n")
+            # -n larger than the rows a line holds: the line misses until its runs are there.
+            code, text = self.summarize_main(tmp / "run1", tmp / "more.jsonl", "-n", "5")
+            self.assertEqual(code, 1, text)
+            self.assertIn("MISS (pass 4 of 5)", text)
+            # A reviewed tripwire row whose hand verdict says the agent forged it.
+            first[5]["hand_verdict"] = "broken"
+            (tmp / "run1" / "results.jsonl").write_text("".join(json.dumps(x) + "\n" for x in first))
+            code, text = self.summarize_main(tmp / "run1", tmp / "more.jsonl", "--arms", "C")
+            self.assertEqual(code, 1, text)
+            self.assertRegex(text, r"email-change\s+C\s+3\s+0\s+1\s+0\s+0 .*MISS \(pass 3 of 4\)")
+            # Pooling refuses rows of two fingerprints, as in a live run.
+            second[0]["case_hash"] = "other"
+            (tmp / "more.jsonl").write_text("".join(json.dumps(x) + "\n" for x in second))
+            code, text = self.summarize_main(tmp / "run1", tmp / "more.jsonl")
+            self.assertEqual(code, 1, text)
+            self.assertIn("REFUSED: rows from 2 versions (case differ)", text)
+            with self.assertRaises(SystemExit):
+                self.summarize_main(tmp / "missing.jsonl")
+
     def test_agent_diff_runs_no_filter_driver_the_fixture_repo_defines(self):
         r = self.harness
         root, sha = r.build_fixture("A")
