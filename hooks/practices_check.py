@@ -157,7 +157,9 @@ A scan runs every rule whose `at` has "commit" (L3r: or `scope = "line"`): `when
 commit's added lines (lines its blob has that the parent's doesn't, by count and without a
 trailing \\r: a moved line isn't new, nor is a CRLF rewrite) of regular files matching `paths`,
 `unless` and practices-allow on the blob the commit leaves. A file added where the same commit
-deleted one with the same basename (a rename with edits) is diffed against the deleted blob.
+deleted one with the same basename (a rename with edits) is diffed against the deleted blob,
+or scanned as all new when that blob is over the size caps (a changed file whose old blob is
+over them is skipped, logged).
 Merges, pure renames (the same blob), symlinks and binaries are skipped; at most MAX_COMMITS
 commits and BYTES_MAX blob bytes, a cut logged as scan-truncated. When the time budget runs
 out mid-scan (logged as scan-truncated), the level denies or tells once on what it read,
@@ -1705,25 +1707,28 @@ def _scan(repo, commits, more, rules, level, ctx, lockfiles, found):
                 continue
             if status == "A" and noid in gone:
                 continue  # a pure rename: the same blob under a new name
-            old = ooid if status != "A" else None
+            old, paired = (ooid if status != "A" else None), False
             if status == "A" and deleted.get(path.rsplit("/", 1)[-1]):
-                old = deleted[path.rsplit("/", 1)[-1]].pop(0)
-            files.append((commit, path, old, noid))
-    locks = [(c, p, n) for c, p, _, n in files if lockfiles and is_lockfile(p)]
+                old, paired = deleted[path.rsplit("/", 1)[-1]].pop(0), True
+            files.append((commit, path, old, noid, paired))
+    locks = [(c, p, n) for c, p, _, n, _ in files if lockfiles and is_lockfile(p)]
     if locks and not is_off(ctx["cfg"], ENGINE, "SEC-60") and not ctx["audited"]():
         for commit, path, noid in locks:
             found.append(Finding(level, ENGINE, SEC60, path, 0, noid, commit))
-    wanted = [(c, p, o, n) for c, p, o, n in files
-              if any(not r.get("paths") or path_matches(r["paths"], p) for _, r in rules)]
-    blobs, skipped = repo.blobs([x for _, _, o, n in wanted for x in (n, o)], FILE_MAX, BYTES_MAX)
+    wanted = [f for f in files
+              if any(not r.get("paths") or path_matches(r["paths"], f[1]) for _, r in rules)]
+    blobs, skipped = repo.blobs([x for _, _, o, n, _ in wanted for x in (n, o)], FILE_MAX,
+                                BYTES_MAX)
     if skipped:
         log("scan-truncated", f"{level}: {len(skipped)} blobs over the size caps were not read")
     cut = 0
-    for commit, path, ooid, noid in wanted:
+    for commit, path, ooid, noid, paired in wanted:
         new = text_of(blobs.get(noid))
         if new is None:
             continue
-        if ooid and ooid not in blobs:
+        if ooid and ooid not in blobs and paired:
+            ooid = None  # a guess at a rename: unread, the file is scanned as all new
+        elif ooid and ooid not in blobs:
             cut += 1  # unread, the old blob would make every line of the file read as added
             continue
         old = text_of(blobs[ooid]) if ooid else ""

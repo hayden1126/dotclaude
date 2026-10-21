@@ -1984,6 +1984,17 @@ class Budgets(BashBase):
         self.assertIsNone(self.call(PC.post_tool_use, "git commit -m x", "b-cut", FILE_MAX=100))
         self.assertIn("1 changed files were not scanned", self.log())
 
+    def test_a_file_paired_by_basename_with_an_unread_blob_is_scanned_as_all_new(self):
+        # Review round 3, low 4: a new file paired with a deleted blob over the size caps was
+        # skipped whole, so a flagged line in it went unscanned.
+        self.commit(**{"dist__index.js": "// built\n" * 20})
+        self.assertIsNone(self.call(PC.pre_tool_use, "git commit -m x", "b-pair"))
+        os.unlink(os.path.join(self.proj, "dist", "index.js"))
+        self.commit(**{"src__index.js": "x({ ...body })\n"})
+        told = self.call(PC.post_tool_use, "git commit -m x", "b-pair", FILE_MAX=100)
+        self.assertIn("src/index.js:1", told["hookSpecificOutput"]["additionalContext"])
+        self.assertNotIn("changed files were not scanned", self.log())
+
     def test_a_large_range_is_cut_short_and_logged(self):
         self.commit(**{"seed": "1\n"})
         self.assertIsNone(self.call(PC.pre_tool_use, "git commit -m x", "b-big"))
