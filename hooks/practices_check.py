@@ -526,11 +526,13 @@ def load_skill(folder):
             "rules": rules}, None
 
 
-def discover(event):
-    """{name: skill} from the user's skills, then the project's, which win a clash."""
+def discover(project):
+    """{name: skill} from the user's skills, then the project's (none when project is None),
+    which win a clash."""
     skills = {}
-    roots = [os.path.join(config_home(), "skills"),
-             os.path.join(project_dir(event), ".claude", "skills")]
+    roots = [os.path.join(config_home(), "skills")]
+    if project:
+        roots.append(os.path.join(project, ".claude", "skills"))
     for root in roots:
         try:
             names = sorted(os.listdir(root))
@@ -548,10 +550,13 @@ def discover(event):
     return skills
 
 
-def load_config(event):
-    """{"enabled", "disable" (a set of ids and skill:ids), "helpers"}; defaults on any fault."""
+def load_config(project):
+    """{"enabled", "disable" (a set of ids and skill:ids), "helpers"} from the project's
+    config.toml; defaults on any fault, or when project is None."""
     default = {"enabled": True, "disable": set(), "helpers": ()}
-    path = os.path.join(project_dir(event), ".claude", "practices", "config.toml")
+    if not project:
+        return default
+    path = os.path.join(project, ".claude", "practices", "config.toml")
     try:
         with open(path, "rb") as f:
             data = tomllib.load(f)
@@ -1149,14 +1154,15 @@ def pre_tool_use(event):
     edit = edit_of(event)
     if edit is None:
         return None
-    cfg = load_config(event)
+    project = project_dir(event)
+    cfg = load_config(project)
     if not cfg["enabled"]:
         return None
-    skills = discover(event)
+    skills = discover(project)
     if not skills:
         return None
     path, fragment, after = edit
-    rel = relative(path, project_dir(event))
+    rel = relative(path, project)
     text, after_text = scan_text(fragment), scan_text(after)
     helpers = cfg["helpers"]
     events = [(s, ev) for s in skills.values() for ev in s["events"] if not is_off(cfg, s, ev["id"])]
@@ -1484,9 +1490,9 @@ class Bounds:
         return None
 
 
-def bounds_of(event):
-    """The Bounds for this call, or None (logged by open_repo) when no project dir is known."""
-    project = bash_project(event)
+def bounds_of(project):
+    """The Bounds for the Bash levels' project (bash_project), or None (logged by open_repo)
+    when no project dir is known."""
     return Bounds(project) if project else None
 
 
@@ -1661,12 +1667,12 @@ def _scan(repo, commits, more, rules, level, ctx, lockfiles, found):
             "was over the size caps, so what they add can't be told")
 
 
-def fresh(findings, event, repo):
+def fresh(findings, event, repo, project):
     """The findings whose key is new for this session and agent, less those on a line L2
-    already denied for that file and rule; one per key."""
+    already denied for that file and rule (its path relative to project, the Bash levels'
+    project dir, as L2 keyed it); one per key."""
     seen = state_keys(event)
     l2_keys = accepted_at_l2(event)
-    project = project_dir(event)
     out, keys = [], set()
     for f in findings:
         if f.key in seen or f.key in keys:
@@ -1696,7 +1702,7 @@ def findings_text(findings, shown=12):
     return "\n".join(parts)
 
 
-def context(event, cfg, ts):
+def context(event, cfg, ts, project):
     cache = {}
 
     def was_audited():
@@ -1706,7 +1712,7 @@ def context(event, cfg, ts):
         return cache["a"]
 
     return {"cfg": cfg, "helpers": cfg["helpers"], "audited": was_audited,
-            "seen": state_keys(event)}
+            "seen": state_keys(event), "project": project}
 
 
 CUT_NOTE = ("The time budget ran out before this check read every commit, so some weren't "
@@ -1776,7 +1782,8 @@ def post_tool_use(event):
     gits, _, _ = bash_calls(event)
     if not any(g[0] == "commit" for g in gits):
         return None
-    cfg = load_config(event)
+    project = bash_project(event)
+    cfg = load_config(project)
     if not cfg["enabled"]:
         return None
     record = recorded_heads(event)
@@ -1785,13 +1792,13 @@ def post_tool_use(event):
             "checked")
         return None
     heads, tops = record
-    skills = discover(event)
+    skills = discover(project)
     rules = commit_rules(skills, cfg)
     found, repos, cuts = [], {}, []
     with Transcripts(event) as ts:
-        ctx = context(event, cfg, ts)
+        ctx = context(event, cfg, ts, project)
         try:
-            bounds = bounds_of(event) if heads else None
+            bounds = bounds_of(project) if heads else None
             for git_dir, before in heads.items():
                 top = tops.get(git_dir)
                 where = {"cwd": top or os.path.dirname(git_dir), "git_dir": git_dir,
@@ -1817,7 +1824,7 @@ def post_tool_use(event):
             return None
     new = []
     for repo in repos.values():
-        new += fresh([f for f, r in found if r is repo], event, repo)
+        new += fresh([f for f, r in found if r is repo], event, repo, project)
     if not new:
         return None
     state_add(event, [f.key for f in new] + cuts)
@@ -1902,7 +1909,7 @@ def push_gate(event, pushes, skills, cfg, ts, ctx, bounds):
             if not tips:
                 continue
             found, cut = scan(repo, [*tips, "--not", "--remotes"], rules, "push", ctx)
-            out += fresh(found, event, repo)
+            out += fresh(found, event, repo, ctx["project"])
             if cut:
                 cuts.append(cut)
                 break
@@ -2082,7 +2089,7 @@ def _l3r(event, ghs, skills, cfg, ts, ctx, bounds, blocks_, keys, found, notes, 
                 blocks_.append(review_block(new, mb, head, branch))
         rules = commit_rules(skills, cfg, line_only=True)
         got, cut = scan(repo, [head, "--not", mb], rules, "L3r", ctx, lockfiles=False)
-        found += fresh(got, event, repo)
+        found += fresh(got, event, repo, ctx["project"])
         if note and (len(blocks_), len(found)) != told:
             notes.append(note)
         if cut:
@@ -2117,7 +2124,8 @@ def bash_pre(event):
     ghs = [g for g in ghs if pr_ready(g[0]) is not None]
     if not (commits or pushes or ghs or named):
         return None
-    cfg = load_config(event)
+    project = bash_project(event)  # never the call's cwd, which an earlier cd moved
+    cfg = load_config(project)
     if not cfg["enabled"]:
         return None
     if not (commits or pushes or ghs):  # the backstop for a launcher this parser can't read
@@ -2134,13 +2142,13 @@ def bash_pre(event):
                 "calls. Resending this call unchanged passes this check, unscanned.")
     reasons, keys, cut_keys = [], [], []
     try:
-        bounds = bounds_of(event)
+        bounds = bounds_of(project)
         if commits:
             record_heads(event, commits, bounds)
         if pushes or ghs:
-            skills = discover(event)
+            skills = discover(project)
             with Transcripts(event) as ts:
-                ctx = context(event, cfg, ts)
+                ctx = context(event, cfg, ts, project)
                 new, cuts = (push_gate(event, pushes, skills, cfg, ts, ctx, bounds) if pushes
                              else ([], []))
                 cut_keys += cuts
@@ -2221,9 +2229,9 @@ def digest(names, skills):
 
 
 def compact(event):
-    if not load_config(event)["enabled"]:
+    if not load_config(project_dir(event))["enabled"]:
         return None
-    skills = discover(event)
+    skills = discover(project_dir(event))
     if not skills:
         return None
     out = {"hookEventName": "SessionStart", "reloadSkills": True}
@@ -2283,7 +2291,7 @@ def health(event):
     if broken:
         problems.append(f"down ({broken}); edits are not checked")
     else:
-        discover(event)  # logs a malformed events.toml, counted below
+        discover(project_dir(event))  # logs a malformed events.toml, counted below
     now = time.time()  # wall clock: compared with file mtimes
     try:
         crumbs = sorted(n for n in os.listdir(d) if n.startswith("breadcrumb-"))
