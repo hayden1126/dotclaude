@@ -1260,16 +1260,22 @@ def is_lockfile(path):
     return base in LOCKFILES or bool(LOCK_GLOB.fullmatch(base))
 
 
+def _eol(line):
+    """A line as added_lines compares it: a trailing \\r dropped, so LF to CRLF adds nothing."""
+    return line[:-1] if line.endswith("\r") else line
+
+
 def added_lines(old, new):
     """[(number, line)] of the lines in new that old doesn't have (as many times as new adds
-    them): a moved line isn't new code. Linear, unlike a real diff."""
+    them), compared without a trailing \\r: a moved line isn't new code, and neither is a line
+    whose ending changed. Linear, unlike a real diff."""
     have = {}
     for line in old.split("\n") if old else ():
-        have[line] = have.get(line, 0) + 1
+        have[_eol(line)] = have.get(_eol(line), 0) + 1
     out = []
     for n, line in enumerate(new.split("\n"), 1):
-        if have.get(line, 0):
-            have[line] -= 1
+        if have.get(_eol(line), 0):
+            have[_eol(line)] -= 1
         else:
             out.append((n, line[:LINE_MAX]))
     return out
@@ -1624,12 +1630,24 @@ def _scan(repo, commits, more, rules, level, ctx, lockfiles, found):
         CRUMB.mark(commit[:12], level, "diff-tree")
         changes = repo.changes(None, commit)
         gone = {c[3] for c in changes if c[0] == "D"}
+        moved = {c[4] for c in changes if c[0] == "A" and c[4] in gone}
+        # A rename with edits shows as a delete and an add: the add is diffed against a
+        # regular file this commit deleted with the same basename, so only what it truly
+        # adds counts. (diff-tree -M would pair them by content, but its content reads aren't
+        # shown to stay objects-only, as GIT_FLAGS requires, so it isn't allowed.)
+        deleted = {}
+        for status, omode, _, ooid, _, path in changes:
+            if status == "D" and omode in ("100644", "100755") and ooid not in moved:
+                deleted.setdefault(path.rsplit("/", 1)[-1], []).append(ooid)
         for status, _, nmode, ooid, noid, path in changes:
             if status not in ("A", "M", "T") or nmode not in ("100644", "100755"):
                 continue
             if status == "A" and noid in gone:
                 continue  # a pure rename: the same blob under a new name
-            files.append((commit, path, ooid if status != "A" else None, noid))
+            old = ooid if status != "A" else None
+            if status == "A" and deleted.get(path.rsplit("/", 1)[-1]):
+                old = deleted[path.rsplit("/", 1)[-1]].pop(0)
+            files.append((commit, path, old, noid))
     locks = [(c, p, n) for c, p, _, n in files if lockfiles and is_lockfile(p)]
     if locks and not is_off(ctx["cfg"], ENGINE, "SEC-60") and not ctx["audited"]():
         for commit, path, noid in locks:

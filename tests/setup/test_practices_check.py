@@ -1339,6 +1339,22 @@ class L3s(BashBase):
         self.sh("update-ref", "refs/heads/main", merge)
         self.assertIsNone(self.post("git commit -m m", "b-merge"))
 
+    def test_a_rename_with_edits_and_a_crlf_rewrite_add_only_new_lines(self):
+        # Review round 2, low 6: a rename with edits was a delete plus an add, so every line
+        # under the new path counted as added; a whole-file LF to CRLF change did the same.
+        self.commit(**{"a.ts": "x({ ...body })\n" + "// filler\n" * 3})
+        os.unlink(os.path.join(self.proj, "a.ts"))  # moved to lib/ with a line added
+        told = self.committed(**{"lib__a.ts": "x({ ...body })\n" + "// filler\n" * 3
+                                               + "y({ ...body })\n"})
+        self.assertIn("SEC-17 (demo) at lib/a.ts:5", told)
+        self.assertNotIn("lib/a.ts:1", told)
+        self.commit(**{"c.ts": "z({ ...body })\nconst c = 1\n"})
+        tid = "b-crlf"
+        self.assertIsNone(self.pre("git commit -m x", tid, session_id="s-crlf"))
+        self.commit(**{"c.ts": "z({ ...body })\r\nconst c = 1\r\n"})
+        self.assertIsNone(self.post("git commit -m x", tid, session_id="s-crlf"))
+        self.assertEqual(PC.added_lines("a\nb\n", "a\r\nb\r\nc\r\n"), [(3, "c\r")])
+
     def test_sec_60_a_lockfile_change_with_no_audit(self):
         told = self.committed(**{"package-lock.json": "{}\n", "requirements-dev.txt": "x==1\n"})
         self.assertIn("SEC-60 (the practices engine) at package-lock.json, requirements-dev.txt",
