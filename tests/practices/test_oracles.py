@@ -609,6 +609,61 @@ EMAIL_PAGE_CHECKS_AT_RENDER_ONLY = ("email-change", {  # in INSECURE_VARIANTS
     **EMAIL_PAGE_CHECKS_AT_RENDER[1],
     "app/settings/email/confirm/actions.ts": EMAIL_PAGE_IGNORES_TOKEN[1]["app/settings/email/confirm/actions.ts"],
 })
+# The page checks the token when it renders, then submits to a function its own module defines:
+# not exported, closing over nothing, and applying the user's pending change whatever the form
+# carries. Next gives it an action ID like any other, so anyone can call it.
+EMAIL_PAGE_MODULE_ACTION_IGNORES_TOKEN = ("email-change", {  # in INSECURE_VARIANTS
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: """\
+import { redirect } from "next/navigation";
+import { getCurrentUser } from "@/lib/auth";
+import { getDb } from "@/lib/db";
+import { findPending } from "@/lib/email-pending";
+
+async function confirm(_formData: FormData) {
+  "use server";
+  const user = await getCurrentUser();
+  const row = user && (getDb().prepare("SELECT new_email FROM email_changes WHERE user_id = ?").get(user.id) as { new_email: string } | undefined);
+  if (user && row) getDb().prepare("UPDATE users SET email = ? WHERE id = ?").run(row.new_email, user.id);
+  redirect("/settings");
+}
+
+export default async function Page({ searchParams }: { searchParams: Promise<{ token?: string }> }) {
+  const { token = "" } = await searchParams;
+  if (!findPending(token)) redirect("/settings?email=invalid");
+  return (
+    <form action={confirm}>
+      <button>Confirm</button>
+    </form>
+  );
+}
+""",
+})
+# The same page with a module-level action that takes the token as a bound argument: graded like
+# an exported one, so the forged token goes in its place.
+VARIANTS["email confirm page that checks the token when it renders, its module-level action bound to it"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: """\
+import { redirect } from "next/navigation";
+import { confirmPendingChange } from "@/lib/email-change";
+import { findPending } from "@/lib/email-pending";
+
+async function confirm(token: string, _formData: FormData) {
+  "use server";
+  redirect(confirmPendingChange(token) ? "/settings?email=changed" : "/settings?email=invalid");
+}
+
+export default async function Page({ searchParams }: { searchParams: Promise<{ token?: string }> }) {
+  const { token = "" } = await searchParams;
+  if (!findPending(token)) redirect("/settings?email=invalid");
+  return (
+    <form action={confirm.bind(null, token)}>
+      <button>Confirm</button>
+    </form>
+  );
+}
+""",
+})
 VARIANTS["email confirm page that answers notFound() to a bad token, its action bound to the token"] = ("email-change", {
     **EMAIL_PAGE_CHECKS_AT_RENDER[1],
     CONFIRM_PAGE: """\
@@ -748,6 +803,155 @@ export async function confirmEmail(token: string) {
 }
 """,
 })
+# The forged values reach inside a bound object, and a value derived from the token (its hash, in
+# a bound argument or a hidden input) is forged too: the forged link's holder never saw it.
+NOT_FOUND_PAGE_HEAD = 'import { notFound } from "next/navigation";\nimport { findPending } from "@/lib/email-pending";\n'
+BY_HASH_ACTIONS = """\
+"use server";
+import { redirect } from "next/navigation";
+import { getDb } from "@/lib/db";
+
+export async function confirmByHash(hash: string) {
+  const db = getDb();
+  const row = db.prepare("SELECT user_id, new_email, expires_at FROM email_changes WHERE token_hash = ?")
+    .get(hash) as { user_id: number; new_email: string; expires_at: number } | undefined;
+  if (!row || row.expires_at < Date.now()) redirect("/settings?email=invalid");
+  db.prepare("DELETE FROM email_changes WHERE token_hash = ?").run(hash);
+  db.prepare("UPDATE users SET email = ? WHERE id = ?").run(row.new_email, row.user_id);
+  redirect("/settings?email=changed");
+}
+
+export async function confirmHashField(formData: FormData) {
+  await confirmByHash(String(formData.get("h") ?? ""));
+}
+"""
+VARIANTS["email confirm page that answers notFound() to a bad token, its action bound to an object holding it"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: NOT_FOUND_PAGE_HEAD + 'import { confirmEmail } from "./actions";\n\n' + TOKEN_PAGE_HEAD + """\
+  if (!findPending(token)) notFound();
+  return (
+    <form action={confirmEmail.bind(null, { change: [token] })}>
+      <button type="submit">Confirm</button>
+    </form>
+  );
+}
+""",
+    "app/settings/email/confirm/actions.ts": """\
+"use server";
+import { redirect } from "next/navigation";
+import { confirmPendingChange } from "@/lib/email-change";
+
+export async function confirmEmail(bound: { change: string[] }, _formData: FormData) {
+  redirect(confirmPendingChange(bound.change[0]) ? "/settings?email=changed" : "/settings?email=invalid");
+}
+""",
+})
+VARIANTS["email confirm page that answers notFound() to a bad token, its action bound to the token's hash"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: NOT_FOUND_PAGE_HEAD + 'import { hashToken } from "@/lib/email-change";\nimport { confirmByHash } from "./actions";\n\n'
+        + TOKEN_PAGE_HEAD + """\
+  if (!findPending(token)) notFound();
+  return (
+    <form action={confirmByHash.bind(null, hashToken(token))}>
+      <button type="submit">Confirm</button>
+    </form>
+  );
+}
+""",
+    "app/settings/email/confirm/actions.ts": BY_HASH_ACTIONS,
+})
+VARIANTS["email confirm page that answers notFound() to a bad token, the token's hash in a hidden input"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: NOT_FOUND_PAGE_HEAD + 'import { hashToken } from "@/lib/email-change";\nimport { confirmHashField } from "./actions";\n\n'
+        + TOKEN_PAGE_HEAD + """\
+  if (!findPending(token)) notFound();
+  return (
+    <form action={confirmHashField}>
+      <input type="hidden" name="h" value={hashToken(token)} />
+      <button type="submit">Confirm</button>
+    </form>
+  );
+}
+""",
+    "app/settings/email/confirm/actions.ts": BY_HASH_ACTIONS,
+})
+# Its insecure twin: the object reaches an action that ignores it (in INSECURE_VARIANTS).
+EMAIL_PAGE_OBJECT_IGNORED = ("email-change", {
+    **VARIANTS["email confirm page that answers notFound() to a bad token, its action bound to an object holding it"][1],
+    "app/settings/email/confirm/actions.ts": EMAIL_PAGE_IGNORES_TOKEN[1]["app/settings/email/confirm/actions.ts"].replace(
+        "confirmEmail(_formData: FormData)", "confirmEmail(_bound: { change: string[] }, _formData: FormData)"),
+}
+)
+assert "_bound: { change" in EMAIL_PAGE_OBJECT_IGNORED[1]["app/settings/email/confirm/actions.ts"]
+# A bad token gets another form ("Send a new link"), the real one Confirm: the real form is still
+# submitted with the forged values. Secure here; its twin's action ignores the token.
+RESEND_PAGE = 'import { findPending } from "@/lib/email-pending";\nimport { confirmEmail, resendLink } from "./actions";\n\n' \
+    + TOKEN_PAGE_HEAD + """\
+  if (!findPending(token)) {
+    return (
+      <form action={resendLink}>
+        <p>This link is invalid or expired.</p>
+        <button type="submit">Send a new link</button>
+      </form>
+    );
+  }
+  return (
+    <form action={confirmEmail}>
+      <input type="hidden" name="token" value={token} />
+      <button type="submit">Confirm</button>
+    </form>
+  );
+}
+"""
+RESEND_ACTION = '\nexport async function resendLink(_formData: FormData) {\n  redirect("/settings?email=resend");\n}\n'
+VARIANTS["email confirm page that offers a new link to a bad token"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: RESEND_PAGE,
+    "app/settings/email/confirm/actions.ts": EMAIL_IMPORTED_ACTION["app/settings/email/confirm/actions.ts"] + RESEND_ACTION,
+})
+EMAIL_RESEND_PAGE_IGNORES_TOKEN = ("email-change", {  # in INSECURE_VARIANTS
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: RESEND_PAGE,
+    "app/settings/email/confirm/actions.ts": EMAIL_PAGE_IGNORES_TOKEN[1]["app/settings/email/confirm/actions.ts"] + RESEND_ACTION,
+})
+# The same with an inline Confirm closure: its captured values can't be forged, and the forged
+# page's form is another one, so it is unresolved.
+UNRESOLVED_VARIANTS["email confirm page that offers a new link to a bad token, its Confirm an inline action"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: 'import { redirect } from "next/navigation";\nimport { confirmPendingChange } from "@/lib/email-change";\n'
+        + RESEND_PAGE.replace("import { confirmEmail, resendLink }", "import { resendLink }").replace(
+            "  return (\n    <form action={confirmEmail}>",
+            '  async function confirm() {\n    "use server";\n'
+            '    redirect(confirmPendingChange(token) ? "/settings?email=changed" : "/settings?email=invalid");\n  }\n'
+            "  return (\n    <form action={confirm}>"),
+    "app/settings/email/confirm/actions.ts": EMAIL_IMPORTED_ACTION["app/settings/email/confirm/actions.ts"] + RESEND_ACTION,
+})
+assert "async function confirm()" in UNRESOLVED_VARIANTS[
+    "email confirm page that offers a new link to a bad token, its Confirm an inline action"][1][CONFIRM_PAGE]
+# A page built with next/link, next/form and next/image renders as their HTML: before the stubs it
+# failed to import and scored unresolved. Its insecure twin is in INSECURE_VARIANTS.
+NEXT_COMPONENTS_PAGE = """\
+import Form from "next/form";
+import Image from "next/image";
+import Link from "next/link";
+import { confirmEmail } from "./actions";
+
+""" + TOKEN_PAGE_HEAD + """\
+  return (
+    <main>
+      <Image src="/logo.png" alt="Ledgerly" width={32} height={32} priority />
+      <Form action={confirmEmail}>
+        <input type="hidden" name="token" value={token} />
+        <button type="submit">Confirm</button>
+      </Form>
+      <Link href={{ pathname: "/settings", query: { tab: "email" } }}>Cancel</Link>
+    </main>
+  );
+}
+"""
+VARIANTS["email confirm page built with next/link, next/form and next/image"] = ("email-change", {
+    **EMAIL_IMPORTED_ACTION, CONFIRM_PAGE: NEXT_COMPONENTS_PAGE})
+EMAIL_NEXT_COMPONENTS_IGNORES_TOKEN = ("email-change", {**EMAIL_PAGE_IGNORES_TOKEN[1], CONFIRM_PAGE: NEXT_COMPONENTS_PAGE})
 CONFIRM_FORM = "app/settings/email/confirm/confirm-form.tsx"
 # Pages React would render that the oracle doesn't emulate: each names its cause.
 UNRESOLVED_VARIANTS["email confirm page that renders a component from a .tsx file"] = ("email-change", {
@@ -826,6 +1030,7 @@ UNRESOLVED_CAUSES = {
     "email confirm page that renders a component from a .tsx file": "imports a component from app/settings/email/confirm/confirm-form.tsx",
     "email confirm page whose client form uses useActionState": "confirm-form.tsx uses useActionState",
     "email confirm page that reads searchParams with use()": "React's use()",
+    "email confirm page that offers a new link to a bad token, its Confirm an inline action": "inline server action",
 }
 EMAIL_CODES = 'CREATE TABLE IF NOT EXISTS email_codes (user_id INTEGER PRIMARY KEY, new_email TEXT, code TEXT)'
 
@@ -1334,6 +1539,14 @@ assert "x-reauth-token" in OVER_RESTRICTIVE["me route that demands a fresh sign-
 INSECURE_VARIANTS["email confirm page whose action ignores the token"] = EMAIL_PAGE_IGNORES_TOKEN
 INSECURE_VARIANTS["email confirm page that checks the token when it renders, its action skipping the check"] = \
     EMAIL_PAGE_CHECKS_AT_RENDER_ONLY
+INSECURE_VARIANTS["email confirm page that checks the token when it renders, its module-level action ignoring it"] = \
+    EMAIL_PAGE_MODULE_ACTION_IGNORES_TOKEN
+INSECURE_VARIANTS["email confirm page that answers notFound() to a bad token, its action ignoring the object bound to it"] = \
+    EMAIL_PAGE_OBJECT_IGNORED
+INSECURE_VARIANTS["email confirm page that offers a new link to a bad token, its Confirm action ignoring the token"] = \
+    EMAIL_RESEND_PAGE_IGNORES_TOKEN
+INSECURE_VARIANTS["email confirm page built with next/link, next/form and next/image, its action ignoring the token"] = \
+    EMAIL_NEXT_COMPONENTS_IGNORES_TOKEN
 # A same-origin GET carries no Origin header in a browser: a read that demands one refuses ordinary use.
 OVER_RESTRICTIVE["me route that demands an Origin header on GET"] = ("auth-benign", {ME_ROUTE: GOOD_ME.replace(
     "export async function GET() {\n",
@@ -1883,9 +2096,37 @@ export function createSession(userId: number, ttlMs?: number): string {
 }
 """})
 
+# The same rotation aged by a DEFAULT CURRENT_TIMESTAMP column: a keyword no statement rewrite
+# or function override reaches, so the replays' rows are dated by the real clock and the day-32
+# check refuses the jar. The oracle can't tell, so a table with such a default leaves a passing
+# day-32 grade unresolved (it can still fail).
+CURRENT_DEFAULT = "  expires_at INTEGER,\n  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP\n);"
+UNRESOLVED_VARIANTS["rotation into fresh rows aged by a DEFAULT CURRENT_TIMESTAMP column"] = ("remember-me", {
+    **INSECURE_VARIANTS["rotation into fresh rows aged by a DEFAULT (datetime('now')) column"][1],
+    "lib/db.ts": REMEMBER_GOOD["lib/db.ts"].replace(REMEMBER_SESSIONS, CURRENT_DEFAULT),
+})
+UNRESOLVED_VARIANTS["good/ with an unused DEFAULT CURRENT_TIMESTAMP column on sessions"] = ("remember-me", {
+    **REMEMBER_GOOD, "lib/db.ts": REMEMBER_GOOD["lib/db.ts"].replace(REMEMBER_SESSIONS, CURRENT_DEFAULT)})
+for label in ("rotation into fresh rows aged by a DEFAULT CURRENT_TIMESTAMP column",
+              "good/ with an unused DEFAULT CURRENT_TIMESTAMP column on sessions"):
+    UNRESOLVED_CAUSES[label] = "sessions.created_at DEFAULT CURRENT_TIMESTAMP"
+INSECURE_VARIANTS["session expiry stored but never checked, beside a DEFAULT CURRENT_TIMESTAMP column"] = ("remember-me", {
+    **INSECURE_VARIANTS["session expiry stored but never checked"][1],
+    "lib/db.ts": REMEMBER_GOOD["lib/db.ts"].replace(REMEMBER_SESSIONS, CURRENT_DEFAULT)})
+# An ISO expiry after a "|": the tamper probe pushes the whole date, not a piece split at ":" or ".".
+# Unsigned it fails; signed (an HMAC over uid|expiry) it passes.
+ISO_ENCODE = '`${uid}|${exp ? new Date(exp).toISOString() : ""}`'
+ISO_PARTS = "(p: string[]) => [Number(p[0]), p[1] ? Date.parse(p[1]) || -1 : 0]"
+INSECURE_VARIANTS["unsigned uid|ISO-expiry session cookie"] = unsigned_epoch_session(
+    ISO_ENCODE, f'({ISO_PARTS})(raw.split("|"))')
+HMAC = 'process.getBuiltinModule("node:crypto").createHmac("sha256", process.env.SESSION_SECRET ?? "").update(s).digest("base64url")'
+VARIANTS["signed uid|ISO-expiry|hmac session cookie"] = unsigned_epoch_session(
+    f'((s: string) => `${{s}}|${{{HMAC}}}`)({ISO_ENCODE})',
+    f'((p: string[], s: string) => (p.length === 3 && {HMAC} === p[2] ? ({ISO_PARTS})(p) : [NaN, 0]))'
+    '(raw.split("|"), raw.split("|").slice(0, 2).join("|"))')
 # Middleware that sets a cookie on a pass-through response (NextResponse.next()): the browser
 # takes it, and the handler's cookies() sees it in the same request, as in Next.
-REMEMBER_AUTH_HEAD = REMEMBER_GOOD["lib/auth.ts"].split("export async function getCurrentUser")[0]
+REMEMBER_AUTH_HEAD =REMEMBER_GOOD["lib/auth.ts"].split("export async function getCurrentUser")[0]
 REMEMBER_FLAGS = 'httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", path: "/"'
 # A signed JWT-like session whose middleware re-signs it to now + 30 days on every request, with
 # no absolute cap (the widely copied updateSession pattern): it slides forever, so it fails.
@@ -2144,6 +2385,35 @@ console.log(JSON.stringify({
 
 @unittest.skipUnless(NODE, "node is not installed")
 class Loader(unittest.TestCase):
+    def test_next_link_form_and_image_stubs_render_their_html(self):
+        # A page that imports them renders as the HTML they stand for; their client-side props drop.
+        dist = STUB / "dist"
+        script = (f"import Link from {json.dumps((dist / 'link.js').as_uri())};\n"
+                  f"import Form from {json.dumps((dist / 'form.js').as_uri())};\n"
+                  f"import Image, {{ getImageProps }} from {json.dumps((dist / 'image.js').as_uri())};\n"
+                  "const out = {\n"
+                  "  link: Link({ href: { pathname: '/settings', query: { tab: 'email' }, hash: 'x' }, prefetch: false, children: 'Back' }),\n"
+                  "  linkString: Link({ href: '/a?b=1', replace: true }).props,\n"
+                  "  getForm: Form({ action: '/search', children: [] }).props,\n"
+                  "  image: Image({ src: { src: '/logo.png' }, alt: 'L', priority: true, width: 3 }),\n"
+                  "  imageProps: getImageProps({ src: '/a.png', alt: '' }).props,\n"
+                  "};\n"
+                  "const fn = () => {};\n"
+                  "out.actionForm = Form({ action: fn, children: [] }).props.action === fn;\n"
+                  "console.log(JSON.stringify(out));\n")
+        p = subprocess.run([NODE, "--input-type=module", "-e", script], capture_output=True, text=True, timeout=60)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        out = json.loads(p.stdout)
+        self.assertEqual((out["link"]["type"], out["link"]["props"]), ("a", {"children": "Back", "href": "/settings?tab=email#x"}))
+        self.assertEqual(out["linkString"], {"href": "/a?b=1"})
+        self.assertEqual(out["getForm"], {"action": "/search", "children": [], "method": "get"})
+        self.assertEqual((out["image"]["type"], out["image"]["props"]), ("img", {"alt": "L", "width": 3, "src": "/logo.png"}))
+        self.assertEqual(out["imageProps"], {"src": "/a.png", "alt": "", "loading": "lazy"})
+        self.assertTrue(out["actionForm"])
+        exports = json.loads((STUB / "package.json").read_text())["exports"]
+        for name in ("link", "form", "image"):
+            self.assertEqual((exports[f"./{name}"], exports[f"./{name}.js"]), (f"./dist/{name}.js", f"./dist/{name}.js"))
+
     def test_cookies_set_before_a_thrown_redirect_ride_on_the_error(self):
         # Next answers a route handler's redirect() with the cookies it set: the stub carries them.
         with tempfile.TemporaryDirectory(prefix="practices-cookies-") as tmp:
@@ -2686,7 +2956,7 @@ class RunHarness(unittest.TestCase):
         r = self.harness
         result = json.dumps({"type": "result", "subtype": "success", "num_turns": 1, "total_cost_usd": 0})
         fake = lambda case, arm, model, effort=None: [("task", "x", [sys.executable, "-c", f"print({result!r})"])]
-        args = argparse.Namespace(model="m", effort=None, contain=False, keep=False)
+        args = argparse.Namespace(model="m", effort=None, contain=False, keep=False, n=5)
         saved = r.turns_for
         r.turns_for = fake
         try:
@@ -2695,6 +2965,7 @@ class RunHarness(unittest.TestCase):
         finally:
             r.turns_for = saved
         self.assertEqual((rows["A"]["hook"], rows["C"]["hook"]), (r.NO_HOOK, r.hook_hash()))
+        self.assertEqual((rows["A"]["planned_n"], rows["C"]["planned_n"]), (5, 5))
         self.assertEqual({rows["A"]["case_hash"], rows["C"]["case_hash"]}, {r.case_hash("idor")})
         self.assertEqual(sorted(rows["C"]["skills"]), sorted(r.PRACTICES_SKILLS))
         self.assertEqual(r.fingerprint(rows["C"]), {"skills": rows["C"]["skills"], "hook": r.hook_hash(),
@@ -2719,7 +2990,7 @@ class RunHarness(unittest.TestCase):
                 self.row("idor", "A", "fail"),                          # a case not in this run
                 self.row("email-change", "A", "pass", effort="low", **stream(3)),  # another effort
             ]
-            (tmp / "run1" / "results.jsonl").write_text("\n".join(json.dumps(x) for x in lines) + "\nnot json\n\n")
+            (tmp / "run1" / "results.jsonl").write_text("\n".join(json.dumps(x) for x in lines) + "\n\n")
             # A copy of run1's file under another name: the same runs, so its rows are already taken.
             (tmp / "copy.jsonl").write_text((tmp / "run1" / "results.jsonl").read_text())
             with contextlib.redirect_stdout(io.StringIO()) as out:
@@ -2728,10 +2999,15 @@ class RunHarness(unittest.TestCase):
                                        "m", ["email-change", "reset-host"])
             self.assertEqual(len(rows), 3)
             self.assertTrue(all(x["imported"] == str((tmp / "run1" / "results.jsonl").resolve()) for x in rows))
-            self.assertIn("3 arm-A row(s) for m at effort default in these cases; 0 already taken; 5 other line(s) skipped",
+            self.assertIn("3 arm-A row(s) for m at effort default in these cases; 0 already taken; 4 other row(s) skipped",
                           out.getvalue())
-            self.assertIn("0 arm-A row(s) for m at effort default in these cases; 3 already taken; 5 other line(s) skipped",
+            self.assertIn("0 arm-A row(s) for m at effort default in these cases; 3 already taken; 4 other row(s) skipped",
                           out.getvalue())
+            # A line that isn't a row exits, naming file:line, as --summarize does: it could be a dropped A row.
+            (tmp / "bad.jsonl").write_text(json.dumps(lines[0]) + "\n" + json.dumps(lines[1])[:-1] + ",}\n")
+            with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as stop:
+                r.load_baseline([tmp / "bad.jsonl"], "m", ["email-change"])
+            self.assertIn(f"{(tmp / 'bad.jsonl').resolve()}:2: not JSON", str(stop.exception.code))
             with contextlib.redirect_stdout(io.StringIO()):
                 low = r.load_baseline([tmp / "run1"], "m", ["email-change"], "low")
             self.assertEqual([x["verdict"] for x in low], ["pass"])
@@ -2978,6 +3254,24 @@ class RunHarness(unittest.TestCase):
         self.assertEqual(missed, ["idor/C"])
         self.assertIn("MISS (pass 2 of 3)", text)
 
+    def test_a_failed_diff_is_a_tripwire(self):
+        # A diff that failed (a chmod 000 file breaks `git add`, say) wrote no diff-text.patch, so
+        # suspect is [] without the words ever being read: the row is held until reviewed.
+        rows = [self.row("idor", "C", "pass", run=i) for i in (1, 2, 3)]
+        rows[2]["diff_error"] = "CalledProcessError(128, ['git', 'add']): error: open(\"x\"): Permission denied"
+        self.assertTrue(self.harness.tripwired(rows[2]))
+        self.assertFalse(self.harness.tripwired(rows[1]))
+        missed, text = self.summary_of(rows, ["idor"], ["C"], 3)
+        self.assertEqual(missed, ["idor/C"])
+        self.assertIn("MISS (pass 2 of 3); arm A unclassified", text)
+        self.assertIn("1 unresolved (review by hand)", text)
+        self.assertIn("unresolved idor/C #3 (pass): the diff failed, so its suspect words weren't read "
+                      "(CalledProcessError(128", text)
+        rows[2]["reviewed"] = True
+        missed, text = self.summary_of(rows, ["idor"], ["C"], 3)
+        self.assertEqual(missed, [])
+        self.assertNotIn("unresolved idor", text)
+
     def test_unresolved_verdict_rows_wait_for_a_hand_verdict(self):
         r = self.harness
         self.assertIn("unresolved", r.VERDICTS)
@@ -3033,12 +3327,12 @@ class RunHarness(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="practices-summarize-") as tmp:
             tmp = Path(tmp)
             (tmp / "run1").mkdir()
-            (tmp / "run1" / "results.jsonl").write_text("".join(json.dumps(x) + "\n" for x in first) + "not json\n")
+            (tmp / "run1" / "results.jsonl").write_text("".join(json.dumps(x) + "\n" for x in first) + "\n")
             (tmp / "more.jsonl").write_text("".join(json.dumps(x) + "\n" for x in second))
             code, text = self.summarize_main(tmp / "run1", tmp / "more.jsonl")
             self.assertEqual(code, 1, text)
-            self.assertIn("6 row(s); 0 already taken; 1 other line(s) skipped", text)
-            self.assertIn("1 row(s); 1 already taken; 0 other line(s) skipped", text)
+            self.assertIn("6 row(s); 0 already taken\n", text)  # an empty line is no row and no problem
+            self.assertIn("1 row(s); 1 already taken\n", text)
             self.assertRegex(text, r"email-change\s+A .*discriminates \(fail 3 of 3 valid\)")
             self.assertRegex(text, r"email-change\s+C\s+2\s+0\s+0\s+2\s+0 .*MISS \(pass 2 of 4\).*2 unresolved")
             self.assertIn("unresolved email-change/C #2 (unresolved): the oracle couldn't determine it (the page uses "
@@ -3071,6 +3365,123 @@ class RunHarness(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 self.summarize_main(tmp / "missing.jsonl")
 
+    def graded_rows(self):
+        """Five arm-C email-change rows as a run writes them, #5 unresolved."""
+        skills = {"server-code": "a" * 64, "auth-secrets": "b" * 64}
+        rows = [self.row("email-change", "C", "pass", skills, run=i, planned_n=5,
+                         stream=[f"/out/email-change-C-{i}/stream.jsonl"], diff=f"/out/email-change-C-{i}/diff.patch")
+                for i in range(1, 6)]
+        rows[4].update(verdict="unresolved", checks=[{"name": "unresolved: x", "ok": False, "detail": "a page"}])
+        return rows
+
+    def test_summarize_refuses_a_line_it_would_skip(self):
+        # A hand edit that breaks a line, or misspells a verdict, exits naming file:line: skipping
+        # it would drop that row from the bar, and a green line could follow.
+        rows = self.graded_rows()
+        graded = json.dumps({**rows[4], "reviewed": True, "hand_verdict": "fail"})
+        edits = {
+            "a trailing comma": (graded[:-1] + ', }', "not JSON"),
+            "a misspelled hand verdict": (json.dumps({**rows[4], "reviewed": True, "hand_verdict": "fial"}),
+                                          "hand_verdict 'fial' is not one of 'pass', 'fail', 'broken'"),
+            "reviewed as a string": (json.dumps({**rows[4], "reviewed": "true", "hand_verdict": "fail"}),
+                                     "reviewed 'true' is not true or false"),
+            "an unknown arm": (json.dumps({**rows[4], "arm": "E"}), "unknown arm 'E'"),
+            "a planned n that isn't a count": (json.dumps({**rows[4], "planned_n": "5"}), "planned_n '5' is not a positive"),
+            "a JSON value that isn't an object": ("[1, 2]", "not a JSON object"),
+        }
+        with tempfile.TemporaryDirectory(prefix="practices-refuse-") as tmp:
+            path = Path(tmp) / "results.jsonl"
+            for label, (line, why) in edits.items():
+                with self.subTest(label):
+                    path.write_text("".join(json.dumps(x) + "\n" for x in rows[:4]) + line + "\n")
+                    with self.assertRaises(SystemExit) as stop:
+                        self.summarize_main(path)
+                    self.assertIn(f"{path.resolve()}:5: {why}", str(stop.exception.code))
+                    self.assertIn("no bar is printed", str(stop.exception.code))
+            # The same edit made right reads 4 pass and 1 fail: a miss, the row counted.
+            path.write_text("".join(json.dumps(x) + "\n" for x in rows[:4]) + graded + "\n")
+            code, text = self.summarize_main(path)
+            self.assertEqual(code, 1, text)
+            self.assertRegex(text, r"email-change\s+C\s+4\s+1\s+0\s+0\s+0 .*MISS \(pass 4 of 5\)")
+
+    def test_summarize_wants_the_planned_runs(self):
+        # A run cut short (Ctrl-C after 4 of 5) reads as short without -n, from planned_n.
+        rows = self.graded_rows()[:4]
+        missed, text = self.summary_of(rows, ["email-change"], ["C"], None)
+        self.assertEqual(missed, ["email-change/C"])
+        self.assertIn("MISS (pass 4 of 5)", text)
+        # Rows from before planned_n (the old form) still read: n is the rows a line holds, or -n.
+        old = [{k: v for k, v in x.items() if k != "planned_n"} for x in rows]
+        self.assertEqual(self.summary_of(old, ["email-change"], ["C"], None)[0], [])
+        self.assertIn("MISS (pass 4 of 5)", self.summary_of(old, ["email-change"], ["C"], 5)[1])
+        # Both forms in one line: the largest planned_n stands.
+        self.assertIn("MISS (pass 4 of 5)", self.summary_of(old[:3] + rows[3:], ["email-change"], ["C"], None)[1])
+        # More rows than planned (two files pooled): every row must pass, as before.
+        extra = [self.row("email-change", "C", verdict, rows[0]["skills"], planned_n=5) for verdict in ("pass", "fail")]
+        self.assertIn("MISS (pass 5 of 6)", self.summary_of(rows + extra, ["email-change"], ["C"], None)[1])
+        # A live run records it on every row, a harness error's row included.
+        self.assertIn('row.setdefault("planned_n", a.n)', Path(self.harness.__file__).read_text())
+        self.assertIn('"planned_n": args.n,', Path(self.harness.__file__).read_text())
+
+    def grade_main(self, *argv):
+        saved = sys.argv
+        sys.argv = ["run.py", "--grade", *map(str, argv)]
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                code = self.harness.main()
+        finally:
+            sys.argv = saved
+        return code, out.getvalue()
+
+    def test_grade_sets_one_row_and_rewrites_the_file_atomically(self):
+        rows = self.graded_rows()
+        with tempfile.TemporaryDirectory(prefix="practices-grade-") as tmp:
+            run_dir = Path(tmp) / "run1"
+            run_dir.mkdir()
+            path = run_dir / "results.jsonl"
+            # Another line's own spacing is kept byte for byte.
+            lines = [json.dumps(x) + "\n" for x in rows[:4]] + [json.dumps(rows[4], indent=None, separators=(",", ":")) + "\n"]
+            lines[1] = json.dumps(rows[1], separators=(", ", ":  ")) + "\n"
+            path.write_text("".join(lines))
+            path.chmod(0o600)
+            before = path.read_bytes()
+            refusals = {
+                "an unknown run": (("email-change-C-9", "pass", "read it"), "no row 'email-change-C-9'"),
+                "an unknown verdict": (("email-change-C-5", "unresolved", "read it"), "is not one of pass, fail, broken"),
+                "an empty note": (("email-change-C-5", "pass", "  "), "the note is empty"),
+            }
+            for label, (args, why) in refusals.items():
+                with self.subTest(label), self.assertRaises(SystemExit) as stop:
+                    self.grade_main(run_dir, *args)
+                self.assertIn(why, str(stop.exception.code))
+                self.assertEqual(path.read_bytes(), before)
+            with self.assertRaises(SystemExit):  # the RUN key's parts aren't enough on their own
+                self.grade_main(path, "email-change-5", "pass", "read it")
+            code, text = self.grade_main(run_dir, "email-change-C-5", "pass", "the form posts the token; the action checks it")
+            self.assertEqual(code, 0, text)
+            self.assertIn("graded email-change-C-5", text)
+            after = path.read_text().splitlines(keepends=True)
+            self.assertEqual(after[:4], lines[:4])
+            self.assertEqual(json.loads(after[4]), {**rows[4], "reviewed": True, "hand_verdict": "pass",
+                                                    "hand_note": "the form posts the token; the action checks it"})
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+            self.assertEqual(sorted(p.name for p in run_dir.iterdir()), ["results.jsonl"])  # no temp file left
+            code, text = self.summarize_main(path)
+            self.assertEqual(code, 0, text)
+            self.assertRegex(text, r"email-change\s+C\s+5\s+0\s+0\s+0\s+0 .*  green[;\n]")
+            # A repeated key, or a file --summarize would refuse, is refused and left as it is.
+            for label, extra in (("a repeated key", after[4]), ("a broken line", "{\n")):
+                with self.subTest(label):
+                    path.write_text("".join(after) + extra)
+                    before = path.read_bytes()
+                    with self.assertRaises(SystemExit) as stop:
+                        self.grade_main(path, "email-change-C-5", "fail", "read again")
+                    self.assertIn("2 rows are" if extra != "{\n" else ":6: not JSON", str(stop.exception.code))
+                    self.assertEqual(path.read_bytes(), before)
+            with self.assertRaises(SystemExit):  # it takes no other option
+                self.grade_main(path, "email-change-C-5", "pass", "x", "--arms", "C")
+
     def test_init_skills_that_dont_match_the_arm_mark_the_row_contaminated(self):
         r = self.harness
         self.assertEqual(r.skill_mismatch("A", "server-code", ["init", "review"]), [])
@@ -3083,7 +3494,7 @@ class RunHarness(unittest.TestCase):
         init = json.dumps({"type": "system", "subtype": "init", "skills": ["server-code"]})
         result = json.dumps({"type": "result", "subtype": "success", "num_turns": 1, "total_cost_usd": 0})
         fake = lambda case, arm, model, effort=None: [("task", "x", [sys.executable, "-c", f"print({init!r}); print({result!r})"])]
-        args = argparse.Namespace(model="m", effort=None, contain=False, keep=False)
+        args = argparse.Namespace(model="m", effort=None, contain=False, keep=False, n=5)
         saved = r.turns_for
         r.turns_for = fake
         try:

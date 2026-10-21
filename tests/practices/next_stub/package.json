@@ -13,6 +13,12 @@
     "./cache.js": "./dist/cache.js",
     "./navigation": "./dist/navigation.js",
     "./navigation.js": "./dist/navigation.js",
+    "./link": "./dist/link.js",
+    "./link.js": "./dist/link.js",
+    "./form": "./dist/form.js",
+    "./form.js": "./dist/form.js",
+    "./image": "./dist/image.js",
+    "./image.js": "./dist/image.js",
     "./dist/test-context": "./dist/test-context.js",
     "./dist/test-context.js": "./dist/test-context.js",
     "./package.json": "./package.json"

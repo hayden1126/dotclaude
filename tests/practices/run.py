@@ -101,12 +101,16 @@ Per run:
       harness_sha (the baseline commit the diff is taken against), hook_errors (the run's hook
         errors.log, "none" when empty or for A and B), and the paths stream (one per turn),
         oracle and diff, under <out>/<case>-<arm>-<i>/;
-      only sometimes: diff_error (the diff failed; the verdict stands), fixture (with --keep),
+      only sometimes: diff_error (the diff failed, so no suspect words were read: a tripwire
+        too; the verdict stands), fixture (with --keep),
         harness_error (an exception in the harness: an error row, with few other fields), and
         three fields no run writes, which a person sets after reading a row's diff and stream:
         reviewed (true clears a tripwire row, which the bar then counts again), hand_verdict
         ("pass", "fail" or "broken": with reviewed true it replaces verdict for the bar, which
-        is how an unresolved row gets graded) and hand_note (why, in a sentence).
+        is how an unresolved row gets graded) and hand_note (why, in a sentence); --grade sets
+        all three;
+      planned_n: the -n the run was started with, so a run cut short still reads as short
+        (rows before 2026-10-21 have none).
     An --out that already holds results.jsonl is refused: a rerun would overwrite the run dirs
     its rows point at. Arms C and D run the hook with CLAUDE_CONFIG_DIR an empty dir and
     XDG_STATE_HOME its own, both in the run dir, so it sees no user-tier skill and keeps its
@@ -156,27 +160,44 @@ or fail; broken and error don't count.
      pooled and its case part equals that arm's; else that line reads as A unclassified, and a
      C or D line is then a regression check (it still has to pass every run), never REFUSED.
   Unresolved: a row whose verdict is unresolved, or whose suspect or contaminated list is
-     non-empty (a tripwire), is unresolved until a person marks it reviewed. It counts under no
+     non-empty or that has a diff_error (a tripwire), is unresolved until a person marks it
+     reviewed. It counts under no
      verdict, never a pass and never a fail (so a C or D line can't be green while it stands,
      and A's valid runs leave it out); its line says how many are unresolved, and each is listed
      after the table with its diff path. After reading its diff and stream, a person sets
      "reviewed": true in its line in results.jsonl (a tripwire row then counts under its own
      verdict) and, to grade it, "hand_verdict" and "hand_note": a reviewed row's hand_verdict
      replaces its verdict for the bar, and an unresolved verdict stays unresolved without one.
-     --summarize then prints the bar again from the edited files, with no model calls.
+     --grade sets the three without hand-editing the line. --summarize then prints the bar
+     again from the edited files, with no model calls.
 
   python3 tests/practices/run.py --summarize PATH [PATH ...] [--cases ...] [--arms ...] [-n N]
+  python3 tests/practices/run.py --grade PATH RUN VERDICT NOTE
 
 --summarize loads the rows of every arm from each PATH (a results.jsonl, or the dir holding
 one; a row already taken, the same stream paths, is dropped), applies reviewed, hand_verdict
 and the tripwires, and prints the same table and bar as a live run, with the same pooling and
 fingerprint rules and exit status, and no model calls. --cases and --arms default to those the
 rows hold. The summary groups rows by model and effort (a row without an effort reads
-"default"). A line's n, the runs a C or D line must pass, is the number of rows it holds, or
--n when that is larger (so a run cut short misses until its rows are there).
+"default"). A line's n, the runs a C or D line must pass, is the largest of the rows it holds,
+-n and the planned_n its rows record (so a run cut short, by Ctrl-C say, misses until its rows
+are there; a row from before planned_n leaves it to the other two). It exits 1 before printing
+any bar, naming each file:line, when a non-empty line is not a row: it won't parse as a JSON
+object, its case, arm or verdict is unknown, or a field a person or the run sets is malformed
+(a hand_verdict outside "pass", "fail" and "broken", a reviewed that isn't true or false, a
+planned_n that isn't a positive whole number). --baseline files are held to the same, except
+that a row of another arm, model, effort or case is skipped.
+
+--grade marks one row graded by hand: it sets "reviewed": true, "hand_verdict": VERDICT ("pass",
+"fail" or "broken") and "hand_note": NOTE on the row whose RUN key is <case>-<arm>-<run>, the
+name of its run dir (email-change-C-5, say), in PATH (a results.jsonl, or the dir holding one),
+and rewrites the file atomically, every other line as it was. It refuses, changing nothing, an
+unknown or repeated RUN key, a VERDICT outside those three, an empty NOTE, and a file with a
+line --summarize would refuse.
 """
 import argparse
 import concurrent.futures
+import contextlib
 import hashlib
 import json
 import os
@@ -1100,6 +1121,7 @@ def run_one(case, arm, index, args, out):
     denials_turns = {label: hook_denials(turn) for label, turn in zip(labels, events_by_turn)}
     row = {
         "case": case, "arm": arm, "run": index, "owner": owner, "kind": CASE_INFO[case].kind,
+        "planned_n": args.n,  # so a summary of a run cut short still wants every planned row
         "model": args.model, "effort": args.effort or "default",
         "effort_seen": transcript_efforts(events_by_turn),
         "verdict": verdict["verdict"], "checks": verdict.get("checks", []),
@@ -1242,12 +1264,15 @@ def verdict_of(row):
 
 
 def tripwired(row):
-    return bool(row.get("suspect") or row.get("contaminated"))
+    """Suspect words in the diff, a contaminated session, or a diff that failed (so its suspect
+    words were never read)."""
+    return bool(row.get("suspect") or row.get("contaminated") or row.get("diff_error"))
 
 
 def unresolved(row):
     """A row the bar can't count yet: its verdict is unresolved (and no hand_verdict replaced
-    it), or a tripwire marked it (suspect or contaminated) and no person has marked it reviewed."""
+    it), or a tripwire marked it (suspect, contaminated or diff_error) and no person has marked it
+    reviewed."""
     return verdict_of(row) == "unresolved" or (tripwired(row) and not reviewed(row))
 
 
@@ -1270,7 +1295,10 @@ def held_reason(row):
             why.append(f"suspect ({', '.join(row['suspect'])})")
         if row.get("contaminated"):
             why.append(f"contaminated ({', '.join(row['contaminated'])})")
+        if row.get("diff_error"):
+            why.append(f"the diff failed, so its suspect words weren't read ({str(row['diff_error'])[:200]})")
     todo = ('set "reviewed": true, "hand_verdict" ("pass", "fail" or "broken") and "hand_note" in its row once read'
+            f" (--grade PATH {run_key(row)} VERDICT NOTE sets the three)"
             if verdict_of(row) == "unresolved" else 'set "reviewed": true in its row once read')
     return "; ".join(why), todo
 
@@ -1282,7 +1310,8 @@ def effort_of(row):
 def summarize(rows, cases, arms, n=None):
     """Prints the table and bar per model and effort; returns the missed "case/arm" labels. Rows
     carrying `imported` are arm-A rows from --baseline files: they count in A's line, marked
-    there. A line's n is max(n, the rows it holds)."""
+    there. A line's n is the largest of n, the rows it holds and their planned_n (a row
+    without one, from before it was recorded, adds nothing)."""
     missed, refused, held = [], [], []
     for model, effort in sorted({(r.get("model"), effort_of(r)) for r in rows}, key=str):
         print(f"\nmodel {model}, effort {effort}")
@@ -1312,7 +1341,8 @@ def summarize(rows, cases, arms, n=None):
                     skills = prints[0]["skills"] if prints else None
                     # A's counts classify this arm's case only when A pooled and ran the same case code.
                     same_case = len(a_prints) == 1 and (not prints or a_prints[0]["case"] == prints[0]["case"])
-                    label, miss = bar(case, arm, counts, max(n or 0, len(mine)),
+                    planned = max((r["planned_n"] for r in mine if is_count(r.get("planned_n"))), default=0)
+                    label, miss = bar(case, arm, counts, max(n or 0, len(mine), planned),
                                       a=counts_of(a_rows) if a_rows and same_case else None,
                                       installed=list(skills) if skills is not None else None)
                 held += [r for r in mine if unresolved(r)]
@@ -1335,33 +1365,87 @@ def summarize(rows, cases, arms, n=None):
     return missed
 
 
+def results_path(given):
+    """A results.jsonl, given as the file or the dir holding it."""
+    path = Path(given)
+    return (path / "results.jsonl" if path.is_dir() else path).resolve()
+
+
+def is_count(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def row_problem(row):
+    """Why a parsed line isn't a row a summary can count, or None. Only the fields a summary
+    reads to place and count a row are checked, and the ones a person edits by hand."""
+    if not isinstance(row, dict):
+        return "not a JSON object"
+    if row.get("case") not in CASE_INFO:
+        return f"unknown case {row.get('case')!r}"
+    if row.get("arm") not in ARMS:
+        return f"unknown arm {row.get('arm')!r}"
+    if row.get("verdict") not in VERDICTS:
+        return f"unknown verdict {row.get('verdict')!r}"
+    if "hand_verdict" in row and row["hand_verdict"] not in HAND_VERDICTS:
+        return f"hand_verdict {row['hand_verdict']!r} is not one of {', '.join(map(repr, HAND_VERDICTS))}"
+    if "reviewed" in row and not isinstance(row["reviewed"], bool):
+        return f"reviewed {row['reviewed']!r} is not true or false"
+    if "planned_n" in row and not is_count(row["planned_n"]):
+        return f"planned_n {row['planned_n']!r} is not a positive whole number"
+    return None
+
+
+def read_results(path, flag, given):
+    """[(line number, row, problem)] for each non-empty line of the results file at `path`:
+    the parsed row (None when it won't parse) and why it isn't a row (row_problem), or None.
+    A file that can't be read exits."""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as e:
+        sys.exit(f"run.py: {flag} {given}: {e.strerror or e}")
+    out = []
+    for number, line in enumerate(lines, 1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except (ValueError, RecursionError) as e:
+            out.append((number, None, f"not JSON ({str(e)[:80]})"))
+            continue
+        out.append((number, row, row_problem(row)))
+    return out
+
+
+def refuse_lines(flag, problems):
+    """Exits naming each file:line that isn't a row: a line skipped silently could drop a hand
+    verdict, or a row, from the bar."""
+    if problems:
+        sys.exit(f"run.py: {flag}: {len(problems)} line(s) aren't rows, so no bar is printed; fix or remove "
+                 "them:\n" + "\n".join(f"  {path}:{number}: {why}" for path, number, why in problems))
+
+
 def load_baseline(paths, model, cases, effort="default"):
     """Arm-A rows for `model`, `effort` (a row's own, "default" when it has none) and `cases`
     from earlier results.jsonl files (each path a file, or a results dir holding one), each
     marked `imported` with its file. A row already taken (the same stream paths: the same run,
-    from a copied file, say) is dropped and counted. A file that can't be read exits; a line
-    that isn't a row is skipped and counted."""
-    rows, seen, seen_rows = [], set(), set()
+    from a copied file, say) is dropped and counted. A file that can't be read exits, and so
+    does a line that isn't a row (refuse_lines); a row of another arm, model, effort or case is
+    skipped and counted."""
+    rows, seen, seen_rows, problems = [], set(), set(), []
     for given in paths:
-        path = Path(given)
-        path = (path / "results.jsonl" if path.is_dir() else path).resolve()
+        path = results_path(given)
         if path in seen:
             continue
         seen.add(path)
-        try:
-            lines = path.read_text(errors="replace").splitlines()
-        except OSError as e:
-            sys.exit(f"run.py: --baseline {given}: {e.strerror or e}")
         took = skipped = dups = 0
-        for line in lines:
-            try:
-                row = json.loads(line)
-            except ValueError:
-                row = None
-            if not (isinstance(row, dict) and row.get("arm") == "A" and row.get("model") == model
+        for number, row, problem in read_results(path, "--baseline", given):
+            if problem:
+                problems.append((path, number, problem))
+                continue
+            if not (row.get("arm") == "A" and row.get("model") == model
                     and (row.get("effort") or "default") == effort
-                    and row.get("case") in cases and row.get("verdict") in VERDICTS):
-                skipped += bool(line.strip())
+                    and row.get("case") in cases):
+                skipped += 1
                 continue
             key = json.dumps(row.get("stream") or row, sort_keys=True)  # a harness error's row has no stream
             if key in seen_rows:
@@ -1371,34 +1455,26 @@ def load_baseline(paths, model, cases, effort="default"):
             rows.append({**row, "imported": str(path)})
             took += 1
         print(f"baseline {path}: {took} arm-A row(s) for {model} at effort {effort} in these cases; "
-              f"{dups} already taken; {skipped} other line(s) skipped")
+              f"{dups} already taken; {skipped} other row(s) skipped")
+    refuse_lines("--baseline", problems)
     return rows
 
 
 def load_rows(paths):
     """Every row of every arm in these results.jsonl files (each path a file, or a results dir
     holding one). A row already taken (the same stream paths) is dropped and counted. A file
-    that can't be read exits; a line that isn't a row is skipped and counted."""
-    rows, seen, seen_rows = [], set(), set()
+    that can't be read exits, and so does a non-empty line that isn't a row (refuse_lines),
+    before any bar is printed."""
+    rows, seen, seen_rows, problems = [], set(), set(), []
     for given in paths:
-        path = Path(given)
-        path = (path / "results.jsonl" if path.is_dir() else path).resolve()
+        path = results_path(given)
         if path in seen:
             continue
         seen.add(path)
-        try:
-            lines = path.read_text(errors="replace").splitlines()
-        except OSError as e:
-            sys.exit(f"run.py: --summarize {given}: {e.strerror or e}")
-        took = skipped = dups = 0
-        for line in lines:
-            try:
-                row = json.loads(line)
-            except ValueError:
-                row = None
-            if not (isinstance(row, dict) and row.get("case") in CASE_INFO and row.get("arm") in ARMS
-                    and row.get("verdict") in VERDICTS):
-                skipped += bool(line.strip())
+        took = dups = 0
+        for number, row, problem in read_results(path, "--summarize", given):
+            if problem:
+                problems.append((path, number, problem))
                 continue
             key = json.dumps(row.get("stream") or row, sort_keys=True)
             if key in seen_rows:
@@ -1407,8 +1483,56 @@ def load_rows(paths):
             seen_rows.add(key)
             rows.append(row)
             took += 1
-        print(f"rows {path}: {took} row(s); {dups} already taken; {skipped} other line(s) skipped")
+        print(f"rows {path}: {took} row(s); {dups} already taken")
+    refuse_lines("--summarize", problems)
     return rows
+
+
+def run_key(row):
+    """A row's RUN key for --grade: <case>-<arm>-<run>, the name of its run dir."""
+    return f"{row.get('case')}-{row.get('arm')}-{row.get('run')}"
+
+
+def grade_row(given, key, verdict, note):
+    """--grade: sets reviewed, hand_verdict and hand_note on the one row whose run_key is `key`
+    in the results file at `given`, and rewrites the file atomically, every other line byte for
+    byte. Refuses, changing nothing, an unknown or repeated key, a verdict outside
+    HAND_VERDICTS, an empty note, and a file with a line --summarize would refuse. Returns the
+    exit code."""
+    if verdict not in HAND_VERDICTS:
+        sys.exit(f"run.py: --grade: verdict {verdict!r} is not one of {', '.join(HAND_VERDICTS)}")
+    if not note.strip():
+        sys.exit("run.py: --grade: the note is empty; say why in a sentence")
+    path = results_path(given)
+    rows = read_results(path, "--grade", given)
+    refuse_lines("--grade", [(path, number, why) for number, _row, why in rows if why])
+    found = [(number, row) for number, row, _why in rows if run_key(row) == key]
+    if not found:
+        known = ", ".join(sorted({run_key(row) for _n, row, _w in rows}))
+        sys.exit(f"run.py: --grade: no row {key!r} in {path}; its runs: {known or 'none'}")
+    if len(found) > 1:
+        sys.exit(f"run.py: --grade: {len(found)} rows are {key!r} in {path} (lines "
+                 f"{', '.join(str(n) for n, _ in found)}); fix the file by hand")
+    [(number, row)] = found
+    before = f"verdict {row['verdict']}" + (f", hand_verdict {row['hand_verdict']}" if "hand_verdict" in row else "")
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    end = lines[number - 1][len(lines[number - 1].rstrip("\r\n")):]
+    lines[number - 1] = json.dumps({**row, "reviewed": True, "hand_verdict": verdict, "hand_note": note}) + (end or "\n")
+    fd, temp = tempfile.mkstemp(dir=path.parent, prefix=".results-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write("".join(lines))
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(temp, path.stat().st_mode & 0o7777)
+        os.replace(temp, path)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temp)
+        raise
+    print(f"graded {key} in {path} (line {number}): hand_verdict {verdict}, was {before}; "
+          f"--summarize {path} prints the bar")
+    return 0
 
 
 def summarize_files(paths, cases=None, arms=None, n=None):
@@ -1504,7 +1628,14 @@ def main():
     ap.add_argument("--summarize", nargs="+", metavar="PATH",
                     help="print the bar from earlier results.jsonl files (or their dirs), every arm's rows, "
                          "applying reviewed and hand_verdict; no model calls")
+    ap.add_argument("--grade", nargs=4, metavar=("PATH", "RUN", "VERDICT", "NOTE"),
+                    help="mark one row of a results.jsonl (or its dir) graded by hand: RUN is <case>-<arm>-<run> "
+                         "(its run dir's name), VERDICT pass, fail or broken, NOTE why; rewrites the file atomically")
     a = ap.parse_args()
+    if a.grade:
+        if a.summarize or a.arms or a.cases or a.n is not None or a.dry_run or a.out or a.baseline:
+            ap.error("--grade edits one row of a results file: it takes no other option")
+        return grade_row(*a.grade)
 
     arms = [x.strip().upper() for x in (a.arms or "").split(",") if x.strip()]
     cases = [c.strip() for c in a.cases.split(",") if c.strip()] if a.cases else []
@@ -1547,6 +1678,7 @@ def main():
             if row is not None:
                 row.setdefault("model", a.model)  # a harness error's row, for the per-model summary
                 row.setdefault("effort", a.effort or "default")
+                row.setdefault("planned_n", a.n)
                 rows.append(row)
                 results.write(json.dumps(row) + "\n")  # each finished row is on disk at once
                 results.flush()

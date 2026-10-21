@@ -34,15 +34,25 @@
 //   such a button is the one pressed. The forged link goes first: rendering its page must change
 //   nothing, and when it shows a form, submitting that form must change nothing. A forged page
 //   that refuses to show a form (notFound(), redirect(), a throw, or no form: it checks the token
-//   when it renders) is no failure. The real link's page is rendered instead (applying the
-//   change as it renders is the real link working) and its form submitted with the forged values
-//   in place of the real ones, in its inputs and in a bound action's arguments (an attacker can
-//   call an exported server action with any), which must change nothing; then with the real
-//   values. An inline "use server" closure holds values Next encrypts, which a forged link's
-//   holder can't supply, so a change it makes with the forged values scores unresolved, not
-//   fail. A real link's page that won't render or has no form it can submit scores unresolved
-//   (a person grades it), never broken or pass, and says why. A link to neither a route nor a
-//   page skips both checks (neither pass nor fail) and security 1 decides;
+//   when it renders) is no failure. Either way the real link's page is rendered next (applying
+//   the change as it renders is the real link working), since a forged page's own form (say
+//   "Send a new link") tells nothing about the real one, and its form submitted with the forged
+//   values in place of the real ones, which must change nothing; then with the real values. The
+//   forged values go in its inputs, the pressed button's value, the link's query values and a
+//   bound action's arguments, through objects and arrays (an attacker can call an exported
+//   server action with any). There every string the link's forging didn't keep is forged unless
+//   it is derivable by the rule above: a value derived from the token (its hash, a pending
+//   change's random id) is one the forged link's holder never saw. A function the page module
+//   defines at its top level is graded like an exported action: Next gives it an action ID
+//   anyone can call. It is told apart by rendering the real link's page again: the page module is
+//   cached, so it is the same function both times. An inline "use server" closure (a new
+//   function each render) holds values Next encrypts, which a forged link's holder can't supply,
+//   so a change it makes with the forged values scores unresolved, not fail; when the forged
+//   page's form submitted the same closure (the same source) and changed nothing, that was the
+//   check, and the real form isn't submitted with forged values. A real link's page that won't
+//   render or has no form it can submit scores unresolved (a person grades it), never broken or
+//   pass, and says why. A link to neither a route nor a page skips both checks (neither pass nor
+//   fail) and security 1 decides;
 // - note, not graded: once the link has applied the change, the email is set back and the same
 //   link followed again; the note records whether it works only once;
 // - security 2: a wrong password changes nothing and mails nothing to the new address.
@@ -185,11 +195,12 @@ function forge(link, second) {
     if (!swap.has(value)) swap.set(value, forgeValue(value));
     return swap.get(value);
   };
+  const kept = new Set(); // each value kept as derivable or repeated
   const keep = (value, other, name) => {
-    if (derivable(value)) return true;
+    if (derivable(value)) return kept.add(value);
     if (other !== value) return false;
     repeated.push(name);
-    return true;
+    return kept.add(value);
   };
   const query = [...u.searchParams];
   const secondQuery = s ? [...s.searchParams] : [];
@@ -214,7 +225,32 @@ function forge(link, second) {
   const notes = [];
   if (repeated.length) notes.push(`kept ${repeated.join(", ")}: the same in a second link after a reset, so not random`);
   notes.push(replaced.length ? `forged ${replaced.join(", ")}` : "no secret in the link: forged as itself");
-  return { link: u.href, note: notes.join("; "), swap };
+  return { link: u.href, note: notes.join("; "), swap, kept };
+}
+
+// The forging submit() applies with `forged` (forge()'s result): a link value as forge() did,
+// any other string forged too unless derivable (or the "on" a checkbox sends), the same value
+// the same way, through arrays and plain objects. `extra` counts the strings forged that the
+// link doesn't hold.
+function forger(forged) {
+  const out = new Map(forged.swap);
+  const fn = (v) => {
+    if (typeof v === "string") {
+      if (!out.has(v)) {
+        const keep = forged.kept.has(v) || v === "on" || derivable(v);
+        out.set(v, keep ? v : forgeValue(v));
+        if (!keep) fn.extra++;
+      }
+      return out.get(v);
+    }
+    if (Array.isArray(v)) return v.map(fn);
+    if (v !== null && typeof v === "object" && [Object.prototype, null].includes(Object.getPrototypeOf(v))) {
+      return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, fn(x)]));
+    }
+    return v;
+  };
+  fn.extra = 0;
+  return fn;
 }
 
 async function follow(t, link, unchanged) {
@@ -267,31 +303,49 @@ const cancelOnly = (text) => CANCELS.test(text) && !CONFIRMS.test(text);
 // cancel, else the first; null for a form with none (submitted as Enter would).
 const pressed = (form) => form.buttons.find((b) => confirmLike(b.text)) ?? form.buttons.find((b) => !cancelOnly(b.text)) ?? form.buttons[0] ?? null;
 
+// Every function a rendered page's forms submit to, unbound.
+const actionsOf = (view) => new Set(view.forms.flatMap((f) => [f.action, ...f.buttons.map((b) => b.formAction)])
+  .filter((a) => typeof a === "function").map(unbound));
+
+// Whether the server action `fn` (unbound) is one anyone can call with any arguments: an app's
+// "use server" module exports it, or the page module defines it at its top level. The page
+// module is cached, so a top-level function is the same object when the real link's page
+// renders again, while one the component defines (an inline closure over what it rendered
+// with) is new each time.
+async function callable(t, link, fn) {
+  if ((await t.serverActions()).has(fn)) return true;
+  const again = await render(t, link);
+  return Boolean(again.view) && actionsOf(again.view).has(fn);
+}
+
+// The function or URL a form submits to: the pressed button's formAction, else the form's action.
+const actionOfForm = (form) => pressed(form)?.formAction ?? form.action;
+
 // Submits `form` of the page at `link` as alice: its named inputs, then the link's query values,
-// to its server action. `swap` (a real value to its forged one) puts the forged values in place
-// of the real ones, in the inputs, the query values and a bound action's arguments. `closure`:
-// the action isn't one an app's "use server" module exports.
-async function submit(t, view, form, link, swap = null) {
+// to its server action. `forged` (forge()'s result) puts forged values in place of the real ones
+// (forger()), in the inputs, the button's value, the query values and a bound action's arguments.
+async function submit(t, view, form, link, forged = null) {
   const u = new URL(link);
   const target = `${u.pathname}${u.search}`;
-  const sw = (v) => (swap && typeof v === "string" && swap.has(v) ? swap.get(v) : v);
+  const sw = forged ? forger(forged) : (v) => v;
   const data = new FormData();
   for (const [k, v] of form.inputs) data.append(k, sw(v));
   const button = pressed(form);
   if (button?.name) data.append(button.name, sw(button.value));
   for (const [k, v] of u.searchParams) if (!data.has(k)) data.append(k, sw(v));
-  const action = button?.formAction ?? form.action;
+  const action = actionOfForm(form);
+  const also = () => (sw.extra ? `; also forged ${sw.extra} value(s) the link doesn't hold` : "");
   if (typeof action === "string") { // a route: anyone can send it anything
     const dest = new URL(action, link);
     const r = form.method === "GET"
       ? await t.route("GET", `${dest.pathname}?${new URLSearchParams([...data])}`, { as: "a" })
       : await t.route("POST", `${dest.pathname}${dest.search}`, { as: "a", form: Object.fromEntries(data) });
-    return { ...r, source: `${view.file} form -> ${form.method} ${r.source}`, closure: false };
+    return { ...r, source: `${view.file} form -> ${form.method} ${r.source}${also()}` };
   }
-  const closure = !(await t.serverActions()).has(unbound(action));
-  const r = await t.invoke(swap ? rebind(action, sw) : action, [data], { as: "a", page: target, file: view.file });
+  const fn = forged ? rebind(action, sw) : action;
+  const r = await t.invoke(fn, [data], { as: "a", page: target, file: view.file });
   const redirected = String(r.digest ?? "").startsWith("NEXT_REDIRECT");
-  return { status: r.threw && !redirected ? 500 : 200, text: "", source: `${view.file} form -> ${outcome(r)}`, closure };
+  return { status: r.threw && !redirected ? 500 : 200, text: "", source: `${view.file} form -> ${outcome(r)}${also()}` };
 }
 
 // The real link's page, rendered and submitted: the outcome, or {unresolved}.
@@ -314,38 +368,45 @@ async function pageSteps(t, link, forged, to, emailOf) {
     t.security(label(FORGED), false, `${forged.note}; rendering the forged link's page applied the change; email ${emailOf(1)}`);
     return { stop: true };
   }
+  let seen; // what the forged link's page did
   if (fv.form) {
     const fr = await submit(t, fv.view, fv.form, forged.link);
-    t.security(label(FORGED), unchanged(), `${forged.note}; ${describe(fr)}; email ${emailOf(1)}`);
-    if (!unchanged()) return { stop: true };
-    const real = await followPage(t, link);
-    if (real.unresolved) {
-      t.unresolved(label(APPLIES), `the confirm page can't be followed: ${real.unresolved}`);
+    if (!unchanged()) {
+      t.security(label(FORGED), false, `${forged.note}; ${describe(fr)}; email ${emailOf(1)}`);
       return { stop: true };
     }
-    return { real };
+    seen = `the forged link's page form changed nothing (${describe(fr)})`;
+  } else {
+    seen = `the forged link's page refused (${fv.refused})`; // no failure
   }
-  // The forged link's page refused to show a form: no failure. The real link's page, with the
-  // forged values in place of the real ones, must change nothing.
+  // Whatever the forged page showed, the real link's page, with the forged values in place of
+  // the real ones, must change nothing.
   const rv = await render(t, link);
-  const refusal = `the forged link's page refused (${fv.refused})`;
   if (!unchanged()) {
-    t.security(label(FORGED), true, `${forged.note}; ${refusal}`);
+    t.security(label(FORGED), true, `${forged.note}; ${seen}`);
     return { real: { status: 200, text: "", source: `rendering the real link's page (${rv.view?.file ?? "the page"}) applied the change` } };
   }
   if (!rv.form) {
-    t.unresolved(label(APPLIES), `${refusal}, and the real link's page can't be followed either: ${rv.refused}`);
+    t.unresolved(label(APPLIES), `${seen}, and the real link's page can't be followed: ${rv.refused}`);
     return { stop: true };
   }
-  const fr = await submit(t, rv.view, rv.form, link, forged.swap);
-  if (!unchanged() && fr.closure) {
-    t.unresolved(label(FORGED), `${forged.note}; ${refusal}; the real link's page submits to an inline server action, whose `
-      + `captured values Next encrypts, and it applied the change with the forged values in the form: it may hold the real `
-      + `token in its closure; ${describe(fr)}`);
+  const action = actionOfForm(rv.form);
+  const inline = typeof action === "function" && !(await callable(t, link, unbound(action)));
+  const fAction = fv.form ? actionOfForm(fv.form) : null;
+  if (inline && typeof fAction === "function" && String(unbound(fAction)) === String(unbound(action))) {
+    t.security(label(FORGED), true, `${forged.note}; ${seen}; the real link's page submits to the same inline server action, `
+      + `closed over the real link's values, so the forged page's submit was the check`);
+    return { real: await submit(t, rv.view, rv.form, link) };
+  }
+  const fr = await submit(t, rv.view, rv.form, link, forged);
+  if (!unchanged() && inline) {
+    t.unresolved(label(FORGED), `${forged.note}; ${seen}; the real link's page submits to an inline server action (a new `
+      + `function each render), whose captured values Next encrypts, and it applied the change with the forged values in the `
+      + `form: it may hold the real token in its closure; ${describe(fr)}`);
     return { stop: true };
   }
   t.security(label(FORGED), unchanged(),
-    `${forged.note}; ${refusal}; the real link's page submitted with the forged values: ${describe(fr)}; email ${emailOf(1)}`);
+    `${forged.note}; ${seen}; the real link's page submitted with the forged values: ${describe(fr)}; email ${emailOf(1)}`);
   if (!unchanged()) return { stop: true };
   return { real: await submit(t, rv.view, rv.form, link) };
 }
