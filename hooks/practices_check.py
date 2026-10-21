@@ -108,8 +108,8 @@ The prefilter is one `LC_ALL=C grep -E`, linear in the payload (a bash `case` gl
 over every "git" in a large output). Every practices entry in settings.json (edit, Bash and
 SessionStart) runs the shim only when it exists and then exits 0; a deny is JSON on stdout.
 hooks/bash_words.py reads the command as simple commands through chains, wrappers (`sudo -E`,
-`env -i`, `time -p`; `env -C` and `sudo -D` move that command's cwd), `cd X &&` (from the
-payload's cwd; a cd inside `( ... )` ends with it), quotes and heredocs, the body of each
+`env -i`, `time -p`; `env -C` and `sudo -D` move that command's cwd), `cd X &&`, `pushd` and
+`popd` (from the payload's cwd; a cd inside `( ... )` ends with it), quotes and heredocs, the body of each
 $(...), backtick, <(...) and >(...) (from the cwd where it sits), a `bash -c` script with no
 expansion in it, and each git call's -C, --git-dir, --work-tree and GIT_DIR=; an expansion in
 one of those skips that call, logged. When what the parser left unread names a commit, push,

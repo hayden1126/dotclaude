@@ -13,8 +13,8 @@ subcommand.
 calls() (practices_check) goes further: it reads the body of each $(...), `...`, <(...) and
 >(...) as commands, from the cwd in force where it sits (nested up to NEST_MAX deep), and a
 `bash -c`, `sh -c` or `zsh -c` script the outer shell passes as written; it follows `env -C`
-and `sudo -D` for their command alone, and a `cd` inside `( ... )` ends at the `)`. With rest,
-it hands back what it left unread (the arguments of commands other than the caller's heads and
+and `sudo -D` for their command alone, a `cd` inside `( ... )` ends at the `)`, and pushd and
+popd are followed through dir_stack. With rest, it hands back what it left unread (the arguments of commands other than the caller's heads and
 grep or rg, each heredoc body a shell runs, each body that won't parse), so its caller can log
 a command it names but can't read. segments() (delete_guard) keeps the old shape: a
 substitution is one placeholder, and a process substitution's parentheses split its body into

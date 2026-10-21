@@ -621,11 +621,11 @@ need nothing extra.
   value, and sit behind a shell prefilter, so Python starts only for a command that names git
   with commit or push, or gh with pr ready or create. The Bash reader follows chains, wrappers
   (`sudo`, `env`, `time`; `env -C` and `sudo -D` move the cwd), a `cd` (only to the end of its
-  subshell), `pushd` and `popd`, `$(...)` and backtick bodies, process substitutions, a literal
-  `bash -c` script, and a heredoc or here-string that a shell runs. A form it can't read (an
-  alias, a function, `eval`, a script file, `xargs`) passes, logged as `git-skipped` whenever
-  what's left of the command names a commit, push or PR call. A command over 64 KB isn't parsed
-  at all: it passes, logged the same way.
+  subshell), `pushd` and `popd`, `$(...)` and backtick bodies, process substitutions and a
+  literal `bash -c` script. A form it can't read (an alias, a function, `eval`, a script file,
+  `xargs`, a heredoc or here-string body that a shell runs) passes, logged as `git-skipped`
+  whenever what's left of the command names a commit, push or PR call. A command over 64 KB
+  isn't parsed at all: it passes, logged as `git-skipped` when it names a call.
   A PR readied in the GitHub web UI never reaches the hook. A repo turns it off with
   `enabled = false` in `.claude/practices/config.toml`, or turns one rule off there with a reason.
   The engine keeps a 2 s budget under the 5 s kill. A scan the budget cuts short denies once on
