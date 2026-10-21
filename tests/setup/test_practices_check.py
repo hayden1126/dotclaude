@@ -23,6 +23,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import tomllib
 import unittest
 from unittest import mock
@@ -1916,6 +1917,58 @@ class Budgets(BashBase):
         self.assertIn("f3.ts:1", ctx)
         self.assertNotIn("f0.ts", ctx)
         self.assertIn("scan-truncated", self.log())
+
+
+class Timing(BashBase):
+    """Review round 2: a 50-commit push of about 4 MB of added text, under the shipped skills,
+    run as Claude Code runs it with the real 2 s budget. It either finishes in time or takes
+    the cut path: a deny that says some commits weren't read, whose resend passes."""
+
+    LINES = ("export async function POST(req: Request) {{",
+             "  const row{n} = await db.select().from(items).where(eq(items.id, id{n}))",
+             "  const parsed{n} = schema.safeParse(await req.json())",
+             "  if (!parsed{n}.success) return new Response('bad', {{ status: 400 }})",
+             "  const url{n} = new URL(`/v1/items/${{id{n}}}`, process.env.API_BASE)",
+             "  await fetch(url{n}, {{ method: 'POST', body: JSON.stringify(parsed{n}.data) }})",
+             "  logger.info('item {n} saved', {{ id: id{n} }})",
+             "}}")
+
+    def test_a_50_commit_4_mb_push_finishes_or_is_cut_correctly(self):
+        for name in ("server-code", "auth-secrets"):
+            os.symlink(os.path.join(REPO, "skills", name),
+                       os.path.join(self.config, "skills", name))
+        self.sh("update-ref", "refs/remotes/origin/main", self.commit(**{"seed": "1\n"}))
+        size, n = 0, 0
+        for c in range(50):
+            lines = []
+            while sum(map(len, lines)) < 80_000:
+                lines += [t.format(n=n) for t in self.LINES]
+                n += 1
+            lines.append(f"db.insert(items).values({{ ...body }}) // file {c}")
+            text_ = "\n".join(lines) + "\n"
+            size += len(text_)
+            path = f"app__api__r{c}__route.ts" if c % 2 else f"lib__f{c}.ts"
+            self.commit(**{path: text_})
+        self.assertGreater(size, 3_900_000)
+        self.assertLess(size, PC.BYTES_MAX)
+        start = time.monotonic()
+        out = self.run_hook(self.event("git push", "PreToolUse", "b-time"))
+        elapsed = time.monotonic() - start
+        cut = "the time budget ran out" in self.log()
+        reason = out and out["hookSpecificOutput"]["permissionDecisionReason"]
+        if os.environ.get("PRACTICES_TIMING"):  # opt-in: the measurement, for a report
+            where = re.findall(r"ran out in the (.*?), so", self.log())
+            print(f"\npractices timing: 50 commits, {size / 1e6:.2f} MB, {elapsed:.2f} s, "
+                  f"cut: {cut} {where}, denied: {bool(reason)}", flush=True)
+        self.assertLess(elapsed, 5.0)  # Claude Code's kill
+        if cut:
+            self.assertTrue(reason is None or "some weren't checked" in reason, reason)
+            if reason:
+                self.assertIsNone(self.run_hook(self.event("git push", "PreToolUse", "b-t2")))
+        else:
+            self.assertLess(elapsed, PC.BUDGET + 1.0)  # the budget, plus Python's start-up
+            self.assertIn("SEC-04 (server-code)", reason)
+            self.assertNotIn("some weren't checked", reason)
 
 
 def load_bash_words():
