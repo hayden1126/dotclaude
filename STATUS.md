@@ -88,19 +88,19 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
   - **Live lanes** (briefs in each record). Merge order (Hayden, 2026-10-21, by readiness, since
-    exam-prep had stages left while mute and policy-fp were nearly done): 1 mute
-    (`feat/device-mute`, #141, carries the lead's notes: the device-wide mute below, plus
-    `setup-tmux.sh`'s `link()` fix). 2 policy-fp (`fix/policy-false-denials`: the three
-    subagent-policy false denials below, plus gap SP3 on Hayden's pick, plus a copy of
-    exam-prep's `--profile` line so main's delegation tests go green at its merge). 3 exam-prep
+    exam-prep had stages left while mute and policy-fp were nearly done): 1 policy-fp
+    (`fix/policy-false-denials`, #143, carries the lead's notes: the three subagent-policy
+    false denials below, plus gap SP3 on Hayden's pick, plus a copy of exam-prep's `--profile`
+    line so main's delegation tests go green at its merge). 2 exam-prep
     (`feat/exam-prep-skill`: the exam-prep skill suite below, plus classifying Claude Code
     2.1.305's `--profile`; its dry run passed without an install, and it needs its install turn
-    before round 1's go/no-go, Thu 10/22). 4 practices (its next PR, auth-secrets; the skill
+    before round 1's go/no-go, Thu 10/22). 3 practices (its next PR, auth-secrets; the skill
     suite below). Each opened on Hayden's ok. practices merged #142 the same day (Hayden moved it first since it was
-    finished) and stays open for more PRs. Merged and closed 2026-10-20, installed from main:
+    finished) and stays open for more PRs. Merged 2026-10-21 and installed from main: mute
+    (#141). Merged and closed 2026-10-20, installed from main:
     summary-retire (#139), link-atomic (#140, which Hayden ordered first so no later install ran
     the old `link()`), pr-horizon (#135), config-dir (#133). Hayden raised the cap
-    from 3 to 4 on 2026-10-20 for exam-prep; it is full.
+    from 3 to 4 on 2026-10-20 for exam-prep; one slot is free since mute's merge.
   - **Lane ask quality: done** (2026-10-19 to 2026-10-20). ask-check merged as #131 and was
     installed from main 2026-10-20: a PreToolUse hook on AskUserQuestion (`hooks/ask_check.py`)
     denies risky asks with a checklist in the reason. branch-reuse merged as #130: `lane new`
@@ -185,15 +185,16 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **A device-wide toggle for the toast and the sound** (Hayden, 2026-10-20): one switch that
     mutes the Windows toast and the notify ring for every session on the machine (no toggle
     exists today). Design settled 2026-10-20 (Hayden picked the lead's pick on all four forks:
-    `PLAN.md`, "Next: a device-wide mute"). In lane mute since 2026-10-20 (its record holds the
-    state).
+    `PLAN.md`, "Next: a device-wide mute"). Merged as #141 (lane mute, 2026-10-21; installed
+    from main, `~/.claude/CLAUDE.md` and `~/.tmux.conf` back on the main checkout): the
+    `claude-mute` CLI and the Mute… menu.
   - **`setup-tmux.sh`'s own `link()` has #140's gap class** (lane link-atomic's report,
     2026-10-20). `setup-tmux.sh:62-71` moves a real file aside, then runs `ln -sfn`. GNU ln
     9.4 replaces a link with no missing window (the lead's race test: 0 misses in about 600k
     checks over 6000 swaps), but BSD/macOS `ln -sf` unlinks first, and the move-aside leaves a
     window on every platform on a first install. Fix: reuse #140's temp-name and `os.replace`
-    swap (merged). In lane mute since 2026-10-20 (Hayden folded it in, since that lane edits
-    `setup-tmux.sh:73-78` anyway).
+    swap (merged). Merged as #141 with the mute (lane mute, 2026-10-21): `setup-tmux.sh` now
+    links with one rename.
   - **Stale worktree admin dirs break sandboxed commands now and then** (lane mute's report,
     2026-10-20; the lead checked). `.git/worktrees/` holds 45 entries `git worktree prune
     --dry-run` would remove ("gitdir file does not exist": closed lanes, old agent worktrees,
@@ -392,8 +393,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lanes mute (merge order 1, carries the lead branch), policy-fp (2), exam-prep (3) and
-     practices (4, its next PR) run; their state is in their records (`lane ls`). After each reinstall,
+  0. Lanes policy-fp (merge order 1, carries the lead branch), exam-prep (2) and practices (3,
+     its next PR) run; their state is in their records (`lane ls`). After each reinstall,
      check `ls -la ~/.claude/CLAUDE.md` (the Watch item). Watch that push asks open with the
      briefing (#137); if they skip it, the Stop-hook check is the follow-up (Hayden's pick).
   1. Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it

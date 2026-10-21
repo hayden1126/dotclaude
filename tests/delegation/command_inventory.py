@@ -264,7 +264,7 @@ CLAUDE_FLAG_OK = {
     "--restricted", "--resume", "--session-id", "--strict-mcp-config", "--system-prompt",
     "--system-prompt-snapshot", "--tmux", "--tools", "--verbose", "--version", "--worktree",
     # The options of the "ok" leaf subcommands below.
-    "--available", "--data-size", "--label", "--strict", "--text",
+    "--available", "--data-size", "--label", "--profile", "--strict", "--text",
 }
 # Short aliases, by their long flag. None may stand for an ask-class flag: a glob can't anchor
 # `-x` safely, so a new one fails the live check until it gets a rule.
