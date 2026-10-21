@@ -1697,6 +1697,21 @@ class Push(BashBase):
                 self.assertIn(mine, reason)
                 self.assertNotIn(other, reason)
 
+    def test_a_push_after_popd_is_judged_back_in_the_dir_it_left(self):
+        # Review round 3, low 5: the push after a popd was judged in the submodule pushd went
+        # to, so the parent's push went unscanned with no log.
+        sub = self.make_repo(os.path.join(self.proj, "sub"))
+        with open(os.path.join(self.proj, ".git", "info", "exclude"), "a") as f:
+            f.write("sub/\n")
+        self.commit(repo=sub, **{"s.ts": "x({ ...body })\n"})
+        self.commit(**{"p.ts": "y({ ...body })\n"})
+        reason = self.pre("pushd sub && git status && popd && git push", session_id="s-popd")
+        self.assertIn("p.ts:1", reason)
+        self.assertNotIn("s.ts", reason)
+        before = self.log()
+        self.assertIsNone(self.pre("popd && git push", session_id="s-popd-2"))
+        self.assertIn("a cd this check can't follow", self.log()[len(before):])
+
     def test_a_source_that_names_no_commit_is_logged(self):
         # Review round 2, low 4: a glob refspec left nothing to scan, and nothing was logged.
         self.commit(**{"bad.ts": "y({ ...body })\n"})
@@ -2241,6 +2256,26 @@ class BashWords(unittest.TestCase):
             "(cd sub; (cd deeper && git push); git commit) && git push": [
                 "/r/sub/deeper", "/r/sub", "/r"],
             "case x in a) cd sub;; esac; git push": ["/r/sub"],
+        }
+        for command, want in cases.items():
+            with self.subTest(command=command):
+                self.assertEqual([c for _, c in self.git(command)], want)
+
+    def test_pushd_and_popd_keep_a_stack(self):
+        # Review round 3, low 5: popd wasn't followed, so a push after it was judged in the
+        # dir pushd went to.
+        cases = {
+            "pushd sub && git commit -m x && popd && git push": ["/r/sub", "/r"],
+            "pushd a; pushd b; git commit; popd; git push": ["/r/a/b", "/r/a"],
+            "pushd a; pushd; git push": ["/r"],  # no dir: swap with the saved one
+            "popd; git push": [None],  # nothing saved in this command: unknown, never a guess
+            "pushd a && popd && popd; git push": [None],
+            "pushd +1; git push": [None],
+            "pushd a; popd -n; git push": [None],
+            "pushd a; cd /abs; popd; git push": ["/r"],
+            "(pushd sub); git push": ["/r"],
+            "pushd sub; x=$(popd; git push)": ["/r"],  # a substitution inherits the stack
+            "pushd sub; bash -c 'popd; git push'": [None],  # a new shell starts with none
         }
         for command, want in cases.items():
             with self.subTest(command=command):

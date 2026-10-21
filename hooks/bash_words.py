@@ -487,12 +487,31 @@ def reads_stdin(args):
 NEST_MAX = 8  # substitutions nested this deep are read; deeper is an unparsable command
 
 
-def calls(command, heads, cwd, rest=None, depth=0):
+def dir_stack(name, args, cwd, stack):
+    """(cwd, stack) after a pushd or popd, stack being the dirs pushd saved in this command
+    (None once it can't be told). `pushd dir` saves the cwd and goes to dir, `popd` goes back
+    to the last one saved, and `pushd` alone swaps the two. A form this doesn't follow (+N, -N,
+    -n, more than one dir), or a popd or swap with nothing saved in this command (the stack
+    from before it can't be seen), makes the cwd unknown (None), never a guess."""
+    if stack is None or len(args) > 1 or any(a.startswith(("+", "-")) for a in args):
+        return None, None
+    if name == "pushd" and args:
+        return cd_target(args, cwd), stack + [cwd]
+    if not stack:
+        return None, None
+    if name == "pushd":
+        return stack[-1], stack[:-1] + [cwd]
+    return stack[-1], stack[:-1]
+
+
+def calls(command, heads, cwd, rest=None, depth=0, stack=()):
     """[(name, args, prefix, cwd)] for each simple command whose name is in heads, with the cwd
-    each starts in (None once a cd can't be followed). The body of each $(...), `...`, <(...)
-    and >(...) is read as commands too, from the cwd in force where it sits, before the command
-    holding it (it runs first), and so is a literal `bash -c` script (shell_script); a cd
-    inside either stays inside. With rest (a list), what the reader leaves unread is appended
+    each starts in (None once a cd can't be followed). A cd is followed, and so are pushd and
+    popd (dir_stack; stack is the dirs saved before the command, None when unknown). The body of
+    each $(...), `...`, <(...) and >(...) is read as commands too, from the cwd and stack in
+    force where it sits, before the command holding it (it runs first), and so is a literal
+    `bash -c` script (shell_script), which starts with no saved dirs; a cd inside either stays
+    inside. With rest (a list), what the reader leaves unread is appended
     to it, so a caller can tell a command it can't read (`xargs git push`) from no command at
     all: the words after each simple command's name, joined, except for a command in heads
     (the caller judges those) or in TEXT_COMMANDS; each heredoc body a shell runs, fed to it
@@ -506,10 +525,11 @@ def calls(command, heads, cwd, rest=None, depth=0):
     bodies, out, k, outer = [], [], 0, []
     docs = [] if rest is not None else None  # the heredoc bodies, one per DOC placeholder
     kd, piped, last = 0, [], []
+    stack = None if stack is None else list(stack)
 
-    def inner(text, where):
+    def inner(text, where, saved):
         try:
-            return calls(text, heads, where, rest, depth + 1)
+            return calls(text, heads, where, rest, depth + 1, saved)
         except ValueError:
             if rest is None:
                 raise
@@ -521,14 +541,14 @@ def calls(command, heads, cwd, rest=None, depth=0):
             piped = last
             continue
         piped = piped if kind == "words" else []
-        if kind == "(":  # a subshell: a cd inside it ends with it
-            outer.append(cwd)
+        if kind == "(":  # a subshell: a cd, pushd or popd inside it ends with it
+            outer.append((cwd, stack))
             continue
         if kind == ")":
-            cwd = outer.pop() if outer else cwd  # a case pattern's ) opens nothing
+            cwd, stack = outer.pop() if outer else (cwd, stack)  # a case pattern's ) opens nothing
             continue
         for body in bodies[k:k + n]:
-            out += inner(body, cwd)
+            out += inner(body, cwd, stack)
         k += n
         last, kd = (docs or [])[kd:kd + h], kd + h
         feed, piped = last + piped, []
@@ -536,15 +556,18 @@ def calls(command, heads, cwd, rest=None, depth=0):
             continue
         dirs = []
         name, args, prefix = command_words(words, set(heads) | SHELLS, dirs)
-        if name in ("cd", "pushd"):
+        if name == "cd":
             cwd = cd_target(args, cwd)
+            continue
+        if name in ("pushd", "popd"):
+            cwd, stack = dir_stack(name, args, cwd, stack)
             continue
         here = cwd
         for d in dirs:  # `env -C d`, `sudo -D d`: this command only
             here = cd_target([d], here) if not d.startswith("-") else None
         script = shell_script(args) if name in SHELLS else None
         if script is not None:
-            out += inner(script, here)
+            out += inner(script, here, ())
             continue
         if rest is not None:
             if name in SHELLS and reads_stdin(args):
@@ -554,5 +577,5 @@ def calls(command, heads, cwd, rest=None, depth=0):
         if name in heads:
             out.append((name, args, prefix, here))
     for body in bodies[k:]:  # a literal %SUBST% in the command leaves the count short
-        out += inner(body, cwd)
+        out += inner(body, cwd, stack)
     return out
