@@ -188,8 +188,10 @@ a run cut short, by Ctrl-C say, misses until its rows are there; a row from befo
 leaves it to the other two). A line that can miss (A on a target case, C or D on target) and
 holds no row is a MISS ("no rows"), never pass 0 of 0, when a run of its model planned it,
 when both --cases and --arms are given (together they name the lines wanted; one alone only
-filters), or when its model has a row without planned_cases or planned_arms (which says nothing
-of what its runs left out). Any other empty line isn't shown, so runs of different plans pooled
+filters), or when it is in the cross of the cases and arms one file holds for that model and
+that file has a row without planned_cases or planned_arms (which says nothing of what its run
+left out). Such a row gates only what its own file holds, never the rest of the pool, so an
+old arm-A file pooled with newer runs adds no line. Any other empty line isn't shown, so runs of different plans pooled
 together don't miss the lines no run planned. A PATH that holds no row (an empty file, or a run
 killed before its first row finished) exits 1, naming it after the bar, so that model can't drop
 out of a pooled bar unseen. A PATH in the --out dir of a live run (see --grade) gets a warning
@@ -1355,6 +1357,27 @@ def planned_lines(rows):
     return cases, arms
 
 
+READ_FROM = "read_from"  # the file load_rows read a row from: in memory only, never written back
+
+
+def old_form_reach(rows):
+    """The (case, arm) lines the rows that record no plan may gate. Such a row, from before
+    planned_cases and planned_arms, says nothing of what its run left out, so the rows of its
+    own file (READ_FROM, from load_rows; one group for rows without it) stand for that plan: the
+    cross of the cases and arms they hold. `rows` are one model's at one effort, so another
+    model's rows in the file add nothing. Reaching past the file would gate lines no run of
+    it planned, as pooling an old arm-A file with newer runs of the same model did."""
+    by_file = {}
+    for r in rows:
+        if not r.get("imported"):
+            by_file.setdefault(r.get(READ_FROM), []).append(r)
+    reach = set()
+    for of_file in by_file.values():
+        if any(not ("planned_cases" in r and "planned_arms" in r) for r in of_file):
+            reach |= {(r.get("case"), x.get("arm")) for r in of_file for x in of_file}
+    return reach
+
+
 def summarize(rows, cases, arms, n=None, named=True):
     """Prints the table and bar per model and effort; returns the missed "case/arm" labels. Rows
     carrying `imported` are arm-A rows from --baseline files: they count in A's line, marked
@@ -1362,15 +1385,14 @@ def summarize(rows, cases, arms, n=None, named=True):
     rows whose run planned that case and arm (plans(); a row without planned_n, from before it
     was recorded, adds nothing). A line that could miss and holds no row is a MISS when a run
     of its model planned it (plans()), when `named` (`cases` and `arms` are the plan: a live
-    run's, or both --cases and --arms), or when the model has a row that records no plan (one
-    from before planned_cases and planned_arms says nothing of what its runs left out). Any
-    other empty line isn't shown: no run of that model planned it, so nothing was cut short."""
+    run's, or both --cases and --arms), or when a row of its model that records no plan reaches
+    it (old_form_reach: the cross of what that row's own file holds). Any other empty line
+    isn't shown: no run of that model planned it, so nothing was cut short."""
     missed, refused, held = [], [], []
     for model, effort in sorted({(r.get("model"), effort_of(r)) for r in rows}, key=str):
         print(f"\nmodel {model}, effort {effort}")
         of_model = [r for r in rows if r.get("model") == model and effort_of(r) == effort]
-        every_line = named or any(not r.get("imported") and not ("planned_cases" in r and "planned_arms" in r)
-                                  for r in of_model)
+        reach = old_form_reach(of_model)
         versions = sorted({str(r["claude_code_version"]) for r in of_model if r.get("claude_code_version")})
         if len(versions) > 1:  # Claude Code can update itself mid-run, so this warns, not refuses
             print(f"warning: rows from {len(versions)} Claude Code versions ({', '.join(versions)}); pooled anyway")
@@ -1385,7 +1407,7 @@ def summarize(rows, cases, arms, n=None, named=True):
             shown = [arm for arm in ARMS if arm in arms or (arm == "A" and a_rows)]
             for arm in shown:
                 mine = [r for r in of_model if r["case"] == case and r["arm"] == arm]
-                if not mine and not (every_line or any(plans(r, case, arm) for r in of_model)):
+                if not mine and not (named or (case, arm) in reach or any(plans(r, case, arm) for r in of_model)):
                     continue  # pooled runs of other plans listed it; none of this model's planned it
                 counts = counts_of(mine)
                 prints = pooled_prints(mine)
@@ -1524,7 +1546,8 @@ def load_baseline(paths, model, cases, effort="default"):
 
 def load_rows(paths):
     """(rows, empty, live): every row of every arm in these results.jsonl files (each path a
-    file, or a results dir holding one), the files that hold no row (a run killed before its
+    file, or a results dir holding one), tagged with the file it came from (READ_FROM, in
+    memory only), the files that hold no row (a run killed before its
     first row leaves one, and its plan is only in rows), and the files a live run is still
     writing (held_by_a_run). A row already taken (the same stream paths) is dropped and
     counted; its file still holds a row. A file that can't be read exits, and so does a
@@ -1547,7 +1570,7 @@ def load_rows(paths):
                 dups += 1
                 continue
             seen_rows.add(key)
-            rows.append(row)
+            rows.append({**row, READ_FROM: str(path)})  # summarize's old_form_reach; no reader writes rows back
             took += 1
         if not took + dups:
             empty.append(path)
@@ -1556,19 +1579,29 @@ def load_rows(paths):
     return rows, empty, live
 
 
+LOCK_PAUSES = (0.05, 0.1, 0.15, 0.2, 0.25, 0.25)  # seconds between results_lock's tries, ~1 s in all
+
+
 @contextlib.contextmanager
 def results_lock(directory, refusal):
     """Holds an exclusive flock on the dir that holds a results.jsonl for the with block, or exits
     with `refusal` when another process holds it. The lock is on the dir, never the file:
     --grade replaces the file, so a lock on it would leave a run that opened it a moment before
     appending to the replaced inode. A run holds it for its whole life (open_results), --grade
-    while it reads and replaces; it ends with the process, so a killed run leaves none behind."""
+    while it reads and replaces; it ends with the process, so a killed run leaves none behind.
+    A --summarize probe (held_by_a_run) holds a shared flock for an instant, so a held lock is
+    tried again, never waited on, LOCK_PAUSES apart before the refusal: a probe is gone by then,
+    and a run's lock isn't."""
     fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)  # not inherited: subprocesses can't keep it
     try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            sys.exit(f"run.py: {refusal}")
+        for pause in (*LOCK_PAUSES, None):
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if pause is None:
+                    sys.exit(f"run.py: {refusal}")
+                time.sleep(pause)
         yield
     finally:
         os.close(fd)
