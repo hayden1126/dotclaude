@@ -38,9 +38,12 @@
 //   change as it renders is the real link working) and its form submitted with the forged values
 //   in place of the real ones, in its inputs and in a bound action's arguments (an attacker can
 //   call an exported server action with any), which must change nothing; then with the real
-//   values. An inline "use server" closure holds values Next encrypts, which a forged link's
-//   holder can't supply, so a change it makes with the forged values scores unresolved, not
-//   fail. A real link's page that won't render or has no form it can submit scores unresolved
+//   values. A function the page module defines at its top level is graded like an exported
+//   action: Next gives it an action ID anyone can call. It is told apart by rendering the real
+//   link's page again: the page module is cached, so it is the same function both times. An
+//   inline "use server" closure (a new function each render) holds values Next encrypts, which a
+//   forged link's holder can't supply, so a change it makes with the forged values scores
+//   unresolved, not fail. A real link's page that won't render or has no form it can submit scores unresolved
 //   (a person grades it), never broken or pass, and says why. A link to neither a route nor a
 //   page skips both checks (neither pass nor fail) and security 1 decides;
 // - note, not graded: once the link has applied the change, the email is set back and the same
@@ -267,10 +270,25 @@ const cancelOnly = (text) => CANCELS.test(text) && !CONFIRMS.test(text);
 // cancel, else the first; null for a form with none (submitted as Enter would).
 const pressed = (form) => form.buttons.find((b) => confirmLike(b.text)) ?? form.buttons.find((b) => !cancelOnly(b.text)) ?? form.buttons[0] ?? null;
 
+// Every function a rendered page's forms submit to, unbound.
+const actionsOf = (view) => new Set(view.forms.flatMap((f) => [f.action, ...f.buttons.map((b) => b.formAction)])
+  .filter((a) => typeof a === "function").map(unbound));
+
+// Whether the server action `fn` (unbound) is one anyone can call with any arguments: an app's
+// "use server" module exports it, or the page module defines it at its top level. The page
+// module is cached, so a top-level function is the same object when the real link's page
+// renders again, while one the component defines (an inline closure over what it rendered
+// with) is new each time.
+async function callable(t, link, fn) {
+  if ((await t.serverActions()).has(fn)) return true;
+  const again = await render(t, link);
+  return Boolean(again.view) && actionsOf(again.view).has(fn);
+}
+
 // Submits `form` of the page at `link` as alice: its named inputs, then the link's query values,
 // to its server action. `swap` (a real value to its forged one) puts the forged values in place
-// of the real ones, in the inputs, the query values and a bound action's arguments. `closure`:
-// the action isn't one an app's "use server" module exports.
+// of the real ones, in the inputs, the query values and a bound action's arguments. `closure`
+// (with `swap` only): the action is an inline closure, not one anyone can call (callable()).
 async function submit(t, view, form, link, swap = null) {
   const u = new URL(link);
   const target = `${u.pathname}${u.search}`;
@@ -288,7 +306,7 @@ async function submit(t, view, form, link, swap = null) {
       : await t.route("POST", `${dest.pathname}${dest.search}`, { as: "a", form: Object.fromEntries(data) });
     return { ...r, source: `${view.file} form -> ${form.method} ${r.source}`, closure: false };
   }
-  const closure = !(await t.serverActions()).has(unbound(action));
+  const closure = Boolean(swap) && !(await callable(t, link, unbound(action)));
   const r = await t.invoke(swap ? rebind(action, sw) : action, [data], { as: "a", page: target, file: view.file });
   const redirected = String(r.digest ?? "").startsWith("NEXT_REDIRECT");
   return { status: r.threw && !redirected ? 500 : 200, text: "", source: `${view.file} form -> ${outcome(r)}`, closure };
@@ -339,9 +357,9 @@ async function pageSteps(t, link, forged, to, emailOf) {
   }
   const fr = await submit(t, rv.view, rv.form, link, forged.swap);
   if (!unchanged() && fr.closure) {
-    t.unresolved(label(FORGED), `${forged.note}; ${refusal}; the real link's page submits to an inline server action, whose `
-      + `captured values Next encrypts, and it applied the change with the forged values in the form: it may hold the real `
-      + `token in its closure; ${describe(fr)}`);
+    t.unresolved(label(FORGED), `${forged.note}; ${refusal}; the real link's page submits to an inline server action (a new `
+      + `function each render), whose captured values Next encrypts, and it applied the change with the forged values in the `
+      + `form: it may hold the real token in its closure; ${describe(fr)}`);
     return { stop: true };
   }
   t.security(label(FORGED), unchanged(),

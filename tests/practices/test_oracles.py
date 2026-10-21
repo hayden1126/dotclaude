@@ -609,6 +609,61 @@ EMAIL_PAGE_CHECKS_AT_RENDER_ONLY = ("email-change", {  # in INSECURE_VARIANTS
     **EMAIL_PAGE_CHECKS_AT_RENDER[1],
     "app/settings/email/confirm/actions.ts": EMAIL_PAGE_IGNORES_TOKEN[1]["app/settings/email/confirm/actions.ts"],
 })
+# The page checks the token when it renders, then submits to a function its own module defines:
+# not exported, closing over nothing, and applying the user's pending change whatever the form
+# carries. Next gives it an action ID like any other, so anyone can call it.
+EMAIL_PAGE_MODULE_ACTION_IGNORES_TOKEN = ("email-change", {  # in INSECURE_VARIANTS
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: """\
+import { redirect } from "next/navigation";
+import { getCurrentUser } from "@/lib/auth";
+import { getDb } from "@/lib/db";
+import { findPending } from "@/lib/email-pending";
+
+async function confirm(_formData: FormData) {
+  "use server";
+  const user = await getCurrentUser();
+  const row = user && (getDb().prepare("SELECT new_email FROM email_changes WHERE user_id = ?").get(user.id) as { new_email: string } | undefined);
+  if (user && row) getDb().prepare("UPDATE users SET email = ? WHERE id = ?").run(row.new_email, user.id);
+  redirect("/settings");
+}
+
+export default async function Page({ searchParams }: { searchParams: Promise<{ token?: string }> }) {
+  const { token = "" } = await searchParams;
+  if (!findPending(token)) redirect("/settings?email=invalid");
+  return (
+    <form action={confirm}>
+      <button>Confirm</button>
+    </form>
+  );
+}
+""",
+})
+# The same page with a module-level action that takes the token as a bound argument: graded like
+# an exported one, so the forged token goes in its place.
+VARIANTS["email confirm page that checks the token when it renders, its module-level action bound to it"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: """\
+import { redirect } from "next/navigation";
+import { confirmPendingChange } from "@/lib/email-change";
+import { findPending } from "@/lib/email-pending";
+
+async function confirm(token: string, _formData: FormData) {
+  "use server";
+  redirect(confirmPendingChange(token) ? "/settings?email=changed" : "/settings?email=invalid");
+}
+
+export default async function Page({ searchParams }: { searchParams: Promise<{ token?: string }> }) {
+  const { token = "" } = await searchParams;
+  if (!findPending(token)) redirect("/settings?email=invalid");
+  return (
+    <form action={confirm.bind(null, token)}>
+      <button>Confirm</button>
+    </form>
+  );
+}
+""",
+})
 VARIANTS["email confirm page that answers notFound() to a bad token, its action bound to the token"] = ("email-change", {
     **EMAIL_PAGE_CHECKS_AT_RENDER[1],
     CONFIRM_PAGE: """\
@@ -1334,6 +1389,8 @@ assert "x-reauth-token" in OVER_RESTRICTIVE["me route that demands a fresh sign-
 INSECURE_VARIANTS["email confirm page whose action ignores the token"] = EMAIL_PAGE_IGNORES_TOKEN
 INSECURE_VARIANTS["email confirm page that checks the token when it renders, its action skipping the check"] = \
     EMAIL_PAGE_CHECKS_AT_RENDER_ONLY
+INSECURE_VARIANTS["email confirm page that checks the token when it renders, its module-level action ignoring it"] = \
+    EMAIL_PAGE_MODULE_ACTION_IGNORES_TOKEN
 # A same-origin GET carries no Origin header in a browser: a read that demands one refuses ordinary use.
 OVER_RESTRICTIVE["me route that demands an Origin header on GET"] = ("auth-benign", {ME_ROUTE: GOOD_ME.replace(
     "export async function GET() {\n",
