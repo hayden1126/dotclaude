@@ -43,7 +43,7 @@ The description is 455 characters, trigger first. It was read against near misse
 
 Every rule gets L0, L1 and L4 through the skill. The table below lists the further levels.
 
-`at` is an optional `[[rule]]` field: a list holding "edit" and/or "commit", defaulting to both. SEC-41-env sets `at = ["commit"]`, since writing a key to a local `.env` is how env works and only committing it is the bug. SEC-41's `practices-allow` covers only the line it sits on, so one allowed test fixture can't hide a real key elsewhere in the file. Both need the engine change that ships with this skill.
+`at` is an optional `[[rule]]` field: a list holding "edit" and/or "commit", defaulting to both. So a rule without `at` runs at the edit (L2) and at commit: L3s scans each new commit with it and scans again at push, where a new finding denies the push once. Every L2 rule in the table below has L3s that way, though the levels column names it only on SEC-40 and SEC-41, where commit time is the main net. L3r, the review before a PR goes ready, gets this skill's gate lines whenever the branch touched one of its events. SEC-41-env sets `at = ["commit"]`, since writing a key to a local `.env` is how env works and only committing it is the bug. SEC-41's `practices-allow` covers only the line it sits on, so one allowed test fixture can't hide a real key elsewhere in the file. Both need the engine change that ships with this skill.
 
 ## Per-repo layer
 
