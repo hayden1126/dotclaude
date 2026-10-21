@@ -45,9 +45,12 @@ Per run:
     to its node_modules/next and stubs/* (server-only, client-only, react) beside it, then
     `git init` and an initial commit. The harness config is a second commit, the last the
     agent's own repo gets from the harness. The same tree is also the baseline commit of the
-    harness's private git dir, beside the fixture and never in it, whose SHA is recorded; the
-    agent's diff is that git dir's view of the work tree against the baseline (so an agent
-    commit isn't lost, and no config the agent can write, such as a filter driver, is read):
+    harness's private git dir, <run dir>/harness-git under the 0700 results dir (never in the
+    fixture or the system temp dir, where the agent's sandbox could write its config), whose SHA
+    is recorded; the agent's diff is that git dir's view of the work tree against the baseline
+    (so an agent commit isn't lost, and no config the agent can write, such as a filter driver,
+    is read). The tripwire's suspect words are read from a --text diff (diff-text.patch), so a
+    .gitattributes marking files -diff can't hide added lines:
     .claude/settings.json turns the sandbox on with autoAllowBashIfSandboxed (the agent's Bash
     runs confined to the fixture, without prompts), plus the skill and hooks for its arm. The
     harness's git reads no global or system config, so no global ignore rule hides .claude/.
@@ -453,11 +456,23 @@ def hook_errors(run_dir):
     return text[-4000:] or "none"
 
 
+PRIVATE_BASE = REPO / ".tmp" / "practices"  # ignored by git, away from the fixtures in /tmp
+
+
+def private_dir(prefix):
+    """A fresh 0700 dir under the checkout's ignored .tmp/practices/, never the system temp dir."""
+    PRIVATE_BASE.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return Path(tempfile.mkdtemp(prefix=prefix, dir=PRIVATE_BASE))
+
+
+_git_dirs = {}  # fixture path -> (its harness git dir, the private dir made to hold it, or None)
+
+
 def harness_git_dir(fixture):
-    """The harness's own git dir for a fixture: beside it, never in it, so the agent can't
-    write its config (a filter driver, an fsmonitor) and git reads none of the fixture's."""
-    fixture = Path(fixture)
-    return fixture.parent / f".{fixture.name}.harness-git"
+    """The harness's own git dir for a fixture build_fixture made: harness-git in its run dir
+    (else in a private dir of its own), never in the fixture or the system temp dir, so the agent
+    can't write its config (a filter driver, an fsmonitor) and git reads none of the fixture's."""
+    return _git_dirs[str(Path(fixture))][0]
 
 
 def harness_git(fixture, *args):
@@ -466,9 +481,11 @@ def harness_git(fixture, *args):
 
 
 def remove_fixture(fixture):
-    """Removes a fixture and the harness's git dir beside it."""
-    shutil.rmtree(harness_git_dir(fixture), ignore_errors=True)
-    shutil.rmtree(fixture, ignore_errors=True)
+    """Removes a fixture and the harness's git dir (and the private dir made for it)."""
+    git_dir, own = _git_dirs.pop(str(Path(fixture)), (None, None))
+    for d in (git_dir, own, fixture):
+        if d is not None:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 def build_fixture(arm, run_dir=None):
@@ -480,6 +497,9 @@ def build_fixture(arm, run_dir=None):
     if arm in ("C", "D") and run_dir is None:
         raise ValueError(f"arm {arm} wires the hook with dirs in the run dir, and none was given")
     root = Path(tempfile.mkdtemp(prefix="ledgerly-"))
+    own = private_dir("harness-") if run_dir is None else None
+    _git_dirs[str(root)] = (Path(run_dir if run_dir is not None else own) / "harness-git", own)
+    harness_git_dir(root).parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(FIXTURE_SRC, root, dirs_exist_ok=True)
     install_stubs(root)
     git("init", "-q", cwd=root)
@@ -789,11 +809,13 @@ def git_dir_problem(fixture):
     return None
 
 
-def agent_diff(fixture, base):
+def agent_diff(fixture, base, text=False):
     """Everything the agent changed in the work tree since the baseline commit `base`, committed
-    or not, through the harness's own git dir: no config the agent could write is read."""
+    or not, through the harness's own git dir: no config the agent could write is read. --binary
+    (for regrading) by default; `text` takes --text instead, every file as text lines, so a
+    .gitattributes marking a file -diff can't hide its added lines from suspect_words."""
     harness_git(fixture, "add", "-A")
-    return harness_git(fixture, "diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv", base)
+    return harness_git(fixture, "diff", "--cached", "--text" if text else "--binary", "--no-ext-diff", "--no-textconv", base)
 
 
 # Words in the agent's added lines that could forge the oracle's verdict from inside its
@@ -1012,6 +1034,7 @@ def finish_run(fixture, harness_sha, case, run_dir, contain, skip_grade=()):
         return {"verdict": "error", "checks": [{"name": "fixture .git", "ok": False, "detail": problem}]}, problem
     try:
         (run_dir / "diff.patch").write_text(agent_diff(fixture, harness_sha))
+        (run_dir / "diff-text.patch").write_text(agent_diff(fixture, harness_sha, text=True))
     except (subprocess.CalledProcessError, OSError) as e:
         diff_error = f"{e!r}: {getattr(e, 'stderr', '')}"[:1000]
     if skip_grade:
@@ -1054,7 +1077,7 @@ def run_one(case, arm, index, args, out):
     verdict, diff_error = finish_run(fixture, harness_sha, case, run_dir, args.contain, skip_grade=failures)
     diff = run_dir / "diff.patch"
     try:
-        suspect = suspect_words(diff.read_text(errors="replace"))
+        suspect = suspect_words((run_dir / "diff-text.patch").read_text(errors="replace"))
     except OSError:
         suspect = []
     per_turn = [stream_summary(turn) for turn in events_by_turn]
@@ -1402,9 +1425,7 @@ def summarize_files(paths, cases=None, arms=None, n=None):
 def default_out():
     """A fresh 0700 results dir under the checkout's ignored .tmp/, not in /tmp next to the
     fixtures, where an agent's session could read earlier runs' oracle output."""
-    base = REPO / ".tmp" / "practices"
-    base.mkdir(parents=True, exist_ok=True, mode=0o700)
-    return Path(tempfile.mkdtemp(prefix=time.strftime("%Y%m%d-%H%M%S-"), dir=base))  # wall clock
+    return private_dir(time.strftime("%Y%m%d-%H%M%S-"))  # wall clock
 
 
 def row_of(fut, case, arm, i):
@@ -1426,7 +1447,7 @@ def dry_run(cases, arms, args):
     failed = []
     for case in cases:
         for arm in arms:
-            scratch = Path(tempfile.mkdtemp(prefix="practices-dry-"))  # the hook's dirs, outside the fixture
+            scratch = private_dir("dry-")  # the hook's dirs and the harness git dir, outside the fixture and /tmp
             fixture, _sha = build_fixture(arm, scratch)
             ok, output = npm_test(fixture)
             print(f"\n[{case} / {arm}] fixture {fixture}: npm test {'ok' if ok else 'FAILED'}")

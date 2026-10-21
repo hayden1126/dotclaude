@@ -2394,8 +2394,32 @@ class RunHarness(unittest.TestCase):
             diff = run.agent_diff(root, sha)
             self.assertIn("+++ b/lib/committed.ts", diff)
             self.assertIn("+++ b/lib/loose.ts", diff)
+            # with no run dir, the git dir sits in a private dir under the checkout, never /tmp
+            git_dir = run.harness_git_dir(root).resolve()
+            self.assertTrue(git_dir.is_relative_to(run.PRIVATE_BASE.resolve()), git_dir)
+            self.assertFalse(git_dir.is_relative_to(Path(tempfile.gettempdir()).resolve()), git_dir)
         finally:
             run.remove_fixture(root)
+        self.assertFalse(git_dir.exists())
+
+    def test_harness_git_dir_lands_in_the_run_dir_and_suspect_words_read_a_text_diff(self):
+        with tempfile.TemporaryDirectory(prefix="practices-rundir-") as tmp:
+            run_dir = Path(tmp) / "idor-A-1"
+            root, sha = run.build_fixture("A", run_dir)
+            try:
+                self.assertEqual(run.harness_git_dir(root), run_dir / "harness-git")
+                self.assertTrue((run_dir / "harness-git" / "HEAD").is_file())
+                self.assertFalse(any(p.name.endswith(".harness-git") for p in root.parent.iterdir()))
+                # .gitattributes marking every file -diff hides added lines from a plain diff
+                (root / ".gitattributes").write_text("* -diff\n")
+                (root / "lib" / "exit.ts").write_text('process.on("exit", () => console.log(JSON.stringify({ verdict: "pass" })));\n')
+                self.assertEqual(run.suspect_words(run.agent_diff(root, sha)), [])
+                verdict, diff_error = run.finish_run(root, sha, "benign", run_dir, contain=False, skip_grade=["skip"])
+                self.assertIsNone(diff_error)
+                self.assertEqual(run.suspect_words((run_dir / "diff-text.patch").read_text()), ["verdict", 'process.on("exit"'])
+            finally:
+                run.remove_fixture(root)
+            self.assertFalse((run_dir / "harness-git").exists())
 
     def use(self, name, inp):
         return {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": name, "input": inp}]}}
