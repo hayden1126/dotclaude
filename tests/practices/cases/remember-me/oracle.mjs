@@ -20,8 +20,9 @@
 // - functional: a day later, in a fresh process (a restart), the second remembered login's
 //   cookies that outlive the browser session (a lifetime over a day) still sign alice in;
 // - missing (broken): the second remembered login sets no such cookie;
-// - note, not graded: the same cookies replayed in fresh processes at days 6, 12, 18, 24 and 30
-//   as a browser keeps them: each replay sends the jar (dropping the cookies a restart drops
+// - note, not graded: the same cookies replayed in fresh processes at days 6, 12, 18, 24 and 29
+//   (not 30: the real clock runs on between the login and the replay, so day 30 is already a
+//   few seconds past a 30-day cap) as a browser keeps them: each replay sends the jar (dropping the cookies a restart drops
 //   and those past their own expiry) and takes any Set-Cookie it answers with, so a design
 //   that rotates the id on each use is followed;
 // - security: 32 days after the second remembered login, in a fresh process, the server refuses
@@ -63,7 +64,7 @@ import { STEP, describe, inFreshProcess, is2xx, Missing, oracle, parseSetCookie,
 const DAY = 86_400;
 const YEAR = 365 * DAY;
 const NOW_FN = "__oracle_now";
-const REPLAY_DAYS = [6, 12, 18, 24, 30];
+const REPLAY_DAYS = [6, 12, 18, 24, 29];
 const PUBLIC = "https://localhost:3000";
 const step = STEP ? JSON.parse(STEP) : null;
 

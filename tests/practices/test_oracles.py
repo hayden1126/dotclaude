@@ -1898,6 +1898,19 @@ class Variants(unittest.TestCase):
                 self.assertEqual((note["ok"], note.get("noted")), (want, True), json.dumps(out, indent=1))
                 self.assertFalse(list(fixture.rglob("__oracle_page_*")), "page() left its rewritten page behind")
 
+    def test_remember_me_good_signs_in_at_every_replay(self):
+        # The last replay is day 29: at day 30 a 30-day cap has already passed by the seconds the
+        # real clock ran since the login, so good/ would always get a "doesn't sign in" note.
+        with tempfile.TemporaryDirectory(prefix="practices-variant-") as tmp:
+            fixture = build(Path(tmp) / "fixture")
+            shutil.copytree(CASES / "remember-me" / "good", fixture, dirs_exist_ok=True)
+            out = run_oracle(fixture, "remember-me", tmp)
+        self.assertEqual(out["verdict"], "pass", json.dumps(out, indent=1))
+        replays = {c["name"]: c["ok"] for c in out["checks"] if c.get("noted") and "day " in c["name"]}
+        self.assertEqual(sorted(replays), sorted(f"note: day {d}: the cookies as the browser keeps them sign in"
+                                                 for d in (6, 12, 18, 24, 29)))
+        self.assertTrue(all(replays.values()), json.dumps(out, indent=1))
+
     def test_forwarded_proto_is_sent_by_remember_me_only(self):
         # remember-me's HTTPS header is its own: no other case's requests change.
         sending = [p.relative_to(HERE).as_posix() for p in [HERE / "oracle_lib.mjs", *sorted(CASES.glob("*/oracle.mjs"))]
