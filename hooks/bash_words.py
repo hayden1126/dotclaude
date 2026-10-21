@@ -4,13 +4,26 @@ One quote-aware pre-pass joins backslash-newline continuations, drops `#` commen
 heredoc bodies, replaces each $(...), `...`, $((...)) and $'...' with a placeholder, and marks
 each redirection (`>`, `>>`, `<`, `2>&1`, `&>`, `<<<`, an fd digit before one); then shlex splits
 the result into simple commands (segments), leaving out each redirection and its target, so a
-command's positional words stay its own (`git push 2>&1` names no remote "2"). command_words() finds the command a
-segment runs through prefix assignments, shell keywords and wrappers (`sudo -u x`, `env -i`,
-`timeout 30`), and cd_target() follows a `cd`. git_call() reads a git command's global options
-(-C, --git-dir, --work-tree, a GIT_DIR= prefix) and its subcommand.
+command's positional words stay its own (`git push 2>&1` names no remote "2"). command_words()
+finds the command a segment runs through prefix assignments, shell keywords and wrappers
+(`sudo -u x`, `env -i`, `timeout 30`, `time -p`), and cd_target() follows a `cd`. git_call()
+reads a git command's global options (-C, --git-dir, --work-tree, a GIT_DIR= prefix) and its
+subcommand.
 
-Accepted limits (accidents, not an adversary, are the target): a command inside `bash -c`,
-`eval`, a function, an alias or a script; a `)` inside `$(case ...)`. Stdlib only.
+calls() (practices_check) goes further: it reads the body of each $(...), `...`, <(...) and
+>(...) as commands, from the cwd in force where it sits (nested up to NEST_MAX deep), and a
+`bash -c`, `sh -c` or `zsh -c` script the outer shell passes as written; it follows `env -C`
+and `sudo -D` for their command alone, and a `cd` inside `( ... )` ends at the `)`. With rest,
+it hands back every argument text and heredoc body, so its caller can log a command it names
+but can't read. segments() (delete_guard) keeps the old shape: a substitution is one
+placeholder, and a process substitution's parentheses split its body into segments.
+
+Accepted limits (accidents, not an adversary, are the target): a command run by `eval`, an
+alias, a function (its body's `cd` is read as if it ran) or a script file; one a launcher
+runs (`xargs`, `find -exec`, `git submodule foreach`, `ssh host`), a `bash -c` script with
+an expansion in it, or one fed on stdin (`bash <<EOF`), which calls() leaves to rest; a
+command inside an unquoted heredoc's $(...); a `)` inside `$(case ...)`; a literal `%SUBST%`
+in the command, which can give a substitution the wrong cwd. Stdlib only.
 """
 import os
 import re

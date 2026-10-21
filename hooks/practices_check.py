@@ -56,7 +56,9 @@ Levels:
   L4  SessionStart(compact): a digest (under DIGEST_MAX characters, shared among the skills
       and cut only between lines) naming the practices skills loaded since the previous
       compaction, with their gate lines, plus reloadSkills: true.
-Deny-once has two signs, and either lets the call through:
+Deny-once has two signs, and either lets the call through (an edit level denies only when
+one can hold: with an unwritable state dir and an empty or missing transcript, the edit is
+allowed, logged as state-error):
   - a tool_result in the window holding the call's own marker. The marker is this engine's own
     text, never Claude Code's "hook error" wording around it, which a release may reword;
     is_error isn't required either, so a stray marker elsewhere costs at most one missed deny;
@@ -98,13 +100,24 @@ Bash levels. settings.json sends a Bash call here only when its command (the pay
 "command" string, never the tool_response output) holds git with commit or push, or gh with pr
 ready or pr create (PostToolUse: git with commit), so Python never starts for any other call.
 The prefilter is one `LC_ALL=C grep -E`, linear in the payload (a bash `case` glob backtracked
-over every "git" in a large output), and it exits 0 when the shim is missing. hooks/bash_words.py reads the command as simple commands through chains,
-wrappers (`sudo -E`, `env -i`), `cd X &&` (from the payload's cwd), quotes and heredocs, and
-each git call's -C, --git-dir, --work-tree and GIT_DIR=; an expansion in one of those skips that
-call, logged. A file written by a heredoc or `cat >` escapes L1 and L2, and L3s is its backstop.
+over every "git" in a large output). Every practices entry in settings.json (edit, Bash and
+SessionStart) runs the shim only when it exists and then exits 0; a deny is JSON on stdout.
+hooks/bash_words.py reads the command as simple commands through chains, wrappers (`sudo -E`,
+`env -i`, `time -p`; `env -C` and `sudo -D` move that command's cwd), `cd X &&` (from the
+payload's cwd; a cd inside `( ... )` ends with it), quotes and heredocs, the body of each
+$(...), backtick, <(...) and >(...) (from the cwd where it sits), a `bash -c` script with no
+expansion in it, and each git call's -C, --git-dir, --work-tree and GIT_DIR=; an expansion in
+one of those skips that call, logged. When no commit, push, pr ready or pr create was read but
+an argument or a heredoc body names one, word by word (`xargs git push`, `find -exec`,
+`git submodule foreach`, a `bash -c` script with an expansion, `bash <<EOF`), it is logged as
+git-skipped. Accepted limits beyond those logs: `eval`, an alias, a function or a script file
+that runs git with nothing naming it in the command; a command inside an unquoted heredoc's
+$(...); a function body's cd, read as if it ran. A file written by a heredoc or `cat >`
+escapes L1 and L2, and L3s is its backstop.
 A repo is read only inside Bounds: git runs only in (or pointed at) the project dir
 (CLAUDE_PROJECT_DIR, else the cwd recorded at the session's first SessionStart, never the call's
-own cwd) or the project's own repo, and a repo is scanned only when the realpaths of its git
+own cwd; the Bash levels read config.toml and the project skills from it too, so a cd moves
+neither) or the project's own repo, and a repo is scanned only when the realpaths of its git
 dir, common dir and every alternates entry sit there too. The project's own repo is the one its
 checkout holds, a linked worktree (a lane) only when its git dir's `gitdir` file links back to
 the project, so a lane reads its main checkout's .git while `git -C ~/vault`, a planted gitfile
@@ -116,9 +129,14 @@ Each level reads commits, never the index or the working tree:
         record, nothing scanned, logged) and tells the model the findings as additionalContext.
   push  PreToolUse on git push scans what it would send (each refspec's source, else HEAD;
         --all, --branches, --mirror: every local branch) less what any remote has, and denies.
-        Deletes and --dry-run pass. One call holding both a commit and a push is denied once,
-        told to run them as separate calls (the scan can't see a commit not yet made).
-  L3r   PreToolUse on gh pr ready (not --undo) or a gh pr create without --draft, judged at a
+        A delete (--delete, -d, `:ref`) and a dry run (--dry-run, -n) pass, logged as
+        push-unscanned; in a short-option cluster -o takes the rest as its value
+        (`-onodeploy`). A source that names no commit here (a glob refspec) is logged as
+        git-skipped, and the rest are still scanned. One call holding both a commit and a push
+        is denied once, told to run them as separate calls (the scan can't see a commit not
+        yet made).
+  L3r   PreToolUse on gh pr ready (not --undo) or a gh pr create without --draft (a -R or
+        --repo before the pr subcommand dropped first), judged at a
         head: the branch a `ready` selector or create's --head names (origin/<branch>, else the
         local branch; unknown: logged, allowed), else the checked-out HEAD (a PR number or URL
         says so in the deny, since it may be another branch's PR); each choice is logged. The
@@ -131,10 +149,16 @@ Each level reads commits, never the index or the working tree:
         block to paste into a reviewer brief. The line-scoped and commit-time rules also run
         over every commit in the range.
 A scan runs every rule whose `at` has "commit" (L3r: or `scope = "line"`): `when` on each
-commit's added lines (lines its blob has that the parent's doesn't, by count: a moved line isn't
-new) of regular files matching `paths`, `unless` and practices-allow on the blob the commit
-leaves. Merges, pure renames (the same blob), symlinks and binaries are skipped; at most
-MAX_COMMITS commits and BYTES_MAX blob bytes, a cut logged as scan-truncated. L3s and push also
+commit's added lines (lines its blob has that the parent's doesn't, by count and without a
+trailing \\r: a moved line isn't new, nor is a CRLF rewrite) of regular files matching `paths`,
+`unless` and practices-allow on the blob the commit leaves. A file added where the same commit
+deleted one with the same basename (a rename with edits) is diffed against the deleted blob.
+Merges, pure renames (the same blob), symlinks and binaries are skipped; at most MAX_COMMITS
+commits and BYTES_MAX blob bytes, a cut logged as scan-truncated. When the time budget runs
+out mid-scan (logged as scan-truncated), the level denies or tells once on what it read,
+saying some commits weren't read, and keeps the range's cut key
+(`<level>|engine|cut|-|sha1(the git dir and the commits)`), so a resend of the same range
+passes unscanned; with nothing read the call is allowed. L3s and push also
 run SEC-60, the engine's own rule: a lockfile changed in the range (LOCKFILES, requirements*.txt)
 with no audit Bash call (AUDIT) in the transcript or, for a subagent, the parent's.
 A finding's key is `<level>|<skill>|<rule>|<path>|sha1(the stripped line)`; a level denies or
