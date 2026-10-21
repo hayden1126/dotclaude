@@ -407,11 +407,14 @@ def line_hits(rule, lines, helpers=()):
 def file_hits(rule, lines, blob, helpers=()):
     """[(number, line)] that a whole-file rule flags in a commit: `when` matches the added lines
     (each flagged line is the one a match starts on), and neither `unless` nor
-    `practices-allow: <id>` is anywhere in the file as the commit leaves it (blob)."""
-    if allowed(rule["id"], blob) or (rule.get("unless") and guarded(
+    `practices-allow: <id>` is anywhere in the file as the commit leaves it (blob). `when` runs
+    first, on the added lines alone: the blob checks cost a pass over the whole file each, so
+    they run only for a file `when` flags (a file with no `when` match gives [] either way)."""
+    hits = when_lines(rule, lines, helpers)
+    if not hits or allowed(rule["id"], blob) or (rule.get("unless") and guarded(
             rule["unless"], blob, helpers, rule["id"])):
         return []
-    return when_lines(rule, lines, helpers)
+    return hits
 
 
 def when_lines(rule, lines, helpers=()):

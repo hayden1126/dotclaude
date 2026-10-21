@@ -2147,5 +2147,37 @@ class Globs(unittest.TestCase):
                 self.assertEqual(PC.path_matches([glob_], path), want)
 
 
+class FileHits(unittest.TestCase):
+    """A commit scan's whole-file rule: `when` on the added lines, then the blob checks."""
+
+    RULE = {"id": "R-1", "when": r"\bsave\(", "unless": r"\bguard\("}
+
+    def test_the_results_stay_the_same(self):
+        added = [(1, "save(x)"), (2, "other()")]
+        cases = (("save(x)\nother()\n", [(1, "save(x)")]),
+                 ("save(x)\nother()\nguard()\n", []),  # unless in the blob
+                 ("save(x) // practices-allow: R-1 ok\n", []))
+        for blob, want in cases:
+            with self.subTest(blob=blob):
+                self.assertEqual(PC.file_hits(self.RULE, added, blob), want)
+        # An unless match with no when match: the same empty result as before.
+        self.assertEqual(PC.file_hits(self.RULE, [(1, "other()")], "other()\nguard()\n"), [])
+
+    def test_the_blob_checks_run_only_when_when_matched(self):
+        # The commit scan paid every rule's `unless` (a pass over the whole blob) on every
+        # changed file before checking `when`.
+        seen = []
+        real = PC.guarded
+
+        def guarded(pattern, text_, helpers, owner):
+            seen.append(pattern)
+            return real(pattern, text_, helpers, owner)
+
+        with mock.patch.object(PC, "guarded", guarded), \
+                mock.patch.object(PC, "allowed", side_effect=AssertionError("allow read")):
+            self.assertEqual(PC.file_hits(self.RULE, [(1, "other()")], "other()\nguard()\n"), [])
+        self.assertNotIn(self.RULE["unless"], seen)
+
+
 if __name__ == "__main__":
     unittest.main()
