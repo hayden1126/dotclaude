@@ -3038,6 +3038,29 @@ class RunHarness(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 self.summarize_main(tmp / "missing.jsonl")
 
+    def test_init_skills_that_dont_match_the_arm_mark_the_row_contaminated(self):
+        r = self.harness
+        self.assertEqual(r.skill_mismatch("A", "server-code", ["init", "review"]), [])
+        self.assertEqual(r.skill_mismatch("A", "server-code", ["server-code", "project:auth-secrets"]),
+                         ["init_skills lists server-code (arm A installs none)", "init_skills lists auth-secrets (arm A installs none)"])
+        self.assertEqual(r.skill_mismatch("C", "auth-secrets", [{"name": "server-code"}, {"name": "auth-secrets"}]), [])
+        self.assertEqual(r.skill_mismatch("D", "auth-secrets", ["server-code"]), ["init_skills lacks auth-secrets (arm D installs it)"])
+        self.assertEqual(r.skill_mismatch("B", "server-code", None), [])  # no init event recorded
+        # A run whose init lists a practices skill in arm A is held unresolved by the bar.
+        init = json.dumps({"type": "system", "subtype": "init", "skills": ["server-code"]})
+        result = json.dumps({"type": "result", "subtype": "success", "num_turns": 1, "total_cost_usd": 0})
+        fake = lambda case, arm, model, effort=None: [("task", "x", [sys.executable, "-c", f"print({init!r}); print({result!r})"])]
+        args = argparse.Namespace(model="m", effort=None, contain=False, keep=False)
+        saved = r.turns_for
+        r.turns_for = fake
+        try:
+            with tempfile.TemporaryDirectory(prefix="practices-row-") as out, contextlib.redirect_stdout(io.StringIO()):
+                row = r.run_one("idor", "A", 1, args, Path(out))
+        finally:
+            r.turns_for = saved
+        self.assertEqual(row["contaminated"], ["init_skills lists server-code (arm A installs none)"])
+        self.assertTrue(r.unresolved(row))
+
     def test_agent_diff_runs_no_filter_driver_the_fixture_repo_defines(self):
         r = self.harness
         root, sha = r.build_fixture("A")

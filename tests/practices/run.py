@@ -89,9 +89,11 @@ Per run:
         init event), is_error, exit_codes, timed_out, strays and stray_kills;
       the fingerprint: skills, hook, case_hash, warmup_hash and harness_hash (below);
       tripwires: suspect (the SUSPECT_WORDS the agent's added lines contain, words that could
-        forge the oracle's verdict from inside its process) and contaminated (up to 5 paths a
-        tool call named outside the run's own fixture that hold .claude/skills or SKILL.md, or
-        another ledgerly-* fixture), each [] when clean;
+        forge the oracle's verdict from inside its process) and contaminated (a mismatch in the
+        skills the session listed at init, init_skills: an arm-A row that lists a practices
+        skill, or a B, C or D row that lacks the case owner's; then up to 5 paths a tool call
+        named outside the run's own fixture that hold .claude/skills or SKILL.md, or another
+        fixture), each [] when clean;
       harness_sha (the baseline commit the diff is taken against), hook_errors (the run's hook
         errors.log, "none" when empty or for A and B), and the paths stream (one per turn),
         oracle and diff, under <out>/<case>-<arm>-<i>/;
@@ -844,6 +846,18 @@ def contamination(events_by_turn, fixture, tmp=None):
     return found[:5]
 
 
+def skill_mismatch(arm, owner, init_skills):
+    """What's wrong with the skills a session listed at init: an arm-A session that lists a
+    practices skill (it installs none), or a B, C or D session that lacks the case owner's.
+    [] when they match, or when the row recorded none."""
+    if not isinstance(init_skills, list):
+        return []
+    names = {skill_called({"skill": s.get("name") if isinstance(s, dict) else s}) for s in init_skills} - {""}
+    if arm == "A":
+        return [f"init_skills lists {name} (arm A installs none)" for name in PRACTICES_SKILLS if name in names]
+    return [] if owner in names else [f"init_skills lacks {owner} (arm {arm} installs it)"]
+
+
 def _exited(pid):
     """True once `pid` has exited, without reaping it (WNOWAIT): while it stays a zombie its
     pid, and so its process group id, can't be reused by an unrelated process."""
@@ -1043,10 +1057,9 @@ def run_one(case, arm, index, args, out):
         suspect = suspect_words(diff.read_text(errors="replace"))
     except OSError:
         suspect = []
-    contaminated = contamination(events_by_turn, fixture)
-
     per_turn = [stream_summary(turn) for turn in events_by_turn]
     summary = dict(per_turn[0])  # init facts (memory_paths, skills) from the first turn
+    contaminated = skill_mismatch(arm, CASE_INFO[case].owner, summary["init_skills"]) + contamination(events_by_turn, fixture)
     summary["result_subtype"] = per_turn[-1]["result_subtype"]
     for key in ("turns", "duration_ms", "total_cost_usd"):
         values = [t[key] for t in per_turn if isinstance(t[key], (int, float))]
