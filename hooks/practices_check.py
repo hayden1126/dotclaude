@@ -1907,11 +1907,31 @@ def push_reason(findings, cut=False):
 
 # L3r: a PR marked ready (or opened as one) waits for a reviewer briefed with the gate lines.
 
+def without_repo(args):
+    """gh's args less -R/--repo and its value wherever it sits before the pr subcommand
+    (`gh -R o/r pr ready`, `gh pr --repo o/r ready`); after it, pr_ready reads it itself."""
+    out, i, words = [], 0, 0
+    while i < len(args):
+        a = args[i]
+        if words < 2:  # `pr`, then its subcommand
+            if a in ("-R", "--repo"):
+                i += 2
+                continue
+            if a.startswith("--repo=") or (a.startswith("-R") and len(a) > 2):
+                i += 1
+                continue
+            words += not a.startswith("-")
+        out.append(a)
+        i += 1
+    return out
+
+
 def pr_ready(args):
     """None unless args are `gh pr ready` (not --undo) or a `gh pr create` that isn't a draft;
     else {"base": the --base, "branch": the branch a `ready` selector or create's --head names
     (an `owner:` prefix dropped), "pr": a `ready` selector that is a PR number or URL}, each
-    None when not given."""
+    None when not given. A -R/--repo before the subcommand is dropped first."""
+    args = without_repo(args)
     if len(args) < 2 or args[0] != "pr" or args[1] not in ("ready", "create"):
         return None
     rest, out = args[2:], {"base": None, "branch": None, "pr": None}

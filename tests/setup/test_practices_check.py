@@ -1628,6 +1628,16 @@ class L3r(BashBase):
         self.assertIn("resend", reason)
         self.assertIsNone(self.pre("gh pr create --title x --body y"))
 
+    def test_a_repo_flag_before_the_subcommand_is_dropped(self):
+        # Review round 2, low 2: `gh -R o/r pr ready 12` needed pr and ready at fixed places.
+        for n, command in enumerate(("gh -R o/r pr ready", "gh --repo o/r pr ready",
+                                     "gh pr --repo o/r ready", "gh --repo=o/r pr create -t x",
+                                     "gh -Ro/r pr -R o/r create -t x", "bash -c 'gh pr ready'",
+                                     "time -p gh pr ready")):
+            with self.subTest(command=command):
+                self.assertIn(self.marker(), self.pre(command, session_id=f"s-repo-{n}"))
+        self.assertIsNone(self.pre("gh -R o/r pr create --draft", session_id="s-repo-d"))
+
     def test_a_pr_created_inside_a_command_substitution_is_judged(self):
         # Review round 2, medium 1: capturing the PR URL this way skipped L3r with no log.
         reason = self.pre("PR=$(gh pr create --title t --body b) && echo $PR")
@@ -1927,6 +1937,30 @@ class BashWords(unittest.TestCase):
         # delete_guard's segments keep their shape: a process substitution's body still splits.
         self.assertEqual(list(BW.segments("diff <(rm -rf x) y")), [["diff", "<"], ["rm", "-rf", "x"],
                                                                   ["y"]])
+
+    def test_a_literal_shell_script_and_time_options(self):
+        # Review round 2, low 2: `bash -c` was a documented limit, and `time -p` made -p the
+        # command name.
+        cases = {
+            "bash -c 'git push'": [(("push", []), "/r")],
+            "sh -c 'cd sub && git commit -q'; git push": [(("commit", ["-q"]), "/r/sub"),
+                                                          (("push", []), "/r")],
+            "bash -lc 'git push origin x'": [(("push", ["origin", "x"]), "/r")],
+            "zsh -e -o pipefail -c 'git push' name arg": [(("push", []), "/r")],
+            "sudo -E bash -c 'git push'": [(("push", []), "/r")],
+            'bash -c "git push $R"': [],  # the outer shell expands it: item 2's log
+            "bash -c 'git -C \"$D\" push'": [],
+            "bash script.sh": [],
+            "time -p git push": [(("push", []), "/r")],
+            "time git commit": [(("commit", []), "/r")],
+            "/usr/bin/time -f %e -o out git push": [(("push", []), "/r")],
+            "time GIT_DIR=/g/.git git commit": [(("commit", []), "/r")],
+        }
+        for command, want in cases.items():
+            with self.subTest(command=command):
+                self.assertEqual(self.git(command), want)
+        (_, args, prefix, _), = BW.calls("time GIT_DIR=/g/.git git commit", {"git"}, "/r")
+        self.assertEqual(BW.git_call(args, prefix, "/r")[2]["git_dir"], "/g/.git")
 
     def test_cd_then_commit_runs_in_the_new_dir(self):
         self.assertEqual(self.git("cd sub && git commit")[0][1], "/r/sub")

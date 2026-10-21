@@ -17,15 +17,18 @@ import re
 import shlex
 
 # Words that can precede the command itself: the shell keywords that open a body, and wrappers.
-KEYWORDS = {"do", "then", "else", "elif", "if", "while", "until", "!", "{", "time"}
+KEYWORDS = {"do", "then", "else", "elif", "if", "while", "until", "!", "{"}
 WRAPPERS = {"sudo", "doas", "command", "nohup", "env", "builtin", "exec", "timeout", "nice",
-            "ionice", "stdbuf", "chronic"}
+            "ionice", "stdbuf", "chronic", "time"}  # time: bash's keyword (-p) or GNU time
 # The short options of each wrapper known to take an argument (`sudo -u x`, `sudo -R /x`). They
 # tell `-uroot` (the argument attached) from `-Eu` (the next word is the argument). The walk is
 # conservative: any other option, and any long one without `=value`, may take the next word too,
 # so that word is skipped unless it names a command the caller looks for (`sudo -E git`).
 WRAPPER_ARGS = {"sudo": "RcaDghprtTUuC", "doas": "aCu", "env": "uCS", "timeout": "ks",
-                "nice": "n", "ionice": "cnp", "stdbuf": "ioe", "exec": "a"}
+                "nice": "n", "ionice": "cnp", "stdbuf": "ioe", "exec": "a", "time": "fo"}
+# The shells whose `-c 'script'` calls() reads as commands, and the options that take a word.
+SHELLS = {"bash", "sh", "zsh"}
+SHELL_ARG_OPTS = {"-o", "+o", "-O", "+O", "--rcfile", "--init-file"}
 # Placeholders. They start with a character no variable name can hold, so `$p$(date)` stays two
 # parts; shlex keeps % inside a word.
 SUBST, ANSI, ARITH, REDIR = "%SUBST%", "%ANSI%", "%ARITH%", "%REDIR%"
@@ -267,7 +270,7 @@ def command_words(words, heads=frozenset()):
                 wants_arg = _option_takes_arg(wrapper, w)
             elif ASSIGN.match(w):
                 wants_arg = False
-                if wrapper == "env":  # `env GIT_DIR=x git` sets it for the command
+                if wrapper in ("env", "time"):  # `env GIT_DIR=x git` sets it for the command
                     prefix.append(ASSIGN.match(w).groups())
             elif COUNT.fullmatch(w):
                 wants_arg = False
@@ -378,6 +381,32 @@ def git_call(args, prefix, cwd):
     return args[i], args[i + 1:], where
 
 
+def shell_script(args):
+    """The script of `bash -c 'script'` (also sh and zsh, `-lc`, `-e -c`, `-o x -c`) when the
+    outer shell passes it as written: no $, backtick or substitution placeholder in it. None
+    otherwise, or when there is no -c."""
+    c, i = False, 0
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            i += 1
+            break
+        if a in SHELL_ARG_OPTS:
+            i += 2
+            continue
+        if a.startswith(("-", "+")) and len(a) > 1:
+            c = c or (a[0] == "-" and not a.startswith("--") and "c" in a[1:])
+            i += 1
+            continue
+        break
+    if not c or i >= len(args):
+        return None
+    script = args[i]
+    if "$" in script or "`" in script or any(p in script for p in (SUBST, ANSI, ARITH)):
+        return None
+    return script
+
+
 NEST_MAX = 8  # substitutions nested this deep are read; deeper is an unparsable command
 
 
@@ -385,7 +414,8 @@ def calls(command, heads, cwd, rest=None, depth=0):
     """[(name, args, prefix, cwd)] for each simple command whose name is in heads, with the cwd
     each starts in (None once a cd can't be followed). The body of each $(...), `...`, <(...)
     and >(...) is read as commands too, from the cwd in force where it sits, before the command
-    holding it (it runs first); a cd inside one stays inside. With rest (a list), the words
+    holding it (it runs first), and so is a literal `bash -c` script (shell_script); a cd
+    inside either stays inside. With rest (a list), the words
     after each simple command's name, joined, and each heredoc body are appended to it, so a
     caller can tell a command it can't read (`xargs git push`) from no command at all. Raises
     ValueError on an unparsable command, or one nested deeper than NEST_MAX."""
@@ -400,12 +430,16 @@ def calls(command, heads, cwd, rest=None, depth=0):
         k += n
         if not words:
             continue
-        name, args, prefix = command_words(words, heads)
-        if rest is not None:
-            rest.append(" ".join(args))
+        name, args, prefix = command_words(words, set(heads) | SHELLS)
         if name in ("cd", "pushd"):
             cwd = cd_target(args, cwd)
             continue
+        script = shell_script(args) if name in SHELLS else None
+        if script is not None:
+            out += calls(script, heads, cwd, rest, depth + 1)
+            continue
+        if rest is not None:
+            rest.append(" ".join(args))
         if name in heads:
             out.append((name, args, prefix, cwd))
     for body in bodies[k:]:  # a literal %SUBST% in the command leaves the count short
