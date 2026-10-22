@@ -203,8 +203,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     .git/worktrees/excluded-guard/commondir" (and once `.git/config.lock`), and the retry ran
     clean. Hayden ran `git worktree prune` on 2026-10-20 (50 entries by then; the lead checked
     first that none was a live worktree's). After it, the dry run was empty, all 14 live
-    worktrees stayed, and a sandboxed command planted nothing. Still to watch: whether running
-    sessions plant the dirs again, and whether the bwrap error recurs. Same family as config-dir's bwrap error in the
+    worktrees stayed, and a sandboxed command planted nothing. They came back: 54 stale entries
+    by 2026-10-22, so a prune is only temporary. The sandbox also left a read-only 0-byte
+    `.git/config.lock` (2026-10-20 21:31 EDT, no git process alive), which blocks every
+    `git config` write in the main checkout: exam-prep's `git push -u` couldn't set its upstream.
+    The cause is likely in Claude Code's sandbox, which binds these git paths per command, and
+    not in dotclaude. Same family as config-dir's bwrap error in the
     Watch item below.
   - **Three false denials in the subagent policy** (lane exam-prep's dry run, 2026-10-20; the
     lead reproduced each with the code's own regexes). In `skills/delegation/scripts/subagent-policy`:
@@ -248,7 +252,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     system temp dir (`skills/lanes/scripts/lane:2341`), which is `/tmp/claude-<uid>`, one of
     the policy's temp roots (`skills/delegation/policy.toml:145`). `_test_tmp_dir`
     (`tests/delegation/test_subagent_policy.py:29-49`) then puts its fake homes in the tree's
-    `.tmp/`, so every fixture path reads as a temp write and about 13 deny cases pass. A real
+    `.tmp/`, so every fixture path reads as a temp write and about 13 deny cases pass. Lane
+    exam-prep saw the same under `/tmp` in test_pass_guards (1) and tests/practices (1), which
+    refuse sandbox-writable paths. A real
     checkout passes, so a trial failure confined to those cases is this artifact. Fix: the test
     refuses a `.tmp/` under a temp root, as it already does for `.claude/worktrees/`, or `trial`
     builds its tree outside the temp root. Lane-able; no live lane owns it.
