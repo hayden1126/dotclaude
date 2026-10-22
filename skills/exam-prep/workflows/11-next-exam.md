@@ -13,7 +13,7 @@ exam-prep hub") is out of reach: it needs a one-time migration to the skill's la
 this stage doesn't do. Say what it lacks, and stop.
 
 A new source for the exam being prepared, rather than a new exam, is "A source added to this exam"
-below.
+below; a skip asked for its extract, backbone or reviews, "A source added unverified".
 
 ## Step 1: Check the inputs
 
@@ -26,6 +26,7 @@ A reopen already under way (step 2, "A resume") goes straight to its log.
 - STATUS has no `Build running` line. With one, ask the student whether a build or a pass is still
   under way: beside a `Polish: <pass>, started` line, `10-polish`'s "A pass that stops" first;
   beside a `Source added: <doc>, started` line, this stage's "A source added to this exam", "A
+  stop", first; beside an `Unverified add: <doc>, started` line, "A source added unverified", "A
   stop", first; otherwise, on their word that it won't resume, remove the line (hard rule 1) and log
   it.
 - The tree is clean. Survey it with `git status` and `git diff --stat` only, as `08-practice`'s
@@ -170,12 +171,13 @@ In this order, each item logged as it lands:
    miss them, and the report offers a `10-polish` pass. The diff is for `12-retro`, which tells the
    skill's own changes from a hub-local edit; hubs never keep their own copy.
 3. **Reset STATUS.** Take out every line about the finished exam's build, mocks, sheets and cram
-   night: `Stage 08 built`, `Reopened build:`, `Tutor:`, `Polish:`, `Source added:`, the final-sheet
-   items, a mock sheet logged as changed or to print again, a part logged for a recheck (item 1
-   moved the attempts). Keep the notes page's URL line (same URL from here on), and add the finished
-   exam's sheet and mock page URLs to the `Earlier exams:` line (start it when there is none), as
-   `<old exam>: <name> <URL>, ... (tag exam/<old-slug>)`. Set the next-step line to `11 step 6,
-   launch the build for <exam> (_build/logs/reopen-<old-slug>.md)`.
+   night: `Stage 08 built`, `Reopened build:`, `Tutor:`, `Polish:`, `Source added:`, `Skip asked:`,
+   the final-sheet items, a mock sheet logged as changed or to print again, a part logged for a
+   recheck (item 1 moved the attempts). An `Unverified:` line stays: its material is still unchecked
+   ("A source added unverified"). Keep the notes page's URL line (same URL from here on), and add
+   the finished exam's sheet and mock page URLs to the `Earlier exams:` line (start it when there is
+   none), as `<old exam>: <name> <URL>, ... (tag exam/<old-slug>)`. Set the next-step line to `11
+   step 6, launch the build for <exam> (_build/logs/reopen-<old-slug>.md)`.
 4. **The approval line, last**, as `00-intake` step 7 item 3 says. Commit, staging the archive's
    moves and the files changed by name.
 
@@ -326,8 +328,9 @@ build is this build's end, not a stage's.
    student: what was added where (a placement that differs from step 2's report), each text
    reworded, the version, and what they must redo, as `10-polish` step 7.2 says (a changed sheet
    printed again, the cram order's next mock line). Last, log `step 5 done`, hand off and commit;
-   the closing commit takes out the `Build running` line and rewrites the source's line as `Source
-   added: <doc> <date>: done (<the log>)`. Then the patches and checks that waited, as `10-polish`
+   the closing commit takes out the `Build running` line and any `Skip asked:` line for it, and
+   rewrites the source's line as `Source added: <doc> <date>: done (<the log>)`. Then the patches
+   and checks that waited, as `10-polish`
    step 7.5 says.
 
 **A stop.** A session that finds `Build running` beside a `Source added: <doc>, started` line reads
@@ -367,6 +370,121 @@ read).
   The student may look back and is told what was put back; then the patches and checks that waited,
   as `10-polish` step 7.5 says.
 
+## A source added unverified
+
+The student asks to skip the extract, the backbone or the reviews for a source added to this exam
+once its plan is approved (SKILL.md hard rule 2, FB-013): a short recitation the night before,
+say. They get one pushback; asked again, the material goes in as they ask, unchecked and bannered
+so. A `Skip asked: <file>` line in STATUS (the source's file name: it has no doc id yet) makes an
+ask the second, in any session. Every commit and handoff this section makes, the pushback's
+included, surveys the tree with `git status` and `git diff --stat` only, commits with a plain `git
+commit` and saves no memory, as "A source added" says. The first row that fits the session says what
+happens:
+
+| Where the ask comes | First ask | Asked again |
+|---|---|---|
+| A `09-tutor` tab, or a second tab beside the cram night's (`08-practice` step 8: one tab runs it; that tab tutors under its step and is neither) | Nothing written and no pushback: a source is added before `Stage 08 built` in a session of its own, from then on in the cram night's tab, so the student asks there | The same |
+| A build under way or unfinished: `Build running` stands (the unattended build, a stage or pass run alone, "A source added" past its fence, an addition under way), or `05-verify` isn't done (`06-site` too, when the notes have a page) | Nothing written and no pushback: the ask waits until no `Build running` line stands and `05-verify` is done (`06-site` too, with a page), and the student brings it then. "A source added" past its fence stops instead on their word that it won't resume ("A stop"), and they ask again once it has | The same |
+| "A source added" before its fence, its step 1 checks passed | The pushback, with step 2's report, its `Skip asked` line committed when the report is shown | That build ends declined at step 2 (logged), then the addition |
+| The hub isn't free (`10-polish` step 1: a notes patch open, `08-practice` step 8.3 or 8.4 under way) | The pushback | The addition, once the hub is free: in this session, or at the student's next ask |
+| Any other: before `Stage 08 built`, a session of its own; from then on, the cram night's tab, between attempts | The pushback | The addition |
+
+**The pushback**, before any notes are written: what the skip costs (the material goes in
+unchecked, its values quoted from the source and never computed, under an `Unverified` banner, off
+every sheet, out of the mocks and the cram order's reading rows, and out of `09`'s walk-throughs and
+quizzes while its STATUS line stands) and about how long "A source added" would take for this
+source. Then commit `Skip asked: <file>, <date>, pushback
+given` in STATUS (while a mock is untaken, after `08-practice` step 4's STATUS check with the
+untaken mocks' keys, as every STATUS write then), and wait, writing no notes. The full path, if
+they take it, is "A source added" from its step 1. The line goes when the source is in: in "A
+source added"'s closing commit (step 5), or in the addition's commit, which puts the `Unverified:`
+line in its place. It goes too on the student's word that the source won't be added (logged), and
+at the next exam's STATUS reset (step 5.3). A stop that puts the hub back to `before <sha>` keeps
+it, since the line was committed before the fence.
+
+**The addition**, in the session the table names. However it ends (done, a failed check, a failed
+fence check, "A stop" below), its last act is `10-polish` step 7.5's patches and checks, which its
+fence held. While a mock is untaken, an ending that adds nothing (a failed check, a failed fence
+check) logs why in STATUS and ends its reply with one line, `Nothing was added: type /clear, then
+"why did the addition stop?"`, since the student, looking away, waits for a `/clear` line; the
+fresh session answers from STATUS, then runs step 7.5.
+
+1. **Check and fence.** While a mock is untaken (STATUS records each attempt), the addition's first
+   message, before any tool runs, is one line: `Look away from this window now: come back when a
+   reply's only line asks for /clear, and type it before reading anything above that line.` The
+   student stays away until the look-back (item 6), and `08-practice` step 8's fence binds this
+   session: it opens no untaken mock's key, `practice/mock-values-key.md` or
+   `_build/verify/mock_key.py`, and searches only `notes/`, `cheatsheet/`, `_build/frag/` and
+   `_build/extract/`. Then check as "A source added" step 1 does: `05-verify` done (and `06-site`
+   with a page), no `Build running` line, the hub free, the tree clean but for `_build/logs/` and
+   `practice/tutor/`; note `git rev-parse HEAD`. A check that fails is told to the student, and
+   the addition waits for it. Pick the doc's id now, a new one as `01-ingest` gives (none reused):
+   it is `<doc>` from here on, in its MANIFEST.md row and both STATUS lines, and the id
+   `extract_check.py` reads. Then add `Build running: <date>` and `Unverified add: <doc>, started
+   <date>` to STATUS and commit them (hard rule 1: while they stand a `09-tutor` tab keeps its
+   build limits and dispatches no patch, and no attempt or polish pass starts). Check that this
+   commit's parent is the HEAD noted (`git rev-parse <it>~1`, where it is `git log -1 --format=%H
+   -- STATUS.md`, since a tutor tab may have committed its log since) and the hub is still free;
+   otherwise another tab wrote in between: take both lines out, commit, and stop, and the student
+   asks again.
+2. **Ingest** the doc as `01-ingest` steps 1 to 3 do: copied in by name, rendered, and its
+   MANIFEST.md row, `in` with the doc id item 1 picked and its count from disk, its Answers cell as
+   the template's legend says, its Notes naming who put it in scope (a staff post, or the student's
+   word, quoted).
+3. **Write**, the notes only, in the Write brief's Format: a new section after the last, or a
+   short subsection just before an old section's Must know, placed and named as "The build on a
+   reopened hub" row 03 says, any text naming the moved Must know by number updated. Each
+   `How it's tested:` line reads `not mapped (unverified)`; a new section ends with its own Must
+   know list, as the Format says, and a subsection in an old section adds no line to that
+   section's Must know. In `_build/backbone.md` each new heading and its id go in, at the same
+   place (and the moved Must know's number), so later material numbers from them. Nothing else
+   changes: no coverage-matrix, How it's tested or worked-example row, nothing on a sheet, a mock,
+   the cram order or the map; a request for one waits until the material is verified.
+   - The material opens with `> **Unverified:** added <date> from <doc> without extract or review,
+     at the student's request; quoted values unchecked.` (CONVERT.md makes it a `callout warn`
+     labeled `Unverified`).
+   - A value is one `_build/verify/examples.out.md` already holds, or is quoted from `<doc>` with
+     its citation; never computed, and the checker isn't extended for it. This is the one exception
+     to hard rule 3, to STYLE S7's first two sentences and to "Changing the notes or a sheet" item
+     2. An answer to a set's question (the doc's own, when its Answers cell is `yes`) is quoted
+     only once that set is marked `yes, attempted` (S7); until then it is cited by page and left
+     out.
+4. **Rebuild**, with a page: the section's fragment (`06-site` step 3, its `fidelity.py` check
+   included; a hub whose `_build/CONVERT.md` lacks the `Unverified` callout, made before it, gets
+   that line in the Convert brief, since the copy changes only at a reopen) and the page (step 5,
+   its checks and screenshots); with plain-text notes, `notes/combined.md` (`04-write` step 6).
+   While a mock is untaken, items 3 and 4 run as
+   `08-practice`'s "Changing the notes or a sheet" with the untaken mocks' keys: its baseline (item
+   1) before the first write, its values as item 3 here says, and its compare (item 4) passed before
+   any commit, a hit on a quoted value reworded by leaving the value out, its citation kept.
+5. **Commit**, once: the material (its notes, fragment and page), its backbone headings, its
+   MANIFEST.md row and, in STATUS, `Unverified: <doc>, <section ids>, <date>` in place of the `Skip
+   asked` line, with any rewording logged by its part, never a value, as "Changing the notes or a
+   sheet" ends (each STATUS write checked as the pushback's). Then republish what is published
+   (`06-site` step 6), its version bumped, and take out the `Build running` and `Unverified add:`
+   lines in a commit of their own.
+6. **Report.** While a mock was untaken, the look-back first: the screen holds edits the compare
+   caught, so hand off and commit, and end the reply with one line, `The change is checked: type
+   /clear, then "what was added?"`, as `08-practice` step 7.4 does; the fresh session answers from
+   STATUS, then runs `10-polish` step 7.5. The report: what went in and where, any rewording, the
+   version, and that the material stays bannered, off every sheet, out of the mocks and the cram
+   order's reading rows, and out of `09` until verified.
+
+**A stop.** A session that finds `Build running` beside an `Unverified add: <doc>, started` line
+first asks the student whether another tab still runs the addition; if one does, it changes nothing.
+On their word that it has stopped, it reads the tree with `git status` and `git diff --stat` only;
+while a mock is untaken, the student looks away from the earlier work and reads only this session's
+questions and its list of paths. Once HEAD's STATUS holds `Unverified: <doc>` (item 5's commit), the
+change is checked and in: republish unless the live page already matches the build (`06-site` step
+6's live read), take out both lines, commit, and go on at item 6. Before that, nothing the addition
+wrote stays: list the paths, never their contents, that `git diff --name-only HEAD` names and the
+untracked ones `git status --porcelain --untracked-files=all` names, all but `_build/logs/` and
+`practice/tutor/`. Then, on the student's go, restore the tracked ones from HEAD (`git restore
+--staged --worktree -- <each>`), `rm` the untracked ones, take out both lines and commit. The doc's
+renders and its copy in `sources/` (ignored by git) stay. HEAD still holds the `Skip asked` line, so
+the student's next ask runs the addition again. The student may look back and is told what was put
+back. Either way, `10-polish` step 7.5's patches and checks come last.
+
 ## Common mistakes
 
 | Mistake | Instead |
@@ -378,6 +496,7 @@ read).
 | Deleting an old section the new exam doesn't cover | A section-level `Not on <exam>` banner (FB-121) |
 | Copying homework due dates into CLAUDE.md | Point to where the course keeps them (FB-181) |
 | Editing a file in the archive | It is frozen: fix the notes and the current sheets |
+| Writing a source's notes at the first "skip the pipeline" | One pushback, a `Skip asked` line, then wait ("A source added unverified") |
 
 ## Done when
 
@@ -395,3 +514,11 @@ is republished; or, stopped, when the hub is as at `before <sha>` with the stopp
 declined at step 2, when the log says so; or, after a failed fence check, when both lines are out
 and committed. In each, STATUS's next-step line reads as at step 1, and `10-polish` step 7.5's
 patches and checks ran last.
+
+A source added unverified is done when one commit holds the material under its banner, its backbone
+headings, its MANIFEST.md row and the `Unverified:` line in place of the `Skip asked` line, what is
+published is republished, the `Build running` and `Unverified add:` lines are out and committed,
+and, while a mock was untaken, the compare passed before that commit and the reply ended with the
+`/clear` line; or, stopped before item 5's commit, when the hub is as HEAD had it with both lines
+out; or, after a failed check or fence check, when nothing was added and both lines, if written,
+are out and committed. In each, `10-polish` step 7.5's patches and checks ran last.

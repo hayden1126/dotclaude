@@ -15,7 +15,8 @@ naming the id that replaces it, if one does.
   planned run B (H); a retro gives each hub-exam of its round the next free letter, skipping C, G,
   K, L and S, which would read as other ids, then `AA`, `AB` and on after Z (`12-retro` step 1).
   They quote the student verbatim, so they stay private and are not shipped. A maintainer who has
-  them reads `~/scratch/exam-prep/evidence.md` for the index.
+  them reads `~/scratch/exam-prep/evidence.md` for the index. `skill test P<n>` cites pressure
+  scenario n of the skill's own tests before release, with the student's ruling on it (private too).
 - **Home** is where the rule lives in the skill: a STYLE or CHASSIS rule (`S4`, `C2`), a workflow
   step (`w04`), a template (`t:cheatsheet`) or a script (`linkcheck.py`). `12-retro` keeps this
   column current.
@@ -37,6 +38,7 @@ naming the id that replaces it, if one does.
 | FB-010 | Start a new course from the latest baseline with every past correction applied up front, not rediscovered as late polish. | SKILL | H1.C2 |
 | FB-011 | Course material is copyrighted: `sources/` and rendered pages are gitignored, the hub repo stays local, and no remote is added without the student's go. | SKILL, t:hub | B4.C8, A4.C8 |
 | FB-012 | Never state a prediction about the exam without a source. Record the instructor's exam-format statement in the hub and cite it. | w00, w09 | A3.C10 |
+| FB-013 | When the student asks to skip the extract, the backbone or the reviews for an added source, push back once (what it costs, how long the full path takes), commit a `Skip asked` line in STATUS, and wait, writing no notes. Asked again, add it as notes only, in one commit with its MANIFEST row and an `Unverified:` STATUS line; values from the checker's output or quoted with a citation, never computed; an `Unverified` banner on the material and the page; off every sheet, out of the mocks' plan and the cram order's reading rows, and out of walk-throughs until verified. The addition fences itself like a build. Where the ask comes (a tutor tab, a build, a patch open, a mock untaken) decides when either happens. | SKILL, w11, w02, t:convert, extract_check.py | skill test P1 |
 
 ## 00-intake
 

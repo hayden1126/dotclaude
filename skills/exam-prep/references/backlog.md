@@ -17,7 +17,8 @@ no hub had it, carried on (`trying (round N+2)`). An item nobody picks stays `op
   polish.
 - **Evidence:** `K-<axis>.F<n>` is a finding from the critique of the two runs' products, with
   axes `org`, `word`, `struct` and `ui`. Harvest ids work as in `feedback-log.md`. `dry run 2,
-  point N` is a point in the report of the skill's second dry run. All three are private.
+  point N` is a point in the report of the skill's second dry run, and `skill test P<n>` pressure
+  scenario n of the skill's own tests before release. All four are private.
 - **Status:** `open`, `trying (round N)`, `kept (round N)` or `dropped (round N: why)`; or
   `shipped in v1 (why)` for an item the baseline build couldn't avoid.
 - **Conflicts** name an existing rule the item would change. Ask before trying those.
@@ -77,6 +78,7 @@ no hub had it, carried on (`trying (round N+2)`). An item nobody picks stays `op
 | K44 | Generate the key-leak markers from the key itself. | harvest | B4 (section 5a) | open |
 | K67 | Ship a template for `05-verify` step 2's notes-to-checker comparison, with its planted-error test. The dry run's first hand-written one passed a wrong distance and a wrong visit order; only its own mutation test caught them. | dry run | dry run 2, point 10 | open |
 | K68 | Ship a fragment fidelity checker for `06-site` step 3 (CONVERT.md's rule that a fragment says what its section says), with its planted-error test. The dry run wrote its own. | dry run | dry run 2, point 10 | open |
+| K69 | Give `11-next-exam`'s "A source added to this exam" a short path for a small source on a cram night, naming the steps it keeps, and a way to verify a section FB-013 added unverified (its banner and `Unverified:` STATUS line) and clear both. In the skill's tests, a 4-page recitation at 1am with the student asking to skip the pipeline: every run skipped the fence, the report and the wait; three review rounds of a skip path each found a major in its newest piece (the gates a notes change keeps, which of 05's steps a skip drops, a course with nothing to compute), and sessions deferred to a restated skip whatever the path said. | skill test | skill test P1 | open |
 
 ## Low
 

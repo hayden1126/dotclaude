@@ -74,4 +74,6 @@ audits the second group against their images (FB-052, FB-104).
 ## Done when
 
 `extract_check.py` exits 0 (it fails while any `UNREADABLE:` flag is open), and STATUS has the
-coverage. Commit the extracts: they are tracked in the hub, which stays local.
+coverage. It skips a doc on a STATUS `Unverified:` line (`11-next-exam`, "A source added
+unverified") until that doc has a block. Commit the extracts: they are tracked in the hub, which
+stays local.

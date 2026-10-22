@@ -76,6 +76,8 @@ this one section: a figure placed outside it shifts every later section's accent
 - `> **Pitfall:** ...`: `<div class="callout warn"><div class="lab">Pitfall</div> ... </div>`.
 - `> **Not on <exam>:** ...` (material kept but out of this exam's scope, FB-121):
   `<div class="callout warn"><div class="lab">Not on <exam></div> ... </div>`.
+- `> **Unverified:** ...` (material added at the student's request without extract or review,
+  FB-013): `<div class="callout warn"><div class="lab">Unverified</div> ... </div>`.
 - `> **Background:** ...` (a derivation no practice question asks for, with that evidence, S20):
   `<div class="callout"><div class="lab">Background</div> ... </div>`, the whole quote inside.
 - `**How it's tested:** ...`: `<p class="connects"><strong>How it's tested:</strong> ...</p>`.

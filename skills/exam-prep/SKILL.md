@@ -55,8 +55,9 @@ call (FB-008: read these before concluding something doesn't exist). Then route:
   build from what is on disk, the line kept; on their word that it won't resume, the line removed.
   Beside a `Polish: <pass>, started` line the build is a polish pass, and `10-polish`'s "A pass that
   stops" says both; beside a `Source added: <doc>, started` line, `11`'s "A source added to this
-  exam" says both. A session launched with `00-intake` step 8's prompt is the build itself and goes
-  on from the first unfinished stage. On a reopened hub (PLAN.md's `Reopened from` line) the
+  exam" says both; beside an `Unverified add: <doc>, started` line, `11`'s "A source added
+  unverified", "A stop". A session launched with `00-intake` step 8's prompt is the build itself and
+  goes on from the first unfinished stage. On a reopened hub (PLAN.md's `Reopened from` line) the
   finished exam's outputs are on disk too, so STATUS's `Reopened build:` line says which stage is
   next, not the disk (`11`, "The build on a reopened hub");
 - an approved `PLAN.md` for this exam whose STATUS next-step line starts with a stage and step
@@ -67,7 +68,8 @@ call (FB-008: read these before concluding something doesn't exist). Then route:
   judged by what is on disk (FB-002), or on a reopened hub by the `Reopened build:` line (above);
   `09` and `10` run when the student asks; a source the plan doesn't name, or a `pending` row's
   file that arrives after the build, runs `11`'s "A source added to this exam" (official solutions
-  to a listed set: `09` step 6).
+  to a listed set: `09` step 6; a skip of its pipeline asked for, `11`'s "A source added
+  unverified").
 
 The hub layout. `<root>` is the hub, or `<hub>/exam-prep/` (a repo of its own, with its own
 session) when the hub has its own conventions:
@@ -93,7 +95,7 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
 |---|---|---|---|
 | 00 | `workflows/00-intake.md` | hub, `CLAUDE.md`, `MANIFEST.md` scope, approved `PLAN.md` | PLAN.md reads `Approved: <date>` |
 | 01 | `workflows/01-ingest.md` | `sources/`, `MANIFEST.md`, renders, Ed digest | every in-scope row has pages on disk |
-| 02 | `workflows/02-extract.md` | `_build/extract/<name>.md` | `extract_check.py` exits 0 |
+| 02 | `workflows/02-extract.md` | `_build/extract/<name>.md` | `extract_check.py` exits 0 (a doc on an `Unverified:` line excepted) |
 | 03 | `workflows/03-backbone.md` | `_build/backbone.md`: order, id registry, coverage | the coverage check is clean |
 | 04 | `workflows/04-write.md` | `notes/NN-<slug>.md`, wired | `linkcheck.py` is clean (plain-text notes: references checked by hand) |
 | 05 | `workflows/05-verify.md` | checker, reviews applied | self-test covers every official part (or nothing is computable), no `TODO-VERIFY` left |
@@ -111,13 +113,20 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
    PLAN.md, ask nothing and log judgment calls in STATUS (FB-001, FB-020). The build session
    (`00-intake` step 8) adds the STATUS line `Build running: <date>` before its first stage, and its
    last stage removes it (`08-practice` step 7.4 puts `Stage 08 built` in its place); a build stage
-   run alone on request (07, 08) and a `10-polish` pass add and remove their own. Any end of a build
-   removes it: a last stage that is skipped or cut short, a stop at a stage's step 1, a stage that
-   stops to wait for a notes patch. While the line stands, a `09-tutor` tab runs within its Step 1's
-   limits, and no session dispatches a notes patch: the build session never does, since it can't
-   show the student a change or ask them.
+   run alone on request (07, 08, `11`'s source additions) and a `10-polish` pass add and remove
+   their own. Any end of a build removes it: a last stage that is skipped or cut short, a stop at a
+   stage's step 1, a stage that stops to wait for a notes patch. While the line stands, a `09-tutor`
+   tab runs within its Step 1's limits, and no session dispatches a notes patch: the build session
+   never does, since it can't show the student a change or ask them.
 2. **Verbatim extraction before writing.** Never WebFetch slides: it returns a summary that drops
    formulas and slide numbers. Fetch raw with curl and render PDFs page by page (FB-040, L01).
+
+   A student who asks to skip the extract, the backbone or the reviews for a source added to the
+   exam gets one pushback before any notes are written, and a `Skip asked` line in STATUS; asked
+   again, the material goes in under an `Unverified` banner. Where the ask comes decides when, and
+   whether, either happens: `11-next-exam`'s "A source added unverified" (FB-013). Material under
+   that banner stays off every sheet, out of the mocks' plan and the cram order's reading rows, and
+   out of `09`'s walk-throughs and quizzes while its `Unverified:` STATUS line stands.
 3. **No hand-computed values.** Every trace, number and key answer comes from a checker that first
    reproduces the official solutions (FB-090, FB-100). When PLAN.md's Checker line says nothing
    is computable, each comes from a cited source, its working shown for the reviewers to redo.

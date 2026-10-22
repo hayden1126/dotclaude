@@ -4,8 +4,8 @@ The hub has every kind of row: PDFs (one scoped by a page range), a reveal deck,
 its official solutions, a Word file, the Ed digest, and reserved, pending and out rows. Pinned: a
 dropped page or slide fails; scope wider than the renders fails and narrower passes; build-frame
 runs cover every page in the run; a question block's cites cover only its own doc and answer
-docs; a doc with no blocks fails; a reserved doc's blocks fail; the brief's closing Coverage line
-adds no UNREADABLE flag."""
+docs; a doc with no blocks fails, unless a STATUS `Unverified:` line names it; a reserved doc's
+blocks fail; the brief's closing Coverage line adds no UNREADABLE flag."""
 import contextlib
 import importlib.util
 import io
@@ -140,6 +140,30 @@ class ExtractCheck(unittest.TestCase):
         code, out = self.run_check()
         self.assertEqual(code, 1)
         self.assertIn("W1: no blocks; MISSING all", out)
+
+    def test_an_unverified_doc_passes_until_it_has_a_block(self):
+        os.remove(os.path.join(self.root, "_build", "extract", "W1.md"))
+        self.write("STATUS.md", "# STATUS\n\n- Unverified: W1, sec-3-w1, 2026-10-22 (FB-013)\n")
+        code, out = self.run_check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("W1: unverified, added without an extract", out)
+        self.assertNotIn("MISSING", out)
+        # A mention mid-line, another doc's line, or a STATUS it can't read exempts nothing.
+        for status in (b"- Added W1 as asked. Unverified: W1, sec-3-w1\n",
+                       b"Unverified: W10, sec-3-w1, 2026-10-22\n",
+                       b"Unverified: W1's section waits\n",
+                       b"\xff\xfe Unverified: W1, sec-3-w1\n"):
+            with open(os.path.join(self.root, "STATUS.md"), "wb") as f:
+                f.write(status)
+            code, out = self.run_check()
+            self.assertEqual(code, 1, (status, out))
+            self.assertIn("W1: no blocks; MISSING all", out)
+        # Once the doc has a block of its own, its row is checked like any other.
+        self.write("STATUS.md", "Unverified: D1, sec-2-d1, 2026-10-22\n")
+        self.extract("D1.md", "### [D1 p.1] t\n")
+        code, out = self.run_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("D1: 7 pages in scope, 7 rendered, 1 with a block", out)
 
     def test_a_question_block_covers_only_its_own_and_answer_docs(self):
         self.extract("D1.md", "".join(f"### [D1 p.{p}] t\n" for p in (1, 2, 3, 4, 6, 7)))

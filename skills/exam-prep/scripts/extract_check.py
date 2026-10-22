@@ -23,6 +23,11 @@ source without pages). Inside a question block, a `[<doc> p.N]` cite covers that
 is the block's own or an answers file (Answers `yes`) whose `solutions to <doc>` note names the
 block's doc (with no such note, any doc's; a warning says so).
 
+A doc that STATUS.md names on a line starting `Unverified: <doc>,` (material added at the
+student's request without an extract, FB-013) is reported as unverified while the extracts count
+no block for it (its own headers, or a page-less cite of it as an answers file), and doesn't fail;
+once they count one, its row is checked like any other. A STATUS.md it can't read exempts nothing.
+
 It prints one line per doc: what is in scope, what has a block, `(image only` entries, and
 `UNREADABLE:` flags (the brief's closing `Coverage:` line doesn't count). Exit 1 on a page or
 slide with no block, an in-scope page not rendered, a doc with no blocks, an open `UNREADABLE:`
@@ -54,6 +59,9 @@ SOLUTIONS_TO = re.compile(r"solutions? (?:to|for) ([A-Za-z0-9_.-]*[A-Za-z0-9_-])
 NOTE_RANGE = re.compile(r"\bpp\.\s*\d|\bp\.\s*\d+\s*-\s*\d")
 KINDS = ("in", "concepts", "reserved", "pending", "out")
 EN_DASH = chr(0x2013)
+# STATUS.md's `Unverified: <doc>, <section ids>, <date>` line (11-next-exam, FB-013), as a list
+# item or bare; a mention mid-line names nothing.
+UNVERIFIED = re.compile(r"^[-*\s]*Unverified:\s*([A-Za-z0-9_.-]*[A-Za-z0-9_-])(?=[,\s]|$)", re.M)
 
 
 def numbers(text):
@@ -282,6 +290,15 @@ def check(root, doc, row, b):
     return f"{doc}: {b['blocks']} blocks, {flags}", open_flags
 
 
+def unverified(root):
+    """Doc ids STATUS.md's `Unverified:` lines name; none when it can't be read (fail closed)."""
+    try:
+        with open(os.path.join(root, "STATUS.md"), encoding="utf-8") as f:
+            return set(UNVERIFIED.findall(f.read()))
+    except (OSError, ValueError):
+        return set()
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description="Check the extracts against MANIFEST.md's scope.")
     p.add_argument("--root", default=".", help="the exam-prep root (default: the cwd)")
@@ -301,6 +318,7 @@ def main(argv=None):
     found = blocks(args.root, rows)
     empty = {"pages": set(), "frags": set(), "blocks": 0, "questions": 0, "image_only": 0,
              "unreadable": 0}
+    skip = unverified(args.root)
     bad = False
     for doc, row in rows.items():
         if row["kind"] not in KINDS:
@@ -312,6 +330,10 @@ def main(argv=None):
             print(f"warning: {doc} holds answers but no `solutions to <doc>` note: its cites "
                   "count for any question block")
         if row["kind"] not in ("in", "concepts"):
+            continue
+        if doc in skip and not (found.get(doc) or empty)["blocks"]:
+            print(f"{doc}: unverified, added without an extract (STATUS `Unverified:` line, "
+                  "FB-013): not checked until it has a block")
             continue
         line, failed = check(args.root, doc, row, found.get(doc) or empty)
         print(line)
