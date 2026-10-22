@@ -210,8 +210,8 @@ authenticate to GitHub, whatever form the command takes: an alias, a Makefile or
 The main thread's git network commands and `gh`'s allowed families (README, permissions) are in
 `excludedCommands`. They run unsandboxed
 through the normal permission flow, as they did before. Delegated agents are denied every excluded
-command: the same holds for `delegation-ledger`, the excluded `lane` subcommands and
-`pass-respawn`, so an agent lists such a step in `blocked_actions`.
+command: the same holds for `delegation-ledger`, the excluded `lane` subcommands,
+`pass-respawn` and `ed-pull`, so an agent lists such a step in `blocked_actions`.
 
 For public data:
 - `gh-public` (GET only, api.github.com, REST and search);

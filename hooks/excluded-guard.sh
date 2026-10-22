@@ -28,7 +28,7 @@ fallback() {
         break
     done
     case $head in
-        git|gh|lane|claude|codex|codex-delegate|delegation-ledger|pass-respawn|tmux|powershell.exe|cmd.exe)
+        git|gh|lane|claude|codex|codex-delegate|delegation-ledger|pass-respawn|ed-pull|tmux|powershell.exe|cmd.exe)
             printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "excluded-guard could not run, so it refuses the excluded command `%s` until it can."}}\n' "$head"
             ;;
     esac

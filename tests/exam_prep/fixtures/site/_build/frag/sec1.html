@@ -1,0 +1,38 @@
+<section class="note" id="sec-1">
+  <h2><span class="n">§1</span> Counting</h2>
+  <p>Counting asks how many objects fit a description. It builds on nothing earlier, and <a class="xref" href="#sec-2">§2 Graphs</a> uses it to count edges.</p>
+  <h3 id="sec-1-sums">1.1 Sums of a range</h3>
+  <p>The <strong>sum of the first n integers</strong> is \(\frac{n(n+1)}{2}\) <a class="slink">D1 p.4</a>. Pairing the first term with the last gives</p>
+  \[ \sum_{i=1}^{n} i = \frac{n(n+1)}{2}. \]
+  <div class="callout def"><div class="lab">Definition</div><p>A <strong>range</strong> is every integer from a to b, inclusive <a class="slink">D1 p.3</a>.</p></div>
+  <p>To sum a range:</p>
+  <ol class="steps">
+    <li>Count its terms: \(b - a + 1\).</li>
+    <li>Add the first and the last term.</li>
+    <li>Multiply the two and halve the product.</li>
+  </ol>
+  <details class="callout example wex" id="ex-1-range">
+  <summary><span class="lab">Worked example 1.1</span><span class="wex-t">Summing 3 to 7</span></summary>
+  <p>Setup: the range 3 to 7.</p>
+  <ol class="steps"><li>5 terms.</li><li>\(3 + 7 = 10\).</li><li>\(5 \times 10 / 2 = 25\).</li></ol>
+  <p><strong>Result:</strong> 25.</p>
+  <p><strong>Conclusion:</strong> the pairing rule needs only the count and the two ends.</p>
+  </details>
+  <p class="connects"><strong>How it's tested:</strong> compute a sum and show the pairing. Practice: <a class="slink">HW1 Q1a</a>.</p>
+  <h3 id="sec-1-rules">1.2 Three counting rules</h3>
+  <ul>
+    <li id="set-rules-a"><strong>a)</strong> <strong>Product:</strong> independent choices multiply <a class="slink">D1 p.6</a>.</li>
+    <li id="set-rules-b"><strong>b)</strong> <strong>Sum:</strong> disjoint cases add.</li>
+    <li id="set-rules-c"><strong>c)</strong> <strong>Bijection:</strong> count an easier set that matches one to one.</li>
+  </ul>
+  <div class="callout key"><div class="lab">Key rule</div><p>Choose the rule by the shape of the description: "and" multiplies (<a class="xref" href="#set-rules-a">rule a</a>), "or" adds (<a class="xref" href="#set-rules-b">rule b</a>).</p></div>
+  <div class="tbl-wrap"><table><thead><tr><th>Description</th><th>Rule</th><th>Count</th></tr></thead>
+  <tbody><tr><td>a 3-letter code over 26 letters</td><td>product</td><td>\(26^3 = 17576\)</td></tr>
+  <tr><td>a code of 1 or 2 digits</td><td>sum</td><td>\(10 + 100 = 110\)</td></tr></tbody></table></div>
+  <div class="callout warn"><div class="lab">Pitfall</div><p>Adding cases that overlap counts their overlap twice; the sum rule needs <em>disjoint</em> cases.</p></div>
+  <h3 id="sec-1-must-know">1.3 Must know</h3>
+  <ul>
+    <li><strong>Range sum:</strong> \(\frac{n(n+1)}{2}\) (<a class="xref" href="#sec-1-sums">§1.1</a>)</li>
+    <li><strong>Three rules:</strong> product, sum, bijection (<a class="xref" href="#sec-1-rules">§1.2</a>)</li>
+  </ul>
+</section>

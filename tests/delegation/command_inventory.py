@@ -76,6 +76,8 @@ EXCLUDED = [
              ["lane lead"]),
     Excluded("pass-respawn","respawns its tmux pane", ["pass-respawn"]),
     Excluded("pass-respawn *", "respawns its tmux pane", ["pass-respawn -C /x --compact"]),
+    Excluded("ed-pull *", "reads the Ed API token in ~/.secrets.env, which the sandbox hides; GETs "
+             "only, writes only ./sources/ed", ["ed-pull pull --course \"ABC W1234\"", "ed-pull list"]),
 ] + [
     # Read-only tmux, anchored on the verb, in the spellings real use shows. A global flag
     # (-L, -S, -f, -c) or any other verb or alias matches nothing here, so it runs sandboxed,
@@ -289,7 +291,8 @@ CLAUDE_COMMANDS = {
                   "eval": "ask", "help": "ok", "init|new": "ask", "install|i": "ask",
                   "list": "ok", "marketplace": "ask", "prune|autoremove": "ask", "tag": "ask",
                   "test": "ask", "uninstall|remove": "ask", "update": "ask", "validate": "ok"},
-    ("sandbox",): {"help": "ok", "install": "ask", "status": "ok"},  # a hidden group
+    ("sandbox",): {"help": "ok", "install": "ask", "status": "ok",  # a hidden group
+                   "uninstall": "ask"},
 }
 
 CLAUDE_RULES = [
@@ -312,7 +315,7 @@ CLAUDE_RULES = [
     for sub in ("gateway", "import", "install", "purge", "respawn", "rm", "setup-token", "stop",
                 "kill", "update", "upgrade", "auth login", "auth logout", "auto-mode reset",
                 "mcp add", "mcp login", "mcp logout", "mcp remove", "mcp reset-project-choices",
-                "mcp serve", "sandbox install")
+                "mcp serve", "sandbox install", "sandbox uninstall")
 ] + [
     # "i " is install's alias; its space keeps it off words that start with i.
     Rule(f"Bash(claude plugin* {sub}*)", "installs, removes or changes plugins",
@@ -388,6 +391,7 @@ NO_ASK = ["lane ls", "lane ls --json", "lane open chart-fix", "lane open chart-f
           "lane new chart-fix --claim 42 --goal x", "lane done chart-fix", "lane init --cap 4",
           "lane adopt ../x", "lane lead", "lane addr lead", "lane addr --repo ~/dotclaude lead",
           "pass-respawn -C /x --compact", "pass-respawn -C /x --print",
+          "ed-pull list", "ed-pull pull", "ed-pull pull --full", "ed-pull rebuild",
           "delegation-ledger wait --pid 1 --max 30", "delegation-ledger canary --quick",
           "codex-delegate run --model sol --dir /x --brief b.md", "tmux ls",
           "tmux list-panes -a -F '#{pane_id} #{pane_current_path}'",

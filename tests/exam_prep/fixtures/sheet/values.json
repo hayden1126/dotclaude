@@ -1,0 +1,9 @@
+{
+ "COURSE": "GRF101",
+ "EXAM": "Exam 1",
+ "FLOOR": "6",
+ "BODY": "6.4",
+ "ID LABEL": "ID",
+ "SIDE 1 TOPICS": "graphs, BFS, shortest paths",
+ "SIDE 2 TOPICS": "proofs, answer templates, symbols"
+}

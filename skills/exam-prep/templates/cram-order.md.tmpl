@@ -1,0 +1,44 @@
+<!-- exam-prep template cram-order.md.tmpl, baseline as of 2026-10-20; changes only via `12-retro`.
+08-practice step 7 fills it into practice/cram-order.md, dropping this comment, and
+cram_check.py checks it. It is a reading list into the published notes, ranked by points per
+minute (FB-157): it adds no new text. Every notes link is <notes URL>#<id>, the URL STATUS holds
+for the notes page (plain-text notes name `§N.K <title>` as text instead, the Out of time line
+names the Must-know lists, and cram_check.py runs with --plain); one file, never an HTML twin (two copies drift). -->
+# Cram order: {{EXAM}}
+
+The night before {{EXAM}}: {{TOTAL}} minutes in {{TIERS}} tiers of reading, ranked by points per
+minute, plus the time of each mock below.
+Read in order and stop where time runs out. Each row is one section of the notes and the one
+thing to take from it.
+
+**Out of time?** Read only the Must-know lists: [§1]({{NOTES URL}}#sec-1-must-know), [§2]({{NOTES URL}}#sec-2-must-know).
+
+## Tier 1: {{TIER NAME}} ({{MINUTES}} min)
+
+1. [§{{N.K}} {{SECTION TITLE}}]({{NOTES URL}}#{{ID}}) ({{MINUTES}} min): {{THE ONE THING}}.
+2. [§{{N.K}} {{SECTION TITLE}}]({{NOTES URL}}#{{ID}}) ({{MINUTES}} min): {{THE ONE THING}}.
+
+{{ONE PER MOCK NOT TAKEN YET, THE HARDER SET LAST, EACH LINK ON ONE LINE: **Then the mock:**
+[<mock title>](<mock page URL>) (while the session is still applying a change to the notes or a
+sheet, start it once the session says the change is done), timed (<minutes> minutes), with the mock
+sheet only, cheatsheet/<exam-slug>-mock.pdf (no sheet: with no notes; when STATUS logs the mock
+sheet changed after it was printed: print it again first, or with the LaTeX engine compile it and
+bring the PDF to the session first). Mark it against its own key, practice/mock-<slug>-key.md (when
+STATUS logs one of its parts for a recheck: bring it to the session before marking), then bring your
+misses to the session: it moves the sections they point at to just after this line, and builds the
+final sheet while you read on (no sheet: it only moves them).}}
+
+## Tier 2: {{TIER NAME}} ({{MINUTES}} min)
+
+3. [§{{N.K}} {{SECTION TITLE}}]({{NOTES URL}}#{{ID}}) ({{MINUTES}} min): {{THE ONE THING}}.
+
+**Skip:** {{EACH SECTION THE EXAM DOESN'T REACH, AND WHY}}.
+
+## Tonight
+
+- {{ONLY WHEN 07 FOUND THE SHEET IS COLLECTED WITH A NAME: Write your name on the cheat sheet
+  before you hand it in; it isn't printed on it.}}
+- {{EXAM}}: {{DATE, TIME AND LENGTH, FROM CLAUDE.md}}. Bring {{WHAT ITS RULES ALLOW: a calculator
+  or none, the sheet}}.
+- {{ONLY WITH A SHEET: Print the final sheet (cheatsheet/<exam-slug>-final.pdf; the mock sheet,
+  -mock.pdf, when no mock was taken) and pack it.}}

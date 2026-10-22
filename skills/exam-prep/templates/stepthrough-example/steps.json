@@ -1,0 +1,4 @@
+{"fig-2-walk": [
+  {"act": "abc", "frames": 2, "final": "Walk A-B-C: 2 edges."},
+  {"act": "acb", "frames": 2, "final": "Walk A-C-B: 2 edges."}
+]}
