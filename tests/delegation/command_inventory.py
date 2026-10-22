@@ -291,7 +291,8 @@ CLAUDE_COMMANDS = {
                   "eval": "ask", "help": "ok", "init|new": "ask", "install|i": "ask",
                   "list": "ok", "marketplace": "ask", "prune|autoremove": "ask", "tag": "ask",
                   "test": "ask", "uninstall|remove": "ask", "update": "ask", "validate": "ok"},
-    ("sandbox",): {"help": "ok", "install": "ask", "status": "ok"},  # a hidden group
+    ("sandbox",): {"help": "ok", "install": "ask", "status": "ok",  # a hidden group
+                   "uninstall": "ask"},
 }
 
 CLAUDE_RULES = [
@@ -314,7 +315,7 @@ CLAUDE_RULES = [
     for sub in ("gateway", "import", "install", "purge", "respawn", "rm", "setup-token", "stop",
                 "kill", "update", "upgrade", "auth login", "auth logout", "auto-mode reset",
                 "mcp add", "mcp login", "mcp logout", "mcp remove", "mcp reset-project-choices",
-                "mcp serve", "sandbox install")
+                "mcp serve", "sandbox install", "sandbox uninstall")
 ] + [
     # "i " is install's alias; its space keeps it off words that start with i.
     Rule(f"Bash(claude plugin* {sub}*)", "installs, removes or changes plugins",
