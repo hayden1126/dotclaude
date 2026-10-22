@@ -45,9 +45,10 @@ picks it up.
     (`08-practice`'s "Changing the notes or a sheet", item 4), so a line on disk may state a mock's
     answer. Search
     them with `git grep -n -e <phrase> HEAD -- notes/ cheatsheet/ _build/frag/`, and read a passage
-    with `git show HEAD:<path> | sed -n '<from>,<to>p'`. `_build/extract/`, which the build never
-    writes, is searched and read from disk with the Grep and Read tools, whose output stays folded
-    (Step 3): a part's block holds its `Solution [` line;
+    with `git show HEAD:<path> | sed -n '<from>,<to>p'`. `_build/extract/` is searched and read
+    from disk with the Grep and Read tools, whose output stays folded (Step 3): a part's block holds
+    its `Solution [` line; but not a file `git status --short -- _build/extract/` lists, which a
+    build's `02-extract` is still writing (`11-next-exam`'s builds too);
   - it dispatches no patch: one the student approves waits under `## Pending patches` in the log
     (Step 5.3), a one-line sheet addition marked `sheet line`, and the build session never
     dispatches one either (it can't show the student a change or ask them); official

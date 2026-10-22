@@ -20,7 +20,7 @@ EM_DASH = chr(0x2014)
 
 # Paths the skill names that a later stage creates. Remove each one in the commit that adds it.
 PENDING = {
-    "workflows/11-next-exam.md",
+    "references/CHANGELOG.md",
     "workflows/12-retro.md",
 }
 

@@ -91,9 +91,11 @@ Name the pass's log, `_build/logs/polish-<pass>-<date>.md` (`<pass>` one of `cla
 included). Start it: the ask in the student's words, the pass, the sections, the pattern, and the
 hub's head (`git rev-parse HEAD`) as `before <sha>`. The log marks each step's end as it finishes
 (`step 2 done`, `step 5 done`) and each of step 7's items, so a resume knows where the pass stopped.
-The pass's paths, below, are `notes/ _build/frag/ 'cheatsheet/*.html' 'cheatsheet/*.tex' MANIFEST.md
-_build/backbone.md _build/chassis.html practice/cram-order.md` as git pathspecs, the globs quoted
-(zsh stops on a glob that matches nothing).
+The pass's paths, below, are `notes/ _build/frag/ ':(glob)cheatsheet/*.html'
+':(glob)cheatsheet/*.tex' MANIFEST.md _build/backbone.md _build/chassis.html
+practice/cram-order.md` as git pathspecs, the globs quoted (zsh stops on a glob that matches
+nothing) and marked `:(glob)`, without which a pathspec's `*` also matches a `/` and takes in a
+finished exam's archive, `cheatsheet/<exam-slug>/`.
 
 Then put up the fence: add `Build running: <date>` to STATUS, and `Polish: <pass>, started <date>
 (<the log>)` in place of any earlier pass's `Polish:` line (STATUS keeps one; the logs keep the
@@ -142,12 +144,15 @@ step 1 says.
     the change, to skip any part on the cut and score out of the points left. A taken mock stays
     as it is.
 
-  A widening puts material back in. When the notes keep it under a banner, the banner goes and
-  each product above takes it back by its own stage's rule; while a mock is untaken, the cram
-  order takes it back as a row in its last reading tier, since its ranking reads
-  `_build/mock-plan.md`, which the fence keeps closed, and an untaken mock's line drops the skip
-  an earlier cut gave it for that material. When it needs a source the hub never
-  extracted, it isn't a pass: `11-next-exam` adds sources to a built hub.
+  A widening puts material back in. When the notes keep it under a banner, the banner goes and each
+  product above takes it back by its own stage's rule; while a mock is untaken, the cram order takes
+  it back as a row in its last reading tier, since its ranking reads `_build/mock-plan.md`, which
+  the fence keeps closed, and an untaken mock's line drops the skip an earlier cut gave it for that
+  material. A widening that needs a source the hub never extracted isn't this pass's: log it as
+  `handed to 11`, leave it out of the pass's list (the report says so), and once step 7.5's closing
+  commit is made, run it as `11-next-exam`'s "A source added to this exam" says, from its step 1, in
+  place of step 7.5's patches and checks (11 runs them however it ends; its step 1 needs the hub
+  free). Step 7.4's report names it, so a student whose session ends first asks again.
 
 ## Step 4: Report
 
@@ -175,14 +180,16 @@ step 1 says.
    baseline), and each product follows its own stage's rule, as step 3 lists them. A change an
    approved item forces beyond its own line (a heading the trim leaves empty, a link whose target
    moved) is made, logged, and named in step 7's report.
-2. While a mock is untaken, tell the student to look away now. Then "Changing the notes or a sheet"
-   item 1, the baseline, before the first change: its hit lines (part ids only) go to the pass's
-   baseline file (its log's name with `.baseline.txt` for `.md`), committed with the log, which
-   records `baseline taken`.
+2. While a mock is untaken, tell the student to look away now, to come back when a reply's only line
+   asks for `/clear`, and to type it before reading anything above that line. Then "Changing the
+   notes or a sheet" item 1, the baseline, before the first change: its hit lines (part ids only) go
+   to the pass's baseline file (its log's name with `.baseline.txt` for `.md`), committed with the
+   log, which records `baseline taken`.
 3. One fix at a time, as `05-verify` step 5 says: every copy of the fact (the section's notes file
    and, with a page, its fragment, a Must-know line, a pitfall box, both sheets, a cram order row
    that quotes it; grep `notes/`, `_build/frag/`, `cheatsheet/` and `practice/cram-order.md` for
-   the old phrase), a new number or trace as step 1 says, never an answer from a set MANIFEST.md
+   the old phrase, leaving a finished exam's frozen archive under `cheatsheet/<exam-slug>/` as it
+   is), a new number or trace as step 1 says, never an answer from a set MANIFEST.md
    doesn't mark `yes, attempted`. While a mock is untaken, each fix is that section's item 2: a
    method taught in general or with an example of its own, never a mock's instance. Change the
    fragment in its own markup (`_build/CONVERT.md`), and a figure label in the fragment's SVG and
@@ -222,13 +229,18 @@ the student: keep it, or put the `before` text back. While a mock is untaken, th
 logged `held for the look-back` and waits for it. Putting the `before` text back needs no new
 compare (that text passed the baseline), only step 5.4's rebuild and checks, then a commit.
 
-The look-back, while a mock is untaken, once the last compare has passed: the student looks back;
-show them what changed on each sheet (FB-137) and each text reworded after a leak hit (step 5.5),
-ask each held question and apply its answer as above, and log `look-back done`, before step 7's
-republish. A change the student rejects there is reworded by them, and applied as step 5 applies a
-fix (they look away again until its compare passes, then see it), or put back the same way as an
-overreach: a corrected fact in every copy (FB-106), its item logged as dropped; an addition, from
-the sheet alone, its item logged `changed (how)` when the notes keep it, else dropped.
+The look-back, while a mock is untaken, once the last compare has passed, on a clean screen: the
+window's scrollback holds edits the compare caught, so log `clear asked`, hand off and commit, and
+end the reply with one line, `The pass is checked: type /clear, then "go on with the polish pass".`,
+as `08-practice` step 7.4 does; the fresh session finds the look-back as "A pass that stops" says,
+and any session that starts fresh there skips the clear. Then the student looks back; show them what
+changed on each sheet (FB-137) and each text reworded after a leak hit (step 5.5), and ask each held
+question and apply its answer as above. A change the student rejects there is reworded by them, and
+applied as step 5 applies a fix, logged `redo <item>`: they look away again, and once its compare
+passes and it is committed, a new `clear asked` round comes before they see it; or put back the same
+way as an overreach: a corrected fact in every copy (FB-106), its item logged as dropped; an
+addition, from the sheet alone, its item logged `changed (how)` when the notes keep it, else
+dropped. Log `look-back done` once every rejection is settled, before step 7's republish.
 
 ## Step 7: Ship and close
 

@@ -14,6 +14,7 @@ directory. The first row that matches wins.
 | Case | How to tell | Then |
 |---|---|---|
 | Resume | `PLAN.md` for this exam reads `Approved: <date>` | Not intake: go to SKILL.md "Where you are". |
+| Next exam in progress | `PLAN.md` reads `Approved: not yet` and its Decisions open with a `Reopened from` line | Not intake: go to `workflows/11-next-exam.md`, step 2 (its log says where it stopped). |
 | Intake in progress | `PLAN.md` for this exam reads `Approved: not yet` | Reread the drafts and the hub's files, then continue at step 5. |
 | Next exam | `MANIFEST.md` and an approved `PLAN.md` exist for an earlier exam | Not intake: go to `workflows/11-next-exam.md`. |
 | Own-conventions root | the directory is `<hub>/exam-prep/`, made by the bullet below | `<root>` is this directory. Continue at step 2. |

@@ -145,6 +145,9 @@ alone, so it must be correct, cover what the exam tests, and make the ideas easy
 - Sources: {{EXTRACT BLOCKS: the coverage-matrix rows that map into §{{N}}, as files and block
   ranges}} in {{ROOT}}/_build/extract/, and {{EXAMPLES: the parts of
   {{ROOT}}/_build/verify/examples.out.md your worked examples use}}.
+- {{PATTERNS, on a hub `11-next-exam` reopened, when the tutor log has them: Where this student
+  stalled before, from the tutor log's ## Patterns, quoted: {{LINES}}. Write so a reader doesn't
+  stall there.}}
 - Out of scope: every other section's file, the backbone, and every file MANIFEST.md marks
   `reserved` ({{RESERVED FILES}}). Never open a file under practice/ whose name ends in -key.md.
 
@@ -462,7 +465,8 @@ meanwhile and merges your branch when you report.
 
 ## Scope
 - Work in: your worktree of {{ROOT}}. Write only inside `notes/`, `_build/frag/` and
-  `cheatsheet/`{{PAGE:, plus the rebuilt `_build/notes.html`}}.
+  `cheatsheet/`{{PAGE:, plus the rebuilt `_build/notes.html`}}, never in a subfolder of
+  `cheatsheet/`: each holds a finished exam's sheets, frozen.
 - The change, exactly as the student approved it, in the notes, a sheet or both:
   - {{NOTES: `notes/{{FILE}}`, {{WHERE: after the line that starts "<its first words>" |
     replacing the sentence "<old>"}}: {{NEW TEXT}}}}
@@ -478,9 +482,9 @@ meanwhile and merges your branch when you report.
     (`_build/notes.html` is rebuilt, never restored): {{THE FILES `git diff --name-only {{BEFORE}}
     HEAD -- notes/ _build/frag/ cheatsheet/` LISTS}}.}}
 - Every copy (FB-106): search `notes/`, `_build/frag/` and `cheatsheet/` for {{THE OLD PHRASE OR
-  FACT}}, and make the same change wherever the fact is stated (a Must-know line, a pitfall box,
-  a sheet line). A wrong fact is fixed on both sheets; a line a mock prompted goes on the final
-  sheet only.
+  FACT}}, and make the same change wherever the fact is stated (a Must-know line, a pitfall box, a
+  sheet line), except in a subfolder of `cheatsheet/`. A wrong fact is fixed on both sheets; a line
+  a mock prompted goes on the final sheet only.
 - {{PAGE: From the worktree root, `python3 -I {{SKILL}}/scripts/assemble.py` and `python3 -I
   {{SKILL}}/scripts/linkcheck.py --html _build/notes.html` both exit 0. | PLAIN TEXT: There is no
   page and no link check (the notes have no anchors): check by eye that each `§N.M` reference you

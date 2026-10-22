@@ -81,9 +81,10 @@ same audit when they exist.
 - Check a reviewer's claim before applying it: with the checker when it is computable, otherwise
   by re-reading the cited page (FB-108). A reviewer has been wrong too.
 - The main session applies every fix, one at a time (FB-108). A correction fixes every copy of the
-  fact: the notes, the Must-know line, a pitfall box, the sheet. Grep for the old value or phrase
-  to find them (FB-106). No fix quotes an answer from a set MANIFEST doesn't mark
-  `yes, attempted`.
+  fact: the notes, the Must-know line, a pitfall box, the sheet. Grep for the old value or phrase to
+  find them (FB-106), and leave a finished exam's archive (`practice/<exam-slug>/`,
+  `cheatsheet/<exam-slug>/`, `11-next-exam`) as it is: it is frozen. No fix quotes an answer from a
+  set MANIFEST doesn't mark `yes, attempted`.
 - A change to the reference or to a convention reruns `selftest.py` and `examples.py`, then step
   2's comparison of every worked example and every filled `value-` (STATUS's TODO-VERIFY list)
   with the new `examples.out.md`: the notes copied the old one. Once `08-practice` has keys,

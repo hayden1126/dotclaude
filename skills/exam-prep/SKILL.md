@@ -41,20 +41,28 @@ call (FB-008: read these before concluding something doesn't exist). Then route:
 
 - the session sits at the root of a hub with its own conventions, and `exam-prep/` holds the
   work: open a session in `exam-prep/` instead (`00-intake`, step 1);
-- no `PLAN.md`, or one reading `Approved: not yet`: intake (`00`);
+- no `PLAN.md`, or one reading `Approved: not yet`: intake (`00`), whose step 1 sends a draft with
+  a `Reopened from` line to `11`;
 - an approved `PLAN.md` for an earlier exam than the one the student names: `11`;
 - a build is running: STATUS has a `Build running` line (hard rule 1): `09` alone, within its Step
   1's limits for the build, never a build stage (from `08-practice` step 2 its output shows mocks
   and keys); only when the student says the build stopped and asks to resume it, looking away, the
   build from what is on disk, the line kept; on their word that it won't resume, the line removed.
   Beside a `Polish: <pass>, started` line the build is a polish pass, and `10-polish`'s "A pass that
-  stops" says both. A session launched with `00-intake` step 8's prompt is the build itself and goes
-  on from the first unfinished stage;
+  stops" says both; beside a `Source added: <doc>, started` line, `11`'s "A source added to this
+  exam" says both. A session launched with `00-intake` step 8's prompt is the build itself and goes
+  on from the first unfinished stage. On a reopened hub (PLAN.md's `Reopened from` line) the
+  finished exam's outputs are on disk too, so STATUS's `Reopened build:` line says which stage is
+  next, not the disk (`11`, "The build on a reopened hub");
 - an approved `PLAN.md` for this exam whose STATUS next-step line starts with a stage and step
   (`08 step 8, the cram night`): that step, and a walk-through, a quiz or a question the student
-  brings there runs `09` inside its rules, and a polish pass `10`, between attempts;
+  brings there runs `09` inside its rules, and a polish pass `10`, between attempts, as does a new
+  source (a review session's notes, a late `pending` file: `11`'s "A source added to this exam");
 - else an approved `PLAN.md` for this exam: the first unfinished stage that PLAN.md includes,
-  judged by what is on disk (FB-002); `09` and `10` run when the student asks.
+  judged by what is on disk (FB-002), or on a reopened hub by the `Reopened build:` line (above);
+  `09` and `10` run when the student asks; a source the plan doesn't name, or a `pending` row's
+  file that arrives after the build, runs `11`'s "A source added to this exam" (official solutions
+  to a listed set: `09` step 6).
 
 The hub layout. `<root>` is the hub, or `<hub>/exam-prep/` (a repo of its own, with its own
 session) when the hub has its own conventions:
@@ -69,6 +77,7 @@ session) when the hub has its own conventions:
 | `_build/shots/`, `_build/package*.json` | the browser check's screenshots, a local Playwright install | ignored |
 | `_build/` (rest) | extracts, backbone, checker, hub copies of STYLE, CHASSIS, CONVERT, page build | tracked |
 | `notes/`, `cheatsheet/`, `practice/` | the products; `practice/*-key.md` and `practice/tutor/` quarantined | tracked |
+| `practice/<exam-slug>/`, `cheatsheet/<exam-slug>/` | a finished exam's products, archived by `11` and frozen; its keys stay quarantined | tracked |
 
 ## Stage map
 
@@ -88,7 +97,7 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
 | 08 | `workflows/08-practice.md` | mocks, quarantined keys, mock pages, the cram order | the key script asserts every computable value; the leak check passes |
 | 09 | `workflows/09-tutor.md` | walk-throughs, quizzes, notes patches, `_build/logs/tutor.md` | on demand |
 | 10 | `workflows/10-polish.md` | scan, report, apply on approval | on demand |
-| 11 | `workflows/11-next-exam.md` | the hub extended for the next exam | reconciled, new scope in MANIFEST |
+| 11 | `workflows/11-next-exam.md` | the finished exam archived, the templates reconciled, the next exam's MANIFEST and PLAN; a source added to this exam | the next exam's PLAN.md approved and its build launched |
 | 12 | `workflows/12-retro.md` | skill diffs, `CHANGELOG.md` entry | after every exam |
 
 ## Hard rules
