@@ -264,6 +264,17 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     `permissionMode` in `agents/writer.md` holds against a parent's mid-run plan mode; if it
     does, it also covers plan mode entered by hand. Lane-able (`skills/pass/`, `tests/`); no
     live lane owns it.
+  - **A compact pass's final Enter sometimes lands as a newline** (Hayden's screenshot,
+    2026-10-22, vulcan lane homeboard, pane %10). `pass.log` logged `outcome=compact` at
+    02:09:50Z (all four send-keys exited 0), yet the resume prompt sat in the input box over a
+    new empty line, unsent. Hayden's guess (Shift held in another window) can't be it:
+    send-keys writes to the pane's pty, which the physical keyboard never reaches. Likely
+    (inferred, not proven): the prompt and its Enter go out back to back
+    (`skills/pass/scripts/pass-respawn:430-432`) while Claude Code is busy right after the
+    compact, so it reads both in one burst, takes it as a paste, and the Enter becomes a
+    newline. Fix: after typing, wait until capture-pane shows the prompt in the box, then send
+    Enter. Check the box emptied, and send one more Enter if the text is still there. Same
+    files as the plan-mode bug above, so one lane takes both.
   - **excluded-guard refuses an over-matched command in an agent worktree** (lane mute's report,
     2026-10-20; checked in code, not reproduced). Candidacy splits on `|`, `;` and `&&` without
     quotes, so a plain `grep` whose quoted pattern holds an excluded head becomes a candidate
