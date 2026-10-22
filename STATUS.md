@@ -87,18 +87,14 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lanes** (briefs in each record). Merge order (Hayden, 2026-10-21, by readiness, since
-    exam-prep had stages left while mute and policy-fp were nearly done): 1 exam-prep
-    (`feat/exam-prep-skill`, carries the lead's notes: the exam-prep skill suite below, plus
-    classifying Claude Code 2.1.305's `--profile`; its dry run passed without an install, and
-    it needs its install turn before round 1's go/no-go, Thu 10/22). 2 practices (its next PR,
-    auth-secrets; the skill suite below). Each opened on Hayden's ok. practices merged #142 the
-    same day (Hayden moved it first since it was finished) and stays open for more PRs. Merged
-    2026-10-21 and installed from main: mute (#141), policy-fp (#143). Merged and closed
-    2026-10-20, installed from main:
+  - **Live lanes** (briefs in each record). Merge order: 1 practices (its next PR,
+    auth-secrets, carries the lead's notes; the skill suite below). It opened on Hayden's ok,
+    merged #142 on 2026-10-20 and stays open for more PRs. Merged 2026-10-22 and installed from
+    main: exam-prep (#144). Merged 2026-10-21 and installed from main: mute (#141), policy-fp
+    (#143), in Hayden's readiness order. Merged and closed 2026-10-20, installed from main:
     summary-retire (#139), link-atomic (#140, which Hayden ordered first so no later install ran
     the old `link()`), pr-horizon (#135), config-dir (#133). Hayden raised the cap
-    from 3 to 4 on 2026-10-20 for exam-prep; two slots are free since mute and policy-fp merged.
+    from 3 to 4 on 2026-10-20 for exam-prep; three slots are free since 2026-10-22.
   - **Lane ask quality: done** (2026-10-19 to 2026-10-20). ask-check merged as #131 and was
     installed from main 2026-10-20: a PreToolUse hook on AskUserQuestion (`hooks/ask_check.py`)
     denies risky asks with a checklist in the reason. branch-reuse merged as #130: `lane new`
@@ -178,8 +174,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     umbrella skill, intake through tutor and retro, built from the two completed runs.
     Round 1 (two midterms Tue 10/27) needs it loadable by Thu 10/22, else round 1 runs by hand.
     Hayden's pick (2026-10-20): rules public, evidence private (his quoted corrections, case
-    notes, course and Ed ids stay in a private dir, [[dotclaude-public-repo]]). In lane exam-prep
-    since 2026-10-20.
+    notes, course and Ed ids stay in a private dir, [[dotclaude-public-repo]]). Merged as #144
+    (lane exam-prep, 2026-10-22; installed from main, with the `ed-pull` CLI and its excluded
+    entry).
   - **A device-wide toggle for the toast and the sound** (Hayden, 2026-10-20): one switch that
     mutes the Windows toast and the notify ring for every session on the machine (no toggle
     exists today). Design settled 2026-10-20 (Hayden picked the lead's pick on all four forks:
@@ -245,8 +242,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     cleanly. Then 2.1.307 added `claude sandbox uninstall` (it removes the Windows sandbox
     account and network filters), red again everywhere (lane exam-prep's report, 2026-10-21;
     the lead reproduced it). Hayden's picks: classify it as an ask, like `sandbox install`
-    (the inventory entry, the `CLAUDE_RULES` subcommand and a `settings.json` ask rule), in
-    lane exam-prep.
+    (the inventory entry, the `CLAUDE_RULES` subcommand and a `settings.json` ask rule). Fixed
+    on main by #144 (lane exam-prep, 2026-10-22) and live since the reinstall from main.
   - **`lane trial` fails test_subagent_policy on the merge alone** (lane policy-fp's report,
     2026-10-20; the lead checked the code). Sandboxed, `trial` builds its scratch tree in the
     system temp dir (`skills/lanes/scripts/lane:2341`), which is `/tmp/claude-<uid>`, one of
@@ -428,8 +425,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lanes exam-prep (merge order 1, carries the lead branch) and practices (2, its next PR)
-     run; their state is in their records (`lane ls`). After each reinstall,
+  0. Lane practices (merge order 1, its next PR, carries the lead branch) runs; their state is in their records (`lane ls`). After each reinstall,
      check `ls -la ~/.claude/CLAUDE.md` (the Watch item). Watch that push asks open with the
      briefing (#137); if they skip it, the Stop-hook check is the follow-up (Hayden's pick).
   1. Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
