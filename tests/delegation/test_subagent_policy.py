@@ -8,7 +8,9 @@ import datetime
 import io
 import json
 import os
+import random
 import re
+import shutil
 import signal
 import subprocess
 import tempfile
@@ -791,7 +793,10 @@ class ReviewFindings(Base):
                     "sed '/x/W ../../../main.py' f"):
             self.assertDenied(self.decide("Bash", {"command": cmd}, atype="writer", cwd=self.wt,
                                           aid="w1"), "worktree-root", msg=cmd)
-        self.assertDenied(self.bash("sed 's/a/b/w ~/.zshrc' f"), "protected-path")
+        self.assertDenied(self.bash("sed 's/a/b/w .git/config' f"), "protected-path")
+        # sed reads ~ in a w name literally (the shell didn't expand the quoted script), so this
+        # writes ./~/.zshrc, not $HOME/.zshrc: not the protected file (F4).
+        self.assertIsNone(self.bash("sed 's/a/b/w ~/.zshrc' f"))
         self.assertDenied(self.bash("sed '1e rm -rf x' f"), "sed-exec")
         self.assertIsNone(self.bash("sed -n '1,5p' f"))
         self.assertIsNone(self.bash("sed 's/a/b/w notes.txt' f"))
@@ -799,6 +804,377 @@ class ReviewFindings(Base):
     def test_a_writer_without_a_worktree_can_still_hand_back(self):
         self.assertIsNone(self.decide("SubagentHandback", {"message": "report"}, atype="writer",
                                       cwd=self.proj, aid="nometa"))
+
+
+class SedScripts(Base):
+    """sed scripts read the way GNU sed 4.9 compiles them: a pattern, a replacement, a text or a
+    label is never a command (the false denials of 2026-10-20), and every e and w still counts."""
+
+    # The scripts that read: a researcher may run them, and so may anyone else.
+    READS = ("sed -n 's/show me/x/p' f", "sed 's/the same for the other six edges\\./x/' f",
+             "sed 's/we/ew/g' f", "sed -n '/new e/p' f", "sed 's/[/]/x/' f", "sed 's/x/\\/w/' f",
+             "sed 'y/we/ew/' f", "sed 'a foo; e date' f", "sed '1i\\\ne w x' f",
+             "sed 'a foo\\\ne' f", "sed -n ':e;b e' f", "sed 's/a/b/#e' f", "sed -n 's/a/b/;p' f",
+             "sed -n 'r in' f", "sed -e 'a foo\\' -e 'e date' f", "sed -n -e '1{' -e p -e '}' f")
+    # Each runs a shell command: as written, or spelled so the old regexes missed it.
+    EXECS = ("sed '1e date' f", "sed 's/a/b/e' f", "sed 's|a|b|e' f", "sed 's/a/b/ e' f",
+             "sed 'p;e date' f", "sed 'p\ne date' f", "sed '1{e date\n}' f", "sed -n '1{p;e\n}' f",
+             "sed 'y/a/b/;e' f", "sed '$!e' f", "sed '/x/I e' f", "sed '\\,x,e' f",
+             "sed 's/[/]/x/e' f", "sed -e p -e e f", "sed 's/a/b/;s/c/d/3e' f",
+             "sed --expression='1e date' f", "sed -e'1e date' f", "sed --e='1e date' f",
+             "sed --expr '1e date' f", "sed -l 5 's/a/b/e' f", "sed -ne '1e date' -e p f",
+             "sed -nes/a/b/e f", "sed 's/a/b/e' -e p f", "sed -e 'a foo' -e 'e date' f",
+             # A filename before -e: under POSIXLY_CORRECT getopt stops at it, so sed takes it as
+             # the script; it is checked strictly (no token-mode leniency now), so the e is caught.
+             "sed error.log -e p f")
+    # sed can't run these, or the policy can't see the script: refused as unchecked.
+    UNCHECKED = ("sed -f x.sed f", "sed --file=x.sed f", "sed -nf x.sed f", "sed 's/a/b' f",
+                 "sed 's/a/b/w' f", "sed --s 's/a/b/' f", "sed -k p f", "sed 's/a/b/q' f",
+                 "sed 's§a§b§' f", "sed '1}' f")
+    # A $var or glob/brace word hides the script and could expand to an option (even -i); the policy
+    # requires sed's own --sandbox AND each dynamic word only as an -e value or after --. Otherwise
+    # it is refused use_alternative, for every role (SP3: an agent-built script ran unchecked before).
+    NEEDS_SANDBOX = (
+        # a dynamic script or file in a bare operand (allowed or exec'd under the old token heuristic)
+        "sed -n \"${N}p\" f", "sed -n \"${N}p\" exam.txt", "sed -n \"${N}p\" error.log",
+        "sed -n \"${N}p\" write.log", "sed \"$S\" f", "sed \"$S\" exam.txt",
+        "sed \"$X\" '1e date' f", "sed $X 'e date' f", "sed \"$X\" -e '1e date' f",
+        "sed -e \"$X\" -e 'e date' f",
+        # FINDINGS: a script the agent BUILDS, unchecked for any role before SP3 (pinned one by one)
+        "sed \"$(printf wout.txt)\" f",          # printf-built w target
+        "sed \"$(printf '1e touch y')\" f",      # printf-built e command
+        "sed \"${X:-wout.txt}\" f",              # default-value w target
+        "sed $X 'wout.txt' f",                   # $X vanishes, 'wout.txt' becomes the script
+        "sed \"${X:--i}\" 's/h/H/' f",           # expands to -i, editing f in place
+        "sed --sandbox \"$pat\" f",              # --sandbox present, but the $var is in script position
+        # --sandbox does not disable -i, and these can still become a bare -i at runtime:
+        "sed --sandbox 's/x/y/' {-i,.git/config}",   # a brace operand expands to `-i .git/config`
+        "sed --sandbox -e $X f",                      # an unquoted -e value word-splits a -i off its tail
+        "sed --sandbox -n -e $N'p' f",               # an unquoted computed script, same split
+        "sed --sandbox -l $X 's/h/H/' f",            # ANY value-taking option's split value, not just -e
+        "sed --sandbox --line-length $X 's/h/H/' f", # the long form of the same
+        "sed --sandbox 's/a/b/' *.txt")              # a glob before -- could match a file named -i
+    # --sandbox (sed refuses every e/r/w) with each dynamic word in a safe slot - a quoted
+    # single-word -e value, or a file after -- (where sed can't read it as an option) - is allowed.
+    SANDBOXED_OK = ("sed --sandbox -e \"${N}p\" exam.txt", "sed --sandbox -n -e \"$pat\" error.log",
+                    "sed --sa -e \"$x\" f", "sed --sandbox p -- \"$file\"",
+                    "sed --sandbox -e \"$x\" -- \"$f\"", "sed --sandbox 's/a/b/' -- *.txt")
+
+    def r(self, cmd):
+        return self.bash(cmd, atype="researcher")
+
+    def wb(self, cmd):
+        self.meta("w1", agentType="writer", worktreePath=self.wt)
+        return self.decide("Bash", {"command": cmd}, atype="writer", cwd=self.wt, aid="w1")
+
+    def test_patterns_replacements_text_and_labels_are_not_commands(self):
+        for cmd in self.READS:
+            self.assertIsNone(self.bash(cmd), cmd)
+            self.assertIsNone(self.r(cmd), cmd)
+        self.assertIsNone(self.bash("sed -i 's/the same for the other six edges\\./x/' f"))
+        self.assertIsNone(self.bash("sed -i -e :a -e '/^\\n*$/{$d;N;ba' -e '}' f"))
+
+    def test_every_e_is_refused(self):
+        for cmd in self.EXECS:
+            self.assertDenied(self.bash(cmd), "sed-exec", "stop_and_explain", cmd)
+            self.assertDenied(self.r(cmd), "researcher-flag", msg=cmd)
+
+    def test_a_script_sed_or_the_policy_cant_read_is_refused(self):
+        for cmd in self.UNCHECKED:
+            self.assertDenied(self.bash(cmd), "sed-unchecked", "stop_and_explain", cmd)
+            self.assertDenied(self.r(cmd), "sed-unchecked", msg=cmd)
+
+    def test_w_writes_to_the_rest_of_the_line(self):
+        for cmd in ("sed 'w notes.txt ../../../../main.py' f", "sed 's|a|b|w ../../../main.py' f",
+                    "sed 's/[/]/g;/w ../../../x/p' f", "sed -n 'p;W ../../../main.py' f"):
+            self.assertDenied(self.wb(cmd), "worktree-root", msg=cmd)
+        for cmd in ("sed -n 's/a/b/w out.txt' f", "sed 'w notes.txt' f",
+                    "sed -n 's/a/b/w /dev/stdout' f"):
+            self.assertIsNone(self.wb(cmd), cmd)
+        for cmd in ("sed 's/a/b/w out' f", "sed 'W out' f", "sed -n 's|a|b|w out' f",
+                    "sed 's/[/]/g;/w x/p' f"):
+            self.assertDenied(self.r(cmd), "researcher-flag", msg=cmd)
+
+    def test_in_place_writes_each_file_and_its_backup(self):
+        for cmd in ("sed -i -e s/a/b/ ../../../main.py", "sed -i'../../../*' s/a/b/ f",
+                    "sed --in-place='../../../*.bak' s/a/b/ f"):
+            self.assertDenied(self.wb(cmd), "worktree-root", msg=cmd)
+        for cmd in ("sed -i.bak s/a/b/ f", "sed -i s/a/b/ f", "sed -i'*' s/a/b/ f"):
+            self.assertIsNone(self.wb(cmd), cmd)
+        for cmd in ("sed -i.json s/a/b/ .mcp", "sed -i'.git/hooks/*' s/a/b/ pre-commit",
+                    "sed --in-place=.json s/a/b/ .mcp", "sed --in=.json s/a/b/ .mcp",
+                    "sed -ni.json s/a/b/p .mcp"):
+            self.assertDenied(self.bash(cmd), "protected-path", msg=cmd)
+        for cmd in ("sed --in s/a/b/ f", "sed --in-pl=.b s/a/b/ f", "sed -si s/a/b/ f"):
+            self.assertDenied(self.r(cmd), "researcher-flag", msg=cmd)
+
+    def test_dynamic_or_glob_sed_needs_sandbox(self):
+        # Without --sandbox (or with a dynamic/glob word out of place) a $var/glob sed is refused for
+        # every role - writer included, since its worktree writes have no sandbox backstop - so an
+        # agent can't build an e, w or -i the policy never sees (SP3). Each case is pinned here.
+        for cmd in self.NEEDS_SANDBOX:
+            self.assertDenied(self.bash(cmd), "sed-unchecked", "use_alternative", cmd)
+            self.assertDenied(self.r(cmd), "sed-unchecked", "use_alternative", cmd)
+            self.assertDenied(self.wb(cmd), "sed-unchecked", "use_alternative", cmd)
+
+    def test_a_for_loop_built_sed_script_is_refused(self):
+        # A loop variable is a dynamic word like any other: the inner sed call still needs --sandbox.
+        cmd = "for X in wout.txt; do sed \"$X\" f; done"
+        self.assertDenied(self.bash(cmd), "sed-unchecked", "use_alternative", cmd)
+        self.assertDenied(self.r(cmd), "sed-unchecked", "use_alternative", cmd)
+
+    def test_sandbox_lets_a_dynamic_or_glob_sed_through(self):
+        # With --sandbox (sed refuses every e/r/w) and each dynamic word as an -e value or after --,
+        # the call is allowed for a writer or general-purpose agent (only a literal -i would remain).
+        for cmd in self.SANDBOXED_OK:
+            self.assertIsNone(self.bash(cmd), cmd)
+            self.assertIsNone(self.wb(cmd), cmd)
+
+    def test_a_tilde_in_a_sed_write_target_is_literal_not_home(self):
+        # sed reads a ~ in a w name or -i suffix literally; checking it as $HOME would deny a
+        # write that really lands in the worktree (F4).
+        self.assertIsNone(self.wb("sed 's/a/b/w ~/out.txt' f"))
+        self.assertIsNone(self.wb("sed -i'~/*.bak' s/a/b/ f"))
+
+    def test_researcher_refuses_sed_with_a_glob_or_brace(self):
+        # A glob or brace word hides what sed's args expand to, and --sandbox does not disable -i;
+        # a researcher has no sandbox backstop for a write, so it refuses every glob/brace, even
+        # with --sandbox.
+        for cmd in ("sed -n p {-e,'1e date'} f", "sed -n 1p *", "sed -n 's/a/b/p' *.log",
+                    "sed --sandbox 's/a/b/' *.log"):
+            self.assertDenied(self.r(cmd), "sed-unchecked", "use_alternative", cmd)
+        # A lone dynamic word is no longer "fine": it needs --sandbox and an -e / after-- slot.
+        self.assertDenied(self.r("sed \"$X\" -n p f"), "sed-unchecked", "use_alternative")
+        self.assertDenied(self.r("sed \"${X:--i}\" 's/h/H/' f"), "sed-unchecked", "use_alternative")
+        self.assertIsNone(self.r("sed --sandbox -e \"$x\" f"))  # --sandbox + an -e value: allowed
+
+    def test_sed_i_backup_names_follow_gnu_seds_symlink_handling(self):
+        # GNU sed 4.9 without --follow-symlinks writes the backup at the link path; with it, at
+        # the resolved target (which os.path.realpath matches). Verified empirically on sed 4.9.
+        self.assertEqual(sp.sed_backups(["a.txt"], ".bak", "/w", False), ["a.txt.bak"])
+        self.assertEqual(sp.sed_backups(["a.txt"], ".bak", "/w", True),
+                         ["a.txt.bak", os.path.realpath("/w/a.txt") + ".bak"])
+
+
+def _gnu_sed_sandbox():
+    try:
+        return subprocess.run(["sed", "--sandbox", "-n", "p"], stdin=subprocess.DEVNULL,
+                              capture_output=True, timeout=10).returncode == 0
+    except OSError:
+        return False
+
+
+SED_ADDRESSES = ("", "", "1", "$", "/x/", "/a\\/b/", "/[/]/", "\\,x,", "\\%[%]%", "/x/I", "1,3",
+                 "1,/y/", "0,/y/", "2~3", "1,+2", "/x/,$", "/[[:alpha:]/]/M", "1 , 3")
+SED_COMMANDS = (
+    "p", "d", "=", "N", "D", "G", "x", "z", "F", "l", "l 5", "q", "q 3", "Q", "e", "e date",
+    "a foo", "a foo; e date", "i\\\nbar", "c\\", "a foo\\\ne x", "a\\text", "r in", "R in",
+    "w out", "W out", "w a b", "w out;p", "w out}", ":e", ":w", "b e", "be", "t w", "T", "b",
+    "b a;:a", "s/a/b/", "s/a/b/g", "s/a/b/e", "s/a/b/w out", "s/a/b/gpw out", "s/a/b/ e",
+    "s/a/b/2", "s/a/b/I", "s|a|b|e", "s,a,b,w out", "s#a#b#", "s/[/]/x/", "s/[/]/g;/w out/p",
+    "s/[^]/]/e/", "s/[[:alpha:]/]/x/", "s/[[./.]]/x/e", "s/[\\/]/x/", "s/x/\\/e/", "s/x/[/]/",
+    "s/a\\/b/c/", "s\\a\\b\\", "s/a/b/#e", "s/a/b/ ; e", "s/[[=e=]/]/x/", "s/[[:]/]/x/w out",
+    "s/a/b/p2g", "s/a/b/pp", "s/a/b/0", "s/a/b/\r", "y/ab/ba/", "y/a\\/b/b\\/a/", "y|a|e|",
+    "{p}", "{e}", "{p;e date\n}", "}", "v", "v 4.2", "#e", "#n", "s/a\\\nb/c/", "s/a/b\\\ne/")
+SED_SEPARATORS = (";", "\n", " ; ", "\n\n", "  ", "")
+
+
+def sed_corpus():
+    """Every command alone, then seeded random scripts of one to three commands."""
+    rng = random.Random(20261020)
+    out = list(SED_COMMANDS)
+    for _ in range(1500):
+        parts = []
+        for _ in range(rng.randint(1, 3)):
+            parts.append(rng.choice(SED_ADDRESSES) + rng.choice(("", "", "!", " ! "))
+                         + rng.choice(SED_COMMANDS))
+            parts.append(rng.choice(SED_SEPARATORS))
+        out.append("".join(parts[:-1]))
+    return out
+
+
+def sed_part_corpus():
+    """Scripts split across -e parts: sed carries a pending a/i/c text and open blocks over."""
+    parts = SED_COMMANDS + ("a foo\\", "1{", "}", ":a", "ba", "$!N", "/^\\n*$/{$d;N;ba", "i\\")
+    rng = random.Random(20261021)
+    return [[rng.choice(parts) for _ in range(rng.randint(2, 3))] for _ in range(800)]
+
+
+@unittest.skipUnless(_gnu_sed_sandbox(), "needs GNU sed with --sandbox (4.3 or newer)")
+class SedOracle(unittest.TestCase):
+    """sed_ops against GNU sed itself: --sandbox refuses a script holding e, r or w before it
+    runs any of it, and plain sed opens every w file when it compiles the script."""
+
+    def test_sed_ops_agrees_with_gnu_sed(self):
+        for script in sed_corpus():
+            p = subprocess.run(["sed", "--sandbox", "-n", "-e", script], stdin=subprocess.DEVNULL,
+                               capture_output=True, text=True, timeout=10)
+            try:
+                ops = sp.sed_ops(script)
+            except sp.SedError:
+                ops = None
+            if p.returncode == 0:  # sed runs it, and it has no e, r or w
+                self.assertEqual(ops, [], repr(script))
+            elif "e/r/w commands disabled" in p.stderr:  # sed found one: so must we
+                self.assertNotEqual(ops, [], repr(script))
+
+    def test_sed_ops_reads_e_parts_as_gnu_sed_does(self):
+        for parts in sed_part_corpus():
+            argv = ["sed", "--sandbox", "-n"] + [x for part in parts for x in ("-e", part)]
+            p = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                               timeout=10)
+            try:
+                ops = sp.sed_ops(*parts)
+            except sp.SedError:
+                ops = None
+            if p.returncode == 0:
+                self.assertEqual(ops, [], repr(parts))
+            elif "e/r/w commands disabled" in p.stderr:
+                self.assertNotEqual(ops, [], repr(parts))
+
+    def test_w_names_are_the_files_sed_opens(self):
+        checked = 0
+        for script in sed_corpus():
+            try:
+                ops = sp.sed_ops(script)
+            except sp.SedError:
+                continue
+            if not ops or any(op != "w" for op, _ in ops):
+                continue
+            with tempfile.TemporaryDirectory() as d:
+                p = subprocess.run(["sed", "-n", "-e", script], stdin=subprocess.DEVNULL, cwd=d,
+                                   capture_output=True, timeout=10)
+                if p.returncode:
+                    continue
+                made = {os.path.relpath(os.path.join(top, f), d)
+                        for top, _, files in os.walk(d) for f in files}
+            self.assertEqual(made, {a for _, a in ops if a not in ("/dev/stdout", "/dev/stderr")},
+                             repr(script))
+            checked += 1
+        self.assertGreater(checked, 20)
+
+
+class ZshQuoting(Base):
+    """zsh expansions Parable can't see stay refused, except in text zsh takes literally:
+    single quotes, double quotes (for =(...) only) and quoted heredoc bodies."""
+
+    def test_literal_text_passes(self):
+        for cmd in ("python3 - <<'EOF'\nux,uy=(x2-x1)/d\nEOF",
+                    "python3 - <<-'EOF'\n\tux,uy=(x2-x1)/d\n\tEOF",
+                    "cat > notes.txt <<'EOF'\n${(f)x} $~y =(z)\nEOF\necho done",
+                    "cat <<\\EOF\n=(z)\nEOF", "cat <<E'X'\n${(f)x}\nEX",
+                    "python3 -c 'a=(1, 2)'", 'python3 -c "a=(1, 2)"', "echo '${(f)x} $~y'",
+                    "echo hi # it's\npython3 -c 'b=(3)'", "echo a#b 'c=(d)'", "x=(a b)",
+                    "F=(supabase/a.sql supabase/b.sql); for f in $F; do echo $f; done",
+                    "typeset -a x=(1 2)", "echo a'b'=c"):
+            self.assertIsNone(self.bash(cmd), cmd)
+
+    def test_expansions_zsh_runs_are_refused(self):
+        for cmd in ("cat =(ls)", "echo ${(f)x}", 'echo "${(f)x}"', "echo $~x", 'echo "$~x"',
+                    "x=1 =(ls)", "echo \\\n=(ls)", "x=\\\n(a b)", "echo ${:-=(ls)}", 'echo "$(cat =(ls))"', "echo `cat =(ls)`",
+                    "cat <<EOF\n${(f)x}\nEOF", "cat <<EOF\n=(ls)\nEOF",
+                    "echo a#'\n' =(ls) \\'",
+                    "(( x = 1 << 2 ))\necho '\n2\n' =(ls) \\'",
+                    "echo $'\\'' =(ls) 'x'",
+                    "cat <<'E'\n=(ls)\nE \n",
+                    "echo x;# '\n' =(ls) \\'", "echo $\\\n~x", "echo $\\\n{\\\n(f)x}",
+                    "x='/(e:\"touch y\":)'; echo $\\\n~x",
+                    "bash -c 'cat =(ls)'", "zsh -c 'echo ${(f)x}'", "eval 'echo $~x'"):
+            self.assertDenied(self.bash(cmd), "zsh-expansion", "stop_and_explain", cmd)
+
+    def test_literal_heredocs_count_only_when_parable_reads_them_the_same(self):
+        from parable import parse
+        a = sp.Analyzer(self.ev("Bash", {"command": "ls"}), POLICY, home=self.home)
+        cmd = "python3 - <<'EOF'\nux=(1)\nEOF"
+        self.assertFalse(a.zsh_expansion(cmd, parse(cmd)))
+        self.assertTrue(a.zsh_expansion(cmd, parse("python3 - <<'EOG'\nux=(1)\nEOG")))
+        self.assertTrue(a.zsh_expansion(cmd, None))  # Parable couldn't parse it
+
+
+    def test_an_equals_inside_a_word_never_substitutes(self):
+        # Every printable character, and a few multi-character words, before =(: where the scan
+        # marks the = mid-word, zsh 5.9 must not run a process substitution there.
+        if not shutil.which("zsh"):
+            self.skipTest("needs zsh")
+        prefixes = [chr(c) for c in range(33, 127)] + [
+            "a" + chr(c) for c in range(33, 127)] + ["a'b'", 'a"b"', "a\\x", "a\\\n", "\\\n",
+                                                    "x\\ ", "{a,", "a]", "$x", "~"]
+        masked = 0
+        with tempfile.TemporaryDirectory() as d:
+            env = {"PATH": os.environ["PATH"], "HOME": d, "TMPPREFIX": os.path.join(d, "zsub")}
+            for pre in prefixes:
+                cmd = f"print -r -- {pre}=(print -r x)"
+                at = len("print -r -- ") + len(pre)
+                if not any(a <= at < b for a, b, _ in sp.unexpanded_spans(cmd)[0]):
+                    continue
+                masked += 1
+                out = subprocess.run(["zsh", "-f", "-c", cmd], cwd=d, env=env, text=True,
+                                     capture_output=True, timeout=10).stdout
+                self.assertNotIn(env["TMPPREFIX"], out, cmd)
+            control = subprocess.run(["zsh", "-f", "-c", "print -r -- =(print -r x)"], cwd=d,
+                                     env=env, text=True, capture_output=True, timeout=10).stdout
+        self.assertIn(env["TMPPREFIX"], control)
+        self.assertGreater(masked, 80)
+
+
+# Places a marker can sit (@), and noise around them. Every one is valid zsh.
+ZSH_SEGMENTS = (
+    "print -r -- @", "print -r -- 'a @ b'", 'print -r -- "a @ b"', "print -r -- x'@'y",
+    "cat <<'E'\n@\nE", "cat <<-'E'\n\t@\n\tE", 'cat <<"E"\n@\nE', "cat <<\\E\n@\nE",
+    "cat <<E'X'\nq @\nEX", "cat <<E\n@\nE", "cat <<'A' <<'B'\n@\nA\n@\nB",
+    "print -r -- 'm\n@'", 'print -r -- "m\n@"', "print -r -- a#'\n' @ \\'",
+    "print -r -- hi # it's", "print -r -- a#b", "print -r -- a\\'b", "print -r -- $'x\\'y'",
+    'print -r -- "q\\"r"', "print -r -- s \\\n t", "cat <<<'h'", 'print -r -- "$(print -r c)"',
+    "print -r -- ${HOME:+h}", "(( 1 << 2 ))", ": 'x'\"y\"\\z", 'true # "unclosed',
+    "print -r -- \\# x", "print -r -- a; print -r -- @", 'print -r -- "$(print -r @)"',
+    'print -r -- "`print -r @`"', "print -r -- ${HOME:+@}", 'print -r -- "${HOME:+@}"',
+    "print -r -- x # it's\nprint -r -- @ \\'")
+
+
+def zsh_case(rng):
+    """A command of two to five segments with markers, and the markers as (index, kind, id).
+    A P marker is =(...), which zsh runs except inside quotes; an F marker is ${(e)...}, which
+    it runs except in single quotes. Each appends its id to ./log when zsh runs it."""
+    body, marks = [], []
+    for seg in (rng.choice(ZSH_SEGMENTS) for _ in range(rng.randint(2, 5))):
+        if body:
+            body.append("\n")
+        for k, piece in enumerate(seg.split("@")):
+            if k:
+                kind = rng.choice("PF")
+                mid = f"{kind}{len(marks)}"
+                marks.append((sum(map(len, body)), kind, mid))
+                body.append(f"=(print -r {mid} >>log)" if kind == "P" else f"${{(e)V{mid}}}")
+            body.append(piece)
+    pre = "".join(f"V{mid}='$(print -r {mid} >>log)'\n" for _, kind, mid in marks if kind == "F")
+    return pre + "".join(body), [(i + len(pre), kind, mid) for i, kind, mid in marks]
+
+
+@unittest.skipUnless(shutil.which("zsh"), "needs zsh")
+class ZshOracle(unittest.TestCase):
+    """unexpanded_spans against zsh itself: a marker the scan calls literal never runs."""
+
+    def test_literal_spans_never_run(self):
+        rng = random.Random(20261020)
+        masked = ran = 0
+        for _ in range(300):
+            cmd, marks = zsh_case(rng)
+            spans = sp.unexpanded_spans(cmd)[0]
+            literal = {mid for i, kind, mid in marks
+                       if any(a <= i < b and (kind == "P" or k != "double") for a, b, k in spans)}
+            with tempfile.TemporaryDirectory() as d:
+                subprocess.run(["zsh", "-f", "-c", cmd], cwd=d, capture_output=True, timeout=10,
+                               env={"PATH": os.environ["PATH"], "HOME": d,
+                                    "TMPPREFIX": os.path.join(d, "zsh")})
+                try:
+                    with open(os.path.join(d, "log")) as f:
+                        logged = set(f.read().split())
+                except FileNotFoundError:
+                    logged = set()
+            self.assertFalse(literal & logged, cmd)
+            masked, ran = masked + len(literal), ran + len(logged)
+        self.assertGreater(masked, 100)
+        self.assertGreater(ran, 100)
 
 
 class Deadline(Base):
