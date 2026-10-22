@@ -175,7 +175,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     follows only if asks skip it.
   - **The exam-prep skill suite** (Hayden's brief, `~/.claude/plans/exam-prep-skill-brief.md`,
     approved 2026-10-06, revised 2026-10-20; copied into lane exam-prep's artifacts): one
-    umbrella skill, intake through tutor and retro, built from the Security I and AI 4701 runs.
+    umbrella skill, intake through tutor and retro, built from the two completed runs.
     Round 1 (two midterms Tue 10/27) needs it loadable by Thu 10/22, else round 1 runs by hand.
     Hayden's pick (2026-10-20): rules public, evidence private (his quoted corrections, case
     notes, course and Ed ids stay in a private dir, [[dotclaude-public-repo]]). In lane exam-prep
