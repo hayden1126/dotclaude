@@ -252,6 +252,21 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     checkout passes, so a trial failure confined to those cases is this artifact. Fix: the test
     refuses a `.tmp/` under a temp root, as it already does for `.claude/worktrees/`, or `trial`
     builds its tree outside the temp root. Lane-able; no live lane owns it.
+  - **`lane trial`'s scratch tree has no setup, and another lane's base conflict fails it**
+    (a session in vulcan, lane editfix, reported 2026-10-22, session 7b1249ff; the lead checked
+    the code). (1) `trial` builds its tree with a bare `git worktree add --detach`
+    (`skills/lanes/scripts/lane:2392`). It copies no `.worktreeinclude` file and runs no
+    `setup`, so a Node suite fails on its first import (no `node_modules`, no `tsc`). The
+    baseline fails the same way, but a failure with no test ids counts as the merge's
+    (`trial_report`), so the trial says FAILED. (2) A lane that conflicts with origin/main by
+    itself makes the whole trial exit 1 ("didn't merge", `:2414`), though the lanes skill
+    says to ask for ready anyway then; a paused spike that never merges fails every trial in
+    its repo. Fix: give the tree the lane's setup (link or copy what `.worktreeinclude` and the
+    setup produce, or run the setup there, with a flag to skip it). Say "fails the same way on
+    the baseline" when neither run has ids and both exit alike. Report a lane that conflicts
+    with the base alone as untried, not FAILED, or add `--skip <lane>`. Workaround: start each
+    `--run` with `ln -sfn <lane>/node_modules node_modules &&`. Lane-able (`skills/lanes/`,
+    `tests/lanes`); no live lane owns it; pairs with the temp-root entry above.
   - **A compact pass puts live background writers into plan mode** (a session in another repo
     reported it, 2026-10-20; the lead checked the code and the writer's transcript). Compact
     mode is the pass picked when background tasks run (`skills/pass/SKILL.md:23,80,103`), yet
