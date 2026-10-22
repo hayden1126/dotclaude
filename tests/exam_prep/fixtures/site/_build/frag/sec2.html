@@ -1,0 +1,33 @@
+<section class="note" id="sec-2">
+  <h2><span class="n">§2</span> Graphs</h2>
+  <p>A graph is a set of nodes joined by edges. Recall from <a class="xref" href="#sec-1-rules">§1.2</a> the product rule: it bounds the number of edges.</p>
+  <h3 id="sec-2-basics">2.1 Nodes and edges</h3>
+  <p>An undirected graph on \(n\) nodes has at most \(\binom{n}{2}\) edges <a class="slink">D2 #/4</a>.</p>
+  <figure id="fig-2-triangle"><svg viewBox="0 0 320 150" role="img" aria-label="Three nodes A, B and C joined in a triangle">
+    <line x1="60" y1="110" x2="160" y2="30" stroke="currentColor"/>
+    <line x1="160" y1="30" x2="260" y2="110" stroke="currentColor"/>
+    <line x1="60" y1="110" x2="260" y2="110" stroke="currentColor" class="dash"/>
+    <circle cx="60" cy="110" r="18" class="bx fill-surf"/><text x="60" y="115" text-anchor="middle" class="mono">A</text>
+    <circle cx="160" cy="30" r="18" class="accbx"/><text x="160" y="35" text-anchor="middle" class="mono acc">B</text>
+    <circle cx="260" cy="110" r="18" class="bx fill-surf"/><text x="260" y="115" text-anchor="middle" class="mono">C</text>
+    <text x="160" y="140" text-anchor="middle" class="sm mut">3 nodes, ≤ 3 edges</text>
+  </svg><figcaption>Fig 2.1. Three nodes reach the bound of three edges.</figcaption></figure>
+  <p><strong>Conclusion:</strong> the bound is reached exactly when every pair is joined.</p>
+  <p class="connects"><strong>How it's tested:</strong> bound the edges of a described graph. Practice: <a class="slink">HW1 Q2</a>.</p>
+  <div class="callout warn"><div class="lab">Not on Exam 1</div><p>Weighted graphs (<a class="slink">D2 #/9</a>) come after the exam's last slide. Kept for a later exam.</p></div>
+  <h3 id="sec-2-walks">2.2 Walks</h3>
+  <p>A <strong>walk</strong> follows edges from node to node; its length is the number of edges it uses <a class="slink">D2 #/6</a>.</p>
+  <!-- FIG fig-2-walk: step-through, the walks A-B-C and A-C-B on the triangle of Fig 2.1 -->
+  <h4 id="sec-2-walks-code">Walks in code</h4>
+  <p>An adjacency list stores each node's neighbours, and a walk is valid when every step follows one <a class="slink">W1 §3.1</a>.</p>
+  <pre><code>adj = {"A": ["B", "C"], "B": ["A", "C"], "C": ["A", "B"]}
+def is_walk(path):  # A &lt;-&gt; B &amp; B &lt;-&gt; C is a walk of length 2
+    return all(b in adj[a] for a, b in zip(path, path[1:]))</code></pre>
+  <div class="callout"><div class="lab">Background</div><p>Only the slides prove that a shortest walk never repeats a node (<a class="slink">D2 #/7</a>); no practice question asks for it.</p></div>
+  <p class="connects"><strong>How it's tested:</strong> trace a walk and give its length. Practice: <a class="slink">HW1 Q3</a>.</p>
+  <h3 id="sec-2-must-know">2.3 Must know</h3>
+  <ul>
+    <li><strong>Edge bound:</strong> \(\binom{n}{2}\), reached by the complete graph (<a class="xref" href="#sec-2-basics">§2.1</a>)</li>
+    <li><strong>Walk length:</strong> the number of edges it uses (<a class="xref" href="#sec-2-walks">§2.2</a>)</li>
+  </ul>
+</section>

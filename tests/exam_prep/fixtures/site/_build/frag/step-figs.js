@@ -1,0 +1,1 @@
+../../../../../../skills/exam-prep/templates/stepthrough-example/step-figs.js
