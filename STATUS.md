@@ -260,8 +260,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     refuses a `.tmp/` under a temp root, as it already does for `.claude/worktrees/`, or `trial`
     builds its tree outside the temp root. Lane-able; no live lane owns it.
   - **`lane trial`'s scratch tree has no setup, and another lane's base conflict fails it**
-    (a session in vulcan, lane editfix, reported 2026-10-22, session 7b1249ff; the lead checked
-    the code). (1) `trial` builds its tree with a bare `git worktree add --detach`
+    (sessions in vulcan reported it twice on 2026-10-22: lane editfix, session 7b1249ff, and lane
+    relbutton, session 54ba45b2; the lead checked the code). (1) `trial` builds its tree with a bare `git worktree add --detach`
     (`skills/lanes/scripts/lane:2392`). It copies no `.worktreeinclude` file and runs no
     `setup`, so a Node suite fails on its first import (no `node_modules`, no `tsc`). The
     baseline fails the same way, but a failure with no test ids counts as the merge's
