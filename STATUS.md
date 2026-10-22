@@ -205,7 +205,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     `.git/config.lock` (2026-10-20 21:31 EDT, no git process alive), which blocks every
     `git config` write in the main checkout: exam-prep's `git push -u` couldn't set its upstream.
     The cause is likely in Claude Code's sandbox, which binds these git paths per command, and
-    not in dotclaude. Same family as config-dir's bwrap error in the
+    not in dotclaude. Hayden removed the lock and pruned again on 2026-10-22 (54 entries). The
+    second prune removed the same long-gone names as the first (`tree1`, `chrome-bg`,
+    `excluded-guard`, and others) plus newer ones, so something replants from an old list,
+    probably long-running sessions whose sandbox path list dates from their start. A sandboxed
+    command right after planted nothing. Same family as config-dir's bwrap error in the
     Watch item below.
   - **Three false denials in the subagent policy** (lane exam-prep's dry run, 2026-10-20; the
     lead reproduced each with the code's own regexes). In `skills/delegation/scripts/subagent-policy`:
