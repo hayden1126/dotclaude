@@ -1,6 +1,6 @@
 ---
 name: exam-prep
-description: Use when a student is preparing for a course exam (midterm, final, quiz) from lecture slides, homework or recitations; when asked to make study notes or a notes site for a course, a cheat sheet or crib sheet, or a mock or practice exam; to walk through homework or practice questions as a tutor; to check Ed Discussion for exam scope, format or allowed materials; or to reopen an exam-prep course hub for the next exam. Not for general research, paper writing or slide-deck building.
+description: Use when a student is preparing for a course exam (midterm, final, quiz) from lecture slides, homework or recitations; when asked to make study notes or a notes site for a course, a cheat sheet or crib sheet, or a mock or practice exam; to walk through homework or practice questions as a tutor; to check Ed Discussion for exam scope, format or allowed materials; to reopen an exam-prep course hub for the next exam; or to run the retro on a round's exams, in the skill's own checkout. Not for general research, paper writing or slide-deck building.
 ---
 
 # Exam prep
@@ -29,14 +29,19 @@ scripts through their interpreter, for example `python3 -I <skill>/scripts/linkc
 - Study help on a built hub: "walk me through the homework", a quiz on the true/false set.
 - Exam facts: "check Ed for exam info".
 - The next exam of a course that already has an exam-prep hub.
+- The retro after a round's exams, in a checkout of the repository that ships this skill.
 
 **Don't use for:** general research (research-discipline), slide decks (deck-production), reading
 an ebook alone (ebook-extract), or a paper.
 
 ## Where you are
 
-Before anything else, read `<root>`'s `STATUS.md`, `PLAN.md` and `MANIFEST.md` (the files in the
-session's own directory, not a parent hub's), then `_build/backbone.md` if it exists. STATUS lists every published artifact's URL and every judgment
+A session in a checkout of the repository that ships this skill (its top level holds
+`skills/exam-prep/SKILL.md`, which `12-retro` edits in place of the installed copy), not a hub, runs
+only `12-retro`: a `~/scratch/exam-prep/rounds/<n>/retro.md` not marked done is a retro under way,
+and its log says where it stopped. In a hub, before anything else, read `<root>`'s `STATUS.md`,
+`PLAN.md` and `MANIFEST.md` (the files in the session's own directory, not a parent hub's), then
+`_build/backbone.md` if it exists. STATUS lists every published artifact's URL and every judgment
 call (FB-008: read these before concluding something doesn't exist). Then route:
 
 - the session sits at the root of a hub with its own conventions, and `exam-prep/` holds the
@@ -98,7 +103,7 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
 | 09 | `workflows/09-tutor.md` | walk-throughs, quizzes, notes patches, `_build/logs/tutor.md` | on demand |
 | 10 | `workflows/10-polish.md` | scan, report, apply on approval | on demand |
 | 11 | `workflows/11-next-exam.md` | the finished exam archived, the templates reconciled, the next exam's MANIFEST and PLAN; a source added to this exam | the next exam's PLAN.md approved and its build launched |
-| 12 | `workflows/12-retro.md` | skill diffs, `CHANGELOG.md` entry | after every exam |
+| 12 | `workflows/12-retro.md` | after a round's exams, in the skill's checkout: the approved skill changes with their ids, header dates, a `CHANGELOG.md` entry and backlog trials | `tests/exam_prep` passes, a review round is minor-only, the pull request is asked for |
 
 ## Hard rules
 
@@ -146,5 +151,9 @@ Browser checks run Playwright from a script, not chrome-devtools MCP (L20).
 ## The private dir
 
 `~/scratch/exam-prep/` holds what never goes in git: `profile.md` (the student's standing
-preferences, such as the cheat-sheet font floor) and the evidence `12-retro` reads. Create it on
-first use, with the Write tool: the Bash sandbox can't write outside the hub.
+preferences, such as the cheat-sheet font floor) and what `12-retro` reads and writes: `README.md`
+(an index of rounds), `evidence.md` (each evidence letter's source), `denylist.txt` (the private
+terms the repository's privacy test refuses) and `rounds/<n>/`, one per retro (its log, the
+condensed transcripts, the harvest reports, the outcome, the proposal and the review reports).
+Create it on first use, with the Write tool: the Bash sandbox can't write outside the session's own
+directory.

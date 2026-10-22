@@ -19,13 +19,10 @@ DENYLIST = os.path.expanduser("~/scratch/exam-prep/denylist.txt")
 EM_DASH = chr(0x2014)
 
 # Paths the skill names that a later stage creates. Remove each one in the commit that adds it.
-PENDING = {
-    "references/CHANGELOG.md",
-    "workflows/12-retro.md",
-}
+PENDING = set()
 
-ID = re.compile(r"\b(FB-\d{3}|L\d{2}|K\d{2})\b")
-DEFINED = re.compile(r"^\|\s*(?:~~)?(FB-\d{3}|L\d{2}|K\d{2})\b")
+ID = re.compile(r"\b(FB-\d{3,}|L\d{2,}|K\d{2,})\b")
+DEFINED = re.compile(r"^\|\s*(?:~~)?(FB-\d{3,}|L\d{2,}|K\d{2,})\b")
 PATH = re.compile(r"(?:(?<=<skill>/)|(?<![\w./~-]))"
                   r"((?:workflows|templates|scripts|references)/[A-Za-z0-9_-]+(?:\.[A-Za-z0-9]+)+)")
 

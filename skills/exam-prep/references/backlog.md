@@ -4,9 +4,14 @@ Baseline as of 2026-10-20; changes only via `12-retro`.
 
 Improvements found but not applied. The templates and workflows encode the two past runs as they
 were. This list holds what a critique of those products, or the harvest, says could be better.
-Nothing here is applied during a build. Before a round, the student picks items to try. The round's
-retro keeps what worked (moving it into STYLE, CHASSIS or a workflow, and marking it `kept`) and
-marks the rest `dropped`, with the reason.
+Nothing here is applied during a build: only a retro applies one, as a trial. At round N's retro
+(`12-retro` step 5) the student picks items to try in round N+1; the retro writes each into the
+skill like any approved change and marks it `trying (round N+1)`, and a hub of round N+1 gets it
+once the student installs the skill with it: a template change through a new hub's copies or
+`11-next-exam`'s reconcile, any other at the next stage that runs. Round N+1's retro asks of each
+trial, naming the hubs that had it: kept (`kept (round N+1)`, the change stays), dropped (`dropped
+(round N+1: why)`, the change reverted and any rule it added struck through, its id kept), or, when
+no hub had it, carried on (`trying (round N+2)`). An item nobody picks stays `open`.
 
 - **Sev:** `high` costs exam points or study time on every use, `medium` is real friction, `low` is
   polish.

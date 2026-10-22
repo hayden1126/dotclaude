@@ -3,14 +3,19 @@
 Baseline as of 2026-10-20; changes only via `12-retro`.
 
 Every rule the skill encodes came from a correction or a stated preference in a past run. This log
-traces each one to its evidence. Ids are stable: a retired rule is struck through and keeps its id,
-and a new rule takes the next free number, so a hub doc that cites `FB-073` keeps pointing at the
-same rule.
+traces each one to its evidence. Ids are stable, so a hub doc that cites `FB-073` keeps pointing at
+the same rule: none is renumbered or reused. A new rule (`12-retro` step 6) takes the next free
+number in its stage's block (the gap before the next block's first id), else the next after the
+highest id, and sits in its stage's section. A retired rule keeps its row, struck through
+(`| ~~FB-073~~ | ~~<its rule>~~ | ... |`), its last cell ending `retired (round N): <why>` and
+naming the id that replaces it, if one does.
 
 - **Evidence** cites `<source>.<item>`, such as `A1.C23` (source A1, correction 23) or `B3.G7`
   (gotcha 7). The sources are harvest reports of two completed runs (A and B) and the session that
-  planned run B (H). They quote the student verbatim, so they stay private and are not shipped. A
-  maintainer who has them reads `~/scratch/exam-prep/evidence.md` for the index.
+  planned run B (H); a retro gives each hub-exam of its round the next free letter, skipping C, G,
+  K, L and S, which would read as other ids, then `AA`, `AB` and on after Z (`12-retro` step 1).
+  They quote the student verbatim, so they stay private and are not shipped. A maintainer who has
+  them reads `~/scratch/exam-prep/evidence.md` for the index.
 - **Home** is where the rule lives in the skill: a STYLE or CHASSIS rule (`S4`, `C2`), a workflow
   step (`w04`), a template (`t:cheatsheet`) or a script (`linkcheck.py`). `12-retro` keeps this
   column current.
