@@ -238,7 +238,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     fails until the inventory classifies it. It's a local strictness switch like `--strict`, so
     it goes in `CLAUDE_FLAG_OK` (`tests/delegation/command_inventory.py`). Fixed on main by #143
     (policy-fp copied exam-prep's line on Hayden's pick); exam-prep's identical line merges
-    cleanly.
+    cleanly. Then 2.1.307 added `claude sandbox uninstall` (it removes the Windows sandbox
+    account and network filters), red again everywhere (lane exam-prep's report, 2026-10-21;
+    the lead reproduced it). Hayden's picks: classify it as an ask, like `sandbox install`
+    (the inventory entry, the `CLAUDE_RULES` subcommand and a `settings.json` ask rule), in
+    lane exam-prep.
   - **`lane trial` fails test_subagent_policy on the merge alone** (lane policy-fp's report,
     2026-10-20; the lead checked the code). Sandboxed, `trial` builds its scratch tree in the
     system temp dir (`skills/lanes/scripts/lane:2341`), which is `/tmp/claude-<uid>`, one of
