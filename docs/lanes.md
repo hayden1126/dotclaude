@@ -700,10 +700,11 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
 
   The baseline `settings.json` pins the model with env `ANTHROPIC_MODEL=opus` (lane model-pin,
   2026-10-23). Claude Code reads it at startup ahead of the `model` key that `/model` saves (probed
-  on 2.1.309), so a `/model` moves only its own session. `/model` still says it saved the pick as
-  your default: it writes the key, which nothing reads while the pin stands. A `--model` flag beats
-  the pin, so `lane open --model ''` starts a lane on Opus. The effort has no pin: `/effort` still
-  sets the default for new sessions.
+  on 2.1.309), so a `/model` moves only its own session. `/model` still says the pick is "saved as
+  your default for new sessions" and writes the key, then adds that `ANTHROPIC_MODEL` is set and new
+  sessions use it (checked live on 2.1.310): nothing reads the key while the pin stands. A `--model`
+  flag beats the pin, so `lane open --model ''` starts a lane on Opus. The effort has no pin:
+  `/effort` still sets the default for new sessions.
 
   A plain pass keeps the pick (`carried_pick` in lanelib, which pass-respawn, `claude-restore` and
   `claude-saved` share), for each flag the old claude launched with, read from its `/proc` command
