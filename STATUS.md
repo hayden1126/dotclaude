@@ -89,12 +89,17 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
   - **Live lanes** (briefs in each record). Merge order: 1 practices (its next PR,
     auth-secrets, carries the lead's notes; the skill suite below). It opened on Hayden's ok,
-    merged #142 on 2026-10-20 and stays open for more PRs. Merged 2026-10-22 and installed from
+    merged #142 on 2026-10-20 and stays open for more PRs. 2 model-pin (`feat/model-pin`,
+    opened 2026-10-23 on Hayden's picks): `/model` saves its pick as the default for every new
+    session (`model` in `~/.claude/settings.json`); the lane pins new sessions to Opus with
+    `ANTHROPIC_MODEL`, which 2.1.309's startup reads before the saved key, so `/model` switches
+    only the current session. Effort stays as is: `CLAUDE_CODE_EFFORT_LEVEL` would lock
+    `/effort` in every session. Merged 2026-10-22 and installed from
     main: exam-prep (#144). Merged 2026-10-21 and installed from main: mute (#141), policy-fp
     (#143), in Hayden's readiness order. Merged and closed 2026-10-20, installed from main:
     summary-retire (#139), link-atomic (#140, which Hayden ordered first so no later install ran
     the old `link()`), pr-horizon (#135), config-dir (#133). Hayden raised the cap
-    from 3 to 4 on 2026-10-20 for exam-prep; three slots are free since 2026-10-22.
+    from 3 to 4 on 2026-10-20 for exam-prep; two slots are free.
   - **Lane ask quality: done** (2026-10-19 to 2026-10-20). ask-check merged as #131 and was
     installed from main 2026-10-20: a PreToolUse hook on AskUserQuestion (`hooks/ask_check.py`)
     denies risky asks with a checklist in the reason. branch-reuse merged as #130: `lane new`
@@ -429,7 +434,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lane practices (merge order 1, its next PR, carries the lead branch) runs; their state is in their records (`lane ls`). After each reinstall,
+  0. Lanes practices (merge order 1, its next PR, carries the lead branch) and model-pin (2)
+     run; their state is in their records (`lane ls`). After each reinstall,
      check `ls -la ~/.claude/CLAUDE.md` (the Watch item). Watch that push asks open with the
      briefing (#137); if they skip it, the Stop-hook check is the follow-up (Hayden's pick).
   1. Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
