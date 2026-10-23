@@ -1587,16 +1587,21 @@ class Pick(Base):
         self.assertEqual(self.respawned(["--model", "opus", "--model=claude-sonnet-5-5"]),
                          ["--model", "claude-sonnet-5-5", "--permission-mode", "plan"])
 
-    def test_only_the_flags_it_launched_with_carry(self):
-        # The command saved its pick as the default for new sessions, which the respawn takes.
+    def test_a_model_command_carries_with_no_launch_flag_and_an_effort_one_doesnt(self):
+        # Launched with no --model, the respawn would take the pin (ANTHROPIC_MODEL), not the
+        # /model's pick, so the pick carries. An /effort carries only over a launch --effort:
+        # the default it saved is what a respawn with none takes.
         self.say(command("/model"), reply("claude-haiku-5-5", "high"))
         self.assertEqual(self.respawned(["--permission-mode", "plan", "x"]),
-                         ["--permission-mode", "plan"])
+                         ["--model", "claude-haiku-5-5", "--permission-mode", "plan"])
         self.assertEqual(self.respawned(["--effort", "low"]),
-                         ["--effort", "high", "--permission-mode", "plan"])
+                         ["--model", "claude-haiku-5-5", "--effort", "high", "--permission-mode",
+                          "plan"])
         self.history(command("/effort", "max"), reply("claude-sonnet-5-5", "max"))
         self.assertEqual(self.respawned(["--model", "sonnet"]),
                          ["--model", "sonnet", "--permission-mode", "plan"])
+        self.assertEqual(self.respawned(["--permission-mode", "plan", "x"]),
+                         ["--permission-mode", "plan"])
 
     def test_after_a_picker_model_it_carries_the_id_the_session_last_ran(self):
         self.say(reply("claude-sonnet-5-5", "low"), command("/model"),
@@ -1633,10 +1638,12 @@ class Pick(Base):
                          ["--model", "sonnet", "--effort", "high", "--permission-mode", "plan"])
 
     def test_a_flag_drops_when_no_usable_entry_follows_its_command(self):
-        # The command saved its pick as the default for new sessions, which then applies.
+        # The respawn then takes the pin for the model and the saved default for the effort; a
+        # /model's own argument still carries, as the pick it was.
         cases = (
             ([command("/model")], []),  # nothing at all after it
-            ([command("/model", "opusplan"), reply("<synthetic>", None)], []),  # an API error
+            ([command("/model", "opusplan"), reply("<synthetic>", None)],  # an API error
+             ["--model", "opusplan"]),
             ([command("/model"), reply("claude-haiku-4-5-20251001", None)],  # haiku 4.5: no effort
              ["--model", "claude-haiku-4-5-20251001"]),
             ([command("/effort", "max"), reply("<synthetic>", None)], ["--model", "sonnet"]),

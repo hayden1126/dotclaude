@@ -159,7 +159,8 @@ holds only notices. A call-time refusal or detach error prints to the caller and
            again when the respawn fails (`failed`) or anything after writing them raises. M and
            E are lanelib.carried_pick's, for each flag the old claude launched with: its value,
            or what the session last ran with when a /model or /effort since (or what ran) says
-           it changed (docs/lanes.md, "Model and effort")
+           it changed; and M after a /model with no launch --model, which would otherwise get
+           the ANTHROPIC_MODEL pin (docs/lanes.md, "Model and effort")
   compact  type `/compact <focus>` and Enter, wait 1 s, type the prompt and Enter (it queues
            behind the compact, spike S4); no respawn and no carry. A send-keys that fails
            stops there and logs `failed` (past /compact, every report of it hands over the

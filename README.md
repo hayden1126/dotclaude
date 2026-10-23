@@ -76,6 +76,15 @@ guard's scan: it lists each dir it would refuse with what the dir holds, then pr
 where the scan's last line says. Rerun the scan (`python3 -I hooks/excluded_guard.py --scan`) after adding a
 PATH dir or cloning a repo whose install step sets in-repo git hooks.
 
+The baseline's `env` pins new sessions to Opus with `ANTHROPIC_MODEL=opus`, which Claude Code
+reads at startup ahead of the `model` key (probed on 2.1.309). Why: `/model` saves its pick as the
+machine-wide default, so without the pin a `/model sonnet` in one session moves every later
+session to Sonnet. With it, `/model` changes only its own session. It still says it saved the pick
+as your default: it writes the key, which nothing reads while the pin stands. `claude --model`
+beats the pin, and a `/pass`, tab restore or shelf Open keeps a session's `/model` (docs/lanes.md,
+"Model and effort"). To pin another model, set `env.ANTHROPIC_MODEL` in the overlay. The effort
+has no pin: `/effort` still sets the default for new sessions.
+
 The baseline's `permissions` deny destructive git and ask before anything that can reach `main`,
 in auto mode too. Denied: force-push, `reset --hard`, `reset --merge` and `git clean -f`, plain or
 through `git -C`, plus a `bash -c` whose text has `git push` then `--force`, or `git reset` then
@@ -494,7 +503,7 @@ need nothing extra.
   `session-created` hook runs `claude-restore --auto main`. It takes the files from the same
   socket but an earlier server (other sockets, like a `tmux -L` test server, are left alone) and opens one window per tab, in the old order, running `claude --resume <id>` in its
   directory with the session's `--model` and `--effort`, or what a later `/model` or `/effort`
-  picked (a bare resume keeps the model but drops the effort; docs/lanes.md, "Model and
+  picked (a bare resume takes the pinned model and the default effort; docs/lanes.md, "Model and
   effort"). It sets each window's tab bar placement before claude starts, then lays out the
   bar once, so the tabs come back where you put them. A marked tab comes back only if it ended within 120 s of its own server's
   last activity (the shutdown itself); one closed earlier stays closed. It skips a session
