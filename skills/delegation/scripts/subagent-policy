@@ -361,6 +361,29 @@ def _heredoc_body(cmd, i, delim, quoted, strip):
     return None
 
 
+# ---------------------------------------------------------------- flags
+
+def flag_hit(a, denied):
+    """The flag in denied that the word a names, or None. A short flag (or a one-dash long one,
+    like find's -exec) must match exactly; a long one matches exactly, with =value, or by any
+    prefix, since getopt_long and git's parse-options take a unique prefix (`--no-veri` is
+    --no-verify). A prefix that is ambiguous makes the program refuse it, so matching it anyway
+    only denies a call that would fail. Use it for deny-lists only: an allow-list stays exact, so
+    a prefix can add denials and never an allow."""
+    if not a:
+        return None
+    if a in denied:
+        return a
+    name = a[2:].partition("=")[0] if a.startswith("--") else ""
+    if not name:
+        return None
+    return next((f for f in denied if f.startswith("--") and f[2:].startswith(name)), None)
+
+
+def any_flag(flags, denied):
+    return any(flag_hit(a, denied) for a in flags)
+
+
 # ---------------------------------------------------------------- sed
 
 class SedError(Exception):
@@ -1554,18 +1577,44 @@ class Analyzer:
                           f"curl {a} writes a local file; researcher reads to stdout")
             i += 1
 
+    # wget 1.21's short options that take a value (its --help gives each a =VALUE; -n takes the
+    # letters of -nv, -nc, -nd, -nH, -np): the rest of the cluster, else the next word.
+    WGET_VALUE_SHORT = frozenset("aABDeiIlnoOPQRtTUwX")
+
     def wget(self, args, researcher=False):
-        for a in args[1:]:
-            if a and any(a == f or a.startswith(f + "=") for f in self.p["wget"]["send_flags"]):
-                self.deny("http-write", "manual_only", f"wget {a} sends data")
-        if researcher:
-            joined = " ".join(a or "" for a in args[1:])
-            to_stdout = re.search(r"(^|\s)(-q?O\s*-|--output-document=-)(\s|$)", joined)
-            writes = re.search(r"(^|\s)(-o|-a|-r|-m|-P|--output-file|--append-output|"
-                               r"--recursive|--mirror|--directory-prefix)(\s|=|$)", joined)
-            if not to_stdout or writes:
-                self.deny("researcher-write", "scope_down",
-                          "researcher runs wget only with -O- (output to stdout)")
+        w = self.p["wget"]
+        send, writes = w["send_flags"], w["researcher_write_flags"]
+        out_doc, words = None, list(args[1:])
+        while words:
+            a = words.pop(0)
+            if a == "--":
+                break  # the rest are URLs
+            if not a or a == "-" or not a.startswith("-"):
+                continue
+            if a.startswith("--"):
+                found = [a]
+                if flag_hit(a, ["--output-document"]) and not flag_hit(a, ["--output-file"]):
+                    _, eq, value = a.partition("=")
+                    out_doc = value if eq else (words.pop(0) if words else None)
+            else:
+                found = []
+                for k, c in enumerate(a[1:], 2):
+                    found.append("-" + c)
+                    if c in self.WGET_VALUE_SHORT:
+                        value = a[k:] or (words.pop(0) if words else None)
+                        if c == "O":
+                            out_doc = value
+                        break
+            for f in found:
+                if flag_hit(f, send):
+                    self.deny("http-write", "manual_only",
+                              f"wget {a} sends data or runs a wgetrc command that can")
+                if researcher and flag_hit(f, writes):
+                    self.deny("researcher-write", "scope_down",
+                              f"wget {a} writes a local file; researcher reads to stdout")
+        if researcher and out_doc != "-":
+            self.deny("researcher-write", "scope_down",
+                      "researcher runs wget only with -O- (output to stdout)")
 
     # ------------------------------------------------ git
 
@@ -1610,12 +1659,11 @@ class Analyzer:
                       f"git {sub} is not a known git subcommand (an alias?); use the subcommand "
                       "it stands for")
         for a in rest:
-            if a and any(a == f or a.startswith(f + "=") for f in g["denied_flags"]):
+            if flag_hit(a, g["denied_flags"]):
                 self.deny("git-flag", "use_alternative", f"git {sub} {a} is not allowed")
             if sub == "grep" and a and (a.startswith("-O") or a == "--open-files-in-pager"):
                 self.deny("git-flag", "use_alternative", "git grep -O runs a pager command")
-            if sub == "clone" and a and (a in ("-u", "--template", "--config") or
-                                         a.startswith("--template=") or a.startswith("--config=")):
+            if sub == "clone" and flag_hit(a, ("-u", "--template", "--config")):
                 self.deny("git-flag", "use_alternative", f"git clone {a} is not allowed")
             if sub == "clone" and a and re.match(r"^(ext|fd)::", a):
                 self.deny("git-transport", "hard_stop", f"git clone {a} runs a command")
@@ -1635,14 +1683,15 @@ class Analyzer:
                       "only `git checkout -b <new>` is allowed; use `git switch -c <new>` to "
                       "create a branch")
         if sub == "switch" and not (flags & {"-c", "--create"}) or (
-                sub == "switch" and flags & {"-C", "--force-create", "-f", "--force",
-                                             "--discard-changes"}):
+                sub == "switch" and any_flag(flags, ("-C", "--force-create", "-f", "--force",
+                                                     "--discard-changes"))):
             self.deny("git-switch", "use_alternative", "only `git switch -c <new>` is allowed")
-        if sub == "restore" and (not flags & {"--staged", "-S"} or flags & {"--worktree", "-W"}):
+        if sub == "restore" and (not flags & {"--staged", "-S"}
+                                 or any_flag(flags, ("--worktree", "-W"))):
             self.deny("git-restore", "use_alternative",
                       "git restore that discards work is not allowed; `git restore --staged "
                       "<path>` unstages")
-        if sub == "branch" and flags & self.GIT_BRANCH_MUTATE:
+        if sub == "branch" and any_flag(flags, self.GIT_BRANCH_MUTATE):
             self.deny("git-branch", "use_alternative",
                       "deleting, moving or force-resetting a branch is not allowed")
         if sub == "stash" and first in ("drop", "clear", "pop"):
@@ -1650,7 +1699,7 @@ class Analyzer:
                       f"git stash {first} discards a stash entry; `git stash apply` keeps it")
         if sub == "worktree" and first not in (None, "list"):
             self.deny("git-worktree", "manual_only", "only `git worktree list` is allowed")
-        if sub == "tag" and flags & self.GIT_TAG_MUTATE:
+        if sub == "tag" and any_flag(flags, self.GIT_TAG_MUTATE):
             self.deny("git-tag", "manual_only", "deleting or moving a tag is not allowed")
         if sub == "remote" and first not in self.GIT_REMOTE_READ:
             self.deny("git-remote", "manual_only", f"git remote {first} changes remotes")
@@ -1658,11 +1707,11 @@ class Analyzer:
             self.deny("git-config", "manual_only", "git config writes are not allowed")
         if sub == "reflog" and first in ("expire", "delete"):
             self.deny("git-reflog", "manual_only", f"git reflog {first} discards history")
-        if sub == "gc" and any(f.startswith("--prune") for f in flags):
+        if sub == "gc" and any_flag(flags, ("--prune",)):
             self.deny("git-gc", "manual_only", "git gc --prune discards objects")
-        if sub in ("merge", "cherry-pick", "am") and "--abort" in flags:
+        if sub in ("merge", "cherry-pick", "am") and any_flag(flags, ("--abort",)):
             self.deny("git-abort", "use_alternative", f"git {sub} --abort discards work in progress")
-        if sub == "rm" and (flags & {"-f", "--force"} or any(
+        if sub == "rm" and (any_flag(flags, ("-f", "--force")) or any(
                 a and re.fullmatch(r"-[a-zA-Z]*f[a-zA-Z]*", a) for a in rest)):
             self.deny("git-rm-force", "use_alternative", "git rm -f discards changes")
         if sub == "submodule" and first not in ("status", "summary", None):
@@ -1693,7 +1742,7 @@ class Analyzer:
     def git_config_read(self, rest, pos, flags):
         write_flags = {"--unset", "--unset-all", "--add", "--replace-all", "--edit", "-e",
                        "--rename-section", "--remove-section", "--global", "--system"}
-        if flags & write_flags:
+        if any_flag(flags, write_flags):
             return False
         if flags & {"--get", "--get-all", "--get-regexp", "--list", "-l", "--get-urlmatch",
                     "--show-origin", "--show-scope", "--name-only"}:
@@ -1707,13 +1756,13 @@ class Analyzer:
                       f"researcher runs read-only git; git {sub} changes something")
         ok = True
         if sub == "branch":
-            ok = not (flags & (self.GIT_BRANCH_MUTATE | {"-t", "--track", "--no-track",
-                                                         "--create-reflog"}))
+            ok = not any_flag(flags, self.GIT_BRANCH_MUTATE | {"-t", "--track", "--no-track",
+                                                               "--create-reflog"})
             ok = ok and (not pos or flags & {"--list", "-l", "--contains", "--merged",
                                              "--no-merged", "--points-at", "--no-contains"})
         elif sub == "tag":
-            ok = not (flags & (self.GIT_TAG_MUTATE | {"-a", "-s", "-m", "-F", "-u",
-                                                      "--annotate", "--sign"}))
+            ok = not any_flag(flags, self.GIT_TAG_MUTATE | {"-a", "-s", "-m", "-F", "-u",
+                                                            "--annotate", "--sign"})
             ok = ok and (not pos or flags & {"-l", "--list", "--contains", "--points-at",
                                              "--merged", "--no-merged"})
         elif sub == "remote":
@@ -1759,7 +1808,7 @@ class Analyzer:
             for f in r["denied_flags"].get(base, []):
                 attached = (not f.startswith("--") and len(f) == 2 and self.short_cluster(a)
                             and a.startswith(f))
-                if a == f or a.startswith(f + "=") or attached:
+                if flag_hit(a, (f,)) or a.startswith(f + "=") or attached:
                     self.deny("researcher-flag", "scope_down",
                               f"{base} {f} writes or runs something; researcher only reads")
         if base == "git":

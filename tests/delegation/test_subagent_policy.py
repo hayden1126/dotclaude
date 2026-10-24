@@ -456,6 +456,38 @@ class Git(Base):
                     "git reflog", "git submodule status", "git tag"):
             self.assertIsNone(self.bash(cmd), cmd)
 
+    def test_denied_long_flags_match_by_unique_prefix(self):
+        # git's parse-options takes any unique prefix of a long option (`git branch --del` ran
+        # as --delete), so every deny-list matches by prefix, each site here once.
+        for cmd, rule in (
+                ("git commit --no-veri -m x", "git-flag"),
+                ("git diff --outp=o.txt", "git-flag"),
+                ("git log --ext-d", "git-flag"),
+                ("git clone --conf=core.fsmonitor=x https://a/b d", "git-flag"),
+                ("git clone --temp=t https://a/b d", "git-flag"),
+                ("git branch --del old", "git-branch"),
+                ("git branch --set-up=o/x", "git-branch"),
+                ("git tag --del v1", "git-tag"),
+                ("git switch -c new --disc", "git-switch"),
+                ("git restore --staged --work f", "git-restore"),
+                ("git rm --forc f", "git-rm-force"),
+                ("git merge --abo", "git-abort"),
+                ("git cherry-pick --abo", "git-abort"),
+                ("git gc --pru=now", "git-gc"),
+                ("git config --unset-a user.name", "git-config"),
+                ("git config --rem x", "git-config")):
+            self.assertDenied(self.bash(cmd), rule, msg=cmd)
+
+    def test_prefix_matching_only_adds_denials(self):
+        # Allow-lists stay exact, and a longer flag that merely starts with a denied one's name
+        # is a different option.
+        for cmd in ("git diff --output-indicator-new=+", "git commit --no-edit -m x",
+                    "git branch --list", "git config --get user.name", "git restore --staged f",
+                    "git switch -c new", "git branch --show-current", "git log --stat"):
+            self.assertIsNone(self.bash(cmd), cmd)
+        for cmd in ("git restore --stag f", "git switch --cre new"):
+            self.assertIsNotNone(self.bash(cmd), cmd)
+
 
 class Rm(Base):
     def test_rm_rules(self):
@@ -488,6 +520,16 @@ class Network(Base):
         for cmd in ("curl -s https://x", "curl -I https://x", "curl -X GET https://x",
                     "curl -sSfL https://x", "wget -qO- https://x"):
             self.assertIsNone(self.bash(cmd), cmd)
+
+    def test_wget_send_flags_match_by_prefix_and_rc_commands_are_denied(self):
+        # wget's getopt_long takes unique prefixes; -e/--execute runs a wgetrc command and
+        # --config reads a wgetrc file, either of which can set post_data or method.
+        for cmd in ("wget --post-d=a https://x", "wget --meth=PUT https://x",
+                    "wget --body-f=f https://x", "wget -qO- -e post_data=x https://x",
+                    "wget -qO- -epost_data=x https://x", "wget -qe method=PUT -O- https://x",
+                    "wget -qO- --exec=method=PUT https://x", "wget -qO- --config=rc https://x",
+                    "wget -qO- --conf=rc https://x"):
+            self.assertDenied(self.bash(cmd), "http-write", "manual_only", cmd)
 
 
 class Files(Base):
@@ -735,6 +777,28 @@ class Researcher(Base):
                 ("uniq in out", "researcher-flag"), ("LD_PRELOAD=x ls", "env-assignment"),
                 ("FOO=1 ls", "env-assignment")):
             self.assertDenied(self.r(cmd), rule, msg=cmd)
+
+
+    def test_denied_flags_match_by_unique_prefix(self):
+        for cmd, rule in (
+                ("sort --out=o.txt f", "researcher-flag"),
+                ("sort --compress-prog=sh f", "researcher-flag"),
+                ("grep --filt=x y f", "researcher-flag"),
+                ("rg --pre-g=x foo", "researcher-flag"),
+                ("date --se=now", "researcher-flag"),
+                ("git branch --trac x origin/x", "researcher-git"),
+                ("git tag --anno v1", "researcher-git"),
+                ("wget -O- --rec https://x", "researcher-write"),
+                ("wget -O- --output-f=log https://x", "researcher-write"),
+                ("wget -O- --dir=d https://x", "researcher-write"),
+                ("wget -qrO- https://x", "researcher-write"),
+                ("wget -qo log -O- https://x", "researcher-write"),
+                ("wget -bqO- https://x", "researcher-write")):
+            self.assertDenied(self.r(cmd), rule, msg=cmd)
+        for cmd in ("grep --pretty foo f", "sort --stable f", "wget -qO- https://x",
+                    "wget -q -O - https://x", "wget --output-document=- https://x",
+                    "wget -qO- -U agent https://x", "wget -qO- --header=X:1 https://x"):
+            self.assertIsNone(self.r(cmd), cmd)
 
 
 class Mcp(Base):
