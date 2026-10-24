@@ -7,7 +7,7 @@ description: Hand this Claude Code session off and restart it fresh in its tmux 
 
 ## Overview
 
-A pass ends this session's context and starts the next one from disk. It always runs a handoff first, gates on `handoff-check`, and then `pass-respawn` acts once the turn ends: it respawns the pane with a fresh `claude` (with the `--model` and `--effort` the session launched with, or what it ran after a later `/model` or `/effort`), or types `/compact` and the resume prompt. The design and its spikes are in PLAN.md, "PR 3: `/pass`"; the script's docstring has the mechanics.
+A pass ends this session's context and starts the next one from disk. It always runs a handoff first, gates on `handoff-check`, and then `pass-respawn` acts once the turn ends: it respawns the pane with a fresh `claude` (with the `--model` and `--effort` the session launched with, or what it ran after a later `/model` or `/effort`; a `/model` carries even with no launch `--model`, since the fresh claude would take the Opus pin), or types `/compact` and the resume prompt. The design and its spikes are in PLAN.md, "PR 3: `/pass`"; the script's docstring has the mechanics.
 
 It runs on `/pass`, or on a terse list whose last item is "pass" with an action before it: "handoff and pass", "commit, pass", "commit, handoff and pass". "pass compact", "handoff and compact" and "handoff and pass compact" pick the compact mode. A one-word "pass" ("Pass.") is not a trigger: it is also how Hayden declines an offer ("want me to also do X?"). Neither is "pass" as a noun or with a subject ("a later pass", "the tests pass").
 

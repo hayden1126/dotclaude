@@ -698,9 +698,18 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   refuses a pick for a lane with a live session, since `/model` or `/effort` in its window is what
   changes a live one.
 
+  The baseline `settings.json` pins the model with env `ANTHROPIC_MODEL=opus` (lane model-pin,
+  2026-10-23). Claude Code reads it at startup ahead of the `model` key that `/model` saves (probed
+  on 2.1.309), so a `/model` moves only its own session. `/model` still says the pick is "saved as
+  your default for new sessions" and writes the key, then adds that `ANTHROPIC_MODEL` is set and new
+  sessions use it (checked live on 2.1.310): nothing reads the key while the pin stands. A `--model`
+  flag beats the pin, so `lane open --model ''` starts a lane on Opus. The effort has no pin:
+  `/effort` still sets the default for new sessions.
+
   A plain pass keeps the pick (`carried_pick` in lanelib, which pass-respawn, `claude-restore` and
   `claude-saved` share), for each flag the old claude launched with, read from its `/proc` command
-  line:
+  line, and for the model after a `/model` even when it launched without one, since the fresh
+  claude would otherwise take the pin (Hayden's pick, 2026-10-23):
   - After a `/model` (for the effort, a `/model` or `/effort`) in the transcript, it carries what
     the last main-chain assistant entry since ran with (`message.model`, `effort`). That id loses
     what an alias or a 1M form means (`opusplan`'s switch per mode, `sonnet[1m]`), so the model is
@@ -709,7 +718,9 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
     `opusplan` or 1M form picked there loses its meaning. The user's saved default is never read: it
     is machine-wide, so another session's later pick of the same family would pass for this
     session's. When no usable entry follows (a `<synthetic>` one, a model that takes no effort, an
-    id that isn't `claude-`), the flag drops, and the default the command saved applies.
+    id that isn't `claude-`), the effort drops to the default the command saved, and the model
+    carries the `/model`'s argument if `lane open` would accept it (the pin would undo the pick),
+    else it drops to the pin.
   - With no such command, it carries the launch value, except a model the last entry can't have run
     as (an alias of another family, another full name; a dated id such as
     `claude-haiku-4-5-20251001` fits `claude-haiku-4-5`). That is a change the transcript can't
@@ -717,26 +728,29 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
     carries the id that ran. A change there within the launch alias's family (`opus` to
     `claude-opus-4-8`) can't be told from none, so it reverts. The effort has no such check: Claude
     Code moves it without a command (a level per model, a one-turn bump), so an `/effort` before a
-    `/clear` reverts too.
+    `/clear` reverts too. A session launched without `--model` has no launch value to check, so a
+    `/model` before a `/clear` reverts to the pin.
 
   Only an accepted `/model` reaches the transcript (a refused one leaves no entry), and only Claude
   Code's own command entry counts, never a prompt or a tool result that quotes its tag. The
   transcript is read just before the respawn, as the resume mode is, so a `/model` during the
   passing turn counts; a launch value that can't be passed on refuses at the call. A session
-  launched without the flags respawns as before. Hayden picked this over a plain copy of the flags
-  (which undoes a mid-session `/model` at the next pass) and a stored per-lane pick (the same flaw,
-  plus new state). How each case comes out:
+  launched without the flags respawns bare unless a `/model` carries. Hayden picked this over a
+  plain copy of the flags (which undoes a mid-session `/model` at the next pass) and a stored
+  per-lane pick (the same flaw, plus new state). How each case comes out:
   - a plain pass or an auto-pass: the pick holds; a compact pass keeps the same process;
   - a `/model` or `/effort` mid-session: the new pick holds at the next pass; across a `/clear`,
-    only a model the launch value can't have run as does;
+    only a model the launch value can't have run as does (with no launch `--model`, none does);
   - a default changed after a lane opened: that lane keeps its launch pick until `/model` or
     `/effort` in its window moves it;
-  - the lead's main checkout: no repo default reaches it, and it carries what it launched with;
+  - the lead's main checkout: no repo default reaches it, and it carries what it launched with
+    or a `/model` since;
   - a tmux restart, or a reopen from the shelf: the pick holds, as below.
 
   A tab restore (`tmux/claude-restore`) and the shelf's Open (`tmux/claude-saved`) keep the pick
-  the same way (lane restore-effort, 2026-10-17). A bare `claude --resume <id>` keeps the model but
-  drops the effort to the default (spike S3, again on 2.1.302), and the resumed claude would have no
+  the same way (lane restore-effort, 2026-10-17). A bare `claude --resume <id>` drops the effort to
+  the default (spike S3, again on 2.1.302) and, under the pin, the model to the pin (probed
+  2026-10-23 on 2.1.309; before the pin it kept the model), and the resumed claude would have no
   flags for its next plain pass to carry, so each types the flags instead (`--resume` honors both,
   probed 2026-10-17 on 2.1.302). `hooks/session-registry.sh` saves the flags the session's claude launched with, as
   `model` and `effort` in its open-sessions entry, at each SessionStart: the hook's nearest
@@ -744,16 +758,14 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   claude run by its versioned path, whose comm is the version; else its name is `claude`), its
   `/proc` command line, each value only in the shape a pass would pass on. `claude-saved` copies
   them into a starred or shelved chat's entry at Star, Shelve and each SessionStart. At relaunch,
-  `carried_pick` reads them with the transcript, which by then is complete, with one difference
-  for a resume: when no usable entry follows a `/model` (the server died before the reply), it
-  carries the `/model`'s argument if `lane open` would accept it, since a resume keeps the
-  session's own model where a new session takes the default the command saved.
+  `carried_pick` reads them with the transcript, which by then is complete, by the pass's rule.
   Hayden approved launch flags plus the transcript over either alone: the flags alone undo a
   mid-session `/model`, and the transcript alone loses an alias or a 1M form and would pin a
   session launched without flags to what it last ran. How each case comes out:
   - launched without flags, or an entry from before the fields (a session started before the
     install keeps one until its next SessionStart: a compact, `/clear` or resume): a bare resume,
-    as before, so the user's default effort applies, as at a pass;
+    unless a `/model` in the transcript carries, so the pin and the user's default effort apply, as
+    at a pass;
   - a field outside its shape: that flag drops, never the tab;
   - a tab with no transcript yet: `claude` with its launch flags;
   - an attach tab, or Open of a chat running in the background: no flags, since the resume

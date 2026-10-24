@@ -715,7 +715,7 @@ def cmd_init(args) -> None:
                 cfg[key] = os.path.abspath(os.path.expanduser(value)) if key == "root" else value
         if args.autopass is not None:  # unset means on (autopass_state.decide)
             cfg["autopass"] = args.autopass
-        for key in PICKS:  # empty means the user's default: no flag at `open`
+        for key in PICKS:  # empty means no flag at `open`: the pin, or the default effort
             value = getattr(args, key)
             if value == "":
                 cfg.pop(key, None)
@@ -1705,7 +1705,8 @@ def cmd_open(args) -> None:
 
 def open_pick(args, cfg: dict) -> list[str]:
     """claude's --model and --effort for `open`: each flag, else the lanes config's default, else
-    none (the user's default; an empty flag skips the config's). A plain pass, a tab restore and
+    none (the ANTHROPIC_MODEL pin, the user's default effort; an empty flag skips the
+    config's). A plain pass, a tab restore and
     the shelf's Open carry them (lanelib.carried_pick), so they are checked here, where Hayden
     sees the refusal: a bad model would only show as an API error in a detached window
     (docs/lanes.md, "Model and effort")."""
@@ -3654,7 +3655,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--locks", help="comma-separated names `lane lock` accepts, e.g. gate,e2e")
     p.add_argument("--autopass", action=argparse.BooleanOptionalAction, default=None,
                    help="auto-pass in the lanes and the main checkout (on when never set)")
-    p.add_argument("--model", help="claude --model for each `lane open` ('' for the user's default)")
+    p.add_argument("--model", help="claude --model for each `lane open` ('' for the "
+                                   "ANTHROPIC_MODEL pin)")
     p.add_argument("--effort", help="claude --effort for each `lane open` ('' for the user's "
                                     "default)")
     p = sub.add_parser("new", help="make a lane: worktree, branch, record, port, setup")

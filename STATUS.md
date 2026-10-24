@@ -87,18 +87,19 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lanes** (briefs in each record). Merge order (Hayden, 2026-10-21, by readiness, since
-    exam-prep had stages left while mute and policy-fp were nearly done): 1 exam-prep
-    (`feat/exam-prep-skill`, carries the lead's notes: the exam-prep skill suite below, plus
-    classifying Claude Code 2.1.305's `--profile`; its dry run passed without an install, and
-    it needs its install turn before round 1's go/no-go, Thu 10/22). 2 practices (its next PR,
-    auth-secrets; the skill suite below). Each opened on Hayden's ok. practices merged #142 the
-    same day (Hayden moved it first since it was finished) and stays open for more PRs. Merged
-    2026-10-21 and installed from main: mute (#141), policy-fp (#143). Merged and closed
-    2026-10-20, installed from main:
+  - **Live lanes** (briefs in each record). Merge order: 1 model-pin (`feat/model-pin`, #145,
+    carries the lead's notes), 2 practices (its next PR, auth-secrets; the skill suite below),
+    paused by Hayden on 2026-10-24 for a few days. practices opened on Hayden's ok, merged #142
+    on 2026-10-20 and stays open for more PRs. model-pin (opened 2026-10-23 on Hayden's picks): `/model` saves its pick as the default for every new
+    session (`model` in `~/.claude/settings.json`); the lane pins new sessions to Opus with
+    `ANTHROPIC_MODEL`, which 2.1.309's startup reads before the saved key, so `/model` switches
+    only the current session. Effort stays as is: `CLAUDE_CODE_EFFORT_LEVEL` would lock
+    `/effort` in every session. Merged 2026-10-22 and installed from
+    main: exam-prep (#144). Merged 2026-10-21 and installed from main: mute (#141), policy-fp
+    (#143), in Hayden's readiness order. Merged and closed 2026-10-20, installed from main:
     summary-retire (#139), link-atomic (#140, which Hayden ordered first so no later install ran
     the old `link()`), pr-horizon (#135), config-dir (#133). Hayden raised the cap
-    from 3 to 4 on 2026-10-20 for exam-prep; two slots are free since mute and policy-fp merged.
+    from 3 to 4 on 2026-10-20 for exam-prep; two slots are free.
   - **Lane ask quality: done** (2026-10-19 to 2026-10-20). ask-check merged as #131 and was
     installed from main 2026-10-20: a PreToolUse hook on AskUserQuestion (`hooks/ask_check.py`)
     denies risky asks with a checklist in the reason. branch-reuse merged as #130: `lane new`
@@ -178,8 +179,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     umbrella skill, intake through tutor and retro, built from the two completed runs.
     Round 1 (two midterms Tue 10/27) needs it loadable by Thu 10/22, else round 1 runs by hand.
     Hayden's pick (2026-10-20): rules public, evidence private (his quoted corrections, case
-    notes, course and Ed ids stay in a private dir, [[dotclaude-public-repo]]). In lane exam-prep
-    since 2026-10-20.
+    notes, course and Ed ids stay in a private dir, [[dotclaude-public-repo]]). Merged as #144
+    (lane exam-prep, 2026-10-22; installed from main, with the `ed-pull` CLI and its excluded
+    entry).
   - **A device-wide toggle for the toast and the sound** (Hayden, 2026-10-20): one switch that
     mutes the Windows toast and the notify ring for every session on the machine (no toggle
     exists today). Design settled 2026-10-20 (Hayden picked the lead's pick on all four forks:
@@ -203,8 +205,16 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     .git/worktrees/excluded-guard/commondir" (and once `.git/config.lock`), and the retry ran
     clean. Hayden ran `git worktree prune` on 2026-10-20 (50 entries by then; the lead checked
     first that none was a live worktree's). After it, the dry run was empty, all 14 live
-    worktrees stayed, and a sandboxed command planted nothing. Still to watch: whether running
-    sessions plant the dirs again, and whether the bwrap error recurs. Same family as config-dir's bwrap error in the
+    worktrees stayed, and a sandboxed command planted nothing. They came back: 54 stale entries
+    by 2026-10-22, so a prune is only temporary. The sandbox also left a read-only 0-byte
+    `.git/config.lock` (2026-10-20 21:31 EDT, no git process alive), which blocks every
+    `git config` write in the main checkout: exam-prep's `git push -u` couldn't set its upstream.
+    The cause is likely in Claude Code's sandbox, which binds these git paths per command, and
+    not in dotclaude. Hayden removed the lock and pruned again on 2026-10-22 (54 entries). The
+    second prune removed the same long-gone names as the first (`tree1`, `chrome-bg`,
+    `excluded-guard`, and others) plus newer ones, so something replants from an old list,
+    probably long-running sessions whose sandbox path list dates from their start. A sandboxed
+    command right after planted nothing. Same family as config-dir's bwrap error in the
     Watch item below.
   - **Three false denials in the subagent policy** (lane exam-prep's dry run, 2026-10-20; the
     lead reproduced each with the code's own regexes). In `skills/delegation/scripts/subagent-policy`:
@@ -241,20 +251,22 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     cleanly. Then 2.1.307 added `claude sandbox uninstall` (it removes the Windows sandbox
     account and network filters), red again everywhere (lane exam-prep's report, 2026-10-21;
     the lead reproduced it). Hayden's picks: classify it as an ask, like `sandbox install`
-    (the inventory entry, the `CLAUDE_RULES` subcommand and a `settings.json` ask rule), in
-    lane exam-prep.
+    (the inventory entry, the `CLAUDE_RULES` subcommand and a `settings.json` ask rule). Fixed
+    on main by #144 (lane exam-prep, 2026-10-22) and live since the reinstall from main.
   - **`lane trial` fails test_subagent_policy on the merge alone** (lane policy-fp's report,
     2026-10-20; the lead checked the code). Sandboxed, `trial` builds its scratch tree in the
     system temp dir (`skills/lanes/scripts/lane:2341`), which is `/tmp/claude-<uid>`, one of
     the policy's temp roots (`skills/delegation/policy.toml:145`). `_test_tmp_dir`
     (`tests/delegation/test_subagent_policy.py:29-49`) then puts its fake homes in the tree's
-    `.tmp/`, so every fixture path reads as a temp write and about 13 deny cases pass. A real
+    `.tmp/`, so every fixture path reads as a temp write and about 13 deny cases pass. Lane
+    exam-prep saw the same under `/tmp` in test_pass_guards (1) and tests/practices (1), which
+    refuse sandbox-writable paths. A real
     checkout passes, so a trial failure confined to those cases is this artifact. Fix: the test
     refuses a `.tmp/` under a temp root, as it already does for `.claude/worktrees/`, or `trial`
     builds its tree outside the temp root. Lane-able; no live lane owns it.
   - **`lane trial`'s scratch tree has no setup, and another lane's base conflict fails it**
-    (a session in vulcan, lane editfix, reported 2026-10-22, session 7b1249ff; the lead checked
-    the code). (1) `trial` builds its tree with a bare `git worktree add --detach`
+    (sessions in vulcan reported it twice on 2026-10-22: lane editfix, session 7b1249ff, and lane
+    relbutton, session 54ba45b2; the lead checked the code). (1) `trial` builds its tree with a bare `git worktree add --detach`
     (`skills/lanes/scripts/lane:2392`). It copies no `.worktreeinclude` file and runs no
     `setup`, so a Node suite fails on its first import (no `node_modules`, no `tsc`). The
     baseline fails the same way, but a failure with no test ids counts as the merge's
@@ -279,6 +291,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     `permissionMode` in `agents/writer.md` holds against a parent's mid-run plan mode; if it
     does, it also covers plan mode entered by hand. Lane-able (`skills/pass/`, `tests/`); no
     live lane owns it.
+  - **`tests/setup/test_claude_mute.py` fails 3 cases near midnight** (lane model-pin's report,
+    2026-10-24; not yet checked by the lead). The cases depend on the local clock (a mute's end
+    time crossing midnight, likely). Fix: pin the clock in those tests. Lane-able; no owner.
   - **A compact pass's final Enter sometimes lands as a newline** (Hayden's screenshot,
     2026-10-22, vulcan lane homeboard, pane %10). `pass.log` logged `outcome=compact` at
     02:09:50Z (all four send-keys exited 0), yet the resume prompt sat in the input box over a
@@ -422,8 +437,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lanes exam-prep (merge order 1, carries the lead branch) and practices (2, its next PR)
-     run; their state is in their records (`lane ls`). After each reinstall,
+  0. Lanes model-pin (merge order 1, #145, carries the lead branch) and practices (2, paused
+     by Hayden 2026-10-24) run; their state is in their records (`lane ls`). After each reinstall,
      check `ls -la ~/.claude/CLAUDE.md` (the Watch item). Watch that push asks open with the
      briefing (#137); if they skip it, the Stop-hook check is the follow-up (Hayden's pick).
   1. Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
