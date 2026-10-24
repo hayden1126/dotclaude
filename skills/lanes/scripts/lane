@@ -2,7 +2,7 @@
 """lane: parallel Claude sessions, one git worktree ("lane") each, with single-writer records.
 
   lane init [--root DIR] [--setup CMD] [--ports A-B] [--cap N] [--locks A,B]
-            [--autopass | --no-autopass] [--model M] [--effort E]
+            [--autopass | --no-autopass] [--model M] [--effort E] [--trial-link P,Q]
   lane new <id> [--branch B] [--reuse-branch] [--claim N ...] [--goal T] [--files T]
                [--overlaps T] [--done-when T] [--constraints T]
   lane adopt <path> [--id SLUG]
@@ -11,7 +11,7 @@
   lane addr [--repo PATH] <id> | lane addr [--repo PATH] lead
   lane lead
   lane lock <name> [--wait SECS] -- <cmd...>
-  lane trial [<id> ...] [--wait SECS] [--keep] --run CMD [--run CMD ...]
+  lane trial [<id> ...] [--wait SECS] [--keep] [--link PATH ...] --run CMD [--run CMD ...]
   lane whoami [--json]
   lane claim <req> ... | lane release <req> ... | lane who <req>
   lane note <text>
@@ -31,13 +31,18 @@ must, so the commands they run stay sandboxed too.
 
 `trial`, from inside a lane, merges the base and every other live lane's commits (or only the
 ids given) onto the lane's HEAD in dangling commits, checks the merge out in a fresh scratch
-tree under the temp dir, and runs each `--run` there under the `suite` lock. A suite
+tree in the lane's .lane-trial/ (gitignored; never under the temp dir, a sandbox policy root),
+gives it the lane's .worktreeinclude files and a symlink to each lane dir the config's
+trial-link or a `--link` names, and runs each `--run` there under the `suite` lock. A suite
 that fails reruns on the baseline (HEAD plus the base) at the same path. It passes only when
-every test id it failed on the merge also fails on the baseline and its exit is no worse there
-(not non-zero on the merge but zero on the baseline, nor a death by signal on the merge only);
-one that printed no id, or whose output either run cut, fails, to be compared by hand. It exits
-0 with no conflict and no failure of the merge's own, 1 otherwise, and 75 when `--wait` runs
-out, as `lock` does.
+every test id (unittest, pytest, TAP) it failed on the merge also fails on the baseline and its
+exit is no worse there (not non-zero on the merge but zero on the baseline, nor a death by
+signal on the merge only), or, with no id on either run, when both exit alike; any other with
+no id, or whose output either run cut, fails, to be compared by hand. A lane that conflicts
+with the base alone is untried, which fails nothing. With nothing merged, the suites run once
+on HEAD plus the base. It exits 0 with no other conflict and no failure of the merge's own (or,
+with nothing merged, no failing suite), 1 otherwise, and 75 when `--wait` runs out, as `lock`
+does.
 
 The lead is the main-checkout session that last acted as lead: a bare `init`, `new`, `adopt`,
 `open` (not `--print`) or `done` that succeeds from an interactive session in the main checkout,
