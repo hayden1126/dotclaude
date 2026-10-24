@@ -1374,6 +1374,23 @@ class Trial(LaneWork):
         self.assertEqual(self.read(got), "edited in alpha\n")  # the lane's, not main's
         self.assertEqual(self.leftovers(), ([], []))
 
+    def env_files(self, *names):
+        """alpha ignores and includes *.env (and ignores node_modules/), with names written."""
+        self.write(os.path.join(self.alpha, ".gitignore"), "*.env\nnode_modules/\n")
+        self.write(os.path.join(self.alpha, ".worktreeinclude"), "*.env\n")
+        self.git("add", ".gitignore", ".worktreeinclude", cwd=self.alpha)
+        self.git("commit", "-q", "-m", "ignores", cwd=self.alpha)
+        for name in names:
+            self.write(os.path.join(self.alpha, name), f"{name} in alpha\n")
+
+    def test_an_included_file_whose_name_git_would_quote_reaches_the_tree(self):
+        self.env_files("café.env")
+        got = os.path.join(self.tmp, "got")
+        rc, out, err = self.trial("--run", f"cat café.env > {shlex.quote(got)}")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("lane trial: copied 1 file(s) from .worktreeinclude\n", out)
+        self.assertEqual(self.read(got), "café.env in alpha\n")
+
     def test_linked_dirs_reach_the_merge_and_the_baseline(self):
         # The config's trial-link and --link each link a dir of the lane's into the tree. The
         # suite fails on the merge only, so the baseline's tree shows its links too.

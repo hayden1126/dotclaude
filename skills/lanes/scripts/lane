@@ -511,6 +511,23 @@ def plain_path(rel: str) -> bool:
     return not any(part in ("", ".", "..") for part in rel.split("/"))
 
 
+def names_z(args: list[str], cwd: str, data: bytes | None = None) -> list[str]:
+    """The NUL-separated names a `git ... -z` call prints (fsdecoded, so no name is quoted or
+    lost to its encoding), fed data on stdin, bounded by TRIAL_GIT_WAIT: running out raises
+    OSError, which `new` and `trial` both report. A failure raises CalledProcessError, except
+    check-ignore's exit 1, which means none matched."""
+    env = dict(os.environ, LC_ALL="C", GIT_TERMINAL_PROMPT="0")
+    try:
+        p = subprocess.run(["git", *args], cwd=cwd, input=data, capture_output=True, env=env,
+                           timeout=TRIAL_GIT_WAIT)
+    except subprocess.TimeoutExpired:
+        raise OSError(errno.ETIMEDOUT, f"git {args[0]} took over {TRIAL_GIT_WAIT} s in {cwd}")
+    if p.returncode not in ((0, 1) if args[0] == "check-ignore" else (0,)):
+        raise subprocess.CalledProcessError(p.returncode, ["git", *args],
+                                            stderr=os.fsdecode(p.stderr))
+    return [os.fsdecode(x) for x in p.stdout.split(b"\0") if x]
+
+
 def copy_includes(repo: Repo, dest: str, src: str | None = None) -> list[str]:
     """Copy src's (by default the main checkout's; `trial` passes the lane's) gitignored files
     that its .worktreeinclude matches (gitignore syntax). An existing file is never overwritten:
@@ -519,12 +536,12 @@ def copy_includes(repo: Repo, dest: str, src: str | None = None) -> list[str]:
     include = os.path.join(src, ".worktreeinclude")
     if not os.path.isfile(include):
         return []
-    p = git(["ls-files", "--others", "--ignored", f"--exclude-from={include}"], src, check=True)
-    matched = [x for x in p.stdout.splitlines() if x]
+    matched = names_z(["ls-files", "-z", "--others", "--ignored", f"--exclude-from={include}"],
+                      src)
     if not matched:
         return []
-    ignored = subprocess.run(["git", "check-ignore", "--stdin"], cwd=src, input="\n".join(matched),
-                             capture_output=True, text=True).stdout.splitlines()
+    ignored = names_z(["check-ignore", "-z", "--stdin"], src,
+                      b"".join(os.fsencode(x) + b"\0" for x in matched))
     copied = []
     for rel in ignored:
         if not plain_path(rel):

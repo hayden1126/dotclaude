@@ -553,6 +553,16 @@ class RoundTrip(LanesRepo):
         self.assertIn("spike", self.git("branch", "--list", "spike"))
         self.assertFalse(os.path.exists(self.lane_path("spike")))
 
+    def test_new_copies_an_included_file_whose_name_git_would_quote(self):
+        # core.quotePath quotes a non-ASCII name in plain output: -z keeps it as it is.
+        self.commit(".gitignore", "*.env\n")
+        self.git("push", "-q", "origin", "main")
+        self.write(os.path.join(self.main, ".worktreeinclude"), "*.env\n")
+        self.write(os.path.join(self.main, "café.env"), "local\n")
+        out = self.lane("new", "spike")
+        self.assertIn("copied 1 file(s) from .worktreeinclude", out)
+        self.assertEqual(self.read(os.path.join(self.lane_path("spike"), "café.env")), "local\n")
+
     def test_done_clears_a_tree_a_trial_left_in_the_lane(self):
         # A trial killed past its cleanup leaves its tree registered in the lane's .lane-trial/:
         # the close unregisters it, so removing the lane leaves no stale entry behind.
