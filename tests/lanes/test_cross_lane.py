@@ -1391,6 +1391,19 @@ class Trial(LaneWork):
         self.assertIn("lane trial: copied 1 file(s) from .worktreeinclude\n", out)
         self.assertEqual(self.read(got), "café.env in alpha\n")
 
+    def test_an_included_file_under_a_linked_dir_never_blocks_the_link(self):
+        # Linked first, and an include under a link is the link's: no copy makes the dir, so
+        # the link goes in, with no warning.
+        self.env_files("x.env", os.path.join("node_modules", "pkg", ".env"))
+        seen = os.path.join(self.tmp, "seen")
+        rc, out, err = self.trial("--link", "node_modules", "--run",
+                                  f"readlink node_modules > {shlex.quote(seen)}")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("lane trial: copied 1 file(s) from .worktreeinclude, linked node_modules\n",
+                      out)
+        self.assertNotIn("not linked", err)
+        self.assertEqual(self.read(seen).strip(), os.path.join(self.alpha, "node_modules"))
+
     def test_linked_dirs_reach_the_merge_and_the_baseline(self):
         # The config's trial-link and --link each link a dir of the lane's into the tree. The
         # suite fails on the merge only, so the baseline's tree shows its links too.

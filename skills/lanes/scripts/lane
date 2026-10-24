@@ -528,10 +528,12 @@ def names_z(args: list[str], cwd: str, data: bytes | None = None) -> list[str]:
     return [os.fsdecode(x) for x in p.stdout.split(b"\0") if x]
 
 
-def copy_includes(repo: Repo, dest: str, src: str | None = None) -> list[str]:
+def copy_includes(repo: Repo, dest: str, src: str | None = None,
+                  skip: list[str] | tuple[str, ...] = ()) -> list[str]:
     """Copy src's (by default the main checkout's; `trial` passes the lane's) gitignored files
-    that its .worktreeinclude matches (gitignore syntax). An existing file is never overwritten:
-    in a finished lane it may hold a lane-local fix."""
+    that its .worktreeinclude matches (gitignore syntax), but those at or under a path in skip
+    (the links `trial` made, which bring them). An existing file is never overwritten: in a
+    finished lane it may hold a lane-local fix."""
     src = src or repo.main
     include = os.path.join(src, ".worktreeinclude")
     if not os.path.isfile(include):
@@ -544,6 +546,8 @@ def copy_includes(repo: Repo, dest: str, src: str | None = None) -> list[str]:
                       b"".join(os.fsencode(x) + b"\0" for x in matched))
     copied = []
     for rel in ignored:
+        if any(rel == s or rel.startswith(s + "/") for s in skip):
+            continue
         if not plain_path(rel):
             warn(f"not copied from .worktreeinclude: {rel!r} is no plain path")
             continue
@@ -2331,12 +2335,13 @@ class TreeSetup(NamedTuple):
 
 
 def trial_setup(repo: Repo, lane: str, tree: str, links: list[str]) -> TreeSetup:
-    """Ready a fresh tree as the lane's own tests ran: copy the lane's gitignored files its
-    .worktreeinclude matches (copy_includes from the lane, so the suites see the lane's copies,
-    never main's), then symlink each of links the lane has to the lane's own by absolute path
-    (node_modules, a .venv: built once, in the lane), unless the tree has that path already. A
-    link is no copy: a suite that writes through it writes the lane's files."""
-    copied = copy_includes(repo, tree, src=lane)
+    """Ready a fresh tree as the lane's own tests ran: symlink each of links the lane has to the
+    lane's own by absolute path (node_modules, a .venv: built once, in the lane), unless the
+    tree tracks that path, then copy the lane's gitignored files its .worktreeinclude matches
+    (copy_includes from the lane, so the suites see the lane's copies, never main's), but none
+    under a link, which brings them already. Links first: a copy under a link's path would make
+    its dir and block it. A link is no copy: a suite that writes through it writes the lane's
+    files."""
     linked, missing, present = [], [], []
     for rel in links:
         if not os.path.lexists(os.path.join(lane, rel)):
@@ -2354,6 +2359,7 @@ def trial_setup(repo: Repo, lane: str, tree: str, links: list[str]) -> TreeSetup
             present.append(rel)
         finally:
             os.close(fd)
+    copied = copy_includes(repo, tree, src=lane, skip=linked)
     return TreeSetup(copied, linked, missing, present)
 
 
