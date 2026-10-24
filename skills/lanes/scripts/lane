@@ -2362,7 +2362,8 @@ def trial_leftovers(repo: Repo, lane_id: str, root: str) -> None:
     `git worktree prune`, since the common dir holds other prunable entries that aren't this
     lane's. A sandboxed command can't remove an admin dir the sandbox mounted when it started,
     so a registration it can't remove is named, once, with the command to run sandbox-off. A
-    root that is a symlink is left alone (`done` calls this sandbox-off on the lane's)."""
+    root that is a symlink is left alone. Only `trial` calls this, sandboxed: it removes by
+    path, which `done`, sandbox-off, never may (trial_admin_dirs)."""
     if os.path.islink(root):
         return
     mine = re.compile(re.escape(trial_prefix(repo, lane_id)) + "[a-z0-9_]{8}")
@@ -2384,6 +2385,57 @@ def trial_leftovers(repo: Repo, lane_id: str, root: str) -> None:
         warn(shown("an earlier trial's tree is still registered and the sandbox can't remove "
                    "it; run sandbox-off: " + "; ".join(
                        f"git worktree remove --force {shlex.quote(p)}" for p in stuck)))
+
+
+def trial_admin_dirs(repo: Repo, lane_id: str, path: str) -> list[tuple[str, str]]:
+    """(admin dir, tree) of each tree a trial of lane lane_id left registered in the lane at
+    path (real), for `done`, which runs sandbox-off. Found by text alone, never by a path
+    resolved: an admin dir under <common>/worktrees that is a real dir (opened with O_NOFOLLOW)
+    whose gitdir file reads exactly <path>/TRIAL_DIR/<trial_prefix + 8 chars>/tree/.git. A
+    process the lane left can swap the tree for a symlink to another lane, so `done` never asks
+    git to remove a tree by its path; the lane's own `git worktree remove` deletes the files,
+    and drop_admin_dirs then the admin dirs."""
+    base = os.path.join(repo.common_dir, "worktrees")
+    mine = re.compile(re.escape(os.path.join(path, TRIAL_DIR, trial_prefix(repo, lane_id)))
+                      + r"[a-z0-9_]{8}/tree/\.git\n?")
+    found = []
+    try:
+        names = sorted(os.listdir(base)) if not os.path.islink(base) else []
+    except FileNotFoundError:
+        return []
+    for name in names:
+        admin = os.path.join(base, name)
+        try:
+            dfd = os.open(admin, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except OSError:  # a symlink, a file, or gone
+            continue
+        try:
+            fd = os.open("gitdir", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
+        except OSError:
+            continue
+        finally:
+            os.close(dfd)
+        with os.fdopen(fd, "rb") as f:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                continue
+            text = os.fsdecode(f.read(1 << 16))
+        if mine.fullmatch(text):
+            found.append((admin, text.rstrip("\n").removesuffix("/.git")))
+    return found
+
+
+def drop_admin_dirs(lane_id: str, admins: list[tuple[str, str]]) -> None:
+    """Remove the admin dirs trial_admin_dirs found, once the lane's worktree is gone; rmtree
+    refuses one swapped for a symlink since. One it can't remove is named, to remove by hand."""
+    for admin, tree in admins:
+        try:
+            shutil.rmtree(admin)
+        except OSError as e:
+            warn(shown(f"couldn't remove {admin}, the registration of a tree a trial left in "
+                       f"lane {lane_id} ({e.strerror or e}): remove that dir"))
+        else:
+            warn(shown(f"cleared the registration of a tree a trial left in lane {lane_id} (it "
+                       f"never reached its cleanup): {tree}"))
 
 
 class SuiteRun(NamedTuple):
@@ -3655,13 +3707,13 @@ def close_record(repo: Repo,
                                   {pid: described(p, "started during the close")
                                    for pid, p in left.items()},
                                   f"End them, then rerun `lane done {lane_id}`")
-                # A tree a killed trial left registered in the lane would go with it, its
-                # registration left stale. Sandbox-off here, so even one a sandboxed trial
-                # couldn't unregister goes.
-                trial_leftovers(repo, lane_id, os.path.join(path, TRIAL_DIR))
+                # A tree a killed trial left registered in the lane goes with it, so its admin
+                # dir would be left stale: found now, removed once the lane's own remove worked.
+                left_trees = trial_admin_dirs(repo, lane_id, path)
                 p = git(["worktree", "remove", path], repo.toplevel)
                 if p.returncode != 0:
                     raise LaneError(f"git worktree remove refused: {p.stderr.strip()}")
+                drop_admin_dirs(lane_id, left_trees)
             with lanes_lock(repo, f"lane {lane_id}'s record is not archived, and its worktree is "
                                   f"gone: {rerun}"):
                 reread(repo, loaded, path)

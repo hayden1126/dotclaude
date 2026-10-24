@@ -568,6 +568,35 @@ class RoundTrip(LanesRepo):
         self.assertNotIn(".lane-trial", self.git("worktree", "list", "--porcelain"))
         self.assertIn(tree, p.stderr)
 
+    def test_dones_trial_cleanup_never_follows_a_tree_swapped_for_a_link(self):
+        # A process the lane left can swap the leftover tree for a symlink to another lane:
+        # `done` (sandbox-off) never removes a tree by its path, only the admin dir whose gitdir
+        # names it, as text, and only once the lane's own remove succeeded.
+        self.lane("new", "spike")
+        self.lane("new", "other")
+        path, other = self.lane_path("spike"), self.lane_path("other")
+        self.write(os.path.join(other, "keep.txt"), "the other lane's\n")
+        key = lanelib.Repo(self.main, self.common).key
+        tree = os.path.join(path, ".lane-trial", f"lane-trial-{key}-spike-abcd1234", "tree")
+        self.git("worktree", "add", "--detach", "--quiet", tree, "HEAD", cwd=path)
+        self.write(os.path.join(path, ".lane-trial", ".gitignore"), "*\n")
+        shutil.rmtree(tree)
+        os.symlink(other, tree)
+        # An admin dir that is a symlink is never removed, even when its gitdir names the lane.
+        decoy = os.path.join(self.tmp, "decoy")
+        self.write(os.path.join(decoy, "gitdir"), os.path.join(
+            path, ".lane-trial", f"lane-trial-{key}-spike-efgh5678", "tree", ".git") + "\n")
+        os.symlink(decoy, os.path.join(self.common, "worktrees", "decoy"))
+        p = self.run_lane("done", "spike", "--abandon")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertFalse(os.path.exists(path))
+        listing = self.git("worktree", "list", "--porcelain")
+        self.assertNotIn("spike-abcd1234", listing)  # the decoy's, git lists through its link
+        self.assertIn(f"worktree {other}\n", listing)
+        self.assertEqual(self.read(os.path.join(other, "keep.txt")), "the other lane's\n")
+        self.assertTrue(os.path.isfile(os.path.join(decoy, "gitdir")))
+        self.assertIn(tree, p.stderr)
+
     def test_done_refuses_while_a_process_lives_in_the_lane(self):
         self.lane("new", "busy")
         sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
