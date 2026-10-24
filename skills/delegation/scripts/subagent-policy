@@ -384,6 +384,72 @@ def any_flag(flags, denied):
     return any(flag_hit(a, denied) for a in flags)
 
 
+# ---------------------------------------------------------------- substitutions
+
+# Node fields that hold shell text Parable doesn't (always) expand into nodes, read by
+# substitutions(): (field, whether quotes quote there). Any other string field holding $, a
+# backtick or <( is refused (unchecked-text), so a field Parable adds later can't pass unread.
+TEXT_FIELDS = {"word": (("value", True),), "pattern": (("pattern", True),),
+               "arith-cmd": (("raw_content", False),),
+               "for-arith": (("init", False), ("cond", False), ("incr", False))}
+LIVE_TEXT = re.compile(r"[$`]|[<>]\(")
+
+
+def substitutions(text, quotes=True):
+    """The body of every command substitution in text that the shell would run: $(...), `...`,
+    <(...) and >(...), with those inside ${...}, $((...)) and $[...] found by scanning that text
+    too. Parable gives some no node (a ${...} argument, an unquoted heredoc body, a body inside
+    double quotes that fails to parse), so the policy reads the text itself, ending each one
+    where Parable's own matching helpers do.
+
+    quotes: whether ' and " quote, as in a word. Pass False for text where they don't (an
+    unquoted heredoc body); the inside of ${...} and arithmetic is scanned that way too, which
+    takes a quoted $( as live and so checks more, never less. A backslash escapes the next
+    character in every mode. Raises ValueError for an opener with no close."""
+    from parable import (_find_braced_param_end, _find_cmdsub_end, _is_valid_arithmetic_start,
+                         _skip_backtick, _skip_single_quoted)
+    out, i, n, dq = [], 0, len(text), False
+
+    def closed(j, close):
+        if j > n or not text[:j].endswith(close):
+            raise ValueError(text[i:])
+        return j
+    while i < n:
+        c, nxt = text[i], text[i + 1:i + 2]
+        if c == "\\":
+            i += 2
+        elif quotes and c == "'" and not dq:
+            i = _skip_single_quoted(text, i + 1)
+            if i > n or text[i - 1] != "'" or i < 2:
+                raise ValueError(text)
+        elif quotes and c == '"':
+            dq, i = not dq, i + 1
+        elif c == "`":
+            j = closed(_skip_backtick(text, i), "`")
+            if j - 1 <= i:
+                raise ValueError(text[i:])
+            out.append(re.sub(r"\\([$`\\])", r"\1", text[i + 1:j - 1]))
+            i = j
+        elif c == "$" and text.startswith("$((", i) and _is_valid_arithmetic_start(text, i):
+            j = closed(_find_cmdsub_end(text, i + 2), "))")
+            out += substitutions(text[i + 3:j - 2], quotes=False)
+            i = j
+        elif nxt == "(" and (c == "$" or (c in "<>" and not dq)):
+            j = closed(_find_cmdsub_end(text, i + 2), ")")
+            out.append(text[i + 2:j - 1])
+            i = j
+        elif c == "$" and nxt == "{":
+            j = closed(_find_braced_param_end(text, i + 2), "}")
+            out += substitutions(text[i + 2:j - 1], quotes=False)
+            i = j
+        elif c == "$" and nxt == "[":
+            out += substitutions(text[i + 2:], quotes=False)  # rare and deprecated: the rest
+            break
+        else:
+            i += 1
+    return out
+
+
 # ---------------------------------------------------------------- sed
 
 class SedError(Exception):
@@ -1113,14 +1179,27 @@ class Analyzer:
                 if getattr(part, "kind", "") != "operator":
                     cwd = self.node(part, cwd, depth)
             return cwd
-        if kind == "redirect":
-            self.redirect(n, cwd)
-            return cwd
         if kind in ("cmdsub", "procsub"):
             inner = getattr(n, "command", None)
             if inner is not None:
                 self.node(inner, cwd, depth + 1)
             return cwd
+        if kind == "heredoc":
+            if not n.quoted:  # an unquoted body expands $(...) and `...`; quotes are literal
+                self.shell_text(n.content, False, cwd, depth)
+            return cwd
+        if kind == "redirect":
+            self.redirect(n, cwd)  # then on to its target word
+        fields = dict(TEXT_FIELDS.get(kind, ()))
+        for f, v in vars(n).items():
+            if f in fields:
+                self.shell_text(v or "", fields[f], cwd, depth)
+            elif isinstance(v, str) and f != "kind" and LIVE_TEXT.search(v):
+                self.deny("unchecked-text", "stop_and_explain",
+                          f"the parser left shell text in a {kind} that the policy can't check; "
+                          "write the command more plainly")
+        if kind == "word":
+            return cwd  # its parts are the substitutions shell_text just checked
         start = cwd
         for c in self.children(n):
             cwd = self.node(c, cwd, depth)
@@ -1143,12 +1222,19 @@ class Analyzer:
         if lit.static is not None and lit.text not in allowed:
             self.check_write_path(lit.text, cwd)
 
+    def shell_text(self, text, quotes, cwd, depth):
+        """Check each command substitution in text, whether or not Parable made it a node."""
+        try:
+            bodies = substitutions(text, quotes)
+        except ValueError:
+            self.deny("parse-error", "stop_and_explain",
+                      "a command substitution has no end the policy can find")
+        for body in bodies:
+            self.analyze_string(body, cwd, depth + 1)
+
     def command(self, n, cwd, depth):
-        for w in n.words:
-            for part in getattr(w, "parts", None) or []:
-                self.node(part, cwd, depth + 1)
-        for r in n.redirects or []:
-            self.redirect(r, cwd)
+        for x in list(n.words) + list(n.redirects or []):
+            self.node(x, cwd, depth)
         lits = [scan_word(w.value, self.home) for w in n.words]
         return self.argv(lits, cwd, depth)
 

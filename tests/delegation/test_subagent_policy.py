@@ -1215,6 +1215,72 @@ def zsh_case(rng):
 
 
 @unittest.skipUnless(shutil.which("zsh"), "needs zsh")
+class Substitutions(Base):
+    """Every command substitution zsh would run gets the inner command checked, including the
+    ones Parable keeps as plain text (a ${...} argument, an unquoted heredoc body, a case
+    pattern, a here-string, a body that fails to parse inside double quotes)."""
+
+    SHAPES = ("cat <<EOF\n$({c})\nEOF", "cat <<EOF\n`{c}`\nEOF", "cat <<EOF\n$(( $({c}) ))\nEOF",
+              "cat <<EOF\n${{X:-$({c})}}\nEOF", "cat <<-EOF\n\t$({c})\n\tEOF",
+              "echo ${{X:-$({c})}}", 'echo "${{X:-$({c})}}"', "echo ${{X/$({c})/y}}",
+              "echo ${{X:$({c})}}", 'echo "${{X:-`{c}`}}"', "echo ${{X:-${{Y:-$({c})}}}}",
+              "echo $[ $({c}) ]", "case x in $({c})) ;; esac", 'cat <<<"$({c})"', 'cat < "$({c})"',
+              "while false; do :; done <<EOF\n$({c})\nEOF", "echo $(echo $({c}))",
+              'echo "$({c})"', "echo `{c}`", "cat <({c})", "[[ -n $({c}) ]]",
+              "for ((i=$({c}); i<1; i++)); do :; done", "(( $({c}) ))",
+              # quotes are literal in an unquoted heredoc body, and ' is literal inside "..."
+              "cat <<EOF\n'$({c})'\nEOF", """echo "'$({c})'\"""")
+
+    def test_inner_commands_are_checked_wherever_the_substitution_sits(self):
+        for shape in self.SHAPES:
+            cmd = shape.format(c="touch x")
+            self.assertDenied(self.bash(cmd, atype="researcher"), "researcher-program", msg=cmd)
+            cmd = shape.format(c="git reset --hard")
+            self.assertDenied(self.bash(cmd), "git-reset", msg=cmd)
+
+    def test_a_body_that_fails_to_parse_is_denied(self):
+        # Parable drops a double-quoted (or process) substitution whose body won't parse, with
+        # no error; zsh still runs it (ls *(.) is a glob qualifier).
+        for cmd in ('echo "$(touch x; ls *(.))"', '[[ -n "$(touch x; ls *(.))" ]]',
+                    'case "$(touch x; ls *(.))" in *) ;; esac',
+                    'for i in "$(touch x; ls *(.))"; do :; done', 'a=("$(touch x; ls *(.))")',
+                    'cat <<<"$(touch x; ls *(.))"', "cat <(touch x; ls *(.))",
+                    "echo x >(touch x; ls *(.))", "cat <<EOF\n$(touch x; ls *(.))\nEOF",
+                    'echo "$(true) $(touch x; ls *(.))"', 'echo "${X:-$(touch x; ls *(.))}"',
+                    # quote characters that would put a naive scan out of step with zsh
+                    """echo "$(echo ")'")$(touch x; ls *(.))'\""""):
+            for atype in ("researcher", "general-purpose"):
+                self.assertDenied(self.bash(cmd, atype=atype), "parse-error", msg=cmd)
+
+    def test_literal_and_checked_forms_pass(self):
+        for cmd in ('echo "$(git log -1)"', "cat <<EOF\n$(date)\nEOF",
+                    "cat <<'EOF'\n$(touch x)\n`touch y`\nEOF", "cat <<EOF\n\\$(touch x)\nEOF",
+                    "echo ${X:-default}", "echo ${X:-$(pwd)}", "echo '$(touch x)'",
+                    "echo \"$(echo '$(touch x)')\"", 'echo "\\$(touch x)"', "echo $(( 1 + 2 ))",
+                    "case x in a) ;; esac", "grep -n '`touch x`' f", "echo $(echo $(echo $(pwd)))",
+                    'echo "${X#*$(pwd)}"', "echo ${#X} ${X[1]}", 'echo "<(touch x)"'):
+            self.assertIsNone(self.bash(cmd, atype="researcher"), cmd)
+        commit = "git commit -m \"$(cat <<'EOF'\nFix `code` here\n\nNot run: $(touch x)\nEOF\n)\""
+        self.assertIsNone(self.bash(commit), commit)
+
+    def test_the_scan_refuses_an_opener_with_no_close(self):
+        for text in ("$(echo", "`echo", "${X:-$(echo}", "<(echo", "$((1+", "'abc"):
+            with self.assertRaises(ValueError, msg=text):
+                sp.substitutions(text)
+        self.assertEqual(sp.substitutions("a `b \\`c\\`` $(d) ${X:-$(e)} '$(f)' \\$(g)"),
+                         ["b `c`", "d", "e"])
+
+    def test_text_the_parser_keeps_elsewhere_is_refused(self):
+        # A node field holding $, a backtick or <( that the policy doesn't read as text: refuse
+        # rather than pass it unread.
+        node = type("N", (), {})()
+        node.kind, node.raw = "frob", "$(touch x)"
+        g = sp.Analyzer(self.ev("Bash", {"command": "true"}), POLICY, home=self.home)
+        with self.assertRaises(sp.Deny) as cm:
+            g.node(node, self.proj, 0)
+        self.assertEqual(cm.exception.rule, "unchecked-text")
+
+
 class ZshOracle(unittest.TestCase):
     """unexpanded_spans against zsh itself: a marker the scan calls literal never runs."""
 
