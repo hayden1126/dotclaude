@@ -227,7 +227,7 @@ the sandbox can write (docs/lanes.md S3). Every input, and why each is safe:
     of lanelib.EFFORTS; a launch model passes lanelib.safe_model (it starts with a letter or
     digit, so it never reads as a flag, and carries no space or shell syntax); a transcript's
     must be a lanelib.MODEL_ID (`claude-...`), and a /model argument a name lanelib.model_problem
-    accepts that could have run as that id. A launch value outside its shape refuses the pass at
+    accepts that could have run as that id, or that no usable entry followed. A launch value outside its shape refuses the pass at
     call time; a transcript value outside it drops the flag.
   - PATH is the call's, so it keeps only the absolute entries outside those dirs (as given and
     resolved). git, tmux and claude resolve through that PATH and must also resolve, as found

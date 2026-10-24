@@ -718,9 +718,9 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
     `opusplan` or 1M form picked there loses its meaning. The user's saved default is never read: it
     is machine-wide, so another session's later pick of the same family would pass for this
     session's. When no usable entry follows (a `<synthetic>` one, a model that takes no effort, an
-    id that isn't `claude-`), the flag drops: the model takes the pin, the effort the default the
-    command saved. A `/model`'s argument that `lane open` would accept still carries, since the pin
-    would undo it.
+    id that isn't `claude-`), the effort drops to the default the command saved, and the model
+    carries the `/model`'s argument if `lane open` would accept it (the pin would undo the pick),
+    else it drops to the pin.
   - With no such command, it carries the launch value, except a model the last entry can't have run
     as (an alias of another family, another full name; a dated id such as
     `claude-haiku-4-5-20251001` fits `claude-haiku-4-5`). That is a change the transcript can't
@@ -764,7 +764,8 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   session launched without flags to what it last ran. How each case comes out:
   - launched without flags, or an entry from before the fields (a session started before the
     install keeps one until its next SessionStart: a compact, `/clear` or resume): a bare resume,
-    unless a `/model` in the transcript carries, so the user's default effort applies, as at a pass;
+    unless a `/model` in the transcript carries, so the pin and the user's default effort apply, as
+    at a pass;
   - a field outside its shape: that flag drops, never the tab;
   - a tab with no transcript yet: `claude` with its launch flags;
   - an attach tab, or Open of a chat running in the background: no flags, since the resume

@@ -76,16 +76,11 @@ guard's scan: it lists each dir it would refuse with what the dir holds, then pr
 where the scan's last line says. Rerun the scan (`python3 -I hooks/excluded_guard.py --scan`) after adding a
 PATH dir or cloning a repo whose install step sets in-repo git hooks.
 
-The baseline's `env` pins new sessions to Opus with `ANTHROPIC_MODEL=opus`, which Claude Code
-reads at startup ahead of the `model` key (probed on 2.1.309). Why: `/model` saves its pick as the
-machine-wide default, so without the pin a `/model sonnet` in one session moves every later
-session to Sonnet. With it, `/model` changes only its own session. It still says the pick is "saved
-as your default for new sessions" and writes the key, then adds "ANTHROPIC_MODEL is set to Opus
-5.5 ... new sessions use that while it is set" (2.1.310): nothing reads the key while the pin
-stands. `claude --model`
-beats the pin, and a `/pass`, tab restore or shelf Open keeps a session's `/model` (docs/lanes.md,
-"Model and effort"). To pin another model, set `env.ANTHROPIC_MODEL` in the overlay. The effort
-has no pin: `/effort` still sets the default for new sessions.
+The baseline's `env` pins new sessions to Opus with `ANTHROPIC_MODEL=opus`. Without it, `/model`
+saves its pick as the machine-wide default, so a `/model sonnet` in one session moves every later
+session to Sonnet; with it, `/model` changes only its own session. To pin another model, set
+`env.ANTHROPIC_MODEL` in the overlay. What `/model` prints under the pin, and how a `/pass`, tab
+restore or shelf Open keeps a session's pick: docs/lanes.md, "Model and effort".
 
 The baseline's `permissions` deny destructive git and ask before anything that can reach `main`,
 in auto mode too. Denied: force-push, `reset --hard`, `reset --merge` and `git clean -f`, plain or
