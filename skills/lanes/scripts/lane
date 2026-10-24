@@ -122,6 +122,9 @@ TRIAL_IDENTITY = ("lane-trial", "lane-trial@localhost")  # the author of its dan
 # The lock every trial holds, one name for all: a trial clears this lane's leftover trees under
 # it, so a second trial of the lane under another lock could remove the first one's live tree
 TRIAL_LOCK = "suite"
+# The dir in a lane that holds its trials' trees: never a temp root, which a sandbox's policy
+# treats apart (some suites fail on any tree there), and hidden from git by its own .gitignore
+TRIAL_DIR = ".lane-trial"
 # env: the locks `lane` processes above this one hold, `<repo key>/<name>@<pid>:<start ticks>,...`
 LOCKS_HELD = "LANE_LOCKS_HELD"
 OVERLAP_WAIT = 10  # secs each git call behind the board's overlap flag may take
@@ -2224,30 +2227,55 @@ class LeadStatus:
 
 
 def trial_prefix(repo: Repo, lane_id: str) -> str:
-    """The name of a trial's scratch dir in the temp dir, before mkdtemp's 8 characters. Keyed by
-    repo: another repo's lane of the same id shares the temp dir but not this repo's suite
-    lock, so its live tree must never look like this lane's leftover."""
+    """The name of a trial's scratch dir (in the lane's TRIAL_DIR, or the temp dir for the lead
+    notes' index and an older `lane`'s trees), before mkdtemp's 8 characters. Keyed by repo:
+    another repo's lane of the same id shares the temp dir but not this repo's suite lock, so
+    its live tree must never look like this lane's leftover."""
     return f"lane-trial-{repo.key}-{lane_id}-"
 
 
-def trial_leftovers(repo: Repo, lane_id: str, tmp: str) -> None:
-    """Clear what earlier trials of this lane left in tmp: one killed by the Bash cap or a
-    respawn never reaches its `finally`. Only this repo's lane's names (trial_prefix and
-    mkdtemp's 8 characters, so lane a never takes lane a-b's), and only registrations of a
-    `tree` there: never a blanket `git worktree prune`, since the common dir holds other
-    prunable entries that aren't this lane's. A sandboxed command can't remove an admin dir the
-    sandbox mounted when it started, so a registration it can't remove is named, once, with the
-    command to run sandbox-off."""
+def trial_root(repo: Repo) -> str:
+    """The lane's TRIAL_DIR (real path), made on first use with a .gitignore of `*` in it, so
+    neither it nor the trees in it ever show in the lane's git status. A symlink there is
+    refused, never followed (the trees would land wherever it points), and an existing
+    .gitignore is never written, nor written through."""
+    root = os.path.join(repo.toplevel, TRIAL_DIR)
+    with contextlib.suppress(FileExistsError):
+        os.mkdir(root)
+    if os.path.islink(root) or not os.path.isdir(root):
+        raise LaneError(f"{root} is a symlink or no dir, and `lane trial` keeps its trees there: "
+                        "remove it, and the next trial makes it afresh")
+    try:
+        fd = os.open(os.path.join(root, ".gitignore"),
+                     os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    except FileExistsError:
+        return root
+    with os.fdopen(fd, "w") as f:
+        f.write("*\n")
+    return root
+
+
+def trial_leftovers(repo: Repo, lane_id: str, root: str) -> None:
+    """Clear what earlier trials of this lane left in root (the lane's TRIAL_DIR, or the temp
+    dir an older `lane` put its trees in): one killed by the Bash cap or a respawn never reaches
+    its `finally`. Only this repo's lane's names (trial_prefix and mkdtemp's 8 characters, so
+    lane a never takes lane a-b's), and only registrations of a `tree` there: never a blanket
+    `git worktree prune`, since the common dir holds other prunable entries that aren't this
+    lane's. A sandboxed command can't remove an admin dir the sandbox mounted when it started,
+    so a registration it can't remove is named, once, with the command to run sandbox-off. A
+    root that is a symlink is left alone (`done` calls this sandbox-off on the lane's)."""
+    if os.path.islink(root):
+        return
     mine = re.compile(re.escape(trial_prefix(repo, lane_id)) + "[a-z0-9_]{8}")
     cleared, stuck = [], []
     for path in worktree_heads(repo):
         parent = os.path.dirname(path)
-        if (os.path.basename(path) == "tree" and os.path.dirname(parent) == tmp
+        if (os.path.basename(path) == "tree" and os.path.dirname(parent) == root
                 and mine.fullmatch(os.path.basename(parent))):
             p = trial_git(repo, ["worktree", "remove", "--force", "--end-of-options", path],
                           ok=tuple(range(256)))
             (cleared if p.returncode == 0 else stuck).append(path)
-    for d in glob.glob(os.path.join(tmp, "lane-trial-*")):
+    for d in glob.glob(os.path.join(root, "lane-trial-*")):
         if mine.fullmatch(os.path.basename(d)) and not os.path.islink(d):
             shutil.rmtree(d, ignore_errors=True)
     if cleared:
@@ -2340,7 +2368,9 @@ def trial(repo: Repo, me: dict, args) -> int:
     trees = worktree_heads(repo)
     others = trial_lanes(repo, me, args.ids, trees)
     tmp = os.path.realpath(tempfile.gettempdir())
-    trial_leftovers(repo, me["id"], tmp)
+    root = trial_root(repo)
+    trial_leftovers(repo, me["id"], root)
+    trial_leftovers(repo, me["id"], tmp)  # an older `lane`'s trees, and the lead notes' index
     head = rev(repo, "HEAD")
     base = rev(repo, base_ref(cfg))
     if head is None or base is None:
@@ -2387,7 +2417,7 @@ def trial(repo: Repo, me: dict, args) -> int:
     say("lane trial: merged " + ", ".join(f"{i} ({s[:12]})" for i, s in merged)
         + f" onto lane {me['id']}'s HEAD and {base_name}")
     warn("other lanes' uncommitted work isn't in the merge, only their commits")
-    tmpdir = tempfile.mkdtemp(prefix=trial_prefix(repo, me["id"]), dir=tmp)
+    tmpdir = tempfile.mkdtemp(prefix=trial_prefix(repo, me["id"]), dir=root)
     tree, holds = os.path.join(tmpdir, "tree"), None
     try:
         trial_git(repo, ["worktree", "add", "--detach", "--quiet", "--end-of-options", tree, cur])
@@ -3477,6 +3507,10 @@ def close_record(repo: Repo,
                                   {pid: described(p, "started during the close")
                                    for pid, p in left.items()},
                                   f"End them, then rerun `lane done {lane_id}`")
+                # A tree a killed trial left registered in the lane would go with it, its
+                # registration left stale. Sandbox-off here, so even one a sandboxed trial
+                # couldn't unregister goes.
+                trial_leftovers(repo, lane_id, os.path.join(path, TRIAL_DIR))
                 p = git(["worktree", "remove", path], repo.toplevel)
                 if p.returncode != 0:
                     raise LaneError(f"git worktree remove refused: {p.stderr.strip()}")

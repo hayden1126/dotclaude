@@ -553,6 +553,21 @@ class RoundTrip(LanesRepo):
         self.assertIn("spike", self.git("branch", "--list", "spike"))
         self.assertFalse(os.path.exists(self.lane_path("spike")))
 
+    def test_done_clears_a_tree_a_trial_left_in_the_lane(self):
+        # A trial killed past its cleanup leaves its tree registered in the lane's .lane-trial/:
+        # the close unregisters it, so removing the lane leaves no stale entry behind.
+        self.lane("new", "spike")
+        path = self.lane_path("spike")
+        key = lanelib.Repo(self.main, self.common).key
+        tree = os.path.join(path, ".lane-trial", f"lane-trial-{key}-spike-abcd1234", "tree")
+        self.git("worktree", "add", "--detach", "--quiet", tree, "HEAD", cwd=path)
+        self.write(os.path.join(path, ".lane-trial", ".gitignore"), "*\n")
+        p = self.run_lane("done", "spike", "--abandon")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertFalse(os.path.exists(path))
+        self.assertNotIn(".lane-trial", self.git("worktree", "list", "--porcelain"))
+        self.assertIn(tree, p.stderr)
+
     def test_done_refuses_while_a_process_lives_in_the_lane(self):
         self.lane("new", "busy")
         sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
