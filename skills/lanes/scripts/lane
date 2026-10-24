@@ -2031,6 +2031,10 @@ UNITTEST_FAIL = re.compile(r"(?:FAIL|ERROR): \S")
 # An id never starts with '(': unittest's own summary, `FAILED (failures=12, skipped=4)`, isn't
 # one, and its counts change whenever a lane adds a test.
 PYTEST_FAIL = re.compile(r"(?:FAILED|ERROR) ([^\s(].*?)(?: - .*)?")
+# TAP, which `node --test` prints into a pipe: `not ok 3 - name`, indented for a subtest. A TODO
+# or SKIP directive (`# TODO ...`, any case) marks no failure.
+TAP_FAIL = re.compile(r"\s*not ok \d+ - (.+)")
+TAP_DIRECTIVE = re.compile(r"\s#\s*(?:TODO|SKIP)", re.IGNORECASE)
 
 
 class TrialStopped(Exception):
@@ -2044,7 +2048,9 @@ class TrialStopped(Exception):
 def failing_ids(lines: list[str]) -> list[str]:
     """The failing test ids a run printed, in order, each once: a unittest `FAIL: ...` or
     `ERROR: ...` line whole (a subtest's parameters, which can embed the tree's path, with it),
-    a pytest `FAILED x` or `ERROR x` summary line's x, its ` - message` tail cut."""
+    a pytest `FAILED x` or `ERROR x` summary line's x, its ` - message` tail cut, and a TAP
+    `not ok <n> - x` line at any indent as `not ok - x`: by name alone, since a lane that adds a
+    test shifts every number after it."""
     found = []
     for line in lines:
         line = line.rstrip()
@@ -2052,6 +2058,8 @@ def failing_ids(lines: list[str]) -> list[str]:
             found.append(line)
         elif m := PYTEST_FAIL.fullmatch(line):
             found.append(m.group(1))
+        elif (m := TAP_FAIL.fullmatch(line)) and not TAP_DIRECTIVE.search(m.group(1)):
+            found.append(f"not ok - {m.group(1)}")
     return list(dict.fromkeys(found))
 
 
@@ -2409,49 +2417,88 @@ def trial(repo: Repo, me: dict, args) -> int:
             "every merge, as a carry would make it")
     if already:
         say(f"lane trial: nothing to merge from {', '.join(already)} (already in)")
-    for line in conflicts.values():
+    for line, _ in conflicts.values():
         say(shown(line))
-    if not merged:
-        say("lane trial: no other lane's work merged, so no suite ran")
-        return 1 if conflicts else 0
-    say("lane trial: merged " + ", ".join(f"{i} ({s[:12]})" for i, s in merged)
-        + f" onto lane {me['id']}'s HEAD and {base_name}")
-    warn("other lanes' uncommitted work isn't in the merge, only their commits")
+    # A lane that conflicts with the base alone claims nothing about this lane: it is untried,
+    # never this lane's failure. Every other conflict fails the trial.
+    untried = [i for i, (_, with_base) in conflicts.items() if with_base]
+    clashed = [i for i, (_, with_base) in conflicts.items() if not with_base]
+    alone = shown(f"lane {me['id']} plus {base_name}")
+    if merged:
+        say("lane trial: merged " + ", ".join(f"{i} ({s[:12]})" for i, s in merged)
+            + f" onto lane {me['id']}'s HEAD and {base_name}")
+        warn("other lanes' uncommitted work isn't in the merge, only their commits")
+    else:  # the suites still run: a failure here is this lane's own, or the base's
+        say(shown(f"lane trial: no other lane's work merged: running the suites on lane "
+                  f"{me['id']}'s HEAD plus {base_name}"))
     tmpdir = tempfile.mkdtemp(prefix=trial_prefix(repo, me["id"]), dir=root)
     tree, holds = os.path.join(tmpdir, "tree"), None
     try:
         trial_git(repo, ["worktree", "add", "--detach", "--quiet", "--end-of-options", tree, cur])
-        holds = "merge"
-        runs = run_suites(tree, args.run, "merge", range(len(args.run)))
-        failed = [i for i, run in enumerate(runs) if run.failed]
-        again = {}
-        if failed:
-            # At the same path: subtest ids that embed it, and the admin dir's name, then match.
-            holds = None
-            trial_git(repo, ["worktree", "remove", "--force", "--end-of-options", tree])
-            trial_git(repo, ["worktree", "add", "--detach", "--quiet", "--end-of-options", tree,
-                             baseline])
+        if not merged:  # cur is the baseline, so nothing reruns
             holds = "baseline"
-            again = dict(zip(failed, run_suites(tree, args.run, "baseline", failed)))
-        rc = trial_report(args.run, runs, again)
+            rc = alone_report(args.run, run_suites(tree, args.run, "the lane's",
+                                                   range(len(args.run))), alone)
+        else:
+            holds = "merge"
+            runs = run_suites(tree, args.run, "merge", range(len(args.run)))
+            failed = [i for i, run in enumerate(runs) if run.failed]
+            again = {}
+            if failed:
+                # At the same path: subtest ids that embed it, and the admin dir's name, then
+                # match.
+                holds = None
+                trial_git(repo, ["worktree", "remove", "--force", "--end-of-options", tree])
+                trial_git(repo, ["worktree", "add", "--detach", "--quiet", "--end-of-options",
+                                 tree, baseline])
+                holds = "baseline"
+                again = dict(zip(failed, run_suites(tree, args.run, "baseline", failed)))
+            rc = trial_report(args.run, runs, again)
     finally:
         if args.keep and holds:
             say(shown(f"lane trial: kept the tree (the {holds}) at {tree}; remove it with `git "
                       f"worktree remove --force {shlex.quote(tree)}`"))
         else:
             drop_tree(repo, tree, tmpdir)
-    if conflicts:
-        many = len(conflicts) > 1
-        say(f"lane trial: FAILED: lane{'s' * many} {', '.join(conflicts)} didn't merge, so "
+    if clashed:
+        many = len(clashed) > 1
+        say(f"lane trial: FAILED: lane{'s' * many} {', '.join(clashed)} didn't merge, so "
             f"{'their' if many else 'its'} work went untried")
-        return 1
+        rc = 1
+    if untried:
+        many = len(untried) > 1
+        say(shown(f"lane trial: lane{'s' * many} {', '.join(untried)} untried "
+                  f"({'they conflict' if many else 'it conflicts'} with {base_name})"))
     return rc
 
 
+def alone_report(commands: list[str], runs: list[SuiteRun], what: str) -> int:
+    """Say how each suite did when no other lane's work merged, on what (this lane's HEAD plus
+    the base: the baseline itself, so nothing reruns to compare against): 0 when every suite
+    passed, else 1. A failed suite lists the ids it printed; a cut run fails, its ids maybe
+    missing. Ids come from the suites' output, so they are masked."""
+    bad = 0
+    for i, (cmd, run) in enumerate(zip(commands, runs)):
+        head = f"lane trial: suite {i + 1} ({cmd}):"
+        if not run.failed:
+            say(shown(f"{head} ok"))
+            continue
+        bad += 1
+        cut = (", and its output was cut (a process it started still holds it), so test ids may "
+               "be missing") if run.cut else ""
+        say(shown(f"{head} failed (exit {run.rc}){cut}" + (":" if run.ids else "")))
+        for x in run.ids:
+            say(shown(f"  {x}"))
+    if bad:
+        say(f"lane trial: FAILED: {bad} suite(s) fail on {what}")
+    return 1 if bad else 0
+
+
 def conflict_line(repo: Repo, lane_id: str, sha: str, conflicted: list[str], chain: dict,
-                  merged: list[tuple[str, str]], commands: list[str]) -> str:
-    """The report's line for lane lane_id, whose head sha conflicted with the merge so far
-    (chain: the base commit and its name, the baseline, and norm). Merges decide, in this order:
+                  merged: list[tuple[str, str]], commands: list[str]) -> tuple[str, bool]:
+    """(the report's line for lane lane_id, whose head sha conflicted with the merge so far, and
+    whether it is the first verdict below: the lane went untried, which fails nothing). chain
+    holds the base commit and its name, the baseline, and norm. Merges decide, in this order:
       - with the base alone: the lane conflicts with the base itself, so it needs to merge the
         base before a trial can tell whether it conflicts with this lane (the line claims
         nothing about this lane, which the known limit below may hide);
@@ -2475,9 +2522,9 @@ def conflict_line(repo: Repo, lane_id: str, sha: str, conflicted: list[str], cha
     if tree is None:
         return (f"lane trial: lane {lane_id} conflicts with {base} ("
                 f"{', '.join(with_base) or 'git named no path'}): it needs to merge {base} "
-                "before a trial can tell whether it conflicts with this lane")
+                "before a trial can tell whether it conflicts with this lane"), True
     if not merged or merge_tree(repo, chain["baseline"], sha, lane_id)[0] is None:
-        return f"lane trial: conflict with lane {lane_id}: {paths}"
+        return f"lane trial: conflict with lane {lane_id}: {paths}", False
     pairs = []
     for other, other_sha in merged:
         tree, both = merge_tree(repo, norm(other_sha), sha, f"{lane_id} and {other}")
@@ -2487,7 +2534,7 @@ def conflict_line(repo: Repo, lane_id: str, sha: str, conflicted: list[str], cha
             "the merge of lane " + ", ".join(other for other, _ in merged) + f" ({paths})")
     alone = shlex.join(["lane", "trial", lane_id, *[x for c in commands for x in ("--run", c)]])
     return (f"lane trial: lane {lane_id} conflicts with {whom}, not with this lane: {lane_id} "
-            f"was left out; try it with this lane alone: {alone}")
+            f"was left out; try it with this lane alone: {alone}"), False
 
 
 def drop_tree(repo: Repo, tree: str, tmpdir: str) -> None:
@@ -2510,8 +2557,11 @@ def trial_report(commands: list[str], runs: list[SuiteRun], again: dict[int, Sui
     when every id it failed on the merge also fails on the baseline, and its exit doesn't get
     worse there: non-zero on the merge but zero on the baseline, or a death by signal on the
     merge only, is the merge's (a `--run` can chain a runner whose ids it parses with a check
-    that prints none). One with no ids to compare, or whose output either run cut, fails, to be
-    compared by hand. Ids come from the suites' output, so they are masked."""
+    that prints none). One that printed no id on either run passes when both exit with the
+    same code (it fails the same way on the baseline, so that failure isn't the merge's; a
+    second break it hides shows only once the first is fixed). Any other with no ids to
+    compare, or one whose output either run cut, fails, to be compared by hand. Ids come from
+    the suites' output, so they are masked."""
     new = 0
     for i, (cmd, (rc, ids, cut)) in enumerate(zip(commands, runs)):
         head = f"lane trial: suite {i + 1} ({cmd}):"
@@ -2524,6 +2574,10 @@ def trial_report(commands: list[str], runs: list[SuiteRun], again: dict[int, Sui
             which = "both runs" if cut and base_cut else "the merge" if cut else "the baseline"
             say(shown(f"{head} its output on {which} was cut (a process it started still holds "
                       "it), so test ids may be missing: compare by hand"))
+            continue
+        if not ids and not base_ids and rc == base_rc:  # rc is non-zero: the merge failed
+            say(shown(f"{head} fails the same way on the baseline (exit {rc} on both, no test "
+                      "ids to compare)"))
             continue
         if not ids:
             new += 1

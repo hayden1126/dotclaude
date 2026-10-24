@@ -510,6 +510,16 @@ class FailingIds(unittest.TestCase):
                          ["FAIL: test_x (a.B.test_x) (path='/tmp/t/tree')",
                           "ERROR: test_y (a.B.test_y)", "t.py::test_z", "t.py::test_w"])
 
+    def test_tap_failures_by_name_at_any_indent_without_their_number(self):
+        # `node --test`, piped, prints TAP: a lane that adds a test shifts every number after
+        # it, so the id drops the number. A TODO or SKIP directive is no failure.
+        lane_mod = load_lane_script()
+        lines = ["TAP version 13", "# Subtest: outer", "    not ok 1 - inner", "    ---",
+                 "    error: 'boom'", "    ...", "not ok 3 - bad one", "ok 4 - fine",
+                 "not ok 5 - later # TODO not yet", "not ok 6 - gone # skip on linux",
+                 "not ok 9 - bad one", "not ok", "# fail 2"]
+        self.assertEqual(lane_mod.failing_ids(lines), ["not ok - inner", "not ok - bad one"])
+
 
 class Tee(unittest.TestCase):
     """run_child's teed output, in process: a short TEE_GRACE patched in, a SIGALRM watchdog in
@@ -707,18 +717,77 @@ class Trial(LaneWork):
         self.commit_files(self.main, ["shared.txt"])
         self.git("push", "-q", "origin", "main")
         self.commit_files(self.beta, ["shared.txt"])
-        rc, out, err = self.trial("--run", "true")
-        self.assertEqual(rc, 1, out + err)
+        gamma = self.new("gamma")
+        self.commit_files(gamma, ["c.txt"])
+        # It is untried, never this lane's failure: the others' suites run, and it exits 0.
+        rc, out, err = self.trial("--run", "test -f c.txt && test ! -f b.txt")
+        self.assertEqual(rc, 0, out + err)
         self.assertIn(self.needs_base("beta", "shared.txt"), out)
         self.assertNotIn("conflict with lane beta", out)
+        self.assertIn("lane trial: merged gamma (", out)
+        self.assertIn("suite 1 (test -f c.txt && test ! -f b.txt): ok", out)
+        self.assertNotIn("FAILED", out)
+        self.assertEqual(out.splitlines()[-1],
+                         "lane trial: lane beta untried (it conflicts with origin/main)")
         # One that conflicts with this lane too gets the base's verdict only (the known limit),
         # which claims nothing about this lane: its own trial, once it merges the base, finds
-        # the rest. The trial still fails.
+        # the rest.
         self.commit_files(self.alpha, ["g.txt"])
         self.commit_files(self.beta, ["g.txt"])
         rc, out, err = self.trial("--run", "true")
-        self.assertEqual(rc, 1, out + err)
+        self.assertEqual(rc, 0, out + err)
         self.assertIn(self.needs_base("beta", "shared.txt"), out)
+
+    def test_untried_lanes_beside_a_real_conflict_still_fail_it(self):
+        gamma, delta = self.new("gamma"), self.new("delta")  # beta and gamma branch before main
+        self.commit_files(self.main, ["shared.txt"])          # moves on
+        self.push_main()
+        self.commit_files(self.beta, ["shared.txt"])
+        self.commit_files(gamma, ["shared.txt"])
+        self.commit_files(delta, ["a.txt"])
+        rc, out, err = self.trial("--run", "true")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("lane trial: conflict with lane delta: a.txt", out)
+        self.assertIn("FAILED: lane delta didn't merge", out)
+        self.assertNotIn("FAILED: lanes", out)
+        self.assertEqual(out.splitlines()[-1], "lane trial: lanes beta, gamma untried (they "
+                                               "conflict with origin/main)")
+
+    def test_alone_the_suites_run_on_this_lanes_head_plus_the_base(self):
+        # beta conflicts with the base, so nothing merges: the suites still run, once, on
+        # alpha's HEAD plus origin/main, and a failure there fails the trial.
+        self.commit_files(self.main, ["shared.txt", "m.txt"])
+        self.push_main()
+        self.commit_files(self.beta, ["shared.txt"])
+        head = ("lane trial: no other lane's work merged: running the suites on lane alpha's HEAD "
+                "plus origin/main")
+        rc, out, err = self.trial("--run", "test -f a.txt && test -f m.txt")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn(head, out)
+        self.assertIn("suite 1 (test -f a.txt && test -f m.txt): ok", out)
+        self.assertEqual(self.leftovers(), ([], []))
+        fails = 'echo "FAIL: test_x (t.T.test_x)"; exit 1'
+        rc, out, err = self.trial("--run", fails, "--run", "true")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn(head, out)
+        self.assertIn(f"suite 1 ({fails}): failed (exit 1):\n  FAIL: test_x (t.T.test_x)", out)
+        self.assertIn("suite 2 (true): ok", out)
+        self.assertNotIn("baseline run", out)  # the tree is the baseline already
+        self.assertIn("lane trial: FAILED: 1 suite(s) fail on lane alpha plus origin/main", out)
+        self.assertEqual(out.splitlines()[-1],
+                         "lane trial: lane beta untried (it conflicts with origin/main)")
+        self.assertEqual(self.leftovers(), ([], []))
+
+    def test_with_no_other_lane_the_suites_still_run(self):
+        self.lane("done", "beta", "--abandon")
+        rc, out, err = self.trial("--run", "test -f a.txt")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("no other lane's work merged: running the suites on lane alpha's HEAD", out)
+        self.assertIn("suite 1 (test -f a.txt): ok", out)
+        rc, out, err = self.trial("--run", "exit 4")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("suite 1 (exit 4): failed (exit 4)", out)
+        self.assertIn("FAILED: 1 suite(s) fail on lane alpha plus origin/main", out)
 
     def test_a_lane_that_holds_the_base_still_leaves_a_base_conflict_to_the_other_lane(self):
         # alpha merged origin/main, so its HEAD conflicts with beta wherever main does: only a
@@ -728,7 +797,7 @@ class Trial(LaneWork):
         self.git("merge", "-q", "--no-edit", "origin/main", cwd=self.alpha)
         self.commit_files(self.beta, ["shared.txt"])
         rc, out, err = self.trial("--run", "true")
-        self.assertEqual(rc, 1, out + err)
+        self.assertEqual(rc, 0, out + err)
         self.assertIn(self.needs_base("beta", "shared.txt"), out)
         self.assertNotIn("conflict with lane beta", out)
 
@@ -776,8 +845,9 @@ class Trial(LaneWork):
         self.edit_lines(self.alpha, "x.txt", {40: "alpha"})
         self.edit_lines(self.beta, "x.txt", {1: "beta"})
         rc, out, err = self.trial("--run", "true")
-        self.assertEqual(rc, 1, out + err)
+        self.assertEqual(rc, 0, out + err)
         self.assertIn(self.needs_base("beta", "x.txt"), out)
+        self.assertIn("lane beta untried (it conflicts with origin/main)", out)
 
     def test_a_lane_that_renames_a_file_this_lane_edits_conflicts_with_this_lane(self):
         # gamma renames old.txt to new.txt and edits line 10, which alpha edits too: git names
@@ -1111,10 +1181,37 @@ class Trial(LaneWork):
         self.assertEqual(rc, 1, out + err)
         self.assertIn("1 failure(s) only on the merge", out)
 
-    def test_a_failure_with_no_test_id_is_compared_by_hand(self):
-        rc, out, err = self.trial("--run", "false")
+    def test_a_failure_with_no_test_id_and_another_exit_on_the_baseline_is_compared_by_hand(self):
+        rc, out, err = self.trial("--run", "if [ -f b.txt ]; then exit 2; fi; exit 1")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("failed (exit 2) with no test id to compare against the baseline", out)
+        # No id on the merge, ids on the baseline: still by hand.
+        rc, out, err = self.trial("--run", 'if [ ! -f b.txt ]; then echo "FAIL: test_x '
+                                           '(t.T.test_x)"; fi; exit 1')
         self.assertEqual(rc, 1, out + err)
         self.assertIn("failed (exit 1) with no test id to compare against the baseline", out)
+
+    def test_a_failure_with_no_test_id_that_the_baseline_repeats_isnt_the_merges(self):
+        rc, out, err = self.trial("--run", "exit 3", "--run", "true")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("lane trial: suite 1 (exit 3): fails the same way on the baseline (exit 3 "
+                      "on both, no test ids to compare)", out)
+        self.assertNotIn("FAILED", out)
+
+    def test_tap_ids_judge_a_failure(self):
+        # A merge-only TAP failure fails the trial; one the baseline repeats under another
+        # number (beta's test comes first) passes.
+        tap = ('if [ -f a.txt ] && [ -f b.txt ]; then echo "not ok 1 - ab"; exit 1; fi; '
+               'echo "ok 1 - ab"')
+        rc, out, err = self.trial("--run", tap)
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn(f"suite 1 ({tap}): 1 failure(s) only on the merge:\n  not ok - ab", out)
+        shifted = ('if [ -f b.txt ]; then echo "ok 1 - new"; echo "not ok 2 - old"; '
+                   'else echo "not ok 1 - old"; fi; exit 1')
+        rc, out, err = self.trial("--run", shifted)
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("every failure also fails on the baseline", out)
+        self.assertIn("  not ok - old", out)
 
     def test_a_leftover_tree_from_a_killed_run_is_cleared(self):
         # A run killed past its cleanup leaves its dir and its registration; only this repo's
@@ -1244,12 +1341,13 @@ class Trial(LaneWork):
         self.assertEqual(rc, 1)
         self.assertIn("lane alpha is this lane", err)
 
-    def test_nothing_to_merge_says_so_and_runs_nothing(self):
-        ran = os.path.join(self.tmp, "ran")
+    def test_nothing_to_merge_says_so_and_runs_the_suites_on_head_plus_the_base(self):
         self.git("push", "-q", "origin", "beta:main", cwd=self.beta)  # beta's work is merged
         self.git("fetch", "-q", "origin")
-        rc, out, err = self.trial("beta", "--run", f"touch {shlex.quote(ran)}")
+        rc, out, err = self.trial("beta", "--run", "test -f a.txt && test -f b.txt")
         self.assertEqual(rc, 0, out + err)
         self.assertIn("nothing to merge from beta (already in)", out)
-        self.assertIn("no other lane's work merged, so no suite ran", out)
-        self.assertFalse(os.path.exists(ran))
+        self.assertIn("no other lane's work merged: running the suites on lane alpha's HEAD plus "
+                      "origin/main", out)
+        self.assertIn("suite 1 (test -f a.txt && test -f b.txt): ok", out)
+        self.assertNotIn("other lanes' uncommitted work", err)
