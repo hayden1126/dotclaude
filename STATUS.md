@@ -87,9 +87,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lanes** (briefs in each record). Merge order: 1 practices (its next PR, auth-secrets,
-    carries the lead's notes; the skill suite below), paused by Hayden on 2026-10-24 for a few
-    days. It opened on Hayden's ok, merged #142 on 2026-10-20 and stays open for more PRs.
+  - **Live lanes** (briefs in each record). Merge order (opened 2026-10-24 on Hayden's "open
+    lanes for the fixes"): 1 mute-clock (`fix/mute-test-clock`, carries the lead's notes: the
+    midnight mute tests below), 2 trial-fix (`fix/lane-trial-setup`: the `lane trial` bugs
+    below), 3 sp-gaps (`fix/policy-gaps-sp1-sp2`: SP1 and SP2 below), 4 practices (its next
+    PR, auth-secrets; the skill suite below), paused by Hayden on 2026-10-24 for a few days and
+    moved last so it blocks no install. practices opened on Hayden's ok, merged #142 on 2026-10-20 and stays open for more PRs.
     Merged 2026-10-24 and installed from main: model-pin (#145, opened 2026-10-23 on Hayden's
     picks): `/model` saves its pick as the default for every new
     session (`model` in `~/.claude/settings.json`); the lane pins new sessions to Opus with
@@ -100,7 +103,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     (#143), in Hayden's readiness order. Merged and closed 2026-10-20, installed from main:
     summary-retire (#139), link-atomic (#140, which Hayden ordered first so no later install ran
     the old `link()`), pr-horizon (#135), config-dir (#133). Hayden raised the cap
-    from 3 to 4 on 2026-10-20 for exam-prep; three slots are free.
+    from 3 to 4 on 2026-10-20 for exam-prep; it is full.
   - **Lane ask quality: done** (2026-10-19 to 2026-10-20). ask-check merged as #131 and was
     installed from main 2026-10-20: a PreToolUse hook on AskUserQuestion (`hooks/ask_check.py`)
     denies risky asks with a checklist in the reason. branch-reuse merged as #130: `lane new`
@@ -241,8 +244,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **Subagent policy gaps SP1 to SP3** (from lane policy-fp, 2026-10-20, routed to the lead
     on Hayden's pick; the lead re-checked each). Details and proposed fixes are in the private
     findings file's "Subagent policy gaps 2026-10-20" section ([[dotclaude-public-repo]]). SP3
-    is fixed: merged in #143 (lane policy-fp, 2026-10-21). SP1 and SP2 are still open; with
-    policy-fp merged, nothing blocks a lane for them.
+    is fixed: merged in #143 (lane policy-fp, 2026-10-21). SP1 and SP2 are in lane sp-gaps
+    since 2026-10-24.
   - **Claude Code 2.1.305 turned `tests/delegation` red everywhere** (lane practices' report,
     2026-10-20; the lead reproduced it on the lead branch). The update added `--profile` to
     `claude plugin validate`, and `test_settings.Inventory.test_installed_claude_flags_and_subcommands_are_classified`
@@ -264,7 +267,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     refuse sandbox-writable paths. A real
     checkout passes, so a trial failure confined to those cases is this artifact. Fix: the test
     refuses a `.tmp/` under a temp root, as it already does for `.claude/worktrees/`, or `trial`
-    builds its tree outside the temp root. Lane-able; no live lane owns it.
+    builds its tree outside the temp root. In lane trial-fix since 2026-10-24.
   - **`lane trial`'s scratch tree has no setup, and another lane's base conflict fails it**
     (sessions in vulcan reported it twice on 2026-10-22: lane editfix, session 7b1249ff, and lane
     relbutton, session 54ba45b2; the lead checked the code). (1) `trial` builds its tree with a bare `git worktree add --detach`
@@ -279,7 +282,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     the baseline" when neither run has ids and both exit alike. Report a lane that conflicts
     with the base alone as untried, not FAILED, or add `--skip <lane>`. Workaround: start each
     `--run` with `ln -sfn <lane>/node_modules node_modules &&`. Lane-able (`skills/lanes/`,
-    `tests/lanes`); no live lane owns it; pairs with the temp-root entry above.
+    `tests/lanes`); in lane trial-fix since 2026-10-24, with the temp-root entry above.
   - **A compact pass puts live background writers into plan mode** (a session in another repo
     reported it, 2026-10-20; the lead checked the code and the writer's transcript). Compact
     mode is the pass picked when background tasks run (`skills/pass/SKILL.md:23,80,103`), yet
@@ -294,7 +297,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     live lane owns it.
   - **`tests/setup/test_claude_mute.py` fails 3 cases near midnight** (lane model-pin's report,
     2026-10-24; not yet checked by the lead). The cases depend on the local clock (a mute's end
-    time crossing midnight, likely). Fix: pin the clock in those tests. Lane-able; no owner.
+    time crossing midnight, likely). Fix: pin the clock in those tests. In lane mute-clock since 2026-10-24.
   - **A compact pass's final Enter sometimes lands as a newline** (Hayden's screenshot,
     2026-10-22, vulcan lane homeboard, pane %10). `pass.log` logged `outcome=compact` at
     02:09:50Z (all four send-keys exited 0), yet the resume prompt sat in the input box over a
@@ -438,8 +441,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lane practices (merge order 1, carries the lead branch) is paused by Hayden since
-     2026-10-24; their state is in their records (`lane ls`). After each reinstall,
+  0. Lanes mute-clock (merge order 1, carries the lead branch), trial-fix (2), sp-gaps (3)
+     and practices (4, paused by Hayden since 2026-10-24) run; their state is in their records (`lane ls`). After each reinstall,
      check `ls -la ~/.claude/CLAUDE.md` (the Watch item). Watch that push asks open with the
      briefing (#137); if they skip it, the Stop-hook check is the follow-up (Hayden's pick).
   1. Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
