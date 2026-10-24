@@ -87,10 +87,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lanes** (briefs in each record). Merge order: 1 practices (its next PR,
-    auth-secrets, carries the lead's notes; the skill suite below). It opened on Hayden's ok,
-    merged #142 on 2026-10-20 and stays open for more PRs. 2 model-pin (`feat/model-pin`,
-    opened 2026-10-23 on Hayden's picks): `/model` saves its pick as the default for every new
+  - **Live lanes** (briefs in each record). Merge order: 1 model-pin (`feat/model-pin`, #145,
+    carries the lead's notes), 2 practices (its next PR, auth-secrets; the skill suite below),
+    paused by Hayden on 2026-10-24 for a few days. practices opened on Hayden's ok, merged #142
+    on 2026-10-20 and stays open for more PRs. model-pin (opened 2026-10-23 on Hayden's picks): `/model` saves its pick as the default for every new
     session (`model` in `~/.claude/settings.json`); the lane pins new sessions to Opus with
     `ANTHROPIC_MODEL`, which 2.1.309's startup reads before the saved key, so `/model` switches
     only the current session. Effort stays as is: `CLAUDE_CODE_EFFORT_LEVEL` would lock
@@ -291,6 +291,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     `permissionMode` in `agents/writer.md` holds against a parent's mid-run plan mode; if it
     does, it also covers plan mode entered by hand. Lane-able (`skills/pass/`, `tests/`); no
     live lane owns it.
+  - **`tests/setup/test_claude_mute.py` fails 3 cases near midnight** (lane model-pin's report,
+    2026-10-24; not yet checked by the lead). The cases depend on the local clock (a mute's end
+    time crossing midnight, likely). Fix: pin the clock in those tests. Lane-able; no owner.
   - **A compact pass's final Enter sometimes lands as a newline** (Hayden's screenshot,
     2026-10-22, vulcan lane homeboard, pane %10). `pass.log` logged `outcome=compact` at
     02:09:50Z (all four send-keys exited 0), yet the resume prompt sat in the input box over a
@@ -434,8 +437,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lanes practices (merge order 1, its next PR, carries the lead branch) and model-pin (2)
-     run; their state is in their records (`lane ls`). After each reinstall,
+  0. Lanes model-pin (merge order 1, #145, carries the lead branch) and practices (2, paused
+     by Hayden 2026-10-24) run; their state is in their records (`lane ls`). After each reinstall,
      check `ls -la ~/.claude/CLAUDE.md` (the Watch item). Watch that push asks open with the
      briefing (#137); if they skip it, the Stop-hook check is the follow-up (Hayden's pick).
   1. Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
