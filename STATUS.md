@@ -241,11 +241,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     compact boundary met before any post-compact usage means no count yet (say nothing, write
     nothing), with a test on a transcript fixture that ends at a boundary. Lane-able
     (`hooks/context_watch.py`, `tests/`); no live lane owns it.
-  - **Subagent policy gaps SP1 to SP3** (from lane policy-fp, 2026-10-20, routed to the lead
+  - **Subagent policy gaps SP1 to SP5** (from lane policy-fp, 2026-10-20, routed to the lead
     on Hayden's pick; the lead re-checked each). Details and proposed fixes are in the private
     findings file's "Subagent policy gaps 2026-10-20" section ([[dotclaude-public-repo]]). SP3
     is fixed: merged in #143 (lane policy-fp, 2026-10-21). SP1 and SP2 are in lane sp-gaps
-    since 2026-10-24.
+    since 2026-10-24; it found SP4 and SP5 (medium, same files), which Hayden folded into its PR
+    on 2026-10-24.
   - **Claude Code 2.1.305 turned `tests/delegation` red everywhere** (lane practices' report,
     2026-10-20; the lead reproduced it on the lead branch). The update added `--profile` to
     `claude plugin validate`, and `test_settings.Inventory.test_installed_claude_flags_and_subcommands_are_classified`
