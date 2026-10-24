@@ -1351,3 +1351,102 @@ class Trial(LaneWork):
                       "origin/main", out)
         self.assertIn("suite 1 (test -f a.txt && test -f b.txt): ok", out)
         self.assertNotIn("other lanes' uncommitted work", err)
+
+    def local_files(self):
+        """alpha's gitignored local files: local.cfg (which .worktreeinclude names, edited in
+        alpha since main's copy), and a Node-style node_modules/fake and a .venv to link."""
+        self.write(os.path.join(self.alpha, ".gitignore"), "local.cfg\nnode_modules/\n.venv/\n")
+        self.write(os.path.join(self.alpha, ".worktreeinclude"), "local.cfg\n")
+        self.git("add", ".gitignore", ".worktreeinclude", cwd=self.alpha)
+        self.git("commit", "-q", "-m", "ignores", cwd=self.alpha)
+        self.write(os.path.join(self.main, "local.cfg"), "main's copy\n")
+        self.write(os.path.join(self.alpha, "local.cfg"), "edited in alpha\n")
+        self.write(os.path.join(self.alpha, "node_modules", "fake", "index.js"),
+                   "module.exports = 42;\n")
+        self.write(os.path.join(self.alpha, ".venv", "bin", "python"), "")
+
+    def test_the_lanes_included_files_reach_the_tree(self):
+        self.local_files()
+        got = os.path.join(self.tmp, "got")
+        rc, out, err = self.trial("--run", f"cat local.cfg > {shlex.quote(got)}")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("lane trial: copied 1 file(s) from .worktreeinclude\n", out)
+        self.assertEqual(self.read(got), "edited in alpha\n")  # the lane's, not main's
+        self.assertEqual(self.leftovers(), ([], []))
+
+    def test_linked_dirs_reach_the_merge_and_the_baseline(self):
+        # The config's trial-link and --link each link a dir of the lane's into the tree. The
+        # suite fails on the merge only, so the baseline's tree shows its links too.
+        self.local_files()
+        self.lane("init", "--trial-link", "node_modules")
+        seen = os.path.join(self.tmp, "seen")
+        cmd = (f"readlink node_modules >> {shlex.quote(seen)}; readlink .venv >> "
+               f"{shlex.quote(seen)}; test ! -f b.txt")
+        rc, out, err = self.trial("--link", ".venv", "--run", cmd)
+        self.assertEqual(rc, 1, out + err)  # no ids, other exits: by hand
+        self.assertIn("lane trial: copied 1 file(s) from .worktreeinclude, linked node_modules, "
+                      ".venv\n", out)
+        self.assertEqual(out.count("linked node_modules"), 1)
+        self.assertIn("baseline run of suite 1/1", out)
+        want = [os.path.join(self.alpha, "node_modules"), os.path.join(self.alpha, ".venv")]
+        self.assertEqual(self.read(seen).splitlines(), want * 2)
+        self.assertTrue(os.path.isfile(os.path.join(self.alpha, "node_modules", "fake",
+                                                    "index.js")))  # the lane's own, untouched
+        self.assertEqual(self.leftovers(), ([], []))
+
+    def test_a_suite_that_requires_a_linked_module_passes_only_once_linked(self):
+        self.local_files()
+        if shutil.which("node"):
+            cmd = "node -e \"require('./node_modules/fake')\""
+        else:  # the same check without node: the module's file, at the tree's own path
+            cmd = "test -f node_modules/fake/index.js"
+        rc, out, err = self.trial("--run", cmd)
+        self.assertEqual(rc, 0, out + err)  # fails on both runs, the same way
+        self.assertIn("fails the same way on the baseline", out)
+        self.assertIn("baseline run of suite 1/1", out)
+        rc, out, err = self.trial("--link", "node_modules", "--run", cmd)
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn(f"suite 1 ({cmd}): ok", out)
+        self.assertNotIn("baseline run", out)
+
+    @unittest.skipUnless(shutil.which("node"), "no node")
+    def test_a_node_test_suite_is_judged_by_its_tap_ids(self):
+        # A real `node --test`, piped: TAP. ab fails only where both lanes' files meet, old
+        # fails everywhere, and the linked module loads.
+        self.local_files()
+        self.write(os.path.join(self.alpha, "t.test.js"),
+                   "const test = require('node:test');\nconst fs = require('node:fs');\n"
+                   "const assert = require('node:assert');\n"
+                   "test('loads', () => assert.equal(require('./node_modules/fake'), 42));\n"
+                   "test('ab', () => assert.ok(!(fs.existsSync('a.txt') && "
+                   "fs.existsSync('b.txt'))));\n"
+                   "test('old', () => assert.fail('always'));\n")
+        self.git("add", "t.test.js", cwd=self.alpha)
+        self.git("commit", "-q", "-m", "node test", cwd=self.alpha)
+        rc, out, err = self.trial("--link", "node_modules", "--run", "node --test t.test.js")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("suite 1 (node --test t.test.js): 1 failure(s) only on the merge:\n"
+                      "  not ok - ab", out)
+        self.assertNotIn("not ok - loads", out)
+
+    def test_a_link_the_lane_lacks_warns_once_and_a_bad_one_is_refused(self):
+        rc, out, err = self.trial("--link", "nope", "--run", "test ! -f b.txt")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("baseline run of suite 1/1", out)
+        self.assertEqual(err.count("not linked into the trial's tree: nope"), 1, err)
+        self.assertIn("lane alpha has no nope", err)
+        for bad in ("../x", "/abs", "a/../b", "./x", ""):
+            with self.subTest(bad=bad):
+                rc, out, err = self.trial("--link", bad, "--run", "true")
+                self.assertEqual(rc, 1, out + err)
+                self.assertIn(f"bad trial link {bad!r}", err)
+                self.assertNotIn("merged", out)
+                if bad:
+                    p = self.run_lane("init", "--trial-link", f"node_modules,{bad}")
+                    self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                    self.assertIn(f"bad trial link {bad!r}", p.stderr)
+        # A trailing slash is fine, and an empty value removes the key.
+        self.assertIn("trial-link = node_modules", self.lane("init", "--trial-link",
+                                                             "node_modules/"))
+        self.assertNotIn("trial-link", self.lane("init", "--trial-link", ""))
+        self.assertEqual(self.leftovers(), ([], []))

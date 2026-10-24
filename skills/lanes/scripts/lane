@@ -501,25 +501,32 @@ def add_exclude(repo: Repo) -> None:
         f.write(("" if not text or text.endswith("\n") else "\n") + "/.lane/\n")
 
 
-def copy_includes(repo: Repo, dest: str) -> list[str]:
-    """Copy the main checkout's gitignored files that .worktreeinclude matches (gitignore syntax).
-    An existing file is never overwritten: in a finished lane it may hold a lane-local fix."""
-    include = os.path.join(repo.main, ".worktreeinclude")
+def plain_path(rel: str) -> bool:
+    """rel names a path below a dir: relative, with no '', '.' or '..' part."""
+    return not any(part in ("", ".", "..") for part in rel.split("/"))
+
+
+def copy_includes(repo: Repo, dest: str, src: str | None = None) -> list[str]:
+    """Copy src's (by default the main checkout's; `trial` passes the lane's) gitignored files
+    that its .worktreeinclude matches (gitignore syntax). An existing file is never overwritten:
+    in a finished lane it may hold a lane-local fix."""
+    src = src or repo.main
+    include = os.path.join(src, ".worktreeinclude")
     if not os.path.isfile(include):
         return []
-    p = git(["ls-files", "--others", "--ignored", f"--exclude-from={include}"], repo.main, check=True)
+    p = git(["ls-files", "--others", "--ignored", f"--exclude-from={include}"], src, check=True)
     matched = [x for x in p.stdout.splitlines() if x]
     if not matched:
         return []
-    ignored = subprocess.run(["git", "check-ignore", "--stdin"], cwd=repo.main, input="\n".join(matched),
+    ignored = subprocess.run(["git", "check-ignore", "--stdin"], cwd=src, input="\n".join(matched),
                              capture_output=True, text=True).stdout.splitlines()
     copied = []
     for rel in ignored:
-        if any(part in ("", ".", "..") for part in rel.split("/")):
+        if not plain_path(rel):
             warn(f"not copied from .worktreeinclude: {rel!r} is no plain path")
             continue
         try:
-            if copy_one(repo.main, dest, rel):
+            if copy_one(src, dest, rel):
                 copied.append(rel)
         except NotADirectoryError:
             warn(f"not copied from .worktreeinclude: {rel} (a dir on its way is a symlink)")
@@ -703,6 +710,7 @@ def cmd_init(args) -> None:
     for key, problem in PICKS.items():
         if (value := getattr(args, key)) and (why := problem(value)):
             raise LaneError(why)
+    trial_links = None if args.trial_link is None else ",".join(trial_link_list(args.trial_link))
     with lock(repo):
         cfg = repo.config() if repo.has_lanes else {}
         name = os.path.basename(repo.main)
@@ -724,6 +732,10 @@ def cmd_init(args) -> None:
                 cfg.pop(key, None)
             elif value is not None:
                 cfg[key] = value
+        if trial_links == "":  # as with the picks: empty removes it
+            cfg.pop("trial-link", None)
+        elif trial_links is not None:
+            cfg["trial-link"] = trial_links
         try:
             write_config(repo, cfg)
         except OSError as e:
@@ -2263,6 +2275,80 @@ def trial_root(repo: Repo) -> str:
     return root
 
 
+def link_problem(rel: str) -> str | None:
+    """Why rel can't be a trial link (trial-link's entries, `--link`), else None: like a
+    .worktreeinclude match, a plain path relative to the lane (one trailing '/' is dropped
+    first, by trial_link_list)."""
+    if plain_path(rel):
+        return None
+    return (f"bad trial link {rel!r}: name a path relative to the lane, with no '..', '.' or "
+            "empty part and no leading '/' (such as node_modules)")
+
+
+def trial_link(rel: str) -> str:
+    """One trial link (a `--link`, or an entry of trial-link), one trailing '/' dropped; a bad
+    one raises (link_problem)."""
+    rel = rel[:-1] if rel.endswith("/") and len(rel) > 1 else rel
+    if why := link_problem(rel):
+        raise LaneError(why)
+    return rel
+
+
+def trial_link_list(spec: str) -> list[str]:
+    """trial-link's comma list as paths, each once (trial_link); '' is none."""
+    return list(dict.fromkeys(trial_link(x.strip()) for x in spec.split(","))) if spec else []
+
+
+class TreeSetup(NamedTuple):
+    """What trial_setup did to a tree: the files it copied, the links it made, the links the
+    lane lacks, and the ones the tree had already."""
+    copied: list[str]
+    linked: list[str]
+    missing: list[str]
+    present: list[str]
+
+
+def trial_setup(repo: Repo, lane: str, tree: str, links: list[str]) -> TreeSetup:
+    """Ready a fresh tree as the lane's own tests ran: copy the lane's gitignored files its
+    .worktreeinclude matches (copy_includes from the lane, so the suites see the lane's copies,
+    never main's), then symlink each of links the lane has to the lane's own by absolute path
+    (node_modules, a .venv: built once, in the lane), unless the tree has that path already. A
+    link is no copy: a suite that writes through it writes the lane's files."""
+    copied = copy_includes(repo, tree, src=lane)
+    linked, missing, present = [], [], []
+    for rel in links:
+        if not os.path.lexists(os.path.join(lane, rel)):
+            missing.append(rel)
+            continue
+        try:
+            fd, name = open_parent(tree, rel, create=True)
+        except NotADirectoryError:  # a tracked symlink on the way
+            present.append(rel)
+            continue
+        try:
+            os.symlink(os.path.join(lane, rel), name, dir_fd=fd)
+            linked.append(rel)
+        except FileExistsError:
+            present.append(rel)
+        finally:
+            os.close(fd)
+    return TreeSetup(copied, linked, missing, present)
+
+
+def say_setup(lane_id: str, setup: TreeSetup) -> None:
+    """trial_setup's one line, and a warning per link it couldn't make (once per trial: the
+    baseline's tree gets the same)."""
+    for rel in setup.missing:
+        warn(shown(f"not linked into the trial's tree: {rel} (lane {lane_id} has no {rel})"))
+    for rel in setup.present:
+        warn(shown(f"not linked into the trial's tree: {rel} (the tree has it already)"))
+    parts = [f"copied {len(setup.copied)} file(s) from .worktreeinclude"] if setup.copied else []
+    if setup.linked:
+        parts.append("linked " + ", ".join(setup.linked))
+    if parts:
+        say(shown("lane trial: " + ", ".join(parts)))
+
+
 def trial_leftovers(repo: Repo, lane_id: str, root: str) -> None:
     """Clear what earlier trials of this lane left in root (the lane's TRIAL_DIR, or the temp
     dir an older `lane` put its trees in): one killed by the Bash cap or a respawn never reaches
@@ -2373,6 +2459,8 @@ def trial(repo: Repo, me: dict, args) -> int:
     use the commits as they are."""
     cfg = repo.config()
     base_name = cfg.get("base", "origin/main")
+    links = list(dict.fromkeys(trial_link_list(str(cfg.get("trial-link", "")))
+                               + [trial_link(x) for x in args.link]))
     trees = worktree_heads(repo)
     others = trial_lanes(repo, me, args.ids, trees)
     tmp = os.path.realpath(tempfile.gettempdir())
@@ -2435,12 +2523,12 @@ def trial(repo: Repo, me: dict, args) -> int:
     tree, holds = os.path.join(tmpdir, "tree"), None
     try:
         trial_git(repo, ["worktree", "add", "--detach", "--quiet", "--end-of-options", tree, cur])
+        holds = "merge" if merged else "baseline"
+        say_setup(me["id"], trial_setup(repo, repo.toplevel, tree, links))
         if not merged:  # cur is the baseline, so nothing reruns
-            holds = "baseline"
             rc = alone_report(args.run, run_suites(tree, args.run, "the lane's",
                                                    range(len(args.run))), alone)
         else:
-            holds = "merge"
             runs = run_suites(tree, args.run, "merge", range(len(args.run)))
             failed = [i for i, run in enumerate(runs) if run.failed]
             again = {}
@@ -2452,6 +2540,7 @@ def trial(repo: Repo, me: dict, args) -> int:
                 trial_git(repo, ["worktree", "add", "--detach", "--quiet", "--end-of-options",
                                  tree, baseline])
                 holds = "baseline"
+                trial_setup(repo, repo.toplevel, tree, links)  # said once, for the merge's
                 again = dict(zip(failed, run_suites(tree, args.run, "baseline", failed)))
             rc = trial_report(args.run, runs, again)
     finally:
@@ -3747,6 +3836,9 @@ def parser() -> argparse.ArgumentParser:
                                    "ANTHROPIC_MODEL pin)")
     p.add_argument("--effort", help="claude --effort for each `lane open` ('' for the user's "
                                     "default)")
+    p.add_argument("--trial-link", dest="trial_link", metavar="PATHS",
+                   help="comma-separated lane paths each `lane trial` symlinks into its tree, "
+                        "e.g. node_modules ('' for none)")
     p = sub.add_parser("new", help="make a lane: worktree, branch, record, port, setup")
     p.add_argument("id")
     p.add_argument("--branch", help="branch name (default: the id)")
@@ -3795,7 +3887,7 @@ def parser() -> argparse.ArgumentParser:
                         "timeout prints \"gave up on lock\" on stderr")
     p = sub.add_parser("trial", help="run the suites on a merge of this lane with every other "
                                      "live lane, in a scratch tree, under the suite lock",
-                       usage="lane trial [<id> ...] [--wait SECS] [--keep] "
+                       usage="lane trial [<id> ...] [--wait SECS] [--keep] [--link PATH ...] "
                              "--run CMD [--run CMD ...]")
     p.add_argument("ids", nargs="*", metavar="id",
                    help="merge only these lanes (default: every other live lane)")
@@ -3806,6 +3898,9 @@ def parser() -> argparse.ArgumentParser:
                    help=f"give up on the lock after SECS, exit {LOCK_BUSY} (default: wait)")
     p.add_argument("--keep", action="store_true",
                    help="keep the scratch tree (it says where, and how to remove it)")
+    p.add_argument("--link", action="append", default=[], metavar="PATH",
+                   help="symlink the lane's PATH (node_modules, a .venv) into the tree, beside "
+                        "init's --trial-link ones; repeat it per path")
     p = sub.add_parser("whoami", help="this checkout's lane id, main, or plain")
     p.add_argument("--json", action="store_true")
     for name in ("claim", "release"):
