@@ -417,7 +417,8 @@ def reply(model, effort="medium"):
 
 class CarriedPick(unittest.TestCase):
     """carried_pick in-process: tests/pass covers the plain pass through pass-respawn's CLI; this
-    covers what only a resume (tab restore, the shelf's Open) does differently."""
+    covers a /model no reply followed, which a pass and a resume (tab restore, the shelf's Open)
+    carry alike, and a session launched with no --model, which ANTHROPIC_MODEL pins."""
 
     LAUNCHED = {"--model": "sonnet", "--effort": "low"}
 
@@ -428,39 +429,70 @@ class CarriedPick(unittest.TestCase):
             f.writelines(json.dumps(e) + "\n" for e in entries)
         return path
 
-    def test_a_resume_carries_a_model_argument_no_reply_followed(self):
-        # The server died between the /model and its first reply. A pass drops the flag (the
-        # default the command saved applies to a new session); a resume would keep the model the
-        # session ran before it, so it carries the argument.
+    def test_a_model_argument_no_reply_followed_carries(self):
+        # The server died, or the pass came, between the /model and its first reply. The fresh
+        # claude would take the pin, not the pick, so the argument carries; the effort the
+        # /model moved has no entry to say what, so it drops to the saved default.
         for after in ([], [reply("<synthetic>", None)]):
             with self.subTest(after=after):
                 path = self.transcript(reply("claude-sonnet-5-5", "low"),
                                        command("/model", "opus[1m]"), *after)
-                self.assertEqual(lanelib.carried_pick(self.LAUNCHED, path), [])
-                self.assertEqual(lanelib.carried_pick(self.LAUNCHED, path, resume=True),
+                self.assertEqual(lanelib.carried_pick(self.LAUNCHED, path),
                                  ["--model", "opus[1m]"])
+                self.assertEqual(lanelib.carried_pick({}, path), ["--model", "opus[1m]"])
 
-    def test_a_resume_still_drops_a_menu_pick_or_a_bad_argument_with_no_reply(self):
+    def test_a_menu_pick_or_a_bad_argument_with_no_reply_drops_the_model(self):
         for args in ("", "sonet", "-x"):
             with self.subTest(args=args):
                 path = self.transcript(reply("claude-sonnet-5-5", "low"), command("/model", args))
-                self.assertEqual(lanelib.carried_pick(self.LAUNCHED, path, resume=True), [])
+                self.assertEqual(lanelib.carried_pick(self.LAUNCHED, path), [])
+                self.assertEqual(lanelib.carried_pick({}, path), [])
 
-    def test_a_resume_after_a_reply_carries_what_a_pass_does(self):
-        path = self.transcript(command("/model", "sonnet"), reply("claude-opus-5-5", "high"),
-                               command("/effort", "max"), reply("claude-opus-5-5", "max"))
-        self.assertEqual(lanelib.carried_pick(self.LAUNCHED, path, resume=True),
-                         ["--model", "claude-opus-5-5", "--effort", "max"])
-        self.assertEqual(lanelib.carried_pick(self.LAUNCHED, path, resume=True),
-                         lanelib.carried_pick(self.LAUNCHED, path))
+    def test_a_model_pick_carries_with_no_launch_flag(self):
+        # Launched bare, the fresh claude would take the pin: the /model carries as it would
+        # over a launch --model.
+        for args, ran, model in (("sonnet", "claude-sonnet-5-5", "sonnet"),
+                                 ("", "claude-haiku-5-5", "claude-haiku-5-5"),
+                                 ("sonnet", "claude-opus-5-5", "claude-opus-5-5")):
+            with self.subTest(args=args, ran=ran):
+                path = self.transcript(reply("claude-opus-5-5", "high"), command("/model", args),
+                                       reply(ran, "high"))
+                self.assertEqual(lanelib.carried_pick({}, path), ["--model", model])
+                self.assertEqual(lanelib.carried_pick({"--effort": "low"}, path),
+                                 ["--model", model, "--effort", "high"])
+
+    def test_a_model_default_argument_carries_with_no_launch_flag(self):
+        # --model default is the account's default, not the pin (probed 2026-10-23 on 2.1.309):
+        # what the /model picked, so it carries like any other argument.
+        path = self.transcript(command("/model", "default"), reply("claude-opus-5-5", "high"))
+        self.assertEqual(lanelib.carried_pick({}, path), ["--model", "default"])
+
+    def test_with_no_launch_model_the_replies_before_a_command_go_unparsed(self):
+        path = self.transcript(*[reply("claude-opus-5-5", "high")] * 5, command("/model", "sonnet"),
+                               reply("claude-sonnet-5-5", "low"))
+        with mock.patch.object(lanelib, "ran", wraps=lanelib.ran) as ran:
+            self.assertEqual(lanelib.carried_pick({"--effort": "low"}, path),
+                             ["--model", "sonnet", "--effort", "low"])
+        self.assertEqual(ran.call_count, 1)
+        with mock.patch.object(lanelib, "ran", wraps=lanelib.ran) as ran:
+            lanelib.carried_pick(self.LAUNCHED, path)
+        self.assertEqual(ran.call_count, 6)
+
+    def test_with_no_launch_flag_no_model_command_carries_nothing(self):
+        # What ran says nothing without a launch value to hold it against (a /model before a
+        # /clear reverts to the pin), and an /effort carries only over a launch --effort: the
+        # saved default it wrote applies.
+        path = self.transcript(reply("claude-sonnet-5-5", "low"), command("/effort", "max"),
+                               reply("claude-sonnet-5-5", "max"))
+        self.assertEqual(lanelib.carried_pick({}, path), [])
 
     def test_no_transcript_carries_the_launch_flags(self):
         # A tab with no input yet: nothing to read, so what it launched with.
         for path in (None, "/nonexistent/x.jsonl"):
             with self.subTest(path=path):
-                self.assertEqual(lanelib.carried_pick(self.LAUNCHED, path, resume=True),
+                self.assertEqual(lanelib.carried_pick(self.LAUNCHED, path),
                                  ["--model", "sonnet", "--effort", "low"])
-        self.assertEqual(lanelib.carried_pick({}, None, resume=True), [])
+        self.assertEqual(lanelib.carried_pick({}, None), [])
 
 
 class UnreadSessions(unittest.TestCase):

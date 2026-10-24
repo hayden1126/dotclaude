@@ -48,7 +48,7 @@ an unregistered worktree: `lane whoami` tells you which.
    `lane init --root ~/code/<repo>-lanes --setup "npm ci" --ports 5191-5199 --cap 4`. It asks
    for Hayden's click: `--setup` names the command each new lane runs, and `--root` moves where
    lanes live. `--model` and `--effort` set the claude model and effort each `lane open`
-   launches with (an empty value: the user's default).
+   launches with (an empty value: the `ANTHROPIC_MODEL` pin, or the user's default effort).
 2. **New lane:** `lane new chart-fix --claim 42 --goal "fix the axis labels" --files src/chart/
    --overlaps api-docs --done-when "axis test green"`. It fetches (and refuses if the fetch
    fails: a lane branches only from the commit the remote reports), branches from `origin/main`

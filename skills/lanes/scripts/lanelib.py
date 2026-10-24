@@ -608,7 +608,7 @@ def stored_pick(entry: dict) -> dict[str, str]:
 # The launch flags a plain pass carries to the respawned claude, and a tab restore or the shelf's
 # Open to the resumed one (carried_pick), and the slash commands that change each mid-session:
 # /model can move the effort too (each model keeps its own), and both save their pick as the
-# default for new sessions.
+# default for new sessions, though the ANTHROPIC_MODEL pin overrides /model's.
 PICK_FLAGS = ("--model", "--effort")
 CHANGED_BY = {"/model": ("--model", "--effort"), "/effort": ("--effort",)}
 COMMAND = re.compile(r"\s*<command-name>(/model|/effort)</command-name>")
@@ -676,12 +676,14 @@ def ran(line: bytes) -> dict[str, str | None] | None:
             else None, "--effort": effort if effort in EFFORTS else None}
 
 
-def picks_since(path: str | None) -> tuple[dict, dict, str | None] | None:
+def picks_since(path: str | None, need_last: bool = True) -> tuple[dict, dict, str | None] | None:
     """What the transcript says of the session's model and effort, as (since, last, chosen):
     since maps each pick flag a /model or /effort changed to what the last main-chain assistant
     entry after its last such command ran with (None: no usable entry since); last is what the
     transcript's last such entry ran with ({}: none); chosen is the last /model's argument (""
-    for a pick from its menu; None: no /model). None when the transcript can't be read."""
+    for a pick from its menu; None: no /model). None when the transcript can't be read.
+    need_last False skips parsing the replies before the first command, so last is then only
+    what ran since it: a session with no launch --model has no use for it."""
     since, last, chosen = {}, {}, None
     try:
         with open(path, "rb") as f:
@@ -691,7 +693,7 @@ def picks_since(path: str | None) -> tuple[dict, dict, str | None] | None:
                     since.update(dict.fromkeys(CHANGED_BY[name]))
                     if name == "/model":
                         chosen = args
-                elif values := ran(line):
+                elif (since or need_last) and (values := ran(line)):
                     last = values
                     since.update({flag: values[flag] for flag in since})
     except (OSError, TypeError, ValueError):
@@ -699,33 +701,33 @@ def picks_since(path: str | None) -> tuple[dict, dict, str | None] | None:
     return since, last, chosen
 
 
-def carried_pick(launched: dict[str, str], transcript: str | None,
-                 resume: bool = False) -> list[str]:
+def carried_pick(launched: dict[str, str], transcript: str | None) -> list[str]:
     """The --model and --effort a plain pass gives the respawned claude, or a tab restore or the
     shelf's Open the resumed one (docs/lanes.md, "Model and effort"), for each flag the session
-    launched with (launched, as pick_flags reads them):
+    launched with (launched, as pick_flags reads them), and the model after a /model even with no
+    launch --model: a fresh claude takes the ANTHROPIC_MODEL pin, not the default a /model saved.
     - after a /model (for the effort, a /model or /effort) in the transcript, what the last entry
-      since ran with, or nothing when none did, since the command saved its pick as the default
-      for new sessions. For the model, the /model's own argument when it is a name model_problem
+      since ran with. For the model, the /model's own argument when it is a name model_problem
       accepts and could have run as that entry's id (an id loses what an alias or a 1M form
-      means); a pick from the menu has none, so it carries the id;
+      means), or when no usable entry followed; a pick from the menu has none, so it carries the
+      id, or nothing. An effort with no usable entry since carries nothing: the default the
+      command saved applies;
     - with no such command, the launch value, except a model the transcript's last entry can't
       have run as (could_run): a change the transcript can't show, such as one before a /clear,
       which starts a new transcript in the same process. Then the id that ran. An effort has no
       such check: it moves without a command (a level per model, a one-turn bump).
-    resume: for a `claude --resume`, which keeps the session's own model rather than taking the
-    default a /model saved, so a /model with no usable entry since carries its argument when
-    model_problem accepts it. A pass reads the transcript at act time, so a /model during the
-    passing turn counts. The transcript is read only when a flag is there to carry; None (no
-    transcript yet) carries the launch flags."""
-    since, last, chosen = (picks_since(transcript) if launched else None) or ({}, {}, None)
+    A pass reads the transcript at act time, so a /model during the passing turn counts. None
+    (no transcript yet) carries the launch flags."""
+    since, last, chosen = picks_since(transcript, "--model" in launched) or ({}, {}, None)
     out = []
-    for flag in (f for f in PICK_FLAGS if f in launched):  # a flag it didn't launch with: none
-        value = launched[flag]
+    for flag in PICK_FLAGS:
+        if flag not in launched and not (flag == "--model" and flag in since):
+            continue  # an effort it didn't launch with: the saved default applies
+        value = launched.get(flag)
         if flag in since:
             value = since[flag]
             if (flag == "--model" and not model_problem(chosen)
-                    and (could_run(chosen, value) if value else resume)):
+                    and (not value or could_run(chosen, value))):
                 value = chosen
         elif flag == "--model" and last.get(flag) and not could_run(value, last[flag]):
             value = last[flag]

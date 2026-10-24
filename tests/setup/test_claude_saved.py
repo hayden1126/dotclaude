@@ -831,12 +831,18 @@ class Saved(unittest.TestCase):
         self.transcript(2, history=[command("/model", "opus"), reply("claude-opus-5-5", "high")])
         self.put(3, shelved=True, pick={"model": "sonnet[1m]"})
         self.transcript(3)
-        for n in (1, 2, 3):
+        self.put(4, shelved=True)  # launched with no flags: a /model still carries
+        self.transcript(4, history=[command("/model", "sonnet"), reply("claude-sonnet-5-5", "low")])
+        self.put(5, shelved=True)  # and with no reply since: its argument
+        self.transcript(5, history=[reply("claude-opus-5-5", "high"), command("/model", "haiku")])
+        for n in (1, 2, 3, 4, 5):
             self.run_saved("open", sid(n), CLIENT)
         self.assertEqual([c for _, _, c in self.opened()],
                          [f"claude --resume {sid(1)} --model sonnet --effort low",
                           f"claude --resume {sid(2)} --model opus --effort high",
-                          f"claude --resume {sid(3)} --model sonnet\\[1m\\]"])
+                          f"claude --resume {sid(3)} --model sonnet\\[1m\\]",
+                          f"claude --resume {sid(4)} --model sonnet",
+                          f"claude --resume {sid(5)} --model haiku"])
 
     def test_open_an_old_or_malformed_entry_resumes_bare(self):
         self.put(1, shelved=True)

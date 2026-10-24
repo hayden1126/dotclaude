@@ -336,6 +336,31 @@ class IgnoreBlock(unittest.TestCase):
             self.assertEqual(f.read(), f"{install_ignore.BEGIN}\n/.x\n")
 
 
+class ModelPin(unittest.TestCase):
+    """The baseline pins new sessions' model with env ANTHROPIC_MODEL, which startup reads ahead
+    of the `model` key /model saves (probed 2026-10-23, 2.1.309): a /model moves only its own
+    session. An overlay's env merges beside the pin, and the live `model` key stays (and stays
+    unread)."""
+
+    def test_the_merged_settings_pin_opus_beside_the_overlays_env(self):
+        with tempfile.TemporaryDirectory() as d:
+            overlay, live = os.path.join(d, "overlay.json"), os.path.join(d, "live.json")
+            with open(overlay, "w") as f:
+                json.dump({"env": {"FOO": "1"}}, f)
+            with open(live, "w") as f:
+                json.dump({"model": "sonnet"}, f)
+            r = run(MERGE, os.path.join(REPO, "settings.json"), overlay, live)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        merged = json.loads(r.stdout)
+        self.assertEqual((merged["env"]["ANTHROPIC_MODEL"], merged["env"]["FOO"], merged["model"]),
+                         ("opus", "1", "sonnet"))
+
+    def test_the_docs_name_the_pin(self):
+        for rel in ("README.md", "docs/lanes.md"):
+            with self.subTest(doc=rel), open(os.path.join(REPO, rel)) as f:
+                self.assertIn("ANTHROPIC_MODEL", f.read())
+
+
 class CcstatuslineSettings(unittest.TestCase):
     """setup.sh's inline python that installs ~/.config/ccstatusline/settings.json: an existing
     file that doesn't parse, has a malformed lines list or lacks the ctx widget is backed up

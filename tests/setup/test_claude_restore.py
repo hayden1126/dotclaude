@@ -471,6 +471,17 @@ class Restore(unittest.TestCase):
         self.run_restore()
         self.assertEqual(self.typed(), [f"claude --resume {sid(1)} --model opus"])
 
+    def test_a_model_pick_carries_for_a_claude_launched_with_no_flags(self):
+        # A bare resume would take the pin (ANTHROPIC_MODEL) or keep the model before the pick.
+        self.entry(1, window=1, history=[reply("claude-opus-5-5", "high"),
+                                         command("/model", "sonnet"),
+                                         reply("claude-sonnet-5-5", "low")])
+        self.entry(2, window=2, history=[command("/effort", "max"),
+                                         reply("claude-opus-5-5", "max")])
+        self.run_restore()
+        self.assertEqual(self.typed(), [f"claude --resume {sid(1)} --model sonnet",
+                                        f"claude --resume {sid(2)}"])
+
     def test_a_bad_field_drops_its_flag_and_never_the_tab(self):
         picks = ({"model": "a b", "effort": "low"}, {"model": 5, "effort": ["x"]},
                  {"model": "$(id)", "effort": "extreme"}, {"model": "-x", "effort": "High"},
