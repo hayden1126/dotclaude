@@ -199,7 +199,7 @@ sees it.
 | `hooks/wants_input.py` | Not a hook: `stop-ring.sh` runs it, detached, on a main session's Stop; asks Haiku whether the reply's last 2,000 characters want the person (a question, an approval, a step only they can do) and prints `yes`, `no` or `error` with the reason and the time taken | symlink `~/.claude/hooks/wants_input.py` |
 | `hooks/mute_state.py` | Not a hook: the device-wide mute's flag (`$XDG_STATE_HOME/dotclaude/mute.json`), its reader and its locked writer; `read_mute` runs `mute_state.py check` only when a flag is there, and `tmux/claude-mute` and `pass-respawn` load it; a flag it can't read mutes nothing (see Hooks, "The device-wide mute") | symlink `~/.claude/hooks/mute_state.py` |
 | `hooks/haiku.py` | Not a hook: the direct Haiku Messages-API call (Claude subscription OAuth token, stdlib urllib, no API key) that `session-summary.sh` and `wants_input.py` share | symlink `~/.claude/hooks/haiku.py` |
-| `hooks/context-watch.sh` | Stop and PostToolUse hook: the auto-pass watcher; writes the context size to `ctx/<session>.json` and, at 300k, 480k and 520k (derived from `autoCompactWindow`), tells the session to run the pass skill, or with autopass off shows you one line at 520k; a shim over `hooks/context_watch.py`, which shares `hooks/autopass_state.py` (tiers, the tab flag, on or off); fails open, with errors in `context-watch.err` in the state dir | symlink `~/.claude/hooks/context-watch.sh`, `context_watch.py` and `autopass_state.py` |
+| `hooks/context-watch.sh` | Stop, PostToolUse and SessionStart(`compact`) hook: the auto-pass watcher; writes the context size to `ctx/<session>.json` (blank after a compact until the next reply is counted) and, at 300k, 480k and 520k (derived from `autoCompactWindow`), tells the session to run the pass skill, or with autopass off shows you one line at 520k; a shim over `hooks/context_watch.py`, which shares `hooks/autopass_state.py` (tiers, the tab flag, on or off); fails open, with errors in `context-watch.err` in the state dir | symlink `~/.claude/hooks/context-watch.sh`, `context_watch.py` and `autopass_state.py` |
 | `hooks/autopass_toggle.py` | Not a hook: the `skills/autopass` mod runs it for `/autopass on\|off\|status` (`autopass_toggle.py SESSION_ID CWD ARGS`), and it prints the one reply | symlink `~/.claude/hooks/autopass_toggle.py` |
 | `hooks/pass-banner.sh` | SessionStart (`startup`) hook: after a plain `/pass` respawned the tab, shows what the old session said in its last turn, once, as a banner you see and the model doesn't (its format and caps: the shim's header); a shim over `hooks/pass_banner.py`; fails open | symlink `~/.claude/hooks/pass-banner.sh` and `pass_banner.py` |
 | `hooks/pass-notice.sh` | UserPromptSubmit and PostToolUse (main thread) hook: when `pass-respawn`'s waiter dropped a `/pass`, adds its notice (`pass-notice/<session>.json` in the state dir) once as context to the session's next prompt or tool call, so the session stops waiting and says why; exits before Python when no notice is there; a shim over `hooks/pass_notice.py`; fails open, with errors in `pass-notice.err` in the state dir | symlink `~/.claude/hooks/pass-notice.sh` and `pass_notice.py` |
@@ -678,9 +678,10 @@ need nothing extra.
   the tab, it shows what the old session said in its last turn, once, as a banner the model
   doesn't see (see Pass, below). It acts only in the same tab on the same tmux server, within
   120 s of the pass, and never in a `claude -p` run or a subagent. Fails open.
-- **Stop / PostToolUse: `context-watch.sh`** (in this repo). The auto-pass watcher (see
-  Auto-pass, below); its `/autopass` toggle is the `skills/autopass` mod, not a settings hook.
-  The PostToolUse entry skips a subagent's calls before any Python starts. Fails open.
+- **Stop / PostToolUse / SessionStart(`compact`): `context-watch.sh`** (in this repo). The
+  auto-pass watcher (see Auto-pass, below); its `/autopass` toggle is the `skills/autopass` mod,
+  not a settings hook. The PostToolUse entry skips a subagent's calls before any Python starts.
+  The SessionStart entry only blanks the count after a compact. Fails open.
 - **UserPromptSubmit / PostToolUse: `pass-notice.sh`** (in this repo).
   - **What it does.** When a `/pass` drops (see Pass, below), the waiter leaves the session
     a notice at `pass-notice/<session>.json` in the state dir. This hook adds it once, as
@@ -870,8 +871,10 @@ rechecks the handoff and respawns the pane with a fresh `claude`.
 ### Auto-pass
 
 A session can hand off on its own before auto-compact (about 567k tokens with
-`autoCompactWindow` at 600k). `hooks/context-watch.sh` runs on Stop and on every main-thread
-tool call. It reads the context size from the transcript's last assistant `usage`, writes it to
+`autoCompactWindow` at 600k). `hooks/context-watch.sh` runs on Stop, on every main-thread
+tool call and when a compact ends. It reads the context size from the transcript's last assistant `usage` (none when a
+compact boundary comes first: the first reply after a compact can land after its tool call's
+hook, and a compact blanks the count until then), writes it to
 `~/.local/state/dotclaude/ctx/<session>.json` (for every session, `claude -p` and `--bg` ones
 included), and acts at three tiers. They come from `autoCompactWindow`, or from the model's
 window when the ctx file says it is smaller: compact at window - 33k, hard 8% of the window
@@ -898,8 +901,8 @@ before that (at most 47k), wrap-up 7% before hard (at most 40k), soft at half th
   minutes, it says compact mode too, as safe whether or not anything runs.
 - With autopass off, you alone see one line at the hard tier, once: "Context 521k, auto-compact
   near 567k: hand off now (/pass)."
-- `/autopass on|off|status` sets it for this tmux tab, or shows the count, the next tier, on or
-  off and what set it. The `skills/autopass` mod answers it with no model turn, at once even
+- `/autopass on|off|status` sets it for this tmux tab, or shows the count ("unknown yet" before
+  the first one, and after a compact until the next), the next tier, on or off and what set it. The `skills/autopass` mod answers it with no model turn, at once even
   when typed mid-turn: while a turn runs the reply is a dim notice, otherwise the command's
   output. Without a tab's setting,
   a lane and the lanes repo's main checkout (the lead) are on (`autopass` in the repo's lanes

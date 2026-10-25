@@ -312,12 +312,15 @@ class Baseline(unittest.TestCase):
         (h,) = entry["hooks"]
         self.assertEqual(h["command"], "i=$(cat); case \"$i\" in *'\"agent_id\"'*) ;; *) "
                          "printf '%s' \"$i\" | " + watch + " ;; esac")
-        hooks = [(event, h) for event in ("Stop", "PostToolUse") for e in S["hooks"][event]
-                 for h in e["hooks"] if "context-watch" in h["command"]]
-        self.assertEqual(len(hooks), 2)
+        # SessionStart(compact) blanks the count, so `lane ls` shows none until a real one lands.
+        self.assertEqual(commands("SessionStart", "compact"), [watch])
+        hooks = [(event, h) for event in ("Stop", "PostToolUse", "SessionStart")
+                 for e in S["hooks"][event] for h in e["hooks"] if "context-watch" in h["command"]]
+        self.assertEqual(len(hooks), 3)
         for event, h in hooks:
             # A Stop waits up to 1.5 s for the turn's final reply (spike A8), then may run tmux
-            # and git, so it gets more room than a tool call.
+            # and git, so it gets more room than a tool call; the first reply waits for
+            # SessionStart hooks.
             self.assertEqual(h["timeout"], 10 if event == "Stop" else 5)
             self.assertNotIn("exit 2", h["command"])
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "context-watch.sh"), os.X_OK))

@@ -1,9 +1,10 @@
 """context-watch: tell the session to hand off (the pass skill) before auto-compact.
 
-hooks/context-watch.sh runs this file with python3 -I on Stop and PostToolUse, passing the event
-on stdin. It prints at most one JSON object and fails open: any error says nothing. Tests import
-it (tests/setup/test_context_watch.py). Stdlib only; keep the source ASCII. PLAN.md "PR 4:
-auto-pass" has the design; hooks/autopass_state.py has the tiers and decide().
+hooks/context-watch.sh runs this file with python3 -I on Stop, PostToolUse and
+SessionStart(compact), passing the event on stdin. It prints at most one JSON object and fails
+open: any error says nothing. Tests import it (tests/setup/test_context_watch.py). Stdlib only;
+keep the source ASCII. PLAN.md "PR 4: auto-pass" has the design; hooks/autopass_state.py has
+the tiers and decide().
 
 Skipped: a subagent's event (agent_id) and a session id that isn't a plain name. A session with
 CLAUDE_CODE_SESSION_ATTENDED=0 (`claude -p`, `claude --bg`) gets its count written but no nudge:
@@ -11,14 +12,20 @@ it has no pane to respawn, and `lane ls` still reads its count.
 
 The count: the transcript's last main-chain assistant entry (type "assistant", not isSidechain)
 with a message.usage, summed as input + cache read + cache creation tokens (spike A3: it matched
-the statusline). A zero sum (a synthetic error entry) doesn't count. The last 512 KiB are read,
-then once 8 MiB when no such entry is in them. Any miss says nothing and writes nothing. At a
-Stop the turn's final reply lands in the transcript about 100 ms into the hook (spike A8), so
-while the last main-chain user or assistant entry is a user's (or none is in reach), the
-watcher re-reads every 25 ms for up to STOP_WAIT (1.5 s); past that it logs a line to stderr
-and uses the last count on disk, if any. The count is merged into ctx/<session>.json as {tokens, time} on every event, firing or not; a
-`window` there (the model's context window, which the statusline widget writes) lowers the
-tiers' window (autopass_state.window).
+the statusline). A zero sum (a synthetic error entry) doesn't count. A main-chain compact
+boundary (a system entry, subtype compact_boundary) met before such an entry means no count yet:
+the first reply after a compact can reach the transcript after its tool call's hook runs
+(batched writes; session 89ae7cc8 counted the pre-compact 521k at a real 107k), and the
+boundary's postTokens leaves out the system prompt and tools. SessionStart(compact) blanks the
+ctx file's tokens (null), so `lane ls` and /autopass show no count until a real one lands; it
+writes only tokens and time, and the next count re-arms the tiers it drops under. The last 512
+KiB are read, then once 8 MiB when no such entry is in them. Any miss says nothing and writes
+nothing. At a Stop the turn's final reply lands in the transcript about 100 ms into the hook
+(spike A8), so while the last main-chain user or assistant entry is a user's (or none is in
+reach), the watcher re-reads every 25 ms for up to STOP_WAIT (1.5 s); past that it logs a line
+to stderr and uses the last count on disk, if any. The count is merged into ctx/<session>.json
+as {tokens, time} on every event, firing or not; a `window` there (the model's context window,
+which the statusline widget writes) lowers the tiers' window (autopass_state.window).
 
 Crossings live in the watcher's own record, ctx-watch/<session>.json, not in stop_hook_active:
 - only the highest tier the count has crossed may speak, once per crossing; when it speaks, the
@@ -154,6 +161,19 @@ def main_chain(line: bytes):
     return d
 
 
+def compact_boundary(line: bytes) -> bool:
+    """Whether a transcript line is a main-chain compact boundary (Claude Code's system entry
+    with subtype compact_boundary): no usage before it is the context now."""
+    if b'"compact_boundary"' not in line:
+        return False
+    try:
+        d = json.loads(line)
+    except (ValueError, RecursionError):   # json recurses on nesting
+        return False
+    return isinstance(d, dict) and not d.get("isSidechain") and d.get("type") == "system" \
+        and d.get("subtype") == "compact_boundary"
+
+
 def usage_total(d: dict):
     """The context size a main-chain entry records (an assistant's), or None."""
     msg = d.get("message")
@@ -172,7 +192,9 @@ def scan(path):
     assistant entry is an assistant's: the turn's final reply is on disk). It is False too
     when no such entry is in reach (an empty file, or one final user line past WIDE), since
     the reply that lands is then readable; it is None when the transcript can't be read: no
-    reply will land there to wait for."""
+    reply will land there to wait for. A compact boundary met first ends the walk with no
+    usage: the first reply after a compact can reach the transcript after the tool call's
+    hook, and the usage before the boundary is the pre-compact context."""
     final = None
     if not isinstance(path, str) or not path:
         return None, None
@@ -185,6 +207,8 @@ def scan(path):
                 if size > span:
                     lines = lines[1:]  # the first line is cut
                 for line in reversed(lines):
+                    if compact_boundary(line):
+                        return None, final is True
                     d = main_chain(line)
                     if d is None:
                         continue
@@ -531,8 +555,12 @@ def handle(d: dict, pane=None):
     if d.get("agent_id"):
         return None
     event, sid = d.get("hook_event_name"), d.get("session_id")
-    if event not in ("Stop", "PostToolUse") or not isinstance(sid, str) \
+    if event not in ("Stop", "PostToolUse", "SessionStart") or not isinstance(sid, str) \
             or not stop_ring.SID.fullmatch(sid):
+        return None
+    if event == "SessionStart":
+        if d.get("source") == "compact":
+            aps.merge_ctx(sid, {"tokens": None, "time": time.time()})
         return None
     path = d.get("transcript_path")
     n = stop_tokens(path, sid) if event == "Stop" else tokens(path)
