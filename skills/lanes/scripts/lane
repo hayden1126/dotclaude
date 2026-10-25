@@ -2,7 +2,7 @@
 """lane: parallel Claude sessions, one git worktree ("lane") each, with single-writer records.
 
   lane init [--root DIR] [--setup CMD] [--ports A-B] [--cap N] [--locks A,B]
-            [--autopass | --no-autopass] [--model M] [--effort E]
+            [--autopass | --no-autopass] [--model M] [--effort E] [--trial-link P,Q]
   lane new <id> [--branch B] [--reuse-branch] [--claim N ...] [--goal T] [--files T]
                [--overlaps T] [--done-when T] [--constraints T]
   lane adopt <path> [--id SLUG]
@@ -11,7 +11,7 @@
   lane addr [--repo PATH] <id> | lane addr [--repo PATH] lead
   lane lead
   lane lock <name> [--wait SECS] -- <cmd...>
-  lane trial [<id> ...] [--wait SECS] [--keep] --run CMD [--run CMD ...]
+  lane trial [<id> ...] [--wait SECS] [--keep] [--link PATH ...] --run CMD [--run CMD ...]
   lane whoami [--json]
   lane claim <req> ... | lane release <req> ... | lane who <req>
   lane note <text>
@@ -31,13 +31,18 @@ must, so the commands they run stay sandboxed too.
 
 `trial`, from inside a lane, merges the base and every other live lane's commits (or only the
 ids given) onto the lane's HEAD in dangling commits, checks the merge out in a fresh scratch
-tree under the temp dir, and runs each `--run` there under the `suite` lock. A suite
+tree in the lane's .lane-trial/ (gitignored; never under the temp dir, a sandbox policy root),
+gives it the lane's .worktreeinclude files and a symlink to each lane dir the config's
+trial-link or a `--link` names, and runs each `--run` there under the `suite` lock. A suite
 that fails reruns on the baseline (HEAD plus the base) at the same path. It passes only when
-every test id it failed on the merge also fails on the baseline and its exit is no worse there
-(not non-zero on the merge but zero on the baseline, nor a death by signal on the merge only);
-one that printed no id, or whose output either run cut, fails, to be compared by hand. It exits
-0 with no conflict and no failure of the merge's own, 1 otherwise, and 75 when `--wait` runs
-out, as `lock` does.
+every test id (unittest, pytest, TAP) it failed on the merge also fails on the baseline and its
+exit is no worse there (not non-zero on the merge but zero on the baseline, nor a death by
+signal on the merge only), or, with no id on either run, when both exit alike; any other with
+no id, or whose output either run cut, fails, to be compared by hand. A lane that conflicts
+with the base alone is untried, which fails nothing. With nothing merged, the suites run once
+on HEAD plus the base. It exits 0 with no other conflict and no failure of the merge's own (or,
+with nothing merged, no failing suite), 1 otherwise, and 75 when `--wait` runs out, as `lock`
+does.
 
 The lead is the main-checkout session that last acted as lead: a bare `init`, `new`, `adopt`,
 `open` (not `--print`) or `done` that succeeds from an interactive session in the main checkout,
@@ -122,6 +127,12 @@ TRIAL_IDENTITY = ("lane-trial", "lane-trial@localhost")  # the author of its dan
 # The lock every trial holds, one name for all: a trial clears this lane's leftover trees under
 # it, so a second trial of the lane under another lock could remove the first one's live tree
 TRIAL_LOCK = "suite"
+# The dir in a lane that holds its trials' trees: never a temp root, which a sandbox's policy
+# treats apart (some suites fail on any tree there), and hidden from git by its own .gitignore
+TRIAL_DIR = ".lane-trial"
+# A trial's trees always get an absolute gitdir, whatever the repo's worktree.useRelativePaths
+# (git 2.48+): `done` finds a leftover's admin dir by that text (trial_admin_dirs)
+ABS_GITDIR = ("-c", "worktree.useRelativePaths=false")
 # env: the locks `lane` processes above this one hold, `<repo key>/<name>@<pid>:<start ticks>,...`
 LOCKS_HELD = "LANE_LOCKS_HELD"
 OVERLAP_WAIT = 10  # secs each git call behind the board's overlap flag may take
@@ -498,28 +509,56 @@ def add_exclude(repo: Repo) -> None:
         f.write(("" if not text or text.endswith("\n") else "\n") + "/.lane/\n")
 
 
-def copy_includes(repo: Repo, dest: str) -> list[str]:
-    """Copy the main checkout's gitignored files that .worktreeinclude matches (gitignore syntax).
-    An existing file is never overwritten: in a finished lane it may hold a lane-local fix."""
-    include = os.path.join(repo.main, ".worktreeinclude")
+def plain_path(rel: str) -> bool:
+    """rel names a path below a dir: relative, with no '', '.' or '..' part."""
+    return not any(part in ("", ".", "..") for part in rel.split("/"))
+
+
+def names_z(args: list[str], cwd: str, data: bytes | None = None) -> list[str]:
+    """The NUL-separated names a `git ... -z` call prints (fsdecoded, so no name is quoted or
+    lost to its encoding), fed data on stdin, bounded by TRIAL_GIT_WAIT: running out raises
+    OSError, which `new` and `trial` both report. A failure raises CalledProcessError, except
+    check-ignore's exit 1, which means none matched."""
+    env = dict(os.environ, LC_ALL="C", GIT_TERMINAL_PROMPT="0")
+    try:
+        p = subprocess.run(["git", *args], cwd=cwd, input=data, capture_output=True, env=env,
+                           timeout=TRIAL_GIT_WAIT)
+    except subprocess.TimeoutExpired:
+        raise OSError(errno.ETIMEDOUT, f"git {args[0]} took over {TRIAL_GIT_WAIT} s in {cwd}")
+    if p.returncode not in ((0, 1) if args[0] == "check-ignore" else (0,)):
+        raise subprocess.CalledProcessError(p.returncode, ["git", *args],
+                                            stderr=os.fsdecode(p.stderr))
+    return [os.fsdecode(x) for x in p.stdout.split(b"\0") if x]
+
+
+def copy_includes(repo: Repo, dest: str, src: str | None = None,
+                  skip: list[str] | tuple[str, ...] = ()) -> list[str]:
+    """Copy src's (by default the main checkout's; `trial` passes the lane's) gitignored files
+    that its .worktreeinclude matches (gitignore syntax), but those at or under a path in skip
+    (the links `trial` made, which bring them). An existing file is never overwritten: in a
+    finished lane it may hold a lane-local fix."""
+    src = src or repo.main
+    include = os.path.join(src, ".worktreeinclude")
     if not os.path.isfile(include):
         return []
-    p = git(["ls-files", "--others", "--ignored", f"--exclude-from={include}"], repo.main, check=True)
-    matched = [x for x in p.stdout.splitlines() if x]
+    matched = names_z(["ls-files", "-z", "--others", "--ignored", f"--exclude-from={include}"],
+                      src)
     if not matched:
         return []
-    ignored = subprocess.run(["git", "check-ignore", "--stdin"], cwd=repo.main, input="\n".join(matched),
-                             capture_output=True, text=True).stdout.splitlines()
+    ignored = names_z(["check-ignore", "-z", "--stdin"], src,
+                      b"".join(os.fsencode(x) + b"\0" for x in matched))
     copied = []
     for rel in ignored:
-        if any(part in ("", ".", "..") for part in rel.split("/")):
+        if any(rel == s or rel.startswith(s + "/") for s in skip):
+            continue
+        if not plain_path(rel):
             warn(f"not copied from .worktreeinclude: {rel!r} is no plain path")
             continue
         try:
-            if copy_one(repo.main, dest, rel):
+            if copy_one(src, dest, rel):
                 copied.append(rel)
         except NotADirectoryError:
-            warn(f"not copied from .worktreeinclude: {rel} (a dir on its way is a symlink)")
+            warn(shown(f"not copied from .worktreeinclude: {rel} (a dir on its way is a symlink)"))
     return copied
 
 
@@ -580,7 +619,7 @@ def copy_one(main: str, dest: str, rel: str) -> bool:
                 if e.errno != errno.ELOOP:  # ELOOP: swapped for a link since the stat
                     raise
             if src is None or not stat.S_ISREG((st := os.fstat(src)).st_mode):
-                warn(f"not copied from .worktreeinclude: {rel} is not a regular file")
+                warn(shown(f"not copied from .worktreeinclude: {rel} is not a regular file"))
                 return False
         ddir, dname = open_parent(dest, rel, create=True)
         try:
@@ -700,6 +739,7 @@ def cmd_init(args) -> None:
     for key, problem in PICKS.items():
         if (value := getattr(args, key)) and (why := problem(value)):
             raise LaneError(why)
+    trial_links = None if args.trial_link is None else ",".join(trial_link_list(args.trial_link))
     with lock(repo):
         cfg = repo.config() if repo.has_lanes else {}
         name = os.path.basename(repo.main)
@@ -721,6 +761,10 @@ def cmd_init(args) -> None:
                 cfg.pop(key, None)
             elif value is not None:
                 cfg[key] = value
+        if trial_links == "":  # as with the picks: empty removes it
+            cfg.pop("trial-link", None)
+        elif trial_links is not None:
+            cfg["trial-link"] = trial_links
         try:
             write_config(repo, cfg)
         except OSError as e:
@@ -2028,6 +2072,13 @@ UNITTEST_FAIL = re.compile(r"(?:FAIL|ERROR): \S")
 # An id never starts with '(': unittest's own summary, `FAILED (failures=12, skipped=4)`, isn't
 # one, and its counts change whenever a lane adds a test.
 PYTEST_FAIL = re.compile(r"(?:FAILED|ERROR) ([^\s(].*?)(?: - .*)?")
+# TAP, which `node --test` prints into a pipe: `not ok 3 - name`, indented for a subtest; the
+# dash is optional (bats prints `not ok 3 name`). A TODO or SKIP directive (`# TODO ...`, any
+# case) marks no failure.
+TAP_FAIL = re.compile(r"(\s*)not ok \d+(?: -)? (.+)")
+# node's comment opening each test, at the indent of its own result line
+TAP_SUBTEST = re.compile(r"(\s*)# Subtest: (.+)")
+TAP_DIRECTIVE = re.compile(r"\s#\s*(?:TODO|SKIP)", re.IGNORECASE)
 
 
 class TrialStopped(Exception):
@@ -2041,14 +2092,25 @@ class TrialStopped(Exception):
 def failing_ids(lines: list[str]) -> list[str]:
     """The failing test ids a run printed, in order, each once: a unittest `FAIL: ...` or
     `ERROR: ...` line whole (a subtest's parameters, which can embed the tree's path, with it),
-    a pytest `FAILED x` or `ERROR x` summary line's x, its ` - message` tail cut."""
+    a pytest `FAILED x` or `ERROR x` summary line's x, its ` - message` tail cut, and a TAP
+    `not ok <n> - x` line at any indent as `not ok - P > Q > x`: no number, since a lane that
+    adds a test shifts every number after it, and the names of the subtests that enclose it
+    (node's `# Subtest: P` lines at smaller indents), so two tests of one name under different
+    parents stay apart. Plain TAP, with no Subtest lines, gives `not ok - x`."""
     found = []
+    chain: list[tuple[int, str]] = []  # (indent, name) of each open `# Subtest:`
     for line in lines:
         line = line.rstrip()
         if UNITTEST_FAIL.match(line):
             found.append(line)
         elif m := PYTEST_FAIL.fullmatch(line):
             found.append(m.group(1))
+        elif m := TAP_SUBTEST.fullmatch(line):
+            indent = len(m.group(1))
+            chain = [c for c in chain if c[0] < indent] + [(indent, m.group(2))]
+        elif (m := TAP_FAIL.fullmatch(line)) and not TAP_DIRECTIVE.search(m.group(2)):
+            parents = [name for indent, name in chain if indent < len(m.group(1))]
+            found.append("not ok - " + " > ".join([*parents, m.group(2)]))
     return list(dict.fromkeys(found))
 
 
@@ -2224,39 +2286,234 @@ class LeadStatus:
 
 
 def trial_prefix(repo: Repo, lane_id: str) -> str:
-    """The name of a trial's scratch dir in the temp dir, before mkdtemp's 8 characters. Keyed by
-    repo: another repo's lane of the same id shares the temp dir but not this repo's suite
-    lock, so its live tree must never look like this lane's leftover."""
+    """The name of a trial's scratch dir (in the lane's TRIAL_DIR, or the temp dir for the lead
+    notes' index and an older `lane`'s trees), before mkdtemp's 8 characters. Keyed by repo:
+    another repo's lane of the same id shares the temp dir but not this repo's suite lock, so
+    its live tree must never look like this lane's leftover."""
     return f"lane-trial-{repo.key}-{lane_id}-"
 
 
-def trial_leftovers(repo: Repo, lane_id: str, tmp: str) -> None:
-    """Clear what earlier trials of this lane left in tmp: one killed by the Bash cap or a
-    respawn never reaches its `finally`. Only this repo's lane's names (trial_prefix and
-    mkdtemp's 8 characters, so lane a never takes lane a-b's), and only registrations of a
-    `tree` there: never a blanket `git worktree prune`, since the common dir holds other
-    prunable entries that aren't this lane's. A sandboxed command can't remove an admin dir the
-    sandbox mounted when it started, so a registration it can't remove is named, once, with the
-    command to run sandbox-off."""
+def trial_root(repo: Repo) -> str:
+    """The lane's TRIAL_DIR (real path), made on first use with a .gitignore of `*` in it, so
+    neither it nor the trees in it ever show in the lane's git status. A symlink there is
+    refused, never followed (the trees would land wherever it points), and an existing
+    .gitignore is never written, nor written through."""
+    root = os.path.join(repo.toplevel, TRIAL_DIR)
+    with contextlib.suppress(FileExistsError):
+        os.mkdir(root)
+    if os.path.islink(root) or not os.path.isdir(root):
+        raise LaneError(shown(f"{root} is a symlink or no dir, and `lane trial` keeps its trees "
+                              f"there: `unlink {root}` (it never empties a dir a link names), "
+                              "and the next trial makes it afresh"))
+    try:
+        fd = os.open(os.path.join(root, ".gitignore"),
+                     os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    except FileExistsError:
+        return root
+    with os.fdopen(fd, "w") as f:
+        f.write("*\n")
+    return root
+
+
+def link_problem(rel: str) -> str | None:
+    """Why rel can't be a trial link (trial-link's entries, `--link`), else None: like a
+    .worktreeinclude match, a plain path relative to the lane (one trailing '/' is dropped
+    first, by trial_link_list)."""
+    if plain_path(rel):
+        return None
+    return (f"bad trial link {rel!r}: name a path relative to the lane, with no '..', '.' or "
+            "empty part and no leading '/' (such as node_modules)")
+
+
+def trial_link(rel: str) -> str:
+    """One trial link (a `--link`, or an entry of trial-link), one trailing '/' dropped; a bad
+    one raises (link_problem)."""
+    rel = rel[:-1] if rel.endswith("/") and len(rel) > 1 else rel
+    if why := link_problem(rel):
+        raise LaneError(why)
+    return rel
+
+
+def trial_link_list(spec: str) -> list[str]:
+    """trial-link's comma list as paths, each once (trial_link); '' is none. A bad entry is
+    refused naming the list, since a hand-edited config can hold one `init` never wrote."""
+    try:
+        return list(dict.fromkeys(trial_link(x.strip()) for x in spec.split(","))) if spec else []
+    except LaneError as e:
+        raise LaneError(shown(f"{e} in trial-link {spec!r}")) from None
+
+
+def trial_links(repo: Repo, extra: list[str]) -> list[str]:
+    """The paths a trial links into its tree: the config's trial-link, then each `--link`, each
+    once. Refused: a bad one (trial_link), one under another (the tree would make the outer one
+    a dir for the inner one's link, so the outer never links), and one the lane lacks: unlinked,
+    a suite that can't load fails alike on the merge and the baseline, which the same-way rule
+    passes, so the trial would pass having tested nothing."""
+    links = list(dict.fromkeys(trial_link_list(str(repo.config().get("trial-link", "")))
+                               + [trial_link(x) for x in extra]))
+    for a in links:
+        for b in links:
+            if b.startswith(a + "/"):
+                raise LaneError(shown(f"nested trial links: {b} is under {a}; link {a} alone"))
+    missing = [x for x in links if not os.path.lexists(os.path.join(repo.toplevel, x))]
+    if missing:
+        configured = set(trial_link_list(str(repo.config().get("trial-link", ""))))
+        whence = ", ".join(f"{x} ({'the lanes config' if x in configured else '--link'})"
+                           for x in missing)
+        raise LaneError(shown(f"lane {own_lane(repo)['id']} has no {whence} to link into the "
+                              "trial's tree: run the lane's setup first. Dropping a config link "
+                              "drops it for every lane, whose suites would then fail alike on "
+                              "both runs and pass untested"))
+    return links
+
+
+class TreeSetup(NamedTuple):
+    """What trial_setup did to a tree: the files it copied, the links it made, the links the
+    lane lacks, and the ones the tree had already."""
+    copied: list[str]
+    linked: list[str]
+    missing: list[str]
+    present: list[str]
+
+
+def trial_setup(repo: Repo, lane: str, tree: str, links: list[str]) -> TreeSetup:
+    """Ready a fresh tree as the lane's own tests ran: symlink each of links the lane has to the
+    lane's own by absolute path (node_modules, a .venv: built once, in the lane), unless the
+    tree tracks that path, then copy the lane's gitignored files its .worktreeinclude matches
+    (copy_includes from the lane, so the suites see the lane's copies, never main's), but none
+    under a link, which brings them already. Links first: a copy under a link's path would make
+    its dir and block it. A link is no copy: a suite that writes through it writes the lane's
+    files."""
+    linked, missing, present = [], [], []
+    for rel in links:
+        if not os.path.lexists(os.path.join(lane, rel)):
+            missing.append(rel)
+            continue
+        try:
+            fd, name = open_parent(tree, rel, create=True)
+        except NotADirectoryError:  # a tracked symlink on the way
+            present.append(rel)
+            continue
+        try:
+            os.symlink(os.path.join(lane, rel), name, dir_fd=fd)
+            linked.append(rel)
+        except FileExistsError:
+            present.append(rel)
+        finally:
+            os.close(fd)
+    copied = copy_includes(repo, tree, src=lane, skip=linked)
+    return TreeSetup(copied, linked, missing, present)
+
+
+def say_setup(lane_id: str, setup: TreeSetup) -> None:
+    """trial_setup's one line, and a warning per link it couldn't make (once per trial: the
+    baseline's tree gets the same)."""
+    for rel in setup.missing:
+        warn(shown(f"not linked into the trial's tree: {rel} (lane {lane_id} has no {rel})"))
+    for rel in setup.present:
+        warn(shown(f"not linked into the trial's tree: {rel} (the tree has it already)"))
+    parts = [f"copied {len(setup.copied)} file(s) from .worktreeinclude"] if setup.copied else []
+    if setup.linked:
+        parts.append("linked " + ", ".join(setup.linked))
+    if parts:
+        say(shown("lane trial: " + ", ".join(parts)))
+
+
+def trial_leftovers(repo: Repo, lane_id: str, root: str) -> None:
+    """Clear what earlier trials of this lane left in root (the lane's TRIAL_DIR, or the temp
+    dir an older `lane` put its trees in): one killed by the Bash cap or a respawn never reaches
+    its `finally`. Only this repo's lane's names (trial_prefix and mkdtemp's 8 characters, so
+    lane a never takes lane a-b's), and only registrations of a `tree` there: never a blanket
+    `git worktree prune`, since the common dir holds other prunable entries that aren't this
+    lane's. A sandboxed command can't remove an admin dir the sandbox mounted when it started,
+    so a registration it can't remove is named, once, as left for `lane done`, never with a
+    by-path remove to run sandbox-off (it would follow a symlink swapped in for the tree). A
+    root that is a symlink is left alone. Only `trial` calls this, sandboxed: it removes by
+    path, which `done`, sandbox-off, never may (trial_admin_dirs)."""
+    if os.path.islink(root):
+        return
     mine = re.compile(re.escape(trial_prefix(repo, lane_id)) + "[a-z0-9_]{8}")
     cleared, stuck = [], []
     for path in worktree_heads(repo):
         parent = os.path.dirname(path)
-        if (os.path.basename(path) == "tree" and os.path.dirname(parent) == tmp
+        if (os.path.basename(path) == "tree" and os.path.dirname(parent) == root
                 and mine.fullmatch(os.path.basename(parent))):
             p = trial_git(repo, ["worktree", "remove", "--force", "--end-of-options", path],
                           ok=tuple(range(256)))
             (cleared if p.returncode == 0 else stuck).append(path)
-    for d in glob.glob(os.path.join(tmp, "lane-trial-*")):
+    for d in glob.glob(os.path.join(root, "lane-trial-*")):
         if mine.fullmatch(os.path.basename(d)) and not os.path.islink(d):
             shutil.rmtree(d, ignore_errors=True)
     if cleared:
         warn(shown(f"cleared the tree an earlier trial left registered (it never reached its "
                    f"cleanup): {', '.join(cleared)}"))
-    if stuck:
-        warn(shown("an earlier trial's tree is still registered and the sandbox can't remove "
-                   "it; run sandbox-off: " + "; ".join(
-                       f"git worktree remove --force {shlex.quote(p)}" for p in stuck)))
+    if stuck:  # never a by-path remove to run: it follows a symlink swapped in for the tree
+        warn(shown(f"the sandbox can't unregister a tree an earlier trial left, so it stays "
+                   f"registered: {', '.join(stuck)}; harmless meanwhile, and `lane done "
+                   f"{lane_id}` clears it when the lane closes"))
+
+
+def trial_admin_dirs(repo: Repo, lane_id: str, path: str) -> list[tuple[str, str]]:
+    """(admin dir, tree) of each tree a trial of lane lane_id left registered in the lane at
+    path (real), for `done`, which runs sandbox-off. Found by text alone, never by a path
+    resolved: an admin dir under <common>/worktrees that is a real dir (opened with O_NOFOLLOW)
+    whose gitdir file reads exactly <root>/<trial_prefix + 8 chars>/tree/.git, root being
+    <path>/TRIAL_DIR or a temp dir an older `lane` built its trees in (this process's, or the
+    Bash sandbox's /tmp/claude-<uid>: a trial ran sandboxed). A process the lane left can swap
+    the tree for a symlink to another lane, so `done` never asks git to remove a tree by its
+    path; the lane's own `git worktree remove` deletes the files in the lane (an old tree's in
+    the temp dir stay, harmless), and drop_admin_dirs then the admin dirs."""
+    base = os.path.join(repo.common_dir, "worktrees")
+    roots = dict.fromkeys([os.path.join(path, TRIAL_DIR),
+                           os.path.realpath(tempfile.gettempdir()), f"/tmp/claude-{os.getuid()}"])
+    mine = re.compile("(?:" + "|".join(re.escape(r) for r in roots) + ")/"
+                      + re.escape(trial_prefix(repo, lane_id)) + r"[a-z0-9_]{8}/tree/\.git\n?")
+    found = []
+    try:
+        names = sorted(os.listdir(base)) if not os.path.islink(base) else []
+    except FileNotFoundError:
+        return []
+    for name in names:
+        admin = os.path.join(base, name)
+        try:
+            dfd = os.open(admin, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except OSError:  # a symlink, a file, or gone
+            continue
+        try:
+            fd = os.open("gitdir", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
+        except OSError:
+            continue
+        finally:
+            os.close(dfd)
+        with os.fdopen(fd, "rb") as f:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                continue
+            text = os.fsdecode(f.read(1 << 16))
+        if mine.fullmatch(text):
+            found.append((admin, text.rstrip("\n").removesuffix("/.git")))
+    return found
+
+
+def drop_admin_dirs(lane_id: str, admins: list[tuple[str, str]]) -> None:
+    """Remove the admin dirs trial_admin_dirs found, once the lane's worktree is gone. Each goes
+    by name under its parent opened with O_NOFOLLOW: sandboxed Bash can write the common dir, so
+    <common>/worktrees itself may have been swapped for a symlink since, and rmtree checks only
+    its last name (it refuses an admin dir swapped for one). One it can't remove is named as
+    left in place, never with a path to remove by hand: run sandbox-off, that would follow
+    whatever link made this removal fail."""
+    for admin, tree in admins:
+        try:
+            fd = os.open(os.path.dirname(admin), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                shutil.rmtree(os.path.basename(admin), dir_fd=fd)
+            finally:
+                os.close(fd)
+        except OSError as e:
+            warn(shown(f"left in place the registration of a tree a trial left in lane "
+                       f"{lane_id} ({e.strerror or e}); `git worktree list` shows the tree"))
+        else:
+            warn(shown(f"cleared the registration of a tree a trial left in lane {lane_id} (it "
+                       f"never reached its cleanup): {tree}"))
 
 
 class SuiteRun(NamedTuple):
@@ -2312,9 +2569,15 @@ def cmd_trial(args) -> int:
     commits, check the merge out in a fresh scratch tree, and run each suite there under a
     lock; a failed suite reruns on the baseline (HEAD plus the base) at the same path, so a
     failure the location alone causes, or one already on the base, isn't the merge's.
-    PLAN.md of lane cross-lane, section B, and docs/lanes.md have the design."""
+    docs/lanes.md, `lane trial`, has the design."""
     repo = lanes_repo()
     me = own_lane(repo)
+    if lanelib.pids_visible():
+        raise LaneError("`lane trial` runs only inside the Bash sandbox (a Claude Code session's "
+                        "Bash, not a plain shell): it removes its scratch trees by path, safe only "
+                        "where the sandbox bounds what a symlink swapped in for one could make git "
+                        "delete, and its suites inherit the sandbox")
+    args.links = trial_links(repo, args.link)  # refused now, never after a wait for the lock
     if held_by_caller(repo, TRIAL_LOCK):  # held_lock would let it in, and its sweep then clear
         raise LaneError(f"a trial can't run under a hold of the {TRIAL_LOCK} lock (inside "
                         "another trial's suite, or `lane lock suite`): an outer trial's live tree "
@@ -2337,10 +2600,13 @@ def trial(repo: Repo, me: dict, args) -> int:
     use the commits as they are."""
     cfg = repo.config()
     base_name = cfg.get("base", "origin/main")
+    links = args.links  # checked in cmd_trial, before the lock
     trees = worktree_heads(repo)
     others = trial_lanes(repo, me, args.ids, trees)
     tmp = os.path.realpath(tempfile.gettempdir())
-    trial_leftovers(repo, me["id"], tmp)
+    root = trial_root(repo)
+    trial_leftovers(repo, me["id"], root)
+    trial_leftovers(repo, me["id"], tmp)  # an older `lane`'s trees, and the lead notes' index
     head = rev(repo, "HEAD")
     base = rev(repo, base_ref(cfg))
     if head is None or base is None:
@@ -2372,56 +2638,105 @@ def trial(repo: Repo, me: dict, args) -> int:
                 merged.append((lane["id"], sha))
             else:
                 conflicts[lane["id"]] = conflict_line(repo, lane["id"], sha, conflicted, chain,
-                                                      merged, args.run)
+                                                      merged, args.run, args.link)
         lead = norm.lead if norm.changed else None
     if lead:
         say(f"lane trial: STATUS.md is the lead's notes on {lead.name} ({lead.commit[:12]}) in "
             "every merge, as a carry would make it")
     if already:
         say(f"lane trial: nothing to merge from {', '.join(already)} (already in)")
-    for line in conflicts.values():
+    for line, _ in conflicts.values():
         say(shown(line))
-    if not merged:
-        say("lane trial: no other lane's work merged, so no suite ran")
-        return 1 if conflicts else 0
-    say("lane trial: merged " + ", ".join(f"{i} ({s[:12]})" for i, s in merged)
-        + f" onto lane {me['id']}'s HEAD and {base_name}")
-    warn("other lanes' uncommitted work isn't in the merge, only their commits")
-    tmpdir = tempfile.mkdtemp(prefix=trial_prefix(repo, me["id"]), dir=tmp)
+    # A lane that conflicts with the base alone claims nothing about this lane: it is untried,
+    # never this lane's failure. Every other conflict fails the trial.
+    untried = [i for i, (_, with_base) in conflicts.items() if with_base]
+    clashed = [i for i, (_, with_base) in conflicts.items() if not with_base]
+    alone = shown(f"lane {me['id']} plus {base_name}")
+    if merged:
+        say("lane trial: merged " + ", ".join(f"{i} ({s[:12]})" for i, s in merged)
+            + f" onto lane {me['id']}'s HEAD and {base_name}")
+        warn("other lanes' uncommitted work isn't in the merge, only their commits")
+    else:  # the suites still run: a failure here is this lane's own, or the base's
+        say(shown(f"lane trial: no other lane's work merged: running the suites on lane "
+                  f"{me['id']}'s HEAD plus {base_name}"))
+    tmpdir = tempfile.mkdtemp(prefix=trial_prefix(repo, me["id"]), dir=root)
     tree, holds = os.path.join(tmpdir, "tree"), None
     try:
-        trial_git(repo, ["worktree", "add", "--detach", "--quiet", "--end-of-options", tree, cur])
-        holds = "merge"
-        runs = run_suites(tree, args.run, "merge", range(len(args.run)))
-        failed = [i for i, run in enumerate(runs) if run.failed]
-        again = {}
-        if failed:
-            # At the same path: subtest ids that embed it, and the admin dir's name, then match.
-            holds = None
-            trial_git(repo, ["worktree", "remove", "--force", "--end-of-options", tree])
-            trial_git(repo, ["worktree", "add", "--detach", "--quiet", "--end-of-options", tree,
-                             baseline])
-            holds = "baseline"
-            again = dict(zip(failed, run_suites(tree, args.run, "baseline", failed)))
-        rc = trial_report(args.run, runs, again)
+        trial_git(repo, [*ABS_GITDIR, "worktree", "add", "--detach", "--quiet", "--end-of-options",
+                         tree, cur])
+        holds = "merge" if merged else "baseline"
+        say_setup(me["id"], trial_setup(repo, repo.toplevel, tree, links))
+        if not merged:  # cur is the baseline, so nothing reruns
+            rc = alone_report(args.run, run_suites(tree, args.run, "the lane's",
+                                                   range(len(args.run))), alone)
+        else:
+            runs = run_suites(tree, args.run, "merge", range(len(args.run)))
+            failed = [i for i, run in enumerate(runs) if run.failed]
+            again = {}
+            if failed:
+                # At the same path: subtest ids that embed it, and the admin dir's name, then
+                # match.
+                holds = None
+                p = trial_git(repo, ["worktree", "remove", "--force", "--end-of-options", tree],
+                              ok=tuple(range(256)))
+                if p.returncode:  # git's words withheld: see drop_tree
+                    raise LaneError(f"couldn't unregister the merge's tree (git exit "
+                                    f"{p.returncode}) before the baseline run, so the trial "
+                                    f"stopped; `lane done {me['id']}` clears it when the lane "
+                                    "closes")
+                trial_git(repo, [*ABS_GITDIR, "worktree", "add", "--detach", "--quiet",
+                                 "--end-of-options", tree, baseline])
+                holds = "baseline"
+                trial_setup(repo, repo.toplevel, tree, links)  # said once, for the merge's
+                again = dict(zip(failed, run_suites(tree, args.run, "baseline", failed)))
+            rc = trial_report(args.run, runs, again)
     finally:
         if args.keep and holds:
-            say(shown(f"lane trial: kept the tree (the {holds}) at {tree}; remove it with `git "
-                      f"worktree remove --force {shlex.quote(tree)}`"))
+            say(shown(f"lane trial: kept the tree (the {holds}) at {tree}; a later `lane trial` "
+                      f"of lane {me['id']} clears its files and `lane done {me['id']}` its "
+                      "registration"))
         else:
-            drop_tree(repo, tree, tmpdir)
-    if conflicts:
-        many = len(conflicts) > 1
-        say(f"lane trial: FAILED: lane{'s' * many} {', '.join(conflicts)} didn't merge, so "
+            drop_tree(repo, me["id"], tree, tmpdir)
+    if clashed:
+        many = len(clashed) > 1
+        say(f"lane trial: FAILED: lane{'s' * many} {', '.join(clashed)} didn't merge, so "
             f"{'their' if many else 'its'} work went untried")
-        return 1
+        rc = 1
+    if untried:
+        many = len(untried) > 1
+        say(shown(f"lane trial: lane{'s' * many} {', '.join(untried)} untried "
+                  f"({'they conflict' if many else 'it conflicts'} with {base_name})"))
     return rc
 
 
+def alone_report(commands: list[str], runs: list[SuiteRun], what: str) -> int:
+    """Say how each suite did when no other lane's work merged, on what (this lane's HEAD plus
+    the base: the baseline itself, so nothing reruns to compare against): 0 when every suite
+    passed, else 1. A failed suite lists the ids it printed; a cut run fails, its ids maybe
+    missing. Ids come from the suites' output, so they are masked."""
+    bad = 0
+    for i, (cmd, run) in enumerate(zip(commands, runs)):
+        head = f"lane trial: suite {i + 1} ({cmd}):"
+        if not run.failed:
+            say(shown(f"{head} ok"))
+            continue
+        bad += 1
+        cut = (", and its output was cut (a process it started still holds it), so test ids may "
+               "be missing") if run.cut else ""
+        say(shown(f"{head} failed (exit {run.rc}){cut}" + (":" if run.ids else "")))
+        for x in run.ids:
+            say(shown(f"  {x}"))
+    if bad:
+        say(f"lane trial: FAILED: {bad} suite(s) fail on {what}")
+    return 1 if bad else 0
+
+
 def conflict_line(repo: Repo, lane_id: str, sha: str, conflicted: list[str], chain: dict,
-                  merged: list[tuple[str, str]], commands: list[str]) -> str:
-    """The report's line for lane lane_id, whose head sha conflicted with the merge so far
-    (chain: the base commit and its name, the baseline, and norm). Merges decide, in this order:
+                  merged: list[tuple[str, str]], commands: list[str],
+                  links: list[str]) -> tuple[str, bool]:
+    """(the report's line for lane lane_id, whose head sha conflicted with the merge so far, and
+    whether it is the first verdict below: the lane went untried, which fails nothing). chain
+    holds the base commit and its name, the baseline, and norm. Merges decide, in this order:
       - with the base alone: the lane conflicts with the base itself, so it needs to merge the
         base before a trial can tell whether it conflicts with this lane (the line claims
         nothing about this lane, which the known limit below may hide);
@@ -2445,9 +2760,9 @@ def conflict_line(repo: Repo, lane_id: str, sha: str, conflicted: list[str], cha
     if tree is None:
         return (f"lane trial: lane {lane_id} conflicts with {base} ("
                 f"{', '.join(with_base) or 'git named no path'}): it needs to merge {base} "
-                "before a trial can tell whether it conflicts with this lane")
+                "before a trial can tell whether it conflicts with this lane"), True
     if not merged or merge_tree(repo, chain["baseline"], sha, lane_id)[0] is None:
-        return f"lane trial: conflict with lane {lane_id}: {paths}"
+        return f"lane trial: conflict with lane {lane_id}: {paths}", False
     pairs = []
     for other, other_sha in merged:
         tree, both = merge_tree(repo, norm(other_sha), sha, f"{lane_id} and {other}")
@@ -2455,20 +2770,27 @@ def conflict_line(repo: Repo, lane_id: str, sha: str, conflicted: list[str], cha
             pairs.append(f"lane {other} ({', '.join(both) or 'git named no path'})")
     whom = (" and ".join(pairs) if pairs else
             "the merge of lane " + ", ".join(other for other, _ in merged) + f" ({paths})")
-    alone = shlex.join(["lane", "trial", lane_id, *[x for c in commands for x in ("--run", c)]])
+    # With this trial's `--link`s (the config's apply anyway): unlinked, a suite that can't load
+    # fails alike on both runs, which passes, so the rerun would test nothing.
+    alone = shlex.join(["lane", "trial", lane_id, *[x for p in links for x in ("--link", p)],
+                        *[x for c in commands for x in ("--run", c)]])
     return (f"lane trial: lane {lane_id} conflicts with {whom}, not with this lane: {lane_id} "
-            f"was left out; try it with this lane alone: {alone}")
+            f"was left out; try it with this lane alone: {alone}"), False
 
 
-def drop_tree(repo: Repo, tree: str, tmpdir: str) -> None:
+def drop_tree(repo: Repo, lane_id: str, tree: str, tmpdir: str) -> None:
     """Unregister and remove the trial's tree, then its dir; a failure only warns, so it never
-    hides how the trial ended."""
+    hides how the trial ended. git's stderr is withheld: a sandboxed process can plant its text
+    (a lock's reason), and git's own advice (`remove -f -f`), pasted sandbox-off, would follow a
+    symlink swapped in for the tree."""
     if os.path.lexists(os.path.join(tree, ".git")):
         try:
             p = git(["worktree", "remove", "--force", "--end-of-options", tree], repo.toplevel,
                     timeout=TRIAL_GIT_WAIT)
             if p.returncode != 0:
-                warn(shown(f"couldn't remove the trial's tree at {tree}: {p.stderr.strip()}"))
+                warn(shown(f"couldn't unregister the trial's tree at {tree} (git exit "
+                           f"{p.returncode}): a later `lane trial` of lane {lane_id} clears its "
+                           f"files and `lane done {lane_id}` its registration"))
         except subprocess.TimeoutExpired:
             warn(f"git worktree remove took over {TRIAL_GIT_WAIT} s: the tree at {tree} is left")
     shutil.rmtree(tmpdir, ignore_errors=True)
@@ -2480,8 +2802,11 @@ def trial_report(commands: list[str], runs: list[SuiteRun], again: dict[int, Sui
     when every id it failed on the merge also fails on the baseline, and its exit doesn't get
     worse there: non-zero on the merge but zero on the baseline, or a death by signal on the
     merge only, is the merge's (a `--run` can chain a runner whose ids it parses with a check
-    that prints none). One with no ids to compare, or whose output either run cut, fails, to be
-    compared by hand. Ids come from the suites' output, so they are masked."""
+    that prints none). One that printed no id on either run passes when both exit with the
+    same code (it fails the same way on the baseline, so that failure isn't the merge's; a
+    second break it hides shows only once the first is fixed). Any other with no ids to
+    compare, or one whose output either run cut, fails, to be compared by hand. Ids come from
+    the suites' output, so they are masked."""
     new = 0
     for i, (cmd, (rc, ids, cut)) in enumerate(zip(commands, runs)):
         head = f"lane trial: suite {i + 1} ({cmd}):"
@@ -2494,6 +2819,10 @@ def trial_report(commands: list[str], runs: list[SuiteRun], again: dict[int, Sui
             which = "both runs" if cut and base_cut else "the merge" if cut else "the baseline"
             say(shown(f"{head} its output on {which} was cut (a process it started still holds "
                       "it), so test ids may be missing: compare by hand"))
+            continue
+        if not ids and not base_ids and rc == base_rc:  # rc is non-zero: the merge failed
+            say(shown(f"{head} fails the same way on the baseline (exit {rc} on both, no test "
+                      "ids to compare)"))
             continue
         if not ids:
             new += 1
@@ -3477,9 +3806,17 @@ def close_record(repo: Repo,
                                   {pid: described(p, "started during the close")
                                    for pid, p in left.items()},
                                   f"End them, then rerun `lane done {lane_id}`")
+                # A tree a killed trial left registered in the lane goes with it, so its admin
+                # dir would be left stale: found now, removed once the lane's own remove worked.
+                left_trees = trial_admin_dirs(repo, lane_id, path)
                 p = git(["worktree", "remove", path], repo.toplevel)
                 if p.returncode != 0:
                     raise LaneError(f"git worktree remove refused: {p.stderr.strip()}")
+                drop_admin_dirs(lane_id, left_trees)
+            else:
+                # Removed by hand (`git worktree remove` of the lane): its trial trees' files went
+                # with it, their registrations didn't.
+                drop_admin_dirs(lane_id, trial_admin_dirs(repo, lane_id, path))
             with lanes_lock(repo, f"lane {lane_id}'s record is not archived, and its worktree is "
                                   f"gone: {rerun}"):
                 reread(repo, loaded, path)
@@ -3659,6 +3996,9 @@ def parser() -> argparse.ArgumentParser:
                                    "ANTHROPIC_MODEL pin)")
     p.add_argument("--effort", help="claude --effort for each `lane open` ('' for the user's "
                                     "default)")
+    p.add_argument("--trial-link", dest="trial_link", metavar="PATHS",
+                   help="comma-separated lane paths each `lane trial` symlinks into its tree, "
+                        "e.g. node_modules ('' for none)")
     p = sub.add_parser("new", help="make a lane: worktree, branch, record, port, setup")
     p.add_argument("id")
     p.add_argument("--branch", help="branch name (default: the id)")
@@ -3707,7 +4047,7 @@ def parser() -> argparse.ArgumentParser:
                         "timeout prints \"gave up on lock\" on stderr")
     p = sub.add_parser("trial", help="run the suites on a merge of this lane with every other "
                                      "live lane, in a scratch tree, under the suite lock",
-                       usage="lane trial [<id> ...] [--wait SECS] [--keep] "
+                       usage="lane trial [<id> ...] [--wait SECS] [--keep] [--link PATH ...] "
                              "--run CMD [--run CMD ...]")
     p.add_argument("ids", nargs="*", metavar="id",
                    help="merge only these lanes (default: every other live lane)")
@@ -3717,7 +4057,10 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--wait", type=float, metavar="SECS",
                    help=f"give up on the lock after SECS, exit {LOCK_BUSY} (default: wait)")
     p.add_argument("--keep", action="store_true",
-                   help="keep the scratch tree (it says where, and how to remove it)")
+                   help="keep the scratch tree (it says where, and what clears it)")
+    p.add_argument("--link", action="append", default=[], metavar="PATH",
+                   help="symlink the lane's PATH (node_modules, a .venv) into the tree, beside "
+                        "init's --trial-link ones; repeat it per path")
     p = sub.add_parser("whoami", help="this checkout's lane id, main, or plain")
     p.add_argument("--json", action="store_true")
     for name in ("claim", "release"):

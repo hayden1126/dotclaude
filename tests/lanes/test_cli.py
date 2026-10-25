@@ -8,8 +8,10 @@ import fcntl
 import glob
 import importlib.machinery
 import importlib.util
+import io
 import json
 import multiprocessing
+import re
 import os
 import shlex
 import shutil
@@ -17,6 +19,7 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import types
@@ -552,6 +555,145 @@ class RoundTrip(LanesRepo):
         self.assertIn("kept", p.stderr)  # -d refuses an unmerged branch, and that is the point
         self.assertIn("spike", self.git("branch", "--list", "spike"))
         self.assertFalse(os.path.exists(self.lane_path("spike")))
+
+    def test_new_copies_an_included_file_whose_name_git_would_quote(self):
+        # core.quotePath quotes a non-ASCII name in plain output: -z keeps it as it is.
+        self.commit(".gitignore", "*.env\n")
+        self.git("push", "-q", "origin", "main")
+        self.write(os.path.join(self.main, ".worktreeinclude"), "*.env\n")
+        self.write(os.path.join(self.main, "café.env"), "local\n")
+        out = self.lane("new", "spike")
+        self.assertIn("copied 1 file(s) from .worktreeinclude", out)
+        self.assertEqual(self.read(os.path.join(self.lane_path("spike"), "café.env")), "local\n")
+
+    def test_new_copies_nothing_when_no_include_is_ignored(self):
+        # check-ignore exits 1 when no name it gets is ignored: nothing to copy, no error.
+        self.commit("tracked.env", "in git\n")
+        self.git("push", "-q", "origin", "main")
+        self.write(os.path.join(self.main, ".worktreeinclude"), "*.env\n")
+        p = self.run_lane("new", "spike")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("copied", p.stdout)
+
+    def test_an_include_it_cant_copy_is_named_with_its_control_chars_masked(self):
+        # -z hands names over as they are, so a name with an escape sequence must be masked
+        # before it reaches a terminal.
+        mod = load_lane_script()
+        src, dest = os.path.join(self.tmp, "src"), os.path.join(self.tmp, "dest")
+        self.git("init", "-q", src, cwd=self.tmp)
+        self.write(os.path.join(src, ".gitignore"), "*.env\n")
+        self.write(os.path.join(src, ".worktreeinclude"), "*.env\n")
+        self.write(os.path.join(src, "d", "\x1b[31mx.env"), "local\n")
+        os.makedirs(os.path.join(self.tmp, "away"))
+        os.makedirs(dest)
+        os.symlink(os.path.join(self.tmp, "away"), os.path.join(dest, "d"))
+        repo = types.SimpleNamespace(main=src)
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(mod.copy_includes(repo, dest), [])
+        self.assertIn("not copied from .worktreeinclude: d/?[31mx.env", err.getvalue())
+        self.assertNotIn("\x1b", err.getvalue())
+
+    def test_done_clears_a_registration_an_older_lanes_trial_left_in_the_temp_dir(self):
+        # An older `lane` built trial trees in the temp dir; one killed partway left its
+        # registration there, which `done` clears by its gitdir text as it does .lane-trial's.
+        self.lane("new", "spike")
+        path = self.lane_path("spike")
+        key = lanelib.Repo(self.main, self.common).key
+        tmp = os.path.realpath(tempfile.gettempdir())
+        old = tempfile.mkdtemp(prefix=f"lane-trial-{key}-spike-", dir=tmp)
+        self.addCleanup(shutil.rmtree, old, True)
+        tree = os.path.join(old, "tree")
+        self.git("worktree", "add", "--detach", "--quiet", tree, "HEAD", cwd=path)
+        p = self.run_lane("done", "spike", "--abandon")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn(tree, self.git("worktree", "list", "--porcelain"))
+        self.assertIn(tree, p.stderr)
+
+    def test_done_clears_a_tree_a_trial_left_in_the_lane(self):
+        # A trial killed past its cleanup leaves its tree registered in the lane's .lane-trial/:
+        # the close unregisters it, so removing the lane leaves no stale entry behind.
+        self.lane("new", "spike")
+        path = self.lane_path("spike")
+        key = lanelib.Repo(self.main, self.common).key
+        tree = os.path.join(path, ".lane-trial", f"lane-trial-{key}-spike-abcd1234", "tree")
+        self.git("worktree", "add", "--detach", "--quiet", tree, "HEAD", cwd=path)
+        self.write(os.path.join(path, ".lane-trial", ".gitignore"), "*\n")
+        p = self.run_lane("done", "spike", "--abandon")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertFalse(os.path.exists(path))
+        self.assertNotIn(".lane-trial", self.git("worktree", "list", "--porcelain"))
+        self.assertIn(tree, p.stderr)
+
+    def test_dones_trial_cleanup_never_follows_a_tree_swapped_for_a_link(self):
+        # A process the lane left can swap the leftover tree for a symlink to another lane:
+        # `done` (sandbox-off) never removes a tree by its path, only the admin dir whose gitdir
+        # names it, as text, and only once the lane's own remove succeeded.
+        self.lane("new", "spike")
+        self.lane("new", "other")
+        path, other = self.lane_path("spike"), self.lane_path("other")
+        self.write(os.path.join(other, "keep.txt"), "the other lane's\n")
+        key = lanelib.Repo(self.main, self.common).key
+        tree = os.path.join(path, ".lane-trial", f"lane-trial-{key}-spike-abcd1234", "tree")
+        self.git("worktree", "add", "--detach", "--quiet", tree, "HEAD", cwd=path)
+        self.write(os.path.join(path, ".lane-trial", ".gitignore"), "*\n")
+        shutil.rmtree(tree)
+        os.symlink(other, tree)
+        # An admin dir that is a symlink is never removed, even when its gitdir names the lane.
+        decoy = os.path.join(self.tmp, "decoy")
+        self.write(os.path.join(decoy, "gitdir"), os.path.join(
+            path, ".lane-trial", f"lane-trial-{key}-spike-efgh5678", "tree", ".git") + "\n")
+        os.symlink(decoy, os.path.join(self.common, "worktrees", "decoy"))
+        p = self.run_lane("done", "spike", "--abandon")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertFalse(os.path.exists(path))
+        listing = self.git("worktree", "list", "--porcelain")
+        self.assertNotIn("spike-abcd1234", listing)  # the decoy's, git lists through its link
+        self.assertIn(f"worktree {other}\n", listing)
+        self.assertEqual(self.read(os.path.join(other, "keep.txt")), "the other lane's\n")
+        self.assertTrue(os.path.isfile(os.path.join(decoy, "gitdir")))
+        self.assertIn(tree, p.stderr)
+
+    def test_dones_admin_dir_removal_never_follows_a_worktrees_dir_swapped_for_a_link(self):
+        # Sandboxed Bash can write the common dir, so <common>/worktrees itself can become a
+        # symlink between trial_admin_dirs' listing and the removal: the rmtree must refuse.
+        mod = load_lane_script()
+        base = os.path.join(self.tmp, "common", "worktrees")
+        os.makedirs(os.path.join(base, "tree"))
+        target = os.path.join(self.tmp, "elsewhere")
+        self.write(os.path.join(target, "tree", "keep.txt"), "not git's\n")
+        os.rename(base, base + ".old")
+        os.symlink(target, base)
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            mod.drop_admin_dirs("spike", [(os.path.join(base, "tree"), "/x/tree")])
+        self.assertEqual(self.read(os.path.join(target, "tree", "keep.txt")), "not git's\n")
+        self.assertIn("left in place", err.getvalue())
+        # No hint to remove it by hand: a by-path rm run sandbox-off would follow the same link.
+        self.assertNotRegex(err.getvalue(), r"remove that|rm -|remove --force")
+
+    def test_no_message_offers_a_removal_by_path(self):
+        # A path a sandboxed process can write may be a swapped-in symlink by the time the user
+        # runs a pasted `rm -rf` or `git worktree remove --force` sandbox-off: git and rm both
+        # follow it and delete what it names. Leftovers go through a `lane` command instead.
+        with open(LANE, encoding="utf-8") as f:
+            text = [line for line in f if not line.lstrip().startswith("#")]
+        bad = [line.strip() for line in text
+               if re.search(r"[\"'][^\"']*(?:rm -r|rm -f|worktree remove --force|remove that)",
+                            line)]
+        self.assertEqual(bad, [])
+
+    def test_done_clears_a_trials_registration_when_the_lanes_worktree_is_gone_already(self):
+        # A lane removed by hand with `git worktree remove` takes its trial trees' files and its
+        # own registration, but not theirs: `done` drops those, as it does on the normal path.
+        self.lane("new", "spike")
+        path = self.lane_path("spike")
+        key = lanelib.Repo(self.main, self.common).key
+        tree = os.path.join(path, ".lane-trial", f"lane-trial-{key}-spike-abcd1234", "tree")
+        self.git("worktree", "add", "--detach", "--quiet", tree, "HEAD", cwd=path)
+        self.git("worktree", "remove", "--force", path)
+        self.assertIn("spike-abcd1234", self.git("worktree", "list", "--porcelain"))
+        p = self.run_lane("done", "spike", "--abandon")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("spike-abcd1234", self.git("worktree", "list", "--porcelain"))
 
     def test_done_refuses_while_a_process_lives_in_the_lane(self):
         self.lane("new", "busy")
