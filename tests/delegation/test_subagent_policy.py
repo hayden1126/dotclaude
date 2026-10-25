@@ -389,6 +389,34 @@ class Commands(Base):
         self.assertIsNone(self.bash("source .venv/bin/activate && pytest -q"))
         self.assertIsNone(self.bash("command -v git"))
 
+    def test_wrapper_options_are_read_exactly(self):
+        # SP11: a wrapper option skipped without its value moved the command (exec -a), GNU
+        # time's -o wrote a file, watch and flock -c ran a shell string, and xargs -I put stdin
+        # into any word. Each wrapper now reads its own option table and refuses the rest.
+        for cmd, rule in (("env time --output=.git/config true", "unknown-option"),
+                          ("env time -ofile true", "unknown-option"),
+                          ("command time -o x ls", "unknown-option"),
+                          ("timeout --foo 5 ls", "unknown-option"),
+                          ("nice -5 ls", "unknown-option"),
+                          ("timeout $T ls", "dynamic-wrapper-arg"),
+                          ("watch -n1 ls '; git reset --hard'", "git-reset"),
+                          ("flock lk -c 'git reset --hard'", "git-reset"),
+                          ("flock ~/.zshrc true", "protected-path"),
+                          ("xargs -I{} sh -c '{}'", "dynamic-shell"),
+                          ("xargs -I X git X", "dynamic-executable"),
+                          ("xargs -I{a,b} ls", "dynamic-wrapper-arg")):
+            self.assertDenied(self.bash(cmd), rule, msg=cmd)
+        for cmd, rule in (("exec -a ls sort -o out f", "researcher-flag"),
+                          ("watch ls '; touch W'", "researcher-program"),
+                          ("flock lk ls", "researcher-flag")):
+            self.assertDenied(self.bash(cmd, atype="researcher"), rule, msg=cmd)
+        for cmd in ("timeout 5 ls", "timeout -s KILL 5 ls", "timeout --signal=KILL 5 ls",
+                    "nice -n 5 ls", "stdbuf -oL ls", "time ls", "time -p ls", "env time ls",
+                    "watch -n1 ls", "watch -x ls", "noglob ls *", "xargs -0 ls", "xargs -n1 echo",
+                    "xargs -I{} cp {} dst", "xargs -I {} cp {} dst", "flock lk ls",
+                    "exec ls"):
+            self.assertIsNone(self.bash(cmd), cmd)
+
     def test_environment_that_changes_what_runs(self):
         for cmd in ("GIT_EXTERNAL_DIFF=x git diff", "LD_PRELOAD=/x.so ls", "PAGER=less git log",
                     "env GIT_SSH_COMMAND=x git status", "BASH_ENV=/x bash -c ls"):
@@ -909,10 +937,10 @@ class Researcher(Base):
                 ("egrep --view=x foo f", "researcher-flag"),
                 # round 7: a word the shell expands can be xxd's or uniq's output operand; ---
                 # ends xxd's options; grep's query, config and config-file forms
-                ("xxd STATUS.md{,}", "researcher-flag"), ("xxd *.bin", "researcher-flag"),
-                ("xxd -c *", "researcher-flag"), ("xxd $(printf 'a b')", "researcher-flag"),
-                ("xxd $F", "researcher-flag"), ("uniq in{,}", "researcher-flag"),
-                ("uniq *.txt", "researcher-flag"), ("xxd --- -c out", "researcher-flag"),
+                ("xxd STATUS.md{,}", "researcher-dynamic"), ("xxd *.bin", "researcher-dynamic"),
+                ("xxd -c *", "researcher-dynamic"), ("xxd $(printf 'a b')", "researcher-dynamic"),
+                ("xxd $F", "researcher-dynamic"), ("uniq in{,}", "researcher-dynamic"),
+                ("uniq *.txt", "researcher-dynamic"), ("xxd --- -c out", "researcher-flag"),
                 ("grep -iQ foo", "researcher-flag"), ("grep --query foo", "researcher-flag"),
                 ("grep --save-config", "researcher-flag"), ("fgrep -Q x", "researcher-flag"),
                 ("grep --config=c foo f", "researcher-flag"), ("grep ---c foo f", "researcher-flag"),
@@ -920,6 +948,17 @@ class Researcher(Base):
                 ("FOO=1 ls", "env-assignment")):
             self.assertDenied(self.r(cmd), rule, msg=cmd)
 
+
+    def test_words_the_shell_fills_in_are_refused(self):
+        # SP11: a researcher program with a write or run rule sees only literal words; anything
+        # the shell or xargs fills in could be an option or output file the rules never read.
+        for cmd in ('sort "$(echo -oout)" in', "sort $(echo -o out) in", 'grep x "$f"',
+                    "grep foo *.md", 'grep x -- "$f"', 'curl -s "https://x/$r"', "xargs sort f",
+                    "echo out | xargs xxd in", 'git log "$x"', "tree {a,b}"):
+            self.assertDenied(self.r(cmd), "researcher-dynamic", msg=cmd)
+        self.assertDenied(self.r("rg --hostname-bin=sh foo"), "researcher-flag")
+        for cmd in ("grep foo a.md b.md", "cat *.md", 'cat "$f"', "ls *", "xargs -n1 echo"):
+            self.assertIsNone(self.r(cmd), cmd)
 
     def test_yq_split_writes_files(self):
         # yq may not be installed, so its table is checked below the command lookup
@@ -967,7 +1006,7 @@ class Researcher(Base):
                     # round 6: -pr is -p and -er is -e to xxd; a value word isn't an operand
                     "xxd -pr f", "xxd -er f", "xxd -c8 f", "xxd -cols 8 f", "xxd -R never f",
                     "xxd -l 16 -s 4 f", "xxd -i -n name f", "xxd -", "file -mC f",
-                    "file -m magic f", 'xxd "$F"', 'uniq -c "$F"', "xxd -- f"):
+                    "file -m magic f", "xxd -- f"):
             self.assertIsNone(self.r(cmd), cmd)
 
 

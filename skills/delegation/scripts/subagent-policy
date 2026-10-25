@@ -1528,7 +1528,7 @@ class Analyzer:
                 self.deny("source", "stop_and_explain",
                           "source runs a file the policy can't see (only */bin/activate is allowed)")
             if base in sh["wrappers"] and base != "sudo":
-                inner = self.peel_wrapper(base, lits)
+                inner = self.peel_wrapper(base, lits, cwd, depth)
                 if inner is None:
                     return cwd  # the wrapper alone (e.g. bare `env`) just prints
                 lits = inner
@@ -1542,7 +1542,7 @@ class Analyzer:
         splits = [l.split for l in lits]
         return self.program(base, args, globs, splits, cwd, depth)
 
-    def peel_wrapper(self, base, lits):
+    def peel_wrapper(self, base, lits, cwd, depth):
         """Return the wrapped command's words, or None when there is none."""
         rest = lits[1:]
         if base == "env":
@@ -1608,40 +1608,126 @@ class Analyzer:
                 else:
                     break
             rest = rest[i:]
-        elif base in ("timeout",):
-            while rest and rest[0].text.startswith("-"):
-                rest = rest[2:] if rest[0].text in ("-s", "--signal", "-k", "--kill-after") else rest[1:]
-            rest = rest[1:]  # the duration
-        elif base in ("nice", "ionice"):
-            while rest and rest[0].text.startswith("-"):
-                rest = rest[2:] if rest[0].text in ("-n", "--adjustment", "-c", "-p") else rest[1:]
-        elif base == "stdbuf":
-            while rest and rest[0].text.startswith("-"):
-                rest = rest[2:] if rest[0].text in ("-i", "-o", "-e") else rest[1:]
-        elif base == "flock":
-            while rest and rest[0].text.startswith("-"):
-                rest = rest[2:] if rest[0].text in ("-w", "--timeout", "-E") else rest[1:]
-            rest = rest[1:]  # the lock file
-        elif base == "watch":
-            while rest and rest[0].text.startswith("-"):
-                rest = rest[2:] if rest[0].text in ("-n", "--interval", "-d") else rest[1:]
-        elif base == "xargs":
-            takes = {"-a", "-d", "-E", "-e", "-I", "-i", "-L", "-l", "-n", "-P", "-s",
-                     "--arg-file", "--delimiter", "--max-args", "--max-procs", "--max-chars"}
-            while rest and rest[0].text.startswith("-"):
-                rest = rest[2:] if rest[0].text in takes else rest[1:]
+            return rest or None
+        if base in ("noglob", "nocorrect"):
+            return rest or None  # zsh precommand modifiers: the next word is the command
+        rest, opts = self.wrapper_options(base, rest)
+        if base == "command" and ("-v" in opts or "-V" in opts):
+            return None  # it prints how a name resolves
+        if base in ("timeout", "flock") and rest:
+            if rest[0].dynamic or rest[0].glob:
+                self.deny("dynamic-wrapper-arg", "stop_and_explain",
+                          f"{base} with a computed {'duration' if base == 'timeout' else 'lock file'}")
+            if base == "flock":
+                if self.is_researcher:
+                    self.deny("researcher-flag", "scope_down",
+                              "flock creates its lock file; researcher only reads")
+                self.check_write_path(rest[0].text, cwd)
+            rest = rest[1:]
+            if base == "flock" and rest and rest[0].text in ("-c", "--command"):
+                return self.wrapper_shell_string(base, rest[1:2], cwd, depth)
+        if base == "watch" and not ({"-x", "--exec"} & set(opts)):
+            return self.wrapper_shell_string(base, rest, cwd, depth)  # watch runs it with sh -c
+        if base == "xargs":
             if not rest:
                 return None
+            repl = opts.get("-I") or opts.get("--replace") or opts.get("-i")
+            if repl is not None:
+                repl = "{}" if repl is True else repl
+                rest = [Lit(l.text, dynamic=True) if repl in (l.text or "") else l for l in rest]
             return rest + [Lit("", dynamic=True)]  # the arguments come from stdin
-        elif base in ("command", "builtin"):
-            if rest and rest[0].text in ("-v", "-V"):
-                return None
-            while rest and rest[0].text.startswith("-"):
-                rest = rest[1:]
-        else:  # exec, time, nohup, noglob, nocorrect
-            while rest and rest[0].text.startswith("-"):
-                rest = rest[1:]
         return rest or None
+
+    # Each wrapper's options as its own parser reads them. A value letter takes the rest of its
+    # cluster, else the next word; an optional one ("opt") only the rest of the cluster, and an
+    # optional long one only an attached =. Long names match exactly. Any other option is
+    # refused: one skipped without its value moves the word the policy takes for the command
+    # (`exec -a ls sort -o out f` runs sort), and GNU time's -o writes a file, so time keeps only
+    # the shell keyword's -p.
+    WRAPPER_OPTS = {
+        "command": {"bool": "pvV"},
+        "builtin": {},
+        "exec": {"bool": "cl", "value": "a"},
+        "time": {"bool": "p"},
+        "nohup": {},
+        "nice": {"value": "n", "lvalue": ("adjustment",)},
+        "timeout": {"bool": "v", "value": "sk", "lbool": ("preserve-status", "foreground",
+                                                          "verbose"),
+                    "lvalue": ("signal", "kill-after")},
+        "stdbuf": {"value": "ioe", "lvalue": ("input", "output", "error")},
+        "ionice": {"bool": "t", "value": "cnpPu", "lbool": ("ignore",),
+                   "lvalue": ("class", "classdata", "pid", "pgid", "uid")},
+        "xargs": {"bool": "0prtxo", "value": "aEILnPsd", "opt": "eil",
+                  "lbool": ("null", "no-run-if-empty", "verbose", "interactive", "exit",
+                            "open-tty", "show-limits"),
+                  "lvalue": ("arg-file", "delimiter", "max-args", "max-procs", "max-chars",
+                             "process-slot-var"),
+                  "lopt": ("max-lines", "replace", "eof")},
+        "watch": {"bool": "bcCegprtwx", "value": "nq", "opt": "d",
+                  "lbool": ("beep", "color", "no-color", "errexit", "chgexit", "precise",
+                            "no-rerun", "no-title", "no-wrap", "exec"),
+                  "lvalue": ("interval", "equexit"), "lopt": ("differences",)},
+        "flock": {"bool": "sxunoF", "value": "wE",
+                  "lbool": ("shared", "exclusive", "unlock", "nonblock", "close", "no-fork",
+                            "verbose"),
+                  "lvalue": ("timeout", "wait", "conflict-exit-code")},
+    }
+
+    def wrapper_options(self, base, rest):
+        """Read a wrapper's leading options by WRAPPER_OPTS: the words after them, and the
+        options seen ({"-I": "{}", "--null": True, ...}). A computed word where an option could
+        be is refused, since it could expand to one."""
+        spec = self.WRAPPER_OPTS[base]
+        opts, rest = {}, list(rest)
+        while rest:
+            lit = rest[0]
+            t = lit.text or ""
+            if lit.glob and not lit.dynamic and not re.search(r"[*?\[]|\{(?!\})", t):
+                lit = Lit(t)  # only a bare {} (xargs -I{}), which neither shell expands
+            if not lit.dynamic and not lit.glob and (t == "-" or not t.startswith("-")):
+                break
+            if lit.dynamic or lit.glob:
+                if not t.startswith("-") and not lit.split:
+                    break  # a quoted expansion in command position: argv refuses it there
+                self.deny("dynamic-wrapper-arg", "stop_and_explain",
+                          f"{base} with a computed word where an option could be")
+            rest = rest[1:]
+            if t == "--":
+                break
+            if t.startswith("--"):
+                name, eq, value = t[2:].partition("=")
+                if name in spec.get("lbool", ()) and not eq:
+                    opts["--" + name] = True
+                elif name in spec.get("lopt", ()):
+                    opts["--" + name] = value if eq else True
+                elif name in spec.get("lvalue", ()):
+                    if not eq:
+                        value = rest.pop(0).text if rest else ""
+                    opts["--" + name] = value
+                else:
+                    self.deny("unknown-option", "stop_and_explain",
+                              f"{base} {t} is an option the policy doesn't know; leave it out")
+                continue
+            for k, ch in enumerate(t[1:], 2):
+                if ch in spec.get("bool", ""):
+                    opts["-" + ch] = True
+                elif ch in spec.get("opt", ""):
+                    opts["-" + ch] = t[k:] or True
+                    break
+                elif ch in spec.get("value", ""):
+                    opts["-" + ch] = t[k:] or (rest.pop(0).text if rest else "")
+                    break
+                else:
+                    self.deny("unknown-option", "stop_and_explain",
+                              f"{base} -{ch} is an option the policy doesn't know; leave it out")
+        return rest, opts
+
+    def wrapper_shell_string(self, base, words, cwd, depth):
+        """watch (without -x) and flock -c run their words through sh -c: check that text."""
+        if any(l.dynamic for l in words):
+            self.deny("dynamic-eval", "stop_and_explain", f"{base} runs a dynamic string")
+        self.analyze_string(" ".join(l.text for l in words), cwd, depth + 1)
+        return None
 
     def shell_wrapper(self, lits, cwd, depth):
         rest, script, has_c = lits[1:], None, False
@@ -2274,6 +2360,9 @@ class Analyzer:
 
     # ------------------------------------------------ researcher
 
+    # Researcher programs with write or run rules in code rather than in denied_flags.
+    RESEARCHER_WRITERS = {"xxd", "uniq", "curl", "wget", "git"}
+
     def researcher_program(self, base, args, globs, splits, cwd, depth):
         r = self.p["researcher"]
         if len(args) == 2 and args[1] in ("--version", "--help", "-h", "-V") and \
@@ -2297,26 +2386,32 @@ class Analyzer:
                 if hit:
                     self.deny("researcher-flag", "scope_down",
                               f"{base} {f} writes or runs something; researcher only reads")
+        if base == "sed" and any(globs[1:]):
+            # A glob or brace could expand to an option the policy can't see, even -i, which
+            # --sandbox does not disable; a researcher write has no sandbox backstop, so refuse.
+            self.deny("sed-unchecked", "use_alternative",
+                      "sed with a glob or brace argument could expand to an option (even -i, "
+                      "which --sandbox won't stop) or a script the policy can't check; name the "
+                      "files or pipe them in")
+        # A program with a write or run rule sees every word literally: a glob, brace, variable
+        # or substitution (or a word xargs adds) can expand to an option or an output operand
+        # the rules never read (`sort "$(echo -oout)" in`), so none is allowed, even after --.
+        # sed keeps its own reader, which already refuses each one outside a --sandbox -e value.
+        if base != "sed" and (base in r["denied_flags"] or base in self.RESEARCHER_WRITERS) and (
+                any(globs[1:]) or any(splits[1:]) or None in args[1:]):
+            self.deny("researcher-dynamic", "use_alternative",
+                      f"{base} with a glob, brace, variable or substitution could expand to an "
+                      "option or output file the policy can't check; name each file and value "
+                      "literally")
         if base == "git":
             return self.git(args, cwd, researcher=True)
         if base == "cd":
             return self.cd(args, cwd)
         if base == "sed":
-            if any(globs[1:]):
-                # A glob or brace could expand to an option the policy can't see, even -i, which
-                # --sandbox does not disable; a researcher write has no sandbox backstop, so refuse.
-                self.deny("sed-unchecked", "use_alternative",
-                          "sed with a glob or brace argument could expand to an option (even -i, "
-                          "which --sandbox won't stop) or a script the policy can't check; name the "
-                          "files or pipe them in")
             call, ops = self.sed(args, globs, splits)
             if call.in_place is not None or any(op in ("e", "w") for op, _ in ops):
                 self.deny("researcher-flag", "scope_down",
                           "sed -i or a sed w/W/e command writes a file or runs one")
-        if base in ("uniq", "xxd") and (any(globs[1:]) or any(splits[1:])):
-            self.deny("researcher-flag", "scope_down",
-                      f"{base} with a glob, brace or unquoted expansion could expand to a second "
-                      "operand, an output file it writes; name the file")
         if base in ("grep", "egrep", "fgrep", "ugrep") and any(
                 a and a.startswith("---") for a in args[1:]):
             self.deny("researcher-flag", "scope_down",

@@ -137,8 +137,14 @@ repo that turns the sandbox off loses subagent Bash; the policy still applies.
     dynamic word be a quoted `-e` value or a file after `--`; a glob or an unquoted expansion before
     `--` is refused, since it could expand to an option the policy can't check. A `~` in a `w` name
     or `-i` suffix is literal, the way sed reads it, not `$HOME`.
-  - Wrappers are peeled: `env`, `command`, `exec`, `timeout`, `nice`, `nohup`, `xargs`, `find -exec`,
-    `bash`/`sh`/`zsh -c` (recursively), and `eval` with a static argument.
+  - Wrappers are peeled: `env`, `command`, `exec`, `time`, `timeout`, `nice`, `nohup`, `stdbuf`,
+    `ionice`, `xargs`, `watch`, `flock`, `find -exec`, `bash`/`sh`/`zsh -c` (recursively), and `eval`
+    with a static argument. Each wrapper's options are read from its own table, the way the
+    wrapper reads them, and an option outside it is refused, so a value can't be mistaken for
+    the command. `time` keeps only the shell keyword's `-p` (GNU time's `-o` writes a file).
+    `watch` (without `-x`) and `flock -c` run their words through `sh -c`, so that text is
+    checked like `eval`'s. `xargs -I` makes every word holding its replace string dynamic, and
+    `flock`'s lock file is a write target.
   - A shell reading stdin (`… | sh`) and `source` (except `*/bin/activate`) are denied.
 - **Command words** must resolve on PATH, be a path to an executable, or be a builtin. That denies
   oh-my-zsh aliases (`gp` = `git push`) and shell functions, and zsh `=git`.
@@ -193,6 +199,10 @@ repo that turns the sandbox off loses subagent Bash; the policy still applies.
   - grep, rg and find without their exec, write or filter flags;
   - jq, sed without `-i`, `e` or `w` (and not with a glob or brace word, which could hide them);
     sort, uniq, diff;
+  - a program with a write or run rule (grep, rg, find, fd, sort, tree, file, yq, date, xxd, uniq,
+    curl, wget and git) takes literal words only: a glob, brace, variable or substitution, or
+    words xargs adds, could expand to an option or output file the rules never read, so each is
+    refused, even after `--`. sed keeps its own reader, described above;
   - read-only git and its list forms;
   - curl GET and `wget -O-` to stdout;
   - `gh-public`;
