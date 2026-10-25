@@ -651,6 +651,16 @@ class Network(Base):
                     "curl -sSfL https://x", "wget -qO- https://x"):
             self.assertIsNone(self.bash(cmd), cmd)
 
+    def test_curl_long_options_match_by_prefix(self):
+        # SP12c: curl takes a unique prefix of a long option, as getopt_long does.
+        for cmd in ("curl --data-bin @f https://x", "curl --form-s a=b https://x",
+                    "curl --upload-f f https://x", "curl --reques POST https://x",
+                    "curl --reques=PUT https://x"):
+            self.assertDenied(self.bash(cmd), "http-write", "manual_only", cmd)
+        for cmd in ("curl --request GET https://x", "curl --request-target / https://x",
+                    "curl -s --compressed https://x"):
+            self.assertIsNone(self.bash(cmd), cmd)
+
     def test_wget_send_flags_match_by_prefix_and_rc_commands_are_denied(self):
         # wget's getopt_long takes unique prefixes; -e/--execute runs a wgetrc command and
         # --config reads a wgetrc file, either of which can set post_data or method.
@@ -958,6 +968,24 @@ class Researcher(Base):
             self.assertDenied(self.r(cmd), "researcher-dynamic", msg=cmd)
         self.assertDenied(self.r("rg --hostname-bin=sh foo"), "researcher-flag")
         for cmd in ("grep foo a.md b.md", "cat *.md", 'cat "$f"', "ls *", "xargs -n1 echo"):
+            self.assertIsNone(self.r(cmd), cmd)
+
+    def test_round8_table_cells(self):
+        # SP12: a stash option before its subcommand means stash push; uniq reads - and every word
+        # after -- as operands; curl takes unique long prefixes and writes through --stderr and
+        # -w %output{}; date sets the clock from a bare operand.
+        for cmd, rule in (("git stash -m list", "researcher-git"),
+                          ("git stash -- list", "researcher-git"),
+                          ("uniq - out", "researcher-flag"), ("uniq -- in -x", "researcher-flag"),
+                          ("curl --dump-h dh https://x", "researcher-write"),
+                          ("curl --stderr se https://x", "researcher-write"),
+                          ("curl -w '%output{wo}' https://x", "researcher-write"),
+                          ("curl -sw '%output{wo}' https://x", "researcher-write"),
+                          ("curl --write-o=@fmt https://x", "researcher-write"),
+                          ("date 10251200", "researcher-flag")):
+            self.assertDenied(self.r(cmd), rule, msg=cmd)
+        for cmd in ("git stash list", "git stash show -p", "uniq -c in", "uniq -", "date +%F",
+                    "date -u +%s", "curl -s -w '%{http_code}' https://x", "curl -sS https://x"):
             self.assertIsNone(self.r(cmd), cmd)
 
     def test_yq_split_writes_files(self):

@@ -145,7 +145,7 @@ send_flags = ["-d", "--data", "--data-ascii", "--data-binary", "--data-raw", "--
 # Researcher only: flags that write local files.
 output_flags = ["-o", "--output", "-O", "--remote-name", "--remote-name-all", "--output-dir",
   "-D", "--dump-header", "-c", "--cookie-jar", "--trace", "--trace-ascii", "--libcurl",
-  "--etag-save", "--hsts", "--alt-svc", "--create-dirs"]
+  "--etag-save", "--hsts", "--alt-svc", "--create-dirs", "--stderr"]
 
 [wget]
 # Flags that send data, run (-e/--execute) or read (--config) a wgetrc command that can set

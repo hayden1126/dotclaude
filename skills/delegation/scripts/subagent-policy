@@ -1997,19 +1997,21 @@ class Analyzer:
         while i < len(args):
             a = args[i] or ""
             method = None
-            if a in ("-X", "--request"):
+            # curl takes a unique prefix of a long option (--data-bin is --data-binary), so every
+            # long name here matches by prefix (flag_hit), as git's and wget's do.
+            if a == "-X" or (a.startswith("--") and "=" not in a and flag_hit(a, ("--request",))):
                 method = args[i + 1] if i + 1 < len(args) else None
                 i += 1
-            elif a.startswith("--request="):
+            elif a.startswith("--") and "=" in a and flag_hit(a, ("--request",)):
                 method = a.split("=", 1)[1]
             elif self.short_cluster(a) and "X" in a[1:]:
                 rest = a[a.index("X", 1) + 1:]
                 method = rest or (args[i + 1] if i + 1 < len(args) else None)
-            if method is not None or a in ("-X", "--request"):
+            if method is not None or a == "-X" or flag_hit(a, ("--request",)):
                 if (method or "").upper() not in c["allowed_methods"]:
                     self.deny("http-write", "manual_only",
                               f"curl with method {method!r}; delegated agents only GET or HEAD")
-            if any(a == f or a.startswith(f + "=") for f in send_long):
+            if a.startswith("--") and flag_hit(a, send_long):
                 self.deny("http-write", "manual_only", f"curl {a} sends data")
             if self.short_cluster(a):
                 for ch in a[1:]:
@@ -2020,9 +2022,20 @@ class Analyzer:
                     if researcher and ch in out_short:
                         self.deny("researcher-write", "scope_down",
                                   f"curl -{ch} writes a local file; researcher reads to stdout")
-            if researcher and any(a == f or a.startswith(f + "=") for f in out_long):
+            if researcher and a.startswith("--") and flag_hit(a, out_long):
                 self.deny("researcher-write", "scope_down",
                           f"curl {a} writes a local file; researcher reads to stdout")
+            if researcher:
+                fmt = None  # -w/--write-out: %output{FILE} writes FILE, and @FILE reads a format
+                if a.startswith("--") and flag_hit(a, ("--write-out",)):
+                    nxt = args[i + 1] if i + 1 < len(args) else ""
+                    fmt = a.split("=", 1)[1] if "=" in a else nxt
+                elif self.short_cluster(a) and "w" in a[1:]:
+                    fmt = a[a.index("w", 1) + 1:] or (args[i + 1] if i + 1 < len(args) else "")
+                if fmt is not None and ("%output" in (fmt or "") or (fmt or "").startswith("@")):
+                    self.deny("researcher-write", "scope_down",
+                              "curl -w with %output{} writes a file, and @FILE reads its format "
+                              "from one; researcher reads to stdout")
             i += 1
 
     # wget 1.21's short options that take a value (its --help gives each a =VALUE; -n takes the
@@ -2337,7 +2350,7 @@ class Analyzer:
         elif sub == "remote":
             ok = first in self.GIT_REMOTE_READ
         elif sub == "stash":
-            ok = first in ("list", "show")
+            ok = bool(rest) and rest[0] in ("list", "show")  # an option first means stash push
         elif sub == "worktree":
             ok = first == "list"
         elif sub == "config":
@@ -2359,6 +2372,17 @@ class Analyzer:
                       f"researcher runs only the read-only forms of git {sub}")
 
     # ------------------------------------------------ researcher
+
+    def uniq_operands(self, words):
+        """uniq's file operands: words that aren't options, - (stdin) included, and every word
+        after --. A second one is the output file."""
+        n = 0
+        for k, a in enumerate(words):
+            if a == "--":
+                return n + len(words) - k - 1
+            if a is None or a == "-" or not a.startswith("-"):
+                n += 1
+        return n
 
     # Researcher programs with write or run rules in code rather than in denied_flags.
     RESEARCHER_WRITERS = {"xxd", "uniq", "curl", "wget", "git"}
@@ -2416,8 +2440,11 @@ class Analyzer:
                 a and a.startswith("---") for a in args[1:]):
             self.deny("researcher-flag", "scope_down",
                       f"{base} ---FILE loads a config file that can set a filter or pager command")
-        if base == "uniq" and len([a for a in args[1:] if a and not a.startswith("-")]) > 1:
+        if base == "uniq" and self.uniq_operands(args[1:]) > 1:
             self.deny("researcher-flag", "scope_down", "uniq with an output file writes it")
+        if base == "date" and any(a and not a.startswith(("-", "+")) for a in args[1:]):
+            self.deny("researcher-flag", "scope_down",
+                      "date with an operand other than +FORMAT sets the clock")
         if base == "xxd" and self.xxd_writes(args[1:]):
             self.deny("researcher-flag", "scope_down", "xxd -r or an xxd output file writes it")
         if base == "curl":
