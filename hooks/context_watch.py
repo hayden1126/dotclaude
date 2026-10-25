@@ -24,8 +24,9 @@ nothing. At a Stop the turn's final reply lands in the transcript about 100 ms i
 (spike A8), so while the last main-chain user or assistant entry is a user's (or none is in
 reach), the watcher re-reads every 25 ms for up to STOP_WAIT (1.5 s); past that it logs a line
 to stderr and uses the last count on disk, if any. The count is merged into ctx/<session>.json
-as {tokens, time} on every event, firing or not; a `window` there (the model's context window,
-which the statusline widget writes) lowers the tiers' window (autopass_state.window).
+as {tokens, time} on every event, firing or not (SessionStart(compact) merges tokens null); a
+`window` there (the model's context window, which the statusline widget writes) lowers the
+tiers' window (autopass_state.window).
 
 Crossings live in the watcher's own record, ctx-watch/<session>.json, not in stop_hook_active:
 - only the highest tier the count has crossed may speak, once per crossing; when it speaks, the
