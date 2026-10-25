@@ -17,6 +17,7 @@ import shlex
 import shutil
 import signal
 import subprocess
+import time
 import sys
 import tempfile
 import unittest
@@ -653,6 +654,7 @@ class Trial(LaneWork):
         self.scratch = os.path.join(self.tmp, "scratch")
         os.makedirs(self.scratch)
         self.env["TMPDIR"] = self.scratch
+        self.env["_LANE_TEST_SANDBOXED"] = "1"  # a trial refuses to run outside the sandbox
         self.alpha, self.beta = self.new("alpha"), self.new("beta")
         self.trial_dir = os.path.join(self.alpha, ".lane-trial")
         self.prefix = f"lane-trial-{lanelib.Repo(self.main, self.common).key}-alpha-"
@@ -728,6 +730,17 @@ class Trial(LaneWork):
         self.assertIn("lane trial: conflict with lane delta: a.txt", out)
         self.assertIn("suite 1 (test -f b.txt): ok", out)
 
+    def test_the_command_to_try_a_lane_alone_keeps_the_links(self):
+        # Without the link the suite can't load, fails alike on both runs, and the same-way
+        # rule would pass a trial that tested nothing.
+        os.makedirs(os.path.join(self.alpha, "node_modules"))
+        self.commit_files(self.beta, ["shared.txt"])
+        gamma = self.new("gamma")
+        self.commit_files(gamma, ["shared.txt", "c.txt"])
+        rc, out, err = self.trial("--link", "node_modules", "--run", "test -f b.txt")
+        self.assertIn("try it with this lane alone: lane trial gamma --link node_modules --run "
+                      "'test -f b.txt'", out)
+
     def test_a_lane_behind_the_base_that_conflicts_with_it_is_its_own_to_merge(self):
         # main moved on in a file alpha never touches, and beta, branched before, changed it too.
         self.commit_files(self.main, ["shared.txt"])
@@ -795,7 +808,9 @@ class Trial(LaneWork):
         self.assertEqual(self.leftovers(), ([], []))
 
     def test_with_no_other_lane_the_suites_still_run(self):
+        self.env["_LANE_TEST_SANDBOXED"] = "0"  # `done` runs outside the sandbox, as it must
         self.lane("done", "beta", "--abandon")
+        self.env["_LANE_TEST_SANDBOXED"] = "1"
         rc, out, err = self.trial("--run", "test -f a.txt")
         self.assertEqual(rc, 0, out + err)
         self.assertIn("no other lane's work merged: running the suites on lane alpha's HEAD", out)
@@ -1267,6 +1282,56 @@ class Trial(LaneWork):
         self.git("worktree", "unlock", ours, cwd=self.alpha)
         self.git("worktree", "prune", cwd=self.alpha)
 
+    def test_it_refuses_to_run_outside_the_sandbox(self):
+        # It removes its trees by path, safe only where the sandbox bounds what a symlink swapped
+        # in for a tree could make git delete.
+        self.env["_LANE_TEST_SANDBOXED"] = "0"
+        rc, out, err = self.trial("--run", "true")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("runs only inside the Bash sandbox", err)
+        self.assertFalse(os.path.exists(self.trial_dir))
+
+    def test_a_bad_or_nested_link_is_refused_before_the_lock(self):
+        # Waiting on the suite lock (maybe a whole other trial) only to refuse a typo is waste.
+        holder = subprocess.Popen([sys.executable, LANE, "lock", "suite", "--", "sleep", "30"],
+                                  cwd=self.alpha, env=self.env, stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL)
+        self.addCleanup(holder.wait)
+        self.addCleanup(holder.terminate)
+        lock = os.path.join(self.common, "lanes", "_locks", "suite")
+        deadline = time.monotonic() + 10
+        while not (os.path.exists(lock) and self.read(lock)) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        for args, want in ((["--link", "../x"], "bad trial link '../x'"),
+                           (["--link", "a", "--link", "a/b"], "nested trial links: a/b is under a")):
+            with self.subTest(args=args):
+                rc, out, err = self.trial(*args, "--run", "true")
+                self.assertEqual(rc, 1, out + err)  # not 75 or a wait: refused at once
+                self.assertIn(want, err)
+
+    def test_a_tree_it_cant_remove_is_reported_without_gits_words(self):
+        # git's stderr can carry text a sandboxed process planted (a lock reason) and its own
+        # "use 'remove -f -f'" advice, which pasted sandbox-off follows a swapped-in link.
+        mod = load_lane_script()
+        tmpdir = os.path.join(self.trial_dir, self.prefix + "zzzz0000")
+        tree = os.path.join(tmpdir, "tree")
+        self.git("worktree", "add", "--detach", "--quiet", tree, "HEAD", cwd=self.alpha)
+        self.git("worktree", "lock", "--reason", "run git worktree remove -f -f now", tree,
+                 cwd=self.alpha)
+        repo = lanelib.Repo(self.alpha, self.common)
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            mod.drop_tree(repo, "alpha", tree, tmpdir)
+        self.assertIn("couldn't unregister the trial's tree", err.getvalue())
+        self.assertIn("`lane done alpha`", err.getvalue())
+        self.assertNotIn("-f -f", err.getvalue())
+        self.git("worktree", "unlock", tree, cwd=self.alpha)
+        self.git("worktree", "prune", cwd=self.alpha)
+
+    def test_keeps_help_promises_no_removal_command(self):
+        p = self.run_lane("trial", "--help")
+        self.assertIn("what clears it", p.stdout)
+        self.assertNotIn("how to remove", p.stdout)
+
     def test_a_symlinked_trial_dir_is_refused(self):
         away = os.path.join(self.tmp, "away")
         os.makedirs(away)
@@ -1274,6 +1339,9 @@ class Trial(LaneWork):
         rc, out, err = self.trial("--run", "true")
         self.assertEqual(rc, 1, out + err)
         self.assertIn(f"{self.trial_dir} is a symlink", err)
+        # unlink removes a link or a file, never a dir's contents, whatever the link names
+        self.assertIn(f"`unlink {self.trial_dir}`", err)
+        self.assertNotIn("remove it", err)
         self.assertEqual(os.listdir(away), [])
 
     def test_it_holds_the_lock_and_a_held_lock_with_wait_0_exits_75(self):
@@ -1513,12 +1581,13 @@ class Trial(LaneWork):
         self.assertIn("suite 1 (node --test p.test.js): 2 failure(s) only on the merge:\n"
                       "  not ok - P2 > works\n  not ok - P2\n", out)
 
-    def test_a_link_the_lane_lacks_warns_once_and_a_bad_one_is_refused(self):
+    def test_a_link_the_lane_lacks_fails_before_any_suite_and_a_bad_one_is_refused(self):
+        # Unlinked, a suite that can't load fails alike on both runs, which the same-way rule
+        # passes: a trial that tested nothing. So a named link the lane lacks fails at once.
         rc, out, err = self.trial("--link", "nope", "--run", "test ! -f b.txt")
         self.assertEqual(rc, 1, out + err)
-        self.assertIn("baseline run of suite 1/1", out)
-        self.assertEqual(err.count("not linked into the trial's tree: nope"), 1, err)
         self.assertIn("lane alpha has no nope", err)
+        self.assertNotIn("run of suite", out)
         for bad in ("../x", "/abs", "a/../b", "./x", ""):
             with self.subTest(bad=bad):
                 rc, out, err = self.trial("--link", bad, "--run", "true")

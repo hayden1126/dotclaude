@@ -412,7 +412,11 @@ would make every file it tracks read as modified, so `done` would refuse every L
 alone skips the uncommitted read then, since it can afford to.
 
 **`lane trial`.** Before a lane asks Hayden for ready, it runs
-`lane trial --run "<suite>" --run "<suite>" ...`, sandboxed:
+`lane trial --run "<suite>" --run "<suite>" ...`, sandboxed. It refuses to run anywhere else
+(a plain shell): it removes its scratch trees by path, which is safe only where the sandbox
+bounds what a symlink swapped in for a tree could make git delete, and its suites inherit the
+sandbox. Before it waits for the lock, it also refuses a bad link path, a link under another one,
+and a link the lane lacks (step 3).
 
 1. It takes the `suite` lock for the whole run. One name for every trial: a trial clears its
    lane's leftover trees under that lock, so a second trial under another lock could remove a
@@ -457,7 +461,11 @@ alone skips the uncommitted read then, since it can afford to.
    `--link PATH` names is symlinked to the lane's own, by absolute path, unless the tree tracks
    that path. The links go in first, and no included file under a link is copied (the link
    brings it): a copy would make the link's dir and block it. Link paths are checked like
-   `.worktreeinclude` entries (relative, no `..`), and one the lane lacks warns once. A link is
+   `.worktreeinclude` entries (relative, no `..`). One under another is refused (the tree would
+   make the outer path a dir for the inner link). One the lane lacks is refused too: unlinked, a
+   suite that can't load fails alike on both runs, which step 5's same-way rule passes, so the
+   trial would pass having tested nothing. A conflict line's "try it with this lane alone"
+   command carries the run's `--link`s for the same reason. A link is
    no copy: a suite that writes through it writes the lane's files. Then each `--run` runs there
    as `sh -c`,
    streaming its output. One `--run` per suite: a chained `a && b` stops at the first failure,

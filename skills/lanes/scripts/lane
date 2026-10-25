@@ -2301,8 +2301,9 @@ def trial_root(repo: Repo) -> str:
     with contextlib.suppress(FileExistsError):
         os.mkdir(root)
     if os.path.islink(root) or not os.path.isdir(root):
-        raise LaneError(f"{root} is a symlink or no dir, and `lane trial` keeps its trees there: "
-                        "remove it, and the next trial makes it afresh")
+        raise LaneError(shown(f"{root} is a symlink or no dir, and `lane trial` keeps its trees "
+                              f"there: `unlink {root}` (it never empties a dir a link names), "
+                              "and the next trial makes it afresh"))
     try:
         fd = os.open(os.path.join(root, ".gitignore"),
                      os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
@@ -2335,6 +2336,26 @@ def trial_link(rel: str) -> str:
 def trial_link_list(spec: str) -> list[str]:
     """trial-link's comma list as paths, each once (trial_link); '' is none."""
     return list(dict.fromkeys(trial_link(x.strip()) for x in spec.split(","))) if spec else []
+
+
+def trial_links(repo: Repo, extra: list[str]) -> list[str]:
+    """The paths a trial links into its tree: the config's trial-link, then each `--link`, each
+    once. Refused: a bad one (trial_link), one under another (the tree would make the outer one
+    a dir for the inner one's link, so the outer never links), and one the lane lacks: unlinked,
+    a suite that can't load fails alike on the merge and the baseline, which the same-way rule
+    passes, so the trial would pass having tested nothing."""
+    links = list(dict.fromkeys(trial_link_list(str(repo.config().get("trial-link", "")))
+                               + [trial_link(x) for x in extra]))
+    for a in links:
+        for b in links:
+            if b.startswith(a + "/"):
+                raise LaneError(shown(f"nested trial links: {b} is under {a}; link {a} alone"))
+    missing = [x for x in links if not os.path.lexists(os.path.join(repo.toplevel, x))]
+    if missing:
+        raise LaneError(shown(f"lane {own_lane(repo)['id']} has no {', '.join(missing)} to link "
+                              "into the trial's tree: run the lane's setup first, or drop the "
+                              "link"))
+    return links
 
 
 class TreeSetup(NamedTuple):
@@ -2479,8 +2500,8 @@ def drop_admin_dirs(lane_id: str, admins: list[tuple[str, str]]) -> None:
             finally:
                 os.close(fd)
         except OSError as e:
-            warn(shown(f"left in place {admin}, the registration of a tree a trial left in "
-                       f"lane {lane_id} ({e.strerror or e}): git lists it as prunable"))
+            warn(shown(f"left in place the registration of a tree a trial left in lane "
+                       f"{lane_id} ({e.strerror or e}); `git worktree list` shows the tree"))
         else:
             warn(shown(f"cleared the registration of a tree a trial left in lane {lane_id} (it "
                        f"never reached its cleanup): {tree}"))
@@ -2542,6 +2563,12 @@ def cmd_trial(args) -> int:
     PLAN.md of lane cross-lane, section B, and docs/lanes.md have the design."""
     repo = lanes_repo()
     me = own_lane(repo)
+    if lanelib.pids_visible():
+        raise LaneError("`lane trial` runs only inside the Bash sandbox (a Claude Code session's "
+                        "Bash, not a plain shell): it removes its scratch trees by path, safe only "
+                        "where the sandbox bounds what a symlink swapped in for one could make git "
+                        "delete, and its suites inherit the sandbox")
+    args.links = trial_links(repo, args.link)  # refused now, never after a wait for the lock
     if held_by_caller(repo, TRIAL_LOCK):  # held_lock would let it in, and its sweep then clear
         raise LaneError(f"a trial can't run under a hold of the {TRIAL_LOCK} lock (inside "
                         "another trial's suite, or `lane lock suite`): an outer trial's live tree "
@@ -2564,8 +2591,7 @@ def trial(repo: Repo, me: dict, args) -> int:
     use the commits as they are."""
     cfg = repo.config()
     base_name = cfg.get("base", "origin/main")
-    links = list(dict.fromkeys(trial_link_list(str(cfg.get("trial-link", "")))
-                               + [trial_link(x) for x in args.link]))
+    links = args.links  # checked in cmd_trial, before the lock
     trees = worktree_heads(repo)
     others = trial_lanes(repo, me, args.ids, trees)
     tmp = os.path.realpath(tempfile.gettempdir())
@@ -2603,7 +2629,7 @@ def trial(repo: Repo, me: dict, args) -> int:
                 merged.append((lane["id"], sha))
             else:
                 conflicts[lane["id"]] = conflict_line(repo, lane["id"], sha, conflicted, chain,
-                                                      merged, args.run)
+                                                      merged, args.run, args.link)
         lead = norm.lead if norm.changed else None
     if lead:
         say(f"lane trial: STATUS.md is the lead's notes on {lead.name} ({lead.commit[:12]}) in "
@@ -2642,7 +2668,13 @@ def trial(repo: Repo, me: dict, args) -> int:
                 # At the same path: subtest ids that embed it, and the admin dir's name, then
                 # match.
                 holds = None
-                trial_git(repo, ["worktree", "remove", "--force", "--end-of-options", tree])
+                p = trial_git(repo, ["worktree", "remove", "--force", "--end-of-options", tree],
+                              ok=tuple(range(256)))
+                if p.returncode:  # git's words withheld: see drop_tree
+                    raise LaneError(f"couldn't unregister the merge's tree (git exit "
+                                    f"{p.returncode}) before the baseline run, so the trial "
+                                    f"stopped; `lane done {me['id']}` clears it when the lane "
+                                    "closes")
                 trial_git(repo, [*ABS_GITDIR, "worktree", "add", "--detach", "--quiet",
                                  "--end-of-options", tree, baseline])
                 holds = "baseline"
@@ -2655,7 +2687,7 @@ def trial(repo: Repo, me: dict, args) -> int:
                       f"of lane {me['id']} clears its files and `lane done {me['id']}` its "
                       "registration"))
         else:
-            drop_tree(repo, tree, tmpdir)
+            drop_tree(repo, me["id"], tree, tmpdir)
     if clashed:
         many = len(clashed) > 1
         say(f"lane trial: FAILED: lane{'s' * many} {', '.join(clashed)} didn't merge, so "
@@ -2691,7 +2723,8 @@ def alone_report(commands: list[str], runs: list[SuiteRun], what: str) -> int:
 
 
 def conflict_line(repo: Repo, lane_id: str, sha: str, conflicted: list[str], chain: dict,
-                  merged: list[tuple[str, str]], commands: list[str]) -> tuple[str, bool]:
+                  merged: list[tuple[str, str]], commands: list[str],
+                  links: list[str]) -> tuple[str, bool]:
     """(the report's line for lane lane_id, whose head sha conflicted with the merge so far, and
     whether it is the first verdict below: the lane went untried, which fails nothing). chain
     holds the base commit and its name, the baseline, and norm. Merges decide, in this order:
@@ -2728,20 +2761,27 @@ def conflict_line(repo: Repo, lane_id: str, sha: str, conflicted: list[str], cha
             pairs.append(f"lane {other} ({', '.join(both) or 'git named no path'})")
     whom = (" and ".join(pairs) if pairs else
             "the merge of lane " + ", ".join(other for other, _ in merged) + f" ({paths})")
-    alone = shlex.join(["lane", "trial", lane_id, *[x for c in commands for x in ("--run", c)]])
+    # With this trial's `--link`s (the config's apply anyway): unlinked, a suite that can't load
+    # fails alike on both runs, which passes, so the rerun would test nothing.
+    alone = shlex.join(["lane", "trial", lane_id, *[x for p in links for x in ("--link", p)],
+                        *[x for c in commands for x in ("--run", c)]])
     return (f"lane trial: lane {lane_id} conflicts with {whom}, not with this lane: {lane_id} "
             f"was left out; try it with this lane alone: {alone}"), False
 
 
-def drop_tree(repo: Repo, tree: str, tmpdir: str) -> None:
+def drop_tree(repo: Repo, lane_id: str, tree: str, tmpdir: str) -> None:
     """Unregister and remove the trial's tree, then its dir; a failure only warns, so it never
-    hides how the trial ended."""
+    hides how the trial ended. git's stderr is withheld: a sandboxed process can plant its text
+    (a lock's reason), and git's own advice (`remove -f -f`), pasted sandbox-off, would follow a
+    symlink swapped in for the tree."""
     if os.path.lexists(os.path.join(tree, ".git")):
         try:
             p = git(["worktree", "remove", "--force", "--end-of-options", tree], repo.toplevel,
                     timeout=TRIAL_GIT_WAIT)
             if p.returncode != 0:
-                warn(shown(f"couldn't remove the trial's tree at {tree}: {p.stderr.strip()}"))
+                warn(shown(f"couldn't unregister the trial's tree at {tree} (git exit "
+                           f"{p.returncode}): a later `lane trial` of lane {lane_id} clears its "
+                           f"files and `lane done {lane_id}` its registration"))
         except subprocess.TimeoutExpired:
             warn(f"git worktree remove took over {TRIAL_GIT_WAIT} s: the tree at {tree} is left")
     shutil.rmtree(tmpdir, ignore_errors=True)
@@ -4008,7 +4048,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--wait", type=float, metavar="SECS",
                    help=f"give up on the lock after SECS, exit {LOCK_BUSY} (default: wait)")
     p.add_argument("--keep", action="store_true",
-                   help="keep the scratch tree (it says where, and how to remove it)")
+                   help="keep the scratch tree (it says where, and what clears it)")
     p.add_argument("--link", action="append", default=[], metavar="PATH",
                    help="symlink the lane's PATH (node_modules, a .venv) into the tree, beside "
                         "init's --trial-link ones; repeat it per path")

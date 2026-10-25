@@ -132,7 +132,8 @@ an unregistered worktree: `lane whoami` tells you which.
    lane's: the trial calls that lane untried, not FAILED, and exits 0 when nothing else fails.
    Tell that lane, and ask for ready anyway, quoting the line. The tree lives in your lane's
    `.lane-trial/` (gitignored) and gets your `.worktreeinclude` files; `--link PATH` symlinks
-   one more of your dirs into it, beside init's `--trial-link` ones.
+   one more of your dirs into it, beside init's `--trial-link` ones (a link your lane lacks is
+   refused: run its setup first). It runs only sandboxed, never from a plain shell.
 
    The lane that learns of the merge
    (it ran `gh pr merge`, or Hayden said "merged" in its window) writes the outcome into its
