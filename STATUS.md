@@ -310,6 +310,14 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     Two low gaps ride with it (rows "seed_record from cmd_adopt" and "add_exclude"); their fix
     reuses the fd helpers done-safe's PR adds. Lane-able (`skills/lanes/scripts/lane`,
     `lanelib.py`, `tests/lanes`) after done-safe merges, since it touches the same files.
+  - **`lane trial` passes a suite that never ran** (low; lane sp-gaps, 2026-10-25, at 4a874df).
+    `trial_report` in `skills/lanes/scripts/lane` passes a failed suite that printed no test id on
+    either run when both exits match, by design (a suite already broken on main isn't the
+    merge's). So `--run tests/delegation` (a directory: exit 126 on both) and a runner missing a
+    required flag (argparse, exit 2 on both) both cleared the pre-ready gate with exit 0. Lead's
+    pick: with no ids on either run, fail and say "compare by hand"; a gate that can't vouch for
+    a suite shouldn't pass it. Lane-able (`skills/lanes/scripts/lane`, `tests/lanes`); after
+    done-safe merges, since it changes `lane`.
   - **Lanes skill: rebase only at your turn** (capella-studio lead, session 80ab3852, 2026-10-25;
     Hayden picked all three in capella's window). (A) The lead, step 7.6: only the lane next in
     merge order merges or rebases origin/main; the others get "main moved to `<sha>`", check
