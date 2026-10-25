@@ -162,16 +162,19 @@ repo that turns the sandbox off loses subagent Bash; the policy still applies.
 - **Command words** must resolve on PATH, be a path to an executable, or be a builtin. That denies
   oh-my-zsh aliases (`gp` = `git push`) and shell functions, and zsh `=git`.
 - **Environment:** `GIT_*`, `LD_*`, `BASH_ENV`, `PAGER` and similar prefixes are denied (except
-  `GIT_PAGER=cat`), and so is `git -c`.
+  `GIT_PAGER=cat`), and so is `git -c`. `WGETRC`, `CURL_HOME`, `WGET_ASKPASS` and `SSH_ASKPASS`
+  are refused anywhere in a command, not only where they are assigned.
 - **git:**
   - reset, rebase, revert and clean are denied;
   - so are a checkout or switch that discards, restore without `--staged`, and branch or tag
     deletion;
   - so are stash drop/clear/pop, worktree changes, remote and config writes, and reflog or
     update-ref deletion;
-  - so are `--no-verify`, `--output`, `--ext-diff` and the `ext::` transport;
+  - so are `--no-verify`, `--output`, `--ext-diff` and `--upload-pack` (also as any unique
+    prefix, the way git reads them) and the `ext::` transport;
   - an unknown subcommand is denied, which catches git aliases.
-- **HTTP:** curl and wget are GET or HEAD only, and send no data.
+- **HTTP:** curl and wget are GET or HEAD only, and send no data. wget also refuses `-e`,
+  `--config` and `--use-askpass`, since a wgetrc command can set a method or run a program.
 - **rm:** `-r` outside the root, allowWrite and temp is denied; so are a dynamic or glob target of
   `-r`, git metadata, and `/` or home.
 - **MCP:** only the read tools listed in `[mcp]`. A new MCP tool fails closed until it is listed.
@@ -217,11 +220,12 @@ repo that turns the sandbox off loses subagent Bash; the policy still applies.
     words xargs adds, could expand to an option or output file the rules never read, so each is
     refused, even after `--`. sed keeps its own reader, described above;
   - read-only git and its list forms;
-  - curl GET and `wget -O-` to stdout;
+  - curl GET, and `wget -O-` to stdout without `-o`, `-a`, `-r`, `-m`, `-P`, `-b` or another
+    file-writing flag;
   - `gh-public`;
   - `git clone` of an https URL into the Claude temp dir;
   - `<program> --version|--help`.
-- **Redirects** go only to `/dev/null`.
+- **Redirects** go only to `/dev/null`, `/dev/stdout` or `/dev/stderr`.
 - **No interpreters.**
 
 ### Public GitHub for delegated agents (the credential barrier)

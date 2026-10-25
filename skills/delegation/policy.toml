@@ -105,8 +105,8 @@ known = ["add", "am", "annotate", "apply", "archive", "bisect", "blame", "branch
   "symbolic-ref", "tag", "update-index", "update-ref", "var", "verify-commit", "verify-tag",
   "version", "whatchanged", "worktree", "write-tree", "for-each-ref", "mktree"]
 # Flags denied on any subcommand: they write files or run a configured program. Like every
-# deny-list of long flags here (except curl's, which needs exact names), these match by any
-# unique prefix too, as getopt_long and git's parse-options read one (`--no-veri`).
+# deny-list of long flags here, these match by any unique prefix too, as getopt_long and git's
+# parse-options read one (`--no-veri`).
 denied_flags = ["--output", "--ext-diff", "--upload-pack", "--receive-pack", "--exec",
   "--open-files-in-pager", "--no-verify"]
 # Researcher: read-only subcommands. List-only forms of branch, tag, remote, stash, worktree

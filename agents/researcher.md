@@ -30,7 +30,7 @@ with a reason that says what to do next.
 - **Pages:** WebFetch for github.com pages and raw files.
 
 **What doesn't pass:**
-- files written anywhere (redirects go only to /dev/null);
+- files written anywhere (redirects go only to /dev/null, /dev/stdout or /dev/stderr);
 - python, node, awk or any other interpreter;
 - scripts;
 - git that changes state;
