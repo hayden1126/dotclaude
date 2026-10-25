@@ -757,8 +757,9 @@ and status single-writer:
 - `lane trial --run "<suite>" ...`, before a lane asks for ready, merges origin/main and every
   other live lane's commits onto it in a scratch tree and runs each suite there under the
   `suite` lock. A failed suite reruns without the other lanes, so only the merge's own failures
-  count, and a conflict names the lanes it is between. With nothing to merge, no suite runs
-  (docs/lanes.md, "Cross-lane checks").
+  count, and a conflict names the lanes it is between. A lane that conflicts with origin/main
+  alone is untried, not a failure. With nothing to merge, the suites still run once on the lane
+  plus origin/main (docs/lanes.md, "Cross-lane checks").
 - A lane tests its change by installing from its own worktree (`lane lock install --
   ./setup.sh`), and that install holds. setup.sh refuses to run from any other lane or clone
   until the main checkout's own run relinks everything. It also refuses a lane with no commit
@@ -766,7 +767,8 @@ and status single-writer:
 - `lane done chart-fix` closes a merged lane in one run. It ends the lane's own sessions and
   what runs under them, proven from /proc and Claude Code's session files and never chosen by
   name or tmux window, and it refuses anything else by name. Then it archives the record and
-  removes the worktree. While the worktree exists, it refuses a lane whose record's Next has a
+  removes the worktree, with the registration of any tree a killed `lane trial` left in it.
+  While the worktree exists, it refuses a lane whose record's Next has a
   `Keep open:` line (more PRs to come) unless given `--abandon`.
 - An optional lead session triages requests into lanes, opens them on Hayden's approval and sets
   the merge order (the skill's "The lead"). After a lane's PR merges, the lane sends it

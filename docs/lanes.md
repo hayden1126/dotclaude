@@ -247,7 +247,8 @@ Why it works this way:
   and `lane done` checks it again (a merged PR whose head is the tip, or the tip in the base).
 - **A scoped exception to "confirm before deleting"**, which CLAUDE.md names. `lane done`
   refuses an unmerged branch, a dirty worktree, links into the lane and a `Keep open:` lane,
-  archives the record before the remove, and never passes `--force` or `-D`. The approval
+  archives the record before the remove, and never passes `--force` or `-D` (a killed trial's
+  leftover registration goes by its gitdir text, never by path: the `lane trial` section). The approval
   covers `lane done` after a merge only; `--abandon` still asks.
 - **`lane done` reads `Keep open:` itself.** `handoff-check --closing` fails on the line too,
   but `done` runs it only when there is something to end, so a kept lane whose session had
@@ -412,7 +413,11 @@ would make every file it tracks read as modified, so `done` would refuse every L
 alone skips the uncommitted read then, since it can afford to.
 
 **`lane trial`.** Before a lane asks Hayden for ready, it runs
-`lane trial --run "<suite>" --run "<suite>" ...`, sandboxed:
+`lane trial --run "<suite>" --run "<suite>" ...`, sandboxed. It refuses to run anywhere else
+(a plain shell): it removes its scratch trees by path, which is safe only where the sandbox
+bounds what a symlink swapped in for a tree could make git delete, and its suites inherit the
+sandbox. Before it waits for the lock, it also refuses a bad link path, a link under another one,
+and a link the lane lacks (step 3).
 
 1. It takes the `suite` lock for the whole run. One name for every trial: a trial clears its
    lane's leftover trees under that lock, so a second trial under another lock could remove a
@@ -429,10 +434,12 @@ alone skips the uncommitted read then, since it can afford to.
    STATUS.md, as a carry would make it, and the report says so: after the merge order changes,
    lanes carry the lead's notes from different lead heads, and those carries always conflict. A
    conflict with the base aborts ("merge origin/main into the lane first"), except such a clash
-   of carries in STATUS.md. A lane that conflicts is skipped and the trial fails, and the report
-   says whose conflict it is. Merges decide, in order. When the other lane conflicts with the
-   base alone, it needs to merge the base before a trial can tell whether it conflicts with this
-   lane, and this lane's ask for ready goes ahead. Else, with no lane merged before it, or when
+   of carries in STATUS.md. A lane that conflicts is skipped, and the report says whose conflict
+   it is. Merges decide, in order. When the other lane conflicts with the base alone, it needs to
+   merge the base before a trial can tell whether it conflicts with this lane: it is untried, not
+   a failure, so it never fails the trial, and the report's last line names it (`lane trial: lane
+   X untried (it conflicts with origin/main)`). This lane's ask for ready goes ahead. Every other
+   conflict fails the trial. Else, with no lane merged before it, or when
    it conflicts with the baseline (this lane's HEAD plus the base, which merges cleanly with
    it), it is this lane's. Else it is between that lane and lanes merged before it: the report
    names each of them it conflicts with by itself, or the merge of them all when none does
@@ -442,40 +449,90 @@ alone skips the uncommitted read then, since it can afford to.
    A lane behind the base that also conflicts with this lane gets the base's verdict only; its
    own trial, once it merges the base, finds the rest. Other lanes' uncommitted work isn't in
    the merge.
-3. It checks the merge out in a fresh `mkdtemp` tree under the temp dir, named by repo key and
-   lane id, and runs each `--run` there as `sh -c`, streaming its output. One `--run` per
-   suite: a chained `a && b` stops at the first failure, and `a; b` reports only the last exit.
+3. It checks the merge out in a fresh `mkdtemp` tree in the lane's `.lane-trial/`, named by
+   repo key and lane id (`<lane>/.lane-trial/lane-trial-<key>-<id>-XXXXXXXX/tree`), never under
+   the temp dir: the sandbox's temp root is a policy root, where some suites fail on any tree
+   (SandboxReality, the subagent-policy cases). The first trial makes `.lane-trial/` with a
+   `.gitignore` of `*` in it, so neither it nor the trees show in the lane's git status; a
+   symlink there is refused. The lead notes' scratch index stays in the temp dir, since no suite
+   runs there. The tree then gets set up as the lane's own tests ran: the lane's gitignored files
+   that its `.worktreeinclude` matches are copied in (from the lane, not main, so the suites see
+   the lane's copies; git's names are read with `-z`, so a non-ASCII name is never quoted), and
+   each path the config's `trial-link` (`lane init --trial-link node_modules,.venv`) or a
+   `--link PATH` names is symlinked to the lane's own, by absolute path, unless the tree tracks
+   that path. The links go in first, and no included file under a link is copied (the link
+   brings it): a copy would make the link's dir and block it. Link paths are checked like
+   `.worktreeinclude` entries (relative, no `..`). One under another is refused (the tree would
+   make the outer path a dir for the inner link). One the lane lacks is refused too: unlinked, a
+   suite that can't load fails alike on both runs, which step 5's same-way rule passes, so the
+   trial would pass having tested nothing. A conflict line's "try it with this lane alone"
+   command carries the run's `--link`s for the same reason. A link is
+   no copy: a suite that writes through it writes the lane's files. Then each `--run` runs there
+   as `sh -c`,
+   streaming its output. One `--run` per suite: a chained `a && b` stops at the first failure,
+   and `a; b` reports only the last exit.
 4. A suite fails when it exits non-zero or prints a failing test id (unittest's `FAIL:` and
    `ERROR:` lines, pytest's `FAILED` and `ERROR`, never unittest's `FAILED (failures=N)`
-   summary), whatever its exit code.
-5. A failed suite reruns on the baseline (HEAD plus the base alone), in a tree at the same path,
-   so ids that embed the path match. It passes only when every id it failed on the merge also
-   fails there and its exit is no worse (non-zero on the merge but zero on the baseline, or a
-   signal on the merge only, is the merge's). A failure with no id to compare, or a run whose
-   output was cut (a process it started kept the pipe 10 s past its exit), fails, to be
-   judged by hand.
-6. It exits 0 with no conflict and no failure of the merge's own, 1 otherwise, and 75 when
-   `--wait` runs out. A conflicted file whose name isn't UTF-8 stops the trial at once, naming
-   the lane (or the base) it was merging: `lane trial <id> ...` with the other lanes' ids tries
-   the rest.
+   summary, and TAP's `not ok <n> - <name>` at any indent, which `node --test` prints into a
+   pipe, as `not ok - <parent> > <name>`: no number, since a lane that adds a test shifts the
+   numbers, and the names of the subtests that enclose it (node's `# Subtest:` lines at smaller
+   indents), so two tests of one name under different parents stay apart; plain TAP with no
+   Subtest lines gives `not ok - <name>`; a `# TODO` or `# SKIP` directive is no failure),
+   whatever its exit code.
+5. A failed suite reruns on the baseline (HEAD plus the base alone), in a tree at the same path
+   set up the same way, so ids that embed the path match. It passes only when every id it
+   failed on the merge also fails there and its exit is no worse (non-zero on the merge but zero
+   on the baseline, or a signal on the merge only, is the merge's). One that printed no id on
+   either run passes when both runs exit with the same code: it fails the same way on the
+   baseline, so that failure isn't the merge's. Any other failure with no id to compare, or a
+   run whose output was cut (a process it started kept the pipe 10 s past its exit), fails, to
+   be judged by hand.
+6. It exits 0 with no failing conflict and no failure of the merge's own, 1 otherwise, and 75
+   when `--wait` runs out. When no other lane's work merges (none live, all already in, or all
+   conflicting), the suites still run once, on this lane's HEAD plus the base; that tree is the
+   baseline, so nothing reruns, and any failing suite exits 1 (`FAILED: N suite(s) fail on lane
+   <id> plus origin/main`). A conflicted file whose name isn't UTF-8 stops the trial at once,
+   naming the lane (or the base) it was merging: `lane trial <id> ...` with the other lanes'
+   ids tries the rest.
 
-Why the baseline: some tests fail on location alone. In a scratch tree of origin/main
-(2026-10-18) tests/lanes and tests/pass passed. tests/setup failed three SandboxReality
-subtests, since the sandbox never protects a tree under the temp dir; that test now skips
-there. tests/delegation failed 12 subagent-policy cases, since the policy allows temp paths
-before it checks protected roots. Skipping those would drop cases that do run correctly under
-temp, so they stay on the baseline path, about 2 minutes per trial. The baseline also keeps
-working when a future test turns out to depend on its location.
+Why the baseline: some tests fail on location alone. In a scratch tree of origin/main under the
+temp dir (2026-10-18) tests/lanes and tests/pass passed. tests/setup failed three SandboxReality
+subtests, since the sandbox protects only the checkouts it was started for; that test now skips
+a checkout under the temp dir or a `.lane-trial/` dir. tests/delegation failed 12
+subagent-policy cases, since the policy allows temp paths before it checks protected roots; the
+tree left the temp dir (2026-10-24, lane trial-fix) so those no longer fail. The baseline stays
+for the rest: it keeps working when a future test turns out to depend on its location, and it
+tells a failure the base already has from the merge's.
 
-Its limits: a test failing in both runs for different reasons hides a real break; a runner with
-another output format can only be compared by hand; a flaky test failing only on the merge reads
-as the merge's. The number of tests run is never compared, so a fail-fast flag (pytest `-x`,
-unittest `-f`) can stop both runs at a shared failure before the test the merge broke, and a
-merge that drops a test package from discovery passes unseen. And a trial killed partway (the
-Bash cap, a respawn) leaves its tree registered. The sandbox mounts each registered worktree's
-admin dir in every command started after the tree exists, so a later sandboxed run can't delete
-it. The next trial removes the files it can, and names the sandbox-off
-`git worktree remove --force <path>` for the rest, never a blanket `git worktree prune`.
+Its limits: a test failing in both runs for different reasons hides a real break, and so does a
+suite with no ids that fails the same way on both (exit 1 on both hides a second break the
+merge adds, until the first is fixed); a runner with another output format can only be
+compared by its exit code or by hand; a flaky test failing only on the merge reads as the
+merge's. The number of tests run is never compared, so a fail-fast flag (pytest `-x`, unittest
+`-f`) can stop both runs at a shared failure before the test the merge broke, and a merge that
+drops a test package from discovery passes unseen. Node resolves a bare `require` up the parent
+dirs, so a tree in `.lane-trial/` without the link still finds the lane's `node_modules`; the
+link makes it the tree's own path, which tools that read `./node_modules` (its `.bin`) need. And
+a trial killed partway (the Bash cap, a respawn) leaves its tree registered. The sandbox mounts
+each registered worktree's admin dir in every command started after the tree exists, so a later
+sandboxed run can't delete it. The next trial removes the files it can (in `.lane-trial/`, and
+in the temp dir an older `lane` used) and names each registration it can't, which stays,
+harmless, until `lane done` clears it; never a blanket `git worktree prune`. Neither that
+message nor `--keep`'s offers a by-path `git worktree remove --force`: git resolves the path,
+so a symlink swapped in for the tree points it at whatever worktree the link names, and it
+deletes that worktree whole (probed on git 2.43, 2026-10-24). `lane done` clears such a
+registration, which removing the lane would otherwise leave stale. It runs sandbox-off, and a
+process the lane left could swap the tree for a symlink to another lane, so it never removes a
+tree by its path: it finds the admin dirs under `<common>/worktrees/` (real dirs, not links)
+whose `gitdir` file reads, as text, a tree with this lane's trial name in the lane's
+`.lane-trial/` or in a temp dir an older `lane` used, and removes just those dirs, each by name
+under its parent opened with `O_NOFOLLOW` (sandboxed Bash can write the common dir), once the
+lane's own `git worktree remove` has deleted the files, or at once when that remove was run by
+hand. One it can't remove it names as left in place, with no path to remove by hand: run
+sandbox-off, that would follow whatever link made the removal fail. No message of `lane` ever
+offers a by-path removal that can recurse or follow a link (a test pins it); the one removal
+it names, `unlink` for a `.lane-trial` that is a symlink, does neither. The trial adds its trees with `worktree.useRelativePaths=false`, so that text is
+always an absolute path.
 
 ## Bug reports from other repos (lane bug-route, 2026-10-18)
 
@@ -576,6 +633,7 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   flag the delete guard checks. `whoami`, `claim`, `release`, `who`, `note`, `asks` and `lock`
   touch only `<common-dir>/lanes/` and the lane's `.lane/`, which a lane-rooted sandbox can
   write (S1). A sandboxed (piped) `ls` says what it skipped; `new`, `open`, `done`, `addr` and `lead` refuse.
+  `trial` must stay sandboxed too, and refuses to run anywhere else (the `lane trial` section).
   `new` and `adopt` also run the config's `setup` command through a shell, sandbox-off, and
   `new` makes its worktree under the config's `root`. So the config lives in the state dir, not
   the common dir: sandboxed Bash can read it but not write it, and only a bare `lane init`
