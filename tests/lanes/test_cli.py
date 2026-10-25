@@ -3018,6 +3018,61 @@ class Close(Fakes):
         self.assertEqual(os.listdir(closed + ".old"), [])  # its own .tmp went
         self.assertTrue(os.path.isdir(self.path))
 
+    def test_dones_removal_never_follows_a_link_swapped_in_above_a_forged_path(self):
+        # lane.json is the lane's to write and nothing ties its path to the lanes root: a path
+        # under a dir absent at the gates (so no worktree check ran), with a planted admin dir
+        # naming it, and that dir swapped for a link before the removal. The way down is walked
+        # from / with O_NOFOLLOW, so the removal refuses.
+        lane_mod = load_lane_script()
+        victim = os.path.join(self.tmp, "home")
+        self.write(os.path.join(victim, "important", "keep.txt"), "the user's\n")
+        forged = os.path.join(self.path, "a", "important")
+        rec = os.path.join(self.common, "lanes", "chart-fix", "lane.json")
+        self.write(rec, json.dumps(dict(self.lane_json("chart-fix"), path=forged)))
+        admin = os.path.join(self.common, "worktrees", "evil")
+        self.write(os.path.join(admin, "gitdir"), os.path.join(forged, ".git") + "\n")
+        self.write(os.path.join(admin, "HEAD"), self.git("rev-parse", "HEAD"))
+        real = lane_mod.install_hold
+
+        def hold(*args):
+            real(*args)
+            if args[-1] == "its worktree was not removed":
+                os.symlink(victim, os.path.join(self.path, "a"))
+
+        with mock.patch.object(lane_mod, "install_hold", side_effect=hold):
+            with self.assertRaisesRegex(lane_mod.LaneError, "leads through a symlink"):
+                self.done_in_process(lane_mod)
+        self.assertEqual(self.read(os.path.join(victim, "important", "keep.txt")), "the user's\n")
+        self.assertTrue(os.path.isdir(admin))
+
+    @unittest.skipIf(os.geteuid() == 0, "root deletes in a read-only dir")
+    def test_a_removal_stopped_partway_is_finished_by_a_rerun(self):
+        # A dir the user can't write stops rmtree partway. The tree was renamed aside first, so
+        # the rerun's gates find nothing at the lane's path, and it finishes the removal.
+        stuck = os.path.join(self.path, ".lane", "stuck")
+        self.write(os.path.join(stuck, "file"), "x")
+        os.chmod(stuck, 0o555)
+        aside = os.path.join(self.root, ".chart-fix.lane-removing")
+        self.addCleanup(lambda: os.path.isdir(aside) and os.chmod(
+            os.path.join(aside, ".lane", "stuck"), 0o755))
+        p = self.run_lane("done", "chart-fix", "--abandon")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("only partly removed", p.stderr)
+        self.assertNotRegex(p.stderr, r"rm -|remove it by hand")
+        self.assertFalse(os.path.lexists(self.path))
+        os.chmod(os.path.join(aside, ".lane", "stuck"), 0o755)
+        self.lane("done", "chart-fix", "--abandon")
+        self.assertFalse(os.path.lexists(aside))
+        self.assertNotIn(self.path, self.git("worktree", "list", "--porcelain"))
+        self.assertEqual(len(self.archives()), 1)
+
+    def test_a_dir_planted_as_an_admin_dirs_gitdir_never_breaks_done(self):
+        os.makedirs(os.path.join(self.common, "worktrees", "odd", "gitdir"))
+        p = self.run_lane("done", "chart-fix", "--abandon")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        self.assertFalse(os.path.exists(self.path))
+
     def test_dones_worktree_removal_never_follows_a_link_in_the_lane(self):
         # A link in the lane to another lane (ignored, so the tree is clean) goes as a link.
         self.lane("new", "api-docs")
@@ -3073,7 +3128,8 @@ class Close(Fakes):
                 real(*args)
 
         with mock.patch.object(lane_mod, "removable", side_effect=removable):
-            with self.assertRaisesRegex(lane_mod.LaneError, r"uncommitted or untracked files \(notes"):
+            with self.assertRaisesRegex(lane_mod.LaneError,
+                                        r"uncommitted or untracked files \(notes"):
                 self.done_in_process(lane_mod)
         self.assertEqual(self.lane_json("chart-fix")["state"], "active")
         self.assertTrue(os.path.isdir(self.path))

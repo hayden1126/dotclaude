@@ -28,6 +28,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -161,9 +162,12 @@ def mirror(repo: lanelib.Repo, lane: dict) -> None:
     try:
         try:
             stamp = os.open("mirror.stamp", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
-            with open(stamp) as f:
-                if lanelib.real_dir_at(fd, "mirror") and changed <= float(f.read()):
+            try:
+                if (stat.S_ISREG(os.fstat(stamp).st_mode) and lanelib.real_dir_at(fd, "mirror")
+                        and changed <= float(os.read(stamp, 64))):
                     return
+            finally:
+                os.close(stamp)
         except (OSError, ValueError):
             pass
         shutil.rmtree("mirror.new", dir_fd=fd, ignore_errors=True)
@@ -171,7 +175,9 @@ def mirror(repo: lanelib.Repo, lane: dict) -> None:
             os.mkdir("mirror.new", dir_fd=fd)
             new = os.open("mirror.new", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
             try:
-                rec = lanelib.open_dir(lane["path"], lanelib.RECORD_DIR)
+                # Walked from / at the lane's real path: lane.json's is the lane's to write.
+                real = os.path.realpath(lane["path"])
+                rec = lanelib.open_dir("/", f"{real}/{lanelib.RECORD_DIR}")
                 try:
                     lanelib.copy_record(rec, new)
                 finally:

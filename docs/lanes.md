@@ -1015,13 +1015,16 @@ copied as the link), and skips
   and a process the lane left can still write the lane and the common dir, so a path checked
   at the gates may lead elsewhere by its use. The admin dir is the one real dir under
   `<common-dir>/worktrees/` whose `gitdir` reads, as text, the lane's `.git` path (the lane's own
-  `.git` file, which it can write, is never asked). The files go by name under the lanes root,
-  which no lane's sandbox can write, through Python's fd-based `rmtree`, which never follows a
-  link; then the admin dir and any tree a trial left, by name under `worktrees/` as it was
-  opened before the files went. The archive's temp dir, its rename and `lanes/<id>/` likewise
+  `.git` file, which it can write, is never asked). `lane.json`'s path is sandbox-writable and
+  nothing ties it to the lanes root (`adopt` takes a worktree anywhere), so the dir above the
+  tree is reached by a walk from `/` with `O_NOFOLLOW` at every name, and a link swapped in on
+  the way refuses the removal. The tree is renamed aside to a fixed hidden name there, then
+  removed by Python's fd-based `rmtree`, which never follows a link; then the admin dir and any
+  tree a trial left, by name under `worktrees/` as it was opened before the files went. The archive's temp dir, its rename and `lanes/<id>/` likewise
   go under `lanes/` and `_closed/` opened at the start. With no admin dir or several naming the
-  lane, it removes nothing. A file it can't delete leaves the worktree part removed and still
-  registered, as git's own remove would.
+  lane, it removes nothing. A file it can't delete (a dir with no write permission) stops it
+  partway with the record and the registration kept; the tree is already aside, so a rerun's
+  gates find nothing at the lane's path, and the rerun finishes the removal.
 
   A rerun keeps what the first run proved. A pane shell's only proof is the session it ran,
   which the close itself ends, so on 2026-10-15 each rerun refused the two-sessions tab's shell

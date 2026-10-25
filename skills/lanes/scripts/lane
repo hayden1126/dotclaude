@@ -2452,9 +2452,11 @@ def admin_dirs(wt_fd: int) -> list[tuple[str, str]]:
             continue
         finally:
             os.close(dfd)
-        with os.fdopen(fd, "rb") as f:
-            if stat.S_ISREG(os.fstat(fd).st_mode):
-                found.append((name, os.fsdecode(f.read(1 << 16))))
+        try:
+            if stat.S_ISREG(os.fstat(fd).st_mode):  # a dir planted as gitdir is skipped
+                found.append((name, os.fsdecode(os.read(fd, 1 << 16))))
+        finally:
+            os.close(fd)
     return found
 
 
@@ -2500,11 +2502,16 @@ def remove_worktree(repo: Repo, lane_id: str, path: str, wt_fd: int) -> None:
     path swapped for a symlink it deleted another worktree whole (git 2.43, 2026-10-24), and it
     deletes <common>/worktrees/<id> by path once the files are gone, by when a process the lane
     left may have swapped worktrees/ for a link. So the admin dir is the one under wt_fd whose
-    gitdir reads, as text, <path>/.git (never the lane's own .git file, which it can write);
-    the files go by name under the lanes root, which no lane's sandbox can write, with
-    rmtree's fd walk, which never follows a link; then the admin dir and any tree a trial left,
-    by name under wt_fd, opened before either. Refuses before deleting anything unless exactly
-    one admin dir names the lane."""
+    gitdir reads, as text, <path>/.git (never the lane's own .git file, which it can write).
+
+    The files: lane.json's path is sandbox-writable and nothing ties it to the lanes root
+    (`adopt` takes a worktree anywhere), so the dir above the tree is reached by a walk from /
+    with O_NOFOLLOW at every name (lanelib.open_dir): a link swapped in anywhere on the way
+    refuses the removal. The tree is renamed aside to a fixed hidden name there, then removed
+    by rmtree's fd walk, which never follows a link, so a removal that fails partway leaves
+    nothing at the lane's path for the rerun's gates, and the rerun finishes it. Then the admin
+    dir and any tree a trial left, by name under wt_fd, opened before either. Refuses before
+    deleting anything unless exactly one admin dir names the lane."""
     gitdir = os.path.join(path, ".git")
     base = os.path.join(repo.common_dir, "worktrees")
     own = [name for name, text in admin_dirs(wt_fd)
@@ -2516,16 +2523,31 @@ def remove_worktree(repo: Repo, lane_id: str, path: str, wt_fd: int) -> None:
                         "removed nothing: `git worktree list` shows what git has")
     trials = trial_admin_dirs(repo, lane_id, path, wt_fd)
     parent, name = os.path.split(path)
-    pfd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
     try:
-        if lanelib.real_dir_at(pfd, name):  # else deleted by hand: the registration is left
-            shutil.rmtree(name, dir_fd=pfd)
+        pfd = lanelib.open_dir("/", parent)
+    except FileNotFoundError:
+        pfd = None  # deleted by hand with a dir above it: only the registration is left
     except OSError as e:
-        raise LaneError(f"lane {lane_id}'s worktree is only partly removed ({e.strerror or e}): "
-                        "git still registers it and its record is kept, so fix what stopped the "
-                        f"removal and rerun `lane done {lane_id}`")
-    finally:
-        os.close(pfd)
+        raise LaneError(f"the way to lane {lane_id}'s worktree leads through a symlink or a file "
+                        f"now ({e.strerror or e}), so nothing was removed")
+    if pfd is not None:
+        aside = f".{name}.lane-removing"
+        try:
+            if lanelib.real_dir_at(pfd, name):  # else deleted by hand, or renamed aside before
+                if lanelib.real_dir_at(pfd, aside):
+                    shutil.rmtree(aside, dir_fd=pfd)
+                elif lexists_at(pfd, aside):
+                    os.unlink(aside, dir_fd=pfd)  # a link or a file: never followed
+                os.rename(name, aside, src_dir_fd=pfd, dst_dir_fd=pfd)
+            if lanelib.real_dir_at(pfd, aside):
+                shutil.rmtree(aside, dir_fd=pfd)
+        except OSError as e:
+            raise LaneError(f"lane {lane_id}'s worktree is only partly removed ({e.strerror or e}):"
+                            " its record and git's registration are kept, and a rerun of "
+                            f"`lane done {lane_id}` finishes it once what stopped it is fixed (a "
+                            "dir in the lane with no write permission, say)")
+        finally:
+            os.close(pfd)
     try:
         shutil.rmtree(own[0], dir_fd=wt_fd)
     except OSError as e:
@@ -3881,12 +3903,12 @@ def lexists_at(dir_fd: int, name: str) -> bool:
 
 def archive_record(repo: Repo, loaded: dict, path: str, lanes_fd: int, dest_fd: int) -> None:
     """Copy the lane's record into the archive open at dest_fd, as RECORD_DIR: its .lane/,
-    opened under the lane's worktree with O_NOFOLLOW, or, when that is gone or a symlink (its
+    walked from / with O_NOFOLLOW at every name, or, when that is gone or a symlink (its
     target is never archived), the last mirror, under lanes_fd. Nothing when neither is
     there."""
     lane_id = loaded["id"]
-    try:
-        src = lanelib.open_dir(path, lanelib.RECORD_DIR)
+    try:  # walked from /, as remove_worktree's: lane.json's path is the lane's to write
+        src = lanelib.open_dir("/", f"{path}/{lanelib.RECORD_DIR}")
     except OSError as e:
         if e.errno not in (errno.ELOOP, errno.ENOENT, errno.ENOTDIR):
             raise
