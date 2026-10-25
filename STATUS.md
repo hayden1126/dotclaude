@@ -416,10 +416,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   override pins `chrome-devtools-mcp@1.9.0` (`setup-chrome-wsl.sh`'s header has why it also clears
   the profile's restored tabs). A drift check would fit the `setup.sh` doctor idea in
   [[deepseek-harness-eval]].
-  - **Unchecked:** sessions load the plugin's own `chrome-devtools` server (no WSL flags) beside the
-    user-scoped override: both tool namespaces show up, and a flagless `npm exec
-    chrome-devtools-mcp@1.9.0` runs. `docs/chrome-devtools-wsl.md` and the memory say user scope
-    wins. Check whether the plugin's copy works on WSL and whether to disable it; then fix the doc.
+  - **Duplicate chrome-devtools servers (confirmed 2026-10-23):** every session runs both the
+    user-scoped override (`chrome-devtools-mcp@1.9.0`, headless WSL flags) and the plugin's own
+    (`@1.11.0`), about 150 MB per server with its npm wrapper, so about 1.7 GB across 11 sessions.
+    `docs/chrome-devtools-wsl.md` still says user scope wins. Fix: keep one (drop the user-scoped
+    entry or disable the plugin, whose skills use its namespace), then fix the doc. Not picked
+    yet.
 - **The delegation post: on `main`, revised in PR #60, not yet on Medium.** Files:
   `docs/prose-is-not-a-permission.md`, `docs/images/delegation-layers.*` (code links pin `7ed72e9`).
   Before Medium: Hayden reads it and decides whether to cut toward 2,500 words (it's about 3,750);
