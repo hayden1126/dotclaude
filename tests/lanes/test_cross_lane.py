@@ -1252,6 +1252,21 @@ class Trial(LaneWork):
         self.assertIn(os.path.join(ours, "tree"), err)
         self.assertEqual(self.leftovers(), (sorted([lane_b, other_repo]), []))
 
+    def test_a_leftover_it_cant_unregister_is_left_to_lane_done_never_a_remove_by_path(self):
+        # Sandboxed, a trial can't unregister a tree the sandbox mounted (a lock stands in for
+        # that here). A by-path `git worktree remove --force` resolves a symlink swapped in for
+        # the tree and deletes whatever worktree it names, so the message never offers one.
+        ours = os.path.join(self.trial_dir, self.prefix + "efgh5678", "tree")
+        self.git("worktree", "add", "--detach", "--quiet", ours, "HEAD", cwd=self.alpha)
+        self.git("worktree", "lock", ours, cwd=self.alpha)
+        rc, out, err = self.trial("--run", "true")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn(f"stays registered: {ours}", err)
+        self.assertIn("`lane done alpha` clears", err)
+        self.assertNotIn("remove --force", out + err)
+        self.git("worktree", "unlock", ours, cwd=self.alpha)
+        self.git("worktree", "prune", cwd=self.alpha)
+
     def test_a_symlinked_trial_dir_is_refused(self):
         away = os.path.join(self.tmp, "away")
         os.makedirs(away)
@@ -1341,6 +1356,8 @@ class Trial(LaneWork):
         self.assertEqual(rc, 0, out + err)
         (tree,) = glob.glob(os.path.join(self.trial_dir, self.prefix + "*", "tree"))
         self.assertIn(f"kept the tree (the merge) at {tree}", out)
+        self.assertIn("the next `lane trial` of lane alpha clears it", out)
+        self.assertNotIn("remove --force", out)  # by path, it would follow a swapped-in link
         self.assertTrue(os.path.isfile(os.path.join(tree, "b.txt")))
         self.git("worktree", "remove", "--force", tree)
 
@@ -1418,6 +1435,7 @@ class Trial(LaneWork):
         self.assertIn("lane trial: copied 1 file(s) from .worktreeinclude, linked node_modules\n",
                       out)
         self.assertNotIn("not linked", err)
+        self.assertNotIn("not copied", err)  # skipped, never tried through the link
         self.assertEqual(self.read(seen).strip(), os.path.join(self.alpha, "node_modules"))
 
     def test_linked_dirs_reach_the_merge_and_the_baseline(self):

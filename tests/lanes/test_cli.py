@@ -18,6 +18,7 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import types
@@ -563,6 +564,49 @@ class RoundTrip(LanesRepo):
         out = self.lane("new", "spike")
         self.assertIn("copied 1 file(s) from .worktreeinclude", out)
         self.assertEqual(self.read(os.path.join(self.lane_path("spike"), "café.env")), "local\n")
+
+    def test_new_copies_nothing_when_no_include_is_ignored(self):
+        # check-ignore exits 1 when no name it gets is ignored: nothing to copy, no error.
+        self.commit("tracked.env", "in git\n")
+        self.git("push", "-q", "origin", "main")
+        self.write(os.path.join(self.main, ".worktreeinclude"), "*.env\n")
+        p = self.run_lane("new", "spike")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("copied", p.stdout)
+
+    def test_an_include_it_cant_copy_is_named_with_its_control_chars_masked(self):
+        # -z hands names over as they are, so a name with an escape sequence must be masked
+        # before it reaches a terminal.
+        mod = load_lane_script()
+        src, dest = os.path.join(self.tmp, "src"), os.path.join(self.tmp, "dest")
+        self.git("init", "-q", src, cwd=self.tmp)
+        self.write(os.path.join(src, ".gitignore"), "*.env\n")
+        self.write(os.path.join(src, ".worktreeinclude"), "*.env\n")
+        self.write(os.path.join(src, "d", "\x1b[31mx.env"), "local\n")
+        os.makedirs(os.path.join(self.tmp, "away"))
+        os.makedirs(dest)
+        os.symlink(os.path.join(self.tmp, "away"), os.path.join(dest, "d"))
+        repo = types.SimpleNamespace(main=src)
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(mod.copy_includes(repo, dest), [])
+        self.assertIn("not copied from .worktreeinclude: d/?[31mx.env", err.getvalue())
+        self.assertNotIn("\x1b", err.getvalue())
+
+    def test_done_clears_a_registration_an_older_lanes_trial_left_in_the_temp_dir(self):
+        # An older `lane` built trial trees in the temp dir; one killed partway left its
+        # registration there, which `done` clears by its gitdir text as it does .lane-trial's.
+        self.lane("new", "spike")
+        path = self.lane_path("spike")
+        key = lanelib.Repo(self.main, self.common).key
+        tmp = os.path.realpath(tempfile.gettempdir())
+        old = tempfile.mkdtemp(prefix=f"lane-trial-{key}-spike-", dir=tmp)
+        self.addCleanup(shutil.rmtree, old, True)
+        tree = os.path.join(old, "tree")
+        self.git("worktree", "add", "--detach", "--quiet", tree, "HEAD", cwd=path)
+        p = self.run_lane("done", "spike", "--abandon")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn(tree, self.git("worktree", "list", "--porcelain"))
+        self.assertIn(tree, p.stderr)
 
     def test_done_clears_a_tree_a_trial_left_in_the_lane(self):
         # A trial killed past its cleanup leaves its tree registered in the lane's .lane-trial/:

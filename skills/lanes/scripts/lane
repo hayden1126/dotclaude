@@ -130,6 +130,9 @@ TRIAL_LOCK = "suite"
 # The dir in a lane that holds its trials' trees: never a temp root, which a sandbox's policy
 # treats apart (some suites fail on any tree there), and hidden from git by its own .gitignore
 TRIAL_DIR = ".lane-trial"
+# A trial's trees always get an absolute gitdir, whatever the repo's worktree.useRelativePaths
+# (git 2.48+): `done` finds a leftover's admin dir by that text (trial_admin_dirs)
+ABS_GITDIR = ("-c", "worktree.useRelativePaths=false")
 # env: the locks `lane` processes above this one hold, `<repo key>/<name>@<pid>:<start ticks>,...`
 LOCKS_HELD = "LANE_LOCKS_HELD"
 OVERLAP_WAIT = 10  # secs each git call behind the board's overlap flag may take
@@ -555,7 +558,7 @@ def copy_includes(repo: Repo, dest: str, src: str | None = None,
             if copy_one(src, dest, rel):
                 copied.append(rel)
         except NotADirectoryError:
-            warn(f"not copied from .worktreeinclude: {rel} (a dir on its way is a symlink)")
+            warn(shown(f"not copied from .worktreeinclude: {rel} (a dir on its way is a symlink)"))
     return copied
 
 
@@ -616,7 +619,7 @@ def copy_one(main: str, dest: str, rel: str) -> bool:
                 if e.errno != errno.ELOOP:  # ELOOP: swapped for a link since the stat
                     raise
             if src is None or not stat.S_ISREG((st := os.fstat(src)).st_mode):
-                warn(f"not copied from .worktreeinclude: {rel} is not a regular file")
+                warn(shown(f"not copied from .worktreeinclude: {rel} is not a regular file"))
                 return False
         ddir, dname = open_parent(dest, rel, create=True)
         try:
@@ -2393,7 +2396,8 @@ def trial_leftovers(repo: Repo, lane_id: str, root: str) -> None:
     lane a never takes lane a-b's), and only registrations of a `tree` there: never a blanket
     `git worktree prune`, since the common dir holds other prunable entries that aren't this
     lane's. A sandboxed command can't remove an admin dir the sandbox mounted when it started,
-    so a registration it can't remove is named, once, with the command to run sandbox-off. A
+    so a registration it can't remove is named, once, as left for `lane done`, never with a
+    by-path remove to run sandbox-off (it would follow a symlink swapped in for the tree). A
     root that is a symlink is left alone. Only `trial` calls this, sandboxed: it removes by
     path, which `done`, sandbox-off, never may (trial_admin_dirs)."""
     if os.path.islink(root):
@@ -2413,23 +2417,27 @@ def trial_leftovers(repo: Repo, lane_id: str, root: str) -> None:
     if cleared:
         warn(shown(f"cleared the tree an earlier trial left registered (it never reached its "
                    f"cleanup): {', '.join(cleared)}"))
-    if stuck:
-        warn(shown("an earlier trial's tree is still registered and the sandbox can't remove "
-                   "it; run sandbox-off: " + "; ".join(
-                       f"git worktree remove --force {shlex.quote(p)}" for p in stuck)))
+    if stuck:  # never a by-path remove to run: it follows a symlink swapped in for the tree
+        warn(shown(f"the sandbox can't unregister a tree an earlier trial left, so it stays "
+                   f"registered: {', '.join(stuck)}; harmless meanwhile, and `lane done "
+                   f"{lane_id}` clears it when the lane closes"))
 
 
 def trial_admin_dirs(repo: Repo, lane_id: str, path: str) -> list[tuple[str, str]]:
     """(admin dir, tree) of each tree a trial of lane lane_id left registered in the lane at
     path (real), for `done`, which runs sandbox-off. Found by text alone, never by a path
     resolved: an admin dir under <common>/worktrees that is a real dir (opened with O_NOFOLLOW)
-    whose gitdir file reads exactly <path>/TRIAL_DIR/<trial_prefix + 8 chars>/tree/.git. A
-    process the lane left can swap the tree for a symlink to another lane, so `done` never asks
-    git to remove a tree by its path; the lane's own `git worktree remove` deletes the files,
-    and drop_admin_dirs then the admin dirs."""
+    whose gitdir file reads exactly <root>/<trial_prefix + 8 chars>/tree/.git, root being
+    <path>/TRIAL_DIR or a temp dir an older `lane` built its trees in (this process's, or the
+    Bash sandbox's /tmp/claude-<uid>: a trial ran sandboxed). A process the lane left can swap
+    the tree for a symlink to another lane, so `done` never asks git to remove a tree by its
+    path; the lane's own `git worktree remove` deletes the files in the lane (an old tree's in
+    the temp dir stay, harmless), and drop_admin_dirs then the admin dirs."""
     base = os.path.join(repo.common_dir, "worktrees")
-    mine = re.compile(re.escape(os.path.join(path, TRIAL_DIR, trial_prefix(repo, lane_id)))
-                      + r"[a-z0-9_]{8}/tree/\.git\n?")
+    roots = dict.fromkeys([os.path.join(path, TRIAL_DIR),
+                           os.path.realpath(tempfile.gettempdir()), f"/tmp/claude-{os.getuid()}"])
+    mine = re.compile("(?:" + "|".join(re.escape(r) for r in roots) + ")/"
+                      + re.escape(trial_prefix(repo, lane_id)) + r"[a-z0-9_]{8}/tree/\.git\n?")
     found = []
     try:
         names = sorted(os.listdir(base)) if not os.path.islink(base) else []
@@ -2618,7 +2626,8 @@ def trial(repo: Repo, me: dict, args) -> int:
     tmpdir = tempfile.mkdtemp(prefix=trial_prefix(repo, me["id"]), dir=root)
     tree, holds = os.path.join(tmpdir, "tree"), None
     try:
-        trial_git(repo, ["worktree", "add", "--detach", "--quiet", "--end-of-options", tree, cur])
+        trial_git(repo, [*ABS_GITDIR, "worktree", "add", "--detach", "--quiet", "--end-of-options",
+                         tree, cur])
         holds = "merge" if merged else "baseline"
         say_setup(me["id"], trial_setup(repo, repo.toplevel, tree, links))
         if not merged:  # cur is the baseline, so nothing reruns
@@ -2633,16 +2642,16 @@ def trial(repo: Repo, me: dict, args) -> int:
                 # match.
                 holds = None
                 trial_git(repo, ["worktree", "remove", "--force", "--end-of-options", tree])
-                trial_git(repo, ["worktree", "add", "--detach", "--quiet", "--end-of-options",
-                                 tree, baseline])
+                trial_git(repo, [*ABS_GITDIR, "worktree", "add", "--detach", "--quiet",
+                                 "--end-of-options", tree, baseline])
                 holds = "baseline"
                 trial_setup(repo, repo.toplevel, tree, links)  # said once, for the merge's
                 again = dict(zip(failed, run_suites(tree, args.run, "baseline", failed)))
             rc = trial_report(args.run, runs, again)
     finally:
         if args.keep and holds:
-            say(shown(f"lane trial: kept the tree (the {holds}) at {tree}; remove it with `git "
-                      f"worktree remove --force {shlex.quote(tree)}`"))
+            say(shown(f"lane trial: kept the tree (the {holds}) at {tree}; the next `lane "
+                      f"trial` of lane {me['id']} clears it"))
         else:
             drop_tree(repo, tree, tmpdir)
     if clashed:

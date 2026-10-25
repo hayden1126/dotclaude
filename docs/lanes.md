@@ -507,15 +507,20 @@ link makes it the tree's own path, which tools that read `./node_modules` (its `
 a trial killed partway (the Bash cap, a respawn) leaves its tree registered. The sandbox mounts
 each registered worktree's admin dir in every command started after the tree exists, so a later
 sandboxed run can't delete it. The next trial removes the files it can (in `.lane-trial/`, and
-in the temp dir an older `lane` used), and names the sandbox-off
-`git worktree remove --force <path>` for the rest, never a blanket `git worktree prune`. `lane
-done` clears such a registration too, which removing the lane would otherwise leave stale. It
-runs sandbox-off, and a process the lane left could swap the tree for a symlink to another
-lane, so it never removes a tree by its path: it finds the admin dirs under
-`<common>/worktrees/` (real dirs, not links) whose `gitdir` file reads, as text, a tree in the
-lane's `.lane-trial/` with this lane's trial name, and removes just those dirs once the lane's
-own `git worktree remove` has deleted the files. One it can't remove it names, to remove by
-hand.
+in the temp dir an older `lane` used) and names each registration it can't, which stays,
+harmless, until `lane done` clears it; never a blanket `git worktree prune`. Neither that
+message nor `--keep`'s offers a by-path `git worktree remove --force`: git resolves the path,
+so a symlink swapped in for the tree points it at whatever worktree the link names, and it
+deletes that worktree whole (probed on git 2.43, 2026-10-24). `lane done` clears such a
+registration, which removing the lane would otherwise leave stale. It runs sandbox-off, and a
+process the lane left could swap the tree for a symlink to another lane, so it never removes a
+tree by its path: it finds the admin dirs under `<common>/worktrees/` (real dirs, not links)
+whose `gitdir` file reads, as text, a tree with this lane's trial name in the lane's
+`.lane-trial/` or in a temp dir an older `lane` used, and removes just those dirs, each by name
+under its parent opened with `O_NOFOLLOW` (sandboxed Bash can write the common dir), once the
+lane's own `git worktree remove` has deleted the files. One it can't remove it names, to remove
+by hand. The trial adds its trees with `worktree.useRelativePaths=false`, so that text is
+always an absolute path.
 
 ## Bug reports from other repos (lane bug-route, 2026-10-18)
 
