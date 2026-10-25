@@ -307,8 +307,19 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     outside its brief, and older than it). Details and the proposed fix are in the same private
     file, rows "cmd_done path trust" and "same, widened". The fix is a design change to
     `new`/`adopt`/`done` with a migration for existing lanes, so it needs Hayden's design call.
-    Lane-able (`skills/lanes/scripts/lane`, `lanelib.py`, `tests/lanes`) after done-safe merges,
-    since it touches the same files.
+    Two low gaps ride with it (rows "seed_record from cmd_adopt" and "add_exclude"); their fix
+    reuses the fd helpers done-safe's PR adds. Lane-able (`skills/lanes/scripts/lane`,
+    `lanelib.py`, `tests/lanes`) after done-safe merges, since it touches the same files.
+  - **Lanes skill: rebase only at your turn** (capella-studio lead, session 80ab3852, 2026-10-25;
+    Hayden picked all three in capella's window). (A) The lead, step 7.6: only the lane next in
+    merge order merges or rebases origin/main; the others get "main moved to `<sha>`", check
+    conflicts with `git merge-tree --write-tree origin/main HEAD`, and update at their turn; the
+    board's `rebase` flag stops reading as a to-do for them. (B) Lifecycle step 6 and "Who asks":
+    after a conflict-free update, CI on the pushed head is the gate; local reruns only for
+    hand-resolved code plus checks the repo names. (C) Optional train note: the second ready PR
+    rebases onto the first's pushed head, then both merge back to back. Lead's caveat for (B):
+    dotclaude has no CI running its suites, so here the repo-named checks are the full local
+    suites. Lane-able (`skills/lanes/SKILL.md`, `docs/lanes.md`, maybe `lane ls`'s flag).
   - **Practices suite input: dependency lifecycle** (capella-studio's lead, 2026-10-25, on
     Hayden's ask; for lane practices when it resumes). The spec's SEC-60 covers only adding a
     dependency. Proposed general rules (SEC-64+ or a `dependencies` section): a per-dependency
