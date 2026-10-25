@@ -319,7 +319,13 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     hand-resolved code plus checks the repo names. (C) Optional train note: the second ready PR
     rebases onto the first's pushed head, then both merge back to back. Lead's caveat for (B):
     dotclaude has no CI running its suites, so here the repo-named checks are the full local
-    suites. Lane-able (`skills/lanes/SKILL.md`, `docs/lanes.md`, maybe `lane ls`'s flag).
+    suites. Correction to (A) (same lead, 2026-10-25): `git merge-tree` honours `.gitattributes`
+    merge drivers (`merge=union`) and GitHub's merge doesn't, so capella's #263 read clean
+    locally and `gh pr merge` refused it. The check asks the forge instead
+    (`gh pr view N --json mergeable`, UNKNOWN: ask again). `lane trial` merges with
+    `git merge-tree` too (`merge_tree` in `skills/lanes/scripts/lane`), so it shares the blind
+    spot in a repo with merge drivers (dotclaude has none). Lane-able (`skills/lanes/SKILL.md`,
+    `docs/lanes.md`, `lane trial`, maybe `lane ls`'s flag).
   - **Practices suite input: dependency lifecycle** (capella-studio's lead, 2026-10-25, on
     Hayden's ask; for lane practices when it resumes). The spec's SEC-60 covers only adding a
     dependency. Proposed general rules (SEC-64+ or a `dependencies` section): a per-dependency
