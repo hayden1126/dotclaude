@@ -17,6 +17,7 @@ import shlex
 import shutil
 import signal
 import subprocess
+import time
 import sys
 import tempfile
 import unittest
@@ -510,6 +511,40 @@ class FailingIds(unittest.TestCase):
                          ["FAIL: test_x (a.B.test_x) (path='/tmp/t/tree')",
                           "ERROR: test_y (a.B.test_y)", "t.py::test_z", "t.py::test_w"])
 
+    def test_tap_failures_without_the_dash_parse_too(self):
+        # The dash is optional in TAP: bats prints `not ok 1 name`. Unparsed, such a suite
+        # would fall to the same-way rule and hide a second break behind a shared one.
+        lane_mod = load_lane_script()
+        self.assertEqual(lane_mod.failing_ids(["not ok 1 name one", "ok 2 fine",
+                                               "not ok 3 skipped # SKIP no db"]),
+                         ["not ok - name one"])
+
+    def test_tap_failures_by_name_at_any_indent_without_their_number(self):
+        # `node --test`, piped, prints TAP: a lane that adds a test shifts every number after
+        # it, so the id drops the number. A TODO or SKIP directive is no failure.
+        lane_mod = load_lane_script()
+        lines = ["TAP version 13", "# Subtest: outer", "    not ok 1 - inner", "    ---",
+                 "    error: 'boom'", "    ...", "not ok 3 - bad one", "ok 4 - fine",
+                 "not ok 5 - later # TODO not yet", "not ok 6 - gone # skip on linux",
+                 "not ok 9 - bad one", "not ok", "# fail 2"]
+        self.assertEqual(lane_mod.failing_ids(lines), ["not ok - outer > inner",
+                                                       "not ok - bad one"])
+
+    def test_tap_ids_carry_the_enclosing_subtests(self):
+        # node's `# Subtest: <name>` lines, by indent, name each failure's parents, so two
+        # tests of one name under different parents stay apart. Plain TAP stays by name.
+        lane_mod = load_lane_script()
+        lines = ["# Subtest: P1", "    # Subtest: works", "    not ok 1 - works", "    1..1",
+                 "not ok 1 - P1", "# Subtest: P2", "    # Subtest: works", "    ok 1 - works",
+                 "    # Subtest: deep", "        # Subtest: works", "        not ok 1 - works",
+                 "        1..1", "    not ok 2 - deep", "not ok 2 - P2"]
+        self.assertEqual(lane_mod.failing_ids(lines),
+                         ["not ok - P1 > works", "not ok - P1", "not ok - P2 > deep > works",
+                          "not ok - P2 > deep", "not ok - P2"])
+        self.assertEqual(lane_mod.failing_ids(["1..2", "ok 1 - a", "    not ok 1 - b",
+                                               "not ok 2 - c"]),
+                         ["not ok - b", "not ok - c"])
+
 
 class Tee(unittest.TestCase):
     """run_child's teed output, in process: a short TEE_GRACE patched in, a SIGALRM watchdog in
@@ -617,8 +652,9 @@ BOTH = 'if [ -f a.txt ] && [ -f b.txt ]; then echo "FAIL: test_ab (t.T.test_ab)"
 
 
 class Trial(LaneWork):
-    """`lane trial` from lane alpha, with beta (and sometimes gamma) live beside it. TMPDIR is
-    the test's own, so every scratch dir a run leaves is in sight."""
+    """`lane trial` from lane alpha, with beta (and sometimes gamma) live beside it. Its trees go
+    in alpha's .lane-trial/, and TMPDIR is the test's own (the old trees' home, and still the
+    lead notes' index's), so every scratch dir a run leaves is in sight."""
 
     def setUp(self):
         super().setUp()
@@ -626,7 +662,9 @@ class Trial(LaneWork):
         self.scratch = os.path.join(self.tmp, "scratch")
         os.makedirs(self.scratch)
         self.env["TMPDIR"] = self.scratch
+        self.env["_LANE_TEST_SANDBOXED"] = "1"  # a trial refuses to run outside the sandbox
         self.alpha, self.beta = self.new("alpha"), self.new("beta")
+        self.trial_dir = os.path.join(self.alpha, ".lane-trial")
         self.prefix = f"lane-trial-{lanelib.Repo(self.main, self.common).key}-alpha-"
         self.commit_files(self.alpha, ["a.txt"])
         self.commit_files(self.beta, ["b.txt"])
@@ -641,21 +679,31 @@ class Trial(LaneWork):
         return p.returncode, p.stdout, p.stderr
 
     def leftovers(self):
-        """Scratch dirs and registered trees a run left."""
+        """Scratch dirs (in TMPDIR, and in .lane-trial/ but its .gitignore) and registered trees
+        a run left."""
         trees = [line for line in self.git("worktree", "list", "--porcelain").splitlines()
-                 if line.startswith("worktree ") and self.scratch in line]
-        return sorted(os.listdir(self.scratch)), trees
+                 if line.startswith("worktree ") and (self.scratch in line
+                                                     or self.trial_dir in line)]
+        ours = os.listdir(self.trial_dir) if os.path.isdir(self.trial_dir) else []
+        return sorted(os.listdir(self.scratch) + [x for x in ours if x != ".gitignore"]), trees
 
     def test_a_clean_trial_runs_each_suite_on_both_lanes_files_and_leaves_nothing(self):
-        where = os.path.join(self.tmp, "where")
+        where, during = os.path.join(self.tmp, "where"), os.path.join(self.tmp, "during")
         rc, out, err = self.trial("--run", "test -f a.txt && test -f b.txt",
-                                  "--run", f"pwd > {shlex.quote(where)}")
+                                  "--run", f"pwd > {shlex.quote(where)}",
+                                  "--run", f"git -C {shlex.quote(self.alpha)} status --porcelain "
+                                           f"> {shlex.quote(during)}")
         self.assertEqual(rc, 0, out + err)
         self.assertIn("lane trial: merged beta (", out)
         self.assertIn("suite 1 (test -f a.txt && test -f b.txt): ok", out)
         self.assertIn("suite 2", out)
+        # In the lane, never under a temp root (a sandbox's policy treats those apart), and out
+        # of the lane's git status, while the suites run and after.
         tree = self.read(where).strip()
-        self.assertRegex(tree, rf"^{self.scratch}/{self.prefix}[a-z0-9_]{{8}}/tree$")
+        self.assertRegex(tree, rf"^{self.trial_dir}/{self.prefix}[a-z0-9_]{{8}}/tree$")
+        self.assertEqual(self.read(os.path.join(self.trial_dir, ".gitignore")), "*\n")
+        self.assertEqual(self.read(during), "")
+        self.assertEqual(self.git("status", "--porcelain", cwd=self.alpha), "")
         self.assertEqual(self.leftovers(), ([], []))
         self.assertIn("other lanes' uncommitted work isn't in the merge", err)
         # Nothing moved: no ref names a trial commit, and alpha's branch is where it was.
@@ -690,23 +738,95 @@ class Trial(LaneWork):
         self.assertIn("lane trial: conflict with lane delta: a.txt", out)
         self.assertIn("suite 1 (test -f b.txt): ok", out)
 
+    def test_the_command_to_try_a_lane_alone_keeps_the_links(self):
+        # Without the link the suite can't load, fails alike on both runs, and the same-way
+        # rule would pass a trial that tested nothing.
+        os.makedirs(os.path.join(self.alpha, "node_modules"))
+        self.commit_files(self.beta, ["shared.txt"])
+        gamma = self.new("gamma")
+        self.commit_files(gamma, ["shared.txt", "c.txt"])
+        rc, out, err = self.trial("--link", "node_modules", "--run", "test -f b.txt")
+        self.assertIn("try it with this lane alone: lane trial gamma --link node_modules --run "
+                      "'test -f b.txt'", out)
+
     def test_a_lane_behind_the_base_that_conflicts_with_it_is_its_own_to_merge(self):
         # main moved on in a file alpha never touches, and beta, branched before, changed it too.
         self.commit_files(self.main, ["shared.txt"])
         self.git("push", "-q", "origin", "main")
         self.commit_files(self.beta, ["shared.txt"])
-        rc, out, err = self.trial("--run", "true")
-        self.assertEqual(rc, 1, out + err)
+        gamma = self.new("gamma")
+        self.commit_files(gamma, ["c.txt"])
+        # It is untried, never this lane's failure: the others' suites run, and it exits 0.
+        rc, out, err = self.trial("--run", "test -f c.txt && test ! -f b.txt")
+        self.assertEqual(rc, 0, out + err)
         self.assertIn(self.needs_base("beta", "shared.txt"), out)
         self.assertNotIn("conflict with lane beta", out)
+        self.assertIn("lane trial: merged gamma (", out)
+        self.assertIn("suite 1 (test -f c.txt && test ! -f b.txt): ok", out)
+        self.assertNotIn("FAILED", out)
+        self.assertEqual(out.splitlines()[-1],
+                         "lane trial: lane beta untried (it conflicts with origin/main)")
         # One that conflicts with this lane too gets the base's verdict only (the known limit),
         # which claims nothing about this lane: its own trial, once it merges the base, finds
-        # the rest. The trial still fails.
+        # the rest.
         self.commit_files(self.alpha, ["g.txt"])
         self.commit_files(self.beta, ["g.txt"])
         rc, out, err = self.trial("--run", "true")
-        self.assertEqual(rc, 1, out + err)
+        self.assertEqual(rc, 0, out + err)
         self.assertIn(self.needs_base("beta", "shared.txt"), out)
+
+    def test_untried_lanes_beside_a_real_conflict_still_fail_it(self):
+        gamma, delta = self.new("gamma"), self.new("delta")  # beta and gamma branch before main
+        self.commit_files(self.main, ["shared.txt"])          # moves on
+        self.push_main()
+        self.commit_files(self.beta, ["shared.txt"])
+        self.commit_files(gamma, ["shared.txt"])
+        self.commit_files(delta, ["a.txt"])
+        rc, out, err = self.trial("--run", "true")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("lane trial: conflict with lane delta: a.txt", out)
+        self.assertIn("FAILED: lane delta didn't merge", out)
+        self.assertNotIn("FAILED: lanes", out)
+        self.assertEqual(out.splitlines()[-1], "lane trial: lanes beta, gamma untried (they "
+                                               "conflict with origin/main)")
+
+    def test_alone_the_suites_run_on_this_lanes_head_plus_the_base(self):
+        # beta conflicts with the base, so nothing merges: the suites still run, once, on
+        # alpha's HEAD plus origin/main, and a failure there fails the trial.
+        self.commit_files(self.main, ["shared.txt", "m.txt"])
+        self.push_main()
+        self.commit_files(self.beta, ["shared.txt"])
+        head = ("lane trial: no other lane's work merged: running the suites on lane alpha's HEAD "
+                "plus origin/main")
+        rc, out, err = self.trial("--run", "test -f a.txt && test -f m.txt")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn(head, out)
+        self.assertIn("suite 1 (test -f a.txt && test -f m.txt): ok", out)
+        self.assertEqual(self.leftovers(), ([], []))
+        fails = 'echo "FAIL: test_x (t.T.test_x)"; exit 1'
+        rc, out, err = self.trial("--run", fails, "--run", "true")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn(head, out)
+        self.assertIn(f"suite 1 ({fails}): failed (exit 1):\n  FAIL: test_x (t.T.test_x)", out)
+        self.assertIn("suite 2 (true): ok", out)
+        self.assertNotIn("baseline run", out)  # the tree is the baseline already
+        self.assertIn("lane trial: FAILED: 1 suite(s) fail on lane alpha plus origin/main", out)
+        self.assertEqual(out.splitlines()[-1],
+                         "lane trial: lane beta untried (it conflicts with origin/main)")
+        self.assertEqual(self.leftovers(), ([], []))
+
+    def test_with_no_other_lane_the_suites_still_run(self):
+        self.env["_LANE_TEST_SANDBOXED"] = "0"  # `done` runs outside the sandbox, as it must
+        self.lane("done", "beta", "--abandon")
+        self.env["_LANE_TEST_SANDBOXED"] = "1"
+        rc, out, err = self.trial("--run", "test -f a.txt")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("no other lane's work merged: running the suites on lane alpha's HEAD", out)
+        self.assertIn("suite 1 (test -f a.txt): ok", out)
+        rc, out, err = self.trial("--run", "exit 4")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("suite 1 (exit 4): failed (exit 4)", out)
+        self.assertIn("FAILED: 1 suite(s) fail on lane alpha plus origin/main", out)
 
     def test_a_lane_that_holds_the_base_still_leaves_a_base_conflict_to_the_other_lane(self):
         # alpha merged origin/main, so its HEAD conflicts with beta wherever main does: only a
@@ -716,7 +836,7 @@ class Trial(LaneWork):
         self.git("merge", "-q", "--no-edit", "origin/main", cwd=self.alpha)
         self.commit_files(self.beta, ["shared.txt"])
         rc, out, err = self.trial("--run", "true")
-        self.assertEqual(rc, 1, out + err)
+        self.assertEqual(rc, 0, out + err)
         self.assertIn(self.needs_base("beta", "shared.txt"), out)
         self.assertNotIn("conflict with lane beta", out)
 
@@ -764,8 +884,9 @@ class Trial(LaneWork):
         self.edit_lines(self.alpha, "x.txt", {40: "alpha"})
         self.edit_lines(self.beta, "x.txt", {1: "beta"})
         rc, out, err = self.trial("--run", "true")
-        self.assertEqual(rc, 1, out + err)
+        self.assertEqual(rc, 0, out + err)
         self.assertIn(self.needs_base("beta", "x.txt"), out)
+        self.assertIn("lane beta untried (it conflicts with origin/main)", out)
 
     def test_a_lane_that_renames_a_file_this_lane_edits_conflicts_with_this_lane(self):
         # gamma renames old.txt to new.txt and edits line 10, which alpha edits too: git names
@@ -939,7 +1060,7 @@ class Trial(LaneWork):
         self.carries()
         rc, out, err = self.trial("--keep", "--run", "true")
         self.assertEqual(rc, 0, out + err)
-        (tree,) = glob.glob(os.path.join(self.scratch, self.prefix + "*", "tree"))
+        (tree,) = glob.glob(os.path.join(self.trial_dir, self.prefix + "*", "tree"))
         want = "lane-trial <lane-trial@localhost> | lane-trial <lane-trial@localhost>"
         for commit in ("HEAD", "HEAD^1", "HEAD^2"):  # the merge, and both STATUS.md commits
             self.assertEqual(self.git("log", "-1", "--format=%an <%ae> | %cn <%ce>", commit,
@@ -1099,18 +1220,48 @@ class Trial(LaneWork):
         self.assertEqual(rc, 1, out + err)
         self.assertIn("1 failure(s) only on the merge", out)
 
-    def test_a_failure_with_no_test_id_is_compared_by_hand(self):
-        rc, out, err = self.trial("--run", "false")
+    def test_a_failure_with_no_test_id_and_another_exit_on_the_baseline_is_compared_by_hand(self):
+        rc, out, err = self.trial("--run", "if [ -f b.txt ]; then exit 2; fi; exit 1")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("failed (exit 2) with no test id to compare against the baseline", out)
+        # No id on the merge, ids on the baseline: still by hand.
+        rc, out, err = self.trial("--run", 'if [ ! -f b.txt ]; then echo "FAIL: test_x '
+                                           '(t.T.test_x)"; fi; exit 1')
         self.assertEqual(rc, 1, out + err)
         self.assertIn("failed (exit 1) with no test id to compare against the baseline", out)
+
+    def test_a_failure_with_no_test_id_that_the_baseline_repeats_isnt_the_merges(self):
+        rc, out, err = self.trial("--run", "exit 3", "--run", "true")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("lane trial: suite 1 (exit 3): fails the same way on the baseline (exit 3 "
+                      "on both, no test ids to compare)", out)
+        self.assertNotIn("FAILED", out)
+
+    def test_tap_ids_judge_a_failure(self):
+        # A merge-only TAP failure fails the trial; one the baseline repeats under another
+        # number (beta's test comes first) passes.
+        tap = ('if [ -f a.txt ] && [ -f b.txt ]; then echo "not ok 1 - ab"; exit 1; fi; '
+               'echo "ok 1 - ab"')
+        rc, out, err = self.trial("--run", tap)
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn(f"suite 1 ({tap}): 1 failure(s) only on the merge:\n  not ok - ab", out)
+        shifted = ('if [ -f b.txt ]; then echo "ok 1 - new"; echo "not ok 2 - old"; '
+                   'else echo "not ok 1 - old"; fi; exit 1')
+        rc, out, err = self.trial("--run", shifted)
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("every failure also fails on the baseline", out)
+        self.assertIn("  not ok - old", out)
 
     def test_a_leftover_tree_from_a_killed_run_is_cleared(self):
         # A run killed past its cleanup leaves its dir and its registration; only this repo's
         # lane's names go. Lane alpha-b's look alike, and so does another repo's lane alpha,
-        # whose trial may be live: it shares the temp dir but not this repo's suite lock.
+        # whose trial may be live: it shares the temp dir but not this repo's suite lock. A tree
+        # an older `lane` left in the temp dir goes as one in .lane-trial/ does.
         stale = os.path.join(self.scratch, self.prefix + "abcd1234")
-        self.git("worktree", "add", "--detach", "--quiet", os.path.join(stale, "tree"), "HEAD",
-                 cwd=self.alpha)
+        ours = os.path.join(self.trial_dir, self.prefix + "efgh5678")
+        for d in (stale, ours):
+            self.git("worktree", "add", "--detach", "--quiet", os.path.join(d, "tree"), "HEAD",
+                     cwd=self.alpha)
         loose = os.path.join(self.scratch, self.prefix + "zzzz9999")
         lane_b = self.prefix.removesuffix("alpha-") + "alpha-b-abcd1234"
         other_repo = "lane-trial-000000000000-alpha-abcd1234"
@@ -1121,7 +1272,85 @@ class Trial(LaneWork):
         self.assertEqual(rc, 0, out + err)
         self.assertIn("cleared the tree an earlier trial left registered", err)
         self.assertIn(os.path.join(stale, "tree"), err)
+        self.assertIn(os.path.join(ours, "tree"), err)
         self.assertEqual(self.leftovers(), (sorted([lane_b, other_repo]), []))
+
+    def test_a_leftover_it_cant_unregister_is_left_to_lane_done_never_a_remove_by_path(self):
+        # Sandboxed, a trial can't unregister a tree the sandbox mounted (a lock stands in for
+        # that here). A by-path `git worktree remove --force` resolves a symlink swapped in for
+        # the tree and deletes whatever worktree it names, so the message never offers one.
+        ours = os.path.join(self.trial_dir, self.prefix + "efgh5678", "tree")
+        self.git("worktree", "add", "--detach", "--quiet", ours, "HEAD", cwd=self.alpha)
+        self.git("worktree", "lock", ours, cwd=self.alpha)
+        rc, out, err = self.trial("--run", "true")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn(f"stays registered: {ours}", err)
+        self.assertIn("`lane done alpha` clears", err)
+        self.assertNotIn("remove --force", out + err)
+        self.git("worktree", "unlock", ours, cwd=self.alpha)
+        self.git("worktree", "prune", cwd=self.alpha)
+
+    def test_it_refuses_to_run_outside_the_sandbox(self):
+        # It removes its trees by path, safe only where the sandbox bounds what a symlink swapped
+        # in for a tree could make git delete.
+        self.env["_LANE_TEST_SANDBOXED"] = "0"
+        rc, out, err = self.trial("--run", "true")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("runs only inside the Bash sandbox", err)
+        self.assertFalse(os.path.exists(self.trial_dir))
+
+    def test_a_bad_or_nested_link_is_refused_before_the_lock(self):
+        # Waiting on the suite lock (maybe a whole other trial) only to refuse a typo is waste.
+        holder = subprocess.Popen([sys.executable, LANE, "lock", "suite", "--", "sleep", "30"],
+                                  cwd=self.alpha, env=self.env, stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL)
+        self.addCleanup(holder.wait)
+        self.addCleanup(holder.terminate)
+        lock = os.path.join(self.common, "lanes", "_locks", "suite")
+        deadline = time.monotonic() + 10
+        while not (os.path.exists(lock) and self.read(lock)) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        for args, want in ((["--link", "../x"], "bad trial link '../x'"),
+                           (["--link", "a", "--link", "a/b"], "nested trial links: a/b is under a")):
+            with self.subTest(args=args):
+                rc, out, err = self.trial(*args, "--run", "true")
+                self.assertEqual(rc, 1, out + err)  # not 75 or a wait: refused at once
+                self.assertIn(want, err)
+
+    def test_a_tree_it_cant_remove_is_reported_without_gits_words(self):
+        # git's stderr can carry text a sandboxed process planted (a lock reason) and its own
+        # "use 'remove -f -f'" advice, which pasted sandbox-off follows a swapped-in link.
+        mod = load_lane_script()
+        tmpdir = os.path.join(self.trial_dir, self.prefix + "zzzz0000")
+        tree = os.path.join(tmpdir, "tree")
+        self.git("worktree", "add", "--detach", "--quiet", tree, "HEAD", cwd=self.alpha)
+        self.git("worktree", "lock", "--reason", "run git worktree remove -f -f now", tree,
+                 cwd=self.alpha)
+        repo = lanelib.Repo(self.alpha, self.common)
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            mod.drop_tree(repo, "alpha", tree, tmpdir)
+        self.assertIn("couldn't unregister the trial's tree", err.getvalue())
+        self.assertIn("`lane done alpha`", err.getvalue())
+        self.assertNotIn("-f -f", err.getvalue())
+        self.git("worktree", "unlock", tree, cwd=self.alpha)
+        self.git("worktree", "prune", cwd=self.alpha)
+
+    def test_keeps_help_promises_no_removal_command(self):
+        p = self.run_lane("trial", "--help")
+        self.assertIn("what clears it", p.stdout)
+        self.assertNotIn("how to remove", p.stdout)
+
+    def test_a_symlinked_trial_dir_is_refused(self):
+        away = os.path.join(self.tmp, "away")
+        os.makedirs(away)
+        os.symlink(away, self.trial_dir)
+        rc, out, err = self.trial("--run", "true")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn(f"{self.trial_dir} is a symlink", err)
+        # unlink removes a link or a file, never a dir's contents, whatever the link names
+        self.assertIn(f"`unlink {self.trial_dir}`", err)
+        self.assertNotIn("remove it", err)
+        self.assertEqual(os.listdir(away), [])
 
     def test_it_holds_the_lock_and_a_held_lock_with_wait_0_exits_75(self):
         # A process outside the trial's tree (here: one that drops what the trial hands its
@@ -1201,8 +1430,12 @@ class Trial(LaneWork):
     def test_keep_keeps_the_tree(self):
         rc, out, err = self.trial("--keep", "--run", "true")
         self.assertEqual(rc, 0, out + err)
-        (tree,) = glob.glob(os.path.join(self.scratch, self.prefix + "*", "tree"))
+        (tree,) = glob.glob(os.path.join(self.trial_dir, self.prefix + "*", "tree"))
         self.assertIn(f"kept the tree (the merge) at {tree}", out)
+        # The next trial can delete the tree's files, but sandboxed it can't unregister it.
+        self.assertIn("a later `lane trial` of lane alpha clears its files and `lane done alpha` "
+                      "its registration", out)
+        self.assertNotIn("remove --force", out)  # by path, it would follow a swapped-in link
         self.assertTrue(os.path.isfile(os.path.join(tree, "b.txt")))
         self.git("worktree", "remove", "--force", tree)
 
@@ -1219,12 +1452,162 @@ class Trial(LaneWork):
         self.assertEqual(rc, 1)
         self.assertIn("lane alpha is this lane", err)
 
-    def test_nothing_to_merge_says_so_and_runs_nothing(self):
-        ran = os.path.join(self.tmp, "ran")
+    def test_nothing_to_merge_says_so_and_runs_the_suites_on_head_plus_the_base(self):
         self.git("push", "-q", "origin", "beta:main", cwd=self.beta)  # beta's work is merged
         self.git("fetch", "-q", "origin")
-        rc, out, err = self.trial("beta", "--run", f"touch {shlex.quote(ran)}")
+        rc, out, err = self.trial("beta", "--run", "test -f a.txt && test -f b.txt")
         self.assertEqual(rc, 0, out + err)
         self.assertIn("nothing to merge from beta (already in)", out)
-        self.assertIn("no other lane's work merged, so no suite ran", out)
-        self.assertFalse(os.path.exists(ran))
+        self.assertIn("no other lane's work merged: running the suites on lane alpha's HEAD plus "
+                      "origin/main", out)
+        self.assertIn("suite 1 (test -f a.txt && test -f b.txt): ok", out)
+        self.assertNotIn("other lanes' uncommitted work", err)
+
+    def local_files(self):
+        """alpha's gitignored local files: local.cfg (which .worktreeinclude names, edited in
+        alpha since main's copy), and a Node-style node_modules/fake and a .venv to link."""
+        self.write(os.path.join(self.alpha, ".gitignore"), "local.cfg\nnode_modules/\n.venv/\n")
+        self.write(os.path.join(self.alpha, ".worktreeinclude"), "local.cfg\n")
+        self.git("add", ".gitignore", ".worktreeinclude", cwd=self.alpha)
+        self.git("commit", "-q", "-m", "ignores", cwd=self.alpha)
+        self.write(os.path.join(self.main, "local.cfg"), "main's copy\n")
+        self.write(os.path.join(self.alpha, "local.cfg"), "edited in alpha\n")
+        self.write(os.path.join(self.alpha, "node_modules", "fake", "index.js"),
+                   "module.exports = 42;\n")
+        self.write(os.path.join(self.alpha, ".venv", "bin", "python"), "")
+
+    def test_the_lanes_included_files_reach_the_tree(self):
+        self.local_files()
+        got = os.path.join(self.tmp, "got")
+        rc, out, err = self.trial("--run", f"cat local.cfg > {shlex.quote(got)}")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("lane trial: copied 1 file(s) from .worktreeinclude\n", out)
+        self.assertEqual(self.read(got), "edited in alpha\n")  # the lane's, not main's
+        self.assertEqual(self.leftovers(), ([], []))
+
+    def env_files(self, *names):
+        """alpha ignores and includes *.env (and ignores node_modules/), with names written."""
+        self.write(os.path.join(self.alpha, ".gitignore"), "*.env\nnode_modules/\n")
+        self.write(os.path.join(self.alpha, ".worktreeinclude"), "*.env\n")
+        self.git("add", ".gitignore", ".worktreeinclude", cwd=self.alpha)
+        self.git("commit", "-q", "-m", "ignores", cwd=self.alpha)
+        for name in names:
+            self.write(os.path.join(self.alpha, name), f"{name} in alpha\n")
+
+    def test_an_included_file_whose_name_git_would_quote_reaches_the_tree(self):
+        self.env_files("café.env")
+        got = os.path.join(self.tmp, "got")
+        rc, out, err = self.trial("--run", f"cat café.env > {shlex.quote(got)}")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("lane trial: copied 1 file(s) from .worktreeinclude\n", out)
+        self.assertEqual(self.read(got), "café.env in alpha\n")
+
+    def test_an_included_file_under_a_linked_dir_never_blocks_the_link(self):
+        # Linked first, and an include under a link is the link's: no copy makes the dir, so
+        # the link goes in, with no warning.
+        self.env_files("x.env", os.path.join("node_modules", "pkg", ".env"))
+        seen = os.path.join(self.tmp, "seen")
+        rc, out, err = self.trial("--link", "node_modules", "--run",
+                                  f"readlink node_modules > {shlex.quote(seen)}")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("lane trial: copied 1 file(s) from .worktreeinclude, linked node_modules\n",
+                      out)
+        self.assertNotIn("not linked", err)
+        self.assertNotIn("not copied", err)  # skipped, never tried through the link
+        self.assertEqual(self.read(seen).strip(), os.path.join(self.alpha, "node_modules"))
+
+    def test_linked_dirs_reach_the_merge_and_the_baseline(self):
+        # The config's trial-link and --link each link a dir of the lane's into the tree. The
+        # suite fails on the merge only, so the baseline's tree shows its links too.
+        self.local_files()
+        self.lane("init", "--trial-link", "node_modules")
+        seen = os.path.join(self.tmp, "seen")
+        cmd = (f"readlink node_modules >> {shlex.quote(seen)}; readlink .venv >> "
+               f"{shlex.quote(seen)}; test ! -f b.txt")
+        rc, out, err = self.trial("--link", ".venv", "--run", cmd)
+        self.assertEqual(rc, 1, out + err)  # no ids, other exits: by hand
+        self.assertIn("lane trial: copied 1 file(s) from .worktreeinclude, linked node_modules, "
+                      ".venv\n", out)
+        self.assertEqual(out.count("linked node_modules"), 1)
+        self.assertIn("baseline run of suite 1/1", out)
+        want = [os.path.join(self.alpha, "node_modules"), os.path.join(self.alpha, ".venv")]
+        self.assertEqual(self.read(seen).splitlines(), want * 2)
+        self.assertTrue(os.path.isfile(os.path.join(self.alpha, "node_modules", "fake",
+                                                    "index.js")))  # the lane's own, untouched
+        self.assertEqual(self.leftovers(), ([], []))
+
+    def test_a_suite_that_requires_a_linked_module_passes_only_once_linked(self):
+        self.local_files()
+        if shutil.which("node"):
+            cmd = "node -e \"require('./node_modules/fake')\""
+        else:  # the same check without node: the module's file, at the tree's own path
+            cmd = "test -f node_modules/fake/index.js"
+        rc, out, err = self.trial("--run", cmd)
+        self.assertEqual(rc, 0, out + err)  # fails on both runs, the same way
+        self.assertIn("fails the same way on the baseline", out)
+        self.assertIn("baseline run of suite 1/1", out)
+        rc, out, err = self.trial("--link", "node_modules", "--run", cmd)
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn(f"suite 1 ({cmd}): ok", out)
+        self.assertNotIn("baseline run", out)
+
+    @unittest.skipUnless(shutil.which("node"), "no node")
+    def test_a_node_test_suite_is_judged_by_its_tap_ids(self):
+        # A real `node --test`, piped: TAP. ab fails only where both lanes' files meet, old
+        # fails everywhere, and the linked module loads.
+        self.local_files()
+        self.write(os.path.join(self.alpha, "t.test.js"),
+                   "const test = require('node:test');\nconst fs = require('node:fs');\n"
+                   "const assert = require('node:assert');\n"
+                   "test('loads', () => assert.equal(require('./node_modules/fake'), 42));\n"
+                   "test('ab', () => assert.ok(!(fs.existsSync('a.txt') && "
+                   "fs.existsSync('b.txt'))));\n"
+                   "test('old', () => assert.fail('always'));\n")
+        self.git("add", "t.test.js", cwd=self.alpha)
+        self.git("commit", "-q", "-m", "node test", cwd=self.alpha)
+        rc, out, err = self.trial("--link", "node_modules", "--run", "node --test t.test.js")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("suite 1 (node --test t.test.js): 1 failure(s) only on the merge:\n"
+                      "  not ok - ab", out)
+        self.assertNotIn("not ok - loads", out)
+
+    @unittest.skipUnless(shutil.which("node"), "no node")
+    def test_node_subtests_of_one_name_under_two_parents_stay_apart(self):
+        # P1 > works fails in both runs, P2 > works only where both lanes' files meet: by name
+        # alone the two `works` would be one id, failing on the baseline too.
+        self.write(os.path.join(self.alpha, "p.test.js"),
+                   "const { test } = require('node:test');\nconst fs = require('node:fs');\n"
+                   "test('P1', async (t) => { await t.test('works', () => { throw new "
+                   "Error('always'); }); });\n"
+                   "test('P2', async (t) => { await t.test('works', () => { if "
+                   "(fs.existsSync('a.txt') && fs.existsSync('b.txt')) throw new "
+                   "Error('merge'); }); });\n")
+        self.git("add", "p.test.js", cwd=self.alpha)
+        self.git("commit", "-q", "-m", "nested node test", cwd=self.alpha)
+        rc, out, err = self.trial("--run", "node --test p.test.js")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("suite 1 (node --test p.test.js): 2 failure(s) only on the merge:\n"
+                      "  not ok - P2 > works\n  not ok - P2\n", out)
+
+    def test_a_link_the_lane_lacks_fails_before_any_suite_and_a_bad_one_is_refused(self):
+        # Unlinked, a suite that can't load fails alike on both runs, which the same-way rule
+        # passes: a trial that tested nothing. So a named link the lane lacks fails at once.
+        rc, out, err = self.trial("--link", "nope", "--run", "test ! -f b.txt")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("lane alpha has no nope (--link)", err)
+        self.assertNotIn("run of suite", out)
+        for bad in ("../x", "/abs", "a/../b", "./x", ""):
+            with self.subTest(bad=bad):
+                rc, out, err = self.trial("--link", bad, "--run", "true")
+                self.assertEqual(rc, 1, out + err)
+                self.assertIn(f"bad trial link {bad!r}", err)
+                self.assertNotIn("merged", out)
+                if bad:
+                    p = self.run_lane("init", "--trial-link", f"node_modules,{bad}")
+                    self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                    self.assertIn(f"bad trial link {bad!r}", p.stderr)
+        # A trailing slash is fine, and an empty value removes the key.
+        self.assertIn("trial-link = node_modules", self.lane("init", "--trial-link",
+                                                             "node_modules/"))
+        self.assertNotIn("trial-link", self.lane("init", "--trial-link", ""))
+        self.assertEqual(self.leftovers(), ([], []))
