@@ -89,7 +89,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
   - **Live lanes** (briefs in each record). Merge order (opened 2026-10-24 on Hayden's "open
     lanes for the fixes"): 1 trial-fix (`fix/lane-trial-setup`, carries the lead's notes: the
-    `lane trial` bugs below), 2 sp-gaps (`fix/policy-gaps-sp1-sp2`: SP1 and SP2 below), 3 practices (its next
+    `lane trial` bugs below), 2 sp-gaps (`fix/policy-gaps-sp1-sp2`: SP1 and SP2 below), 3 ctx-compact
+    (`fix/context-watch-compact`, opened 2026-10-25: the context-watch item below), 4 practices (its next
     PR, auth-secrets; the skill suite below), paused by Hayden on 2026-10-24 for a few days and
     moved last so it blocks no install. practices opened on Hayden's ok, merged #142 on 2026-10-20 and stays open for more PRs.
     Merged 2026-10-25: mute-clock (#146, tests only: the mute tests failed across UTC midnight, 18:30-20:00 EDT, not local midnight). Merged 2026-10-24 and installed from main: model-pin (#145, opened 2026-10-23 on Hayden's
@@ -102,7 +103,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     (#143), in Hayden's readiness order. Merged and closed 2026-10-20, installed from main:
     summary-retire (#139), link-atomic (#140, which Hayden ordered first so no later install ran
     the old `link()`), pr-horizon (#135), config-dir (#133). Hayden raised the cap
-    from 3 to 4 on 2026-10-20 for exam-prep; one slot is free.
+    from 3 to 4 on 2026-10-20 for exam-prep; it is full. Hayden kept the cap at 4 on 2026-10-25 (RAM): the
+    `lane done` gaps and the duplicate chrome-devtools servers open as slots free, the former
+    after trial-fix merges.
   - **Lane ask quality: done** (2026-10-19 to 2026-10-20). ask-check merged as #131 and was
     installed from main 2026-10-20: a PreToolUse hook on AskUserQuestion (`hooks/ask_check.py`)
     denies risky asks with a checklist in the reason. branch-reuse merged as #130: `lane new`
@@ -238,8 +241,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     a compact, that call's assistant entry wasn't on disk yet, so the nudge said "521k ... hand
     off now" where the real count was 107k. Obeying it loops compact after compact. Fix: a
     compact boundary met before any post-compact usage means no count yet (say nothing, write
-    nothing), with a test on a transcript fixture that ends at a boundary. Lane-able
-    (`hooks/context_watch.py`, `tests/`); no live lane owns it.
+    nothing), with a test on a transcript fixture that ends at a boundary. In lane ctx-compact
+    since 2026-10-25.
   - **Subagent policy gaps SP1 to SP7** (from lane policy-fp, 2026-10-20, routed to the lead
     on Hayden's pick; the lead re-checked each). Details and proposed fixes are in the private
     findings file's "Subagent policy gaps 2026-10-20" section ([[dotclaude-public-repo]]). SP3
@@ -455,8 +458,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lanes trial-fix (merge order 1, carries the lead branch), sp-gaps (2) and practices (3,
-     paused by Hayden since 2026-10-24) run; their state is in their records (`lane ls`). After each reinstall,
+  0. Lanes trial-fix (merge order 1, carries the lead branch), sp-gaps (2), ctx-compact (3)
+     and practices (4, paused by Hayden since 2026-10-24) run; next to open as slots free: the
+     `lane done` gaps (after trial-fix), then the duplicate chrome-devtools servers; their state is in their records (`lane ls`). After each reinstall,
      check `ls -la ~/.claude/CLAUDE.md` (the Watch item). Watch that push asks open with the
      briefing (#137); if they skip it, the Stop-hook check is the follow-up (Hayden's pick).
   1. Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
