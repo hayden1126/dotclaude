@@ -1510,8 +1510,14 @@ class Analyzer:
                 "build), run the creating step as its own Bash call first, then this one")
 
     def argv(self, lits, cwd, depth):
+        """Check one simple command; the cwd after it. env -C moves only the command env runs,
+        so whatever path the check takes, the shell's own cwd is unchanged then."""
+        moved = []
+        new = self.argv_checked(lits, cwd, depth, moved)
+        return cwd if moved else new
+
+    def argv_checked(self, lits, cwd, depth, moved):
         sh = self.p["shell"]
-        shell_cwd, self.peel_moved = cwd, False
         for _ in range(20):
             while lits and not lits[0].dynamic and self.assignment(lits[0]):
                 self.check_env(*self.assignment(lits[0]))
@@ -1547,6 +1553,8 @@ class Analyzer:
                           "source runs a file the policy can't see (only */bin/activate is allowed)")
             if base in sh["wrappers"] and base != "sudo":
                 inner = self.peel_wrapper(base, lits, cwd, depth)
+                if self.peel_moved:
+                    moved.append(base)
                 cwd = self.peel_cwd
                 if inner is None:
                     return cwd  # the wrapper alone (e.g. bare `env`) just prints
@@ -1561,22 +1569,24 @@ class Analyzer:
         args = [l.text if not l.dynamic else None for l in lits]
         globs = [l.glob for l in lits]
         splits = [l.split for l in lits]
-        moved = self.peel_moved
-        cwd = self.program(base, args, globs, splits, cwd, depth)
-        return shell_cwd if moved else cwd  # env -C moved only the command it ran
+        return self.program(base, args, globs, splits, cwd, depth)
 
     def env_chdir(self, lit):
         """env -C DIR runs the command in DIR: hold it to cd's rules and move the cwd the rest
         of the checks resolve against."""
         if lit is None or lit.dynamic or lit.glob:
             self.deny("dynamic-wrapper-arg", "stop_and_explain", "env -C with a computed directory")
-        self.peel_cwd = self.cd(["cd", lit.text], self.peel_start)  # the last -C wins
-        self.peel_moved = True
+        new = resolve(expand(lit.text, self.home), self.peel_start)  # the last -C wins
+        if self.confined and not (under(new, self.root) or self.in_temp(new)):
+            self.deny("worktree-root", "scope_down",
+                      f"env -C {lit.text} leaves your worktree ({self.root}); stay inside it")
+        self.peel_cwd, self.peel_moved = new, True
 
     def peel_wrapper(self, base, lits, cwd, depth):
         """Return the wrapped command's words, or None when there is none. A wrapper that runs
         the command elsewhere (env -C) leaves the new cwd in self.peel_cwd."""
         self.peel_cwd = self.peel_start = cwd
+        self.peel_moved = False
         rest = lits[1:]
         if base == "env":
             i = 0
@@ -1800,7 +1810,10 @@ class Analyzer:
 
     # Shell options that take the next word (-o NAME, +O NAME), and the long ones that take
     # none. Any other long option is refused (--rcfile and --init-file read a file).
-    SHELL_VALUE = {"zsh": "o"}  # every other shell: "oO", the value always the next word
+    # -O takes the next word in bash (zsh's -O is a flag). -o takes the rest of its word when
+    # there is one (zsh, ksh; bash would fail on it) and else the next word.
+    SHELL_VALUE = {"zsh": "o"}  # every other shell: "oO"
+    STDIN_OPTIONS = {"stdin", "shinstdin"}  # -o stdin (dash), -o shin_stdin (zsh) mean -s
     SHELL_LONG = {"--norc", "--noprofile", "--login", "--posix", "--no-rcs", "--noediting",
                   "--verbose", "--restricted"}
 
@@ -1808,7 +1821,7 @@ class Analyzer:
         """A shell's options, read as bash and zsh read them: -c makes the first word after the
         options the script, wherever -c stands among them, and -o/-O take the next word."""
         rest, script, has_c, has_s = lits[1:], None, False, False
-        shell = os.path.basename(lits[0].text)
+        shell = re.sub(r"\d+$", "", os.path.basename(lits[0].text))  # zsh5 is zsh
         i = 0
         while i < len(rest):
             lit = rest[i]
@@ -1835,12 +1848,18 @@ class Analyzer:
                     elif ch == "s":
                         has_s = True
                     elif ch in self.SHELL_VALUE.get(shell, "oO"):
-                        if shell == "zsh" and t[k:]:
-                            break  # zsh: -oNAME, the rest of the word is the value
-                        if i < len(rest) and (rest[i].dynamic or rest[i].glob):
-                            self.deny("dynamic-shell", "stop_and_explain",
-                                      "a shell option with a computed value")
-                        i += 1  # its value
+                        if ch == "o" and t[k:]:
+                            value = t[k:]  # -oNAME: the rest of the word is the value
+                        else:
+                            if i < len(rest) and (rest[i].dynamic or rest[i].glob):
+                                self.deny("dynamic-shell", "stop_and_explain",
+                                          "a shell option with a computed value")
+                            value = rest[i].text if i < len(rest) else ""
+                            i += 1  # its value
+                        if ch == "o" and value.lower().replace("_", "") in self.STDIN_OPTIONS:
+                            has_s = True
+                        if ch == "o" and t[k:]:
+                            break
                 continue
             break
         if has_s and not has_c:

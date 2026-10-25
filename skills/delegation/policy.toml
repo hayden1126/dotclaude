@@ -71,7 +71,7 @@ builtins = ["cd", "pushd", "popd", "echo", "printf", "true", "false", "test", "[
 # Wrappers that run the rest of the command line: their inner command is checked instead.
 wrappers = ["sudo", "env", "command", "builtin", "exec", "time", "nohup", "nice", "timeout",
   "stdbuf", "ionice", "xargs", "watch", "flock", "noglob", "nocorrect"]
-shells = ["bash", "sh", "zsh", "dash", "ksh"]
+shells = ["bash", "sh", "zsh", "zsh5", "dash", "ksh", "ksh93", "mksh", "rbash"]
 # Environment assignments that change what a command executes.
 denied_env_prefixes = ["GIT_", "LD_", "DYLD_"]
 # Checked wherever a variable is set: a VAR=x prefix, export and the typeset family, read and

@@ -456,12 +456,29 @@ class Commands(Base):
                           ("bash -s true", "shell-stdin"), ("zsh -s", "shell-stdin"),
                           ("unset HOME; eval echo $HOME", "dynamic-eval"),
                           ("env -i sh -c 'eval echo $HOME'", "dynamic-eval"),
-                          ("eval true ~bin", "dynamic-eval")):
+                          ("eval true ~bin", "dynamic-eval"),
+                          # last review: -oNAME in any shell, stdin by option name, zsh5
+                          ("bash -oerrexit -c 'git reset --hard'", "git-reset"),
+                          ("sh -o stdin x", "shell-stdin"), ("zsh -o shin_stdin x", "shell-stdin"),
+                          ("zsh5 -c 'git reset --hard'", "git-reset"),
+                          ("env -u HOME sh -c 'eval echo $HOME'", "dynamic-eval"),
+                          ("env -uHOME sh -c 'eval echo $HOME'", "dynamic-eval"),
+                          ("env --unset HOME sh -c 'eval echo $HOME'", "dynamic-eval"),
+                          ("env --unset=HOME sh -c 'eval echo $HOME'", "dynamic-eval"),
+                          ("env --ignore-environment sh -c 'eval echo $HOME'", "dynamic-eval")):
             self.assertDenied(self.bash(cmd), rule, msg=cmd)
         for cmd in ("bash -euo pipefail -c 'ls -la'", "bash -c ls", 'sh -c "echo hi"',
                     "bash --norc --noprofile -c ls", "eval echo $HOME", "eval echo ~",
                     "HOME=/tmp/h npm test", "ls ~", "cat ~/x", "bash -c 'ls' -- a b"):
             self.assertIsNone(self.bash(cmd), cmd)
+
+    def test_an_uninstalled_shell_reads_attached_o(self):
+        # ksh93 and mksh take -oNAME as one word; ksh may not be installed, so call the reader
+        g = sp.Analyzer(self.ev("Bash", {"command": "true"}), POLICY, home=self.home)
+        lits = [sp.Lit(w) for w in ("ksh", "-oerrexit", "-c", "git reset --hard")]
+        with self.assertRaises(sp.Deny) as cm:
+            g.shell_wrapper(lits, self.proj, 0)
+        self.assertEqual(cm.exception.rule, "git-reset")
 
     def test_tilde_prefixes(self):
         # ~user, ~+, ~- are unknown (zsh reads ~name from a variable first); so are $HOME:h and
@@ -836,6 +853,14 @@ class Writer(Base):
         self.assertDenied(self.wb("env -C a/b/c true; rm -rf ../../../src"), msg="leak")
         self.assertIsNone(self.wb("env -C a/b/c true; rm -rf src"))
         self.assertDenied(self.wb("env -C a/b/c -C ../../.. touch x"), "worktree-root")
+        # last review: the shell's cwd stays put on every path, and -C reads a dash-led name
+        for cmd in ("env -C a/b/c sh -c true; rm -rf ../../../src",
+                    "env -C a/b/c; rm -rf ../../../src",
+                    "env -C a/b/c nice true; rm -rf ../../../src"):
+            self.assertDenied(self.wb(cmd), msg=cmd)
+        self.assertIsNone(self.wb("env -C a env -C b/c true"))  # nested: b/c from a
+        os.makedirs(os.path.join(self.wt, "-d"), exist_ok=True)
+        self.assertIsNone(self.wb("env -C -d ls"))
 
     def test_writes_into_the_main_checkout_are_denied(self):
         for cmd in ("echo x > ../../../escape.txt", f"echo x > {self.proj}/src/a.py",

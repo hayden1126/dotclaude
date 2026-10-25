@@ -155,8 +155,9 @@ repo that turns the sandbox off loses subagent Bash; the policy still applies.
   - `~user`, `~+` and `~-` are dynamic (zsh reads `~name` from a variable holding a path before
     it looks up the user), and so are `$HOME:h` and `$HOME[1]`. Once a command sets or unsets
     HOME anywhere (`env -i` and `env -u HOME` included), `~` and `$HOME` are dynamic throughout it.
-  - A shell's `-s` (commands from stdin) is refused like `… | sh`. zsh's `-O` is a flag and its
-    `-oNAME` takes the rest of the word; bash's `-o` and `-O` take the next word.
+  - A shell's `-s` (commands from stdin), or `-o stdin`/`-o shin_stdin`, is refused like `… | sh`.
+    `-oNAME` takes the rest of its word and a bare `-o` the next one; bash's `-O` takes the next
+    word, and zsh's is a flag. `zsh5`, `ksh93`, `mksh` and `rbash` are read as shells too.
   - A shell reading stdin (`… | sh`) and `source` (except `*/bin/activate`) are denied.
 - **Command words** must resolve on PATH, be a path to an executable, or be a builtin. That denies
   oh-my-zsh aliases (`gp` = `git push`) and shell functions, and zsh `=git`.
