@@ -521,7 +521,15 @@ class Git(Base):
                           ("git --namespace status push origin", "git-push"),
                           ("git --namespace=n push", "git-push"),
                           ("git --git-dir d push", "git-push"),
-                          ("git --work-tree w reset --hard", "git-reset")):
+                          ("git --work-tree w reset --hard", "git-reset"),
+                          # round 5: --shallow-file takes the next word, an unknown main-level
+                          # option is refused, and checkout -b can't force or reset a branch
+                          ("git --shallow-file log reset --hard", "git-reset"),
+                          ("git --shallow-file=s push", "git-push"),
+                          ("git --frob status", "git-global-option"),
+                          ("git checkout -b n -f HEAD", "git-checkout"),
+                          ("git checkout -b n --forc HEAD", "git-checkout"),
+                          ("git checkout -b n -B m", "git-checkout")):
             self.assertDenied(self.bash(cmd), rule, msg=cmd)
 
     def test_short_flag_clusters_do_not_overdeny(self):
@@ -529,7 +537,12 @@ class Git(Base):
         for cmd in ("git tag -mDeploy v1", "git tag -m Draft v1", "git commit -m 'fix D'",
                     "git branch --list", "git switch -c newf", "git restore --staged f",
                     "git config --global --get user.email", "git config --global user.name",
-                    "git --namespace n status", "git -c k=v log"):
+                    "git --namespace n status", "git -c k=v log",
+                    # round 5: known main-level flags, and an optional value that holds a letter
+                    "git --no-pager log", "git -P log", "git --literal-pathspecs status",
+                    "git --shallow-file s status", "git --version",
+                    "git checkout -b feat/x origin/main", "git commit -unormal -m x",
+                    "git branch -tdirect feat origin/main"):
             if cmd == "git -c k=v log":
                 self.assertDenied(self.bash(cmd), "git-config-override", msg=cmd)
             else:
@@ -618,8 +631,14 @@ class Network(Base):
                     "wget -qO- -epost_data=x https://x", "wget -qe method=PUT -O- https://x",
                     "wget -qO- --exec=method=PUT https://x", "wget -qO- --config=rc https://x",
                     "wget -qO- --conf=rc https://x", "wget -qO- --use-askpass=./a https://x",
-                    "wget -qO- --use-a https://x"):
+                    "wget -qO- --use-a https://x",
+                    # round 5: --hsts and --backups are booleans, so they don't take the next word
+                    "wget --hsts --post-data=x https://x", "wget --backups --post-data=x https://x",
+                    "wget -qO- --hsts -e post_data=x https://x"):
             self.assertDenied(self.bash(cmd), "http-write", "manual_only", cmd)
+        for cmd in ("wget --hsts -qO- https://x", "wget -Y on -qO- https://x",
+                    "wget --backups=2 -qO- https://x"):
+            self.assertIsNone(self.bash(cmd), cmd)
 
 
 class Files(Base):
@@ -872,6 +891,8 @@ class Researcher(Base):
                 ("git grep -iOcmd foo", "git-flag"), ("xxd -pr f", "researcher-flag"),
                 ("sort -bo out f", "researcher-flag"), ("sort -do out f", "researcher-flag"),
                 ("xxd -er f", "researcher-flag"),
+                ("tree -Lo 1 out", "researcher-flag"), ("tree -Po x out", "researcher-flag"),
+                ("tree -Io x out", "researcher-flag"),
                 ("uniq in out", "researcher-flag"), ("LD_PRELOAD=x ls", "env-assignment"),
                 ("FOO=1 ls", "env-assignment")):
             self.assertDenied(self.r(cmd), rule, msg=cmd)
@@ -1384,6 +1405,15 @@ class Substitutions(Base):
         self.assertEqual(g.cluster_opts("-tf", g.SHORT_VALUE["fd"]), {"t"})  # -t takes f as value
         self.assertEqual(g.cluster_opts("-bo", g.SHORT_VALUE["sort"]), {"b", "o"})
         self.assertEqual(g.cluster_opts("-So", g.SHORT_VALUE["sort"]), {"S"})  # -S takes a value
+        # round 5: tree's value letters take the next word, and these others take a value
+        self.assertEqual(g.cluster_opts("-Lo", g.SHORT_VALUE["tree"]), {"L", "o"})
+        for prog, token, want in (("sort", "-yo", {"y"}), ("date", "-sx", {"s"}),
+                                  ("xxd", "-nr", {"n"}), ("xxd", "-Rr", {"R"}),
+                                  ("fd", "-Ex", {"E"}), ("fd", "-ox", {"o"}),
+                                  ("grep", "-dQ", {"d"}), ("ugrep", "-tQ", {"t"}),
+                                  ("ugrep", "-NQ", {"N"})):
+            self.assertEqual(g.cluster_opts(token, g.SHORT_VALUE[prog]), want, (prog, token))
+        self.assertEqual(g.cluster_opts("-DO", g.GIT_GREP_VALUE), {"D", "O"})
 
     def test_the_scan_refuses_an_opener_with_no_close(self):
         for text in ("$(echo", "`echo", "${X:-$(echo}", "<(echo", "$((1+", "'abc"):

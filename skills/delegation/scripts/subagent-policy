@@ -1854,10 +1854,13 @@ class Analyzer:
     # Short options that take a value, per program, so a cluster's tail isn't read as more
     # options (`sort -ko,2`: the k takes "o,2"). Used by cluster_opts for the deny checks below.
     # Only options that actually take a value; a boolean short flag must stay out, or a denied
-    # letter after it (sort -bo, fd -px, xxd -er) would be read as its value and missed.
-    SHORT_VALUE = {"sort": "oktST", "tree": "LPIo", "date": "dIrf", "xxd": "cglso",
-                   "fd": "xXtedjSc", "fdfind": "xXtedjSc", "grep": "efmABCD",
-                   "egrep": "efmABCD", "fgrep": "efmABCD", "ugrep": "efmABCD"}
+    # letter after it (sort -bo, fd -px, xxd -er) would be read as its value and missed. tree has
+    # none: each of its value letters takes the next word and the cluster goes on (`tree -Lo 1 f`
+    # is -L 1 -o f). grep's letters cover GNU grep and ugrep, which grep runs here.
+    SHORT_VALUE = {"sort": "oktSTy", "tree": "", "date": "dIrfs", "xxd": "cglsonR",
+                   "fd": "xXtedjScEo", "fdfind": "xXtedjScEo", "grep": "efmABCDdgJKMNOt",
+                   "egrep": "efmABCDdgJKMNOt", "fgrep": "efmABCDdgJKMNOt",
+                   "ugrep": "efmABCDdgJKMNOt"}
 
     def cluster_opts(self, token, value_letters):
         """The option letters in a short cluster (-qD -> {q, D}), stopping once a value-taking
@@ -1909,12 +1912,12 @@ class Analyzer:
 
     # wget 1.21's short options that take a value (its --help gives each a =VALUE; -n takes the
     # letters of -nv, -nc, -nd, -nH, -np): the rest of the cluster, else the next word.
-    WGET_VALUE_SHORT = frozenset("aABDeiIlnoOPQRtTUwX")
+    WGET_VALUE_SHORT = frozenset("aABDeiIlnoOPQRtTUwXY")
     # wget 1.21's long options that take a value: its --help gives each a =VALUE, except
-    # max-redirect and hsts-file, which take one too. Written without =, the value is the next
-    # word. use-askpass's value is optional, so it is attached or absent.
+    # max-redirect, hsts-file and use-askpass, which take one too. Written without =, the value
+    # is the next word. backups is the other way round: its value is attached or absent.
     WGET_LONG_VALUE = frozenset("""
-        accept accept-regex append-output backups base bind-address body-data body-file
+        accept accept-regex append-output base bind-address body-data body-file
         ca-certificate ca-directory certificate certificate-type ciphers compression config
         connect-timeout crl-file cut-dirs default-page directory-prefix dns-timeout domains
         exclude-directories exclude-domains execute follow-tags ftp-password ftp-user header
@@ -1923,13 +1926,15 @@ class Analyzer:
         password pinnedpubkey post-data post-file prefer-family private-key private-key-type
         progress proxy-password proxy-user quota random-file read-timeout referer regex-type
         reject reject-regex rejected-log remote-encoding report-speed restrict-file-names
-        retry-on-http-error save-cookies secure-protocol start-pos timeout tries user user-agent
-        wait waitretry warc-dedup warc-file warc-header warc-max-size warc-tempdir""".split())
+        retry-on-http-error save-cookies secure-protocol start-pos timeout tries use-askpass user
+        user-agent wait waitretry warc-dedup warc-file warc-header warc-max-size
+        warc-tempdir""".split())
+    # The boolean ones, hsts and backups included: --help shows only --no-hsts, and --backups=N.
     WGET_LONG_FLAG = frozenset("""
-        adjust-extension ask-password auth-no-challenge background backup-converted
+        adjust-extension ask-password auth-no-challenge background backup-converted backups
         content-disposition content-on-error continue convert-file-only convert-links debug
         delete-after follow-ftp force-directories force-html ftps-clear-data-connection
-        ftps-fallback-to-ftp ftps-implicit ftps-resume-ssl help https-only ignore-case
+        ftps-fallback-to-ftp ftps-implicit ftps-resume-ssl help hsts https-only ignore-case
         ignore-length inet4-only inet6-only keep-session-cookies mirror no-cache
         no-check-certificate no-clobber no-config no-cookies no-directories no-dns-cache no-glob
         no-host-directories no-hsts no-http-keep-alive no-if-modified-since no-iri no-netrc
@@ -1938,7 +1943,7 @@ class Analyzer:
         preserve-permissions protocol-directories quiet random-wait recursive relative
         retr-symlinks retry-connrefused retry-on-host-error save-headers server-response
         show-progress span-hosts spider strict-comments timestamping trust-server-names unlink
-        use-askpass verbose version warc-cdx xattr""".split())
+        verbose version warc-cdx xattr""".split())
 
     def wget_long(self, name):
         """The wget long option name stands for: itself, else the one option it is a prefix of;
@@ -2004,7 +2009,16 @@ class Analyzer:
     # git's main-level options that take a value (attached with = or the next word). Reading
     # the value is what stops it being mistaken for the subcommand (`git --namespace x push`).
     GIT_GLOBAL_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix",
-                        "--config-env", "--attr-source"}
+                        "--config-env", "--attr-source", "--shallow-file"}
+    # The ones that take no next word (--exec-path and --list-cmds take theirs attached). git
+    # matches its main-level options exactly, so any other is refused rather than guessed at: a
+    # value option this list lacks would make its value read as the subcommand.
+    GIT_GLOBAL_FLAG = {"-p", "--paginate", "-P", "--no-pager", "--no-replace-objects", "--bare",
+                       "--literal-pathspecs", "--no-literal-pathspecs", "--glob-pathspecs",
+                       "--noglob-pathspecs", "--icase-pathspecs", "--no-optional-locks",
+                       "--no-advice", "--no-lazy-fetch", "--exec-path", "--html-path",
+                       "--man-path", "--info-path", "--list-cmds", "-v", "--version", "-h",
+                       "--help"}
 
     def git(self, args, cwd, researcher=False):
         g = self.p["git"]
@@ -2019,6 +2033,10 @@ class Analyzer:
                           "run git without it")
             if name == "--exec-path":
                 self.deny("git-exec-path", "manual_only", "git --exec-path runs other programs")
+            if name not in self.GIT_GLOBAL_VALUE | self.GIT_GLOBAL_FLAG:
+                self.deny("git-global-option", "stop_and_explain",
+                          f"git {name} is not a main-level git option the policy knows; run git "
+                          "without it")
             value = attached if eq else None
             if name in self.GIT_GLOBAL_VALUE and not eq:
                 if i + 1 >= len(args):
@@ -2047,7 +2065,7 @@ class Analyzer:
             if flag_hit(a, g["denied_flags"]):
                 self.deny("git-flag", "use_alternative", f"git {sub} {a} is not allowed")
             if sub == "grep" and a and (
-                    (self.short_cluster(a) and "O" in self.cluster_opts(a, self.SHORT_VALUE["grep"]))
+                    (self.short_cluster(a) and "O" in self.cluster_opts(a, self.GIT_GREP_VALUE))
                     or flag_hit(a, ("--open-files-in-pager",))):
                 self.deny("git-flag", "use_alternative", "git grep -O runs a pager command")
             if sub == "clone" and self.clone_flag(a):
@@ -2065,7 +2083,8 @@ class Analyzer:
         if researcher:
             self.git_read_only(sub, rest, pos, flags, first, cwd)
             return cwd
-        if sub == "checkout" and not (rest and rest[0] == "-b"):
+        if sub == "checkout" and not (rest and rest[0] == "-b") or (
+                sub == "checkout" and any_flag(flags, ("-B", "-f", "--force"))):
             self.deny("git-checkout", "use_alternative",
                       "only `git checkout -b <new>` is allowed; use `git switch -c <new>` to "
                       "create a branch")
@@ -2116,8 +2135,11 @@ class Analyzer:
     # Per-subcommand short options that take a value, so the rest of a cluster is that value and
     # not more flags (`git tag -mDeploy`: the m takes "Deploy", not -D -e ...). Only subcommands
     # whose mutate checks read short letters need an entry.
-    GIT_SHORT_VALUE = {"branch": "u", "tag": "mFun", "switch": "cC", "restore": "s",
-                       "commit": "mFcC", "checkout": "bBm"}
+    # An optional value (branch -t, commit -S and -u) is the rest of the cluster too.
+    GIT_SHORT_VALUE = {"branch": "ut", "tag": "mFun", "switch": "cCt", "restore": "s",
+                       "commit": "mFcCtSu", "checkout": "bB"}
+    # git grep's own (-O's optional value is attached), not grep's or ugrep's.
+    GIT_GREP_VALUE = "efmABCO"
 
     def git_flags(self, sub, rest):
         """The option flags in rest as a set: each long option whole (minus any =value), and each
