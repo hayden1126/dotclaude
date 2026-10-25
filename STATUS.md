@@ -459,7 +459,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 - **Next (lead, main checkout):**
   0. Lanes sp-gaps (merge order 1, carries the lead branch), ctx-compact (2), done-safe (3)
      and practices (4, paused by Hayden since 2026-10-24) run; next to open at a free slot: the
-     duplicate chrome-devtools servers; their state is in their records (`lane ls`). After each reinstall,
+     duplicate chrome-devtools servers; their state is in their records (`lane ls`). Waiting on:
+     sp-gaps' SP6(b) design ask to Hayden and its install message; ctx-compact's and done-safe's
+     plans. Pending with Hayden, outside the lanes: `wsl --shutdown` at a break applies the 18 GB
+     WSL cap set in `C:\Users\hayde\.wslconfig` on 2026-10-23 (backup `.wslconfig.bak-20261023`).
+     Before each lead STATUS commit, grep it against the exam-prep denylist
+     ([[lead-status-denylist-check]]). After each reinstall,
      check `ls -la ~/.claude/CLAUDE.md` (the Watch item). Watch that push asks open with the
      briefing (#137); if they skip it, the Stop-hook check is the follow-up (Hayden's pick).
   1. Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
@@ -468,7 +473,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
      branch). `lane new` refuses a branch name any PR used, and refuses when gh can't answer
      (lane branch-reuse); `--reuse-branch` overrides.
   - The lead's commits: `git log --first-parent main..chore/after-pr4` (STATUS only, plus merges
-    of main). Session 45664d28 (2026-10-20) ran `2c28e7e..HEAD` on the lead branch: the #135
+    of main). Session ab816898 (2026-10-20 to 25) ran `26b58ac..HEAD`: the #141, #143, #144,
+    #145, #146 and #147 chains, lanes opened and closed, SP3 to SP7. Session 45664d28 (2026-10-20) ran `2c28e7e..26b58ac` on the lead branch: the #135
     chain (pr-horizon closed), the #133 chain (config-dir closed), lead PRs #136 and #137
     (merged, installed), lanes practices, summary-retire and link-atomic,
     and the CLAUDE.md watch item.
