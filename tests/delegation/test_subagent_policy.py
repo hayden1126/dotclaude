@@ -399,31 +399,51 @@ class Commands(Base):
     def test_every_way_of_setting_a_variable_is_checked(self):
         # A config-file path variable points curl or wget at a file the agent wrote, and a
         # builtin or loop that sets a variable reaches the same names as a VAR=x prefix does.
-        for cmd in ("WGETRC=rc wget -qO- https://x", "CURL_HOME=. curl -s https://x",
-                    "WGET_ASKPASS=./a wget -qO- https://x", "export SSH_ASKPASS=./a",
-                    "export WGETRC=rc; wget -qO- https://x", "export CURL_HOME=.",
-                    "declare -x LD_PRELOAD=/x.so", "typeset -gx CURL_HOME=.", "local CURL_HOME=.",
-                    "let CURL_HOME=1", "let 'CURL_HOME += 1'", "export CURL_HOME",
+        for cmd in ("PAGER=less git log",
+                    "export PAGER=rc; wget -qO- https://x", "export PAGER=.",
+                    "declare -x LD_PRELOAD=/x.so", "typeset -gx PAGER=.", "local PAGER=.",
+                    "let PAGER=1", "let 'PAGER += 1'", "export PAGER",
                     "export -n PAGER=less",
-                    "read -r WGETRC <<<rc", "read 'CURL_HOME?home: '",
-                    "printf -v CURL_HOME %s .", "printf -vCURL_HOME %s .", "getopts ab CURL_HOME",
-                    "for CURL_HOME in .; do curl -s https://x; done",
-                    "select CURL_HOME in .; do break; done", ": ${WGETRC:=rc}", "echo ${CURL_HOME=.}",
-                    "(( CURL_HOME = 1 ))", "for ((CURL_HOME=1; CURL_HOME<2; CURL_HOME++)); do :; done"):
+                    "read -r PAGER <<<rc", "read 'PAGER?home: '",
+                    "printf -v PAGER %s .", "printf -vPAGER %s .", "getopts ab PAGER",
+                    "for PAGER in .; do git log; done",
+                    "select PAGER in .; do break; done", ": ${PAGER:=rc}", "echo ${PAGER=.}",
+                    "(( PAGER = 1 ))", "for ((PAGER=1; PAGER<2; PAGER++)); do :; done"):
             self.assertDenied(self.bash(cmd), "env-assignment", msg=cmd)
         for cmd in ("integer CURL_HOME=1", "print -v CURL_HOME .", "mapfile -t CURL_HOME <f",
                     "vared CURL_HOME",
                     "readonly GIT_SSH_COMMAND=x"):
             self.assertIsNotNone(self.bash(cmd), cmd)  # not on the builtins list at all
+        for cmd in ("WGETRC=rc wget -qO- https://x", "CURL_HOME=. curl -s https://x",
+                    "WGET_ASKPASS=./a wget -qO- https://x", "export SSH_ASKPASS=./a",
+                    "echo WGETRC", "grep -r CURL_HOME .", "printf -vCURL_HOME %s .", ": $((WGETRC=10))", ": $[CURL_HOME=1]",
+                    "[[ WGETRC=10 -eq 10 ]]", ": {CURL_HOME}>/dev/null", ": ${a[WGETRC=1]}",
+                    "echo SSH_ASKPASS"):
+            self.assertDenied(self.bash(cmd), "env-banned", msg=cmd)  # named anywhere at all
+        for cmd in (": <<EOF\n${PAGER:=less}\nEOF", "case x in ${PAGER:=less}) ;; esac",
+                    "(( ${PAGER:=1} ))", ": ${PAGER::=less}", "read 'PAGER[1,-1]' <<<x",
+                    "printf -vPAGER[1] %s x"):
+            self.assertDenied(self.bash(cmd), "env-assignment", msg=cmd)
+        for cmd in ("declare -n r=PAGER", "local -n r=x", "n=PAGER; : ${!n:=less}"):
+            self.assertDenied(self.bash(cmd), "dynamic-assignment", msg=cmd)
         for cmd in ('export "$N"=rc', "export $N=rc", "read -r $N", "printf -v $N %s x"):
             self.assertDenied(self.bash(cmd), "dynamic-assignment", msg=cmd)
         for cmd in ('export PATH="$PATH:/x"', "export FOO=1 BAR", "local i=0", "declare -a arr",
                     "read -r line <f", "printf -v out %s x", "for i in a b; do echo $i; done",
                     "export GIT_PAGER=cat", "echo ${X:=1}", "(( i = 1 ))", "export -p",
-                    "let i=i+1", "(( CURL_HOME == 1 ))",
-                    "HOME=/tmp/h git status", "XDG_CONFIG_HOME=/tmp/c ls"):
+                    "let i=i+1", "(( PAGER == 1 ))",
+                    "HOME=/tmp/h git status", "XDG_CONFIG_HOME=/tmp/c ls",
+                    'export "FOO=bar"', 'local "x=$1"', 'read -p "Name $x: " ans',
+                    "read -rp 'Name: ' ans", "export -n FOO"):
             self.assertIsNone(self.bash(cmd), cmd)
         self.assertIsNone(self.bash("for i in a b; do echo $i; done", atype="researcher"))
+
+    def test_a_trap_handler_is_checked_like_eval(self):
+        self.assertDenied(self.bash("trap 'git reset --hard' EXIT"), "git-reset")
+        self.assertDenied(self.bash("trap -- 'git reset --hard' EXIT INT"), "git-reset")
+        self.assertDenied(self.bash('trap "$X" EXIT'), "dynamic-eval")
+        for cmd in ("trap 'echo done' EXIT", "trap - EXIT", "trap '' INT", "trap -l", "trap"):
+            self.assertIsNone(self.bash(cmd), cmd)
 
     def test_ordinary_work_passes(self):
         for cmd in ("ls -la src", "npm test 2>&1 | tail -20", "git status", "git diff --stat",
@@ -830,7 +850,7 @@ class Researcher(Base):
                 ("wget -bqO- https://x", "researcher-write")):
             self.assertDenied(self.r(cmd), rule, msg=cmd)
         for cmd in ("wget --referer -O- https://x", "wget -U -O- https://x",
-                    "wget --user-a -O- https://x"):
+                    "wget --user-a -O- https://x", "wget --egd-file -O- https://x"):
             # the -O- is the long option's value, so wget saves the page to a file
             self.assertDenied(self.r(cmd), "researcher-write", msg=cmd)
         for cmd in ("grep --pretty foo f", "sort --stable f", "wget -qO- https://x",
@@ -1273,7 +1293,9 @@ class Substitutions(Base):
               # review round 1: ANSI-C quotes take \', zsh honours ' in an unquoted ${X:-...}
               # default, and a backtick inside "..." also unescapes \"
               """echo $'\\''$({c})\\'""", """echo ${{X:-'}}'$({c})'}}'}}\\'""",
-              """echo "`echo \\"'\\"$({c})\\"'\\"`\"""")
+              """echo "`echo \\"'\\"$({c})\\"'\\"`\"""",
+              # review round 2: a ${...} default holding $'..' or, inside "...", a '
+              """echo ${{x:-$'\\'}}'$({c})}}\\'""", """echo "${{x:-'}}"'$({c})'"'}}\"""")
 
     def test_inner_commands_are_checked_wherever_the_substitution_sits(self):
         for shape in self.SHAPES:
@@ -1322,6 +1344,9 @@ class Substitutions(Base):
                              ("x <(a)", ["a"])):
             self.assertEqual(sp.substitutions(text), bodies, text)
         self.assertEqual(sp.substitutions("x <(a) $(b)", "heredoc"), ["b"])
+        self.assertEqual(sp.substitutions("$$'\\'$(a)''"), ["a"])  # $$, then a plain '\\'
+        with self.assertRaises(ValueError):
+            sp.substitutions("x '")
 
     def test_parsed_substitutions_are_checked_even_where_the_scan_finds_none(self):
         with mock.patch.object(sp, "substitutions", return_value=[]):

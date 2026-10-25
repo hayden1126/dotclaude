@@ -74,12 +74,15 @@ wrappers = ["sudo", "env", "command", "builtin", "exec", "time", "nohup", "nice"
 shells = ["bash", "sh", "zsh", "dash", "ksh"]
 # Environment assignments that change what a command executes.
 denied_env_prefixes = ["GIT_", "LD_", "DYLD_"]
-# Also the variables that point curl or wget at a config file (one that can set data or a
-# method) or name a program wget runs. HOME and XDG_CONFIG_HOME do too, but hermetic test runs set them, so they stay
-# allowed. Names are checked wherever a variable is set: a VAR=x prefix, export and the
-# typeset family, read and printf -v, a loop variable, ${VAR:=x}, arithmetic.
-denied_env_names = ["BASH_ENV", "ENV", "ZDOTDIR", "PROMPT_COMMAND", "PAGER", "EDITOR", "VISUAL",
-  "WGETRC", "CURL_HOME", "WGET_ASKPASS", "SSH_ASKPASS"]
+# Checked wherever a variable is set: a VAR=x prefix, export and the typeset family, read and
+# printf -v, a loop variable, ${VAR:=x}, arithmetic commands.
+denied_env_names = ["BASH_ENV", "ENV", "ZDOTDIR", "PROMPT_COMMAND", "PAGER", "EDITOR", "VISUAL"]
+# Names with no use in delegated work, refused wherever they appear in a command: the variables
+# that point curl or wget at a config file (one that can set data or a method) or name a
+# program wget runs. A shell has more ways to set a variable than any per-form check knows, so
+# a name that never needs setting is refused outright. HOME and XDG_CONFIG_HOME also point at
+# config files, but hermetic test runs set them, so they stay allowed.
+banned_env_names = ["WGETRC", "CURL_HOME", "WGET_ASKPASS", "SSH_ASKPASS"]
 allowed_env = ["GIT_PAGER=cat", "PAGER=cat", "GIT_TERMINAL_PROMPT=0"]
 # `source`/`.` runs a file the policy can't see; only virtualenv activation is allowed.
 source_allowed_suffixes = ["/bin/activate"]

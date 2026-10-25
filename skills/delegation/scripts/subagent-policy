@@ -396,7 +396,8 @@ TEXT_FIELDS = {"word": (("value", "word"),), "pattern": (("pattern", "word"),),
 LIVE_TEXT = re.compile(r"[$`]|[<>]\(")
 # Assignments inside text: ${NAME=v} / ${NAME:=v}, and NAME = v, NAME += v, NAME++ ... in
 # arithmetic (the name, whatever the operator; == and != compare).
-PARAM_ASSIGN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*):?=")
+PARAM_ASSIGN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?:\[[^]]*\])?:{0,2}=")  # zsh: ::=
+PARAM_INDIRECT_ASSIGN = re.compile(r"\$\{![A-Za-z_][A-Za-z0-9_]*(?:\[[^]]*\])?:{0,2}=")
 ARITH_ASSIGN = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:(?:[-+*/%&|^]|<<|>>|\*\*)?=(?!=)|\+\+|--)"
                           r"|(?:\+\+|--)\s*([A-Za-z_][A-Za-z0-9_]*)")
 
@@ -423,13 +424,13 @@ def substitutions(text, mode="word"):
         return j
     while i < n:
         c, nxt = text[i], text[i + 1:i + 2]
-        if c == "\\":
-            i += 2
+        if c == "\\" or (c == "$" and nxt == "$"):
+            i += 2  # an escape, or $$ (the pid), which a ' after it can't join
         elif quotes and c == "$" and nxt == "'" and not dq:
             i = closed(_ansi_c_end(text, i + 2), "'")  # $'...' honours backslash escapes
         elif quotes and c == "'" and not dq:
-            i = _skip_single_quoted(text, i + 1)
-            if i > n or text[i - 1] != "'" or i < 2:
+            start, i = i, _skip_single_quoted(text, i + 1)
+            if i > n or i - 1 <= start or text[i - 1] != "'":
                 raise ValueError(text)
         elif quotes and c == '"':
             dq, i = not dq, i + 1
@@ -449,9 +450,10 @@ def substitutions(text, mode="word"):
             out.append(text[i + 2:j - 1])
             i = j
         elif c == "$" and nxt == "{":
-            j = closed(_find_braced_param_end(text, i + 2), "}")
-            if quotes and not dq:  # unquoted, the shell honours '...' inside, so it may end later
-                j = max(j, closed(_param_end(text, i + 2), "}"))
+            # The shell may honour '...' inside and end later than Parable's helper; reading on
+            # to the later end only checks more.
+            j = max(closed(_find_braced_param_end(text, i + 2), "}"),
+                    closed(_param_end(text, i + 2), "}"))
             out += substitutions(text[i + 2:j - 1], "inner")
             i = j
         elif c == "$" and nxt == "[":
@@ -481,8 +483,10 @@ def _param_end(text, i):
     depth = 1
     while i < len(text):
         c = text[i]
-        if c == "\\":
+        if c == "\\" or text.startswith("$$", i):
             i += 2
+        elif text.startswith("$'", i):
+            i = _ansi_c_end(text, i + 2)
         elif c == "'":
             j = text.find("'", i + 1)
             if j < 0:
@@ -1166,6 +1170,11 @@ class Analyzer:
             self.deny("too-long", "stop_and_explain", "command too long to check")
         if depth > self.p["shell"]["max_depth"]:
             self.deny("too-deep", "stop_and_explain", "commands nested too deeply to check")
+        banned = [x for x in self.p["shell"]["banned_env_names"] if x in cmd]  # even mid-word
+        if banned:
+            self.deny("env-banned", "use_alternative",
+                      f"{banned[0]} is a variable delegated agents never use, in any form; "
+                      "run the command without it")
         try:
             nodes, error = parse(cmd), None
         except ParseError as e:
@@ -1248,9 +1257,6 @@ class Analyzer:
             self.redirect(n, cwd)  # then on to its target word
         if kind in ("for", "select"):
             self.check_env_name(n.var)
-        if kind == "word":
-            for name in PARAM_ASSIGN.findall(n.value):  # ${NAME:=value} sets NAME
-                self.check_env_name(name)
         if kind in ("arith-cmd", "for-arith"):
             for v in vars(n).values():
                 if isinstance(v, str):
@@ -1301,7 +1307,13 @@ class Analyzer:
                 yield from self.parsed_substitutions(c)
 
     def shell_text(self, text, mode, cwd, depth):
-        """Check each command substitution in text, whether or not Parable made it a node."""
+        """Check each command substitution in text, whether or not Parable made it a node, and
+        each ${NAME:=value} default, which sets NAME."""
+        for name in PARAM_ASSIGN.findall(text):
+            self.check_env_name(name)
+        if PARAM_INDIRECT_ASSIGN.search(text):
+            self.deny("dynamic-assignment", "stop_and_explain",
+                      "${!name:=value} sets the variable another one names; name it plainly")
         try:
             bodies = substitutions(text, mode)
         except ValueError:
@@ -1343,23 +1355,36 @@ class Analyzer:
     # only way to set one, so each name goes through the same check.
     TYPESET = {"export", "declare", "typeset", "local", "readonly", "integer", "float"}
     READ_INTO = {"read", "getopts", "mapfile", "readarray", "vared"}
-    ASSIGN_NAME = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)(\[[^]]*\])?(\+?=|$)")
+    # NAME, NAME[sub], NAME=..., NAME+=..., optionally inside a leading quote ("x=$1"); the name
+    # and subscript hold no expansion.
+    ASSIGN_NAME = re.compile(r"""["']?([A-Za-z_][A-Za-z0-9_]*)(\[[^]$`]*\])?(\+?=|["']?$)""")
+    READ_VALUE_OPTS = "dinNptu"  # read's options whose value is the next word (-a's is a name)
 
     def assigning_builtin(self, base, lits):
         def name_of(lit):
             m = self.ASSIGN_NAME.match(lit.raw)
-            if not m or "$" in m.group(1) + (m.group(2) or ""):
+            if not m:
                 self.deny("dynamic-assignment", "stop_and_explain",
                           f"{base} sets a variable whose name the policy can't read "
                           f"({lit.raw!r}); name it plainly")
             return m
         rest = lits[1:]
         if base in self.TYPESET or base in self.READ_INTO:
+            skip = False
             for lit in rest:
+                if skip:
+                    skip = False
+                    continue
                 if lit.raw.startswith(("-", "+")) and not lit.dynamic:
-                    continue  # an option (read -p's prompt is checked too, harmlessly)
+                    if base in ("declare", "typeset", "local") and "n" in lit.text[1:]:
+                        self.deny("dynamic-assignment", "stop_and_explain",
+                                  f"{base} -n makes a name that sets another variable; set the "
+                                  "variable itself")
+                    skip = base == "read" and lit.text[-1] in self.READ_VALUE_OPTS
+                    continue
                 if base in self.READ_INTO and not lit.dynamic:
-                    self.check_env_name(lit.text.split("?", 1)[0])  # zsh: read 'NAME?prompt'
+                    # zsh: read 'NAME?prompt'; a subscript sets part of NAME
+                    self.check_env_name(re.split(r"[?\[]", lit.text, maxsplit=1)[0])
                     continue
                 m = name_of(lit)
                 if lit.dynamic or lit.text not in self.p["shell"]["allowed_env"]:
@@ -1373,9 +1398,27 @@ class Analyzer:
                 if lit.raw == "-v" and k + 1 < len(rest):
                     self.check_env_name(name_of(rest[k + 1]).group(1))
                 elif lit.raw.startswith("-v") and not lit.dynamic:
-                    self.check_env_name(lit.text[2:])
+                    self.check_env_name(lit.text[2:].split("[", 1)[0])
                 elif not lit.raw.startswith("-"):
                     break  # the format: options end here
+
+    def trap(self, lits, cwd, depth):
+        """trap's handler runs later in this shell, so it is checked like eval's text. Resetting
+        (`trap - SIG`), ignoring (`trap '' SIG`) and the listing forms run nothing."""
+        rest = lits[1:]
+        while rest and not rest[0].dynamic and rest[0].text.startswith("-") and rest[0].text != "-":
+            end, rest = rest[0].text == "--", rest[1:]
+            if end:
+                break
+        if not rest:
+            return
+        handler = rest[0]
+        if handler.dynamic:
+            self.deny("dynamic-eval", "stop_and_explain", "trap with a dynamic handler")
+        if handler.text in ("", "-") or (len(rest) == 1 and
+                                         re.fullmatch(r"(SIG)?[A-Z0-9]+", handler.text)):
+            return
+        self.analyze_string(handler.text, cwd, depth + 1)
 
     def resolves(self, word):
         if word in self.p["shell"]["builtins"]:
@@ -1420,6 +1463,9 @@ class Analyzer:
                 if any(l.dynamic for l in lits[1:]):
                     self.deny("dynamic-eval", "stop_and_explain", "eval of a dynamic string")
                 self.analyze_string(" ".join(l.text for l in lits[1:]), cwd, depth + 1)
+                return cwd
+            if base == "trap":
+                self.trap(lits, cwd, depth)
                 return cwd
             if base in ("source", "."):
                 target = lits[1].text if len(lits) > 1 and not lits[1].dynamic else ""
@@ -1842,6 +1888,9 @@ class Analyzer:
                 name, eq, value = a[2:].partition("=")
                 opt = self.wget_long(name)
                 if opt is None:
+                    if researcher:  # it may take the next word, -O- included, as its value
+                        self.deny("researcher-write", "scope_down",
+                                  f"wget {a} is not an option the policy knows")
                     found, exact = [a], False  # unknown: match the lists by prefix
                 else:
                     found, exact = ["--" + opt], True
