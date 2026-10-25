@@ -160,10 +160,11 @@ class Lit:
     split: the word can become more than one argument or expand to an option at runtime (an
     unquoted expansion, which word-splits, or a glob/brace), so it is not one fixed argument;
     a quoted expansion ("$X") is dynamic but not split (always exactly one word)."""
-    __slots__ = ("text", "dynamic", "glob", "split")
+    __slots__ = ("text", "dynamic", "glob", "split", "raw")
 
-    def __init__(self, text, dynamic=False, glob=False, split=False):
+    def __init__(self, text, dynamic=False, glob=False, split=False, raw=None):
         self.text, self.dynamic, self.glob, self.split = text, dynamic, glob, split
+        self.raw = text if raw is None else raw  # the word as written, quotes and all
 
     @property
     def static(self):
@@ -171,11 +172,18 @@ class Lit:
 
 
 def scan_word(value, home):
+    """home None: the command sets HOME somewhere, so ~ and $HOME are unknown (dynamic)."""
     out, i, q, dyn, glob, split = [], 0, None, False, False, False
     n = len(value)
-    if value == "~" or value.startswith("~/"):
-        out.append(home)
+    prefix = value[1:].split("/", 1)[0] if value.startswith("~") else None
+    if prefix == "":
+        out.append(home if home is not None else "~")
+        dyn = home is None
         i = 1
+    elif prefix is not None and not re.search(r"[\"'\\$`]", prefix):
+        # ~user, ~+, ~-, ~N: zsh reads ~name from a variable holding a path before it looks up
+        # the user, and +, -, N are PWD, OLDPWD and the directory stack, so none is known.
+        dyn = True
     while i < n:
         c = value[i]
         if q == "'":
@@ -198,8 +206,8 @@ def scan_word(value, home):
                     split = True
             elif c == "$":
                 rest = value[i:]
-                m = re.match(r"\$(\{HOME\}|HOME)(?![A-Za-z0-9_])", rest)
-                if m:
+                m = re.match(r"\$(\{HOME\}|HOME)(?![A-Za-z0-9_:\[])", rest)  # not $HOME:h
+                if m and home is not None:
                     out.append(home)
                     i += len(m.group(0))
                     continue
@@ -213,7 +221,7 @@ def scan_word(value, home):
             else:
                 out.append(c)
         i += 1
-    return Lit("".join(out), dyn, glob, split)
+    return Lit("".join(out), dyn, glob, split, value)
 
 
 # ---------------------------------------------------------------- zsh expansions
@@ -359,6 +367,171 @@ def _heredoc_body(cmd, i, delim, quoted, strip):
         lines.append(text)
         i = end + 1
     return None
+
+
+# ---------------------------------------------------------------- flags
+
+def flag_hit(a, denied):
+    """The flag in denied that the word a names, or None. A short flag (or a one-dash long one,
+    like find's -exec) must match exactly; a long one matches exactly, with =value, or by any
+    prefix, since getopt_long and git's parse-options take a unique prefix (`--no-veri` is
+    --no-verify). A prefix that is ambiguous makes the program refuse it, so matching it anyway
+    only denies a call that would fail. Use it for deny-lists only: an allow-list stays exact, so
+    a prefix can add denials and never an allow."""
+    if not a:
+        return None
+    if a in denied:
+        return a
+    name = a[2:].partition("=")[0] if a.startswith("--") else ""
+    if not name:
+        return None
+    return next((f for f in denied if f.startswith("--") and f[2:].startswith(name)), None)
+
+
+def any_flag(flags, denied):
+    return any(flag_hit(a, denied) for a in flags)
+
+
+# ---------------------------------------------------------------- substitutions
+
+# Node fields that hold shell text Parable doesn't (always) expand into nodes, read by
+# substitutions() in the mode named. Any other string field holding $, a backtick or <( is
+# refused (unchecked-text), so a field Parable adds later can't pass unread.
+TEXT_FIELDS = {"word": (("value", "word"),), "pattern": (("pattern", "word"),),
+               "arith-cmd": (("raw_content", "inner"),),
+               "for-arith": (("init", "inner"), ("cond", "inner"), ("incr", "inner"))}
+LIVE_TEXT = re.compile(r"[$`]|[<>]\(")
+# Assignments inside text: ${NAME=v} / ${NAME:=v}, and NAME = v, NAME += v, NAME++ ... in
+# arithmetic (the name, whatever the operator; == and != compare).
+PARAM_ASSIGN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?:\[[^]]*\])?:{0,2}=")  # zsh: ::=
+PARAM_INDIRECT_ASSIGN = re.compile(r"\$\{![A-Za-z_][A-Za-z0-9_]*(?:\[[^]]*\])?:{0,2}=")
+ARITH_ASSIGN = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:(?:[-+*/%&|^]|<<|>>|\*\*)?=(?!=)|\+\+|--)"
+                          r"|(?:\+\+|--)\s*([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def substitutions(text, mode="word"):
+    """The body of every command substitution in text that the shell would run: $(...), `...`,
+    <(...) and >(...), with those inside ${...}, $((...)) and $[...] found by scanning that text
+    too. The caller also checks the substitutions Parable parsed; this reading covers the text
+    Parable keeps unparsed. Each one ends where Parable's matching helpers end it, or later
+    where the shell reads further.
+
+    mode: "word" (quotes quote, as in a word), "heredoc" (an unquoted heredoc body: quotes are
+    text, and <( is text) or "inner" (the inside of ${...} or arithmetic, read with quotes as
+    text, so a quoted $( counts as live: it checks more, never less). A backslash escapes the
+    next character in every mode. Raises ValueError for an opener with no close."""
+    from parable import (_find_braced_param_end, _find_cmdsub_end, _is_valid_arithmetic_start,
+                         _skip_backtick, _skip_single_quoted)
+    quotes = mode == "word"
+    # In inner mode the text is already bounded (the inside of a ${...} or arithmetic), so an
+    # opener with no close is a quoted or partial fragment, not a live substitution: skip it
+    # rather than refuse. Only top-level text (word, heredoc) refuses an unclosed opener.
+    strict = mode != "inner"
+    out, i, n, dq = [], 0, len(text), False
+
+    def closed(j, close):
+        if j <= n and text[:j].endswith(close):
+            return j
+        if strict:
+            raise ValueError(text[i:])
+        return None
+    while i < n:
+        c, nxt = text[i], text[i + 1:i + 2]
+        if c == "\\" or (c == "$" and nxt == "$"):
+            i += 2  # an escape, or $$ (the pid), which a ' after it can't join
+        elif quotes and c == "$" and nxt == "'" and not dq:
+            i = closed(_ansi_c_end(text, i + 2), "'")  # $'...' honours backslash escapes
+        elif quotes and c == "'" and not dq:
+            start, i = i, _skip_single_quoted(text, i + 1)
+            if i > n or i - 1 <= start or text[i - 1] != "'":
+                raise ValueError(text)
+        elif quotes and c == '"':
+            dq, i = not dq, i + 1
+        elif c == "`":
+            j = closed(_skip_backtick(text, i), "`")
+            if j is None or j - 1 <= i:
+                if strict and j is not None:
+                    raise ValueError(text[i:])
+                i += 1
+                continue
+            # inside "...", the shell also drops the backslash before a "
+            out.append(re.sub(r'\\([$`\\"])' if dq else r"\\([$`\\])", r"\1", text[i + 1:j - 1]))
+            i = j
+        elif c == "$" and text.startswith("$((", i) and _is_valid_arithmetic_start(text, i):
+            j = closed(_find_cmdsub_end(text, i + 2), "))")
+            if j is None:
+                i += 1
+                continue
+            out += substitutions(text[i + 3:j - 2], "inner")
+            i = j
+        elif nxt == "(" and (c == "$" or (c in "<>" and not dq and mode != "heredoc")):
+            j = closed(_find_cmdsub_end(text, i + 2), ")")
+            if j is None:
+                i += 1
+                continue
+            out.append(text[i + 2:j - 1])
+            i = j
+        elif c == "$" and nxt == "{":
+            # The shell may honour '...' inside and end later than Parable's helper; reading on
+            # to the later end only checks more.
+            e1, e2 = closed(_find_braced_param_end(text, i + 2), "}"), \
+                closed(_param_end(text, i + 2), "}")
+            j = max(e1 or 0, e2 or 0)
+            if not j:
+                i += 1
+                continue
+            out += substitutions(text[i + 2:j - 1], "inner")
+            i = j
+        elif c == "$" and nxt == "[":
+            out += substitutions(text[i + 2:], "inner")  # rare and deprecated: the rest
+            break
+        else:
+            i += 1
+    return out
+
+
+def _ansi_c_end(text, i):
+    """Past the ' closing a $'...' whose body starts at i; len+1 when there is none."""
+    while i < len(text):
+        if text[i] == "\\":
+            i += 2
+        elif text[i] == "'":
+            return i + 1
+        else:
+            i += 1
+    return len(text) + 1
+
+
+def _param_end(text, i):
+    """Past the } closing a ${ whose body starts at i, reading '...' as quoted throughout (as
+    the shell does in an unquoted ${X:-word}); len+1 when there is none."""
+    from parable import _find_cmdsub_end, _skip_backtick, _skip_double_quoted
+    depth = 1
+    while i < len(text):
+        c = text[i]
+        if c == "\\" or text.startswith("$$", i):
+            i += 2
+        elif text.startswith("$'", i):
+            i = _ansi_c_end(text, i + 2)
+        elif c == "'":
+            j = text.find("'", i + 1)
+            if j < 0:
+                return len(text) + 1
+            i = j + 1
+        elif c == '"':
+            i = _skip_double_quoted(text, i + 1)
+        elif c == "`":
+            i = _skip_backtick(text, i)
+        elif text.startswith("$(", i):
+            i = _find_cmdsub_end(text, i + 2)
+        elif text.startswith("${", i):
+            i = _param_end(text, i + 2)
+        else:
+            depth += (c == "{") - (c == "}")
+            i += 1
+            if depth == 0:
+                return i
+    return len(text) + 1
 
 
 # ---------------------------------------------------------------- sed
@@ -802,6 +975,8 @@ class Analyzer:
         # Any isolated agent (a writer, or any type spawned with isolation "worktree") is held
         # to its worktree; a writer without one is refused outright (decide()).
         self.confined = self.worktree is not None
+        self.home_assigned = False  # the command sets HOME (check_env_name)
+        self.word_home = self.home  # what ~ and $HOME read as in words; None once HOME is set
         self._parent_root = False  # looked up on first need (protected_roots)
         self.path_dirs = self._path_dirs()
 
@@ -1016,6 +1191,12 @@ class Analyzer:
         if not isinstance(cmd, str):
             self.deny("malformed-input", "stop_and_explain", "shell call with no command")
         self.analyze_string(cmd, self.cwd, 0)
+        if self.home_assigned and self.word_home is not None:
+            # HOME is set somewhere in this command, so ~ and $HOME may not be the real home
+            # anywhere in it (a loop can set it before an earlier line runs again): check the
+            # whole command again with both unknown.
+            self.word_home = None
+            self.analyze_string(cmd, self.cwd, 0)
 
     def analyze_string(self, cmd, cwd, depth):
         from parable import parse, ParseError
@@ -1023,6 +1204,11 @@ class Analyzer:
             self.deny("too-long", "stop_and_explain", "command too long to check")
         if depth > self.p["shell"]["max_depth"]:
             self.deny("too-deep", "stop_and_explain", "commands nested too deeply to check")
+        banned = [x for x in self.p["shell"]["banned_env_names"] if x in cmd]  # even mid-word
+        if banned:
+            self.deny("env-banned", "use_alternative",
+                      f"{banned[0]} is a variable delegated agents never use, in any form; "
+                      "run the command without it")
         try:
             nodes, error = parse(cmd), None
         except ParseError as e:
@@ -1090,13 +1276,40 @@ class Analyzer:
                 if getattr(part, "kind", "") != "operator":
                     cwd = self.node(part, cwd, depth)
             return cwd
-        if kind == "redirect":
-            self.redirect(n, cwd)
-            return cwd
         if kind in ("cmdsub", "procsub"):
+            if depth > self.p["shell"]["max_depth"]:
+                self.deny("too-deep", "stop_and_explain", "commands nested too deeply to check")
             inner = getattr(n, "command", None)
             if inner is not None:
                 self.node(inner, cwd, depth + 1)
+            return cwd
+        if kind == "heredoc":
+            if not n.quoted:  # an unquoted body expands $(...) and `...`; quotes are literal
+                self.shell_text(n.content, "heredoc", cwd, depth)
+            return cwd
+        if kind == "redirect":
+            self.redirect(n, cwd)  # then on to its target word
+        if kind in ("for", "select"):
+            self.check_env_name(n.var)
+        if kind in ("arith-cmd", "for-arith"):
+            for v in vars(n).values():
+                if isinstance(v, str):
+                    for m in ARITH_ASSIGN.finditer(v):
+                        self.check_env_name(m.group(1) or m.group(2))
+        fields = dict(TEXT_FIELDS.get(kind, ()))
+        for f, v in vars(n).items():
+            if f in fields:
+                self.shell_text(v or "", fields[f], cwd, depth)
+            elif isinstance(v, str) and f != "kind" and LIVE_TEXT.search(v):
+                self.deny("unchecked-text", "stop_and_explain",
+                          f"the parser left shell text in a {kind} that the policy can't check; "
+                          "write the command more plainly")
+        if kind in ("word", "arith-cmd"):
+            # Also check every substitution Parable parsed beneath it. A body that either reading
+            # finds is checked, so the two must both miss one. The rest beneath is the same text
+            # shell_text just read.
+            for sub in self.parsed_substitutions(n):
+                self.node(sub, cwd, depth + 1)
             return cwd
         start = cwd
         for c in self.children(n):
@@ -1108,7 +1321,7 @@ class Analyzer:
         target = getattr(r, "target", None)
         if ">" not in op or target is None or not hasattr(target, "value"):
             return
-        lit = scan_word(target.value, self.home)
+        lit = scan_word(target.value, self.word_home)
         if re.fullmatch(r"&(\d+|-)", target.value.strip()):
             return  # 2>&1, >&2, >&-: Parable keeps a duplication's target as "&N"
         # Everything else writes its target, `>& file` and `&>` included (zsh sends both
@@ -1120,13 +1333,33 @@ class Analyzer:
         if lit.static is not None and lit.text not in allowed:
             self.check_write_path(lit.text, cwd)
 
+    def parsed_substitutions(self, n):
+        for c in self.children(n):
+            if c.kind in ("cmdsub", "procsub"):
+                yield c
+            else:
+                yield from self.parsed_substitutions(c)
+
+    def shell_text(self, text, mode, cwd, depth):
+        """Check each command substitution in text, whether or not Parable made it a node, and
+        each ${NAME:=value} default, which sets NAME."""
+        for name in PARAM_ASSIGN.findall(text):
+            self.check_env_name(name)
+        if PARAM_INDIRECT_ASSIGN.search(text):
+            self.deny("dynamic-assignment", "stop_and_explain",
+                      "${!name:=value} sets the variable another one names; name it plainly")
+        try:
+            bodies = substitutions(text, mode)
+        except ValueError:
+            self.deny("parse-error", "stop_and_explain",
+                      "a command substitution has no end the policy can find")
+        for body in bodies:
+            self.analyze_string(body, cwd, depth + 1)
+
     def command(self, n, cwd, depth):
-        for w in n.words:
-            for part in getattr(w, "parts", None) or []:
-                self.node(part, cwd, depth + 1)
-        for r in n.redirects or []:
-            self.redirect(r, cwd)
-        lits = [scan_word(w.value, self.home) for w in n.words]
+        for x in list(n.words) + list(n.redirects or []):
+            self.node(x, cwd, depth)
+        lits = [scan_word(w.value, self.word_home) for w in n.words]
         return self.argv(lits, cwd, depth)
 
     # ------------------------------------------------ one simple command
@@ -1141,10 +1374,122 @@ class Analyzer:
             return
         if self.is_researcher and name not in self.p["researcher"]["allowed_env"]:
             self.deny("env-assignment", "scope_down", f"researcher may not set {name}")
-        if name in sh["denied_env_names"] or any(name.startswith(x)
-                                                 for x in sh["denied_env_prefixes"]):
+        self.check_env_name(name)
+
+    def check_env_assignment(self, lit):
+        """A NAME=value word, where the value (but not the name) may be dynamic. The allowlist
+        exemption (PAGER=cat) applies only to a fully static word; otherwise the name is checked
+        on its own, and a computed name is refused."""
+        m = re.match(r"""["']?([A-Za-z_][A-Za-z0-9_]*)(\[[^]]*\])?\+?=(.*)""", lit.raw, re.S)
+        name = m.group(1)
+        if "$" in m.group(1) + (m.group(2) or "") or "`" in (m.group(2) or ""):
+            self.deny("dynamic-assignment", "stop_and_explain",
+                      f"the variable name in {lit.raw!r} comes from an expansion; name it plainly")
+        if not lit.dynamic:
+            self.check_env(name, self.assignment(lit)[1])
+        else:
+            if self.is_researcher and name not in self.p["researcher"]["allowed_env"]:
+                self.deny("env-assignment", "scope_down", f"researcher may not set {name}")
+            self.check_env_name(name)
+
+    def check_env_name(self, name):
+        sh = self.p["shell"]
+        if name == "HOME":
+            self.home_assigned = True
+        if name in sh["denied_env_names"] or name in sh["banned_env_names"] or any(
+                name.startswith(x) for x in sh["denied_env_prefixes"]):
             self.deny("env-assignment", "use_alternative",
-                      f"setting {name} changes what the command executes; run it without that")
+                      f"setting {name} changes what a command executes or reads; run it "
+                      "without that")
+
+    # Builtins that set variables from their arguments: NAME=value or a bare NAME (export and
+    # the typeset family), or a NAME they read into. A VAR=x word before a command is not the
+    # only way to set one, so each name goes through the same check.
+    TYPESET = {"export", "declare", "typeset", "local", "readonly", "integer", "float"}
+    READ_INTO = {"read", "getopts", "mapfile", "readarray", "vared"}
+    # NAME, NAME[sub], NAME=..., NAME+=..., optionally inside a leading quote ("x=$1"); the name
+    # and subscript hold no expansion.
+    ASSIGN_NAME = re.compile(r"""["']?([A-Za-z_][A-Za-z0-9_]*)(\[[^]$`]*\])?(\+?=|["']?$)""")
+    READ_VALUE_OPTS = "dinNptu"  # read's options whose value is the next word (-a's is a name)
+
+    def assigning_builtin(self, base, lits):
+        def name_of(lit):
+            m = self.ASSIGN_NAME.match(lit.raw)
+            if not m:
+                self.deny("dynamic-assignment", "stop_and_explain",
+                          f"{base} sets a variable whose name the policy can't read "
+                          f"({lit.raw!r}); name it plainly")
+            return m
+        rest = lits[1:]
+        if base in self.TYPESET or base in self.READ_INTO:
+            skip = False
+            for lit in rest:
+                if skip:
+                    skip = False
+                    continue
+                if lit.raw.startswith(("-", "+")) and not lit.dynamic:
+                    if base in ("declare", "typeset", "local") and "n" in lit.text[1:]:
+                        self.deny("dynamic-assignment", "stop_and_explain",
+                                  f"{base} -n makes a name that sets another variable; set the "
+                                  "variable itself")
+                    if base == "read":  # the next word is a value only if nothing is attached to
+                        for j, ch in enumerate(lit.text[1:]):  # the first value-taking letter
+                            if ch in self.READ_VALUE_OPTS:
+                                skip = j == len(lit.text) - 2
+                                break
+                    continue
+                if base in self.READ_INTO and not lit.dynamic:
+                    # zsh: read 'NAME?prompt'; a subscript sets part of NAME
+                    self.check_env_name(re.split(r"[?\[]", lit.text, maxsplit=1)[0])
+                    continue
+                m = name_of(lit)
+                if lit.dynamic or lit.text not in self.p["shell"]["allowed_env"]:
+                    self.check_env_name(m.group(1))
+        elif base == "let":
+            for lit in rest:
+                for m in ARITH_ASSIGN.finditer(lit.text):
+                    self.check_env_name(m.group(1) or m.group(2))
+        elif base in ("printf", "print"):
+            k = 0
+            while k < len(rest):
+                t = rest[k].text
+                if t == "-v":  # quoted or bare; an attached expansion left text as "-v" too
+                    if rest[k].dynamic:
+                        self.deny("dynamic-assignment", "stop_and_explain",
+                                  f"{base} -v with a computed variable name; name it plainly")
+                    if k + 1 < len(rest):
+                        self.check_env_name(re.split(r"\[", name_of(rest[k + 1]).group(1), 1)[0])
+                    k += 2
+                elif t.startswith("-v"):  # -vNAME attached
+                    if rest[k].dynamic:
+                        self.deny("dynamic-assignment", "stop_and_explain",
+                                  f"{base} -v with a computed variable name; name it plainly")
+                    self.check_env_name(t[2:].split("[", 1)[0])
+                    k += 1
+                elif t.startswith("-"):
+                    k += 1
+                else:
+                    break  # the format: options end here
+
+    def trap(self, lits, cwd, depth):
+        """trap's handler runs later in this shell, so it is checked like eval's text. Resetting
+        (`trap - SIG`), ignoring (`trap '' SIG`) and the listing forms run nothing."""
+        rest = lits[1:]
+        # trap's only options are -l, -p and --; anything else starting with - is the handler
+        # (a reset like `trap '-; cmd' EXIT`), so it is not skipped.
+        while rest and not rest[0].dynamic and rest[0].text in ("-l", "-p", "--"):
+            end, rest = rest[0].text == "--", rest[1:]
+            if end:
+                break
+        if not rest:
+            return
+        handler = rest[0]
+        if handler.dynamic or handler.glob:
+            self.deny("dynamic-eval", "stop_and_explain", "trap with a dynamic handler")
+        if handler.text in ("", "-") or (len(rest) == 1 and
+                                         re.fullmatch(r"(SIG)?[A-Z0-9]+", handler.text)):
+            return
+        self.analyze_string(handler.text, cwd, depth + 1)
 
     def resolves(self, word):
         if word in self.p["shell"]["builtins"]:
@@ -1165,6 +1510,13 @@ class Analyzer:
                 "build), run the creating step as its own Bash call first, then this one")
 
     def argv(self, lits, cwd, depth):
+        """Check one simple command; the cwd after it. env -C moves only the command env runs,
+        so whatever path the check takes, the shell's own cwd is unchanged then."""
+        moved = []
+        new = self.argv_checked(lits, cwd, depth, moved)
+        return cwd if moved else new
+
+    def argv_checked(self, lits, cwd, depth, moved):
         sh = self.p["shell"]
         for _ in range(20):
             while lits and not lits[0].dynamic and self.assignment(lits[0]):
@@ -1186,9 +1538,12 @@ class Analyzer:
             if base in sh["shells"]:
                 return self.shell_wrapper(lits, cwd, depth)
             if base == "eval":
-                if any(l.dynamic for l in lits[1:]):
+                if any(l.dynamic or l.glob for l in lits[1:]):
                     self.deny("dynamic-eval", "stop_and_explain", "eval of a dynamic string")
                 self.analyze_string(" ".join(l.text for l in lits[1:]), cwd, depth + 1)
+                return cwd
+            if base == "trap":
+                self.trap(lits, cwd, depth)
                 return cwd
             if base in ("source", "."):
                 target = lits[1].text if len(lits) > 1 and not lits[1].dynamic else ""
@@ -1197,7 +1552,10 @@ class Analyzer:
                 self.deny("source", "stop_and_explain",
                           "source runs a file the policy can't see (only */bin/activate is allowed)")
             if base in sh["wrappers"] and base != "sudo":
-                inner = self.peel_wrapper(base, lits)
+                inner = self.peel_wrapper(base, lits, cwd, depth)
+                if self.peel_moved:
+                    moved.append(base)
+                cwd = self.peel_cwd
                 if inner is None:
                     return cwd  # the wrapper alone (e.g. bare `env`) just prints
                 lits = inner
@@ -1205,13 +1563,30 @@ class Analyzer:
             break
         else:
             self.deny("too-deep", "stop_and_explain", "too many nested wrappers")
+        self.assigning_builtin(base, lits)
+        if base == "unset" and any(l.text == "HOME" for l in lits[1:]):
+            self.home_assigned = True  # $HOME is now empty: check the command again
         args = [l.text if not l.dynamic else None for l in lits]
         globs = [l.glob for l in lits]
         splits = [l.split for l in lits]
         return self.program(base, args, globs, splits, cwd, depth)
 
-    def peel_wrapper(self, base, lits):
-        """Return the wrapped command's words, or None when there is none."""
+    def env_chdir(self, lit):
+        """env -C DIR runs the command in DIR: hold it to cd's rules and move the cwd the rest
+        of the checks resolve against."""
+        if lit is None or lit.dynamic or lit.glob:
+            self.deny("dynamic-wrapper-arg", "stop_and_explain", "env -C with a computed directory")
+        new = resolve(expand(lit.text, self.home), self.peel_start)  # the last -C wins
+        if self.confined and not (under(new, self.root) or self.in_temp(new)):
+            self.deny("worktree-root", "scope_down",
+                      f"env -C {lit.text} leaves your worktree ({self.root}); stay inside it")
+        self.peel_cwd, self.peel_moved = new, True
+
+    def peel_wrapper(self, base, lits, cwd, depth):
+        """Return the wrapped command's words, or None when there is none. A wrapper that runs
+        the command elsewhere (env -C) leaves the new cwd in self.peel_cwd."""
+        self.peel_cwd = self.peel_start = cwd
+        self.peel_moved = False
         rest = lits[1:]
         if base == "env":
             i = 0
@@ -1226,12 +1601,23 @@ class Analyzer:
                 elif t.startswith("--split-string="):
                     split, after = Lit(t.split("=", 1)[1], rest[i].dynamic), i + 1
                 elif t in ("--ignore-environment", "--null", "--debug"):
+                    self.home_assigned |= t == "--ignore-environment"
                     i += 1
                     continue
-                elif t in ("--unset", "--chdir"):
+                elif t == "--unset":
+                    self.home_assigned |= i + 1 < len(rest) and rest[i + 1].text == "HOME"
                     i += 2
                     continue
-                elif t.startswith("--unset=") or t.startswith("--chdir="):
+                elif t == "--chdir":
+                    self.env_chdir(rest[i + 1] if i + 1 < len(rest) else None)
+                    i += 2
+                    continue
+                elif t.startswith("--chdir="):
+                    self.env_chdir(Lit(t.split("=", 1)[1], rest[i].dynamic, rest[i].glob))
+                    i += 1
+                    continue
+                elif t.startswith("--unset="):
+                    self.home_assigned |= t == "--unset=HOME"
                     i += 1
                     continue
                 elif t.startswith("--"):
@@ -1244,11 +1630,18 @@ class Analyzer:
                     after = i + 1
                     for k, ch in enumerate(t[1:], 1):
                         if ch in "i0v":
+                            self.home_assigned |= ch == "i"
                             continue
                         value = t[k + 1:]
                         if ch in "uC":
                             if not value:
                                 after = i + 2
+                            if ch == "u":
+                                self.home_assigned |= (value or (rest[i + 1].text if i + 1 < len(
+                                    rest) else "")) == "HOME"
+                            if ch == "C":
+                                self.env_chdir(Lit(value, rest[i].dynamic, rest[i].glob) if value
+                                               else rest[i + 1] if i + 1 < len(rest) else None)
                             break
                         if ch == "S":
                             if value:
@@ -1267,63 +1660,214 @@ class Analyzer:
                     if split.dynamic:
                         self.deny("dynamic-shell", "stop_and_explain", "env -S with a dynamic string")
                     return [Lit(s) for s in split.text.split()] + rest[after:]
-                elif self.assignment(rest[i]):
-                    self.check_env(*self.assignment(rest[i]))
+                elif re.match(r"""["']?[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?=""", rest[i].raw):
+                    self.check_env_assignment(rest[i])
                     i += 1
+                elif rest[i].dynamic and "=" in (rest[i].text or ""):
+                    self.deny("dynamic-assignment", "stop_and_explain",
+                              "env with a computed variable name; name it plainly")
                 else:
                     break
             rest = rest[i:]
-        elif base in ("timeout",):
-            while rest and rest[0].text.startswith("-"):
-                rest = rest[2:] if rest[0].text in ("-s", "--signal", "-k", "--kill-after") else rest[1:]
-            rest = rest[1:]  # the duration
-        elif base in ("nice", "ionice"):
-            while rest and rest[0].text.startswith("-"):
-                rest = rest[2:] if rest[0].text in ("-n", "--adjustment", "-c", "-p") else rest[1:]
-        elif base == "stdbuf":
-            while rest and rest[0].text.startswith("-"):
-                rest = rest[2:] if rest[0].text in ("-i", "-o", "-e") else rest[1:]
-        elif base == "flock":
-            while rest and rest[0].text.startswith("-"):
-                rest = rest[2:] if rest[0].text in ("-w", "--timeout", "-E") else rest[1:]
-            rest = rest[1:]  # the lock file
-        elif base == "watch":
-            while rest and rest[0].text.startswith("-"):
-                rest = rest[2:] if rest[0].text in ("-n", "--interval", "-d") else rest[1:]
-        elif base == "xargs":
-            takes = {"-a", "-d", "-E", "-e", "-I", "-i", "-L", "-l", "-n", "-P", "-s",
-                     "--arg-file", "--delimiter", "--max-args", "--max-procs", "--max-chars"}
-            while rest and rest[0].text.startswith("-"):
-                rest = rest[2:] if rest[0].text in takes else rest[1:]
+            return rest or None
+        if base in ("noglob", "nocorrect"):
+            return rest or None  # zsh precommand modifiers: the next word is the command
+        rest, opts = self.wrapper_options(base, rest)
+        repl = opts.pop("replace", None)
+        if base == "command" and ("-v" in opts or "-V" in opts):
+            return None  # it prints how a name resolves
+        if base in ("timeout", "flock") and rest:
+            if rest[0].dynamic or rest[0].glob:
+                self.deny("dynamic-wrapper-arg", "stop_and_explain",
+                          f"{base} with a computed {'duration' if base == 'timeout' else 'lock file'}")
+            if base == "flock":
+                if self.is_researcher:
+                    self.deny("researcher-flag", "scope_down",
+                              "flock creates its lock file; researcher only reads")
+                self.check_write_path(rest[0].text, cwd)
+            rest = rest[1:]
+            if base == "flock" and rest and rest[0].text in ("-c", "--command"):
+                return self.wrapper_shell_string(base, rest[1:2], cwd, depth)
+        if base == "watch" and not ({"-x", "--exec"} & set(opts)):
+            return self.wrapper_shell_string(base, rest, cwd, depth)  # watch runs it with sh -c
+        if base == "xargs":
             if not rest:
                 return None
+            if repl is not None:
+                repl = "{}" if repl is True else repl
+                rest = [Lit(l.text, dynamic=True) if repl in (l.text or "") else l for l in rest]
             return rest + [Lit("", dynamic=True)]  # the arguments come from stdin
-        elif base in ("command", "builtin"):
-            if rest and rest[0].text in ("-v", "-V"):
-                return None
-            while rest and rest[0].text.startswith("-"):
-                rest = rest[1:]
-        else:  # exec, time, nohup, noglob, nocorrect
-            while rest and rest[0].text.startswith("-"):
-                rest = rest[1:]
         return rest or None
 
+    # Each wrapper's options as its own parser reads them. A value letter takes the rest of its
+    # cluster, else the next word; an optional one ("opt") only the rest of the cluster, and an
+    # optional long one only an attached =. Long names match exactly. Any other option is
+    # refused: one skipped without its value moves the word the policy takes for the command
+    # (`exec -a ls sort -o out f` runs sort), and GNU time's -o writes a file, so time keeps only
+    # the shell keyword's -p.
+    WRAPPER_OPTS = {
+        "command": {"bool": "pvV"},
+        "builtin": {},
+        "exec": {"bool": "cl", "value": "a"},
+        "time": {"bool": "p"},
+        "nohup": {},
+        "nice": {"value": "n", "lvalue": ("adjustment",)},
+        "timeout": {"bool": "v", "value": "sk", "lbool": ("preserve-status", "foreground",
+                                                          "verbose"),
+                    "lvalue": ("signal", "kill-after")},
+        "stdbuf": {"value": "ioe", "lvalue": ("input", "output", "error")},
+        "ionice": {"bool": "t", "value": "cnpPu", "lbool": ("ignore",),
+                   "lvalue": ("class", "classdata", "pid", "pgid", "uid")},
+        "xargs": {"bool": "0prtxo", "value": "aEILnPsd", "opt": "eil",
+                  "lbool": ("null", "no-run-if-empty", "verbose", "interactive", "exit",
+                            "open-tty", "show-limits"),
+                  "lvalue": ("arg-file", "delimiter", "max-args", "max-procs", "max-chars",
+                             "process-slot-var"),
+                  "lopt": ("max-lines", "replace", "eof")},
+        "watch": {"bool": "bcCegprtwx", "value": "nq", "opt": "d",
+                  "lbool": ("beep", "color", "no-color", "errexit", "chgexit", "precise",
+                            "no-rerun", "no-title", "no-wrap", "exec"),
+                  "lvalue": ("interval", "equexit"), "lopt": ("differences",)},
+        "flock": {"bool": "sxunoF", "value": "wE",
+                  "lbool": ("shared", "exclusive", "unlock", "nonblock", "close", "no-fork",
+                            "verbose"),
+                  "lvalue": ("timeout", "wait", "conflict-exit-code")},
+    }
+
+    def wrapper_options(self, base, rest):
+        """Read a wrapper's leading options by WRAPPER_OPTS: the words after them, and the
+        options seen ({"-I": "{}", "--null": True, ...}). A computed word where an option could
+        be is refused, since it could expand to one."""
+        spec = self.WRAPPER_OPTS[base]
+        opts, rest = {}, list(rest)
+        while rest:
+            lit = rest[0]
+            t = lit.text or ""
+            if lit.glob and not lit.dynamic and not re.search(r"[*?\[]|\{(?!\})", t):
+                lit = Lit(t)  # only a bare {} (xargs -I{}), which neither shell expands
+            if not lit.dynamic and not lit.glob and (t == "-" or not t.startswith("-")):
+                break
+            if lit.dynamic or lit.glob:
+                if not t.startswith("-") and not lit.split:
+                    break  # a quoted expansion in command position: argv refuses it there
+                self.deny("dynamic-wrapper-arg", "stop_and_explain",
+                          f"{base} with a computed word where an option could be")
+            rest = rest[1:]
+            if t == "--":
+                break
+            if t.startswith("--"):
+                name, eq, value = t[2:].partition("=")
+                if name in spec.get("lbool", ()) and not eq:
+                    opts["--" + name] = True
+                elif name in spec.get("lopt", ()):
+                    opts["--" + name] = value if eq else True
+                    if name == "replace":
+                        opts["replace"] = opts["--replace"]  # xargs: the last one given wins
+                elif name in spec.get("lvalue", ()):
+                    if not eq:
+                        value = self.wrapper_value(base, rest)
+                    opts["--" + name] = value
+                else:
+                    self.deny("unknown-option", "stop_and_explain",
+                              f"{base} {t} is an option the policy doesn't know; leave it out")
+                continue
+            for k, ch in enumerate(t[1:], 2):
+                if ch in spec.get("bool", ""):
+                    opts["-" + ch] = True
+                    continue
+                elif ch in spec.get("opt", ""):
+                    opts["-" + ch] = t[k:] or True
+                    if base == "xargs" and ch == "i":
+                        opts["replace"] = opts["-i"]
+                    break
+                elif ch in spec.get("value", ""):
+                    opts["-" + ch] = t[k:] or self.wrapper_value(base, rest)
+                    if base == "xargs" and ch == "I":
+                        opts["replace"] = opts["-I"]
+                    break
+                else:
+                    self.deny("unknown-option", "stop_and_explain",
+                              f"{base} -{ch} is an option the policy doesn't know; leave it out")
+        return rest, opts
+
+    def wrapper_value(self, base, rest):
+        """Pop an option's value from the next word. It must be one literal word: a brace, glob
+        or expansion there could become several and move the command (`nice -n {5,echo,x} true`)."""
+        if not rest:
+            return ""
+        lit = rest.pop(0)
+        if lit.dynamic or (lit.glob and re.search(r"[*?\[]|\{(?!\})", lit.text or "")):
+            self.deny("dynamic-wrapper-arg", "stop_and_explain",
+                      f"{base} with a computed option value")
+        return lit.text
+
+    def wrapper_shell_string(self, base, words, cwd, depth):
+        """watch (without -x) and flock -c run their words through sh -c: check that text."""
+        if any(l.dynamic or l.glob for l in words):
+            self.deny("dynamic-eval", "stop_and_explain", f"{base} runs a dynamic string")
+        self.analyze_string(" ".join(l.text for l in words), cwd, depth + 1)
+        return None
+
+    # Shell options that take the next word (-o NAME, +O NAME), and the long ones that take
+    # none. Any other long option is refused (--rcfile and --init-file read a file).
+    # -O takes the next word in bash (zsh's -O is a flag). -o takes the rest of its word when
+    # there is one (zsh, ksh; bash would fail on it) and else the next word.
+    SHELL_VALUE = {"zsh": "o"}  # every other shell: "oO"
+    STDIN_OPTIONS = {"stdin", "shinstdin"}  # -o stdin (dash), -o shin_stdin (zsh) mean -s
+    SHELL_LONG = {"--norc", "--noprofile", "--login", "--posix", "--no-rcs", "--noediting",
+                  "--verbose", "--restricted"}
+
     def shell_wrapper(self, lits, cwd, depth):
-        rest, script, has_c = lits[1:], None, False
+        """A shell's options, read as bash and zsh read them: -c makes the first word after the
+        options the script, wherever -c stands among them, and -o/-O take the next word."""
+        rest, script, has_c, has_s = lits[1:], None, False, False
+        shell = re.sub(r"\d+$", "", os.path.basename(lits[0].text))  # zsh5 is zsh
         i = 0
         while i < len(rest):
-            t = rest[i].text
-            if t == "-c" or (t.startswith("-") and not t.startswith("--") and "c" in t[1:]):
-                has_c = True
-                if i + 1 < len(rest):
-                    script = rest[i + 1]
+            lit = rest[i]
+            t = lit.text or ""
+            if lit.dynamic or lit.glob:
+                if t.startswith(("-", "+")) or lit.split:
+                    self.deny("dynamic-shell", "stop_and_explain",
+                              "a shell with a computed word where an option could be")
                 break
-            if t.startswith("-") or t.startswith("+"):
+            if t in ("-", "--"):
+                i += 1
+                break
+            if t.startswith("--"):
+                if t not in self.SHELL_LONG:
+                    self.deny("unknown-option", "stop_and_explain",
+                              f"{t} is a shell option the policy doesn't know; leave it out")
                 i += 1
                 continue
+            if t.startswith(("-", "+")) and len(t) > 1:
+                i += 1
+                for k, ch in enumerate(t[1:], 2):
+                    if ch == "c":
+                        has_c = True
+                    elif ch == "s":
+                        has_s = True
+                    elif ch in self.SHELL_VALUE.get(shell, "oO"):
+                        if ch == "o" and t[k:]:
+                            value = t[k:]  # -oNAME: the rest of the word is the value
+                        else:
+                            if i < len(rest) and (rest[i].dynamic or rest[i].glob):
+                                self.deny("dynamic-shell", "stop_and_explain",
+                                          "a shell option with a computed value")
+                            value = rest[i].text if i < len(rest) else ""
+                            i += 1  # its value
+                        if ch == "o" and value.lower().replace("_", "") in self.STDIN_OPTIONS:
+                            has_s = True
+                        if ch == "o" and t[k:]:
+                            break
+                continue
             break
+        if has_s and not has_c:
+            self.deny("shell-stdin", "stop_and_explain",
+                      "a shell with -s reads its commands from stdin, which can't be checked")
         if has_c:
-            if script is None or script.dynamic:
+            script = rest[i] if i < len(rest) else None
+            if script is None or script.dynamic or script.glob:
                 self.deny("dynamic-shell", "stop_and_explain", "a shell -c with a dynamic script")
             self.analyze_string(script.text, cwd, depth + 1)
             return cwd
@@ -1516,6 +2060,56 @@ class Analyzer:
     def short_cluster(self, a):
         return a.startswith("-") and not a.startswith("--") and len(a) > 1
 
+    # Short options that take a value, per program, so a cluster's tail isn't read as more
+    # options (`sort -ko,2`: the k takes "o,2"). Used by cluster_opts for the deny checks below.
+    # Only options that actually take a value; a boolean short flag must stay out, or a denied
+    # letter after it (sort -bo, fd -px) would be read as its value and missed. tree has none:
+    # each of its value letters takes the next word and the cluster goes on (`tree -Lo 1 f` is
+    # -L 1 -o f). grep's letters cover GNU grep and ugrep, which grep runs here. xxd doesn't
+    # cluster at all; xxd_writes reads it.
+    SHORT_VALUE = {"sort": "oktSTy", "tree": "", "date": "dIrfs", "file": "mefFP", "yq": "opIsf",
+                   "fd": "xXtedjScEo", "fdfind": "xXtedjScEo", "grep": "efmABCDdgJKMNOt",
+                   "egrep": "efmABCDdgJKMNOt", "fgrep": "efmABCDdgJKMNOt",
+                   "ugrep": "efmABCDdgJKMNOt"}
+
+    def cluster_opts(self, token, value_letters):
+        """The option letters in a short cluster (-qD -> {q, D}), stopping once a value-taking
+        letter is reached: that letter is included, and the rest of the token is its value."""
+        out = set()
+        for ch in token[1:]:
+            out.add(ch)
+            if ch in value_letters:
+                break
+        return out
+
+    # xxd reads each option by its first letter after one or two dashes (-revert, --r and -r are
+    # all -r; -pr is -p), and stops at its first file operand. A value letter takes the next word
+    # when nothing follows it or what follows starts its long name (-c 8, -cols 8), else the rest
+    # of the word (-c8). R has no long name the policy relies on.
+    XXD_VALUE = {"c": "ols", "g": "roupsize", "l": "en", "s": "eek", "n": "ame", "o": "ffset",
+                 "R": ""}
+
+    def xxd_writes(self, words):
+        """True when xxd would write a file: -r in any spelling, or a second operand (the output
+        file). A word the policy can't read counts as an operand, so doubt means a refusal."""
+        words, operands = list(words), 0
+        while words:
+            a = words.pop(0)
+            if a in ("--", "---"):  # xxd drops one dash from a word that starts --, so --- is --
+                operands += len(words)
+                break
+            if a is None or a == "-" or not a.startswith("-"):
+                operands += 1 + len(words)  # options end here; every later word is an operand
+                break
+            body = a[2:] if a.startswith("--") else a[1:]
+            if body[:1] == "r":
+                return True
+            long = self.XXD_VALUE.get(body[:1])
+            if long is not None and (len(body) == 1 or (long and body[1:].startswith(long))):
+                if words:
+                    words.pop(0)
+        return operands > 1
+
     def curl(self, args, researcher=False):
         c = self.p["curl"]
         send_long = [f for f in c["send_flags"] if f.startswith("--")]
@@ -1526,19 +2120,21 @@ class Analyzer:
         while i < len(args):
             a = args[i] or ""
             method = None
-            if a in ("-X", "--request"):
+            # curl takes a unique prefix of a long option (--data-bin is --data-binary), so every
+            # long name here matches by prefix (flag_hit), as git's and wget's do.
+            if a == "-X" or (a.startswith("--") and "=" not in a and flag_hit(a, ("--request",))):
                 method = args[i + 1] if i + 1 < len(args) else None
                 i += 1
-            elif a.startswith("--request="):
+            elif a.startswith("--") and "=" in a and flag_hit(a, ("--request",)):
                 method = a.split("=", 1)[1]
             elif self.short_cluster(a) and "X" in a[1:]:
                 rest = a[a.index("X", 1) + 1:]
                 method = rest or (args[i + 1] if i + 1 < len(args) else None)
-            if method is not None or a in ("-X", "--request"):
+            if method is not None or a == "-X" or flag_hit(a, ("--request",)):
                 if (method or "").upper() not in c["allowed_methods"]:
                     self.deny("http-write", "manual_only",
                               f"curl with method {method!r}; delegated agents only GET or HEAD")
-            if any(a == f or a.startswith(f + "=") for f in send_long):
+            if a.startswith("--") and flag_hit(a, send_long):
                 self.deny("http-write", "manual_only", f"curl {a} sends data")
             if self.short_cluster(a):
                 for ch in a[1:]:
@@ -1549,23 +2145,109 @@ class Analyzer:
                     if researcher and ch in out_short:
                         self.deny("researcher-write", "scope_down",
                                   f"curl -{ch} writes a local file; researcher reads to stdout")
-            if researcher and any(a == f or a.startswith(f + "=") for f in out_long):
+            if researcher and a.startswith("--") and flag_hit(a, out_long):
                 self.deny("researcher-write", "scope_down",
                           f"curl {a} writes a local file; researcher reads to stdout")
+            if researcher:
+                fmt = None  # -w/--write-out: %output{FILE} writes FILE, and @FILE reads a format
+                if a.startswith("--") and flag_hit(a, ("--write-out",)):
+                    nxt = args[i + 1] if i + 1 < len(args) else ""
+                    fmt = a.split("=", 1)[1] if "=" in a else nxt
+                elif self.short_cluster(a) and "w" in a[1:]:
+                    fmt = a[a.index("w", 1) + 1:] or (args[i + 1] if i + 1 < len(args) else "")
+                if fmt is not None and ("%output" in (fmt or "") or (fmt or "").startswith("@")):
+                    self.deny("researcher-write", "scope_down",
+                              "curl -w with %output{} writes a file, and @FILE reads its format "
+                              "from one; researcher reads to stdout")
             i += 1
 
+    # wget 1.21's short options that take a value (its --help gives each a =VALUE; -n takes the
+    # letters of -nv, -nc, -nd, -nH, -np): the rest of the cluster, else the next word.
+    WGET_VALUE_SHORT = frozenset("aABDeiIlnoOPQRtTUwXY")
+    # wget 1.21's long options that take a value: its --help gives each a =VALUE, except
+    # max-redirect, hsts-file and use-askpass, which take one too. Written without =, the value
+    # is the next word. backups is the other way round: its value is attached or absent.
+    WGET_LONG_VALUE = frozenset("""
+        accept accept-regex append-output base bind-address body-data body-file
+        ca-certificate ca-directory certificate certificate-type ciphers compression config
+        connect-timeout crl-file cut-dirs default-page directory-prefix dns-timeout domains
+        exclude-directories exclude-domains execute follow-tags ftp-password ftp-user header
+        hsts-file http-password http-user ignore-tags include-directories input-file level
+        limit-rate load-cookies local-encoding max-redirect method output-document output-file
+        password pinnedpubkey post-data post-file prefer-family private-key private-key-type
+        progress proxy-password proxy-user quota random-file read-timeout referer regex-type
+        reject reject-regex rejected-log remote-encoding report-speed restrict-file-names
+        retry-on-http-error save-cookies secure-protocol start-pos timeout tries use-askpass user
+        user-agent wait waitretry warc-dedup warc-file warc-header warc-max-size
+        warc-tempdir""".split())
+    # The boolean ones, hsts and backups included: --help shows only --no-hsts, and --backups=N.
+    WGET_LONG_FLAG = frozenset("""
+        adjust-extension ask-password auth-no-challenge background backup-converted backups
+        content-disposition content-on-error continue convert-file-only convert-links debug
+        delete-after follow-ftp force-directories force-html ftps-clear-data-connection
+        ftps-fallback-to-ftp ftps-implicit ftps-resume-ssl help hsts https-only ignore-case
+        ignore-length inet4-only inet6-only keep-session-cookies mirror no-cache
+        no-check-certificate no-clobber no-config no-cookies no-directories no-dns-cache no-glob
+        no-host-directories no-hsts no-http-keep-alive no-if-modified-since no-iri no-netrc
+        no-parent no-passive-ftp no-proxy no-remove-listing no-use-server-timestamps no-verbose
+        no-warc-compression no-warc-digests no-warc-keep-log page-requisites
+        preserve-permissions protocol-directories quiet random-wait recursive relative
+        retr-symlinks retry-connrefused retry-on-host-error save-headers server-response
+        show-progress span-hosts spider strict-comments timestamping trust-server-names unlink
+        verbose version warc-cdx xattr""".split())
+
+    def wget_long(self, name):
+        """The wget long option name stands for: itself, else the one option it is a prefix of;
+        None when unknown or ambiguous (wget then refuses the call)."""
+        known = self.WGET_LONG_VALUE | self.WGET_LONG_FLAG
+        if name in known:
+            return name
+        hits = [o for o in known if o.startswith(name)]
+        return hits[0] if len(hits) == 1 else None
+
     def wget(self, args, researcher=False):
-        for a in args[1:]:
-            if a and any(a == f or a.startswith(f + "=") for f in self.p["wget"]["send_flags"]):
-                self.deny("http-write", "manual_only", f"wget {a} sends data")
-        if researcher:
-            joined = " ".join(a or "" for a in args[1:])
-            to_stdout = re.search(r"(^|\s)(-q?O\s*-|--output-document=-)(\s|$)", joined)
-            writes = re.search(r"(^|\s)(-o|-a|-r|-m|-P|--output-file|--append-output|"
-                               r"--recursive|--mirror|--directory-prefix)(\s|=|$)", joined)
-            if not to_stdout or writes:
-                self.deny("researcher-write", "scope_down",
-                          "researcher runs wget only with -O- (output to stdout)")
+        w = self.p["wget"]
+        send, writes = w["send_flags"], w["researcher_write_flags"]
+        out_doc, words = None, list(args[1:])
+        while words:
+            a = words.pop(0)
+            if a == "--":
+                break  # the rest are URLs
+            if not a or a == "-" or not a.startswith("-"):
+                continue
+            if a.startswith("--"):
+                name, eq, value = a[2:].partition("=")
+                opt = self.wget_long(name)
+                if opt is None:
+                    if researcher:  # it may take the next word, -O- included, as its value
+                        self.deny("researcher-write", "scope_down",
+                                  f"wget {a} is not an option the policy knows")
+                    found, exact = [a], False  # unknown: match the lists by prefix
+                else:
+                    found, exact = ["--" + opt], True
+                    if opt in self.WGET_LONG_VALUE and not eq:
+                        value = words.pop(0) if words else None
+                    if opt == "output-document":
+                        out_doc = value
+            else:
+                found, exact = [], True
+                for k, c in enumerate(a[1:], 2):
+                    found.append("-" + c)
+                    if c in self.WGET_VALUE_SHORT:
+                        value = a[k:] or (words.pop(0) if words else None)
+                        if c == "O":
+                            out_doc = value
+                        break
+            for f in found:
+                if (f in send) if exact else flag_hit(f, send):
+                    self.deny("http-write", "manual_only",
+                              f"wget {a} sends data or runs a wgetrc command that can")
+                if researcher and ((f in writes) if exact else flag_hit(f, writes)):
+                    self.deny("researcher-write", "scope_down",
+                              f"wget {a} writes a local file; researcher reads to stdout")
+        if researcher and out_doc != "-":
+            self.deny("researcher-write", "scope_down",
+                      "researcher runs wget only with -O- (output to stdout)")
 
     # ------------------------------------------------ git
 
@@ -1575,26 +2257,47 @@ class Analyzer:
     GIT_TAG_MUTATE = {"-d", "--delete", "-f", "--force"}
     GIT_REMOTE_READ = {None, "-v", "--verbose", "show", "get-url"}
 
+    # git's main-level options that take a value (attached with = or the next word). Reading
+    # the value is what stops it being mistaken for the subcommand (`git --namespace x push`).
+    GIT_GLOBAL_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix",
+                        "--config-env", "--attr-source", "--shallow-file"}
+    # The ones that take no next word (--exec-path and --list-cmds take theirs attached). git
+    # matches its main-level options exactly, so any other is refused rather than guessed at: a
+    # value option this list lacks would make its value read as the subcommand.
+    GIT_GLOBAL_FLAG = {"-p", "--paginate", "-P", "--no-pager", "--no-replace-objects", "--bare",
+                       "--literal-pathspecs", "--no-literal-pathspecs", "--glob-pathspecs",
+                       "--noglob-pathspecs", "--icase-pathspecs", "--no-optional-locks",
+                       "--no-advice", "--no-lazy-fetch", "--exec-path", "--html-path",
+                       "--man-path", "--info-path", "--list-cmds", "-v", "--version", "-h",
+                       "--help"}
+
     def git(self, args, cwd, researcher=False):
         g = self.p["git"]
         i = 1
         gcwd = cwd
-        while i < len(args) and args[i] and args[i].startswith("-"):
+        while i < len(args) and args[i] and args[i].startswith("-") and args[i] != "-":
             a = args[i]
-            if a == "-c" or a.startswith("--config-env"):
+            name, eq, attached = a.partition("=")
+            if name in ("-c", "--config-env"):
                 self.deny("git-config-override", "use_alternative",
                           "git -c can set a pager, diff driver or fsmonitor that runs a command; "
                           "run git without it")
-            if a == "-C" and i + 1 < len(args):
-                if args[i + 1] is None:
-                    self.deny("git-dynamic-dir", "stop_and_explain", "git -C with a computed path")
-                gcwd = resolve(expand(args[i + 1], self.home), gcwd)
-                i += 2
-                continue
-            if a.startswith("--exec-path="):
+            if name == "--exec-path":
                 self.deny("git-exec-path", "manual_only", "git --exec-path runs other programs")
-            if a.startswith("--git-dir=") or a.startswith("--work-tree="):
-                gcwd = resolve(expand(a.split("=", 1)[1], self.home), gcwd)
+            if name not in self.GIT_GLOBAL_VALUE | self.GIT_GLOBAL_FLAG:
+                self.deny("git-global-option", "stop_and_explain",
+                          f"git {name} is not a main-level git option the policy knows; run git "
+                          "without it")
+            value = attached if eq else None
+            if name in self.GIT_GLOBAL_VALUE and not eq:
+                if i + 1 >= len(args):
+                    break
+                value, i = args[i + 1], i + 1
+            if name in ("-C", "--git-dir", "--work-tree"):
+                if value is None:
+                    self.deny("git-dynamic-dir", "stop_and_explain",
+                              f"git {name} with a computed path")
+                gcwd = resolve(expand(value, self.home), gcwd)
             i += 1
         if self.confined and not (under(gcwd, self.root) or self.in_temp(gcwd)):
             self.deny("worktree-root", "scope_down",
@@ -1610,12 +2313,13 @@ class Analyzer:
                       f"git {sub} is not a known git subcommand (an alias?); use the subcommand "
                       "it stands for")
         for a in rest:
-            if a and any(a == f or a.startswith(f + "=") for f in g["denied_flags"]):
+            if flag_hit(a, g["denied_flags"]):
                 self.deny("git-flag", "use_alternative", f"git {sub} {a} is not allowed")
-            if sub == "grep" and a and (a.startswith("-O") or a == "--open-files-in-pager"):
+            if sub == "grep" and a and (
+                    (self.short_cluster(a) and "O" in self.cluster_opts(a, self.GIT_GREP_VALUE))
+                    or flag_hit(a, ("--open-files-in-pager",))):
                 self.deny("git-flag", "use_alternative", "git grep -O runs a pager command")
-            if sub == "clone" and a and (a in ("-u", "--template", "--config") or
-                                         a.startswith("--template=") or a.startswith("--config=")):
+            if sub == "clone" and self.clone_flag(a):
                 self.deny("git-flag", "use_alternative", f"git clone {a} is not allowed")
             if sub == "clone" and a and re.match(r"^(ext|fd)::", a):
                 self.deny("git-transport", "hard_stop", f"git clone {a} runs a command")
@@ -1625,24 +2329,29 @@ class Analyzer:
                       + (" (it needs the GitHub credential, which subagents never get)"
                          if sub in ("push", "fetch", "pull", "ls-remote", "send-pack") else ""))
         pos = [a for a in rest if a is not None and not a.startswith("-")]
-        flags = {a.split("=", 1)[0] for a in rest if a and a.startswith("-")}
+        flags = self.git_flags(sub, rest)
         first = pos[0] if pos else None
         if researcher:
             self.git_read_only(sub, rest, pos, flags, first, cwd)
             return cwd
-        if sub == "checkout" and not (rest and rest[0] == "-b"):
+        if sub == "checkout" and not (rest and rest[0] == "-b") or (
+                sub == "checkout" and any_flag(flags, ("-B", "-f", "--force"))):
             self.deny("git-checkout", "use_alternative",
                       "only `git checkout -b <new>` is allowed; use `git switch -c <new>` to "
                       "create a branch")
         if sub == "switch" and not (flags & {"-c", "--create"}) or (
-                sub == "switch" and flags & {"-C", "--force-create", "-f", "--force",
-                                             "--discard-changes"}):
+                sub == "switch" and any_flag(flags, ("-C", "--force-create", "-f", "--force",
+                                                     "--discard-changes"))):
             self.deny("git-switch", "use_alternative", "only `git switch -c <new>` is allowed")
-        if sub == "restore" and (not flags & {"--staged", "-S"} or flags & {"--worktree", "-W"}):
+        if sub == "restore" and (not flags & {"--staged", "-S"}
+                                 or any_flag(flags, ("--worktree", "-W"))):
             self.deny("git-restore", "use_alternative",
                       "git restore that discards work is not allowed; `git restore --staged "
                       "<path>` unstages")
-        if sub == "branch" and flags & self.GIT_BRANCH_MUTATE:
+        if sub == "commit" and "-n" in flags:
+            self.deny("git-flag", "use_alternative",
+                      "git commit -n is --no-verify; it skips the hooks")
+        if sub == "branch" and any_flag(flags, self.GIT_BRANCH_MUTATE):
             self.deny("git-branch", "use_alternative",
                       "deleting, moving or force-resetting a branch is not allowed")
         if sub == "stash" and first in ("drop", "clear", "pop"):
@@ -1650,7 +2359,7 @@ class Analyzer:
                       f"git stash {first} discards a stash entry; `git stash apply` keeps it")
         if sub == "worktree" and first not in (None, "list"):
             self.deny("git-worktree", "manual_only", "only `git worktree list` is allowed")
-        if sub == "tag" and flags & self.GIT_TAG_MUTATE:
+        if sub == "tag" and any_flag(flags, self.GIT_TAG_MUTATE):
             self.deny("git-tag", "manual_only", "deleting or moving a tag is not allowed")
         if sub == "remote" and first not in self.GIT_REMOTE_READ:
             self.deny("git-remote", "manual_only", f"git remote {first} changes remotes")
@@ -1658,11 +2367,11 @@ class Analyzer:
             self.deny("git-config", "manual_only", "git config writes are not allowed")
         if sub == "reflog" and first in ("expire", "delete"):
             self.deny("git-reflog", "manual_only", f"git reflog {first} discards history")
-        if sub == "gc" and any(f.startswith("--prune") for f in flags):
+        if sub == "gc" and any_flag(flags, ("--prune",)):
             self.deny("git-gc", "manual_only", "git gc --prune discards objects")
-        if sub in ("merge", "cherry-pick", "am") and "--abort" in flags:
+        if sub in ("merge", "cherry-pick", "am") and any_flag(flags, ("--abort",)):
             self.deny("git-abort", "use_alternative", f"git {sub} --abort discards work in progress")
-        if sub == "rm" and (flags & {"-f", "--force"} or any(
+        if sub == "rm" and (any_flag(flags, ("-f", "--force")) or any(
                 a and re.fullmatch(r"-[a-zA-Z]*f[a-zA-Z]*", a) for a in rest)):
             self.deny("git-rm-force", "use_alternative", "git rm -f discards changes")
         if sub == "submodule" and first not in ("status", "summary", None):
@@ -1674,6 +2383,46 @@ class Analyzer:
             self.check_write_path(cpos[-1], cwd)
         return cwd
 
+    # Per-subcommand short options that take a value, so the rest of a cluster is that value and
+    # not more flags (`git tag -mDeploy`: the m takes "Deploy", not -D -e ...). Only subcommands
+    # whose mutate checks read short letters need an entry.
+    # An optional value (branch -t, commit -S and -u) is the rest of the cluster too.
+    GIT_SHORT_VALUE = {"branch": "ut", "tag": "mFun", "switch": "cCt", "restore": "s",
+                       "commit": "mFcCtSu", "checkout": "bB"}
+    # git grep's own (-O's optional value is attached), not grep's or ugrep's.
+    GIT_GREP_VALUE = "efmABCO"
+
+    def git_flags(self, sub, rest):
+        """The option flags in rest as a set: each long option whole (minus any =value), and each
+        short cluster split into its letters (-qD -> -q, -D), stopping at a value-taking letter so
+        an attached value is never read as flags."""
+        value = self.GIT_SHORT_VALUE.get(sub, "")
+        out = set()
+        for a in rest:
+            if not a or not a.startswith("-") or a == "-":
+                continue
+            if a.startswith("--"):
+                out.add(a.split("=", 1)[0])
+                continue
+            for ch in a[1:]:
+                out.add("-" + ch)
+                if ch in value:
+                    break
+        return out
+
+    def clone_flag(self, a):
+        """git clone's --upload-pack (-u), --config (-c) and --template: long by prefix, short
+        anywhere in a cluster (`-qc`) before a value-taking letter (-b, -j, -o) starts a value."""
+        if flag_hit(a, ("--upload-pack", "--template", "--config", "--separate-git-dir")):
+            return True  # --separate-git-dir puts .git anywhere, outside the clone dest
+        if self.short_cluster(a or ""):
+            for ch in a[1:]:
+                if ch in "uc":
+                    return True
+                if ch in "bjo":
+                    break
+        return False
+
     CLONE_VALUE_FLAGS = {"--depth", "-b", "--branch", "-o", "--origin", "--reference",
                          "--reference-if-able", "-j", "--jobs", "--shallow-since",
                          "--shallow-exclude", "--separate-git-dir", "--filter",
@@ -1684,6 +2433,9 @@ class Analyzer:
         for a in rest:
             if skip:
                 skip = False
+            elif a is not None and a.startswith("--") and "=" not in a and flag_hit(
+                    a, self.CLONE_VALUE_FLAGS):
+                skip = True  # a long value option by prefix (--sep -> --separate-git-dir)
             elif a is not None and a in self.CLONE_VALUE_FLAGS:
                 skip = True
             elif a is None or not a.startswith("-"):
@@ -1691,9 +2443,11 @@ class Analyzer:
         return out
 
     def git_config_read(self, rest, pos, flags):
+        # --global/--system only pick the scope; a write still needs an action flag or a
+        # name+value pair (caught by the positional count below), so a read with --global passes.
         write_flags = {"--unset", "--unset-all", "--add", "--replace-all", "--edit", "-e",
-                       "--rename-section", "--remove-section", "--global", "--system"}
-        if flags & write_flags:
+                       "--rename-section", "--remove-section"}
+        if any_flag(flags, write_flags):
             return False
         if flags & {"--get", "--get-all", "--get-regexp", "--list", "-l", "--get-urlmatch",
                     "--show-origin", "--show-scope", "--name-only"}:
@@ -1707,19 +2461,19 @@ class Analyzer:
                       f"researcher runs read-only git; git {sub} changes something")
         ok = True
         if sub == "branch":
-            ok = not (flags & (self.GIT_BRANCH_MUTATE | {"-t", "--track", "--no-track",
-                                                         "--create-reflog"}))
+            ok = not any_flag(flags, self.GIT_BRANCH_MUTATE | {"-t", "--track", "--no-track",
+                                                               "--create-reflog"})
             ok = ok and (not pos or flags & {"--list", "-l", "--contains", "--merged",
                                              "--no-merged", "--points-at", "--no-contains"})
         elif sub == "tag":
-            ok = not (flags & (self.GIT_TAG_MUTATE | {"-a", "-s", "-m", "-F", "-u",
-                                                      "--annotate", "--sign"}))
+            ok = not any_flag(flags, self.GIT_TAG_MUTATE | {"-a", "-s", "-m", "-F", "-u",
+                                                            "--annotate", "--sign"})
             ok = ok and (not pos or flags & {"-l", "--list", "--contains", "--points-at",
                                              "--merged", "--no-merged"})
         elif sub == "remote":
             ok = first in self.GIT_REMOTE_READ
         elif sub == "stash":
-            ok = first in ("list", "show")
+            ok = bool(rest) and rest[0] in ("list", "show")  # an option first means stash push
         elif sub == "worktree":
             ok = first == "list"
         elif sub == "config":
@@ -1742,6 +2496,20 @@ class Analyzer:
 
     # ------------------------------------------------ researcher
 
+    def uniq_operands(self, words):
+        """uniq's file operands: words that aren't options, - (stdin) included, and every word
+        after --. A second one is the output file."""
+        n = 0
+        for k, a in enumerate(words):
+            if a == "--":
+                return n + len(words) - k - 1
+            if a is None or a == "-" or not a.startswith("-"):
+                n += 1
+        return n
+
+    # Researcher programs with write or run rules in code rather than in denied_flags.
+    RESEARCHER_WRITERS = {"xxd", "uniq", "curl", "wget", "git"}
+
     def researcher_program(self, base, args, globs, splits, cwd, depth):
         r = self.p["researcher"]
         if len(args) == 2 and args[1] in ("--version", "--help", "-h", "-V") and \
@@ -1756,30 +2524,52 @@ class Analyzer:
         for a in args[1:]:
             if a is None:
                 continue
+            cluster = (self.cluster_opts(a, self.SHORT_VALUE.get(base, ""))
+                       if self.short_cluster(a) else set())
             for f in r["denied_flags"].get(base, []):
-                attached = (not f.startswith("--") and len(f) == 2 and self.short_cluster(a)
-                            and a.startswith(f))
-                if a == f or a.startswith(f + "=") or attached:
+                hit = flag_hit(a, (f,)) or a.startswith(f + "=")
+                if not f.startswith("--") and len(f) == 2:
+                    hit = hit or f[1] in cluster  # a denied letter anywhere in the cluster
+                if hit:
                     self.deny("researcher-flag", "scope_down",
                               f"{base} {f} writes or runs something; researcher only reads")
+        if base == "sed" and any(globs[1:]):
+            # A glob or brace could expand to an option the policy can't see, even -i, which
+            # --sandbox does not disable; a researcher write has no sandbox backstop, so refuse.
+            self.deny("sed-unchecked", "use_alternative",
+                      "sed with a glob or brace argument could expand to an option (even -i, "
+                      "which --sandbox won't stop) or a script the policy can't check; name the "
+                      "files or pipe them in")
+        # A program with a write or run rule sees every word literally: a glob, brace, variable
+        # or substitution (or a word xargs adds) can expand to an option or an output operand
+        # the rules never read (`sort "$(echo -oout)" in`), so none is allowed, even after --.
+        # sed keeps its own reader, which already refuses each one outside a --sandbox -e value.
+        if base != "sed" and (base in r["denied_flags"] or base in self.RESEARCHER_WRITERS) and (
+                any(globs[1:]) or any(splits[1:]) or None in args[1:]):
+            self.deny("researcher-dynamic", "use_alternative",
+                      f"{base} with a glob, brace, variable or substitution could expand to an "
+                      "option or output file the policy can't check; name each file and value "
+                      "literally")
         if base == "git":
             return self.git(args, cwd, researcher=True)
         if base == "cd":
             return self.cd(args, cwd)
         if base == "sed":
-            if any(globs[1:]):
-                # A glob or brace could expand to an option the policy can't see, even -i, which
-                # --sandbox does not disable; a researcher write has no sandbox backstop, so refuse.
-                self.deny("sed-unchecked", "use_alternative",
-                          "sed with a glob or brace argument could expand to an option (even -i, "
-                          "which --sandbox won't stop) or a script the policy can't check; name the "
-                          "files or pipe them in")
             call, ops = self.sed(args, globs, splits)
             if call.in_place is not None or any(op in ("e", "w") for op, _ in ops):
                 self.deny("researcher-flag", "scope_down",
                           "sed -i or a sed w/W/e command writes a file or runs one")
-        if base == "uniq" and len([a for a in args[1:] if a and not a.startswith("-")]) > 1:
+        if base in ("grep", "egrep", "fgrep", "ugrep") and any(
+                a and a.startswith("---") for a in args[1:]):
+            self.deny("researcher-flag", "scope_down",
+                      f"{base} ---FILE loads a config file that can set a filter or pager command")
+        if base == "uniq" and self.uniq_operands(args[1:]) > 1:
             self.deny("researcher-flag", "scope_down", "uniq with an output file writes it")
+        if base == "date" and any(a and not a.startswith(("-", "+")) for a in args[1:]):
+            self.deny("researcher-flag", "scope_down",
+                      "date with an operand other than +FORMAT sets the clock")
+        if base == "xxd" and self.xxd_writes(args[1:]):
+            self.deny("researcher-flag", "scope_down", "xxd -r or an xxd output file writes it")
         if base == "curl":
             self.curl(args, researcher=True)
         if base == "wget":
