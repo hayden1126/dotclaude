@@ -416,12 +416,18 @@ def substitutions(text, mode="word"):
     from parable import (_find_braced_param_end, _find_cmdsub_end, _is_valid_arithmetic_start,
                          _skip_backtick, _skip_single_quoted)
     quotes = mode == "word"
+    # In inner mode the text is already bounded (the inside of a ${...} or arithmetic), so an
+    # opener with no close is a quoted or partial fragment, not a live substitution: skip it
+    # rather than refuse. Only top-level text (word, heredoc) refuses an unclosed opener.
+    strict = mode != "inner"
     out, i, n, dq = [], 0, len(text), False
 
     def closed(j, close):
-        if j > n or not text[:j].endswith(close):
+        if j <= n and text[:j].endswith(close):
+            return j
+        if strict:
             raise ValueError(text[i:])
-        return j
+        return None
     while i < n:
         c, nxt = text[i], text[i + 1:i + 2]
         if c == "\\" or (c == "$" and nxt == "$"):
@@ -436,24 +442,37 @@ def substitutions(text, mode="word"):
             dq, i = not dq, i + 1
         elif c == "`":
             j = closed(_skip_backtick(text, i), "`")
-            if j - 1 <= i:
-                raise ValueError(text[i:])
+            if j is None or j - 1 <= i:
+                if strict and j is not None:
+                    raise ValueError(text[i:])
+                i += 1
+                continue
             # inside "...", the shell also drops the backslash before a "
             out.append(re.sub(r'\\([$`\\"])' if dq else r"\\([$`\\])", r"\1", text[i + 1:j - 1]))
             i = j
         elif c == "$" and text.startswith("$((", i) and _is_valid_arithmetic_start(text, i):
             j = closed(_find_cmdsub_end(text, i + 2), "))")
+            if j is None:
+                i += 1
+                continue
             out += substitutions(text[i + 3:j - 2], "inner")
             i = j
         elif nxt == "(" and (c == "$" or (c in "<>" and not dq and mode != "heredoc")):
             j = closed(_find_cmdsub_end(text, i + 2), ")")
+            if j is None:
+                i += 1
+                continue
             out.append(text[i + 2:j - 1])
             i = j
         elif c == "$" and nxt == "{":
             # The shell may honour '...' inside and end later than Parable's helper; reading on
             # to the later end only checks more.
-            j = max(closed(_find_braced_param_end(text, i + 2), "}"),
-                    closed(_param_end(text, i + 2), "}"))
+            e1, e2 = closed(_find_braced_param_end(text, i + 2), "}"), \
+                closed(_param_end(text, i + 2), "}")
+            j = max(e1 or 0, e2 or 0)
+            if not j:
+                i += 1
+                continue
             out += substitutions(text[i + 2:j - 1], "inner")
             i = j
         elif c == "$" and nxt == "[":
@@ -1342,10 +1361,26 @@ class Analyzer:
             self.deny("env-assignment", "scope_down", f"researcher may not set {name}")
         self.check_env_name(name)
 
+    def check_env_assignment(self, lit):
+        """A NAME=value word, where the value (but not the name) may be dynamic. The allowlist
+        exemption (PAGER=cat) applies only to a fully static word; otherwise the name is checked
+        on its own, and a computed name is refused."""
+        m = re.match(r"""["']?([A-Za-z_][A-Za-z0-9_]*)(\[[^]]*\])?\+?=(.*)""", lit.raw, re.S)
+        name = m.group(1)
+        if "$" in m.group(1) + (m.group(2) or "") or "`" in (m.group(2) or ""):
+            self.deny("dynamic-assignment", "stop_and_explain",
+                      f"the variable name in {lit.raw!r} comes from an expansion; name it plainly")
+        if not lit.dynamic:
+            self.check_env(name, self.assignment(lit)[1])
+        else:
+            if self.is_researcher and name not in self.p["researcher"]["allowed_env"]:
+                self.deny("env-assignment", "scope_down", f"researcher may not set {name}")
+            self.check_env_name(name)
+
     def check_env_name(self, name):
         sh = self.p["shell"]
-        if name in sh["denied_env_names"] or any(name.startswith(x)
-                                                 for x in sh["denied_env_prefixes"]):
+        if name in sh["denied_env_names"] or name in sh["banned_env_names"] or any(
+                name.startswith(x) for x in sh["denied_env_prefixes"]):
             self.deny("env-assignment", "use_alternative",
                       f"setting {name} changes what a command executes or reads; run it "
                       "without that")
@@ -1380,7 +1415,11 @@ class Analyzer:
                         self.deny("dynamic-assignment", "stop_and_explain",
                                   f"{base} -n makes a name that sets another variable; set the "
                                   "variable itself")
-                    skip = base == "read" and lit.text[-1] in self.READ_VALUE_OPTS
+                    if base == "read":  # the next word is a value only if nothing is attached to
+                        for j, ch in enumerate(lit.text[1:]):  # the first value-taking letter
+                            if ch in self.READ_VALUE_OPTS:
+                                skip = j == len(lit.text) - 2
+                                break
                     continue
                 if base in self.READ_INTO and not lit.dynamic:
                     # zsh: read 'NAME?prompt'; a subscript sets part of NAME
@@ -1394,19 +1433,34 @@ class Analyzer:
                 for m in ARITH_ASSIGN.finditer(lit.text):
                     self.check_env_name(m.group(1) or m.group(2))
         elif base in ("printf", "print"):
-            for k, lit in enumerate(rest):
-                if lit.raw == "-v" and k + 1 < len(rest):
-                    self.check_env_name(name_of(rest[k + 1]).group(1))
-                elif lit.raw.startswith("-v") and not lit.dynamic:
-                    self.check_env_name(lit.text[2:].split("[", 1)[0])
-                elif not lit.raw.startswith("-"):
+            k = 0
+            while k < len(rest):
+                t = rest[k].text
+                if t == "-v":  # quoted or bare; an attached expansion left text as "-v" too
+                    if rest[k].dynamic:
+                        self.deny("dynamic-assignment", "stop_and_explain",
+                                  f"{base} -v with a computed variable name; name it plainly")
+                    if k + 1 < len(rest):
+                        self.check_env_name(re.split(r"\[", name_of(rest[k + 1]).group(1), 1)[0])
+                    k += 2
+                elif t.startswith("-v"):  # -vNAME attached
+                    if rest[k].dynamic:
+                        self.deny("dynamic-assignment", "stop_and_explain",
+                                  f"{base} -v with a computed variable name; name it plainly")
+                    self.check_env_name(t[2:].split("[", 1)[0])
+                    k += 1
+                elif t.startswith("-"):
+                    k += 1
+                else:
                     break  # the format: options end here
 
     def trap(self, lits, cwd, depth):
         """trap's handler runs later in this shell, so it is checked like eval's text. Resetting
         (`trap - SIG`), ignoring (`trap '' SIG`) and the listing forms run nothing."""
         rest = lits[1:]
-        while rest and not rest[0].dynamic and rest[0].text.startswith("-") and rest[0].text != "-":
+        # trap's only options are -l, -p and --; anything else starting with - is the handler
+        # (a reset like `trap '-; cmd' EXIT`), so it is not skipped.
+        while rest and not rest[0].dynamic and rest[0].text in ("-l", "-p", "--"):
             end, rest = rest[0].text == "--", rest[1:]
             if end:
                 break
@@ -1545,9 +1599,12 @@ class Analyzer:
                     if split.dynamic:
                         self.deny("dynamic-shell", "stop_and_explain", "env -S with a dynamic string")
                     return [Lit(s) for s in split.text.split()] + rest[after:]
-                elif self.assignment(rest[i]):
-                    self.check_env(*self.assignment(rest[i]))
+                elif re.match(r"""["']?[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?=""", rest[i].raw):
+                    self.check_env_assignment(rest[i])
                     i += 1
+                elif rest[i].dynamic and "=" in (rest[i].text or ""):
+                    self.deny("dynamic-assignment", "stop_and_explain",
+                              "env with a computed variable name; name it plainly")
                 else:
                     break
             rest = rest[i:]
@@ -1794,6 +1851,22 @@ class Analyzer:
     def short_cluster(self, a):
         return a.startswith("-") and not a.startswith("--") and len(a) > 1
 
+    # Short options that take a value, per program, so a cluster's tail isn't read as more
+    # options (`sort -ko,2`: the k takes "o,2"). Used by cluster_opts for the deny checks below.
+    SHORT_VALUE = {"sort": "oktSbd", "tree": "LPIo", "date": "dIrf", "xxd": "cglseo",
+                   "fd": "xXtedpjSc", "fdfind": "xXtedpjSc", "grep": "efmABCDd",
+                   "egrep": "efmABCDd", "fgrep": "efmABCDd", "ugrep": "efmABCDd"}
+
+    def cluster_opts(self, token, value_letters):
+        """The option letters in a short cluster (-qD -> {q, D}), stopping once a value-taking
+        letter is reached: that letter is included, and the rest of the token is its value."""
+        out = set()
+        for ch in token[1:]:
+            out.add(ch)
+            if ch in value_letters:
+                break
+        return out
+
     def curl(self, args, researcher=False):
         c = self.p["curl"]
         send_long = [f for f in c["send_flags"] if f.startswith("--")]
@@ -1926,26 +1999,34 @@ class Analyzer:
     GIT_TAG_MUTATE = {"-d", "--delete", "-f", "--force"}
     GIT_REMOTE_READ = {None, "-v", "--verbose", "show", "get-url"}
 
+    # git's main-level options that take a value (attached with = or the next word). Reading
+    # the value is what stops it being mistaken for the subcommand (`git --namespace x push`).
+    GIT_GLOBAL_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix",
+                        "--config-env", "--attr-source"}
+
     def git(self, args, cwd, researcher=False):
         g = self.p["git"]
         i = 1
         gcwd = cwd
-        while i < len(args) and args[i] and args[i].startswith("-"):
+        while i < len(args) and args[i] and args[i].startswith("-") and args[i] != "-":
             a = args[i]
-            if a == "-c" or a.startswith("--config-env"):
+            name, eq, attached = a.partition("=")
+            if name in ("-c", "--config-env"):
                 self.deny("git-config-override", "use_alternative",
                           "git -c can set a pager, diff driver or fsmonitor that runs a command; "
                           "run git without it")
-            if a == "-C" and i + 1 < len(args):
-                if args[i + 1] is None:
-                    self.deny("git-dynamic-dir", "stop_and_explain", "git -C with a computed path")
-                gcwd = resolve(expand(args[i + 1], self.home), gcwd)
-                i += 2
-                continue
-            if a.startswith("--exec-path="):
+            if name == "--exec-path":
                 self.deny("git-exec-path", "manual_only", "git --exec-path runs other programs")
-            if a.startswith("--git-dir=") or a.startswith("--work-tree="):
-                gcwd = resolve(expand(a.split("=", 1)[1], self.home), gcwd)
+            value = attached if eq else None
+            if name in self.GIT_GLOBAL_VALUE and not eq:
+                if i + 1 >= len(args):
+                    break
+                value, i = args[i + 1], i + 1
+            if name in ("-C", "--git-dir", "--work-tree"):
+                if value is None:
+                    self.deny("git-dynamic-dir", "stop_and_explain",
+                              f"git {name} with a computed path")
+                gcwd = resolve(expand(value, self.home), gcwd)
             i += 1
         if self.confined and not (under(gcwd, self.root) or self.in_temp(gcwd)):
             self.deny("worktree-root", "scope_down",
@@ -1963,7 +2044,9 @@ class Analyzer:
         for a in rest:
             if flag_hit(a, g["denied_flags"]):
                 self.deny("git-flag", "use_alternative", f"git {sub} {a} is not allowed")
-            if sub == "grep" and a and (a.startswith("-O") or a == "--open-files-in-pager"):
+            if sub == "grep" and a and (
+                    (self.short_cluster(a) and "O" in self.cluster_opts(a, self.SHORT_VALUE["grep"]))
+                    or flag_hit(a, ("--open-files-in-pager",))):
                 self.deny("git-flag", "use_alternative", "git grep -O runs a pager command")
             if sub == "clone" and self.clone_flag(a):
                 self.deny("git-flag", "use_alternative", f"git clone {a} is not allowed")
@@ -1975,7 +2058,7 @@ class Analyzer:
                       + (" (it needs the GitHub credential, which subagents never get)"
                          if sub in ("push", "fetch", "pull", "ls-remote", "send-pack") else ""))
         pos = [a for a in rest if a is not None and not a.startswith("-")]
-        flags = {a.split("=", 1)[0] for a in rest if a and a.startswith("-")}
+        flags = self.git_flags(sub, rest)
         first = pos[0] if pos else None
         if researcher:
             self.git_read_only(sub, rest, pos, flags, first, cwd)
@@ -1993,6 +2076,9 @@ class Analyzer:
             self.deny("git-restore", "use_alternative",
                       "git restore that discards work is not allowed; `git restore --staged "
                       "<path>` unstages")
+        if sub == "commit" and "-n" in flags:
+            self.deny("git-flag", "use_alternative",
+                      "git commit -n is --no-verify; it skips the hooks")
         if sub == "branch" and any_flag(flags, self.GIT_BRANCH_MUTATE):
             self.deny("git-branch", "use_alternative",
                       "deleting, moving or force-resetting a branch is not allowed")
@@ -2025,11 +2111,35 @@ class Analyzer:
             self.check_write_path(cpos[-1], cwd)
         return cwd
 
+    # Per-subcommand short options that take a value, so the rest of a cluster is that value and
+    # not more flags (`git tag -mDeploy`: the m takes "Deploy", not -D -e ...). Only subcommands
+    # whose mutate checks read short letters need an entry.
+    GIT_SHORT_VALUE = {"branch": "u", "tag": "mFun", "switch": "cC", "restore": "s",
+                       "commit": "mFcC", "checkout": "bBm"}
+
+    def git_flags(self, sub, rest):
+        """The option flags in rest as a set: each long option whole (minus any =value), and each
+        short cluster split into its letters (-qD -> -q, -D), stopping at a value-taking letter so
+        an attached value is never read as flags."""
+        value = self.GIT_SHORT_VALUE.get(sub, "")
+        out = set()
+        for a in rest:
+            if not a or not a.startswith("-") or a == "-":
+                continue
+            if a.startswith("--"):
+                out.add(a.split("=", 1)[0])
+                continue
+            for ch in a[1:]:
+                out.add("-" + ch)
+                if ch in value:
+                    break
+        return out
+
     def clone_flag(self, a):
         """git clone's --upload-pack (-u), --config (-c) and --template: long by prefix, short
         anywhere in a cluster (`-qc`) before a value-taking letter (-b, -j, -o) starts a value."""
-        if flag_hit(a, ("--upload-pack", "--template", "--config")):
-            return True
+        if flag_hit(a, ("--upload-pack", "--template", "--config", "--separate-git-dir")):
+            return True  # --separate-git-dir puts .git anywhere, outside the clone dest
         if self.short_cluster(a or ""):
             for ch in a[1:]:
                 if ch in "uc":
@@ -2048,6 +2158,9 @@ class Analyzer:
         for a in rest:
             if skip:
                 skip = False
+            elif a is not None and a.startswith("--") and "=" not in a and flag_hit(
+                    a, self.CLONE_VALUE_FLAGS):
+                skip = True  # a long value option by prefix (--sep -> --separate-git-dir)
             elif a is not None and a in self.CLONE_VALUE_FLAGS:
                 skip = True
             elif a is None or not a.startswith("-"):
@@ -2055,8 +2168,10 @@ class Analyzer:
         return out
 
     def git_config_read(self, rest, pos, flags):
+        # --global/--system only pick the scope; a write still needs an action flag or a
+        # name+value pair (caught by the positional count below), so a read with --global passes.
         write_flags = {"--unset", "--unset-all", "--add", "--replace-all", "--edit", "-e",
-                       "--rename-section", "--remove-section", "--global", "--system"}
+                       "--rename-section", "--remove-section"}
         if any_flag(flags, write_flags):
             return False
         if flags & {"--get", "--get-all", "--get-regexp", "--list", "-l", "--get-urlmatch",
@@ -2120,10 +2235,13 @@ class Analyzer:
         for a in args[1:]:
             if a is None:
                 continue
+            cluster = (self.cluster_opts(a, self.SHORT_VALUE.get(base, ""))
+                       if self.short_cluster(a) else set())
             for f in r["denied_flags"].get(base, []):
-                attached = (not f.startswith("--") and len(f) == 2 and self.short_cluster(a)
-                            and a.startswith(f))
-                if flag_hit(a, (f,)) or a.startswith(f + "=") or attached:
+                hit = flag_hit(a, (f,)) or a.startswith(f + "=")
+                if not f.startswith("--") and len(f) == 2:
+                    hit = hit or f[1] in cluster  # a denied letter anywhere in the cluster
+                if hit:
                     self.deny("researcher-flag", "scope_down",
                               f"{base} {f} writes or runs something; researcher only reads")
         if base == "git":

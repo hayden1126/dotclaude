@@ -426,8 +426,17 @@ class Commands(Base):
             self.assertDenied(self.bash(cmd), "env-assignment", msg=cmd)
         for cmd in ("declare -n r=PAGER", "local -n r=x", "n=PAGER; : ${!n:=less}"):
             self.assertDenied(self.bash(cmd), "dynamic-assignment", msg=cmd)
-        for cmd in ('export "$N"=rc', "export $N=rc", "read -r $N", "printf -v $N %s x"):
+        for cmd in ('export "$N"=rc', "export $N=rc", "read -r $N", "printf -v $N %s x",
+                    'env "$N"=less git log', 'printf -v"$N" %s less', "declare -n r=PAGER",
+                    'printf -v"$N" %s x'):
             self.assertDenied(self.bash(cmd), "dynamic-assignment", msg=cmd)
+        for cmd in ("env PAGER=ca$t git log", "read -dp PAGER <<<less", "printf '-v' PAGER %s x",
+                    "read -r -d x PAGER <<<y", "env BASH_ENV=/x bash -c ls",
+                    "printf -vPAGER[1] %s x"):
+            self.assertDenied(self.bash(cmd), "env-assignment", msg=cmd)
+        for cmd in ("env FOO=1 git log", "read -rp 'go: ' ans", "read -d x ans <<<y",
+                    "printf -v out %s x", "env PAGER=cat git log", "read -n 3 ans <<<yyy"):
+            self.assertIsNone(self.bash(cmd), cmd)
         for cmd in ('export PATH="$PATH:/x"', "export FOO=1 BAR", "local i=0", "declare -a arr",
                     "read -r line <f", "printf -v out %s x", "for i in a b; do echo $i; done",
                     "export GIT_PAGER=cat", "echo ${X:=1}", "(( i = 1 ))", "export -p",
@@ -441,6 +450,8 @@ class Commands(Base):
     def test_a_trap_handler_is_checked_like_eval(self):
         self.assertDenied(self.bash("trap 'git reset --hard' EXIT"), "git-reset")
         self.assertDenied(self.bash("trap -- 'git reset --hard' EXIT INT"), "git-reset")
+        self.assertIsNotNone(self.bash("trap '-; git reset --hard' EXIT"))  # handler analyzed
+        self.assertDenied(self.bash("trap -p 'git reset --hard' EXIT"), "git-reset")
         self.assertDenied(self.bash('trap "$X" EXIT'), "dynamic-eval")
         for cmd in ("trap 'echo done' EXIT", "trap - EXIT", "trap '' INT", "trap -l", "trap"):
             self.assertIsNone(self.bash(cmd), cmd)
@@ -498,6 +509,31 @@ class Git(Base):
                 ("git -c core.pager=x log", "git-config-override", "use_alternative"),
                 ("git frob", "git-unknown", "stop_and_explain")):
             self.assertDenied(self.bash(cmd), rule, intent, cmd)
+
+    def test_short_flag_clusters_and_global_options(self):
+        # round 3: short mutate flags inside a cluster, a global option that eats the subcommand,
+        # and commit -n (short of --no-verify).
+        for cmd, rule in (("git branch -qD old", "git-branch"), ("git branch -Dq old", "git-branch"),
+                          ("git tag -fm msg v1 HEAD", "git-tag"), ("git switch -c n -fq", "git-switch"),
+                          ("git restore -S -Wq f", "git-restore"), ("git restore -SW f", "git-restore"),
+                          ("git commit -n -m x", "git-flag"), ("git commit -nm x", "git-flag"),
+                          ("git commit -an", "git-flag"),
+                          ("git --namespace status push origin", "git-push"),
+                          ("git --namespace=n push", "git-push"),
+                          ("git --git-dir d push", "git-push"),
+                          ("git --work-tree w reset --hard", "git-reset")):
+            self.assertDenied(self.bash(cmd), rule, msg=cmd)
+
+    def test_short_flag_clusters_do_not_overdeny(self):
+        # an attached value whose text contains a mutate letter is not a flag
+        for cmd in ("git tag -mDeploy v1", "git tag -m Draft v1", "git commit -m 'fix D'",
+                    "git branch --list", "git switch -c newf", "git restore --staged f",
+                    "git config --global --get user.email", "git config --global user.name",
+                    "git --namespace n status", "git -c k=v log"):
+            if cmd == "git -c k=v log":
+                self.assertDenied(self.bash(cmd), "git-config-override", msg=cmd)
+            else:
+                self.assertIsNone(self.bash(cmd), cmd)
 
     def test_read_forms_pass(self):
         for cmd in ("git remote -v", "git remote get-url origin", "git config --get user.name",
@@ -806,6 +842,7 @@ class Researcher(Base):
                     "git config --get user.name", "git stash list", "curl -s https://api.github.com/zen",
                     "wget -qO- https://x", "gh-public /repos/a/b", "ls -la", "cargo --version",
                     "git clone --depth 1 https://github.com/a/b /tmp/claude-%d/r/b" % os.getuid(),
+                    "git clone --dep 1 https://github.com/a/b /tmp/claude-%d/r/c" % os.getuid(),
                     "diff a b", "sort f | uniq -c"):
             self.assertIsNone(self.r(cmd), cmd)
 
@@ -822,12 +859,17 @@ class Researcher(Base):
                 ("git stash push", "researcher-git"), ("git config user.name x", "researcher-git"),
                 ("git clone https://github.com/a/b b", "researcher-clone"),
                 ("git clone git@github.com:a/b /tmp/claude-%d/b" % os.getuid(), "researcher-clone"),
+                ("git clone --dep 1 https://a/b /x", "researcher-clone"),
+                ("git clone --separate-git-dir /x https://a/b /tmp/claude-%d/t" % os.getuid(),
+                 "git-flag"),
                 ("sed -i s/a/b/ f", "researcher-flag"), ("sed 's/a/b/w out' f", "researcher-flag"),
                 ("sed -e '1e ls' f", "researcher-flag"),
                 ("find . -name x -delete", "researcher-flag"), ("find . -exec rm {} ;", "researcher-flag"),
                 ("find . -fprint out", "researcher-flag"), ("grep --filter=x foo .", "researcher-flag"),
                 ("grep --pre=cat foo", "researcher-flag"), ("sort -o out f", "researcher-flag"),
                 ("sort -oout f", "researcher-flag"), ("tree -o out", "researcher-flag"),
+                ("sort -uo /home/hayden/x f", "researcher-flag"), ("tree -nao out", "researcher-flag"),
+                ("git grep -iOcmd foo", "git-flag"), ("xxd -pr f", "researcher-flag"),
                 ("uniq in out", "researcher-flag"), ("LD_PRELOAD=x ls", "env-assignment"),
                 ("FOO=1 ls", "env-assignment")):
             self.assertDenied(self.r(cmd), rule, msg=cmd)
@@ -857,7 +899,8 @@ class Researcher(Base):
                     "wget -O- --reject=jpg https://x", "wget --output-document - https://x",
                     "wget --quiet -O- https://x", "wget --referer=r -O- https://x",
                     "wget -q -O - https://x", "wget --output-document=- https://x",
-                    "wget -qO- -U agent https://x", "wget -qO- --header=X:1 https://x"):
+                    "wget -qO- -U agent https://x", "wget -qO- --header=X:1 https://x",
+                    "sort -n f", "sort -k2 f", "tree -L 2", "git grep -in foo", "xxd -c 8 f"):
             self.assertIsNone(self.r(cmd), cmd)
 
 
@@ -1324,7 +1367,8 @@ class Substitutions(Base):
                     "echo ${X:-default}", "echo ${X:-$(pwd)}", "echo '$(touch x)'",
                     "echo \"$(echo '$(touch x)')\"", 'echo "\\$(touch x)"', "echo $(( 1 + 2 ))",
                     "case x in a) ;; esac", "grep -n '`touch x`' f", "echo $(echo $(echo $(pwd)))",
-                    'echo "${X#*$(pwd)}"', "echo ${#X} ${X[1]}", 'echo "<(touch x)"'):
+                    'echo "${X#*$(pwd)}"', "echo ${#X} ${X[1]}", 'echo "<(touch x)"',
+                    "echo ${X:-'`'}", "echo ${X:-'$('}", "echo ${X:-')'}"):
             self.assertIsNone(self.bash(cmd, atype="researcher"), cmd)
         for cmd in ("cat > n.md <<EOF\nsad :>( face, then <(touch x)\nEOF", '(( "$x" > 1 ))'):
             self.assertIsNone(self.bash(cmd), cmd)  # a heredoc's <( is text; a quoted arith operand
