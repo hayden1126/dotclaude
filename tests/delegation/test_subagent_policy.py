@@ -907,6 +907,15 @@ class Researcher(Base):
                 ("file -C -m m", "researcher-flag"), ("file -zC -m m", "researcher-flag"),
                 ("file --comp -m m", "researcher-flag"), ("grep --pager=less foo f", "researcher-flag"),
                 ("egrep --view=x foo f", "researcher-flag"),
+                # round 7: a word the shell expands can be xxd's or uniq's output operand; ---
+                # ends xxd's options; grep's query, config and config-file forms
+                ("xxd STATUS.md{,}", "researcher-flag"), ("xxd *.bin", "researcher-flag"),
+                ("xxd -c *", "researcher-flag"), ("xxd $(printf 'a b')", "researcher-flag"),
+                ("xxd $F", "researcher-flag"), ("uniq in{,}", "researcher-flag"),
+                ("uniq *.txt", "researcher-flag"), ("xxd --- -c out", "researcher-flag"),
+                ("grep -iQ foo", "researcher-flag"), ("grep --query foo", "researcher-flag"),
+                ("grep --save-config", "researcher-flag"), ("fgrep -Q x", "researcher-flag"),
+                ("grep --config=c foo f", "researcher-flag"), ("grep ---c foo f", "researcher-flag"),
                 ("uniq in out", "researcher-flag"), ("LD_PRELOAD=x ls", "env-assignment"),
                 ("FOO=1 ls", "env-assignment")):
             self.assertDenied(self.r(cmd), rule, msg=cmd)
@@ -919,8 +928,15 @@ class Researcher(Base):
             with self.assertRaises(sp.Deny, msg=args) as cm:
                 g.researcher_program("yq", args, [], [], self.proj, 0)
             self.assertEqual(cm.exception.rule, "researcher-flag", args)
-        self.assertEqual(g.researcher_program("yq", ["yq", ".a", "f"], [], [], self.proj, 0),
-                         self.proj)
+        # round 7: yq's value letters, so an output format holding s or i isn't read as -s or -i
+        for args in (["yq", ".a", "f"], ["yq", "-o=json", ".", "f"], ["yq", "-ojson", ".", "f"],
+                     ["yq", "-o=csv", ".", "f"], ["yq", "-p=json", ".", "f"],
+                     ["yq", "-Po=ini", ".", "f"]):
+            self.assertEqual(g.researcher_program("yq", args, [False] * len(args),
+                                                  [False] * len(args), self.proj, 0),
+                             self.proj, args)
+        with self.assertRaises(sp.Deny):  # -i after a boolean is still seen
+            g.researcher_program("yq", ["yq", "-Pi", ".", "f"], [], [], self.proj, 0)
 
     def test_denied_flags_match_by_unique_prefix(self):
         for cmd, rule in (
@@ -951,7 +967,7 @@ class Researcher(Base):
                     # round 6: -pr is -p and -er is -e to xxd; a value word isn't an operand
                     "xxd -pr f", "xxd -er f", "xxd -c8 f", "xxd -cols 8 f", "xxd -R never f",
                     "xxd -l 16 -s 4 f", "xxd -i -n name f", "xxd -", "file -mC f",
-                    "file -m magic f"):
+                    "file -m magic f", 'xxd "$F"', 'uniq -c "$F"', "xxd -- f"):
             self.assertIsNone(self.r(cmd), cmd)
 
 

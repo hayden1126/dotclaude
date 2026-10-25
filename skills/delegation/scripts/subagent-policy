@@ -1858,7 +1858,7 @@ class Analyzer:
     # each of its value letters takes the next word and the cluster goes on (`tree -Lo 1 f` is
     # -L 1 -o f). grep's letters cover GNU grep and ugrep, which grep runs here. xxd doesn't
     # cluster at all; xxd_writes reads it.
-    SHORT_VALUE = {"sort": "oktSTy", "tree": "", "date": "dIrfs", "file": "mefFP",
+    SHORT_VALUE = {"sort": "oktSTy", "tree": "", "date": "dIrfs", "file": "mefFP", "yq": "opIsf",
                    "fd": "xXtedjScEo", "fdfind": "xXtedjScEo", "grep": "efmABCDdgJKMNOt",
                    "egrep": "efmABCDdgJKMNOt", "fgrep": "efmABCDdgJKMNOt",
                    "ugrep": "efmABCDdgJKMNOt"}
@@ -1886,7 +1886,7 @@ class Analyzer:
         words, operands = list(words), 0
         while words:
             a = words.pop(0)
-            if a == "--":
+            if a in ("--", "---"):  # xxd drops one dash from a word that starts --, so --- is --
                 operands += len(words)
                 break
             if a is None or a == "-" or not a.startswith("-"):
@@ -2313,6 +2313,14 @@ class Analyzer:
             if call.in_place is not None or any(op in ("e", "w") for op, _ in ops):
                 self.deny("researcher-flag", "scope_down",
                           "sed -i or a sed w/W/e command writes a file or runs one")
+        if base in ("uniq", "xxd") and (any(globs[1:]) or any(splits[1:])):
+            self.deny("researcher-flag", "scope_down",
+                      f"{base} with a glob, brace or unquoted expansion could expand to a second "
+                      "operand, an output file it writes; name the file")
+        if base in ("grep", "egrep", "fgrep", "ugrep") and any(
+                a and a.startswith("---") for a in args[1:]):
+            self.deny("researcher-flag", "scope_down",
+                      f"{base} ---FILE loads a config file that can set a filter or pager command")
         if base == "uniq" and len([a for a in args[1:] if a and not a.startswith("-")]) > 1:
             self.deny("researcher-flag", "scope_down", "uniq with an output file writes it")
         if base == "xxd" and self.xxd_writes(args[1:]):
