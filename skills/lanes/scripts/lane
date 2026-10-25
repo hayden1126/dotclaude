@@ -2457,11 +2457,18 @@ def trial_admin_dirs(repo: Repo, lane_id: str, path: str) -> list[tuple[str, str
 
 
 def drop_admin_dirs(lane_id: str, admins: list[tuple[str, str]]) -> None:
-    """Remove the admin dirs trial_admin_dirs found, once the lane's worktree is gone; rmtree
-    refuses one swapped for a symlink since. One it can't remove is named, to remove by hand."""
+    """Remove the admin dirs trial_admin_dirs found, once the lane's worktree is gone. Each goes
+    by name under its parent opened with O_NOFOLLOW: sandboxed Bash can write the common dir, so
+    <common>/worktrees itself may have been swapped for a symlink since, and rmtree checks only
+    its last name (it refuses an admin dir swapped for one). One it can't remove is named, to
+    remove by hand."""
     for admin, tree in admins:
         try:
-            shutil.rmtree(admin)
+            fd = os.open(os.path.dirname(admin), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                shutil.rmtree(os.path.basename(admin), dir_fd=fd)
+            finally:
+                os.close(fd)
         except OSError as e:
             warn(shown(f"couldn't remove {admin}, the registration of a tree a trial left in "
                        f"lane {lane_id} ({e.strerror or e}): remove that dir"))

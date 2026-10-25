@@ -8,6 +8,7 @@ import fcntl
 import glob
 import importlib.machinery
 import importlib.util
+import io
 import json
 import multiprocessing
 import os
@@ -606,6 +607,21 @@ class RoundTrip(LanesRepo):
         self.assertEqual(self.read(os.path.join(other, "keep.txt")), "the other lane's\n")
         self.assertTrue(os.path.isfile(os.path.join(decoy, "gitdir")))
         self.assertIn(tree, p.stderr)
+
+    def test_dones_admin_dir_removal_never_follows_a_worktrees_dir_swapped_for_a_link(self):
+        # Sandboxed Bash can write the common dir, so <common>/worktrees itself can become a
+        # symlink between trial_admin_dirs' listing and the removal: the rmtree must refuse.
+        mod = load_lane_script()
+        base = os.path.join(self.tmp, "common", "worktrees")
+        os.makedirs(os.path.join(base, "tree"))
+        target = os.path.join(self.tmp, "elsewhere")
+        self.write(os.path.join(target, "tree", "keep.txt"), "not git's\n")
+        os.rename(base, base + ".old")
+        os.symlink(target, base)
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            mod.drop_admin_dirs("spike", [(os.path.join(base, "tree"), "/x/tree")])
+        self.assertEqual(self.read(os.path.join(target, "tree", "keep.txt")), "not git's\n")
+        self.assertIn("couldn't remove", err.getvalue())
 
     def test_done_refuses_while_a_process_lives_in_the_lane(self):
         self.lane("new", "busy")
