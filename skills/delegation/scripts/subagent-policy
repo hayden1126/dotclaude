@@ -38,6 +38,7 @@ intent vocabulary follow cc-safety-net (github.com/kenryu42/cc-safety-net, MIT),
 import fnmatch
 import json
 import os
+import pwd
 import re
 import shutil
 import signal
@@ -172,11 +173,20 @@ class Lit:
 
 
 def scan_word(value, home):
+    """home None: the command sets HOME somewhere, so ~ and $HOME are unknown (dynamic)."""
     out, i, q, dyn, glob, split = [], 0, None, False, False, False
     n = len(value)
-    if value == "~" or value.startswith("~/"):
-        out.append(home)
+    prefix = value[1:].split("/", 1)[0] if value.startswith("~") else None
+    if prefix == "":
+        out.append(home if home is not None else "~")
+        dyn = home is None
         i = 1
+    elif prefix is not None and not re.search(r"[\"'\\$`]", prefix):
+        try:  # ~user is that user's home; ~+, ~-, ~N (PWD, OLDPWD, the stack) are unknown
+            out.append(pwd.getpwnam(prefix).pw_dir)
+            i = 1 + len(prefix)
+        except (KeyError, ValueError):
+            dyn = True
     while i < n:
         c = value[i]
         if q == "'":
@@ -200,7 +210,7 @@ def scan_word(value, home):
             elif c == "$":
                 rest = value[i:]
                 m = re.match(r"\$(\{HOME\}|HOME)(?![A-Za-z0-9_])", rest)
-                if m:
+                if m and home is not None:
                     out.append(home)
                     i += len(m.group(0))
                     continue
@@ -968,6 +978,8 @@ class Analyzer:
         # Any isolated agent (a writer, or any type spawned with isolation "worktree") is held
         # to its worktree; a writer without one is refused outright (decide()).
         self.confined = self.worktree is not None
+        self.home_assigned = False  # the command sets HOME (check_env_name)
+        self.word_home = self.home  # what ~ and $HOME read as in words; None once HOME is set
         self._parent_root = False  # looked up on first need (protected_roots)
         self.path_dirs = self._path_dirs()
 
@@ -1182,6 +1194,12 @@ class Analyzer:
         if not isinstance(cmd, str):
             self.deny("malformed-input", "stop_and_explain", "shell call with no command")
         self.analyze_string(cmd, self.cwd, 0)
+        if self.home_assigned and self.word_home is not None:
+            # HOME is set somewhere in this command, so ~ and $HOME may not be the real home
+            # anywhere in it (a loop can set it before an earlier line runs again): check the
+            # whole command again with both unknown.
+            self.word_home = None
+            self.analyze_string(cmd, self.cwd, 0)
 
     def analyze_string(self, cmd, cwd, depth):
         from parable import parse, ParseError
@@ -1306,7 +1324,7 @@ class Analyzer:
         target = getattr(r, "target", None)
         if ">" not in op or target is None or not hasattr(target, "value"):
             return
-        lit = scan_word(target.value, self.home)
+        lit = scan_word(target.value, self.word_home)
         if re.fullmatch(r"&(\d+|-)", target.value.strip()):
             return  # 2>&1, >&2, >&-: Parable keeps a duplication's target as "&N"
         # Everything else writes its target, `>& file` and `&>` included (zsh sends both
@@ -1344,7 +1362,7 @@ class Analyzer:
     def command(self, n, cwd, depth):
         for x in list(n.words) + list(n.redirects or []):
             self.node(x, cwd, depth)
-        lits = [scan_word(w.value, self.home) for w in n.words]
+        lits = [scan_word(w.value, self.word_home) for w in n.words]
         return self.argv(lits, cwd, depth)
 
     # ------------------------------------------------ one simple command
@@ -1379,6 +1397,8 @@ class Analyzer:
 
     def check_env_name(self, name):
         sh = self.p["shell"]
+        if name == "HOME":
+            self.home_assigned = True
         if name in sh["denied_env_names"] or name in sh["banned_env_names"] or any(
                 name.startswith(x) for x in sh["denied_env_prefixes"]):
             self.deny("env-assignment", "use_alternative",
@@ -1467,7 +1487,7 @@ class Analyzer:
         if not rest:
             return
         handler = rest[0]
-        if handler.dynamic:
+        if handler.dynamic or handler.glob:
             self.deny("dynamic-eval", "stop_and_explain", "trap with a dynamic handler")
         if handler.text in ("", "-") or (len(rest) == 1 and
                                          re.fullmatch(r"(SIG)?[A-Z0-9]+", handler.text)):
@@ -1514,7 +1534,7 @@ class Analyzer:
             if base in sh["shells"]:
                 return self.shell_wrapper(lits, cwd, depth)
             if base == "eval":
-                if any(l.dynamic for l in lits[1:]):
+                if any(l.dynamic or l.glob for l in lits[1:]):
                     self.deny("dynamic-eval", "stop_and_explain", "eval of a dynamic string")
                 self.analyze_string(" ".join(l.text for l in lits[1:]), cwd, depth + 1)
                 return cwd
@@ -1763,27 +1783,54 @@ class Analyzer:
 
     def wrapper_shell_string(self, base, words, cwd, depth):
         """watch (without -x) and flock -c run their words through sh -c: check that text."""
-        if any(l.dynamic for l in words):
+        if any(l.dynamic or l.glob for l in words):
             self.deny("dynamic-eval", "stop_and_explain", f"{base} runs a dynamic string")
         self.analyze_string(" ".join(l.text for l in words), cwd, depth + 1)
         return None
 
+    # Shell options that take the next word (-o NAME, +O NAME), and the long ones that take
+    # none. Any other long option is refused (--rcfile and --init-file read a file).
+    SHELL_VALUE = "oO"
+    SHELL_LONG = {"--norc", "--noprofile", "--login", "--posix", "--no-rcs", "--noediting",
+                  "--verbose", "--restricted"}
+
     def shell_wrapper(self, lits, cwd, depth):
+        """A shell's options, read as bash and zsh read them: -c makes the first word after the
+        options the script, wherever -c stands among them, and -o/-O take the next word."""
         rest, script, has_c = lits[1:], None, False
         i = 0
         while i < len(rest):
-            t = rest[i].text
-            if t == "-c" or (t.startswith("-") and not t.startswith("--") and "c" in t[1:]):
-                has_c = True
-                if i + 1 < len(rest):
-                    script = rest[i + 1]
+            lit = rest[i]
+            t = lit.text or ""
+            if lit.dynamic or lit.glob:
+                if t.startswith(("-", "+")) or lit.split:
+                    self.deny("dynamic-shell", "stop_and_explain",
+                              "a shell with a computed word where an option could be")
                 break
-            if t.startswith("-") or t.startswith("+"):
+            if t in ("-", "--"):
                 i += 1
+                break
+            if t.startswith("--"):
+                if t not in self.SHELL_LONG:
+                    self.deny("unknown-option", "stop_and_explain",
+                              f"{t} is a shell option the policy doesn't know; leave it out")
+                i += 1
+                continue
+            if t.startswith(("-", "+")) and len(t) > 1:
+                i += 1
+                for ch in t[1:]:
+                    if ch == "c":
+                        has_c = True
+                    elif ch in self.SHELL_VALUE:
+                        if i < len(rest) and (rest[i].dynamic or rest[i].glob):
+                            self.deny("dynamic-shell", "stop_and_explain",
+                                      "a shell option with a computed value")
+                        i += 1  # its value
                 continue
             break
         if has_c:
-            if script is None or script.dynamic:
+            script = rest[i] if i < len(rest) else None
+            if script is None or script.dynamic or script.glob:
                 self.deny("dynamic-shell", "stop_and_explain", "a shell -c with a dynamic script")
             self.analyze_string(script.text, cwd, depth + 1)
             return cwd

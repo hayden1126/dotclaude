@@ -8,6 +8,7 @@ import datetime
 import io
 import json
 import os
+import pwd
 import random
 import re
 import shutil
@@ -425,6 +426,46 @@ class Commands(Base):
                     "xargs -I{} cp {} dst", "xargs -I {} cp {} dst", "flock lk ls",
                     "exec ls"):
             self.assertIsNone(self.bash(cmd), cmd)
+
+    def test_text_a_shell_parses_again_is_read_exactly(self):
+        # SP13: a shell's option values, a brace or glob word in text that is parsed again, and
+        # a ~ or $HOME after the command sets HOME.
+        for cmd, rule in (("bash -o errexit -c 'git reset --hard'", "git-reset"),
+                          ("bash -O extglob -c 'git reset --hard'", "git-reset"),
+                          ("bash +o errexit -c 'git reset --hard'", "git-reset"),
+                          ("bash -eo pipefail -c 'git reset --hard'", "git-reset"),
+                          ("bash -c -x 'git reset --hard'", "git-reset"),
+                          ("zsh -f -c 'git reset --hard'", "git-reset"),
+                          ("bash --rcfile x -c ls", "unknown-option"),
+                          ("bash -o $O -c ls", "dynamic-shell"),
+                          ("eval true {,\\'}\;git\\ reset\;\\#\\'", "dynamic-eval"),
+                          ("eval true *", "dynamic-eval"),
+                          ("watch -n1 true {,\\'}\;git\\ reset\;\\#\\'", "dynamic-eval"),
+                          ("sh -c true\\ {,\\'}\;git\\ reset\;\\#\\'", "dynamic-shell"),
+                          ("trap true\\ {,\\'}\;git\\ reset\;\\#\\' EXIT", "dynamic-eval"),
+                          ("HOME='x;git reset --hard'; eval echo $HOME", "dynamic-eval"),
+                          ("HOME=/x; eval echo ~", "dynamic-eval"),
+                          ("export HOME=/x; eval echo ~/y", "dynamic-eval"),
+                          ("eval true ~+", "dynamic-eval")):
+            self.assertDenied(self.bash(cmd), rule, msg=cmd)
+        for cmd in ("bash -euo pipefail -c 'ls -la'", "bash -c ls", 'sh -c "echo hi"',
+                    "bash --norc --noprofile -c ls", "eval echo $HOME", "eval echo ~",
+                    "HOME=/tmp/h npm test", "ls ~", "cat ~/x", "bash -c 'ls' -- a b"):
+            self.assertIsNone(self.bash(cmd), cmd)
+
+    def test_tilde_prefixes(self):
+        # ~user is that user's home; ~+, ~- and an unknown user are unknown; once HOME is set,
+        # ~ and $HOME are unknown too.
+        user = pwd.getpwuid(os.getuid()).pw_name
+        home = pwd.getpwuid(os.getuid()).pw_dir
+        self.assertEqual(sp.scan_word(f"~{user}/x", "/fake").text, home + "/x")
+        self.assertFalse(sp.scan_word(f"~{user}/x", "/fake").dynamic)
+        for w in ("~+/x", "~-", "~nosuchuserzz/x"):
+            self.assertTrue(sp.scan_word(w, "/fake").dynamic, w)
+        for w in ("~", "~/x", "$HOME/x", "${HOME}"):
+            self.assertFalse(sp.scan_word(w, "/fake").dynamic, w)
+            self.assertTrue(sp.scan_word(w, None).dynamic, w)
+        self.assertFalse(sp.scan_word("'~'x", None).dynamic)  # a quoted ~ is text
 
     def test_environment_that_changes_what_runs(self):
         for cmd in ("GIT_EXTERNAL_DIFF=x git diff", "LD_PRELOAD=/x.so ls", "PAGER=less git log",

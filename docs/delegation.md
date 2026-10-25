@@ -144,7 +144,16 @@ repo that turns the sandbox off loses subagent Bash; the policy still applies.
     the command. `time` keeps only the shell keyword's `-p` (GNU time's `-o` writes a file).
     `watch` (without `-x`) and `flock -c` run their words through `sh -c`, so that text is
     checked like `eval`'s. `xargs -I` makes every word holding its replace string dynamic, and
-    `flock`'s lock file is a write target.
+    `flock`'s lock file is a write target. `env -C` moves the directory the rest of the checks
+    resolve against, under `cd`'s rules.
+  - A shell's options are read the way bash and zsh read them: `-o`/`-O` take the next word,
+    `-c` makes the first word after the options the script, and a long option outside a short
+    list (`--norc`, `--noprofile`, `--login`, `--posix` and similar) is refused.
+  - Text a shell parses again (`eval`, `sh -c`, `watch`, `flock -c`, a `trap` handler) must be
+    literal: a brace or glob word there is refused like a variable, since it expands before the
+    text is parsed again.
+  - `~user` is read as that user's home. `~+`, `~-` and an unknown user are dynamic, and once a
+    command sets HOME anywhere, `~` and `$HOME` are dynamic throughout it.
   - A shell reading stdin (`… | sh`) and `source` (except `*/bin/activate`) are denied.
 - **Command words** must resolve on PATH, be a path to an executable, or be a builtin. That denies
   oh-my-zsh aliases (`gp` = `git push`) and shell functions, and zsh `=git`.
