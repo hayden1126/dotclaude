@@ -686,7 +686,8 @@ class RoundTrip(LanesRepo):
             text = [line for line in f if not line.lstrip().startswith("#")]
         bad = [line.strip() for line in text
                if re.search(r"[\"'][^\"']*(?:rm -r|rm -f|worktree remove --force|remove that"
-                            r"|or remove them|remove it by hand|close the lane by hand)", line,
+                            r"|or remove them|remove it by hand|close the lane by hand"
+                            r"|remove the ones? the CLI)", line,
                             re.IGNORECASE)]
         self.assertEqual(bad, [])
 
@@ -713,6 +714,38 @@ class RoundTrip(LanesRepo):
         p = self.run_lane("done", "spike", "--abandon")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertNotIn(path, self.git("worktree", "list", "--porcelain"))
+
+    def test_the_lanes_lock_never_follows_a_lock_file_planted_as_a_link(self):
+        # O_CREAT through a planted .lock link would make a file wherever it points.
+        target = os.path.join(self.tmp, "made-elsewhere")
+        lock = os.path.join(self.common, "lanes", ".lock")
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(lock)
+        os.symlink(target, lock)
+        with self.assertRaises(OSError):
+            with lanelib.lock(lanelib.resolve(self.main)):
+                pass
+        self.assertFalse(os.path.lexists(target))
+
+    def test_a_lane_json_write_never_follows_a_lane_dir_swapped_after_the_read(self):
+        # Sandboxed Bash can swap lanes/<id> for a link between update_lane's read and write:
+        # by path, the lane's lane.json (its path field the lane's choice) landed there.
+        self.lane("new", "spike")
+        data = os.path.join(self.common, "lanes", "spike")
+        victim = os.path.join(self.tmp, "victim")
+        os.makedirs(victim)
+        real = lanelib.read_record
+
+        def read(repo, lane_id):
+            lane = real(repo, lane_id)
+            os.rename(data, os.path.join(self.tmp, "moved"))
+            os.symlink(victim, data)
+            return lane
+
+        with mock.patch.object(lanelib, "read_record", side_effect=read):
+            with self.assertRaises(OSError):
+                lanelib.update_lane(lanelib.resolve(self.main), "spike", lambda lane: None)
+        self.assertEqual(os.listdir(victim), [])
 
     def test_done_refuses_while_a_process_lives_in_the_lane(self):
         self.lane("new", "busy")
@@ -1330,7 +1363,7 @@ class RecordTrust(LanesRepo):
             with self.subTest(args=args):
                 p = self.run_lane(*args)
                 self.assertEqual(p.returncode, 1)
-                self.assertIn("didn't write", p.stderr)
+                self.assertIn("only one is the CLI's", p.stderr)
         self.assertTrue(os.path.isdir(self.lane_path("chart-fix")))
 
     def test_new_refuses_a_path_a_stale_record_still_holds(self):
@@ -3021,8 +3054,8 @@ class Close(Fakes):
     def test_dones_removal_never_follows_a_link_swapped_in_above_a_forged_path(self):
         # lane.json is the lane's to write and nothing ties its path to the lanes root: a path
         # under a dir absent at the gates (so no worktree check ran), with a planted admin dir
-        # naming it, and that dir swapped for a link before the removal. The way down is walked
-        # from / with O_NOFOLLOW, so the removal refuses.
+        # naming it, and that dir swapped for a link once the admin dir matched. The way down is
+        # walked from / with O_NOFOLLOW, so the removal refuses.
         lane_mod = load_lane_script()
         victim = os.path.join(self.tmp, "home")
         self.write(os.path.join(victim, "important", "keep.txt"), "the user's\n")
@@ -3032,14 +3065,13 @@ class Close(Fakes):
         admin = os.path.join(self.common, "worktrees", "evil")
         self.write(os.path.join(admin, "gitdir"), os.path.join(forged, ".git") + "\n")
         self.write(os.path.join(admin, "HEAD"), self.git("rev-parse", "HEAD"))
-        real = lane_mod.install_hold
+        real = lane_mod.trial_admin_dirs
 
-        def hold(*args):
-            real(*args)
-            if args[-1] == "its worktree was not removed":
-                os.symlink(victim, os.path.join(self.path, "a"))
+        def trials(*args):  # called once the lane's own admin dir matched
+            os.symlink(victim, os.path.join(self.path, "a"))
+            return real(*args)
 
-        with mock.patch.object(lane_mod, "install_hold", side_effect=hold):
+        with mock.patch.object(lane_mod, "trial_admin_dirs", side_effect=trials):
             with self.assertRaisesRegex(lane_mod.LaneError, "leads through a symlink"):
                 self.done_in_process(lane_mod)
         self.assertEqual(self.read(os.path.join(victim, "important", "keep.txt")), "the user's\n")
@@ -3064,7 +3096,10 @@ class Close(Fakes):
         self.lane("done", "chart-fix", "--abandon")
         self.assertFalse(os.path.lexists(aside))
         self.assertNotIn(self.path, self.git("worktree", "list", "--porcelain"))
-        self.assertEqual(len(self.archives()), 1)
+        (archive,) = self.archives()
+        # Archived from the tree aside (its .lane/ went last), not from a mirror: none ran here.
+        self.assertTrue(os.path.isfile(os.path.join(
+            self.common, "lanes", "_closed", archive, ".lane", "stuck", "file")))
 
     def test_a_dir_planted_as_an_admin_dirs_gitdir_never_breaks_done(self):
         os.makedirs(os.path.join(self.common, "worktrees", "odd", "gitdir"))

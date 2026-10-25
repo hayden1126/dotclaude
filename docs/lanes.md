@@ -660,11 +660,12 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
     sides. A symlink is copied as a link (a relative one made absolute), never read through, so
     the sandbox's read deny still holds at its target; anything not a regular file is skipped.
   - A symlinked `lanes/`, `lanes/<id>`, mirror or `info/exclude` is refused.
-  - `done` and the mirror hook remove, rename and write only by name under a directory fd,
-    reached from the main checkout with `O_NOFOLLOW` at each step, and copy a record by fd at
-    every level. Both run sandbox-off over dirs a lane's sandbox can write (its worktree and
-    record, `<common-dir>/worktrees/` and `lanes/`), where a check of a path can't hold until
-    its use. No message offers a removal by path (a test scans them).
+  - Sandbox-off, whatever `lane` and its hooks remove, rename or write in the lane's worktree,
+    `<common-dir>/worktrees/` or `<common-dir>/lanes/` (`lane.json`, the lock file, the mirror,
+    archives) goes by name under a directory fd, reached from `/` or the main checkout with
+    `O_NOFOLLOW` at each step, and a record is copied by fd at every level. A lane's sandbox can
+    write all three, so a check of a path there can't hold until its use. No message of `done`
+    or the mirror offers a removal by path (a test scans the CLI's messages).
   - `done` signals a process only on kernel facts (`/proc`) and Claude Code's own files (session
     files, transcripts), never on `lane.json` (the pieces, `lane done`).
   PR 3 adds `pass-respawn` to `excludedCommands` (bare and with arguments): it needs the tmux socket and
@@ -1023,8 +1024,10 @@ copied as the link), and skips
   tree a trial left, by name under `worktrees/` as it was opened before the files went. The archive's temp dir, its rename and `lanes/<id>/` likewise
   go under `lanes/` and `_closed/` opened at the start. With no admin dir or several naming the
   lane, it removes nothing. A file it can't delete (a dir with no write permission) stops it
-  partway with the record and the registration kept; the tree is already aside, so a rerun's
-  gates find nothing at the lane's path, and the rerun finishes the removal.
+  partway with `lane.json` and the registration kept; the tree is already aside, so a rerun's
+  gates find nothing at the lane's path, and the rerun finishes the removal. The tree's
+  `.lane/` goes last, so the rerun archives the record from the tree aside, not the older
+  mirror.
 
   A rerun keeps what the first run proved. A pane shell's only proof is the session it ran,
   which the close itself ends, so on 2026-10-15 each rerun refused the two-sessions tab's shell

@@ -603,8 +603,15 @@ def lock(repo: Repo, timeout: float | None = None):
     """flock on <common-dir>/lanes/.lock: every write to lanes data happens under it. timeout None
     blocks; a number raises LockTimeout after that many seconds (hooks use one)."""
     repo.check_lanes_dir()
-    os.makedirs(repo.lanes_dir, exist_ok=True)
-    with open(os.path.join(repo.lanes_dir, ".lock"), "a") as f:
+    # By name under lanes/ opened with O_NOFOLLOW: a .lock planted as a link would have O_CREAT
+    # make a file wherever it points.
+    lanes = common_fd(repo, LANES, create=True)
+    try:
+        fd = os.open(".lock", os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o644,
+                     dir_fd=lanes)
+    finally:
+        os.close(lanes)
+    with os.fdopen(fd, "a") as f:
         if timeout is None:
             fcntl.flock(f, fcntl.LOCK_EX)
         else:
@@ -626,12 +633,23 @@ def lock(repo: Repo, timeout: float | None = None):
 def update_lane(repo: Repo, lane_id: str, change) -> dict:
     """Read lane.json (checked: read_record), apply change(lane) in place, stamp updated, write
     it back. Call under lock."""
-    path = repo.lane_json(lane_id)
     lane = read_record(repo, lane_id)
     change(lane)
     lane["updated"] = now_iso()
-    write_json(path, lane)
+    write_lane_json(repo, lane_id, lane)
     return lane
+
+
+def write_lane_json(repo: Repo, lane_id: str, lane: dict) -> None:
+    """lanes/<id>/lane.json, written by name under lanes/<id> opened from the main checkout with
+    O_NOFOLLOW (common_fd): sandboxed Bash can swap lanes/<id> for a link between the read and
+    the write, and a write by path would land a lane.json, whose path field the lane chose,
+    wherever it points (another repo's lanes dir, say)."""
+    fd = common_fd(repo, f"{LANES}/{lane_id}", create=True)
+    try:
+        write_at(fd, "lane.json", json.dumps(lane, indent=2) + "\n")
+    finally:
+        os.close(fd)
 
 
 def valid_id(lane_id: str) -> bool:

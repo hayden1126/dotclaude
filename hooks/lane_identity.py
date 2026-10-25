@@ -188,9 +188,13 @@ def mirror(repo: lanelib.Repo, lane: dict) -> None:
             shutil.rmtree("mirror.new", dir_fd=fd, ignore_errors=True)
             raise
         shutil.rmtree("mirror.old", dir_fd=fd, ignore_errors=True)
-        if lanelib.real_dir_at(fd, "mirror"):
-            os.rename("mirror", "mirror.old", src_dir_fd=fd, dst_dir_fd=fd)
-        os.rename("mirror.new", "mirror", src_dir_fd=fd, dst_dir_fd=fd)
+        try:
+            if lanelib.real_dir_at(fd, "mirror"):
+                os.rename("mirror", "mirror.old", src_dir_fd=fd, dst_dir_fd=fd)
+            os.rename("mirror.new", "mirror", src_dir_fd=fd, dst_dir_fd=fd)
+        except BaseException:  # a mirror planted as a link, say: mirror.old stays to restore
+            shutil.rmtree("mirror.new", dir_fd=fd, ignore_errors=True)
+            raise
         shutil.rmtree("mirror.old", dir_fd=fd, ignore_errors=True)
         lanelib.write_at(fd, "mirror.stamp", repr(changed))
     finally:
