@@ -388,11 +388,11 @@ def any_flag(flags, denied):
 # ---------------------------------------------------------------- substitutions
 
 # Node fields that hold shell text Parable doesn't (always) expand into nodes, read by
-# substitutions(): (field, whether quotes quote there). Any other string field holding $, a
-# backtick or <( is refused (unchecked-text), so a field Parable adds later can't pass unread.
-TEXT_FIELDS = {"word": (("value", True),), "pattern": (("pattern", True),),
-               "arith-cmd": (("raw_content", False),),
-               "for-arith": (("init", False), ("cond", False), ("incr", False))}
+# substitutions() in the mode named. Any other string field holding $, a backtick or <( is
+# refused (unchecked-text), so a field Parable adds later can't pass unread.
+TEXT_FIELDS = {"word": (("value", "word"),), "pattern": (("pattern", "word"),),
+               "arith-cmd": (("raw_content", "inner"),),
+               "for-arith": (("init", "inner"), ("cond", "inner"), ("incr", "inner"))}
 LIVE_TEXT = re.compile(r"[$`]|[<>]\(")
 # Assignments inside text: ${NAME=v} / ${NAME:=v}, and NAME = v, NAME += v, NAME++ ... in
 # arithmetic (the name, whatever the operator; == and != compare).
@@ -401,19 +401,20 @@ ARITH_ASSIGN = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:(?:[-+*/%&|^]|<<|>>|\*
                           r"|(?:\+\+|--)\s*([A-Za-z_][A-Za-z0-9_]*)")
 
 
-def substitutions(text, quotes=True):
+def substitutions(text, mode="word"):
     """The body of every command substitution in text that the shell would run: $(...), `...`,
     <(...) and >(...), with those inside ${...}, $((...)) and $[...] found by scanning that text
-    too. Parable gives some no node (a ${...} argument, an unquoted heredoc body, a body inside
-    double quotes that fails to parse), so the policy reads the text itself, ending each one
-    where Parable's own matching helpers do.
+    too. The caller also checks the substitutions Parable parsed; this reading covers the text
+    Parable keeps unparsed. Each one ends where Parable's matching helpers end it, or later
+    where the shell reads further.
 
-    quotes: whether ' and " quote, as in a word. Pass False for text where they don't (an
-    unquoted heredoc body); the inside of ${...} and arithmetic is scanned that way too, which
-    takes a quoted $( as live and so checks more, never less. A backslash escapes the next
-    character in every mode. Raises ValueError for an opener with no close."""
+    mode: "word" (quotes quote, as in a word), "heredoc" (an unquoted heredoc body: quotes are
+    text, and <( is text) or "inner" (the inside of ${...} or arithmetic, read with quotes as
+    text, so a quoted $( counts as live: it checks more, never less). A backslash escapes the
+    next character in every mode. Raises ValueError for an opener with no close."""
     from parable import (_find_braced_param_end, _find_cmdsub_end, _is_valid_arithmetic_start,
                          _skip_backtick, _skip_single_quoted)
+    quotes = mode == "word"
     out, i, n, dq = [], 0, len(text), False
 
     def closed(j, close):
@@ -424,6 +425,8 @@ def substitutions(text, quotes=True):
         c, nxt = text[i], text[i + 1:i + 2]
         if c == "\\":
             i += 2
+        elif quotes and c == "$" and nxt == "'" and not dq:
+            i = closed(_ansi_c_end(text, i + 2), "'")  # $'...' honours backslash escapes
         elif quotes and c == "'" and not dq:
             i = _skip_single_quoted(text, i + 1)
             if i > n or text[i - 1] != "'" or i < 2:
@@ -434,26 +437,71 @@ def substitutions(text, quotes=True):
             j = closed(_skip_backtick(text, i), "`")
             if j - 1 <= i:
                 raise ValueError(text[i:])
-            out.append(re.sub(r"\\([$`\\])", r"\1", text[i + 1:j - 1]))
+            # inside "...", the shell also drops the backslash before a "
+            out.append(re.sub(r'\\([$`\\"])' if dq else r"\\([$`\\])", r"\1", text[i + 1:j - 1]))
             i = j
         elif c == "$" and text.startswith("$((", i) and _is_valid_arithmetic_start(text, i):
             j = closed(_find_cmdsub_end(text, i + 2), "))")
-            out += substitutions(text[i + 3:j - 2], quotes=False)
+            out += substitutions(text[i + 3:j - 2], "inner")
             i = j
-        elif nxt == "(" and (c == "$" or (c in "<>" and not dq)):
+        elif nxt == "(" and (c == "$" or (c in "<>" and not dq and mode != "heredoc")):
             j = closed(_find_cmdsub_end(text, i + 2), ")")
             out.append(text[i + 2:j - 1])
             i = j
         elif c == "$" and nxt == "{":
             j = closed(_find_braced_param_end(text, i + 2), "}")
-            out += substitutions(text[i + 2:j - 1], quotes=False)
+            if quotes and not dq:  # unquoted, the shell honours '...' inside, so it may end later
+                j = max(j, closed(_param_end(text, i + 2), "}"))
+            out += substitutions(text[i + 2:j - 1], "inner")
             i = j
         elif c == "$" and nxt == "[":
-            out += substitutions(text[i + 2:], quotes=False)  # rare and deprecated: the rest
+            out += substitutions(text[i + 2:], "inner")  # rare and deprecated: the rest
             break
         else:
             i += 1
     return out
+
+
+def _ansi_c_end(text, i):
+    """Past the ' closing a $'...' whose body starts at i; len+1 when there is none."""
+    while i < len(text):
+        if text[i] == "\\":
+            i += 2
+        elif text[i] == "'":
+            return i + 1
+        else:
+            i += 1
+    return len(text) + 1
+
+
+def _param_end(text, i):
+    """Past the } closing a ${ whose body starts at i, reading '...' as quoted throughout (as
+    the shell does in an unquoted ${X:-word}); len+1 when there is none."""
+    from parable import _find_cmdsub_end, _skip_backtick, _skip_double_quoted
+    depth = 1
+    while i < len(text):
+        c = text[i]
+        if c == "\\":
+            i += 2
+        elif c == "'":
+            j = text.find("'", i + 1)
+            if j < 0:
+                return len(text) + 1
+            i = j + 1
+        elif c == '"':
+            i = _skip_double_quoted(text, i + 1)
+        elif c == "`":
+            i = _skip_backtick(text, i)
+        elif text.startswith("$(", i):
+            i = _find_cmdsub_end(text, i + 2)
+        elif text.startswith("${", i):
+            i = _param_end(text, i + 2)
+        else:
+            depth += (c == "{") - (c == "}")
+            i += 1
+            if depth == 0:
+                return i
+    return len(text) + 1
 
 
 # ---------------------------------------------------------------- sed
@@ -1186,13 +1234,15 @@ class Analyzer:
                     cwd = self.node(part, cwd, depth)
             return cwd
         if kind in ("cmdsub", "procsub"):
+            if depth > self.p["shell"]["max_depth"]:
+                self.deny("too-deep", "stop_and_explain", "commands nested too deeply to check")
             inner = getattr(n, "command", None)
             if inner is not None:
                 self.node(inner, cwd, depth + 1)
             return cwd
         if kind == "heredoc":
             if not n.quoted:  # an unquoted body expands $(...) and `...`; quotes are literal
-                self.shell_text(n.content, False, cwd, depth)
+                self.shell_text(n.content, "heredoc", cwd, depth)
             return cwd
         if kind == "redirect":
             self.redirect(n, cwd)  # then on to its target word
@@ -1214,8 +1264,13 @@ class Analyzer:
                 self.deny("unchecked-text", "stop_and_explain",
                           f"the parser left shell text in a {kind} that the policy can't check; "
                           "write the command more plainly")
-        if kind == "word":
-            return cwd  # its parts are the substitutions shell_text just checked
+        if kind in ("word", "arith-cmd"):
+            # Also check every substitution Parable parsed beneath it. A body that either reading
+            # finds is checked, so the two must both miss one. The rest beneath is the same text
+            # shell_text just read.
+            for sub in self.parsed_substitutions(n):
+                self.node(sub, cwd, depth + 1)
+            return cwd
         start = cwd
         for c in self.children(n):
             cwd = self.node(c, cwd, depth)
@@ -1238,10 +1293,17 @@ class Analyzer:
         if lit.static is not None and lit.text not in allowed:
             self.check_write_path(lit.text, cwd)
 
-    def shell_text(self, text, quotes, cwd, depth):
+    def parsed_substitutions(self, n):
+        for c in self.children(n):
+            if c.kind in ("cmdsub", "procsub"):
+                yield c
+            else:
+                yield from self.parsed_substitutions(c)
+
+    def shell_text(self, text, mode, cwd, depth):
         """Check each command substitution in text, whether or not Parable made it a node."""
         try:
-            bodies = substitutions(text, quotes)
+            bodies = substitutions(text, mode)
         except ValueError:
             self.deny("parse-error", "stop_and_explain",
                       "a command substitution has no end the policy can find")
@@ -1727,6 +1789,44 @@ class Analyzer:
     # wget 1.21's short options that take a value (its --help gives each a =VALUE; -n takes the
     # letters of -nv, -nc, -nd, -nH, -np): the rest of the cluster, else the next word.
     WGET_VALUE_SHORT = frozenset("aABDeiIlnoOPQRtTUwX")
+    # wget 1.21's long options that take a value: its --help gives each a =VALUE, except
+    # max-redirect and hsts-file, which take one too. Written without =, the value is the next
+    # word. use-askpass's value is optional, so it is attached or absent.
+    WGET_LONG_VALUE = frozenset("""
+        accept accept-regex append-output backups base bind-address body-data body-file
+        ca-certificate ca-directory certificate certificate-type ciphers compression config
+        connect-timeout crl-file cut-dirs default-page directory-prefix dns-timeout domains
+        exclude-directories exclude-domains execute follow-tags ftp-password ftp-user header
+        hsts-file http-password http-user ignore-tags include-directories input-file level
+        limit-rate load-cookies local-encoding max-redirect method output-document output-file
+        password pinnedpubkey post-data post-file prefer-family private-key private-key-type
+        progress proxy-password proxy-user quota random-file read-timeout referer regex-type
+        reject reject-regex rejected-log remote-encoding report-speed restrict-file-names
+        retry-on-http-error save-cookies secure-protocol start-pos timeout tries user user-agent
+        wait waitretry warc-dedup warc-file warc-header warc-max-size warc-tempdir""".split())
+    WGET_LONG_FLAG = frozenset("""
+        adjust-extension ask-password auth-no-challenge background backup-converted
+        content-disposition content-on-error continue convert-file-only convert-links debug
+        delete-after follow-ftp force-directories force-html ftps-clear-data-connection
+        ftps-fallback-to-ftp ftps-implicit ftps-resume-ssl help https-only ignore-case
+        ignore-length inet4-only inet6-only keep-session-cookies mirror no-cache
+        no-check-certificate no-clobber no-config no-cookies no-directories no-dns-cache no-glob
+        no-host-directories no-hsts no-http-keep-alive no-if-modified-since no-iri no-netrc
+        no-parent no-passive-ftp no-proxy no-remove-listing no-use-server-timestamps no-verbose
+        no-warc-compression no-warc-digests no-warc-keep-log page-requisites
+        preserve-permissions protocol-directories quiet random-wait recursive relative
+        retr-symlinks retry-connrefused retry-on-host-error save-headers server-response
+        show-progress span-hosts spider strict-comments timestamping trust-server-names unlink
+        use-askpass verbose version warc-cdx xattr""".split())
+
+    def wget_long(self, name):
+        """The wget long option name stands for: itself, else the one option it is a prefix of;
+        None when unknown or ambiguous (wget then refuses the call)."""
+        known = self.WGET_LONG_VALUE | self.WGET_LONG_FLAG
+        if name in known:
+            return name
+        hits = [o for o in known if o.startswith(name)]
+        return hits[0] if len(hits) == 1 else None
 
     def wget(self, args, researcher=False):
         w = self.p["wget"]
@@ -1739,12 +1839,18 @@ class Analyzer:
             if not a or a == "-" or not a.startswith("-"):
                 continue
             if a.startswith("--"):
-                found = [a]
-                if flag_hit(a, ["--output-document"]) and not flag_hit(a, ["--output-file"]):
-                    _, eq, value = a.partition("=")
-                    out_doc = value if eq else (words.pop(0) if words else None)
+                name, eq, value = a[2:].partition("=")
+                opt = self.wget_long(name)
+                if opt is None:
+                    found, exact = [a], False  # unknown: match the lists by prefix
+                else:
+                    found, exact = ["--" + opt], True
+                    if opt in self.WGET_LONG_VALUE and not eq:
+                        value = words.pop(0) if words else None
+                    if opt == "output-document":
+                        out_doc = value
             else:
-                found = []
+                found, exact = [], True
                 for k, c in enumerate(a[1:], 2):
                     found.append("-" + c)
                     if c in self.WGET_VALUE_SHORT:
@@ -1753,10 +1859,10 @@ class Analyzer:
                             out_doc = value
                         break
             for f in found:
-                if flag_hit(f, send):
+                if (f in send) if exact else flag_hit(f, send):
                     self.deny("http-write", "manual_only",
                               f"wget {a} sends data or runs a wgetrc command that can")
-                if researcher and flag_hit(f, writes):
+                if researcher and ((f in writes) if exact else flag_hit(f, writes)):
                     self.deny("researcher-write", "scope_down",
                               f"wget {a} writes a local file; researcher reads to stdout")
         if researcher and out_doc != "-":
@@ -1810,7 +1916,7 @@ class Analyzer:
                 self.deny("git-flag", "use_alternative", f"git {sub} {a} is not allowed")
             if sub == "grep" and a and (a.startswith("-O") or a == "--open-files-in-pager"):
                 self.deny("git-flag", "use_alternative", "git grep -O runs a pager command")
-            if sub == "clone" and flag_hit(a, ("-u", "--template", "--config")):
+            if sub == "clone" and self.clone_flag(a):
                 self.deny("git-flag", "use_alternative", f"git clone {a} is not allowed")
             if sub == "clone" and a and re.match(r"^(ext|fd)::", a):
                 self.deny("git-transport", "hard_stop", f"git clone {a} runs a command")
@@ -1869,6 +1975,19 @@ class Analyzer:
         if sub == "clone" and self.confined and len(cpos) >= 2 and cpos[-1] is not None:
             self.check_write_path(cpos[-1], cwd)
         return cwd
+
+    def clone_flag(self, a):
+        """git clone's --upload-pack (-u), --config (-c) and --template: long by prefix, short
+        anywhere in a cluster (`-qc`) before a value-taking letter (-b, -j, -o) starts a value."""
+        if flag_hit(a, ("--upload-pack", "--template", "--config")):
+            return True
+        if self.short_cluster(a or ""):
+            for ch in a[1:]:
+                if ch in "uc":
+                    return True
+                if ch in "bjo":
+                    break
+        return False
 
     CLONE_VALUE_FLAGS = {"--depth", "-b", "--branch", "-o", "--origin", "--reference",
                          "--reference-if-able", "-j", "--jobs", "--shallow-since",

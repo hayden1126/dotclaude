@@ -75,11 +75,11 @@ shells = ["bash", "sh", "zsh", "dash", "ksh"]
 # Environment assignments that change what a command executes.
 denied_env_prefixes = ["GIT_", "LD_", "DYLD_"]
 # Also the variables that point curl or wget at a config file (one that can set data or a
-# method). HOME and XDG_CONFIG_HOME do too, but hermetic test runs set them, so they stay
+# method) or name a program wget runs. HOME and XDG_CONFIG_HOME do too, but hermetic test runs set them, so they stay
 # allowed. Names are checked wherever a variable is set: a VAR=x prefix, export and the
 # typeset family, read and printf -v, a loop variable, ${VAR:=x}, arithmetic.
 denied_env_names = ["BASH_ENV", "ENV", "ZDOTDIR", "PROMPT_COMMAND", "PAGER", "EDITOR", "VISUAL",
-  "WGETRC", "CURL_HOME"]
+  "WGETRC", "CURL_HOME", "WGET_ASKPASS", "SSH_ASKPASS"]
 allowed_env = ["GIT_PAGER=cat", "PAGER=cat", "GIT_TERMINAL_PROMPT=0"]
 # `source`/`.` runs a file the policy can't see; only virtualenv activation is allowed.
 source_allowed_suffixes = ["/bin/activate"]
@@ -145,10 +145,10 @@ output_flags = ["-o", "--output", "-O", "--remote-name", "--remote-name-all", "-
   "--etag-save", "--hsts", "--alt-svc", "--create-dirs"]
 
 [wget]
-# Flags that send data, or run (-e/--execute) or read (--config) a wgetrc command that can set
-# post_data or method: denied for every delegated agent.
+# Flags that send data, run (-e/--execute) or read (--config) a wgetrc command that can set
+# post_data or method, or run a program (--use-askpass): denied for every delegated agent.
 send_flags = ["--post-data", "--post-file", "--method", "--body-data", "--body-file", "-e",
-  "--execute", "--config"]
+  "--execute", "--config", "--use-askpass"]
 # Researcher only: flags that write local files. The researcher must also send the document to
 # stdout (-O- or --output-document=-).
 researcher_write_flags = ["-o", "--output-file", "-a", "--append-output", "-r", "--recursive",

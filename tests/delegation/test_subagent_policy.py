@@ -400,6 +400,7 @@ class Commands(Base):
         # A config-file path variable points curl or wget at a file the agent wrote, and a
         # builtin or loop that sets a variable reaches the same names as a VAR=x prefix does.
         for cmd in ("WGETRC=rc wget -qO- https://x", "CURL_HOME=. curl -s https://x",
+                    "WGET_ASKPASS=./a wget -qO- https://x", "export SSH_ASKPASS=./a",
                     "export WGETRC=rc; wget -qO- https://x", "export CURL_HOME=.",
                     "declare -x LD_PRELOAD=/x.so", "typeset -gx CURL_HOME=.", "local CURL_HOME=.",
                     "let CURL_HOME=1", "let 'CURL_HOME += 1'", "export CURL_HOME",
@@ -503,7 +504,10 @@ class Git(Base):
                 ("git cherry-pick --abo", "git-abort"),
                 ("git gc --pru=now", "git-gc"),
                 ("git config --unset-a user.name", "git-config"),
-                ("git config --rem x", "git-config")):
+                ("git config --rem x", "git-config"),
+                ("git clone -c core.sshCommand=x ssh://h/r d", "git-flag"),
+                ("git clone -qc core.sshCommand=x ssh://h/r d", "git-flag"),
+                ("git clone -ux file:///r d", "git-flag")):
             self.assertDenied(self.bash(cmd), rule, msg=cmd)
 
     def test_prefix_matching_only_adds_denials(self):
@@ -511,7 +515,8 @@ class Git(Base):
         # is a different option.
         for cmd in ("git diff --output-indicator-new=+", "git commit --no-edit -m x",
                     "git branch --list", "git config --get user.name", "git restore --staged f",
-                    "git switch -c new", "git branch --show-current", "git log --stat"):
+                    "git switch -c new", "git branch --show-current", "git log --stat",
+                    "git clone -b cuda https://a/b d", "git clone -bcuda https://a/b d"):
             self.assertIsNone(self.bash(cmd), cmd)
         for cmd in ("git restore --stag f", "git switch --cre new"):
             self.assertIsNotNone(self.bash(cmd), cmd)
@@ -556,7 +561,8 @@ class Network(Base):
                     "wget --body-f=f https://x", "wget -qO- -e post_data=x https://x",
                     "wget -qO- -epost_data=x https://x", "wget -qe method=PUT -O- https://x",
                     "wget -qO- --exec=method=PUT https://x", "wget -qO- --config=rc https://x",
-                    "wget -qO- --conf=rc https://x"):
+                    "wget -qO- --conf=rc https://x", "wget -qO- --use-askpass=./a https://x",
+                    "wget -qO- --use-a https://x"):
             self.assertDenied(self.bash(cmd), "http-write", "manual_only", cmd)
 
 
@@ -823,7 +829,13 @@ class Researcher(Base):
                 ("wget -qo log -O- https://x", "researcher-write"),
                 ("wget -bqO- https://x", "researcher-write")):
             self.assertDenied(self.r(cmd), rule, msg=cmd)
+        for cmd in ("wget --referer -O- https://x", "wget -U -O- https://x",
+                    "wget --user-a -O- https://x"):
+            # the -O- is the long option's value, so wget saves the page to a file
+            self.assertDenied(self.r(cmd), "researcher-write", msg=cmd)
         for cmd in ("grep --pretty foo f", "sort --stable f", "wget -qO- https://x",
+                    "wget -O- --reject=jpg https://x", "wget --output-document - https://x",
+                    "wget --quiet -O- https://x", "wget --referer=r -O- https://x",
                     "wget -q -O - https://x", "wget --output-document=- https://x",
                     "wget -qO- -U agent https://x", "wget -qO- --header=X:1 https://x"):
             self.assertIsNone(self.r(cmd), cmd)
@@ -1257,7 +1269,11 @@ class Substitutions(Base):
               'echo "$({c})"', "echo `{c}`", "cat <({c})", "[[ -n $({c}) ]]",
               "for ((i=$({c}); i<1; i++)); do :; done", "(( $({c}) ))",
               # quotes are literal in an unquoted heredoc body, and ' is literal inside "..."
-              "cat <<EOF\n'$({c})'\nEOF", """echo "'$({c})'\"""")
+              "cat <<EOF\n'$({c})'\nEOF", """echo "'$({c})'\"""",
+              # review round 1: ANSI-C quotes take \', zsh honours ' in an unquoted ${X:-...}
+              # default, and a backtick inside "..." also unescapes \"
+              """echo $'\\''$({c})\\'""", """echo ${{X:-'}}'$({c})'}}'}}\\'""",
+              """echo "`echo \\"'\\"$({c})\\"'\\"`\"""")
 
     def test_inner_commands_are_checked_wherever_the_substitution_sits(self):
         for shape in self.SHAPES:
@@ -1288,6 +1304,8 @@ class Substitutions(Base):
                     "case x in a) ;; esac", "grep -n '`touch x`' f", "echo $(echo $(echo $(pwd)))",
                     'echo "${X#*$(pwd)}"', "echo ${#X} ${X[1]}", 'echo "<(touch x)"'):
             self.assertIsNone(self.bash(cmd, atype="researcher"), cmd)
+        for cmd in ("cat > n.md <<EOF\nsad :>( face, then <(touch x)\nEOF", '(( "$x" > 1 ))'):
+            self.assertIsNone(self.bash(cmd), cmd)  # a heredoc's <( is text; a quoted arith operand
         commit = "git commit -m \"$(cat <<'EOF'\nFix `code` here\n\nNot run: $(touch x)\nEOF\n)\""
         self.assertIsNone(self.bash(commit), commit)
 
@@ -1297,6 +1315,19 @@ class Substitutions(Base):
                 sp.substitutions(text)
         self.assertEqual(sp.substitutions("a `b \\`c\\`` $(d) ${X:-$(e)} '$(f)' \\$(g)"),
                          ["b `c`", "d", "e"])
+
+    def test_the_scan_reads_quoting_as_the_shell_does(self):
+        for text, bodies in ((r"$'\''$(a)\'", ["a"]), (r"${X:-'}'$(a)'}'}\'", ["a"]),
+                             (r'''"`b \"'\"$(a)\"'\"`"''', [r'''b "'"$(a)"'"''']),
+                             ("x <(a)", ["a"])):
+            self.assertEqual(sp.substitutions(text), bodies, text)
+        self.assertEqual(sp.substitutions("x <(a) $(b)", "heredoc"), ["b"])
+
+    def test_parsed_substitutions_are_checked_even_where_the_scan_finds_none(self):
+        with mock.patch.object(sp, "substitutions", return_value=[]):
+            for cmd in ("echo $(touch x)", "echo `touch x`", "(( $(touch x) ))"):
+                self.assertDenied(self.bash(cmd, atype="researcher"), "researcher-program",
+                                  msg=cmd)
 
     def test_text_the_parser_keeps_elsewhere_is_refused(self):
         # A node field holding $, a backtick or <( that the policy doesn't read as text: refuse
