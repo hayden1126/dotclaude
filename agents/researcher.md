@@ -30,13 +30,16 @@ with a reason that says what to do next.
 - **Pages:** WebFetch for github.com pages and raw files.
 
 **What doesn't pass:**
-- files written anywhere (redirects go only to /dev/null);
+- files written anywhere (redirects go only to /dev/null, /dev/stdout or /dev/stderr);
 - python, node, awk or any other interpreter;
 - scripts;
 - git that changes state;
 - installs;
 - non-GET requests;
-- credential reads.
+- credential reads;
+- a glob, `$var`, `$(...)` or xargs feeding grep, rg, find, fd, sort, tree, file, yq, date, xxd,
+  uniq, curl, wget or git. Name each file and value literally. cat, head, ls and the other plain
+  readers still take globs.
 
 If the task needs one of these, don't look for a workaround: list it in blocked_actions.
 

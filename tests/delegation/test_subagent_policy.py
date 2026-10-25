@@ -8,6 +8,7 @@ import datetime
 import io
 import json
 import os
+import pwd
 import random
 import re
 import shutil
@@ -389,12 +390,174 @@ class Commands(Base):
         self.assertIsNone(self.bash("source .venv/bin/activate && pytest -q"))
         self.assertIsNone(self.bash("command -v git"))
 
+    def test_wrapper_options_are_read_exactly(self):
+        # SP11: a wrapper option skipped without its value moved the command (exec -a), GNU
+        # time's -o wrote a file, watch and flock -c ran a shell string, and xargs -I put stdin
+        # into any word. Each wrapper now reads its own option table and refuses the rest.
+        for cmd, rule in (("env time --output=.git/config true", "unknown-option"),
+                          ("env time -ofile true", "unknown-option"),
+                          ("command time -o x ls", "unknown-option"),
+                          ("timeout --foo 5 ls", "unknown-option"),
+                          ("nice -5 ls", "unknown-option"),
+                          ("timeout $T ls", "dynamic-wrapper-arg"),
+                          ("watch -n1 ls '; git reset --hard'", "git-reset"),
+                          ("flock lk -c 'git reset --hard'", "git-reset"),
+                          ("flock ~/.zshrc true", "protected-path"),
+                          ("xargs -I{} sh -c '{}'", "dynamic-shell"),
+                          ("xargs -I X git X", "dynamic-executable"),
+                          ("xargs -I{a,b} ls", "dynamic-wrapper-arg"),
+                          # section B: a value word must be literal, and xargs's last replace
+                          # option is the one it uses
+                          ("nice -n {5,echo,x} true", "dynamic-wrapper-arg"),
+                          ("timeout -s {KILL,5,echo} 5 true", "dynamic-wrapper-arg"),
+                          ("stdbuf -o {L,echo} true", "dynamic-wrapper-arg"),
+                          ("xargs -I {a,b} ls", "dynamic-wrapper-arg"),
+                          ('xargs -I "$X" true', "dynamic-wrapper-arg"),
+                          ("xargs -I zzz -iQQ git QQ", "dynamic-executable"),
+                          ("xargs --replace=QQ git QQ", "dynamic-executable")):
+            self.assertDenied(self.bash(cmd), rule, msg=cmd)
+        for cmd, rule in (("exec -a ls sort -o out f", "researcher-flag"),
+                          ("watch ls '; touch W'", "researcher-program"),
+                          ("flock lk ls", "researcher-flag")):
+            self.assertDenied(self.bash(cmd, atype="researcher"), rule, msg=cmd)
+        for cmd in ("timeout 5 ls", "timeout -s KILL 5 ls", "timeout --signal=KILL 5 ls",
+                    "nice -n 5 ls", "stdbuf -oL ls", "time ls", "time -p ls", "env time ls",
+                    "watch -n1 ls", "watch -x ls", "noglob ls *", "xargs -0 ls", "xargs -n1 echo",
+                    "xargs -I{} cp {} dst", "xargs -I {} cp {} dst", "flock lk ls",
+                    "exec ls"):
+            self.assertIsNone(self.bash(cmd), cmd)
+
+    def test_text_a_shell_parses_again_is_read_exactly(self):
+        # SP13: a shell's option values, a brace or glob word in text that is parsed again, and
+        # a ~ or $HOME after the command sets HOME.
+        for cmd, rule in (("bash -o errexit -c 'git reset --hard'", "git-reset"),
+                          ("bash -O extglob -c 'git reset --hard'", "git-reset"),
+                          ("bash +o errexit -c 'git reset --hard'", "git-reset"),
+                          ("bash -eo pipefail -c 'git reset --hard'", "git-reset"),
+                          ("bash -c -x 'git reset --hard'", "git-reset"),
+                          ("zsh -f -c 'git reset --hard'", "git-reset"),
+                          ("bash --rcfile x -c ls", "unknown-option"),
+                          ("bash -o $O -c ls", "dynamic-shell"),
+                          ("eval true {,\\'}\;git\\ reset\;\\#\\'", "dynamic-eval"),
+                          ("eval true *", "dynamic-eval"),
+                          ("watch -n1 true {,\\'}\;git\\ reset\;\\#\\'", "dynamic-eval"),
+                          ("sh -c true\\ {,\\'}\;git\\ reset\;\\#\\'", "dynamic-shell"),
+                          ("trap true\\ {,\\'}\;git\\ reset\;\\#\\' EXIT", "dynamic-eval"),
+                          ("HOME='x;git reset --hard'; eval echo $HOME", "dynamic-eval"),
+                          ("HOME=/x; eval echo ~", "dynamic-eval"),
+                          ("export HOME=/x; eval echo ~/y", "dynamic-eval"),
+                          ("eval true ~+", "dynamic-eval"),
+                          # final review: zsh's -O is a flag and -oNAME takes its own word; -s
+                          # reads stdin; unsetting HOME also makes ~ and $HOME unknown
+                          ("zsh -c -O 'git reset --hard' true", "git-reset"),
+                          ("zsh -O -c 'git reset --hard'", "git-reset"),
+                          ("zsh -oerrexit -c 'git reset --hard'", "git-reset"),
+                          ("bash -O extglob -c 'git reset --hard'", "git-reset"),
+                          ("bash -s true", "shell-stdin"), ("zsh -s", "shell-stdin"),
+                          ("unset HOME; eval echo $HOME", "dynamic-eval"),
+                          ("env -i sh -c 'eval echo $HOME'", "dynamic-eval"),
+                          ("eval true ~bin", "dynamic-eval"),
+                          # last review: -oNAME in any shell, stdin by option name, zsh5
+                          ("bash -oerrexit -c 'git reset --hard'", "git-reset"),
+                          ("sh -o stdin x", "shell-stdin"), ("zsh -o shin_stdin x", "shell-stdin"),
+                          ("zsh5 -c 'git reset --hard'", "git-reset"),
+                          ("env -u HOME sh -c 'eval echo $HOME'", "dynamic-eval"),
+                          ("env -uHOME sh -c 'eval echo $HOME'", "dynamic-eval"),
+                          ("env --unset HOME sh -c 'eval echo $HOME'", "dynamic-eval"),
+                          ("env --unset=HOME sh -c 'eval echo $HOME'", "dynamic-eval"),
+                          ("env --ignore-environment sh -c 'eval echo $HOME'", "dynamic-eval")):
+            self.assertDenied(self.bash(cmd), rule, msg=cmd)
+        for cmd in ("bash -euo pipefail -c 'ls -la'", "bash -c ls", 'sh -c "echo hi"',
+                    "bash --norc --noprofile -c ls", "eval echo $HOME", "eval echo ~",
+                    "HOME=/tmp/h npm test", "ls ~", "cat ~/x", "bash -c 'ls' -- a b"):
+            self.assertIsNone(self.bash(cmd), cmd)
+
+    def test_an_uninstalled_shell_reads_attached_o(self):
+        # ksh93 and mksh take -oNAME as one word; ksh may not be installed, so call the reader
+        g = sp.Analyzer(self.ev("Bash", {"command": "true"}), POLICY, home=self.home)
+        lits = [sp.Lit(w) for w in ("ksh", "-oerrexit", "-c", "git reset --hard")]
+        with self.assertRaises(sp.Deny) as cm:
+            g.shell_wrapper(lits, self.proj, 0)
+        self.assertEqual(cm.exception.rule, "git-reset")
+
+    def test_tilde_prefixes(self):
+        # ~user, ~+, ~- are unknown (zsh reads ~name from a variable first); so are $HOME:h and
+        # $HOME[1]; once HOME is set, ~ and $HOME are unknown too.
+        user = pwd.getpwuid(os.getuid()).pw_name
+        for w in (f"~{user}/x", "~bin/true", "~+/x", "~-", "~nosuchuserzz/x", "$HOME:h/x",
+                  "$HOME[1]"):
+            self.assertTrue(sp.scan_word(w, "/fake").dynamic, w)
+        for w in ("~", "~/x", "$HOME/x", "${HOME}"):
+            self.assertFalse(sp.scan_word(w, "/fake").dynamic, w)
+            self.assertTrue(sp.scan_word(w, None).dynamic, w)
+        self.assertFalse(sp.scan_word("'~'x", None).dynamic)  # a quoted ~ is text
+
     def test_environment_that_changes_what_runs(self):
         for cmd in ("GIT_EXTERNAL_DIFF=x git diff", "LD_PRELOAD=/x.so ls", "PAGER=less git log",
                     "env GIT_SSH_COMMAND=x git status", "BASH_ENV=/x bash -c ls"):
             self.assertDenied(self.bash(cmd), "env-assignment", msg=cmd)
         self.assertIsNone(self.bash("GIT_PAGER=cat git log -3"))
         self.assertIsNone(self.bash("FOO=1 npm test"))
+
+    def test_every_way_of_setting_a_variable_is_checked(self):
+        # A config-file path variable points curl or wget at a file the agent wrote, and a
+        # builtin or loop that sets a variable reaches the same names as a VAR=x prefix does.
+        for cmd in ("PAGER=less git log",
+                    "export PAGER=rc; wget -qO- https://x", "export PAGER=.",
+                    "declare -x LD_PRELOAD=/x.so", "typeset -gx PAGER=.", "local PAGER=.",
+                    "let PAGER=1", "let 'PAGER += 1'", "export PAGER",
+                    "export -n PAGER=less",
+                    "read -r PAGER <<<rc", "read 'PAGER?home: '",
+                    "printf -v PAGER %s .", "printf -vPAGER %s .", "getopts ab PAGER",
+                    "for PAGER in .; do git log; done",
+                    "select PAGER in .; do break; done", ": ${PAGER:=rc}", "echo ${PAGER=.}",
+                    "(( PAGER = 1 ))", "for ((PAGER=1; PAGER<2; PAGER++)); do :; done"):
+            self.assertDenied(self.bash(cmd), "env-assignment", msg=cmd)
+        for cmd in ("integer CURL_HOME=1", "print -v CURL_HOME .", "mapfile -t CURL_HOME <f",
+                    "vared CURL_HOME",
+                    "readonly GIT_SSH_COMMAND=x"):
+            self.assertIsNotNone(self.bash(cmd), cmd)  # not on the builtins list at all
+        for cmd in ("WGETRC=rc wget -qO- https://x", "CURL_HOME=. curl -s https://x",
+                    "WGET_ASKPASS=./a wget -qO- https://x", "export SSH_ASKPASS=./a",
+                    "echo WGETRC", "grep -r CURL_HOME .", "printf -vCURL_HOME %s .", ": $((WGETRC=10))", ": $[CURL_HOME=1]",
+                    "[[ WGETRC=10 -eq 10 ]]", ": {CURL_HOME}>/dev/null", ": ${a[WGETRC=1]}",
+                    "echo SSH_ASKPASS"):
+            self.assertDenied(self.bash(cmd), "env-banned", msg=cmd)  # named anywhere at all
+        for cmd in (": <<EOF\n${PAGER:=less}\nEOF", "case x in ${PAGER:=less}) ;; esac",
+                    "(( ${PAGER:=1} ))", ": ${PAGER::=less}", "read 'PAGER[1,-1]' <<<x",
+                    "printf -vPAGER[1] %s x"):
+            self.assertDenied(self.bash(cmd), "env-assignment", msg=cmd)
+        for cmd in ("declare -n r=PAGER", "local -n r=x", "n=PAGER; : ${!n:=less}"):
+            self.assertDenied(self.bash(cmd), "dynamic-assignment", msg=cmd)
+        for cmd in ('export "$N"=rc', "export $N=rc", "read -r $N", "printf -v $N %s x",
+                    'env "$N"=less git log', 'printf -v"$N" %s less', "declare -n r=PAGER",
+                    'printf -v"$N" %s x'):
+            self.assertDenied(self.bash(cmd), "dynamic-assignment", msg=cmd)
+        for cmd in ("env PAGER=ca$t git log", "read -dp PAGER <<<less", "printf '-v' PAGER %s x",
+                    "read -r -d x PAGER <<<y", "env BASH_ENV=/x bash -c ls",
+                    "printf -vPAGER[1] %s x"):
+            self.assertDenied(self.bash(cmd), "env-assignment", msg=cmd)
+        for cmd in ("env FOO=1 git log", "read -rp 'go: ' ans", "read -d x ans <<<y",
+                    "printf -v out %s x", "env PAGER=cat git log", "read -n 3 ans <<<yyy"):
+            self.assertIsNone(self.bash(cmd), cmd)
+        for cmd in ('export PATH="$PATH:/x"', "export FOO=1 BAR", "local i=0", "declare -a arr",
+                    "read -r line <f", "printf -v out %s x", "for i in a b; do echo $i; done",
+                    "export GIT_PAGER=cat", "echo ${X:=1}", "(( i = 1 ))", "export -p",
+                    "let i=i+1", "(( PAGER == 1 ))",
+                    "HOME=/tmp/h git status", "XDG_CONFIG_HOME=/tmp/c ls",
+                    'export "FOO=bar"', 'local "x=$1"', 'read -p "Name $x: " ans',
+                    "read -rp 'Name: ' ans", "export -n FOO"):
+            self.assertIsNone(self.bash(cmd), cmd)
+        self.assertIsNone(self.bash("for i in a b; do echo $i; done", atype="researcher"))
+
+    def test_a_trap_handler_is_checked_like_eval(self):
+        self.assertDenied(self.bash("trap 'git reset --hard' EXIT"), "git-reset")
+        self.assertDenied(self.bash("trap -- 'git reset --hard' EXIT INT"), "git-reset")
+        self.assertIsNotNone(self.bash("trap '-; git reset --hard' EXIT"))  # handler analyzed
+        self.assertDenied(self.bash("trap -p 'git reset --hard' EXIT"), "git-reset")
+        self.assertDenied(self.bash('trap "$X" EXIT'), "dynamic-eval")
+        for cmd in ("trap 'echo done' EXIT", "trap - EXIT", "trap '' INT", "trap -l", "trap"):
+            self.assertIsNone(self.bash(cmd), cmd)
 
     def test_ordinary_work_passes(self):
         for cmd in ("ls -la src", "npm test 2>&1 | tail -20", "git status", "git diff --stat",
@@ -450,11 +613,85 @@ class Git(Base):
                 ("git frob", "git-unknown", "stop_and_explain")):
             self.assertDenied(self.bash(cmd), rule, intent, cmd)
 
+    def test_short_flag_clusters_and_global_options(self):
+        # round 3: short mutate flags inside a cluster, a global option that eats the subcommand,
+        # and commit -n (short of --no-verify).
+        for cmd, rule in (("git branch -qD old", "git-branch"), ("git branch -Dq old", "git-branch"),
+                          ("git tag -fm msg v1 HEAD", "git-tag"), ("git switch -c n -fq", "git-switch"),
+                          ("git restore -S -Wq f", "git-restore"), ("git restore -SW f", "git-restore"),
+                          ("git commit -n -m x", "git-flag"), ("git commit -nm x", "git-flag"),
+                          ("git commit -an", "git-flag"),
+                          ("git --namespace status push origin", "git-push"),
+                          ("git --namespace=n push", "git-push"),
+                          ("git --git-dir d push", "git-push"),
+                          ("git --work-tree w reset --hard", "git-reset"),
+                          # round 5: --shallow-file takes the next word, an unknown main-level
+                          # option is refused, and checkout -b can't force or reset a branch
+                          ("git --shallow-file log reset --hard", "git-reset"),
+                          ("git --shallow-file=s push", "git-push"),
+                          ("git --frob status", "git-global-option"),
+                          ("git checkout -b n -f HEAD", "git-checkout"),
+                          ("git checkout -b n --forc HEAD", "git-checkout"),
+                          ("git checkout -b n -B m", "git-checkout")):
+            self.assertDenied(self.bash(cmd), rule, msg=cmd)
+
+    def test_short_flag_clusters_do_not_overdeny(self):
+        # an attached value whose text contains a mutate letter is not a flag
+        for cmd in ("git tag -mDeploy v1", "git tag -m Draft v1", "git commit -m 'fix D'",
+                    "git branch --list", "git switch -c newf", "git restore --staged f",
+                    "git config --global --get user.email", "git config --global user.name",
+                    "git --namespace n status", "git -c k=v log",
+                    # round 5: known main-level flags, and an optional value that holds a letter
+                    "git --no-pager log", "git -P log", "git --literal-pathspecs status",
+                    "git --shallow-file s status", "git --version",
+                    "git checkout -b feat/x origin/main", "git commit -unormal -m x",
+                    "git branch -tdirect feat origin/main"):
+            if cmd == "git -c k=v log":
+                self.assertDenied(self.bash(cmd), "git-config-override", msg=cmd)
+            else:
+                self.assertIsNone(self.bash(cmd), cmd)
+
     def test_read_forms_pass(self):
         for cmd in ("git remote -v", "git remote get-url origin", "git config --get user.name",
                     "git config user.name", "git branch -a", "git worktree list",
                     "git reflog", "git submodule status", "git tag"):
             self.assertIsNone(self.bash(cmd), cmd)
+
+    def test_denied_long_flags_match_by_unique_prefix(self):
+        # git's parse-options takes any unique prefix of a long option (`git branch --del` ran
+        # as --delete), so every deny-list matches by prefix, each site here once.
+        for cmd, rule in (
+                ("git commit --no-veri -m x", "git-flag"),
+                ("git diff --outp=o.txt", "git-flag"),
+                ("git log --ext-d", "git-flag"),
+                ("git clone --conf=core.fsmonitor=x https://a/b d", "git-flag"),
+                ("git clone --temp=t https://a/b d", "git-flag"),
+                ("git branch --del old", "git-branch"),
+                ("git branch --set-up=o/x", "git-branch"),
+                ("git tag --del v1", "git-tag"),
+                ("git switch -c new --disc", "git-switch"),
+                ("git restore --staged --work f", "git-restore"),
+                ("git rm --forc f", "git-rm-force"),
+                ("git merge --abo", "git-abort"),
+                ("git cherry-pick --abo", "git-abort"),
+                ("git gc --pru=now", "git-gc"),
+                ("git config --unset-a user.name", "git-config"),
+                ("git config --rem x", "git-config"),
+                ("git clone -c core.sshCommand=x ssh://h/r d", "git-flag"),
+                ("git clone -qc core.sshCommand=x ssh://h/r d", "git-flag"),
+                ("git clone -ux file:///r d", "git-flag")):
+            self.assertDenied(self.bash(cmd), rule, msg=cmd)
+
+    def test_prefix_matching_only_adds_denials(self):
+        # Allow-lists stay exact, and a longer flag that merely starts with a denied one's name
+        # is a different option.
+        for cmd in ("git diff --output-indicator-new=+", "git commit --no-edit -m x",
+                    "git branch --list", "git config --get user.name", "git restore --staged f",
+                    "git switch -c new", "git branch --show-current", "git log --stat",
+                    "git clone -b cuda https://a/b d", "git clone -bcuda https://a/b d"):
+            self.assertIsNone(self.bash(cmd), cmd)
+        for cmd in ("git restore --stag f", "git switch --cre new"):
+            self.assertIsNotNone(self.bash(cmd), cmd)
 
 
 class Rm(Base):
@@ -488,6 +725,36 @@ class Network(Base):
         for cmd in ("curl -s https://x", "curl -I https://x", "curl -X GET https://x",
                     "curl -sSfL https://x", "wget -qO- https://x"):
             self.assertIsNone(self.bash(cmd), cmd)
+
+    def test_curl_long_options_match_by_prefix(self):
+        # SP12c: curl takes a unique prefix of a long option, as getopt_long does.
+        for cmd in ("curl --data-bin @f https://x", "curl --form-s a=b https://x",
+                    "curl --upload-f f https://x", "curl --reques POST https://x",
+                    "curl --reques=PUT https://x"):
+            self.assertDenied(self.bash(cmd), "http-write", "manual_only", cmd)
+        for cmd in ("curl --request GET https://x", "curl --request-target / https://x",
+                    "curl -s --compressed https://x"):
+            self.assertIsNone(self.bash(cmd), cmd)
+
+    def test_wget_send_flags_match_by_prefix_and_rc_commands_are_denied(self):
+        # wget's getopt_long takes unique prefixes; -e/--execute runs a wgetrc command and
+        # --config reads a wgetrc file, either of which can set post_data or method.
+        for cmd in ("wget --post-d=a https://x", "wget --meth=PUT https://x",
+                    "wget --body-f=f https://x", "wget -qO- -e post_data=x https://x",
+                    "wget -qO- -epost_data=x https://x", "wget -qe method=PUT -O- https://x",
+                    "wget -qO- --exec=method=PUT https://x", "wget -qO- --config=rc https://x",
+                    "wget -qO- --conf=rc https://x", "wget -qO- --use-askpass=./a https://x",
+                    "wget -qO- --use-a https://x",
+                    # round 5: --hsts and --backups are booleans, so they don't take the next word
+                    "wget --hsts --post-data=x https://x", "wget --backups --post-data=x https://x",
+                    "wget -qO- --hsts -e post_data=x https://x"):
+            self.assertDenied(self.bash(cmd), "http-write", "manual_only", cmd)
+        # -Y takes the next word, so the -e word is its value (wget then refuses the bad boolean)
+        for cmd in ("wget -Y -epost_data=x https://x", "wget --backups=2 -qO- https://x"):
+            self.assertIsNone(self.bash(cmd), cmd)
+        # a researcher's --hsts no longer swallows the -O- it needs
+        for cmd in ("wget --hsts -O- https://x", "wget --backups -O- https://x"):
+            self.assertIsNone(self.bash(cmd, atype="researcher"), cmd)
 
 
 class Files(Base):
@@ -572,6 +839,28 @@ class Writer(Base):
 
     def wb(self, cmd):
         return self.w("Bash", {"command": cmd})
+
+    def test_env_chdir_moves_the_cwd(self):
+        # section B: env -C runs the command elsewhere, so the checks follow it there
+        for cmd in ("env -C ../../.. touch main.py", f"env -C {self.proj} touch x",
+                    f"env --chdir={self.proj} touch x", f"env -C{self.proj} touch x",
+                    f"env --chdir {self.proj} touch x"):
+            self.assertDenied(self.wb(cmd), "worktree-root", msg=cmd)
+        self.assertDenied(self.wb("env -C $D ls"), "dynamic-wrapper-arg")
+        self.assertIsNone(self.wb("env -C src ls"))
+        # final review: -C moves only the command env runs, and the last -C wins, from the start
+        os.makedirs(os.path.join(self.wt, "a", "b", "c"), exist_ok=True)
+        self.assertDenied(self.wb("env -C a/b/c true; rm -rf ../../../src"), msg="leak")
+        self.assertIsNone(self.wb("env -C a/b/c true; rm -rf src"))
+        self.assertDenied(self.wb("env -C a/b/c -C ../../.. touch x"), "worktree-root")
+        # last review: the shell's cwd stays put on every path, and -C reads a dash-led name
+        for cmd in ("env -C a/b/c sh -c true; rm -rf ../../../src",
+                    "env -C a/b/c; rm -rf ../../../src",
+                    "env -C a/b/c nice true; rm -rf ../../../src"):
+            self.assertDenied(self.wb(cmd), msg=cmd)
+        self.assertIsNone(self.wb("env -C a env -C b/c true"))  # nested: b/c from a
+        os.makedirs(os.path.join(self.wt, "-d"), exist_ok=True)
+        self.assertIsNone(self.wb("env -C -d ls"))
 
     def test_writes_into_the_main_checkout_are_denied(self):
         for cmd in ("echo x > ../../../escape.txt", f"echo x > {self.proj}/src/a.py",
@@ -710,6 +999,7 @@ class Researcher(Base):
                     "git config --get user.name", "git stash list", "curl -s https://api.github.com/zen",
                     "wget -qO- https://x", "gh-public /repos/a/b", "ls -la", "cargo --version",
                     "git clone --depth 1 https://github.com/a/b /tmp/claude-%d/r/b" % os.getuid(),
+                    "git clone --dep 1 https://github.com/a/b /tmp/claude-%d/r/c" % os.getuid(),
                     "diff a b", "sort f | uniq -c"):
             self.assertIsNone(self.r(cmd), cmd)
 
@@ -726,15 +1016,123 @@ class Researcher(Base):
                 ("git stash push", "researcher-git"), ("git config user.name x", "researcher-git"),
                 ("git clone https://github.com/a/b b", "researcher-clone"),
                 ("git clone git@github.com:a/b /tmp/claude-%d/b" % os.getuid(), "researcher-clone"),
+                ("git clone --dep 1 https://a/b /x", "researcher-clone"),
+                ("git clone --separate-git-dir /x https://a/b /tmp/claude-%d/t" % os.getuid(),
+                 "git-flag"),
                 ("sed -i s/a/b/ f", "researcher-flag"), ("sed 's/a/b/w out' f", "researcher-flag"),
                 ("sed -e '1e ls' f", "researcher-flag"),
                 ("find . -name x -delete", "researcher-flag"), ("find . -exec rm {} ;", "researcher-flag"),
                 ("find . -fprint out", "researcher-flag"), ("grep --filter=x foo .", "researcher-flag"),
                 ("grep --pre=cat foo", "researcher-flag"), ("sort -o out f", "researcher-flag"),
                 ("sort -oout f", "researcher-flag"), ("tree -o out", "researcher-flag"),
+                ("sort -uo /home/hayden/x f", "researcher-flag"), ("tree -nao out", "researcher-flag"),
+                ("git grep -iOcmd foo", "git-flag"), ("xxd -r f", "researcher-flag"),
+                ("sort -bo out f", "researcher-flag"), ("sort -do out f", "researcher-flag"),
+                ("tree -Lo 1 out", "researcher-flag"), ("tree -Po x out", "researcher-flag"),
+                ("tree -Io x out", "researcher-flag"),
+                # round 6: xxd reads options by first letter and takes an output operand, tree
+                # -R writes 00Tree.html, file -C writes a .mgc, and the other output options
+                ("xxd -revert f", "researcher-flag"), ("xxd --revert f", "researcher-flag"),
+                ("xxd --r f", "researcher-flag"), ("xxd -rp hex", "researcher-flag"),
+                ("xxd in out", "researcher-flag"), ("xxd -c 8 in out", "researcher-flag"),
+                ("xxd -cols 8 in out", "researcher-flag"), ("xxd -c8 in out", "researcher-flag"),
+                ("xxd in -c", "researcher-flag"), ("xxd - out", "researcher-flag"),
+                ("xxd -- in out", "researcher-flag"), ("xxd -s 1 -R never in out", "researcher-flag"),
+                ("tree -R -H . -L 1 d", "researcher-flag"), ("tree -aR d", "researcher-flag"),
+                ("file -C -m m", "researcher-flag"), ("file -zC -m m", "researcher-flag"),
+                ("file --comp -m m", "researcher-flag"), ("grep --pager=less foo f", "researcher-flag"),
+                ("egrep --view=x foo f", "researcher-flag"),
+                # round 7: a word the shell expands can be xxd's or uniq's output operand; ---
+                # ends xxd's options; grep's query, config and config-file forms
+                ("xxd STATUS.md{,}", "researcher-dynamic"), ("xxd *.bin", "researcher-dynamic"),
+                ("xxd -c *", "researcher-dynamic"), ("xxd $(printf 'a b')", "researcher-dynamic"),
+                ("xxd $F", "researcher-dynamic"), ("uniq in{,}", "researcher-dynamic"),
+                ("uniq *.txt", "researcher-dynamic"), ("xxd --- -c out", "researcher-flag"),
+                ("grep -iQ foo", "researcher-flag"), ("grep --query foo", "researcher-flag"),
+                ("grep --save-config", "researcher-flag"), ("fgrep -Q x", "researcher-flag"),
+                ("grep --config=c foo f", "researcher-flag"), ("grep ---c foo f", "researcher-flag"),
                 ("uniq in out", "researcher-flag"), ("LD_PRELOAD=x ls", "env-assignment"),
                 ("FOO=1 ls", "env-assignment")):
             self.assertDenied(self.r(cmd), rule, msg=cmd)
+
+
+    def test_words_the_shell_fills_in_are_refused(self):
+        # SP11: a researcher program with a write or run rule sees only literal words; anything
+        # the shell or xargs fills in could be an option or output file the rules never read.
+        for cmd in ('sort "$(echo -oout)" in', "sort $(echo -o out) in", 'grep x "$f"',
+                    "grep foo *.md", 'grep x -- "$f"', 'curl -s "https://x/$r"', "xargs sort f",
+                    "echo out | xargs xxd in", 'git log "$x"', "tree {a,b}"):
+            self.assertDenied(self.r(cmd), "researcher-dynamic", msg=cmd)
+        self.assertDenied(self.r("rg --hostname-bin=sh foo"), "researcher-flag")
+        for cmd in ("grep foo a.md b.md", "cat *.md", 'cat "$f"', "ls *", "xargs -n1 echo"):
+            self.assertIsNone(self.r(cmd), cmd)
+
+    def test_round8_table_cells(self):
+        # SP12: a stash option before its subcommand means stash push; uniq reads - and every word
+        # after -- as operands; curl takes unique long prefixes and writes through --stderr and
+        # -w %output{}; date sets the clock from a bare operand.
+        for cmd, rule in (("git stash -m list", "researcher-git"),
+                          ("git stash -- list", "researcher-git"),
+                          ("uniq - out", "researcher-flag"), ("uniq -- in -x", "researcher-flag"),
+                          ("curl --dump-h dh https://x", "researcher-write"),
+                          ("curl --stderr se https://x", "researcher-write"),
+                          ("curl -w '%output{wo}' https://x", "researcher-write"),
+                          ("curl -sw '%output{wo}' https://x", "researcher-write"),
+                          ("curl --write-o=@fmt https://x", "researcher-write"),
+                          ("date 10251200", "researcher-flag")):
+            self.assertDenied(self.r(cmd), rule, msg=cmd)
+        for cmd in ("git stash list", "git stash show -p", "uniq -c in", "uniq -", "date +%F",
+                    "date -u +%s", "curl -s -w '%{http_code}' https://x", "curl -sS https://x"):
+            self.assertIsNone(self.r(cmd), cmd)
+
+    def test_yq_split_writes_files(self):
+        # yq may not be installed, so its table is checked below the command lookup
+        g = sp.Analyzer(self.ev("Bash", {"command": "true"}), POLICY, home=self.home)
+        for args in (["yq", "-s", "x", "f"], ["yq", "--split-exp", "x", "f"], ["yq", "-Ps", "x", "f"]):
+            with self.assertRaises(sp.Deny, msg=args) as cm:
+                g.researcher_program("yq", args, [], [], self.proj, 0)
+            self.assertEqual(cm.exception.rule, "researcher-flag", args)
+        # round 7: yq's value letters, so an output format holding s or i isn't read as -s or -i
+        for args in (["yq", ".a", "f"], ["yq", "-o=json", ".", "f"], ["yq", "-ojson", ".", "f"],
+                     ["yq", "-o=csv", ".", "f"], ["yq", "-p=json", ".", "f"],
+                     ["yq", "-Po=ini", ".", "f"]):
+            self.assertEqual(g.researcher_program("yq", args, [False] * len(args),
+                                                  [False] * len(args), self.proj, 0),
+                             self.proj, args)
+        with self.assertRaises(sp.Deny):  # -i after a boolean is still seen
+            g.researcher_program("yq", ["yq", "-Pi", ".", "f"], [], [], self.proj, 0)
+
+    def test_denied_flags_match_by_unique_prefix(self):
+        for cmd, rule in (
+                ("sort --out=o.txt f", "researcher-flag"),
+                ("sort --compress-prog=sh f", "researcher-flag"),
+                ("grep --filt=x y f", "researcher-flag"),
+                ("rg --pre-g=x foo", "researcher-flag"),
+                ("date --se=now", "researcher-flag"),
+                ("git branch --trac x origin/x", "researcher-git"),
+                ("git tag --anno v1", "researcher-git"),
+                ("wget -O- --rec https://x", "researcher-write"),
+                ("wget -O- --output-f=log https://x", "researcher-write"),
+                ("wget -O- --dir=d https://x", "researcher-write"),
+                ("wget -qrO- https://x", "researcher-write"),
+                ("wget -qo log -O- https://x", "researcher-write"),
+                ("wget -bqO- https://x", "researcher-write")):
+            self.assertDenied(self.r(cmd), rule, msg=cmd)
+        for cmd in ("wget --referer -O- https://x", "wget -U -O- https://x",
+                    "wget --user-a -O- https://x", "wget --egd-file -O- https://x"):
+            # the -O- is the long option's value, so wget saves the page to a file
+            self.assertDenied(self.r(cmd), "researcher-write", msg=cmd)
+        for cmd in ("grep --pretty foo f", "sort --stable f", "wget -qO- https://x",
+                    "wget -O- --reject=jpg https://x", "wget --output-document - https://x",
+                    "wget --quiet -O- https://x", "wget --referer=r -O- https://x",
+                    "wget -q -O - https://x", "wget --output-document=- https://x",
+                    "wget -qO- -U agent https://x", "wget -qO- --header=X:1 https://x",
+                    "sort -n f", "sort -k2 f", "tree -L 2", "git grep -in foo", "xxd -c 8 f",
+                    # round 6: -pr is -p and -er is -e to xxd; a value word isn't an operand
+                    "xxd -pr f", "xxd -er f", "xxd -c8 f", "xxd -cols 8 f", "xxd -R never f",
+                    "xxd -l 16 -s 4 f", "xxd -i -n name f", "xxd -", "file -mC f",
+                    "file -m magic f", "xxd -- f"):
+            self.assertIsNone(self.r(cmd), cmd)
 
 
 class Mcp(Base):
@@ -1151,6 +1549,114 @@ def zsh_case(rng):
 
 
 @unittest.skipUnless(shutil.which("zsh"), "needs zsh")
+class Substitutions(Base):
+    """Every command substitution zsh would run gets the inner command checked, including the
+    ones Parable keeps as plain text (a ${...} argument, an unquoted heredoc body, a case
+    pattern, a here-string, a body that fails to parse inside double quotes)."""
+
+    SHAPES = ("cat <<EOF\n$({c})\nEOF", "cat <<EOF\n`{c}`\nEOF", "cat <<EOF\n$(( $({c}) ))\nEOF",
+              "cat <<EOF\n${{X:-$({c})}}\nEOF", "cat <<-EOF\n\t$({c})\n\tEOF",
+              "echo ${{X:-$({c})}}", 'echo "${{X:-$({c})}}"', "echo ${{X/$({c})/y}}",
+              "echo ${{X:$({c})}}", 'echo "${{X:-`{c}`}}"', "echo ${{X:-${{Y:-$({c})}}}}",
+              "echo $[ $({c}) ]", "case x in $({c})) ;; esac", 'cat <<<"$({c})"', 'cat < "$({c})"',
+              "while false; do :; done <<EOF\n$({c})\nEOF", "echo $(echo $({c}))",
+              'echo "$({c})"', "echo `{c}`", "cat <({c})", "[[ -n $({c}) ]]",
+              "for ((i=$({c}); i<1; i++)); do :; done", "(( $({c}) ))",
+              # quotes are literal in an unquoted heredoc body, and ' is literal inside "..."
+              "cat <<EOF\n'$({c})'\nEOF", """echo "'$({c})'\"""",
+              # review round 1: ANSI-C quotes take \', zsh honours ' in an unquoted ${X:-...}
+              # default, and a backtick inside "..." also unescapes \"
+              """echo $'\\''$({c})\\'""", """echo ${{X:-'}}'$({c})'}}'}}\\'""",
+              """echo "`echo \\"'\\"$({c})\\"'\\"`\"""",
+              # review round 2: a ${...} default holding $'..' or, inside "...", a '
+              """echo ${{x:-$'\\'}}'$({c})}}\\'""", """echo "${{x:-'}}"'$({c})'"'}}\"""")
+
+    def test_inner_commands_are_checked_wherever_the_substitution_sits(self):
+        for shape in self.SHAPES:
+            cmd = shape.format(c="touch x")
+            self.assertDenied(self.bash(cmd, atype="researcher"), "researcher-program", msg=cmd)
+            cmd = shape.format(c="git reset --hard")
+            self.assertDenied(self.bash(cmd), "git-reset", msg=cmd)
+
+    def test_a_body_that_fails_to_parse_is_denied(self):
+        # Parable drops a double-quoted (or process) substitution whose body won't parse, with
+        # no error; zsh still runs it (ls *(.) is a glob qualifier).
+        for cmd in ('echo "$(touch x; ls *(.))"', '[[ -n "$(touch x; ls *(.))" ]]',
+                    'case "$(touch x; ls *(.))" in *) ;; esac',
+                    'for i in "$(touch x; ls *(.))"; do :; done', 'a=("$(touch x; ls *(.))")',
+                    'cat <<<"$(touch x; ls *(.))"', "cat <(touch x; ls *(.))",
+                    "echo x >(touch x; ls *(.))", "cat <<EOF\n$(touch x; ls *(.))\nEOF",
+                    'echo "$(true) $(touch x; ls *(.))"', 'echo "${X:-$(touch x; ls *(.))}"',
+                    # quote characters that would put a naive scan out of step with zsh
+                    """echo "$(echo ")'")$(touch x; ls *(.))'\""""):
+            for atype in ("researcher", "general-purpose"):
+                self.assertDenied(self.bash(cmd, atype=atype), "parse-error", msg=cmd)
+
+    def test_literal_and_checked_forms_pass(self):
+        for cmd in ('echo "$(git log -1)"', "cat <<EOF\n$(date)\nEOF",
+                    "cat <<'EOF'\n$(touch x)\n`touch y`\nEOF", "cat <<EOF\n\\$(touch x)\nEOF",
+                    "echo ${X:-default}", "echo ${X:-$(pwd)}", "echo '$(touch x)'",
+                    "echo \"$(echo '$(touch x)')\"", 'echo "\\$(touch x)"', "echo $(( 1 + 2 ))",
+                    "case x in a) ;; esac", "grep -n '`touch x`' f", "echo $(echo $(echo $(pwd)))",
+                    'echo "${X#*$(pwd)}"', "echo ${#X} ${X[1]}", 'echo "<(touch x)"',
+                    "echo ${X:-'`'}", "echo ${X:-'$('}", "echo ${X:-')'}"):
+            self.assertIsNone(self.bash(cmd, atype="researcher"), cmd)
+        for cmd in ("cat > n.md <<EOF\nsad :>( face, then <(touch x)\nEOF", '(( "$x" > 1 ))'):
+            self.assertIsNone(self.bash(cmd), cmd)  # a heredoc's <( is text; a quoted arith operand
+        commit = "git commit -m \"$(cat <<'EOF'\nFix `code` here\n\nNot run: $(touch x)\nEOF\n)\""
+        self.assertIsNone(self.bash(commit), commit)
+
+    def test_cluster_opts_stops_only_at_value_taking_letters(self):
+        g = sp.Analyzer(self.ev("Bash", {"command": "true"}), POLICY, home=self.home)
+        self.assertEqual(g.cluster_opts("-px", g.SHORT_VALUE["fd"]), {"p", "x"})  # -p is boolean
+        self.assertEqual(g.cluster_opts("-Hx", g.SHORT_VALUE["fd"]), {"H", "x"})
+        self.assertEqual(g.cluster_opts("-tf", g.SHORT_VALUE["fd"]), {"t"})  # -t takes f as value
+        self.assertEqual(g.cluster_opts("-bo", g.SHORT_VALUE["sort"]), {"b", "o"})
+        self.assertEqual(g.cluster_opts("-So", g.SHORT_VALUE["sort"]), {"S"})  # -S takes a value
+        # round 5: tree's value letters take the next word, and these others take a value
+        self.assertEqual(g.cluster_opts("-Lo", g.SHORT_VALUE["tree"]), {"L", "o"})
+        for prog, token, want in (("sort", "-yo", {"y"}), ("date", "-sx", {"s"}),
+                                  ("file", "-mC", {"m"}),
+                                  ("fd", "-Ex", {"E"}), ("fd", "-ox", {"o"}),
+                                  ("grep", "-dQ", {"d"}), ("ugrep", "-tQ", {"t"}),
+                                  ("ugrep", "-NQ", {"N"})):
+            self.assertEqual(g.cluster_opts(token, g.SHORT_VALUE[prog]), want, (prog, token))
+        self.assertEqual(g.cluster_opts("-DO", g.GIT_GREP_VALUE), {"D", "O"})
+
+    def test_the_scan_refuses_an_opener_with_no_close(self):
+        for text in ("$(echo", "`echo", "${X:-$(echo}", "<(echo", "$((1+", "'abc"):
+            with self.assertRaises(ValueError, msg=text):
+                sp.substitutions(text)
+        self.assertEqual(sp.substitutions("a `b \\`c\\`` $(d) ${X:-$(e)} '$(f)' \\$(g)"),
+                         ["b `c`", "d", "e"])
+
+    def test_the_scan_reads_quoting_as_the_shell_does(self):
+        for text, bodies in ((r"$'\''$(a)\'", ["a"]), (r"${X:-'}'$(a)'}'}\'", ["a"]),
+                             (r'''"`b \"'\"$(a)\"'\"`"''', [r'''b "'"$(a)"'"''']),
+                             ("x <(a)", ["a"])):
+            self.assertEqual(sp.substitutions(text), bodies, text)
+        self.assertEqual(sp.substitutions("x <(a) $(b)", "heredoc"), ["b"])
+        self.assertEqual(sp.substitutions("$$'\\'$(a)''"), ["a"])  # $$, then a plain '\\'
+        with self.assertRaises(ValueError):
+            sp.substitutions("x '")
+
+    def test_parsed_substitutions_are_checked_even_where_the_scan_finds_none(self):
+        with mock.patch.object(sp, "substitutions", return_value=[]):
+            for cmd in ("echo $(touch x)", "echo `touch x`", "(( $(touch x) ))"):
+                self.assertDenied(self.bash(cmd, atype="researcher"), "researcher-program",
+                                  msg=cmd)
+
+    def test_text_the_parser_keeps_elsewhere_is_refused(self):
+        # A node field holding $, a backtick or <( that the policy doesn't read as text: refuse
+        # rather than pass it unread.
+        node = type("N", (), {})()
+        node.kind, node.raw = "frob", "$(touch x)"
+        g = sp.Analyzer(self.ev("Bash", {"command": "true"}), POLICY, home=self.home)
+        with self.assertRaises(sp.Deny) as cm:
+            g.node(node, self.proj, 0)
+        self.assertEqual(cm.exception.rule, "unchecked-text")
+
+
 class ZshOracle(unittest.TestCase):
     """unexpanded_spans against zsh itself: a marker the scan calls literal never runs."""
 
