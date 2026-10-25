@@ -21,6 +21,7 @@ Layout (PLAN.md "Layout"):
 """
 import contextlib
 import datetime
+import errno
 import fcntl
 import glob
 import hashlib
@@ -409,17 +410,120 @@ def walk_record(src: str, rel: str = ""):
             yield path, sub, "file"
 
 
-def copy_record(src: str, dest: str) -> None:
-    """Copy a record dir (a lane's .lane/) to dest, which must not exist; links stay links."""
-    os.makedirs(dest)
-    for path, rel, kind in walk_record(src):
-        target = os.path.join(dest, rel)
-        if kind == "dir":
-            os.makedirs(target, exist_ok=True)
-        elif kind == "link":
-            os.symlink(os.readlink(path), target)
-        else:
-            shutil.copy2(path, target)
+def open_dir(root: str | int, rel: str, create: bool = False) -> int:
+    """fd of the dir root/rel, opening each name below root by fd with O_NOFOLLOW: a symlink
+    anywhere on the way, even one swapped in mid-walk, fails the open (ELOOP or ENOTDIR)
+    instead of leading out of root. root, a path or a dir fd, is trusted as it stands: its
+    parent must be one no sandbox can write. create makes missing dirs."""
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY) if isinstance(root, str) else os.dup(root)
+    try:
+        for d in filter(None, rel.split("/")):
+            if create:
+                with contextlib.suppress(FileExistsError):
+                    os.mkdir(d, dir_fd=fd)
+            nxt = os.open(d, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def common_fd(repo: "Repo", rel: str = "", create: bool = False) -> int:
+    """fd of <common>/rel, walked from the common dir's parent, the main checkout, which no
+    lane's sandbox can write. Sandboxed Bash can write the common dir, so worktrees/, lanes/
+    or anything under them may be a symlink by now; a removal or write sandbox-off goes by name
+    under this fd, never by a path through them."""
+    parent, name = os.path.split(repo.common_dir)
+    return open_dir(parent, f"{name}/{rel}" if rel else name, create)
+
+
+def real_dir_at(dir_fd: int, name: str) -> bool:
+    """name under dir_fd is a dir and not a link to one."""
+    try:
+        return stat.S_ISDIR(os.stat(name, dir_fd=dir_fd, follow_symlinks=False).st_mode)
+    except FileNotFoundError:
+        return False
+
+
+def copy_fd(src: int, out: int) -> None:
+    os.lseek(src, 0, os.SEEK_SET)
+    while chunk := os.read(src, 1 << 20):
+        view = memoryview(chunk)
+        while view:
+            view = view[os.write(out, view):]
+
+
+def copy_record(src: int, dest: int) -> None:
+    """Copy the record dir open at fd src (a lane's .lane/, or its mirror) into the empty dir
+    open at fd dest, by fd at every level. Both sides run sandbox-off and a lane's sandbox can
+    write both (its record, and <common>/lanes): each name is opened under its parent's fd with
+    O_NOFOLLOW and checked by fstat, so a file or dir swapped for a symlink mid-copy is copied
+    as the link it became, never read through (a read-denied key landing where the sandbox can
+    read it) or written through (a file outside the sandbox). Links stay links, dangling or
+    not; regular files keep their mode and times; anything else (a FIFO, a socket) is left."""
+    for name in sorted(os.listdir(src)):
+        _copy_entry(src, dest, name)
+
+
+def _copy_entry(src: int, dest: int, name: str) -> None:
+    mode = os.stat(name, dir_fd=src, follow_symlinks=False).st_mode
+    if stat.S_ISDIR(mode) or stat.S_ISREG(mode):
+        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK  # a FIFO swapped in never blocks
+        try:
+            fd = os.open(name, flags | (os.O_DIRECTORY if stat.S_ISDIR(mode) else 0), dir_fd=src)
+        except OSError as e:  # swapped for a link since the stat: copied as one, below
+            if e.errno not in (errno.ELOOP, errno.ENOTDIR):
+                raise
+        else:  # fstat, not the stat: a swap between the two copies what the fd holds
+            try:
+                st = os.fstat(fd)
+                if stat.S_ISDIR(st.st_mode):
+                    os.mkdir(name, dir_fd=dest)
+                    sub = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dest)
+                    try:
+                        copy_record(fd, sub)
+                    finally:
+                        os.close(sub)
+                elif stat.S_ISREG(st.st_mode):
+                    out = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                  0o600, dir_fd=dest)
+                    try:
+                        copy_fd(fd, out)
+                        os.fchmod(out, stat.S_IMODE(st.st_mode))
+                        os.utime(out, ns=(st.st_atime_ns, st.st_mtime_ns))
+                    finally:
+                        os.close(out)
+            finally:
+                os.close(fd)
+            return
+    try:  # a link from the start, or one swapped in since the stat
+        target = os.readlink(name, dir_fd=src)
+    except OSError as e:
+        if e.errno in (errno.EINVAL, errno.ENOENT):  # not a link (a FIFO, a socket), or gone
+            return
+        raise
+    os.symlink(target, name, dir_fd=dest)
+
+
+def write_at(dir_fd: int, name: str, text: str) -> None:
+    """write_text by fd: a fresh temp under dir_fd (O_EXCL, O_NOFOLLOW), fsynced, then renamed
+    over name, so neither a link planted at name nor one swapped in for dir_fd's path is
+    written through."""
+    tmp = f".tmp-{os.getpid()}-{time.monotonic_ns()}"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644,
+                 dir_fd=dir_fd)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp, dir_fd=dir_fd)
+        raise
 
 
 def newest_mtime(src: str) -> float:
@@ -446,14 +550,21 @@ def mirror_dir(repo: "Repo",
     def real_dir(p):  # a planted link here would have `done` archive whatever it points at
         return os.path.isdir(p) and not os.path.islink(p)
 
-    if real_dir(dest):
-        return dest
-    if not real_dir(old):
+    if not restore:
+        return dest if real_dir(dest) else old if real_dir(old) else None
+    try:  # the rename goes by name under lanes/<id>, which a lane may have swapped for a link
+        fd = common_fd(repo, f"{LANES}/{lane_id}")
+    except OSError:
         return None
-    if restore:
-        os.rename(old, dest)
+    try:
+        if real_dir_at(fd, "mirror"):
+            return dest
+        if not real_dir_at(fd, "mirror.old"):
+            return None
+        os.rename("mirror.old", "mirror", src_dir_fd=fd, dst_dir_fd=fd)
         return dest
-    return old
+    finally:
+        os.close(fd)
 
 
 def write_json(path: str, data) -> None:
