@@ -322,7 +322,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     suites. Correction to (A) (same lead, 2026-10-25): `git merge-tree` honours `.gitattributes`
     merge drivers (`merge=union`) and GitHub's merge doesn't, so capella's #263 read clean
     locally and `gh pr merge` refused it. The check asks the forge instead
-    (`gh pr view N --json mergeable`, UNKNOWN: ask again). `lane trial` merges with
+    (`gh pr view N --json mergeable`, UNKNOWN: ask again), or, unpushed too,
+    `git --attr-source=<empty tree 4b825dc6...> merge-tree --write-tree --name-only` (git 2.40+),
+    which skips the drivers (the lead reproduced it on git 2.43, 2026-10-25: a `merge=union`
+    file reads clean plainly and conflicts with it). Open question: it also drops `binary` and
+    eol attributes, and whether GitHub honours those is unchecked. `lane trial` merges with
     `git merge-tree` too (`merge_tree` in `skills/lanes/scripts/lane`), so it shares the blind
     spot in a repo with merge drivers (dotclaude has none). Lane-able (`skills/lanes/SKILL.md`,
     `docs/lanes.md`, `lane trial`, maybe `lane ls`'s flag).
