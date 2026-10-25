@@ -222,7 +222,8 @@ class Repo:
     @property
     def key(self) -> str:
         """This repo's name in places other repos share: its config's in the state dir, its
-        `lane trial` scratch dirs' in the temp dir. 12 hex of the common dir's sha256."""
+        `lane trial` scratch dirs' names (in the lane's .lane-trial/, and the lead notes' index
+        in the temp dir). 12 hex of the common dir's sha256."""
         return hashlib.sha256(self.common_dir.encode()).hexdigest()[:12]
 
     @property

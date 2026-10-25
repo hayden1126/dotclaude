@@ -766,7 +766,8 @@ and status single-writer:
 - `lane done chart-fix` closes a merged lane in one run. It ends the lane's own sessions and
   what runs under them, proven from /proc and Claude Code's session files and never chosen by
   name or tmux window, and it refuses anything else by name. Then it archives the record and
-  removes the worktree. While the worktree exists, it refuses a lane whose record's Next has a
+  removes the worktree, with the registration of any tree a killed `lane trial` left in it.
+  While the worktree exists, it refuses a lane whose record's Next has a
   `Keep open:` line (more PRs to come) unless given `--abandon`.
 - An optional lead session triages requests into lanes, opens them on Hayden's approval and sets
   the merge order (the skill's "The lead"). After a lane's PR merges, the lane sends it

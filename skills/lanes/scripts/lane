@@ -2569,7 +2569,7 @@ def cmd_trial(args) -> int:
     commits, check the merge out in a fresh scratch tree, and run each suite there under a
     lock; a failed suite reruns on the baseline (HEAD plus the base) at the same path, so a
     failure the location alone causes, or one already on the base, isn't the merge's.
-    PLAN.md of lane cross-lane, section B, and docs/lanes.md have the design."""
+    docs/lanes.md, `lane trial`, has the design."""
     repo = lanes_repo()
     me = own_lane(repo)
     if lanelib.pids_visible():

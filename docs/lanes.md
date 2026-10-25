@@ -247,7 +247,8 @@ Why it works this way:
   and `lane done` checks it again (a merged PR whose head is the tip, or the tip in the base).
 - **A scoped exception to "confirm before deleting"**, which CLAUDE.md names. `lane done`
   refuses an unmerged branch, a dirty worktree, links into the lane and a `Keep open:` lane,
-  archives the record before the remove, and never passes `--force` or `-D`. The approval
+  archives the record before the remove, and never passes `--force` or `-D` (a killed trial's
+  leftover registration goes by its gitdir text, never by path: the `lane trial` section). The approval
   covers `lane done` after a merge only; `--abandon` still asks.
 - **`lane done` reads `Keep open:` itself.** `handoff-check --closing` fails on the line too,
   but `done` runs it only when there is something to end, so a kept lane whose session had
@@ -632,6 +633,7 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   flag the delete guard checks. `whoami`, `claim`, `release`, `who`, `note`, `asks` and `lock`
   touch only `<common-dir>/lanes/` and the lane's `.lane/`, which a lane-rooted sandbox can
   write (S1). A sandboxed (piped) `ls` says what it skipped; `new`, `open`, `done`, `addr` and `lead` refuse.
+  `trial` must stay sandboxed too, and refuses to run anywhere else (the `lane trial` section).
   `new` and `adopt` also run the config's `setup` command through a shell, sandbox-off, and
   `new` makes its worktree under the config's `root`. So the config lives in the state dir, not
   the common dir: sandboxed Bash can read it but not write it, and only a bare `lane init`
