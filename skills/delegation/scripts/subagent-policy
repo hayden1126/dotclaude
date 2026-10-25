@@ -1854,10 +1854,11 @@ class Analyzer:
     # Short options that take a value, per program, so a cluster's tail isn't read as more
     # options (`sort -ko,2`: the k takes "o,2"). Used by cluster_opts for the deny checks below.
     # Only options that actually take a value; a boolean short flag must stay out, or a denied
-    # letter after it (sort -bo, fd -px, xxd -er) would be read as its value and missed. tree has
-    # none: each of its value letters takes the next word and the cluster goes on (`tree -Lo 1 f`
-    # is -L 1 -o f). grep's letters cover GNU grep and ugrep, which grep runs here.
-    SHORT_VALUE = {"sort": "oktSTy", "tree": "", "date": "dIrfs", "xxd": "cglsonR",
+    # letter after it (sort -bo, fd -px) would be read as its value and missed. tree has none:
+    # each of its value letters takes the next word and the cluster goes on (`tree -Lo 1 f` is
+    # -L 1 -o f). grep's letters cover GNU grep and ugrep, which grep runs here. xxd doesn't
+    # cluster at all; xxd_writes reads it.
+    SHORT_VALUE = {"sort": "oktSTy", "tree": "", "date": "dIrfs", "file": "mefFP",
                    "fd": "xXtedjScEo", "fdfind": "xXtedjScEo", "grep": "efmABCDdgJKMNOt",
                    "egrep": "efmABCDdgJKMNOt", "fgrep": "efmABCDdgJKMNOt",
                    "ugrep": "efmABCDdgJKMNOt"}
@@ -1871,6 +1872,34 @@ class Analyzer:
             if ch in value_letters:
                 break
         return out
+
+    # xxd reads each option by its first letter after one or two dashes (-revert, --r and -r are
+    # all -r; -pr is -p), and stops at its first file operand. A value letter takes the next word
+    # when nothing follows it or what follows starts its long name (-c 8, -cols 8), else the rest
+    # of the word (-c8). R has no long name the policy relies on.
+    XXD_VALUE = {"c": "ols", "g": "roupsize", "l": "en", "s": "eek", "n": "ame", "o": "ffset",
+                 "R": ""}
+
+    def xxd_writes(self, words):
+        """True when xxd would write a file: -r in any spelling, or a second operand (the output
+        file). A word the policy can't read counts as an operand, so doubt means a refusal."""
+        words, operands = list(words), 0
+        while words:
+            a = words.pop(0)
+            if a == "--":
+                operands += len(words)
+                break
+            if a is None or a == "-" or not a.startswith("-"):
+                operands += 1 + len(words)  # options end here; every later word is an operand
+                break
+            body = a[2:] if a.startswith("--") else a[1:]
+            if body[:1] == "r":
+                return True
+            long = self.XXD_VALUE.get(body[:1])
+            if long is not None and (len(body) == 1 or (long and body[1:].startswith(long))):
+                if words:
+                    words.pop(0)
+        return operands > 1
 
     def curl(self, args, researcher=False):
         c = self.p["curl"]
@@ -2286,6 +2315,8 @@ class Analyzer:
                           "sed -i or a sed w/W/e command writes a file or runs one")
         if base == "uniq" and len([a for a in args[1:] if a and not a.startswith("-")]) > 1:
             self.deny("researcher-flag", "scope_down", "uniq with an output file writes it")
+        if base == "xxd" and self.xxd_writes(args[1:]):
+            self.deny("researcher-flag", "scope_down", "xxd -r or an xxd output file writes it")
         if base == "curl":
             self.curl(args, researcher=True)
         if base == "wget":

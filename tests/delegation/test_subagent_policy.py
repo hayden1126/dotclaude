@@ -636,9 +636,12 @@ class Network(Base):
                     "wget --hsts --post-data=x https://x", "wget --backups --post-data=x https://x",
                     "wget -qO- --hsts -e post_data=x https://x"):
             self.assertDenied(self.bash(cmd), "http-write", "manual_only", cmd)
-        for cmd in ("wget --hsts -qO- https://x", "wget -Y on -qO- https://x",
-                    "wget --backups=2 -qO- https://x"):
+        # -Y takes the next word, so the -e word is its value (wget then refuses the bad boolean)
+        for cmd in ("wget -Y -epost_data=x https://x", "wget --backups=2 -qO- https://x"):
             self.assertIsNone(self.bash(cmd), cmd)
+        # a researcher's --hsts no longer swallows the -O- it needs
+        for cmd in ("wget --hsts -O- https://x", "wget --backups -O- https://x"):
+            self.assertIsNone(self.bash(cmd, atype="researcher"), cmd)
 
 
 class Files(Base):
@@ -888,15 +891,36 @@ class Researcher(Base):
                 ("grep --pre=cat foo", "researcher-flag"), ("sort -o out f", "researcher-flag"),
                 ("sort -oout f", "researcher-flag"), ("tree -o out", "researcher-flag"),
                 ("sort -uo /home/hayden/x f", "researcher-flag"), ("tree -nao out", "researcher-flag"),
-                ("git grep -iOcmd foo", "git-flag"), ("xxd -pr f", "researcher-flag"),
+                ("git grep -iOcmd foo", "git-flag"), ("xxd -r f", "researcher-flag"),
                 ("sort -bo out f", "researcher-flag"), ("sort -do out f", "researcher-flag"),
-                ("xxd -er f", "researcher-flag"),
                 ("tree -Lo 1 out", "researcher-flag"), ("tree -Po x out", "researcher-flag"),
                 ("tree -Io x out", "researcher-flag"),
+                # round 6: xxd reads options by first letter and takes an output operand, tree
+                # -R writes 00Tree.html, file -C writes a .mgc, and the other output options
+                ("xxd -revert f", "researcher-flag"), ("xxd --revert f", "researcher-flag"),
+                ("xxd --r f", "researcher-flag"), ("xxd -rp hex", "researcher-flag"),
+                ("xxd in out", "researcher-flag"), ("xxd -c 8 in out", "researcher-flag"),
+                ("xxd -cols 8 in out", "researcher-flag"), ("xxd -c8 in out", "researcher-flag"),
+                ("xxd in -c", "researcher-flag"), ("xxd - out", "researcher-flag"),
+                ("xxd -- in out", "researcher-flag"), ("xxd -s 1 -R never in out", "researcher-flag"),
+                ("tree -R -H . -L 1 d", "researcher-flag"), ("tree -aR d", "researcher-flag"),
+                ("file -C -m m", "researcher-flag"), ("file -zC -m m", "researcher-flag"),
+                ("file --comp -m m", "researcher-flag"), ("grep --pager=less foo f", "researcher-flag"),
+                ("egrep --view=x foo f", "researcher-flag"),
                 ("uniq in out", "researcher-flag"), ("LD_PRELOAD=x ls", "env-assignment"),
                 ("FOO=1 ls", "env-assignment")):
             self.assertDenied(self.r(cmd), rule, msg=cmd)
 
+
+    def test_yq_split_writes_files(self):
+        # yq may not be installed, so its table is checked below the command lookup
+        g = sp.Analyzer(self.ev("Bash", {"command": "true"}), POLICY, home=self.home)
+        for args in (["yq", "-s", "x", "f"], ["yq", "--split-exp", "x", "f"], ["yq", "-Ps", "x", "f"]):
+            with self.assertRaises(sp.Deny, msg=args) as cm:
+                g.researcher_program("yq", args, [], [], self.proj, 0)
+            self.assertEqual(cm.exception.rule, "researcher-flag", args)
+        self.assertEqual(g.researcher_program("yq", ["yq", ".a", "f"], [], [], self.proj, 0),
+                         self.proj)
 
     def test_denied_flags_match_by_unique_prefix(self):
         for cmd, rule in (
@@ -923,7 +947,11 @@ class Researcher(Base):
                     "wget --quiet -O- https://x", "wget --referer=r -O- https://x",
                     "wget -q -O - https://x", "wget --output-document=- https://x",
                     "wget -qO- -U agent https://x", "wget -qO- --header=X:1 https://x",
-                    "sort -n f", "sort -k2 f", "tree -L 2", "git grep -in foo", "xxd -c 8 f"):
+                    "sort -n f", "sort -k2 f", "tree -L 2", "git grep -in foo", "xxd -c 8 f",
+                    # round 6: -pr is -p and -er is -e to xxd; a value word isn't an operand
+                    "xxd -pr f", "xxd -er f", "xxd -c8 f", "xxd -cols 8 f", "xxd -R never f",
+                    "xxd -l 16 -s 4 f", "xxd -i -n name f", "xxd -", "file -mC f",
+                    "file -m magic f"):
             self.assertIsNone(self.r(cmd), cmd)
 
 
@@ -1408,7 +1436,7 @@ class Substitutions(Base):
         # round 5: tree's value letters take the next word, and these others take a value
         self.assertEqual(g.cluster_opts("-Lo", g.SHORT_VALUE["tree"]), {"L", "o"})
         for prog, token, want in (("sort", "-yo", {"y"}), ("date", "-sx", {"s"}),
-                                  ("xxd", "-nr", {"n"}), ("xxd", "-Rr", {"R"}),
+                                  ("file", "-mC", {"m"}),
                                   ("fd", "-Ex", {"E"}), ("fd", "-ox", {"o"}),
                                   ("grep", "-dQ", {"d"}), ("ugrep", "-tQ", {"t"}),
                                   ("ugrep", "-NQ", {"N"})):

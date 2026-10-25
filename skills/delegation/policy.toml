@@ -215,21 +215,22 @@ allowed_env = ["LC_ALL", "LANG", "TZ", "NO_COLOR", "TERM", "COLUMNS", "GIT_PAGER
 allowed_redirect_targets = ["/dev/null", "/dev/stdout", "/dev/stderr"]
 
 [researcher.denied_flags]
-# Per-program flags that write a file or run a program.
-grep = ["--filter", "--pre", "-Q", "--query", "--save-config"]
-egrep = ["--filter", "--pre", "-Q", "--query", "--save-config"]
-fgrep = ["--filter", "--pre", "-Q", "--query", "--save-config"]
-ugrep = ["--filter", "--pre", "-Q", "--query", "--save-config"]
+# Per-program flags that write a file or run a program. xxd has no entry: it matches options
+# by first letter and takes an output file operand, so the policy reads it in code.
+grep = ["--filter", "--pre", "-Q", "--query", "--save-config", "--pager", "--view"]
+egrep = ["--filter", "--pre", "-Q", "--query", "--save-config", "--pager", "--view"]
+fgrep = ["--filter", "--pre", "-Q", "--query", "--save-config", "--pager", "--view"]
+ugrep = ["--filter", "--pre", "-Q", "--query", "--save-config", "--pager", "--view"]
 rg = ["--pre", "--pre-glob"]
 find = ["-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"]
 fd = ["-x", "--exec", "-X", "--exec-batch"]
 fdfind = ["-x", "--exec", "-X", "--exec-batch"]
 sed = ["-i", "--in-place"]
 sort = ["-o", "--output", "--compress-program"]
-tree = ["-o"]
-xxd = ["-r", "-revert"]
+tree = ["-o", "-R"]
+file = ["-C", "--compile"]
 date = ["-s", "--set"]
-yq = ["-i", "--inplace"]
+yq = ["-i", "--inplace", "-s", "--split-exp"]
 
 [mcp]
 # MCP tools a delegated agent may call: reads only, as fnmatch globs on the full tool name.
