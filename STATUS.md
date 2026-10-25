@@ -89,7 +89,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
   - **Live lanes** (briefs in each record). Merge order (opened 2026-10-24 on Hayden's "open
     lanes for the fixes"): 1 trial-fix (`fix/lane-trial-setup`, carries the lead's notes: the
-    `lane trial` bugs below), 2 sp-gaps (`fix/policy-gaps-sp1-sp2`: SP1 and SP2 below), 3 practices (its next
+    `lane trial` bugs below), 2 sp-gaps (`fix/policy-gaps-sp1-sp2`: SP1 and SP2 below), 3 ctx-compact
+    (`fix/context-watch-compact`, opened 2026-10-25: the context-watch item below), 4 practices (its next
     PR, auth-secrets; the skill suite below), paused by Hayden on 2026-10-24 for a few days and
     moved last so it blocks no install. practices opened on Hayden's ok, merged #142 on 2026-10-20 and stays open for more PRs.
     Merged 2026-10-25: mute-clock (#146, tests only: the mute tests failed across UTC midnight, 18:30-20:00 EDT, not local midnight). Merged 2026-10-24 and installed from main: model-pin (#145, opened 2026-10-23 on Hayden's
@@ -102,7 +103,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     (#143), in Hayden's readiness order. Merged and closed 2026-10-20, installed from main:
     summary-retire (#139), link-atomic (#140, which Hayden ordered first so no later install ran
     the old `link()`), pr-horizon (#135), config-dir (#133). Hayden raised the cap
-    from 3 to 4 on 2026-10-20 for exam-prep; one slot is free.
+    from 3 to 4 on 2026-10-20 for exam-prep; it is full. Hayden kept the cap at 4 on 2026-10-25 (RAM): the
+    `lane done` gaps and the duplicate chrome-devtools servers open as slots free, the former
+    after trial-fix merges.
   - **Lane ask quality: done** (2026-10-19 to 2026-10-20). ask-check merged as #131 and was
     installed from main 2026-10-20: a PreToolUse hook on AskUserQuestion (`hooks/ask_check.py`)
     denies risky asks with a checklist in the reason. branch-reuse merged as #130: `lane new`
@@ -238,15 +241,15 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     a compact, that call's assistant entry wasn't on disk yet, so the nudge said "521k ... hand
     off now" where the real count was 107k. Obeying it loops compact after compact. Fix: a
     compact boundary met before any post-compact usage means no count yet (say nothing, write
-    nothing), with a test on a transcript fixture that ends at a boundary. Lane-able
-    (`hooks/context_watch.py`, `tests/`); no live lane owns it.
-  - **Subagent policy gaps SP1 to SP6** (from lane policy-fp, 2026-10-20, routed to the lead
+    nothing), with a test on a transcript fixture that ends at a boundary. In lane ctx-compact
+    since 2026-10-25.
+  - **Subagent policy gaps SP1 to SP7** (from lane policy-fp, 2026-10-20, routed to the lead
     on Hayden's pick; the lead re-checked each). Details and proposed fixes are in the private
     findings file's "Subagent policy gaps 2026-10-20" section ([[dotclaude-public-repo]]). SP3
     is fixed: merged in #143 (lane policy-fp, 2026-10-21). SP1 and SP2 are in lane sp-gaps
     since 2026-10-24; it found SP4 and SP5 (medium, same files), which Hayden folded into its PR
     on 2026-10-24, and SP6 (medium), part of which it folds in; the rest waits on a design call
-    in its record.
+    in its record; then SP7 (medium), fixed in the lane too.
   - **Claude Code 2.1.305 turned `tests/delegation` red everywhere** (lane practices' report,
     2026-10-20; the lead reproduced it on the lead branch). The update added `--profile` to
     `claude plugin validate`, and `test_settings.Inventory.test_installed_claude_flags_and_subcommands_are_classified`
@@ -301,6 +304,15 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     `~/scratch/lane-done-removal/FINDINGS.md` ([[dotclaude-public-repo]]). Lane-able
     (`skills/lanes/scripts/lane`, `tests/lanes`), after trial-fix merges since it edits the same
     script; no owner yet.
+  - **Practices suite input: dependency lifecycle** (capella-studio's lead, 2026-10-25, on
+    Hayden's ask; for lane practices when it resumes). The spec's SEC-60 covers only adding a
+    dependency. Proposed general rules (SEC-64+ or a `dependencies` section): a per-dependency
+    ledger kept in step with package.json by a test, an admission checklist, a production audit
+    in PR checks with a triage file (id, why n/a, expiry), and an update bot (security PRs at
+    once, grouped monthly minor+patch, majors separate, ~14-day cooldown, no auto-merge where a
+    merge deploys). capella's lane `deps` is the pilot and evidence. Scope is Hayden's call at
+    resume. capella also runs a read-only gap audit of its app against the spec's rule IDs, pinned
+    to the spec as of 2026-10-20.
   - **A compact pass's final Enter sometimes lands as a newline** (Hayden's screenshot,
     2026-10-22, vulcan lane homeboard, pane %10). `pass.log` logged `outcome=compact` at
     02:09:50Z (all four send-keys exited 0), yet the resume prompt sat in the input box over a
@@ -407,10 +419,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   override pins `chrome-devtools-mcp@1.9.0` (`setup-chrome-wsl.sh`'s header has why it also clears
   the profile's restored tabs). A drift check would fit the `setup.sh` doctor idea in
   [[deepseek-harness-eval]].
-  - **Unchecked:** sessions load the plugin's own `chrome-devtools` server (no WSL flags) beside the
-    user-scoped override: both tool namespaces show up, and a flagless `npm exec
-    chrome-devtools-mcp@1.9.0` runs. `docs/chrome-devtools-wsl.md` and the memory say user scope
-    wins. Check whether the plugin's copy works on WSL and whether to disable it; then fix the doc.
+  - **Duplicate chrome-devtools servers (confirmed 2026-10-23):** every session runs both the
+    user-scoped override (`chrome-devtools-mcp@1.9.0`, headless WSL flags) and the plugin's own
+    (`@1.11.0`), about 150 MB per server with its npm wrapper, so about 1.7 GB across 11 sessions.
+    `docs/chrome-devtools-wsl.md` still says user scope wins. Fix: keep one (drop the user-scoped
+    entry or disable the plugin, whose skills use its namespace), then fix the doc. Not picked
+    yet.
 - **The delegation post: on `main`, revised in PR #60, not yet on Medium.** Files:
   `docs/prose-is-not-a-permission.md`, `docs/images/delegation-layers.*` (code links pin `7ed72e9`).
   Before Medium: Hayden reads it and decides whether to cut toward 2,500 words (it's about 3,750);
@@ -444,8 +458,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lanes trial-fix (merge order 1, carries the lead branch), sp-gaps (2) and practices (3,
-     paused by Hayden since 2026-10-24) run; their state is in their records (`lane ls`). After each reinstall,
+  0. Lanes trial-fix (merge order 1, carries the lead branch), sp-gaps (2), ctx-compact (3)
+     and practices (4, paused by Hayden since 2026-10-24) run; next to open as slots free: the
+     `lane done` gaps (after trial-fix), then the duplicate chrome-devtools servers; their state is in their records (`lane ls`). After each reinstall,
      check `ls -la ~/.claude/CLAUDE.md` (the Watch item). Watch that push asks open with the
      briefing (#137); if they skip it, the Stop-hook check is the follow-up (Hayden's pick).
   1. Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
