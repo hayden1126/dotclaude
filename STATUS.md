@@ -301,6 +301,15 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     `~/scratch/lane-done-removal/FINDINGS.md` ([[dotclaude-public-repo]]). Lane-able
     (`skills/lanes/scripts/lane`, `tests/lanes`), after trial-fix merges since it edits the same
     script; no owner yet.
+  - **Practices suite input: dependency lifecycle** (capella-studio's lead, 2026-10-25, on
+    Hayden's ask; for lane practices when it resumes). The spec's SEC-60 covers only adding a
+    dependency. Proposed general rules (SEC-64+ or a `dependencies` section): a per-dependency
+    ledger kept in step with package.json by a test, an admission checklist, a production audit
+    in PR checks with a triage file (id, why n/a, expiry), and an update bot (security PRs at
+    once, grouped monthly minor+patch, majors separate, ~14-day cooldown, no auto-merge where a
+    merge deploys). capella's lane `deps` is the pilot and evidence. Scope is Hayden's call at
+    resume. capella also runs a read-only gap audit of its app against the spec's rule IDs, pinned
+    to the spec as of 2026-10-20.
   - **A compact pass's final Enter sometimes lands as a newline** (Hayden's screenshot,
     2026-10-22, vulcan lane homeboard, pane %10). `pass.log` logged `outcome=compact` at
     02:09:50Z (all four send-keys exited 0), yet the resume prompt sat in the input box over a
