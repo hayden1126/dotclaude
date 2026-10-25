@@ -660,10 +660,11 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
     sides. A symlink is copied as a link (a relative one made absolute), never read through, so
     the sandbox's read deny still holds at its target; anything not a regular file is skipped.
   - A symlinked `lanes/`, `lanes/<id>`, mirror or `info/exclude` is refused.
-  - Sandbox-off, whatever `lane` and its hooks remove, rename or write in the lane's worktree,
-    `<common-dir>/worktrees/` or `<common-dir>/lanes/` (`lane.json`, the lock file, the mirror,
-    archives) goes by name under a directory fd, reached from `/` or the main checkout with
-    `O_NOFOLLOW` at each step, and a record is copied by fd at every level. A lane's sandbox can
+  - Sandbox-off, whatever `done` and the mirror hook remove, rename or write in the lane's
+    worktree, `<common-dir>/worktrees/` or `<common-dir>/lanes/`, and every write of
+    `lane.json` or open of the lock file by any `lane` command, goes by name under a directory
+    fd, reached from `/` or the main checkout with `O_NOFOLLOW` at each step (and no `..`); a
+    record is copied by fd at every level. A lane's sandbox can
     write all three, so a check of a path there can't hold until its use. No message of `done`
     or the mirror offers a removal by path (a test scans the CLI's messages).
   - `done` signals a process only on kernel facts (`/proc`) and Claude Code's own files (session
@@ -960,6 +961,9 @@ copied as the link), and skips
   - a background session: `claude stop <jobId>` ends it;
   - a dirty, locked or submodule worktree, which a plain `git worktree remove` would refuse
     after the kill (the dirt check runs again just before the worktree goes, as git's does);
+  - a worktree git doesn't list at the lane's path though the gates find one there (its admin
+    dir's `gitdir` read one way by `done` and another by git), since `done` couldn't then find
+    the registration it removes;
   - a run from anywhere but the main checkout, or under a Claude session whose cwd is in a
     linked worktree of this repo or under the lanes root (outside the main checkout): only the
     lead closes lanes. Both come from git's own worktree links and the lanes config, never
@@ -1015,19 +1019,23 @@ copied as the link), and skips
   `done` removes the worktree itself, never through `git worktree remove`: git deletes by path,
   and a process the lane left can still write the lane and the common dir, so a path checked
   at the gates may lead elsewhere by its use. The admin dir is the one real dir under
-  `<common-dir>/worktrees/` whose `gitdir` reads, as text, the lane's `.git` path (the lane's own
-  `.git` file, which it can write, is never asked). `lane.json`'s path is sandbox-writable and
+  `<common-dir>/worktrees/` whose `gitdir` resolves to the lane's `.git` path, as the gates
+  resolve it (the lane's own `.git` file, which it can write, is never asked; the removal never
+  goes by that resolved path). A locked one is refused, as git refuses it, even with its tree
+  gone. `lane.json`'s path is sandbox-writable and
   nothing ties it to the lanes root (`adopt` takes a worktree anywhere), so the dir above the
   tree is reached by a walk from `/` with `O_NOFOLLOW` at every name, and a link swapped in on
   the way refuses the removal. The tree is renamed aside to a fixed hidden name there, then
   removed by Python's fd-based `rmtree`, which never follows a link; then the admin dir and any
-  tree a trial left, by name under `worktrees/` as it was opened before the files went. The archive's temp dir, its rename and `lanes/<id>/` likewise
-  go under `lanes/` and `_closed/` opened at the start. With no admin dir or several naming the
+  tree a trial left, by name under `worktrees/` as it was opened before the files went. The
+  archive's temp dir, its rename and `lanes/<id>/` likewise go under `lanes/` and `_closed/`
+  opened at the start. With no admin dir or several naming the
   lane, it removes nothing. A file it can't delete (a dir with no write permission) stops it
   partway with `lane.json` and the registration kept; the tree is already aside, so a rerun's
-  gates find nothing at the lane's path, and the rerun finishes the removal. The tree's
-  `.lane/` goes last, so the rerun archives the record from the tree aside, not the older
-  mirror.
+  gates find nothing at the lane's path, and the rerun finishes the removal, even once git
+  dropped the registration meanwhile (a prune). The tree's `.lane/` goes last, so unless the
+  failure was inside it, the rerun archives the whole record from the tree aside, not the
+  older mirror.
 
   A rerun keeps what the first run proved. A pane shell's only proof is the session it ran,
   which the close itself ends, so on 2026-10-15 each rerun refused the two-sessions tab's shell

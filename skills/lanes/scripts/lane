@@ -2503,7 +2503,7 @@ def remove_worktree(repo: Repo, lane_id: str, path: str, wt_fd: int) -> None:
     path swapped for a symlink it deleted another worktree whole (git 2.43, 2026-10-24), and it
     deletes <common>/worktrees/<id> by path once the files are gone, by when a process the lane
     left may have swapped worktrees/ for a link. So the admin dir is the one under wt_fd whose
-    gitdir reads, as text, <path>/.git (never the lane's own .git file, which it can write).
+    gitdir text resolves to <path>/.git (never the lane's own .git file, which it can write).
 
     The files: lane.json's path is sandbox-writable and nothing ties it to the lanes root
     (`adopt` takes a worktree anywhere), so the dir above the tree is reached by a walk from /
@@ -2518,51 +2518,80 @@ def remove_worktree(repo: Repo, lane_id: str, path: str, wt_fd: int) -> None:
     own = [name for name, text in admin_dirs(wt_fd)
            # as worktree_problem resolves it; git 2.48's worktree.useRelativePaths writes it
            # relative to the admin dir. Only the match: the removal never goes by this path.
-           if os.path.realpath(os.path.join(base, name, text.rstrip("\n"))) == gitdir]
+           if "\0" not in text
+           and os.path.realpath(os.path.join(base, name, text.rstrip(" \t\n\r"))) == gitdir]
     if len(own) != 1:
         raise LaneError(f"{len(own) or 'no'} admin dirs under git's worktrees dir name lane "
                         f"{lane_id}'s worktree, so `done` can't tell its registration and "
                         "removed nothing: `git worktree list` shows what git has")
-    trials = trial_admin_dirs(repo, lane_id, path, wt_fd)
-    parent, name = os.path.split(path)
+    # removable checked the lock where the tree exists; git refuses a locked one that is gone
+    # too (a drive not mounted, say), and prune keeps it.
     try:
-        pfd = lanelib.open_dir("/", parent)
-    except FileNotFoundError:
-        pfd = None  # deleted by hand with a dir above it: only the registration is left
+        afd = os.open(own[0], os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=wt_fd)
     except OSError as e:
-        raise LaneError(f"the way to lane {lane_id}'s worktree leads through a symlink or a file "
-                        f"now ({e.strerror or e}), so nothing was removed")
-    if pfd is not None:
-        aside = aside_name(name)
-        try:
-            try:
-                if lanelib.real_dir_at(pfd, name):  # else deleted by hand, or aside already
-                    if lanelib.real_dir_at(pfd, aside):
-                        shutil.rmtree(aside, dir_fd=pfd)
-                    elif lexists_at(pfd, aside):
-                        os.unlink(aside, dir_fd=pfd)  # a link or a file: never followed
-                    os.rename(name, aside, src_dir_fd=pfd, dst_dir_fd=pfd)
-            except OSError as e:
-                raise LaneError(f"lane {lane_id}'s worktree could not be moved aside for its "
-                                f"removal ({e.strerror or e}), so nothing was removed: rerun "
-                                f"`lane done {lane_id}` once that is fixed")
-            try:
-                if lanelib.real_dir_at(pfd, aside):
-                    remove_aside(pfd, aside)
-            except OSError as e:
-                raise LaneError(f"lane {lane_id}'s worktree is only partly removed "
-                                f"({e.strerror or e}): its record and git's registration are "
-                                f"kept, and a rerun of `lane done {lane_id}` finishes it once "
-                                "what stopped it is fixed (a dir in the lane with no write "
-                                "permission, say)")
-        finally:
-            os.close(pfd)
+        raise LaneError(f"lane {lane_id}'s registration can't be opened ({e.strerror or e}), so "
+                        "nothing was removed")
+    try:
+        locked = lexists_at(afd, "locked")
+    finally:
+        os.close(afd)
+    if locked:
+        raise LaneError(f"lane {lane_id}'s worktree is locked, so `done` won't remove it: unlock "
+                        "it (`git worktree list` names the locked one), then rerun "
+                        f"`lane done {lane_id}`")
+    trials = trial_admin_dirs(repo, lane_id, path, wt_fd)
+    remove_tree(lane_id, path, move=True)
     try:
         shutil.rmtree(own[0], dir_fd=wt_fd)
     except OSError as e:
         warn(shown(f"left in place git's registration of lane {lane_id}'s worktree "
                    f"({e.strerror or e}); `git worktree list` shows it prunable"))
     drop_admin_dirs(lane_id, wt_fd, trials)
+
+
+def remove_tree(lane_id: str, path: str, move: bool) -> None:
+    """The files of lane lane_id's worktree at path: the dir above reached by a walk from /
+    with O_NOFOLLOW at every name, the tree (only with move) renamed aside to aside_name there,
+    and the aside removed (remove_aside). Without move, only an aside a stopped removal left:
+    a tree git no longer registers was never checked clean."""
+    parent, name = os.path.split(path)
+    try:
+        pfd = lanelib.open_dir("/", parent)
+    except FileNotFoundError:
+        return  # deleted by hand with a dir above it: only the registration is left
+    except OSError as e:
+        if not move:  # the tree is gone; only a leftover aside was at stake
+            warn(f"lane {lane_id}'s worktree is gone, but `done` couldn't look for what a "
+                 f"stopped removal may have left beside it ({e.strerror or e})")
+            return
+        raise LaneError(f"the way to lane {lane_id}'s worktree leads through a symlink, a file or "
+                        f"a dir `done` can't open now ({e.strerror or e}), so nothing was "
+                        "removed")
+    aside = aside_name(name)
+    try:
+        try:
+            if move and lanelib.real_dir_at(pfd, name):  # else deleted by hand, or aside
+                if lanelib.real_dir_at(pfd, aside):
+                    shutil.rmtree(aside, dir_fd=pfd)
+                elif lexists_at(pfd, aside):
+                    os.unlink(aside, dir_fd=pfd)  # a link or a file: never followed
+                os.rename(name, aside, src_dir_fd=pfd, dst_dir_fd=pfd)
+        except OSError as e:
+            raise LaneError(f"lane {lane_id}'s worktree could not be moved aside for its "
+                            f"removal ({e.strerror or e}), so nothing was removed: rerun "
+                            f"`lane done {lane_id}` once that is fixed")
+        try:
+            if lanelib.real_dir_at(pfd, aside):
+                remove_aside(pfd, aside)
+        except OSError as e:
+            kept = "its record and git's registration are" if move else "its record is"
+            raise LaneError(f"lane {lane_id}'s worktree is only partly removed "
+                            f"({e.strerror or e}): {kept} kept, and a rerun of "
+                            f"`lane done {lane_id}` finishes it once "
+                            "what stopped it is fixed (a dir in the lane with no write "
+                            "permission, say)")
+    finally:
+        os.close(pfd)
 
 
 def aside_name(name: str) -> str:
@@ -3168,7 +3197,9 @@ def removable(lane_id: str, path: str) -> None:
     reaches that child. The lane's sessions still run here, so refusing submodules first would
     race a lane that adds one after the check: the submodule refusal below stays the gate. And
     fsmonitor is off: a relative core.fsmonitor in the repo's config resolves in the lane."""
-    p = git(["-c", "core.fsmonitor=false", "status", "--porcelain", "--ignore-submodules=all"],
+    # --untracked-files=normal: a status.showUntrackedFiles=no in any config would hide them.
+    p = git(["-c", "core.fsmonitor=false", "status", "--porcelain", "--ignore-submodules=all",
+             "--untracked-files=normal"],
             path)
     if p.returncode != 0:
         raise LaneError(shown(f"git status failed in {path}: {p.stderr.strip()}"))
@@ -3909,10 +3940,20 @@ def close_record(repo: Repo,
                     raise LaneError(f"git's worktrees dir is gone, so lane {lane_id}'s worktree "
                                     f"was not removed: {rerun}")
                 remove_worktree(repo, lane_id, path, wt_fd)
-            elif wt_fd is not None:
-                # Removed by hand (`git worktree remove` of the lane): its trial trees' files went
-                # with it, their registrations didn't.
-                drop_admin_dirs(lane_id, wt_fd, trial_admin_dirs(repo, lane_id, path, wt_fd))
+            else:
+                if present:
+                    # cmd_done refused this before any signal; here it went meanwhile (a
+                    # prune, a move): it removes nothing, and keeps the record for the rerun.
+                    raise LaneError(f"git lists no worktree at lane {lane_id}'s path, though the "
+                                    "gates found one there, so nothing was removed: `git "
+                                    "worktree list` shows what git has")
+                # A tree a stopped removal left aside goes even once git dropped the
+                # registration (a prune between the runs).
+                remove_tree(lane_id, path, move=False)
+                if wt_fd is not None:
+                    # Removed by hand (`git worktree remove` of the lane): its trial trees'
+                    # files went with it, their registrations didn't.
+                    drop_admin_dirs(lane_id, wt_fd, trial_admin_dirs(repo, lane_id, path, wt_fd))
             with lanes_lock(repo, f"lane {lane_id}'s record is not archived, and its worktree is "
                                   f"gone: {rerun}"):
                 reread(repo, loaded, path)
@@ -3978,8 +4019,7 @@ def cmd_done(args) -> None:
     if path == repo.main:
         raise LaneError(f"refusing: lane {args.id}'s path is the main checkout")
     lead_only(repo, args.id, path)
-    # Every git `done` runs in the lane (status, handoff-check's, the one `git worktree remove`
-    # starts) takes its config from this repo's common dir, never the lane-writable commondir
+    # Every git `done` runs in the lane (status, handoff-check's) takes its config from this repo's common dir, never the lane-writable commondir
     # file that worktree_problem checks: a lane could repoint it after the check to a config
     # whose core.fsmonitor runs a command sandbox-off.
     os.environ["GIT_COMMON_DIR"] = repo.common_dir
@@ -3987,8 +4027,8 @@ def cmd_done(args) -> None:
     # post-index-change hook, which a relative core.hooksPath runs from the lane's worktree.
     os.environ["GIT_OPTIONAL_LOCKS"] = "0"
     # Nor does any of them query fsmonitor: a relative core.fsmonitor in the repo's config runs
-    # from the lane's worktree, and `git worktree remove` runs a status there of its own, past
-    # any -c on our command line. Config from the environment reaches it, and submodules: the
+    # from the lane's worktree, and a child git (a hook's, handoff-check's) runs past any -c
+    # on our command line. Config from the environment reaches it, and submodules: the
     # last entry of GIT_CONFIG_PARAMETERS, which git reads after any GIT_CONFIG_COUNT entries
     # and the inherited ones before it, so nothing inherited turns it back on.
     os.environ["GIT_CONFIG_PARAMETERS"] = " ".join(filter(None, [
@@ -4006,6 +4046,12 @@ def cmd_done(args) -> None:
     if present:  # its record is archived and its worktree removed, sandbox-off
         usable_path(repo, lane)
     heads = worktree_heads(repo)  # judged once: close_record refuses if it moves meanwhile
+    if present and path not in heads:
+        # The gates resolve the admin dir's gitdir as git doesn't always (a trailing slash, a
+        # relative one before git 2.48): with no registration found, `done` can't remove it.
+        raise LaneError(f"git lists no worktree at lane {args.id}'s path, though the gates found "
+                        "one there, so nothing was signalled: `git worktree list` shows what "
+                        "git has")
     branches = done_branches(repo, lane, heads)
     fetched = fetch(repo)
     how, state, why = closable_all(repo, lane, heads, branches, fetched)

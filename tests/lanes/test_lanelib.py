@@ -187,6 +187,15 @@ class ByFd(unittest.TestCase):
         fd = lanelib.open_dir(self.root, "a/new/deeper", create=True)
         os.close(fd)
         self.assertTrue(os.path.isdir(os.path.join(self.root, "a", "new", "deeper")))
+        with self.assertRaises(OSError):  # O_NOFOLLOW never stops `..`: refused by name
+            os.close(lanelib.open_dir(self.root, "a/../.."))
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads an execute-only dir")
+    def test_open_dir_passes_an_execute_only_dir_on_the_way(self):
+        os.makedirs(os.path.join(self.root, "x", "lane"))
+        os.chmod(os.path.join(self.root, "x"), 0o111)
+        self.addCleanup(os.chmod, os.path.join(self.root, "x"), 0o755)
+        os.close(lanelib.open_dir(self.root, "x/lane"))
 
     def test_copy_record_copies_links_as_links_and_files_with_their_mode(self):
         src = os.path.join(self.root, "rec")

@@ -165,7 +165,7 @@ an unregistered worktree: `lane whoami` tells you which.
    Before any signal, it refuses, by name:
    - anything else with its cwd in the lane;
    - a background session (`claude stop <jobId>` ends it);
-   - a dirty, locked or submodule worktree;
+   - a dirty, locked or submodule worktree, or one git doesn't list at the lane's path;
    - a repo that sets `extensions.worktreeConfig` (git in the lane would read its
      lane-writable `config.worktree`);
    - a run from anywhere but the main checkout, or under a lane's session (only the lead

@@ -415,13 +415,21 @@ def open_dir(root: str | int, rel: str, create: bool = False) -> int:
     anywhere on the way, even one swapped in mid-walk, fails the open (ELOOP or ENOTDIR)
     instead of leading out of root. root, a path or a dir fd, is trusted as it stands: its
     parent must be one no sandbox can write. create makes missing dirs."""
-    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY) if isinstance(root, str) else os.dup(root)
+    names = [d for d in rel.split("/") if d]
+    if any(d in (".", "..") for d in names):  # O_NOFOLLOW stops links, never `..`
+        raise OSError(errno.EINVAL, f"{rel!r} has a '.' or '..' in it")
+    # O_PATH on the way down (an execute-only dir above a lane still opens), O_RDONLY at the end,
+    # where callers list or read.
+    way = os.O_PATH | os.O_DIRECTORY
+    fd = (os.open(root, way if names else os.O_RDONLY | os.O_DIRECTORY) if isinstance(root, str)
+          else os.dup(root) if not names else os.open(".", way, dir_fd=root))
     try:
-        for d in filter(None, rel.split("/")):
+        for i, d in enumerate(names):
             if create:
                 with contextlib.suppress(FileExistsError):
                     os.mkdir(d, dir_fd=fd)
-            nxt = os.open(d, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            last = os.O_RDONLY | os.O_DIRECTORY if i == len(names) - 1 else way
+            nxt = os.open(d, last | os.O_NOFOLLOW, dir_fd=fd)
             os.close(fd)
             fd = nxt
     except BaseException:
@@ -468,12 +476,17 @@ def copy_record(src: int, dest: int) -> None:
 
 
 def _copy_entry(src: int, dest: int, name: str) -> None:
-    mode = os.stat(name, dir_fd=src, follow_symlinks=False).st_mode
+    try:
+        mode = os.stat(name, dir_fd=src, follow_symlinks=False).st_mode
+    except FileNotFoundError:  # gone since the listing: nothing to copy
+        return
     if stat.S_ISDIR(mode) or stat.S_ISREG(mode):
         flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK  # a FIFO swapped in never blocks
         try:
             fd = os.open(name, flags | (os.O_DIRECTORY if stat.S_ISDIR(mode) else 0), dir_fd=src)
         except OSError as e:  # swapped for a link since the stat: copied as one, below
+            if e.errno == errno.ENOENT:
+                return
             if e.errno not in (errno.ELOOP, errno.ENOTDIR):
                 raise
         else:  # fstat, not the stat: a swap between the two copies what the fd holds
@@ -512,8 +525,8 @@ def write_at(dir_fd: int, name: str, text: str) -> None:
     over name, so neither a link planted at name nor one swapped in for dir_fd's path is
     written through."""
     tmp = f".tmp-{os.getpid()}-{time.monotonic_ns()}"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644,
-                 dir_fd=dir_fd)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600,
+                 dir_fd=dir_fd)  # 0600, as write_json's mkstemp
     try:
         with os.fdopen(fd, "w") as f:
             f.write(text)
@@ -606,9 +619,9 @@ def lock(repo: Repo, timeout: float | None = None):
     # By name under lanes/ opened with O_NOFOLLOW: a .lock planted as a link would have O_CREAT
     # make a file wherever it points.
     lanes = common_fd(repo, LANES, create=True)
-    try:
-        fd = os.open(".lock", os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o644,
-                     dir_fd=lanes)
+    try:  # O_NONBLOCK: a FIFO planted there refuses (ENXIO) instead of hanging every command
+        fd = os.open(".lock", os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW
+                     | os.O_NONBLOCK, 0o644, dir_fd=lanes)
     finally:
         os.close(lanes)
     with os.fdopen(fd, "a") as f:
@@ -907,7 +920,16 @@ def read_record(repo: "Repo", lane_id: str) -> dict:
     repo.check_lanes_dir()
     if not valid_id(lane_id) or os.path.islink(repo.lane_dir(lane_id)):
         raise Untrusted(f"lanes/{lane_id} is not a lane dir")
-    with open(repo.lane_json(lane_id)) as f:
+    # O_NONBLOCK: a FIFO planted there would hang every command that lists lanes
+    try:
+        fd = os.open(repo.lane_json(lane_id), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as e:
+        if e.errno == errno.ELOOP:
+            raise Untrusted(f"lanes/{lane_id}/lane.json is a symlink")
+        raise
+    with open(fd) as f:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise Untrusted(f"lanes/{lane_id}/lane.json is not a file")
         try:
             lane = json.load(f)
         except (ValueError, RecursionError):  # json recurses on nesting
@@ -943,8 +965,9 @@ def worktree_problem(repo: "Repo", path: str, lanes: list[dict]) -> str | None:
     back = read_head(os.path.join(admin, "gitdir"), GITDIR_MAX) if admin else None
     if back is None:
         return f"{path} is not a worktree (its admin dir's gitdir file can't be read)"
-    back = back.decode(errors="replace").strip()
-    back = os.path.realpath(back) if back and "\0" not in back else ""
+    back = back.decode(errors="replace").rstrip(" \t\n\r")  # git's strbuf_rtrim; and remove_worktree
+    # git 2.48's worktree.useRelativePaths writes it relative to the admin dir
+    back = os.path.realpath(os.path.join(admin, back)) if back and "\0" not in back else ""
     if os.path.dirname(admin) != os.path.join(repo.common_dir, "worktrees") or back != dotgit:
         return f"{path} is not a worktree of this repo"
     # git takes the config (core.fsmonitor runs a command on `git status`) from the dir commondir
