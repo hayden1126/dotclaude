@@ -1853,9 +1853,11 @@ class Analyzer:
 
     # Short options that take a value, per program, so a cluster's tail isn't read as more
     # options (`sort -ko,2`: the k takes "o,2"). Used by cluster_opts for the deny checks below.
-    SHORT_VALUE = {"sort": "oktSbd", "tree": "LPIo", "date": "dIrf", "xxd": "cglseo",
-                   "fd": "xXtedpjSc", "fdfind": "xXtedpjSc", "grep": "efmABCDd",
-                   "egrep": "efmABCDd", "fgrep": "efmABCDd", "ugrep": "efmABCDd"}
+    # Only options that actually take a value; a boolean short flag must stay out, or a denied
+    # letter after it (sort -bo, fd -px, xxd -er) would be read as its value and missed.
+    SHORT_VALUE = {"sort": "oktST", "tree": "LPIo", "date": "dIrf", "xxd": "cglso",
+                   "fd": "xXtedjSc", "fdfind": "xXtedjSc", "grep": "efmABCD",
+                   "egrep": "efmABCD", "fgrep": "efmABCD", "ugrep": "efmABCD"}
 
     def cluster_opts(self, token, value_letters):
         """The option letters in a short cluster (-qD -> {q, D}), stopping once a value-taking

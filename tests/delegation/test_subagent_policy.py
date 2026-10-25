@@ -870,6 +870,8 @@ class Researcher(Base):
                 ("sort -oout f", "researcher-flag"), ("tree -o out", "researcher-flag"),
                 ("sort -uo /home/hayden/x f", "researcher-flag"), ("tree -nao out", "researcher-flag"),
                 ("git grep -iOcmd foo", "git-flag"), ("xxd -pr f", "researcher-flag"),
+                ("sort -bo out f", "researcher-flag"), ("sort -do out f", "researcher-flag"),
+                ("xxd -er f", "researcher-flag"),
                 ("uniq in out", "researcher-flag"), ("LD_PRELOAD=x ls", "env-assignment"),
                 ("FOO=1 ls", "env-assignment")):
             self.assertDenied(self.r(cmd), rule, msg=cmd)
@@ -1374,6 +1376,14 @@ class Substitutions(Base):
             self.assertIsNone(self.bash(cmd), cmd)  # a heredoc's <( is text; a quoted arith operand
         commit = "git commit -m \"$(cat <<'EOF'\nFix `code` here\n\nNot run: $(touch x)\nEOF\n)\""
         self.assertIsNone(self.bash(commit), commit)
+
+    def test_cluster_opts_stops_only_at_value_taking_letters(self):
+        g = sp.Analyzer(self.ev("Bash", {"command": "true"}), POLICY, home=self.home)
+        self.assertEqual(g.cluster_opts("-px", g.SHORT_VALUE["fd"]), {"p", "x"})  # -p is boolean
+        self.assertEqual(g.cluster_opts("-Hx", g.SHORT_VALUE["fd"]), {"H", "x"})
+        self.assertEqual(g.cluster_opts("-tf", g.SHORT_VALUE["fd"]), {"t"})  # -t takes f as value
+        self.assertEqual(g.cluster_opts("-bo", g.SHORT_VALUE["sort"]), {"b", "o"})
+        self.assertEqual(g.cluster_opts("-So", g.SHORT_VALUE["sort"]), {"S"})  # -S takes a value
 
     def test_the_scan_refuses_an_opener_with_no_close(self):
         for text in ("$(echo", "`echo", "${X:-$(echo}", "<(echo", "$((1+", "'abc"):
