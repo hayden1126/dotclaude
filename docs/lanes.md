@@ -452,18 +452,24 @@ alone skips the uncommitted read then, since it can afford to.
    symlink there is refused. The lead notes' scratch index stays in the temp dir, since no suite
    runs there. The tree then gets set up as the lane's own tests ran: the lane's gitignored files
    that its `.worktreeinclude` matches are copied in (from the lane, not main, so the suites see
-   the lane's copies), and each path the config's `trial-link` (`lane init --trial-link
-   node_modules,.venv`) or a `--link PATH` names is symlinked to the lane's own, by absolute
-   path, unless the tree has that path already. Link paths are checked like `.worktreeinclude`
-   entries (relative, no `..`), and one the lane lacks warns once. A link is no copy: a suite
-   that writes through it writes the lane's files. Then each `--run` runs there as `sh -c`,
+   the lane's copies; git's names are read with `-z`, so a non-ASCII name is never quoted), and
+   each path the config's `trial-link` (`lane init --trial-link node_modules,.venv`) or a
+   `--link PATH` names is symlinked to the lane's own, by absolute path, unless the tree tracks
+   that path. The links go in first, and no included file under a link is copied (the link
+   brings it): a copy would make the link's dir and block it. Link paths are checked like
+   `.worktreeinclude` entries (relative, no `..`), and one the lane lacks warns once. A link is
+   no copy: a suite that writes through it writes the lane's files. Then each `--run` runs there
+   as `sh -c`,
    streaming its output. One `--run` per suite: a chained `a && b` stops at the first failure,
    and `a; b` reports only the last exit.
 4. A suite fails when it exits non-zero or prints a failing test id (unittest's `FAIL:` and
    `ERROR:` lines, pytest's `FAILED` and `ERROR`, never unittest's `FAILED (failures=N)`
    summary, and TAP's `not ok <n> - <name>` at any indent, which `node --test` prints into a
-   pipe, as `not ok - <name>`: no number, since a lane that adds a test shifts the numbers; a
-   `# TODO` or `# SKIP` directive is no failure), whatever its exit code.
+   pipe, as `not ok - <parent> > <name>`: no number, since a lane that adds a test shifts the
+   numbers, and the names of the subtests that enclose it (node's `# Subtest:` lines at smaller
+   indents), so two tests of one name under different parents stay apart; plain TAP with no
+   Subtest lines gives `not ok - <name>`; a `# TODO` or `# SKIP` directive is no failure),
+   whatever its exit code.
 5. A failed suite reruns on the baseline (HEAD plus the base alone), in a tree at the same path
    set up the same way, so ids that embed the path match. It passes only when every id it
    failed on the merge also fails there and its exit is no worse (non-zero on the merge but zero
@@ -503,8 +509,13 @@ each registered worktree's admin dir in every command started after the tree exi
 sandboxed run can't delete it. The next trial removes the files it can (in `.lane-trial/`, and
 in the temp dir an older `lane` used), and names the sandbox-off
 `git worktree remove --force <path>` for the rest, never a blanket `git worktree prune`. `lane
-done`, sandbox-off, unregisters such a tree before it removes the lane, which would otherwise
-leave the registration stale.
+done` clears such a registration too, which removing the lane would otherwise leave stale. It
+runs sandbox-off, and a process the lane left could swap the tree for a symlink to another
+lane, so it never removes a tree by its path: it finds the admin dirs under
+`<common>/worktrees/` (real dirs, not links) whose `gitdir` file reads, as text, a tree in the
+lane's `.lane-trial/` with this lane's trial name, and removes just those dirs once the lane's
+own `git worktree remove` has deleted the files. One it can't remove it names, to remove by
+hand.
 
 ## Bug reports from other repos (lane bug-route, 2026-10-18)
 
