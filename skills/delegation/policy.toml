@@ -171,6 +171,9 @@ write_denied = ["~/.claude", "~/.gitconfig", "~/.config/git", "~/.zshrc", "~/.zs
   "~/.config/gh", "~/.ssh", "~/.local/bin",
   # PATH dirs and install dirs an excluded command resolves through (hooks/excluded_guard.py).
   "~/.bun/bin", "~/.cargo/bin", "~/.local/share/claude", "~/.local/lib/node_modules",
+  # chrome-devtools-mcp's config file, the Chrome it names (setup-chrome-wsl.sh) and its profile:
+  # all load outside the sandbox at session start.
+  "~/.config/cd4a", "~/chrome", "~/.cache/chrome-devtools-mcp",
   "~/dotclaude/settings.json", "~/dotclaude/hooks", "~/dotclaude/skills", "~/dotclaude/agents",
   "~/dotclaude/CLAUDE.md", "~/dotclaude/codex", "~/.codex",
   # Run or installed outside the sandbox: ccstatusline, the Notification hook, setup.sh and

@@ -242,7 +242,10 @@
       "Edit(~/.bun/bin/**)",
       "Edit(~/.cargo/bin/**)",
       "Edit(~/.local/share/claude/**)",
-      "Edit(~/.local/lib/node_modules/**)"
+      "Edit(~/.local/lib/node_modules/**)",
+      "Edit(~/.config/cd4a/**)",
+      "Edit(~/chrome/**)",
+      "Edit(~/.cache/chrome-devtools-mcp/**)"
     ]
   },
   "sandbox": {

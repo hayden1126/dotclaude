@@ -496,6 +496,16 @@ class Baseline(unittest.TestCase):
             self.assertNotIn(p, sandbox_deny)
             self.assertIn(p, POLICY["protect"]["write_denied"])
 
+    def test_the_chrome_devtools_config_chrome_and_profile_are_write_protected(self):
+        # chrome-devtools-mcp reads ~/.config/cd4a/config.json at every session start and runs
+        # its executablePath, ~/chrome/current, on its profile, outside the sandbox
+        # (setup-chrome-wsl.sh writes the first two). An Edit deny binds sandboxed Bash and the
+        # file tools alike, so these are not denyWrite lines.
+        for p in ("~/.config/cd4a", "~/chrome", "~/.cache/chrome-devtools-mcp"):
+            self.assertIn(f"Edit({p}/**)", S["permissions"]["deny"])
+            self.assertNotIn(p, S["sandbox"]["filesystem"]["denyWrite"])
+            self.assertIn(p, POLICY["protect"]["write_denied"])
+
     def test_every_allow_rule_on_an_excluded_command_sits_behind_the_guard(self):
         # An allow rule skips the classifier, so an excluded command it covers must meet the
         # guard first.

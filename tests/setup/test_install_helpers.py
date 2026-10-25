@@ -585,6 +585,7 @@ PYTHON_NON_CALLS = {
     "setup.sh": ('for f in "$REPO_DIR"/hooks/*.sh "$REPO_DIR"/hooks/*.py; do',
                  'for pyf in "$REPO_DIR"/statusline/*.py; do'),
     "setup-tmux.sh": ('command -v python3 >/dev/null || die "python3 not found."',),
+    "setup-chrome-wsl.sh": ('command -v python3 >/dev/null || die "python3 not found."',),
 }
 
 
@@ -749,6 +750,7 @@ class SetupWiring(unittest.TestCase):
         self.assertEqual(len(calls["setup.sh"]), 12)
         self.assertEqual(len(calls["sync.sh"]), 2)
         self.assertEqual(len(calls["setup-tmux.sh"]), 2)  # swap_in's os.replace and the .tmux.conf write
+        self.assertEqual(len(calls["setup-chrome-wsl.sh"]), 2)  # the plugin version and the config merge
 
     def test_the_isolation_scan_flags_every_other_way_to_start_python(self):
         planted = [
