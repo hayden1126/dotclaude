@@ -303,6 +303,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     the lead). Details and the proposed fix are in the private file
     `~/scratch/lane-done-removal/FINDINGS.md` ([[dotclaude-public-repo]]). Lane-able
     (`skills/lanes/scripts/lane`, `tests/lanes`); in lane done-safe since 2026-10-25.
+  - **Another `lane done` close-path gap** (lane done-safe's reviewer round 1, 2026-10-24;
+    outside its brief, and older than it). Details and the proposed fix are in the same private
+    file, rows "cmd_done path trust" and "same, widened". The fix is a design change to
+    `new`/`adopt`/`done` with a migration for existing lanes, so it needs Hayden's design call.
+    Lane-able (`skills/lanes/scripts/lane`, `lanelib.py`, `tests/lanes`) after done-safe merges,
+    since it touches the same files.
   - **Practices suite input: dependency lifecycle** (capella-studio's lead, 2026-10-25, on
     Hayden's ask; for lane practices when it resumes). The spec's SEC-60 covers only adding a
     dependency. Proposed general rules (SEC-64+ or a `dependencies` section): a per-dependency
