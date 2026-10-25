@@ -88,12 +88,13 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
   - **Live lanes** (briefs in each record). Merge order (opened 2026-10-24 on Hayden's "open
-    lanes for the fixes"): 1 trial-fix (`fix/lane-trial-setup`, carries the lead's notes: the
-    `lane trial` bugs below), 2 sp-gaps (`fix/policy-gaps-sp1-sp2`: SP1 and SP2 below), 3 ctx-compact
-    (`fix/context-watch-compact`, opened 2026-10-25: the context-watch item below), 4 practices (its next
+    lanes for the fixes"): 1 sp-gaps (`fix/policy-gaps-sp1-sp2`, carries the lead's notes: SP1
+    and SP2 below), 2 ctx-compact (`fix/context-watch-compact`, opened 2026-10-25: the
+    context-watch item below), 3 done-safe (`fix/lane-done-removals`, opened 2026-10-25 when
+    trial-fix merged: the `lane done` gaps below), 4 practices (its next
     PR, auth-secrets; the skill suite below), paused by Hayden on 2026-10-24 for a few days and
     moved last so it blocks no install. practices opened on Hayden's ok, merged #142 on 2026-10-20 and stays open for more PRs.
-    Merged 2026-10-25: mute-clock (#146, tests only: the mute tests failed across UTC midnight, 18:30-20:00 EDT, not local midnight). Merged 2026-10-24 and installed from main: model-pin (#145, opened 2026-10-23 on Hayden's
+    Merged 2026-10-25 and installed from main: trial-fix (#147, the `lane trial` bugs below). Merged 2026-10-25: mute-clock (#146, tests only: the mute tests failed across UTC midnight, 18:30-20:00 EDT, not local midnight). Merged 2026-10-24 and installed from main: model-pin (#145, opened 2026-10-23 on Hayden's
     picks): `/model` saves its pick as the default for every new
     session (`model` in `~/.claude/settings.json`); the lane pins new sessions to Opus with
     `ANTHROPIC_MODEL`, which 2.1.309's startup reads before the saved key, so `/model` switches
@@ -104,8 +105,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     summary-retire (#139), link-atomic (#140, which Hayden ordered first so no later install ran
     the old `link()`), pr-horizon (#135), config-dir (#133). Hayden raised the cap
     from 3 to 4 on 2026-10-20 for exam-prep; it is full. Hayden kept the cap at 4 on 2026-10-25 (RAM): the
-    `lane done` gaps and the duplicate chrome-devtools servers open as slots free, the former
-    after trial-fix merges.
+    duplicate chrome-devtools servers open at the next free slot.
   - **Lane ask quality: done** (2026-10-19 to 2026-10-20). ask-check merged as #131 and was
     installed from main 2026-10-20: a PreToolUse hook on AskUserQuestion (`hooks/ask_check.py`)
     denies risky asks with a checklist in the reason. branch-reuse merged as #130: `lane new`
@@ -271,7 +271,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     refuse sandbox-writable paths. A real
     checkout passes, so a trial failure confined to those cases is this artifact. Fix: the test
     refuses a `.tmp/` under a temp root, as it already does for `.claude/worktrees/`, or `trial`
-    builds its tree outside the temp root. In lane trial-fix since 2026-10-24.
+    builds its tree outside the temp root. Fixed in #147 (lane trial-fix, 2026-10-25).
   - **`lane trial`'s scratch tree has no setup, and another lane's base conflict fails it**
     (sessions in vulcan reported it twice on 2026-10-22: lane editfix, session 7b1249ff, and lane
     relbutton, session 54ba45b2; the lead checked the code). (1) `trial` builds its tree with a bare `git worktree add --detach`
@@ -286,7 +286,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     the baseline" when neither run has ids and both exit alike. Report a lane that conflicts
     with the base alone as untried, not FAILED, or add `--skip <lane>`. Workaround: start each
     `--run` with `ln -sfn <lane>/node_modules node_modules &&`. Lane-able (`skills/lanes/`,
-    `tests/lanes`); in lane trial-fix since 2026-10-24, with the temp-root entry above.
+    `tests/lanes`); fixed in #147 (lane trial-fix, 2026-10-25), with the temp-root entry above.
   - **A compact pass puts live background writers into plan mode** (a session in another repo
     reported it, 2026-10-20; the lead checked the code and the writer's transcript). Compact
     mode is the pass picked when background tasks run (`skills/pass/SKILL.md:23,80,103`), yet
@@ -302,8 +302,42 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **`lane done` close-path gaps** (lane trial-fix's report, 2026-10-25; not yet re-checked by
     the lead). Details and the proposed fix are in the private file
     `~/scratch/lane-done-removal/FINDINGS.md` ([[dotclaude-public-repo]]). Lane-able
-    (`skills/lanes/scripts/lane`, `tests/lanes`), after trial-fix merges since it edits the same
-    script; no owner yet.
+    (`skills/lanes/scripts/lane`, `tests/lanes`); in lane done-safe since 2026-10-25.
+  - **Another `lane done` close-path gap** (lane done-safe's reviewer round 1, 2026-10-24;
+    outside its brief, and older than it). Details and the proposed fix are in the same private
+    file, rows "cmd_done path trust" and "same, widened". The fix is a design change to
+    `new`/`adopt`/`done` with a migration for existing lanes, so it needs Hayden's design call.
+    Two low gaps ride with it (rows "seed_record from cmd_adopt" and "add_exclude"); their fix
+    reuses the fd helpers done-safe's PR adds. Lane-able (`skills/lanes/scripts/lane`,
+    `lanelib.py`, `tests/lanes`) after done-safe merges, since it touches the same files.
+  - **`lane trial` passes a suite that never ran** (low; lane sp-gaps, 2026-10-25, at 4a874df).
+    `trial_report` in `skills/lanes/scripts/lane` passes a failed suite that printed no test id on
+    either run when both exits match, by design (a suite already broken on main isn't the
+    merge's). So `--run tests/delegation` (a directory: exit 126 on both) and a runner missing a
+    required flag (argparse, exit 2 on both) both cleared the pre-ready gate with exit 0. Lead's
+    pick: with no ids on either run, fail and say "compare by hand"; a gate that can't vouch for
+    a suite shouldn't pass it. Lane-able (`skills/lanes/scripts/lane`, `tests/lanes`); after
+    done-safe merges, since it changes `lane`.
+  - **Lanes skill: rebase only at your turn** (capella-studio lead, session 80ab3852, 2026-10-25;
+    Hayden picked all three in capella's window). (A) The lead, step 7.6: only the lane next in
+    merge order merges or rebases origin/main; the others get "main moved to `<sha>`", check
+    conflicts with `git merge-tree --write-tree origin/main HEAD`, and update at their turn; the
+    board's `rebase` flag stops reading as a to-do for them. (B) Lifecycle step 6 and "Who asks":
+    after a conflict-free update, CI on the pushed head is the gate; local reruns only for
+    hand-resolved code plus checks the repo names. (C) Optional train note: the second ready PR
+    rebases onto the first's pushed head, then both merge back to back. Lead's caveat for (B):
+    dotclaude has no CI running its suites, so here the repo-named checks are the full local
+    suites. Correction to (A) (same lead, 2026-10-25): `git merge-tree` honours `.gitattributes`
+    merge drivers (`merge=union`) and GitHub's merge doesn't, so capella's #263 read clean
+    locally and `gh pr merge` refused it. The check asks the forge instead
+    (`gh pr view N --json mergeable`, UNKNOWN: ask again), or, unpushed too,
+    `git --attr-source=<empty tree 4b825dc6...> merge-tree --write-tree --name-only` (git 2.40+),
+    which skips the drivers (the lead reproduced it on git 2.43, 2026-10-25: a `merge=union`
+    file reads clean plainly and conflicts with it). Open question: it also drops `binary` and
+    eol attributes, and whether GitHub honours those is unchecked. `lane trial` merges with
+    `git merge-tree` too (`merge_tree` in `skills/lanes/scripts/lane`), so it shares the blind
+    spot in a repo with merge drivers (dotclaude has none). Lane-able (`skills/lanes/SKILL.md`,
+    `docs/lanes.md`, `lane trial`, maybe `lane ls`'s flag).
   - **Practices suite input: dependency lifecycle** (capella-studio's lead, 2026-10-25, on
     Hayden's ask; for lane practices when it resumes). The spec's SEC-60 covers only adding a
     dependency. Proposed general rules (SEC-64+ or a `dependencies` section): a per-dependency
@@ -458,9 +492,14 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lanes trial-fix (merge order 1, carries the lead branch), sp-gaps (2), ctx-compact (3)
-     and practices (4, paused by Hayden since 2026-10-24) run; next to open as slots free: the
-     `lane done` gaps (after trial-fix), then the duplicate chrome-devtools servers; their state is in their records (`lane ls`). After each reinstall,
+  0. Lanes sp-gaps (merge order 1, carries the lead branch), ctx-compact (2), done-safe (3)
+     and practices (4, paused by Hayden since 2026-10-24) run; next to open at a free slot: the
+     duplicate chrome-devtools servers; their state is in their records (`lane ls`). Waiting on:
+     sp-gaps' SP6(b) design ask to Hayden and its install message; ctx-compact's and done-safe's
+     plans. Pending with Hayden, outside the lanes: `wsl --shutdown` at a break applies the 18 GB
+     WSL cap set in `C:\Users\hayde\.wslconfig` on 2026-10-23 (backup `.wslconfig.bak-20261023`).
+     Before each lead STATUS commit, grep it against the exam-prep denylist
+     ([[lead-status-denylist-check]]). After each reinstall,
      check `ls -la ~/.claude/CLAUDE.md` (the Watch item). Watch that push asks open with the
      briefing (#137); if they skip it, the Stop-hook check is the follow-up (Hayden's pick).
   1. Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
@@ -469,7 +508,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
      branch). `lane new` refuses a branch name any PR used, and refuses when gh can't answer
      (lane branch-reuse); `--reuse-branch` overrides.
   - The lead's commits: `git log --first-parent main..chore/after-pr4` (STATUS only, plus merges
-    of main). Session 45664d28 (2026-10-20) ran `2c28e7e..HEAD` on the lead branch: the #135
+    of main). Session ab816898 (2026-10-20 to 25) ran `26b58ac..HEAD`: the #141, #143, #144,
+    #145, #146 and #147 chains, lanes opened and closed, SP3 to SP7. Session 45664d28 (2026-10-20) ran `2c28e7e..26b58ac` on the lead branch: the #135
     chain (pr-horizon closed), the #133 chain (config-dir closed), lead PRs #136 and #137
     (merged, installed), lanes practices, summary-retire and link-atomic,
     and the CLAUDE.md watch item.
