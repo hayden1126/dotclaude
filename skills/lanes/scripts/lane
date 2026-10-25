@@ -2071,7 +2071,9 @@ UNITTEST_FAIL = re.compile(r"(?:FAIL|ERROR): \S")
 PYTEST_FAIL = re.compile(r"(?:FAILED|ERROR) ([^\s(].*?)(?: - .*)?")
 # TAP, which `node --test` prints into a pipe: `not ok 3 - name`, indented for a subtest. A TODO
 # or SKIP directive (`# TODO ...`, any case) marks no failure.
-TAP_FAIL = re.compile(r"\s*not ok \d+ - (.+)")
+TAP_FAIL = re.compile(r"(\s*)not ok \d+ - (.+)")
+# node's comment opening each test, at the indent of its own result line
+TAP_SUBTEST = re.compile(r"(\s*)# Subtest: (.+)")
 TAP_DIRECTIVE = re.compile(r"\s#\s*(?:TODO|SKIP)", re.IGNORECASE)
 
 
@@ -2087,17 +2089,24 @@ def failing_ids(lines: list[str]) -> list[str]:
     """The failing test ids a run printed, in order, each once: a unittest `FAIL: ...` or
     `ERROR: ...` line whole (a subtest's parameters, which can embed the tree's path, with it),
     a pytest `FAILED x` or `ERROR x` summary line's x, its ` - message` tail cut, and a TAP
-    `not ok <n> - x` line at any indent as `not ok - x`: by name alone, since a lane that adds a
-    test shifts every number after it."""
+    `not ok <n> - x` line at any indent as `not ok - P > Q > x`: no number, since a lane that
+    adds a test shifts every number after it, and the names of the subtests that enclose it
+    (node's `# Subtest: P` lines at smaller indents), so two tests of one name under different
+    parents stay apart. Plain TAP, with no Subtest lines, gives `not ok - x`."""
     found = []
+    chain: list[tuple[int, str]] = []  # (indent, name) of each open `# Subtest:`
     for line in lines:
         line = line.rstrip()
         if UNITTEST_FAIL.match(line):
             found.append(line)
         elif m := PYTEST_FAIL.fullmatch(line):
             found.append(m.group(1))
-        elif (m := TAP_FAIL.fullmatch(line)) and not TAP_DIRECTIVE.search(m.group(1)):
-            found.append(f"not ok - {m.group(1)}")
+        elif m := TAP_SUBTEST.fullmatch(line):
+            indent = len(m.group(1))
+            chain = [c for c in chain if c[0] < indent] + [(indent, m.group(2))]
+        elif (m := TAP_FAIL.fullmatch(line)) and not TAP_DIRECTIVE.search(m.group(2)):
+            parents = [name for indent, name in chain if indent < len(m.group(1))]
+            found.append("not ok - " + " > ".join([*parents, m.group(2)]))
     return list(dict.fromkeys(found))
 
 

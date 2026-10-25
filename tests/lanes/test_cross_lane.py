@@ -518,7 +518,23 @@ class FailingIds(unittest.TestCase):
                  "    error: 'boom'", "    ...", "not ok 3 - bad one", "ok 4 - fine",
                  "not ok 5 - later # TODO not yet", "not ok 6 - gone # skip on linux",
                  "not ok 9 - bad one", "not ok", "# fail 2"]
-        self.assertEqual(lane_mod.failing_ids(lines), ["not ok - inner", "not ok - bad one"])
+        self.assertEqual(lane_mod.failing_ids(lines), ["not ok - outer > inner",
+                                                       "not ok - bad one"])
+
+    def test_tap_ids_carry_the_enclosing_subtests(self):
+        # node's `# Subtest: <name>` lines, by indent, name each failure's parents, so two
+        # tests of one name under different parents stay apart. Plain TAP stays by name.
+        lane_mod = load_lane_script()
+        lines = ["# Subtest: P1", "    # Subtest: works", "    not ok 1 - works", "    1..1",
+                 "not ok 1 - P1", "# Subtest: P2", "    # Subtest: works", "    ok 1 - works",
+                 "    # Subtest: deep", "        # Subtest: works", "        not ok 1 - works",
+                 "        1..1", "    not ok 2 - deep", "not ok 2 - P2"]
+        self.assertEqual(lane_mod.failing_ids(lines),
+                         ["not ok - P1 > works", "not ok - P1", "not ok - P2 > deep > works",
+                          "not ok - P2 > deep", "not ok - P2"])
+        self.assertEqual(lane_mod.failing_ids(["1..2", "ok 1 - a", "    not ok 1 - b",
+                                               "not ok 2 - c"]),
+                         ["not ok - b", "not ok - c"])
 
 
 class Tee(unittest.TestCase):
@@ -1458,6 +1474,24 @@ class Trial(LaneWork):
         self.assertIn("suite 1 (node --test t.test.js): 1 failure(s) only on the merge:\n"
                       "  not ok - ab", out)
         self.assertNotIn("not ok - loads", out)
+
+    @unittest.skipUnless(shutil.which("node"), "no node")
+    def test_node_subtests_of_one_name_under_two_parents_stay_apart(self):
+        # P1 > works fails in both runs, P2 > works only where both lanes' files meet: by name
+        # alone the two `works` would be one id, failing on the baseline too.
+        self.write(os.path.join(self.alpha, "p.test.js"),
+                   "const { test } = require('node:test');\nconst fs = require('node:fs');\n"
+                   "test('P1', async (t) => { await t.test('works', () => { throw new "
+                   "Error('always'); }); });\n"
+                   "test('P2', async (t) => { await t.test('works', () => { if "
+                   "(fs.existsSync('a.txt') && fs.existsSync('b.txt')) throw new "
+                   "Error('merge'); }); });\n")
+        self.git("add", "p.test.js", cwd=self.alpha)
+        self.git("commit", "-q", "-m", "nested node test", cwd=self.alpha)
+        rc, out, err = self.trial("--run", "node --test p.test.js")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("suite 1 (node --test p.test.js): 2 failure(s) only on the merge:\n"
+                      "  not ok - P2 > works\n  not ok - P2\n", out)
 
     def test_a_link_the_lane_lacks_warns_once_and_a_bad_one_is_refused(self):
         rc, out, err = self.trial("--link", "nope", "--run", "test ! -f b.txt")
