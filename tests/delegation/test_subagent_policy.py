@@ -446,7 +446,17 @@ class Commands(Base):
                           ("HOME='x;git reset --hard'; eval echo $HOME", "dynamic-eval"),
                           ("HOME=/x; eval echo ~", "dynamic-eval"),
                           ("export HOME=/x; eval echo ~/y", "dynamic-eval"),
-                          ("eval true ~+", "dynamic-eval")):
+                          ("eval true ~+", "dynamic-eval"),
+                          # final review: zsh's -O is a flag and -oNAME takes its own word; -s
+                          # reads stdin; unsetting HOME also makes ~ and $HOME unknown
+                          ("zsh -c -O 'git reset --hard' true", "git-reset"),
+                          ("zsh -O -c 'git reset --hard'", "git-reset"),
+                          ("zsh -oerrexit -c 'git reset --hard'", "git-reset"),
+                          ("bash -O extglob -c 'git reset --hard'", "git-reset"),
+                          ("bash -s true", "shell-stdin"), ("zsh -s", "shell-stdin"),
+                          ("unset HOME; eval echo $HOME", "dynamic-eval"),
+                          ("env -i sh -c 'eval echo $HOME'", "dynamic-eval"),
+                          ("eval true ~bin", "dynamic-eval")):
             self.assertDenied(self.bash(cmd), rule, msg=cmd)
         for cmd in ("bash -euo pipefail -c 'ls -la'", "bash -c ls", 'sh -c "echo hi"',
                     "bash --norc --noprofile -c ls", "eval echo $HOME", "eval echo ~",
@@ -454,13 +464,11 @@ class Commands(Base):
             self.assertIsNone(self.bash(cmd), cmd)
 
     def test_tilde_prefixes(self):
-        # ~user is that user's home; ~+, ~- and an unknown user are unknown; once HOME is set,
-        # ~ and $HOME are unknown too.
+        # ~user, ~+, ~- are unknown (zsh reads ~name from a variable first); so are $HOME:h and
+        # $HOME[1]; once HOME is set, ~ and $HOME are unknown too.
         user = pwd.getpwuid(os.getuid()).pw_name
-        home = pwd.getpwuid(os.getuid()).pw_dir
-        self.assertEqual(sp.scan_word(f"~{user}/x", "/fake").text, home + "/x")
-        self.assertFalse(sp.scan_word(f"~{user}/x", "/fake").dynamic)
-        for w in ("~+/x", "~-", "~nosuchuserzz/x"):
+        for w in (f"~{user}/x", "~bin/true", "~+/x", "~-", "~nosuchuserzz/x", "$HOME:h/x",
+                  "$HOME[1]"):
             self.assertTrue(sp.scan_word(w, "/fake").dynamic, w)
         for w in ("~", "~/x", "$HOME/x", "${HOME}"):
             self.assertFalse(sp.scan_word(w, "/fake").dynamic, w)
@@ -823,6 +831,11 @@ class Writer(Base):
             self.assertDenied(self.wb(cmd), "worktree-root", msg=cmd)
         self.assertDenied(self.wb("env -C $D ls"), "dynamic-wrapper-arg")
         self.assertIsNone(self.wb("env -C src ls"))
+        # final review: -C moves only the command env runs, and the last -C wins, from the start
+        os.makedirs(os.path.join(self.wt, "a", "b", "c"), exist_ok=True)
+        self.assertDenied(self.wb("env -C a/b/c true; rm -rf ../../../src"), msg="leak")
+        self.assertIsNone(self.wb("env -C a/b/c true; rm -rf src"))
+        self.assertDenied(self.wb("env -C a/b/c -C ../../.. touch x"), "worktree-root")
 
     def test_writes_into_the_main_checkout_are_denied(self):
         for cmd in ("echo x > ../../../escape.txt", f"echo x > {self.proj}/src/a.py",
