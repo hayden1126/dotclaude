@@ -2468,8 +2468,9 @@ def drop_admin_dirs(lane_id: str, admins: list[tuple[str, str]]) -> None:
     """Remove the admin dirs trial_admin_dirs found, once the lane's worktree is gone. Each goes
     by name under its parent opened with O_NOFOLLOW: sandboxed Bash can write the common dir, so
     <common>/worktrees itself may have been swapped for a symlink since, and rmtree checks only
-    its last name (it refuses an admin dir swapped for one). One it can't remove is named, to
-    remove by hand."""
+    its last name (it refuses an admin dir swapped for one). One it can't remove is named as
+    left in place, never with a path to remove by hand: run sandbox-off, that would follow
+    whatever link made this removal fail."""
     for admin, tree in admins:
         try:
             fd = os.open(os.path.dirname(admin), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -2478,8 +2479,8 @@ def drop_admin_dirs(lane_id: str, admins: list[tuple[str, str]]) -> None:
             finally:
                 os.close(fd)
         except OSError as e:
-            warn(shown(f"couldn't remove {admin}, the registration of a tree a trial left in "
-                       f"lane {lane_id} ({e.strerror or e}): remove that dir"))
+            warn(shown(f"left in place {admin}, the registration of a tree a trial left in "
+                       f"lane {lane_id} ({e.strerror or e}): git lists it as prunable"))
         else:
             warn(shown(f"cleared the registration of a tree a trial left in lane {lane_id} (it "
                        f"never reached its cleanup): {tree}"))
@@ -2650,8 +2651,9 @@ def trial(repo: Repo, me: dict, args) -> int:
             rc = trial_report(args.run, runs, again)
     finally:
         if args.keep and holds:
-            say(shown(f"lane trial: kept the tree (the {holds}) at {tree}; the next `lane "
-                      f"trial` of lane {me['id']} clears it"))
+            say(shown(f"lane trial: kept the tree (the {holds}) at {tree}; a later `lane trial` "
+                      f"of lane {me['id']} clears its files and `lane done {me['id']}` its "
+                      "registration"))
         else:
             drop_tree(repo, tree, tmpdir)
     if clashed:
@@ -3762,6 +3764,10 @@ def close_record(repo: Repo,
                 if p.returncode != 0:
                     raise LaneError(f"git worktree remove refused: {p.stderr.strip()}")
                 drop_admin_dirs(lane_id, left_trees)
+            else:
+                # Removed by hand (`git worktree remove` of the lane): its trial trees' files went
+                # with it, their registrations didn't.
+                drop_admin_dirs(lane_id, trial_admin_dirs(repo, lane_id, path))
             with lanes_lock(repo, f"lane {lane_id}'s record is not archived, and its worktree is "
                                   f"gone: {rerun}"):
                 reread(repo, loaded, path)

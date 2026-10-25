@@ -518,8 +518,10 @@ tree by its path: it finds the admin dirs under `<common>/worktrees/` (real dirs
 whose `gitdir` file reads, as text, a tree with this lane's trial name in the lane's
 `.lane-trial/` or in a temp dir an older `lane` used, and removes just those dirs, each by name
 under its parent opened with `O_NOFOLLOW` (sandboxed Bash can write the common dir), once the
-lane's own `git worktree remove` has deleted the files. One it can't remove it names, to remove
-by hand. The trial adds its trees with `worktree.useRelativePaths=false`, so that text is
+lane's own `git worktree remove` has deleted the files, or at once when that remove was run by
+hand. One it can't remove it names as left in place, with no path to remove by hand: run
+sandbox-off, that would follow whatever link made the removal fail. No message of `lane` ever
+offers a by-path removal (a test pins it). The trial adds its trees with `worktree.useRelativePaths=false`, so that text is
 always an absolute path.
 
 ## Bug reports from other repos (lane bug-route, 2026-10-18)

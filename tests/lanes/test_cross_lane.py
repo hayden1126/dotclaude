@@ -1356,7 +1356,9 @@ class Trial(LaneWork):
         self.assertEqual(rc, 0, out + err)
         (tree,) = glob.glob(os.path.join(self.trial_dir, self.prefix + "*", "tree"))
         self.assertIn(f"kept the tree (the merge) at {tree}", out)
-        self.assertIn("the next `lane trial` of lane alpha clears it", out)
+        # The next trial can delete the tree's files, but sandboxed it can't unregister it.
+        self.assertIn("a later `lane trial` of lane alpha clears its files and `lane done alpha` "
+                      "its registration", out)
         self.assertNotIn("remove --force", out)  # by path, it would follow a swapped-in link
         self.assertTrue(os.path.isfile(os.path.join(tree, "b.txt")))
         self.git("worktree", "remove", "--force", tree)

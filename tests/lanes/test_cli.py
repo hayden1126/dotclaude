@@ -11,6 +11,7 @@ import importlib.util
 import io
 import json
 import multiprocessing
+import re
 import os
 import shlex
 import shutil
@@ -665,7 +666,34 @@ class RoundTrip(LanesRepo):
         with contextlib.redirect_stderr(io.StringIO()) as err:
             mod.drop_admin_dirs("spike", [(os.path.join(base, "tree"), "/x/tree")])
         self.assertEqual(self.read(os.path.join(target, "tree", "keep.txt")), "not git's\n")
-        self.assertIn("couldn't remove", err.getvalue())
+        self.assertIn("left in place", err.getvalue())
+        # No hint to remove it by hand: a by-path rm run sandbox-off would follow the same link.
+        self.assertNotRegex(err.getvalue(), r"remove that|rm -|remove --force")
+
+    def test_no_message_offers_a_removal_by_path(self):
+        # A path a sandboxed process can write may be a swapped-in symlink by the time the user
+        # runs a pasted `rm -rf` or `git worktree remove --force` sandbox-off: git and rm both
+        # follow it and delete what it names. Leftovers go through a `lane` command instead.
+        with open(LANE, encoding="utf-8") as f:
+            text = [line for line in f if not line.lstrip().startswith("#")]
+        bad = [line.strip() for line in text
+               if re.search(r"[\"'][^\"']*(?:rm -r|rm -f|worktree remove --force|remove that)",
+                            line)]
+        self.assertEqual(bad, [])
+
+    def test_done_clears_a_trials_registration_when_the_lanes_worktree_is_gone_already(self):
+        # A lane removed by hand with `git worktree remove` takes its trial trees' files and its
+        # own registration, but not theirs: `done` drops those, as it does on the normal path.
+        self.lane("new", "spike")
+        path = self.lane_path("spike")
+        key = lanelib.Repo(self.main, self.common).key
+        tree = os.path.join(path, ".lane-trial", f"lane-trial-{key}-spike-abcd1234", "tree")
+        self.git("worktree", "add", "--detach", "--quiet", tree, "HEAD", cwd=path)
+        self.git("worktree", "remove", "--force", path)
+        self.assertIn("spike-abcd1234", self.git("worktree", "list", "--porcelain"))
+        p = self.run_lane("done", "spike", "--abandon")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("spike-abcd1234", self.git("worktree", "list", "--porcelain"))
 
     def test_done_refuses_while_a_process_lives_in_the_lane(self):
         self.lane("new", "busy")
