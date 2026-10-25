@@ -160,10 +160,11 @@ class Lit:
     split: the word can become more than one argument or expand to an option at runtime (an
     unquoted expansion, which word-splits, or a glob/brace), so it is not one fixed argument;
     a quoted expansion ("$X") is dynamic but not split (always exactly one word)."""
-    __slots__ = ("text", "dynamic", "glob", "split")
+    __slots__ = ("text", "dynamic", "glob", "split", "raw")
 
-    def __init__(self, text, dynamic=False, glob=False, split=False):
+    def __init__(self, text, dynamic=False, glob=False, split=False, raw=None):
         self.text, self.dynamic, self.glob, self.split = text, dynamic, glob, split
+        self.raw = text if raw is None else raw  # the word as written, quotes and all
 
     @property
     def static(self):
@@ -213,7 +214,7 @@ def scan_word(value, home):
             else:
                 out.append(c)
         i += 1
-    return Lit("".join(out), dyn, glob, split)
+    return Lit("".join(out), dyn, glob, split, value)
 
 
 # ---------------------------------------------------------------- zsh expansions
@@ -393,6 +394,11 @@ TEXT_FIELDS = {"word": (("value", True),), "pattern": (("pattern", True),),
                "arith-cmd": (("raw_content", False),),
                "for-arith": (("init", False), ("cond", False), ("incr", False))}
 LIVE_TEXT = re.compile(r"[$`]|[<>]\(")
+# Assignments inside text: ${NAME=v} / ${NAME:=v}, and NAME = v, NAME += v, NAME++ ... in
+# arithmetic (the name, whatever the operator; == and != compare).
+PARAM_ASSIGN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*):?=")
+ARITH_ASSIGN = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:(?:[-+*/%&|^]|<<|>>|\*\*)?=(?!=)|\+\+|--)"
+                          r"|(?:\+\+|--)\s*([A-Za-z_][A-Za-z0-9_]*)")
 
 
 def substitutions(text, quotes=True):
@@ -1190,6 +1196,16 @@ class Analyzer:
             return cwd
         if kind == "redirect":
             self.redirect(n, cwd)  # then on to its target word
+        if kind in ("for", "select"):
+            self.check_env_name(n.var)
+        if kind == "word":
+            for name in PARAM_ASSIGN.findall(n.value):  # ${NAME:=value} sets NAME
+                self.check_env_name(name)
+        if kind in ("arith-cmd", "for-arith"):
+            for v in vars(n).values():
+                if isinstance(v, str):
+                    for m in ARITH_ASSIGN.finditer(v):
+                        self.check_env_name(m.group(1) or m.group(2))
         fields = dict(TEXT_FIELDS.get(kind, ()))
         for f, v in vars(n).items():
             if f in fields:
@@ -1250,10 +1266,54 @@ class Analyzer:
             return
         if self.is_researcher and name not in self.p["researcher"]["allowed_env"]:
             self.deny("env-assignment", "scope_down", f"researcher may not set {name}")
+        self.check_env_name(name)
+
+    def check_env_name(self, name):
+        sh = self.p["shell"]
         if name in sh["denied_env_names"] or any(name.startswith(x)
                                                  for x in sh["denied_env_prefixes"]):
             self.deny("env-assignment", "use_alternative",
-                      f"setting {name} changes what the command executes; run it without that")
+                      f"setting {name} changes what a command executes or reads; run it "
+                      "without that")
+
+    # Builtins that set variables from their arguments: NAME=value or a bare NAME (export and
+    # the typeset family), or a NAME they read into. A VAR=x word before a command is not the
+    # only way to set one, so each name goes through the same check.
+    TYPESET = {"export", "declare", "typeset", "local", "readonly", "integer", "float"}
+    READ_INTO = {"read", "getopts", "mapfile", "readarray", "vared"}
+    ASSIGN_NAME = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)(\[[^]]*\])?(\+?=|$)")
+
+    def assigning_builtin(self, base, lits):
+        def name_of(lit):
+            m = self.ASSIGN_NAME.match(lit.raw)
+            if not m or "$" in m.group(1) + (m.group(2) or ""):
+                self.deny("dynamic-assignment", "stop_and_explain",
+                          f"{base} sets a variable whose name the policy can't read "
+                          f"({lit.raw!r}); name it plainly")
+            return m
+        rest = lits[1:]
+        if base in self.TYPESET or base in self.READ_INTO:
+            for lit in rest:
+                if lit.raw.startswith(("-", "+")) and not lit.dynamic:
+                    continue  # an option (read -p's prompt is checked too, harmlessly)
+                if base in self.READ_INTO and not lit.dynamic:
+                    self.check_env_name(lit.text.split("?", 1)[0])  # zsh: read 'NAME?prompt'
+                    continue
+                m = name_of(lit)
+                if lit.dynamic or lit.text not in self.p["shell"]["allowed_env"]:
+                    self.check_env_name(m.group(1))
+        elif base == "let":
+            for lit in rest:
+                for m in ARITH_ASSIGN.finditer(lit.text):
+                    self.check_env_name(m.group(1) or m.group(2))
+        elif base in ("printf", "print"):
+            for k, lit in enumerate(rest):
+                if lit.raw == "-v" and k + 1 < len(rest):
+                    self.check_env_name(name_of(rest[k + 1]).group(1))
+                elif lit.raw.startswith("-v") and not lit.dynamic:
+                    self.check_env_name(lit.text[2:])
+                elif not lit.raw.startswith("-"):
+                    break  # the format: options end here
 
     def resolves(self, word):
         if word in self.p["shell"]["builtins"]:
@@ -1314,6 +1374,7 @@ class Analyzer:
             break
         else:
             self.deny("too-deep", "stop_and_explain", "too many nested wrappers")
+        self.assigning_builtin(base, lits)
         args = [l.text if not l.dynamic else None for l in lits]
         globs = [l.glob for l in lits]
         splits = [l.split for l in lits]

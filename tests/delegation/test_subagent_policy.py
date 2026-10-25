@@ -396,6 +396,34 @@ class Commands(Base):
         self.assertIsNone(self.bash("GIT_PAGER=cat git log -3"))
         self.assertIsNone(self.bash("FOO=1 npm test"))
 
+    def test_every_way_of_setting_a_variable_is_checked(self):
+        # A config-file path variable points curl or wget at a file the agent wrote, and a
+        # builtin or loop that sets a variable reaches the same names as a VAR=x prefix does.
+        for cmd in ("WGETRC=rc wget -qO- https://x", "CURL_HOME=. curl -s https://x",
+                    "export WGETRC=rc; wget -qO- https://x", "export CURL_HOME=.",
+                    "declare -x LD_PRELOAD=/x.so", "typeset -gx CURL_HOME=.", "local CURL_HOME=.",
+                    "let CURL_HOME=1", "let 'CURL_HOME += 1'", "export CURL_HOME",
+                    "export -n PAGER=less",
+                    "read -r WGETRC <<<rc", "read 'CURL_HOME?home: '",
+                    "printf -v CURL_HOME %s .", "printf -vCURL_HOME %s .", "getopts ab CURL_HOME",
+                    "for CURL_HOME in .; do curl -s https://x; done",
+                    "select CURL_HOME in .; do break; done", ": ${WGETRC:=rc}", "echo ${CURL_HOME=.}",
+                    "(( CURL_HOME = 1 ))", "for ((CURL_HOME=1; CURL_HOME<2; CURL_HOME++)); do :; done"):
+            self.assertDenied(self.bash(cmd), "env-assignment", msg=cmd)
+        for cmd in ("integer CURL_HOME=1", "print -v CURL_HOME .", "mapfile -t CURL_HOME <f",
+                    "vared CURL_HOME",
+                    "readonly GIT_SSH_COMMAND=x"):
+            self.assertIsNotNone(self.bash(cmd), cmd)  # not on the builtins list at all
+        for cmd in ('export "$N"=rc', "export $N=rc", "read -r $N", "printf -v $N %s x"):
+            self.assertDenied(self.bash(cmd), "dynamic-assignment", msg=cmd)
+        for cmd in ('export PATH="$PATH:/x"', "export FOO=1 BAR", "local i=0", "declare -a arr",
+                    "read -r line <f", "printf -v out %s x", "for i in a b; do echo $i; done",
+                    "export GIT_PAGER=cat", "echo ${X:=1}", "(( i = 1 ))", "export -p",
+                    "let i=i+1", "(( CURL_HOME == 1 ))",
+                    "HOME=/tmp/h git status", "XDG_CONFIG_HOME=/tmp/c ls"):
+            self.assertIsNone(self.bash(cmd), cmd)
+        self.assertIsNone(self.bash("for i in a b; do echo $i; done", atype="researcher"))
+
     def test_ordinary_work_passes(self):
         for cmd in ("ls -la src", "npm test 2>&1 | tail -20", "git status", "git diff --stat",
                     "git add -A && git commit -m 'x'", "git log --oneline -5 > /dev/null",
