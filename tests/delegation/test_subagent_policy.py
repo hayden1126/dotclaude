@@ -404,7 +404,16 @@ class Commands(Base):
                           ("flock ~/.zshrc true", "protected-path"),
                           ("xargs -I{} sh -c '{}'", "dynamic-shell"),
                           ("xargs -I X git X", "dynamic-executable"),
-                          ("xargs -I{a,b} ls", "dynamic-wrapper-arg")):
+                          ("xargs -I{a,b} ls", "dynamic-wrapper-arg"),
+                          # section B: a value word must be literal, and xargs's last replace
+                          # option is the one it uses
+                          ("nice -n {5,echo,x} true", "dynamic-wrapper-arg"),
+                          ("timeout -s {KILL,5,echo} 5 true", "dynamic-wrapper-arg"),
+                          ("stdbuf -o {L,echo} true", "dynamic-wrapper-arg"),
+                          ("xargs -I {a,b} ls", "dynamic-wrapper-arg"),
+                          ('xargs -I "$X" true', "dynamic-wrapper-arg"),
+                          ("xargs -I zzz -iQQ git QQ", "dynamic-executable"),
+                          ("xargs --replace=QQ git QQ", "dynamic-executable")):
             self.assertDenied(self.bash(cmd), rule, msg=cmd)
         for cmd, rule in (("exec -a ls sort -o out f", "researcher-flag"),
                           ("watch ls '; touch W'", "researcher-program"),
@@ -764,6 +773,15 @@ class Writer(Base):
 
     def wb(self, cmd):
         return self.w("Bash", {"command": cmd})
+
+    def test_env_chdir_moves_the_cwd(self):
+        # section B: env -C runs the command elsewhere, so the checks follow it there
+        for cmd in ("env -C ../../.. touch main.py", f"env -C {self.proj} touch x",
+                    f"env --chdir={self.proj} touch x", f"env -C{self.proj} touch x",
+                    f"env --chdir {self.proj} touch x"):
+            self.assertDenied(self.wb(cmd), "worktree-root", msg=cmd)
+        self.assertDenied(self.wb("env -C $D ls"), "dynamic-wrapper-arg")
+        self.assertIsNone(self.wb("env -C src ls"))
 
     def test_writes_into_the_main_checkout_are_denied(self):
         for cmd in ("echo x > ../../../escape.txt", f"echo x > {self.proj}/src/a.py",

@@ -1529,6 +1529,7 @@ class Analyzer:
                           "source runs a file the policy can't see (only */bin/activate is allowed)")
             if base in sh["wrappers"] and base != "sudo":
                 inner = self.peel_wrapper(base, lits, cwd, depth)
+                cwd = self.peel_cwd
                 if inner is None:
                     return cwd  # the wrapper alone (e.g. bare `env`) just prints
                 lits = inner
@@ -1542,8 +1543,17 @@ class Analyzer:
         splits = [l.split for l in lits]
         return self.program(base, args, globs, splits, cwd, depth)
 
+    def env_chdir(self, lit):
+        """env -C DIR runs the command in DIR: hold it to cd's rules and move the cwd the rest
+        of the checks resolve against."""
+        if lit is None or lit.dynamic or lit.glob:
+            self.deny("dynamic-wrapper-arg", "stop_and_explain", "env -C with a computed directory")
+        self.peel_cwd = self.cd(["cd", lit.text], self.peel_cwd)
+
     def peel_wrapper(self, base, lits, cwd, depth):
-        """Return the wrapped command's words, or None when there is none."""
+        """Return the wrapped command's words, or None when there is none. A wrapper that runs
+        the command elsewhere (env -C) leaves the new cwd in self.peel_cwd."""
+        self.peel_cwd = cwd
         rest = lits[1:]
         if base == "env":
             i = 0
@@ -1560,10 +1570,18 @@ class Analyzer:
                 elif t in ("--ignore-environment", "--null", "--debug"):
                     i += 1
                     continue
-                elif t in ("--unset", "--chdir"):
+                elif t == "--unset":
                     i += 2
                     continue
-                elif t.startswith("--unset=") or t.startswith("--chdir="):
+                elif t == "--chdir":
+                    self.env_chdir(rest[i + 1] if i + 1 < len(rest) else None)
+                    i += 2
+                    continue
+                elif t.startswith("--chdir="):
+                    self.env_chdir(Lit(t.split("=", 1)[1], rest[i].dynamic, rest[i].glob))
+                    i += 1
+                    continue
+                elif t.startswith("--unset="):
                     i += 1
                     continue
                 elif t.startswith("--"):
@@ -1581,6 +1599,9 @@ class Analyzer:
                         if ch in "uC":
                             if not value:
                                 after = i + 2
+                            if ch == "C":
+                                self.env_chdir(Lit(value, rest[i].dynamic, rest[i].glob) if value
+                                               else rest[i + 1] if i + 1 < len(rest) else None)
                             break
                         if ch == "S":
                             if value:
@@ -1612,6 +1633,7 @@ class Analyzer:
         if base in ("noglob", "nocorrect"):
             return rest or None  # zsh precommand modifiers: the next word is the command
         rest, opts = self.wrapper_options(base, rest)
+        repl = opts.pop("replace", None)
         if base == "command" and ("-v" in opts or "-V" in opts):
             return None  # it prints how a name resolves
         if base in ("timeout", "flock") and rest:
@@ -1631,7 +1653,6 @@ class Analyzer:
         if base == "xargs":
             if not rest:
                 return None
-            repl = opts.get("-I") or opts.get("--replace") or opts.get("-i")
             if repl is not None:
                 repl = "{}" if repl is True else repl
                 rest = [Lit(l.text, dynamic=True) if repl in (l.text or "") else l for l in rest]
@@ -1700,9 +1721,11 @@ class Analyzer:
                     opts["--" + name] = True
                 elif name in spec.get("lopt", ()):
                     opts["--" + name] = value if eq else True
+                    if name == "replace":
+                        opts["replace"] = opts["--replace"]  # xargs: the last one given wins
                 elif name in spec.get("lvalue", ()):
                     if not eq:
-                        value = rest.pop(0).text if rest else ""
+                        value = self.wrapper_value(base, rest)
                     opts["--" + name] = value
                 else:
                     self.deny("unknown-option", "stop_and_explain",
@@ -1711,16 +1734,32 @@ class Analyzer:
             for k, ch in enumerate(t[1:], 2):
                 if ch in spec.get("bool", ""):
                     opts["-" + ch] = True
+                    continue
                 elif ch in spec.get("opt", ""):
                     opts["-" + ch] = t[k:] or True
+                    if base == "xargs" and ch == "i":
+                        opts["replace"] = opts["-i"]
                     break
                 elif ch in spec.get("value", ""):
-                    opts["-" + ch] = t[k:] or (rest.pop(0).text if rest else "")
+                    opts["-" + ch] = t[k:] or self.wrapper_value(base, rest)
+                    if base == "xargs" and ch == "I":
+                        opts["replace"] = opts["-I"]
                     break
                 else:
                     self.deny("unknown-option", "stop_and_explain",
                               f"{base} -{ch} is an option the policy doesn't know; leave it out")
         return rest, opts
+
+    def wrapper_value(self, base, rest):
+        """Pop an option's value from the next word. It must be one literal word: a brace, glob
+        or expansion there could become several and move the command (`nice -n {5,echo,x} true`)."""
+        if not rest:
+            return ""
+        lit = rest.pop(0)
+        if lit.dynamic or (lit.glob and re.search(r"[*?\[]|\{(?!\})", lit.text or "")):
+            self.deny("dynamic-wrapper-arg", "stop_and_explain",
+                      f"{base} with a computed option value")
+        return lit.text
 
     def wrapper_shell_string(self, base, words, cwd, depth):
         """watch (without -x) and flock -c run their words through sh -c: check that text."""
