@@ -44,6 +44,20 @@ def cells(text):
     return len(text) + text.count(SOUND) + text.count(TOAST)
 
 
+def tz_at(hh, mm):
+    """(TZ, offset): a fixed-offset TZ under which the wall clock reads hh:mm now, and its
+    seconds east of UTC. POSIX TZ counts west, so the sign flips."""
+    now = int(time.time())  # wall clock
+    offset = (hh * 3600 + mm * 60 - now % 86400 + 43200) % 86400 - 43200
+    sign, east = ("-", offset) if offset >= 0 else ("+", -offset)
+    return "FAKE%s%02d:%02d:%02d" % (sign, east // 3600, east // 60 % 60, east % 60), offset
+
+
+def ends(until, offset, weekday=False):
+    """A mute's end as the CLI names it under tz_at's offset."""
+    return time.strftime("%a %H:%M" if weekday else "%H:%M", time.gmtime(until + offset))
+
+
 def timed(secs, now=NOW):
     return {"since": now - 60, "until": now + secs}
 
@@ -64,7 +78,10 @@ class ClaudeMute(unittest.TestCase):
             f.write(TMUX_STUB)
         os.chmod(os.path.join(stubs, "tmux"), 0o755)
         self.log = os.path.join(self.tmp, "tmux.log")
-        self.env = {**os.environ, "XDG_STATE_HOME": self.state, "TZ": "UTC",
+        # The CLI's clock reads local noon: under a fixed UTC, a timed mute that ran past UTC
+        # midnight named its weekday and failed the cases that expect today's end.
+        tz, self.offset = tz_at(12, 0)
+        self.env = {**os.environ, "XDG_STATE_HOME": self.state, "TZ": tz,
                     "PATH": stubs + os.pathsep + os.environ["PATH"], "STUB_LOG": self.log,
                     "STUB_CLIENTS": "$9 /dev/pts/1\\n$3 %s\\n" % CLIENT}
 
@@ -108,7 +125,7 @@ class ClaudeMute(unittest.TestCase):
         for name in ("sound", "toast"):
             self.assertLessEqual(before + 3600, flag[name]["until"])
             self.assertLessEqual(flag[name]["until"], after + 3600)
-        until = time.strftime("%H:%M", time.gmtime(flag["sound"]["until"]))
+        until = ends(flag["sound"]["until"], self.offset)
         self.assertEqual(out, "sound:  muted, 60 min left (until %s)\n"
                               "toasts: muted, 60 min left (until %s)\n" % (until, until))
 
@@ -116,7 +133,7 @@ class ClaudeMute(unittest.TestCase):
         rc, out, _ = self.run_cli("on", "sound", "--for", "90m")
         self.assertEqual(rc, 0)
         self.assertEqual(sorted(self.on_disk()), ["sound"])
-        until = time.strftime("%H:%M", time.gmtime(self.on_disk()["sound"]["until"]))
+        until = ends(self.on_disk()["sound"]["until"], self.offset)
         self.assertEqual(out, "sound:  muted, 90 min left (until %s)\ntoasts: on\n" % until)
         rc, out, _ = self.run_cli("on", "toast", "--until-off")
         self.assertEqual(rc, 0)
@@ -215,6 +232,19 @@ class ClaudeMute(unittest.TestCase):
             self.assertEqual(cm.clock(NOW + 3600, NOW), "09:00")      # NOW is 08:00 UTC
             self.assertEqual(cm.clock(NOW + 23 * 3600, NOW),
                              time.strftime("%a", time.gmtime(NOW + 86400)) + " 07:00")
+
+    def test_an_end_past_midnight_names_its_weekday(self):
+        tz, offset = tz_at(23, 30)
+        rc, out, err = self.run_cli("on", "sound", "--for", "1h", "--client", CLIENT,
+                                    env={"TZ": tz})
+        self.assertEqual((rc, err), (0, ""))
+        until = self.on_disk()["sound"]["until"]
+        self.assertNotEqual(ends(until - 3600, offset, weekday=True)[:3],
+                            ends(until, offset, weekday=True)[:3])      # it did cross midnight
+        end = ends(until, offset, weekday=True)
+        self.assertEqual(out, "sound:  muted, 60 min left (until %s)\ntoasts: on\n" % end)
+        [m] = self.calls("display-message")
+        self.assertEqual(m[3], "claude-mute: sound muted until %s" % end + DOT + "toasts on")
 
     # --- the write the OS refuses ---------------------------------------------------------
 
@@ -498,7 +528,7 @@ class ClaudeMute(unittest.TestCase):
             command = dict((i[0], i[2]) for i in self.items(self.menu()) if i)[name]
             inner = re.fullmatch(r"run-shell '(.*)'", command).group(1)
             subprocess.run(["sh", "-c", inner], timeout=20, env=self.env, check=True)
-        until = time.strftime("%H:%M", time.gmtime(self.on_disk()["sound"]["until"]))
+        until = ends(self.on_disk()["sound"]["until"], self.offset)
         self.assertEqual(self.calls("display-message")[-1][3],
                          "claude-mute: sound muted until %s" % until + DOT + "toasts on")
 
