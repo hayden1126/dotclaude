@@ -529,7 +529,8 @@ under its parent opened with `O_NOFOLLOW` (sandboxed Bash can write the common d
 lane's own `git worktree remove` has deleted the files, or at once when that remove was run by
 hand. One it can't remove it names as left in place, with no path to remove by hand: run
 sandbox-off, that would follow whatever link made the removal fail. No message of `lane` ever
-offers a by-path removal (a test pins it). The trial adds its trees with `worktree.useRelativePaths=false`, so that text is
+offers a by-path removal that can recurse or follow a link (a test pins it); the one removal
+it names, `unlink` for a `.lane-trial` that is a symlink, does neither. The trial adds its trees with `worktree.useRelativePaths=false`, so that text is
 always an absolute path.
 
 ## Bug reports from other repos (lane bug-route, 2026-10-18)

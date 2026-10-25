@@ -756,8 +756,9 @@ and status single-writer:
 - `lane trial --run "<suite>" ...`, before a lane asks for ready, merges origin/main and every
   other live lane's commits onto it in a scratch tree and runs each suite there under the
   `suite` lock. A failed suite reruns without the other lanes, so only the merge's own failures
-  count, and a conflict names the lanes it is between. With nothing to merge, no suite runs
-  (docs/lanes.md, "Cross-lane checks").
+  count, and a conflict names the lanes it is between. A lane that conflicts with origin/main
+  alone is untried, not a failure. With nothing to merge, the suites still run once on the lane
+  plus origin/main (docs/lanes.md, "Cross-lane checks").
 - A lane tests its change by installing from its own worktree (`lane lock install --
   ./setup.sh`), and that install holds. setup.sh refuses to run from any other lane or clone
   until the main checkout's own run relinks everything. It also refuses a lane with no commit

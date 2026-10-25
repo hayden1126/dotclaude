@@ -511,6 +511,14 @@ class FailingIds(unittest.TestCase):
                          ["FAIL: test_x (a.B.test_x) (path='/tmp/t/tree')",
                           "ERROR: test_y (a.B.test_y)", "t.py::test_z", "t.py::test_w"])
 
+    def test_tap_failures_without_the_dash_parse_too(self):
+        # The dash is optional in TAP: bats prints `not ok 1 name`. Unparsed, such a suite
+        # would fall to the same-way rule and hide a second break behind a shared one.
+        lane_mod = load_lane_script()
+        self.assertEqual(lane_mod.failing_ids(["not ok 1 name one", "ok 2 fine",
+                                               "not ok 3 skipped # SKIP no db"]),
+                         ["not ok - name one"])
+
     def test_tap_failures_by_name_at_any_indent_without_their_number(self):
         # `node --test`, piped, prints TAP: a lane that adds a test shifts every number after
         # it, so the id drops the number. A TODO or SKIP directive is no failure.
@@ -1586,7 +1594,7 @@ class Trial(LaneWork):
         # passes: a trial that tested nothing. So a named link the lane lacks fails at once.
         rc, out, err = self.trial("--link", "nope", "--run", "test ! -f b.txt")
         self.assertEqual(rc, 1, out + err)
-        self.assertIn("lane alpha has no nope", err)
+        self.assertIn("lane alpha has no nope (--link)", err)
         self.assertNotIn("run of suite", out)
         for bad in ("../x", "/abs", "a/../b", "./x", ""):
             with self.subTest(bad=bad):

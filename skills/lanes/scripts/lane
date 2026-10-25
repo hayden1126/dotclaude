@@ -2072,9 +2072,10 @@ UNITTEST_FAIL = re.compile(r"(?:FAIL|ERROR): \S")
 # An id never starts with '(': unittest's own summary, `FAILED (failures=12, skipped=4)`, isn't
 # one, and its counts change whenever a lane adds a test.
 PYTEST_FAIL = re.compile(r"(?:FAILED|ERROR) ([^\s(].*?)(?: - .*)?")
-# TAP, which `node --test` prints into a pipe: `not ok 3 - name`, indented for a subtest. A TODO
-# or SKIP directive (`# TODO ...`, any case) marks no failure.
-TAP_FAIL = re.compile(r"(\s*)not ok \d+ - (.+)")
+# TAP, which `node --test` prints into a pipe: `not ok 3 - name`, indented for a subtest; the
+# dash is optional (bats prints `not ok 3 name`). A TODO or SKIP directive (`# TODO ...`, any
+# case) marks no failure.
+TAP_FAIL = re.compile(r"(\s*)not ok \d+(?: -)? (.+)")
 # node's comment opening each test, at the indent of its own result line
 TAP_SUBTEST = re.compile(r"(\s*)# Subtest: (.+)")
 TAP_DIRECTIVE = re.compile(r"\s#\s*(?:TODO|SKIP)", re.IGNORECASE)
@@ -2334,8 +2335,12 @@ def trial_link(rel: str) -> str:
 
 
 def trial_link_list(spec: str) -> list[str]:
-    """trial-link's comma list as paths, each once (trial_link); '' is none."""
-    return list(dict.fromkeys(trial_link(x.strip()) for x in spec.split(","))) if spec else []
+    """trial-link's comma list as paths, each once (trial_link); '' is none. A bad entry is
+    refused naming the list, since a hand-edited config can hold one `init` never wrote."""
+    try:
+        return list(dict.fromkeys(trial_link(x.strip()) for x in spec.split(","))) if spec else []
+    except LaneError as e:
+        raise LaneError(shown(f"{e} in trial-link {spec!r}")) from None
 
 
 def trial_links(repo: Repo, extra: list[str]) -> list[str]:
@@ -2352,9 +2357,13 @@ def trial_links(repo: Repo, extra: list[str]) -> list[str]:
                 raise LaneError(shown(f"nested trial links: {b} is under {a}; link {a} alone"))
     missing = [x for x in links if not os.path.lexists(os.path.join(repo.toplevel, x))]
     if missing:
-        raise LaneError(shown(f"lane {own_lane(repo)['id']} has no {', '.join(missing)} to link "
-                              "into the trial's tree: run the lane's setup first, or drop the "
-                              "link"))
+        configured = set(trial_link_list(str(repo.config().get("trial-link", ""))))
+        whence = ", ".join(f"{x} ({'the lanes config' if x in configured else '--link'})"
+                           for x in missing)
+        raise LaneError(shown(f"lane {own_lane(repo)['id']} has no {whence} to link into the "
+                              "trial's tree: run the lane's setup first. Dropping a config link "
+                              "drops it for every lane, whose suites would then fail alike on "
+                              "both runs and pass untested"))
     return links
 
 
