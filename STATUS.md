@@ -296,6 +296,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     `permissionMode` in `agents/writer.md` holds against a parent's mid-run plan mode; if it
     does, it also covers plan mode entered by hand. Lane-able (`skills/pass/`, `tests/`); no
     live lane owns it.
+  - **`lane done` close-path gaps** (lane trial-fix's report, 2026-10-25; not yet re-checked by
+    the lead). Details and the proposed fix are in the private file
+    `~/scratch/lane-done-removal/FINDINGS.md` ([[dotclaude-public-repo]]). Lane-able
+    (`skills/lanes/scripts/lane`, `tests/lanes`), after trial-fix merges since it edits the same
+    script; no owner yet.
   - **A compact pass's final Enter sometimes lands as a newline** (Hayden's screenshot,
     2026-10-22, vulcan lane homeboard, pane %10). `pass.log` logged `outcome=compact` at
     02:09:50Z (all four send-keys exited 0), yet the resume prompt sat in the input box over a
