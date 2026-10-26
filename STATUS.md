@@ -330,6 +330,14 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     Lead's pick: a lanes-config key naming extra locks every trial also takes (`trial_locks`),
     plus a docs line; not a hard-coded `quiet`, which is capella's name. Lane-able after
     done-safe merges.
+  - **excluded-guard rule 1 in a nested repo** (low; session d3d62f82, a course-notes hub,
+    2026-10-26). From a nested repo inside the session's project, every excluded call is
+    refused (`pass-respawn`, `lane addr`, `git push`). That is rule 1 working as documented
+    (docs/delegation.md). Two things to fix: (a) the refusal in `check_rule1` says "the working
+    directory resolves to the git dir <x>", which reads as if the cwd were `.git`; it should say
+    the cwd's repo (git dir <x>) isn't the project's, and that a session launched in that repo
+    works. (b) A related follow-up, private (sandbox-audit FINDINGS, G5b), needs Hayden's ok
+    for a probe. (a) is a one-line lane-able change to `hooks/excluded_guard.py` and its test.
   - **Lanes skill: rebase only at your turn** (capella-studio lead, session 80ab3852, 2026-10-25;
     Hayden picked all three in capella's window). (A) The lead, step 7.6: only the lane next in
     merge order merges or rebases origin/main; the others get "main moved to `<sha>`", check
