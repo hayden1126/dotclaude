@@ -325,7 +325,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     free-form and independent, so capella's `lane lock quiet -- <gate>` started beside a
     running trial (load 45.6 on 12 cores, timing tests void). Working as coded; the gap is that
     nothing tells a repo with its own quiet lock to exclude trials. Workaround sent to capella:
-    start each trial as `lane lock quiet -- lane trial ...` (`held_lock` refuses a trial only
+    start each trial as `lane lock quiet -- lane trial ...` (`cmd_trial` refuses to start only
     under a `suite` hold), and take the two locks in that order wherever both are taken.
     Lead's pick: a lanes-config key naming extra locks every trial also takes (`trial_locks`),
     plus a docs line; not a hard-coded `quiet`, which is capella's name. Lane-able after
