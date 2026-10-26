@@ -320,6 +320,16 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     pick: with no ids on either run, fail and say "compare by hand"; a gate that can't vouch for
     a suite shouldn't pass it. Lane-able (`skills/lanes/scripts/lane`, `tests/lanes`); after
     done-safe merges, since it changes `lane`.
+  - **`lane trial` runs beside a repo's own "quiet machine" lock** (low; capella-studio lead,
+    session 80ab3852, 2026-10-26). A trial holds only `TRIAL_LOCK` (`suite`); lock names are
+    free-form and independent, so capella's `lane lock quiet -- <gate>` started beside a
+    running trial (load 45.6 on 12 cores, timing tests void). Working as coded; the gap is that
+    nothing tells a repo with its own quiet lock to exclude trials. Workaround sent to capella:
+    start each trial as `lane lock quiet -- lane trial ...` (`held_lock` refuses a trial only
+    under a `suite` hold), and take the two locks in that order wherever both are taken.
+    Lead's pick: a lanes-config key naming extra locks every trial also takes (`trial_locks`),
+    plus a docs line; not a hard-coded `quiet`, which is capella's name. Lane-able after
+    done-safe merges.
   - **Lanes skill: rebase only at your turn** (capella-studio lead, session 80ab3852, 2026-10-25;
     Hayden picked all three in capella's window). (A) The lead, step 7.6: only the lane next in
     merge order merges or rebases origin/main; the others get "main moved to `<sha>`", check
