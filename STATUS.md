@@ -338,6 +338,16 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     the cwd's repo (git dir <x>) isn't the project's, and that a session launched in that repo
     works. (b) A related follow-up, private (sandbox-audit FINDINGS, G5b), needs Hayden's ok
     for a probe. (a) is a one-line lane-able change to `hooks/excluded_guard.py` and its test.
+  - **An unclosed `<!--` in a Next block passes `handoff-check` and hides `Keep open:`**
+    (medium: `lane done` can close a lane with work left; capella-studio lane kindtheme, session
+    a3c5cb2b, 2026-10-28; capella's lead caught it before the close). An edit spliced at the
+    template comment's own mention of `Keep open:` and dropped its `-->`. `section()` in
+    `lanelib.py` strips only closed comments, so the comment's text became the first step and
+    `kept_open` found no line starting with the flag (reproduced by the lead on a copy of the
+    record). Fix: a status file with an unclosed `<!--` fails `handoff-check` and makes
+    `lane done` refuse, naming the line. That is a closed rule, where requiring the flag can't
+    be: no tool knows more PRs follow. Lane-able (`lanelib.py`, `handoff-check`, their tests)
+    after done-safe merges, since done-safe changes `lanelib.py`.
   - **Lanes skill: rebase only at your turn** (capella-studio lead, session 80ab3852, 2026-10-25;
     Hayden picked all three in capella's window). (A) The lead, step 7.6: only the lane next in
     merge order merges or rebases origin/main; the others get "main moved to `<sha>`", check
