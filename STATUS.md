@@ -367,6 +367,14 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     merge deploys). capella's lane `deps` is the pilot and evidence. Scope is Hayden's call at
     resume. capella also runs a read-only gap audit of its app against the spec's rule IDs, pinned
     to the spec as of 2026-10-20.
+  - **Practices suite input: cloudflare/security-audit-skill** (Hayden, 2026-10-27; for lane
+    practices when it resumes). https://github.com/cloudflare/security-audit-skill (MIT): a
+    six-phase audit skill (recon, coverage-led hunting with isolated hunters and critics, a fresh
+    verifier per candidate, `findings.json` checked against `report-schema.json`, record
+    verification, reports), with per-class reference files and two zero-dependency Node
+    validators. Compare it with the suite's audit and review path and the spec's rule IDs: what to
+    adopt (the coverage ledger, the disprove-first verifier, the schema-checked findings), and
+    whether to install it beside the suite or take its ideas only. Scope is Hayden's call at resume.
   - **A compact pass's final Enter sometimes lands as a newline** (Hayden's screenshot,
     2026-10-22, vulcan lane homeboard, pane %10). `pass.log` logged `outcome=compact` at
     02:09:50Z (all four send-keys exited 0), yet the resume prompt sat in the input box over a
