@@ -165,7 +165,7 @@ an unregistered worktree: `lane whoami` tells you which.
    Before any signal, it refuses, by name:
    - anything else with its cwd in the lane;
    - a background session (`claude stop <jobId>` ends it);
-   - a dirty, locked or submodule worktree;
+   - a dirty, locked or submodule worktree, or one git doesn't list at the lane's path;
    - a repo that sets `extensions.worktreeConfig` (git in the lane would read its
      lane-writable `config.worktree`);
    - a run from anywhere but the main checkout, or under a lane's session (only the lead
@@ -178,8 +178,9 @@ an unregistered worktree: `lane whoami` tells you which.
    first run proved (a restored tab's shell, whose session that run ended). Give its Bash call
    `timeout: 600000`: it can wait minutes (the fetch, handoff-check, up to five 10 s grace
    periods, the locks), and one cut off by a timeout needs a rerun.
-   It archives `lane.json` and `.lane/` to `<common-dir>/lanes/_closed/<id>-<date>/`, runs
-   `git worktree remove` (never `--force`) and `git branch -d` (never `-D`). It judges and
+   It archives `lane.json` and `.lane/` to `<common-dir>/lanes/_closed/<id>-<date>/`, removes
+   the worktree as a plain `git worktree remove` would (never forced), but by directory fd so a
+   symlink swapped in can't redirect it, and runs `git branch -d` (never `-D`). It judges and
    deletes the branch the worktree has checked out, and `lane.json`'s when that differs (a lane
    that switched for a follow-up PR); a detached worktree needs `--abandon`. Last, it names any
    Edit deny rule left naming the removed worktree: drop those from the file it names.

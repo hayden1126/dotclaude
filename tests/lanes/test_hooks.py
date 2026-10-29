@@ -322,6 +322,36 @@ class IdentityHook(LanesRepo):
         self.assertEqual(self.read(self.mirror("STATUS.md")), "the only copy\n")
         self.assertFalse(os.path.exists(old))
 
+    def test_the_mirror_never_follows_a_lane_dir_swapped_for_a_link_mid_copy(self):
+        # The hook runs unsandboxed after every turn, and the lane's sandbox can write the common
+        # dir: lanes/<id> swapped for a link once the lane's record was read had mirror.old
+        # removed, and mirror and mirror.new renamed, by paths through it, wherever it led.
+        mod = self.identity_module()
+        repo = mod.lanelib.resolve(self.lane_dir)
+        lane = repo.lane_at(self.lane_dir)
+        data = os.path.join(self.common, "lanes", "chart-fix")
+        moved = os.path.join(self.tmp, "moved")
+        victim = os.path.join(self.tmp, "victim")
+        self.write(os.path.join(data, "mirror", "STATUS.md"), "the last mirror\n")
+        for name in ("mirror", "mirror.old"):
+            self.write(os.path.join(victim, name, "keep.txt"), "not the lane's\n")
+        real = mod.lanelib.copy_record
+
+        def copy(*args):
+            os.rename(data, moved)
+            os.symlink(victim, data)
+            real(*args)
+
+        with mock.patch.object(mod.lanelib, "copy_record", side_effect=copy):
+            mod.mirror(repo, lane)
+        for name in ("mirror", "mirror.old"):
+            with self.subTest(name=name):
+                self.assertEqual(self.read(os.path.join(victim, name, "keep.txt")),
+                                 "not the lane's\n")
+        self.assertEqual(sorted(os.listdir(victim)), ["mirror", "mirror.old"])
+        self.assertEqual(self.read(os.path.join(moved, "mirror", "STATUS.md")),
+                         self.read(self.record("chart-fix")))
+
     def test_links_are_mirrored_as_links_and_never_followed(self):
         # Following them copied whatever they reached (`../..`, a home dir, keys) into the
         # mirror and every archive. Evidence must be real files in .lane/artifacts/.

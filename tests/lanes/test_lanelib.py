@@ -159,6 +159,116 @@ class Walk(unittest.TestCase):
         self.assertEqual(lanelib.newest_mtime(rec), before)  # a target's change is not ours
 
 
+class ByFd(unittest.TestCase):
+    """open_dir and copy_record: sandbox-off walks through dirs a lane's sandbox can write, so a
+    name may be a link by the time it is used."""
+
+    def setUp(self):
+        self.root = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root)
+
+    def write(self, path, text):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(text)
+
+    def opened(self, path):
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        self.addCleanup(os.close, fd)
+        return fd
+
+    def test_open_dir_refuses_a_link_anywhere_below_root(self):
+        os.makedirs(os.path.join(self.root, "a", "real"))
+        os.symlink(os.path.join(self.root, "a"), os.path.join(self.root, "link"))
+        os.close(lanelib.open_dir(self.root, "a/real"))
+        for rel in ("link/real", "a/../link", "link"):
+            with self.subTest(rel=rel), self.assertRaises(OSError):
+                os.close(lanelib.open_dir(self.root, rel))
+        fd = lanelib.open_dir(self.root, "a/new/deeper", create=True)
+        os.close(fd)
+        self.assertTrue(os.path.isdir(os.path.join(self.root, "a", "new", "deeper")))
+        with self.assertRaises(OSError):  # O_NOFOLLOW never stops `..`: refused by name
+            os.close(lanelib.open_dir(self.root, "a/../.."))
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads an execute-only dir")
+    def test_open_dir_passes_an_execute_only_dir_on_the_way(self):
+        os.makedirs(os.path.join(self.root, "x", "lane"))
+        os.chmod(os.path.join(self.root, "x"), 0o111)
+        self.addCleanup(os.chmod, os.path.join(self.root, "x"), 0o755)
+        os.close(lanelib.open_dir(self.root, "x/lane"))
+
+    def test_copy_record_copies_links_as_links_and_files_with_their_mode(self):
+        src = os.path.join(self.root, "rec")
+        self.write(os.path.join(src, "STATUS.md"), "# LANE\n")
+        os.chmod(os.path.join(src, "STATUS.md"), 0o640)
+        self.write(os.path.join(src, "artifacts", "a.png"), "png")
+        os.symlink("../..", os.path.join(src, "artifacts", "up"))
+        os.mkfifo(os.path.join(src, "fifo"))
+        dest = os.path.join(self.root, "dest")
+        os.mkdir(dest)
+        lanelib.copy_record(self.opened(src), self.opened(dest))
+        self.assertEqual(sorted(os.listdir(dest)), ["STATUS.md", "artifacts"])  # no FIFO
+        self.assertEqual(os.stat(os.path.join(dest, "STATUS.md")).st_mode & 0o777, 0o640)
+        self.assertEqual(os.readlink(os.path.join(dest, "artifacts", "up")), "../..")
+        with open(os.path.join(dest, "artifacts", "a.png")) as f:
+            self.assertEqual(f.read(), "png")
+
+    def test_copy_record_never_reads_through_a_file_swapped_for_a_link(self):
+        # The lane swaps a record file for a link to a read-denied file between the scan and
+        # the copy: by path, its content landed in the mirror, which the sandbox can read.
+        src = os.path.join(self.root, "rec")
+        secret = os.path.join(self.root, "key")
+        self.write(secret, "secret")
+        self.write(os.path.join(src, "plain"), "x")
+        os.makedirs(os.path.join(src, "sub"))
+        os.symlink(secret, os.path.join(src, "STATUS.md"))
+        os.symlink(self.root, os.path.join(src, "dir"))
+        real = os.stat
+
+        def stat(name, *args, **kw):  # the stat sees each before its swap: a file, a dir
+            st = real(name, *args, **kw)
+            if name == "STATUS.md":
+                return real(os.path.join(src, "plain"))
+            if name == "dir":
+                return real(os.path.join(src, "sub"))
+            return st
+
+        dest = os.path.join(self.root, "dest")
+        os.mkdir(dest)
+        with mock.patch.object(lanelib.os, "stat", side_effect=stat):
+            lanelib.copy_record(self.opened(src), self.opened(dest))
+        self.assertEqual(os.readlink(os.path.join(dest, "STATUS.md")), secret)
+        self.assertEqual(os.readlink(os.path.join(dest, "dir")), self.root)
+
+    def test_copy_record_writes_under_the_dest_it_opened_even_once_its_path_is_a_link(self):
+        src = os.path.join(self.root, "rec")
+        self.write(os.path.join(src, "STATUS.md"), "# LANE\n")
+        self.write(os.path.join(src, "artifacts", "a.png"), "png")
+        dest = os.path.join(self.root, "dest")
+        os.mkdir(dest)
+        dest_fd = self.opened(dest)
+        elsewhere = os.path.join(self.root, "elsewhere")
+        os.mkdir(elsewhere)
+        os.rename(dest, dest + ".old")
+        os.symlink(elsewhere, dest)
+        lanelib.copy_record(self.opened(src), dest_fd)
+        self.assertEqual(os.listdir(elsewhere), [])
+        self.assertEqual(sorted(os.listdir(dest + ".old")), ["STATUS.md", "artifacts"])
+
+    def test_copy_record_never_writes_through_a_link_planted_in_dest(self):
+        src = os.path.join(self.root, "rec")
+        self.write(os.path.join(src, "STATUS.md"), "# LANE\n")
+        dest = os.path.join(self.root, "dest")
+        os.mkdir(dest)
+        target = os.path.join(self.root, "target")
+        self.write(target, "keep")
+        os.symlink(target, os.path.join(dest, "STATUS.md"))
+        with self.assertRaises(FileExistsError):
+            lanelib.copy_record(self.opened(src), self.opened(dest))
+        with open(target) as f:
+            self.assertEqual(f.read(), "keep")
+
+
 class LeadRelink(_fixture.LiveSessions):
     """lanelib.lead_relink in process, for a child standing in for the hook (its pid): which
     proof, if any, says the session running it continues the recorded lead. This test runner
