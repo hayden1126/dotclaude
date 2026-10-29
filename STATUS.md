@@ -320,6 +320,65 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     pick: with no ids on either run, fail and say "compare by hand"; a gate that can't vouch for
     a suite shouldn't pass it. Lane-able (`skills/lanes/scripts/lane`, `tests/lanes`); after
     done-safe merges, since it changes `lane`.
+  - **`lane trial` runs beside a repo's own "quiet machine" lock** (low; capella-studio lead,
+    session 80ab3852, 2026-10-26). A trial holds only `TRIAL_LOCK` (`suite`); lock names are
+    free-form and independent, so capella's `lane lock quiet -- <gate>` started beside a
+    running trial (load 45.6 on 12 cores, timing tests void). Working as coded; the gap is that
+    nothing tells a repo with its own quiet lock to exclude trials. Workaround sent to capella:
+    start each trial as `lane lock quiet -- lane trial ...` (`cmd_trial` refuses to start only
+    under a `suite` hold), and take the two locks in that order wherever both are taken.
+    Lead's pick: a lanes-config key naming extra locks every trial also takes (`trial_locks`),
+    plus a docs line; not a hard-coded `quiet`, which is capella's name. Lane-able after
+    done-safe merges.
+  - **excluded-guard rule 1 in a nested repo** (low; session d3d62f82, a course-notes hub,
+    2026-10-26). From a nested repo inside the session's project, every excluded call is
+    refused (`pass-respawn`, `lane addr`, `git push`). That is rule 1 working as documented
+    (docs/delegation.md). Two things to fix: (a) the refusal in `check_rule1` says "the working
+    directory resolves to the git dir <x>", which reads as if the cwd were `.git`; it should say
+    the cwd's repo (git dir <x>) isn't the project's, and that a session launched in that repo
+    works. (b) A related follow-up, private (sandbox-audit FINDINGS, G5b), needs Hayden's ok
+    for a probe. (a) is a one-line lane-able change to `hooks/excluded_guard.py` and its test.
+  - **An unclosed `<!--` in a Next block passes `handoff-check` and hides `Keep open:`**
+    (medium: `lane done` can close a lane with work left; capella-studio lane kindtheme, session
+    a3c5cb2b, 2026-10-28; capella's lead caught it before the close). An edit spliced at the
+    template comment's own mention of `Keep open:` and dropped its `-->`. `section()` in
+    `lanelib.py` strips only closed comments, so the comment's text became the first step and
+    `kept_open` found no line starting with the flag (reproduced by the lead on a copy of the
+    record). Fix: a status file with an unclosed `<!--` fails `handoff-check` and makes
+    `lane done` refuse, naming the line. That is a closed rule, where requiring the flag can't
+    be: no tool knows more PRs follow. Lane-able (`lanelib.py`, `handoff-check`, their tests)
+    after done-safe merges, since done-safe changes `lanelib.py`.
+  - **`lane park <id>`: a parked state outside the cap** (feature; capella-studio lead, session
+    6bceec36, on Hayden's pick there, 2026-10-29). Finished lanes wait hours for their merge turn
+    (5.4 h and 5.6 h on 2026-10-28) holding a cap slot, a Claude session and dev servers. Ask:
+    park refuses unless `handoff-check` passes, there is no `handoff?` flag, the tree is clean
+    and the branch is pushed or has an open PR. Park then ends the lane's sessions with `done`'s
+    proof rules and keeps the worktree, branch, record and claims. `ls` shows `parked` and still
+    derives PR, `rebase`, `overlap` and `handoff?`. `open` unparks it (plan mode, refused over
+    the cap), and `done` works as usual. Today the cap counts registered lanes at `new` (no
+    check at `open`), so the change is a CLI-written flag under `<common-dir>/lanes/` (never
+    the record), skipped by `new`'s count and checked by `open`. Lead's additions: park refuses
+    while the lane holds a lock or the install hold; the lead sends a parked lane no "main
+    moved" (it has no session; the `rebase` flag carries it). Hayden's pick (2026-10-29, in
+    capella's lead session, relayed by it): a parked lane may unpark over a full cap to rebase
+    and merge, at most one lane over the cap at a time; it frees the slot when it merges and
+    closes. capella accepted both additions.
+  - **Ports: blocks per lane, `lane port`, `lane serve`** (feature; capella-studio lane prefs,
+    session 78db7f95, at Hayden's ask, 2026-10-29). Lane prefs' run script started a dev server
+    on 5197, which lane tweaks' dev already held; the start failed, the script went on, and its
+    checks silently tested tweaks' server. `new` hands each lane one port, while lanes run 2-3
+    servers. Proposed: (1) a block of ports per lane, shown in `ls`; (2) `lane port claim
+    [--purpose]`, `port who`, `port ls`, with a state file and dead-pid cleanup; (3) `lane serve
+    [--port N] -- <cmd>`: claim, start it in its own session, wait for its ready line or its
+    death, check the listener's pid is in that session, print the id to kill; (4) a SessionStart
+    "your ports" line. Reads of other sessions' sockets and /proc need the excludedCommands route.
+    Lead's view: the silent wrong-server run is the bug, and only (3)'s listener check closes it
+    (a registry is advisory: an unregistered process still takes a port). Order: (3) with (1)
+    first; (2) and (4) next; a machine-wide pool for non-lane repos last, if at all.
+    Lane-able (`lane`, `lanelib.py`, `tests/lanes`, `docs/lanes.md`, the lane-identity hook)
+    after done-safe merges; scope is Hayden's call.
+    dotclaude uses it too: paused practices holds a slot today. Lane-able (`lane`,
+    `lanelib.py`, `tests/lanes`, `docs/lanes.md`, the lanes skill) after done-safe merges.
   - **Lanes skill: rebase only at your turn** (capella-studio lead, session 80ab3852, 2026-10-25;
     Hayden picked all three in capella's window). (A) The lead, step 7.6: only the lane next in
     merge order merges or rebases origin/main; the others get "main moved to `<sha>`", check
@@ -349,6 +408,14 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     merge deploys). capella's lane `deps` is the pilot and evidence. Scope is Hayden's call at
     resume. capella also runs a read-only gap audit of its app against the spec's rule IDs, pinned
     to the spec as of 2026-10-20.
+  - **Practices suite input: cloudflare/security-audit-skill** (Hayden, 2026-10-27; for lane
+    practices when it resumes). https://github.com/cloudflare/security-audit-skill (MIT): a
+    six-phase audit skill (recon, coverage-led hunting with isolated hunters and critics, a fresh
+    verifier per candidate, `findings.json` checked against `report-schema.json`, record
+    verification, reports), with per-class reference files and two zero-dependency Node
+    validators. Compare it with the suite's audit and review path and the spec's rule IDs: what to
+    adopt (the coverage ledger, the disprove-first verifier, the schema-checked findings), and
+    whether to install it beside the suite or take its ideas only. Scope is Hayden's call at resume.
   - **A compact pass's final Enter sometimes lands as a newline** (Hayden's screenshot,
     2026-10-22, vulcan lane homeboard, pane %10). `pass.log` logged `outcome=compact` at
     02:09:50Z (all four send-keys exited 0), yet the resume prompt sat in the input box over a
