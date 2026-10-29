@@ -3,6 +3,7 @@
 
   lane init [--root DIR] [--setup CMD] [--ports A-B] [--cap N] [--locks A,B]
             [--autopass | --no-autopass] [--model M] [--effort E] [--trial-link P,Q]
+            [--trial-locks A,B]
   lane new <id> [--branch B] [--reuse-branch] [--claim N ...] [--goal T] [--files T]
                [--overlaps T] [--done-when T] [--constraints T]
   lane adopt <path> [--id SLUG]
@@ -33,7 +34,8 @@ must, so the commands they run stay sandboxed too.
 ids given) onto the lane's HEAD in dangling commits, checks the merge out in a fresh scratch
 tree in the lane's .lane-trial/ (gitignored; never under the temp dir, a sandbox policy root),
 gives it the lane's .worktreeinclude files and a symlink to each lane dir the config's
-trial-link or a `--link` names, and runs each `--run` there under the `suite` lock. A suite
+trial-link or a `--link` names, and runs each `--run` there under the `suite` lock (after the
+config's trial-locks, in order). A suite
 that fails reruns on the baseline (HEAD plus the base) at the same path. It passes only when
 every test id (unittest, pytest, TAP) it failed on the merge also fails on the baseline and its
 exit is no worse there (not non-zero on the merge but zero on the baseline, nor a death by
@@ -248,6 +250,25 @@ def parse_locks(spec: str) -> list[str]:
         raise LaneError(f"bad lock name(s) {', '.join(bad)}: a slug of letters, digits, '.', '_', "
                         "'-' that starts with a letter or digit, with no '..'")
     return names
+
+
+def trial_locks(cfg: dict) -> list[str]:
+    """The config's trial-locks, in order: locks every `lane trial` takes before `suite`, so a
+    repo's own lock (a quiet-machine gate's) never runs beside a trial. Each must be one of its
+    locks, and never `suite`, which every trial takes anyway: refused at `init`, and by a trial
+    before it waits on any lock."""
+    names = parse_locks(str(cfg.get("trial-locks", "")))
+    locks = parse_locks(str(cfg.get("locks", "")))
+    for name in names:
+        if name == TRIAL_LOCK:
+            raise LaneError(f"the lanes config's trial-locks names `{TRIAL_LOCK}`, which every "
+                            "trial takes already: drop it with `lane init --trial-locks <list>`")
+        if name not in locks:
+            raise LaneError(f"the lanes config's trial-locks names {name}, which the config's "
+                            f"locks don't list ({', '.join(locks) or 'none'}): add it with `lane "
+                            "init --locks <full,list>`, or drop it with `lane init --trial-locks "
+                            "<list>`")
+    return list(dict.fromkeys(names))
 
 
 def lock_path(repo: Repo, name: str) -> str:
@@ -720,6 +741,8 @@ def cmd_init(args) -> None:
     parse_ports(args.ports or "")
     if args.locks is not None:
         args.locks = ",".join(parse_locks(args.locks))
+    if args.trial_locks is not None:
+        args.trial_locks = ",".join(parse_locks(args.trial_locks))
     for key, problem in PICKS.items():
         if (value := getattr(args, key)) and (why := problem(value)):
             raise LaneError(why)
@@ -749,6 +772,11 @@ def cmd_init(args) -> None:
             cfg.pop("trial-link", None)
         elif trial_links is not None:
             cfg["trial-link"] = trial_links
+        if args.trial_locks == "":
+            cfg.pop("trial-locks", None)
+        elif args.trial_locks is not None:
+            cfg["trial-locks"] = args.trial_locks
+        trial_locks(cfg)  # after --locks too: one that drops a trial lock is refused
         try:
             write_config(repo, cfg)
         except OSError as e:
@@ -2683,10 +2711,19 @@ def cmd_trial(args) -> int:
         raise LaneError(f"a trial can't run under a hold of the {TRIAL_LOCK} lock (inside "
                         "another trial's suite, or `lane lock suite`): an outer trial's live tree "
                         "would look like a leftover to clear. Run it on its own")
+    extra = trial_locks(repo.config())  # refused now, never after a wait for one before it
     command = ["lane", "trial", *args.ids, *[x for c in args.run for x in ("--run", c)]]
+    # The config's trial-locks first, then `suite`, under one --wait: the order the docs give
+    # wherever both are taken, so a gate holding its own lock and then `suite` can't deadlock
+    # with a trial.
+    deadline = None if args.wait is None else time.monotonic() + args.wait
     try:
-        with held_lock(repo, TRIAL_LOCK, args.wait, command) as held:
-            return trial(repo, me, args) if held else LOCK_BUSY
+        with contextlib.ExitStack() as held:
+            for name in [*extra, TRIAL_LOCK]:
+                left = None if deadline is None else max(0.0, deadline - time.monotonic())
+                if not held.enter_context(held_lock(repo, name, left, command)):
+                    return LOCK_BUSY
+            return trial(repo, me, args)
     except KeyboardInterrupt:  # a Ctrl-C while waiting, merging or cleaning up
         return -signal.SIGINT
     except TrialStopped as e:
@@ -4195,6 +4232,9 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--trial-link", dest="trial_link", metavar="PATHS",
                    help="comma-separated lane paths each `lane trial` symlinks into its tree, "
                         "e.g. node_modules ('' for none)")
+    p.add_argument("--trial-locks", dest="trial_locks", metavar="A,B",
+                   help="comma-separated locks (from --locks) each `lane trial` takes before "
+                        "`suite`, e.g. quiet ('' for none)")
     p = sub.add_parser("new", help="make a lane: worktree, branch, record, port, setup")
     p.add_argument("id")
     p.add_argument("--branch", help="branch name (default: the id)")

@@ -424,9 +424,15 @@ alone skips the uncommitted read then, since it can afford to.
 (a plain shell): it removes its scratch trees by path, which is safe only where the sandbox
 bounds what a symlink swapped in for a tree could make git delete, and its suites inherit the
 sandbox. Before it waits for the lock, it also refuses a bad link path, a link under another one,
-and a link the lane lacks (step 3).
+and a link the lane lacks (step 3), and a config `trial-locks` entry its `locks` don't list.
 
-1. It takes the `suite` lock for the whole run. One name for every trial: a trial clears its
+1. It takes the `suite` lock for the whole run, after any locks the config's `trial-locks`
+   names (`lane init --trial-locks quiet`), in order, under the one `--wait`. A repo whose gate
+   holds a lock of its own for a quiet machine names it there, so the gate never runs beside a
+   trial (capella-studio's `quiet` gate ran beside one at load 45.6 on 12 cores, 2026-10-26).
+   Take a repo's own locks before `suite` wherever both are taken, as a trial does, or the two
+   can deadlock. A trial run under an outer hold of one (`lane lock quiet -- lane trial ...`)
+   runs under that hold. One name for every trial: a trial clears its
    lane's leftover trees under that lock, so a second trial under another lock could remove a
    live tree. Locks are re-entrant for descendants (`LANE_LOCKS_HELD`, keyed by repo), so a
    `--run` that wraps its suite in `lane lock suite` runs under the trial's hold instead of
@@ -593,7 +599,8 @@ stays in the common dir, which sandboxed Bash can write (S1).
 $XDG_STATE_HOME/dotclaude/lanes/<repo>-<hash>.toml
                                 the config: root, setup cmd, port range, live-lane cap, base
                                 (<remote>/<branch>, default origin/main), locks, autopass,
-                                model, effort; written only by a bare `lane init`
+                                model, effort, trial-link, trial-locks; written only
+                                by a bare `lane init`
 $XDG_STATE_HOME/dotclaude/lanes/<repo>-<hash>.lead.json
                                 the lead record: the main-checkout session that last acted as
                                 lead, written only by bare `lane` commands ("One lead per main
