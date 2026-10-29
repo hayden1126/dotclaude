@@ -37,8 +37,9 @@ trial-link or a `--link` names, and runs each `--run` there under the `suite` lo
 that fails reruns on the baseline (HEAD plus the base) at the same path. It passes only when
 every test id (unittest, pytest, TAP) it failed on the merge also fails on the baseline and its
 exit is no worse there (not non-zero on the merge but zero on the baseline, nor a death by
-signal on the merge only), or, with no id on either run, when both exit alike; any other with
-no id, or whose output either run cut, fails, to be compared by hand. A lane that conflicts
+signal on the merge only); one with no id to compare (even with none on either run and both
+exiting alike: a suite that never ran fails alike too), or whose output either run cut, fails,
+to be compared by hand. A lane that conflicts
 with the base alone is untried, which fails nothing. With nothing merged, the suites run once
 on HEAD plus the base. It exits 0 with no other conflict and no failure of the merge's own (or,
 with nothing merged, no failing suite), 1 otherwise, and 75 when `--wait` runs out, as `lock`
@@ -2902,11 +2903,11 @@ def trial_report(commands: list[str], runs: list[SuiteRun], again: dict[int, Sui
     when every id it failed on the merge also fails on the baseline, and its exit doesn't get
     worse there: non-zero on the merge but zero on the baseline, or a death by signal on the
     merge only, is the merge's (a `--run` can chain a runner whose ids it parses with a check
-    that prints none). One that printed no id on either run passes when both exit with the
-    same code (it fails the same way on the baseline, so that failure isn't the merge's; a
-    second break it hides shows only once the first is fixed). Any other with no ids to
-    compare, or one whose output either run cut, fails, to be compared by hand. Ids come from
-    the suites' output, so they are masked."""
+    that prints none). One with no ids to compare fails, to be compared by hand, even when it
+    printed none on either run and both exit alike: a suite that never ran (a directory as the
+    `--run`, a runner missing a flag) fails alike on both, and a gate that can't vouch for it
+    mustn't pass it. So does one whose output either run cut. Ids come from the suites' output,
+    so they are masked."""
     new = 0
     for i, (cmd, (rc, ids, cut)) in enumerate(zip(commands, runs)):
         head = f"lane trial: suite {i + 1} ({cmd}):"
@@ -2920,9 +2921,11 @@ def trial_report(commands: list[str], runs: list[SuiteRun], again: dict[int, Sui
             say(shown(f"{head} its output on {which} was cut (a process it started still holds "
                       "it), so test ids may be missing: compare by hand"))
             continue
-        if not ids and not base_ids and rc == base_rc:  # rc is non-zero: the merge failed
-            say(shown(f"{head} fails the same way on the baseline (exit {rc} on both, no test "
-                      "ids to compare)"))
+        if not ids and not base_ids:
+            new += 1
+            say(shown(f"{head} failed (exit {rc}) with no test id on either run (exit {base_rc} "
+                      "on the baseline): the trial can't vouch for it, compare the two runs above "
+                      "by hand"))
             continue
         if not ids:
             new += 1

@@ -471,8 +471,8 @@ and a link the lane lacks (step 3).
    brings it): a copy would make the link's dir and block it. Link paths are checked like
    `.worktreeinclude` entries (relative, no `..`). One under another is refused (the tree would
    make the outer path a dir for the inner link). One the lane lacks is refused too: unlinked, a
-   suite that can't load fails alike on both runs, which step 5's same-way rule passes, so the
-   trial would pass having tested nothing. A conflict line's "try it with this lane alone"
+   suite that can't load fails alike on both runs, which says nothing of the merge (step 5
+   sends it to be compared by hand). A conflict line's "try it with this lane alone"
    command carries the run's `--link`s for the same reason. A link is
    no copy: a suite that writes through it writes the lane's files. Then each `--run` runs there
    as `sh -c`,
@@ -489,11 +489,12 @@ and a link the lane lacks (step 3).
 5. A failed suite reruns on the baseline (HEAD plus the base alone), in a tree at the same path
    set up the same way, so ids that embed the path match. It passes only when every id it
    failed on the merge also fails there and its exit is no worse (non-zero on the merge but zero
-   on the baseline, or a signal on the merge only, is the merge's). One that printed no id on
-   either run passes when both runs exit with the same code: it fails the same way on the
-   baseline, so that failure isn't the merge's. Any other failure with no id to compare, or a
-   run whose output was cut (a process it started kept the pipe 10 s past its exit), fails, to
-   be judged by hand.
+   on the baseline, or a signal on the merge only, is the merge's). A failure with no id to
+   compare fails, to be judged by hand, even one that printed no id on either run and exits
+   alike on both: a suite that never ran (a directory as the `--run`, exit 126 on both; a
+   runner missing a required flag, exit 2 on both) fails alike too, and a gate that can't vouch
+   for a suite mustn't pass it (lane sp-gaps, 2026-10-25). So does a run whose output was cut
+   (a process it started kept the pipe 10 s past its exit).
 6. It exits 0 with no failing conflict and no failure of the merge's own, 1 otherwise, and 75
    when `--wait` runs out. When no other lane's work merges (none live, all already in, or all
    conflicting), the suites still run once, on this lane's HEAD plus the base; that tree is the
@@ -511,10 +512,9 @@ tree left the temp dir (2026-10-24, lane trial-fix) so those no longer fail. The
 for the rest: it keeps working when a future test turns out to depend on its location, and it
 tells a failure the base already has from the merge's.
 
-Its limits: a test failing in both runs for different reasons hides a real break, and so does a
-suite with no ids that fails the same way on both (exit 1 on both hides a second break the
-merge adds, until the first is fixed); a runner with another output format can only be
-compared by its exit code or by hand; a flaky test failing only on the merge reads as the
+Its limits: a test failing in both runs for different reasons hides a real break; a runner
+with another output format is compared by hand whenever it fails, so a suite already broken
+on the base fails every trial until it is fixed or left out of the `--run`s; a flaky test failing only on the merge reads as the
 merge's. The number of tests run is never compared, so a fail-fast flag (pytest `-x`, unittest
 `-f`) can stop both runs at a shared failure before the test the merge broke, and a merge that
 drops a test package from discovery passes unseen. Node resolves a bare `require` up the parent

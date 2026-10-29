@@ -1223,19 +1223,28 @@ class Trial(LaneWork):
     def test_a_failure_with_no_test_id_and_another_exit_on_the_baseline_is_compared_by_hand(self):
         rc, out, err = self.trial("--run", "if [ -f b.txt ]; then exit 2; fi; exit 1")
         self.assertEqual(rc, 1, out + err)
-        self.assertIn("failed (exit 2) with no test id to compare against the baseline", out)
+        self.assertIn("failed (exit 2) with no test id on either run (exit 1 on the baseline)",
+                      out)
         # No id on the merge, ids on the baseline: still by hand.
         rc, out, err = self.trial("--run", 'if [ ! -f b.txt ]; then echo "FAIL: test_x '
                                            '(t.T.test_x)"; fi; exit 1')
         self.assertEqual(rc, 1, out + err)
         self.assertIn("failed (exit 1) with no test id to compare against the baseline", out)
 
-    def test_a_failure_with_no_test_id_that_the_baseline_repeats_isnt_the_merges(self):
+    def test_a_failure_with_no_test_id_on_either_run_is_compared_by_hand(self):
+        # Even when both runs exit alike: a suite that never ran (a directory as `--run`, exit
+        # 126 on both; a runner missing a flag, exit 2 on both) would pass a gate that can't
+        # vouch for it.
         rc, out, err = self.trial("--run", "exit 3", "--run", "true")
-        self.assertEqual(rc, 0, out + err)
-        self.assertIn("lane trial: suite 1 (exit 3): fails the same way on the baseline (exit 3 "
-                      "on both, no test ids to compare)", out)
-        self.assertNotIn("FAILED", out)
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("lane trial: suite 1 (exit 3): failed (exit 3) with no test id on either "
+                      "run (exit 3 on the baseline): the trial can't vouch for it, compare the "
+                      "two runs above by hand", out)
+        self.assertIn("lane trial: suite 2 (true): ok", out)
+        rc, out, err = self.trial("--run", "./")  # the tree itself: a directory
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("failed (exit 126) with no test id on either run (exit 126 on the "
+                      "baseline)", out)
 
     def test_tap_ids_judge_a_failure(self):
         # A merge-only TAP failure fails the trial; one the baseline repeats under another
@@ -1543,8 +1552,8 @@ class Trial(LaneWork):
         else:  # the same check without node: the module's file, at the tree's own path
             cmd = "test -f node_modules/fake/index.js"
         rc, out, err = self.trial("--run", cmd)
-        self.assertEqual(rc, 0, out + err)  # fails on both runs, the same way
-        self.assertIn("fails the same way on the baseline", out)
+        self.assertEqual(rc, 1, out + err)  # fails on both runs alike, with no id: by hand
+        self.assertIn("no test id on either run", out)
         self.assertIn("baseline run of suite 1/1", out)
         rc, out, err = self.trial("--link", "node_modules", "--run", cmd)
         self.assertEqual(rc, 0, out + err)
