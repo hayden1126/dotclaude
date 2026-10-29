@@ -73,7 +73,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 ## In flight
 - **dotclaude runs in lanes (since 2026-10-12).** The lead is the main checkout. Lanes live in
   `~/dotclaude-lanes/`, and each lane's state is in its record (`lane ls`, `lane asks`), not
-  here. The config caps live lanes at 3, with locks `install` and `suite`.
+  here. The config caps live lanes at 4, with locks `install` and `suite`.
   - Merged through lanes, installed from main and closed: #90 to #129 (2026-10-12 to
     2026-10-19), with lead PR #117 among them (its check passed: session 3a153a27's auto-pass
     loaded the handoff skill before pass-respawn's `handoff-check`). Last: bug-route, #125
@@ -90,7 +90,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **Live lanes** (briefs in each record). Merge order (opened 2026-10-24 on Hayden's "open
     lanes for the fixes"): 1 chrome-dup (`fix/chrome-devtools-duplicate`, carries the lead's
     notes: the duplicate chrome-devtools servers below, opened 2026-10-25 when sp-gaps merged),
-    2 practices (its next
+    2 lane-fixes (`fix/lane-small-bugs`, opened 2026-10-29 on Hayden's "open": the backlog's
+    unclosed `<!--`, trial no-ids and trial quiet lock items, in that order, one PR),
+    3 practices (its next
     PR, auth-secrets; the skill suite below), paused by Hayden on 2026-10-24 for a few days and
     moved last so it blocks no install. practices opened on Hayden's ok, merged #142 on 2026-10-20 and stays open for more PRs.
     Merged 2026-10-29 and installed from main: done-safe (#150: `lane done`'s removals go by
@@ -294,6 +296,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     `permissionMode` in `agents/writer.md` holds against a parent's mid-run plan mode; if it
     does, it also covers plan mode entered by hand. Lane-able (`skills/pass/`, `tests/`); no
     live lane owns it.
+  - **Two open sandbox gaps from lane chrome-dup's gap check** (high; lane chrome-dup,
+    2026-10-25, reported to the lead 2026-10-29). Details are private: sandbox-audit FINDINGS,
+    "Gap check 2026-10-25", rows N2 and N3 (the parts still OPEN; chrome-dup's PR fixes N1 and
+    N3's bun part). Each is a new lane, after chrome-dup merges, since both reach the files its
+    PR adds or changes (`settings.json`, `hooks/sandbox-caches.sh`). N3's rest needs one probe
+    per cache; N2's fix is a design fork for Hayden (options in the private row).
   - **Another `lane done` close-path gap** (lane done-safe's reviewer round 1, 2026-10-24;
     outside its brief, and older than it). Details and the proposed fix are in the same private
     file, rows "cmd_done path trust" and "same, widened". The fix is a design change to
@@ -301,7 +309,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     Two low gaps ride with it (rows "seed_record from cmd_adopt" and "add_exclude"); their fix
     reuses the fd helpers done-safe's PR adds. Lane-able (`skills/lanes/scripts/lane`,
     `lanelib.py`, `tests/lanes`) after done-safe merges, since it touches the same files.
-  - **`lane trial` passes a suite that never ran** (low; lane sp-gaps, 2026-10-25, at 4a874df).
+  - **`lane trial` passes a suite that never ran** (lane lane-fixes; low; lane sp-gaps, 2026-10-25, at 4a874df).
     `trial_report` in `skills/lanes/scripts/lane` passes a failed suite that printed no test id on
     either run when both exits match, by design (a suite already broken on main isn't the
     merge's). So `--run tests/delegation` (a directory: exit 126 on both) and a runner missing a
@@ -309,7 +317,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     pick: with no ids on either run, fail and say "compare by hand"; a gate that can't vouch for
     a suite shouldn't pass it. Lane-able (`skills/lanes/scripts/lane`, `tests/lanes`); after
     done-safe merges, since it changes `lane`.
-  - **`lane trial` runs beside a repo's own "quiet machine" lock** (low; capella-studio lead,
+  - **`lane trial` runs beside a repo's own "quiet machine" lock** (lane lane-fixes; low; capella-studio lead,
     session 80ab3852, 2026-10-26). A trial holds only `TRIAL_LOCK` (`suite`); lock names are
     free-form and independent, so capella's `lane lock quiet -- <gate>` started beside a
     running trial (load 45.6 on 12 cores, timing tests void). Working as coded; the gap is that
@@ -328,7 +336,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     works. (b) A related follow-up, private (sandbox-audit FINDINGS, G5b), needs Hayden's ok
     for a probe. (a) is a one-line lane-able change to `hooks/excluded_guard.py` and its test.
   - **An unclosed `<!--` in a Next block passes `handoff-check` and hides `Keep open:`**
-    (medium: `lane done` can close a lane with work left; capella-studio lane kindtheme, session
+    (lane lane-fixes; medium: `lane done` can close a lane with work left; capella-studio lane kindtheme, session
     a3c5cb2b, 2026-10-28; capella's lead caught it before the close). An edit spliced at the
     template comment's own mention of `Keep open:` and dropped its `-->`. `section()` in
     `lanelib.py` strips only closed comments, so the comment's text became the first step and
@@ -551,12 +559,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lanes chrome-dup (merge order 1, carries the lead branch) and practices (2, paused by
-     Hayden since 2026-10-24) run; their state is in their records (`lane ls`). Two slots are
-     free (done-safe closed after #150). Next to open: Hayden's pick from the backlog. The
-     `lane` items (done path-trust, trial no-ids, trial quiet lock, unclosed comment,
-     `lane park`, ports) are unblocked now; they share `lane` and `lanelib.py`, so one lane or
-     a strict sequence, not two at once. Pending with Hayden, outside the lanes: `wsl --shutdown` at a break applies the 18 GB
+  0. Lanes chrome-dup (merge order 1, carries the lead branch), lane-fixes (2) and practices
+     (3, paused by Hayden since 2026-10-24) run; their state is in their records (`lane ls`).
+     One slot is free. The other `lane` items (`lane park`, ports, done path-trust) share
+     `lane` and `lanelib.py` with lane-fixes, so they wait for its merge: then `lane park`
+     next, as its own PR. Path-trust still needs Hayden's design call. Pending with Hayden, outside the lanes: `wsl --shutdown` at a break applies the 18 GB
      WSL cap set in `C:\Users\hayde\.wslconfig` on 2026-10-23 (backup `.wslconfig.bak-20261023`).
      Before each lead STATUS commit, grep it against the exam-prep denylist
      ([[lead-status-denylist-check]]). After each reinstall,
