@@ -348,6 +348,21 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     `lane done` refuse, naming the line. That is a closed rule, where requiring the flag can't
     be: no tool knows more PRs follow. Lane-able (`lanelib.py`, `handoff-check`, their tests)
     after done-safe merges, since done-safe changes `lanelib.py`.
+  - **`lane park <id>`: a parked state outside the cap** (feature; capella-studio lead, session
+    6bceec36, on Hayden's pick there, 2026-10-29). Finished lanes wait hours for their merge turn
+    (5.4 h and 5.6 h on 2026-10-28) holding a cap slot, a Claude session and dev servers. Ask:
+    park refuses unless `handoff-check` passes, there is no `handoff?` flag, the tree is clean
+    and the branch is pushed or has an open PR. Park then ends the lane's sessions with `done`'s
+    proof rules and keeps the worktree, branch, record and claims. `ls` shows `parked` and still
+    derives PR, `rebase`, `overlap` and `handoff?`. `open` unparks it (plan mode, refused over
+    the cap), and `done` works as usual. Today the cap counts registered lanes at `new` (no
+    check at `open`), so the change is a CLI-written flag under `<common-dir>/lanes/` (never
+    the record), skipped by `new`'s count and checked by `open`. Lead's additions: park refuses
+    while the lane holds a lock or the install hold; the lead sends a parked lane no "main
+    moved" (it has no session; the `rebase` flag carries it). Open fork for Hayden: when the
+    cap is full, may the lane next to merge still unpark? Otherwise it waits on a slot.
+    dotclaude uses it too: paused practices holds a slot today. Lane-able (`lane`,
+    `lanelib.py`, `tests/lanes`, `docs/lanes.md`, the lanes skill) after done-safe merges.
   - **Lanes skill: rebase only at your turn** (capella-studio lead, session 80ab3852, 2026-10-25;
     Hayden picked all three in capella's window). (A) The lead, step 7.6: only the lane next in
     merge order merges or rebases origin/main; the others get "main moved to `<sha>`", check
