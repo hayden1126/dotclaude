@@ -12,8 +12,8 @@ inherits the session's environment, so TMUX_PANE names the tab (spike 2, 2.1.296
   the lock stays busy, the reply says the change may take up to a minute). Outside tmux nothing
   is written: the toggle is per tab, and `autopass` in pass.toml ($XDG_CONFIG_HOME/dotclaude,
   ~/.config by default; the replies name the one in use) is the global default.
-- status, or no word: the context size (ctx/<session>.json), the next tier, on or off, and
-  which level set it.
+- status, or no word: the context size (ctx/<session>.json; unknown yet after a compact), the
+  next tier, on or off, and which level set it.
 - another word, or more than one: the usage line.
 A failure exits non-zero with the error on stderr, and the mod shows it: nothing else answers
 the command. Tests: tests/setup/test_context_watch.py. Stdlib only; keep the source ASCII.
