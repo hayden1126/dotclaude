@@ -88,11 +88,13 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
   - **Live lanes** (briefs in each record). Merge order (opened 2026-10-24 on Hayden's "open
-    lanes for the fixes"): 1 done-safe (`fix/lane-done-removals`, carries the lead's notes,
-    opened 2026-10-25 when trial-fix merged: the `lane done` gaps below), 2 chrome-dup (the
-    duplicate chrome-devtools servers below, opened 2026-10-25 when sp-gaps merged), 3 practices (its next
+    lanes for the fixes"): 1 chrome-dup (`fix/chrome-devtools-duplicate`, carries the lead's
+    notes: the duplicate chrome-devtools servers below, opened 2026-10-25 when sp-gaps merged),
+    2 practices (its next
     PR, auth-secrets; the skill suite below), paused by Hayden on 2026-10-24 for a few days and
     moved last so it blocks no install. practices opened on Hayden's ok, merged #142 on 2026-10-20 and stays open for more PRs.
+    Merged 2026-10-29 and installed from main: done-safe (#150: `lane done`'s removals go by
+    proof, the close-path gaps from lane trial-fix's report; smoke test by the lead passed).
     Merged 2026-10-29 and installed from main: ctx-compact (#149: context-watch says nothing
     after a compact until a post-compact count exists, instead of nudging on the pre-compact one).
     Merged 2026-10-25 and installed from main: sp-gaps (#148, SP1, SP2 and SP4 to SP13: the
@@ -292,10 +294,6 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     `permissionMode` in `agents/writer.md` holds against a parent's mid-run plan mode; if it
     does, it also covers plan mode entered by hand. Lane-able (`skills/pass/`, `tests/`); no
     live lane owns it.
-  - **`lane done` close-path gaps** (lane trial-fix's report, 2026-10-25; not yet re-checked by
-    the lead). Details and the proposed fix are in the private file
-    `~/scratch/lane-done-removal/FINDINGS.md` ([[dotclaude-public-repo]]). Lane-able
-    (`skills/lanes/scripts/lane`, `tests/lanes`); in lane done-safe since 2026-10-25.
   - **Another `lane done` close-path gap** (lane done-safe's reviewer round 1, 2026-10-24;
     outside its brief, and older than it). Details and the proposed fix are in the same private
     file, rows "cmd_done path trust" and "same, widened". The fix is a design change to
@@ -553,12 +551,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lanes done-safe (merge order 1, carries the lead branch), chrome-dup (2) and practices
-     (3, paused by Hayden since 2026-10-24) run; their state is in their records (`lane ls`).
-     One slot is free (ctx-compact closed after #149). Next to open: Hayden's pick from the
-     backlog; the `lane` items (done path-trust, trial no-ids, trial quiet lock, unclosed
-     comment, `lane park`, ports) wait for done-safe's merge, since they change the same files.
-     done-safe installs next, then its smoke test (the lead runs it from the main checkout). Pending with Hayden, outside the lanes: `wsl --shutdown` at a break applies the 18 GB
+  0. Lanes chrome-dup (merge order 1, carries the lead branch) and practices (2, paused by
+     Hayden since 2026-10-24) run; their state is in their records (`lane ls`). Two slots are
+     free (done-safe closed after #150). Next to open: Hayden's pick from the backlog. The
+     `lane` items (done path-trust, trial no-ids, trial quiet lock, unclosed comment,
+     `lane park`, ports) are unblocked now; they share `lane` and `lanelib.py`, so one lane or
+     a strict sequence, not two at once. Pending with Hayden, outside the lanes: `wsl --shutdown` at a break applies the 18 GB
      WSL cap set in `C:\Users\hayde\.wslconfig` on 2026-10-23 (backup `.wslconfig.bak-20261023`).
      Before each lead STATUS commit, grep it against the exam-prep denylist
      ([[lead-status-denylist-check]]). After each reinstall,
