@@ -405,7 +405,7 @@ So every sandbox-off status in a checkout now skips submodule contents: `lane do
 `removable()` (`=all`, its submodule refusal stays), `handoff-check` and `delegation-ledger`'s
 hook (`=dirty`, which still reports a moved gitlink), each with optional locks off and
 `core.fsmonitor=false` (a relative fsmonitor command resolves inside the checkout; `done` sets
-it for every git it runs, `git worktree remove`'s own status included), and the ledger's hook,
+it for every git it runs), and the ledger's hook,
 like `ls` and `done`, runs no status in a repo whose own config sets `extensions.worktreeConfig`
 (`audit` names those runs unchecked). A configured filter driver (a program the user
 installed, such as git-lfs) still runs on the files a checkout routes to it: turning it off
@@ -527,8 +527,8 @@ tree by its path: it finds the admin dirs under `<common>/worktrees/` (real dirs
 whose `gitdir` file reads, as text, a tree with this lane's trial name in the lane's
 `.lane-trial/` or in a temp dir an older `lane` used, and removes just those dirs, each by name
 under its parent opened with `O_NOFOLLOW` (sandboxed Bash can write the common dir), once the
-lane's own `git worktree remove` has deleted the files, or at once when that remove was run by
-hand. One it can't remove it names as left in place, with no path to remove by hand: run
+lane's files are gone (`done` removes them itself, below), or at once when the lane was removed
+by hand. One it can't remove it names as left in place, with no path to remove by hand: run
 sandbox-off, that would follow whatever link made the removal fail. No message of `lane` ever
 offers a by-path removal that can recurse or follow a link (a test pins it); the one removal
 it names, `unlink` for a `.lane-trial` that is a symlink, does neither. The trial adds its trees with `worktree.useRelativePaths=false`, so that text is
@@ -660,6 +660,13 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
     sides. A symlink is copied as a link (a relative one made absolute), never read through, so
     the sandbox's read deny still holds at its target; anything not a regular file is skipped.
   - A symlinked `lanes/`, `lanes/<id>`, mirror or `info/exclude` is refused.
+  - Sandbox-off, whatever `done` and the mirror hook remove, rename or write in the lane's
+    worktree, `<common-dir>/worktrees/` or `<common-dir>/lanes/`, and every write of
+    `lane.json` or open of the lock file by any `lane` command, goes by name under a directory
+    fd, reached from `/` or the main checkout with `O_NOFOLLOW` at each step (and no `..`); a
+    record is copied by fd at every level. A lane's sandbox can
+    write all three, so a check of a path there can't hold until its use. No message of `done`
+    or the mirror offers a removal by path (a test scans the CLI's messages).
   - `done` signals a process only on kernel facts (`/proc`) and Claude Code's own files (session
     files, transcripts), never on `lane.json` (the pieces, `lane done`).
   PR 3 adds `pass-respawn` to `excludedCommands` (bare and with arguments): it needs the tmux socket and
@@ -885,7 +892,10 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   compact keeps its session's entry, so the session's start (which `handoff-check` uses) doesn't
   move. The mirror is crash-safe: it builds `mirror.new`, swaps, then deletes. A `mirror.old` left
   by a killed run is restored under the lock by the hook or `done`, and read in place by lock-free
-  readers such as `lane asks`. It copies every symlink as a link and never follows one, and skips
+  readers such as `lane asks`. Every step goes by name under `lanes/<id>/` opened by fd, so a
+link swapped in for it mid-run leads nowhere. It copies every symlink as a link and never
+follows one, opening each name by fd with `O_NOFOLLOW` (a file swapped for a link mid-copy is
+copied as the link), and skips
   the copy when nothing in `.lane/` changed. Following links once copied whatever they reached
   (`../..`, a home dir) into every archive, so evidence must be real files. A `.lane` that is itself
   a symlink (a repo can commit `.lane -> ..`) is never mirrored or archived, and `lane new` and
@@ -950,8 +960,11 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   Before any signal, `done` refuses anything else by name (pid, comm and program name, never an
   argument: one can hold a secret). The same goes for each of these:
   - a background session: `claude stop <jobId>` ends it;
-  - a dirty, locked or submodule worktree, which `git worktree remove` would refuse after the
-    kill;
+  - a dirty, locked or submodule worktree, which a plain `git worktree remove` would refuse
+    after the kill (the dirt check runs again just before the worktree goes, as git's does);
+  - a worktree git doesn't list at the lane's path though the gates find one there (its admin
+    dir's `gitdir` read one way by `done` and another by git), since `done` couldn't then find
+    the registration it removes;
   - a run from anywhere but the main checkout, or under a Claude session whose cwd is in a
     linked worktree of this repo or under the lanes root (outside the main checkout): only the
     lead closes lanes. Both come from git's own worktree links and the lanes config, never
@@ -1000,10 +1013,30 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   setup.sh's `install.lock` (waited for up to 30 s), `done` builds the archive under a temporary
   name from `lane.json` re-read under the lanes lock (so it keeps the `endedAt` SessionEnd
   stamped), checks the install and the lane's processes once more and removes the worktree with
-  the lanes lock released
-  (`git worktree remove` can outlast the hooks' 2 s), then re-reads the record under it and
-  moves the archive into place. No install relinks into the lane in between, and a failure
-  leaves no partial archive.
+  the lanes lock released (it can outlast the hooks' 2 s), then re-reads the record under it,
+  moves the archive into place and removes `lanes/<id>/`. No install relinks into the lane in
+  between, and a failure leaves no partial archive.
+
+  `done` removes the worktree itself, never through `git worktree remove`: git deletes by path,
+  and a process the lane left can still write the lane and the common dir, so a path checked
+  at the gates may lead elsewhere by its use. The admin dir is the one real dir under
+  `<common-dir>/worktrees/` whose `gitdir` resolves to the lane's `.git` path, as the gates
+  resolve it (the lane's own `.git` file, which it can write, is never asked; the removal never
+  goes by that resolved path). A locked one is refused, as git refuses it, even with its tree
+  gone. `lane.json`'s path is sandbox-writable and
+  nothing ties it to the lanes root (`adopt` takes a worktree anywhere), so the dir above the
+  tree is reached by a walk from `/` with `O_NOFOLLOW` at every name, and a link swapped in on
+  the way refuses the removal. The tree is renamed aside to a fixed hidden name there, then
+  removed by Python's fd-based `rmtree`, which never follows a link; then the admin dir and any
+  tree a trial left, by name under `worktrees/` as it was opened before the files went. The
+  archive's temp dir, its rename and `lanes/<id>/` likewise go under `lanes/` and `_closed/`
+  opened at the start. With no admin dir or several naming the
+  lane, it removes nothing. A file it can't delete (a dir with no write permission) stops it
+  partway with `lane.json` and the registration kept; the tree is already aside, so a rerun's
+  gates find nothing at the lane's path, and the rerun finishes the removal, even once git
+  dropped the registration meanwhile (a prune). The tree's `.lane/` goes last, so unless the
+  failure was inside it, the rerun archives the whole record from the tree aside, not the
+  older mirror.
 
   A rerun keeps what the first run proved. A pane shell's only proof is the session it ran,
   which the close itself ends, so on 2026-10-15 each rerun refused the two-sessions tab's shell
