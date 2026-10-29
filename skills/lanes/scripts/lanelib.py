@@ -93,28 +93,99 @@ def prose_only(text: str) -> str:
     return INLINE_CODE.sub(" ", "\n".join(kept))
 
 
-def unclosed_comment(text: str | None) -> int | None:
-    """The 1-based line of the first `<!--` its own section never closes with `-->`, None when
-    every one is closed. section() reads each section alone and strips only closed comments, so
-    an unclosed one leaks the comment's text into what the tools read (a `Keep open:` inside or
-    after it can be missed). Sections split as section() splits them, the text before the first
-    heading counting as one. An opener or closer in fenced or inline code quotes one: it opens
-    and closes nothing."""
-    lines = (text or "").splitlines()
-    opened = None
-    for n, (line, code) in enumerate(zip(lines, fenced(lines)), 1):
-        if re.match(r"#{1,2}\s", line):
-            if opened is not None:
-                return opened
+SECTION_BREAK = re.compile(r"#{1,2}\s")
+
+
+UNCLOSED, STRAY = "an unclosed `<!--`", "a stray `-->` (a comment ended before it)"
+
+
+def strip_comments(lines: list[str]) -> tuple[str, tuple[int, str] | None]:
+    """One section's lines joined, each HTML comment cut out as markdown renders it, and its
+    first flaw, (line index, UNCLOSED or STRAY), None without one. The one
+    comment scan section() and comment_flaw share, so what the check passes is what the
+    tools read: two scans that disagreed let a quoted `<!--` ... `-->` pair hide a `Keep open:`.
+
+    Outside a comment, a fenced block or an inline code span quotes a marker: it opens nothing.
+    Inside one, the first `-->` ends it, backticks or not. A fence the section never closes
+    counts as plain text, so a mistyped closer can't hide an opener after it. An unclosed
+    comment's text is kept from its opener on: a `Keep open:` line in it still counts, and the
+    check fails the record anyway. A `-->` outside code and comments is stray: a comment that
+    quoted one ended there, and its tail reads as the record's."""
+    plain: set[int] = set()  # fence lines read as plain text: fences the section never closed
+    while True:
+        out: list[str] = []
+        opened = mark = stray = None
+        fence = fence_at = None
+        for i, line in enumerate(lines):
+            m = FENCE.match(line) if opened is None else None
+            if fence is not None:
+                if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) \
+                        and not line[m.end():].strip():
+                    fence = None
+                out.append(line + "\n")
+                continue
+            if m and i not in plain:
+                fence, fence_at = m.group(1), i
+                out.append(line + "\n")
+                continue
+            pos = 0
+            while True:
+                if opened is not None:
+                    end = line.find("-->", pos)
+                    if end < 0:
+                        break  # the comment runs on, newline and all
+                    opened, pos = None, end + 3
+                    continue
+                start = line.find("<!--", pos)
+                close = line.find("-->", pos)
+                code = INLINE_CODE.search(line, pos)
+                first = min((x for x in (start, close, code.start() if code else -1) if x >= 0),
+                            default=-1)
+                if code and code.start() == first:
+                    out.append(line[pos:code.end()])
+                    pos = code.end()
+                elif close == first >= 0:
+                    stray = i if stray is None else stray
+                    out.append(line[pos:close + 3])
+                    pos = close + 3
+                elif start >= 0:
+                    out.append(line[pos:start])
+                    opened, mark, pos = (i, start), len(out), start + 4
+                else:
+                    out.append(line[pos:] + "\n")
+                    break
+        if fence is not None:
+            plain.add(fence_at)
             continue
-        if code:
-            continue
-        for m in re.finditer(r"<!--|-->", INLINE_CODE.sub(" ", line)):
-            if m.group(0) == "<!--" and opened is None:
-                opened = n
-            elif m.group(0) == "-->" and opened is not None:
-                opened = None
-    return opened
+        if opened is not None:
+            i, col = opened
+            out[mark:] = ["\n".join([lines[i][col:], *lines[i + 1:]])]
+            if stray is None or i < stray:
+                return "".join(out), (i, UNCLOSED)
+        return "".join(out), None if stray is None else (stray, STRAY)
+
+
+def sections(text: str | None) -> list[tuple[int, list[str]]]:
+    """(index of its first body line, body lines) for each section: split at every line
+    section() ends a section at, the text before the first heading counting as one."""
+    out: list[tuple[int, list[str]]] = [(0, [])]
+    for i, line in enumerate((text or "").splitlines()):
+        if SECTION_BREAK.match(line):
+            out.append((i + 1, []))
+        else:
+            out[-1][1].append(line)
+    return out
+
+
+def comment_flaw(text: str | None) -> tuple[int, str] | None:
+    """(1-based line, UNCLOSED or STRAY) for the first section whose comments don't parse
+    cleanly, None when every one does: a `<!--` its own section never closes, or a stray `-->`.
+    Either leaks a comment's text into what the tools read, where a `Keep open:` inside or
+    after it can be missed. The same scan as section()'s (strip_comments)."""
+    for first, body in sections(text):
+        if (flaw := strip_comments(body)[1]) is not None:
+            return first + flaw[0] + 1, flaw[1]
+    return None
 
 
 def added_phrases(old: str, new: str) -> list[str]:
@@ -1057,8 +1128,9 @@ def section(text: str,
     prefixes: tuple[str, ...] = (),
 ) -> str | None:
     """The body of the first `## <heading>` section whose heading equals one of names or starts
-    with one of prefixes (case-insensitive), with HTML comments and template placeholder lines
-    (`- <...>`) removed. None when no such heading exists."""
+    with one of prefixes (case-insensitive), with HTML comments (strip_comments: a marker quoted
+    in code is no comment) and template placeholder lines (`- <...>`) removed. None when no such
+    heading exists."""
     lines = (text or "").splitlines()
     wanted = {n.lower() for n in names}
     starts = tuple(p.lower() for p in prefixes)
@@ -1069,10 +1141,10 @@ def section(text: str,
             continue
         body = []
         for nxt in lines[i + 1:]:
-            if re.match(r"#{1,2}\s", nxt):
+            if SECTION_BREAK.match(nxt):
                 break
             body.append(nxt)
-        cleaned = re.sub(r"<!--.*?-->", "", "\n".join(body), flags=re.DOTALL)
+        cleaned = strip_comments(body)[0]
         kept = [ln for ln in cleaned.splitlines()
                 if ln.strip() and not re.fullmatch(r"\s*(?:[-*]\s*)?<[^<>]*>\s*", ln)]
         return "\n".join(kept)

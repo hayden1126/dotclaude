@@ -262,8 +262,15 @@ Why it works this way:
   `Keep open:` inside or after it no longer starts a line of Next, and `done` would close the
   lane (capella-studio lane kindtheme, 2026-10-28). Requiring the flag can't fix it (no tool
   knows more PRs follow), so the rule is closed instead: every `<!--` outside code is closed in
-  its own `##` section (`lanelib.unclosed_comment`), or `done` and `handoff-check` fail,
-  naming the line. `--abandon` skips it, as it skips the flag.
+  its own section (split at `#` and `##` headings), and no `-->` stands outside code and
+  comments (a comment that quoted one ended there), or `done` and `handoff-check` fail, naming
+  the line (`lanelib.comment_flaw`). `--abandon` skips it, as it skips the flag. The check and
+  `section()`, which every reader of a record goes through, share one scan
+  (`lanelib.strip_comments`), as markdown renders: a marker in inline code or a fence is
+  quoted, a comment's first `-->` ends it, and a fence its section never closes is plain text.
+  Two scans once disagreed: `section()` stripped from a quoted `<!--` to a quoted `-->`, a
+  `Keep open:` line between them, while the check skipped both (lane-fixes' reviewer,
+  2026-10-29).
 - **The backlog line moved to the lead.** The lead owns the project STATUS, so the one line at
   merge is a step of its chain, not the lane's.
 
@@ -424,10 +431,12 @@ alone skips the uncommitted read then, since it can afford to.
 (a plain shell): it removes its scratch trees by path, which is safe only where the sandbox
 bounds what a symlink swapped in for a tree could make git delete, and its suites inherit the
 sandbox. Before it waits for the lock, it also refuses a bad link path, a link under another one,
-and a link the lane lacks (step 3), and a config `trial-locks` entry its `locks` don't list.
+and a link the lane lacks (step 3), and a config `trial-locks` entry its `locks` don't list or
+that names `suite`.
 
 1. It takes the `suite` lock for the whole run, after any locks the config's `trial-locks`
-   names (`lane init --trial-locks quiet`), in order, under the one `--wait`. A repo whose gate
+   names (`lane init --trial-locks quiet`), in order, under the one `--wait` (a lock taken
+   late waits only for what is left, and the give-up says so). A repo whose gate
    holds a lock of its own for a quiet machine names it there, so the gate never runs beside a
    trial (capella-studio's `quiet` gate ran beside one at load 45.6 on 12 cores, 2026-10-26).
    Take a repo's own locks before `suite` wherever both are taken, as a trial does, or the two
@@ -934,8 +943,8 @@ copied as the link), and skips
   code fails in a lanes repo and only warns in a plain one, where long-lived text has no peer
   to mislead. `--closing`, which `lane done` runs, judges freshness against HEAD's commit only
   and skips approval: after a `/pass`, the idle new session started after the handoff. It also
-  fails on a `Keep open:` item in Next. Every mode fails an unclosed `<!--` outside code,
-  naming its line (`--closing --abandon` skips it). Its unpushed-commit warning follows the checked-out
+  fails on a `Keep open:` item in Next. Every mode fails an unclosed `<!--` or a stray `-->`
+  outside code, naming its line (`--closing --abandon` skips it). Its unpushed-commit warning follows the checked-out
   branch or detached HEAD (why: the branch switch paragraph under `lane done`), falling back to
   `lane.json`'s branch only when HEAD can't be read or names an invalid branch. It counts the
   commits that neither the base nor any of origin's refs hold, never against one pushed copy:
@@ -949,7 +958,7 @@ copied as the link), and skips
   `--abandon`. It can't tell "no work" from "fast-forwarded in before adoption", so its state is
   `closed`, "closed (nothing past origin/main)", unless a merged PR names that tip; `abandoned`
   means `--abandon`. While the worktree exists it refuses a lane whose record's Next has a
-  `Keep open:` item, or whose record has an unclosed `<!--`, live session or not ("Who asks what"); `--abandon` closes it anyway, and a
+  `Keep open:` item, or whose record has an unclosed `<!--` or a stray `-->`, live session or not ("Who asks what"); `--abandon` closes it anyway, and a
   merged lane keeps the state `merged`. The archive is built under a `.tmp` name and renamed into place only when
   complete. Sandboxed, `done` can't see
   other processes, so it refuses and asks for a bare `lane done <id>`. It detects the sandbox by

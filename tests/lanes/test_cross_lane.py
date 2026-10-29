@@ -1404,6 +1404,17 @@ class Trial(LaneWork):
         self.assertEqual(subprocess.run(probe, shell=True, cwd=self.alpha, env=self.env,
                                         capture_output=True, timeout=30).returncode, 0)
         fcntl.flock(fd, fcntl.LOCK_UN)
+        # One --wait covers both: a give-up on `suite` says so, its "after Ns" being what was left.
+        suite = os.open(os.path.join(self.common, "lanes", "_locks", "suite"),
+                        os.O_RDWR | os.O_CREAT)
+        self.addCleanup(os.close, suite)
+        fcntl.flock(suite, fcntl.LOCK_EX)
+        rc, out, err = self.trial("--wait", "0.5", "--run", "true")
+        self.assertEqual(rc, 75, out + err)
+        self.assertIn("gave up on lock suite", err)
+        self.assertIn("--wait 0.5s covers all of the trial's locks (quiet, suite), in that order",
+                      err)
+        fcntl.flock(suite, fcntl.LOCK_UN)
         # Under an outer hold of it (the workaround capella was sent), the trial runs under it.
         p = subprocess.run([sys.executable, LANE, "lock", "quiet", "--", sys.executable, LANE,
                             "trial", "--run", "true"], cwd=self.alpha, env=self.env,

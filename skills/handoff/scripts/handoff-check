@@ -12,9 +12,10 @@ in a plain repo (the root STATUS.md). Checks:
              when a session file won't read as JSON and no readable one names this session
   A checkout outside main that matches no lane record while one is left out fails at once:
   the left-out record may be its own.
-  comments   every `<!--` outside code is closed by a `-->` in its own `##` section
-             (lanelib.unclosed_comment): the tools strip only closed comments, so an unclosed
-             one's text reads as the record's and can hide a `Keep open:`
+  comments   every `<!--` outside code is closed by a `-->` in its own section (split at `#`
+             and `##` headings), and no `-->` stands outside code and comments
+             (lanelib.comment_flaw): either flaw makes the comment's text read as the record's,
+             which can hide a `Keep open:`
   next       a non-empty section under a `##` heading starting with "Next", or "Notes for next
              session", with a step in it besides any `Keep open:` line (a flag, not a step)
   approval   every `(approved by Hayden` marker in that section carries a valid ISO date
@@ -170,7 +171,7 @@ def unpushed(repo: lanelib.Repo, lane: dict) -> tuple[str, int]:
 def check(cwd: str, closing: bool = False,
           abandon: bool = False) -> tuple[str, list[str], list[str]]:
     """(header, failures, warnings) for the checkout holding cwd; closing: --closing's checks;
-    abandon: skip --closing's kept check."""
+    abandon: skip --closing's kept and comments checks."""
     repo = lanelib.resolve(cwd)
     if repo is None:
         return "handoff-check: not inside a git work tree", ["not a git work tree"], []
@@ -208,9 +209,10 @@ def check(cwd: str, closing: bool = False,
     elif start is not None and mtime < start:
         fails.append(f"the status file was not written during this session ({source})")
 
-    if not (closing and abandon) and (line := lanelib.unclosed_comment(text)) is not None:
-        fails.append(f"an unclosed `<!--` at line {line}: close it with `-->`. Until then the "
-                     "tools read the comment's text as the record's, and can miss a `Keep open:`")
+    if not (closing and abandon) and (flaw := lanelib.comment_flaw(text)):
+        fails.append(f"{flaw[1]} at line {flaw[0]}: fix the comment (quote a marker in "
+                     "backticks). Until then the tools read the comment's text as the record's, "
+                     "and can miss a `Keep open:`")
 
     block = lanelib.next_block(text)
     if not block:

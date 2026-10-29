@@ -2722,6 +2722,9 @@ def cmd_trial(args) -> int:
             for name in [*extra, TRIAL_LOCK]:
                 left = None if deadline is None else max(0.0, deadline - time.monotonic())
                 if not held.enter_context(held_lock(repo, name, left, command)):
+                    if extra and args.wait:  # its "after Ns" counts only what was left
+                        warn(f"--wait {args.wait:g}s covers all of the trial's locks "
+                             f"({', '.join([*extra, TRIAL_LOCK])}), in that order")
                     return LOCK_BUSY
             return trial(repo, me, args)
     except KeyboardInterrupt:  # a Ctrl-C while waiting, merging or cleaning up
@@ -4102,10 +4105,10 @@ def cmd_done(args) -> None:
     # only when there is something to end. An unclosed comment first: its text would read as
     # the Next block's, so the flag can't be read past it.
     text = (record_text(repo, lane)[0] or "") if present and not args.abandon else ""
-    if (line := lanelib.unclosed_comment(text)) is not None:
-        raise LaneError(f"lane {args.id}'s record has an unclosed `<!--` at line {line}, so its "
-                        "Next can't be read for `Keep open:`. Close it with `-->` in the lane; "
-                        "pass --abandon to close the lane anyway")
+    if flaw := lanelib.comment_flaw(text):
+        raise LaneError(f"lane {args.id}'s record has {flaw[1]} at line {flaw[0]}, so its Next "
+                        "can't be read for `Keep open:`. Fix the comment in the lane (quote a "
+                        "marker in backticks); pass --abandon to close the lane anyway")
     if kept := lanelib.kept_open(lanelib.next_block(text)):
         raise LaneError(f"lane {args.id}'s Next says {shown(kept.splitlines()[0].strip())!r}: it "
                         "stays open for more PRs. Its session drops that line at its last merge; "

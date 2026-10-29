@@ -148,7 +148,7 @@ an unregistered worktree: `lane whoami` tells you which.
    or the stopped lead's window if it gives one.
 7. **Close:** `lane done <id>` refuses an unmerged branch, a lane made by `lane new` with no
    commits past its base, and, while its worktree exists, a lane whose record's Next has a
-   `Keep open:` line or whose record has an unclosed `<!--` (it names the line), live session or not (pass `--abandon` to close any of them anyway; it
+   `Keep open:` line or whose record has an unclosed `<!--` or a stray `-->` (it names the line), live session or not (pass `--abandon` to close any of them anyway; it
    asks). It ends what provably
    belongs to the lane, so its open tab needs no closing by hand:
    - its Claude sessions get SIGTERM (a `lane open` tab closes with its claude), and a stopped
