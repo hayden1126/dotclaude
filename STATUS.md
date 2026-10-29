@@ -359,8 +359,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     check at `open`), so the change is a CLI-written flag under `<common-dir>/lanes/` (never
     the record), skipped by `new`'s count and checked by `open`. Lead's additions: park refuses
     while the lane holds a lock or the install hold; the lead sends a parked lane no "main
-    moved" (it has no session; the `rebase` flag carries it). Open fork for Hayden: when the
-    cap is full, may the lane next to merge still unpark? Otherwise it waits on a slot.
+    moved" (it has no session; the `rebase` flag carries it). Hayden's pick (2026-10-29, in
+    capella's lead session, relayed by it): a parked lane may unpark over a full cap to rebase
+    and merge, at most one lane over the cap at a time; it frees the slot when it merges and
+    closes. capella accepted both additions.
     dotclaude uses it too: paused practices holds a slot today. Lane-able (`lane`,
     `lanelib.py`, `tests/lanes`, `docs/lanes.md`, the lanes skill) after done-safe merges.
   - **Lanes skill: rebase only at your turn** (capella-studio lead, session 80ab3852, 2026-10-25;
