@@ -239,6 +239,31 @@ class Baseline(unittest.TestCase):
         self.assertFalse({"DISPLAY", "WAYLAND_DISPLAY"} & set(S.get("env", {})))
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "blank-display.sh"), os.X_OK))
 
+    def test_sandboxed_package_managers_write_their_own_caches(self):
+        # Sandbox gaps N1 and N3 (2026-10-25): plugin MCP servers run unsandboxed from
+        # ~/.npm/_npx, which npx reuses without rechecking, and bun's global installs (the status
+        # line's ccstatusline) are hardlinks into ~/.bun/install/cache. Both leave allowWrite;
+        # the hook points sandboxed Bash at ~/.cache/claude-sandbox through CLAUDE_ENV_FILE. A
+        # settings env entry would reach the MCP servers and the status line.
+        allow = S["sandbox"]["filesystem"]["allowWrite"]
+        for default in ("~/.npm", "~/.bun/install/cache"):
+            # Neither the dir, anything under it, nor a parent of it (a "~" entry reopens both).
+            self.assertFalse([p for p in allow if p == default or p.startswith(default + "/")
+                              or default.startswith(p.rstrip("/") + "/")], allow)
+        self.assertIn("~/.cache/claude-sandbox", allow)
+        with open(os.path.join(REPO, "hooks", "sandbox-caches.sh")) as f:
+            self.assertIn('root="$HOME/.cache/claude-sandbox"', f.read())
+        self.assertFalse([k for k in S.get("env", {})
+                          if k.lower() in ("npm_config_cache", "bun_install_cache_dir")])
+        hook = 'bash "$HOME/.claude/hooks/sandbox-caches.sh"'
+        (entry,) = [e for e in S["hooks"]["SessionStart"]
+                    if any("sandbox-caches" in h["command"] for h in e["hooks"])]
+        self.assertEqual(entry["matcher"], "startup|resume|clear|compact")
+        (h,) = entry["hooks"]
+        self.assertEqual(h["command"], hook)
+        self.assertLessEqual(h["timeout"], 5)
+        self.assertTrue(os.access(os.path.join(REPO, "hooks", "sandbox-caches.sh"), os.X_OK))
+
     def test_the_watch_guard_is_wired_on_stop_and_fails_open(self):
         (entry,) = [e for e in S["hooks"]["Stop"]
                     if any("watch-guard.sh" in h["command"] for h in e["hooks"])]
@@ -497,6 +522,16 @@ class Baseline(unittest.TestCase):
                   "~/.local/lib/node_modules"):
             self.assertIn(f"Edit({p}/**)", deny)
             self.assertNotIn(p, sandbox_deny)
+            self.assertIn(p, POLICY["protect"]["write_denied"])
+
+    def test_the_chrome_devtools_config_chrome_and_profile_are_write_protected(self):
+        # chrome-devtools-mcp reads ~/.config/cd4a/config.json at every session start and runs
+        # its executablePath, ~/chrome/current, on its profile, outside the sandbox
+        # (setup-chrome-wsl.sh writes the first two). An Edit deny binds sandboxed Bash and the
+        # file tools alike, so these are not denyWrite lines.
+        for p in ("~/.config/cd4a", "~/chrome", "~/.cache/chrome-devtools-mcp"):
+            self.assertIn(f"Edit({p}/**)", S["permissions"]["deny"])
+            self.assertNotIn(p, S["sandbox"]["filesystem"]["denyWrite"])
             self.assertIn(p, POLICY["protect"]["write_denied"])
 
     def test_every_allow_rule_on_an_excluded_command_sits_behind_the_guard(self):

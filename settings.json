@@ -242,7 +242,10 @@
       "Edit(~/.bun/bin/**)",
       "Edit(~/.cargo/bin/**)",
       "Edit(~/.local/share/claude/**)",
-      "Edit(~/.local/lib/node_modules/**)"
+      "Edit(~/.local/lib/node_modules/**)",
+      "Edit(~/.config/cd4a/**)",
+      "Edit(~/chrome/**)",
+      "Edit(~/.cache/chrome-devtools-mcp/**)"
     ]
   },
   "sandbox": {
@@ -374,10 +377,9 @@
         "~/.cache/pnpm",
         "~/.cache/node-gyp",
         "~/.cache/ms-playwright",
+        "~/.cache/claude-sandbox",
         "~/.local/share/uv/python",
-        "~/.local/share/pnpm/store",
-        "~/.npm",
-        "~/.bun/install/cache"
+        "~/.local/share/pnpm/store"
       ]
     },
     "network": {
@@ -585,6 +587,16 @@
           {
             "type": "command",
             "command": "bash \"$HOME/.claude/hooks/blank-display.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/sandbox-caches.sh\"",
             "timeout": 5
           }
         ]
