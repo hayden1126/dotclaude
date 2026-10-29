@@ -1492,6 +1492,16 @@ wins.
     `/tmp/claude-<uid>`;
   - a `denyRead` directory reads as empty, and a `denyRead` file as permission denied;
   - `~` expands in `denyRead` and `allowWrite`, and a missing path is skipped harmlessly;
+  - npx reuses an `~/.npm/_npx/<hash>/` tree for an exact-version spec without an integrity
+    recheck (npm 11.11.1, `libnpmexec`), and plugin MCP servers run from those trees outside
+    the sandbox. A sandboxed edit to one ran at the next npx (gap N1, 2026-10-25), so `~/.npm`
+    is not in `allowWrite`; sandboxed Bash's npm uses `~/.cache/claude-sandbox/npm` (README,
+    `sandbox-caches.sh`). Bun's global installs are hardlinks into `~/.bun/install/cache`
+    (the status line's `ccstatusline`, gap N3), so that cache is out too, for
+    `~/.cache/claude-sandbox/bun`. The sandbox runtime sets `SANDBOX_RUNTIME=1` inside the
+    sandbox, and Claude Code inlines `CLAUDE_ENV_FILE` into the command it runs there (2.1.310).
+    Every npx run writes into its tree (a lock and `package.json`), so a `denyWrite` on `_npx`
+    alone would break sandboxed npx;
   - an unlisted domain is refused and reported as `<sandbox_violations>` in the tool result.
 - **`excludedCommands` matching** (probe):
   - `"cp *"` matched `cp a b` (the command left the sandbox and hit the permission gate);
