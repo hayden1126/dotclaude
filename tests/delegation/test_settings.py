@@ -239,6 +239,30 @@ class Baseline(unittest.TestCase):
         self.assertFalse({"DISPLAY", "WAYLAND_DISPLAY"} & set(S.get("env", {})))
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "blank-display.sh"), os.X_OK))
 
+    def test_sandboxed_package_managers_write_their_own_caches(self):
+        # Sandbox gaps N1 and N3 (2026-10-25): plugin MCP servers run unsandboxed from
+        # ~/.npm/_npx, which npx reuses without rechecking, and bun's global installs (the status
+        # line's ccstatusline) are hardlinks into ~/.bun/install/cache. Both leave allowWrite;
+        # the hook points sandboxed Bash at ~/.cache/claude-sandbox through CLAUDE_ENV_FILE. A
+        # settings env entry would reach the MCP servers and the status line.
+        allow = S["sandbox"]["filesystem"]["allowWrite"]
+        for default in ("~/.npm", "~/.bun"):
+            self.assertFalse([p for p in allow if p == default or p.startswith(default + "/")],
+                             allow)
+        self.assertIn("~/.cache/claude-sandbox", allow)
+        with open(os.path.join(REPO, "hooks", "sandbox-caches.sh")) as f:
+            self.assertIn('root="$HOME/.cache/claude-sandbox"', f.read())
+        self.assertFalse([k for k in S.get("env", {})
+                          if k.lower() in ("npm_config_cache", "bun_install_cache_dir")])
+        hook = 'bash "$HOME/.claude/hooks/sandbox-caches.sh"'
+        (entry,) = [e for e in S["hooks"]["SessionStart"]
+                    if any("sandbox-caches" in h["command"] for h in e["hooks"])]
+        self.assertEqual(entry["matcher"], "startup|resume|clear|compact")
+        (h,) = entry["hooks"]
+        self.assertEqual(h["command"], hook)
+        self.assertLessEqual(h["timeout"], 5)
+        self.assertTrue(os.access(os.path.join(REPO, "hooks", "sandbox-caches.sh"), os.X_OK))
+
     def test_the_watch_guard_is_wired_on_stop_and_fails_open(self):
         (entry,) = [e for e in S["hooks"]["Stop"]
                     if any("watch-guard.sh" in h["command"] for h in e["hooks"])]

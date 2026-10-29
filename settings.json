@@ -377,10 +377,9 @@
         "~/.cache/pnpm",
         "~/.cache/node-gyp",
         "~/.cache/ms-playwright",
+        "~/.cache/claude-sandbox",
         "~/.local/share/uv/python",
-        "~/.local/share/pnpm/store",
-        "~/.npm",
-        "~/.bun/install/cache"
+        "~/.local/share/pnpm/store"
       ]
     },
     "network": {
@@ -588,6 +587,16 @@
           {
             "type": "command",
             "command": "bash \"$HOME/.claude/hooks/blank-display.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/sandbox-caches.sh\"",
             "timeout": 5
           }
         ]
