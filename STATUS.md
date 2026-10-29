@@ -296,6 +296,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     `permissionMode` in `agents/writer.md` holds against a parent's mid-run plan mode; if it
     does, it also covers plan mode entered by hand. Lane-able (`skills/pass/`, `tests/`); no
     live lane owns it.
+  - **Two open sandbox gaps from lane chrome-dup's gap check** (high; lane chrome-dup,
+    2026-10-25, reported to the lead 2026-10-29). Details are private: sandbox-audit FINDINGS,
+    "Gap check 2026-10-25", rows N2 and N3 (the parts still OPEN; chrome-dup's PR fixes N1 and
+    N3's bun part). Each is a new lane, after chrome-dup merges, since both reach the files its
+    PR adds or changes (`settings.json`, `hooks/sandbox-caches.sh`). N3's rest needs one probe
+    per cache; N2's fix is a design fork for Hayden (options in the private row).
   - **Another `lane done` close-path gap** (lane done-safe's reviewer round 1, 2026-10-24;
     outside its brief, and older than it). Details and the proposed fix are in the same private
     file, rows "cmd_done path trust" and "same, widened". The fix is a design change to
