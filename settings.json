@@ -602,6 +602,16 @@
         ]
       },
       {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/context-watch.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "matcher": "startup|resume|clear",
         "hooks": [
           {
