@@ -119,6 +119,25 @@ class SandboxCaches(unittest.TestCase):
         self.run_hook()
         self.assertIn("can't write", self.logged())
 
+    def test_an_unreadable_env_file_still_gets_one_clean_line(self):
+        # The newline guard's tail fails here; its error must reach neither the file nor stderr.
+        with open(self.envfile, "w") as f:
+            f.write("export OTHER=1\n")
+        os.chmod(self.envfile, 0o200)
+        self.run_hook()
+        os.chmod(self.envfile, 0o600)
+        with open(self.envfile) as f:
+            lines = f.read().splitlines()
+        self.assertEqual(len(lines), 2, lines)
+        self.assertTrue(lines[1].startswith("if [ -n "), lines)
+        self.assertEqual(self.sourced(), self.want)
+
+    def test_an_unwritable_log_dir_stays_silent(self):
+        # The log line's own redirect errors must not reach stderr (run_hook checks it is empty).
+        os.makedirs(os.path.join(self.tmp, "state"))
+        open(os.path.join(self.tmp, "state", "dotclaude"), "w").close()  # a file, not a dir
+        self.run_hook(env_file=False)
+
     def test_a_cache_path_that_is_a_file_writes_nothing_and_logs(self):
         os.makedirs(self.root)
         open(self.want[1], "w").close()

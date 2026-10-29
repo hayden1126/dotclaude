@@ -246,9 +246,10 @@ class Baseline(unittest.TestCase):
         # the hook points sandboxed Bash at ~/.cache/claude-sandbox through CLAUDE_ENV_FILE. A
         # settings env entry would reach the MCP servers and the status line.
         allow = S["sandbox"]["filesystem"]["allowWrite"]
-        for default in ("~/.npm", "~/.bun"):
-            self.assertFalse([p for p in allow if p == default or p.startswith(default + "/")],
-                             allow)
+        for default in ("~/.npm", "~/.bun/install/cache"):
+            # Neither the dir, anything under it, nor a parent of it (a "~" entry reopens both).
+            self.assertFalse([p for p in allow if p == default or p.startswith(default + "/")
+                              or default.startswith(p.rstrip("/") + "/")], allow)
         self.assertIn("~/.cache/claude-sandbox", allow)
         with open(os.path.join(REPO, "hooks", "sandbox-caches.sh")) as f:
             self.assertIn('root="$HOME/.cache/claude-sandbox"', f.read())
