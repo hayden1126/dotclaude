@@ -561,6 +561,20 @@ class Lane(Check):
         # `lane done --abandon` passes --abandon on, since it closes a kept lane anyway.
         self.assertPasses(self.check(self.path, "--closing", "--abandon"))
 
+    def test_an_unclosed_comment_fails_naming_its_line(self):
+        # The comment's text would read as the record's, hiding a `Keep open:` from --closing.
+        # At the end: the template's own comment comes first in Next, and its `-->` would close it.
+        self.finish("<!-- Keep open: PR 2 follows.\n")
+        line = len(self.body.splitlines()) + 1
+        self.assertGap(self.check(self.path), f"an unclosed `<!--` at line {line}")
+        self.assertGap(self.check(self.path, "--closing"), f"an unclosed `<!--` at line {line}")
+        # `lane done --abandon` closes the lane anyway, as it does a kept one.
+        self.assertPasses(self.check(self.path, "--closing", "--abandon"))
+
+    def test_an_opener_quoted_in_code_passes(self):
+        self.finish("\n## Backlog\n- An unclosed `<!--` hides `Keep open:`.\n")
+        self.assertPasses(self.check(self.path))
+
     def test_a_next_with_only_keep_open_has_no_step(self):
         # The flag is no step, so /pass would have nothing to resume with.
         self.body = self.body.replace("- Write the axis test for #42, then run it.\n",

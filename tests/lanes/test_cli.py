@@ -184,6 +184,24 @@ class RoundTrip(LanesRepo):
         self.assertEqual(self.git("branch", "--list", "chart-fix"), "")
         self.assertEqual(json.loads(self.lane("ls", "--json")), [])
 
+    def test_done_refuses_an_unclosed_comment_until_abandon(self):
+        # An unclosed `<!--` leaks its text into the Next block, so a `Keep open:` can be missed:
+        # done refuses, naming the line, before it reads the flag.
+        self.lane("new", "chart-fix")
+        path = self.lane_path("chart-fix")
+        self.commit("chart.txt", "axis\n", cwd=path)
+        self.git("push", "-q", "origin", "chart-fix:main", cwd=path)
+        rec = self.record("chart-fix")
+        text = self.read(rec)  # at the end, past the template comment's `-->`
+        line = len(text.splitlines()) + 1
+        self.write(rec, text + "<!-- More PRs follow, so start with Keep open: PR 2.\n")
+        p = self.run_lane("done", "chart-fix")
+        self.assertEqual(p.returncode, 1, p.stderr)
+        self.assertIn(f"an unclosed `<!--` at line {line}", p.stderr)
+        self.assertTrue(os.path.isdir(path))
+        self.assertIn("closed", self.lane("done", "chart-fix", "--abandon"))
+        self.assertFalse(os.path.exists(path))
+
     def test_done_refuses_a_kept_lane_until_abandon(self):
         # `Keep open:` in Next keeps a merged lane open even with no session to end, where
         # `handoff-check --closing` never runs. --abandon (an ask rule) closes it anyway.

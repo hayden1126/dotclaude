@@ -38,6 +38,48 @@ class ProseOnly(unittest.TestCase):
         self.assertEqual(self.phrases("this session\n```\nmy lane\n"), ["this session"])
 
 
+class UnclosedComment(unittest.TestCase):
+    """lanelib.unclosed_comment: section() strips only closed comments, so an opener its section
+    never closes leaks the comment's text into what the tools read."""
+
+    def test_closed_comments_pass(self):
+        for text in ("## Next\n<!-- one line -->\n- Step.\n",
+                     "## Next\n<!-- a comment\nover lines, quoting `Keep open: <why>` -->\n",
+                     "## State\n<!-- a --> x <!-- b -->\n## Next\n<!---->\n- Step.\n",
+                     "", None):
+            self.assertIsNone(lanelib.unclosed_comment(text), text)
+
+    def test_an_unclosed_opener_gives_its_line(self):
+        self.assertEqual(lanelib.unclosed_comment("# LANE: x\n\n## Next\n- Step.\n<!-- note\n"),
+                         5)
+        # `<!-->` and `<!--->` open a comment section()'s regex never closes.
+        self.assertEqual(lanelib.unclosed_comment("## Next\n<!--> x\n"), 2)
+        self.assertEqual(lanelib.unclosed_comment("## Next\n<!---> x\n"), 2)
+        # The first unclosed one, after a closed one on the same line.
+        self.assertEqual(lanelib.unclosed_comment("## A\nok\n<!-- a --> <!-- b\n"), 3)
+
+    def test_a_comment_closed_only_in_a_later_section_is_unclosed(self):
+        # section() reads each section alone, so the opener's own section keeps it open.
+        text = "## State\n<!-- note\n## Next\n- Step. -->\n"
+        self.assertEqual(lanelib.unclosed_comment(text), 2)
+
+    def test_an_opener_in_code_is_quoted_not_opened(self):
+        for text in ("## Backlog\n- An unclosed `<!--` hides `Keep open:`.\n",
+                     "## Backlog\n```\n<!-- an example\n```\n",
+                     "## Backlog\n~~~html\n<!--\n"):  # an unclosed fence runs to the end
+            self.assertIsNone(lanelib.unclosed_comment(text), text)
+
+    def test_the_template_splice_that_hid_keep_open(self):
+        # An edit at the template comment's own mention of the flag dropped its `-->`: the
+        # comment's text became the first step, and kept_open found no line starting with it.
+        text = ("# LANE: x\n\n## Next\n"
+                "<!-- The exact next concrete step and what to verify. handoff-check fails while "
+                "this is empty.\nWhile more PRs will follow this one, start with Keep open: PR 2 "
+                "follows for the docs.\n- Write the docs test.\n")
+        self.assertIsNone(lanelib.kept_open(lanelib.next_block(text)))
+        self.assertEqual(lanelib.unclosed_comment(text), 4)
+
+
 class Sandbox(unittest.TestCase):
     def proc(self, argv0, comm="x"):
         root = tempfile.mkdtemp()

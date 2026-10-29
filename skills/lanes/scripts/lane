@@ -4058,10 +4058,15 @@ def cmd_done(args) -> None:
     if not how and not args.abandon:
         raise LaneError(f"{why}. Pass --abandon to close it anyway")
     how, state = (how, state) if how else ("abandoned", "abandoned")
-    # Read here, live session or not: `handoff-check --closing` (which fails on it too) runs only
-    # when there is something to end.
-    if present and not args.abandon and (kept := lanelib.kept_open(lanelib.next_block(
-            record_text(repo, lane)[0] or ""))):
+    # Read here, live session or not: `handoff-check --closing` (which fails on both too) runs
+    # only when there is something to end. An unclosed comment first: its text would read as
+    # the Next block's, so the flag can't be read past it.
+    text = (record_text(repo, lane)[0] or "") if present and not args.abandon else ""
+    if (line := lanelib.unclosed_comment(text)) is not None:
+        raise LaneError(f"lane {args.id}'s record has an unclosed `<!--` at line {line}, so its "
+                        "Next can't be read for `Keep open:`. Close it with `-->` in the lane; "
+                        "pass --abandon to close the lane anyway")
+    if kept := lanelib.kept_open(lanelib.next_block(text)):
         raise LaneError(f"lane {args.id}'s Next says {shown(kept.splitlines()[0].strip())!r}: it "
                         "stays open for more PRs. Its session drops that line at its last merge; "
                         "pass --abandon to close it anyway")

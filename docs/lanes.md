@@ -257,6 +257,13 @@ Why it works this way:
   Next that starts with `Keep open:` counts, not only the first: a false hit holds a close,
   while a miss ends a lane with work left. `lanelib.first_item` skips the line, so the step
   `/pass` resumes with (and reads the approval marker from) is the one after it.
+- **An unclosed `<!--` refuses the close too.** The tools strip only closed comments, so an
+  edit that drops a template comment's `-->` turns the comment's text into the record's: a
+  `Keep open:` inside or after it no longer starts a line of Next, and `done` would close the
+  lane (capella-studio lane kindtheme, 2026-10-28). Requiring the flag can't fix it (no tool
+  knows more PRs follow), so the rule is closed instead: every `<!--` outside code is closed in
+  its own `##` section (`lanelib.unclosed_comment`), or `done` and `handoff-check` fail,
+  naming the line. `--abandon` skips it, as it skips the flag.
 - **The backlog line moved to the lead.** The lead owns the project STATUS, so the one line at
   merge is a step of its chain, not the lane's.
 
@@ -920,7 +927,8 @@ copied as the link), and skips
   code fails in a lanes repo and only warns in a plain one, where long-lived text has no peer
   to mislead. `--closing`, which `lane done` runs, judges freshness against HEAD's commit only
   and skips approval: after a `/pass`, the idle new session started after the handoff. It also
-  fails on a `Keep open:` item in Next. Its unpushed-commit warning follows the checked-out
+  fails on a `Keep open:` item in Next. Every mode fails an unclosed `<!--` outside code,
+  naming its line (`--closing --abandon` skips it). Its unpushed-commit warning follows the checked-out
   branch or detached HEAD (why: the branch switch paragraph under `lane done`), falling back to
   `lane.json`'s branch only when HEAD can't be read or names an invalid branch. It counts the
   commits that neither the base nor any of origin's refs hold, never against one pushed copy:
@@ -934,7 +942,7 @@ copied as the link), and skips
   `--abandon`. It can't tell "no work" from "fast-forwarded in before adoption", so its state is
   `closed`, "closed (nothing past origin/main)", unless a merged PR names that tip; `abandoned`
   means `--abandon`. While the worktree exists it refuses a lane whose record's Next has a
-  `Keep open:` item, live session or not ("Who asks what"); `--abandon` closes it anyway, and a
+  `Keep open:` item, or whose record has an unclosed `<!--`, live session or not ("Who asks what"); `--abandon` closes it anyway, and a
   merged lane keeps the state `merged`. The archive is built under a `.tmp` name and renamed into place only when
   complete. Sandboxed, `done` can't see
   other processes, so it refuses and asks for a bare `lane done <id>`. It detects the sandbox by

@@ -63,28 +63,58 @@ def relative_phrases(text: str) -> list[str]:
 
 
 FENCE = re.compile(r"\s{0,3}(`{3,}|~{3,})")
+INLINE_CODE = re.compile(r"`[^`\n]*`")
 
 
-def prose_only(text: str) -> str:
-    """text without HTML comments, fenced code blocks and inline code: what quotes an example
-    rather than claiming anything. The one lint the guard and handoff-check share.
+def fenced(lines: list[str]) -> list[bool]:
+    """Whether each line belongs to a fenced code block, its fence lines included.
 
     A fence opens with 3+ backticks or tildes and closes on a line of the same char, at least as
     long, with nothing after but whitespace. An unclosed fence runs to the end of the text, which
     errs toward passing quoted text, never toward denying prose."""
-    text = re.sub(r"<!--.*?-->", " ", text or "", flags=re.DOTALL)
-    kept, fence = [], None
-    for line in text.splitlines():
+    out, fence = [], None
+    for line in lines:
         m = FENCE.match(line)
+        out.append(fence is not None or bool(m))
         if fence is None:
             if m:
                 fence = m.group(1)
-            else:
-                kept.append(line)
         elif m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) \
                 and not line[m.end():].strip():
             fence = None
-    return re.sub(r"`[^`\n]*`", " ", "\n".join(kept))
+    return out
+
+
+def prose_only(text: str) -> str:
+    """text without HTML comments, fenced code blocks (fenced) and inline code: what quotes an
+    example rather than claiming anything. The one lint the guard and handoff-check share."""
+    lines = re.sub(r"<!--.*?-->", " ", text or "", flags=re.DOTALL).splitlines()
+    kept = [line for line, code in zip(lines, fenced(lines)) if not code]
+    return INLINE_CODE.sub(" ", "\n".join(kept))
+
+
+def unclosed_comment(text: str | None) -> int | None:
+    """The 1-based line of the first `<!--` its own section never closes with `-->`, None when
+    every one is closed. section() reads each section alone and strips only closed comments, so
+    an unclosed one leaks the comment's text into what the tools read (a `Keep open:` inside or
+    after it can be missed). Sections split as section() splits them, the text before the first
+    heading counting as one. An opener or closer in fenced or inline code quotes one: it opens
+    and closes nothing."""
+    lines = (text or "").splitlines()
+    opened = None
+    for n, (line, code) in enumerate(zip(lines, fenced(lines)), 1):
+        if re.match(r"#{1,2}\s", line):
+            if opened is not None:
+                return opened
+            continue
+        if code:
+            continue
+        for m in re.finditer(r"<!--|-->", INLINE_CODE.sub(" ", line)):
+            if m.group(0) == "<!--" and opened is None:
+                opened = n
+            elif m.group(0) == "-->" and opened is not None:
+                opened = None
+    return opened
 
 
 def added_phrases(old: str, new: str) -> list[str]:
