@@ -56,9 +56,8 @@ class UnclosedComment(unittest.TestCase):
 
     def test_an_unclosed_opener_gives_its_line(self):
         self.assertEqual(self.flaw("# LANE: x\n\n## Next\n- Step.\n<!-- note\n"), 5)
-        # `<!-->` and `<!--->` open a comment section()'s regex never closes.
-        self.assertEqual(self.flaw("## Next\n<!--> x\n"), 2)
-        self.assertEqual(self.flaw("## Next\n<!---> x\n"), 2)
+        # A form feed is no line break to an editor, though splitlines() makes it one.
+        self.assertEqual(self.flaw("## Next\n\x0c\n<!-- x\n"), 3)
         # The first unclosed one, after a closed one on the same line.
         self.assertEqual(self.flaw("## A\nok\n<!-- a --> <!-- b\n"), 3)
 
@@ -75,12 +74,34 @@ class UnclosedComment(unittest.TestCase):
         # Inside a comment, backticks quote nothing: its first `-->` ends it.
         self.assertIsNone(lanelib.comment_flaw("## Next\n<!-- start with `Keep open: <why>` -->\n"))
 
+    def test_short_comments_close_themselves(self):
+        # `<!-->` and `<!--->` are whole comments (CommonMark 0.31, HTML): read as openers, they
+        # ran to a later `-->` and hid the flag between.
+        for opener in ("<!-->", "<!--->"):
+            text = f"## Next\n- Use {opener} here\nKeep open: PR 2\n- and <!-- x -->\n"
+            self.assertIsNone(lanelib.comment_flaw(text), opener)
+            self.assertEqual(lanelib.kept_open(lanelib.next_block(text)), "Keep open: PR 2")
+
+    def test_a_comment_starting_its_line_leaves_the_flag_at_the_start(self):
+        # The blank after `-->` once indented the flag into a wrap of the step before it.
+        for comment in ("<!-- docs -->", "<!-- docs\nfollow -->", "  <!-- docs -->"):
+            text = f"## Next\n- Ship PR 1.\n{comment} Keep open: PR 2\n"
+            self.assertEqual(lanelib.kept_open(lanelib.next_block(text)), "Keep open: PR 2",
+                             comment)
+        # Mid-line, after text, it stays a mention, as it always was.
+        text = "## Next\n- Ship. <!-- docs --> Keep open: PR 2\n"
+        self.assertIsNone(lanelib.kept_open(lanelib.next_block(text)))
+
     def test_quoted_markers_never_hide_keep_open(self):
         # The raw strip ran from a quoted `<!--` to a quoted `-->`, the flag between them gone.
         text = ("## Next\n<!-- template -->\n- Document the `<!--` rule.\nKeep open: docs PR "
                 "follows\n- Then fix the `-->` parsing.\n")
         self.assertIsNone(lanelib.comment_flaw(text))
         self.assertEqual(lanelib.kept_open(lanelib.next_block(text)), "Keep open: docs PR follows")
+        # A double-backtick span quotes too: read as an empty span and a marker, it didn't.
+        text = "## Next\n- Doc the ``<!--`` rule\nKeep open: docs PR\n- And ``-->``\n"
+        self.assertIsNone(lanelib.comment_flaw(text))
+        self.assertEqual(lanelib.kept_open(lanelib.next_block(text)), "Keep open: docs PR")
 
     def test_a_fence_never_closed_in_its_section_is_plain_text(self):
         # A mistyped closer (here ```bash) once left every later line looking like code, so the

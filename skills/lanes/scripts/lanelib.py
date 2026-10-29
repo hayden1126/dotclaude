@@ -94,6 +94,8 @@ def prose_only(text: str) -> str:
 
 
 SECTION_BREAK = re.compile(r"#{1,2}\s")
+# A code span as CommonMark reads one: a backtick run, closed by a run of the same length.
+CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)")
 
 
 UNCLOSED, STRAY = "an unclosed `<!--`", "a stray `-->` (a comment ended before it)"
@@ -105,8 +107,11 @@ def strip_comments(lines: list[str]) -> tuple[str, tuple[int, str] | None]:
     comment scan section() and comment_flaw share, so what the check passes is what the
     tools read: two scans that disagreed let a quoted `<!--` ... `-->` pair hide a `Keep open:`.
 
-    Outside a comment, a fenced block or an inline code span quotes a marker: it opens nothing.
-    Inside one, the first `-->` ends it, backticks or not. A fence the section never closes
+    Outside a comment, a fenced block or a code span (CODE_SPAN: ``<!--`` too) quotes a
+    marker: it opens nothing. Inside one, the first `-->` ends it, backticks or not, and
+    `<!-->` and `<!--->` are whole comments (CommonMark 0.31, HTML). A comment that starts its
+    line takes the blanks around it along, so a `Keep open:` behind it still starts the line,
+    not a wrap of the item before. A fence the section never closes
     counts as plain text, so a mistyped closer can't hide an opener after it. An unclosed
     comment's text is kept from its opener on: a `Keep open:` line in it still counts, and the
     check fails the record anyway. A `-->` outside code and comments is stray: a comment that
@@ -116,17 +121,25 @@ def strip_comments(lines: list[str]) -> tuple[str, tuple[int, str] | None]:
         out: list[str] = []
         opened = mark = stray = None
         fence = fence_at = None
+        blank = True  # nothing but blanks kept since the last newline
+
+        def keep(piece: str) -> None:
+            nonlocal blank
+            out.append(piece)
+            tail = piece.rpartition("\n")
+            blank = not tail[2].strip() if tail[1] else blank and not piece.strip()
+
         for i, line in enumerate(lines):
             m = FENCE.match(line) if opened is None else None
             if fence is not None:
                 if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) \
                         and not line[m.end():].strip():
                     fence = None
-                out.append(line + "\n")
+                keep(line + "\n")
                 continue
             if m and i not in plain:
                 fence, fence_at = m.group(1), i
-                out.append(line + "\n")
+                keep(line + "\n")
                 continue
             pos = 0
             while True:
@@ -135,24 +148,28 @@ def strip_comments(lines: list[str]) -> tuple[str, tuple[int, str] | None]:
                     if end < 0:
                         break  # the comment runs on, newline and all
                     opened, pos = None, end + 3
+                    if blank:  # it started its line: so does what follows it, unindented
+                        pos = len(line) - len(line[pos:].lstrip())
+                        kept = "".join(out)
+                        out[:] = [kept[:kept.rfind("\n") + 1]]
                     continue
                 start = line.find("<!--", pos)
                 close = line.find("-->", pos)
-                code = INLINE_CODE.search(line, pos)
+                code = CODE_SPAN.search(line, pos)
                 first = min((x for x in (start, close, code.start() if code else -1) if x >= 0),
                             default=-1)
                 if code and code.start() == first:
-                    out.append(line[pos:code.end()])
+                    keep(line[pos:code.end()])
                     pos = code.end()
                 elif close == first >= 0:
                     stray = i if stray is None else stray
-                    out.append(line[pos:close + 3])
+                    keep(line[pos:close + 3])
                     pos = close + 3
                 elif start >= 0:
-                    out.append(line[pos:start])
-                    opened, mark, pos = (i, start), len(out), start + 4
+                    keep(line[pos:start])
+                    opened, mark, pos = (i, start), len(out), start + 2  # `<!-->` closes itself
                 else:
-                    out.append(line[pos:] + "\n")
+                    keep(line[pos:] + "\n")
                     break
         if fence is not None:
             plain.add(fence_at)
@@ -182,9 +199,13 @@ def comment_flaw(text: str | None) -> tuple[int, str] | None:
     cleanly, None when every one does: a `<!--` its own section never closes, or a stray `-->`.
     Either leaks a comment's text into what the tools read, where a `Keep open:` inside or
     after it can be missed. The same scan as section()'s (strip_comments)."""
+    text = text or ""
     for first, body in sections(text):
         if (flaw := strip_comments(body)[1]) is not None:
-            return first + flaw[0] + 1, flaw[1]
+            # splitlines also breaks at a form feed and the like, where an editor doesn't:
+            # count the newlines before the flawed line instead.
+            at = sum(len(x) for x in text.splitlines(keepends=True)[:first + flaw[0]])
+            return text.count("\n", 0, at) + 1, flaw[1]
     return None
 
 
