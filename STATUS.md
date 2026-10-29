@@ -88,12 +88,13 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
   - **Live lanes** (briefs in each record). Merge order (opened 2026-10-24 on Hayden's "open
-    lanes for the fixes"): 1 ctx-compact (`fix/context-watch-compact`, carries the lead's notes,
-    opened 2026-10-25: the context-watch item below), 2 done-safe (`fix/lane-done-removals`,
-    opened 2026-10-25 when trial-fix merged: the `lane done` gaps below), 3 chrome-dup (the
-    duplicate chrome-devtools servers below, opened 2026-10-25 when sp-gaps merged), 4 practices (its next
+    lanes for the fixes"): 1 done-safe (`fix/lane-done-removals`, carries the lead's notes,
+    opened 2026-10-25 when trial-fix merged: the `lane done` gaps below), 2 chrome-dup (the
+    duplicate chrome-devtools servers below, opened 2026-10-25 when sp-gaps merged), 3 practices (its next
     PR, auth-secrets; the skill suite below), paused by Hayden on 2026-10-24 for a few days and
     moved last so it blocks no install. practices opened on Hayden's ok, merged #142 on 2026-10-20 and stays open for more PRs.
+    Merged 2026-10-29 and installed from main: ctx-compact (#149: context-watch says nothing
+    after a compact until a post-compact count exists, instead of nudging on the pre-compact one).
     Merged 2026-10-25 and installed from main: sp-gaps (#148, SP1, SP2 and SP4 to SP13: the
     subagent policy gaps below). Merged 2026-10-25 and installed from main: trial-fix (#147, the `lane trial` bugs below). Merged 2026-10-25: mute-clock (#146, tests only: the mute tests failed across UTC midnight, 18:30-20:00 EDT, not local midnight). Merged 2026-10-24 and installed from main: model-pin (#145, opened 2026-10-23 on Hayden's
     picks): `/model` saves its pick as the default for every new
@@ -233,16 +234,6 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     parse the s-command (skip pattern and replacement, then read flags) and judge `=(` only at
     a word start outside quotes, keeping `1e date`, `s/a/b/e`, `s/a/b/w f`, `cat =(ls)` and
     `${(f)x}` refused. Merged as #143 (lane policy-fp, 2026-10-21, installed from main).
-  - **context-watch reads the pre-compact count right after a compact** (lane exam-prep's
-    report, 2026-10-20, session 89ae7cc8; the lead checked the code, not probed live).
-    `scan()` (`hooks/context_watch.py:170-200`) walks back to the last main-chain assistant
-    usage and never stops at a compact boundary: `main_chain` skips the `compact_boundary`
-    system line, and the compact-summary user entry has no usage. At the first PostToolUse after
-    a compact, that call's assistant entry wasn't on disk yet, so the nudge said "521k ... hand
-    off now" where the real count was 107k. Obeying it loops compact after compact. Fix: a
-    compact boundary met before any post-compact usage means no count yet (say nothing, write
-    nothing), with a test on a transcript fixture that ends at a boundary. In lane ctx-compact
-    since 2026-10-25.
   - **Subagent policy gaps SP1 to SP7** (from lane policy-fp, 2026-10-20, routed to the lead
     on Hayden's pick; the lead re-checked each). Details and proposed fixes are in the private
     findings file's "Subagent policy gaps 2026-10-20" section ([[dotclaude-public-repo]]). SP3
@@ -562,11 +553,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lanes ctx-compact (merge order 1, carries the lead branch), done-safe (2), chrome-dup (3)
-     and practices (4, paused by Hayden since 2026-10-24) run; their state is in their records
-     (`lane ls`). Next to open at a free slot: Hayden's pick from the backlog (the `lane done`
-     path-trust lane and the `lane trial` no-ids fix wait for done-safe's merge). Waiting on:
-     ctx-compact's, done-safe's and chrome-dup's plans. Pending with Hayden, outside the lanes: `wsl --shutdown` at a break applies the 18 GB
+  0. Lanes done-safe (merge order 1, carries the lead branch), chrome-dup (2) and practices
+     (3, paused by Hayden since 2026-10-24) run; their state is in their records (`lane ls`).
+     One slot is free (ctx-compact closed after #149). Next to open: Hayden's pick from the
+     backlog; the `lane` items (done path-trust, trial no-ids, trial quiet lock, unclosed
+     comment, `lane park`, ports) wait for done-safe's merge, since they change the same files.
+     done-safe installs next, then its smoke test (the lead runs it from the main checkout). Pending with Hayden, outside the lanes: `wsl --shutdown` at a break applies the 18 GB
      WSL cap set in `C:\Users\hayde\.wslconfig` on 2026-10-23 (backup `.wslconfig.bak-20261023`).
      Before each lead STATUS commit, grep it against the exam-prep denylist
      ([[lead-status-denylist-check]]). After each reinstall,
