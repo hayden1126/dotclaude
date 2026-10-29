@@ -22,7 +22,8 @@ auto-pass" has the design.
   pass.toml (pass_toml_path()) overrides the three for live tests; a value that isn't three
   increasing positive integers below compact_at is ignored.
 - The ctx file, ctx/<session>.json = {tokens, time, window?, window_at?}: the watcher writes
-  tokens and time, the widget window and window_at. Both merge through merge_ctx(), under the
+  tokens and time (tokens null from a compact until the first count after it), the widget
+  window and window_at. Both merge through merge_ctx(), under the
   session's ctx lock (ctx-watch/<session>.ctx.lock, apart from the watcher's own), so neither
   rolls back the other's fields.
 - The tab flag, $XDG_STATE_HOME/dotclaude/autopass/<pane number>.json = {tab, on, set_at}, holds
@@ -252,8 +253,8 @@ def decide(cwd: str, pane: str | None) -> tuple[bool, str]:
 # ---- the watcher's files, shared with /autopass ----
 
 def ctx_path(sid: str) -> str:
-    """{tokens, time}: the session's context size at its latest Stop or tool call, plus the
-    widget's {window, window_at}."""
+    """{tokens, time}: the session's context size at its latest Stop or tool call (tokens null
+    from a compact until the next count), plus the widget's {window, window_at}."""
     return os.path.join(state_dir(), "ctx", sid + ".json")
 
 

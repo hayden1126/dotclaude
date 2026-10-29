@@ -852,7 +852,8 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   live sessions, the most urgent one when there are two, marked `*` past the soft tier and `!`
   past hard on that session's own window (`312k*`, `523k!`; the window comes from the config
   dir of the transcript its stop record names, as the watcher's does). It is `-` with no count
-  and `?` when sandboxed; `--json` has it as `ctx` (`session`, `tokens`, `tier`, `status`). The
+  (a compact blanks it until the first reply after it is counted) and `?` when sandboxed;
+  `--json` has it as `ctx` (`session`, `tokens`, `tier`, `status`). The
   STATE column after it lists each live session's `status` from its session file (`busy`,
   `idle`, `waiting`, or `shell` while a background shell runs at the prompt), as `states` in
   `--json`. A stopped session (Ctrl+Z) drives none of these columns: its lane gets the `stopped`

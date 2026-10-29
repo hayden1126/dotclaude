@@ -322,6 +322,13 @@ class Ctx(Lead):
         self.assertEqual(self.board(), ("-", None))
         self.session(os.getpid(), "s-1")  # live, but the watcher hasn't counted it yet
         self.assertEqual(self.board(), ("-", None))
+        self.ctx("s-1", None)  # a compact blanked the count (SessionStart(compact))
+        self.assertEqual(self.board(), ("-", None))
+        self.session(os.getppid(), "s-2")
+        self.ctx("s-2", 120000)  # the lane's other session still counts
+        self.assertEqual(self.board(),
+                         ("120k", {"session": "s-2", "tokens": 120000, "tier": None,
+                                   "status": "idle"}))
 
     def test_one_session(self):
         self.session(os.getpid(), "s-1")

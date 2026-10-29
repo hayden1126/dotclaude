@@ -79,6 +79,17 @@ USER = {"parentUuid": "a-1", "isSidechain": False, "type": "user", "uuid": "u-2"
                                                  "content": "done"}]}}
 SYSTEM = {"type": "system", "subtype": "stop_hook_summary", "isSidechain": False,
           "hookCount": 3, "uuid": "s-1"}
+# A compact, as Claude Code writes it: the boundary, then the summary as a user entry. The
+# boundary's postTokens leaves out the system prompt and tools (60-70k under the next real
+# count), so it is no count.
+BOUNDARY = {"parentUuid": None, "logicalParentUuid": "a-1", "isSidechain": False,
+            "type": "system", "subtype": "compact_boundary", "content": "Conversation compacted",
+            "isMeta": False, "level": "info", "uuid": "b-1",
+            "compactMetadata": {"trigger": "manual", "preTokens": 521139, "postTokens": 42286}}
+SUMMARY = {"parentUuid": "b-1", "isSidechain": False, "type": "user", "uuid": "u-3",
+           "isCompactSummary": True, "isVisibleInTranscriptOnly": True,
+           "message": {"role": "user", "content": "This session is being continued from a "
+                                                  "previous conversation ..."}}
 
 
 class Base(unittest.TestCase):
@@ -547,6 +558,64 @@ class Skips(Base):
         self.assertEqual(cw.tokens(self.transcript), 41_538)
 
 
+class Compact(Base):
+    """Session 89ae7cc8 (2026-10-20): the first tool call after a /compact ran before its own
+    assistant entry reached the transcript (batched writes), and the walk back passed the
+    boundary to the pre-compact reply: "521k ... hand off now" at a real 107k."""
+
+    def test_a_boundary_before_any_usage_is_no_count(self):
+        quoted = dict(USER, toolUseResult={"stdout": '{"subtype":"compact_boundary"}'})
+        big = dict(USER, toolUseResult={"stdout": "x" * (cw.TAIL + 1000)})
+        cases = [((BOUNDARY, SUMMARY), (None, False)),
+                 ((BOUNDARY,), (None, False)),
+                 ((BOUNDARY, SUMMARY, USER), (None, False)),
+                 ((BOUNDARY, SUMMARY, assistant(107_000)), (107_000, True)),
+                 ((BOUNDARY, big), (None, False)),            # no widening past the boundary
+                 ((dict(BOUNDARY, isSidechain=True), USER), (521_000, False)),
+                 ((quoted,), (521_000, False))]               # only quotes the subtype
+        for after, want in cases:
+            self.write_transcript(521_000, after=after)
+            self.assertEqual(cw.scan(self.transcript), want, after)
+
+    def test_a_tool_call_right_after_a_compact_says_nothing_and_writes_nothing(self):
+        self.on()
+        self.write_transcript(525_000, after=(BOUNDARY, SUMMARY, USER))
+        self.assertIsNone(self.tool())
+        self.assertFalse(self.has_ctx())
+
+    def test_sessionstart_compact_blanks_the_count_and_the_next_one_re_arms(self):
+        self.on()
+        self.write_ctx_window(600_000)
+        self.assertEqual(self.stop(525_000), block("hard", "525k"))
+        self.append(BOUNDARY, SUMMARY)
+        self.assertIsNone(self.event("SessionStart", source="compact"))
+        ctx = self.ctx()
+        self.assertEqual((ctx["tokens"], ctx["window"]), (None, 600_000))
+        self.assertIsNone(self.tool())                    # still no count: nothing written
+        self.assertIsNone(self.ctx()["tokens"])
+        self.append(assistant(107_000), USER)
+        self.assertIsNone(self.tool())
+        self.assertEqual(self.ctx()["tokens"], 107_000)
+        with open(os.path.join(self.state, "dotclaude", "ctx-watch", SID + ".json")) as f:
+            self.assertEqual(set(json.load(f)["fired"].values()), {None})
+        self.assertEqual(self.stop(525_000), block("hard", "525k"))   # fires again
+
+    def test_a_p_runs_count_is_blanked_too(self):
+        # `lane ls` reads a `claude -p` or `--bg` session's count as well.
+        bg = {**IN_TAB, "CLAUDE_CODE_SESSION_ATTENDED": "0"}
+        self.stop(525_000, session=bg)
+        self.assertIsNone(self.event("SessionStart", session=bg, source="compact"))
+        self.assertIsNone(self.ctx()["tokens"])
+
+    def test_sessionstart_other_than_compact_writes_nothing(self):
+        for source in ("startup", "resume", "clear", None):
+            self.assertIsNone(self.event("SessionStart", source=source))
+        self.assertIsNone(self.event("SessionStart", source="compact", agent_id="a1"))
+        self.assertIsNone(self.event("SessionStart", source="compact", session_id="../evil"))
+        self.assertFalse(self.has_ctx())
+        self.assertFalse(os.path.exists(os.path.join(self.state, "dotclaude", "evil.json")))
+
+
 class StopWait(Base):
     """Spike A8: at a Stop the turn's final reply lands in the transcript about 100 ms into the
     hook, so the watcher waits for it rather than count the previous turn."""
@@ -622,6 +691,23 @@ class StopWait(Base):
                 self.assertIsNone(cw.handle(dict(self.payload(), transcript_path=path)))
         self.assertLess(time.monotonic() - start, 5)
         self.assertEqual(err.getvalue(), "")
+
+    def test_a_stop_right_after_a_compact_waits_for_its_reply(self):
+        self.write_transcript(521_000, after=(BOUNDARY, SUMMARY, USER))
+        out, calls = self.handle_landing(assistant(107_000), SYSTEM)
+        self.assertIsNone(out)
+        self.assertEqual((calls[0], self.ctx()["tokens"]), ((None, False), 107_000))
+
+    def test_a_stop_with_no_reply_after_a_compact_waits_then_says_nothing(self):
+        # 5 of 344 real compacts had a Stop before any reply: it waits like any Stop, then
+        # logs, and counts nothing rather than the pre-compact reply.
+        self.on()
+        self.write_transcript(525_000, after=(BOUNDARY, SUMMARY))
+        self.assertIsNone(self.stop())
+        self.assertFalse(self.has_ctx())
+        with open(os.path.join(self.state, "dotclaude", "context-watch.err")) as f:
+            self.assertIn("context-watch %s: no final reply in the transcript after 1.5 s; "
+                          "no count" % SID, f.read())
 
     def test_a_reply_that_never_lands_logs_a_line_and_uses_the_previous_count(self):
         # End to end: the shim appends the line to context-watch.err, never to the session.
@@ -821,6 +907,12 @@ class Toggle(Base):
         self.write_transcript(530_000)
         self.stop()
         self.assertIn("past the hard tier (520k)", self.reply("status"))
+
+    def test_status_after_a_compact_says_unknown_yet(self):
+        self.write_transcript(530_000)
+        self.stop()
+        self.event("SessionStart", source="compact")
+        self.assertIn("Context unknown yet, next tier: soft at 300k", self.reply("status"))
 
     def test_status_reads_the_window_from_the_inherited_config_dir(self):
         conf = os.path.join(self.tmp, "cfg")
@@ -1318,6 +1410,16 @@ class CtxOrder(Base):
         self.assertEqual(aps.read_ctx(SID)["window"], 200_000)
         aps.write_ctx(SID, 510_000, 300.0)
         self.assertEqual(aps.read_ctx(SID)["tokens"], 510_000)
+
+    def test_the_compact_blank_and_a_late_count_never_undo_each_other(self):
+        aps.write_ctx(SID, 520_000, 100.0)
+        aps.merge_ctx(SID, {"tokens": None, "time": 200.0})   # SessionStart(compact)
+        aps.write_ctx(SID, 521_000, 150.0)   # a pre-compact hook finishing late: dropped
+        self.assertIsNone(aps.read_ctx(SID)["tokens"])
+        aps.write_ctx(SID, 107_000, 300.0)
+        aps.merge_ctx(SID, {"tokens": None, "time": 250.0})   # a blank that waited on the lock
+        self.assertEqual({k: aps.read_ctx(SID)[k] for k in ("tokens", "time")},
+                         {"tokens": 107_000, "time": 300.0})
 
 
 if __name__ == "__main__":
