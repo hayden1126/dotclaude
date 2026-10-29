@@ -363,6 +363,20 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     capella's lead session, relayed by it): a parked lane may unpark over a full cap to rebase
     and merge, at most one lane over the cap at a time; it frees the slot when it merges and
     closes. capella accepted both additions.
+  - **Ports: blocks per lane, `lane port`, `lane serve`** (feature; capella-studio lane prefs,
+    session 78db7f95, at Hayden's ask, 2026-10-29). Lane prefs' run script started a dev server
+    on 5197, which lane tweaks' dev already held; the start failed, the script went on, and its
+    checks silently tested tweaks' server. `new` hands each lane one port, while lanes run 2-3
+    servers. Proposed: (1) a block of ports per lane, shown in `ls`; (2) `lane port claim
+    [--purpose]`, `port who`, `port ls`, with a state file and dead-pid cleanup; (3) `lane serve
+    [--port N] -- <cmd>`: claim, start it in its own session, wait for its ready line or its
+    death, check the listener's pid is in that session, print the id to kill; (4) a SessionStart
+    "your ports" line. Reads of other sessions' sockets and /proc need the excludedCommands route.
+    Lead's view: the silent wrong-server run is the bug, and only (3)'s listener check closes it
+    (a registry is advisory: an unregistered process still takes a port). Order: (3) with (1)
+    first; (2) and (4) next; a machine-wide pool for non-lane repos last, if at all.
+    Lane-able (`lane`, `lanelib.py`, `tests/lanes`, `docs/lanes.md`, the lane-identity hook)
+    after done-safe merges; scope is Hayden's call.
     dotclaude uses it too: paused practices holds a slot today. Lane-able (`lane`,
     `lanelib.py`, `tests/lanes`, `docs/lanes.md`, the lanes skill) after done-safe merges.
   - **Lanes skill: rebase only at your turn** (capella-studio lead, session 80ab3852, 2026-10-25;
