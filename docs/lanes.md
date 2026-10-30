@@ -286,6 +286,15 @@ Why it works this way:
   three reads (lane lane-fixes, 2026-10-29). A first version of that comparison skipped every
   input whose Next held the flag's text anywhere, and so missed the line-start comment and the
   bullet cases. None of 104 real records changed its verdict.
+- **Known limits of reading the flag from prose.** Review round 4 (lane lane-fixes, 2026-10-29)
+  found records where every read still misses a flag the page shows: a `## Next` quoted in a
+  code block before the real one is taken for it (so is an earlier heading that only starts
+  with "Next", like `## Next.js upgrade`), and a commented-out code block can upset the fence
+  tracking so that a `## ` line inside a later code block ends Next. Each review round found
+  holes in the newest boundary rule, so the fix is structural, not another rule: the flag
+  belongs in `lane.json`, set by a command (`lane keep "<why>"`), with the record's line for
+  people and `handoff-check` warning when the two disagree. A lane can only hold itself that
+  way, the safe direction. Until then, keep `Keep open:` at the top of Next, in plain text.
 - **The backlog line moved to the lead.** The lead owns the project STATUS, so the one line at
   merge is a step of its chain, not the lane's.
 

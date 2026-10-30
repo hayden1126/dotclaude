@@ -62,9 +62,10 @@ def relative_phrases(text: str) -> list[str]:
     return [" ".join(m.group(0).lower().split()) for m in RELATIVE.finditer(text or "")]
 
 
-# Up to 3 spaces, never a tab (4 columns: indented code), and a backtick fence's info string
-# holds no backtick (```x``` is inline code): CommonMark's fence opener.
-FENCE = re.compile(r" {0,3}(`{3,}(?=[^`]*$)|~{3,})")
+# A backtick fence's info string holds no backtick (```x``` is inline code, CommonMark). The
+# indent stays loose (a tab too): under a list item a tab-indented fence is one, and the lint
+# errs toward quoting.
+FENCE = re.compile(r"\s{0,3}(`{3,}(?=[^`]*$)|~{3,})")
 INLINE_CODE = re.compile(r"`[^`\n]*`")
 
 
