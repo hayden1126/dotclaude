@@ -1,5 +1,6 @@
 """skills/lanes/scripts/lane park: a finished lane's sessions end and its cap slot frees, its
 worktree, branch, record and claims kept; `lane open` unparks it, at most one lane over the cap."""
+import argparse
 import datetime
 import fcntl
 import glob
@@ -8,9 +9,13 @@ import os
 import shlex
 import shutil
 import signal
+import subprocess
+import sys
 import time
+from unittest import mock
 
 import test_cli  # by module: a class imported by name would have its tests collected here too
+from _fixture import LANE
 
 import lanelib  # on sys.path through _fixture
 
@@ -369,3 +374,171 @@ class Cap(ParkBase):
         self.assertEqual(p.returncode, 1)
         self.assertIn("is parked", p.stderr)
         self.assertEqual(len(glob.glob(self.flag_glob())), 1)
+
+
+class Round1(ParkBase):
+    """Review round 1: what the gates' first answers can't settle by the time of the signals."""
+
+    def park_in_process(self, lane_mod):
+        """cmd_park in this process, from the main checkout, with the fixture's environment."""
+        cwd = os.getcwd()
+        os.chdir(self.main)
+        try:
+            with mock.patch.dict(os.environ, self.env, clear=True):
+                lane_mod.cmd_park(argparse.Namespace(id="chart-fix"))
+        finally:
+            os.chdir(cwd)
+
+    def flips_to(self, pid, status):
+        """A stand-in handoff-check that passes and sets pid's session file status, as a
+        session that took a turn while the gates ran."""
+        fake = os.path.join(self.tmp, f"handoff-{status}.py")
+        sess = os.path.join(self.home, ".claude", "sessions", f"{pid}.json")
+        self.write(fake, "import json\n"
+                         f"p = {sess!r}\n"
+                         "d = json.load(open(p))\n"
+                         f"d['status'] = {status!r}\n"
+                         "json.dump(d, open(p, 'w'))\n")
+        return fake
+
+    def test_a_session_that_goes_busy_or_waiting_during_the_gates_refuses(self):
+        self.ready()
+        lane_mod = test_cli.load_lane_script()
+        (claude,) = self.claude()
+        for status, said in (("busy", "is busy"), ("waiting", "is waiting")):
+            with self.subTest(status):
+                with mock.patch.object(lane_mod, "HANDOFF_CHECK", self.flips_to(claude, status)):
+                    with self.assertRaisesRegex(lane_mod.LaneError, said):
+                        self.park_in_process(lane_mod)
+                self.assertTrue(self.alive(claude))
+                self.assertEqual(self.signals(), [])
+                self.assertEqual(glob.glob(self.flag_glob()), [])
+                self.assertEqual(glob.glob(self.proof()), [])
+                self.session_file(claude)  # idle again for the next case
+
+    def test_a_refused_park_with_nothing_to_end_keeps_the_restore_entries(self):
+        self.ready()
+        lane_mod = test_cli.load_lane_script()
+        entry = self.open_session_entry("sess-lane-0007", self.path)
+        with mock.patch.object(lane_mod, "end_lane",
+                               side_effect=lane_mod.LaneError("started during the park")):
+            with self.assertRaisesRegex(lane_mod.LaneError, "started during the park"):
+                self.park_in_process(lane_mod)
+        self.assertTrue(os.path.exists(entry))
+
+    def test_a_planted_remote_tracking_ref_is_no_push(self):
+        self.ready(push=False)
+        self.git("update-ref", "refs/remotes/origin/chart-fix",
+                 self.git("rev-parse", "HEAD", cwd=self.path).strip())
+        (claude,) = self.claude()
+        p = self.run_lane("park", "chart-fix")
+        self.assertIn("is not on origin/chart-fix", p.stderr)
+        self.assertRefusedUntouched(p, claude)
+
+    def test_an_unreachable_remote_refuses(self):
+        self.ready()
+        (claude,) = self.claude()
+        self.git("remote", "set-url", "origin", os.path.join(self.tmp, "gone.git"))
+        p = self.run_lane("park", "chart-fix")
+        self.assertIn("can't ask origin", p.stderr)
+        self.assertRefusedUntouched(p, claude)
+
+    def test_a_detached_head_refuses(self):
+        self.ready()
+        self.git("checkout", "-q", "--detach", cwd=self.path)
+        (claude,) = self.claude()
+        p = self.run_lane("park", "chart-fix")
+        self.assertIn("detached HEAD", p.stderr)
+        self.assertRefusedUntouched(p, claude)
+
+    def test_worktree_config_refuses_in_parks_words(self):
+        self.ready()
+        (claude,) = self.claude()
+        self.git("config", "extensions.worktreeConfig", "true")
+        p = self.run_lane("park", "chart-fix")
+        self.assertIn("`park` won't run git there sandbox-off", p.stderr)
+        self.assertRefusedUntouched(p, claude)
+
+    def test_park_under_a_lanes_session_from_the_main_checkout_refuses(self):
+        self.ready()
+        pid, go, out = self.act_under(self.fake(self.path), ["park", "chart-fix"])
+        self.session_file(pid, "sess-lane-0005")
+        res = self.await_done(go, out)
+        self.assertEqual(res["rc"], 1, res["err"])
+        self.assertIn("only the lead (the main checkout) parks lanes", res["err"])
+        self.assertIn("This `lane park` runs under session sess-lane-0005", res["err"])
+        self.assertTrue(self.alive(pid))
+        self.assertEqual(self.signals(), [])
+        self.assertEqual(glob.glob(self.flag_glob()), [])
+
+
+class Round1Cap(ParkBase):
+    """Review round 1's cap cases."""
+
+    tmux = Cap.tmux
+
+    def test_open_under_the_cap_unparks_with_no_over_line(self):
+        self.flag()
+        self.tmux()
+        out = self.lane("open", "chart-fix")
+        self.assertNotIn("over the cap", out)
+        self.assertEqual(glob.glob(self.flag_glob()), [])
+
+    def test_new_counts_a_parked_lane_while_liveness_is_unknown(self):
+        self.lane("init", "--cap", "1")
+        self.flag()
+        self.write(os.path.join(self.home, ".claude", "sessions", f"{os.getpid()}.json"), "{")
+        self.assertIn("cap", self.run_lane("new", "other").stderr)
+
+    def test_a_parked_lane_with_only_a_stopped_session_holds_its_slot(self):
+        self.lane("init", "--cap", "1")
+        self.flag()
+        (claude,) = self.claude()
+        self.stop(claude)
+        self.assertIn("cap", self.run_lane("new", "other").stderr)
+
+    def test_the_cap_line_names_how_far_over(self):
+        self.lane("init", "--cap", "1")
+        self.flag()
+        self.lane("new", "beta")
+        self.flag("beta")
+        self.lane("new", "gamma")
+        self.claude()  # sessions started by hand in both parked lanes
+        (other,) = self.start(self.fake(self.lane_path("beta")))
+        self.session_file(other, "sess-lane-0002", cwd=self.lane_path("beta"))
+        self.assertIn("cap: 3 of 1 slots held (2 parked), 2 over", self.lane("ls"))
+
+    def test_a_second_open_waiting_on_the_lock_sees_the_first_lane_holding_its_slot(self):
+        # Two opens of parked lanes at the cap: the second waits on the lanes lock the first
+        # holds from its cap check to its flag's removal, then counts it and refuses.
+        self.lane("init", "--cap", "1")
+        self.flag()
+        self.lane("new", "beta")
+        self.flag("beta")
+        self.lane("new", "gamma")  # gamma holds the one slot
+        self.tmux()
+        repo = lanelib.resolve(self.main)
+        lock_file = os.path.join(self.common, "lanes", ".lock")
+        with lanelib.lock(repo):
+            second = subprocess.Popen([sys.executable, LANE, "open", "beta"], cwd=self.main,
+                                      env=self.env, stdout=subprocess.PIPE,
+                                      stderr=subprocess.PIPE, text=True)
+            self.addCleanup(lambda: second.poll() is None and (second.kill(), second.wait()))
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline and second.poll() is None:
+                fds = os.path.join("/proc", str(second.pid), "fd")
+                try:
+                    if any(os.readlink(os.path.join(fds, f)) == lock_file
+                           for f in os.listdir(fds)):
+                        break
+                except OSError:
+                    pass
+                time.sleep(0.02)
+            time.sleep(0.2)  # from its open to its flock
+            # The first open finishing under the lock: its window opened, its flag removed.
+            (flag,) = glob.glob(self.flag_glob())
+            os.remove(flag)
+        out, err = second.communicate(timeout=60)
+        self.assertEqual(second.returncode, 1, out + err)
+        self.assertIn("over the cap", err)
+        self.assertEqual(len(glob.glob(self.flag_glob("beta"))), 1)
