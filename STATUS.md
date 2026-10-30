@@ -166,6 +166,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **A probe of one command lane pass-fixes leaves exempt** (2026-10-29; private: sandbox-audit
     FINDINGS, G5b section, "Fix 4 scope", exemption (b)). It is a paid Codex run. Deferred by
     Hayden (2026-10-29): no Codex subscription now. Reopen when he has one.
+  - **Excluded-guard design gaps** (two high, three medium; lane pass-fixes' review round 3,
+    2026-10-30; Hayden split them out of its PR). Private: sandbox-audit FINDINGS, "Excluded-guard
+    design gaps, 2026-10-30", G-A to G-E, plus a few false-refusal lows. A new lane once pass-fixes
+    merges (it owns `hooks/excluded_guard.py` until then); G-A starts with one live probe.
   - **Approval-marker tests flake at midnight** (low; lane park, 2026-10-30). Two
     `tests/lanes/test_handoff_check.py` PlainRepo tests (a dated marker passes, a future one fails)
     failed once in a full `tests/lanes` run that crossed local midnight, then passed on rerun.
