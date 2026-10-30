@@ -15,7 +15,10 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      worktrees/<name>/commondir, not the main .git/ dir, so the common dir comes from git's real
      layout: a gitdir with a commondir file must sit at <common>/worktrees/<name> with its
      commondir naming that <common>, and <common> must hold no commondir. Any other layout, in
-     the cwd's repo or the project's, is refused.
+     the cwd's repo or the project's, is refused. A path argument a head runs git in is judged
+     the same way, resolved from the cwd (path_arguments: pass-respawn -C, lane adopt PATH, a
+     local repository for git push, fetch, pull and ls-remote), and such a call must spell its
+     words plainly; `delegation-ledger hook` is refused outright, since its paths come on stdin.
   2. The PATH the head resolves through. Every PATH entry must be protected, not only those
      before the head: its children (git, gh, tmux, the tools claude spawns) search PATH too. An
      empty or relative entry is the cwd: refused. Then the resolved file's symlink chain (each
@@ -233,17 +236,129 @@ def first_word(text):
     return words[0] if words else ""
 
 
+def all_pieces(command):
+    return [command.strip(), normalize(command)] + [normalize(p) for p in SPLIT.split(command)]
+
+
+def matching_pieces(command, patterns):
+    """Every piece (whole command first) an excludedCommands pattern matches."""
+    regexes = [pattern_re(p) for p in patterns]
+    return [p for p in all_pieces(command) if p and any(r.fullmatch(p) for r in regexes)]
+
+
+def heads_of(pieces):
+    heads = []
+    for piece in pieces:
+        head = first_word(normalize(piece))
+        if head and head not in heads:
+            heads.append(head)
+    return heads
+
+
 def candidates(command, patterns):
     """The heads of every matching piece (whole command first). Empty: not a candidate."""
-    regexes = [pattern_re(p) for p in patterns]
-    heads = []
-    pieces = [command.strip(), normalize(command)] + [normalize(p) for p in SPLIT.split(command)]
-    for piece in pieces:
-        if piece and any(r.fullmatch(piece) for r in regexes):
-            head = first_word(normalize(piece))
-            if head and head not in heads:
-                heads.append(head)
-    return heads
+    return heads_of(matching_pieces(command, patterns))
+
+
+# --- Path arguments ----------------------------------------------------------------------------
+
+# Rule 1 judges each path argument a head runs git in (itself or through a child) as it judges
+# the cwd: pass-respawn -C (handoff-check runs git status there, then a claude starts there),
+# lane adopt PATH, and a local repository for git push, fetch, pull and ls-remote (git runs the
+# target's receive-pack or upload-pack). Left unjudged by design (docs/delegation.md): lane addr
+# --repo, whose one git lookup there runs under lanelib.HANDED_ENV and starts no repo-local
+# program, and codex-delegate run --dir, which the delegation skill sends to any repo.
+PATH_HEADS = {"pass-respawn", "lane", "git", "delegation-ledger"}
+GIT_PATH_SUBS = {"push", "fetch", "pull", "ls-remote"}
+# A redirection word (shlex keeps `2>&1` and `>out` whole), and its target when not attached.
+REDIRECT = re.compile(r"\d*(<<<|<<-?|<>|>>|>\||&>>|&>|>&|<&|<|>)(.*)", re.S)
+# A word the shell hands on as typed: no expansion, glob, quote or space. `~` only as $HOME.
+PLAIN_WORD = re.compile(r"(~(?=/|$))?[A-Za-z0-9_./:@%+,=-]*")
+
+
+def path_arguments(words):
+    """(path, existing_only) for each path argument in words, a piece's argv. Every spelling
+    counts, every repeat too (argparse keeps the last; the guard judges all). git's repository
+    words also name remotes and refs, so only a path that exists counts there."""
+    head, args = os.path.basename(words[0]), words[1:]
+    out = []
+    if head == "pass-respawn":
+        for i, w in enumerate(args):
+            if w == "-C" and i + 1 < len(args):
+                out.append(args[i + 1])
+            elif w.startswith("-C") and w != "-C":
+                # `-C=x` is x on Python 3.12 and `=x` on older ones: judge both.
+                out += [w[2:]] + ([w[3:]] if w.startswith("-C=") else [])
+        return [(p, False) for p in out]
+    if head == "lane" and args[:1] == ["adopt"]:
+        # Every word but its options; `--id`'s value is judged too (an over-match only adds checks).
+        return [(w, False) for w in args[1:]
+                if w not in ("--", "--id", "-h", "--help") and not w.startswith("--id=")]
+    if head == "git" and args[:1] and args[0] in GIT_PATH_SUBS:
+        for w in args[1:]:
+            if w.startswith("-"):
+                if "=" in w:
+                    out.append(w.split("=", 1)[1])
+            else:
+                out.append(w)
+        return [(p.removeprefix("file://"), True) for p in out]
+    return []
+
+
+def path_pieces(command, pieces):
+    """The matching pieces whose arguments are judged: in a compound command each split piece
+    on its own, since the whole command's words hold the operators."""
+    split = [normalize(p) for p in SPLIT.split(command) if p.strip()]
+    return [p for p in pieces if len(split) < 2 or p in split]
+
+
+def argv_words(words):
+    """words less the redirections and their targets: the shell takes them out of argv, from
+    anywhere in the command. A quoted `>` the shell would pass on is dropped too; every head
+    judged here refuses a stray word like that."""
+    out, skip = [], False
+    for w in words:
+        if skip:
+            skip = False
+        elif m := REDIRECT.fullmatch(w):
+            skip = not m.group(2)
+        else:
+            out.append(w)
+    return out
+
+
+def check_path_arguments(m, env, cwd, project, piece):
+    """Rule 1 for each path argument of a matching piece (path_arguments), resolved from cwd."""
+    try:
+        words = argv_words(shlex.split(piece))
+    except ValueError:
+        words = None
+    head = os.path.basename(words[0] if words else first_word(piece))
+    if head not in PATH_HEADS:
+        return
+    if words is None:
+        raise Refusal("rule1", head, f"`{head}` takes a path argument, and the guard can't split "
+                      "this call into words (a quote its split cut). Run it as one plain command.")
+    sub = next((w for w in words[1:] if not w.startswith("-")), None)
+    if head == "delegation-ledger":
+        if sub == "hook":
+            raise Refusal("rule1", head, "`delegation-ledger hook` reads the checkout it runs "
+                          "git in from its stdin, which the guard can't judge. Claude Code's "
+                          "hooks run it directly, never through Bash.")
+        return
+    if head == "lane" and sub != "adopt" or head == "git" and sub not in GIT_PATH_SUBS:
+        return
+    name = head if head == "pass-respawn" else f"{head} {sub}"
+    for w in words[1:]:
+        if not PLAIN_WORD.fullmatch(w) or w.startswith("="):
+            raise Refusal("rule1", w, f"`{name}` takes a path argument, and {w!r} is not a plain "
+                          "word (an expansion, glob, quote or space the shell would rewrite "
+                          "before the guard could judge it). Spell paths and refs as plain words.")
+    for path, existing_only in path_arguments(words):
+        full = os.path.join(cwd, os.path.expanduser(path))
+        if existing_only and not os.path.lexists(full):
+            continue
+        check_rule1(m, env, full, project, arg=path)
 
 
 # --- Machine view ------------------------------------------------------------------------------
@@ -508,14 +623,18 @@ def config_refs(path, home):
     return includes, hooks
 
 
-def check_rule1(m, env, cwd, project):
+def check_rule1(m, env, cwd, project, arg=None):
+    """Rule 1 for the repo at cwd: the call's own cwd, or the path argument arg resolved to
+    cwd (check_path_arguments)."""
     repo = discover(cwd, env)
     proj = discover(project, {k: env[k] for k in ("GIT_CEILING_DIRECTORIES",) if k in env})
     if repo and (proj is None or repo[1] != proj[1]):
+        what, fix = ((f"the path argument {arg}", "Name a path in the project's repository")
+                     if arg is not None else
+                     ("the working directory", "Run it from the project's repository"))
         raise Refusal("rule1", repo[0],
-                      f"the working directory is in the repository with git dir {repo[0]}, not the "
-                      "project's. Run it from the project's repository, or from a session "
-                      "launched in that repository.")
+                      f"{what} is in the repository with git dir {repo[0]}, not the project's. "
+                      f"{fix}, or run it from a session launched in that repository.")
     home = m.home
     trusted, files = [], []
     if repo:
@@ -657,13 +776,15 @@ def check_rule3(head, cwd, project):
                       "the project root.")
 
 
-def judge(heads, cwd, env, settings):
+def judge(heads, cwd, env, settings, pieces=()):
     project = env.get("CLAUDE_PROJECT_DIR")
     if not project:
         raise Refusal("project", "(unset)", "CLAUDE_PROJECT_DIR is unset, so the guard can't tell "
                       "the project's repository; refusing an excluded command.")
     m = Machine(env, settings, cwd)
     check_rule1(m, env, cwd, project)
+    for piece in pieces:
+        check_path_arguments(m, env, cwd, project, piece)
     for head in heads:
         check_rule2(m, head, env.get("PATH", ""))
         check_rule3(head, cwd, project)
@@ -1141,18 +1262,21 @@ def main():
     session = str(event.get("session_id"))[:8]
     try:
         settings, errors = load_settings(env)
-        heads = candidates(command, settings["excludedCommands"])
+        pieces = matching_pieces(command, settings["excludedCommands"])
+        heads = heads_of(pieces)
         if errors and not heads:
             log(f"unread settings {errors}: treating as a candidate")
             heads = [first_word(normalize(command)) or "(unknown)"]
+            pieces = all_pieces(command)
     except Exception as e:
         log(f"match error {type(e).__name__}: {e}: treating as a candidate")
         settings = {"excludedCommands": [], "denyWrite": [], "allowWrite": [], "editDeny": []}
         heads = [first_word(normalize(command)) or "(unknown)"]
+        pieces = all_pieces(command)
     if not heads:
         return
     try:
-        judge(heads, cwd, env, settings)
+        judge(heads, cwd, env, settings, path_pieces(command, pieces))
     except Refusal as r:
         log(f"deny {r.rule} {r.path} head={heads[0]} session={session}")
         deny(f"excluded-guard ({r.rule}): {r.reason}")

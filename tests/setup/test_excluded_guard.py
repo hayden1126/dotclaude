@@ -200,7 +200,8 @@ class Rule1Repository(Guard):
 
     def test_lane_addr_repo_runs_from_another_repo_and_from_home(self):
         # The global CLAUDE.md line's call, from a session outside dotclaude: the guard judges
-        # the cwd, never the --repo path (the CLI hardens its own git there).
+        # the cwd, and leaves the --repo path alone by design (the CLI hardens its own git there;
+        # Rule1PathArguments pins the exemption).
         call = "lane addr --repo ~/dotclaude lead"
         self.allowed(call)
         self.env["CLAUDE_PROJECT_DIR"] = self.home
@@ -217,6 +218,130 @@ class Rule1Repository(Guard):
         self.env["CLAUDE_PROJECT_DIR"] = self.lane
         self.write(os.path.join(self.proj, ".git", "worktrees", "lane", "config.worktree"), "")
         self.allowed("git push", cwd=self.lane)
+
+
+class Rule1PathArguments(Guard):
+    """A path argument a head runs git in is judged as the cwd is, from the project root."""
+
+    PATH_HEADS = ["pass-respawn", "pass-respawn *", "lane adopt *", "git push -*", "git fetch *",
+                  "git pull *", "git ls-remote *", "delegation-ledger *", "codex-delegate *"]
+
+    def setUp(self):
+        super().setUp()
+        self.write_settings({"excludedCommands": EXCLUDED + self.PATH_HEADS})
+        self.other = self.mkdir("other")
+        self.git("init", "-q", self.other, cwd=self.tmp)
+        self.other_git = os.path.join(self.other, ".git")
+
+    def refused(self, call, path=None):
+        return self.denied(call, "rule1", path)
+
+    def test_pass_respawn_C_in_another_repo_is_refused_in_every_spelling(self):
+        o = self.other
+        for call in (f"pass-respawn -C {o}", f"pass-respawn -C{o}", f"pass-respawn -C={o}",
+                     f"pass-respawn --compact -C {o}", f"pass-respawn -C {self.proj} -C {o}",
+                     f"pass-respawn -C {o} --print", f"pass-respawn -C {o} | cat"):
+            with self.subTest(call=call):
+                reason = self.refused(call, self.other_git)
+                self.assertIn(f"the path argument {o} is in the repository with git dir "
+                              f"{self.other_git}, not the project's", reason)
+                self.assertIn("a session launched in that repository", reason)
+
+    def test_pass_respawn_C_in_the_project_passes(self):
+        for call in (f"pass-respawn -C {self.proj}", f"pass-respawn -C {self.proj} --compact",
+                     "pass-respawn -C .", "pass-respawn", "pass-respawn --cancel",
+                     f"pass-respawn -C {self.mkdir('proj', 'sub')}", "pass-respawn -C sub",
+                     f"pass-respawn -C {self.mkdir('plain')}"):
+            with self.subTest(call=call):
+                self.allowed(call)
+
+    def test_pass_respawn_C_in_a_lane_of_the_project_passes(self):
+        self.allowed(f"pass-respawn -C {self.lane}")
+        self.env["CLAUDE_PROJECT_DIR"] = self.lane
+        self.allowed(f"pass-respawn -C {self.lane}", cwd=self.lane)
+
+    def test_a_relative_path_is_judged_from_the_cwd(self):
+        self.refused("pass-respawn -C ../other", self.other_git)
+        # From proj/x, ../other is proj/other: the project's own path, missing or not.
+        self.allowed("pass-respawn -C ../other", cwd=self.mkdir("proj", "x"))
+
+    def test_a_home_relative_path_is_expanded(self):
+        mine = self.mkdir("home", "repo")
+        self.git("init", "-q", mine, cwd=self.tmp)
+        self.refused("pass-respawn -C ~/repo", os.path.join(mine, ".git"))
+
+    def test_a_path_the_shell_would_rewrite_is_refused(self):
+        for token in ("$HOME/repo", "${HOME}", "`pwd`", "$(pwd)", "~root/x", "/tmp/{a,b}",
+                      f"{self.tmp}/oth*", f"{self.tmp}/oth?r", f"{self.tmp}/e(v|x)il",
+                      "'my repo'", "=git"):
+            with self.subTest(token=token):
+                reason = self.refused(f"pass-respawn -C {token}")
+                self.assertIn("plain word", reason)
+
+    def test_operators_and_redirections_are_not_arguments(self):
+        for call in ("git fetch origin && git merge --ff-only", "git push origin main 2>&1",
+                     "git fetch origin 2>&1 | tail -3", "git pull --ff-only > /dev/null",
+                     f"pass-respawn -C {self.proj} 2>/dev/null", "git ls-remote origin >out"):
+            with self.subTest(call=call):
+                self.allowed(call)
+        for call in (f"git fetch origin && git fetch {self.other}",
+                     f"git push -q {self.other} 2>&1", f"pass-respawn > out -C {self.other}"):
+            with self.subTest(call=call):
+                self.refused(call, self.other_git)
+
+    def test_a_quote_the_split_cut_is_refused(self):
+        # The candidate split isn't quote-aware: a quoted `;` leaves a piece shlex can't read.
+        self.refused(f'pass-respawn -C "{self.other};x"')
+
+    def test_lane_adopt_path_in_another_repo_is_refused(self):
+        for call in (f"lane adopt {self.other}", f"lane adopt --id x {self.other}",
+                     f"lane adopt -- {self.other}"):
+            with self.subTest(call=call):
+                self.refused(call, self.other_git)
+        self.allowed(f"lane adopt {self.lane}")
+        self.allowed(f"lane adopt --id=lane {self.lane}")
+
+    def test_git_with_a_local_repository_in_another_repo_is_refused(self):
+        o = self.other
+        for call in (f"git push -q {o}", f"git push -q {o} HEAD", f"git push -q file://{o}",
+                     f"git push -q --repo={o}", f"git push -q --repo {o}", f"git fetch {o}",
+                     f"git fetch --quiet file://{o} main", f"git pull {o} main",
+                     f"git ls-remote {o}", f"git push origin --repo={o}"):
+            with self.subTest(call=call):
+                self.refused(call, self.other_git)
+
+    def test_git_with_remotes_refs_and_urls_passes(self):
+        self.mkdir("proj", "feat")  # a ref that is also a dir of the project
+        for call in ("git push", "git push origin feat/x", "git push -u origin HEAD:refs/heads/x",
+                     "git push origin feat", "git push --force-with-lease origin main",
+                     "git fetch origin", "git fetch --prune origin", "git pull --ff-only",
+                     "git ls-remote https://github.com/x/y", "git fetch git@github.com:x/y.git",
+                     f"git push -q {self.proj}", f"git fetch {self.lane}"):
+            with self.subTest(call=call):
+                self.allowed(call)
+
+    def test_git_with_a_word_the_shell_would_rewrite_is_refused(self):
+        # Over-matches a quoted refspec glob: the guard can't tell quoting once shlex has run.
+        for call in ("git push origin $BRANCH", "git fetch origin '+refs/heads/*:refs/x/*'",
+                     f"git push -q {self.tmp}/oth*"):
+            with self.subTest(call=call):
+                self.assertIn("plain word", self.refused(call))
+
+    def test_delegation_ledger_hook_is_refused_from_bash(self):
+        for call in ("delegation-ledger hook", "delegation-ledger hook < /dev/null",
+                     "delegation-ledger hook <<< '{}'", "echo {} | delegation-ledger hook"):
+            with self.subTest(call=call):
+                self.assertIn("stdin", self.refused(call))
+        for call in ("delegation-ledger watch", "delegation-ledger wait --pid 1 --max 60",
+                     "delegation-ledger audit"):
+            with self.subTest(call=call):
+                self.allowed(call)
+
+    def test_lane_addr_repo_and_codex_delegate_dir_are_left_unjudged(self):
+        # Exempt by design (docs/delegation.md): lane addr's one git lookup there is hardened and
+        # runs no repo-local program (probed 2026-10-29); codex-delegate is sent to any repo.
+        self.allowed(f"lane addr --repo {self.other} lead")
+        self.allowed(f"codex-delegate run --model sol --dir {self.other} --brief b.md")
 
 
 class Rule1Layout(Guard):

@@ -272,7 +272,11 @@ For a match it refuses, naming the path, when:
    `commondir` file must sit at `<common>/worktrees/<name>` and name that `<common>`, which holds
    no `commondir` itself. Any other layout, in the cwd's repo or the project's, is refused. A
    dir counts as a repo as soon as git would take it as one: a `.git` entry, or `HEAD` with
-   `objects/` and `refs/` or with a `commondir`. The
+   `objects/` and `refs/` or with a `commondir`. Rule 1 judges path arguments too, resolved
+   from the cwd: `pass-respawn -C`, `lane adopt PATH`, and a local repository given to
+   `git push`, `fetch`, `pull` or `ls-remote`. Such a call must spell each word plainly (no
+   expansion, glob, quote or space), since the guard reads the text before the shell rewrites
+   it, and `delegation-ledger hook` runs only as a hook, never through Bash. The
    other config git reads must be write-protected: the global and XDG files (or
    `GIT_CONFIG_GLOBAL`), `/etc/gitconfig` (or `GIT_CONFIG_SYSTEM`, skipped under
    `GIT_CONFIG_NOSYSTEM`), every `include.path` and `includeIf` target, and a `core.hooksPath`
@@ -382,9 +386,10 @@ Not covered:
   call's starting cwd, and such a call either matches no pattern or runs sandboxed (a compound
   command stays in the sandbox). The guard doesn't read `dangerouslyDisableSandbox`: a sandbox-off
   call is judged like any other, by its text;
-- a repo an excluded command is handed as an argument (`lane addr --repo PATH`): the guard never
-  judges PATH's git config, so the CLI hardens the one git it runs there itself (docs/lanes.md,
-  "Bug reports from other repos").
+- two path arguments, by design: `lane addr --repo PATH`, whose one git lookup there the CLI
+  hardens itself and which starts no repo-local program (probed 2026-10-29; docs/lanes.md, "Bug
+  reports from other repos"), so a session in another repo can still reach dotclaude's lead;
+  and `codex-delegate run --dir`, which the delegation skill sends to any repo.
 
 Allow rules on excluded commands sit behind it: an allow rule skips the classifier, and
 `test_settings.py` fails if one covers an excluded command while the guard isn't wired.
