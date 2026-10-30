@@ -158,7 +158,19 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     "same, widened". The fix is a design change to `new`/`adopt`/`done` with a migration for
     existing lanes, so it needs Hayden's design call. Two low gaps ride with it (rows
     "seed_record from cmd_adopt" and "add_exclude"); their fix reuses #150's fd helpers.
-    Lane-able (`skills/lanes/scripts/lane`, `lanelib.py`, `tests/lanes`).
+    A third rides with it from lane pass-fixes (2026-10-29): sandbox-audit FINDINGS, G5b section,
+    "NEW 3". Lane-able (`skills/lanes/scripts/lane`, `lanelib.py`, `tests/lanes`).
+  - **A probe of one command lane pass-fixes leaves exempt** (2026-10-29; private: sandbox-audit
+    FINDINGS, G5b section, "Fix 4 scope", exemption (b)). It is a paid Codex run. Deferred by
+    Hayden (2026-10-29): no Codex subscription now. Reopen when he has one.
+  - **Store `Keep open` as structured state** (Hayden's pick, 2026-10-29, via lane lane-fixes).
+    `lane keep "<why>"` / `lane keep --off` write it to lane.json, `lane done` reads the field,
+    the record's `Keep open:` line is for people, and handoff-check warns when the two disagree.
+    Why: four review rounds on reading the flag from markdown kept finding misses (comments, code
+    spans, fences, a quoted `## Next`); docs/lanes.md "Known limits of reading the flag from
+    prose" (branch `fix/lane-small-bugs`) lists what stays open. Lane-able after lane-fixes merges
+    (`skills/lanes/scripts/lane`, `lanelib.py`, handoff-check, `tests/lanes`), the same files as
+    lane park, so it opens after park merges.
   - **`lane trial` passes a suite that never ran** (lane lane-fixes; low; lane sp-gaps,
     2026-10-25). `trial_report` passes a failed suite that printed no test id on either run when
     both exits match, so a directory or a runner missing a flag cleared the gate. Lead's pick:
