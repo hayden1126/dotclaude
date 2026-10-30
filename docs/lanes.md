@@ -326,7 +326,7 @@ sessions in the main checkout"), so no lane could send `merged #N`. The tab bar 
 lane was told to pick `main:@3` from the refusal.
 
 Hayden's rule: **the lead is the last main-checkout session to act as lead.** A bare `lane init`,
-`new`, `adopt`, `open` (not `--print`) or `done` that succeeds records the Claude session above
+`new`, `adopt`, `open` (not `--print`), `done` or `park` that succeeds records the Claude session above
 it, and `lane lead` does so on purpose. The other two candidates lose on the one real case:
 
 | Situation | Last to act | Oldest | None until Hayden picks |
@@ -607,28 +607,40 @@ parked lane holds its slot too. `lane new` refuses at the cap, counted this way.
 pass the cap, and at the cap it opens and says `lane X is over the cap of N by one: for its
 rebase and merge` (Hayden's pick: a parked lane may unpark over a full cap to merge, at most one
 lane over at a time). It clears the flag only once `tmux new-window` succeeds. `open --print`
-refuses a parked lane, since it would start a session the flag doesn't know of. `open` of a
+refuses a parked lane, since it would start a session the flag doesn't know of. One hold of
+the lanes lock spans the cap check, `tmux new-window` and the flag's removal, so a second
+`open` of a parked lane waits and then counts the first as holding its slot. `open` of a
 lane that isn't parked has no cap check, as before.
 
 **The gates.** Every one runs before any signal, in this order: the record (not stale,
-`setup-failed` or `closing`; already parked with no session refuses), `lead_only` (a lane can't
-park itself: the command would end the session that runs it), `done`'s git hardening and its
-`extensions.worktreeConfig` refusal, a clean tree, HEAD on `<remote>/<branch>` after a fetch or
-at an open PR's head (an open PR behind HEAD refuses: the commits past it would sit outside the
-PR), the plain `handoff-check` (not `--closing`, so a `Keep open:` lane parks), no `handoff?`
-(gh unavailable fails closed), no lock the lane holds (each config lock and `suite`), no
-install hold, no busy session (every other gate can pass mid-turn, and the SIGTERM would cut
-the turn off), then `done`'s survey and self-guard. A parked lane with a session in it reruns
-them all.
+`setup-failed` or `closing`), `lead_only` (a lane can't park itself: the command would end the
+session that runs it), already parked with no session (which needs the session files, so it
+comes after `lead_only`'s sandbox check), `done`'s git hardening and its
+`extensions.worktreeConfig` refusal, a clean tree, HEAD pushed (an ancestor of the commit the
+remote's own `refs/heads/<branch>` is at, asked with `ls-remote` and fetched, never the
+remote-tracking ref a lane can plant), or at an open PR's head (an open PR behind HEAD refuses:
+the commits past it would sit outside the PR), the plain `handoff-check` (not `--closing`, so a
+`Keep open:` lane parks), no `handoff?` (gh unavailable fails closed), no lock the lane holds
+(each config lock and `suite`), no install hold, no busy session, then `done`'s survey and
+self-guard. The gates take a while (a fetch, gh, handoff-check), so the session statuses are
+read again from the session files the survey reads: a session that went busy, or one waiting on
+a permission dialog or a question, refuses (every other gate can pass mid-turn, and the SIGTERM
+would cut the turn off or lose the question). A parked lane with a session in it reruns them
+all.
 
 **Ending.** The same `save_proof`, `end_lane` and open-sessions sweep as `done`, with the verb
-passed in so a refusal says `rerun lane park X`. There is no `closing` state: a session that
-`open` starts mid-park shows up in `end_lane`'s final look, which refuses the park and leaves
-the lane unparked. On success, under the lanes lock, the flag is written and the proof removed.
+passed in so a refusal says `rerun lane park X`. There is no `closing` state. A session that
+`open` starts between the survey and `end_lane`'s final look shows up there, which refuses the
+park and leaves the lane unparked. One that starts after the final look runs in a lane that
+ends up parked; it holds the slot all the same (a parked lane with a session holds one), and
+the board shows it `parked` with a live session. The open-sessions sweep runs once something
+was ended, or once the final look passed with nothing to end: a refused park that ended nothing
+keeps every restore entry. On success, under the lanes lock, the flag is written and the proof
+removed.
 
 **The board.** A parked lane shows `parked` and never `orphan`; `--json` rows carry `parked`
 (the stamp, or null). With a lane parked or the cap passed, a `cap: N of M slots held (K
-parked)` line follows, with `, one over` past the cap. The lead sends a parked lane no "main
+parked)` line follows, with `, X over` past the cap. It counts by the same rule as `new`. The lead sends a parked lane no "main
 moved" message: its `rebase` flag carries that to its unpark. `lane trial` keeps merging parked
 lanes, which are live and will merge.
 

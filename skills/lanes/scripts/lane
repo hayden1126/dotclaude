@@ -49,7 +49,7 @@ with nothing merged, no failing suite), 1 otherwise, and 75 when `--wait` runs o
 does.
 
 The lead is the main-checkout session that last acted as lead: a bare `init`, `new`, `adopt`,
-`open` (not `--print`) or `done` that succeeds from an interactive session in the main checkout,
+`open` (not `--print`), `done` or `park` that succeeds from an interactive session in the main checkout,
 or `lead`, records it in the state dir (lanelib.read_lead). hooks/lane_identity.py runs `lead`
 for a session that proves it continues the recorded lead (lanelib.lead_relink: a resume, a
 /clear or a /pass successor), so the record follows it. `addr lead` picks it among the main
@@ -1317,16 +1317,20 @@ def parked_stamp(repo: Repo, lane: dict) -> str | None:
     return rec["parked"]
 
 
+def slot_rule(lane: dict, parked: str | None, sessions: list | None) -> bool:
+    """The one rule for who holds a cap slot: the lane's worktree exists (lanelib.is_live) and
+    it is not parked, or sessions (running or stopped) are in it all the same, one started by
+    hand (`cd <lane> && claude`) included, so the count never trusts the flag alone. sessions
+    None (liveness unknown): a parked lane holds its slot."""
+    return lanelib.is_live(lane) and (not parked or sessions is None or bool(sessions))
+
+
 def holds_slot(repo: Repo, lane: dict, live: list[dict] | None) -> bool:
-    """Whether the lane holds a cap slot: its worktree exists and it is not parked, or a session
-    runs in it all the same (one started by hand, `cd <lane> && claude`), so the count never
-    trusts the flag alone. live is lanelib.live_sessions(); unknown (None), a parked lane
-    holds its slot."""
+    """slot_rule for a record, live being lanelib.live_sessions()."""
     if not lanelib.is_live(lane):
         return False
-    if parked_stamp(repo, lane) is None or live is None:
-        return True
-    return bool(sessions_in(live, os.path.realpath(lane["path"])))
+    here = None if live is None else sessions_in(live, os.path.realpath(lane["path"]))
+    return slot_rule(lane, parked_stamp(repo, lane), here)
 
 
 def board(repo: Repo) -> list[dict]:
@@ -1385,7 +1389,7 @@ def board(repo: Repo) -> list[dict]:
         # Either still holds its port, claims and a cap slot; a closing one waits on `done`.
         if lane.get("state") in ("setup-failed", "closing"):
             flags.append(lane["state"])
-        row["parked"] = None if stale else parked_stamp(repo, lane)
+        row["parked"] = parked_stamp(repo, lane) if lanelib.is_live(lane) else None
         if row["parked"]:
             flags.append("parked")
         if stale:
@@ -1520,22 +1524,22 @@ def cmd_ls(args) -> None:
 
 
 def cap_line(repo: Repo, rows: list[dict]) -> str | None:
-    """`cap: N of M slots held (K parked)`, with `, one over` past the cap, when a lane is parked
-    or the cap is passed; None otherwise. A row holds a slot as holds_slot says: live, and not
-    parked unless a session (running or stopped) is in it, or liveness is unknown."""
+    """`cap: N of M slots held (K parked)`, with `, X over` past the cap, when a lane is parked
+    or the cap is passed; None otherwise. Each row counts by slot_rule, as `new` counts the
+    records (holds_slot), its running and stopped sessions both."""
     held, parked = 0, 0
     for r in rows:
-        if r["stale"]:
+        if not lanelib.is_live(r):
             continue
         parked += bool(r["parked"])
         sessions = (None if r["live_sessions"] is None
                     else r["live_sessions"] + (r["stopped_sessions"] or []))
-        held += not r["parked"] or sessions is None or bool(sessions)
+        held += slot_rule(r, r["parked"], sessions)
     cap = int(repo.config().get("cap", DEFAULT_CAP))
     if not parked and held <= cap:
         return None
-    return f"cap: {held} of {cap} slots held ({parked} parked)" + (", one over" if held > cap
-                                                                  else "")
+    return f"cap: {held} of {cap} slots held ({parked} parked)" + (
+        f", {held - cap} over" if held > cap else "")
 
 
 def lead_unknown_note(path: str, of: str = "", capital: bool = False) -> str:
@@ -1806,7 +1810,6 @@ def cmd_open(args) -> None:
                             "at launch: /model or /effort in its window changes it")
         focus_session(args, here)
         return
-    over = unpark_check(repo, lane, live) if parked else None
     pick = open_pick(args, repo.config())
     claude = shutil.which("claude")
     if claude is None:
@@ -1822,11 +1825,24 @@ def cmd_open(args) -> None:
         return
     if not os.environ.get("TMUX"):
         raise LaneError(f"not inside tmux; run this instead: cd {shlex.quote(path)} && claude")
-    p = subprocess.run(argv, capture_output=True, text=True)
-    if p.returncode != 0:
-        raise LaneError(f"tmux new-window failed: {p.stderr.strip()}")
-    # Only the time: the window is derived from the live session on each `ls` (invariant 4).
-    with lock(repo):
+    over = None
+    with contextlib.ExitStack() as held:
+        if parked:
+            # One hold of the lanes lock from the cap check to the flag's removal: two opens of
+            # parked lanes at the cap would each count the other parked and both go over. Nothing
+            # in between takes the lock again.
+            held.enter_context(lock(repo))
+            live = lanelib.live_sessions()  # again: an open that held the lock started one
+            if sessions_in(live or [], path):
+                raise LaneError(f"lane {args.id} got a live session meanwhile (a second `lane "
+                                f"open`?): `lane open {args.id} --focus` switches to it")
+            over = unpark_check(repo, lane, live)
+        p = subprocess.run(argv, capture_output=True, text=True)
+        if p.returncode != 0:
+            raise LaneError(f"tmux new-window failed: {p.stderr.strip()}")
+        if not parked:
+            held.enter_context(lock(repo))
+        # Only the time: the window is derived from the live session on each `ls` (invariant 4).
         lanelib.update_lane(repo, args.id, lambda x: x.update(opened=now_iso()))
         if parked:  # only now: a failed new-window leaves the lane parked
             try:
@@ -3163,6 +3179,7 @@ def survey(lane_id: str,
     path: str,
     procs: dict[int, lanelib.Proc],
     known: dict[tuple[int, int], Hit] | None = None,
+    files: list[dict] | None = None,
 ) -> tuple[dict[int, Hit], dict[int, str]]:
     """Sort what runs in the lane (in_lane), from one scan: (hits, refused). hits {pid: Hit} is
     what `done` may end; refused {pid: line} what nothing proves the lane's, each of which
@@ -3171,8 +3188,10 @@ def survey(lane_id: str,
     still its OWNED children. The rest in order: SESSION, OWNED, PANE, LEFTOVER. A PANE is a
     tmux pane's shell (its parent a tmux server) with no foreign session id. A LEFTOVER's every
     descendant, anywhere, must be a hit too: a tmux server or a `--bg` daemon started from a
-    lane Bash carries the lane's session id, and its panes or sessions run elsewhere."""
-    files = lanelib.session_files()
+    lane Bash carries the lane's session id, and its panes or sessions run elsewhere. files are
+    Claude Code's session files (lanelib.session_files, read here when not given)."""
+    if files is None:
+        files = lanelib.session_files()
     here = in_lane(procs, path)
     kids = lanelib.children(procs)
     by_pid = {}
@@ -3897,7 +3916,7 @@ def sid_of(session: dict) -> str:
 
 LEAD_ACTS = ("init", "new", "adopt", "open", "done", "park")  # each, when it succeeds, takes the lead
 LEAD_HINT = ("No lead picked: the lead takes it with a bare `lane lead` (Hayden: `! lane lead` at "
-             "the lead's prompt), or any bare lane new, open, adopt or done it runs. After a tmux "
+             "the lead's prompt), or any bare lane new, open, adopt, done or park it runs. After a tmux "
              "restart, a restored tab that resumes the lead's session keeps the lead; otherwise "
              "the lead must act again")
 SANDBOXED_LEAD = ("sandboxed: the Claude session above this command is out of sight, and the "
@@ -4348,11 +4367,12 @@ def branch_config(repo: Repo, branch: str) -> list[tuple[str, str]]:
 
 
 def pushed_check(repo: Repo, lane: dict, heads: dict[str, tuple[str, str]]) -> tuple[str, str]:
-    """Refuse unless the lane's HEAD is pushed: an ancestor of <remote>/<branch> once fetched
-    (the base's remote, base_parts), or the head of an open PR from its branch (a fork's). An
-    open PR behind HEAD refuses: the commits past it would sit outside the PR. A failed fetch
-    refuses too, as sandboxed Bash can write the remote-tracking refs. (branch, ref) as
-    lane_head gives them."""
+    """Refuse unless the lane's HEAD is pushed: an ancestor of the commit the remote's own
+    refs/heads/<branch> is at (the base's remote, base_parts; asked with ls-remote, then
+    fetched, as fetched_base does), or the head of an open PR from its branch (a fork's). Never
+    the remote-tracking ref: sandboxed Bash can plant one, and a fetch that doesn't prune keeps
+    one for a branch the remote deleted. An open PR behind HEAD refuses: the commits past it
+    would sit outside the PR. (branch, ref) as lane_head gives them."""
     lane_id = lane["id"]
     branch, ref = lane_head(lane, heads)
     if not branch:
@@ -4362,10 +4382,7 @@ def pushed_check(repo: Repo, lane: dict, heads: dict[str, tuple[str, str]]) -> t
     if head is None:
         raise LaneError(f"lane {lane_id}'s branch {branch} has no commit")
     remote, _ = base_parts(repo, repo.config())
-    if not fetch(repo):
-        raise LaneError(f"can't fetch {remote}, so lane {lane_id}'s push can't be checked: rerun "
-                        f"`lane park {lane_id}` once the network is back")
-    tip = rev(repo, f"refs/remotes/{remote}/{branch}")
+    tip = remote_tip(repo, remote, branch, lane_id)
     if tip and git(["merge-base", "--is-ancestor", "--end-of-options", head, tip],
                    repo.toplevel).returncode == 0:
         return branch, ref
@@ -4383,6 +4400,38 @@ def pushed_check(repo: Repo, lane: dict, heads: dict[str, tuple[str, str]]) -> t
     raise LaneError(f"lane {lane_id}'s HEAD {head[:12]} is not on {remote}/{branch}, nor any open "
                     f"PR's head: push it from the lane's own session, then rerun "
                     f"`lane park {lane_id}`")
+
+
+def remote_tip(repo: Repo, remote: str, branch: str, lane_id: str) -> str | None:
+    """The commit remote's refs/heads/<branch> is at now, by ls-remote, fetched so it is local;
+    None when the remote has no such branch. Refuses when the remote can't be asked or fetched,
+    or the fetch didn't bring that commit."""
+    head = f"refs/heads/{branch}"
+    p = git(["ls-remote", "--exit-code", remote, head], repo.toplevel)
+    if p.returncode not in (0, 2):  # 2: no matching ref
+        line = (p.stderr.strip().splitlines() or ["unknown error"])[-1]
+        raise LaneError(shown(f"can't ask {remote} for lane {lane_id}'s branch ({line}), so its "
+                              f"push can't be checked: rerun `lane park {lane_id}` once it "
+                              "answers"))
+    # ls-remote matches a pattern against a ref's tail: only the exact ref counts.
+    shas = [f[0] for f in map(str.split, p.stdout.splitlines()) if len(f) == 2 and f[1] == head]
+    if not shas:
+        return None
+    if len(shas) != 1 or not lanelib.SHA_RE.fullmatch(shas[0]):
+        raise LaneError(f"{remote}'s answer for {head} is no single commit, so lane {lane_id}'s "
+                        "push can't be checked")
+    if rev(repo, shas[0]) != shas[0]:
+        p = git(["fetch", "--quiet", remote], repo.toplevel)
+        if p.returncode != 0:
+            line = (p.stderr.strip().splitlines() or ["unknown error"])[-1]
+            raise LaneError(shown(f"can't fetch {remote} ({line}), so lane {lane_id}'s push "
+                                  f"can't be checked: rerun `lane park {lane_id}` once it "
+                                  "fetches"))
+        if rev(repo, shas[0]) != shas[0]:
+            raise LaneError(f"the fetch didn't bring {remote}/{branch}'s commit {shas[0][:12]} "
+                            f"(force-pushed meanwhile?), so lane {lane_id}'s push can't be "
+                            f"checked: rerun `lane park {lane_id}`")
+    return shas[0]
 
 
 def handoff_gate(lane_id: str, path: str) -> None:
@@ -4438,12 +4487,37 @@ def park_gates(repo: Repo, lane: dict, path: str, here: list[dict]) -> None:
                               f"{lane_id}` once it is idle"))
 
 
+def mid_turn(lane_id: str, hits: dict[int, Hit], files: list[dict]) -> None:
+    """Refuse when a lane session among hits is busy or waiting, by the status in the same
+    session files survey read: the gates take up to minutes (a fetch, gh, handoff-check), so
+    the busy gate's answer before them is stale by the signals, and a session that started or
+    took a turn meanwhile would be cut off mid-turn. Waiting is a permission dialog or a
+    question to Hayden, which the SIGTERM would lose."""
+    for h in sorted(hits.values(), key=lambda h: h.proc.pid):
+        if h.kind != SESSION:
+            continue
+        s = next((f for f in files if f.get("pid") == h.proc.pid
+                  and lanelib.proc_start_of(f) == h.proc.start), {})
+        status = status_of(s)
+        if status == "busy":
+            raise LaneError(f"lane {lane_id}'s session {h.sid} is busy (mid-turn), and parking "
+                            f"would cut its turn off, so nothing was signalled: rerun `lane park "
+                            f"{lane_id}` once it is idle")
+        if status == "waiting":
+            raise LaneError(f"lane {lane_id}'s session {h.sid} is waiting on Hayden (a permission "
+                            "dialog or a question), which parking would lose, so nothing was "
+                            f"signalled: answer it, then rerun `lane park {lane_id}`")
+
+
 def cmd_park(args) -> None:
     """End a finished lane's sessions and free its cap slot, keeping its worktree, branch, record
     and claims: the flag at Repo.parked_path, which `open` clears. Every gate runs before any
     signal, as `done`'s do; a parked lane someone started a session in reruns them all and ends
-    it again. No `closing` state: a session `open` starts mid-park shows up in end_lane's final
-    look, which refuses the park and leaves the lane unparked."""
+    it again. The session statuses are read again with the survey that picks what to end
+    (mid_turn), since the gates take a while. No `closing` state: a session that starts between
+    that survey and the final look of end_lane (an `open` mid-park) refuses the park there and
+    leaves the lane unparked; one that starts after the final look runs in a parked lane, which
+    holds its slot all the same (holds_slot) and shows `parked` with a live session."""
     repo = lanes_repo()
     lane = load_lane(repo, args.id)
     check_data_dir(repo, args.id)
@@ -4474,14 +4548,15 @@ def cmd_park(args) -> None:
         raise LaneError(f"git lists no worktree at lane {args.id}'s path, so nothing was "
                         "signalled: `git worktree list` shows what git has")
     park_gates(repo, lane, path, here)
-    procs = lanelib.scan()
+    procs, files = lanelib.scan(), lanelib.session_files()
     # A rerun keeps what an earlier run proved: its signals may have ended the proof itself.
-    hits, refused = survey(args.id, path, procs, load_proof(repo, lane, path, procs))
+    hits, refused = survey(args.id, path, procs, load_proof(repo, lane, path, procs), files)
     self_guard(args.id, path, procs, hits, "park")
     if refused:
         raise refusal(f"nothing proves these processes in {path} are lane {args.id}'s, so "
                       "nothing was signalled", refused,
                       f"End or move them, then rerun `lane park {args.id}`")
+    mid_turn(args.id, hits, files)
     if hits:
         try:
             save_proof(repo, lane, path, hits.values())
@@ -4489,9 +4564,13 @@ def cmd_park(args) -> None:
             raise LaneError(f"can't record what lane {args.id}'s park proved at "
                             f"{repo.closing_path(args.id)} ({e.strerror or e}), so nothing was "
                             f"signalled: rerun `lane park {args.id}` once it can be written")
-    try:
-        end_lane(repo, lane, path, hits, "park")  # with no hits, its final look only
-    finally:  # a park refused partway has ended sessions all the same
+    if hits:
+        try:
+            end_lane(repo, lane, path, hits, "park")
+        finally:  # a park refused partway has ended sessions all the same
+            sweep_open_sessions(path)
+    else:  # its final look only: a refusal there ended nothing, so it keeps every entry
+        end_lane(repo, lane, path, hits, "park")
         sweep_open_sessions(path)
     with lanes_lock(repo, f"lane {args.id} is not parked: rerun `lane park {args.id}`"):
         now = reread(repo, lane, path)
@@ -4575,7 +4654,8 @@ def parser() -> argparse.ArgumentParser:
                         "session in another repo reaching this one's lead: `lane addr --repo "
                         "~/dotclaude lead`)")
     p = sub.add_parser("lead", help="make the session that runs this the lead, the one `lane addr "
-                                    "lead` names (a bare init, new, adopt, open or done does too)")
+                                    "lead` names (a bare init, new, adopt, open, done or park "
+                                    "does too)")
     p.add_argument("--expect-sid", metavar="SID",
                    help="refuse unless that session holds this id (the lane-identity hook's "
                         "relink passes the id it proved)")

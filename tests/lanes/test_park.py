@@ -355,7 +355,7 @@ class Cap(ParkBase):
         out = self.lane("open", "chart-fix")
         self.assertIn("lane chart-fix is over the cap of 1 by one: for its rebase and merge", out)
         self.assertEqual(glob.glob(self.flag_glob()), [])
-        self.assertIn("cap: 2 of 1 slots held (1 parked), one over", self.lane("ls"))
+        self.assertIn("cap: 2 of 1 slots held (1 parked), 1 over", self.lane("ls"))
         p = self.run_lane("open", "beta")
         self.assertEqual(p.returncode, 1)
         self.assertIn("over the cap", p.stderr)

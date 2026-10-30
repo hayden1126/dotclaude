@@ -142,7 +142,8 @@ an unregistered worktree: `lane whoami` tells you which.
    the park ends the lane's sessions and frees its cap slot, and keeps its worktree, branch,
    record and claims. It refuses a dirty tree, a HEAD that is neither pushed nor an open PR's
    head, a failing `handoff-check`, the `handoff?` flag, a lock the lane holds, the install hold
-   and a busy session. When its turn comes, `lane open <id>` unparks it to rebase and merge,
+   and a session that is busy or waiting on Hayden, checked again just before the signals.
+   So send `park me` as the turn's last act, with no question open. When its turn comes, `lane open <id>` unparks it to rebase and merge,
    even at the cap: one lane may go over by one.
 
    The lane that learns of the merge
@@ -213,7 +214,7 @@ rebases: a carry names the lead's head, and the next carry diffs from it.
 
 **Which session leads.** A main checkout can hold two live sessions: a stray resumed there, or a
 side chat. The lead is the last one to act as lead. A bare `lane init`, `new`, `adopt`, `open` (not
-`--print`) or `done` that succeeds from an interactive session in the main checkout records it in the state
+`--print`), `done` or `park` that succeeds from an interactive session in the main checkout records it in the state
 dir, where no lane can write, and `lane lead` takes it on purpose (Hayden: `! lane lead` at its
 prompt). A /clear, a /pass in its pane, or a resume of its session (in another tab, or the tab a
 tmux restart restores) keeps it: the lane-identity hook relinks the record on proof, so a restart

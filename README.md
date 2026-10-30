@@ -763,7 +763,7 @@ and status single-writer:
   that lane's live session. A session's ListAgents name is its tab title, which changes most
   turns, and a pass gives it a new socket, so resolve the address just before each send.
   With two live sessions in the main checkout, `lane addr lead` prints the lead's: the last one
-  to run a bare `lane init`, `new`, `adopt`, `open` (not `--print`) or `done` that succeeds,
+  to run a bare `lane init`, `new`, `adopt`, `open` (not `--print`), `done` or `park` that succeeds,
   or `lane lead` to take it on
   purpose (`! lane lead` at its prompt). `lane ls` names both, with their windows.
   `--repo PATH` looks in the lanes repo whose main checkout holds PATH instead of the cwd's,
