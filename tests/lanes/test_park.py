@@ -657,3 +657,61 @@ class Round2(ParkBase):
         p = self.run_lane("park", "chart-fix")
         self.assertIn("can't fetch origin", p.stderr)
         self.assertRefusedUntouched(p, claude)
+
+
+class Round3(ParkBase):
+    """Review round 3."""
+
+    def test_open_of_a_parked_lane_outside_tmux_refuses_without_the_cd_hint(self):
+        self.flag()
+        p = self.run_lane("open", "chart-fix")  # TMUX is unset in the fixture
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("lane chart-fix is parked", p.stderr)
+        self.assertIn("from inside tmux", p.stderr)
+        self.assertNotIn("&& claude", p.stderr)
+        self.assertEqual(len(glob.glob(self.flag_glob())), 1)
+
+    def test_the_cap_line_counts_a_twin_record_as_new_does(self):
+        self.lane("init", "--cap", "1")
+        rec = dict(self.lane_json("chart-fix"), id="twin")
+        self.write(os.path.join(self.common, "lanes", "twin", "lane.json"), json.dumps(rec))
+        self.assertIn("cap", self.run_lane("new", "other").stderr)  # new counts both
+        self.assertIn("cap: 2 of 1 slots held (0 parked), 1 over", self.lane("ls"))
+
+    def test_a_head_already_in_the_base_counts_as_pushed(self):
+        # A Keep-open lane whose PR merged, its head branch deleted, with nothing new since.
+        self.commit("chart.txt", "axis\n", cwd=self.path)
+        self.git("push", "-q", "origin", "chart-fix:main", cwd=self.path)
+        self.hand_off()
+        self.assertEqual(self.git("ls-remote", "origin", "refs/heads/chart-fix"), "")
+        self.assertParked(self.lane("park", "chart-fix"))
+
+    def test_reread_names_the_park(self):
+        lane_mod = test_cli.load_lane_script()
+        repo = lanelib.resolve(self.main)
+        lane = self.lane_json("chart-fix")
+        with self.assertRaisesRegex(lane_mod.LaneError,
+                                    r"path or branch changed during the park: refusing"):
+            lane_mod.reread(repo, lane, self.main, "park")
+        with self.assertRaisesRegex(lane_mod.LaneError,
+                                    r"lane nosuch was closed meanwhile \(a `lane done`\?\), so "
+                                    "it is not parked"):
+            lane_mod.reread(repo, dict(lane, id="nosuch"), self.path, "park")
+        # done's words, unchanged
+        with self.assertRaisesRegex(lane_mod.LaneError,
+                                    r"lane nosuch was closed meanwhile \(a second `lane done`\?\)$"):
+            lane_mod.reread(repo, dict(lane, id="nosuch"), self.path)
+
+    def test_a_graft_never_makes_an_unpushed_head_look_pushed(self):
+        self.ready()
+        pushed = self.git("rev-parse", "HEAD", cwd=self.path).strip()
+        self.commit("more.txt", "x\n", cwd=self.path)
+        self.hand_off()
+        head = self.git("rev-parse", "HEAD", cwd=self.path).strip()
+        # <common>/info/grafts is sandbox-writable: through it, the pushed commit's parent is
+        # the unpushed HEAD.
+        self.write(os.path.join(self.common, "info", "grafts"), f"{pushed} {head}\n")
+        (claude,) = self.claude()
+        p = self.run_lane("park", "chart-fix")
+        self.assertIn("is not on origin/chart-fix", p.stderr)
+        self.assertRefusedUntouched(p, claude)
