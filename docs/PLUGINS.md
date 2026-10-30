@@ -44,8 +44,8 @@ research-discipline skill points here for docs lookups.
 
 Drives a real Chrome instance over the DevTools Protocol: click, type, screenshot, inspect
 network and console, run traces and audits. Works out of the box on Linux and macOS. On WSL2
-the stock server cannot launch Chrome; a machine-local, opt-in override fixes it (not applied
-by `setup.sh`). WSL2 users: see [chrome-devtools-wsl.md](chrome-devtools-wsl.md). Everyone
+the stock server cannot launch Chrome; a machine-local, opt-in config file for it fixes that
+(not applied by `setup.sh`). WSL2 users: see [chrome-devtools-wsl.md](chrome-devtools-wsl.md). Everyone
 else needs nothing.
 
 ## `codex`
