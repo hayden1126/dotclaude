@@ -282,6 +282,8 @@ GIT_PROGRAM_OPTIONS = ("receive-pack", "upload-pack", "exec")
 GIT_RECURSE = "recurse-submodules"
 # A redirection word (shlex keeps `2>&1` and `>out` whole), and its target when not attached.
 REDIRECT = re.compile(r"\d*(<<<|<<-?|<>|>>|>\||&>>|&>|>&|<&|<|>)(.*)", re.S)
+# The `&` of a redirection operator (2>&1, >&2, <&0, &>out), which SPLIT would cut at.
+REDIRECT_AMP = re.compile(r"\d*[<>]&|&>>?")
 # A word the shell hands on as typed: no expansion, glob, quote or space. `~` only as $HOME.
 PLAIN_WORD = re.compile(r"(~(?=/|$))?[A-Za-z0-9_./:@%+,=-]*")
 
@@ -315,34 +317,44 @@ def path_arguments(words):
     return []
 
 
-def path_pieces(command, pieces):
-    """The matching pieces whose arguments are judged: in a compound command each split piece
-    on its own, since the whole command's words hold the operators."""
-    split = [normalize(p) for p in SPLIT.split(command) if p.strip()]
-    return [p for p in pieces if len(split) < 2 or p in split]
+def path_pieces(command, patterns):
+    """The pieces whose arguments are judged: in a compound command each split piece that a
+    pattern matches (every one with patterns None, when matching failed), since the whole
+    command's words hold the operators; else the whole command. A redirection's `&` doesn't
+    split: `git push -q 2>&1 <path>` is one piece, or the path would fall in an unmatched one."""
+    masked = REDIRECT_AMP.sub(lambda r: r.group(0).replace("&", "\0"), command)
+    split = [normalize(p.replace("\0", "&")) for p in SPLIT.split(masked) if p.strip()]
+    if len(split) < 2:
+        return [normalize(command)]
+    regexes = None if patterns is None else [pattern_re(p) for p in patterns]
+    return [p for p in split if regexes is None or any(r.fullmatch(p) for r in regexes)]
 
 
 def argv_words(words):
-    """words less the redirections and their targets: the shell takes them out of argv, from
-    anywhere in the command. A quoted `>` the shell would pass on is dropped too; every head
-    judged here refuses a stray word like that."""
-    out, skip = [], False
+    """(argv, targets): words less the redirections, which the shell takes out of argv from
+    anywhere in the command, and those redirections' targets, judged as plain words too (a
+    `$(...)` or `<(...)` there runs before git does). A quoted `>` the shell would pass on is
+    dropped too; every head judged here refuses a stray word like that."""
+    out, targets, skip = [], [], False
     for w in words:
         if skip:
             skip = False
+            targets.append(w)
         elif m := REDIRECT.fullmatch(w):
             skip = not m.group(2)
+            if m.group(2):
+                targets.append(m.group(2))
         else:
             out.append(w)
-    return out
+    return out, targets
 
 
 def check_path_arguments(m, env, cwd, project, piece):
     """Rule 1 for each path argument of a matching piece (path_arguments), resolved from cwd."""
     try:
-        words = argv_words(shlex.split(piece))
+        words, targets = argv_words(shlex.split(piece))
     except ValueError:
-        words = None
+        words, targets = None, []
     head = os.path.basename(words[0] if words else first_word(piece))
     if head not in PATH_HEADS:
         return
@@ -359,7 +371,7 @@ def check_path_arguments(m, env, cwd, project, piece):
     if head == "lane" and sub != "adopt" or head == "git" and sub not in GIT_PATH_SUBS:
         return
     name = head if head == "pass-respawn" else f"{head} {sub}"
-    for w in words[1:]:
+    for w in words[1:] + targets:
         # git %-decodes a file:// URL's path, so a `%` could spell any path.
         if not PLAIN_WORD.fullmatch(w) or w.startswith("=") or head == "git" and "%" in w:
             raise Refusal("rule1", w, f"`{name}` takes a path argument, and {w!r} is not a plain "
@@ -402,14 +414,19 @@ def check_git_words(sub, args, repo):
             raise Refusal("rule1", w, f"`git {sub}` with {w!r} names a program for git to run "
                           "outside the sandbox, which the guard can't judge. Run it without that "
                           "option.")
-        if len(name) >= 4 and (GIT_RECURSE.startswith(name) or name.startswith(GIT_RECURSE)):
+        if (len(name) >= 4 and (GIT_RECURSE.startswith(name) or name.startswith(GIT_RECURSE))
+                and value not in ("no", "false")):
             raise Refusal("rule1", w, f"`git {sub}` with {w!r} runs git in each submodule's "
                           "own git dir, whose config the guard doesn't judge. Run it without "
                           "submodule recursion.")
-        # git takes a word as a remote's nick only with no `/` and not `.` or `..`.
-        if repo and not w.startswith("-") and "/" not in w and w not in (".", "..") and any(
-                os.path.lexists(os.path.join(repo[1], kind, w)) for kind in ("remotes", "branches")):
-            raise Refusal("rule1", w, f"`git {sub}` names {w!r}, a remote a legacy file in the "
+        # The repository word: a positional, or --repo's value (git takes a prefix of it).
+        # git takes it as a remote's nick only with no `/` and not `.` or `..`.
+        nick = (value if len(name) >= 3 and "repo".startswith(name) and "=" in w
+                else None if w.startswith("-") else w)
+        if repo and nick and "/" not in nick and nick not in (".", "..") and any(
+                os.path.lexists(os.path.join(repo[1], kind, nick))
+                for kind in ("remotes", "branches")):
+            raise Refusal("rule1", w, f"`git {sub}` names {nick!r}, a remote a legacy file in the "
                           f"project's git dir ({repo[1]}/remotes or /branches) defines, outside "
                           "the config the guard judges. Define it in .git/config instead.")
 
@@ -1315,21 +1332,21 @@ def main():
     session = str(event.get("session_id"))[:8]
     try:
         settings, errors = load_settings(env)
-        pieces = matching_pieces(command, settings["excludedCommands"])
-        heads = heads_of(pieces)
+        patterns = settings["excludedCommands"]
+        heads = heads_of(matching_pieces(command, patterns))
         if errors and not heads:
             log(f"unread settings {errors}: treating as a candidate")
             heads = [first_word(normalize(command)) or "(unknown)"]
-            pieces = all_pieces(command)
+            patterns = None  # judge every piece
     except Exception as e:
         log(f"match error {type(e).__name__}: {e}: treating as a candidate")
         settings = {"excludedCommands": [], "denyWrite": [], "allowWrite": [], "editDeny": []}
         heads = [first_word(normalize(command)) or "(unknown)"]
-        pieces = all_pieces(command)
+        patterns = None
     if not heads:
         return
     try:
-        judge(heads, cwd, env, settings, path_pieces(command, pieces))
+        judge(heads, cwd, env, settings, path_pieces(command, patterns))
     except Refusal as r:
         log(f"deny {r.rule} {r.path} head={heads[0]} session={session}")
         deny(f"excluded-guard ({r.rule}): {r.reason}")

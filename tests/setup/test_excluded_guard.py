@@ -371,7 +371,21 @@ class Rule1PathArguments(Guard):
                      "git fetch --recurse-submodules-default=yes origin"):
             with self.subTest(call=call):
                 self.assertIn("submodule", self.refused(call))
-        self.allowed("git fetch --no-recurse-submodules origin")
+        for call in ("git fetch --no-recurse-submodules origin",
+                     "git fetch --recurse-submodules=no origin"):
+            with self.subTest(call=call):
+                self.allowed(call)
+
+    def test_round_3_spellings_are_refused(self):
+        # Review round 3: a redirection holding `&` before the path, a legacy remote given as
+        # --repo=, and a substitution in a redirection target.
+        self.write(os.path.join(self.proj, ".git", "remotes", "evil"), "URL: /x\n")
+        for call in (f"git push -q 2>&1 {self.other} HEAD", f"git fetch >&2 {self.other}",
+                     f"pass-respawn 2>&1 -C {self.other}", f"lane adopt 2>&1 {self.other}",
+                     "git push --repo=evil HEAD", "git fetch origin <(true)",
+                     'git fetch origin >"$(true)"', "git fetch origin > $(true)"):
+            with self.subTest(call=call):
+                self.refused(call)
 
     def test_git_refuses_ext_in_an_option_value(self):
         self.assertIn("names a program", self.refused("git push --repo=ext::sh HEAD"))
