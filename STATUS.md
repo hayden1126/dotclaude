@@ -166,6 +166,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **A probe of one command lane pass-fixes leaves exempt** (2026-10-29; private: sandbox-audit
     FINDINGS, G5b section, "Fix 4 scope", exemption (b)). It is a paid Codex run. Deferred by
     Hayden (2026-10-29): no Codex subscription now. Reopen when he has one.
+  - **Approval-marker tests flake at midnight** (low; lane park, 2026-10-30). Two
+    `tests/lanes/test_handoff_check.py` PlainRepo tests (a dated marker passes, a future one fails)
+    failed once in a full `tests/lanes` run that crossed local midnight, then passed on rerun.
+    Cause: the module's `TODAY` is computed at import, so after midnight it is yesterday while
+    handoff-check reads the real date. Fix: compute it per test, or pin the clock in the check's
+    env. Rides with the next lane touching `tests/lanes` (ports).
   - **Store `Keep open` as structured state** (Hayden's pick, 2026-10-29, via lane lane-fixes).
     `lane keep "<why>"` / `lane keep --off` write it to lane.json, `lane done` reads the field,
     the record's `Keep open:` line is for people, and handoff-check warns when the two disagree.
