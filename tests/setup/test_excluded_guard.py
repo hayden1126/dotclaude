@@ -165,8 +165,14 @@ class Rule1Repository(Guard):
     def test_a_nested_repo_under_the_root_is_refused(self):
         nested = self.mkdir("proj", "sub", "nested")
         self.git("init", "-q", nested, cwd=self.tmp)
-        self.denied("git push", "rule1", os.path.join(nested, ".git"), cwd=nested)
+        reason = self.denied("git push", "rule1", os.path.join(nested, ".git"), cwd=nested)
         self.assertIn("deny rule1 " + os.path.join(nested, ".git"), self.log())
+        # The cwd's repo is named by its git dir, never as if the cwd were that dir, and the
+        # fix names the session that does work.
+        self.assertNotIn("resolves to the git dir", reason)
+        self.assertIn(f"in the repository with git dir {os.path.join(nested, '.git')}, not the "
+                      "project's", reason)
+        self.assertIn("a session launched in that repository", reason)
 
     def test_a_planted_gitfile_pointing_elsewhere_is_refused(self):
         other = self.mkdir("other")

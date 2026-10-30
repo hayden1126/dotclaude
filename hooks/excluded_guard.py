@@ -513,8 +513,9 @@ def check_rule1(m, env, cwd, project):
     proj = discover(project, {k: env[k] for k in ("GIT_CEILING_DIRECTORIES",) if k in env})
     if repo and (proj is None or repo[1] != proj[1]):
         raise Refusal("rule1", repo[0],
-                      f"the working directory resolves to the git dir {repo[0]}, not the project's "
-                      "repository. Run it from the project's repository.")
+                      f"the working directory is in the repository with git dir {repo[0]}, not the "
+                      "project's. Run it from the project's repository, or from a session "
+                      "launched in that repository.")
     home = m.home
     trusted, files = [], []
     if repo:
