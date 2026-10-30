@@ -193,7 +193,8 @@ it too. No doc said which window owns which ask.
   link points into a lane, add the backlog line, nudge the other lanes (an unmerged lane whose
   install the reinstall released hears so), and `lane done` once the hand-back gate passes. It reports one line, or the failed step.
 - A lane with more PRs to come starts its Next with `Keep open: <why>`, and `lane done` refuses
-  it. `--abandon` closes it anyway and stays an ask rule (Hayden, 2026-10-14).
+  it (a commented-out flag too), as it does a record with an unclosed `<!--`. `--abandon` closes
+  it anyway and stays an ask rule (Hayden, 2026-10-14).
 - Lanes report their own state and asks, never the lead's messages.
 - Before an act whose effect leaves its worktree (an install from the lane, a cap slot), and
   with anything the lead must run, a lane messages the lead, never Hayden (Hayden, 2026-10-19).
@@ -246,7 +247,8 @@ Why it works this way:
   standing approval written here; the lead proves the merge with `gh pr view` before it acts,
   and `lane done` checks it again (a merged PR whose head is the tip, or the tip in the base).
 - **A scoped exception to "confirm before deleting"**, which CLAUDE.md names. `lane done`
-  refuses an unmerged branch, a dirty worktree, links into the lane and a `Keep open:` lane,
+  refuses an unmerged branch, a dirty worktree, links into the lane, a `Keep open:` lane and a
+  record whose comments don't parse,
   archives the record before the remove, and never passes `--force` or `-D` (a killed trial's
   leftover registration goes by its gitdir text, never by path: the `lane trial` section). The approval
   covers `lane done` after a merge only; `--abandon` still asks.

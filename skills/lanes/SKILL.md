@@ -120,7 +120,7 @@ an unregistered worktree: `lane whoami` tells you which.
    Before the ask for ready, run `lane trial --run "<suite>" ...` from the lane, one `--run` per
    suite your Done when names, in the background (it takes as long as the suites, longer when
    one fails). It merges origin/main and every other live lane's commits onto your HEAD in a
-   scratch tree and runs the suites there under the `suite` lock, so it finds what a merge
+   scratch tree and runs the suites there under the `suite` lock (and init's `--trial-locks`), so it finds what a merge
    breaks without a textual conflict. Pass each suite bare, with no fail-fast flag (`-x`, `-f`:
    it hides failures behind a shared one), not wrapped in `lane lock suite`
    (the trial holds it already), and never start a trial under that lock. Quote its last lines
