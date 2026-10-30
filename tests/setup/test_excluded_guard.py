@@ -333,10 +333,48 @@ class Rule1PathArguments(Guard):
             with self.subTest(call=call):
                 self.assertIn("names a program", self.refused(call))
         # Options merely sharing a prefix pass: -u sets upstream for push.
-        for call in ("git push -u origin HEAD", "git push --recurse-submodules=check origin",
-                     "git fetch --update-head-ok origin", "git push --repo=origin"):
+        for call in ("git push -u origin HEAD", "git fetch --update-head-ok origin",
+                     "git push --repo=origin"):
             with self.subTest(call=call):
                 self.allowed(call)
+
+    def test_git_judges_a_repository_as_its_server_side_finds_it(self):
+        # Review round 2: git tries <word>.git when <word> is missing, reads a file there as a
+        # gitfile, and takes a file:// URL's path past any host part, %-decoded.
+        bare = os.path.join(self.tmp, "evil.git")
+        self.git("init", "-q", "--bare", bare, cwd=self.tmp)
+        gitfile = self.write(os.path.join(self.tmp, "gf"), f"gitdir: {bare}\n")
+        # `git push -q`: a bare `git push <repo>` matches no excluded pattern, so it runs
+        # sandboxed.
+        for call in (f"git push -q {self.tmp}/evil HEAD", f"git push -q {gitfile} HEAD",
+                     f"git fetch file://host{bare}", f"git push -q file:///{bare[1:]} HEAD",
+                     f"git ls-remote {bare}", f"git fetch {self.tmp}/evil"):
+            with self.subTest(call=call):
+                self.refused(call)
+        for call in (f"git push -q file://{self.tmp}/%65vil.git HEAD", "git push origin 100%"):
+            with self.subTest(call=call):
+                self.assertIn("plain word", self.refused(call))
+
+    def test_git_refuses_a_remote_from_a_legacy_remotes_file(self):
+        # .git/remotes/<name> and .git/branches/<name> name a URL outside the judged config.
+        for kind in ("remotes", "branches"):
+            with self.subTest(kind=kind):
+                planted = self.write(os.path.join(self.proj, ".git", kind, "evil"), "URL: /x\n")
+                self.assertIn("legacy", self.refused("git push -q evil HEAD"))
+                self.assertIn("legacy", self.refused("git fetch evil"))
+                os.remove(planted)
+        self.allowed("git push -q evil HEAD")  # no such file: git finds no remote
+
+    def test_git_refuses_submodule_recursion(self):
+        for call in ("git fetch --recurse-submodules", "git pull --recurse-submodules=yes",
+                     "git push --recurse-submodules=on-demand origin", "git fetch --recurse",
+                     "git fetch --recurse-submodules-default=yes origin"):
+            with self.subTest(call=call):
+                self.assertIn("submodule", self.refused(call))
+        self.allowed("git fetch --no-recurse-submodules origin")
+
+    def test_git_refuses_ext_in_an_option_value(self):
+        self.assertIn("names a program", self.refused("git push --repo=ext::sh HEAD"))
 
     def test_git_with_a_word_the_shell_would_rewrite_is_refused(self):
         # Over-matches a quoted refspec glob: the guard can't tell quoting once shlex has run.

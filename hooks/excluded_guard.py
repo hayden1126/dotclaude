@@ -19,8 +19,10 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      the same way, resolved from the cwd (path_arguments: pass-respawn -C, lane adopt PATH, a
      local repository for git push, fetch, pull and ls-remote), and such a call must spell its
      words plainly, naming no program for git to run (--receive-pack, --upload-pack, --exec,
-     an ext:: remote); `delegation-ledger hook` is refused outright, since its paths come on
-     stdin.
+     an ext:: remote), no submodule recursion and no remote from a legacy .git/remotes or
+     .git/branches file (check_git_words); a git repository is judged where git's server side
+     finds it (<path>, <path>.git, a gitfile, a file:// URL with no host, no %-escape).
+     `delegation-ledger hook` is refused outright, since its paths come on stdin.
   2. The PATH the head resolves through. Every PATH entry must be protected, not only those
      before the head: its children (git, gh, tmux, the tools claude spawns) search PATH too. An
      empty or relative entry is the cwd: refused. Then the resolved file's symlink chain (each
@@ -275,6 +277,9 @@ GIT_PATH_SUBS = {"push", "fetch", "pull", "ls-remote"}
 # Long options of those whose value is a program git runs (git takes any unique prefix), and
 # ls-remote's short -u for --upload-pack; an `ext::` remote runs a command too.
 GIT_PROGRAM_OPTIONS = ("receive-pack", "upload-pack", "exec")
+# --recurse-submodules (any prefix git takes, and its -default form) runs git in each
+# submodule's own gitdir, whose config the guard never judges; --no-recurse-submodules is fine.
+GIT_RECURSE = "recurse-submodules"
 # A redirection word (shlex keeps `2>&1` and `>out` whole), and its target when not attached.
 REDIRECT = re.compile(r"\d*(<<<|<<-?|<>|>>|>\||&>>|&>|>&|<&|<|>)(.*)", re.S)
 # A word the shell hands on as typed: no expansion, glob, quote or space. `~` only as $HOME.
@@ -306,7 +311,7 @@ def path_arguments(words):
                     out.append(w.split("=", 1)[1])
             else:
                 out.append(w)
-        return [(p.removeprefix("file://"), True) for p in out]
+        return [(p, True) for p in out]
     return []
 
 
@@ -355,23 +360,58 @@ def check_path_arguments(m, env, cwd, project, piece):
         return
     name = head if head == "pass-respawn" else f"{head} {sub}"
     for w in words[1:]:
-        if not PLAIN_WORD.fullmatch(w) or w.startswith("="):
+        # git %-decodes a file:// URL's path, so a `%` could spell any path.
+        if not PLAIN_WORD.fullmatch(w) or w.startswith("=") or head == "git" and "%" in w:
             raise Refusal("rule1", w, f"`{name}` takes a path argument, and {w!r} is not a plain "
-                          "word (an expansion, glob, quote or space the shell would rewrite "
-                          "before the guard could judge it). Spell paths and refs as plain words.")
+                          "word (an expansion, glob, quote, space or %-escape that would be "
+                          "rewritten before git sees it). Spell paths and refs as plain words.")
     if head == "git":
-        for w in words[2:]:
-            name = w[2:].split("=", 1)[0] if w.startswith("--") else ""
-            if (name and any(o.startswith(name) for o in GIT_PROGRAM_OPTIONS)
-                    or sub == "ls-remote" and re.match(r"-[^-]*u", w) or w.startswith("ext::")):
-                raise Refusal("rule1", w, f"`git {sub}` with {w!r} names a program for git to "
-                              "run outside the sandbox, which the guard can't judge. Run it "
-                              "without that option.")
+        check_git_words(sub, words[2:], discover(cwd, env))
     for path, existing_only in path_arguments(words):
+        if existing_only and path.startswith("file://"):
+            path = path[len("file://"):]
+            if not path.startswith("/"):  # git drops a host part: judge no guess at the rest
+                raise Refusal("rule1", path, f"`git {sub}` names a file:// URL with a host part "
+                              f"(file://{path}); give the repository as a plain path.")
         full = os.path.join(cwd, os.path.expanduser(path))
-        if existing_only and not os.path.lexists(full):
+        if not existing_only:
+            check_rule1(m, env, full, project, arg=path)
             continue
-        check_rule1(m, env, full, project, arg=path)
+        # git's server side tries <path> and then <path>.git, and reads a file there as a
+        # gitfile; a dir it judges as rule 1 judges the cwd (which also finds <dir>/.git).
+        for found in (full, full + ".git"):
+            if os.path.isfile(found):
+                try:
+                    found = read_gitfile(found)
+                except Exception:
+                    continue  # no gitfile (a bundle, say): git reads no config from it
+            if os.path.lexists(found):
+                check_rule1(m, env, found, project, arg=path)
+
+
+def check_git_words(sub, args, repo):
+    """Refuse a git push, fetch, pull or ls-remote word naming what rule 1 can't judge: a program
+    for git to run (an option of GIT_PROGRAM_OPTIONS by any prefix, ls-remote's -u, an ext::
+    remote, also as an option's value), submodule recursion, or a remote defined by a legacy
+    file in the project's git dir (.git/remotes, .git/branches: outside the judged config)."""
+    for w in args:
+        name = w[2:].split("=", 1)[0] if w.startswith("--") else ""
+        value = w.split("=", 1)[1] if name and "=" in w else w
+        if (name and any(o.startswith(name) for o in GIT_PROGRAM_OPTIONS)
+                or sub == "ls-remote" and re.match(r"-[^-]*u", w) or value.startswith("ext::")):
+            raise Refusal("rule1", w, f"`git {sub}` with {w!r} names a program for git to run "
+                          "outside the sandbox, which the guard can't judge. Run it without that "
+                          "option.")
+        if len(name) >= 4 and (GIT_RECURSE.startswith(name) or name.startswith(GIT_RECURSE)):
+            raise Refusal("rule1", w, f"`git {sub}` with {w!r} runs git in each submodule's "
+                          "own git dir, whose config the guard doesn't judge. Run it without "
+                          "submodule recursion.")
+        # git takes a word as a remote's nick only with no `/` and not `.` or `..`.
+        if repo and not w.startswith("-") and "/" not in w and w not in (".", "..") and any(
+                os.path.lexists(os.path.join(repo[1], kind, w)) for kind in ("remotes", "branches")):
+            raise Refusal("rule1", w, f"`git {sub}` names {w!r}, a remote a legacy file in the "
+                          f"project's git dir ({repo[1]}/remotes or /branches) defines, outside "
+                          "the config the guard judges. Define it in .git/config instead.")
 
 
 # --- Machine view ------------------------------------------------------------------------------
