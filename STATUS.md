@@ -147,7 +147,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     (a) The `check_rule1` refusal reads as if the cwd were `.git`; it should say the cwd's repo
     isn't the project's, and that a session launched in that repo works. (b) The private
     follow-up (sandbox-audit FINDINGS, G5b) was probed on Hayden's ok (2026-10-29) and routed
-    to lane pass-fixes with it.
+    to lane pass-fixes with it. Its guard half is committed in the lane; the handoff-check half
+    goes in the same PR once lane-fixes merges and pass-fixes has merged origin/main.
   - **Two open sandbox gaps from lane chrome-dup's gap check** (high; lane chrome-dup,
     2026-10-25, reported to the lead 2026-10-29). Details are private: sandbox-audit FINDINGS,
     "Gap check 2026-10-25", rows N2 and N3 (the parts still OPEN). Each is a new lane; both
