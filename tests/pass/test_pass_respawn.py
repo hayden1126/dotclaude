@@ -107,7 +107,31 @@ case "$1" in
         *) printf '%s\n' "$FAKE_TMUX_SERVER" ;;
       esac
     fi ;;
-  capture-pane) printf '%s\n' "$FAKE_TMUX_SCREEN" ;;
+  send-keys)
+    # The input box: typing fills $FAKE_TMUX_BOX and Enter empties it, unless
+    # $FAKE_TMUX_BOX.newlines counts Enters that land as a newline (the text stays).
+    if [ -n "$FAKE_TMUX_BOX" ]; then
+      if [ "$4" = -l ]; then
+        printf '%s' "$5" >> "$FAKE_TMUX_BOX"
+        printf '%s\n' "${FAKE_TMUX_LAG:-0}" > "$FAKE_TMUX_BOX.lag"
+      elif [ "$4" = Enter ]; then
+        n=$(cat "$FAKE_TMUX_BOX.newlines" 2>/dev/null || echo 0)
+        if [ "$n" -gt 0 ]; then echo $((n - 1)) > "$FAKE_TMUX_BOX.newlines"
+        else : > "$FAKE_TMUX_BOX"; fi
+      fi
+    fi ;;
+  capture-pane)
+    # The box while it holds text, once $FAKE_TMUX_LAG captures have passed since the typing;
+    # the static screen otherwise.
+    lag=$(cat "$FAKE_TMUX_BOX.lag" 2>/dev/null || echo 0)
+    if [ "$lag" -gt 0 ]; then
+      echo $((lag - 1)) > "$FAKE_TMUX_BOX.lag"
+      printf '%s\n' "$FAKE_TMUX_SCREEN"
+    elif [ -s "$FAKE_TMUX_BOX" ]; then
+      printf '%s%s%s\n' "$FAKE_TMUX_BEFORE" "$(cat "$FAKE_TMUX_BOX")" "$FAKE_TMUX_AFTER"
+    else
+      printf '%s\n' "$FAKE_TMUX_SCREEN"
+    fi ;;
   list-clients) [ -n "$FAKE_TMUX_CLIENTS" ] && printf '%s\n' "$FAKE_TMUX_CLIENTS" ;;
 esac
 exit 0
@@ -168,6 +192,7 @@ def screen(box):
 
 
 EMPTY_BOX = screen("")
+BOX_BEFORE, BOX_AFTER = screen("\0").split("\0")  # the fake tmux renders its box between
 
 
 def table(*extra, claude=True):
@@ -196,6 +221,7 @@ class Base(LanesRepo):
         super().setUp()
         self.mod = load()
         self.mod.POLL, self.mod.SETTLE, self.mod.COMPACT_GAP = 0.01, 0.05, 0.01
+        self.mod.SHOW_WAIT, self.mod.SENT_WAIT, self.mod.BOX_POLL = 0.3, 0.2, 0.01
         self.real_roots = self.mod.writable_roots
         self.mod.writable_roots = (lambda repo, cwd, launch=None, session_argv=None:
                                    [repo.toplevel, repo.main] if repo else [])
@@ -217,7 +243,9 @@ class Base(LanesRepo):
                         FAKE_TMUX_SERVER=SERVER, FAKE_TMUX_PANE=f"{PANE_SHELL} claude {PANE_TTY}",
                         FAKE_TMUX_FAIL="", FAKE_TMUX_MODE="0", FAKE_TMUX_SCREEN=EMPTY_BOX,
                         FAKE_TMUX_WHERE=WHERE, FAKE_TMUX_CLIENTS=CLIENTS,
-                        FAKE_TOAST_LOG=self.toast_log, FAKE_TOAST_EXIT="0")
+                        FAKE_TOAST_LOG=self.toast_log, FAKE_TOAST_EXIT="0",
+                        FAKE_TMUX_BOX=os.path.join(self.tmp, "box"), FAKE_TMUX_LAG="0",
+                        FAKE_TMUX_BEFORE=BOX_BEFORE, FAKE_TMUX_AFTER=BOX_AFTER)
         patch = mock.patch.dict(os.environ, self.env, clear=True)
         patch.start()
         self.addCleanup(patch.stop)
@@ -344,7 +372,8 @@ class Base(LanesRepo):
         """A fresh turn for another call in the same test: a new script, no stop yet."""
         self.script = list(script) or ["busy", "idle"]
         self.status, self.stopped = None, False
-        for path in (self.tmux_log, self.toast_log):
+        box = os.environ["FAKE_TMUX_BOX"]
+        for path in (self.tmux_log, self.toast_log, box, box + ".lag", box + ".newlines"):
             with contextlib.suppress(FileNotFoundError):
                 os.remove(path)
 
@@ -849,6 +878,67 @@ class Plain(Base):
         code, out = self.run_pass("--compact", "--foreground")
         self.assertEqual(code, 0, out)
         return [a[-1] for a in self.calls("tmux", "send-keys")][2]
+
+    # --- the keys land as typed (an Enter read with the text as one paste is a newline) ---
+
+    def newlines(self, n):
+        """The next n Enters land as a newline: the text stays in the box."""
+        self.write(os.environ["FAKE_TMUX_BOX"] + ".newlines", f"{n}\n")
+
+    def keys(self):
+        return [a[-1] for a in self.calls("tmux", "send-keys")]
+
+    def test_each_enter_waits_until_the_box_shows_the_typed_line(self):
+        os.environ["FAKE_TMUX_LAG"] = "3"  # the box shows the text only at the 4th capture
+        code, out = self.run_pass("--compact", "--foreground")
+        self.assertEqual(code, 0, out)
+        prompt = self.PROMPT + " Call EnterPlanMode first."
+        self.assertEqual(self.keys(), [f"/compact {self.mod.compact_focus('STATUS.md')}",
+                                       "Enter", prompt, "Enter"])
+        log = [a[0] for a in self.calls("tmux")]
+        calls = [a[1] for a in self.calls("tmux")]
+        for typed_at in (i for i, a in enumerate(self.calls("tmux")) if "-l" in a):
+            before_enter = calls[typed_at + 1:calls.index("send-keys", typed_at + 1)]
+            self.assertEqual(before_enter.count("capture-pane"), 4, (before_enter, log))
+        self.assertIn("mode=compact outcome=compact", self.log())
+
+    def test_an_enter_that_lands_as_a_newline_gets_one_more(self):
+        self.newlines(1)  # /compact's Enter lands as a newline
+        code, out = self.run_pass("--compact", "--foreground")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.keys()[1:4], ["Enter", "Enter", self.PROMPT +
+                                            " Call EnterPlanMode first."])
+        self.assertIn("mode=compact outcome=compact", self.log())
+
+    def test_a_resume_prompt_still_in_the_box_after_two_enters_is_handed_over(self):
+        prompt = self.PROMPT + " Call EnterPlanMode first."
+        real = self.mod.tmux
+
+        def tmux(plan, *args):  # the prompt's two Enters both land as newlines
+            if args[-1:] == (prompt,):
+                self.newlines(2)
+            return real(plan, *args)
+        self.mod.tmux = tmux
+        try:
+            code, out = self.run_pass("--compact", "--foreground")
+        finally:
+            self.mod.tmux = real
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.keys()[2:], [prompt, "Enter", "Enter"])
+        (line,) = [ln for ln in self.log().splitlines() if "outcome=failed" in ln]
+        self.assertIn("send-keys 4 of 4: the input box still showed it after two Enters", line)
+        self.assertLoud("press Enter")
+        self.assertEqual(self.notice()["outcome"], "failed")
+
+    def test_a_line_the_box_never_shows_gets_no_enter(self):
+        os.environ["FAKE_TMUX_LAG"] = "1000"
+        code, out = self.run_pass("--compact", "--foreground")
+        self.assertEqual(code, 1, out)
+        # /compact typed but never seen: no Enter, so nothing compacts and nothing else is typed.
+        self.assertEqual(self.keys(), [f"/compact {self.mod.compact_focus('STATUS.md')}"])
+        (line,) = [ln for ln in self.log().splitlines() if "outcome=failed" in ln]
+        self.assertIn("send-keys 2 of 4: not sent: the input box didn't show the typed text",
+                      line)
 
     def test_a_compact_pass_with_a_live_agent_holds_off_plan_mode(self):
         # Plan mode reaches a running background agent and stops its edits (2026-10-20); a

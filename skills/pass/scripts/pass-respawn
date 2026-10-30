@@ -138,7 +138,7 @@ Hayden, since passing again drops the same way and an autopass would loop). `par
 stays `failed`, but its held tmux line and toast hand the prompt over too ("pass failed after
 /compact was sent; type the resume prompt yourself: ..."), and its pass.log line ends with it,
 as `partial`'s do. Once the prompt may already sit in the input box, typing it again would
-double it. When the final Enter failed (or got no answer), the line says "pass failed after the
+double it. When the final Enter failed (or got no answer, or didn't take), the line says "pass failed after the
 resume prompt was typed; press Enter (or type it if the box is empty): ...", and the notice says
 the prompt may sit unsent there. When tmux gave no answer while typing it, nothing is known
 either way: the line says "pass failed while typing the resume prompt; press Enter if it is in
@@ -162,9 +162,12 @@ holds only notices. A call-time refusal or detach error prints to the caller and
            it changed; and M after a /model with no launch --model, which would otherwise get
            the ANTHROPIC_MODEL pin (docs/lanes.md, "Model and effort")
   compact  type `/compact <focus>` and Enter, wait 1 s, type the prompt and Enter (it queues
-           behind the compact, spike S4); no respawn and no carry. A send-keys that fails
-           stops there and logs `failed` (past /compact, every report of it hands over the
-           prompt).
+           behind the compact, spike S4); no respawn and no carry. Each Enter goes only once
+           the input box shows the typed line, and once more if the line is still there after
+           it (send_line): text and Enter read in one burst count as a paste, and the Enter
+           lands as a newline. A send-keys that fails, a line the box never shows (no Enter
+           then) or one still there after two Enters stops there and logs `failed` (past
+           /compact, every report of it hands over the prompt).
            Before the prompt it re-checks the pane (tmux not answering, copy mode,
            a draft, no input box): on a problem the prompt is not typed but shown loud, as a
            drop is (the status line until a key press, and the toast), for Hayden to type,
@@ -328,6 +331,12 @@ AT_PROMPT = {"idle", "shell"}
 # The interrupt's text: Esc ends a turn with this user entry and no turn_duration (spike).
 INTERRUPTED = "[Request interrupted by user"
 COMPACT_GAP = 1.0  # secs between typing /compact and the prompt (it queues, S4)
+# A typed line's Enter goes only once the input box shows the line: Claude Code, busy, reads
+# text and Enter that come in one burst as a paste, and the Enter lands as a newline (Hayden's
+# screenshot, 2026-10-22). Then the box must empty; one more Enter if it doesn't.
+SHOW_WAIT = 5.0    # secs for the box to show the typed line
+SENT_WAIT = 2.0    # secs for the box to let it go after an Enter
+BOX_POLL = 0.1
 TIMEOUT = 600.0
 MAX_TIMEOUT = 3600.0
 PANE_RE = re.compile(r"%\d+")
@@ -1535,6 +1544,50 @@ def pane_problem(plan: Plan) -> str | None:
     return "unsent draft in the input box" if box else None
 
 
+def read_box(plan: Plan) -> str | None:
+    """The input box's text now (input_box), with every space taken out (a wrapped line joins
+    with one), or None with no box or no answer."""
+    p = tmux(plan, "capture-pane", "-e", "-p", "-t", plan.pane)
+    box = input_box(p.stdout) if p is not None and p.returncode == 0 else None
+    return None if box is None else "".join(box.split())
+
+
+def box_until(plan: Plan, done, wait: float) -> str | None:
+    """Read the box until done(box) or wait passes; the last read."""
+    deadline = time.monotonic() + wait
+    while True:
+        box = read_box(plan)
+        if done(box) or time.monotonic() >= deadline:
+            return box
+        time.sleep(BOX_POLL)
+
+
+def tmux_failed(p: subprocess.CompletedProcess | None) -> tuple[str, str] | None:
+    """(how, tmux's words) for a tmux call that failed: how is `tmux` for an error, `silent`
+    for no answer; None when it worked."""
+    if p is not None and p.returncode == 0:
+        return None
+    return ("tmux", p.stderr.strip() or "no error text") if p else ("silent", "tmux didn't run")
+
+
+def send_line(plan: Plan, typing: list[str], enter: list[str]) -> tuple[int, str, str] | None:
+    """Type a line, Enter once the box shows it, and once more if it still does after; None when
+    it went, else (the failed step: 0 typing, 1 its Enter; how: tmux_failed's, or `box` for what
+    the box showed; what happened). No Enter while the box shows anything else or no box: it
+    could confirm a dialog."""
+    if failed := tmux_failed(tmux(plan, *typing[1:])):
+        return 0, *failed
+    line = "".join(typing[-1].split())
+    if box_until(plan, lambda box: box == line, SHOW_WAIT) != line:
+        return 1, "box", f"not sent: the input box didn't show the typed text within {SHOW_WAIT:g} s"
+    for _ in range(2):
+        if failed := tmux_failed(tmux(plan, *enter[1:])):
+            return 1, *failed
+        if box_until(plan, lambda box: box != line, SENT_WAIT) != line:
+            return None
+    return 1, "box", "the input box still showed it after two Enters"
+
+
 def pane_place(plan: Plan) -> tuple[str | None, str, str]:
     """(the pane's session id, its window index, its window name) from tmux, or (None, "", "")
     when tmux can't find the pane."""
@@ -2102,52 +2155,54 @@ def wait_and_act(plan: Plan, procs) -> str:
             late(plan, ("default mode" if approved else "plan mode")
                  + (f" with {shlex.join(plan.pick)}" if plan.pick else "") + ignored(rec)))
         return "respawn"
-    for i, argv in enumerate(actions):  # /compact <focus>, Enter, the prompt, Enter
-        if i == 2:
+    for line in (0, 2):  # /compact <focus> and its Enter, then the prompt and its Enter
+        if line == 2:
             time.sleep(COMPACT_GAP)
             if why := pane_problem(plan):  # copy mode, a draft or no box came up in the gap
                 # notify keeps it on the status line until a key press (the default is about
                 # 750 ms) and sends the toast; pass.log keeps the whole prompt, which the status
                 # line may cut.
+                prompt = actions[2][-1]
                 log(plan.mode, "partial", plan.pane,
                     late(plan, f"/compact sent, resume prompt not typed: {why}")
-                    + f"; resume prompt: {argv[-1]}")
-                tell(plan, "partial", time.time(), why, prompt=argv[-1])
+                    + f"; resume prompt: {prompt}")
+                tell(plan, "partial", time.time(), why, prompt=prompt)
                 with contextlib.suppress(Exception):
                     notify(plan, f"pass: /compact sent; type the resume prompt yourself: "
-                                 f"{argv[-1]}")
+                                 f"{prompt}")
                 return "partial"
-        p = tmux(plan, *argv[1:])
-        if p is None or p.returncode != 0:
-            said = (p.stderr.strip() if p else "tmux didn't run") or "no error text"
-            detail = late(plan, f"send-keys {i + 1} of 4: {said}")
-            if i < 2:
-                return drop(plan, "failed", detail)
-            # Past /compact and its Enter a second pass would compact again, so the held tmux
-            # line, the toast, pass.log and the notice hand over the resume prompt, as
-            # `partial`'s do; the outcome stays `failed`. Once the prompt may be in the box (the
-            # Enter failed, or tmux gave no answer while typing it, so the keys may have gone),
-            # typing it again would double it: Hayden presses Enter instead, or types it into an
-            # empty box. With no answer at the typing step nothing is known either way.
-            prompt = actions[2][-1]
-            if i == 3:
-                shown = ("pass failed after the resume prompt was typed; press Enter (or type it "
-                         f"if the box is empty): {prompt}")
-                cause = (f"sent /compact and typed the resume prompt, but its Enter may not have "
-                         f"gone through (tmux: {clipped(said)}), so the prompt may sit unsent in "
-                         "the input box")
-            elif p is None:
-                shown = ("pass failed while typing the resume prompt; press Enter if it is in the "
-                         f"box, else type it: {prompt}")
-                cause = (f"sent /compact, but tmux gave no answer while typing the resume prompt "
-                         f"({clipped(said)}), so it may or may not sit unsent in the input box")
-            else:
-                shown = ("pass failed after /compact was sent; type the resume prompt yourself: "
-                         f"{prompt}")
-                cause = (f"sent /compact, but the resume prompt wasn't typed or sent (tmux: "
-                         f"{clipped(said)})")
-            return drop(plan, "failed", f"{detail}; resume prompt: {prompt}", shown,
-                        cause=cause, prompt=prompt)
+        failed = send_line(plan, actions[line], actions[line + 1])
+        if failed is None:
+            continue
+        step, how, said = failed
+        i = line + step
+        detail = late(plan, f"send-keys {i + 1} of 4: {said}")
+        if i < 2:
+            return drop(plan, "failed", detail)
+        # Past /compact and its Enter a second pass would compact again, so the held tmux
+        # line, the toast, pass.log and the notice hand over the resume prompt, as
+        # `partial`'s do; the outcome stays `failed`. Once the prompt may be in the box (its
+        # Enter failed or didn't take, or tmux gave no answer while typing it, so the keys may
+        # have gone), typing it again would double it: Hayden presses Enter instead, or types it
+        # into an empty box. With no answer at the typing step nothing is known either way.
+        prompt = actions[2][-1]
+        why = clipped(said) if how == "box" else f"tmux: {clipped(said)}"
+        if i == 3:
+            shown = ("pass failed after the resume prompt was typed; press Enter (or type it "
+                     f"if the box is empty): {prompt}")
+            cause = (f"sent /compact and typed the resume prompt, but its Enter may not have "
+                     f"gone through ({why}), so the prompt may sit unsent in the input box")
+        elif how == "silent":
+            shown = ("pass failed while typing the resume prompt; press Enter if it is in the "
+                     f"box, else type it: {prompt}")
+            cause = (f"sent /compact, but tmux gave no answer while typing the resume prompt "
+                     f"({clipped(said)}), so it may or may not sit unsent in the input box")
+        else:
+            shown = ("pass failed after /compact was sent; type the resume prompt yourself: "
+                     f"{prompt}")
+            cause = (f"sent /compact, but the resume prompt wasn't typed or sent ({why})")
+        return drop(plan, "failed", f"{detail}; resume prompt: {prompt}", shown,
+                    cause=cause, prompt=prompt)
     mode = ("default mode" if approved else "plan mode" if agents == [] else
             "plan mode after hand-back: " + logged(agents) if agents else
             "plan mode unless an agent runs (the stop record can't say)")
