@@ -191,7 +191,7 @@ class ParkRefusals(ParkBase):
                                                "headRefName": "chart-fix", "headRefOid": old}])
         (claude,) = self.claude()
         p = self.run_lane("park", "chart-fix")
-        self.assertIn(f"open PR #9 is at {old[:12]}, behind its HEAD", p.stderr)
+        self.assertIn(f"open PR #9 is at {old[:12]}, which differs from its HEAD", p.stderr)
         self.assertRefusedUntouched(p, claude)
 
     def test_a_failing_handoff_check(self):
@@ -227,7 +227,8 @@ class ParkRefusals(ParkBase):
         (claude,) = self.claude()
         del self.env["FAKE_GH_OUT"]
         p = self.run_lane("park", "chart-fix")
-        self.assertIn("gh", p.stderr)
+        self.assertIn("gh can't answer (no network or credential), so lane chart-fix's handoff? "
+                      "can't clear", p.stderr)
         self.assertRefusedUntouched(p, claude)
 
     def hold(self, name, who="chart-fix"):
@@ -542,3 +543,117 @@ class Round1Cap(ParkBase):
         self.assertEqual(second.returncode, 1, out + err)
         self.assertIn("over the cap", err)
         self.assertEqual(len(glob.glob(self.flag_glob("beta"))), 1)
+
+
+class Round2(ParkBase):
+    """Review round 2."""
+
+    tmux = Cap.tmux
+
+    def waiting_on_the_lock(self, *argv):
+        """A `lane <argv>` started while this test holds the lanes lock, returned once it holds
+        the lock file open (blocked on it, or about to be)."""
+        lock_file = os.path.join(self.common, "lanes", ".lock")
+        proc = subprocess.Popen([sys.executable, LANE, *argv], cwd=self.main, env=self.env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: proc.poll() is None and (proc.kill(), proc.wait()))
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and proc.poll() is None:
+            fds = os.path.join("/proc", str(proc.pid), "fd")
+            try:
+                if any(os.readlink(os.path.join(fds, f)) == lock_file for f in os.listdir(fds)):
+                    break
+            except OSError:
+                pass
+            time.sleep(0.02)
+        time.sleep(0.2)  # from its open to its flock
+        return proc
+
+    def test_a_second_open_of_the_same_lane_refuses_once_the_first_unparked_it(self):
+        # tmux new-window returns before the new claude writes its session file, so the second
+        # open finds no session: the flag, gone under the lock, is what tells it.
+        self.flag()
+        self.tmux()
+        with lanelib.lock(lanelib.resolve(self.main)):
+            second = self.waiting_on_the_lock("open", "chart-fix")
+            (flag,) = glob.glob(self.flag_glob())
+            os.remove(flag)  # the first open, done under the lock: window opened, flag removed
+        out, err = second.communicate(timeout=60)
+        self.assertEqual(second.returncode, 1, out + err)
+        self.assertIn("lane chart-fix was unparked meanwhile: `lane open chart-fix --focus`", err)
+        self.assertNotIn("opened", out)
+
+    def test_a_replace_ref_never_makes_an_unpushed_head_look_pushed(self):
+        self.ready()
+        pushed = self.git("rev-parse", "HEAD", cwd=self.path).strip()
+        self.commit("more.txt", "x\n", cwd=self.path)
+        self.hand_off()
+        head = self.git("rev-parse", "HEAD", cwd=self.path).strip()
+        tree = self.git("rev-parse", "HEAD^{tree}", cwd=self.path).strip()
+        child = self.git("commit-tree", tree, "-p", head, "-m", "stand-in").strip()
+        # refs/replace is shared, and a lane's sandbox can write it: the pushed commit, read
+        # through it, is a child of the unpushed HEAD.
+        self.git("replace", pushed, child)
+        (claude,) = self.claude()
+        p = self.run_lane("park", "chart-fix")
+        self.assertIn("is not on origin/chart-fix", p.stderr)
+        self.assertRefusedUntouched(p, claude)
+
+    def fork_pr(self, oid):
+        self.env["FAKE_GH_OUT"] = json.dumps([{"number": 9, "state": "OPEN",
+                                               "headRefName": "chart-fix", "headRefOid": oid}])
+
+    def test_an_open_pr_ahead_of_head_counts_as_pushed(self):
+        # A fork's PR whose head is a local descendant of HEAD holds all of HEAD's work.
+        self.ready(push=False)
+        head = self.git("rev-parse", "HEAD", cwd=self.path).strip()
+        tree = self.git("rev-parse", "HEAD^{tree}", cwd=self.path).strip()
+        ahead = self.git("commit-tree", tree, "-p", head, "-m", "a fixup on the fork").strip()
+        self.fork_pr(ahead)
+        self.assertParked(self.lane("park", "chart-fix"))
+
+    def test_an_open_pr_at_an_unknown_or_unrelated_commit_differs(self):
+        self.ready(push=False)
+        base = self.git("rev-parse", "origin/main").strip()
+        tree = self.git("rev-parse", "HEAD^{tree}", cwd=self.path).strip()
+        other = self.git("commit-tree", tree, "-p", base, "-m", "elsewhere").strip()
+        (claude,) = self.claude()
+        for oid in (other, "f" * 40):
+            with self.subTest(oid):
+                self.fork_pr(oid)
+                p = self.run_lane("park", "chart-fix")
+                self.assertIn(f"open PR #9 is at {oid[:12]}, which differs from its HEAD",
+                              p.stderr)
+                self.assertRefusedUntouched(p, claude)
+
+    def test_parking_a_parked_lane_with_a_hand_started_session_ends_it(self):
+        self.ready()
+        self.flag()
+        (claude,) = self.claude()  # `cd <lane> && claude`
+        out = self.lane("park", "chart-fix")
+        self.assertEqual(self.signals(), [(claude, "SIGTERM")])
+        self.assertParked(out)
+        (flag,) = glob.glob(self.flag_glob())
+        self.assertNotEqual(json.loads(self.read(flag))["parked"], "2026-10-29T10:00:00+00:00")
+
+    def test_open_of_a_lane_that_isnt_parked_has_no_cap_check(self):
+        self.lane("new", "beta")
+        self.lane("init", "--cap", "1")  # two lanes hold a slot, past the cap
+        self.tmux()
+        out = self.lane("open", "chart-fix")
+        self.assertIn("opened chart-fix", out)
+        self.assertNotIn("over the cap", out)
+
+    def test_a_failed_fetch_of_the_remotes_commit_refuses(self):
+        # ls-remote answers with a commit this repo lacks, and the fetch that would bring it
+        # fails.
+        self.ready()
+        clone = os.path.join(self.tmp, "elsewhere")
+        self.git("clone", "-q", "-b", "chart-fix", self.origin, clone, cwd=self.tmp)
+        self.commit("far.txt", "x\n", cwd=clone)
+        self.git("push", "-q", "origin", "chart-fix", cwd=clone)
+        self.git("config", "remote.origin.fetch", "+refs/heads/nosuch:refs/remotes/origin/nosuch")
+        (claude,) = self.claude()
+        p = self.run_lane("park", "chart-fix")
+        self.assertIn("can't fetch origin", p.stderr)
+        self.assertRefusedUntouched(p, claude)
