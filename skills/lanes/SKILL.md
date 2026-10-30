@@ -120,7 +120,7 @@ an unregistered worktree: `lane whoami` tells you which.
    Before the ask for ready, run `lane trial --run "<suite>" ...` from the lane, one `--run` per
    suite your Done when names, in the background (it takes as long as the suites, longer when
    one fails). It merges origin/main and every other live lane's commits onto your HEAD in a
-   scratch tree and runs the suites there under the `suite` lock, so it finds what a merge
+   scratch tree and runs the suites there under the `suite` lock (and init's `--trial-locks`), so it finds what a merge
    breaks without a textual conflict. Pass each suite bare, with no fail-fast flag (`-x`, `-f`:
    it hides failures behind a shared one), not wrapped in `lane lock suite`
    (the trial holds it already), and never start a trial under that lock. Quote its last lines
@@ -130,7 +130,9 @@ an unregistered worktree: `lane whoami` tells you which.
    theirs: rerun with the `lane trial <id> ...` it names to try that lane with yours alone. One
    it says is between another lane and origin/main ("it needs to merge origin/main") is that
    lane's: the trial calls that lane untried, not FAILED, and exits 0 when nothing else fails.
-   Tell that lane, and ask for ready anyway, quoting the line. The tree lives in your lane's
+   Tell that lane, and ask for ready anyway, quoting the line. A failure that printed no test id
+   ("compare the two runs above by hand") fails the trial even when the baseline fails alike:
+   read both runs, and say in the ask why it isn't the merge's. The tree lives in your lane's
    `.lane-trial/` (gitignored) and gets your `.worktreeinclude` files; `--link PATH` symlinks
    one more of your dirs into it, beside init's `--trial-link` ones (a link your lane lacks is
    refused: run its setup first). It runs only sandboxed, never from a plain shell.
@@ -146,7 +148,7 @@ an unregistered worktree: `lane whoami` tells you which.
    or the stopped lead's window if it gives one.
 7. **Close:** `lane done <id>` refuses an unmerged branch, a lane made by `lane new` with no
    commits past its base, and, while its worktree exists, a lane whose record's Next has a
-   `Keep open:` line, live session or not (pass `--abandon` to close any of them anyway; it
+   `Keep open:` line (one inside a comment counts too) or whose record has an unclosed `<!--` or a stray `-->` (it names the line), live session or not (pass `--abandon` to close any of them anyway; it
    asks). It ends what provably
    belongs to the lane, so its open tab needs no closing by hand:
    - its Claude sessions get SIGTERM (a `lane open` tab closes with its claude), and a stopped
@@ -291,6 +293,9 @@ inherits the lead from it.
    e2e suite on a fixed port) in `lane lock <name> -- <cmd>`. List the names once with
    `lane init --locks gate,e2e` (it takes the full list and replaces the old one); an unlisted name is refused, since a typo would split the mutual
    exclusion. A second run waits and names the holder; `--wait SECS` gives up with exit 75.
+   A gate that needs a quiet machine also keeps trials out with `lane init --trial-locks
+   <name>`: every `lane trial` then takes that lock before `suite`. Take your own locks before
+   `suite` wherever you take both, as a trial does, or the two can deadlock.
 9. **Bug reports from other repos.** A session outside the repo that hits a bug in its tooling
    sends the report to what `lane addr --repo <main checkout> lead` prints (dotclaude's CLAUDE.md
    says so). Log each as one backlog line in the project STATUS on the lead's branch, naming the
@@ -361,7 +366,7 @@ resend passes.
 | `lane addr <id>` / `lane addr lead` | `uds:<socket>`, the SendMessage address of the lane's (or the lead's) one live session; refuses on none or several, except that `lead` picks the recorded lead or its resume among several (and refuses with the way to pick when none is). A stopped session (Ctrl+Z) is never an address: the refusal names its window to `fg` it in. `--repo PATH` looks in the lanes repo whose main checkout holds PATH instead of the cwd's, from any dir: a session in another repo reports a dotclaude bug to what `lane addr --repo ~/dotclaude lead` prints. Bare: it must see other processes |
 | `lane lead` | makes the session that runs it the lead (from the main checkout only; Hayden: `! lane lead` at its prompt). Bare |
 | `lane lock gate -- <cmd>` | run `<cmd>` under the named lock, waiting while another run holds it; `--wait SECS` gives up with exit 75 (docs/lanes.md: telling it from the command's own 75) |
-| `lane trial --run "<suite>" ...` | from a lane: merge origin/main and every other live lane's commits (or only the ids given) onto its HEAD in a scratch tree, run each suite there under the `suite` lock, and rerun a failed one on HEAD plus origin/main alone to tell the merge's failures from the location's; with nothing merged, run them once on HEAD plus origin/main; exit 0 clean, 1 on a conflict or a failure of the merge's own (a lane that conflicts with origin/main alone is untried, not a failure), 75 on `--wait`; `--keep` keeps the tree; `--link PATH` symlinks a lane dir into it |
+| `lane trial --run "<suite>" ...` | from a lane: merge origin/main and every other live lane's commits (or only the ids given) onto its HEAD in a scratch tree, run each suite there under the `suite` lock (and init's `--trial-locks`), and rerun a failed one on HEAD plus origin/main alone to tell the merge's failures from the location's; with nothing merged, run them once on HEAD plus origin/main; exit 0 clean, 1 on a conflict, a failure of the merge's own or one with no test id to compare (a lane that conflicts with origin/main alone is untried, not a failure), 75 on `--wait`; `--keep` keeps the tree; `--link PATH` symlinks a lane dir into it |
 | `lane new` / `adopt` / `done` | lifecycle, above |
 
 Board flags: `stale` (worktree gone; its claims are void), `rebase` (behind the base),

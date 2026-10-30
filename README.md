@@ -773,7 +773,8 @@ and status single-writer:
   waits instead of colliding.
 - `lane trial --run "<suite>" ...`, before a lane asks for ready, merges origin/main and every
   other live lane's commits onto it in a scratch tree and runs each suite there under the
-  `suite` lock. A failed suite reruns without the other lanes, so only the merge's own failures
+  `suite` lock (after any the config's `trial-locks` names, such as a repo's own quiet-machine
+  lock). A failed suite reruns without the other lanes, so only the merge's own failures
   count, and a conflict names the lanes it is between. A lane that conflicts with origin/main
   alone is untried, not a failure. With nothing to merge, the suites still run once on the lane
   plus origin/main (docs/lanes.md, "Cross-lane checks").
@@ -786,7 +787,8 @@ and status single-writer:
   name or tmux window, and it refuses anything else by name. Then it archives the record and
   removes the worktree, with the registration of any tree a killed `lane trial` left in it.
   While the worktree exists, it refuses a lane whose record's Next has a
-  `Keep open:` line (more PRs to come) unless given `--abandon`.
+  `Keep open:` line (more PRs to come; one inside a comment counts too), or whose record has an
+  unclosed `<!--` or a stray `-->`, unless given `--abandon`.
 - An optional lead session triages requests into lanes, opens them on Hayden's approval and sets
   the merge order (the skill's "The lead"). After a lane's PR merges, the lane sends it
   `merged #N`, and the lead reinstalls and runs `lane done` on Hayden's standing approval. Each

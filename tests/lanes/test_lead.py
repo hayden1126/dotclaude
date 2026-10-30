@@ -420,6 +420,27 @@ class Lock(Lead):
         self.assertEqual(p.returncode, 1)
         self.assertIn("../x", p.stderr)
 
+    def test_init_checks_the_trial_locks_against_the_locks(self):
+        # Every trial also takes them, before `suite`: each must be a lock `lane lock` accepts.
+        out = self.lane("init", "--trial-locks", "e2e")
+        self.assertIn("trial-locks = e2e", out)
+        for spec, why in (("suite", "`suite`, which every trial takes already"),
+                          ("nope", "nope, which the config's locks don't list"),
+                          ("../x", "bad lock name(s) ../x")):
+            with self.subTest(spec=spec):
+                p = self.run_lane("init", "--trial-locks", spec)
+                self.assertEqual(p.returncode, 1, p.stderr)
+                self.assertIn(why, p.stderr)
+        # A --locks that drops one is refused too: every trial would then fail on it.
+        p = self.run_lane("init", "--locks", "gate")
+        self.assertEqual(p.returncode, 1, p.stderr)
+        self.assertIn("e2e, which the config's locks don't list", p.stderr)
+        (cfg,) = self.config_files()
+        self.assertIn('locks = "gate,e2e"', self.read(cfg))
+        self.assertIn('trial-locks = "e2e"', self.read(cfg))
+        self.assertNotIn("trial-locks", self.lane("init", "--trial-locks", ""))
+        self.lane("init", "--locks", "gate")
+
     def test_the_command_exit_code_passes_through(self):
         self.assertEqual(self.run_lane("lock", "gate", "--", "sh", "-c", "exit 3").returncode, 3)
         # A command killed by signal n kills `lane` with n too, as a calling shell expects.

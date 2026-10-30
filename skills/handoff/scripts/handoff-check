@@ -12,6 +12,10 @@ in a plain repo (the root STATUS.md). Checks:
              when a session file won't read as JSON and no readable one names this session
   A checkout outside main that matches no lane record while one is left out fails at once:
   the left-out record may be its own.
+  comments   every `<!--` outside code is closed by a `-->` in its own section (split at `#`
+             and `##` headings), and no `-->` stands outside code and comments
+             (lanelib.comment_flaw): either flaw makes the comment's text read as the record's,
+             which can hide a `Keep open:`
   next       a non-empty section under a `##` heading starting with "Next", or "Notes for next
              session", with a step in it besides any `Keep open:` line (a flag, not a step)
   approval   every `(approved by Hayden` marker in that section carries a valid ISO date
@@ -28,13 +32,15 @@ in a plain repo (the root STATUS.md). Checks:
   pushed     in a lane, unpushed commits are noted in the record (a warning: pushes need Hayden)
 The handoff skill runs it last; a handoff is not done until it passes.
 
---closing is the check `lane done` runs before it ends a lane's sessions. It keeps clean, next,
-absolute, claims and pushed, but fresh compares the status file against HEAD's commit only, not
+--closing is the check `lane done` runs before it ends a lane's sessions. It keeps clean,
+comments, next, absolute, claims and pushed, but fresh compares the status file against HEAD's commit only, not
 against the session's start (after /pass, the idle new session started after the handoff), and
 approval is skipped (no session resumes from that Next block). It adds:
-  kept       a `Keep open: <why>` item in the Next block fails: the lane has more PRs to come
-             (lanelib.kept_open; `lane done` checks it too, live session or not). Skipped with
-             --abandon, which `lane done --abandon` passes on: it closes a kept lane anyway
+  kept       a `Keep open: <why>` item in the Next block fails, even one inside a comment:
+             the lane has more PRs to come (lanelib.kept_flag; `lane done` checks it too, live
+             session or not). Skipped with
+             --abandon, which `lane done --abandon` passes on: it closes a kept lane anyway.
+             --abandon skips comments too, which `lane done` checks for the same reason
 """
 import argparse
 import datetime
@@ -166,7 +172,7 @@ def unpushed(repo: lanelib.Repo, lane: dict) -> tuple[str, int]:
 def check(cwd: str, closing: bool = False,
           abandon: bool = False) -> tuple[str, list[str], list[str]]:
     """(header, failures, warnings) for the checkout holding cwd; closing: --closing's checks;
-    abandon: skip --closing's kept check."""
+    abandon: skip --closing's kept and comments checks."""
     repo = lanelib.resolve(cwd)
     if repo is None:
         return "handoff-check: not inside a git work tree", ["not a git work tree"], []
@@ -204,13 +210,18 @@ def check(cwd: str, closing: bool = False,
     elif start is not None and mtime < start:
         fails.append(f"the status file was not written during this session ({source})")
 
+    if not (closing and abandon) and (flaw := lanelib.comment_flaw(text)):
+        fails.append(f"{flaw[1]} at line {flaw[0]}: fix the comment (quote a marker in "
+                     "backticks). Until then the tools read the comment's text as the record's, "
+                     "and can miss a `Keep open:`")
+
     block = lanelib.next_block(text)
     if not block:
         fails.append("no non-empty `## Next...` (or `## Notes for next session`) section")
     elif not closing and not lanelib.first_item(block):
         fails.append("the Next block has only a `Keep open:` line, which is a flag, not a step: "
                      "add the next step after it")
-    elif closing and not abandon and (kept := lanelib.kept_open(block)):
+    elif closing and not abandon and (kept := lanelib.kept_flag(text)):
         fails.append(f"the Next block says {kept.splitlines()[0].strip()!r}: the lane stays open "
                      "for more PRs. Its session drops that line at its last merge (`lane done "
                      "--abandon` closes it anyway)")

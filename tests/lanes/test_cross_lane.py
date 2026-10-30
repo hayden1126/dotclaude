@@ -1223,19 +1223,28 @@ class Trial(LaneWork):
     def test_a_failure_with_no_test_id_and_another_exit_on_the_baseline_is_compared_by_hand(self):
         rc, out, err = self.trial("--run", "if [ -f b.txt ]; then exit 2; fi; exit 1")
         self.assertEqual(rc, 1, out + err)
-        self.assertIn("failed (exit 2) with no test id to compare against the baseline", out)
+        self.assertIn("failed (exit 2) with no test id on either run (exit 1 on the baseline)",
+                      out)
         # No id on the merge, ids on the baseline: still by hand.
         rc, out, err = self.trial("--run", 'if [ ! -f b.txt ]; then echo "FAIL: test_x '
                                            '(t.T.test_x)"; fi; exit 1')
         self.assertEqual(rc, 1, out + err)
         self.assertIn("failed (exit 1) with no test id to compare against the baseline", out)
 
-    def test_a_failure_with_no_test_id_that_the_baseline_repeats_isnt_the_merges(self):
+    def test_a_failure_with_no_test_id_on_either_run_is_compared_by_hand(self):
+        # Even when both runs exit alike: a suite that never ran (a directory as `--run`, exit
+        # 126 on both; a runner missing a flag, exit 2 on both) would pass a gate that can't
+        # vouch for it.
         rc, out, err = self.trial("--run", "exit 3", "--run", "true")
-        self.assertEqual(rc, 0, out + err)
-        self.assertIn("lane trial: suite 1 (exit 3): fails the same way on the baseline (exit 3 "
-                      "on both, no test ids to compare)", out)
-        self.assertNotIn("FAILED", out)
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("lane trial: suite 1 (exit 3): failed (exit 3) with no test id on either "
+                      "run (exit 3 on the baseline): the trial can't vouch for it, compare the "
+                      "two runs above by hand", out)
+        self.assertIn("lane trial: suite 2 (true): ok", out)
+        rc, out, err = self.trial("--run", "./")  # the tree itself: a directory
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("failed (exit 126) with no test id on either run (exit 126 on the "
+                      "baseline)", out)
 
     def test_tap_ids_judge_a_failure(self):
         # A merge-only TAP failure fails the trial; one the baseline repeats under another
@@ -1371,6 +1380,56 @@ class Trial(LaneWork):
         self.assertEqual(rc, 75, out + err)
         self.assertIn("gave up on lock suite", err)
         self.assertNotIn("merged", out)
+
+    def test_it_takes_the_trial_locks_before_the_suite_lock(self):
+        # A repo's own lock (capella's `quiet`) keeps its gate from running beside a trial.
+        self.lane("init", "--locks", "suite,quiet", "--trial-locks", "quiet")
+        rc_file = os.path.join(self.tmp, "inner-rc")
+        inner = shlex.join(["env", "-u", "LANE_LOCKS_HELD", sys.executable, LANE, "lock", "quiet",
+                            "--wait", "0", "--", "true"])
+        rc, out, err = self.trial("--run", f"{inner}; echo $? > {shlex.quote(rc_file)}")
+        self.assertEqual(rc, 0, out + err)
+        self.assertEqual(self.read(rc_file).strip(), "75")  # held by the trial meanwhile
+        self.assertIn("gave up on lock quiet", out)
+        # Held elsewhere: the trial gives up on it first, never taking `suite` meanwhile.
+        lock = os.path.join(self.common, "lanes", "_locks", "quiet")
+        fd = os.open(lock, os.O_RDWR)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        probe = shlex.join([sys.executable, LANE, "lock", "suite", "--wait", "0", "--", "true"])
+        rc, out, err = self.trial("--wait", "0", "--run", "true")
+        self.assertEqual(rc, 75, out + err)
+        self.assertIn("gave up on lock quiet", err)
+        self.assertNotIn("merged", out)
+        self.assertEqual(subprocess.run(probe, shell=True, cwd=self.alpha, env=self.env,
+                                        capture_output=True, timeout=30).returncode, 0)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        # One --wait covers both: a give-up on `suite` says so, its "after Ns" being what was left.
+        suite = os.open(os.path.join(self.common, "lanes", "_locks", "suite"),
+                        os.O_RDWR | os.O_CREAT)
+        self.addCleanup(os.close, suite)
+        fcntl.flock(suite, fcntl.LOCK_EX)
+        rc, out, err = self.trial("--wait", "0.5", "--run", "true")
+        self.assertEqual(rc, 75, out + err)
+        self.assertIn("gave up on lock suite", err)
+        self.assertIn("--wait 0.5s covers all of the trial's locks (quiet, suite), in that order",
+                      err)
+        fcntl.flock(suite, fcntl.LOCK_UN)
+        # Under an outer hold of it (the workaround capella was sent), the trial runs under it.
+        p = subprocess.run([sys.executable, LANE, "lock", "quiet", "--", sys.executable, LANE,
+                            "trial", "--run", "true"], cwd=self.alpha, env=self.env,
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("lock quiet is held by a command this one runs under", p.stdout + p.stderr)
+
+    def test_a_trial_lock_the_locks_dont_list_refuses_before_any_wait(self):
+        # A hand-edited config: refused up front, not after a wait for the locks before it.
+        (cfg,) = self.config_files()
+        self.write(cfg, self.read(cfg) + 'trial-locks = "quiet"\n')
+        rc, out, err = self.trial("--wait", "0", "--run", "true")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("the lanes config's trial-locks names quiet, which the config's locks don't "
+                      "list", err)
 
     def test_a_suite_that_takes_the_suite_lock_runs_under_the_trials_hold(self):
         # It would wait on its own trial forever. The same holds for `lane lock` inside itself.
@@ -1543,8 +1602,8 @@ class Trial(LaneWork):
         else:  # the same check without node: the module's file, at the tree's own path
             cmd = "test -f node_modules/fake/index.js"
         rc, out, err = self.trial("--run", cmd)
-        self.assertEqual(rc, 0, out + err)  # fails on both runs, the same way
-        self.assertIn("fails the same way on the baseline", out)
+        self.assertEqual(rc, 1, out + err)  # fails on both runs alike, with no id: by hand
+        self.assertIn("no test id on either run", out)
         self.assertIn("baseline run of suite 1/1", out)
         rc, out, err = self.trial("--link", "node_modules", "--run", cmd)
         self.assertEqual(rc, 0, out + err)

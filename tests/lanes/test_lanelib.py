@@ -34,8 +34,112 @@ class ProseOnly(unittest.TestCase):
                 self.assertEqual(self.phrases(text), ["this session"])
         self.assertEqual(self.phrases("```\nx\n`````  \nthis session\n"), ["this session"])
 
+    def test_a_backtick_in_the_info_string_makes_no_fence(self):
+        # CommonMark: ```x``` is inline code, not a fence.
+        self.assertEqual(lanelib.fenced(["```x```", "this session", "```"]), [False, False, True])
+
+    def test_a_tab_indented_fence_under_a_list_item_quotes(self):
+        # A fence there in CommonMark: linting its example would deny quoted text.
+        self.assertEqual(self.phrases("- Run:\n\t```sh\n\techo this session\n\t```\n"), [])
+
     def test_an_unclosed_fence_runs_to_the_end(self):
         self.assertEqual(self.phrases("this session\n```\nmy lane\n"), ["this session"])
+
+
+class UnclosedComment(unittest.TestCase):
+    """lanelib.comment_flaw and the scan it shares with section(): a flaw the check misses is
+    comment text the tools read as the record's."""
+
+    def flaw(self, text):
+        line, what = lanelib.comment_flaw(text)
+        self.assertEqual(what, lanelib.UNCLOSED)
+        return line
+
+    def test_closed_comments_pass(self):
+        for text in ("## Next\n<!-- one line -->\n- Step.\n",
+                     "## Next\n<!-- a comment\nover lines, quoting `Keep open: <why>` -->\n",
+                     "## State\n<!-- a --> x <!-- b -->\n## Next\n<!---->\n- Step.\n",
+                     "", None):
+            self.assertIsNone(lanelib.comment_flaw(text), text)
+
+    def test_an_unclosed_opener_gives_its_line(self):
+        self.assertEqual(self.flaw("# LANE: x\n\n## Next\n- Step.\n<!-- note\n"), 5)
+        # A form feed is no line break to an editor, though splitlines() makes it one.
+        self.assertEqual(self.flaw("## Next\n\x0c\n<!-- x\n"), 3)
+        # The first unclosed one, after a closed one on the same line.
+        self.assertEqual(self.flaw("## A\nok\n<!-- a --> <!-- b\n"), 3)
+
+    def test_a_comment_closed_only_in_a_later_section_is_unclosed(self):
+        # section() reads each section alone, so the opener's own section keeps it open.
+        text = "## State\n<!-- note\n## Next\n- Step. -->\n"
+        self.assertEqual(self.flaw(text), 2)
+
+    def test_an_opener_in_code_is_quoted_not_opened(self):
+        for text in ("## Backlog\n- An unclosed `<!--` hides `Keep open:`.\n",
+                     "## Backlog\n```\n<!-- an example\n```\n",
+                     "## Backlog\nquoted `-->`, and `<!--` too\n"):
+            self.assertIsNone(lanelib.comment_flaw(text), text)
+        # Inside a comment, backticks quote nothing: its first `-->` ends it.
+        self.assertIsNone(lanelib.comment_flaw("## Next\n<!-- start with `Keep open: <why>` -->\n"))
+
+    def test_short_comments_close_themselves(self):
+        # `<!-->` and `<!--->` are whole comments (CommonMark 0.31, HTML): read as openers, they
+        # ran to a later `-->` and hid the flag between.
+        for opener in ("<!-->", "<!--->"):
+            text = f"## Next\n- Use {opener} here\nKeep open: PR 2\n- and <!-- x -->\n"
+            self.assertIsNone(lanelib.comment_flaw(text), opener)
+            self.assertEqual(lanelib.kept_open(lanelib.next_block(text)), "Keep open: PR 2")
+
+    def test_a_comment_starting_its_line_leaves_the_flag_at_the_start(self):
+        # The blank after `-->` once indented the flag into a wrap of the step before it.
+        for comment in ("<!-- docs -->", "<!-- docs\nfollow -->", "  <!-- docs -->"):
+            text = f"## Next\n- Ship PR 1.\n{comment} Keep open: PR 2\n"
+            self.assertEqual(lanelib.kept_open(lanelib.next_block(text)), "Keep open: PR 2",
+                             comment)
+        # Mid-line, after text, it stays a mention, as it always was.
+        text = "## Next\n- Ship. <!-- docs --> Keep open: PR 2\n"
+        self.assertIsNone(lanelib.kept_open(lanelib.next_block(text)))
+
+    def test_quoted_markers_never_hide_keep_open(self):
+        # The raw strip ran from a quoted `<!--` to a quoted `-->`, the flag between them gone.
+        text = ("## Next\n<!-- template -->\n- Document the `<!--` rule.\nKeep open: docs PR "
+                "follows\n- Then fix the `-->` parsing.\n")
+        self.assertIsNone(lanelib.comment_flaw(text))
+        self.assertEqual(lanelib.kept_open(lanelib.next_block(text)), "Keep open: docs PR follows")
+        # A double-backtick span quotes too: read as an empty span and a marker, it didn't.
+        text = "## Next\n- Doc the ``<!--`` rule\nKeep open: docs PR\n- And ``-->``\n"
+        self.assertIsNone(lanelib.comment_flaw(text))
+        self.assertEqual(lanelib.kept_open(lanelib.next_block(text)), "Keep open: docs PR")
+
+    def test_a_fence_never_closed_in_its_section_is_plain_text(self):
+        # A mistyped closer (here ```bash) once left every later line looking like code, so the
+        # unclosed comment in Next passed while section() leaked it. A fence ends at its section.
+        text = ("## State\n```\ncode\n```bash\n## Next\n<!-- start with Keep open: PR 2.\n"
+                "- Write the docs test.\n")
+        self.assertEqual(self.flaw(text), 6)
+        self.assertEqual(self.flaw("## Backlog\n~~~html\n<!--\n"), 3)
+        # Its lines read as text in the section too, a closed comment in them stripped.
+        self.assertEqual(lanelib.section("## Next\n```\n<!-- x -->- Step.\n", "Next"),
+                         "```\n- Step.")
+
+    def test_a_stray_closer_is_a_flaw(self):
+        # A comment that quoted `-->` ended there: its tail became the first Next item, where
+        # /pass reads the approval marker.
+        text = "## Next\n<!-- never `-->` here -->\n- Step.\n"
+        self.assertEqual(lanelib.comment_flaw(text), (2, lanelib.STRAY))
+        self.assertEqual(lanelib.first_item(lanelib.next_block(text)), "` here -->")
+        self.assertEqual(lanelib.comment_flaw("## A\nx --> y\n## B\n<!-- z\n"), (2, lanelib.STRAY))
+        self.assertEqual(lanelib.comment_flaw("## A\n<!-- z\nx --> y -->\n"), (3, lanelib.STRAY))
+
+    def test_the_template_splice_that_hid_keep_open(self):
+        # An edit at the template comment's own mention of the flag dropped its `-->`: the
+        # comment's text became the first step, and kept_open found no line starting with it.
+        text = ("# LANE: x\n\n## Next\n"
+                "<!-- The exact next concrete step and what to verify. handoff-check fails while "
+                "this is empty.\nWhile more PRs will follow this one, start with Keep open: PR 2 "
+                "follows for the docs.\n- Write the docs test.\n")
+        self.assertIsNone(lanelib.kept_open(lanelib.next_block(text)))
+        self.assertEqual(self.flaw(text), 4)
 
 
 class Sandbox(unittest.TestCase):

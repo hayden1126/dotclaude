@@ -402,6 +402,54 @@ class KeepOpen(unittest.TestCase):
         self.assertIsNone(lanelib.kept_open(None))
 
 
+class KeptFlag(unittest.TestCase):
+    """lanelib.kept_flag: no comment hides `Keep open:`, whatever a renderer takes for one."""
+
+    def test_a_flag_inside_a_comment_still_holds(self):
+        for body in ("<!-- Keep open: PR 2 follows. -->\n- Step.\n",
+                     "- Step.\n<!--\nKeep open: PR 2 follows.\n-->\n",
+                     # Opened in a list item: markdown ends the comment with the item.
+                     "-   <!--\nKeep open: PR 2\nx-->\n",
+                     # `--` inside: CommonMark 0.30 and GitHub read no comment here at all.
+                     "x <!--\nKeep open: PR 2\ny <!--->\n"):
+            text = f"# LANE: x\n\n## Next\n{body}"
+            self.assertIsNone(lanelib.kept_open(lanelib.next_block(text)), body)
+            self.assertIsNotNone(lanelib.kept_flag(text), body)
+
+    def test_a_flag_behind_a_comment_or_commented_under_a_bullet_holds(self):
+        # A line-start comment with text in it: the marker-deleting read kept its text in front.
+        text = "## Next\nx <!--\n<!-- c -->Keep open: PR 2\n"
+        self.assertIsNone(lanelib.comment_flaw(text))
+        self.assertEqual(lanelib.kept_flag(text), "Keep open: PR 2")
+        # Indented under a bullet, a commented flag still holds, as the docs say.
+        self.assertEqual(lanelib.kept_flag("## Next\n- Step.\n  <!-- Keep open: PR 2 -->\n"),
+                         "Keep open: PR 2")
+        # A whole-line comment once read as a template placeholder (`<...>`) and was dropped.
+        self.assertEqual(lanelib.kept_flag("## Next\n- Step.\n<!-- Keep open: PR 2 -->\n"),
+                         "Keep open: PR 2")
+
+    def test_a_commented_fence_never_upsets_where_next_ends(self):
+        # The commented-out fence's closer has `-->` after it, so it never closes, and the real
+        # fence's opener read as its closer: the shell comment then ended Next.
+        text = ("## Next\n<!-- old:\n```sh\nmake\n``` -->\n```\n# install first\n```\n"
+                "Keep open: PR 2\n")
+        self.assertEqual(lanelib.kept_flag(text), "Keep open: PR 2")
+
+    def test_a_heading_in_a_fence_never_ends_next_for_it(self):
+        # section() ends Next at the shell comment, so the flag after the fence was lost.
+        text = "## Next\n- Run:\n```sh\n# install first\nmake\n```\nKeep open: PR 2.\n"
+        self.assertIsNone(lanelib.kept_open(lanelib.next_block(text)))
+        self.assertEqual(lanelib.kept_flag(text), "Keep open: PR 2.")
+
+    def test_mentions_and_other_sections_still_dont(self):
+        for text in ("## Next\n<!-- start with `Keep open: <why>` while more PRs follow -->\n"
+                     "- Step.\n",
+                     "## State\n<!-- Keep open: PR 2. -->\n## Next\n- Step.\n",
+                     "## Next\n- Step.\n```\n## Other\n```\n## State\nKeep open: PR 2.\n"):
+            self.assertIsNone(lanelib.kept_flag(text), text)
+        self.assertIsNone(lanelib.kept_flag(None))
+
+
 class Lane(Check):
     def setUp(self):
         super().setUp()
@@ -559,6 +607,26 @@ class Lane(Check):
         self.assertPasses(self.check(self.path))
         self.assertGap(self.check(self.path, "--closing"), "Keep open: PR 2 follows for #42.")
         # `lane done --abandon` passes --abandon on, since it closes a kept lane anyway.
+        self.assertPasses(self.check(self.path, "--closing", "--abandon"))
+
+    def test_an_unclosed_comment_fails_naming_its_line(self):
+        # The comment's text would read as the record's, hiding a `Keep open:` from --closing.
+        # At the end: the template's own comment comes first in Next, and its `-->` would close it.
+        self.finish("<!-- Keep open: PR 2 follows.\n")
+        line = len(self.body.splitlines()) + 1
+        self.assertGap(self.check(self.path), f"an unclosed `<!--` at line {line}")
+        self.assertGap(self.check(self.path, "--closing"), f"an unclosed `<!--` at line {line}")
+        # `lane done --abandon` closes the lane anyway, as it does a kept one.
+        self.assertPasses(self.check(self.path, "--closing", "--abandon"))
+
+    def test_an_opener_quoted_in_code_passes(self):
+        self.finish("\n## Backlog\n- An unclosed `<!--` hides `Keep open:`.\n")
+        self.assertPasses(self.check(self.path))
+
+    def test_closing_refuses_a_flag_inside_a_comment(self):
+        # Whether a renderer shows it depends on the dialect: it holds either way.
+        self.finish("<!-- Keep open: PR 2 follows. -->\n")
+        self.assertGap(self.check(self.path, "--closing"), "Keep open: PR 2 follows.")
         self.assertPasses(self.check(self.path, "--closing", "--abandon"))
 
     def test_a_next_with_only_keep_open_has_no_step(self):
