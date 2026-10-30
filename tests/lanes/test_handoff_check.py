@@ -165,6 +165,36 @@ class PlainRepo(Check):
         self.write(os.path.join(self.main, ".claude", "worktrees", "loose.txt"), "x")
         self.assertPasses(self.check())
 
+    def plant_filter(self, *scope):
+        """A clean and a process filter that would mark a file when run, routed to a tracked file
+        made stat-dirty at its size (so `git status` would re-hash it); the marker's path."""
+        marker = os.path.join(self.tmp, "filter-ran")
+        prog = os.path.join(self.tmp, "filter.sh")
+        self.write(prog, f"#!/bin/sh\ntouch {marker}\ncat\n")
+        os.chmod(prog, 0o755)
+        for key in ("clean", "process"):
+            subprocess.run(["git", "config", *scope, f"filter.probe.{key}", prog], cwd=self.main,
+                           env=self.env, check=True)
+        self.commit("data.txt", "data\n")
+        self.write(os.path.join(self.main, ".git", "info", "attributes"), "data.txt filter=probe\n")
+        self.commit("STATUS.md", GOOD + "- data.txt holds the fixture.\n")
+        os.remove(marker)  # the fixture's own git add ran the filter
+        # Last, since a commit refreshes the index and would record the new stat.
+        past = time.time() - 7200  # wall clock
+        os.utime(os.path.join(self.main, "data.txt"), (past, past))
+        return marker
+
+    def test_a_filter_in_the_repos_own_config_fails_and_never_runs(self):
+        marker = self.plant_filter()
+        result = self.check()
+        self.assertFalse(os.path.exists(marker), "the check ran the repo's filter")
+        self.assertGap(result, "filter")
+
+    def test_a_filter_from_global_config_passes(self):
+        # git lfs install writes its filter to the global config, which the session can't write.
+        self.plant_filter("--global")
+        self.assertPasses(self.check())
+
     def test_sandbox_stubs_are_never_leftovers(self):
         # The Bash sandbox mounts /dev/null over protected paths a repo lacks (.claude/hooks in
         # dotclaude); git lists the stub as untracked. A link to /dev/null stands in for the

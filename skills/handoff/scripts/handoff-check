@@ -3,8 +3,9 @@
 
 Works in a lane (the record is <lane>/.lane/STATUS.md), in the main checkout of a lanes repo and
 in a plain repo (the root STATUS.md). Checks:
-  clean      the tree is clean, or each leftover's repo-relative path is named in the status file;
-             agent worktrees (.claude/worktrees/) and sandbox /dev/null stubs never count
+  clean      the repo's own config sets no filter clean or process command (git status would run
+             it; global and system ones pass), and the tree is clean, or each leftover's
+             repo-relative path is named in the status file; agent worktrees (.claude/worktrees/) and sandbox /dev/null stubs never count
   fresh      the status file was written after HEAD's commit (or HEAD carries it) and after this
              session started: in a lane the latest lane.json sessions[].startedAt; elsewhere the
              session named by $CLAUDE_CODE_SESSION_ID, else the newest Claude session file whose
@@ -92,6 +93,24 @@ def sandbox_stub(path: str) -> bool:
         return stat.S_ISCHR(os.stat(path).st_mode)
     except OSError:
         return False
+
+
+def repo_filter(repo: lanelib.Repo) -> str | None:
+    """Why `git status` can't run in the checkout, or None: a filter's clean or process command
+    set in the repo's own config (local, worktree or command scope), which status runs on a file
+    the checkout routes to it. Global and system config, which the session can't write, may set
+    one (git lfs install does). Unreadable config fails closed."""
+    p = git(["config", "--show-scope", "--get-regexp", r"^filter\..*\.(clean|process)$"],
+            repo.toplevel)
+    if p.returncode not in (0, 1):  # 1: none set
+        return f"its filter config can't be read ({p.stderr.strip() or p.returncode})"
+    keys = [ln.split(None, 2)[1] for ln in p.stdout.splitlines()
+            if ln.split(None, 1)[0] not in ("global", "system")]
+    if keys:
+        return (f"the repository's own config sets {', '.join(keys)}, a program `git status` "
+                "would run, so the tree went unchecked. Remove it, or set it in your global "
+                "config")
+    return None
 
 
 def leftovers(repo: lanelib.Repo) -> list[str]:
@@ -190,8 +209,9 @@ def check(cwd: str, closing: bool = False,
     except OSError:
         return header, [f"no status file at {status}"], []
 
-    dirty = [p for p in leftovers(repo) if not named(p, text)]
-    if dirty:
+    if why := repo_filter(repo):
+        fails.append(why)
+    elif dirty := [p for p in leftovers(repo) if not named(p, text)]:
         fails.append("uncommitted and not named in the status file: " + ", ".join(dirty))
 
     mtime = os.path.getmtime(status)
