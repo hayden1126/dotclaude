@@ -229,6 +229,11 @@ class PlainRepo(Check):
         git("update-ref", "HEAD", git("hash-object", "-t", "commit", "-w", raw))
         git("config", "log.showSignature", "true")
         git("config", "gpg.program", prog)
+        # Control: a plain git log does run it, so the check's own run proves something.
+        subprocess.run(["git", "log", "-1", "--format=%ct"], cwd=self.main, env=self.env,
+                       capture_output=True)
+        self.assertTrue(os.path.exists(marker), "the fixture's gpg.program never ran")
+        os.remove(marker)
         self.check()
         self.assertFalse(os.path.exists(marker), "the check ran the repo's gpg.program")
 

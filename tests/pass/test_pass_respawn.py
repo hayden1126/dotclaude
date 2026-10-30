@@ -958,6 +958,33 @@ class Plain(Base):
         self.assertIn(prompt, n["text"])
         self.assertIn("so it may or may not run", n["text"])
 
+    def test_a_compact_enter_that_may_have_gone_hands_over_the_prompt(self):
+        # Review round 2: tmux giving no answer at /compact's Enter, or failing the second Enter
+        # after the first went, may leave /compact running: another pass could compact twice.
+        prompt = self.PROMPT + " Call EnterPlanMode first."
+        real = self.mod.tmux
+        for enters, answer in ((1, None), (2, None),
+                               (2, subprocess.CompletedProcess([], 1, "", "lost"))):
+            with self.subTest(enters=enters, answer=answer):
+                self.reset()
+                self.newlines(enters - 1)  # a first Enter that lands as a newline
+                seen = []
+
+                def tmux(plan, *args, enters=enters, answer=answer, seen=seen):
+                    if args[0] == "send-keys" and args[-1] == "Enter":
+                        seen.append(args)
+                        if len(seen) == enters:
+                            return answer
+                    return real(plan, *args)
+                self.mod.tmux = tmux
+                try:
+                    code, out = self.run_pass("--compact", "--foreground")
+                finally:
+                    self.mod.tmux = real
+                self.assertEqual(code, 1, out)
+                self.assertLoud("/compact may not have gone")
+                self.assertIn(prompt, self.notice()["text"])
+
     def test_an_enter_whose_box_cant_be_read_is_not_counted_as_sent(self):
         prompt = self.PROMPT + " Call EnterPlanMode first."
         real, after = self.mod.tmux, []

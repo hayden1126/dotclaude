@@ -1583,28 +1583,30 @@ def tmux_failed(p: subprocess.CompletedProcess | None) -> tuple[str, str] | None
     return ("tmux", p.stderr.strip() or "no error text") if p else ("silent", "tmux didn't run")
 
 
-def send_line(plan: Plan, typing: list[str], enter: list[str]) -> tuple[int, str, str] | None:
+def send_line(plan: Plan, typing: list[str],
+              enter: list[str]) -> tuple[int, str, str, bool] | None:
     """Type a line, Enter once the box shows it, and once more if it still does after; None when
-    it went, else (the failed step: 0 typing, 1 its Enter; how; what happened). how is
-    tmux_failed's, or what the box showed: `unseen` (no Enter went, the line may sit in the box),
-    `stuck` (still there after two Enters) or `unread` (tmux didn't answer after an Enter): after
-    either of the last two the line may yet go. No Enter while the box shows anything else or no
-    box: it could confirm a dialog."""
+    it went, else (the failed step: 0 typing, 1 its Enter; how; what happened; went: an Enter may
+    have gone, so the line may yet be sent). how is tmux_failed's, or what the box showed:
+    `unseen` (no Enter went, the line may sit in the box), `stuck` (still there after two
+    Enters) or `unread` (tmux didn't answer after an Enter). No Enter while the box shows
+    anything else or no box: it could confirm a dialog."""
     if failed := tmux_failed(tmux(plan, *typing[1:])):
-        return 0, *failed
+        return 0, *failed, False
     line = "".join(typing[-1].split())
     if box_until(plan, lambda box: box == line, SHOW_WAIT) != line:
         return 1, "unseen", (f"not sent: the input box didn't show the typed text within "
-                             f"{SHOW_WAIT:g} s")
-    for _ in range(2):
+                             f"{SHOW_WAIT:g} s"), False
+    for n in range(2):
         if failed := tmux_failed(tmux(plan, *enter[1:])):
-            return 1, *failed
+            # With no answer the key may have gone; a second Enter follows one that did.
+            return 1, *failed, bool(n) or failed[0] == "silent"
         box = box_until(plan, lambda box: box is not NO_ANSWER and box != line, SENT_WAIT)
         if box is NO_ANSWER:
-            return 1, "unread", "tmux didn't answer after the Enter, so it may not have gone"
+            return 1, "unread", "tmux didn't answer after the Enter, so it may not have gone", True
         if box != line:
             return None
-    return 1, "stuck", "the input box still showed it after two Enters"
+    return 1, "stuck", "the input box still showed it after two Enters", True
 
 
 def pane_place(plan: Plan) -> tuple[str | None, str, str]:
@@ -2193,11 +2195,11 @@ def wait_and_act(plan: Plan, procs) -> str:
         failed = send_line(plan, actions[line], actions[line + 1])
         if failed is None:
             continue
-        step, how, said = failed
+        step, how, said, went = failed
         i = line + step
         detail = late(plan, f"send-keys {i + 1} of 4: {said}")
         prompt = actions[2][-1]
-        if i == 1 and how in ("stuck", "unread"):
+        if i == 1 and went:
             # Its Enters went out, so /compact may yet run: passing again could compact twice.
             return drop(plan, "failed", f"{detail}; resume prompt: {prompt}",
                         "pass failed: /compact may not have gone (it showed in the box after its "
