@@ -171,6 +171,17 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     2026-10-30; Hayden split them out of its PR). Private: sandbox-audit FINDINGS, "Excluded-guard
     design gaps, 2026-10-30", G-A to G-E, plus a few false-refusal lows. A new lane once pass-fixes
     merges (it owns `hooks/excluded_guard.py` until then); G-A starts with one live probe.
+  - **`lane lock <name> --shared -- <cmd>`** (feature; capella-studio lead, session 6bceec36,
+    on Hayden's pick in capella lane checkfix's window, 2026-10-30). Shared holders coexist; an
+    exclusive holder waits for all of them, and a queued exclusive waiter blocks new shared ones
+    (no starvation). A per-lock cap on shared holders in the lanes config (capella starts at 2;
+    its 17 GB machine hit low memory on 2026-10-30). Nesting must hold: a shared outer lock around
+    exclusive inner ones. `lane ls` shows each holder and its mode. Why: capella's 2-minute gates
+    waited 30+ minutes behind a 50-minute browser sweep; measured side by side, the gate passed
+    4/4 (median 259 s vs 219 s alone). Note for the lane: `flock`'s shared mode alone doesn't
+    stop writer starvation, so the queued-exclusive rule needs a turnstile. Lane-able (`lane`,
+    `lanelib.py`, `tests/lanes`, `docs/lanes.md`), after ports; overlaps lane park. Tell the
+    capella-studio lead when it lands.
   - **Approval-marker tests flake at midnight** (low; lane park, 2026-10-30). Two
     `tests/lanes/test_handoff_check.py` PlainRepo tests (a dated marker passes, a future one fails)
     failed once in a full `tests/lanes` run that crossed local midnight, then passed on rerun.
