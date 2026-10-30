@@ -93,7 +93,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **Live lanes** (briefs in each record). Merge order: 1 pass-fixes (`fix/pass-compact`,
     carries the lead's notes; opened 2026-10-29 on Hayden's pick: the two compact-pass bugs and
     the excluded-guard rule 1 items below), 2 park (`feat/lane-park`, opened 2026-10-29 on
-    Hayden's "a third lane since lane-fixes almost done": `lane park` below), 3 practices
+    Hayden's "a third lane since lane-fixes almost done": `lane park` below), 3 cache-gaps
+    (`fix/sandbox-cache-gaps`, opened 2026-10-29 on Hayden's pick of N2/N3 over ports: the two
+    sandbox gaps below; its install narrows the sandbox live, so it tells the lead first), 4 practices
     (`feat/practices-auth-secrets`, its next PR; paused by Hayden since 2026-10-24, last so it
     blocks no install; it conflicts with origin/main on its own, per lane-fixes' trial).
     Merged 2026-10-29 and installed from main, both closed: chrome-dup (#151: one chrome-devtools
@@ -104,7 +106,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
 
   Backlog:
-  - **Next lane, one slot free since #152:** ports (below) or N2/N3 (Hayden's pick).
+  - **Next lane when a slot frees:** ports (below; Hayden picked N2/N3 first, 2026-10-29).
   - G8 open probes (a) and (b) (Hayden's pick, 2026-10-14): Hayden runs
     `~/scratch/sandbox-audit/g8-probe/run.py` by hand with the sandbox off, because the auto-mode
     classifier refused the run. Results go into the private findings file's G8 section.
@@ -149,7 +151,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     follow-up (sandbox-audit FINDINGS, G5b) was probed on Hayden's ok (2026-10-29) and routed
     to lane pass-fixes with it. Its guard half is committed in the lane; the handoff-check half
     goes in the same PR, after pass-fixes merges origin/main (lane-fixes merged as #152).
-  - **Two open sandbox gaps from lane chrome-dup's gap check** (high; lane chrome-dup,
+  - **Two open sandbox gaps from lane chrome-dup's gap check** (lane cache-gaps; high; lane chrome-dup,
     2026-10-25, reported to the lead 2026-10-29). Details are private: sandbox-audit FINDINGS,
     "Gap check 2026-10-25", rows N2 and N3 (the parts still OPEN). Each is a new lane; both
     reach `settings.json` and `hooks/sandbox-caches.sh` (#151, merged). N3's rest needs one probe per cache; N2's fix is a design fork
@@ -309,8 +311,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Three lanes run, one slot free (In flight, Live lanes; state in their records, `lane ls`).
-     Next lane: ports or N2/N3 (Hayden's pick). Running
+  0. Four lanes run, cap full (In flight, Live lanes; state in their records, `lane ls`).
+     Next lane when a slot frees: ports. Running
      sessions took chrome-dup's allowWrite swap live at its install (2026-10-29): a session
      started before it needs a `/pass` before a sandboxed npm or bun install. Pending with Hayden, outside the lanes: `wsl --shutdown` at a break applies the 18 GB
      WSL cap set in `C:\Users\hayde\.wslconfig` on 2026-10-23 (backup `.wslconfig.bak-20261023`).
