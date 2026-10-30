@@ -199,6 +199,12 @@ class RoundTrip(LanesRepo):
         self.assertEqual(p.returncode, 1, p.stderr)
         self.assertIn(f"an unclosed `<!--` at line {line}", p.stderr)
         self.assertTrue(os.path.isdir(path))
+        # Closed, the comment still holds the lane: no comment hides the flag.
+        self.write(rec, text + "<!-- More PRs follow, so:\nKeep open: PR 2. -->\n")
+        p = self.run_lane("done", "chart-fix")
+        self.assertEqual(p.returncode, 1, p.stderr)
+        self.assertIn("Keep open: PR 2.", p.stderr)
+        self.assertTrue(os.path.isdir(path))
         self.assertIn("closed", self.lane("done", "chart-fix", "--abandon"))
         self.assertFalse(os.path.exists(path))
 

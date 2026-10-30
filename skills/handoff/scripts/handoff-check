@@ -36,8 +36,9 @@ The handoff skill runs it last; a handoff is not done until it passes.
 comments, next, absolute, claims and pushed, but fresh compares the status file against HEAD's commit only, not
 against the session's start (after /pass, the idle new session started after the handoff), and
 approval is skipped (no session resumes from that Next block). It adds:
-  kept       a `Keep open: <why>` item in the Next block fails: the lane has more PRs to come
-             (lanelib.kept_open; `lane done` checks it too, live session or not). Skipped with
+  kept       a `Keep open: <why>` item in the Next block fails, even one inside a comment:
+             the lane has more PRs to come (lanelib.kept_flag; `lane done` checks it too, live
+             session or not). Skipped with
              --abandon, which `lane done --abandon` passes on: it closes a kept lane anyway.
              --abandon skips comments too, which `lane done` checks for the same reason
 """
@@ -220,7 +221,7 @@ def check(cwd: str, closing: bool = False,
     elif not closing and not lanelib.first_item(block):
         fails.append("the Next block has only a `Keep open:` line, which is a flag, not a step: "
                      "add the next step after it")
-    elif closing and not abandon and (kept := lanelib.kept_open(block)):
+    elif closing and not abandon and (kept := lanelib.kept_flag(text)):
         fails.append(f"the Next block says {kept.splitlines()[0].strip()!r}: the lane stays open "
                      "for more PRs. Its session drops that line at its last merge (`lane done "
                      "--abandon` closes it anyway)")

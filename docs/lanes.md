@@ -271,6 +271,16 @@ Why it works this way:
   Two scans once disagreed: `section()` stripped from a quoted `<!--` to a quoted `-->`, a
   `Keep open:` line between them, while the check skipped both (lane-fixes' reviewer,
   2026-10-29).
+- **No comment hides `Keep open:`.** `done` and `handoff-check --closing` read the flag twice
+  (`lanelib.kept_flag`): in Next as the tools read it, and in Next as written with only the
+  comment markers deleted, where a heading inside a fence (a shell comment) ends nothing.
+  Either holds the lane, so a flag commented out on purpose holds too: delete it, or close with
+  `--abandon`. Why: what is a comment depends on the renderer. CommonMark 0.30 and GitHub read
+  no comment where one holds `--`, 0.31 and browsers read `<!--->` as one, and a comment
+  opened in a list item ends with the item. Compared against markdown-it (CommonMark) on
+  random Next sections, the one scan alone missed a flag the page showed in about 80 of
+  30,000. With both reads, 0 of 180,000 (lane lane-fixes, 2026-10-29), and none of 105 real records
+  changed its verdict.
 - **The backlog line moved to the lead.** The lead owns the project STATUS, so the one line at
   merge is a step of its chain, not the lane's.
 

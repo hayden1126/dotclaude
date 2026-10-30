@@ -1144,14 +1144,29 @@ def norm_request(req: str) -> str:
     return "#" + req if req.isdigit() else req
 
 
+COMMENT_MARKER = re.compile(r"<!--->|<!-->|<!--|-->")
+
+
+def unmarked(line: str) -> str:
+    """line with its comment markers deleted and the comments' text kept: a marker that starts
+    the line goes with the blanks after it, so the text behind it starts the line instead."""
+    indent = line[:len(line) - len(line.lstrip())]
+    rest = line[len(indent):]
+    while m := re.match(r"(?:<!--->|<!-->|<!--|-->)\s*", rest):
+        rest = rest[m.end():]
+    return indent + COMMENT_MARKER.sub(" ", rest)
+
+
 def section(text: str,
     *names: str,
     prefixes: tuple[str, ...] = (),
+    raw: bool = False,
 ) -> str | None:
     """The body of the first `## <heading>` section whose heading equals one of names or starts
     with one of prefixes (case-insensitive), with HTML comments (strip_comments: a marker quoted
     in code is no comment) and template placeholder lines (`- <...>`) removed. None when no such
-    heading exists."""
+    heading exists. raw: the comments' text kept, only their markers deleted (unmarked), and
+    a heading inside a fence ends nothing."""
     lines = (text or "").splitlines()
     wanted = {n.lower() for n in names}
     starts = tuple(p.lower() for p in prefixes)
@@ -1161,21 +1176,25 @@ def section(text: str,
         if not m or not (heading in wanted or (starts and heading.startswith(starts))):
             continue
         body = []
-        for nxt in lines[i + 1:]:
-            if SECTION_BREAK.match(nxt):
+        rest = lines[i + 1:]
+        # raw: a heading inside a fence (a shell comment) is code, and ends nothing; a fence
+        # never closed runs on, which only lengthens what raw reads.
+        quoted = fenced(rest) if raw else [False] * len(rest)
+        for nxt, code in zip(rest, quoted):
+            if SECTION_BREAK.match(nxt) and not code:
                 break
             body.append(nxt)
-        cleaned = strip_comments(body)[0]
+        cleaned = "\n".join(map(unmarked, body)) if raw else strip_comments(body)[0]
         kept = [ln for ln in cleaned.splitlines()
                 if ln.strip() and not re.fullmatch(r"\s*(?:[-*]\s*)?<[^<>]*>\s*", ln)]
         return "\n".join(kept)
     return None
 
 
-def next_block(text: str) -> str | None:
+def next_block(text: str, raw: bool = False) -> str | None:
     """The status file's Next block: the first `## Next...` (or `## Notes for next session`)
-    section, as section() cleans it."""
-    return section(text, "Notes for next session", prefixes=("next",))
+    section, as section() cleans it (raw: comments' text kept)."""
+    return section(text, "Notes for next session", prefixes=("next",), raw=raw)
 
 
 def status_path(repo: Repo, lane: dict | None) -> str:
@@ -1225,6 +1244,16 @@ def kept_open(block: str | None) -> str | None:
     the lane while it stands. Any item counts, not only the first: a false hit only holds a
     close, while a miss would end a lane that has work left."""
     return next((item for item in next_items(block) if KEEP_OPEN.match(item)), None)
+
+
+def kept_flag(text: str | None) -> str | None:
+    """The status file's `Keep open:` item (kept_open), in its Next block as the tools read it,
+    else as written with only comment markers deleted (next_block raw): no comment hides the
+    flag. Markdown dialects and browsers disagree on what is a comment (`<!--->`, a `--`
+    inside one, one opened in a list item ends with the item), so a flag one renderer shows
+    could sit inside what the scan takes for a comment. A flag commented out on purpose still
+    holds: delete it, or close with --abandon."""
+    return kept_open(next_block(text or "")) or kept_open(next_block(text or "", raw=True))
 
 
 def first_item(block: str | None) -> str:

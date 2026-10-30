@@ -56,7 +56,7 @@ Use it when a handoff already ran this session, or when `handoff-check` says the
 
 In a lane, once the lane's PR has merged (it ran `gh pr merge`, or Hayden said "merged"):
 
-1. Write the final outcome into the lane record. If more PRs will follow on this lane, start the Next block with `Keep open: <why>` on one line (a bullet may wrap, indented): `lane done` refuses the lane while that line stands, and the step after it is the first item.
+1. Write the final outcome into the lane record. If more PRs will follow on this lane, start the Next block with `Keep open: <why>` on one line (a bullet may wrap, indented): `lane done` refuses the lane while that line stands (commenting it out doesn't release it: delete it), and the step after it is the first item.
 2. Finish the procedure as usual, `handoff-check` last.
 3. Send the lead `merged #N` (SendMessage to what a bare `lane addr lead` prints, run just before the send) as the session's last act. Say nothing more about the merge to Hayden: the lead proves it, reinstalls, adds the backlog line and runs `lane done` on Hayden's standing approval, then reports (the `lanes` skill, "Who asks Hayden what"). Never propose `lane done`: only the lead can run it.
 4. `lane addr lead` refuses (no lead running, or several sessions and none picked): tell Hayden once that #N merged, with the refusal's way to pick the lead if it gives one.

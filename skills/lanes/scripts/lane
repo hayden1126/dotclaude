@@ -4109,7 +4109,7 @@ def cmd_done(args) -> None:
         raise LaneError(f"lane {args.id}'s record has {flaw[1]} at line {flaw[0]}, so its Next "
                         "can't be read for `Keep open:`. Fix the comment in the lane (quote a "
                         "marker in backticks); pass --abandon to close the lane anyway")
-    if kept := lanelib.kept_open(lanelib.next_block(text)):
+    if kept := lanelib.kept_flag(text):
         raise LaneError(f"lane {args.id}'s Next says {shown(kept.splitlines()[0].strip())!r}: it "
                         "stays open for more PRs. Its session drops that line at its last merge; "
                         "pass --abandon to close it anyway")

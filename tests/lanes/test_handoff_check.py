@@ -402,6 +402,35 @@ class KeepOpen(unittest.TestCase):
         self.assertIsNone(lanelib.kept_open(None))
 
 
+class KeptFlag(unittest.TestCase):
+    """lanelib.kept_flag: no comment hides `Keep open:`, whatever a renderer takes for one."""
+
+    def test_a_flag_inside_a_comment_still_holds(self):
+        for body in ("<!-- Keep open: PR 2 follows. -->\n- Step.\n",
+                     "- Step.\n<!--\nKeep open: PR 2 follows.\n-->\n",
+                     # Opened in a list item: markdown ends the comment with the item.
+                     "-   <!--\nKeep open: PR 2\nx-->\n",
+                     # `--` inside: CommonMark 0.30 and GitHub read no comment here at all.
+                     "x <!--\nKeep open: PR 2\ny <!--->\n"):
+            text = f"# LANE: x\n\n## Next\n{body}"
+            self.assertIsNone(lanelib.kept_open(lanelib.next_block(text)), body)
+            self.assertIsNotNone(lanelib.kept_flag(text), body)
+
+    def test_a_heading_in_a_fence_never_ends_next_for_it(self):
+        # section() ends Next at the shell comment, so the flag after the fence was lost.
+        text = "## Next\n- Run:\n```sh\n# install first\nmake\n```\nKeep open: PR 2.\n"
+        self.assertIsNone(lanelib.kept_open(lanelib.next_block(text)))
+        self.assertEqual(lanelib.kept_flag(text), "Keep open: PR 2.")
+
+    def test_mentions_and_other_sections_still_dont(self):
+        for text in ("## Next\n<!-- start with `Keep open: <why>` while more PRs follow -->\n"
+                     "- Step.\n",
+                     "## State\n<!-- Keep open: PR 2. -->\n## Next\n- Step.\n",
+                     "## Next\n- Step.\n```\n## Other\n```\n## State\nKeep open: PR 2.\n"):
+            self.assertIsNone(lanelib.kept_flag(text), text)
+        self.assertIsNone(lanelib.kept_flag(None))
+
+
 class Lane(Check):
     def setUp(self):
         super().setUp()
@@ -574,6 +603,12 @@ class Lane(Check):
     def test_an_opener_quoted_in_code_passes(self):
         self.finish("\n## Backlog\n- An unclosed `<!--` hides `Keep open:`.\n")
         self.assertPasses(self.check(self.path))
+
+    def test_closing_refuses_a_flag_inside_a_comment(self):
+        # Whether a renderer shows it depends on the dialect: it holds either way.
+        self.finish("<!-- Keep open: PR 2 follows. -->\n")
+        self.assertGap(self.check(self.path, "--closing"), "Keep open: PR 2 follows.")
+        self.assertPasses(self.check(self.path, "--closing", "--abandon"))
 
     def test_a_next_with_only_keep_open_has_no_step(self):
         # The flag is no step, so /pass would have nothing to resume with.
