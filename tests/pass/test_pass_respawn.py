@@ -121,14 +121,15 @@ case "$1" in
       fi
     fi ;;
   capture-pane)
-    # The box while it holds text, once $FAKE_TMUX_LAG captures have passed since the typing;
-    # the static screen otherwise.
+    # The box while it holds text, wrapped at $FAKE_TMUX_WRAP columns (mid-word too), once
+    # $FAKE_TMUX_LAG captures have passed since the typing; the static screen otherwise.
     lag=$(cat "$FAKE_TMUX_BOX.lag" 2>/dev/null || echo 0)
     if [ "$lag" -gt 0 ]; then
       echo $((lag - 1)) > "$FAKE_TMUX_BOX.lag"
       printf '%s\n' "$FAKE_TMUX_SCREEN"
     elif [ -s "$FAKE_TMUX_BOX" ]; then
-      printf '%s%s%s\n' "$FAKE_TMUX_BEFORE" "$(cat "$FAKE_TMUX_BOX")" "$FAKE_TMUX_AFTER"
+      printf '%s%s%s\n' "$FAKE_TMUX_BEFORE" "$(fold -w "${FAKE_TMUX_WRAP:-80}" "$FAKE_TMUX_BOX")" \
+        "$FAKE_TMUX_AFTER"
     else
       printf '%s\n' "$FAKE_TMUX_SCREEN"
     fi ;;
@@ -245,6 +246,7 @@ class Base(LanesRepo):
                         FAKE_TMUX_WHERE=WHERE, FAKE_TMUX_CLIENTS=CLIENTS,
                         FAKE_TOAST_LOG=self.toast_log, FAKE_TOAST_EXIT="0",
                         FAKE_TMUX_BOX=os.path.join(self.tmp, "box"), FAKE_TMUX_LAG="0",
+                        FAKE_TMUX_WRAP="47",
                         FAKE_TMUX_BEFORE=BOX_BEFORE, FAKE_TMUX_AFTER=BOX_AFTER)
         patch = mock.patch.dict(os.environ, self.env, clear=True)
         patch.start()
@@ -939,6 +941,45 @@ class Plain(Base):
         (line,) = [ln for ln in self.log().splitlines() if "outcome=failed" in ln]
         self.assertIn("send-keys 2 of 4: not sent: the input box didn't show the typed text",
                       line)
+        # The typed line may sit in the box, so the tab says so (review round 1).
+        self.assertLoud("didn't show the typed /compact line, so no Enter went; it may sit in "
+                        "the box")
+
+    def test_compact_still_in_the_box_after_two_enters_hands_over_the_prompt(self):
+        # Its Enters went out: /compact may yet run, so another pass could compact twice.
+        self.newlines(2)
+        code, out = self.run_pass("--compact", "--foreground")
+        self.assertEqual(code, 1, out)
+        prompt = self.PROMPT + " Call EnterPlanMode first."
+        self.assertEqual(self.keys()[1:], ["Enter", "Enter"])
+        self.assertLoud("/compact may not have gone")
+        n = self.notice()
+        self.assertEqual(n["outcome"], "failed")
+        self.assertIn(prompt, n["text"])
+        self.assertIn("so it may or may not run", n["text"])
+
+    def test_an_enter_whose_box_cant_be_read_is_not_counted_as_sent(self):
+        prompt = self.PROMPT + " Call EnterPlanMode first."
+        real, after = self.mod.tmux, []
+
+        def tmux(plan, *args):  # tmux stops answering captures after the prompt's Enter
+            if args[-1:] == (prompt,):
+                after.append(True)
+            if after and args[0] == "capture-pane" and len(after) > 1:
+                return None
+            if after and args[-1:] == ("Enter",):
+                after.append(True)
+            return real(plan, *args)
+        self.mod.tmux = tmux
+        try:
+            code, out = self.run_pass("--compact", "--foreground")
+        finally:
+            self.mod.tmux = real
+        self.assertEqual(code, 1, out)
+        self.assertNotIn("outcome=compact", self.log())
+        (line,) = [ln for ln in self.log().splitlines() if "outcome=failed" in ln]
+        self.assertIn("send-keys 4 of 4: tmux didn't answer after the Enter", line)
+        self.assertLoud("press Enter")
 
     def test_a_compact_pass_with_a_live_agent_holds_off_plan_mode(self):
         # Plan mode reaches a running background agent and stops its edits (2026-10-20); a
@@ -2743,6 +2784,10 @@ class Units(unittest.TestCase):
         for label in ("shell", "monitor", "cloud session", "dream", "artifact watch", "MCP task"):
             with self.subTest(label=label):
                 self.assertEqual(live({"time": 2.0, "waits": [], "tasks": [label]}, 1.0), [])
+        # A kind neither set names leaves it unknown, unless an agent is listed anyway.
+        self.assertIsNone(live({"time": 2.0, "waits": [], "tasks": ["unlabeled"]}, 1.0))
+        self.assertEqual(live({"time": 2.0, "waits": [], "tasks": ["unlabeled", "subagent"]},
+                              1.0), [{"label": "subagent"}])
         # A wait the tasks don't describe still counts, by its label.
         self.assertEqual(live({"time": 2.0, "waits": ["workflow"], "tasks": []}, 1.0),
                          [{"label": "workflow"}])
