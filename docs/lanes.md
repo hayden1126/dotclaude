@@ -193,7 +193,8 @@ it too. No doc said which window owns which ask.
   link points into a lane, add the backlog line, nudge the other lanes (an unmerged lane whose
   install the reinstall released hears so), and `lane done` once the hand-back gate passes. It reports one line, or the failed step.
 - A lane with more PRs to come starts its Next with `Keep open: <why>`, and `lane done` refuses
-  it. `--abandon` closes it anyway and stays an ask rule (Hayden, 2026-10-14).
+  it (a commented-out flag too), as it does a record with an unclosed `<!--`. `--abandon` closes
+  it anyway and stays an ask rule (Hayden, 2026-10-14).
 - Lanes report their own state and asks, never the lead's messages.
 - Before an act whose effect leaves its worktree (an install from the lane, a cap slot), and
   with anything the lead must run, a lane messages the lead, never Hayden (Hayden, 2026-10-19).
@@ -246,7 +247,8 @@ Why it works this way:
   standing approval written here; the lead proves the merge with `gh pr view` before it acts,
   and `lane done` checks it again (a merged PR whose head is the tip, or the tip in the base).
 - **A scoped exception to "confirm before deleting"**, which CLAUDE.md names. `lane done`
-  refuses an unmerged branch, a dirty worktree, links into the lane and a `Keep open:` lane,
+  refuses an unmerged branch, a dirty worktree, links into the lane, a `Keep open:` lane and a
+  record whose comments don't parse,
   archives the record before the remove, and never passes `--force` or `-D` (a killed trial's
   leftover registration goes by its gitdir text, never by path: the `lane trial` section). The approval
   covers `lane done` after a merge only; `--abandon` still asks.
@@ -257,6 +259,44 @@ Why it works this way:
   Next that starts with `Keep open:` counts, not only the first: a false hit holds a close,
   while a miss ends a lane with work left. `lanelib.first_item` skips the line, so the step
   `/pass` resumes with (and reads the approval marker from) is the one after it.
+- **An unclosed `<!--` refuses the close too.** The tools strip only closed comments, so an
+  edit that drops a template comment's `-->` turns the comment's text into the record's: a
+  `Keep open:` inside or after it no longer starts a line of Next, and `done` would close the
+  lane (capella-studio lane kindtheme, 2026-10-28). Requiring the flag can't fix it (no tool
+  knows more PRs follow), so the rule is closed instead: every `<!--` outside code is closed in
+  its own section (split at `#` and `##` headings), and no `-->` stands outside code and
+  comments (a comment that quoted one ended there), or `done` and `handoff-check` fail, naming
+  the line (`lanelib.comment_flaw`). `--abandon` skips it, as it skips the flag. The check and
+  `section()`, which every reader of a record goes through, share one scan
+  (`lanelib.strip_comments`), as markdown renders: a marker in inline code or a fence is
+  quoted, a comment's first `-->` ends it, and a fence its section never closes is plain text.
+  Two scans once disagreed: `section()` stripped from a quoted `<!--` to a quoted `-->`, a
+  `Keep open:` line between them, while the check skipped both (lane-fixes' reviewer,
+  2026-10-29).
+- **No comment hides `Keep open:`.** `done` and `handoff-check --closing` read the flag three
+  ways (`lanelib.kept_flag`): in Next as the tools read it; as written, each line's comment
+  markers deleted; and as written, the comments that start a line dropped
+  (`<!-- c -->Keep open:`). The two as-written reads end Next only at a `## ` heading outside a
+  fence, so a shell comment in a code block ends nothing, and a marker that starts a line takes
+  the indent along, so a flag commented out under a bullet counts. Any read holds the lane, so a
+  flag commented out on purpose holds too: delete it, or close with `--abandon`. Why: what is a
+  comment depends on the renderer. CommonMark 0.30 and GitHub read no comment where one holds
+  `--`, 0.31 and browsers read `<!--->` as one, and a comment opened in a list item ends with the
+  item. A comparison against markdown-it (CommonMark) on random Next sections, the flag placed
+  only where the layout rules call it one, counts a miss where the page shows it and no read
+  finds it with no comment flaw: 257 in 30,000 with the one scan alone, 0 in 180,000 with the
+  three reads (lane lane-fixes, 2026-10-29). A first version of that comparison skipped every
+  input whose Next held the flag's text anywhere, and so missed the line-start comment and the
+  bullet cases. None of 104 real records changed its verdict.
+- **Known limits of reading the flag from prose.** Review round 4 (lane lane-fixes, 2026-10-29)
+  found records where every read still misses a flag the page shows: a `## Next` quoted in a
+  code block before the real one is taken for it (so is an earlier heading that only starts
+  with "Next", like `## Next.js upgrade`), and a commented-out code block can upset the fence
+  tracking so that a `## ` line inside a later code block ends Next. Each review round found
+  holes in the newest boundary rule, so the fix is structural, not another rule: the flag
+  belongs in `lane.json`, set by a command (`lane keep "<why>"`), with the record's line for
+  people and `handoff-check` warning when the two disagree. A lane can only hold itself that
+  way, the safe direction. Until then, keep `Keep open:` at the top of Next, in plain text.
 - **The backlog line moved to the lead.** The lead owns the project STATUS, so the one line at
   merge is a step of its chain, not the lane's.
 
@@ -417,9 +457,17 @@ alone skips the uncommitted read then, since it can afford to.
 (a plain shell): it removes its scratch trees by path, which is safe only where the sandbox
 bounds what a symlink swapped in for a tree could make git delete, and its suites inherit the
 sandbox. Before it waits for the lock, it also refuses a bad link path, a link under another one,
-and a link the lane lacks (step 3).
+and a link the lane lacks (step 3), and a config `trial-locks` entry its `locks` don't list or
+that names `suite`.
 
-1. It takes the `suite` lock for the whole run. One name for every trial: a trial clears its
+1. It takes the `suite` lock for the whole run, after any locks the config's `trial-locks`
+   names (`lane init --trial-locks quiet`), in order, under the one `--wait` (a lock taken
+   late waits only for what is left, and the give-up says so). A repo whose gate
+   holds a lock of its own for a quiet machine names it there, so the gate never runs beside a
+   trial (capella-studio's `quiet` gate ran beside one at load 45.6 on 12 cores, 2026-10-26).
+   Take a repo's own locks before `suite` wherever both are taken, as a trial does, or the two
+   can deadlock. A trial run under an outer hold of one (`lane lock quiet -- lane trial ...`)
+   runs under that hold. One name for every trial: a trial clears its
    lane's leftover trees under that lock, so a second trial under another lock could remove a
    live tree. Locks are re-entrant for descendants (`LANE_LOCKS_HELD`, keyed by repo), so a
    `--run` that wraps its suite in `lane lock suite` runs under the trial's hold instead of
@@ -464,8 +512,8 @@ and a link the lane lacks (step 3).
    brings it): a copy would make the link's dir and block it. Link paths are checked like
    `.worktreeinclude` entries (relative, no `..`). One under another is refused (the tree would
    make the outer path a dir for the inner link). One the lane lacks is refused too: unlinked, a
-   suite that can't load fails alike on both runs, which step 5's same-way rule passes, so the
-   trial would pass having tested nothing. A conflict line's "try it with this lane alone"
+   suite that can't load fails alike on both runs, which says nothing of the merge (step 5
+   sends it to be compared by hand). A conflict line's "try it with this lane alone"
    command carries the run's `--link`s for the same reason. A link is
    no copy: a suite that writes through it writes the lane's files. Then each `--run` runs there
    as `sh -c`,
@@ -482,11 +530,12 @@ and a link the lane lacks (step 3).
 5. A failed suite reruns on the baseline (HEAD plus the base alone), in a tree at the same path
    set up the same way, so ids that embed the path match. It passes only when every id it
    failed on the merge also fails there and its exit is no worse (non-zero on the merge but zero
-   on the baseline, or a signal on the merge only, is the merge's). One that printed no id on
-   either run passes when both runs exit with the same code: it fails the same way on the
-   baseline, so that failure isn't the merge's. Any other failure with no id to compare, or a
-   run whose output was cut (a process it started kept the pipe 10 s past its exit), fails, to
-   be judged by hand.
+   on the baseline, or a signal on the merge only, is the merge's). A failure with no id to
+   compare fails, to be judged by hand, even one that printed no id on either run and exits
+   alike on both: a suite that never ran (a directory as the `--run`, exit 126 on both; a
+   runner missing a required flag, exit 2 on both) fails alike too, and a gate that can't vouch
+   for a suite mustn't pass it (lane sp-gaps, 2026-10-25). So does a run whose output was cut
+   (a process it started kept the pipe 10 s past its exit).
 6. It exits 0 with no failing conflict and no failure of the merge's own, 1 otherwise, and 75
    when `--wait` runs out. When no other lane's work merges (none live, all already in, or all
    conflicting), the suites still run once, on this lane's HEAD plus the base; that tree is the
@@ -504,10 +553,9 @@ tree left the temp dir (2026-10-24, lane trial-fix) so those no longer fail. The
 for the rest: it keeps working when a future test turns out to depend on its location, and it
 tells a failure the base already has from the merge's.
 
-Its limits: a test failing in both runs for different reasons hides a real break, and so does a
-suite with no ids that fails the same way on both (exit 1 on both hides a second break the
-merge adds, until the first is fixed); a runner with another output format can only be
-compared by its exit code or by hand; a flaky test failing only on the merge reads as the
+Its limits: a test failing in both runs for different reasons hides a real break; a runner
+with another output format is compared by hand whenever it fails, so a suite already broken
+on the base fails every trial until it is fixed or left out of the `--run`s; a flaky test failing only on the merge reads as the
 merge's. The number of tests run is never compared, so a fail-fast flag (pytest `-x`, unittest
 `-f`) can stop both runs at a shared failure before the test the merge broke, and a merge that
 drops a test package from discovery passes unseen. Node resolves a bare `require` up the parent
@@ -586,7 +634,8 @@ stays in the common dir, which sandboxed Bash can write (S1).
 $XDG_STATE_HOME/dotclaude/lanes/<repo>-<hash>.toml
                                 the config: root, setup cmd, port range, live-lane cap, base
                                 (<remote>/<branch>, default origin/main), locks, autopass,
-                                model, effort; written only by a bare `lane init`
+                                model, effort, trial-link, trial-locks; written only
+                                by a bare `lane init`
 $XDG_STATE_HOME/dotclaude/lanes/<repo>-<hash>.lead.json
                                 the lead record: the main-checkout session that last acted as
                                 lead, written only by bare `lane` commands ("One lead per main
@@ -920,7 +969,8 @@ copied as the link), and skips
   code fails in a lanes repo and only warns in a plain one, where long-lived text has no peer
   to mislead. `--closing`, which `lane done` runs, judges freshness against HEAD's commit only
   and skips approval: after a `/pass`, the idle new session started after the handoff. It also
-  fails on a `Keep open:` item in Next. Its unpushed-commit warning follows the checked-out
+  fails on a `Keep open:` item in Next. Every mode fails an unclosed `<!--` or a stray `-->`
+  outside code, naming its line (`--closing --abandon` skips it). Its unpushed-commit warning follows the checked-out
   branch or detached HEAD (why: the branch switch paragraph under `lane done`), falling back to
   `lane.json`'s branch only when HEAD can't be read or names an invalid branch. It counts the
   commits that neither the base nor any of origin's refs hold, never against one pushed copy:
@@ -934,7 +984,7 @@ copied as the link), and skips
   `--abandon`. It can't tell "no work" from "fast-forwarded in before adoption", so its state is
   `closed`, "closed (nothing past origin/main)", unless a merged PR names that tip; `abandoned`
   means `--abandon`. While the worktree exists it refuses a lane whose record's Next has a
-  `Keep open:` item, live session or not ("Who asks what"); `--abandon` closes it anyway, and a
+  `Keep open:` item, or whose record has an unclosed `<!--` or a stray `-->`, live session or not ("Who asks what"); `--abandon` closes it anyway, and a
   merged lane keeps the state `merged`. The archive is built under a `.tmp` name and renamed into place only when
   complete. Sandboxed, `done` can't see
   other processes, so it refuses and asks for a bare `lane done <id>`. It detects the sandbox by
