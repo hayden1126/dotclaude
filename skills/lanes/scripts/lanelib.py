@@ -62,29 +62,154 @@ def relative_phrases(text: str) -> list[str]:
     return [" ".join(m.group(0).lower().split()) for m in RELATIVE.finditer(text or "")]
 
 
-FENCE = re.compile(r"\s{0,3}(`{3,}|~{3,})")
+# A backtick fence's info string holds no backtick (```x``` is inline code, CommonMark). The
+# indent stays loose (a tab too): under a list item a tab-indented fence is one, and the lint
+# errs toward quoting.
+FENCE = re.compile(r"\s{0,3}(`{3,}(?=[^`]*$)|~{3,})")
+INLINE_CODE = re.compile(r"`[^`\n]*`")
 
 
-def prose_only(text: str) -> str:
-    """text without HTML comments, fenced code blocks and inline code: what quotes an example
-    rather than claiming anything. The one lint the guard and handoff-check share.
+def fenced(lines: list[str]) -> list[bool]:
+    """Whether each line belongs to a fenced code block, its fence lines included.
 
     A fence opens with 3+ backticks or tildes and closes on a line of the same char, at least as
     long, with nothing after but whitespace. An unclosed fence runs to the end of the text, which
     errs toward passing quoted text, never toward denying prose."""
-    text = re.sub(r"<!--.*?-->", " ", text or "", flags=re.DOTALL)
-    kept, fence = [], None
-    for line in text.splitlines():
+    out, fence = [], None
+    for line in lines:
         m = FENCE.match(line)
+        out.append(fence is not None or bool(m))
         if fence is None:
             if m:
                 fence = m.group(1)
-            else:
-                kept.append(line)
         elif m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) \
                 and not line[m.end():].strip():
             fence = None
-    return re.sub(r"`[^`\n]*`", " ", "\n".join(kept))
+    return out
+
+
+def prose_only(text: str) -> str:
+    """text without HTML comments, fenced code blocks (fenced) and inline code: what quotes an
+    example rather than claiming anything. The one lint the guard and handoff-check share."""
+    lines = re.sub(r"<!--.*?-->", " ", text or "", flags=re.DOTALL).splitlines()
+    kept = [line for line, code in zip(lines, fenced(lines)) if not code]
+    return INLINE_CODE.sub(" ", "\n".join(kept))
+
+
+SECTION_BREAK = re.compile(r"#{1,2}\s")
+# A code span as CommonMark reads one: a backtick run, closed by a run of the same length.
+CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)")
+
+
+UNCLOSED, STRAY = "an unclosed `<!--`", "a stray `-->` (a comment ended before it)"
+
+
+def strip_comments(lines: list[str]) -> tuple[str, tuple[int, str] | None]:
+    """One section's lines joined, each HTML comment cut out as markdown renders it, and its
+    first flaw, (line index, UNCLOSED or STRAY), None without one. The one
+    comment scan section() and comment_flaw share, so what the check passes is what the
+    tools read: two scans that disagreed let a quoted `<!--` ... `-->` pair hide a `Keep open:`.
+
+    Outside a comment, a fenced block or a code span (CODE_SPAN: ``<!--`` too) quotes a
+    marker: it opens nothing. Inside one, the first `-->` ends it, backticks or not, and
+    `<!-->` and `<!--->` are whole comments (CommonMark 0.31, HTML). A comment that starts its
+    line takes the blanks around it along, so a `Keep open:` behind it still starts the line,
+    not a wrap of the item before. A fence the section never closes
+    counts as plain text, so a mistyped closer can't hide an opener after it. An unclosed
+    comment's text is kept from its opener on: a `Keep open:` line in it still counts, and the
+    check fails the record anyway. A `-->` outside code and comments is stray: a comment that
+    quoted one ended there, and its tail reads as the record's."""
+    plain: set[int] = set()  # fence lines read as plain text: fences the section never closed
+    while True:
+        out: list[str] = []
+        opened = mark = stray = None
+        fence = fence_at = None
+        blank = True  # nothing but blanks kept since the last newline
+
+        def keep(piece: str) -> None:
+            nonlocal blank
+            out.append(piece)
+            tail = piece.rpartition("\n")
+            blank = not tail[2].strip() if tail[1] else blank and not piece.strip()
+
+        for i, line in enumerate(lines):
+            m = FENCE.match(line) if opened is None else None
+            if fence is not None:
+                if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) \
+                        and not line[m.end():].strip():
+                    fence = None
+                keep(line + "\n")
+                continue
+            if m and i not in plain:
+                fence, fence_at = m.group(1), i
+                keep(line + "\n")
+                continue
+            pos = 0
+            while True:
+                if opened is not None:
+                    end = line.find("-->", pos)
+                    if end < 0:
+                        break  # the comment runs on, newline and all
+                    opened, pos = None, end + 3
+                    if blank:  # it started its line: so does what follows it, unindented
+                        pos = len(line) - len(line[pos:].lstrip())
+                        kept = "".join(out)
+                        out[:] = [kept[:kept.rfind("\n") + 1]]
+                    continue
+                start = line.find("<!--", pos)
+                close = line.find("-->", pos)
+                code = CODE_SPAN.search(line, pos)
+                first = min((x for x in (start, close, code.start() if code else -1) if x >= 0),
+                            default=-1)
+                if code and code.start() == first:
+                    keep(line[pos:code.end()])
+                    pos = code.end()
+                elif close == first >= 0:
+                    stray = i if stray is None else stray
+                    keep(line[pos:close + 3])
+                    pos = close + 3
+                elif start >= 0:
+                    keep(line[pos:start])
+                    opened, mark, pos = (i, start), len(out), start + 2  # `<!-->` closes itself
+                else:
+                    keep(line[pos:] + "\n")
+                    break
+        if fence is not None:
+            plain.add(fence_at)
+            continue
+        if opened is not None:
+            i, col = opened
+            out[mark:] = ["\n".join([lines[i][col:], *lines[i + 1:]])]
+            if stray is None or i < stray:
+                return "".join(out), (i, UNCLOSED)
+        return "".join(out), None if stray is None else (stray, STRAY)
+
+
+def sections(text: str | None) -> list[tuple[int, list[str]]]:
+    """(index of its first body line, body lines) for each section: split at every line
+    section() ends a section at, the text before the first heading counting as one."""
+    out: list[tuple[int, list[str]]] = [(0, [])]
+    for i, line in enumerate((text or "").splitlines()):
+        if SECTION_BREAK.match(line):
+            out.append((i + 1, []))
+        else:
+            out[-1][1].append(line)
+    return out
+
+
+def comment_flaw(text: str | None) -> tuple[int, str] | None:
+    """(1-based line, UNCLOSED or STRAY) for the first section whose comments don't parse
+    cleanly, None when every one does: a `<!--` its own section never closes, or a stray `-->`.
+    Either leaks a comment's text into what the tools read, where a `Keep open:` inside or
+    after it can be missed. The same scan as section()'s (strip_comments)."""
+    text = text or ""
+    for first, body in sections(text):
+        if (flaw := strip_comments(body)[1]) is not None:
+            # splitlines also breaks at a form feed and the like, where an editor doesn't:
+            # count the newlines before the flawed line instead.
+            at = sum(len(x) for x in text.splitlines(keepends=True)[:first + flaw[0]])
+            return text.count("\n", 0, at) + 1, flaw[1]
+    return None
 
 
 def added_phrases(old: str, new: str) -> list[str]:
@@ -1022,13 +1147,38 @@ def norm_request(req: str) -> str:
     return "#" + req if req.isdigit() else req
 
 
+COMMENT_MARKER = re.compile(r"<!--->|<!-->|<!--|-->")
+
+
+LEADING_MARKER = re.compile(r"(?:<!--->|<!-->|<!--|-->)\s*")
+LEADING_COMMENT = re.compile(r"(?:<!--->|<!-->|<!--.*?-->|<!--|-->)\s*")
+
+
+def unmarked(line: str, drop: bool = False) -> str:
+    """line with its comment markers deleted and the comments' text kept, or with drop, the
+    whole comments that start it dropped, text and all (`<!-- c -->Keep open:`), and the other
+    markers deleted. Markers that start the line go with the blanks around them, so the text
+    behind them starts the line, unindented: a commented flag under a bullet is a flag."""
+    rest = line.lstrip()
+    if not (m := (LEADING_COMMENT if drop else LEADING_MARKER).match(rest)):
+        return line[:len(line) - len(rest)] + COMMENT_MARKER.sub(" ", rest).rstrip()
+    while m:
+        rest = rest[m.end():]
+        m = (LEADING_COMMENT if drop else LEADING_MARKER).match(rest)
+    return COMMENT_MARKER.sub(" ", rest).rstrip()
+
+
 def section(text: str,
     *names: str,
     prefixes: tuple[str, ...] = (),
+    raw: bool = False,
 ) -> str | None:
     """The body of the first `## <heading>` section whose heading equals one of names or starts
-    with one of prefixes (case-insensitive), with HTML comments and template placeholder lines
-    (`- <...>`) removed. None when no such heading exists."""
+    with one of prefixes (case-insensitive), with HTML comments (strip_comments: a marker quoted
+    in code is no comment) and template placeholder lines (`- <...>`) removed. None when no such
+    heading exists. raw: the lines as written, comments and all (kept_flag reads them), ended
+    only by a `## ` heading outside a fence: a `# ` line is likelier a shell comment in a fence
+    whose parity a comment or a malformed fence line upset than a section."""
     lines = (text or "").splitlines()
     wanted = {n.lower() for n in names}
     starts = tuple(p.lower() for p in prefixes)
@@ -1038,21 +1188,25 @@ def section(text: str,
         if not m or not (heading in wanted or (starts and heading.startswith(starts))):
             continue
         body = []
-        for nxt in lines[i + 1:]:
-            if re.match(r"#{1,2}\s", nxt):
+        rest = lines[i + 1:]
+        # raw ends late, never early: a fence never closed runs on, which only lengthens it.
+        quoted = fenced(rest) if raw else [False] * len(rest)
+        for nxt, code in zip(rest, quoted):
+            if re.match(r"##\s", nxt) and not code if raw else SECTION_BREAK.match(nxt):
                 break
             body.append(nxt)
-        cleaned = re.sub(r"<!--.*?-->", "", "\n".join(body), flags=re.DOTALL)
+        cleaned = "\n".join(body) if raw else strip_comments(body)[0]
+        # Not in raw: `<!-- Keep open: x -->` would read as a placeholder.
         kept = [ln for ln in cleaned.splitlines()
-                if ln.strip() and not re.fullmatch(r"\s*(?:[-*]\s*)?<[^<>]*>\s*", ln)]
+                if ln.strip() and (raw or not re.fullmatch(r"\s*(?:[-*]\s*)?<[^<>]*>\s*", ln))]
         return "\n".join(kept)
     return None
 
 
-def next_block(text: str) -> str | None:
+def next_block(text: str, raw: bool = False) -> str | None:
     """The status file's Next block: the first `## Next...` (or `## Notes for next session`)
-    section, as section() cleans it."""
-    return section(text, "Notes for next session", prefixes=("next",))
+    section, as section() cleans it (raw: as written, comments and all)."""
+    return section(text, "Notes for next session", prefixes=("next",), raw=raw)
 
 
 def status_path(repo: Repo, lane: dict | None) -> str:
@@ -1102,6 +1256,21 @@ def kept_open(block: str | None) -> str | None:
     the lane while it stands. Any item counts, not only the first: a false hit only holds a
     close, while a miss would end a lane that has work left."""
     return next((item for item in next_items(block) if KEEP_OPEN.match(item)), None)
+
+
+def kept_flag(text: str | None) -> str | None:
+    """The status file's `Keep open:` item (kept_open), in its Next block as the tools read it,
+    else as written (next_block raw) with each line's comment markers deleted, else with the
+    comments that start a line dropped (unmarked): no comment hides the flag. Markdown dialects
+    and browsers disagree on what is a comment (`<!--->`, a `--` inside one, one opened in a
+    list item ends with the item), so a flag one renderer shows could sit inside what the scan
+    takes for a comment, or behind one (`<!-- c -->Keep open:`). A flag commented out on
+    purpose still holds: delete it, or close with --abandon. Each read only adds holds."""
+    raw = next_block(text or "", raw=True) or ""
+    lines = raw.splitlines()
+    return (kept_open(next_block(text or ""))
+            or kept_open("\n".join(unmarked(ln) for ln in lines))
+            or kept_open("\n".join(unmarked(ln, drop=True) for ln in lines)))
 
 
 def first_item(block: str | None) -> str:
