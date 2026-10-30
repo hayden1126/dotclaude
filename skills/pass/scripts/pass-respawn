@@ -174,7 +174,9 @@ The resume mode is plan mode unless the first item of the status file's Next blo
 `(approved by Hayden YYYY-MM-DD)` dated on or after the session's start and not after today
 (lanelib.approval); then --permission-mode is left out and the user's default applies. An
 unknown session start reads as unapproved. A same-day marker from an earlier session can't be
-told apart by its date, so it counts. --print shows the mode and the
+told apart by its date, so it counts. A compact pass's resume prompt holds off plan mode while
+the stop record lists a background agent, teammate or workflow (live_agents), and says both
+ways when the record can't tell, as at --print. --print shows the mode and the
 exact argv instead of acting; --foreground runs the waiter in-process (tests). Each decision
 appends one line to $XDG_STATE_HOME/dotclaude/pass.log (an exception in the waiter: `error`).
 
@@ -360,6 +362,11 @@ NOUNS = lanelib.TASK_NOUNS
 # A busy notice names this many tasks, each description cut to this many characters, so it fits
 # a status line; pass.log and --tasks keep LOG_CHARS (stop-ring.sh caps a description at 200).
 SHOWN, SHOWN_CHARS, LOG_CHARS = 2, 40, 200
+# The stop record's task labels that run under this session's permission mode. A compact pass's
+# resume prompt holds off plan mode while one runs: entering it mid-run stops a background
+# writer's edits (2026-10-20), and a permissionMode in the agent's frontmatter doesn't keep it
+# out (probed 2026-10-29).
+PLAN_MODE_KINDS = frozenset({"subagent", "teammate", "workflow"})
 TOAST_PS1 = "notify-toast.ps1"  # in the config dir, as hooks/notify.sh finds it
 PANE_FIXES = {  # pane_problem's causes, and what to do about each
     "pane in copy mode": "Leave copy mode (q), then /pass",
@@ -422,8 +429,9 @@ class Plan:
     def status_file(self) -> str:
         return os.path.join(self.toplevel, self.status_rel)
 
-    def actions(self, approved: bool) -> list[list[str]]:
-        prompt = resume_prompt(self.status_rel, self.in_lane, approved, self.mode == "compact")
+    def actions(self, approved: bool, agents: list[dict] | None = None) -> list[list[str]]:
+        prompt = resume_prompt(self.status_rel, self.in_lane, approved, self.mode == "compact",
+                               agents)
         if self.mode == "plain":
             perm = [] if approved else ["--permission-mode", "plan"]
             return [[self.tmux, "respawn-pane", "-k", "-t", self.pane, "-c", self.toplevel, "--",
@@ -1245,11 +1253,36 @@ def mute_reader(roots: list[str]) -> str | None:
     return MUTE_STATE
 
 
-def resume_prompt(status_rel: str, in_lane: bool, approved: bool, compact: bool) -> str:
+def resume_prompt(status_rel: str, in_lane: bool, approved: bool, compact: bool,
+                  agents: list[dict] | None = None) -> str:
+    """The prompt the next session starts from. An unapproved compact one asks for plan mode,
+    held off while agents (live_agents) run, and said both ways when that is unknown (None)."""
     step = "continue with the approved next step" if approved else "plan the next step"
     text = (f"Read your lane record {status_rel}, then {step}." if in_lane
             else f"Read STATUS.md (and PLAN.md if present), then {step}.")
-    return text + (" Call EnterPlanMode first." if compact and not approved else "")
+    if not compact or approved:
+        return text
+    if agents is None:
+        return text + (" Call EnterPlanMode first, unless a background agent is still running: "
+                       "then plan in chat and call it only after it hands back.")
+    if agents:
+        return text + (f" A background agent is still running ({task_line(agents)}): plan in "
+                       "chat, and call EnterPlanMode only after it hands back.")
+    return text + " Call EnterPlanMode first."
+
+
+def live_agents(rec: dict | None, called: float) -> list[dict] | None:
+    """The stop record's tasks (and waits it doesn't describe) that a plan mode entered now
+    would reach (PLAN_MODE_KINDS), [] for none; None when the record can't say: none, one from
+    before the call, or lists that won't read."""
+    if not isinstance(rec, dict) or not readable_time(rec.get("time")) or rec["time"] <= called:
+        return None
+    entries, waits = lanelib.task_entries(rec.get("tasks")), rec.get("waits")
+    if entries is None or not isinstance(waits, list):
+        return None
+    labels = {e["label"] for e in entries}
+    entries += [{"label": str(w)} for w in waits if str(w) not in labels]
+    return [e for e in entries if e["label"] in PLAN_MODE_KINDS]
 
 
 def compact_focus(status_rel: str) -> str:
@@ -2022,8 +2055,9 @@ def wait_and_act(plan: Plan, procs) -> str:
                     cause="a prompt was typed or queued after the call")
     approved = approved_now(plan, session)
     plan.pick = lanelib.carried_pick(plan.launched, plan.transcript)
-    actions = plan.actions(approved)
-    rec = stop_record(plan.session_id) if plan.mode == "plain" else None
+    rec = stop_record(plan.session_id)
+    agents = live_agents(rec, plan.called) if plan.mode == "compact" else []
+    actions = plan.actions(approved, agents)
     if plan.mode == "plain" and (problem := stop_problem(plan, rec)):
         return drop(plan, "busy", f"busy: {problem[0]}", problem[1],
                     cause=problem[1].removeprefix("pass refused: "))
@@ -2114,7 +2148,10 @@ def wait_and_act(plan: Plan, procs) -> str:
                          f"{clipped(said)})")
             return drop(plan, "failed", f"{detail}; resume prompt: {prompt}", shown,
                         cause=cause, prompt=prompt)
-    log(plan.mode, "compact", plan.pane, late(plan, "default mode" if approved else "plan mode"))
+    mode = ("default mode" if approved else "plan mode" if agents == [] else
+            "plan mode after hand-back: " + logged(agents) if agents else
+            "plan mode unless an agent runs (the stop record can't say)")
+    log(plan.mode, "compact", plan.pane, late(plan, mode))
     return "compact"
 
 
@@ -2299,6 +2336,8 @@ def list_tasks() -> int:
         verdict = ("blocks a plain pass; the turn waits on it" if e["label"] in waits
                    else "doesn't block a plain pass" if lanelib.plain_pass_ignores(e)
                    else "blocks a plain pass")
+        if e["label"] in PLAN_MODE_KINDS:
+            verdict += "; a compact pass resumes without plan mode until it hands back"
         print(f"  {lanelib.describe_task(e, LOG_CHARS)}: {verdict}")
     if not entries + extra:
         print("  none")

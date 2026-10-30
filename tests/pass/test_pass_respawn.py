@@ -147,6 +147,9 @@ def marked(text, day=TODAY):
 
 
 APPROVED = marked(GOOD)
+# An unapproved compact resume prompt's tail when the stop record can't say whether an agent runs.
+UNSURE = (" Call EnterPlanMode first, unless a background agent is still running: then plan in "
+          "chat and call it only after it hands back.")
 SID = "sess-0001"
 CLAUDE, PANE_SHELL, SHELL = 900000, 899999, 900001
 PANE_TTY = "/dev/pts/4"  # the pane's tty, as #{pane_tty} names it
@@ -563,7 +566,8 @@ class Plain(Base):
         self.assertIn("STATUS.md holds the exact facts", focus)
         for argv in (["send-keys", "-t", "%4", "-l", f"/compact {focus}"],
                      ["send-keys", "-t", "%4", "Enter"],
-                     ["send-keys", "-t", "%4", "-l", self.PROMPT + " Call EnterPlanMode first."]):
+                     # At the call the stop record can't speak for this turn yet.
+                     ["send-keys", "-t", "%4", "-l", self.PROMPT + UNSURE]):
             self.assertIn(shlex.join([self.tmux, *argv]), lines)
 
     def test_approved_compact_skips_plan_mode(self):
@@ -839,6 +843,41 @@ class Plain(Base):
         self.assertFalse(os.path.exists(self.carry_marker()))
         self.assertIn("mode=compact outcome=compact", self.log())
         self.assertFalse(os.path.exists(self.last_reply()))  # the conversation survives
+
+    def typed_prompt(self):
+        """The resume prompt a --foreground compact pass typed."""
+        code, out = self.run_pass("--compact", "--foreground")
+        self.assertEqual(code, 0, out)
+        return [a[-1] for a in self.calls("tmux", "send-keys")][2]
+
+    def test_a_compact_pass_with_a_live_agent_holds_off_plan_mode(self):
+        # Plan mode reaches a running background agent and stops its edits (2026-10-20); a
+        # permissionMode in its frontmatter doesn't keep it out (probed 2026-10-29).
+        self.stop_waits = ["subagent"]
+        self.stop_tasks = [{"label": "subagent", "id": "a1", "description": "Write the chart fix"},
+                           {"label": "shell", "id": "b1", "description": "npm test"}]
+        self.assertEqual(self.typed_prompt(),
+                         self.PROMPT + ' A background agent is still running (subagent "Write '
+                         'the chart fix" (a1)): plan in chat, and call EnterPlanMode only after '
+                         'it hands back.')
+        self.assertIn('plan mode after hand-back: subagent "Write the chart fix" (a1)', self.log())
+
+    def test_a_compact_pass_with_only_shells_and_monitors_enters_plan_mode(self):
+        self.stop_waits = ["shell"]
+        self.stop_tasks = [{"label": "shell", "id": "b1"}, {"label": "monitor", "id": "m1"}, WATCH]
+        self.assertEqual(self.typed_prompt(), self.PROMPT + " Call EnterPlanMode first.")
+
+    def test_a_compact_pass_with_no_stop_record_says_both_ways(self):
+        self.stop_waits = None  # the Stop wrote no record
+        self.assertEqual(self.typed_prompt(), self.PROMPT + UNSURE)
+
+    def test_an_approved_compact_pass_with_a_live_agent_just_continues(self):
+        self.commit("STATUS.md", APPROVED, msg="Handoff")
+        self.stop_waits = ["subagent"]
+        self.stop_tasks = [{"label": "subagent", "id": "a1"}]
+        prompt = self.typed_prompt()
+        self.assertNotIn("EnterPlanMode", prompt)
+        self.assertIn("then continue with the approved next step.", prompt)
 
     REPLIES = [{"prompt_id": "p1", "text": "Earlier: the tests pass.", "time": 1.0},
                {"prompt_id": "p2", "text": "Done: the PR is up.", "time": 2.0},
@@ -1296,7 +1335,9 @@ class Plain(Base):
         for line in ['monitor "deploy events" (b0fzd27l4): blocks a plain pass',
                      'shell "npm run dev" (b2): blocks a plain pass; the turn waits on it',
                      f"artifact watch {URL} (s31udgb0s): doesn't block a plain pass",
-                     "dream (d1): doesn't block a plain pass", "teammate: blocks a plain pass"]:
+                     "dream (d1): doesn't block a plain pass",
+                     "teammate: blocks a plain pass; a compact pass resumes without plan mode "
+                     "until it hands back"]:
             self.assertIn("\n  " + line + "\n", out)
         # Read-only: nothing shown, logged or queued.
         self.assertEqual((self.notices(), self.log()), ([], ""))
@@ -2366,7 +2407,7 @@ class Lane(Base):
         self.assertIn(shlex.join([self.tmux, "send-keys", "-t", "%4", "-l",
                                   f"/compact {self.mod.compact_focus('.lane/STATUS.md')}"]),
                       out.splitlines())
-        self.assertIn(self.PROMPT + " Call EnterPlanMode first.", out)
+        self.assertIn(self.PROMPT + UNSURE, out)
 
     def test_the_waiter_in_a_lane_respawns(self):
         code, out = self.run_pass("--foreground", cwd=self.path)
@@ -2602,6 +2643,25 @@ class Units(unittest.TestCase):
         for tasks in ([{"label": "dream", "id": "d1"}], [WATCH], []):
             self.assertIsNone(self.mod.stop_problem(plan, {"time": 1.0, "waits": [],
                                                            "tasks": tasks}))
+
+    def test_live_agents_are_the_tasks_plan_mode_reaches(self):
+        live = self.mod.live_agents
+        for label in ("subagent", "teammate", "workflow"):
+            with self.subTest(label=label):
+                rec = {"time": 2.0, "waits": [], "tasks": [{"label": label, "id": "t1"}]}
+                self.assertEqual(live(rec, 1.0), [{"label": label, "id": "t1"}])
+        for label in ("shell", "monitor", "cloud session", "dream", "artifact watch", "MCP task"):
+            with self.subTest(label=label):
+                self.assertEqual(live({"time": 2.0, "waits": [], "tasks": [label]}, 1.0), [])
+        # A wait the tasks don't describe still counts, by its label.
+        self.assertEqual(live({"time": 2.0, "waits": ["workflow"], "tasks": []}, 1.0),
+                         [{"label": "workflow"}])
+        # Unknown: no record, one from before the call, or one whose lists can't be read.
+        for rec in (None, {"time": 0.5, "waits": [], "tasks": []}, {"time": "x", "tasks": []},
+                    {"time": 2.0, "waits": [], "tasks": "?"}, {"time": 2.0, "waits": 3,
+                                                                 "tasks": []}):
+            with self.subTest(rec=rec):
+                self.assertIsNone(live(rec, 1.0))
 
     def test_the_stop_record_is_read_as_utf8_in_any_locale(self):
         # stop_ring.py writes it as UTF-8. The C locale with Python's UTF-8 mode and coercion off
