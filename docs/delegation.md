@@ -276,7 +276,8 @@ For a match it refuses, naming the path, when:
    from the cwd: `pass-respawn -C`, `lane adopt PATH`, and a local repository given to
    `git push`, `fetch`, `pull` or `ls-remote`. Such a call must spell each word plainly (no
    expansion, glob, quote or space), since the guard reads the text before the shell rewrites
-   it, and `delegation-ledger hook` runs only as a hook, never through Bash. The
+   it. An option of those git calls that names a program for git to run, and an `ext::`
+   remote, are refused, and `delegation-ledger hook` runs only as a hook, never through Bash. The
    other config git reads must be write-protected: the global and XDG files (or
    `GIT_CONFIG_GLOBAL`), `/etc/gitconfig` (or `GIT_CONFIG_SYSTEM`, skipped under
    `GIT_CONFIG_NOSYSTEM`), every `include.path` and `includeIf` target, and a `core.hooksPath`

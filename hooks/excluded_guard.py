@@ -18,7 +18,9 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      the cwd's repo or the project's, is refused. A path argument a head runs git in is judged
      the same way, resolved from the cwd (path_arguments: pass-respawn -C, lane adopt PATH, a
      local repository for git push, fetch, pull and ls-remote), and such a call must spell its
-     words plainly; `delegation-ledger hook` is refused outright, since its paths come on stdin.
+     words plainly, naming no program for git to run (--receive-pack, --upload-pack, --exec,
+     an ext:: remote); `delegation-ledger hook` is refused outright, since its paths come on
+     stdin.
   2. The PATH the head resolves through. Every PATH entry must be protected, not only those
      before the head: its children (git, gh, tmux, the tools claude spawns) search PATH too. An
      empty or relative entry is the cwd: refused. Then the resolved file's symlink chain (each
@@ -270,6 +272,9 @@ def candidates(command, patterns):
 # program, and codex-delegate run --dir, which the delegation skill sends to any repo.
 PATH_HEADS = {"pass-respawn", "lane", "git", "delegation-ledger"}
 GIT_PATH_SUBS = {"push", "fetch", "pull", "ls-remote"}
+# Long options of those whose value is a program git runs (git takes any unique prefix), and
+# ls-remote's short -u for --upload-pack; an `ext::` remote runs a command too.
+GIT_PROGRAM_OPTIONS = ("receive-pack", "upload-pack", "exec")
 # A redirection word (shlex keeps `2>&1` and `>out` whole), and its target when not attached.
 REDIRECT = re.compile(r"\d*(<<<|<<-?|<>|>>|>\||&>>|&>|>&|<&|<|>)(.*)", re.S)
 # A word the shell hands on as typed: no expansion, glob, quote or space. `~` only as $HOME.
@@ -354,6 +359,14 @@ def check_path_arguments(m, env, cwd, project, piece):
             raise Refusal("rule1", w, f"`{name}` takes a path argument, and {w!r} is not a plain "
                           "word (an expansion, glob, quote or space the shell would rewrite "
                           "before the guard could judge it). Spell paths and refs as plain words.")
+    if head == "git":
+        for w in words[2:]:
+            name = w[2:].split("=", 1)[0] if w.startswith("--") else ""
+            if (name and any(o.startswith(name) for o in GIT_PROGRAM_OPTIONS)
+                    or sub == "ls-remote" and re.match(r"-[^-]*u", w) or w.startswith("ext::")):
+                raise Refusal("rule1", w, f"`git {sub}` with {w!r} names a program for git to "
+                              "run outside the sandbox, which the guard can't judge. Run it "
+                              "without that option.")
     for path, existing_only in path_arguments(words):
         full = os.path.join(cwd, os.path.expanduser(path))
         if existing_only and not os.path.lexists(full):

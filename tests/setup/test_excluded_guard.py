@@ -320,6 +320,24 @@ class Rule1PathArguments(Guard):
             with self.subTest(call=call):
                 self.allowed(call)
 
+    def test_git_with_an_option_naming_a_program_is_refused(self):
+        # Review round 1 (high): the value is a program git runs, not a repository to judge.
+        prog = self.write(os.path.join(self.tmp, "prog"), MARKER, 0o755)
+        for call in (f"git push --receive-pack={prog} .", f"git push --receive-pack {prog} .",
+                     f"git push --rec={prog} .", f"git push -q --exec={prog} .",
+                     f"git push --e={prog} .", f"git fetch --upload-pack={prog} .",
+                     f"git fetch --upl {prog} origin", f"git pull --upload-pack={prog} .",
+                     f"git ls-remote --upload-pack={prog} .", f"git ls-remote -u {prog} .",
+                     f"git ls-remote -qu{prog} .", f"git ls-remote --exec={prog} .",
+                     "git fetch ext::sh", f"git push -q ext::{prog}"):
+            with self.subTest(call=call):
+                self.assertIn("names a program", self.refused(call))
+        # Options merely sharing a prefix pass: -u sets upstream for push.
+        for call in ("git push -u origin HEAD", "git push --recurse-submodules=check origin",
+                     "git fetch --update-head-ok origin", "git push --repo=origin"):
+            with self.subTest(call=call):
+                self.allowed(call)
+
     def test_git_with_a_word_the_shell_would_rewrite_is_refused(self):
         # Over-matches a quoted refspec glob: the guard can't tell quoting once shlex has run.
         for call in ("git push origin $BRANCH", "git fetch origin '+refs/heads/*:refs/x/*'",
