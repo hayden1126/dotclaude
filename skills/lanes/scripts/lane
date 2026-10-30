@@ -25,10 +25,10 @@ the config in $XDG_STATE_HOME/dotclaude/lanes/ (why, and what is checked before 
 acts on a sandbox-writable file: docs/lanes.md S3). Every write takes the flock on <common-dir>/lanes/.lock. Board fields (ahead/behind, PR state,
 liveness, flags) are derived on each `ls`, never stored. skills/lanes/SKILL.md is the guide and
 docs/lanes.md the design. Run `init`, `new`, `adopt`, `ls`, `open`, `done`, `park`, `addr` and `lead` bare,
-so their excludedCommands entries take them out of the sandbox: `new`, `ls` and `done` need the
+so their excludedCommands entries take them out of the sandbox: `new`, `ls`, `done` and `park` need the
 network and the GitHub credential (`new` refuses without them; `ls` and `done` say what they
-skipped), `ls`, `open`, `done`, `addr` and `lead` need to see other processes, and `lead` writes
-the lead record in the state dir. Every other subcommand runs sandboxed; `lock` and `trial`
+skipped; `park` refuses), `ls`, `open`, `done`, `park`, `addr` and `lead` need to see other
+processes, and `lead` writes the lead record in the state dir, as `park` does its flag. Every other subcommand runs sandboxed; `lock` and `trial`
 must, so the commands they run stay sandboxed too.
 
 `trial`, from inside a lane, merges the base and every other live lane's commits (or only the
