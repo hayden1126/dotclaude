@@ -179,7 +179,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     exclusive inner ones. `lane ls` shows each holder and its mode. Why: capella's 2-minute gates
     waited 30+ minutes behind a 50-minute browser sweep; measured side by side, the gate passed
     4/4 (median 259 s vs 219 s alone). Note for the lane: `flock`'s shared mode alone doesn't
-    stop writer starvation, so the queued-exclusive rule needs a turnstile. Lane-able (`lane`,
+    stop writer starvation, so the queued-exclusive rule needs a turnstile; and `lane ls` probes a
+    lock by taking `LOCK_SH` for an instant (`lock_holder`), which would succeed beside a shared
+    holder and read the lock as free. Lane-able (`lane`,
     `lanelib.py`, `tests/lanes`, `docs/lanes.md`), after ports; overlaps lane park. Tell the
     capella-studio lead when it lands.
   - **Approval-marker tests flake at midnight** (low; lane park, 2026-10-30). Two
