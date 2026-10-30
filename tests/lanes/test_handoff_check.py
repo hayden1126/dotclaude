@@ -190,6 +190,36 @@ class PlainRepo(Check):
         self.assertFalse(os.path.exists(marker), "the check ran the repo's filter")
         self.assertGap(result, "filter")
 
+    def test_a_filter_value_holding_a_newline_reads_whole(self):
+        # git prints values raw, so a newline in one would split a line-based read.
+        subprocess.run(["git", "config", "--global", "filter.x.clean", "a\nb"], cwd=self.main,
+                       env=self.env, check=True)
+        self.assertPasses(self.check())
+        subprocess.run(["git", "config", "filter.y.clean", "c\nd"], cwd=self.main, env=self.env,
+                       check=True)
+        self.assertGap(self.check(), "sets filter.y.clean,")
+
+    def test_a_signed_head_never_runs_the_repos_gpg_program(self):
+        # log.showSignature makes `git log` verify HEAD's signature with gpg.program, which the
+        # repo's own config names (review round 1).
+        marker = os.path.join(self.tmp, "gpg-ran")
+        prog = os.path.join(self.tmp, "gpg.sh")
+        self.write(prog, f"#!/bin/sh\ntouch {marker}\nexit 1\n")
+        os.chmod(prog, 0o755)
+        git = lambda *a: subprocess.run(["git", *a], cwd=self.main, env=self.env, check=True,
+                                        capture_output=True, text=True).stdout.strip()
+        body = (f"tree {git('rev-parse', 'HEAD^{tree}')}\nparent {git('rev-parse', 'HEAD')}\n"
+                "author t <t@t> 1700000000 +0000\ncommitter t <t@t> 1700000000 +0000\n"
+                "gpgsig -----BEGIN PGP SIGNATURE-----\n \n abc\n -----END PGP SIGNATURE-----\n"
+                "\nsigned\n")
+        raw = os.path.join(self.tmp, "commit")
+        self.write(raw, body)
+        git("update-ref", "HEAD", git("hash-object", "-t", "commit", "-w", raw))
+        git("config", "log.showSignature", "true")
+        git("config", "gpg.program", prog)
+        self.check()
+        self.assertFalse(os.path.exists(marker), "the check ran the repo's gpg.program")
+
     def test_a_filter_from_global_config_passes(self):
         # git lfs install writes its filter to the global config, which the session can't write.
         self.plant_filter("--global")
