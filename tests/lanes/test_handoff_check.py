@@ -190,6 +190,18 @@ class PlainRepo(Check):
         self.assertFalse(os.path.exists(marker), "the check ran the repo's filter")
         self.assertGap(result, "filter")
 
+    def test_a_repo_local_lfs_extension_fails(self):
+        # git-lfs, a filter installed globally, runs an lfs.extension's clean command, so the
+        # repo's own one counts as the repo's filter (not probed: no git-lfs on HAYPC).
+        subprocess.run(["git", "config", "lfs.extension.x.clean", "prog %f"], cwd=self.main,
+                       env=self.env, check=True)
+        self.assertGap(self.check(), "sets lfs.extension.x.clean,")
+        subprocess.run(["git", "config", "--unset", "lfs.extension.x.clean"], cwd=self.main,
+                       env=self.env, check=True)
+        subprocess.run(["git", "config", "--global", "lfs.extension.x.clean", "prog %f"],
+                       cwd=self.main, env=self.env, check=True)
+        self.assertPasses(self.check())
+
     def test_a_filter_value_holding_a_newline_reads_whole(self):
         # git prints values raw, so a newline in one would split a line-based read.
         subprocess.run(["git", "config", "--global", "filter.x.clean", "a\nb"], cwd=self.main,

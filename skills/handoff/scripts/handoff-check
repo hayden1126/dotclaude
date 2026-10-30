@@ -3,8 +3,8 @@
 
 Works in a lane (the record is <lane>/.lane/STATUS.md), in the main checkout of a lanes repo and
 in a plain repo (the root STATUS.md). Checks:
-  clean      the repo's own config sets no filter clean or process command (git status would run
-             it; global and system ones pass), and the tree is clean, or each leftover's
+  clean      the repo's own config sets no filter clean or process command and no lfs.extension
+             key (git status would run it; global and system ones pass), and the tree is clean, or each leftover's
              repo-relative path is named in the status file; agent worktrees (.claude/worktrees/) and sandbox /dev/null stubs never count
   fresh      the status file was written after HEAD's commit (or HEAD carries it) and after this
              session started: in a lane the latest lane.json sessions[].startedAt; elsewhere the
@@ -96,12 +96,14 @@ def sandbox_stub(path: str) -> bool:
 
 
 def repo_filter(repo: lanelib.Repo) -> str | None:
-    """Why `git status` can't run in the checkout, or None: a filter's clean or process command
-    set in the repo's own config (local, worktree or command scope), which status runs on a file
-    the checkout routes to it. Global and system config, which the session can't write, may set
+    """Why `git status` can't run in the checkout, or None: a filter's clean or process command,
+    or any lfs.extension key, set in the repo's own config (local, worktree or command scope),
+    which status runs on a file the checkout routes to it. Global and system config, which the session can't write, may set
     one (git lfs install does). Unreadable config fails closed."""
-    p = git(["config", "--show-scope", "-z", "--get-regexp", r"^filter\..*\.(clean|process)$"],
-            repo.toplevel)
+    # git-lfs, a filter installed globally, runs an lfs.extension's commands: the repo's own
+    # count too (not probed: no git-lfs on HAYPC).
+    p = git(["config", "--show-scope", "-z", "--get-regexp",
+             r"^(filter\..*\.(clean|process)|lfs\.extension\..*)$"], repo.toplevel)
     # -z: each entry is scope NUL key LF value NUL, since a value may hold a newline.
     fields = p.stdout.split("\0")
     if p.returncode not in (0, 1) or fields[-1] != "" or len(fields) % 2 != 1:  # 1: none set
