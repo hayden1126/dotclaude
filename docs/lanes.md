@@ -609,7 +609,9 @@ rebase and merge` (Hayden's pick: a parked lane may unpark over a full cap to me
 lane over at a time). It clears the flag only once `tmux new-window` succeeds. `open --print`
 refuses a parked lane, since it would start a session the flag doesn't know of. One hold of
 the lanes lock spans the cap check, `tmux new-window` and the flag's removal, so a second
-`open` of a parked lane waits and then counts the first as holding its slot. `open` of a
+`open` of a parked lane waits and then counts the first as holding its slot; a second
+`open` of the same lane finds its flag gone under the lock and refuses (the first one's claude
+may not have written its session file yet). `open` of a
 lane that isn't parked has no cap check, as before.
 
 **The gates.** Every one runs before any signal, in this order: the record (not stale,
@@ -618,15 +620,19 @@ session that runs it), already parked with no session (which needs the session f
 comes after `lead_only`'s sandbox check), `done`'s git hardening and its
 `extensions.worktreeConfig` refusal, a clean tree, HEAD pushed (an ancestor of the commit the
 remote's own `refs/heads/<branch>` is at, asked with `ls-remote` and fetched, never the
-remote-tracking ref a lane can plant), or at an open PR's head (an open PR behind HEAD refuses:
-the commits past it would sit outside the PR), the plain `handoff-check` (not `--closing`, so a
+remote-tracking ref a lane can plant, and with replace refs off), or an open PR whose head is
+HEAD or a local commit HEAD is an ancestor of (a PR at any other commit refuses: HEAD's work
+would sit outside it), the plain `handoff-check` (not `--closing`, so a
 `Keep open:` lane parks), no `handoff?` (gh unavailable fails closed), no lock the lane holds
 (each config lock and `suite`), no install hold, no busy session, then `done`'s survey and
 self-guard. The gates take a while (a fetch, gh, handoff-check), so the session statuses are
 read again from the session files the survey reads: a session that went busy, or one waiting on
 a permission dialog or a question, refuses (every other gate can pass mid-turn, and the SIGTERM
 would cut the turn off or lose the question). A parked lane with a session in it reruns them
-all.
+all. The pushed, lock and busy gates guard a cooperative lane against mistakes: the lane's own
+sandbox can still defeat the pushed gate (move its work to another branch and reset), which is
+acceptable, since the worktree and branch are kept, so nothing is lost, and the flag itself
+can't be forged.
 
 **Ending.** The same `save_proof`, `end_lane` and open-sessions sweep as `done`, with the verb
 passed in so a refusal says `rerun lane park X`. There is no `closing` state. A session that

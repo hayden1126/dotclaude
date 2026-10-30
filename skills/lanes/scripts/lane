@@ -91,8 +91,8 @@ its worktree exists, unless it is parked with no session in it (holds_slot); `ne
 holders, and `open` of a parked lane goes at most one lane over the cap, for its rebase and
 merge. It refuses before any signal, as `done` does, on a dirty tree, a HEAD that is neither
 on the remote branch nor an open PR's head, a failing plain handoff-check, the board's
-handoff?, a lock the lane holds, the install hold, a busy session, or anything in the lane
-nothing proves its own.
+handoff?, a lock the lane holds, the install hold, a busy session or one waiting on Hayden,
+or anything in the lane nothing proves its own.
 """
 import argparse
 import contextlib
@@ -1832,6 +1832,11 @@ def cmd_open(args) -> None:
             # parked lanes at the cap would each count the other parked and both go over. Nothing
             # in between takes the lock again.
             held.enter_context(lock(repo))
+            # Again, under the lock: a second open of this lane that held it removed the flag,
+            # and its claude may not have written its session file yet.
+            if parked_stamp(repo, lane) is None:
+                raise LaneError(f"lane {args.id} was unparked meanwhile: `lane open {args.id} "
+                                "--focus`")
             live = lanelib.live_sessions()  # again: an open that held the lock started one
             if sessions_in(live or [], path):
                 raise LaneError(f"lane {args.id} got a live session meanwhile (a second `lane "
@@ -4203,6 +4208,9 @@ def harden_git_env(repo: Repo) -> None:
     # and the inherited ones before it, so nothing inherited turns it back on.
     os.environ["GIT_CONFIG_PARAMETERS"] = " ".join(filter(None, [
         os.environ.get("GIT_CONFIG_PARAMETERS", "").strip(), "'core.fsmonitor'='false'"]))
+    # Nor reads an object through refs/replace (or grafts), which sandboxed Bash can write: a
+    # replaced commit could make an unpushed HEAD read as an ancestor of the remote's.
+    os.environ["GIT_NO_REPLACE_OBJECTS"] = "1"
 
 
 def worktree_config_refusal(repo: Repo, lane_id: str, present: bool, verb: str = "done") -> None:
@@ -4371,8 +4379,9 @@ def pushed_check(repo: Repo, lane: dict, heads: dict[str, tuple[str, str]]) -> t
     refs/heads/<branch> is at (the base's remote, base_parts; asked with ls-remote, then
     fetched, as fetched_base does), or the head of an open PR from its branch (a fork's). Never
     the remote-tracking ref: sandboxed Bash can plant one, and a fetch that doesn't prune keeps
-    one for a branch the remote deleted. An open PR behind HEAD refuses: the commits past it
-    would sit outside the PR. (branch, ref) as lane_head gives them."""
+    one for a branch the remote deleted. An open PR counts when its head is HEAD, or a local
+    commit HEAD is an ancestor of (a fork's PR with a fixup on it); at any other commit, HEAD's
+    work would sit outside the PR, so it refuses. (branch, ref) as lane_head gives them."""
     lane_id = lane["id"]
     branch, ref = lane_head(lane, heads)
     if not branch:
@@ -4390,16 +4399,28 @@ def pushed_check(repo: Repo, lane: dict, heads: dict[str, tuple[str, str]]) -> t
     if rows is None:
         raise LaneError(f"lane {lane_id}'s HEAD {head[:12]} is not on {remote}/{branch}, and gh "
                         f"can't say whether an open PR holds it ({why})")
-    if any(r.get("headRefOid") == head for r in rows):
+    if any(holds_head(repo, r.get("headRefOid"), head) for r in rows):
         return branch, ref
     if rows:
         r = rows[0]
-        raise LaneError(f"lane {lane_id}'s open PR #{r.get('number')} is at "
-                        f"{str(r.get('headRefOid'))[:12]}, behind its HEAD {head[:12]}: push the "
-                        f"lane's commits from its own session, then rerun `lane park {lane_id}`")
+        raise LaneError(shown(f"lane {lane_id}'s open PR #{r.get('number')} is at "
+                              f"{str(r.get('headRefOid'))[:12]}, which differs from its HEAD "
+                              f"{head[:12]}: push the lane's commits from its own session, then "
+                              f"rerun `lane park {lane_id}`"))
     raise LaneError(f"lane {lane_id}'s HEAD {head[:12]} is not on {remote}/{branch}, nor any open "
                     f"PR's head: push it from the lane's own session, then rerun "
                     f"`lane park {lane_id}`")
+
+
+def holds_head(repo: Repo, oid, head: str) -> bool:
+    """Whether a PR's head commit oid holds head: it is head, or a local commit head is an
+    ancestor of."""
+    if oid == head:
+        return True
+    if not (isinstance(oid, str) and lanelib.SHA_RE.fullmatch(oid)) or rev(repo, oid) != oid:
+        return False
+    return git(["merge-base", "--is-ancestor", "--end-of-options", head, oid],
+               repo.toplevel).returncode == 0
 
 
 def remote_tip(repo: Repo, remote: str, branch: str, lane_id: str) -> str | None:
@@ -4715,8 +4736,8 @@ def parser() -> argparse.ArgumentParser:
                        "worktree, branch, record and claims. It refuses before any signal on a "
                        "dirty tree, a HEAD not pushed (nor an open PR's head), a failing "
                        "handoff-check, a lit handoff?, a lock the lane holds, the install hold, "
-                       "a busy session, or anything in the lane nothing proves its own. `lane "
-                       "open <id>` unparks it, at most one lane over the cap.")
+                       "a busy session or one waiting on Hayden, or anything in the lane "
+                       "nothing proves its own. `lane open <id>` unparks it, at most one lane over the cap.")
     p.add_argument("id")
     return ap
 
