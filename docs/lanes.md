@@ -620,7 +620,8 @@ session that runs it), already parked with no session (which needs the session f
 comes after `lead_only`'s sandbox check), `done`'s git hardening and its
 `extensions.worktreeConfig` refusal, a clean tree, HEAD pushed (an ancestor of the commit the
 remote's own `refs/heads/<branch>` is at, asked with `ls-remote` and fetched, never the
-remote-tracking ref a lane can plant, and with replace refs off), or an open PR whose head is
+remote-tracking ref a lane can plant, and with replace refs and grafts off; or of the base's
+commit, the same way, for a lane whose PR merged with nothing new since), or an open PR whose head is
 HEAD or a local commit HEAD is an ancestor of (a PR at any other commit refuses: HEAD's work
 would sit outside it), the plain `handoff-check` (not `--closing`, so a
 `Keep open:` lane parks), no `handoff?` (gh unavailable fails closed), no lock the lane holds
@@ -646,7 +647,7 @@ removed.
 
 **The board.** A parked lane shows `parked` and never `orphan`; `--json` rows carry `parked`
 (the stamp, or null). With a lane parked or the cap passed, a `cap: N of M slots held (K
-parked)` line follows, with `, X over` past the cap. It counts by the same rule as `new`. The lead sends a parked lane no "main
+parked)` line follows, with `, X over` past the cap. It counts the same records as `new`, twins included, by the same rule. The lead sends a parked lane no "main
 moved" message: its `rebase` flag carries that to its unpark. `lane trial` keeps merging parked
 lanes, which are live and will merge.
 
@@ -792,6 +793,9 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
     or the mirror offers a removal by path (a test scans the CLI's messages).
   - `done` signals a process only on kernel facts (`/proc`) and Claude Code's own files (session
     files, transcripts), never on `lane.json` (the pieces, `lane done`).
+  - An accepted limit: `is_live` trusts `lane.json`'s path, so a lane that points its own path
+    at a missing dir drops out of `new`'s cap count. Counting by `git worktree list` wouldn't
+    close it, since git's worktree admin dir is sandbox-writable too.
   PR 3 adds `pass-respawn` to `excludedCommands` (bare and with arguments): it needs the tmux socket and
   the session's processes, and its docstring lists what it reads and why each input is safe.
   The excluded-command inventory (2026-10-13, `tests/delegation/command_inventory.py`) adds three

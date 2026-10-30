@@ -1317,20 +1317,17 @@ def parked_stamp(repo: Repo, lane: dict) -> str | None:
     return rec["parked"]
 
 
-def slot_rule(lane: dict, parked: str | None, sessions: list | None) -> bool:
-    """The one rule for who holds a cap slot: the lane's worktree exists (lanelib.is_live) and
-    it is not parked, or sessions (running or stopped) are in it all the same, one started by
-    hand (`cd <lane> && claude`) included, so the count never trusts the flag alone. sessions
-    None (liveness unknown): a parked lane holds its slot."""
-    return lanelib.is_live(lane) and (not parked or sessions is None or bool(sessions))
-
-
 def holds_slot(repo: Repo, lane: dict, live: list[dict] | None) -> bool:
-    """slot_rule for a record, live being lanelib.live_sessions()."""
+    """The one rule for who holds a cap slot, which `new`, `open` and the board's cap line all
+    count by: the lane's worktree exists (lanelib.is_live) and it is not parked, or sessions
+    (running or stopped) are in it all the same, one started by hand (`cd <lane> && claude`)
+    included, so the count never trusts the flag alone. live is lanelib.live_sessions(); unknown
+    (None), a parked lane holds its slot."""
     if not lanelib.is_live(lane):
         return False
-    here = None if live is None else sessions_in(live, os.path.realpath(lane["path"]))
-    return slot_rule(lane, parked_stamp(repo, lane), here)
+    if parked_stamp(repo, lane) is None or live is None:
+        return True
+    return bool(sessions_in(live, os.path.realpath(lane["path"])))
 
 
 def board(repo: Repo) -> list[dict]:
@@ -1506,7 +1503,7 @@ def cmd_ls(args) -> None:
             say(f"locks: {name} held by {holder}")
     for line in overlap_lines(rows):
         say(line)
-    if line := cap_line(repo, rows):
+    if line := cap_line(repo):
         say(line)
     if line := main_footer(repo):
         say(line)
@@ -1523,18 +1520,16 @@ def cmd_ls(args) -> None:
             f"the lead's ./setup.sh in {h['main']} releases it")
 
 
-def cap_line(repo: Repo, rows: list[dict]) -> str | None:
+def cap_line(repo: Repo) -> str | None:
     """`cap: N of M slots held (K parked)`, with `, X over` past the cap, when a lane is parked
-    or the cap is passed; None otherwise. Each row counts by slot_rule, as `new` counts the
-    records (holds_slot), its running and stopped sessions both."""
+    or the cap is passed; None otherwise. It counts what `new` counts: every checked record,
+    twins included (repo.lanes(shared=True), which held_lanes hands `new`), each by
+    holds_slot. A record left out, which `new` refuses on, `ls` names above it."""
+    live = lanelib.live_sessions()
     held, parked = 0, 0
-    for r in rows:
-        if not lanelib.is_live(r):
-            continue
-        parked += bool(r["parked"])
-        sessions = (None if r["live_sessions"] is None
-                    else r["live_sessions"] + (r["stopped_sessions"] or []))
-        held += slot_rule(r, r["parked"], sessions)
+    for lane in filter(lanelib.is_live, repo.lanes(shared=True)):
+        parked += parked_stamp(repo, lane) is not None
+        held += holds_slot(repo, lane, live)
     cap = int(repo.config().get("cap", DEFAULT_CAP))
     if not parked and held <= cap:
         return None
@@ -1779,6 +1774,10 @@ def cmd_open(args) -> None:
     if parked and args.print:
         raise LaneError(f"lane {args.id} is parked, and `--print` would start a session its flag "
                         f"doesn't know of: a bare `lane open {args.id}` unparks it")
+    if parked and not os.environ.get("TMUX"):
+        raise LaneError(f"lane {args.id} is parked, and outside tmux the way in is a session its "
+                        f"flag doesn't know of: run a bare `lane open {args.id}` from inside tmux "
+                        "to unpark it")
     live = lanelib.live_sessions()
     if live is None:
         if lanelib.pids_visible():  # a session file that won't read may be a live session's
@@ -3756,17 +3755,20 @@ def lanes_lock(repo: Repo, then: str):
         yield
 
 
-def reread(repo: Repo, loaded: dict, path: str) -> dict:
+def reread(repo: Repo, loaded: dict, path: str, verb: str = "done") -> dict:
     """lane.json read again, under the lock: a second `done` may have closed the lane since this
-    one loaded it, or its path or branch changed (what `done` checked would no longer be what
-    it removes or deletes)."""
+    one (or a `park`) loaded it, or its path or branch changed (what `done` checked would no
+    longer be what it removes or deletes, nor what `park` checked what it parks)."""
     lane_id = loaded["id"]
     try:
         lane = lanelib.read_record(repo, lane_id)
     except FileNotFoundError:
-        raise LaneError(f"lane {lane_id} was closed meanwhile (a second `lane done`?)")
+        raise LaneError(f"lane {lane_id} was closed meanwhile (a second `lane done`?)"
+                        if verb == "done" else
+                        f"lane {lane_id} was closed meanwhile (a `lane done`?), so it is not parked")
     if os.path.realpath(lane["path"]) != path or lane["branch"] != loaded["branch"]:
-        raise LaneError(f"lane {lane_id}'s path or branch changed during the close: refusing")
+        raise LaneError(f"lane {lane_id}'s path or branch changed during {ACTING[verb][1]}: "
+                        "refusing")
     return lane
 
 
@@ -4208,9 +4210,11 @@ def harden_git_env(repo: Repo) -> None:
     # and the inherited ones before it, so nothing inherited turns it back on.
     os.environ["GIT_CONFIG_PARAMETERS"] = " ".join(filter(None, [
         os.environ.get("GIT_CONFIG_PARAMETERS", "").strip(), "'core.fsmonitor'='false'"]))
-    # Nor reads an object through refs/replace (or grafts), which sandboxed Bash can write: a
-    # replaced commit could make an unpushed HEAD read as an ancestor of the remote's.
+    # Nor reads an object through refs/replace or <common>/info/grafts, which sandboxed Bash can
+    # write: a replaced commit, or a grafted parent, could make an unpushed HEAD read as an
+    # ancestor of the remote's. GIT_NO_REPLACE_OBJECTS stops only the first.
     os.environ["GIT_NO_REPLACE_OBJECTS"] = "1"
+    os.environ["GIT_GRAFT_FILE"] = os.devnull
 
 
 def worktree_config_refusal(repo: Repo, lane_id: str, present: bool, verb: str = "done") -> None:
@@ -4379,7 +4383,8 @@ def pushed_check(repo: Repo, lane: dict, heads: dict[str, tuple[str, str]]) -> t
     refs/heads/<branch> is at (the base's remote, base_parts; asked with ls-remote, then
     fetched, as fetched_base does), or the head of an open PR from its branch (a fork's). Never
     the remote-tracking ref: sandboxed Bash can plant one, and a fetch that doesn't prune keeps
-    one for a branch the remote deleted. An open PR counts when its head is HEAD, or a local
+    one for a branch the remote deleted. A HEAD in the remote's base branch (the same way)
+    counts too: all its work is merged. An open PR counts when its head is HEAD, or a local
     commit HEAD is an ancestor of (a fork's PR with a fixup on it); at any other commit, HEAD's
     work would sit outside the PR, so it refuses. (branch, ref) as lane_head gives them."""
     lane_id = lane["id"]
@@ -4390,11 +4395,14 @@ def pushed_check(repo: Repo, lane: dict, heads: dict[str, tuple[str, str]]) -> t
     head = rev(repo, ref)
     if head is None:
         raise LaneError(f"lane {lane_id}'s branch {branch} has no commit")
-    remote, _ = base_parts(repo, repo.config())
-    tip = remote_tip(repo, remote, branch, lane_id)
-    if tip and git(["merge-base", "--is-ancestor", "--end-of-options", head, tip],
-                   repo.toplevel).returncode == 0:
-        return branch, ref
+    remote, base = base_parts(repo, repo.config())
+    # The lane's branch on the remote, then the base: a Keep-open lane whose PR merged (its head
+    # branch deleted) with nothing new since is all in the base.
+    for name in dict.fromkeys([branch, base]):
+        tip = remote_tip(repo, remote, name, lane_id)
+        if tip and git(["merge-base", "--is-ancestor", "--end-of-options", head, tip],
+                       repo.toplevel).returncode == 0:
+            return branch, ref
     rows, why = branch_prs(repo, branch, "open")
     if rows is None:
         raise LaneError(f"lane {lane_id}'s HEAD {head[:12]} is not on {remote}/{branch}, and gh "
@@ -4594,7 +4602,7 @@ def cmd_park(args) -> None:
         end_lane(repo, lane, path, hits, "park")
         sweep_open_sessions(path)
     with lanes_lock(repo, f"lane {args.id} is not parked: rerun `lane park {args.id}`"):
-        now = reread(repo, lane, path)
+        now = reread(repo, lane, path, "park")
         if now.get("state") != lane.get("state"):
             raise LaneError(f"lane {args.id} went {now.get('state')} during the park, so it is not "
                             "parked")
