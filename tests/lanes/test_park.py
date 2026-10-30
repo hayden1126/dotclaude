@@ -1,5 +1,6 @@
 """skills/lanes/scripts/lane park: a finished lane's sessions end and its cap slot frees, its
 worktree, branch, record and claims kept; `lane open` unparks it, at most one lane over the cap."""
+import datetime
 import fcntl
 import glob
 import json
@@ -77,6 +78,8 @@ class Park(ParkBase):
     def test_park_ends_the_session_and_keeps_everything_else(self):
         self.ready()
         self.lane("claim", "42", cwd=self.path)
+        self.write(self.record("chart-fix"), self.read(self.record("chart-fix")).replace(
+            "## Next\n", "## Next\n- #42 is done.\n"))
         (claude,) = self.claude()
         out = self.lane("park", "chart-fix")
         self.assertIn(f"ended {claude} {self.comms[claude]} (lane session {self.SID})", out)
@@ -123,10 +126,10 @@ class Park(ParkBase):
         self.ready()
         stray = os.path.join(self.tmp, "stray.pid")
         (claude,) = self.claude(on_term=[["sh", "-c", f"cd {shlex.quote(self.path)} && "
-                                                      f"(sleep 30 & echo $! > {stray})"], ""])
+                                                      f"(sleep 30 >/dev/null 2>&1 & echo $! > {stray})"], ""])
         p = self.run_lane("park", "chart-fix")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
-        self.assertIn(f"ended {claude}", p.stdout)
+        self.assertIn(f"ended {claude}", p.stdout, p.stderr)
         self.assertIn("rerun `lane park chart-fix`", p.stderr)
         self.assertNotIn("lane done", p.stderr)
         self.assertEqual(glob.glob(self.flag_glob()), [])
@@ -205,8 +208,11 @@ class ParkRefusals(ParkBase):
     def test_handoff_lit(self):
         self.ready()
         (claude,) = self.claude()
-        later = time.time() + 600  # wall clock: a commit after the record's last write
-        os.utime(self.record("chart-fix"), (later - 1200, later - 1200))
+        # A merge after the record's last write: the lane never saw it.
+        later = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=10)
+        self.env["FAKE_GH_OUT"] = json.dumps([{"number": 7, "state": "MERGED",
+                                               "headRefName": "chart-fix",
+                                               "mergedAt": later.isoformat(timespec="seconds")}])
         p = self.run_lane("park", "chart-fix")
         self.assertIn("handoff?", p.stderr)
         self.assertRefusedUntouched(p, claude)
@@ -253,7 +259,7 @@ class ParkRefusals(ParkBase):
                    os.path.join(hooks, "lane-identity.sh"))
         p = self.run_lane("park", "chart-fix")
         self.assertIn("lane chart-fix holds the install", p.stderr)
-        self.assertIn("rerun `lane park chart-fix`", p.stderr)
+        self.assertIn("then reruns `lane park chart-fix`", p.stderr)
         self.assertNotIn("removing it would break them", p.stderr)
         self.assertRefusedUntouched(p, claude)
 
