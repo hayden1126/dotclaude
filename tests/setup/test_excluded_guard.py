@@ -387,6 +387,58 @@ class Rule1PathArguments(Guard):
             with self.subTest(call=call):
                 self.refused(call)
 
+    def test_round_4_spellings_are_refused(self):
+        # Review round 4: an unmatched piece of a candidate call, a clobber redirection (>|), and
+        # an escaped > before a real background &.
+        o = self.other
+        for call in (f"gh pr list; git push -q {o} HEAD", f"gh pr list; git push {o} HEAD",
+                     f"pass-respawn&>/dev/null -C {o}; :", f"git push -q >| /dev/null {o} HEAD",
+                     "git fetch origin >| $(true)", f"echo \\>& git push -q {o} HEAD"):
+            with self.subTest(call=call):
+                self.refused(call)
+
+    def test_a_call_is_judged_as_the_shell_splits_it(self):
+        # The shell's own tokens, not a regex split: a guarded call anywhere in a candidate
+        # command is judged, inside a subshell, a group, an if or after a newline too.
+        o = self.other
+        for call in (f"gh pr list; (git push -q {o} HEAD)", f"gh pr list; {{ git push -q {o}; }}",
+                     f"gh pr list; if git push -q {o}; then :; fi", f"gh pr list\ngit push {o}",
+                     f"gh pr list && GIT_TRACE=1 git push {o}", f"git push -q 2>&1 {o} HEAD",
+                     f"git push -q &>>| /dev/null {o}", f"git fetch origin >(cat) {o}",
+                     f"git fetch origin $(echo {o})", f"git push -q origin#; git push -q {o}",
+                     f"gh pr list `git push -q {o}`", f"gh pr list; git -C {o} push -q",
+                     f"gh pr list; git -c a=b fetch {o}", f"gh pr list; git push -q {o} 'x",
+                     f"echo $'\\''; pass-respawn -C {o}; echo $'\\''",
+                     f"# '\npass-respawn -C {o}\n# '", f'gh pr list "$(git push -q {o})"',
+                     f"gh pr list; cat <<EOF\n$(git push -q {o})\nEOF",
+                     f"gh pr list; x=$(case a in a) git push -q {o};; esac)",
+                     f"pass-respawn -C {o}(N)"):
+            with self.subTest(call=call):
+                self.refused(call)
+
+    def test_a_quoted_or_escaped_operator_is_a_word(self):
+        # `";"` and `\;` are words to the shell, not operators, held to the plain-word rule.
+        for call in (f'git push -q --repo ";" {self.other}', "git push -q \\; origin",
+                     "git fetch origin '|' x", 'pass-respawn -C ">"',
+                     f'pass-respawn -C "{self.other};b"'):
+            with self.subTest(call=call):
+                self.assertIn("plain word", self.refused(call))
+
+    def test_ordinary_calls_pass(self):
+        for call in ("git push", "git push origin main", "git push -u origin HEAD",
+                     "git push --force-with-lease origin feat/x", "git push origin --delete feat/x",
+                     "git fetch origin", "git fetch --prune", "git pull --ff-only",
+                     "git ls-remote --heads origin", "git fetch origin main:refs/remotes/origin/main",
+                     "git push origin main 2>&1 | tail -3", "git fetch origin && git merge --ff-only",
+                     "git pull --rebase > /dev/null 2>&1", f"pass-respawn -C {self.proj}",
+                     "gh pr view 5 --json title --jq '.title|ascii_downcase'",
+                     "git push origin main && gh pr create --title t --body 'a and b'",
+                     'git fetch -q origin; grep -c "a\\|b" README', "git push origin main # done",
+                     "git push origin \\\n main", "gh pr comment 5 --body-file - <<'EOF'\nit's done\nEOF",
+                     "gh pr view 5 --json body --jq .body | grep -c '^#'"):
+            with self.subTest(call=call):
+                self.allowed(call)
+
     def test_git_refuses_ext_in_an_option_value(self):
         self.assertIn("names a program", self.refused("git push --repo=ext::sh HEAD"))
 
@@ -412,6 +464,59 @@ class Rule1PathArguments(Guard):
         # runs no repo-local program (probed 2026-10-29); codex-delegate is sent to any repo.
         self.allowed(f"lane addr --repo {self.other} lead")
         self.allowed(f"codex-delegate run --model sol --dir {self.other} --brief b.md")
+
+
+
+ZSH = shutil.which("zsh")
+
+
+@unittest.skipUnless(ZSH, "zsh is not installed")
+class LexerMatchesZsh(unittest.TestCase):
+    """path_calls finds each call with the argv zsh really runs it with: the stubs record it."""
+
+    STUBS = (r"""_rec() { print -rN -- "$@" >> "$OUT"; print -rn -- $'\x1e' >> "$OUT" }"""
+             "\ngit() { _rec git \"$@\" }\npass-respawn() { _rec pass-respawn \"$@\" }"
+             "\nlane() { _rec lane \"$@\" }\ndelegation-ledger() { _rec delegation-ledger \"$@\" }\n")
+    CORPUS = (
+        "git push -q origin main", "git push 'a b' \"c d\" e\\ f 't'\"u\"v",
+        "git push -q 2>&1 x HEAD", "git push -q 2 >&1 x", "git push -q >| out x",
+        "git push -q &>> log x", "git push -q >! log2 x", "git push s 2>/dev/null 1>&2",
+        "true pr list; git push x", "true; (git push -q x)", "{ git push -q x; }",
+        "if git push -q x; then :; fi", "true\ngit push x", "true && GIT_TRACE=1 git push x",
+        "true | git push n", "git push o |& cat", "delegation-ledger wait x",
+        "echo $(git push -q x)", 'echo "$(git push -q y)"', "echo `git push -q z`",
+        "echo ${x:-$(git push -q r)}", "echo $'\\''; git push -q a; echo $'\\''",
+        "# '\ngit push -q b\n# '", "git push origin main # done", "git push origin \\\n main",
+        "cat <<'EOF'\nit's\nEOF\ngit push -q c", "cat <<EOF\n$(git push -q d)\nEOF",
+        "cat <<-EOF\n\tit's\n\tEOF\ngit push e", "cat <<\\EOF\n$(x\nEOF\ngit push e2",
+        "x=$(case a in a) git push -q f;; esac)", 'x="$(case a in a) git push -q f2;; esac)"',
+        "git push -q --repo \";\" g",
+        "git push -q \\; h", "git fetch origin '|' i", "pass-respawn -C \">\"",
+        "lane adopt \"j;k\"", "git push origin#; git push -q l", "echo \"it's\" && git push m",
+    )
+    # Lines that name a call zsh never runs: nothing to judge. (A glob group's words are read as
+    # a command, an over-judge: `echo \\$(git push no)` yields a call zsh never runs.)
+    NO_CALL = ("echo '$(git push no)'", "cat <<'EOF'\n$(git push no)\nEOF")
+
+    def zsh_calls(self, command):
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "out")
+            subprocess.run([ZSH, "-f", "-c", self.STUBS + command], cwd=d, capture_output=True,
+                           env={"OUT": out, "PATH": os.environ["PATH"], "HOME": d}, timeout=10)
+            text = slurp(out) if os.path.exists(out) else ""
+        return sorted(r.split("\0")[:-1] for r in text.split("\x1e") if r)
+
+    def test_each_call_has_zshs_argv(self):
+        guard = load_guard()
+        for command in self.CORPUS:
+            with self.subTest(command=command):
+                calls = self.zsh_calls(command)
+                self.assertTrue(calls, "zsh ran no call: the corpus line is wrong")
+                self.assertEqual(sorted(w for w, _ in guard.path_calls(command)), calls)
+        for command in self.NO_CALL:
+            with self.subTest(command=command):
+                self.assertEqual(self.zsh_calls(command), [])
+                self.assertEqual(list(guard.path_calls(command)), [])
 
 
 class Rule1Layout(Guard):

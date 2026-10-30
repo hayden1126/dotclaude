@@ -276,8 +276,10 @@ For a match it refuses, naming the path, when:
    from the cwd: `pass-respawn -C`, `lane adopt PATH`, and a local repository given to
    `git push`, `fetch`, `pull` or `ls-remote`. Such a call must spell each word plainly (no
    expansion, glob, quote or space), its redirection targets too, since the guard reads the
-   text before the shell rewrites it. A git repository is judged where git's own lookup finds it (a `.git` suffix, a gitfile,
-   a `file://` URL). An option of those git calls that names a program for git to run, an
+   text before the shell rewrites it. The guard finds these calls as zsh splits the command,
+   anywhere in it (a later piece, a subshell, a substitution), and refuses a command it can't
+   read and a git option before those subcommands. A git repository is judged where git's own
+   lookup finds it (a `.git` suffix, a gitfile, a `file://` URL). An option of those git calls that names a program for git to run, an
    `ext::` remote, submodule recursion, a remote defined outside `.git/config` (the legacy
    `.git/remotes` and `.git/branches` files) and a `%` in any word are refused, and
    `delegation-ledger hook` runs only as a hook, never through Bash. The
