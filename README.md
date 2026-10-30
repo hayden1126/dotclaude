@@ -95,7 +95,7 @@ handoff skill's own `gh pr ready` as an unrequested commit, so `test_settings.py
 that every `gh pr` or `gh run` step CLAUDE.md, a skill or an agent names has a rule. Also
 allowed, because the classifier once refused a CI watch with no reason given: the read-only
 `gh pr checks`, `view`, `list`, `status` and `diff`, and `gh run list`, `view` and `watch`.
-`lane ls`, `new`, `adopt`, `open`, `done`, `addr` and `lead` are allowed too, behind the excluded-command guard
+`lane ls`, `new`, `adopt`, `open`, `done`, `park`, `addr` and `lead` are allowed too, behind the excluded-command guard
 (docs/lanes.md S3).
 Read-only git (`status`, `log`, `diff`, `show`, `rev-parse`; the classifier once refused one as an
 "unrequested commit") is allowed too, with the pipe filters `head`, `tail`, `wc` and `grep`, since
@@ -789,6 +789,10 @@ and status single-writer:
   While the worktree exists, it refuses a lane whose record's Next has a
   `Keep open:` line (more PRs to come; one inside a comment counts too), or whose record has an
   unclosed `<!--` or a stray `-->`, unless given `--abandon`.
+- `lane park chart-fix` frees a finished lane's cap slot while it waits its merge turn. It ends
+  the lane's sessions the way `done` does and keeps the worktree, branch, record and claims. It
+  refuses unless the work is pushed and handed off. `lane open chart-fix` unparks it, at most
+  one lane over the cap, for its rebase and merge.
 - An optional lead session triages requests into lanes, opens them on Hayden's approval and sets
   the merge order (the skill's "The lead"). After a lane's PR merges, the lane sends it
   `merged #N`, and the lead reinstalls and runs `lane done` on Hayden's standing approval. Each
