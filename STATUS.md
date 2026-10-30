@@ -106,7 +106,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
 
   Backlog:
-  - **Next lane when a slot frees:** ports (below; Hayden picked N2/N3 first, 2026-10-29).
+  - **Next lane when a slot frees:** the excluded-guard design gaps (below), once pass-fixes
+    merges; then ports (Hayden's order, 2026-10-30).
   - G8 open probes (a) and (b) (Hayden's pick, 2026-10-14): Hayden runs
     `~/scratch/sandbox-audit/g8-probe/run.py` by hand with the sandbox off, because the auto-mode
     classifier refused the run. Results go into the private findings file's G8 section.
@@ -322,7 +323,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 ## Notes for next session
 - **Next (lead, main checkout):**
   0. Four lanes run, cap full (In flight, Live lanes; state in their records, `lane ls`).
-     Next lane when a slot frees: ports. Running
+     Next lane when a slot frees: the guard gaps, then ports. Running
      sessions took chrome-dup's allowWrite swap live at its install (2026-10-29): a session
      started before it needs a `/pass` before a sandboxed npm or bun install. Pending with Hayden, outside the lanes: `wsl --shutdown` at a break applies the 18 GB
      WSL cap set in `C:\Users\hayde\.wslconfig` on 2026-10-23 (backup `.wslconfig.bak-20261023`).
