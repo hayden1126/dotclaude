@@ -7,11 +7,13 @@ user, so a "clean" (protected) dir is one an Edit deny rule in the user settings
 permission bits protect nothing there, and only /usr/bin-style dirs outside every root are
 protected by location.
 """
+import concurrent.futures
 import contextlib
 import importlib.util
 import io
 import json
 import os
+import random
 import shutil
 import stat
 import subprocess
@@ -412,7 +414,9 @@ class Rule1PathArguments(Guard):
                      f"# '\npass-respawn -C {o}\n# '", f'gh pr list "$(git push -q {o})"',
                      f"gh pr list; cat <<EOF\n$(git push -q {o})\nEOF",
                      f"gh pr list; x=$(case a in a) git push -q {o};; esac)",
-                     f"pass-respawn -C {o}(N)"):
+                     f"pass-respawn -C {o}(N)", f"echo $(( 1 << 2 ))\ngit push -q {o}",
+                     f"echo $[ ##a ]; git push -q {o}", f"cat <<$(x)\nb\n$(x)\ngit push -q {o}",
+                     f"git push -q ²>log {o}"):
             with self.subTest(call=call):
                 self.refused(call)
 
@@ -474,7 +478,8 @@ ZSH = shutil.which("zsh")
 class LexerMatchesZsh(unittest.TestCase):
     """path_calls finds each call with the argv zsh really runs it with: the stubs record it."""
 
-    STUBS = (r"""_rec() { print -rN -- "$@" >> "$OUT"; print -rn -- $'\x1e' >> "$OUT" }"""
+    # One write per record, so calls running at once in a pipe don't interleave.
+    STUBS = (r"""_rec() { local IFS=$'\0'; print -rn -- "$*"$'\0\x1e' >> "$OUT" }"""
              "\ngit() { _rec git \"$@\" }\npass-respawn() { _rec pass-respawn \"$@\" }"
              "\nlane() { _rec lane \"$@\" }\ndelegation-ledger() { _rec delegation-ledger \"$@\" }\n")
     CORPUS = (
@@ -493,6 +498,8 @@ class LexerMatchesZsh(unittest.TestCase):
         "git push -q --repo \";\" g",
         "git push -q \\; h", "git fetch origin '|' i", "pass-respawn -C \">\"",
         "lane adopt \"j;k\"", "git push origin#; git push -q l", "echo \"it's\" && git push m",
+        "git push ²>log origin", "cat <<EOF\nE\\\nOF\ngit push e3\nEOF", "{ git push x2 }",
+        "echo `git push \\\n-q r3`",
     )
     # Lines that name a call zsh never runs: nothing to judge. (A glob group's words are read as
     # a command, an over-judge: `echo \\$(git push no)` yields a call zsh never runs.)
@@ -502,7 +509,8 @@ class LexerMatchesZsh(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             out = os.path.join(d, "out")
             subprocess.run([ZSH, "-f", "-c", self.STUBS + command], cwd=d, capture_output=True,
-                           env={"OUT": out, "PATH": os.environ["PATH"], "HOME": d}, timeout=10)
+                           env={"OUT": out, "PATH": os.environ["PATH"], "HOME": d}, timeout=10,
+                           stdin=subprocess.DEVNULL)
             text = slurp(out) if os.path.exists(out) else ""
         return sorted(r.split("\0")[:-1] for r in text.split("\x1e") if r)
 
@@ -517,6 +525,94 @@ class LexerMatchesZsh(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(self.zsh_calls(command), [])
                 self.assertEqual(list(guard.path_calls(command)), [])
+
+    def test_generated_commands(self):
+        # Random commands from shell fragments around `git push -q rN` calls: each call zsh
+        # runs must be one path_calls finds, unless the guard refuses the command (the lexer
+        # can't read it, or a call holds a word that isn't plain). GUARD_FUZZ_N and
+        # GUARD_FUZZ_SEED run a bigger sample by hand.
+        guard = load_guard()
+        n = int(os.environ.get("GUARD_FUZZ_N", "300"))
+        commands = fuzz_commands(int(os.environ.get("GUARD_FUZZ_SEED", "1")), n)
+        with concurrent.futures.ThreadPoolExecutor(8) as pool:
+            ran = list(pool.map(self.zsh_calls, commands))
+        missed, judged = [], 0
+        for command, calls in zip(commands, ran):
+            try:
+                found = [w for w, _ in guard.path_calls(command)]
+            except ValueError:
+                continue
+            if any(not guard.PLAIN_WORD.fullmatch(w) for c in found for w in c[2:]):
+                continue
+            judged += 1
+            if any(c not in found for c in calls):
+                missed.append((command, calls, found))
+        self.assertEqual(missed[:3], [])
+        self.assertGreater(judged, n // 2, "most generated commands should be read, not refused")
+
+
+FUZZ_NOISE = (
+    "echo 'a;b'", 'echo "a|b"', "echo \\;", "echo $'\\''", "echo $'a\\nb'", 'echo "$(echo x)"',
+    "echo $(echo ')')", "echo `echo x`", "echo ${x:-y}", "echo a#b", "echo *(N)", "echo {a,b}",
+    "x=1", "echo $#", 'echo "it\'s"', "echo \\\\", "true", ":", "echo ')'", "echo '('",
+    'echo "#"', "echo \\#x", "echo }", "echo {", "echo x }", 'echo "\\""', "echo '\\'",
+    "cat <<<'x y'", "echo 2>/dev/null", "echo >|f", "echo $'\\x27'", "echo '<<E'", "echo \\<<E",
+    "echo $((1<<2))", "echo $[ ##a ]", "(( x = 1 << 2 ))", "echo \u00b2>f",
+)
+FUZZ_REDIRECTS = ("2>&1", ">|f", "&>f", ">!f", "2>f", "<<<x", ">f", "1>f", "<<<'a b'", "2>>f", "<f")
+
+
+def fuzz_commands(seed, n):
+    """n random commands mixing quoting, operators, groups, substitutions, heredocs and
+    comments around `git push -q rN` calls (N unique per call)."""
+    rng, count = random.Random(seed), [0]
+
+    def call():
+        count[0] += 1
+        target = rng.choice(("r{}", "'r{}'", '"r{}"', "r''{}", "\\r{}", "\u00b2>f r{}")).format(count[0])
+        words = ["git", "push", "-q", target]
+        for _ in range(rng.randrange(3)):
+            words.insert(rng.randrange(2, len(words) + 1), rng.choice(FUZZ_REDIRECTS))
+        return " ".join(words) + ("" if rng.random() < 0.8 else " # ' ) \" (")
+
+    def statement(depth):
+        if depth > 2 or rng.random() < 0.35:
+            return call() if rng.random() < 0.5 else rng.choice(FUZZ_NOISE)
+        x = lambda: statement(depth + 1)
+        kind = rng.randrange(12)
+        if kind == 0:
+            return f"( {x()} )"
+        if kind == 1:
+            return f"{{ {x()}; }}" if rng.random() < 0.5 else f"{{ {x()} }}"
+        if kind == 2:
+            return f"if {x()}; then {x()}; fi"
+        if kind == 3:
+            return rng.choice(("echo $({})", 'echo "$({})"', "x=$({})")).format(x())
+        if kind == 4:
+            return f"case a in a) {x()};; esac"
+        if kind == 5:
+            return f"{x()} {rng.choice(('&&', '||', '|', ';', '|&'))} {x()}"
+        if kind == 6:
+            return f"{x()}\n{x()}"
+        if kind == 7:
+            return f"{x()} # it's ( \"\n{x()}"
+        if kind == 8:
+            inner = x()
+            return f"echo `{inner}`" if "`" not in inner else inner
+        if kind == 9:  # $'...' on both sides of a call
+            return f"echo $'\\'' ; {x()} ; echo $'\\''"
+        # A heredoc: an unquoted one runs its $(...), a quoted one doesn't.
+        delim = rng.choice(("E", "'E'", '"E"', "\\E", "$(E)", "E"))
+        dash = rng.random() < 0.3
+        lines = [rng.choice(("it's", "a ) b", "#x", "$(" + x() + ")", "E\\", "x\\", "`echo x`",
+                             "\"", "EE", " E", "E\\\nE"))
+                 for _ in range(rng.randrange(1, 4))]
+        tab = "\t" if dash else ""
+        body = "".join(f"{tab}{line}\n" for line in lines)
+        end = "$(E)" if delim == "$(E)" else "E"
+        return f"cat <<{'-' if dash else ''}{delim}\n{body}{tab}{end}\n{x()}"
+
+    return [statement(0) for _ in range(n)]
 
 
 class Rule1Layout(Guard):

@@ -290,6 +290,9 @@ REDIRECT_OPS = ("&>>|", "&>>!", ">>&|", ">>&!", "<<<", "<<-", "&>>", "&>|", "&>!
                 ">&|", ">&!", ">>&", "<<", ">>", "<>", ">|", ">!", ">&", "<&", "&>", "<", ">")
 SHELL_OPS = sorted(CONTROL_OPS + REDIRECT_OPS, key=len, reverse=True)
 WORD_END = " \t\n;&|<>)"
+FD = re.compile(r"[0-9]+")  # ASCII only: str.isdigit() takes ² and other digits zsh doesn't
+# Words after which the next word is in command position (a `{` there opens a group).
+COMMAND_WORDS = {"{", "!", "if", "then", "else", "elif", "while", "until", "do", "time"}
 # A word the shell hands on as typed: no expansion, glob, quote or space. `~` only as $HOME.
 PLAIN_WORD = re.compile(r"(~(?=/|$))?[A-Za-z0-9_./:@%+,=-]*")
 
@@ -333,7 +336,9 @@ class ShellLexer:
     redirection's fd number is dropped. A `$(...)`, backtick, `<(...)`, `${...}`, `$'...'` or
     zsh glob group `(...)` stays in its word as a marker no plain word matches, and the commands
     inside (an unquoted heredoc's too) are lexed into `subs`, so their calls are judged as well.
-    Raises ValueError where the text doesn't parse (an unclosed quote or substitution)."""
+    Raises ValueError where the text doesn't parse (an unclosed quote or substitution) and for
+    what it doesn't read: arithmetic (`$((`, `((`, `$[`), a heredoc delimiter holding an
+    expansion, and a heredoc with no end line."""
 
     def __init__(self, text):
         self.s, self.i, self.subs, self.heredocs = text, 0, [], []
@@ -347,7 +352,7 @@ class ShellLexer:
 
     def command(self, nested=False):
         """The tokens up to the end, or with nested, up to the `)` closing a `(` already read."""
-        out, cases, delim_for = [], 0, None
+        out, cases, braces, delim_for = [], 0, 0, None
         while c := self.peek():
             if c in " \t" or c == "\\" and self.peek(1) == "\n":
                 self.i += 1 if c != "\\" else 2
@@ -360,6 +365,8 @@ class ShellLexer:
                     return out
                 out.append(Op(";"))  # a case pattern's end, or a stray
             elif c == "(" or c in "<>" and self.peek(1) == "(":
+                if c == "(" and self.peek(1) == "(":
+                    raise ValueError("arithmetic, which the guard doesn't read")
                 self.i += 1 if c == "(" else 2
                 self.nested()
                 out.append(f"{c if c != '(' else ''}(…)")
@@ -371,13 +378,22 @@ class ShellLexer:
                 elif op == "\n":
                     self.read_heredocs()
             else:
+                at_command = not out or isinstance(out[-1], Op) or out[-1] in COMMAND_WORDS
                 word, quoted = self.word()
-                if word.isdigit() and not quoted and self.peek() in ("<", ">"):
-                    continue  # an fd number: 2>&1
-                out.append(word)
                 if delim_for:
+                    if "…" in word:
+                        raise ValueError("a heredoc delimiter holding an expansion")
                     self.heredocs.append((word, delim_for == "<<-", not quoted))
                     delim_for = None
+                elif FD.fullmatch(word) and not quoted and self.peek() in ("<", ">"):
+                    continue  # an fd number: 2>&1
+                elif not quoted and word == "}" and braces:
+                    braces -= 1
+                    out.append(Op(";"))  # a group's end, even after arguments
+                    continue
+                out.append(word)
+                if not quoted and word == "{" and at_command:
+                    braces += 1
                 elif not quoted and word == "case":
                     cases += 1
                 elif not quoted and word == "esac" and cases:
@@ -415,6 +431,8 @@ class ShellLexer:
                 parts.append("$'…'")
                 self.i, quoted = end + 1, True
             elif c == "(":  # glued to the word: a zsh glob group
+                if n == "(":
+                    raise ValueError("arithmetic, which the guard doesn't read")
                 self.i += 1
                 self.nested()
                 parts.append("(…)")
@@ -428,6 +446,8 @@ class ShellLexer:
     def expansion(self):
         """At a `$(`, `${` or backtick: lex it into subs and return its marker; else ""."""
         c, n = self.peek(), self.peek(1)
+        if c == "$" and (n == "[" or n == "(" and self.peek(2) == "("):
+            raise ValueError("arithmetic, which the guard doesn't read")
         if c == "$" and n == "(":
             self.i += 2
             self.nested()
@@ -448,6 +468,9 @@ class ShellLexer:
         if c == "`":
             end, inner = self.i + 1, []
             while end < len(self.s) and self.s[end] != "`":
+                if self.s[end] == "\\" and self.s[end + 1:end + 2] == "\n":
+                    end += 2  # zsh joins the line before it reads the command inside
+                    continue
                 if self.s[end] == "\\" and self.s[end + 1:end + 2] in ("`", "\\", "$"):
                     end += 1
                 inner.append(self.s[end:end + 1])
@@ -479,20 +502,28 @@ class ShellLexer:
         self.i += 1
         return "".join(parts)
 
+    def line(self):
+        """The physical line at self.i, consumed with its newline."""
+        nl = self.s.find("\n", self.i)
+        end = len(self.s) if nl < 0 else nl
+        line, self.i = self.s[self.i:end], end + (nl >= 0)
+        return line
+
     def read_heredocs(self):
-        """After a newline: skip each pending heredoc's body, lexing an unquoted one's
-        substitutions."""
+        """After a newline: skip each pending heredoc's body to its delimiter line, lexing an
+        unquoted one's substitutions. In an unquoted one a backslash-newline joins lines before
+        the delimiter is matched."""
         pending, self.heredocs = self.heredocs, []
         for delim, strip_tabs, expand in pending:
-            start = body_end = self.i
-            while self.i < len(self.s):
-                nl = self.s.find("\n", self.i)
-                line_end = len(self.s) if nl < 0 else nl
-                line = self.s[self.i:line_end]
-                body_end, self.i = self.i, line_end + (nl >= 0)
+            start = self.i
+            while True:
+                if self.i >= len(self.s):
+                    raise ValueError("a heredoc with no end line")
+                body_end, line = self.i, self.line()
+                while expand and (len(line) - len(line.rstrip("\\"))) % 2 and self.i < len(self.s):
+                    line = line[:-1] + self.line()
                 if (line.lstrip("\t") if strip_tabs else line) == delim:
                     break
-                body_end = self.i
             if expand:
                 sub = ShellLexer(self.s[start:body_end])
                 sub.expanded("")
