@@ -158,7 +158,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     "same, widened". The fix is a design change to `new`/`adopt`/`done` with a migration for
     existing lanes, so it needs Hayden's design call. Two low gaps ride with it (rows
     "seed_record from cmd_adopt" and "add_exclude"); their fix reuses #150's fd helpers.
-    Lane-able (`skills/lanes/scripts/lane`, `lanelib.py`, `tests/lanes`).
+    A third rides with it from lane pass-fixes (2026-10-29): sandbox-audit FINDINGS, G5b section,
+    "NEW 3". Lane-able (`skills/lanes/scripts/lane`, `lanelib.py`, `tests/lanes`).
+  - **A probe of one command lane pass-fixes leaves exempt** (2026-10-29; private: sandbox-audit
+    FINDINGS, G5b section, "Fix 4 scope", exemption (b)). It is a paid Codex run, so it waits for
+    Hayden's ok.
   - **`lane trial` passes a suite that never ran** (lane lane-fixes; low; lane sp-gaps,
     2026-10-25). `trial_report` passes a failed suite that printed no test id on either run when
     both exits match, so a directory or a runner missing a flag cleared the gate. Lead's pick:
