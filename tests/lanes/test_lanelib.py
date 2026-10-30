@@ -34,6 +34,12 @@ class ProseOnly(unittest.TestCase):
                 self.assertEqual(self.phrases(text), ["this session"])
         self.assertEqual(self.phrases("```\nx\n`````  \nthis session\n"), ["this session"])
 
+    def test_a_tab_or_a_backtick_in_the_info_string_makes_no_fence(self):
+        # CommonMark: a tab indents 4 columns (indented code), and ```x``` is inline code.
+        for line in ("\t```", "```x```"):
+            self.assertEqual(lanelib.fenced([line, "this session", "```"]), [False, False, True],
+                             line)
+
     def test_an_unclosed_fence_runs_to_the_end(self):
         self.assertEqual(self.phrases("this session\n```\nmy lane\n"), ["this session"])
 

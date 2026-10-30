@@ -62,7 +62,9 @@ def relative_phrases(text: str) -> list[str]:
     return [" ".join(m.group(0).lower().split()) for m in RELATIVE.finditer(text or "")]
 
 
-FENCE = re.compile(r"\s{0,3}(`{3,}|~{3,})")
+# Up to 3 spaces, never a tab (4 columns: indented code), and a backtick fence's info string
+# holds no backtick (```x``` is inline code): CommonMark's fence opener.
+FENCE = re.compile(r" {0,3}(`{3,}(?=[^`]*$)|~{3,})")
 INLINE_CODE = re.compile(r"`[^`\n]*`")
 
 
@@ -1147,14 +1149,22 @@ def norm_request(req: str) -> str:
 COMMENT_MARKER = re.compile(r"<!--->|<!-->|<!--|-->")
 
 
-def unmarked(line: str) -> str:
-    """line with its comment markers deleted and the comments' text kept: a marker that starts
-    the line goes with the blanks after it, so the text behind it starts the line instead."""
-    indent = line[:len(line) - len(line.lstrip())]
-    rest = line[len(indent):]
-    while m := re.match(r"(?:<!--->|<!-->|<!--|-->)\s*", rest):
+LEADING_MARKER = re.compile(r"(?:<!--->|<!-->|<!--|-->)\s*")
+LEADING_COMMENT = re.compile(r"(?:<!--->|<!-->|<!--.*?-->|<!--|-->)\s*")
+
+
+def unmarked(line: str, drop: bool = False) -> str:
+    """line with its comment markers deleted and the comments' text kept, or with drop, the
+    whole comments that start it dropped, text and all (`<!-- c -->Keep open:`), and the other
+    markers deleted. Markers that start the line go with the blanks around them, so the text
+    behind them starts the line, unindented: a commented flag under a bullet is a flag."""
+    rest = line.lstrip()
+    if not (m := (LEADING_COMMENT if drop else LEADING_MARKER).match(rest)):
+        return line[:len(line) - len(rest)] + COMMENT_MARKER.sub(" ", rest).rstrip()
+    while m:
         rest = rest[m.end():]
-    return indent + COMMENT_MARKER.sub(" ", rest)
+        m = (LEADING_COMMENT if drop else LEADING_MARKER).match(rest)
+    return COMMENT_MARKER.sub(" ", rest).rstrip()
 
 
 def section(text: str,
@@ -1165,8 +1175,9 @@ def section(text: str,
     """The body of the first `## <heading>` section whose heading equals one of names or starts
     with one of prefixes (case-insensitive), with HTML comments (strip_comments: a marker quoted
     in code is no comment) and template placeholder lines (`- <...>`) removed. None when no such
-    heading exists. raw: the comments' text kept, only their markers deleted (unmarked), and
-    a heading inside a fence ends nothing."""
+    heading exists. raw: the lines as written, comments and all (kept_flag reads them), ended
+    only by a `## ` heading outside a fence: a `# ` line is likelier a shell comment in a fence
+    whose parity a comment or a malformed fence line upset than a section."""
     lines = (text or "").splitlines()
     wanted = {n.lower() for n in names}
     starts = tuple(p.lower() for p in prefixes)
@@ -1177,23 +1188,23 @@ def section(text: str,
             continue
         body = []
         rest = lines[i + 1:]
-        # raw: a heading inside a fence (a shell comment) is code, and ends nothing; a fence
-        # never closed runs on, which only lengthens what raw reads.
+        # raw ends late, never early: a fence never closed runs on, which only lengthens it.
         quoted = fenced(rest) if raw else [False] * len(rest)
         for nxt, code in zip(rest, quoted):
-            if SECTION_BREAK.match(nxt) and not code:
+            if re.match(r"##\s", nxt) and not code if raw else SECTION_BREAK.match(nxt):
                 break
             body.append(nxt)
-        cleaned = "\n".join(map(unmarked, body)) if raw else strip_comments(body)[0]
+        cleaned = "\n".join(body) if raw else strip_comments(body)[0]
+        # Not in raw: `<!-- Keep open: x -->` would read as a placeholder.
         kept = [ln for ln in cleaned.splitlines()
-                if ln.strip() and not re.fullmatch(r"\s*(?:[-*]\s*)?<[^<>]*>\s*", ln)]
+                if ln.strip() and (raw or not re.fullmatch(r"\s*(?:[-*]\s*)?<[^<>]*>\s*", ln))]
         return "\n".join(kept)
     return None
 
 
 def next_block(text: str, raw: bool = False) -> str | None:
     """The status file's Next block: the first `## Next...` (or `## Notes for next session`)
-    section, as section() cleans it (raw: comments' text kept)."""
+    section, as section() cleans it (raw: as written, comments and all)."""
     return section(text, "Notes for next session", prefixes=("next",), raw=raw)
 
 
@@ -1248,12 +1259,17 @@ def kept_open(block: str | None) -> str | None:
 
 def kept_flag(text: str | None) -> str | None:
     """The status file's `Keep open:` item (kept_open), in its Next block as the tools read it,
-    else as written with only comment markers deleted (next_block raw): no comment hides the
-    flag. Markdown dialects and browsers disagree on what is a comment (`<!--->`, a `--`
-    inside one, one opened in a list item ends with the item), so a flag one renderer shows
-    could sit inside what the scan takes for a comment. A flag commented out on purpose still
-    holds: delete it, or close with --abandon."""
-    return kept_open(next_block(text or "")) or kept_open(next_block(text or "", raw=True))
+    else as written (next_block raw) with each line's comment markers deleted, else with the
+    comments that start a line dropped (unmarked): no comment hides the flag. Markdown dialects
+    and browsers disagree on what is a comment (`<!--->`, a `--` inside one, one opened in a
+    list item ends with the item), so a flag one renderer shows could sit inside what the scan
+    takes for a comment, or behind one (`<!-- c -->Keep open:`). A flag commented out on
+    purpose still holds: delete it, or close with --abandon. Each read only adds holds."""
+    raw = next_block(text or "", raw=True) or ""
+    lines = raw.splitlines()
+    return (kept_open(next_block(text or ""))
+            or kept_open("\n".join(unmarked(ln) for ln in lines))
+            or kept_open("\n".join(unmarked(ln, drop=True) for ln in lines)))
 
 
 def first_item(block: str | None) -> str:

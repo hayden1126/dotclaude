@@ -416,6 +416,25 @@ class KeptFlag(unittest.TestCase):
             self.assertIsNone(lanelib.kept_open(lanelib.next_block(text)), body)
             self.assertIsNotNone(lanelib.kept_flag(text), body)
 
+    def test_a_flag_behind_a_comment_or_commented_under_a_bullet_holds(self):
+        # A line-start comment with text in it: the marker-deleting read kept its text in front.
+        text = "## Next\nx <!--\n<!-- c -->Keep open: PR 2\n"
+        self.assertIsNone(lanelib.comment_flaw(text))
+        self.assertEqual(lanelib.kept_flag(text), "Keep open: PR 2")
+        # Indented under a bullet, a commented flag still holds, as the docs say.
+        self.assertEqual(lanelib.kept_flag("## Next\n- Step.\n  <!-- Keep open: PR 2 -->\n"),
+                         "Keep open: PR 2")
+        # A whole-line comment once read as a template placeholder (`<...>`) and was dropped.
+        self.assertEqual(lanelib.kept_flag("## Next\n- Step.\n<!-- Keep open: PR 2 -->\n"),
+                         "Keep open: PR 2")
+
+    def test_a_commented_fence_never_upsets_where_next_ends(self):
+        # The commented-out fence's closer has `-->` after it, so it never closes, and the real
+        # fence's opener read as its closer: the shell comment then ended Next.
+        text = ("## Next\n<!-- old:\n```sh\nmake\n``` -->\n```\n# install first\n```\n"
+                "Keep open: PR 2\n")
+        self.assertEqual(lanelib.kept_flag(text), "Keep open: PR 2")
+
     def test_a_heading_in_a_fence_never_ends_next_for_it(self):
         # section() ends Next at the shell comment, so the flag after the fence was lost.
         text = "## Next\n- Run:\n```sh\n# install first\nmake\n```\nKeep open: PR 2.\n"
