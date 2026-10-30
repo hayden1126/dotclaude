@@ -424,7 +424,7 @@ class LeadPick(LiveSessions):
                            f"pid {b} interactive proj:@{b} idle {ub}",
                            "No lead picked: the lead takes it with a bare `lane lead`",
                            "(Hayden: `! lane lead` at the lead's prompt)",
-                           "or any bare lane new, open, adopt or done it runs",
+                           "or any bare lane new, open, adopt, done or park it runs",
                            "After a tmux restart, a restored tab that resumes the lead's "
                            "session keeps the lead; otherwise the lead must act again")
         self.assertNotIn("stopped", err)
