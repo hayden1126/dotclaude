@@ -165,6 +165,83 @@ class PlainRepo(Check):
         self.write(os.path.join(self.main, ".claude", "worktrees", "loose.txt"), "x")
         self.assertPasses(self.check())
 
+    def plant_filter(self, *scope):
+        """A clean and a process filter that would mark a file when run, routed to a tracked file
+        made stat-dirty at its size (so `git status` would re-hash it); the marker's path."""
+        marker = os.path.join(self.tmp, "filter-ran")
+        prog = os.path.join(self.tmp, "filter.sh")
+        self.write(prog, f"#!/bin/sh\ntouch {marker}\ncat\n")
+        os.chmod(prog, 0o755)
+        for key in ("clean", "process"):
+            subprocess.run(["git", "config", *scope, f"filter.probe.{key}", prog], cwd=self.main,
+                           env=self.env, check=True)
+        self.commit("data.txt", "data\n")
+        self.write(os.path.join(self.main, ".git", "info", "attributes"), "data.txt filter=probe\n")
+        self.commit("STATUS.md", GOOD + "- data.txt holds the fixture.\n")
+        os.remove(marker)  # the fixture's own git add ran the filter
+        # Last, since a commit refreshes the index and would record the new stat.
+        past = time.time() - 7200  # wall clock
+        os.utime(os.path.join(self.main, "data.txt"), (past, past))
+        return marker
+
+    def test_a_filter_in_the_repos_own_config_fails_and_never_runs(self):
+        marker = self.plant_filter()
+        result = self.check()
+        self.assertFalse(os.path.exists(marker), "the check ran the repo's filter")
+        self.assertGap(result, "filter")
+
+    def test_a_repo_local_lfs_extension_fails(self):
+        # git-lfs, a filter installed globally, runs an lfs.extension's clean command, so the
+        # repo's own one counts as the repo's filter (not probed: no git-lfs on HAYPC).
+        subprocess.run(["git", "config", "lfs.extension.x.clean", "prog %f"], cwd=self.main,
+                       env=self.env, check=True)
+        self.assertGap(self.check(), "sets lfs.extension.x.clean,")
+        subprocess.run(["git", "config", "--unset", "lfs.extension.x.clean"], cwd=self.main,
+                       env=self.env, check=True)
+        subprocess.run(["git", "config", "--global", "lfs.extension.x.clean", "prog %f"],
+                       cwd=self.main, env=self.env, check=True)
+        self.assertPasses(self.check())
+
+    def test_a_filter_value_holding_a_newline_reads_whole(self):
+        # git prints values raw, so a newline in one would split a line-based read.
+        subprocess.run(["git", "config", "--global", "filter.x.clean", "a\nb"], cwd=self.main,
+                       env=self.env, check=True)
+        self.assertPasses(self.check())
+        subprocess.run(["git", "config", "filter.y.clean", "c\nd"], cwd=self.main, env=self.env,
+                       check=True)
+        self.assertGap(self.check(), "sets filter.y.clean,")
+
+    def test_a_signed_head_never_runs_the_repos_gpg_program(self):
+        # log.showSignature makes `git log` verify HEAD's signature with gpg.program, which the
+        # repo's own config names (review round 1).
+        marker = os.path.join(self.tmp, "gpg-ran")
+        prog = os.path.join(self.tmp, "gpg.sh")
+        self.write(prog, f"#!/bin/sh\ntouch {marker}\nexit 1\n")
+        os.chmod(prog, 0o755)
+        git = lambda *a: subprocess.run(["git", *a], cwd=self.main, env=self.env, check=True,
+                                        capture_output=True, text=True).stdout.strip()
+        body = (f"tree {git('rev-parse', 'HEAD^{tree}')}\nparent {git('rev-parse', 'HEAD')}\n"
+                "author t <t@t> 1700000000 +0000\ncommitter t <t@t> 1700000000 +0000\n"
+                "gpgsig -----BEGIN PGP SIGNATURE-----\n \n abc\n -----END PGP SIGNATURE-----\n"
+                "\nsigned\n")
+        raw = os.path.join(self.tmp, "commit")
+        self.write(raw, body)
+        git("update-ref", "HEAD", git("hash-object", "-t", "commit", "-w", raw))
+        git("config", "log.showSignature", "true")
+        git("config", "gpg.program", prog)
+        # Control: a plain git log does run it, so the check's own run proves something.
+        subprocess.run(["git", "log", "-1", "--format=%ct"], cwd=self.main, env=self.env,
+                       capture_output=True)
+        self.assertTrue(os.path.exists(marker), "the fixture's gpg.program never ran")
+        os.remove(marker)
+        self.check()
+        self.assertFalse(os.path.exists(marker), "the check ran the repo's gpg.program")
+
+    def test_a_filter_from_global_config_passes(self):
+        # git lfs install writes its filter to the global config, which the session can't write.
+        self.plant_filter("--global")
+        self.assertPasses(self.check())
+
     def test_sandbox_stubs_are_never_leftovers(self):
         # The Bash sandbox mounts /dev/null over protected paths a repo lacks (.claude/hooks in
         # dotclaude); git lists the stub as untracked. A link to /dev/null stands in for the

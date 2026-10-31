@@ -7,11 +7,13 @@ user, so a "clean" (protected) dir is one an Edit deny rule in the user settings
 permission bits protect nothing there, and only /usr/bin-style dirs outside every root are
 protected by location.
 """
+import concurrent.futures
 import contextlib
 import importlib.util
 import io
 import json
 import os
+import random
 import shutil
 import stat
 import subprocess
@@ -165,8 +167,14 @@ class Rule1Repository(Guard):
     def test_a_nested_repo_under_the_root_is_refused(self):
         nested = self.mkdir("proj", "sub", "nested")
         self.git("init", "-q", nested, cwd=self.tmp)
-        self.denied("git push", "rule1", os.path.join(nested, ".git"), cwd=nested)
+        reason = self.denied("git push", "rule1", os.path.join(nested, ".git"), cwd=nested)
         self.assertIn("deny rule1 " + os.path.join(nested, ".git"), self.log())
+        # The cwd's repo is named by its git dir, never as if the cwd were that dir, and the
+        # fix names the session that does work.
+        self.assertNotIn("resolves to the git dir", reason)
+        self.assertIn(f"in the repository with git dir {os.path.join(nested, '.git')}, not the "
+                      "project's", reason)
+        self.assertIn("a session launched in that repository", reason)
 
     def test_a_planted_gitfile_pointing_elsewhere_is_refused(self):
         other = self.mkdir("other")
@@ -194,7 +202,8 @@ class Rule1Repository(Guard):
 
     def test_lane_addr_repo_runs_from_another_repo_and_from_home(self):
         # The global CLAUDE.md line's call, from a session outside dotclaude: the guard judges
-        # the cwd, never the --repo path (the CLI hardens its own git there).
+        # the cwd, and leaves the --repo path alone by design (the CLI hardens its own git there;
+        # Rule1PathArguments pins the exemption).
         call = "lane addr --repo ~/dotclaude lead"
         self.allowed(call)
         self.env["CLAUDE_PROJECT_DIR"] = self.home
@@ -211,6 +220,399 @@ class Rule1Repository(Guard):
         self.env["CLAUDE_PROJECT_DIR"] = self.lane
         self.write(os.path.join(self.proj, ".git", "worktrees", "lane", "config.worktree"), "")
         self.allowed("git push", cwd=self.lane)
+
+
+class Rule1PathArguments(Guard):
+    """A path argument a head runs git in is judged as the cwd is, from the project root."""
+
+    PATH_HEADS = ["pass-respawn", "pass-respawn *", "lane adopt *", "git push -*", "git fetch *",
+                  "git pull *", "git ls-remote *", "delegation-ledger *", "codex-delegate *"]
+
+    def setUp(self):
+        super().setUp()
+        self.write_settings({"excludedCommands": EXCLUDED + self.PATH_HEADS})
+        self.other = self.mkdir("other")
+        self.git("init", "-q", self.other, cwd=self.tmp)
+        self.other_git = os.path.join(self.other, ".git")
+
+    def refused(self, call, path=None):
+        return self.denied(call, "rule1", path)
+
+    def test_pass_respawn_C_in_another_repo_is_refused_in_every_spelling(self):
+        o = self.other
+        for call in (f"pass-respawn -C {o}", f"pass-respawn -C{o}", f"pass-respawn -C={o}",
+                     f"pass-respawn --compact -C {o}", f"pass-respawn -C {self.proj} -C {o}",
+                     f"pass-respawn -C {o} --print", f"pass-respawn -C {o} | cat"):
+            with self.subTest(call=call):
+                reason = self.refused(call, self.other_git)
+                self.assertIn(f"the path argument {o} is in the repository with git dir "
+                              f"{self.other_git}, not the project's", reason)
+                self.assertIn("a session launched in that repository", reason)
+
+    def test_pass_respawn_C_in_the_project_passes(self):
+        for call in (f"pass-respawn -C {self.proj}", f"pass-respawn -C {self.proj} --compact",
+                     "pass-respawn -C .", "pass-respawn", "pass-respawn --cancel",
+                     f"pass-respawn -C {self.mkdir('proj', 'sub')}", "pass-respawn -C sub",
+                     f"pass-respawn -C {self.mkdir('plain')}"):
+            with self.subTest(call=call):
+                self.allowed(call)
+
+    def test_pass_respawn_C_in_a_lane_of_the_project_passes(self):
+        self.allowed(f"pass-respawn -C {self.lane}")
+        self.env["CLAUDE_PROJECT_DIR"] = self.lane
+        self.allowed(f"pass-respawn -C {self.lane}", cwd=self.lane)
+
+    def test_a_relative_path_is_judged_from_the_cwd(self):
+        self.refused("pass-respawn -C ../other", self.other_git)
+        # From proj/x, ../other is proj/other: the project's own path, missing or not.
+        self.allowed("pass-respawn -C ../other", cwd=self.mkdir("proj", "x"))
+
+    def test_a_home_relative_path_is_expanded(self):
+        mine = self.mkdir("home", "repo")
+        self.git("init", "-q", mine, cwd=self.tmp)
+        self.refused("pass-respawn -C ~/repo", os.path.join(mine, ".git"))
+
+    def test_a_path_the_shell_would_rewrite_is_refused(self):
+        for token in ("$HOME/repo", "${HOME}", "`pwd`", "$(pwd)", "~root/x", "/tmp/{a,b}",
+                      f"{self.tmp}/oth*", f"{self.tmp}/oth?r", f"{self.tmp}/e(v|x)il",
+                      "'my repo'", "=git"):
+            with self.subTest(token=token):
+                reason = self.refused(f"pass-respawn -C {token}")
+                self.assertIn("plain word", reason)
+
+    def test_operators_and_redirections_are_not_arguments(self):
+        for call in ("git fetch origin && git merge --ff-only", "git push origin main 2>&1",
+                     "git fetch origin 2>&1 | tail -3", "git pull --ff-only > /dev/null",
+                     f"pass-respawn -C {self.proj} 2>/dev/null", "git ls-remote origin >out"):
+            with self.subTest(call=call):
+                self.allowed(call)
+        for call in (f"git fetch origin && git fetch {self.other}",
+                     f"git push -q {self.other} 2>&1", f"pass-respawn > out -C {self.other}"):
+            with self.subTest(call=call):
+                self.refused(call, self.other_git)
+
+    def test_a_quote_the_split_cut_is_refused(self):
+        # The candidate split isn't quote-aware: a quoted `;` leaves a piece shlex can't read.
+        self.refused(f'pass-respawn -C "{self.other};x"')
+
+    def test_lane_adopt_path_in_another_repo_is_refused(self):
+        for call in (f"lane adopt {self.other}", f"lane adopt --id x {self.other}",
+                     f"lane adopt -- {self.other}"):
+            with self.subTest(call=call):
+                self.refused(call, self.other_git)
+        self.allowed(f"lane adopt {self.lane}")
+        self.allowed(f"lane adopt --id=lane {self.lane}")
+
+    def test_git_with_a_local_repository_in_another_repo_is_refused(self):
+        o = self.other
+        for call in (f"git push -q {o}", f"git push -q {o} HEAD", f"git push -q file://{o}",
+                     f"git push -q --repo={o}", f"git push -q --repo {o}", f"git fetch {o}",
+                     f"git fetch --quiet file://{o} main", f"git pull {o} main",
+                     f"git ls-remote {o}", f"git push origin --repo={o}"):
+            with self.subTest(call=call):
+                self.refused(call, self.other_git)
+
+    def test_git_with_remotes_refs_and_urls_passes(self):
+        self.mkdir("proj", "feat")  # a ref that is also a dir of the project
+        for call in ("git push", "git push origin feat/x", "git push -u origin HEAD:refs/heads/x",
+                     "git push origin feat", "git push --force-with-lease origin main",
+                     "git fetch origin", "git fetch --prune origin", "git pull --ff-only",
+                     "git ls-remote https://github.com/x/y", "git fetch git@github.com:x/y.git",
+                     f"git push -q {self.proj}", f"git fetch {self.lane}"):
+            with self.subTest(call=call):
+                self.allowed(call)
+
+    def test_git_with_an_option_naming_a_program_is_refused(self):
+        # Review round 1 (high): the value is a program git runs, not a repository to judge.
+        prog = self.write(os.path.join(self.tmp, "prog"), MARKER, 0o755)
+        for call in (f"git push --receive-pack={prog} .", f"git push --receive-pack {prog} .",
+                     f"git push --rec={prog} .", f"git push -q --exec={prog} .",
+                     f"git push --e={prog} .", f"git fetch --upload-pack={prog} .",
+                     f"git fetch --upl {prog} origin", f"git pull --upload-pack={prog} .",
+                     f"git ls-remote --upload-pack={prog} .", f"git ls-remote -u {prog} .",
+                     f"git ls-remote -qu{prog} .", f"git ls-remote --exec={prog} .",
+                     "git fetch ext::sh", f"git push -q ext::{prog}"):
+            with self.subTest(call=call):
+                self.assertIn("names a program", self.refused(call))
+        # Options merely sharing a prefix pass: -u sets upstream for push.
+        for call in ("git push -u origin HEAD", "git fetch --update-head-ok origin",
+                     "git push --repo=origin"):
+            with self.subTest(call=call):
+                self.allowed(call)
+
+    def test_git_judges_a_repository_as_its_server_side_finds_it(self):
+        # Review round 2: git tries <word>.git when <word> is missing, reads a file there as a
+        # gitfile, and takes a file:// URL's path past any host part, %-decoded.
+        bare = os.path.join(self.tmp, "evil.git")
+        self.git("init", "-q", "--bare", bare, cwd=self.tmp)
+        gitfile = self.write(os.path.join(self.tmp, "gf"), f"gitdir: {bare}\n")
+        # `git push -q`: a bare `git push <repo>` matches no excluded pattern, so it runs
+        # sandboxed.
+        for call in (f"git push -q {self.tmp}/evil HEAD", f"git push -q {gitfile} HEAD",
+                     f"git fetch file://host{bare}", f"git push -q file:///{bare[1:]} HEAD",
+                     f"git ls-remote {bare}", f"git fetch {self.tmp}/evil"):
+            with self.subTest(call=call):
+                self.refused(call)
+        for call in (f"git push -q file://{self.tmp}/%65vil.git HEAD", "git push origin 100%"):
+            with self.subTest(call=call):
+                self.assertIn("plain word", self.refused(call))
+
+    def test_git_refuses_a_remote_from_a_legacy_remotes_file(self):
+        # .git/remotes/<name> and .git/branches/<name> name a URL outside the judged config.
+        for kind in ("remotes", "branches"):
+            with self.subTest(kind=kind):
+                planted = self.write(os.path.join(self.proj, ".git", kind, "evil"), "URL: /x\n")
+                self.assertIn("legacy", self.refused("git push -q evil HEAD"))
+                self.assertIn("legacy", self.refused("git fetch evil"))
+                os.remove(planted)
+        self.allowed("git push -q evil HEAD")  # no such file: git finds no remote
+
+    def test_git_refuses_submodule_recursion(self):
+        for call in ("git fetch --recurse-submodules", "git pull --recurse-submodules=yes",
+                     "git push --recurse-submodules=on-demand origin", "git fetch --recurse",
+                     "git fetch --recurse-submodules-default=yes origin"):
+            with self.subTest(call=call):
+                self.assertIn("submodule", self.refused(call))
+        for call in ("git fetch --no-recurse-submodules origin",
+                     "git fetch --recurse-submodules=no origin"):
+            with self.subTest(call=call):
+                self.allowed(call)
+
+    def test_round_3_spellings_are_refused(self):
+        # Review round 3: a redirection holding `&` before the path, a legacy remote given as
+        # --repo=, and a substitution in a redirection target.
+        self.write(os.path.join(self.proj, ".git", "remotes", "evil"), "URL: /x\n")
+        for call in (f"git push -q 2>&1 {self.other} HEAD", f"git fetch >&2 {self.other}",
+                     f"pass-respawn 2>&1 -C {self.other}", f"lane adopt 2>&1 {self.other}",
+                     "git push --repo=evil HEAD", "git fetch origin <(true)",
+                     'git fetch origin >"$(true)"', "git fetch origin > $(true)"):
+            with self.subTest(call=call):
+                self.refused(call)
+
+    def test_round_4_spellings_are_refused(self):
+        # Review round 4: an unmatched piece of a candidate call, a clobber redirection (>|), and
+        # an escaped > before a real background &.
+        o = self.other
+        for call in (f"gh pr list; git push -q {o} HEAD", f"gh pr list; git push {o} HEAD",
+                     f"pass-respawn&>/dev/null -C {o}; :", f"git push -q >| /dev/null {o} HEAD",
+                     "git fetch origin >| $(true)", f"echo \\>& git push -q {o} HEAD"):
+            with self.subTest(call=call):
+                self.refused(call)
+
+    def test_a_call_is_judged_as_the_shell_splits_it(self):
+        # The shell's own tokens, not a regex split: a guarded call anywhere in a candidate
+        # command is judged, inside a subshell, a group, an if or after a newline too.
+        o = self.other
+        for call in (f"gh pr list; (git push -q {o} HEAD)", f"gh pr list; {{ git push -q {o}; }}",
+                     f"gh pr list; if git push -q {o}; then :; fi", f"gh pr list\ngit push {o}",
+                     f"gh pr list && GIT_TRACE=1 git push {o}", f"git push -q 2>&1 {o} HEAD",
+                     f"git push -q &>>| /dev/null {o}", f"git fetch origin >(cat) {o}",
+                     f"git fetch origin $(echo {o})", f"git push -q origin#; git push -q {o}",
+                     f"gh pr list `git push -q {o}`", f"gh pr list; git -C {o} push -q",
+                     f"gh pr list; git -c a=b fetch {o}", f"gh pr list; git push -q {o} 'x",
+                     f"echo $'\\''; pass-respawn -C {o}; echo $'\\''",
+                     f"# '\npass-respawn -C {o}\n# '", f'gh pr list "$(git push -q {o})"',
+                     f"gh pr list; cat <<EOF\n$(git push -q {o})\nEOF",
+                     f"gh pr list; x=$(case a in a) git push -q {o};; esac)",
+                     f"pass-respawn -C {o}(N)", f"echo $(( 1 << 2 ))\ngit push -q {o}",
+                     f"echo $[ ##a ]; git push -q {o}", f"cat <<$(x)\nb\n$(x)\ngit push -q {o}",
+                     f"git push -q ²>log {o}"):
+            with self.subTest(call=call):
+                self.refused(call)
+
+    def test_a_quoted_or_escaped_operator_is_a_word(self):
+        # `";"` and `\;` are words to the shell, not operators, held to the plain-word rule.
+        for call in (f'git push -q --repo ";" {self.other}', "git push -q \\; origin",
+                     "git fetch origin '|' x", 'pass-respawn -C ">"',
+                     f'pass-respawn -C "{self.other};b"'):
+            with self.subTest(call=call):
+                self.assertIn("plain word", self.refused(call))
+
+    def test_ordinary_calls_pass(self):
+        for call in ("git push", "git push origin main", "git push -u origin HEAD",
+                     "git push --force-with-lease origin feat/x", "git push origin --delete feat/x",
+                     "git fetch origin", "git fetch --prune", "git pull --ff-only",
+                     "git ls-remote --heads origin", "git fetch origin main:refs/remotes/origin/main",
+                     "git push origin main 2>&1 | tail -3", "git fetch origin && git merge --ff-only",
+                     "git pull --rebase > /dev/null 2>&1", f"pass-respawn -C {self.proj}",
+                     "gh pr view 5 --json title --jq '.title|ascii_downcase'",
+                     "git push origin main && gh pr create --title t --body 'a and b'",
+                     'git fetch -q origin; grep -c "a\\|b" README', "git push origin main # done",
+                     "git push origin \\\n main", "gh pr comment 5 --body-file - <<'EOF'\nit's done\nEOF",
+                     "gh pr view 5 --json body --jq .body | grep -c '^#'"):
+            with self.subTest(call=call):
+                self.allowed(call)
+
+    def test_git_refuses_ext_in_an_option_value(self):
+        self.assertIn("names a program", self.refused("git push --repo=ext::sh HEAD"))
+
+    def test_git_with_a_word_the_shell_would_rewrite_is_refused(self):
+        # Over-matches a quoted refspec glob: the guard can't tell quoting once shlex has run.
+        for call in ("git push origin $BRANCH", "git fetch origin '+refs/heads/*:refs/x/*'",
+                     f"git push -q {self.tmp}/oth*"):
+            with self.subTest(call=call):
+                self.assertIn("plain word", self.refused(call))
+
+    def test_delegation_ledger_hook_is_refused_from_bash(self):
+        for call in ("delegation-ledger hook", "delegation-ledger hook < /dev/null",
+                     "delegation-ledger hook <<< '{}'", "echo {} | delegation-ledger hook"):
+            with self.subTest(call=call):
+                self.assertIn("stdin", self.refused(call))
+        for call in ("delegation-ledger watch", "delegation-ledger wait --pid 1 --max 60",
+                     "delegation-ledger audit"):
+            with self.subTest(call=call):
+                self.allowed(call)
+
+    def test_lane_addr_repo_and_codex_delegate_dir_are_left_unjudged(self):
+        # Exempt by design (docs/delegation.md): lane addr's one git lookup there is hardened and
+        # runs no repo-local program (probed 2026-10-29); codex-delegate is sent to any repo.
+        self.allowed(f"lane addr --repo {self.other} lead")
+        self.allowed(f"codex-delegate run --model sol --dir {self.other} --brief b.md")
+
+
+
+ZSH = shutil.which("zsh")
+
+
+@unittest.skipUnless(ZSH, "zsh is not installed")
+class LexerMatchesZsh(unittest.TestCase):
+    """path_calls finds each call with the argv zsh really runs it with: the stubs record it."""
+
+    # One write per record, so calls running at once in a pipe don't interleave.
+    STUBS = (r"""_rec() { local IFS=$'\0'; print -rn -- "$*"$'\0\x1e' >> "$OUT" }"""
+             "\ngit() { _rec git \"$@\" }\npass-respawn() { _rec pass-respawn \"$@\" }"
+             "\nlane() { _rec lane \"$@\" }\ndelegation-ledger() { _rec delegation-ledger \"$@\" }\n")
+    CORPUS = (
+        "git push -q origin main", "git push 'a b' \"c d\" e\\ f 't'\"u\"v",
+        "git push -q 2>&1 x HEAD", "git push -q 2 >&1 x", "git push -q >| out x",
+        "git push -q &>> log x", "git push -q >! log2 x", "git push s 2>/dev/null 1>&2",
+        "true pr list; git push x", "true; (git push -q x)", "{ git push -q x; }",
+        "if git push -q x; then :; fi", "true\ngit push x", "true && GIT_TRACE=1 git push x",
+        "true | git push n", "git push o |& cat", "delegation-ledger wait x",
+        "echo $(git push -q x)", 'echo "$(git push -q y)"', "echo `git push -q z`",
+        "echo ${x:-$(git push -q r)}", "echo $'\\''; git push -q a; echo $'\\''",
+        "# '\ngit push -q b\n# '", "git push origin main # done", "git push origin \\\n main",
+        "cat <<'EOF'\nit's\nEOF\ngit push -q c", "cat <<EOF\n$(git push -q d)\nEOF",
+        "cat <<-EOF\n\tit's\n\tEOF\ngit push e", "cat <<\\EOF\n$(x\nEOF\ngit push e2",
+        "x=$(case a in a) git push -q f;; esac)", 'x="$(case a in a) git push -q f2;; esac)"',
+        "git push -q --repo \";\" g",
+        "git push -q \\; h", "git fetch origin '|' i", "pass-respawn -C \">\"",
+        "lane adopt \"j;k\"", "git push origin#; git push -q l", "echo \"it's\" && git push m",
+        "git push ²>log origin", "cat <<EOF\nE\\\nOF\ngit push e3\nEOF", "{ git push x2 }",
+        "echo `git push \\\n-q r3`",
+    )
+    # Lines that name a call zsh never runs: nothing to judge. (A glob group's words are read as
+    # a command, an over-judge: `echo \\$(git push no)` yields a call zsh never runs.)
+    NO_CALL = ("echo '$(git push no)'", "cat <<'EOF'\n$(git push no)\nEOF")
+
+    def zsh_calls(self, command):
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "out")
+            subprocess.run([ZSH, "-f", "-c", self.STUBS + command], cwd=d, capture_output=True,
+                           env={"OUT": out, "PATH": os.environ["PATH"], "HOME": d}, timeout=10,
+                           stdin=subprocess.DEVNULL)
+            text = slurp(out) if os.path.exists(out) else ""
+        return sorted(r.split("\0")[:-1] for r in text.split("\x1e") if r)
+
+    def test_each_call_has_zshs_argv(self):
+        guard = load_guard()
+        for command in self.CORPUS:
+            with self.subTest(command=command):
+                calls = self.zsh_calls(command)
+                self.assertTrue(calls, "zsh ran no call: the corpus line is wrong")
+                self.assertEqual(sorted(w for w, _ in guard.path_calls(command)), calls)
+        for command in self.NO_CALL:
+            with self.subTest(command=command):
+                self.assertEqual(self.zsh_calls(command), [])
+                self.assertEqual(list(guard.path_calls(command)), [])
+
+    def test_generated_commands(self):
+        # Random commands from shell fragments around `git push -q rN` calls: each call zsh
+        # runs must be one path_calls finds, unless the guard refuses the command (the lexer
+        # can't read it, or a call holds a word that isn't plain). GUARD_FUZZ_N and
+        # GUARD_FUZZ_SEED run a bigger sample by hand.
+        guard = load_guard()
+        n = int(os.environ.get("GUARD_FUZZ_N", "300"))
+        commands = fuzz_commands(int(os.environ.get("GUARD_FUZZ_SEED", "1")), n)
+        with concurrent.futures.ThreadPoolExecutor(8) as pool:
+            ran = list(pool.map(self.zsh_calls, commands))
+        missed, judged = [], 0
+        for command, calls in zip(commands, ran):
+            try:
+                found = [w for w, _ in guard.path_calls(command)]
+            except ValueError:
+                continue
+            if any(not guard.PLAIN_WORD.fullmatch(w) for c in found for w in c[2:]):
+                continue
+            judged += 1
+            if any(c not in found for c in calls):
+                missed.append((command, calls, found))
+        self.assertEqual(missed[:3], [])
+        self.assertGreater(judged, n // 2, "most generated commands should be read, not refused")
+
+
+FUZZ_NOISE = (
+    "echo 'a;b'", 'echo "a|b"', "echo \\;", "echo $'\\''", "echo $'a\\nb'", 'echo "$(echo x)"',
+    "echo $(echo ')')", "echo `echo x`", "echo ${x:-y}", "echo a#b", "echo *(N)", "echo {a,b}",
+    "x=1", "echo $#", 'echo "it\'s"', "echo \\\\", "true", ":", "echo ')'", "echo '('",
+    'echo "#"', "echo \\#x", "echo }", "echo {", "echo x }", 'echo "\\""', "echo '\\'",
+    "cat <<<'x y'", "echo 2>/dev/null", "echo >|f", "echo $'\\x27'", "echo '<<E'", "echo \\<<E",
+    "echo $((1<<2))", "echo $[ ##a ]", "(( x = 1 << 2 ))", "echo \u00b2>f",
+)
+FUZZ_REDIRECTS = ("2>&1", ">|f", "&>f", ">!f", "2>f", "<<<x", ">f", "1>f", "<<<'a b'", "2>>f", "<f")
+
+
+def fuzz_commands(seed, n):
+    """n random commands mixing quoting, operators, groups, substitutions, heredocs and
+    comments around `git push -q rN` calls (N unique per call)."""
+    rng, count = random.Random(seed), [0]
+
+    def call():
+        count[0] += 1
+        target = rng.choice(("r{}", "'r{}'", '"r{}"', "r''{}", "\\r{}", "\u00b2>f r{}")).format(count[0])
+        words = ["git", "push", "-q", target]
+        for _ in range(rng.randrange(3)):
+            words.insert(rng.randrange(2, len(words) + 1), rng.choice(FUZZ_REDIRECTS))
+        return " ".join(words) + ("" if rng.random() < 0.8 else " # ' ) \" (")
+
+    def statement(depth):
+        if depth > 2 or rng.random() < 0.35:
+            return call() if rng.random() < 0.5 else rng.choice(FUZZ_NOISE)
+        x = lambda: statement(depth + 1)
+        kind = rng.randrange(12)
+        if kind == 0:
+            return f"( {x()} )"
+        if kind == 1:
+            return f"{{ {x()}; }}" if rng.random() < 0.5 else f"{{ {x()} }}"
+        if kind == 2:
+            return f"if {x()}; then {x()}; fi"
+        if kind == 3:
+            return rng.choice(("echo $({})", 'echo "$({})"', "x=$({})")).format(x())
+        if kind == 4:
+            return f"case a in a) {x()};; esac"
+        if kind == 5:
+            return f"{x()} {rng.choice(('&&', '||', '|', ';', '|&'))} {x()}"
+        if kind == 6:
+            return f"{x()}\n{x()}"
+        if kind == 7:
+            return f"{x()} # it's ( \"\n{x()}"
+        if kind == 8:
+            inner = x()
+            return f"echo `{inner}`" if "`" not in inner else inner
+        if kind == 9:  # $'...' on both sides of a call
+            return f"echo $'\\'' ; {x()} ; echo $'\\''"
+        # A heredoc: an unquoted one runs its $(...), a quoted one doesn't.
+        delim = rng.choice(("E", "'E'", '"E"', "\\E", "$(E)", "E"))
+        dash = rng.random() < 0.3
+        lines = [rng.choice(("it's", "a ) b", "#x", "$(" + x() + ")", "E\\", "x\\", "`echo x`",
+                             "\"", "EE", " E", "E\\\nE"))
+                 for _ in range(rng.randrange(1, 4))]
+        tab = "\t" if dash else ""
+        body = "".join(f"{tab}{line}\n" for line in lines)
+        end = "$(E)" if delim == "$(E)" else "E"
+        return f"cat <<{'-' if dash else ''}{delim}\n{body}{tab}{end}\n{x()}"
+
+    return [statement(0) for _ in range(n)]
 
 
 class Rule1Layout(Guard):
