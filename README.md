@@ -49,19 +49,26 @@ value the file already sets is kept and named on stderr. bun has no such setting
 mode covers new installs only, so the run that first sets it points to `cache-unlink`: from a
 terminal, `cache-unlink ~/code` counts, per project, the files that are still hardlinks into the
 uv, pnpm or bun cache (`--files` lists them), and `cache-unlink --apply ~/code` gives each a copy
-of its own (same bytes, mode and times; nothing to reinstall). It names every cache it searched,
-and a dir it couldn't read makes the report incomplete, never clean. On Windows (git-bash), which
-has no Bash sandbox, setup skips copy mode.
+of its own (same bytes, mode and times; nothing to reinstall). It names every cache it searched;
+a file linked to something outside the dirs you named counts too, as `linked outside`: a cache
+it didn't find, or harmless links such as the git objects a local `git clone` shares with its
+source (un-linking those costs only disk). A dir it couldn't read makes the report incomplete,
+never clean. Run it with no Claude session
+working in those dirs, since one could swap a dir for an empty one while the walk passes. On
+Windows (git-bash), which has no Bash sandbox, setup skips copy mode.
 
 **Upgrading from an older install.** Before this, the sandbox could write `~/.cache/uv`,
 `~/.cache/pip`, `~/.cache/pnpm`, `~/.cache/node-gyp`, `~/.cache/ms-playwright`,
 `~/.local/share/uv/python` and pnpm's store directly, and unsandboxed runs still use what they
-hold. `cache-unlink` keeps the bytes it copies, so it can't undo an edit made then. On a machine
-that ran an older dotclaude, rebuild them from a terminal once, after `cache-unlink --apply`:
-`uv cache clean`; `uv python install --reinstall <each version uv python list --only-installed
-shows>`; `pip cache purge`; `rm -rf "$(pnpm store path)" ~/.cache/node-gyp`; and for
-Playwright, `rm -rf ~/.cache/ms-playwright`, then `npx playwright@<each project's version>
-install chromium-headless-shell`. A project installed in that window can hold a copy of an
+hold. `cache-unlink` keeps the bytes it copies, so it can't undo an edit made then. Setup says
+so when the settings it replaces had those entries. Rebuild them from a terminal once, after
+`cache-unlink --apply`: `uv cache clean`; `uv python install --reinstall <each version that
+uv python list --only-installed --python-preference only-managed shows>` (without that flag
+the list includes system Pythons, which this would download as new managed copies); `pip cache
+purge`; `rm -rf "$(pnpm store path)" ~/.cache/pnpm ~/.cache/node-gyp` (`~/.cache/pnpm` holds
+pnpm's metadata and the trees `pnpm dlx` reuses); and for Playwright, `rm -rf
+~/.cache/ms-playwright`, then `npx playwright@<each project's version> install
+chromium-headless-shell`. A project installed in that window can hold a copy of an
 edited file too: reinstall it (`uv sync --reinstall`, `pnpm install --force`). Auditing the
 caches against their own checksums is the alternative; HAYPC's were audited on 2026-10-31 and
 were clean.

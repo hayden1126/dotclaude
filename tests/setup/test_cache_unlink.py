@@ -155,6 +155,32 @@ class CacheUnlink(Base):
         self.assertIn("other        1 files  ~/code/a", p.stdout)
         self.assertIn("bun          1 files  ~/code/b", p.stdout)
 
+    def test_uvs_default_cache_counts_with_uv_cache_dir_set(self):
+        # The cache an older sandbox could write is the default one, wherever the var points.
+        a = self.put(os.path.join(self.uv, "archive-v0", "h1", "m.py"))
+        self.link(a, os.path.join(self.code, "py", "m.py"))
+        p = self.run_tool(self.code, UV_CACHE_DIR=os.path.join(self.tmp, "elsewhere"))
+        self.assertIn("uv           1 files  ~/code/py", p.stdout)
+
+    def test_a_cache_dir_in_uv_toml_counts(self):
+        moved = self.put(os.path.join(self.tmp, "moved uv", "archive-v0", "m.py"))
+        self.put(os.path.join(self.home, ".config", "uv", "uv.toml"),
+                 f'cache-dir = "{os.path.dirname(os.path.dirname(moved))}"  # moved\n')
+        self.link(moved, os.path.join(self.code, "py", "m.py"))
+        self.assertIn("uv           1 files  ~/code/py", self.run_tool(self.code).stdout)
+
+    def test_a_link_to_an_unsearched_cache_is_never_clean(self):
+        # A project's own pnpm storeDir, or any cache this doesn't know: the file has more links
+        # than the DIRs hold.
+        store = self.put(os.path.join(self.tmp, "project store", "v3", "f"))
+        proj = self.link(store, os.path.join(self.code, "web", "node_modules", "x", "f"))
+        p = self.run_tool(self.code)
+        self.assertEqual(p.returncode, 1, p.stdout)
+        self.assertIn("linked outside", p.stdout)
+        self.assertIn("1 files  ~/code/web", p.stdout)
+        self.assertEqual(self.run_tool("--apply", self.code).returncode, 0)
+        self.assertEqual(os.stat(proj).st_nlink, 1)
+
     def test_a_file_directly_in_dir_is_grouped_under_dir(self):
         a = self.put(os.path.join(self.uv, "archive-v0", "h1", "m.py"))
         self.link(a, os.path.join(self.code, "m.py"))
@@ -302,6 +328,21 @@ class Races(Base):
             done, failed = self.mod.apply(self.shared)
         self.assertEqual((done, [e for _, e in failed]), (0, ["a write made no progress"]))
         self.assert_target_kept()
+
+    def test_a_pnpm_store_link_at_a_filesystem_root_is_no_cache(self):
+        # A session that can write the root plants .pnpm-store -> a project dir: as a "cache"
+        # it would go unwalked, and its shared files unreported.
+        os.symlink(os.path.join(self.proj, "d1"), os.path.join(self.code, ".pnpm-store"))
+        with mock.patch.object(self.mod, "mount_of", return_value=self.code), \
+                mock.patch.dict(os.environ, {"HOME": self.home}):
+            caches = self.mod.default_caches([self.code])
+        self.assertNotIn(os.path.join(self.proj, "d1"), caches["pnpm"])
+        os.remove(os.path.join(self.code, ".pnpm-store"))
+        os.makedirs(os.path.join(self.code, ".pnpm-store"))
+        with mock.patch.object(self.mod, "mount_of", return_value=self.code), \
+                mock.patch.dict(os.environ, {"HOME": self.home}):
+            caches = self.mod.default_caches([self.code])
+        self.assertIn(os.path.join(self.code, ".pnpm-store"), caches["pnpm"])  # a real dir is
 
     def test_a_file_swapped_for_a_link_is_refused(self):
         os.remove(self.target)

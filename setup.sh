@@ -170,6 +170,24 @@ copy_managed() {
 # kept; a live value the baseline overrides is named on stderr. Installed from a checkout other
 # than ~/dotclaude (a lane), that checkout's copies of the write-protected paths join denyWrite.
 # Without an overlay, such a key or another checkout, the baseline is copied byte for byte.
+# Before the copy replaces it: did the installed settings let the sandbox write the package
+# caches, uv's Pythons or Playwright's browsers (an older dotclaude)? Section 6 then points to the
+# rebuild step, since unsandboxed runs still use what the sandbox could write there.
+old_cache_writes="$(python3 -I - "$CLAUDE_DIR/settings.json" 2>/dev/null <<'PY' || true
+import json, sys
+try:
+    allow = json.load(open(sys.argv[1]))["sandbox"]["filesystem"]["allowWrite"]
+except Exception:
+    sys.exit()
+old = ("~/.cache/uv", "~/.cache/pip", "~/.cache/pnpm", "~/.cache/node-gyp",
+       "~/.cache/ms-playwright", "~/.local/share/uv", "~/.local/share/pnpm")
+for p in (p for p in allow if isinstance(p, str)):
+    p = p.rstrip("/") or "/"
+    if any(p == o or p.startswith(o + "/") or o.startswith(p + "/") for o in old):
+        print(1)
+        break
+PY
+)"
 MERGED_SETTINGS="$(mktemp)"  # section 1's exit trap removes it
 chmod 644 "$MERGED_SETTINGS"  # mktemp's 0600 would carry over to the installed copy
 python3 -I "$REPO_DIR/merge-settings.py" --checkout "$REPO_DIR" "$REPO_DIR/settings.json" \
@@ -573,10 +591,11 @@ case "$(uname -s)" in
       [[ -z $pnpm_import || $pnpm_import == copy ]] \
         || warn "pnpm reads package-import-method as $pnpm_import, not copy (set in ~/.npmrc, or a config dir this missed): its installs can hardlink to the shared cache"
     fi
-    # The run that first sets copy mode is also the first with the caches read-only, so on a
-    # machine that ran an older dotclaude, what the sandbox could write until now needs a check.
     [[ -z $copy_mode_new ]] \
-      || warn "copy mode is new here: uv and pnpm installs made before it still share files with their caches. List them with \`cache-unlink <your project dirs>\`, then rerun it with --apply. If an older dotclaude ran here, its sandbox could write the caches, uv's Pythons and Playwright's browsers: rebuild them (README, \"Upgrading from an older install\")"
+      || warn "copy mode is new here: uv and pnpm installs made before it still share files with their caches. List them with \`cache-unlink <your project dirs>\`, then rerun it with --apply"
+    # Set in section 2 from the settings this run replaced.
+    [[ -z ${old_cache_writes:-} ]] \
+      || warn "the settings this run replaced let the sandbox write the package caches, uv's Pythons or Playwright's browsers, and unsandboxed runs still use them: rebuild them once (README, \"Upgrading from an older install\")"
     ;;
 esac
 

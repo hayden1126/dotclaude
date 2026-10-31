@@ -13,14 +13,18 @@ Run it from a terminal, outside the sandbox: it reads the caches and rewrites th
     cache-unlink ~/code              # report, per project under ~/code; exit 1 if any is shared
     cache-unlink --apply ~/code      # un-link them; exit 0 once none is left
 
-The caches: uv's ($UV_CACHE_DIR, else $XDG_CACHE_HOME/uv or ~/.cache/uv); pnpm's store
-($PNPM_HOME/store, $XDG_DATA_HOME/pnpm/store, ~/.local/share/pnpm/store, ~/Library/pnpm/store, a
-store-dir set in pnpm's rc or ~/.npmrc, and the .pnpm-store at the root of each DIR's
-filesystem, where pnpm keeps a store for projects on another disk); bun's
-($BUN_INSTALL_CACHE_DIR, $BUN_INSTALL/install/cache, ~/.bun/install/cache); plus any --cache
-DIR. The report names every cache it searched, so a store it missed shows. Only a project file
-that is the same file as one in a cache counts: links inside a cache (uv links its own entries to
-each other) never do, a cache inside a DIR is skipped, and a DIR inside a cache is refused.
+The caches: uv's ($UV_CACHE_DIR, a cache-dir in uv.toml, and the default $XDG_CACHE_HOME/uv or
+~/.cache/uv); pnpm's store ($PNPM_HOME/store, $XDG_DATA_HOME/pnpm/store,
+~/.local/share/pnpm/store, ~/Library/pnpm/store, a store-dir set in pnpm's rc or ~/.npmrc, and
+the .pnpm-store at the root of each DIR's filesystem, where pnpm keeps a store for projects on
+another disk, unless it is a link); bun's ($BUN_INSTALL_CACHE_DIR, $BUN_INSTALL/install/cache,
+~/.bun/install/cache); plus any --cache DIR. The report names every cache it searched. A
+project file that is the same file as one in a cache counts, and so does one with more links
+than the DIRs hold, none in a searched cache ("linked outside": a cache it didn't find, such as
+a project's own pnpm storeDir), so a missed cache never reads as clean. Links inside a cache (uv
+links its own entries to each other) or only between files under the DIRs never count; a cache
+inside a DIR is skipped, and a DIR inside a cache is refused. Run it with no Claude session
+working in those dirs: a session could swap a dir for an empty one while the walk passes.
 
 --apply works on dirs the sandbox can write while it runs, so it never trusts a path's text: it
 opens each dir from the DIR down without following a link, and creates, renames and removes
@@ -33,6 +37,7 @@ import re
 import stat
 import sys
 
+OUTSIDE = "linked outside"  # the report's name for links to files outside the DIRs
 NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 DIR_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | NOFOLLOW
 
@@ -68,6 +73,18 @@ def rc_store_dirs(home):
     return found
 
 
+def uv_cache_dirs(home):
+    """cache-dir values set in uv's user config."""
+    config = os.environ.get("XDG_CONFIG_HOME") or os.path.join(home, ".config")
+    try:
+        with open(os.path.join(config, "uv", "uv.toml")) as f:
+            text = f.read()
+    except OSError:
+        return []
+    return [os.path.expanduser(m.group(1)) for m in
+            re.finditer(r"(?m)^\s*cache-dir\s*=\s*[\"'](.+?)[\"']\s*(?:#.*)?$", text)]
+
+
 def default_caches(roots):
     home = os.path.expanduser("~")
     env = os.environ.get
@@ -84,11 +101,19 @@ def default_caches(roots):
         bun.insert(0, os.path.join(env("BUN_INSTALL"), "install", "cache"))
     if env("BUN_INSTALL_CACHE_DIR"):
         bun.insert(0, env("BUN_INSTALL_CACHE_DIR"))
-    caches = {"uv": [env("UV_CACHE_DIR") or os.path.join(xdg_cache, "uv")], "pnpm": pnpm,
-              "bun": bun}
+    # uv's default too when a var or uv.toml moves it: the cache an older sandbox could write is
+    # the default one.
+    uv = [os.path.join(xdg_cache, "uv"), os.path.join(home, ".cache", "uv"), *uv_cache_dirs(home)]
+    if env("UV_CACHE_DIR"):
+        uv.insert(0, env("UV_CACHE_DIR"))
+    caches = {"uv": uv, "pnpm": pnpm, "bun": bun}
+    # A .pnpm-store at a filesystem root a sandboxed session could write might be its link to a
+    # project dir, which would then count as a cache and go unwalked: a link is never a store.
+    planted = {os.path.join(mount_of(r), ".pnpm-store") for r in roots}
     out = {}
     for name, dirs in caches.items():
-        real = [os.path.realpath(d) for d in dirs if os.path.isdir(d)]
+        real = [os.path.realpath(d) for d in dirs
+                if os.path.isdir(d) and not (d in planted and os.path.islink(d))]
         out[name] = list(dict.fromkeys(real))
     return out
 
@@ -146,6 +171,13 @@ def find_shared(roots, caches):
             for _, st in linked_files(d, set(), errors):
                 for root, rel, pst in wanted.pop((st.st_dev, st.st_ino), ()):
                     shared.setdefault((project_of(root, rel), name), []).append((root, rel, pst))
+    # A file with more links than the DIRs hold, none of them in a cache searched, is linked to
+    # something outside: maybe a cache this didn't find (a project's own pnpm storeDir). It
+    # counts, so the report is never clean for it; giving it its own copy is safe either way.
+    for entries in wanted.values():
+        if entries[0][2].st_nlink > len(entries):
+            for root, rel, pst in entries:
+                shared.setdefault((project_of(root, rel), OUTSIDE), []).append((root, rel, pst))
     return shared, errors
 
 

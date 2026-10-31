@@ -4,6 +4,7 @@ in-place edit there can't reach other installs (sandbox gap N3). It sets the key
 the user config file, keeps a value the file already has, and never doubles a line (stdlib only).
 
 Each test cuts section 6 out of setup.sh and runs it in bash with XDG_CONFIG_HOME in a temp dir."""
+import json
 import os
 import shutil
 import subprocess
@@ -15,6 +16,15 @@ SETUP = os.path.join(REPO, "setup.sh")
 UV_LINE = 'link-mode = "copy"'
 PNPM_LINE = "package-import-method=copy"
 HINT = "copy mode is new here"
+REBUILD = 'README, "Upgrading from an older install"'
+
+
+def old_cache_check():
+    """setup.sh's section 2 check of the settings it is about to replace."""
+    with open(SETUP) as f:
+        text = f.read()
+    start = text.index('old_cache_writes="$(')
+    return text[start:text.index('PY\n)"', start) + len('PY\n)"')] + '\nprintf "%s" "$old_cache_writes"'
 
 
 def section():
@@ -100,10 +110,14 @@ class CopyMode(unittest.TestCase):
         self.assertFalse(os.path.exists(self.config))
         self.assertFalse(self.hinted)
 
-    def test_the_hint_points_to_the_rebuild_step(self):
-        self.run_section()
-        self.assertTrue(self.hinted)
-        self.assertIn('README, \\"Upgrading from an older install\\"', section())
+    def test_an_older_install_points_to_the_rebuild_step_whatever_copy_mode_says(self):
+        # Copy mode set by hand long ago says nothing about what the old sandbox could write.
+        self.write(self.uv, 'link-mode = "copy"\n')
+        self.write(self.pnpm, "package-import-method=copy\n")
+        err = self.run_section(old_cache_writes="1")
+        self.assertIn(REBUILD, err)
+        self.assertFalse(self.hinted)
+        self.assertNotIn(REBUILD, self.run_section())
         with open(os.path.join(REPO, "README.md")) as f:
             self.assertIn("**Upgrading from an older install.**", f.read())
 
@@ -246,6 +260,37 @@ class CopyMode(unittest.TestCase):
         os.remove(os.path.join(self.bin, "pnpm"))
         self.assertEqual(self.run_section(PATH=os.pathsep.join([self.bin, "/usr/bin", "/bin"])),
                          "")
+
+
+class OlderInstallCheck(unittest.TestCase):
+    """Section 2 reads the installed settings before replacing them: an allowWrite entry that
+    covers a package cache, uv's Pythons or Playwright's browsers marks an older install."""
+
+    def check(self, settings):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        if settings is not None:
+            with open(os.path.join(tmp, "settings.json"), "w") as f:
+                f.write(settings if isinstance(settings, str) else json.dumps(settings))
+        p = subprocess.run(["bash", "-euo", "pipefail", "-c", old_cache_check()],
+                           capture_output=True, text=True, timeout=10,
+                           env=dict(os.environ, CLAUDE_DIR=tmp))
+        self.assertEqual((p.returncode, p.stderr), (0, ""))
+        return p.stdout
+
+    def allow(self, *paths):
+        return {"sandbox": {"filesystem": {"allowWrite": list(paths)}}}
+
+    def test_an_old_cache_entry_marks_an_older_install(self):
+        for entry in ("~/.cache/uv", "~/.cache/ms-playwright/", "~/.local/share/uv/python",
+                      "~/.local/share/pnpm/store", "~/.cache", "~"):
+            self.assertEqual(self.check(self.allow("~/.cache/claude-sandbox", entry)), "1", entry)
+
+    def test_the_new_settings_or_none_dont(self):
+        self.assertEqual(self.check(self.allow("~/.cache/claude-sandbox")), "")
+        self.assertEqual(self.check(None), "")
+        self.assertEqual(self.check("not json"), "")
+        self.assertEqual(self.check({"sandbox": {}}), "")
 
 
 if __name__ == "__main__":
