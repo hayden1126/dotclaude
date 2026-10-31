@@ -31,7 +31,12 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      Each local-path remote URL in the cwd's config chain, trusted files too (remote.*.url and
      pushurl, each url.<base>.insteadOf and pushInsteadOf base), is judged too (G-D): where it
      exists, as a path argument's repository is; where it is missing, refused if a sandboxed
-     session could create it. A URL's own repo doesn't have its URLs judged.
+     session could create it. A URL's own repo doesn't have its URLs judged. git fetch and
+     pull, and gh pr checkout, gh pr merge and gh issue develop (which run them), are refused
+     unless the git call carries --no-recurse-submodules or the effective config has submodule
+     recursion off (G-B): the last fetch.recurseSubmodules or submodule.recurse git reads must
+     be false (for pull, submodule.recurse too), else git runs in each submodule's own git
+     dir. dotclaude's setup.sh sets fetch.recurseSubmodules false globally.
   2. The PATH the head resolves through. Every PATH entry must be protected, not only those
      before the head: its children (git, gh, tmux, the tools claude spawns) search PATH too. An
      empty or relative entry is the cwd: refused. Then the resolved file's symlink chain (each
@@ -538,8 +543,8 @@ class ShellLexer:
                 self.subs += sub.subs
 
 
-def path_calls(command):
-    """(argv, targets) for each call of a PATH_HEADS program, the way zsh splits the command
+def path_calls(command, heads=PATH_HEADS):
+    """(argv, targets) for each call of a `heads` program, the way zsh splits the command
     (ShellLexer): in every piece between control operators, a substitution's too, each word
     naming one starts a call running to the piece's end (subshells, groups, `if`, `VAR=`
     prefixes and wrappers like `env` included), less the piece's redirections, whose targets
@@ -563,20 +568,23 @@ def path_calls(command):
         pieces.append((words, targets))
         for words, targets in pieces:
             for i, w in enumerate(words):
-                if os.path.basename(w) in PATH_HEADS:
+                if os.path.basename(w) in heads:
                     yield words[i:], targets
 
 
 def check_calls(m, env, cwd, project, command):
-    """Rule 1 for the path arguments of every PATH_HEADS call in the command."""
+    """Rule 1 for the path arguments of every PATH_HEADS call in the command, and G-B for every
+    git and gh call (check_recursion)."""
     try:
-        calls = list(path_calls(command))
+        calls = list(path_calls(command, PATH_HEADS | {"gh"}))
     except ValueError as e:
         raise Refusal("rule1", "(command)", "the guard can't read this command as zsh would, so "
                       f"it can't find the path arguments in it: {e}. Or run the excluded command "
                       "as its own plain Bash call.")
     for words, targets in calls:
-        check_path_arguments(m, env, cwd, project, words, targets)
+        if os.path.basename(words[0]) in PATH_HEADS:
+            check_path_arguments(m, env, cwd, project, words, targets)
+        check_recursion(m, env, cwd, words)
 
 
 def check_path_arguments(m, env, cwd, project, words, targets):
@@ -1061,6 +1069,188 @@ def check_legacy_remotes(common):
                           "dir a sandboxed session can write, outside the config the guard "
                           "judges. Define the remote in the config instead (`git remote add "
                           f"<name> <url>`), then remove each entry in {d}.")
+
+
+# --- G-B: submodule recursion ------------------------------------------------------------------
+
+# git fetch (and pull, through it) reads both keys into one setting, so the later one wins.
+RECURSE_KEYS = {"fetch.recursesubmodules", "submodule.recurse"}
+GIT_FALSE = {"false", "no", "off", "0", ""}
+RECURSE_FIX = ("Run `git config --global fetch.recurseSubmodules false` (dotclaude's ./setup.sh "
+               "sets it)")
+# Options of git fetch and pull that take no separate value: a --no-recurse-submodules right
+# after one is an option, not that option's value. Any other option before it doesn't count.
+NO_VALUE_OPTIONS = {
+    "--quiet", "--verbose", "--progress", "--no-progress", "--all", "--prune", "--no-prune",
+    "--tags", "--no-tags", "--force", "--dry-run", "--append", "--atomic", "--keep",
+    "--unshallow", "--update-shallow", "--ipv4", "--ipv6", "--ff", "--no-ff", "--ff-only",
+    "--rebase", "--no-rebase", "--autostash", "--no-autostash", "--stat", "--no-stat",
+    "--commit", "--no-commit", "--edit", "--no-edit", "--squash", "--no-squash", "--verify",
+    "--no-verify", "--set-upstream", "--prune-tags", "--write-fetch-head",
+    "--no-write-fetch-head", "--show-forced-updates", "--no-show-forced-updates", "--multiple",
+    "--no-recurse-submodules"}
+NO_VALUE_SHORT = re.compile(r"-[qvptnfaPk46]+")
+# gh forms that run git fetch or pull inside (gh 2.89): (first, second word, what git runs).
+GH_GIT_FORMS = {("pr", "checkout"): "fetch", ("pr", "merge"): "pull",
+                ("issue", "develop"): "pull"}
+
+
+def config_occurrences(env, repo, home):
+    """(key, value, certain) for each fetch.recurseSubmodules and submodule.recurse git reads,
+    in git's order: system, XDG, global, the repo's config, its config.worktree, each include
+    in place, then GIT_CONFIG_COUNT's keys and GIT_CONFIG_PARAMETERS. A value from an includeIf
+    (whose condition the guard doesn't evaluate), or a config.worktree git may not read, is not
+    certain."""
+    files = []
+    if not env.get("GIT_CONFIG_NOSYSTEM") or env["GIT_CONFIG_NOSYSTEM"].lower() in ("0", "false",
+                                                                                   "no", "off"):
+        files.append((env.get("GIT_CONFIG_SYSTEM") or "/etc/gitconfig", True))
+    if env.get("GIT_CONFIG_GLOBAL"):
+        files.append((expand(env["GIT_CONFIG_GLOBAL"], home), True))
+    else:
+        xdg = env.get("XDG_CONFIG_HOME") or os.path.join(home, ".config")
+        files += [(os.path.join(xdg, "git", "config"), True),
+                  (os.path.join(home, ".gitconfig"), True)]
+    if repo:
+        gitdir, common, _ = repo
+        local = os.path.join(common, "config")
+        # git reads config.worktree only with extensions.worktreeConfig set in the common
+        # config itself (its repository format: no includes).
+        ext = [v for s, sub, k, v in (config_entries(local) if os.path.isfile(local) else [])
+               if s == "extensions" and not sub and k == "worktreeconfig"]
+        files += [(local, True), (os.path.join(gitdir, "config.worktree"),
+                                  bool(ext) and ext[-1].lower() not in GIT_FALSE)]
+    out = []
+    for path, certain in files:
+        out += file_occurrences(path, certain, home, 0)
+    count = env.get("GIT_CONFIG_COUNT")
+    pairs = []
+    if count:
+        if not re.fullmatch(r"[0-9]+", count):
+            raise Refusal("rule1", "GIT_CONFIG_COUNT", f"GIT_CONFIG_COUNT is {count!r}, which the "
+                          "guard can't read. Unset it for excluded commands.")
+        for i in range(int(count)):
+            if f"GIT_CONFIG_KEY_{i}" not in env:
+                raise Refusal("rule1", "GIT_CONFIG_COUNT", f"GIT_CONFIG_KEY_{i} is unset under "
+                              "GIT_CONFIG_COUNT. Unset GIT_CONFIG_COUNT for excluded commands.")
+            pairs.append((env[f"GIT_CONFIG_KEY_{i}"], env.get(f"GIT_CONFIG_VALUE_{i}", "")))
+    params = env.get("GIT_CONFIG_PARAMETERS")
+    if params:
+        try:
+            words = shlex.split(params)
+        except ValueError:
+            raise Refusal("rule1", "GIT_CONFIG_PARAMETERS", "the guard can't read "
+                          "GIT_CONFIG_PARAMETERS. Unset it for excluded commands.")
+        for w in words:
+            key, eq, value = w.partition("=")
+            pairs.append((key, value if eq else "true"))
+    for key, value in pairs:
+        section, _, rest = key.partition(".")
+        sub, _, name = rest.rpartition(".")
+        if section.lower() in ("include", "includeif") and name.lower() == "path":
+            if os.path.isabs(value):  # git refuses a relative one from the command line
+                out += file_occurrences(value, section.lower() == "include" and not sub, home, 1)
+        elif not sub and f"{section}.{name}".lower() in RECURSE_KEYS:
+            out.append((f"{section}.{name}".lower(), value, True))
+    return out
+
+
+def file_occurrences(path, certain, home, depth):
+    """config_occurrences for one file, its includes read in place."""
+    if depth > INCLUDE_DEPTH or not os.path.isfile(path):
+        return []
+    out = []
+    for section, sub, key, value in config_entries(path):
+        if section in ("include", "includeif") and key == "path":
+            if value:
+                target = os.path.join(os.path.dirname(path), expand(value, home))
+                out += file_occurrences(target, certain and section == "include" and not sub,
+                                        home, depth + 1)
+        elif not sub and f"{section}.{key}" in RECURSE_KEYS:
+            out.append((f"{section}.{key}", value, certain))
+    return out
+
+
+def config_false(occurrences, keys, unset):
+    """Whether the last of `keys` git reads is surely a git false value (`unset` when none is
+    set). A value that is not certain can only turn it on."""
+    off = unset
+    for key, value, certain in occurrences:
+        if key in keys:
+            false = value.lower() in GIT_FALSE
+            off = false if certain else off and false
+    return off
+
+
+def recursion_on(env, repo, home, pull=False):
+    """What turns submodule recursion on for a git fetch (or, with pull, a pull) from `repo`:
+    [] when the effective config surely has it off. pull also updates each submodule after its
+    merge when submodule.recurse alone is on."""
+    occ = config_occurrences(env, repo, home)
+    on = []
+    if not config_false(occ, RECURSE_KEYS, unset=False):
+        on.append("fetch.recurseSubmodules")
+    if pull and not config_false(occ, {"submodule.recurse"}, unset=True):
+        on.append("submodule.recurse")
+    return on
+
+
+def recursion_flag(args):
+    """Whether git fetch or pull args turn recursion off on the command line: a
+    --no-recurse-submodules (or --recurse-submodules=<false>) before any `--`, after a word
+    that can't take it as its value."""
+    prev = None
+    for w in args:
+        if w == "--":
+            return False
+        off = w == "--no-recurse-submodules" or (
+            w.startswith("--recurse-submodules=") and w.split("=", 1)[1].lower() in GIT_FALSE
+            and w.split("=", 1)[1])
+        if off and (prev is None or not prev.startswith("-") or prev.startswith("--") and "="
+                    in prev or prev in NO_VALUE_OPTIONS or NO_VALUE_SHORT.fullmatch(prev)):
+            return True
+        prev = w
+    return False
+
+
+def check_recursion(m, env, cwd, words):
+    """G-B for one call: git fetch or pull, or a gh form that runs one, recurses into each
+    submodule's own git dir, which a sandboxed session can write. Refuse unless the git call
+    carries --no-recurse-submodules or the effective config has recursion off."""
+    head = os.path.basename(words[0])
+    if head == "git" and words[1:2] in (["fetch"], ["pull"]):
+        sub, name = words[1], f"git {words[1]}"
+        if recursion_flag(words[2:]):
+            return
+        fix = (f"{RECURSE_FIX}, or add `--no-recurse-submodules` right after `{sub}`"
+               + (" (that also skips the submodule update)" if sub == "pull" else ""))
+    elif head == "gh":
+        positional, skip = [], False
+        for w in words[1:]:
+            if skip:
+                skip = False
+            elif w in ("-R", "--repo"):
+                skip = True
+            elif not w.startswith("-"):
+                positional.append(w)
+        sub = GH_GIT_FORMS.get(tuple(positional[:2]))
+        if not sub:
+            return
+        name = f"gh {' '.join(positional[:2])}"
+        if name == "gh pr checkout" and "--recurse-submodules" in words:
+            raise Refusal("rule1", "--recurse-submodules", "`gh pr checkout --recurse-submodules` "
+                          "updates each submodule, running git in its own git dir, which a "
+                          "sandboxed session can write. Run it without --recurse-submodules.")
+        fix = f"{RECURSE_FIX}; gh passes git no flag to turn it off"
+    else:
+        return
+    on = recursion_on(env, discover(cwd, env), m.home, pull=sub == "pull")
+    if on:
+        raise Refusal("rule1", on[0], f"`{name}` runs git {sub} with submodule recursion on in "
+                      f"the effective git config ({' and '.join(on)}), which runs git in each "
+                      "submodule's own git dir, where a sandboxed session can write. "
+                      + fix + (". For pull, also set submodule.recurse false"
+                               if "submodule.recurse" in on else "") + ".")
 
 
 def check_hooks_dir(m, hdir):

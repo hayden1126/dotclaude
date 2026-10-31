@@ -59,6 +59,8 @@ class Guard(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp)
         self.addCleanup(unlock, self.tmp)
         self.home = self.mkdir("home")
+        # As setup.sh leaves it: without it every git fetch and pull is refused (G-B).
+        self.write(os.path.join(self.home, ".gitconfig"), RECURSE_OFF)
         self.deny_write = []  # paths an Edit deny rule covers (both routes)
         self.sandbox_deny = []  # raw denyWrite lines (sandboxed Bash only)
         self.proj = os.path.join(self.tmp, "proj")
@@ -738,6 +740,7 @@ class Rule1Config(Guard):
 
     def test_a_symlinked_gitconfig_is_judged_by_its_hops_and_target(self):
         real = self.write(os.path.join(self.tmp, "wcfg", "gitconfig"), "")
+        os.remove(os.path.join(self.home, ".gitconfig"))
         os.symlink(real, os.path.join(self.home, ".gitconfig"))
         self.denied("git push", "rule1", os.path.join(self.home, ".gitconfig"))
 
@@ -798,6 +801,7 @@ class Rule1Config(Guard):
     def test_git_config_global_replaces_the_normal_global_files(self):
         # The normal global files are writable; GIT_CONFIG_GLOBAL makes git skip them.
         real = self.write(os.path.join(self.tmp, "wcfg", "gitconfig"), "")
+        os.remove(os.path.join(self.home, ".gitconfig"))
         os.symlink(real, os.path.join(self.home, ".gitconfig"))
         self.write(os.path.join(self.home, ".config", "git", "config"), "")
         self.denied("git push", "rule1")
@@ -879,6 +883,142 @@ class Rule1RemoteUrls(Guard):
             with self.subTest(value=value):
                 self.remote("remote.origin.url", value)
                 self.allowed("git push")
+
+
+RECURSE_OFF = "[fetch]\n\trecurseSubmodules = false\n"  # what setup.sh sets
+
+
+class SubmoduleRecursion(Guard):
+    """G-B: git fetch and pull, and the gh forms that run them, recurse into submodules, whose
+    own git dirs a sandboxed session can write. They pass only with --no-recurse-submodules
+    (git) or recursion off in the effective config."""
+
+    FORMS = ["git fetch", "git fetch *", "git pull", "git pull *", "gh issue *"]
+
+    def setUp(self):
+        super().setUp()
+        self.write_settings({"excludedCommands": EXCLUDED + self.FORMS})
+        self.gitconfig = os.path.join(self.home, ".gitconfig")
+        os.remove(self.gitconfig)
+
+    def test_recursion_on_by_default_refuses_with_the_fix(self):
+        for call in ("git fetch", "git fetch origin", "git pull --ff-only", "git fetch -q origin",
+                     "gh pr list; git fetch origin", "gh pr checkout 5", "gh pr merge 5 --squash",
+                     "gh pr merge -d 5", "gh issue develop 3 --checkout",
+                     "git fetch -o --no-recurse-submodules origin",
+                     "git fetch origin -- --no-recurse-submodules"):
+            with self.subTest(call=call):
+                reason = self.denied(call, "rule1")
+                self.assertIn("git config --global fetch.recurseSubmodules false", reason)
+                self.assertIn("setup.sh", reason)
+                if call.startswith("git"):
+                    self.assertIn("--no-recurse-submodules", reason)
+
+    def test_the_flag_or_the_config_switch_off_passes(self):
+        for call in ("git fetch --no-recurse-submodules origin", "git pull --no-recurse-submodules",
+                     "git fetch -q --prune --no-recurse-submodules", "gh pr view 5",
+                     "git fetch origin main --no-recurse-submodules",
+                     "git fetch --recurse-submodules=no origin", "gh issue view 3"):
+            with self.subTest(call=call):
+                self.allowed(call)
+        for config in (RECURSE_OFF, "[submodule]\n\trecurse = true\n" + RECURSE_OFF,
+                       "[fetch]\n\trecurseSubmodules = no\n"):
+            self.write(self.gitconfig, config)
+            pulls = ("git pull", "gh issue develop 3") if "recurse =" not in config else ()
+            for call in ("git fetch", "git fetch origin", "gh pr checkout 5") + pulls:
+                with self.subTest(config=config, call=call):
+                    self.allowed(call)
+        self.git("config", "fetch.recurseSubmodules", "false", cwd=self.proj)  # trusted local
+        os.remove(self.gitconfig)
+        self.allowed("git fetch origin")
+
+    def test_a_later_value_or_the_environment_wins(self):
+        self.write(self.gitconfig, RECURSE_OFF + "[submodule]\n\trecurse = true\n")
+        self.denied("git fetch", "rule1")
+        self.write(self.gitconfig, RECURSE_OFF)
+        self.env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="fetch.recurseSubmodules",
+                        GIT_CONFIG_VALUE_0="on-demand")
+        self.denied("git fetch", "rule1")
+        self.env["GIT_CONFIG_PARAMETERS"] = "'fetch.recurseSubmodules'='false'"
+        self.allowed("git fetch")
+
+    def test_pull_also_needs_submodule_recurse_off(self):
+        # pull updates each submodule after the merge when submodule.recurse is on, whatever
+        # fetch.recurseSubmodules says.
+        self.write(self.gitconfig, "[submodule]\n\trecurse = true\n" + RECURSE_OFF)
+        self.allowed("git fetch")
+        for call in ("git pull", "gh pr merge -d 5"):
+            with self.subTest(call=call):
+                self.assertIn("submodule.recurse", self.denied(call, "rule1"))
+        self.allowed("git pull --no-recurse-submodules")
+
+    def test_gh_pr_checkout_with_recursion_is_refused_outright(self):
+        self.write(self.gitconfig, RECURSE_OFF)
+        self.assertIn("--recurse-submodules",
+                      self.denied("gh pr checkout --recurse-submodules 5", "rule1"))
+
+
+class SubmoduleRecursionMatchesGit(Guard):
+    """The guard's effective-config verdict against real git: in a clone whose submodule's own
+    config makes a fetch there run a marker program, recursion counts as off exactly when a
+    plain `git fetch` leaves the marker unrun."""
+
+    def test_the_guard_agrees_with_git(self):
+        guard = load_guard()
+        sub, up, clone = (os.path.join(self.tmp, n) for n in ("s", "u", "c"))
+        allow = ("-c", "protocol.file.allow=always")
+        self.git("init", "-q", sub, cwd=self.tmp)
+        self.git("commit", "-q", "--allow-empty", "-m", "s", cwd=sub)
+        self.git("init", "-q", up, cwd=self.tmp)
+        self.git("commit", "-q", "--allow-empty", "-m", "u", cwd=up)
+        self.git(*allow, "submodule", "add", "-q", sub, "sub", cwd=up)
+        self.git("config", "-f", ".gitmodules", "submodule.sub.fetchRecurseSubmodules", "true",
+                 cwd=up)
+        self.git("commit", "-q", "-am", "sub", cwd=up)
+        self.git(*allow, "clone", "-q", "--recurse-submodules", up, clone, cwd=self.tmp)
+        fired = os.path.join(self.tmp, "fired")
+        prog = self.write(os.path.join(self.tmp, "prog"),
+                          f"#!/bin/sh\necho x >> {fired}\nexit 1\n", 0o755)
+        self.git("config", "remote.origin.uploadpack", prog, cwd=os.path.join(clone, "sub"))
+        local = os.path.join(clone, ".git", "config")
+        base_local = slurp(local)
+        glob_cfg = os.path.join(self.tmp, "g", "config")
+        inc_off = self.write(os.path.join(self.tmp, "g", "off"), RECURSE_OFF)
+        inc_on = self.write(os.path.join(self.tmp, "g", "on"), "[submodule]\n\trecurse\n")
+        on = "[fetch]\n\trecurseSubmodules = true\n"
+        sub_on = "[submodule]\n\trecurse = true\n"
+        wt_ext = "[extensions]\n\tworktreeConfig = true\n"
+        layouts = [  # (global, local, config.worktree, env)
+            ("", "", "", {}), (RECURSE_OFF, "", "", {}), (RECURSE_OFF, on, "", {}),
+            (RECURSE_OFF, sub_on, "", {}), (sub_on, RECURSE_OFF, "", {}),
+            (f"[include]\n\tpath = {inc_off}\n", "", "", {}),
+            (f"[include]\n\tpath = off\n{sub_on}", "", "", {}),
+            (RECURSE_OFF, "", "", {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "submodule.recurse",
+                                   "GIT_CONFIG_VALUE_0": "true"}),
+            (on, "", "", {"GIT_CONFIG_PARAMETERS": "'fetch.recurseSubmodules=false'"}),
+            ("", "", "", {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "fetch.recurseSubmodules",
+                          "GIT_CONFIG_VALUE_0": "false",
+                          "GIT_CONFIG_PARAMETERS": "'submodule.recurse'='true'"}),
+            (on, wt_ext, RECURSE_OFF, {}), (on, "", RECURSE_OFF, {}),
+            (f'{RECURSE_OFF}[includeIf "gitdir:{clone}/"]\n\tpath = {inc_on}\n', "", "", {}),
+        ] + [(f"[fetch]\n\trecurseSubmodules = {v}\n", "", "", {})
+             for v in ("no", "off", "0", "", "FALSE", "on-demand", "yes")]
+        for glob_text, local_text, wt_text, extra in layouts:
+            with self.subTest(glob=glob_text, local=local_text, wt=wt_text, env=extra):
+                self.write(glob_cfg, "[protocol]\n\tallow = always\n" + glob_text)
+                self.write(local, base_local + local_text)
+                self.write(os.path.join(clone, ".git", "config.worktree"), wt_text)
+                env = {"PATH": "/usr/bin:/bin", "HOME": self.home, "GIT_CONFIG_NOSYSTEM": "1",
+                       "GIT_CONFIG_GLOBAL": glob_cfg, **extra}
+                subprocess.run(["git", "fetch", "-q"], cwd=clone, env=env, capture_output=True)
+                ran = os.path.exists(fired)
+                if ran:
+                    os.remove(fired)
+                on_now = guard.recursion_on(env, guard.discover(clone, env), self.home)
+                if "on-demand" in glob_text:  # on-demand fetches only changed submodules
+                    self.assertTrue(on_now)
+                    continue
+                self.assertEqual(bool(on_now), ran, on_now)
 
 
 class Rule2Path(Guard):
