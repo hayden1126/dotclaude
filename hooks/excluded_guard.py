@@ -290,6 +290,8 @@ REDIRECT_OPS = ("&>>|", "&>>!", ">>&|", ">>&!", "<<<", "<<-", "&>>", "&>|", "&>!
                 ">&|", ">&!", ">>&", "<<", ">>", "<>", ">|", ">!", ">&", "<&", "&>", "<", ">")
 SHELL_OPS = sorted(CONTROL_OPS + REDIRECT_OPS, key=len, reverse=True)
 WORD_END = " \t\n;&|<>)"
+ARITHMETIC = ("arithmetic ($((...)), ((...)) or $[...]), which the guard doesn't read; do the "
+              "arithmetic in a separate Bash call")
 FD = re.compile(r"[0-9]+")  # ASCII only: str.isdigit() takes ² and other digits zsh doesn't
 # Words after which the next word is in command position (a `{` there opens a group).
 COMMAND_WORDS = {"{", "!", "if", "then", "else", "elif", "while", "until", "do", "time"}
@@ -366,7 +368,7 @@ class ShellLexer:
                 out.append(Op(";"))  # a case pattern's end, or a stray
             elif c == "(" or c in "<>" and self.peek(1) == "(":
                 if c == "(" and self.peek(1) == "(":
-                    raise ValueError("arithmetic, which the guard doesn't read")
+                    raise ValueError(ARITHMETIC)
                 self.i += 1 if c == "(" else 2
                 self.nested()
                 out.append(f"{c if c != '(' else ''}(…)")
@@ -382,7 +384,7 @@ class ShellLexer:
                 word, quoted = self.word()
                 if delim_for:
                     if "…" in word:
-                        raise ValueError("a heredoc delimiter holding an expansion")
+                        raise ValueError("a heredoc delimiter holding an expansion; use a plain one, like EOF")
                     self.heredocs.append((word, delim_for == "<<-", not quoted))
                     delim_for = None
                 elif FD.fullmatch(word) and not quoted and self.peek() in ("<", ">"):
@@ -432,7 +434,7 @@ class ShellLexer:
                 self.i, quoted = end + 1, True
             elif c == "(":  # glued to the word: a zsh glob group
                 if n == "(":
-                    raise ValueError("arithmetic, which the guard doesn't read")
+                    raise ValueError(ARITHMETIC)
                 self.i += 1
                 self.nested()
                 parts.append("(…)")
@@ -447,7 +449,7 @@ class ShellLexer:
         """At a `$(`, `${` or backtick: lex it into subs and return its marker; else ""."""
         c, n = self.peek(), self.peek(1)
         if c == "$" and (n == "[" or n == "(" and self.peek(2) == "("):
-            raise ValueError("arithmetic, which the guard doesn't read")
+            raise ValueError(ARITHMETIC)
         if c == "$" and n == "(":
             self.i += 2
             self.nested()
@@ -457,7 +459,7 @@ class ShellLexer:
             depth = 0
             while (c := self.peek()) != "}" or depth:
                 if not c or c in "'\"":
-                    raise ValueError("a ${...} the guard can't read")
+                    raise ValueError("a ${...} holding a quote; set the value in a separate Bash call")
                 if c == "\\":
                     self.i += 2
                 elif not self.expansion():
@@ -518,7 +520,7 @@ class ShellLexer:
             start = self.i
             while True:
                 if self.i >= len(self.s):
-                    raise ValueError("a heredoc with no end line")
+                    raise ValueError("a heredoc with no end line; end it with its delimiter line")
                 body_end, line = self.i, self.line()
                 while expand and (len(line) - len(line.rstrip("\\"))) % 2 and self.i < len(self.s):
                     line = line[:-1] + self.line()
@@ -564,9 +566,9 @@ def check_calls(m, env, cwd, project, command):
     try:
         calls = list(path_calls(command))
     except ValueError as e:
-        raise Refusal("rule1", "(command)", f"the guard can't read this command as zsh would "
-                      f"({e}), so it can't find the path arguments in it. Run it as plain "
-                      "commands.")
+        raise Refusal("rule1", "(command)", "the guard can't read this command as zsh would, so "
+                      f"it can't find the path arguments in it: {e}. Or run the excluded command "
+                      "as its own plain Bash call.")
     for words, targets in calls:
         check_path_arguments(m, env, cwd, project, words, targets)
 
@@ -579,8 +581,8 @@ def check_path_arguments(m, env, cwd, project, words, targets):
             w in GIT_PATH_SUBS for w in words[2:]):
         raise Refusal("rule1", words[1], f"`git` with {words[1]!r} before its subcommand: the "
                       "guard judges git push, fetch, pull and ls-remote only with no git option "
-                      "before the subcommand. Run it from the repository's directory without "
-                      "that option.")
+                      "before the subcommand. Run it bare (no option before the subcommand) "
+                      "from a session in that repository, or with the sandbox off.")
     if head == "delegation-ledger":
         if sub == "hook":
             raise Refusal("rule1", head, "`delegation-ledger hook` reads the checkout it runs "
