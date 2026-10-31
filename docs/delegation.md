@@ -280,9 +280,19 @@ For a match it refuses, naming the path, when:
    anywhere in it (a later piece, a subshell, a substitution), and refuses a command it can't
    read and a git option before those subcommands. A git repository is judged where git's own
    lookup finds it (a `.git` suffix, a gitfile, a `file://` URL). An option of those git calls that names a program for git to run, an
-   `ext::` remote, submodule recursion, a remote defined outside `.git/config` (the legacy
-   `.git/remotes` and `.git/branches` files) and a `%` in any word are refused, and
-   `delegation-ledger hook` runs only as a hook, never through Bash. The
+   `ext::` remote, `--recurse-submodules` and a `%` in any word are refused, and
+   `delegation-ledger hook` runs only as a hook, never through Bash. A repo whose common git
+   dir holds any entry in `remotes/` or `branches/` (legacy remote files, outside the judged
+   config) is refused for every excluded call (G-C). Each local-path remote URL in the cwd's
+   config, the repo's own trusted config included (`remote.<n>.url` and `pushurl`, each
+   `url.<base>.insteadOf` and `pushInsteadOf` base), is judged as a path argument's repository
+   is where it exists, and refused where it is missing and a sandboxed session could create it
+   (G-D). `git fetch` and `pull`, and `gh pr checkout`, `gh pr merge` and `gh issue develop`
+   (which run them), are refused unless the git call carries `--no-recurse-submodules` or the
+   effective config has submodule recursion off (G-B): the last `fetch.recurseSubmodules` or
+   `submodule.recurse` git reads must be false (for pull, `submodule.recurse` too).
+   `./setup.sh` sets `fetch.recurseSubmodules false` in the global config, and `lane`'s own
+   fetches pass the flag. The
    other config git reads must be write-protected: the global and XDG files (or
    `GIT_CONFIG_GLOBAL`), `/etc/gitconfig` (or `GIT_CONFIG_SYSTEM`, skipped under
    `GIT_CONFIG_NOSYSTEM`), every `include.path` and `includeIf` target, and a `core.hooksPath`
