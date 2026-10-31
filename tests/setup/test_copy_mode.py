@@ -17,12 +17,16 @@ PNPM_LINE = "package-import-method=copy"
 
 
 def section():
-    """setup.sh from its `# 6. Copy mode` header up to `# 7. Stale links`, after the say and
-    warn helpers it uses."""
+    """setup.sh from its `# N. Copy mode` header up to the next section's rule, after the say
+    and warn helpers it uses. Keyed on the title, not the number, so a section added before or
+    after it doesn't move the cut."""
     with open(SETUP) as f:
         text = f.read()
     helpers = text[text.index("say()"):text.index("# ----", text.index("say()"))]
-    return helpers + text[text.index("# 6. Copy mode"):text.index("# 7. Stale links")]
+    start = text.index(". Copy mode for uv and pnpm installs")
+    start = text.rindex("\n", 0, start) + 1
+    end = text.index("\n# ----", text.index("\n# ----", start) + 1)
+    return helpers + text[start:end]
 
 
 class CopyMode(unittest.TestCase):
