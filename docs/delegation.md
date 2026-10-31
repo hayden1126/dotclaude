@@ -283,23 +283,34 @@ For a match it refuses, naming the path, when:
    from the cwd: `pass-respawn -C`, `lane adopt PATH`, and a local repository given to
    `git push`, `fetch`, `pull` or `ls-remote`. Such a call must spell each word plainly (no
    expansion, glob, quote or space), its redirection targets too, since the guard reads the
-   text before the shell rewrites it. The guard finds these calls as zsh splits the command,
+   text before the shell rewrites it. A git refspec or option value may also use the revision
+   spellings zsh hands on unchanged with the options Claude Code's shell snapshot sets
+   (item 10, tested against zsh): `~` and `^` anywhere but a leading `~`, `@{...}` or `^{...}`
+   with no `,`, `..` or brace inside, and `%`. A spelling zsh rewrites (`@{a,b}`, `@{1..3}`,
+   `~1`) stays refused. The guard finds these calls as zsh splits the command,
    anywhere in it (a later piece, a subshell, a substitution), and refuses a command it can't
    read and a git option before those subcommands. git's words are read as its own option
    parser reads them, from tables of git 2.43's options (`git <sub> -h`, captured in
    `tests/setup/data/git-help/` and tied to the tables by a test that also fails on another git
    version): the repository is the first positional or `--repo`'s value (every positional with
    `fetch --multiple`), later positionals are refspecs and never paths, and an option the
-   tables don't list, or an ambiguous prefix, is refused by name. A git repository is judged
-   where git's own lookup finds it (a `.git` suffix, a gitfile, a `file://` URL). An option of those git calls that names a program for git to run, an
-   `ext::` remote, `--recurse-submodules` and a `%` in any word are refused, and
+   tables don't list, or an ambiguous prefix, is refused by name (item 7). A repository word
+   that names a remote the config surely defines is judged by its URL (G-D). For `fetch` and
+   `pull`, one that names a `remotes.<group>` value is judged by each member in turn, as git
+   fetches them, and a member git would read as an option is refused. Any other repository
+   word is a local path to git, judged whether it exists or not (G-E, item 8), where git's
+   server side looks for it: `<p>/.git`, `<p>`, `<p>.git/.git` and `<p>.git` in that order, the
+   first that is a file or a git dir winning. Each that exists is judged along its symlinks and
+   as the cwd's repo is; one that is missing, tried before the first git would take, is
+   refused when a sandboxed session could create it. A `file://` URL with a host part or a
+   `%`-escape is refused. An option of those git calls that names a program for git to run, an
+   `ext::` remote, `--recurse-submodules` and a `%` in a repository word are refused, and
    `delegation-ledger hook` runs only as a hook, never through Bash. A repo whose common git
    dir holds any entry in `remotes/` or `branches/` (legacy remote files, outside the judged
    config) is refused for every excluded call (G-C). Each local-path remote URL in the cwd's
    config, the repo's own trusted config included (`remote.<n>.url` and `pushurl`, each
-   `url.<base>.insteadOf` and `pushInsteadOf` base), is judged as a path argument's repository
-   is where it exists, and refused where it is missing and a sandboxed session could create it
-   (G-D). `git fetch` and `pull`, and `gh pr checkout`, `gh pr merge` and `gh issue develop`
+   `url.<base>.insteadOf` and `pushInsteadOf` base), is judged as a local repository word is,
+   each path git's server side tries included (G-D). `git fetch` and `pull`, and `gh pr checkout`, `gh pr merge` and `gh issue develop`
    (which run them), are refused unless the git call carries `--no-recurse-submodules` or the
    effective config has submodule recursion off (G-B): the last `fetch.recurseSubmodules` or
    `submodule.recurse` git reads must be false (for pull, `submodule.recurse` too).

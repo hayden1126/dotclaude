@@ -20,21 +20,30 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      local repository for git push, fetch, pull and ls-remote), and such a call must spell its
      words plainly, naming no program for git to run (--receive-pack, --upload-pack, --exec,
      an ext:: remote) and no submodule recursion (check_git_words). git's words are read as
-     its parse-options reads them (git_argv, with git 2.43's option tables): the repository
-     is the first positional or --repo's value (every positional with fetch --multiple), the
-     later ones are refspecs, never paths, and an option the tables don't list, or an
-     ambiguous prefix, is refused. A git repository is judged where git's server side
-     finds it (<path>, <path>.git, a gitfile, a file:// URL with no host, no %-escape), and
-     a git option before those subcommands is refused. The calls are found the way zsh splits
+     its parse-options reads them (git_argv, with git 2.43's option tables; item 7): the
+     repository is the first positional or --repo's value (every positional with fetch
+     --multiple), the later ones are refspecs, never paths, and an option the tables don't
+     list, or an ambiguous prefix, is refused. A refspec or option value may also use git's
+     revision spellings zsh hands on unchanged (REFSPEC_WORD, item 10: mid-word ~ and ^, a
+     leading ^, @{...} or ^{...} with no comma, `..` or brace, and %); a repository word stays
+     a PLAIN_WORD with no %. A repository word naming a remote the config surely defines is
+     judged by its URL (G-D); for fetch and pull, one naming a remotes.<group> value is judged
+     by each member in turn, as git fetches them, and a member git would read as an option is
+     refused. Any other word is a local path to git, judged whether it exists or not (G-E path
+     half, item 8), as git's server side finds it: it tries <path>/.git, <path>, <path>.git/.git
+     and <path>.git in turn (check_server_repo), each that exists is judged along its symlink
+     chain and as the cwd's repo is, and one that is missing, before the first git would take,
+     is refused if a sandboxed session could create it. A file:// URL must have no host and no
+     %-escape, and a git option before those subcommands is refused. The calls are found the way zsh splits
      the command (ShellLexer): each call of those heads anywhere in a candidate is judged, one
      in a substitution, subshell or later piece too, and a command it can't read is refused.
      `delegation-ledger hook` is refused outright, since its paths come on stdin. A repo
      (the cwd's or a path argument's) whose common dir holds any entry in remotes/ or
      branches/ is refused (G-C): git reads a legacy remote there, outside the judged config.
      Each local-path remote URL in the cwd's config chain, trusted files too (remote.*.url and
-     pushurl, each url.<base>.insteadOf and pushInsteadOf base), is judged too (G-D): where it
-     exists, as a path argument's repository is; where it is missing, refused if a sandboxed
-     session could create it. A URL's own repo doesn't have its URLs judged. git fetch and
+     pushurl, each url.<base>.insteadOf and pushInsteadOf base), is judged too (G-D), as a
+     repository word's path is (check_server_repo). A URL's own repo doesn't have its URLs
+     judged. git fetch and
      pull, and gh pr checkout, gh pr merge and gh issue develop (which run them), are refused
      unless the git call carries --no-recurse-submodules or the effective config has submodule
      recursion off (G-B): the last fetch.recurseSubmodules or submodule.recurse git reads must
