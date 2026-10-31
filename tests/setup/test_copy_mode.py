@@ -93,6 +93,20 @@ class CopyMode(unittest.TestCase):
         self.run_section()
         self.assertTrue(self.hinted)
 
+    def test_on_windows_copy_mode_is_skipped(self):
+        # git-bash: no Bash sandbox to write a project, and uv's config isn't under ~/.config.
+        self.fake("uname", "echo MINGW64_NT-10.0-26100")
+        self.run_section()
+        self.assertFalse(os.path.exists(self.config))
+        self.assertFalse(self.hinted)
+
+    def test_the_hint_points_to_the_rebuild_step(self):
+        self.run_section()
+        self.assertTrue(self.hinted)
+        self.assertIn('README, \\"Upgrading from an older install\\"', section())
+        with open(os.path.join(REPO, "README.md")) as f:
+            self.assertIn("**Upgrading from an older install.**", f.read())
+
     def test_a_rerun_adds_nothing(self):
         self.run_section()
         self.run_section()

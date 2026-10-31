@@ -553,23 +553,32 @@ set_top_key() {
   fi
 }
 
-config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
-set_top_key "$config_home/uv/uv.toml" link-mode 'link-mode = "copy"' copy
-# pnpm's global rc is in XDG_CONFIG_HOME when that is set, else ~/Library/Preferences on macOS
-# and ~/.config elsewhere (Windows: LOCALAPPDATA, which the check below names).
-pnpm_dir="$config_home/pnpm"
-[[ -z ${XDG_CONFIG_HOME:-} && $(uname -s) == Darwin ]] && pnpm_dir="$HOME/Library/Preferences/pnpm"
-set_top_key "$pnpm_dir/rc" package-import-method package-import-method=copy copy
-# Then ask pnpm itself, from /, so no project's .npmrc counts: a ~/.npmrc or an OS path this
-# missed would show here. COREPACK_ENABLE_NETWORK=0 stops a corepack pnpm from downloading one.
-if command -v pnpm >/dev/null 2>&1; then
-  pnpm_import="$(cd / && COREPACK_ENABLE_NETWORK=0 pnpm config get package-import-method \
-    </dev/null 2>/dev/null)" || pnpm_import=""
-  [[ -z $pnpm_import || $pnpm_import == copy ]] \
-    || warn "pnpm reads package-import-method as $pnpm_import, not copy (set in ~/.npmrc, or a config dir this missed): its installs can hardlink to the shared cache"
-fi
-[[ -z $copy_mode_new ]] \
-  || warn "copy mode is new here: uv and pnpm installs made before it still share files with their caches. List them with \`cache-unlink <your project dirs>\`, then rerun it with --apply to un-link them"
+# Windows (git-bash) has no Bash sandbox to write a project, so copy mode buys nothing there (and
+# its config dirs are APPDATA's, not these).
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) say "copy mode skipped: no Bash sandbox on Windows" ;;
+  *)
+    config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+    set_top_key "$config_home/uv/uv.toml" link-mode 'link-mode = "copy"' copy
+    # pnpm's global rc is in XDG_CONFIG_HOME when that is set, else ~/Library/Preferences on
+    # macOS and ~/.config elsewhere.
+    pnpm_dir="$config_home/pnpm"
+    [[ -z ${XDG_CONFIG_HOME:-} && $(uname -s) == Darwin ]] && pnpm_dir="$HOME/Library/Preferences/pnpm"
+    set_top_key "$pnpm_dir/rc" package-import-method package-import-method=copy copy
+    # Then ask pnpm itself, from /, so no project's .npmrc counts: a ~/.npmrc or an OS path this
+    # missed would show here. COREPACK_ENABLE_NETWORK=0 stops a corepack pnpm downloading one.
+    if command -v pnpm >/dev/null 2>&1; then
+      pnpm_import="$(cd / && COREPACK_ENABLE_NETWORK=0 pnpm config get package-import-method \
+        </dev/null 2>/dev/null)" || pnpm_import=""
+      [[ -z $pnpm_import || $pnpm_import == copy ]] \
+        || warn "pnpm reads package-import-method as $pnpm_import, not copy (set in ~/.npmrc, or a config dir this missed): its installs can hardlink to the shared cache"
+    fi
+    # The run that first sets copy mode is also the first with the caches read-only, so on a
+    # machine that ran an older dotclaude, what the sandbox could write until now needs a check.
+    [[ -z $copy_mode_new ]] \
+      || warn "copy mode is new here: uv and pnpm installs made before it still share files with their caches. List them with \`cache-unlink <your project dirs>\`, then rerun it with --apply. If an older dotclaude ran here, its sandbox could write the caches, uv's Pythons and Playwright's browsers: rebuild them (README, \"Upgrading from an older install\")"
+    ;;
+esac
 
 # ---------------------------------------------------------------------------
 # 7. Stale links and plugin changes

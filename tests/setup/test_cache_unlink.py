@@ -9,6 +9,7 @@ import importlib.machinery
 import importlib.util
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -159,6 +160,37 @@ class CacheUnlink(Base):
         self.link(a, os.path.join(self.code, "m.py"))
         self.assertIn("1 files  ~/code\n", self.run_tool(self.code).stdout)
 
+    def test_an_unreadable_dir_makes_the_report_incomplete_not_clean(self):
+        # A sandboxed session can chmod 000 the dir holding a linked file, then restore it.
+        if os.geteuid() == 0:
+            self.skipTest("root reads a mode-000 dir")
+        a = self.put(os.path.join(self.uv, "archive-v0", "h1", "m.py"))
+        hidden = os.path.join(self.code, "py", ".venv", "lib")
+        self.link(a, os.path.join(hidden, "m.py"))
+        os.chmod(hidden, 0)
+        self.addCleanup(os.chmod, hidden, 0o755)
+        for args in ([self.code], ["--apply", self.code]):
+            p = self.run_tool(*args)
+            self.assertEqual(p.returncode, 1, args)
+            self.assertNotIn("no file under", p.stdout)
+            self.assertIn("report is incomplete", p.stdout)
+            self.assertIn("can't read ~/code/py/.venv/lib", p.stderr)
+
+    def test_files_lists_each_shared_file(self):
+        a = self.put(os.path.join(self.uv, "archive-v0", "h1", "m.py"))
+        self.link(a, os.path.join(self.code, "py", "m.py"))
+        self.assertIn("    ~/code/py/m.py\n", self.run_tool("--files", self.code).stdout)
+
+    def test_a_dir_name_that_isnt_utf8_is_printed_escaped(self):
+        a = self.put(os.path.join(self.uv, "archive-v0", "h1", "m.py"))
+        odd = os.path.join(os.fsencode(self.code), b"\xff")
+        os.makedirs(odd)
+        os.link(a, os.path.join(odd, b"m.py"))
+        p = self.run_tool(self.code, LANG="C.UTF-8", LC_ALL="C.UTF-8", PYTHONIOENCODING="")
+        self.assertEqual(p.returncode, 1, p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        self.assertIn("~/code/\\udcff", p.stdout)
+
     def test_inside_the_sandbox_it_refuses(self):
         # There the cache vars name the sandbox's own caches: the report would miss the real ones.
         p = self.run_tool(self.code, SANDBOX_RUNTIME="1")
@@ -184,8 +216,8 @@ class Races(Base):
         # The dir a swapped-in link would aim the write at, with a file there to overwrite.
         self.victim_dir = os.path.join(self.tmp, "dot-ssh")
         self.victim = self.put(os.path.join(self.victim_dir, "authorized_keys"), "real key\n")
-        self.shared = self.mod.find_shared([self.code], {"uv": [self.uv]})
-        self.assertEqual(sum(len(f) for f in self.shared.values()), 1)
+        self.shared, errors = self.mod.find_shared([self.code], {"uv": [self.uv]})
+        self.assertEqual((sum(len(f) for f in self.shared.values()), errors), (1, []))
 
     def swap_d1_for_a_link(self):
         os.rename(os.path.join(self.proj, "d1"), os.path.join(self.proj, "d1.real"))
@@ -225,6 +257,51 @@ class Races(Base):
         done, failed = self.mod.apply(self.shared)
         self.assertEqual((done, [e for _, e in failed]), (0, ["changed since the walk"]))
         self.assertEqual(self.read(self.target), "new\n")
+
+    def test_a_file_swapped_for_a_fifo_fails_without_hanging(self):
+        os.remove(self.target)
+        os.mkfifo(self.target)
+        signal.signal(signal.SIGALRM, lambda *a: self.fail("apply blocked on the FIFO"))
+        signal.alarm(5)
+        try:
+            done, failed = self.mod.apply(self.shared)
+        finally:
+            signal.alarm(0)
+        self.assertEqual((done, [e for _, e in failed]), (0, ["changed since the walk"]))
+
+    def assert_target_kept(self):
+        self.assertEqual(self.read(self.target), "payload\n")
+        self.assertEqual(os.stat(self.target).st_nlink, 2)
+        self.assertEqual(os.listdir(os.path.dirname(self.target)), ["authorized_keys"])
+
+    def test_short_writes_still_copy_the_whole_file(self):
+        real_write = os.write
+        with mock.patch.object(self.mod.os, "write",
+                               side_effect=lambda fd, b: real_write(fd, bytes(b[:1]))):
+            done, failed = self.mod.apply(self.shared)
+        self.assertEqual((done, failed), (1, []))
+        self.assertEqual(self.read(self.target), "payload\n")
+        self.assertEqual(os.stat(self.target).st_nlink, 1)
+
+    def test_a_copy_cut_short_never_replaces_the_file(self):
+        # The read side ends early, as when the file shrinks mid-copy: sizes differ.
+        real_read, calls = os.read, []
+
+        def first_byte_only(fd, n):
+            calls.append(fd)
+            return real_read(fd, 1) if len(calls) == 1 else b""
+
+        with mock.patch.object(self.mod.os, "read", side_effect=first_byte_only):
+            done, failed = self.mod.apply(self.shared)
+        self.assertEqual((done, [e for _, e in failed]),
+                         (0, ["the copy came out a different size"]))
+        self.assert_target_kept()
+
+    def test_a_write_that_makes_no_progress_fails_instead_of_spinning(self):
+        with mock.patch.object(self.mod.os, "write", return_value=0):
+            done, failed = self.mod.apply(self.shared)
+        self.assertEqual((done, [e for _, e in failed]), (0, ["a write made no progress"]))
+        self.assert_target_kept()
 
     def test_a_file_swapped_for_a_link_is_refused(self):
         os.remove(self.target)

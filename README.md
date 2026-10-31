@@ -47,9 +47,24 @@ installed packages are its own files, not hardlinks into the shared cache (sandb
 value the file already sets is kept and named on stderr. bun has no such setting. pnpm's file is
 `~/Library/Preferences/pnpm/rc` on macOS, and setup then asks pnpm which value it reads. Copy
 mode covers new installs only, so the run that first sets it points to `cache-unlink`: from a
-terminal, `cache-unlink ~/code` lists the files under each project that are still hardlinks into
-the uv, pnpm or bun cache, and `cache-unlink --apply ~/code` gives each a copy of its own (same
-bytes, mode and times; nothing to reinstall).
+terminal, `cache-unlink ~/code` counts, per project, the files that are still hardlinks into the
+uv, pnpm or bun cache (`--files` lists them), and `cache-unlink --apply ~/code` gives each a copy
+of its own (same bytes, mode and times; nothing to reinstall). It names every cache it searched,
+and a dir it couldn't read makes the report incomplete, never clean. On Windows (git-bash), which
+has no Bash sandbox, setup skips copy mode.
+
+**Upgrading from an older install.** Before this, the sandbox could write `~/.cache/uv`,
+`~/.cache/pip`, `~/.cache/pnpm`, `~/.cache/node-gyp`, `~/.cache/ms-playwright`,
+`~/.local/share/uv/python` and pnpm's store directly, and unsandboxed runs still use what they
+hold. `cache-unlink` keeps the bytes it copies, so it can't undo an edit made then. On a machine
+that ran an older dotclaude, rebuild them from a terminal once, after `cache-unlink --apply`:
+`uv cache clean`; `uv python install --reinstall <each version uv python list --only-installed
+shows>`; `pip cache purge`; `rm -rf "$(pnpm store path)" ~/.cache/node-gyp`; and for
+Playwright, `rm -rf ~/.cache/ms-playwright`, then `npx playwright@<each project's version>
+install chromium-headless-shell`. A project installed in that window can hold a copy of an
+edited file too: reinstall it (`uv sync --reinstall`, `pnpm install --force`). Auditing the
+caches against their own checksums is the alternative; HAYPC's were audited on 2026-10-31 and
+were clean.
 
 Each run replaces that copy, so a value added to a key the baseline sets is lost. Settings that belong
 to one machine, such as hooks for its own scripts or `sandbox.excludedCommands` for its own tools, go
@@ -227,7 +242,7 @@ sees it.
 | `hooks/memory-git.sh` | SessionStart/Stop hook: commits every project's auto-memory to a local-only git repo (`$XDG_STATE_HOME/dotclaude/memory.git`); never blocks | symlink `~/.claude/hooks/memory-git.sh` |
 | `hooks/blank-display.sh` | SessionStart hook: in a repo that opts in with `git config dotclaude.blankDisplay true` (every worktree of it), sets `DISPLAY` and `WAYLAND_DISPLAY` empty for Bash through `CLAUDE_ENV_FILE`, so a headed browser can't open in front of you; silent elsewhere; a shim over `hooks/blank_display.py`; fails open; see docs/chrome-devtools-wsl.md "Background Windows Chrome for probes" | symlink `~/.claude/hooks/blank-display.sh` and `blank_display.py` |
 | `hooks/sandbox-caches.sh` | SessionStart hook: creates `~/.cache/claude-sandbox/<tool>` dirs and, through `CLAUDE_ENV_FILE`, exports the cache vars of npm, bun, uv, pip, pnpm, node-gyp and Playwright to them for sandboxed Bash only, so the sandbox keeps the default caches (where plugin MCP servers and unsandboxed installs run from) read-only; silent; fails open, and a sandboxed install then gets a write error | symlink `~/.claude/hooks/sandbox-caches.sh` |
-| `bin/cache-unlink` | Lists the files under the dirs you name that are hardlinks into the uv, pnpm or bun cache (installs made before copy mode, sandbox gap N3), grouped by project; `--apply` gives each a copy of its own. Links inside a cache never count. Run it from a terminal | symlink `~/.local/bin/cache-unlink` when that dir exists |
+| `bin/cache-unlink` | Counts, per project, the files under the dirs you name that are hardlinks into the uv, pnpm or bun cache (installs made before copy mode, sandbox gap N3; `--files` lists them); `--apply` gives each a copy of its own, writing only through dirs it opened without following a link. Links inside a cache never count; an unreadable dir makes the report incomplete. Run it from a terminal: it refuses inside the sandbox | symlink `~/.local/bin/cache-unlink` when that dir exists |
 | `bin/claude-file-history` | Lists and restores Claude Code's own backups of a file (`~/.claude/file-history`), found through the transcripts | symlink `~/.local/bin/claude-file-history` when that dir exists |
 | `bin/npx` | Shim ahead of the real npx: for a launch by Claude Code (an MCP server, which starts in the project dir) or an exact-version spec (`pkg@1.2.3`), it puts `--prefix=/` first, so npx ignores the project dir's `node_modules` and `.npmrc` (sandbox gap N2); anything else, such as your own `npx tsc`, reaches the real npx untouched. A hook's npx runs under `/bin/sh -c`: where that shell forks it (dash, on Debian and Ubuntu) it reaches npx untouched; where it hands a lone command over (bash, on macOS) it gets the prefix. What a project hook runs is sandbox gap H1, not the shim's. It also makes `/` npm's global prefix for that run (`npm_config_prefix=/` reaches the package). So a project's own MCP server that needs the project's registry or local install should start with `node <path>`, not npx: under the shim, `npx -y @corp/mcp` would resolve on the public registry | symlink `~/.local/bin/npx` when that dir exists (ahead of `/usr/bin` on PATH); an npx already there that isn't dotclaude's (npm's own, with npm's prefix at `~/.local`) is left alone and named |
 | `bin/chrome-bg` | WSL2 only, run sandbox-off: runs Windows Chrome behind all your windows for headed puppeteer probes; `run -- CMD` hands CMD the browserURL in `$CHROME_BG_URL` and stops Chrome when CMD ends, `start`, `stop` and `ls` manage detached runs, `check` is the live self-test; see docs/chrome-devtools-wsl.md "Background Windows Chrome for probes" | symlink `~/.local/bin/chrome-bg` when that dir exists |
@@ -765,8 +780,9 @@ need nothing extra.
   takes from it. npm checks the hash of what it reads from its cache, but npx reuses a package
   tree it already unpacked there without a check, so an edit to it runs in the next sandboxed
   `npx pkg@<that version>` anywhere. pnpm rehashes a store file only when its mtime moved, which
-  the writer can set back; uv, pip and bun don't check. Copy mode keeps uv and pnpm installs
-  already made out of reach; bun's still hardlink. Treat what a sandboxed install built as sandbox-made,
+  the writer can set back; uv, pip and bun don't check. Under copy mode a uv or pnpm install, once
+  made, holds files of its own, so a later edit to the shelf can't reach it; bun's installs still
+  hardlink. Treat what a sandboxed install built as sandbox-made,
   whichever session built it, before running it from a terminal. Every sandboxed npm or npx run prints one
   `npm warn Unknown env config "devdir"` line: node-gyp reads its dir only from that
   npm-style var. Silent; fails open (errors go to
