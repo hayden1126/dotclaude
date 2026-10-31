@@ -399,15 +399,33 @@ class Serve(LanesRepo):
         self.assertTrue(self.mine(f"{self.server} 127.0.0.1 {self.lo}"))
         self.write(path, json.dumps(rec))  # so cleanup ends it
 
-    def test_stop_ends_a_session_member_that_cleared_its_environment(self):
-        # No token on it, so only the leader's session (the leader still runs) proves it.
-        argv = ["sh", "-c", f'env -i sh -c "sleep 600; :" {self.tmp} & exec "$0" {self.server} '
-                            '127.0.0.1 "$PORT"', sys.executable]
-        p = self.serve("--", *argv)
+    def test_stop_ends_what_carries_the_token_and_leaves_what_cleared_it(self):
+        # Only the token proves a process the serve's once serve has returned: a session member
+        # that cleared its environment is left by --stop (and refused by name by done and park).
+        member = f'env -i sh -c "sleep 600; : {self.tmp}"'
+        p = self.serve("--", "sh", "-c", f'{member} & exec "$0" {self.server} 127.0.0.1 "$PORT"',
+                       sys.executable)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        (member,) = self.mine("sleep 600; :")
-        self.assertIsNone(lanelib.proc_env(member, "LANE_SERVE"))
+        (pid,) = self.mine("sleep 600; :")
+        self.addCleanup(lambda: self.mine("sleep 600; :") and os.kill(pid, signal.SIGKILL))
         self.lane("serve", "--stop", str(self.lo), cwd=self.path)
+        self.assertEqual(self.mine(f"{self.server} 127.0.0.1 {self.lo}"), [])
+        self.assertEqual(self.mine("sleep 600; :"), [pid])
+
+    def test_a_listener_that_cleared_its_environment_fails_the_serve(self):
+        # --stop couldn't reach it later, so serve never succeeds on it.
+        p = self.serve("--", "env", "-i", sys.executable, self.server, "127.0.0.1", "{port}")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("is in the serve's session but cleared its environment", p.stderr)
+        self.assertEqual(self.mine(f"{self.server} 127.0.0.1 {self.lo}"), [])
+        self.assertIsNone(self.served(self.lo))
+
+    def test_a_failed_serve_ends_session_members_that_cleared_their_environment(self):
+        # serve holds its leader unreaped, so its session stays proof of the serve's members
+        # until it has ended them: a timeout leaves nothing behind.
+        p = self.serve("--timeout", "1", "--", "sh", "-c",
+                       f'env -i sh -c "sleep 600; : {self.tmp}" & exec sleep 600')
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertEqual(self.mine("sleep 600; :"), [])
 
     def test_a_serve_still_running_but_not_listening_holds_its_port(self):
@@ -583,6 +601,29 @@ class ServedRecords(LanesRepo):
         out = self.lane("done", "web")
         self.assertIn("lane serve's, port", out)
         self.assertTrue(all(self.gone(pid, start) for pid, start in starts.items()))
+
+    def test_done_refuses_by_name_a_child_that_cleared_its_environment_and_left(self):
+        # Round 4's case: the token is the only proof, so a child that cleared it and left the
+        # lane's dir is refused before any signal, never orphaned with its record removed.
+        _, (server,) = self.serve_script(
+            f"import os, subprocess, sys; subprocess.Popen(['env', '-i', 'sh', '-c', "
+            f"'sleep 600; : {self.tmp}'], cwd='/'); os.execv(sys.executable, [sys.executable, "
+            f"{self.server!r}, '127.0.0.1', sys.argv[1]])")
+        (child,) = [int(n) for n in os.listdir("/proc") if n.isdigit()
+                    and self.tmp in " ".join(lanelib.proc_cmdline(int(n)) or [])
+                    and "sleep 600; :" in " ".join(lanelib.proc_cmdline(int(n)) or [])]
+        start = lanelib.proc_start(child)
+        self.addCleanup(lambda: lanelib.proc_start(child) == start
+                        and os.kill(child, signal.SIGKILL))
+        self.merge()
+        p = self.run_lane("done", "web")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("nothing was signalled", p.stderr)
+        self.assertIn(f"{child}", p.stderr)
+        self.assertIn("outside lane web", p.stderr)
+        self.assertFalse(self.gone(child, start))
+        self.assertFalse(self.gone(server, lanelib.proc_start(server)))
+        self.assertTrue(os.path.exists(self.repo.served_path("web", self.lo)))
 
     def test_survey_counts_a_served_process_as_the_lanes(self):
         # The class done's rounds and park share: SERVED by the record, refused without it.

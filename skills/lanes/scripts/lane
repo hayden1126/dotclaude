@@ -2296,34 +2296,31 @@ def session_of(pid: int) -> int | None:
         return None
 
 
-def served_by(pid: int, token: str, sid: int | None) -> bool:
+def served_by(pid: int, token: str, sid: int | None = None) -> bool:
     """Whether pid is part of the serve whose token is token: it started with the token in its
     environment, which every process the server starts inherits, in its session or out of it
-    (a daemon's setsid), or it is in session sid. sid only while the leader is proven alive,
-    so its pid, the session's id, can't have been handed to another process."""
+    (a daemon's setsid). The token is the one proof `--stop`, `done` and `park` go by. sid only
+    from `serve` itself, while it holds its leader unreaped (its pid, the session's id, can't be
+    handed on then), to end the session's members when the serve fails."""
     if sid is not None and session_of(pid) == sid:
         return True
     return lanelib.proc_env(pid, SERVE_ENV) == token
 
 
-def served_procs(token: str, sid_of) -> list[lanelib.Proc]:
-    """The running processes of the serve with token. sid_of() proves the leader's session after
-    the scan, so a leader reaped and its pid handed on during the scan never counts."""
+def served_procs(token: str, sid: int | None = None) -> list[lanelib.Proc]:
+    """The running processes of the serve with token (and, from `serve`, session sid)."""
     me = os.getpid()
-    procs = lanelib.scan(full=False)
-    sid = sid_of()
-    return [p for p in procs.values()
+    return [p for p in lanelib.scan(full=False).values()
             if p.state not in lanelib.EXITED and p.pid != me and served_by(p.pid, token, sid)]
 
 
-def end_serve(token: str, sid_of, send=None) -> list[str]:
+def end_serve(token: str, sid: int | None = None, send=None) -> list[str]:
     """SIGTERM every process of the serve, SIGKILL what outlives the grace, and look again for
     any it started meanwhile; each signal through send (signal_proc, or `done`'s guarded), so a
-    pid reused since the scan is never hit. sid_of() proves the leader's session afresh on each
-    look (None once it can't: its pid may have been handed on). What still runs, named."""
+    pid reused since the scan is never hit. What still runs, named."""
     send = send or signal_proc
     for _ in range(2):
-        group = served_procs(token, sid_of)
+        group = served_procs(token, sid)
         for p in group:
             send(p, signal.SIGTERM)
         deadline = time.monotonic() + grace()
@@ -2335,7 +2332,7 @@ def end_serve(token: str, sid_of, send=None) -> list[str]:
         deadline = time.monotonic() + 1
         while any(lanelib.proc_alive(p) for p in group) and time.monotonic() < deadline:
             time.sleep(SERVE_POLL)
-    return [f"{p.pid} {p.comm}" for p in served_procs(token, sid_of)]
+    return [f"{p.pid} {p.comm}" for p in served_procs(token, sid)]
 
 
 def load_served(repo: Repo, lane_id: str, port: int) -> dict | None:
@@ -2350,26 +2347,17 @@ def load_served(repo: Repo, lane_id: str, port: int) -> dict | None:
     return rec if ok else None
 
 
-def served_sid(rec: dict) -> int | None:
-    """The record's leader pid while it still runs as that process (this boot, same pid and
-    start), which makes it its session's id; else None."""
+def this_boot(rec: dict) -> bool:
+    """Whether rec's serve ran in this boot; a record from an earlier one names nothing alive."""
     try:
-        if rec["boot"] != lanelib.boot_id():
-            return None
+        return rec["boot"] == lanelib.boot_id()
     except OSError:
-        return None
-    st = lanelib.proc_stat(rec["pid"])
-    return rec["pid"] if st and st[3] == rec["start"] and st[1] not in lanelib.EXITED else None
+        return False
 
 
 def served_live(rec: dict) -> list[lanelib.Proc]:
-    """What still runs of the serve rec names; nothing once the machine rebooted."""
-    try:
-        if rec["boot"] != lanelib.boot_id():
-            return []
-    except OSError:
-        return []
-    return served_procs(rec["token"], lambda: served_sid(rec))
+    """What still runs of the serve rec names: the processes carrying its token."""
+    return served_procs(rec["token"]) if this_boot(rec) else []
 
 
 def served_records(repo: Repo, lane_id: str) -> list[dict]:
@@ -2382,15 +2370,10 @@ def served_records(repo: Repo, lane_id: str) -> list[dict]:
     return [rec for port in sorted(ports) if (rec := load_served(repo, lane_id, port))]
 
 
-def serve_proofs(repo: Repo, lane_id: str) -> list[tuple[str, int | None, int]]:
-    """(token, proven leader sid or None, port) for each of the lane's serve records from this
-    boot: survey counts a process carrying one (or in a proven session) as the lane's, SERVED."""
-    out = []
-    for rec in served_records(repo, lane_id):
-        with contextlib.suppress(OSError):
-            if rec["boot"] == lanelib.boot_id():
-                out.append((rec["token"], served_sid(rec), rec["port"]))
-    return out
+def serve_proofs(repo: Repo, lane_id: str) -> list[tuple[str, int]]:
+    """(token, port) for each of the lane's serve records from this boot: survey counts a
+    process carrying one as the lane's, SERVED."""
+    return [(rec["token"], rec["port"]) for rec in served_records(repo, lane_id) if this_boot(rec)]
 
 
 def end_lane_serves(repo: Repo, lane_id: str) -> None:
@@ -2402,7 +2385,7 @@ def end_lane_serves(repo: Repo, lane_id: str) -> None:
     left = []
     for rec in served_records(repo, lane_id):
         if served_live(rec):
-            still = end_serve(rec["token"], lambda rec=rec: served_sid(rec), send)
+            still = end_serve(rec["token"], send=send)
             left += [f"{x} (port {rec['port']})" for x in still]
             if not still:
                 say(f"  ended what lane serve started on port {rec['port']}")
@@ -2535,6 +2518,9 @@ def cmd_serve(args) -> int:
     block = lane_block(repo, lane)
     lanes = repo.lanes(shared=True)
     top = usable_path(repo, lane)
+    # A SIGTERM (the Bash tool's, a timeout's) ends serve as Ctrl-C does: from the server's start
+    # on, through the cleanup that ends what it started.
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
     with lock(repo):
         port = serve_port(repo, lane, block, args.port, lanes)
         fd, log = serve_log(top, port)
@@ -2549,10 +2535,10 @@ def cmd_serve(args) -> int:
             os.close(fd)
             raise LaneError(shown(f"can't run {argv[0]}: {e.strerror or e}"))
 
-        def leader_sid() -> int | None:
-            # Unreaped (no poll or wait has seen it exit), the leader's pid can't be handed on:
-            # until then its session is the serve's.
-            return child.pid if child.returncode is None else None
+        # serve never reaps its leader while it waits (exited() looks with WNOWAIT), so the
+        # leader's pid, its session's id, can't be handed on: the session is the serve's until
+        # fail()'s wait, which ends its members first.
+        sid = child.pid
 
         try:
             if not (start := lanelib.proc_start(child.pid)):
@@ -2562,7 +2548,7 @@ def cmd_serve(args) -> int:
                 "boot": lanelib.boot_id(), "token": token, "argv": argv, "log": log,
                 "started": now_iso()})
         except BaseException as e:  # an interrupt too: nothing unrecorded is left running
-            end_serve(token, leader_sid)
+            end_serve(token, sid)
             os.close(fd)
             if isinstance(e, OSError):
                 raise LaneError(f"can't record the serve at {repo.served_path(lane['id'], port)} "
@@ -2570,8 +2556,15 @@ def cmd_serve(args) -> int:
                                 "ended")
             raise
 
+    def exited() -> int | None:
+        """The leader's exit status (negative: the signal), left unreaped; None while it runs."""
+        info = os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        if info is None:
+            return None
+        return info.si_status if info.si_code == os.CLD_EXITED else -info.si_status
+
     def fail(why: str) -> int:
-        left = end_serve(token, leader_sid)
+        left = end_serve(token, sid)
         with contextlib.suppress(subprocess.TimeoutExpired):
             child.wait(timeout=1)
         if not left:
@@ -2585,17 +2578,23 @@ def cmd_serve(args) -> int:
     secs = SERVE_TIMEOUT if args.timeout is None else args.timeout
     deadline = time.monotonic() + secs
     seen = ready is None
-    # A SIGTERM (the Bash tool's, a timeout's) ends the wait as Ctrl-C does: through fail().
-    signal.signal(signal.SIGTERM, signal.default_int_handler)
     try:
         while True:
-            rc = child.poll()
-            sid = leader_sid()
+            rc = exited()
             if not seen:
                 seen = bool(ready.search(log_text(fd, SERVE_READ)))
             if seen and (inodes := lanelib.listeners(port)):
-                foreign = [pids for pids in lanelib.socket_pids(inodes).values()
-                           if not pids or not all(served_by(x, token, sid) for x in pids)]
+                owners = list(lanelib.socket_pids(inodes).values())
+                # A listener counts only by the token, the proof `--stop` and `done` go by, so a
+                # serve never succeeds on a server they couldn't reach.
+                foreign = [pids for pids in owners
+                           if not pids or not all(served_by(x, token) for x in pids)]
+                if cleared := [x for x in foreign if x and all(served_by(y, token, sid) for y in x)]:
+                    return fail(shown(
+                        f"port {port}'s listener is in the serve's session but cleared its "
+                        f"environment ({'; '.join(holder_text(x, lanes) for x in cleared)}), so "
+                        f"`lane serve --stop` couldn't reach it: the serve's processes are ended. "
+                        f"Start it with its environment kept"))
                 if foreign:
                     return fail(shown(
                         f"port {port}'s listener is not the server lane serve started: "
@@ -2604,7 +2603,7 @@ def cmd_serve(args) -> int:
                 say(f"serving port {port}: pid {child.pid}, log {log}; "
                     f"stop it with `lane serve --stop {port}`")
                 return 0
-            if rc is not None and not served_procs(token, lambda: None):
+            if rc is not None and not [p for p in served_procs(token, sid) if p.pid != sid]:
                 how = f"status {rc}" if rc >= 0 else f"signal {-rc}"
                 return fail(shown(f"{argv[0]} exited with {how} before it listened on port "
                                   f"{port}, and left nothing running"))
@@ -2621,8 +2620,7 @@ def cmd_serve(args) -> int:
 
 def serve_stop(repo: Repo, lane: dict, port: int) -> int:
     """End what a serve of this lane started on port, proved by the record serve wrote in the
-    state dir (no lane's sandboxed Bash can write it): the processes carrying its token, and
-    its leader's session while the leader runs as the process recorded."""
+    state dir (no lane's sandboxed Bash can write it): the processes carrying its token."""
     rec = load_served(repo, lane["id"], port)
     if rec is None:
         holders = port_holders(port, repo.lanes(shared=True))
@@ -2633,7 +2631,7 @@ def serve_stop(repo: Repo, lane: dict, port: int) -> int:
         remove_served(repo, lane["id"], port, rec["token"])
         say(f"port {port}: the server lane serve started (pid {rec['pid']}) is already gone")
         return 0
-    if left := end_serve(rec["token"], lambda: served_sid(rec)):
+    if left := end_serve(rec["token"]):
         raise LaneError(f"port {port}: these outlived SIGKILL: {', '.join(left)}. The record "
                         f"stays, so `lane serve --stop {port}` can retry")
     remove_served(repo, lane["id"], port, rec["token"])
@@ -3629,16 +3627,15 @@ def survey(lane_id: str,
     procs: dict[int, lanelib.Proc],
     known: dict[tuple[int, int], Hit] | None = None,
     files: list[dict] | None = None,
-    serves: list[tuple[str, int | None, int]] = (),
+    serves: list[tuple[str, int]] = (),
 ) -> tuple[dict[int, Hit], dict[int, str]]:
     """Sort what runs in the lane (in_lane), from one scan: (hits, refused). hits {pid: Hit} is
     what `done` may end; refused {pid: line} what nothing proves the lane's, each of which
     refuses the close. A process in known {(pid, start): Hit} (an earlier round's hits) keeps its
     class: a session mid-exit may have dropped its session file, and its SessionEnd hooks are
     still its OWNED children. The rest in order: SESSION, OWNED, SERVED, PANE, LEFTOVER. A
-    SERVED process is one of a `lane serve` of this lane (serves, from serve_proofs: its token,
-    or its proven session), whose record in the state dir is the proof, whatever session id it
-    carries. A PANE is a tmux pane's shell (its parent a tmux server) with no foreign session
+    SERVED process carries the token of a `lane serve` of this lane (serves, from serve_proofs),
+    whose record in the state dir is the proof, whatever session id it carries. A PANE is a tmux pane's shell (its parent a tmux server) with no foreign session
     id. A LEFTOVER's or SERVED's every descendant, anywhere, must be a hit too, or a SERVED
     process outside the lane, which end_lane_serves ends after: a tmux server or a `--bg` daemon
     started from a lane Bash carries the lane's session id, and its panes or sessions run
@@ -3686,7 +3683,7 @@ def survey(lane_id: str,
             if up is not None:
                 hits[pid] = Hit(p, OWNED, f"under lane session {hits[up].sid}")
     def served_port(pid: int) -> int | None:
-        return next((port for token, sid, port in serves if served_by(pid, token, sid)), None)
+        return next((port for token, port in serves if served_by(pid, token)), None)
 
     proven = {}
     for pid, p in here.items():
