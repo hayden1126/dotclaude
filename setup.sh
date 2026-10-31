@@ -538,10 +538,12 @@ set_top_key() {
   fi
   # Written to a copy beside the real file (cp -p keeps its mode), then renamed over it: a
   # failed write (disk full) leaves the old file whole, and a link stays a link.
+  # The newline goes on in its own step: bash versions differ on $'\n' inside "${v:+...}".
   rest="$(cat "$file")"
+  [[ -z $rest ]] || rest+=$'\n'
   target="$(readlink -f "$file")"
   if cp -p "$target" "$target.setup.$$" \
-     && printf '%s\n%s' "$line" "${rest:+$rest$'\n'}" > "$target.setup.$$" \
+     && printf '%s\n%s' "$line" "$rest" > "$target.setup.$$" \
      && mv -f "$target.setup.$$" "$target"; then
     say "set $key in $file"
     copy_mode_new=1
