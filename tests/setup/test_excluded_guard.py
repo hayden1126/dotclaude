@@ -9,6 +9,7 @@ protected by location.
 """
 import concurrent.futures
 import contextlib
+import glob
 import importlib.util
 import io
 import json
@@ -502,7 +503,8 @@ class Rule1PathArguments(Guard):
                      f"git ls-remote {bare}", f"git fetch {self.tmp}/evil"):
             with self.subTest(call=call):
                 self.refused(call)
-        for call in (f"git push -q file://{self.tmp}/%65vil.git HEAD", "git push origin 100%"):
+        for call in (f"git push -q file://{self.tmp}/%65vil.git HEAD", "git push -q 100% HEAD",
+                     "git push -q --repo=a%b HEAD"):
             with self.subTest(call=call):
                 self.assertIn("plain word", self.refused(call))
 
@@ -701,6 +703,23 @@ class Rule1PathArguments(Guard):
             with self.subTest(call=call):
                 self.allowed(call)
 
+    def test_a_refspec_may_use_gits_revision_spellings(self):
+        # Item 10: zsh hands these on unchanged (RefspecSpellingsMatchZsh), so a refspec or an
+        # option value may hold them; a repository word stays a PLAIN_WORD.
+        for call in ("git push origin HEAD~1:refs/heads/x", "git push origin main^:refs/heads/y",
+                     "git fetch origin ^refs/heads/skip", "git push origin HEAD@{1}:refs/heads/x",
+                     "git push origin x^{commit}:refs/heads/y", "git push origin 100%",
+                     "git push origin @{-1}:x", "git push origin @{2.days.ago}:x",
+                     "git push origin @{u}", "git push -o a~1 origin", "git fetch origin feat~2"):
+            with self.subTest(call=call):
+                self.allowed(call)
+        for call in ("git push origin @{a,b}", "git push origin @{1..3}", "git push origin ~1",
+                     "git push origin x{a}", "git push origin @{a{b}}", "git push origin x}",
+                     "git push -q x~1 HEAD", "git push -q ^x HEAD", "git push -o ~1 origin",
+                     "git push -q a@{u} HEAD"):
+            with self.subTest(call=call):
+                self.assertIn("plain word", self.refused(call))
+
     def test_git_refuses_ext_in_an_option_value(self):
         self.assertIn("names a program", self.refused("git push --repo=ext::sh HEAD"))
 
@@ -798,15 +817,64 @@ class LexerMatchesZsh(unittest.TestCase):
         for command, calls in zip(commands, ran):
             try:
                 found = [w for w, _ in guard.path_calls(command)]
-            except ValueError:
-                continue
-            if any(not guard.PLAIN_WORD.fullmatch(w) for c in found for w in c[2:]):
+                if any(guard.unplain_word(c) is not None for c in found):
+                    continue
+            except (ValueError, guard.Refusal):
                 continue
             judged += 1
             if any(c not in found for c in calls):
                 missed.append((command, calls, found))
         self.assertEqual(missed[:3], [])
         self.assertGreater(judged, n // 2, "most generated commands should be read, not refused")
+
+
+def snapshot_setopts():
+    """The top-level setopt and unsetopt lines of a Claude Code shell snapshot (the options its
+    Bash tool's zsh runs with), newest first, or None when none is readable."""
+    snaps = glob.glob(os.path.expanduser("~/.claude/shell-snapshots/snapshot-zsh-*.sh"))
+    for snap in sorted(snaps, key=lambda f: -os.path.getmtime(f)):
+        try:
+            lines = slurp(snap).splitlines()
+        except OSError:
+            continue
+        opts = [line for line in lines if re.match(r"(setopt|unsetopt)\b", line)]
+        if opts:
+            return opts
+    return None
+
+
+@unittest.skipUnless(ZSH, "zsh is not installed")
+class RefspecSpellingsMatchZsh(unittest.TestCase):
+    """Item 10: each spelling a git refspec word may use beyond PLAIN_WORD is one zsh, with the
+    options a Claude Code snapshot sets, hands on unchanged; each it rewrites stays refused."""
+
+    ACCEPTED = ("HEAD~1", "HEAD~", "main~3", "x~y", "x~1~2", "a~", "x:~1", "a=~1", "HEAD^",
+                "HEAD^2", "HEAD^^", "^main", "x^1:refs/heads/y", "x^{tree}", "x^{}", "^{/fix}",
+                "HEAD@{1}", "@{u}", "@{-1}", "main@{upstream}", "HEAD@{2.days.ago}", "@{0}",
+                "@{}", "@{1.2}", "@{x}y", "a@{b}@{c}", "@{@}", "HEAD@{1}~2^3", "100%", "a%b",
+                "%1", "%%", "@{1}%", "%x~1", "+HEAD~2:x", "feat/x~1:refs/heads/y", "a,b")
+    REWRITTEN = ("@{a,b}", "@{1..3}", "@{a..b}", "~1", "~+", "~-", "x{a,b}", "@{a{b,c}}")
+
+    def zsh_word(self, opts, word):
+        with tempfile.TemporaryDirectory() as d:
+            p = subprocess.run([ZSH, "-f", "-c", "\n".join(opts) + f"\nprint -rn -- {word}\n"],
+                               cwd=d, capture_output=True, text=True, timeout=10,
+                               env={"PATH": "/usr/bin:/bin", "HOME": d}, stdin=subprocess.DEVNULL)
+        return p.stdout if p.returncode == 0 else None
+
+    def test_each_accepted_spelling_is_handed_on_unchanged(self):
+        opts = snapshot_setopts()
+        if opts is None:
+            self.skipTest("no readable shell snapshot under ~/.claude/shell-snapshots")
+        guard = load_guard()
+        for word in self.ACCEPTED:
+            with self.subTest(word=word):
+                self.assertTrue(guard.refspec_word(word), "the guard refuses it")
+                self.assertEqual(self.zsh_word(opts, word), word)
+        for word in self.REWRITTEN:
+            with self.subTest(word=word):
+                self.assertFalse(guard.refspec_word(word), "the guard takes it")
+                self.assertNotEqual(self.zsh_word(opts, word), word, "zsh keeps it: drop it here")
 
 
 FUZZ_NOISE = (
@@ -817,6 +885,10 @@ FUZZ_NOISE = (
     "cat <<<'x y'", "echo 2>/dev/null", "echo >|f", "echo $'\\x27'", "echo '<<E'", "echo \\<<E",
     "echo $((1<<2))", "echo $[ ##a ]", "(( x = 1 << 2 ))", "echo \u00b2>f",
 )
+# Refspec words after a call's repository word: ones zsh hands on unchanged (item 10) and ones
+# it rewrites, which the guard must refuse rather than misread.
+FUZZ_REFSPECS = ("HEAD~1", "x^{tree}", "@{u}", "main@{1}~2", "^main", "100%", "x:~1", "@{a,b}",
+                 "@{1..3}", "~1", "x{a,b}", "'@{a,b}'", "HEAD^2:refs/heads/y", "a~b%c")
 FUZZ_REDIRECTS = ("2>&1", ">|f", "&>f", ">!f", "2>f", "<<<x", ">f", "1>f", "<<<'a b'", "2>>f", "<f")
 
 
@@ -829,6 +901,7 @@ def fuzz_commands(seed, n):
         count[0] += 1
         target = rng.choice(("r{}", "'r{}'", '"r{}"', "r''{}", "\\r{}", "\u00b2>f r{}")).format(count[0])
         words = ["git", "push", "-q", target]
+        words += [rng.choice(FUZZ_REFSPECS) for _ in range(rng.choice((0, 0, 1, 2)))]
         for _ in range(rng.randrange(3)):
             words.insert(rng.randrange(2, len(words) + 1), rng.choice(FUZZ_REDIRECTS))
         return " ".join(words) + ("" if rng.random() < 0.8 else " # ' ) \" (")

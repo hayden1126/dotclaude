@@ -377,6 +377,34 @@ FD = re.compile(r"[0-9]+")  # ASCII only: str.isdigit() takes ² and other digit
 COMMAND_WORDS = {"{", "!", "if", "then", "else", "elif", "while", "until", "do", "time"}
 # A word the shell hands on as typed: no expansion, glob, quote or space. `~` only as $HOME.
 PLAIN_WORD = re.compile(r"(~(?=/|$))?[A-Za-z0-9_./:@%+,=-]*")
+# A git word other than the repository (a refspec, an option's value) may also use git's revision
+# spellings zsh hands on unchanged with the options Claude Code's shell snapshot sets (tested
+# against zsh): `~` and `^` anywhere but a leading `~`, and a `{...}` right after `@` or `^`
+# holding no `,`, `..` or brace (zsh's brace expansion).
+REFSPEC_WORD = re.compile(
+    r"(?!~)(?:[A-Za-z0-9_./:@%+,=~^-]|(?<=[@^])\{(?:(?!\.\.)[A-Za-z0-9_./:@%+=~^-])*\})*")
+
+
+def refspec_word(w):
+    """Whether zsh hands a git refspec word on as typed (PLAIN_WORD or REFSPEC_WORD)."""
+    return bool(PLAIN_WORD.fullmatch(w) or REFSPEC_WORD.fullmatch(w)) and not w.startswith("=")
+
+
+def unplain_word(words, targets=()):
+    """The first word of a path-taking call (words: its argv; targets: its redirection
+    targets) that the shell might rewrite before the head sees it, or None. A git push, fetch,
+    pull or ls-remote's other words may be refspec words (refspec_word), and then each
+    repository word (git_argv, which refuses an option it can't read) must be a PLAIN_WORD
+    with no `%`: git %-decodes a file:// URL's path, so a `%` could spell any path. Every
+    other word must be a PLAIN_WORD. No word may start with `=` (zsh's =cmd)."""
+    git = os.path.basename(words[0]) == "git" and words[1:2] and words[1] in GIT_PATH_SUBS
+    for w in words[1:]:
+        if not (refspec_word(w) if git else PLAIN_WORD.fullmatch(w) and w[:1] != "="):
+            return w
+    for w in (git_argv(words[1], words[2:])[1] if git else []) + list(targets):
+        if not PLAIN_WORD.fullmatch(w) or w.startswith("=") or git and "%" in w:
+            return w
+    return None
 
 
 def git_argv(sub, args):
@@ -776,14 +804,14 @@ def check_path_arguments(m, env, cwd, project, words, targets, remotes=frozenset
     if head == "lane" and sub != "adopt" or head == "git" and sub not in GIT_PATH_SUBS:
         return
     name = head if head == "pass-respawn" else f"{head} {sub}"
-    for w in words[1:] + targets:
-        # git %-decodes a file:// URL's path, so a `%` could spell any path.
-        if not PLAIN_WORD.fullmatch(w) or w.startswith("=") or head == "git" and "%" in w:
-            raise Refusal("rule1", w, f"`{name}` takes a path argument, and {w!r} is not a plain "
-                          "word (an expansion, glob, quote, space or %-escape that would be "
-                          "rewritten before git sees it). Spell paths and refs as plain words.")
     if head == "git":
-        check_git_words(sub, words[2:])
+        check_git_words(sub, words[2:])  # first: its refusal names the program option
+    w = unplain_word(words, targets)
+    if w is not None:
+        raise Refusal("rule1", w, f"`{name}` takes a path argument, and {w!r} is not a plain "
+                      "word (an expansion, glob, quote, space or %-escape that would be "
+                      "rewritten before git sees it). Spell paths and refs as plain words.")
+    if head == "git":
         options, repos, _ = git_argv(sub, words[2:])
         multiple = [n for n, _ in options if n in ("multiple", "no-multiple")][-1:] == ["multiple"]
         for word in repos:
