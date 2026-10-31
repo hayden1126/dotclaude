@@ -425,22 +425,23 @@ class Baseline(unittest.TestCase):
             self.assertLessEqual(h["timeout"], 5)
         for script in ("lane-guard.sh", "lane-identity.sh"):
             self.assertTrue(os.access(os.path.join(REPO, "hooks", script), os.X_OK), script)
-        # `lane new`, `ls` and `done` need the network and gh's credential (spike S3); `ls`,
-        # `open`, `done` and `addr` need to see other processes. Only those run sandbox-off: `lane lock
+        # `lane new`, `ls`, `done` and `park` need the network and gh's credential (spike S3);
+        # `ls`, `open`, `done`, `park` and `addr` need to see other processes, and `park` writes
+        # its flag in the state dir. Only those run sandbox-off: `lane lock
         # -- <cmd>` must stay sandboxed, or the command it wraps would run outside the sandbox
         # without the dangerouslyDisableSandbox flag the delete guard checks. `new` and `adopt`
         # run the config's `setup` through a shell, so the config lives in the state dir, which
         # sandboxed Bash can't write (docs/lanes.md S3; tests/lanes ConfigTrust).
         excluded = S["sandbox"]["excludedCommands"]
         bare = ["lane init", "lane init *", "lane new *", "lane adopt *", "lane ls", "lane ls *",
-                "lane open *", "lane done *", "lane addr *", "lane lead"]
+                "lane open *", "lane done *", "lane park *", "lane addr *", "lane lead"]
         self.assertEqual([p for p in excluded if p.split()[0] == "lane"], bare)
         self.assertNotIn("lane *", excluded)
         for cmd in ("lane lock gate -- true", "lane lock gate -- rm -rf build", "lane whoami",
                     "lane claim 42", "lane note x"):
             self.assertEqual([p for p in excluded if glob_match(p, cmd)], [], cmd)
         for cmd in ("lane ls", "lane ls --json", "lane open chart-fix", "lane done chart-fix",
-                    "lane addr lead", "lane lead"):
+                    "lane park chart-fix", "lane addr lead", "lane lead"):
             self.assertTrue(any(glob_match(p, cmd) for p in excluded), cmd)
 
     def test_pass_respawn_runs_outside_the_sandbox(self):

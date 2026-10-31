@@ -17,7 +17,11 @@ Layout (PLAN.md "Layout"):
                                 acted as lead, written only by bare commands
   <state-dir>/lanes/<repo>-<hash>.closing/<id>.json
                                 the pane shells a `lane done` of lane <id> proved the lane's,
-                                kept for a rerun until the close completes (Repo.closing_path)
+                                kept for a rerun until the close completes (Repo.closing_path);
+                                `lane park` keeps its own there the same way
+  <state-dir>/lanes/<repo>-<hash>.parked/<id>.json
+                                lane <id>'s parked flag (Repo.parked_path): written by `lane park`,
+                                removed by `lane open` and `lane done`
 """
 import contextlib
 import datetime
@@ -369,6 +373,12 @@ class Repo:
         CLI's save_proof), beside the config: `done` signals by it, so only a bare command may
         write it, never lane.json's sandbox-writable dir."""
         return os.path.join(self.config_path.removesuffix(".toml") + ".closing", lane_id + ".json")
+
+    def parked_path(self, lane_id: str) -> str:
+        """Lane lane_id's parked flag (`lane park`), beside the config: a parked lane gives up its
+        cap slot, so only a bare command may write it. A lane.json field would let any lane's
+        sandboxed Bash park itself out of the cap, or unpark another."""
+        return os.path.join(self.config_path.removesuffix(".toml") + ".parked", lane_id + ".json")
 
     @property
     def has_lanes(self) -> bool:

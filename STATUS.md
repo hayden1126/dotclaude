@@ -90,24 +90,28 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - #144 (exam-prep): rules public, evidence private (Hayden, 2026-10-20).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
-  - **Live lanes** (briefs in each record). Merge order: 1 pass-fixes (`fix/pass-compact`,
-    carries the lead's notes; opened 2026-10-29 on Hayden's pick: the two compact-pass bugs and
-    the excluded-guard rule 1 items below), 2 park (`feat/lane-park`, opened 2026-10-29 on
-    Hayden's "a third lane since lane-fixes almost done": `lane park` below), 3 cache-gaps
-    (`fix/sandbox-cache-gaps`, opened 2026-10-29 on Hayden's pick of N2/N3 over ports: the two
-    sandbox gaps below; its install narrows the sandbox live, so it tells the lead first), 4 practices
+  - **Live lanes** (briefs in each record). Merge order: 1 park (`feat/lane-park`, #153,
+    carries the lead's notes; opened 2026-10-29 on Hayden's "a third lane since lane-fixes almost
+    done": `lane park` below), 2 cache-gaps (`fix/sandbox-cache-gaps`, opened 2026-10-29 on
+    Hayden's pick of N2/N3 over ports: the two sandbox gaps below; its install narrows the sandbox
+    live, so it tells the lead first), 3 guard-gaps (`fix/guard-design-gaps`, opened 2026-10-31 on
+    Hayden's order: the excluded-guard design gaps below), 4 practices
     (`feat/practices-auth-secrets`, its next PR; paused by Hayden since 2026-10-24, last so it
     blocks no install; it conflicts with origin/main on its own, per lane-fixes' trial).
-    Merged 2026-10-29 and installed from main, both closed: chrome-dup (#151: one chrome-devtools
+    Merged and installed from main, all closed: chrome-dup (#151, 2026-10-29: one chrome-devtools
     server, the plugin's; sandbox gap fixes N1 and N3's bun part, `hooks/sandbox-caches.sh`; its
-    install changed running sessions' sandbox live, [[cc-sandbox-config-reloads-live]]) and
-    lane-fixes (#152: an unclosed `<!--` fails handoff-check and `lane done`, trial no-ids fail,
-    `trial_locks`; docs/lanes.md "Known limits of reading the flag from prose").
+    install changed running sessions' sandbox live, [[cc-sandbox-config-reloads-live]]),
+    lane-fixes (#152, 2026-10-30: an unclosed `<!--` fails handoff-check and `lane done`, trial
+    no-ids fail, `trial_locks`; docs/lanes.md "Known limits of reading the flag from prose") and
+    pass-fixes (#154, 2026-10-31: compact-pass fixes; excluded-guard rule 1 judges path arguments
+    where git finds the repo, with a zsh-like lexer and refusals that say what to run instead;
+    handoff-check refuses a repo whose own config sets a filter command or an lfs.extension key).
+    #154's install made new refusals live in every session: arithmetic like `$((SECONDS+12))` and
+    `git -C <dir> fetch` in a command that would leave the sandbox.
   - Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
 
   Backlog:
-  - **Next lane when a slot frees:** the excluded-guard design gaps (below), once pass-fixes
-    merges; then ports (Hayden's order, 2026-10-30).
+  - **Next lane when a slot frees:** ports (Hayden's order, 2026-10-30).
   - G8 open probes (a) and (b) (Hayden's pick, 2026-10-14): Hayden runs
     `~/scratch/sandbox-audit/g8-probe/run.py` by hand with the sandbox off, because the auto-mode
     classifier refused the run. Results go into the private findings file's G8 section.
@@ -135,23 +139,6 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     prune is only temporary, and a sandboxed `prune` half-deletes live entries
     ([[sandbox-recreates-closed-worktree-dirs]], [[git-worktree-prune-shared]]). Leave them.
     Related: a read-only 0-byte `.git/config.lock` while a lane's sandboxed command runs (Notes).
-  - **A compact pass puts live background writers into plan mode** (lane pass-fixes; a session
-    in another repo reported it, 2026-10-20). Compact mode's resume prompt adds "Call
-    EnterPlanMode first" to every unapproved pass (`resume_prompt` in
-    `skills/pass/scripts/pass-respawn`); subagents follow the parent's permission mode, so a
-    running writer was refused its write and handed back with 4 of 6 parts unstarted. Fix:
-    with a live agent, the prompt says to plan in chat and enter plan mode after it hands back;
-    also test a `permissionMode` in `agents/writer.md`.
-  - **A compact pass's final Enter sometimes lands as a newline** (lane pass-fixes; Hayden's
-    screenshot, 2026-10-22). The prompt and its Enter go out back to back while Claude Code is
-    busy after the compact (inferred), so it reads a paste. Fix: wait until capture-pane shows
-    the prompt in the box, send Enter, check the box emptied, one more Enter if not.
-  - **excluded-guard rule 1 in a nested repo** (lane pass-fixes; session d3d62f82, 2026-10-26).
-    (a) The `check_rule1` refusal reads as if the cwd were `.git`; it should say the cwd's repo
-    isn't the project's, and that a session launched in that repo works. (b) The private
-    follow-up (sandbox-audit FINDINGS, G5b) was probed on Hayden's ok (2026-10-29) and routed
-    to lane pass-fixes with it. Its guard half is committed in the lane; the handoff-check half
-    goes in the same PR, after pass-fixes merges origin/main (lane-fixes merged as #152).
   - **Two open sandbox gaps from lane chrome-dup's gap check** (lane cache-gaps; high; lane chrome-dup,
     2026-10-25, reported to the lead 2026-10-29). Details are private: sandbox-audit FINDINGS,
     "Gap check 2026-10-25", rows N2 and N3 (the parts still OPEN). Each is a new lane; both
@@ -167,10 +154,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **A probe of one command lane pass-fixes leaves exempt** (2026-10-29; private: sandbox-audit
     FINDINGS, G5b section, "Fix 4 scope", exemption (b)). It is a paid Codex run. Deferred by
     Hayden (2026-10-29): no Codex subscription now. Reopen when he has one.
-  - **Excluded-guard design gaps** (two high, three medium; lane pass-fixes' review round 3,
+  - **Excluded-guard design gaps** (lane guard-gaps; two high, three medium; lane pass-fixes' review round 3,
     2026-10-30; Hayden split them out of its PR). Private: sandbox-audit FINDINGS, "Excluded-guard
-    design gaps, 2026-10-30", G-A to G-E, plus a few false-refusal lows. A new lane once pass-fixes
-    merges (it owns `hooks/excluded_guard.py` until then); G-A starts with one live probe.
+    design gaps, 2026-10-30", G-A to G-E, plus a few false-refusal lows. G-A starts with one live
+    probe.
   - **`lane lock <name> --shared -- <cmd>`** (feature; capella-studio lead, session 6bceec36,
     on Hayden's pick in capella lane checkfix's window, 2026-10-30). Shared holders coexist; an
     exclusive holder waits for all of them, and a queued exclusive waiter blocks new shared ones
@@ -184,6 +171,18 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     holder and read the lock as free. Lane-able (`lane`,
     `lanelib.py`, `tests/lanes`, `docs/lanes.md`), after ports; overlaps lane park. Tell the
     capella-studio lead when it lands.
+  - **Subagent Bash moves to the background at 180 s** (medium; lane pass-fixes, session
+    0eb4c7ff, 2026-10-30; Claude Code 2.1.316). A subagent's foreground `./wait.sh` (timeout
+    600000) was moved to the background after 180 s; the agent handed back early ("not written"),
+    resumed on the job's notice and did the work, and its second SubagentHandback was refused
+    ("your report was already delivered"), so the parent heard the opposite of what happened.
+    The delegation skill's "a long command runs in the foreground (up to the Bash tool's 10-minute
+    limit)" and BRIEF.md's Budget line no longer hold for subagents past 180 s. Evidence: lane
+    pass-fixes' `.lane/artifacts/pass-compact-smoke.md` (archived with the lane), agent
+    transcript `agent-a6301324f3813f8b5` of probe session 668e9503. Fix: the docs say wait on a
+    moved command's output before reporting, and the report check refuses a handback while one
+    of the agent's own background commands still runs. Lane-able (`skills/delegation/`, its
+    hooks and `tests/delegation`).
   - **Approval-marker tests flake at midnight** (low; lane park, 2026-10-30). Two
     `tests/lanes/test_handoff_check.py` PlainRepo tests (a dated marker passes, a future one fails)
     failed once in a full `tests/lanes` run that crossed local midnight, then passed on rerun.
@@ -336,7 +335,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 ## Notes for next session
 - **Next (lead, main checkout):**
   0. Four lanes run, cap full (In flight, Live lanes; state in their records, `lane ls`).
-     Next lane when a slot frees: the guard gaps, then ports. Running
+     Next lane when a slot frees: ports. Running
      sessions took chrome-dup's allowWrite swap live at its install (2026-10-29): a session
      started before it needs a `/pass` before a sandboxed npm or bun install. Pending with Hayden, outside the lanes: `wsl --shutdown` at a break applies the 18 GB
      WSL cap set in `C:\Users\hayde\.wslconfig` on 2026-10-23 (backup `.wslconfig.bak-20261023`).
