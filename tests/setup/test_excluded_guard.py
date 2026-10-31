@@ -815,6 +815,72 @@ class Rule1Config(Guard):
         self.allowed("git push")
 
 
+class Rule1RemoteUrls(Guard):
+    """G-D: a local-path remote URL or url.<base> rewrite in the config chain, the repo's own
+    trusted config included, is judged as a path argument: an existing repo as rule 1 judges the
+    cwd, a missing path by whether a sandboxed session could create it."""
+
+    def setUp(self):
+        super().setUp()
+        self.other = self.mkdir("other")
+        self.git("init", "-q", self.other, cwd=self.tmp)
+        self.other_git = os.path.join(self.other, ".git")
+
+    def remote(self, key, value):
+        self.git("config", key, value, cwd=self.proj)
+
+    def test_a_remote_url_naming_another_repo_is_refused(self):
+        for key in ("remote.origin.url", "remote.up.pushurl"):
+            for value in (self.other, f"file://{self.other}", "../other", self.other_git):
+                with self.subTest(key=key, value=value):
+                    self.remote(key, value)
+                    for call in ("git push", "gh pr view 5"):
+                        reason = self.denied(call, "rule1", self.other_git)
+                        self.assertIn(f"the remote URL {value}", reason)
+                        self.assertIn("network URL", reason)
+                    self.git("config", "--unset", key, cwd=self.proj)
+        self.allowed("git push")
+
+    def test_a_bare_repo_found_as_name_dot_git_is_refused(self):
+        bare = os.path.join(self.tmp, "evil.git")
+        self.git("init", "-q", "--bare", bare, cwd=self.tmp)
+        self.remote("remote.origin.url", os.path.join(self.tmp, "evil"))
+        self.denied("git push", "rule1", bare)
+
+    def test_a_missing_path_a_sandboxed_session_could_create_is_refused(self):
+        for value in (os.path.join(self.tmp, "nothing", "repo"), "file:///" + self.tmp[1:] + "/x",
+                      "../missing"):
+            with self.subTest(value=value):
+                self.remote("remote.origin.url", value)
+                reason = self.denied("git push", "rule1")
+                self.assertIn("missing", reason)
+        self.remote("remote.origin.url", "/nonexistent-excluded-guard-test/repo")
+        self.allowed("git push")
+
+    def test_a_file_url_with_a_host_part_or_escape_is_refused(self):
+        for value in ("file://host/x", f"file://{self.tmp}/%6fther"):
+            with self.subTest(value=value):
+                self.remote("remote.origin.url", value)
+                self.denied("git push", "rule1")
+
+    def test_a_url_rewrite_base_is_judged(self):
+        for key in ("insteadOf", "pushInsteadOf"):
+            with self.subTest(key=key):
+                self.write(os.path.join(self.home, ".gitconfig"),
+                           f'[url "{self.other}"]\n\t{key} = https://github.com/\n')
+                self.assertIn(f"the remote URL {self.other}",
+                              self.denied("git push", "rule1", self.other_git))
+        os.remove(os.path.join(self.home, ".gitconfig"))
+        self.allowed("git push")
+
+    def test_network_urls_and_the_projects_own_paths_pass(self):
+        for value in ("https://github.com/x/y", "git@github.com:x/y.git", "ssh://h/x",
+                      "host:path/x", self.lane, self.proj, "."):
+            with self.subTest(value=value):
+                self.remote("remote.origin.url", value)
+                self.allowed("git push")
+
+
 class Rule2Path(Guard):
     def test_a_writable_dir_before_the_head_is_refused(self):
         self.env["PATH"] = f"{self.wbin}:{self.bin}:/usr/bin"

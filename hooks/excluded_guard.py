@@ -28,6 +28,10 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      `delegation-ledger hook` is refused outright, since its paths come on stdin. A repo
      (the cwd's or a path argument's) whose common dir holds any entry in remotes/ or
      branches/ is refused (G-C): git reads a legacy remote there, outside the judged config.
+     Each local-path remote URL in the cwd's config chain, trusted files too (remote.*.url and
+     pushurl, each url.<base>.insteadOf and pushInsteadOf base), is judged too (G-D): where it
+     exists, as a path argument's repository is; where it is missing, refused if a sandboxed
+     session could create it. A URL's own repo doesn't have its URLs judged.
   2. The PATH the head resolves through. Every PATH entry must be protected, not only those
      before the head: its children (git, gh, tmux, the tools claude spawns) search PATH too. An
      empty or relative entry is the cwd: refused. Then the resolved file's symlink chain (each
@@ -907,9 +911,15 @@ def config_entries(path):
 
 
 def config_refs(path, home):
-    """Include targets and core.hooksPath values named in one config file."""
-    includes, hooks = [], []
-    for section, _, key, value in config_entries(path):
+    """Include targets, core.hooksPath values and remote URLs named in one config file. The URLs
+    are each remote.<n>.url and pushurl value and each url.<base>.insteadOf or pushInsteadOf
+    base: the URL git ends up using."""
+    includes, hooks, urls = [], [], []
+    for section, subsection, key, value in config_entries(path):
+        if section == "remote" and key in ("url", "pushurl") and value:
+            urls.append(value)
+        elif section == "url" and key in ("insteadof", "pushinsteadof") and subsection:
+            urls.append(subsection)
         if not value:
             continue
         if section in ("include", "includeif") and key == "path":
@@ -917,16 +927,42 @@ def config_refs(path, home):
             includes.append(os.path.join(os.path.dirname(path), v))
         elif section == "core" and key == "hookspath":
             hooks.append(expand(value, home))
-    return includes, hooks
+    return includes, hooks, urls
 
 
-def check_rule1(m, env, cwd, project, arg=None):
+def local_url_path(url):
+    """The path a local remote URL names, or None for a network one. Local is `file://` or no
+    `<scheme>://` and not scp-like (`[user@]host:path`: a `:` before any `/`), as git tells
+    them apart."""
+    if url.lower().startswith("file://"):
+        path = url[len("file://"):]
+        if not path.startswith("/"):  # git drops a host part: judge no guess at the rest
+            raise Refusal("rule1", url, f"the remote URL {url} is a file:// URL with a host part; "
+                          "give the repository as a plain path or a network URL.")
+        if "%" in path:  # git %-decodes it, so a `%` could spell any path
+            raise Refusal("rule1", url, f"the remote URL {url} holds a %-escape, which git "
+                          "decodes before it reads the path; spell the path plainly.")
+        return path
+    if re.match(r"[A-Za-z][A-Za-z0-9+.-]*://", url):
+        return None
+    colon, slash = url.find(":"), url.find("/")
+    if colon >= 0 and (slash < 0 or colon < slash):
+        return None
+    return url
+
+
+def check_rule1(m, env, cwd, project, arg=None, url=None):
     """Rule 1 for the repo at cwd: the call's own cwd, or the path argument arg resolved to
-    cwd (check_path_arguments)."""
+    cwd (check_path_arguments), or the repo a local remote URL names (url: the URL as the
+    config spells it). Only the call's own cwd has its remote URLs judged (check_remote_url),
+    one level deep: a URL's repo doesn't have its own judged."""
     repo = discover(cwd, env)
     proj = discover(project, {k: env[k] for k in ("GIT_CEILING_DIRECTORIES",) if k in env})
     if repo and (proj is None or repo[1] != proj[1]):
-        what, fix = ((f"the path argument {arg}", "Name a path in the project's repository")
+        what, fix = ((f"the remote URL {url}", "Point the remote at a network URL or a path in "
+                      "the project's repository")
+                     if url is not None else
+                     (f"the path argument {arg}", "Name a path in the project's repository")
                      if arg is not None else
                      ("the working directory", "Run it from the project's repository"))
         raise Refusal("rule1", repo[0],
@@ -950,7 +986,7 @@ def check_rule1(m, env, cwd, project, arg=None):
     if not env.get("GIT_CONFIG_NOSYSTEM") or env["GIT_CONFIG_NOSYSTEM"].lower() in ("0", "false",
                                                                                    "no", "off"):
         files.append(env.get("GIT_CONFIG_SYSTEM") or "/etc/gitconfig")
-    seen = set()
+    seen, urls = set(), []
     queue = [(f, True, 0) for f in trusted] + [(f, False, 0) for f in files]
     hooks_base = repo[2] if repo else cwd
     while queue:
@@ -966,11 +1002,43 @@ def check_rule1(m, env, cwd, project, arg=None):
                 f"write ({bad}).", protect=m))
         if not os.path.isfile(target):
             continue  # judged above; only a regular file is parsed
-        includes, hooks = config_refs(target, home)
+        includes, hooks, found = config_refs(target, home)
         if depth < INCLUDE_DEPTH:
             queue += [(i, False, depth + 1) for i in includes]
         for h in hooks:
             check_hooks_dir(m, os.path.join(hooks_base, h))
+        urls += found
+    if arg is None and url is None:
+        for u in dict.fromkeys(urls):
+            check_remote_url(m, env, u, hooks_base, cwd, project)
+
+
+def check_remote_url(m, env, url, top, cwd, project):
+    """G-D: a local remote URL (local_url_path) names a repo git runs the server side of outside
+    the sandbox. A relative one is resolved from both the repo top and the cwd. Where it exists
+    it is judged as an existing repository word (<p>, <p>.git, a gitfile: check_rule1); where
+    neither exists, it is refused if a sandboxed session could create it."""
+    path = local_url_path(url)
+    if path is None:
+        return
+    path = os.path.expanduser(path) if path.startswith("~") else path
+    for full in dict.fromkeys(os.path.join(base, path) for base in (top, cwd)):
+        exists = False
+        for found in (full, full + ".git"):
+            if os.path.isfile(found):
+                try:
+                    found = read_gitfile(found)
+                except Exception:
+                    continue  # no gitfile (a bundle, say): git reads no config from it
+            if os.path.lexists(found):
+                exists = True
+                check_rule1(m, env, found, project, arg=url, url=url)
+        bad = None if exists else m.exposed(full)
+        if bad:
+            raise Refusal("rule1", bad, f"the remote URL {url} names {full}, which is missing and "
+                          f"a sandboxed session could create ({bad}), so git would run a repo "
+                          "it planted. Point the remote at a network URL or a path in the "
+                          "project's repository, or protect that dir.", protect=m)
 
 
 def check_legacy_remotes(common):
