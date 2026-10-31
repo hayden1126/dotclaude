@@ -44,7 +44,12 @@ so it needs `/pass`.
 It also sets copy mode for uv and pnpm in their user configs (`link-mode = "copy"` in
 `~/.config/uv/uv.toml`, `package-import-method=copy` in `~/.config/pnpm/rc`), so a project's
 installed packages are its own files, not hardlinks into the shared cache (sandbox gap N3). A
-value the file already sets is kept and named on stderr. bun has no such setting.
+value the file already sets is kept and named on stderr. bun has no such setting. pnpm's file is
+`~/Library/Preferences/pnpm/rc` on macOS, and setup then asks pnpm which value it reads. Copy
+mode covers new installs only, so the run that first sets it points to `cache-unlink`: from a
+terminal, `cache-unlink ~/code` lists the files under each project that are still hardlinks into
+the uv, pnpm or bun cache, and `cache-unlink --apply ~/code` gives each a copy of its own (same
+bytes, mode and times; nothing to reinstall).
 
 Each run replaces that copy, so a value added to a key the baseline sets is lost. Settings that belong
 to one machine, such as hooks for its own scripts or `sandbox.excludedCommands` for its own tools, go
@@ -222,6 +227,7 @@ sees it.
 | `hooks/memory-git.sh` | SessionStart/Stop hook: commits every project's auto-memory to a local-only git repo (`$XDG_STATE_HOME/dotclaude/memory.git`); never blocks | symlink `~/.claude/hooks/memory-git.sh` |
 | `hooks/blank-display.sh` | SessionStart hook: in a repo that opts in with `git config dotclaude.blankDisplay true` (every worktree of it), sets `DISPLAY` and `WAYLAND_DISPLAY` empty for Bash through `CLAUDE_ENV_FILE`, so a headed browser can't open in front of you; silent elsewhere; a shim over `hooks/blank_display.py`; fails open; see docs/chrome-devtools-wsl.md "Background Windows Chrome for probes" | symlink `~/.claude/hooks/blank-display.sh` and `blank_display.py` |
 | `hooks/sandbox-caches.sh` | SessionStart hook: creates `~/.cache/claude-sandbox/<tool>` dirs and, through `CLAUDE_ENV_FILE`, exports the cache vars of npm, bun, uv, pip, pnpm, node-gyp and Playwright to them for sandboxed Bash only, so the sandbox keeps the default caches (where plugin MCP servers and unsandboxed installs run from) read-only; silent; fails open, and a sandboxed install then gets a write error | symlink `~/.claude/hooks/sandbox-caches.sh` |
+| `bin/cache-unlink` | Lists the files under the dirs you name that are hardlinks into the uv, pnpm or bun cache (installs made before copy mode, sandbox gap N3), grouped by project; `--apply` gives each a copy of its own. Links inside a cache never count. Run it from a terminal | symlink `~/.local/bin/cache-unlink` when that dir exists |
 | `bin/claude-file-history` | Lists and restores Claude Code's own backups of a file (`~/.claude/file-history`), found through the transcripts | symlink `~/.local/bin/claude-file-history` when that dir exists |
 | `bin/npx` | Shim ahead of the real npx: for a launch by Claude Code (an MCP server, which starts in the project dir) or an exact-version spec (`pkg@1.2.3`), it puts `--prefix=/` first, so npx ignores the project dir's `node_modules` and `.npmrc` (sandbox gap N2); anything else, such as your own `npx tsc`, reaches the real npx untouched. It also makes `/` npm's global prefix for that run (`npm_config_prefix=/` reaches the package). So a project's own MCP server that needs the project's registry or local install should start with `node <path>`, not npx: under the shim, `npx -y @corp/mcp` would resolve on the public registry | symlink `~/.local/bin/npx` when that dir exists (ahead of `/usr/bin` on PATH); an npx already there that isn't dotclaude's (npm's own, with npm's prefix at `~/.local`) is left alone and named |
 | `bin/chrome-bg` | WSL2 only, run sandbox-off: runs Windows Chrome behind all your windows for headed puppeteer probes; `run -- CMD` hands CMD the browserURL in `$CHROME_BG_URL` and stops Chrome when CMD ends, `start`, `stop` and `ls` manage detached runs, `check` is the live self-test; see docs/chrome-devtools-wsl.md "Background Windows Chrome for probes" | symlink `~/.local/bin/chrome-bg` when that dir exists |

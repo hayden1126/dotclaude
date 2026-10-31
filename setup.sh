@@ -489,17 +489,23 @@ fi
 # N3). Copy mode gives each project files of its own. A project's own setting beats the user
 # file, but a project that sets it controls its install anyway (its scripts, its build backend).
 # A value the file already sets stays, named on stderr. bun has no such setting, only
-# `bun install --backend=copyfile`.
+# `bun install --backend=copyfile`. Copy mode covers new installs only: the run that first sets
+# it points to bin/cache-unlink, which finds and un-links the installs made before.
 
 # Put LINE at the top of FILE (above any [table], where a TOML key would belong to the table)
 # unless the top level already sets KEY. Written in place, so a linked file stays a link. A
 # table that sets KEY to another value (uv's [pip]) is named, and kept. A file it can't read or
-# write is named and skipped, so the rest of setup still runs.
+# write is named and skipped, so the rest of setup still runs. Sets copy_mode_new on a write.
+copy_mode_new=""
 set_top_key() {
   local file="$1" key="$2" line="$3" want="$4" sets top="" t rest target
   if [[ ! -e $file && ! -L $file ]]; then
-    mkdir -p "$(dirname "$file")" && printf '%s\n' "$line" > "$file" \
-      && say "set $key in $file" || warn "can't create $file: $key not set"
+    if mkdir -p "$(dirname "$file")" && printf '%s\n' "$line" > "$file"; then
+      say "set $key in $file"
+      copy_mode_new=1
+    else
+      warn "can't create $file: $key not set"
+    fi
     return
   fi
   [[ -f $file && -r $file && -w $file ]] || { warn "can't read or write $file: $key not set"; return; }
@@ -538,6 +544,7 @@ set_top_key() {
      && printf '%s\n%s' "$line" "${rest:+$rest$'\n'}" > "$target.setup.$$" \
      && mv -f "$target.setup.$$" "$target"; then
     say "set $key in $file"
+    copy_mode_new=1
   else
     rm -f "$target.setup.$$"
     warn "can't write $file: $key not set"
@@ -559,6 +566,8 @@ if command -v pnpm >/dev/null 2>&1; then
   [[ -z $pnpm_import || $pnpm_import == copy ]] \
     || warn "pnpm reads package-import-method as $pnpm_import, not copy (set in ~/.npmrc, or a config dir this missed): its installs can hardlink to the shared cache"
 fi
+[[ -z $copy_mode_new ]] \
+  || warn "copy mode is new here: uv and pnpm installs made before it still share files with their caches. List them with \`cache-unlink <your project dirs>\`, then rerun it with --apply to un-link them"
 
 # ---------------------------------------------------------------------------
 # 7. Stale links and plugin changes

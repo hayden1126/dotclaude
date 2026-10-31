@@ -14,6 +14,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 SETUP = os.path.join(REPO, "setup.sh")
 UV_LINE = 'link-mode = "copy"'
 PNPM_LINE = "package-import-method=copy"
+HINT = "copy mode is new here"
 
 
 def section():
@@ -55,7 +56,10 @@ class CopyMode(unittest.TestCase):
         p = subprocess.run(["bash", "-euo", "pipefail", "-c", section()], capture_output=True,
                            text=True, timeout=10, env=env)
         self.assertEqual(p.returncode, 0, p.stderr)
-        return p.stderr
+        # The cache-unlink hint, on a run that wrote a key, is kept apart in self.hinted.
+        lines = p.stderr.splitlines(keepends=True)
+        self.hinted = any(HINT in line for line in lines)
+        return "".join(line for line in lines if HINT not in line)
 
     def write(self, path, text):
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -70,6 +74,24 @@ class CopyMode(unittest.TestCase):
         self.assertEqual(self.run_section(), "")
         self.assertEqual(self.read(self.uv), UV_LINE + "\n")
         self.assertEqual(self.read(self.pnpm), PNPM_LINE + "\n")
+
+    def test_the_run_that_sets_copy_mode_points_to_cache_unlink_once(self):
+        # Copy mode covers new installs only; the old ones need bin/cache-unlink.
+        self.run_section()
+        self.assertTrue(self.hinted)
+        self.run_section()
+        self.assertFalse(self.hinted)
+
+    def test_copy_mode_already_set_by_hand_gives_no_hint(self):
+        self.write(self.uv, 'link-mode = "copy"\n')
+        self.write(self.pnpm, "package-import-method=copy\n")
+        self.run_section()
+        self.assertFalse(self.hinted)
+
+    def test_one_new_key_is_enough_for_the_hint(self):
+        self.write(self.uv, 'link-mode = "copy"\n')
+        self.run_section()
+        self.assertTrue(self.hinted)
 
     def test_a_rerun_adds_nothing(self):
         self.run_section()
