@@ -707,10 +707,10 @@ the block (`5191-5193`), and the setup command gets `LANE_PORTS=5191-5193` besid
    the command replaced, a per-serve token in `LANE_SERVE`, and its output in the lane's
    `.lane-serve/<port>.log` (gitignored by a `*` inside).
 3. It waits (60 s, `--timeout`) for the `--ready` line, if given, and then for a listener on the
-   port. Every listener there, IPv4 and IPv6, must be the serve's: in its session, or carrying
-   its token. Anything else fails the serve, names the holder and ends what the serve started.
-   This is the check that closes the bug. A server that dies first fails the serve with its exit
-   status and the log's tail.
+   port. Every listener there, IPv4 and IPv6, must be the serve's: carrying its token, or in its
+   session while its leader runs. Anything else fails the serve, names the holder and ends what
+   the serve started. This is the check that closes the bug. A server that dies first (with
+   nothing of it left running) fails the serve with its exit status and the log's tail.
 
 Why a token, not the session alone? A wrapper (`sh -c 'node srv.js &'`) exits after starting the
 server, and a daemon leaves the session with `setsid`. Both keep the token their environment
@@ -721,8 +721,17 @@ its token, plus its leader's session while the leader still runs as the recorded
 and start). Each signal goes through the pidfd check `done` uses, so a reused pid is never hit.
 The record lives in the state dir (`<repo>-<hash>.served/<id>/<port>.json`: pid, start, boot,
 token), which only a sandbox-off command can write, so no lane's sandboxed Bash can point
-`--stop` at another process. `done` removes the lane's records. A served server carries the lane
-session's `CLAUDE_CODE_SESSION_ID`, so `done` and `park` end it with the lane's sessions anyway.
+`--stop` at another process. A served server carries the lane session's
+`CLAUDE_CODE_SESSION_ID`, so `park` ends it with the lane's sessions while its cwd stays in the
+lane. `done` also ends, by the records, any that left (a daemon's `chdir("/")`) before it
+removes them, and refuses the close while one outlives SIGKILL.
+
+**Known limits.** The check runs once, when the first listener appears: a listener that binds
+the port after that goes unseen. A listener another user owns (its fds can't be read) always
+fails the serve, since nothing proves it the serve's. A server that rewrites its environment
+area (setproctitle, as gunicorn does) may lose the token, so it counts as the serve's only
+while it shares the leader's session and the leader runs: start such a server directly, not
+through a wrapper that exits.
 
 **Why serve runs sandbox-off, and asks each time.** The Bash sandbox gives each command its own
 network and pid namespace: inside it, `/proc/net/tcp` lists only the command's own sockets, and a
@@ -733,7 +742,9 @@ sandbox with no prompt. A private sandbox-audit row (lane ports, 2026-10-31) has
 backlog item tracks the fix.
 
 `lane.json` is sandbox-writable, so `serve` checks a lane's block against the config's range and
-every other lane's block before it uses it.
+every other lane's block before it uses it. A planted `lane.json` can still claim free ports, so
+`new` runs out sooner, or overlap another lane, so that lane's serve refuses; it can block work,
+but it can't aim a signal.
 
 ## Layout
 

@@ -10,6 +10,7 @@ import sys
 import textwrap
 import time
 import unittest
+from unittest import mock
 
 from _fixture import LANE, LanesRepo
 
@@ -451,10 +452,57 @@ class Serve(LanesRepo):
                 self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
                 self.assertIn(why, p.stderr)
 
-    def test_log_tail_reads_only_a_regular_file(self):
-        fifo = os.path.join(self.tmp, "fifo.log")
-        os.mkfifo(fifo)
-        self.assertEqual(load_lane_script().log_tail(fifo), "")
+    def start_serve(self, *args):
+        """A serve running in the background, once its record is written."""
+        proc = subprocess.Popen([sys.executable, LANE, "serve", *args], cwd=self.path,
+                                env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True)
+        self.addCleanup(self.stop_all)
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        deadline = time.monotonic() + 10
+        while self.served(self.lo) is None:
+            self.assertLess(time.monotonic(), deadline, "the serve never recorded")
+            time.sleep(0.02)
+        return proc
+
+    def test_the_log_is_read_through_the_fd_serve_made(self):
+        # The lane can swap .lane-serve for a link while serve waits: the --ready scan and the
+        # failure's tail must read the log serve made, never the one the path names by then.
+        proc = self.start_serve("--timeout", "2", "--ready", "DECOY", "--",
+                                "sh", "-c", f"echo real; sleep 600; : {self.tmp}")
+        decoy = os.path.join(self.tmp, "decoy")
+        self.write(os.path.join(decoy, f"{self.lo}.log"), "DECOY secret\n")
+        logs = os.path.join(self.path, ".lane-serve")
+        os.rename(logs, logs + ".old")
+        os.symlink(decoy, logs)
+        out, err = proc.communicate(timeout=30)
+        self.assertEqual(proc.returncode, 1, out + err)
+        self.assertIn("no line matched --ready 'DECOY'", err)
+        self.assertNotIn("secret", err)
+        self.assertIn("real", err)
+
+    def test_an_interrupted_serve_ends_what_it_started(self):
+        proc = self.start_serve("--", "sh", "-c", f"sleep 600; : {self.tmp}")
+        (pid,) = [x for x in self.mine("sleep 600") if x != proc.pid]  # not serve's own argv
+        proc.send_signal(signal.SIGINT)
+        out, err = proc.communicate(timeout=30)
+        self.assertEqual(proc.returncode, -signal.SIGINT, out + err)
+        self.assertIn("interrupted", err)
+        self.assertEqual(self.mine("sleep 600"), [])
+        self.assertIsNone(self.served(self.lo))
+
+    def test_stop_keeps_the_record_while_a_process_outlives_sigkill(self):
+        p = self.serve("--", sys.executable, self.server, "127.0.0.1", "{port}")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        mod = load_lane_script()
+        repo = lanelib.resolve(self.path)
+        _, lane = repo.identity()
+        with mock.patch.object(mod, "end_serve", return_value=["4242 stuck"]):
+            with self.assertRaises(mod.LaneError) as e:
+                mod.serve_stop(repo, lane, self.lo)
+        self.assertIn("4242 stuck", str(e.exception))
+        self.assertIn(f"`lane serve --stop {self.lo}` can retry", str(e.exception))
+        self.assertIsNotNone(self.served(self.lo))
 
     def test_another_lanes_server_is_not_this_lanes_to_stop(self):
         p = self.serve("--", sys.executable, self.server, "127.0.0.1", "{port}")
@@ -468,14 +516,32 @@ class Serve(LanesRepo):
 
 
 class ServedRecords(LanesRepo):
-    def test_done_removes_the_lanes_serve_records(self):
+    def test_done_ends_a_server_that_left_the_lane_and_removes_the_records(self):
+        # A daemon that chdirs to / is out of done's view of the lane's processes: done ends it
+        # by its record before removing the record, so nothing is left running untracked.
+        lo = free_run(1)
+        self.lane("init", "--ports", f"{lo}-{lo}")
         self.lane("new", "web")
         path = self.lane_path("web")
+        server = os.path.join(self.tmp, "srv.py")
+        self.write(server, SERVER)
+        script = (f"import os, subprocess, sys; subprocess.Popen([sys.executable, {server!r}, "
+                  f"'127.0.0.1', sys.argv[1]], start_new_session=True, cwd='/')")
+        p = self.run_lane("serve", "--", sys.executable, "-c", script, "{port}", cwd=path)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         repo = lanelib.Repo(self.main, self.common)
-        self.write(repo.served_path("web", 5191), "{}")
+        token = json.loads(self.read(repo.served_path("web", lo)))["token"]
+        (daemon,) = [int(n) for n in os.listdir("/proc") if n.isdigit()
+                     and lanelib.proc_env(int(n), "LANE_SERVE") == token]
+        self.addCleanup(lambda: lanelib.proc_alive(lanelib.scan()[daemon])
+                        if daemon in lanelib.scan() else None)
+        self.assertEqual(os.readlink(f"/proc/{daemon}/cwd"), "/")
         self.commit("chart.txt", "axis\n", cwd=path)
         self.git("push", "-q", "origin", "web:main", cwd=path)
-        self.lane("done", "web")
+        out = self.lane("done", "web")
+        self.assertIn(f"ended what lane serve started on port {lo}", out)
+        self.assertFalse(os.path.exists(f"/proc/{daemon}") and
+                         lanelib.proc_stat(daemon)[1] not in lanelib.EXITED)
         self.assertFalse(os.path.exists(repo.served_dir("web")))
 
 

@@ -2312,12 +2312,13 @@ def served_procs(token: str, sid: int | None) -> list[lanelib.Proc]:
             if p.state not in lanelib.EXITED and p.pid != me and served_by(p.pid, token, sid)]
 
 
-def end_serve(token: str, sid: int | None) -> list[str]:
+def end_serve(token: str, sid_of) -> list[str]:
     """SIGTERM every process of the serve, SIGKILL what outlives the grace, and look again for
     any it started meanwhile; each signal through signal_proc, so a pid reused since the scan
-    is never hit. The survivors, named."""
+    is never hit. sid_of() proves the leader's session afresh on each look (None once it can't:
+    its pid may have been handed on). The survivors, named."""
     for _ in range(2):
-        group = served_procs(token, sid)
+        group = served_procs(token, sid_of())
         for p in group:
             signal_proc(p, signal.SIGTERM)
         deadline = time.monotonic() + grace()
@@ -2329,7 +2330,7 @@ def end_serve(token: str, sid: int | None) -> list[str]:
         deadline = time.monotonic() + 1
         while any(lanelib.proc_alive(p) for p in group) and time.monotonic() < deadline:
             time.sleep(SERVE_POLL)
-    return [f"{p.pid} {p.comm}" for p in served_procs(token, sid)]
+    return [f"{p.pid} {p.comm}" for p in served_procs(token, sid_of())]
 
 
 def load_served(repo: Repo, lane_id: str, port: int) -> dict | None:
@@ -2366,6 +2367,31 @@ def served_live(rec: dict) -> list[lanelib.Proc]:
     return served_procs(rec["token"], served_sid(rec))
 
 
+def served_records(repo: Repo, lane_id: str) -> list[dict]:
+    """Every record of lane lane_id's serves that reads."""
+    try:
+        names = os.listdir(repo.served_dir(lane_id))
+    except FileNotFoundError:
+        return []
+    ports = [int(n[:-5]) for n in names if n.endswith(".json") and n[:-5].isdigit()]
+    return [rec for port in sorted(ports) if (rec := load_served(repo, lane_id, port))]
+
+
+def end_lane_serves(repo: Repo, lane_id: str) -> None:
+    """End what each of the lane's serves still runs, wherever its cwd went (a daemon's chdir
+    takes it out of `done`'s view of the lane), so no record is removed while its server runs."""
+    left = []
+    for rec in served_records(repo, lane_id):
+        if served_live(rec):
+            ended = end_serve(rec["token"], lambda rec=rec: served_sid(rec))
+            left += [f"{x} (port {rec['port']})" for x in ended]
+            if not ended:
+                say(f"  ended what lane serve started on port {rec['port']}")
+    if left:
+        raise LaneError(f"lane {lane_id}'s served processes outlived SIGKILL: {', '.join(left)}. "
+                        f"Rerun `lane done {lane_id}` once they are gone")
+
+
 def remove_served(repo: Repo, lane_id: str, port: int, token: str) -> None:
     """Remove port's record while it is still token's serve's: a later serve may own it."""
     with lock(repo):
@@ -2376,7 +2402,8 @@ def remove_served(repo: Repo, lane_id: str, port: int, token: str) -> None:
 
 
 def serve_log(top: str, port: int) -> tuple[int, str]:
-    """A fresh log for port in the lane's SERVE_DIR: (write fd, path). The lane's sandboxed Bash
+    """A fresh log for port in the lane's SERVE_DIR: (fd, path), the fd open for reading too,
+    so serve reads the log it made, never what the path names by then. The lane's sandboxed Bash
     can plant anything there, and serve runs sandbox-off: the dir is opened with O_NOFOLLOW and
     each file is made with O_EXCL (the log after an unlink) and written through that fd, so
     neither a symlink nor a hard link to a file elsewhere is ever written through."""
@@ -2389,10 +2416,10 @@ def serve_log(top: str, port: int) -> tuple[int, str]:
         raise LaneError(shown(f"{root} is a symlink or no dir, and `lane serve` keeps its logs "
                               f"there: `unlink {root}`, and the next serve makes it afresh"))
     name = f"{port}.log"
-    made = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
+    made = os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
     try:
         try:
-            gi = os.open(".gitignore", made, 0o644, dir_fd=dfd)
+            gi = os.open(".gitignore", os.O_WRONLY | made, 0o644, dir_fd=dfd)
         except FileExistsError:
             pass
         else:
@@ -2404,24 +2431,20 @@ def serve_log(top: str, port: int) -> tuple[int, str]:
             pass
         except IsADirectoryError:
             raise LaneError(shown(f"{root}/{name} is a dir: remove it, then serve again"))
-        fd = os.open(name, made, 0o644, dir_fd=dfd)
+        fd = os.open(name, os.O_RDWR | made, 0o644, dir_fd=dfd)
     finally:
         os.close(dfd)
     return fd, os.path.join(root, name)
 
 
-def log_tail(path: str, limit: int = SERVE_TAIL) -> str:
-    """The end of a log, read only from a regular file (a FIFO planted there can't be sought)."""
+def log_text(fd: int, limit: int, tail: bool = False) -> str:
+    """Up to limit bytes of the log serve made, from its start or its end, read by fd."""
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        size = os.fstat(fd).st_size
+        data = os.pread(fd, limit, max(0, size - limit) if tail else 0)
     except OSError:
         return ""
-    with os.fdopen(fd, "rb") as f:
-        st = os.fstat(f.fileno())
-        if not stat.S_ISREG(st.st_mode):
-            return ""
-        f.seek(max(0, st.st_size - limit))
-        return shown(f.read(limit).decode(errors="replace")).strip()
+    return data.decode(errors="replace")
 
 
 def serve_secs(text: str) -> float:
@@ -2503,22 +2526,32 @@ def cmd_serve(args) -> int:
                                      env=dict(os.environ, PORT=str(port), LANE_PORT=str(port),
                                               **{SERVE_ENV: token}))
         except OSError as e:
-            raise LaneError(shown(f"can't run {argv[0]}: {e.strerror or e}"))
-        finally:
             os.close(fd)
-        write_json(repo.served_path(lane["id"], port), {
-            "lane": lane["id"], "port": port, "pid": child.pid,
-            "start": lanelib.proc_start(child.pid) or 0, "boot": lanelib.boot_id(),
-            "token": token, "argv": argv, "log": log, "started": now_iso()})
+            raise LaneError(shown(f"can't run {argv[0]}: {e.strerror or e}"))
+
+        def leader_sid() -> int | None:
+            # Unreaped (no poll or wait has seen it exit), the leader's pid can't be handed on:
+            # until then its session is the serve's.
+            return child.pid if child.returncode is None else None
+
+        try:
+            write_json(repo.served_path(lane["id"], port), {
+                "lane": lane["id"], "port": port, "pid": child.pid,
+                "start": lanelib.proc_start(child.pid) or 0, "boot": lanelib.boot_id(),
+                "token": token, "argv": argv, "log": log, "started": now_iso()})
+        except OSError as e:
+            end_serve(token, leader_sid)
+            os.close(fd)
+            raise LaneError(f"can't record the serve at {repo.served_path(lane['id'], port)} "
+                            f"({e.strerror or e}), so `--stop` couldn't reach it: it is ended")
 
     def fail(why: str) -> int:
-        # Unreaped, the leader's pid can't be reused: until then its session is the serve's.
-        left = end_serve(token, child.pid if child.poll() is None else None)
+        left = end_serve(token, leader_sid)
         with contextlib.suppress(subprocess.TimeoutExpired):
             child.wait(timeout=1)
         if not left:
             remove_served(repo, lane["id"], port, token)
-        tail = log_tail(log)
+        tail = shown(log_text(fd, SERVE_TAIL, tail=True)).strip()
         warn(why + (f"\nleft running: {', '.join(left)}; `lane serve --stop {port}` retries"
                     if left else "")
              + (f"\n--- {log} (tail)\n{tail}" if tail else ""))
@@ -2530,11 +2563,9 @@ def cmd_serve(args) -> int:
     try:
         while True:
             rc = child.poll()
-            sid = child.pid if rc is None else None
+            sid = leader_sid()
             if not seen:
-                with contextlib.suppress(OSError):
-                    head = lanelib.read_head(log, SERVE_READ) or b""
-                    seen = bool(ready.search(head.decode(errors="replace")))
+                seen = bool(ready.search(log_text(fd, SERVE_READ)))
             if seen and (inodes := lanelib.listeners(port)):
                 foreign = [pids for pids in lanelib.socket_pids(inodes).values()
                            if not pids or not all(served_by(x, token, sid) for x in pids)]
@@ -2557,6 +2588,8 @@ def cmd_serve(args) -> int:
     except KeyboardInterrupt:
         fail("interrupted: the serve's processes are ended")
         return -signal.SIGINT
+    finally:
+        os.close(fd)
 
 
 def serve_stop(repo: Repo, lane: dict, port: int) -> int:
@@ -2573,7 +2606,7 @@ def serve_stop(repo: Repo, lane: dict, port: int) -> int:
         remove_served(repo, lane["id"], port, rec["token"])
         say(f"port {port}: the server lane serve started (pid {rec['pid']}) is already gone")
         return 0
-    if left := end_serve(rec["token"], served_sid(rec)):
+    if left := end_serve(rec["token"], lambda: served_sid(rec)):
         raise LaneError(f"port {port}: these outlived SIGKILL: {', '.join(left)}. The record "
                         f"stays, so `lane serve --stop {port}` can retry")
     remove_served(repo, lane["id"], port, rec["token"])
@@ -4693,6 +4726,7 @@ def cmd_done(args) -> None:
         if present:
             end_lane(repo, lane, path, hits)  # its final look only
         sweep_open_sessions(path)
+    end_lane_serves(repo, args.id)  # before the close: a refusal leaves the lane to rerun
     archive = close_record(repo, lane, path, state, how, present, heads.get(path))
     try:
         os.remove(repo.closing_path(args.id))
@@ -4716,7 +4750,7 @@ def cmd_done(args) -> None:
         pass
     except OSError as e:
         warn(f"lane {args.id}'s serve records are kept at {repo.served_dir(args.id)} "
-             f"({e.strerror}): harmless, since each names its server's boot, start and token")
+             f"({e.strerror}): harmless, since what each names is ended")
     say(f"lane {args.id} closed ({how}); archived to {archive}")
     delete_branches(repo, branches)
     orphaned_rules(args.id, path)

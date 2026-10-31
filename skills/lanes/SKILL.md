@@ -80,7 +80,7 @@ an unregistered worktree: `lane whoami` tells you which.
    started, so a server that failed to bind a port another lane holds fails here, instead of
    your checks testing that lane's server. It refuses in the sandbox, so run it with the sandbox
    off (each start asks). `--ready RE` waits for a log line too; the log is
-   `.lane-serve/<port>.log`. `lane serve --stop <port>` ends it; `done` and `park` end it too.
+   `.lane-serve/<port>.log`. `lane serve --stop <port>` ends it; `done` ends it too, and `park` while its cwd is in the lane.
 
    **Tell the lead before you reach past your worktree.** Before an act whose effect leaves the
    lane's worktree (an install from the lane, anything that takes a cap slot), and whenever the
