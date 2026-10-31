@@ -36,7 +36,10 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      unless the git call carries --no-recurse-submodules or the effective config has submodule
      recursion off (G-B): the last fetch.recurseSubmodules or submodule.recurse git reads must
      be false (for pull, submodule.recurse too), else git runs in each submodule's own git
-     dir. dotclaude's setup.sh sets fetch.recurseSubmodules false globally.
+     dir. dotclaude's setup.sh sets fetch.recurseSubmodules false globally. A cwd, path
+     argument or URL's repo below its repo top, or in no repo, is refused when a dir git looks
+     in on its way up (to the top, or to / or a ceiling) is writable (G-E): a repo planted
+     there after the check would be the one git uses. The refusal names the top to run from.
   2. The PATH the head resolves through. Every PATH entry must be protected, not only those
      before the head: its children (git, gh, tmux, the tools claude spawns) search PATH too. An
      empty or relative entry is the cwd: refused. Then the resolved file's symlink chain (each
@@ -61,7 +64,9 @@ so "this session can't write it" is not enough.
 Which calls are candidates: a pattern's `*` matches any characters, spaces included; the rest is
 literal. A call is a candidate when the whole command matches, or any piece does after splitting
 on newlines, `;`, `&&`, `||`, `|` and `&` (not quote-aware, so it over-matches: an over-match only
-adds checks to a sandboxed call). excludedCommands and allowWrite are the union of user, managed,
+adds checks to a sandboxed call). Claude Code 2.1.316 runs a compound line and a substitution
+sandboxed whole (G-A, probed), so only a matching call runs outside and the guard judges those;
+re-probe on each Claude Code version. excludedCommands and allowWrite are the union of user, managed,
 project and project-local files (more candidates, more writable: both safe). Protecting entries
 count only from user and managed files: the machine view stands for every session, and other
 sessions don't load this project's settings.

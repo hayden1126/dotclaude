@@ -264,7 +264,11 @@ settings.
 For a match it refuses, naming the path, when:
 1. **The git repo is not the project's.** The cwd must resolve to the same common git dir as
    `CLAUDE_PROJECT_DIR`, or to no repo. A nested repo, a planted gitfile or a repo in a temp dir
-   has a config the session can write. The project's own `config` and `hooks/` are trusted, and
+   has a config the session can write. The cwd must also be its repo's top: from below it, or
+   from no repo, the call is refused when a dir git looks in on its way up (to the top, or to
+   `/` or a `GIT_CEILING_DIRECTORIES` entry) is writable, since a repo planted there after the
+   check would be the one git uses (G-E). The refusal names the top to run from. Path arguments
+   and local remote URLs are held to the same rule. The project's own `config` and `hooks/` are trusted, and
    so is `config.worktree` when the cwd's gitdir is the project's own, since Claude Code keeps
    them read-only for the session; another worktree's `config.worktree` is judged. That trust
    rests on Claude Code protecting the session's gitfile and its `worktrees/<name>/commondir`,
