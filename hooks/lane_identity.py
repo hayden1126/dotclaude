@@ -94,7 +94,7 @@ def lane_context(lane: dict, source: str, where: str) -> str:
     claims = ", ".join(lane.get("claims", [])) or "none"
     lines = [
         f"You are lane `{lane['id']}`: {where}, claims {claims}, "
-        f"port {lane.get('port') or 'none'}. Your record is {lanelib.record_path(lane)} "
+        f"{lanelib.ports_text(lane)}. Your record is {lanelib.record_path(lane)} "
         "(Brief, State, Decisions, Asks for Hayden, Not mine, Next): read it before acting.",
         "Other lanes' records are read-only. Ownership comes only from `lane who #<n>` (claims), "
         "never from prose, agent lists or tab titles. Never write relative identity ('another "

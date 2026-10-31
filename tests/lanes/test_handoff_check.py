@@ -20,7 +20,6 @@ GOOD = """# STATUS: chart work
 ## Notes for next session
 - Run the chart tests, then open the PR for #42.
 """
-TODAY = datetime.date.today()
 FIRST = "- Run the chart tests, then open the PR for #42."
 
 
@@ -110,7 +109,11 @@ class PlainRepo(Check):
 
     def setUp(self):
         super().setUp()
-        self.session(self.main, time.time() - 60)  # wall clock
+        self.started = time.time() - 60  # wall clock
+        self.session(self.main, self.started)
+        # Marker dates count from the session's start date, as handoff-check's do: never from
+        # a date the module or test read, which is yesterday's once a run crosses midnight.
+        self.day = datetime.date.fromtimestamp(self.started)
         self.status = os.path.join(self.main, "STATUS.md")
         self.commit("STATUS.md", GOOD, msg="Handoff")
 
@@ -298,17 +301,17 @@ class PlainRepo(Check):
         self.assertGap(self.check(), "no status file")
 
     def test_a_dated_approval_marker_passes(self):
-        self.commit("STATUS.md", marked(f"(approved by Hayden {TODAY})"))
+        self.commit("STATUS.md", marked(f"(approved by Hayden {self.day})"))
         self.assertPasses(self.check())
 
     def test_an_approval_marker_from_before_the_session_fails(self):
-        old = TODAY - datetime.timedelta(days=1)
+        old = self.day - datetime.timedelta(days=1)
         self.commit("STATUS.md", marked(f"(approved by Hayden {old})"))
         self.assertGap(self.check(), "approval marker predates this session: remove it or get a "
                        "fresh approval")
 
     def test_an_old_marker_on_a_later_item_is_ignored(self):
-        old = TODAY - datetime.timedelta(days=3)
+        old = self.day - datetime.timedelta(days=3)
         self.commit("STATUS.md", GOOD + f"- Then merge it (approved by Hayden {old}).\n")
         self.assertPasses(self.check())
 
@@ -319,17 +322,18 @@ class PlainRepo(Check):
             self.assertGap(self.check(), "approval marker")
 
     def test_an_approval_marker_dated_in_the_future_fails(self):
-        later = TODAY + datetime.timedelta(days=1)
+        # Two days on: past handoff-check's today on either side of a midnight the run crosses.
+        later = self.day + datetime.timedelta(days=2)
         self.commit("STATUS.md", marked(f"(approved by Hayden {later})"))
         self.assertGap(self.check(), "approval marker is dated in the future")
 
     def test_a_first_item_marker_with_an_unknown_session_start_fails(self):
         os.remove(os.path.join(self.home, ".claude", "sessions", "1.json"))
-        self.commit("STATUS.md", marked(f"(approved by Hayden {TODAY})"))
+        self.commit("STATUS.md", marked(f"(approved by Hayden {self.day})"))
         self.assertGap(self.check(), "can't confirm this session's start: remove the marker or "
                        "run inside the session")
         # a marker on a later item is still ignored
-        self.commit("STATUS.md", GOOD + f"- Then merge it (approved by Hayden {TODAY}).\n")
+        self.commit("STATUS.md", GOOD + f"- Then merge it (approved by Hayden {self.day}).\n")
         self.assertPasses(self.check())
 
     def test_an_approval_marker_outside_next_is_not_checked(self):
@@ -671,7 +675,8 @@ class Lane(Check):
         self.assertGap(self.check(self.path, "--closing"), "older than HEAD")
 
     def test_closing_skips_approval(self):
-        old = TODAY - datetime.timedelta(days=1)
+        (start,) = [s["startedAt"] for s in self.lane_json("chart-fix")["sessions"]]
+        old = datetime.date.fromtimestamp(lanelib.parse_iso(start)) - datetime.timedelta(days=1)
         self.body = self.body.replace("then run it.", f"then run it (approved by Hayden {old}).")
         self.finish()
         self.assertGap(self.check(self.path), "predates this session")

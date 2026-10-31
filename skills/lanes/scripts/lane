@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """lane: parallel Claude sessions, one git worktree ("lane") each, with single-writer records.
 
-  lane init [--root DIR] [--setup CMD] [--ports A-B] [--cap N] [--locks A,B]
+  lane init [--root DIR] [--setup CMD] [--ports A-B] [--block N] [--cap N] [--locks A,B]
             [--autopass | --no-autopass] [--model M] [--effort E] [--trial-link P,Q]
             [--trial-locks A,B]
   lane new <id> [--branch B] [--reuse-branch] [--claim N ...] [--goal T] [--files T]
@@ -252,6 +252,20 @@ def parse_ports(spec: str) -> range | None:
     if not 0 < lo <= hi < 65536:
         raise LaneError(f"bad port range {spec!r}")
     return range(lo, hi + 1)
+
+
+def parse_block(value, ports: range | None) -> int:
+    """The config's `block`, the ports each new lane gets in a row; at least 1, and it must fit
+    in the port range when there is one."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        n = 0
+    if type(value) is bool or n < 1:
+        raise LaneError(f"--block wants a whole number of ports, at least 1, got {value!r}")
+    if ports is not None and n > len(ports):
+        raise LaneError(f"a block of {n} ports can't fit in {ports[0]}-{ports[-1]}")
+    return n
 
 
 def parse_locks(spec: str) -> list[str]:
@@ -515,15 +529,21 @@ def held_lanes(repo: Repo) -> list[dict]:
     return lanes
 
 
-def free_port(repo: Repo, cfg: dict) -> int | None:
+def free_block(repo: Repo, cfg: dict) -> range | None:
+    """The first run of the config's `block` ports in its range that no held lane's block
+    touches, or None with no range."""
     ports = parse_ports(cfg.get("ports", ""))
     if ports is None:
         return None
-    used = {lane.get("port") for lane in held_lanes(repo)}
-    for port in ports:
-        if port not in used:
-            return port
-    raise LaneError(f"no free port in {cfg['ports']}: every one is held by a lane")
+    n = parse_block(cfg.get("block", 1), ports)
+    used = set()
+    for lane in held_lanes(repo):
+        used.update(lanelib.port_block(lane) or ())
+    for lo in range(ports.start, ports.stop - n + 1):
+        if used.isdisjoint(range(lo, lo + n)):
+            return range(lo, lo + n)
+    what = "port" if n == 1 else f"block of {n} ports"
+    raise LaneError(f"no free {what} in {cfg['ports']}: the lanes hold the rest")
 
 
 def add_exclude(repo: Repo) -> None:
@@ -690,12 +710,15 @@ def lane_files(repo: Repo, lane: dict, brief: dict) -> list[str]:
 
 
 def run_setup(repo: Repo, lane: dict) -> None:
-    """The 'setup' step: the configured command in the lane, with LANE_ID and LANE_PORT set. A
+    """The 'setup' step: the configured command in the lane, with LANE_ID, LANE_PORT (the first
+    port) and LANE_PORTS (the block, A-B) set. A
     failure marks the lane setup-failed at this step and raises."""
     setup = repo.config().get("setup")
     if not setup:
         return
-    env = dict(os.environ, LANE_ID=lane["id"], LANE_PORT=str(lane.get("port") or ""))
+    block = lanelib.port_block(lane)
+    env = dict(os.environ, LANE_ID=lane["id"], LANE_PORT=str(block[0]) if block else "",
+               LANE_PORTS=f"{block[0]}-{block[-1]}" if block else "")
     say(f"  setup: {setup}")
     if subprocess.run(setup, shell=True, cwd=usable_path(repo, lane), env=env).returncode != 0:
         with lock(repo):
@@ -725,13 +748,17 @@ def seed_record(lane: dict, brief: dict) -> None:
     lanelib.write_text(path, text)
 
 
-def new_record(lane_id: str, branch: str, path: str, base_sha: str | None, port: int | None,
+def new_record(lane_id: str, branch: str, path: str, base_sha: str | None,
+    block: range | None,
     claims: list[str],
 ) -> dict:
     stamp = now_iso()
-    return {"id": lane_id, "branch": branch, "path": path, "base_sha": base_sha, "port": port,
-            "claims": claims, "state": "active", "sessions": [], "created": stamp,
-            "updated": stamp}
+    rec = {"id": lane_id, "branch": branch, "path": path, "base_sha": base_sha,
+           "port": block[0] if block else None, "claims": claims, "state": "active",
+           "sessions": [], "created": stamp, "updated": stamp}
+    if block:
+        rec["block"] = len(block)
+    return rec
 
 
 def claim_conflicts(repo: Repo, lane_id: str, reqs: list[str]) -> list[str]:
@@ -751,6 +778,8 @@ def cmd_init(args) -> None:
     if not repo.is_main:
         raise LaneError(f"run `lane init` in the main checkout ({repo.main})")
     parse_ports(args.ports or "")
+    if args.block is not None:
+        args.block = parse_block(args.block, None)
     if args.locks is not None:
         args.locks = ",".join(parse_locks(args.locks))
     if args.trial_locks is not None:
@@ -768,10 +797,11 @@ def cmd_init(args) -> None:
         cfg.setdefault("cap", DEFAULT_CAP)
         cfg.setdefault("base", "origin/main")
         cfg.setdefault("locks", "")
-        for key in ("root", "setup", "ports", "cap", "locks"):
+        for key in ("root", "setup", "ports", "block", "cap", "locks"):
             value = getattr(args, key)
             if value is not None:
                 cfg[key] = os.path.abspath(os.path.expanduser(value)) if key == "root" else value
+        parse_block(cfg.get("block", 1), parse_ports(cfg["ports"]))  # the two, as they'll stand
         if args.autopass is not None:  # unset means on (autopass_state.decide)
             cfg["autopass"] = args.autopass
         for key in PICKS:  # empty means no flag at `open`: the pin, or the default effort
@@ -847,7 +877,7 @@ def cmd_new(args) -> None:
                             "it with `lane done` first")
         if conflicts := claim_conflicts(repo, args.id, reqs):
             raise LaneError("already claimed: " + ", ".join(conflicts))
-        port = free_port(repo, cfg)
+        block = free_block(repo, cfg)
         os.makedirs(cfg["root"], exist_ok=True)
         # From the commit, not the ref name: no upstream is set, and no ref rewritten since the
         # fetch can choose the tree.
@@ -856,14 +886,15 @@ def cmd_new(args) -> None:
             raise LaneError("git worktree add failed: " + p.stderr.strip())
         # Registered the moment the worktree exists, so a failure below leaves a lane that
         # `adopt` finishes or `done --abandon` removes, never an orphan worktree.
-        lane = new_record(args.id, branch, os.path.realpath(path), base_sha, port, reqs)
+        lane = new_record(args.id, branch, os.path.realpath(path), base_sha, block, reqs)
         lane.update(state="setup-failed", setup_failed="copy")
         if args.reuse_branch:  # its branch may hold a PR older than the lane (merges_of)
             lane["reused"] = True
         lanelib.write_lane_json(repo, args.id, lane)
         copied = lane_files(repo, lane, {ph: getattr(args, attr) for attr, ph in BRIEF.items()})
         lane = lanelib.update_lane(repo, args.id, mark_active)
-    say(f"lane {args.id}: branch {branch} from {base} ({base_sha[:12]}), port {port or 'none'}")
+    say(f"lane {args.id}: branch {branch} from {base} ({base_sha[:12]}), "
+        f"{lanelib.ports_text(lane)}")
     if copied:
         say(f"  copied {len(copied)} file(s) from .worktreeinclude")
     say(f"  record {lanelib.record_path(lane)}")
@@ -884,7 +915,7 @@ def finish(repo: Repo, lane: dict) -> None:
     check_worktree(lane, seed_ask=True)  # still setup-failed, which `open` refuses: no session
     with lock(repo):
         lane = lanelib.update_lane(repo, lane["id"], mark_active)
-    say(f"finished lane {lane['id']}: branch {lane['branch']}, port {lane['port'] or 'none'}")
+    say(f"finished lane {lane['id']}: branch {lane['branch']}, {lanelib.ports_text(lane)}")
     say(f"  record {lanelib.record_path(lane)}")
 
 
@@ -925,13 +956,13 @@ def cmd_adopt(args) -> None:
                         "link would mirror and archive its target): remove it, then adopt")
     with lock(repo):
         check_unregistered(repo, lane_id)
-        held_lanes(repo)  # a left-out record may be this path's: refuse, ports or not (free_port)
+        held_lanes(repo)  # a left-out record may be this path's: refuse, ports or not (free_block)
         if held := holders(repo, path):  # again under the lock: a racing adopt or new
             raise LaneError(f"{path} is already registered as lane {held[0]['id']}")
         mb = git(["merge-base", "--end-of-options", f"refs/heads/{trees[path]}", base_ref(cfg)],
                  repo.toplevel)
         lane = new_record(lane_id, trees[path], path, mb.stdout.strip() or None,
-                          free_port(repo, cfg), [])
+                          free_block(repo, cfg), [])
         lane["adopted"] = True  # its base is a merge-base, which a fast-forward merge makes its tip
         try:
             add_exclude(repo)
@@ -939,7 +970,7 @@ def cmd_adopt(args) -> None:
         except OSError as e:
             raise LaneError(f"could not seed {lanelib.record_path(lane)}: {e}")
         lanelib.write_lane_json(repo, lane_id, lane)
-    say(f"adopted lane {lane_id}: branch {lane['branch']}, port {lane['port'] or 'none'}")
+    say(f"adopted lane {lane_id}: branch {lane['branch']}, {lanelib.ports_text(lane)}")
     say(f"  record {lanelib.record_path(lane)}")
     check_worktree(lane, seed_ask=False)
 
@@ -1601,7 +1632,7 @@ def print_board(rows: list[dict]) -> None:
         ctx = "?" if unknown else ctx_cell(r["ctx"])
         state = "?" if unknown else ",".join(r["states"]) or "-"
         window = "?" if unknown else r["window"] or "-"
-        table.append((r["id"], r["branch"], ab, r["pr"], str(r["port"] or "-"),
+        table.append((r["id"], r["branch"], ab, r["pr"], lanelib.block_text(r) or "-",
                       ",".join(r.get("claims", [])) or "-", sess, ctx, state, window,
                       " ".join(r["flags"]) or "-"))
     widths = [max(len(row[i]) for row in table) for i in range(len(head))]
@@ -1620,13 +1651,15 @@ def cmd_whoami(args) -> None:
         except (OSError, subprocess.SubprocessError):  # git can't list them: the stored name
             branch, ref = lane["branch"], ""
         info.update(branch=branch_label(branch, ref), registered_branch=lane["branch"],
-                    port=lane.get("port"), claims=lane.get("claims", []),
+                    port=lane.get("port"),
+                    ports=[b[0], b[-1]] if (b := lanelib.port_block(lane)) else None,
+                    claims=lane.get("claims", []),
                     record=lanelib.record_path(lane))
     if args.json:
         say(json.dumps(info, indent=2))
         return
     if lane:
-        say(f"{lane['id']}  (lane; branch {info['branch']}, port {lane.get('port') or 'none'}, "
+        say(f"{lane['id']}  (lane; branch {info['branch']}, {lanelib.ports_text(lane)}, "
             f"claims {', '.join(lane.get('claims', [])) or 'none'})")
         say(f"record {info['record']}")
     else:
@@ -2195,6 +2228,292 @@ def cmd_lock(args) -> int:
             return run_child(args.command) if held else LOCK_BUSY
     except KeyboardInterrupt:  # a Ctrl-C while waiting, or before or after the command runs
         return -signal.SIGINT
+
+
+# ---- serve: a lane's server, proved to be the port's listener --------------------------------
+SERVE_DIR = ".lane-serve"  # in the lane: each port's log, gitignored by a `*` inside
+SERVE_TIMEOUT = 60.0  # seconds a server gets to listen (--timeout)
+SERVE_POLL = 0.1
+SERVE_TAIL = 2000  # bytes of the log a failure shows
+SERVE_READ = 1 << 20  # bytes of the log --ready searches
+
+
+def sandbox_off(what: str) -> None:
+    """Refuse in the Bash sandbox, whose own network and pid namespace hide every listener but
+    its own and keep a server there out of everyone else's reach."""
+    if not lanelib.pids_visible():
+        raise LaneError(f"{what} can't run in the Bash sandbox: its own network and pids hide "
+                        "who listens on a port, and a server there is out of the browser's and "
+                        "other commands' reach. Rerun it with the sandbox off (each start asks)")
+
+
+def serving_lane(repo: Repo) -> dict:
+    kind, lane = repo.identity()
+    if kind != "lane":
+        raise LaneError(f"lane serve runs from a lane: this checkout is {kind}")
+    return lane
+
+
+def holder_text(pids: set[int], lanes: list[dict]) -> str:
+    """'pid 123 (node, lane api)' per pid, or what can't be seen of a socket with none."""
+    if not pids:
+        return "a process this user can't see (another user's)"
+    out = []
+    for pid in sorted(pids):
+        comm = (lanelib.proc_stat(pid) or ("?",))[0]
+        try:
+            cwd = os.readlink(f"{lanelib.PROC}/{pid}/cwd")
+        except OSError:
+            cwd = None
+        owner = next((x["id"] for x in lanes if lanelib.cwd_inside(cwd, x["path"])), None)
+        out.append(f"pid {pid} ({comm}{f', lane {owner}' if owner else ''})")
+    return ", ".join(out)
+
+
+def port_holders(port: int, lanes: list[dict], mine: int | None = None) -> list[str]:
+    """Who listens on port, one entry per socket, leaving out a socket whose every holder is in
+    session mine."""
+    out = []
+    for pids in lanelib.socket_pids(lanelib.listeners(port)).values():
+        if mine is not None and pids and all(session_of(pid) == mine for pid in pids):
+            continue
+        out.append(holder_text(pids, lanes))
+    return out
+
+
+def session_of(pid: int) -> int | None:
+    try:
+        return os.getsid(pid)
+    except OSError:
+        return None
+
+
+def load_served(repo: Repo, lane_id: str, port: int) -> dict | None:
+    """The record `serve` wrote for port, or None: gone, or no record of the right shape."""
+    try:
+        rec = json.loads(lanelib.read_head(repo.served_path(lane_id, port), PROOF_MAX) or b"null")
+    except ValueError:
+        return None
+    ok = (isinstance(rec, dict) and rec.get("lane") == lane_id and rec.get("port") == port
+          and all(type(rec.get(k)) is int and rec[k] > 0 for k in ("pid", "start"))
+          and isinstance(rec.get("boot"), str))
+    return rec if ok else None
+
+
+def served_leader(rec: dict | None) -> lanelib.Proc | None:
+    """The session leader a record names, while it still runs as that process (same boot, pid
+    and start) and still leads its session."""
+    try:
+        if rec is None or rec["boot"] != lanelib.boot_id():
+            return None
+    except OSError:
+        return None
+    st = lanelib.proc_stat(rec["pid"])
+    if st is None or st[3] != rec["start"] or st[1] in lanelib.EXITED:
+        return None
+    if session_of(rec["pid"]) != rec["pid"]:
+        return None
+    return lanelib.Proc(rec["pid"], st[2], st[3], st[1], st[0], None, ())
+
+
+def end_session(leader: lanelib.Proc) -> list[str]:
+    """SIGTERM every process in leader's session, SIGKILL what outlives the grace; each signal
+    through signal_proc, so a pid reused since the scan is never hit. The survivors, named."""
+    def members():
+        return [p for p in lanelib.scan(full=False).values()
+                if p.state not in lanelib.EXITED and session_of(p.pid) == leader.pid]
+    if lanelib.proc_start(leader.pid) != leader.start:
+        return []
+    group = members()
+    for p in group:
+        signal_proc(p, signal.SIGTERM)
+    deadline = time.monotonic() + grace()
+    while (alive := [p for p in group if lanelib.proc_alive(p)]) and time.monotonic() < deadline:
+        time.sleep(SERVE_POLL)
+    for p in alive:
+        signal_proc(p, signal.SIGKILL)
+    time.sleep(SERVE_POLL)
+    return [f"{p.pid} {p.comm}" for p in group if lanelib.proc_alive(p)]
+
+
+def remove_served(repo: Repo, lane_id: str, port: int, pid: int) -> None:
+    """Remove port's record while it is still pid's: a later serve may have taken the port."""
+    with lock(repo):
+        rec = load_served(repo, lane_id, port)
+        if rec is None or rec["pid"] == pid:
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(repo.served_path(lane_id, port))
+
+
+def serve_log(top: str, port: int) -> tuple[int, str]:
+    """A fresh log for port in the lane's SERVE_DIR: (write fd, path). The lane's sandboxed Bash
+    can plant anything there, and serve runs sandbox-off: the dir is opened with O_NOFOLLOW and
+    the log made with O_EXCL after an unlink, so neither a symlink nor a hard link to a file
+    elsewhere is ever written through."""
+    root = os.path.join(top, SERVE_DIR)
+    with contextlib.suppress(FileExistsError):
+        os.mkdir(root)
+    try:
+        dfd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        raise LaneError(shown(f"{root} is a symlink or no dir, and `lane serve` keeps its logs "
+                              f"there: `unlink {root}`, and the next serve makes it afresh"))
+    name = f"{port}.log"
+    try:
+        with contextlib.suppress(FileExistsError):
+            os.close(os.open(".gitignore", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o644, dir_fd=dfd))
+            gi = os.open(".gitignore", os.O_WRONLY | os.O_NOFOLLOW, dir_fd=dfd)
+            with os.fdopen(gi, "w") as f:
+                f.write("*\n")
+        try:
+            os.unlink(name, dir_fd=dfd)
+        except FileNotFoundError:
+            pass
+        except IsADirectoryError:
+            raise LaneError(shown(f"{root}/{name} is a dir: remove it, then serve again"))
+        fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                     0o644, dir_fd=dfd)
+    finally:
+        os.close(dfd)
+    return fd, os.path.join(root, name)
+
+
+def log_tail(path: str, limit: int = SERVE_TAIL) -> str:
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return ""
+    with os.fdopen(fd, "rb") as f:
+        size = os.fstat(f.fileno()).st_size
+        f.seek(max(0, size - limit))
+        return shown(f.read(limit).decode(errors="replace")).strip()
+
+
+def serve_port(repo: Repo, lane: dict, block: range, want: int | None, lanes: list[dict]) -> int:
+    """The port to serve on: want, which must be in block, or the block's first with no
+    listener; refused while something listens on it or a live serve of the lane holds it."""
+    span = f"{block[0]}-{block[-1]}"
+    if want is not None and want not in block:
+        raise LaneError(f"port {want} is not in lane {lane['id']}'s ports {span}")
+    for port in [want] if want is not None else block:
+        holders = port_holders(port, lanes)
+        if served_leader(load_served(repo, lane["id"], port)) and not holders:
+            holders = ["a server lane serve started that isn't listening: "
+                       f"`lane serve --stop {port}`"]
+        if not holders:
+            return port
+        if want is not None:
+            raise LaneError(shown(f"port {port} already has a listener: {'; '.join(holders)}. "
+                                  "A server started there would fail to bind, and checks would "
+                                  "test that one"))
+    raise LaneError(f"every port of lane {lane['id']}'s ports {span} has a listener: stop one "
+                    "with `lane serve --stop <port>`, or name one with --port")
+
+
+def cmd_serve(args) -> int:
+    sandbox_off("lane serve")
+    repo = lanes_repo()
+    lane = serving_lane(repo)
+    if args.stop is not None:
+        return serve_stop(repo, lane, args.stop)
+    if not args.command:
+        raise LaneError("name the command after --: lane serve [--port N] [--ready RE] -- <cmd...>")
+    ready = None
+    if args.ready is not None:
+        try:
+            ready = re.compile(args.ready)
+        except re.error as e:
+            raise LaneError(f"--ready {args.ready!r} is no regex: {e}")
+    block = lanelib.port_block(lane)
+    if block is None:
+        raise LaneError(f"lane {lane['id']} has no ports: the repo needs a range "
+                        "(`lane init --ports A-B`), which the next `lane new` hands out")
+    lanes = repo.lanes(shared=True)
+    top = usable_path(repo, lane)
+    with lock(repo):
+        port = serve_port(repo, lane, block, args.port, lanes)
+        fd, log = serve_log(top, port)
+        argv = [a.replace("{port}", str(port)) for a in args.command]
+        try:
+            child = subprocess.Popen(argv, cwd=os.getcwd(), stdin=subprocess.DEVNULL, stdout=fd,
+                                     stderr=fd, start_new_session=True,
+                                     env=dict(os.environ, PORT=str(port), LANE_PORT=str(port)))
+        except OSError as e:
+            raise LaneError(shown(f"can't run {argv[0]}: {e.strerror or e}"))
+        finally:
+            os.close(fd)
+        st = lanelib.proc_stat(child.pid)
+        leader = lanelib.Proc(child.pid, os.getpid(), st[3] if st else 0, "R", argv[0], None, ())
+        write_json(repo.served_path(lane["id"], port), {
+            "lane": lane["id"], "port": port, "pid": child.pid, "start": leader.start,
+            "boot": lanelib.boot_id(), "argv": argv, "log": log, "started": now_iso()})
+
+    def fail(why: str) -> int:
+        left = end_session(leader)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            child.wait(timeout=1)
+        remove_served(repo, lane["id"], port, child.pid)
+        tail = log_tail(log)
+        warn(why + (f"\nleft running: {', '.join(left)}" if left else "")
+             + (f"\n--- {log} (tail)\n{tail}" if tail else ""))
+        return 1
+
+    deadline = time.monotonic() + (SERVE_TIMEOUT if args.timeout is None else args.timeout)
+    seen = ready is None
+    try:
+        while True:
+            rc = child.poll()
+            if rc is not None:
+                how = f"status {rc}" if rc >= 0 else f"signal {-rc}"
+                return fail(shown(f"{argv[0]} exited with {how} before it listened on port {port}"))
+            if not seen:
+                with contextlib.suppress(OSError):
+                    head = lanelib.read_head(log, SERVE_READ) or b""
+                    seen = bool(ready.search(head.decode(errors="replace")))
+            if seen and (inodes := lanelib.listeners(port)):
+                owners = lanelib.socket_pids(inodes)
+                foreign = [pids for pids in owners.values()
+                           if not pids or any(session_of(x) != child.pid for x in pids)]
+                if foreign:
+                    return fail(shown(
+                        f"port {port}'s listener is not the server lane serve started: "
+                        f"{'; '.join(holder_text(x, lanes) for x in foreign)}. Checks against "
+                        f"port {port} would test that one, so the serve's session ({child.pid}) "
+                        "is ended"))
+                say(f"serving port {port}: pid {child.pid}, log {log}; "
+                    f"stop it with `lane serve --stop {port}`")
+                return 0
+            if time.monotonic() > deadline:
+                secs = f"{SERVE_TIMEOUT if args.timeout is None else args.timeout:g}"
+                return fail(f"nothing listened on port {port} within {secs} s" if seen else
+                            f"no line matched --ready {args.ready!r} within {secs} s")
+            time.sleep(SERVE_POLL)
+    except KeyboardInterrupt:
+        fail(f"interrupted: the serve's session ({child.pid}) is ended")
+        return -signal.SIGINT
+
+
+def serve_stop(repo: Repo, lane: dict, port: int) -> int:
+    """End the session a serve of this lane started on port, proved by the record serve wrote
+    in the state dir (no lane's sandboxed Bash can write it) and the leader's pid and start."""
+    rec = load_served(repo, lane["id"], port)
+    if rec is None:
+        holders = port_holders(port, repo.lanes(shared=True))
+        raise LaneError(shown(f"lane {lane['id']}'s serve started nothing on port {port}"
+                              + (f"; its listener is {'; '.join(holders)}, which isn't this "
+                                 "lane's to stop" if holders else "")))
+    leader = served_leader(rec)
+    if leader is None:
+        remove_served(repo, lane["id"], port, rec["pid"])
+        say(f"port {port}: the server lane serve started (pid {rec['pid']}) is already gone")
+        return 0
+    left = end_session(leader)
+    remove_served(repo, lane["id"], port, rec["pid"])
+    if left:
+        raise LaneError(f"port {port}: these outlived SIGKILL: {', '.join(left)}")
+    say(f"stopped port {port}: ended the session of pid {rec['pid']}")
+    return 0
 
 
 # ---- trial: the suites on a merge with every other live lane ---------------------------------
@@ -4633,7 +4952,8 @@ def parser() -> argparse.ArgumentParser:
     p = sub.add_parser("init", help="write the lanes config (in the state dir)")
     p.add_argument("--root", help="dir that holds the lane worktrees (default <repo>-lanes beside it)")
     p.add_argument("--setup", help="shell command run in each new lane (LANE_ID, LANE_PORT set)")
-    p.add_argument("--ports", help="port range A-B handed out one per lane")
+    p.add_argument("--ports", help="port range A-B handed out a block per lane")
+    p.add_argument("--block", help="ports per lane, in a row from --ports (default 1)")
     p.add_argument("--cap", type=int, help=f"live-lane cap (default {DEFAULT_CAP})")
     p.add_argument("--locks", help="comma-separated names `lane lock` accepts, e.g. gate,e2e")
     p.add_argument("--autopass", action=argparse.BooleanOptionalAction, default=None,
@@ -4695,6 +5015,18 @@ def parser() -> argparse.ArgumentParser:
                    help=f"give up after SECS, exit {LOCK_BUSY} (default: wait as long as it "
                         f"takes); the command's own {LOCK_BUSY} looks the same, but only a "
                         "timeout prints \"gave up on lock\" on stderr")
+    p = sub.add_parser("serve", help="start a lane's server on one of its ports and prove the "
+                                     "port's listener is it; sandbox off",
+                       usage="lane serve [--port N] [--ready RE] [--timeout SECS] -- <cmd...> "
+                             "| lane serve --stop PORT")
+    p.add_argument("--port", type=int, help="a port of the lane's block (default: its first "
+                                            "with no listener)")
+    p.add_argument("--ready", metavar="RE", help="wait for a log line matching RE, then for the "
+                                                 "listener")
+    p.add_argument("--timeout", type=float, metavar="SECS",
+                   help=f"give up after SECS (default {SERVE_TIMEOUT:g})")
+    p.add_argument("--stop", type=int, metavar="PORT",
+                   help="end the server a serve of this lane started on PORT")
     p = sub.add_parser("trial", help="run the suites on a merge of this lane with every other "
                                      "live lane, in a scratch tree, under the suite lock",
                        usage="lane trial [<id> ...] [--wait SECS] [--keep] [--link PATH ...] "
@@ -4755,7 +5087,7 @@ def main(argv=None) -> int:
     # `lock`'s command is everything after the first `--`, split off before argparse sees it:
     # a REMAINDER positional would swallow `--wait` and keep the `--`.
     command = None
-    if argv[:1] == ["lock"] and "--" in argv:
+    if argv[:1] in (["lock"], ["serve"]) and "--" in argv:
         cut = argv.index("--")
         argv, command = argv[:cut], argv[cut + 1:]
     ap = parser()
@@ -4770,6 +5102,8 @@ def main(argv=None) -> int:
     if args.cmd == "lock":
         if not command:
             ap.error("lane lock <name> [--wait SECS] -- <cmd...>: no command after --")
+        args.command = command
+    if args.cmd == "serve":
         args.command = command
     try:
         rc = globals()["cmd_" + args.cmd](args)
