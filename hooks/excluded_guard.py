@@ -19,13 +19,15 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      the same way, resolved from the cwd (path_arguments: pass-respawn -C, lane adopt PATH, a
      local repository for git push, fetch, pull and ls-remote), and such a call must spell its
      words plainly, naming no program for git to run (--receive-pack, --upload-pack, --exec,
-     an ext:: remote), no submodule recursion and no remote from a legacy .git/remotes or
-     .git/branches file (check_git_words); a git repository is judged where git's server side
+     an ext:: remote) and no submodule recursion (check_git_words); a git repository is judged
+     where git's server side
      finds it (<path>, <path>.git, a gitfile, a file:// URL with no host, no %-escape), and
      a git option before those subcommands is refused. The calls are found the way zsh splits
      the command (ShellLexer): each call of those heads anywhere in a candidate is judged, one
      in a substitution, subshell or later piece too, and a command it can't read is refused.
-     `delegation-ledger hook` is refused outright, since its paths come on stdin.
+     `delegation-ledger hook` is refused outright, since its paths come on stdin. A repo
+     (the cwd's or a path argument's) whose common dir holds any entry in remotes/ or
+     branches/ is refused (G-C): git reads a legacy remote there, outside the judged config.
   2. The PATH the head resolves through. Every PATH entry must be protected, not only those
      before the head: its children (git, gh, tmux, the tools claude spawns) search PATH too. An
      empty or relative entry is the cwd: refused. Then the resolved file's symlink chain (each
@@ -599,7 +601,7 @@ def check_path_arguments(m, env, cwd, project, words, targets):
                           "word (an expansion, glob, quote, space or %-escape that would be "
                           "rewritten before git sees it). Spell paths and refs as plain words.")
     if head == "git":
-        check_git_words(sub, words[2:], discover(cwd, env))
+        check_git_words(sub, words[2:])
     for path, existing_only in path_arguments(words):
         if existing_only and path.startswith("file://"):
             path = path[len("file://"):]
@@ -622,11 +624,11 @@ def check_path_arguments(m, env, cwd, project, words, targets):
                 check_rule1(m, env, found, project, arg=path)
 
 
-def check_git_words(sub, args, repo):
+def check_git_words(sub, args):
     """Refuse a git push, fetch, pull or ls-remote word naming what rule 1 can't judge: a program
     for git to run (an option of GIT_PROGRAM_OPTIONS by any prefix, ls-remote's -u, an ext::
-    remote, also as an option's value), submodule recursion, or a remote defined by a legacy
-    file in the project's git dir (.git/remotes, .git/branches: outside the judged config)."""
+    remote, also as an option's value) or submodule recursion. A legacy remote file refuses in
+    check_rule1, whatever the call names (G-C)."""
     for w in args:
         name = w[2:].split("=", 1)[0] if w.startswith("--") else ""
         value = w.split("=", 1)[1] if name and "=" in w else w
@@ -640,16 +642,6 @@ def check_git_words(sub, args, repo):
             raise Refusal("rule1", w, f"`git {sub}` with {w!r} runs git in each submodule's "
                           "own git dir, whose config the guard doesn't judge. Run it without "
                           "submodule recursion.")
-        # The repository word: a positional, or --repo's value (git takes a prefix of it).
-        # git takes it as a remote's nick only with no `/` and not `.` or `..`.
-        nick = (value if len(name) >= 3 and "repo".startswith(name) and "=" in w
-                else None if w.startswith("-") else w)
-        if repo and nick and "/" not in nick and nick not in (".", "..") and any(
-                os.path.lexists(os.path.join(repo[1], kind, nick))
-                for kind in ("remotes", "branches")):
-            raise Refusal("rule1", w, f"`git {sub}` names {nick!r}, a remote a legacy file in the "
-                          f"project's git dir ({repo[1]}/remotes or /branches) defines, outside "
-                          "the config the guard judges. Define it in .git/config instead.")
 
 
 # --- Machine view ------------------------------------------------------------------------------
@@ -944,6 +936,7 @@ def check_rule1(m, env, cwd, project, arg=None):
     trusted, files = [], []
     if repo:
         gitdir, common, top = repo
+        check_legacy_remotes(common)
         # Claude Code protects the session's own gitdir, so config.worktree is trusted only there.
         trusted = [os.path.join(common, "config")]
         worktree_cfg = os.path.join(gitdir, "config.worktree")
@@ -978,6 +971,28 @@ def check_rule1(m, env, cwd, project, arg=None):
             queue += [(i, False, depth + 1) for i in includes]
         for h in hooks:
             check_hooks_dir(m, os.path.join(hooks_base, h))
+
+
+def check_legacy_remotes(common):
+    """G-C: git reads a remote it finds in no config from <common>/remotes/<name> or
+    <common>/branches/<name>. Those dirs sit in the main git dir, which a sandboxed session can
+    write, and any call that resolves a remote reads them (the default remote, gh's own git), so
+    any entry there refuses. An empty dir passes (git init makes branches/)."""
+    for kind in ("remotes", "branches"):
+        d = os.path.join(common, kind)
+        try:
+            names = sorted(os.listdir(d))
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except OSError as e:
+            raise Refusal("rule1", d, f"could not read {d} ({type(e).__name__}), where git finds "
+                          "legacy remotes; refusing an excluded command.")
+        if names:
+            entry = os.path.join(d, names[0])
+            raise Refusal("rule1", entry, f"{entry} defines a legacy remote, read from the git "
+                          "dir a sandboxed session can write, outside the config the guard "
+                          "judges. Define the remote in the config instead (`git remote add "
+                          f"<name> <url>`), then remove each entry in {d}.")
 
 
 def check_hooks_dir(m, hdir):

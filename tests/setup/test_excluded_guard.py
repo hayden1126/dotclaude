@@ -216,6 +216,26 @@ class Rule1Repository(Guard):
         cfg = self.write(os.path.join(self.proj, ".git", "config.worktree"), "")
         self.denied("git push", "rule1", cfg, cwd=self.proj)
 
+    def test_a_legacy_remote_file_in_the_common_dir_is_refused_g_c(self):
+        # G-C: git reads a remote from <common>/remotes or <common>/branches, outside the judged
+        # config, for any call that resolves a remote (the default one, gh's own git too).
+        common = os.path.join(self.proj, ".git")
+        os.makedirs(os.path.join(common, "branches"), exist_ok=True)  # empty, as git init makes
+        self.allowed("git push")
+        for kind in ("remotes", "branches"):
+            with self.subTest(kind=kind):
+                entry = self.write(os.path.join(common, kind, "origin"), "x\n")
+                for call, cwd in (("git push", self.proj), ("gh pr view 5", self.proj),
+                                  ("git push origin lane", self.lane)):
+                    if cwd == self.lane:
+                        self.env["CLAUDE_PROJECT_DIR"] = self.lane
+                    reason = self.denied(call, "rule1", entry, cwd=cwd)
+                    self.env["CLAUDE_PROJECT_DIR"] = self.proj
+                    self.assertIn("legacy", reason)
+                    self.assertIn("git remote add", reason)
+                os.remove(entry)
+        self.allowed("git push")
+
     def test_the_projects_own_config_worktree_is_trusted(self):
         self.env["CLAUDE_PROJECT_DIR"] = self.lane
         self.write(os.path.join(self.proj, ".git", "worktrees", "lane", "config.worktree"), "")
