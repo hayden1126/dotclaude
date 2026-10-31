@@ -2,12 +2,13 @@
 caches of their own, so the sandbox can keep the caches unsandboxed code runs from read-only
 (stdlib only). Sandbox gap N1: plugin MCP servers run unsandboxed from ~/.npm/_npx, and npx
 reuses a tree there without rechecking it. N3: bun's global installs (the status line's
-ccstatusline) are hardlinks into ~/.bun/install/cache.
+ccstatusline) are hardlinks into ~/.bun/install/cache, and the same holds for uv, pip, pnpm,
+node-gyp and Playwright, whose caches unsandboxed installs and runs reuse.
 
 Each test runs the hook with bash the way Claude Code does, then sources the env file the way
 Claude Code inlines it into each Bash command: inside the sandbox, where the sandbox runtime sets
-SANDBOX_RUNTIME=1, and outside it. The env starts clean of every CLAUDE*, SANDBOX_RUNTIME, BUN_*
-and npm_config_* var, and HOME and XDG_STATE_HOME point into a temp dir."""
+SANDBOX_RUNTIME=1, and outside it. The env starts clean of every CLAUDE*, SANDBOX_RUNTIME and cache
+var below, and HOME and XDG_STATE_HOME point into a temp dir."""
 import os
 import shutil
 import stat
@@ -19,8 +20,21 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 HOOK = os.path.join(REPO, "hooks", "sandbox-caches.sh")
 PAYLOAD = ('{"hook_event_name": "SessionStart", "source": "startup", '
            '"session_id": "abcdef12-0000", "cwd": "/"}')
-VARS = ("npm_config_cache", "BUN_INSTALL_CACHE_DIR")
-SHOW = 'source "$1"; printf "%s\\n" "${npm_config_cache-unset}" "${BUN_INSTALL_CACHE_DIR-unset}"'
+# Each var and the dir under ~/.cache/claude-sandbox it points sandboxed Bash at.
+CACHES = (
+    ("npm_config_cache", "npm"),
+    ("BUN_INSTALL_CACHE_DIR", "bun"),
+    ("UV_CACHE_DIR", "uv"),
+    ("UV_PYTHON_INSTALL_DIR", "uv-python"),
+    ("UV_PYTHON_BIN_DIR", "uv-bin"),
+    ("PIP_CACHE_DIR", "pip"),
+    ("PNPM_HOME", "pnpm"),
+    ("npm_config_devdir", "node-gyp"),
+    ("PLAYWRIGHT_BROWSERS_PATH", "ms-playwright"),
+)
+VARS = tuple(v for v, _ in CACHES)
+SHOW = 'source "$1"; printf "%s\\n"' + "".join(f' "${{{v}-unset}}"' for v in VARS)
+UNSET = ["unset"] * len(VARS)
 
 
 class SandboxCaches(unittest.TestCase):
@@ -30,11 +44,12 @@ class SandboxCaches(unittest.TestCase):
         self.home = os.path.join(self.tmp, "home dir")  # a space, to prove the quoting
         os.makedirs(self.home)
         self.root = os.path.join(self.home, ".cache", "claude-sandbox")
-        self.want = [os.path.join(self.root, "npm"), os.path.join(self.root, "bun")]
+        self.want = [os.path.join(self.root, d) for _, d in CACHES]
         self.envfile = os.path.join(self.tmp, "session-env.sh")
         self.logfile = os.path.join(self.tmp, "state", "dotclaude", "sandbox-caches.log")
         self.env = {k: v for k, v in os.environ.items()
-                    if not k.startswith(("CLAUDE", "SANDBOX_RUNTIME", "BUN_"))
+                    if not k.startswith(("CLAUDE", "SANDBOX_RUNTIME", "BUN_", "UV_", "PIP_",
+                                         "PNPM_", "PLAYWRIGHT_"))
                     and not k.lower().startswith("npm_config_")}
         self.env.update(HOME=self.home, XDG_STATE_HOME=os.path.join(self.tmp, "state"))
 
@@ -77,14 +92,14 @@ class SandboxCaches(unittest.TestCase):
         # A sandbox-off command or an excluded `claude -p` must not carry the vars: the child
         # claude's MCP servers would then npx from a dir sandboxed Bash can write.
         self.run_hook()
-        self.assertEqual(self.sourced(sandboxed=False), ["unset", "unset"])
+        self.assertEqual(self.sourced(sandboxed=False), UNSET)
 
     @unittest.skipUnless(shutil.which("zsh"), "zsh not installed")
     def test_zsh_reads_the_same_line(self):
         # Claude Code runs Bash commands in the user's shell, zsh on HAYPC.
         self.run_hook()
         self.assertEqual(self.sourced("zsh"), self.want)
-        self.assertEqual(self.sourced("zsh", sandboxed=False), ["unset", "unset"])
+        self.assertEqual(self.sourced("zsh", sandboxed=False), UNSET)
 
     def test_ends_another_hooks_unterminated_line_first(self):
         with open(self.envfile, "w") as f:

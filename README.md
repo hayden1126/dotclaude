@@ -41,6 +41,11 @@ ones into a lane worktree (Lanes, below). When a mod or plugin changed since the
 it says so in one line. A session that started before the install loads those only at its start,
 so it needs `/pass`.
 
+It also sets copy mode for uv and pnpm in their user configs (`link-mode = "copy"` in
+`~/.config/uv/uv.toml`, `package-import-method=copy` in `~/.config/pnpm/rc`), so a project's
+installed packages are its own files, not hardlinks into the shared cache (sandbox gap N3). A
+value the file already sets is kept and named on stderr. bun has no such setting.
+
 Each run replaces that copy, so a value added to a key the baseline sets is lost. Settings that belong
 to one machine, such as hooks for its own scripts or `sandbox.excludedCommands` for its own tools, go
 in `~/.claude/settings.machine.json` instead. It isn't in this repo; `setup.sh` installs the baseline
@@ -216,7 +221,7 @@ sees it.
 | `hooks/excluded-check.sh` | SessionStart hook: shows what the excluded-command guard would refuse from the session's project and PATH, with the Edit deny rule for each dir, once per change in those findings; runs `excluded_guard.py --session`; fails open | symlink `~/.claude/hooks/excluded-check.sh` |
 | `hooks/memory-git.sh` | SessionStart/Stop hook: commits every project's auto-memory to a local-only git repo (`$XDG_STATE_HOME/dotclaude/memory.git`); never blocks | symlink `~/.claude/hooks/memory-git.sh` |
 | `hooks/blank-display.sh` | SessionStart hook: in a repo that opts in with `git config dotclaude.blankDisplay true` (every worktree of it), sets `DISPLAY` and `WAYLAND_DISPLAY` empty for Bash through `CLAUDE_ENV_FILE`, so a headed browser can't open in front of you; silent elsewhere; a shim over `hooks/blank_display.py`; fails open; see docs/chrome-devtools-wsl.md "Background Windows Chrome for probes" | symlink `~/.claude/hooks/blank-display.sh` and `blank_display.py` |
-| `hooks/sandbox-caches.sh` | SessionStart hook: creates `~/.cache/claude-sandbox/{npm,bun}` and, through `CLAUDE_ENV_FILE`, exports `npm_config_cache` and `BUN_INSTALL_CACHE_DIR` to them for sandboxed Bash only, so the sandbox keeps `~/.npm` (where plugin MCP servers run from) and `~/.bun/install/cache` (hardlinked into bun's global installs) read-only; silent; fails open, and a sandboxed install then gets a write error | symlink `~/.claude/hooks/sandbox-caches.sh` |
+| `hooks/sandbox-caches.sh` | SessionStart hook: creates `~/.cache/claude-sandbox/<tool>` dirs and, through `CLAUDE_ENV_FILE`, exports the cache vars of npm, bun, uv, pip, pnpm, node-gyp and Playwright to them for sandboxed Bash only, so the sandbox keeps the default caches (where plugin MCP servers and unsandboxed installs run from) read-only; silent; fails open, and a sandboxed install then gets a write error | symlink `~/.claude/hooks/sandbox-caches.sh` |
 | `bin/claude-file-history` | Lists and restores Claude Code's own backups of a file (`~/.claude/file-history`), found through the transcripts | symlink `~/.local/bin/claude-file-history` when that dir exists |
 | `bin/chrome-bg` | WSL2 only, run sandbox-off: runs Windows Chrome behind all your windows for headed puppeteer probes; `run -- CMD` hands CMD the browserURL in `$CHROME_BG_URL` and stops Chrome when CMD ends, `start`, `stop` and `ls` manage detached runs, `check` is the live self-test; see docs/chrome-devtools-wsl.md "Background Windows Chrome for probes" | symlink `~/.local/bin/chrome-bg` when that dir exists |
 | `templates/` | `SPEC.md`, `PLAN.md`, `STATUS.md` scaffolds for full-track work that survive `/clear`, and `LANE.md`, a lane's record | symlink per file into `~/.claude/templates/` |
@@ -715,19 +720,27 @@ need nothing extra.
   Windows Chrome for probes" has why the vars are empty, not unset, and why it is never a
   settings `env` entry.
 - **SessionStart (`startup|resume|clear|compact`): `sandbox-caches.sh`** (in this repo). It
-  gives sandboxed Bash's npm and bun caches of their own: it creates
-  `~/.cache/claude-sandbox/{npm,bun}` (the sandbox skips a missing `allowWrite` path) and
-  appends to `CLAUDE_ENV_FILE` a line that exports `npm_config_cache` and
-  `BUN_INSTALL_CACHE_DIR` as those dirs only when `SANDBOX_RUNTIME` is set, which the sandbox
-  runtime does inside the sandbox. The default caches feed code that runs outside the sandbox.
+  gives sandboxed Bash's package managers caches of their own: it creates a dir per tool under
+  `~/.cache/claude-sandbox` (the sandbox skips a missing `allowWrite` path) and appends to
+  `CLAUDE_ENV_FILE` a line that exports, only when `SANDBOX_RUNTIME` is set (which the sandbox
+  runtime does inside the sandbox), `npm_config_cache`, `BUN_INSTALL_CACHE_DIR`,
+  `UV_CACHE_DIR`, `UV_PYTHON_INSTALL_DIR`, `UV_PYTHON_BIN_DIR`, `PIP_CACHE_DIR`, `PNPM_HOME`
+  (pnpm's store), `npm_config_devdir` (node-gyp's headers) and `PLAYWRIGHT_BROWSERS_PATH`.
+  pnpm's metadata cache needs no var: it stays read-only and pnpm skips writing it. The default
+  caches feed code that runs outside the sandbox.
   Plugin MCP servers start as `npx <pkg>@<version>` and run from `~/.npm/_npx/<hash>/`, which
   npx reuses without rechecking: with `~/.npm` writable, an edit from sandboxed Bash ran at the
   next launch (sandbox gap N1, 2026-10-25). Bun's global installs are hardlinks into
   `~/.bun/install/cache`, so the status line's `ccstatusline` script was the same file as one
-  sandboxed Bash could write (N3). So both defaults are out of `allowWrite`, and
-  `~/.cache/claude-sandbox` is in. Unsandboxed commands keep the defaults: an excluded
-  `claude -p` would otherwise pass the vars to its MCP servers, as a settings `env` entry would.
-  The first sandboxed install of a package downloads it again. Silent; fails open (errors go to
+  sandboxed Bash could write (N3). uv, pip, pnpm, node-gyp and Playwright are the same class
+  (N3): unsandboxed installs and runs reuse what their caches hold. So every default is out of
+  `allowWrite`, and `~/.cache/claude-sandbox` is the only entry. Unsandboxed commands keep the
+  defaults: an excluded `claude -p` would otherwise pass the vars to its MCP servers, as a
+  settings `env` entry would. The first sandboxed install of a package, Python or browser
+  downloads it again; `allowedDomains` lists the download hosts (`releases.astral.sh`,
+  `nodejs.org`, `cdn.playwright.dev`, `playwright.download.prss.microsoft.com`). A sandboxed npx
+  prints one `npm warn Unknown env config "devdir"` line: node-gyp reads its dir only from that
+  npm-style var. Silent; fails open (errors go to
   `$XDG_STATE_HOME/dotclaude/sandbox-caches.log`), and a sandboxed install then gets a write
   error on the default cache.
 

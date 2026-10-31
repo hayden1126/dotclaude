@@ -372,14 +372,7 @@
         "~/.claude/agents"
       ],
       "allowWrite": [
-        "~/.cache/uv",
-        "~/.cache/pip",
-        "~/.cache/pnpm",
-        "~/.cache/node-gyp",
-        "~/.cache/ms-playwright",
-        "~/.cache/claude-sandbox",
-        "~/.local/share/uv/python",
-        "~/.local/share/pnpm/store"
+        "~/.cache/claude-sandbox"
       ]
     },
     "network": {
@@ -392,6 +385,10 @@
         "registry.npmjs.org",
         "pypi.org",
         "files.pythonhosted.org",
+        "releases.astral.sh",
+        "nodejs.org",
+        "cdn.playwright.dev",
+        "playwright.download.prss.microsoft.com",
         "relay.fullyjustified.net",
         "data1b.fullyjustified.net"
       ]

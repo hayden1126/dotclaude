@@ -454,7 +454,50 @@ if [[ "$(uname -s)" == "Linux" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 6. Stale links and plugin changes
+# 6. Copy mode for uv and pnpm installs (~/.config/uv/uv.toml, ~/.config/pnpm/rc)
+# ---------------------------------------------------------------------------
+# uv and pnpm hardlink a project's packages to their shared cache, so a sandboxed session working
+# in a project installed outside the sandbox could edit a cache file in place through the
+# project's copy, and later installs of that package anywhere would get the edit (sandbox gap
+# N3). Copy mode gives each project files of its own. A project's own setting beats the user
+# file, but a project that sets it controls its install anyway (its scripts, its build backend).
+# A value the file already sets stays, named on stderr. bun has no such setting, only
+# `bun install --backend=copyfile`.
+
+# Put LINE at the top of FILE (above any [table], where a TOML key would belong to the table)
+# unless the top level already sets KEY. Written in place, so a linked file stays a link.
+set_top_key() {
+  local file="$1" key="$2" line="$3" want="$4" cur
+  if [[ ! -e $file ]]; then
+    mkdir -p "$(dirname "$file")"
+    printf '%s\n' "$line" > "$file"
+    say "set $key in $file"; return
+  fi
+  cur="$(awk -v k="$key" '
+    /^[[:space:]]*\[/ { exit }
+    { l = $0; sub(/^[[:space:]]+/, "", l) }
+    index(l, k) == 1 && substr(l, length(k) + 1) ~ /^[[:space:]]*=/ {
+      v = substr(l, length(k) + 1); sub(/^[[:space:]]*=[[:space:]]*/, "", v)
+      gsub(/["'\''[:space:]]/, "", v); print "=" v; exit
+    }' "$file")"
+  if [[ $cur == "=$want" ]]; then
+    return
+  elif [[ -n $cur ]]; then
+    warn "$file sets $key to ${cur#=}, kept: installs there can hardlink to the shared cache"
+    return
+  fi
+  local rest
+  rest="$(cat "$file")"
+  printf '%s\n%s' "$line" "${rest:+$rest$'\n'}" > "$file"
+  say "set $key in $file"
+}
+
+config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+set_top_key "$config_home/uv/uv.toml" link-mode 'link-mode = "copy"' copy
+set_top_key "$config_home/pnpm/rc" package-import-method package-import-method=copy copy
+
+# ---------------------------------------------------------------------------
+# 7. Stale links and plugin changes
 # ---------------------------------------------------------------------------
 # After the last link: remove the managed links this run didn't replace that point into another
 # live lane worktree (a file only that lane has), and the dangling ones into this checkout or
@@ -474,7 +517,7 @@ python3 -I "$REPO_DIR/hooks/excluded_guard.py" --scan \
   || warn "the excluded-command guard would refuse the calls above: look at each dir, fix each as the scan says (most by pasting the settings.machine.json it printed), and rerun setup where its last line says"
 
 # ---------------------------------------------------------------------------
-# 7. Final checklist
+# 8. Final checklist
 # ---------------------------------------------------------------------------
 cat <<'EOF'
 
