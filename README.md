@@ -739,7 +739,12 @@ need nothing extra.
   defaults: an excluded `claude -p` would otherwise pass the vars to its MCP servers, as a
   settings `env` entry would. The first sandboxed install of a package, Python or browser
   downloads it again; `allowedDomains` lists the download hosts (`releases.astral.sh`,
-  `nodejs.org`, `cdn.playwright.dev`, `playwright.download.prss.microsoft.com`). A sandboxed npx
+  `nodejs.org`, `cdn.playwright.dev`, `playwright.download.prss.microsoft.com`). Playwright's
+  Chromium builds are the exception: they redirect to `storage.googleapis.com`, and allowing that
+  host would let sandboxed code upload to any public-write bucket. So install a Chromium revision
+  from a terminal, into the sandbox's dir:
+  `PLAYWRIGHT_BROWSERS_PATH=~/.cache/claude-sandbox/ms-playwright npx playwright install chromium`
+  (or `chromium-headless-shell`). A sandboxed npx
   prints one `npm warn Unknown env config "devdir"` line: node-gyp reads its dir only from that
   npm-style var. Silent; fails open (errors go to
   `$XDG_STATE_HOME/dotclaude/sandbox-caches.log`), and a sandboxed install then gets a write
