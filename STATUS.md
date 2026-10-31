@@ -114,7 +114,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
   Backlog:
   - **Next lane when a slot frees:** shared lane locks or structured `Keep open` (both below,
-    both in the lane CLI files ports now holds), or the subagent 180 s fix; Hayden's pick.
+    both in the lane CLI files ports now holds), the subagent 180 s fix, or the design-decision
+    security re-evaluation; Hayden's pick.
   - G8 open probes (a) and (b) (Hayden's pick, 2026-10-14): Hayden runs
     `~/scratch/sandbox-audit/g8-probe/run.py` by hand with the sandbox off, because the auto-mode
     classifier refused the run. Results go into the private findings file's G8 section.
@@ -200,6 +201,21 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     prose" (branch `fix/lane-small-bugs`) lists what stays open. Lane-able
     (`skills/lanes/scripts/lane`, `lanelib.py`, handoff-check, `tests/lanes`), the same files as
     lane ports, so it opens after ports merges.
+  - **A server jail for `lane serve`** (Hayden, 2026-10-31, via lane ports, session 57b5b44c).
+    `serve` binds the host port itself and forwards into the dev server, which runs in a
+    bubblewrap jail with the sandbox's file rules and no network of its own. Closes a private
+    sandbox-audit FINDINGS row (lane ports, 2026-10-31). Open design question: a server that calls
+    out needs a proxy with an allowlist. Lane-able after ports PR 1 (`lane`, `lanelib.py`,
+    `tests/lanes`).
+  - **Re-evaluate past design decisions for unflagged exploitability** (Hayden, 2026-10-31, via
+    lane ports, session 57b5b44c). Why: a design fork in lane ports offered a standing sandbox
+    bypass without naming the threat until Hayden asked; earlier forks may have shipped the same
+    way. Sources: lane records' Decisions (`<common-dir>/lanes/_closed/*/`), memory,
+    `docs/lanes.md` and `docs/delegation.md` rationale, PR bodies. For each decision that touches
+    the sandbox, permissions, excluded commands or unsandboxed execution: the threat, whether it
+    was named when chosen, and a fix or an accept. Findings go private (sandbox-audit FINDINGS).
+    Lead's view: a read-only audit lane of its own, not lane practices (paused, and its skills
+    cover app code, not dotclaude's own design).
   - **Ports: blocks per lane, `lane port`, `lane serve`** (lane ports; feature; capella-studio lane prefs,
     session 78db7f95, 2026-10-29). A lane's run script started a dev server on a port another
     lane's dev held; the start failed and its checks silently tested the other server. Proposed:
