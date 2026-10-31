@@ -304,6 +304,16 @@ for name, spec in tools.items():
     subprocess.run(cmd_str, shell=True, check=False)
 PY
 
+# git: no submodule recursion on fetch or pull (excluded-guard G-B). A fetch outside the
+# sandbox would run git in each submodule's own git dir, which a sandboxed session can write;
+# the guard refuses fetch and pull until this is off. Set only when it isn't false already.
+if [ "$(git config --global --includes --type=bool --get fetch.recurseSubmodules 2>/dev/null)" = false ]; then
+    say "git: fetch.recurseSubmodules is already false globally"
+else
+    git config --global --replace-all fetch.recurseSubmodules false
+    say "git: set fetch.recurseSubmodules false globally (excluded-guard G-B)"
+fi
+
 # ---------------------------------------------------------------------------
 # 5. Status line widget (~/.config/ccstatusline)
 # ---------------------------------------------------------------------------
