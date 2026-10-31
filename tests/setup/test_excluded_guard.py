@@ -163,8 +163,10 @@ class Rule1Repository(Guard):
         self.allowed("git push origin lane", cwd=self.lane)
         self.allowed("lane ls", cwd=self.lane)
 
-    def test_a_subdir_of_the_root_in_the_same_repo_passes(self):
-        self.allowed("git push", cwd=self.mkdir("proj", "sub", "deeper"))
+    def test_a_protected_subdir_of_the_root_in_the_same_repo_passes(self):
+        # A writable one is refused (Rule1BelowTop).
+        self.protect(self.mkdir("proj", "sub"))
+        self.allowed("git push", cwd=self.protect(self.mkdir("proj", "sub", "deeper")))
 
     def test_a_nested_repo_under_the_root_is_refused(self):
         nested = self.mkdir("proj", "sub", "nested")
@@ -190,8 +192,9 @@ class Rule1Repository(Guard):
         self.git("init", "-q", other, cwd=self.tmp)
         self.denied("gh pr view", "rule1", cwd=other)
 
-    def test_no_repo_at_the_cwd_passes(self):
-        plain = self.mkdir("plain")
+    def test_no_repo_at_a_protected_cwd_passes(self):
+        # A writable one is refused (Rule1BelowTop).
+        plain = self.protect(self.mkdir("plain"))
         self.env["CLAUDE_PROJECT_DIR"] = plain
         self.allowed("git push", cwd=plain)
 
@@ -199,8 +202,8 @@ class Rule1Repository(Guard):
         self.env["CLAUDE_PROJECT_DIR"] = self.mkdir("plain")
         self.denied("git push", "rule1")
 
-    def test_a_cwd_with_no_repo_passes_while_the_project_is_a_repo(self):
-        self.allowed("git push", cwd=self.mkdir("plain"))
+    def test_a_protected_cwd_with_no_repo_passes_while_the_project_is_a_repo(self):
+        self.allowed("git push", cwd=self.protect(self.mkdir("plain")))
 
     def test_lane_addr_repo_runs_from_another_repo_and_from_home(self):
         # The global CLAUDE.md line's call, from a session outside dotclaude: the guard judges
@@ -208,8 +211,10 @@ class Rule1Repository(Guard):
         # Rule1PathArguments pins the exemption).
         call = "lane addr --repo ~/dotclaude lead"
         self.allowed(call)
-        self.env["CLAUDE_PROJECT_DIR"] = self.home
-        self.allowed(call, cwd=self.home)
+        other = self.mkdir("other")
+        self.git("init", "-q", other, cwd=self.tmp)
+        self.env["CLAUDE_PROJECT_DIR"] = other
+        self.allowed(call, cwd=other)
 
     def test_another_worktrees_config_worktree_is_judged(self):
         # A lane-like project, cwd in the main checkout: same common dir, a different gitdir.
@@ -244,6 +249,75 @@ class Rule1Repository(Guard):
         self.allowed("git push", cwd=self.lane)
 
 
+class Rule1BelowTop(Guard):
+    """G-E cwd half: git finds a repo by walking up from where it runs, so a dir it passes on
+    the way that a sandboxed session can write could gain a planted repo between the check and
+    the run. A call from below its repo top, or from no repo, is refused unless every dir git
+    looks in on the way is protected."""
+
+    PATH_HEADS = ["pass-respawn", "pass-respawn *", "lane adopt *"]
+
+    def setUp(self):
+        super().setUp()
+        self.write_settings({"excludedCommands": EXCLUDED + self.PATH_HEADS})
+
+    def test_a_call_from_below_the_repo_top_is_refused_with_the_top_to_run_from(self):
+        deeper = self.mkdir("proj", "sub", "deeper")
+        for call in ("git push", "gh pr view 5", "lane ls"):
+            with self.subTest(call=call):
+                reason = self.denied(call, "rule1", deeper, cwd=deeper)
+                self.assertIn(f"Run it from {self.proj}", reason)
+        lane_sub = self.mkdir("lane", "sub")
+        self.env["CLAUDE_PROJECT_DIR"] = self.lane
+        self.assertIn(f"Run it from {self.lane}",
+                      self.denied("git push", "rule1", lane_sub, cwd=lane_sub))
+
+    def test_a_call_from_no_repo_is_refused_unless_no_session_can_write_the_way_up(self):
+        plain = self.mkdir("plain")
+        for project in (self.proj, plain):
+            with self.subTest(project=project):
+                self.env["CLAUDE_PROJECT_DIR"] = project
+                reason = self.denied("git push", "rule1", plain, cwd=plain)
+                self.assertIn("repository top", reason)
+        self.env["CLAUDE_PROJECT_DIR"] = self.home
+        self.denied("lane addr --repo ~/dotclaude lead", "rule1", self.home, cwd=self.home)
+        # Outside every write root no sandboxed session can plant a repo.
+        self.env["CLAUDE_PROJECT_DIR"] = "/usr"
+        self.allowed("git push", cwd="/usr")
+
+    def test_the_repo_top_and_protected_dirs_on_the_way_pass(self):
+        self.allowed("git push")
+        self.env["CLAUDE_PROJECT_DIR"] = self.lane
+        self.allowed("git push origin lane", cwd=self.lane)
+        self.env["CLAUDE_PROJECT_DIR"] = self.proj
+        deeper = self.mkdir("proj", "sub", "deeper")
+        self.protect(os.path.join(self.proj, "sub", "deeper"))
+        # proj/sub is still writable: a repo planted there would be found from deeper.
+        self.denied("git push", "rule1", os.path.join(self.proj, "sub"), cwd=deeper)
+        self.protect(os.path.join(self.proj, "sub"))
+        self.allowed("git push", cwd=deeper)
+
+    def test_a_path_argument_below_its_repo_top_or_in_no_repo_is_refused(self):
+        sub = self.mkdir("proj", "sub")
+        plain = self.mkdir("plain")
+        for call, bad in ((f"pass-respawn -C {sub}", sub), ("pass-respawn -C sub", sub),
+                          (f"pass-respawn -C {plain}", plain), (f"lane adopt {sub}", sub)):
+            with self.subTest(call=call):
+                self.assertIn("repository top", self.denied(call, "rule1", bad))
+        for call in (f"pass-respawn -C {self.proj}", f"pass-respawn -C {self.lane}",
+                     "pass-respawn -C .", f"lane adopt {self.lane}"):
+            with self.subTest(call=call):
+                self.allowed(call)
+
+    def test_project_refusals_pass_for_a_lane_root(self):
+        # lane new reports project_refusals for the new lane's root: a repo top.
+        guard = load_guard()
+        refusals, error = guard.project_refusals(self.env, self.lane)
+        self.assertEqual(([r.reason for r in refusals], error), ([], None))
+        refusals, _ = guard.project_refusals(self.env, self.mkdir("lane", "sub"), self.lane)
+        self.assertTrue(refusals)
+
+
 class Rule1PathArguments(Guard):
     """A path argument a head runs git in is judged as the cwd is, from the project root."""
 
@@ -274,8 +348,8 @@ class Rule1PathArguments(Guard):
     def test_pass_respawn_C_in_the_project_passes(self):
         for call in (f"pass-respawn -C {self.proj}", f"pass-respawn -C {self.proj} --compact",
                      "pass-respawn -C .", "pass-respawn", "pass-respawn --cancel",
-                     f"pass-respawn -C {self.mkdir('proj', 'sub')}", "pass-respawn -C sub",
-                     f"pass-respawn -C {self.mkdir('plain')}"):
+                     f"pass-respawn -C {self.protect(self.mkdir('proj', 'sub'))}",
+                     "pass-respawn -C sub", f"pass-respawn -C {self.protect(self.mkdir('plain'))}"):
             with self.subTest(call=call):
                 self.allowed(call)
 
@@ -286,8 +360,8 @@ class Rule1PathArguments(Guard):
 
     def test_a_relative_path_is_judged_from_the_cwd(self):
         self.refused("pass-respawn -C ../other", self.other_git)
-        # From proj/x, ../other is proj/other: the project's own path, missing or not.
-        self.allowed("pass-respawn -C ../other", cwd=self.mkdir("proj", "x"))
+        # From the lane, ../proj is the project's own top.
+        self.allowed("pass-respawn -C ../proj", cwd=self.lane)
 
     def test_a_home_relative_path_is_expanded(self):
         mine = self.mkdir("home", "repo")
@@ -323,7 +397,10 @@ class Rule1PathArguments(Guard):
             with self.subTest(call=call):
                 self.refused(call, self.other_git)
         self.allowed(f"lane adopt {self.lane}")
-        self.allowed(f"lane adopt --id=lane {self.lane}")
+        for call in (f"lane adopt --id=lane {self.lane}", f"lane adopt --id x {self.lane}",
+                     f"lane adopt {self.lane} --i x"):
+            with self.subTest(call=call):
+                self.allowed(call)
 
     def test_git_with_a_local_repository_in_another_repo_is_refused(self):
         o = self.other
@@ -335,14 +412,20 @@ class Rule1PathArguments(Guard):
                 self.refused(call, self.other_git)
 
     def test_git_with_remotes_refs_and_urls_passes(self):
-        self.mkdir("proj", "feat")  # a ref that is also a dir of the project
         for call in ("git push", "git push origin feat/x", "git push -u origin HEAD:refs/heads/x",
-                     "git push origin feat", "git push --force-with-lease origin main",
+                     "git push --force-with-lease origin main",
                      "git fetch origin", "git fetch --prune origin", "git pull --ff-only",
                      "git ls-remote https://github.com/x/y", "git fetch git@github.com:x/y.git",
                      f"git push -q {self.proj}", f"git fetch {self.lane}"):
             with self.subTest(call=call):
                 self.allowed(call)
+
+    @unittest.expectedFailure
+    def test_a_refspec_named_like_a_dir_of_the_project_passes(self):
+        # A false refusal until refspec words stop being path candidates (W2 item 7): `feat`
+        # is judged as a path, and proj/feat sits below the repo top (Rule1BelowTop).
+        self.mkdir("proj", "feat")
+        self.allowed("git push origin feat")
 
     def test_git_with_an_option_naming_a_program_is_refused(self):
         # Review round 1 (high): the value is a program git runs, not a repository to judge.
@@ -1232,16 +1315,16 @@ class Rule2Path(Guard):
 class Rule3ProjectRoot(Guard):
     def test_claude_runs_only_from_the_project_root(self):
         self.allowed("claude --version")
-        sub = self.mkdir("proj", "sub")
+        sub = self.protect(self.mkdir("proj", "sub"))  # else rule 1 refuses it first
         self.denied("claude --version", "rule3", sub, cwd=sub)
 
     def test_codex_runs_only_from_the_project_root(self):
         self.allowed("codex login status")
-        sub = self.mkdir("proj", "sub")
+        sub = self.protect(self.mkdir("proj", "sub"))
         self.denied("codex login status", "rule3", sub, cwd=sub)
 
     def test_git_from_a_subdir_is_not_held_to_rule_3(self):
-        self.allowed("git push", cwd=self.mkdir("proj", "sub"))
+        self.allowed("git push", cwd=self.protect(self.mkdir("proj", "sub")))
 
 
 class Matching(Guard):

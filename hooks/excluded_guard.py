@@ -321,13 +321,21 @@ def path_arguments(words):
             if w == "-C" and i + 1 < len(args):
                 out.append(args[i + 1])
             elif w.startswith("-C") and w != "-C":
-                # `-C=x` is x on Python 3.12 and `=x` on older ones: judge both.
-                out += [w[2:]] + ([w[3:]] if w.startswith("-C=") else [])
+                # `-C=x` is x on Python 3.12 and `=x` on older ones: judge both, x first.
+                out += ([w[3:]] if w.startswith("-C=") else []) + [w[2:]]
         return [(p, False) for p in out]
     if head == "lane" and args[:1] == ["adopt"]:
-        # Every word but its options; `--id`'s value is judged too (an over-match only adds checks).
-        return [(w, False) for w in args[1:]
-                if w not in ("--", "--id", "-h", "--help") and not w.startswith("--id=")]
+        # Every word but its options and `--id`'s value (argparse takes `--i` for it too): a
+        # missing path a sandboxed session could create is refused (check_below_top).
+        out, skip = [], False
+        for w in args[1:]:
+            if skip and not w.startswith("-"):
+                skip = False
+            elif w in ("--i", "--id"):
+                skip = True
+            elif w not in ("--", "-h", "--help") and not w.startswith(("--id=", "--i=")):
+                out.append(w)
+        return [(w, False) for w in out]
     if head == "git" and args[:1] and args[0] in GIT_PATH_SUBS:
         for w in args[1:]:
             if w.startswith("-"):
@@ -847,8 +855,7 @@ def discover(start, env=None):
         gitdir, common = gitdir_info(os.path.join(start, env["GIT_DIR"]))
         top = env.get("GIT_WORK_TREE") or start
         return gitdir, common, os.path.realpath(os.path.join(start, top))
-    ceilings = {os.path.realpath(c) for c in (env.get("GIT_CEILING_DIRECTORIES") or "").split(":")
-                if c}
+    ceilings = ceiling_dirs(env)
     d = start
     while True:
         dotgit = os.path.join(d, ".git")
@@ -862,6 +869,51 @@ def discover(start, env=None):
         if parent == d or parent in ceilings:
             return None
         d = parent
+
+
+def ceiling_dirs(env):
+    return {os.path.realpath(c) for c in (env.get("GIT_CEILING_DIRECTORIES") or "").split(":")
+            if c}
+
+
+def searched_dirs(start, env, top):
+    """The dirs git's discovery looks in from `start` before it reaches `top` (the top of the
+    repo it found), or, with top None, every dir it looked in (up to / or a ceiling). Empty
+    with GIT_DIR set: git looks nowhere."""
+    if env.get("GIT_DIR"):
+        return []
+    ceilings, d, out = ceiling_dirs(env), os.path.realpath(start), []
+    while d != top:
+        out.append(d)
+        parent = os.path.dirname(d)
+        if parent == d or parent in ceilings:
+            break
+        d = parent
+    return out
+
+
+def check_below_top(m, env, cwd, project, repo, what, kind):
+    """G-E cwd half: git walks up from cwd to the first repo it finds, and a dir it looks in on
+    the way that a sandboxed session can write could gain a planted repo after the check.
+    Refuse unless cwd is its repo's top, or every dir git looks in from it is protected. kind
+    is what check_rule1 judges: "cwd", "arg" or "url"."""
+    top = repo[2] if repo else None
+    for d in searched_dirs(cwd, env, top):
+        bad = m.exposed(d)
+        if not bad:
+            continue
+        if not top:
+            proj = discover(project, {k: env[k] for k in ("GIT_CEILING_DIRECTORIES",)
+                                      if k in env})
+            top_name = "a repository top" + (f" (the project's is {proj[2]})" if proj else "")
+        else:
+            top_name = f"{top}, the repository top"
+        fix = {"cwd": f"Run it from {top_name}", "arg": f"Name {top_name}, instead",
+               "url": f"Point the remote at a network URL or {top_name}"}[kind]
+        where = (f"is below its repository top {top}" if top else "is in no repository")
+        raise Refusal("rule1", bad, f"{what} {where}, and a sandboxed session can write {bad}, "
+                      "where git looks for a repository on its way up and would use one "
+                      f"planted after this check. {fix}.")
 
 
 def parse_value(raw):
@@ -966,16 +1018,17 @@ def check_rule1(m, env, cwd, project, arg=None, url=None):
     one level deep: a URL's repo doesn't have its own judged."""
     repo = discover(cwd, env)
     proj = discover(project, {k: env[k] for k in ("GIT_CEILING_DIRECTORIES",) if k in env})
+    kind = "url" if url is not None else "arg" if arg is not None else "cwd"
+    what = {"url": f"the remote URL {url}", "arg": f"the path argument {arg}",
+            "cwd": "the working directory"}[kind]
     if repo and (proj is None or repo[1] != proj[1]):
-        what, fix = ((f"the remote URL {url}", "Point the remote at a network URL or a path in "
-                      "the project's repository")
-                     if url is not None else
-                     (f"the path argument {arg}", "Name a path in the project's repository")
-                     if arg is not None else
-                     ("the working directory", "Run it from the project's repository"))
+        fix = {"url": "Point the remote at a network URL or a path in the project's repository",
+               "arg": "Name a path in the project's repository",
+               "cwd": "Run it from the project's repository"}[kind]
         raise Refusal("rule1", repo[0],
                       f"{what} is in the repository with git dir {repo[0]}, not the project's. "
                       f"{fix}, or run it from a session launched in that repository.")
+    check_below_top(m, env, cwd, project, repo, what, kind)
     home = m.home
     trusted, files = [], []
     if repo:
