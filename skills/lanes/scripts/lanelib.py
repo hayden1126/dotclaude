@@ -22,6 +22,9 @@ Layout (PLAN.md "Layout"):
   <state-dir>/lanes/<repo>-<hash>.parked/<id>.json
                                 lane <id>'s parked flag (Repo.parked_path): written by `lane park`,
                                 removed by `lane open` and `lane done`
+  <state-dir>/lanes/<repo>-<hash>.served/<id>/<port>.json
+                                what `lane serve` started on a port (Repo.served_path), which
+                                `serve --stop` ends by; `lane done` removes the dir
 """
 import contextlib
 import datetime
@@ -380,12 +383,16 @@ class Repo:
         sandboxed Bash park itself out of the cap, or unpark another."""
         return os.path.join(self.config_path.removesuffix(".toml") + ".parked", lane_id + ".json")
 
+    def served_dir(self, lane_id: str) -> str:
+        """Lane lane_id's serve records, beside the config: `serve --stop` signals by them, so
+        only a sandbox-off `lane serve` may write them, never a lane's sandboxed Bash. `lane
+        done` removes the dir."""
+        return os.path.join(self.config_path.removesuffix(".toml") + ".served", lane_id)
+
     def served_path(self, lane_id: str, port: int) -> str:
-        """What `lane serve` started on port for lane lane_id (its session leader's pid, start
-        and boot), beside the config: `serve --stop` signals by it, so only a bare command may
-        write it, never a lane's sandboxed Bash."""
-        return os.path.join(self.config_path.removesuffix(".toml") + ".served", lane_id,
-                            f"{port}.json")
+        """What `lane serve` started on port: its leader's pid, start and boot, and the token
+        in the environment of everything it started."""
+        return os.path.join(self.served_dir(lane_id), f"{port}.json")
 
     @property
     def has_lanes(self) -> bool:
@@ -1871,6 +1878,17 @@ ENVIRON_MAX = 1 << 20  # bytes of /proc/<pid>/environ read for TMUX and TMUX_PAN
 LEAD_MAX = 4096  # bytes of a lead record; a longer one is no record
 PANE = re.compile(r"%[0-9]{1,9}")
 NUMBER = re.compile(r"[0-9]{1,20}")
+
+
+def proc_env(pid: int, key: str, proc: str = PROC) -> str | None:
+    """The value of key in the environment pid started with, or None: unset, or unreadable
+    (gone, another user's). Read bounded, never through a link or waiting on a FIFO."""
+    raw = read_head(os.path.join(proc, str(pid), "environ"), ENVIRON_MAX)
+    want = key.encode() + b"="
+    for entry in (raw or b"").split(b"\0"):
+        if entry.startswith(want):
+            return entry[len(want):].decode(errors="replace")
+    return None
 
 
 def proc_tmux(pid: int, proc: str = PROC) -> tuple[str, int, int, str] | None:

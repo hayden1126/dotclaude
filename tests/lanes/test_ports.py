@@ -1,4 +1,6 @@
 """Port blocks: `lane init --block N` hands each new lane N ports in a row from `--ports`."""
+import importlib.machinery
+import importlib.util
 import json
 import os
 import signal
@@ -9,9 +11,18 @@ import textwrap
 import time
 import unittest
 
-from _fixture import LanesRepo
+from _fixture import LANE, LanesRepo
 
 import lanelib  # on sys.path through _fixture
+
+
+def load_lane_script():
+    """The `lane` script as a module (it has no .py name)."""
+    loader = importlib.machinery.SourceFileLoader("lane_cli", LANE)
+    spec = importlib.util.spec_from_loader("lane_cli", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
 
 
 class PortBlocks(LanesRepo):
@@ -209,29 +220,70 @@ class Serve(LanesRepo):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn(f"serving port {self.lo + 2}", p.stdout)
 
-    def test_a_listener_outside_the_servers_session_fails_the_serve(self):
+    def mine(self, pattern):
+        """Pids whose command line holds pattern and this test's temp dir: never another
+        lane's concurrent suite."""
+        out = []
+        for name in os.listdir("/proc"):
+            if name.isdigit():
+                argv = lanelib.proc_cmdline(int(name)) or []
+                line = " ".join(argv)
+                if pattern in line and self.tmp in line:
+                    out.append(int(name))
+        return out
+
+    def test_a_listener_that_is_not_the_serves_fails_it(self):
         # The bug this closes: our server never binds (another holds the port), and the checks
         # that follow would test the other server. Here our command hands the port to a process
-        # in a session of its own, so the only listener isn't ours.
-        script = (f"import subprocess, sys, time; subprocess.Popen([sys.executable, "
-                  f"{self.server!r}, '127.0.0.1', sys.argv[1]], start_new_session=True); "
-                  f"time.sleep(600)")
+        # outside its session with the token cleared from its environment: as foreign as
+        # another lane's server, and deterministic.
+        script = (f"import subprocess, sys, time; subprocess.Popen(['env', '-i', "
+                  f"{sys.executable!r}, {self.server!r}, '127.0.0.1', sys.argv[1]], "
+                  f"start_new_session=True); time.sleep(600)  # {self.tmp}")
         p = self.serve("--", sys.executable, "-c", script, "{port}")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn(f"port {self.lo}'s listener is not the server lane serve started",
                       p.stderr)
-        holders = [int(x) for x in subprocess.run(
-            ["pgrep", "-f", f"{self.server} 127.0.0.1 {self.lo}"],
-            capture_output=True, text=True).stdout.split()]
+        holders = self.mine(f"{self.server} 127.0.0.1 {self.lo}")
         for pid in holders:
             self.addCleanup(lambda pid=pid: os.kill(pid, signal.SIGKILL))
         self.assertTrue(holders)
         self.assertIn(f"pid {holders[0]}", p.stderr)
         self.assertIsNone(self.served(self.lo))
-        # The serve's own session is ended: nothing of it is left.
-        leaders = subprocess.run(["pgrep", "-f", "time.sleep\\(600\\)"], capture_output=True,
-                                 text=True).stdout.split()
-        self.assertEqual(leaders, [])
+        self.assertEqual(self.mine("time.sleep(600)"), [])  # the serve's own leader is ended
+
+    def test_a_server_that_outlives_its_leader_or_daemonizes_is_the_serves(self):
+        # A wrapper that backgrounds the server and exits, and a server that leaves the session
+        # (setsid, as a daemon does): both carry the serve's token, so both are its own, and
+        # --stop ends them after the leader is gone.
+        forms = {
+            "wrapper": ["sh", "-c", f'"$0" {self.server} 127.0.0.1 "$PORT" & exit 0',
+                        sys.executable],
+            "daemon": [sys.executable, "-c",
+                       f"import subprocess, sys; subprocess.Popen([sys.executable, "
+                       f"{self.server!r}, '127.0.0.1', sys.argv[1]], start_new_session=True)",
+                       "{port}"],
+        }
+        for i, (form, argv) in enumerate(forms.items()):
+            with self.subTest(form=form):
+                port = self.lo + i
+                p = self.serve("--port", str(port), "--", *argv)
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                (pid,) = self.mine(f"{self.server} 127.0.0.1 {port}")
+                self.assertNotEqual(os.getsid(pid), self.served(port)["pid"]) if form == "daemon" \
+                    else None
+                p = self.run_lane("serve", "--stop", str(port), cwd=self.path)
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertIn(f"stopped port {port}", p.stdout)
+                self.assertEqual(self.mine(f"{self.server} 127.0.0.1 {port}"), [])
+
+    def test_the_server_carries_the_lane_sessions_id(self):
+        # So `lane done` and `lane park` end it with the lane's sessions, as a leftover.
+        self.env["CLAUDE_CODE_SESSION_ID"] = "sess-lane-0007"
+        p = self.serve("--", sys.executable, self.server, "127.0.0.1", "{port}")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(lanelib.proc_env(self.served(self.lo)["pid"], "CLAUDE_CODE_SESSION_ID"),
+                         "sess-lane-0007")
 
     def test_a_port_already_listened_on_is_refused_and_names_the_holder(self):
         hosts = ["127.0.0.1"] + (["::1"] if ipv6() else [])
@@ -284,6 +336,7 @@ class Serve(LanesRepo):
         os.makedirs(logs)
         os.symlink(victim, os.path.join(logs, f"{self.lo}.log"))
         os.link(victim, os.path.join(logs, f"{self.lo + 1}.log"))
+        os.link(victim, os.path.join(logs, ".gitignore"))
         for port in (self.lo, self.lo + 1):
             with self.subTest(port=port):
                 p = self.serve("--port", str(port), "--", sys.executable, self.server,
@@ -324,12 +377,84 @@ class Serve(LanesRepo):
         repo = lanelib.Repo(self.main, self.common)
         path = repo.served_path("web", self.lo)
         rec = json.loads(self.read(path))
+        # The recorded pid now names a session leader the serve never started (its start
+        # differs): neither it nor its session is signalled; the server, by its token, is.
         holder = self.foreign("127.0.0.1", self.lo + 1)
-        self.write(path, json.dumps(dict(rec, pid=holder.pid)))  # its start won't match
+        self.write(path, json.dumps(dict(rec, pid=holder.pid)))
         p = self.run_lane("serve", "--stop", str(self.lo), cwd=self.path)
-        self.assertIn("already gone", p.stdout + p.stderr)
+        self.assertIn(f"stopped port {self.lo}", p.stdout, p.stderr)
         self.assertIsNone(holder.poll())
-        self.write(path, json.dumps(rec))  # so cleanup ends the real one
+        self.assertEqual(self.mine(f"{self.server} 127.0.0.1 {self.lo}"), [])
+
+    def test_a_record_from_another_boot_names_nothing_alive(self):
+        p = self.serve("--", sys.executable, self.server, "127.0.0.1", "{port}")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        repo = lanelib.Repo(self.main, self.common)
+        path = repo.served_path("web", self.lo)
+        rec = json.loads(self.read(path))
+        self.write(path, json.dumps(dict(rec, boot="another-boot")))
+        p = self.run_lane("serve", "--stop", str(self.lo), cwd=self.path)
+        self.assertIn("already gone", p.stdout, p.stderr)
+        self.assertTrue(self.mine(f"{self.server} 127.0.0.1 {self.lo}"))
+        self.write(path, json.dumps(rec))  # so cleanup ends it
+
+    def test_stop_ends_a_session_member_that_cleared_its_environment(self):
+        # No token on it, so only the leader's session (the leader still runs) proves it.
+        argv = ["sh", "-c", f'env -i sh -c "sleep 600; :" {self.tmp} & exec "$0" {self.server} '
+                            '127.0.0.1 "$PORT"', sys.executable]
+        p = self.serve("--", *argv)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        (member,) = self.mine("sleep 600; :")
+        self.assertIsNone(lanelib.proc_env(member, "LANE_SERVE"))
+        self.lane("serve", "--stop", str(self.lo), cwd=self.path)
+        self.assertEqual(self.mine("sleep 600; :"), [])
+
+    def test_a_serve_still_running_but_not_listening_holds_its_port(self):
+        script = textwrap.dedent(f"""\
+            import signal, socket, sys, time
+            s = socket.socket()
+            s.bind(("127.0.0.1", int(sys.argv[1])))
+            s.listen()
+            signal.signal(signal.SIGUSR1, lambda *_: s.close())
+            print("listening", flush=True)
+            while True:
+                time.sleep(1)  # {self.tmp}
+        """)
+        p = self.serve("--", sys.executable, "-c", script, "{port}")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        os.kill(self.served(self.lo)["pid"], signal.SIGUSR1)
+        deadline = time.monotonic() + 5
+        while lanelib.listeners(self.lo) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        p = self.serve("--port", str(self.lo), "--", "true")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("still runs but isn't listening: `lane serve --stop", p.stderr)
+
+    def test_a_timeout_must_be_finite_seconds(self):
+        for value in ("nan", "inf", "0", "-1", "x"):
+            with self.subTest(timeout=value):
+                p = self.serve("--timeout", value, "--", "true")
+                self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+                self.assertIn("wants seconds above 0", p.stderr)
+
+    def test_a_lane_json_block_is_checked_against_the_range_and_the_lanes(self):
+        # lane.json is sandbox-writable: a lane could name any port, or another lane's.
+        self.lane("init", "--ports", f"{self.lo}-{self.lo + 5}")
+        self.lane("new", "api")  # lo+3 .. lo+5
+        rec = self.lane_json("web")
+        for fields, why in (({"port": self.lo + 3}, "lane api holds"),
+                            ({"block": 9}, "outside the repo's range")):
+            with self.subTest(fields=fields):
+                self.write(os.path.join(self.common, "lanes", "web", "lane.json"),
+                           json.dumps(dict(rec, **fields)))
+                p = self.serve("--", "true")
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertIn(why, p.stderr)
+
+    def test_log_tail_reads_only_a_regular_file(self):
+        fifo = os.path.join(self.tmp, "fifo.log")
+        os.mkfifo(fifo)
+        self.assertEqual(load_lane_script().log_tail(fifo), "")
 
     def test_another_lanes_server_is_not_this_lanes_to_stop(self):
         p = self.serve("--", sys.executable, self.server, "127.0.0.1", "{port}")
@@ -340,6 +465,18 @@ class Serve(LanesRepo):
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("lane api's serve started nothing", p.stderr)
         self.assertIsNotNone(self.served(self.lo))
+
+
+class ServedRecords(LanesRepo):
+    def test_done_removes_the_lanes_serve_records(self):
+        self.lane("new", "web")
+        path = self.lane_path("web")
+        repo = lanelib.Repo(self.main, self.common)
+        self.write(repo.served_path("web", 5191), "{}")
+        self.commit("chart.txt", "axis\n", cwd=path)
+        self.git("push", "-q", "origin", "web:main", cwd=path)
+        self.lane("done", "web")
+        self.assertFalse(os.path.exists(repo.served_dir("web")))
 
 
 if __name__ == "__main__":
