@@ -244,8 +244,9 @@ class Baseline(unittest.TestCase):
         # ~/.npm/_npx, which npx reuses without rechecking, and bun's global installs (the status
         # line's ccstatusline) are hardlinks into ~/.bun/install/cache; uv, pip, pnpm, node-gyp
         # and Playwright reuse their caches the same way. All leave allowWrite; the hook points
-        # sandboxed Bash at ~/.cache/claude-sandbox through CLAUDE_ENV_FILE. A settings env entry
-        # would reach the MCP servers and the status line.
+        # sandboxed Bash at ~/.cache/claude-sandbox through CLAUDE_ENV_FILE, except Playwright,
+        # which launches Hayden's browsers read-only. A settings env entry would reach the MCP
+        # servers and the status line.
         allow = S["sandbox"]["filesystem"]["allowWrite"]
         for default in ("~/.npm", "~/.bun/install/cache", "~/.cache/uv", "~/.cache/pip",
                         "~/.cache/pnpm", "~/.cache/node-gyp", "~/.cache/ms-playwright",
@@ -260,13 +261,14 @@ class Baseline(unittest.TestCase):
                       "uv_python_downloads", "pip_cache_dir", "pnpm_home", "npm_config_devdir",
                       "playwright_browsers_path")
         self.assertFalse([k for k in S.get("env", {}) if k.lower() in cache_vars])
-        # Sandboxed installs fetch into their own dirs: gyp headers, browsers. Not Pythons
-        # (sandboxed uv runs Hayden's, read-only), nor Playwright's Chromium, whose builds
-        # redirect to storage.googleapis.com, where any public-write bucket takes uploads.
+        # Sandboxed installs fetch into their own dirs: gyp headers. Not Pythons or Playwright's
+        # browsers: sandboxed uv and Playwright run Hayden's own, read-only, so neither downloads
+        # one (Chromium's builds would redirect to storage.googleapis.com, where any
+        # public-write bucket takes uploads).
         hosts = S["sandbox"]["network"]["allowedDomains"]
-        for host in ("nodejs.org", "cdn.playwright.dev", "playwright.download.prss.microsoft.com"):
-            self.assertIn(host, hosts)
-        for host in ("releases.astral.sh", "storage.googleapis.com"):
+        self.assertIn("nodejs.org", hosts)
+        for host in ("releases.astral.sh", "storage.googleapis.com", "cdn.playwright.dev",
+                     "playwright.download.prss.microsoft.com"):
             self.assertNotIn(host, hosts)
         self.assertNotIn("~/.local/share/uv", allow)
         hook = 'bash "$HOME/.claude/hooks/sandbox-caches.sh"'

@@ -2,8 +2,9 @@
 caches of their own, so the sandbox can keep the caches unsandboxed code runs from read-only
 (stdlib only). Sandbox gap N1: plugin MCP servers run unsandboxed from ~/.npm/_npx, and npx
 reuses a tree there without rechecking it. N3: bun's global installs (the status line's
-ccstatusline) are hardlinks into ~/.bun/install/cache, and the same holds for uv, pip, pnpm,
-node-gyp and Playwright, whose caches unsandboxed installs and runs reuse.
+ccstatusline) are hardlinks into ~/.bun/install/cache, and the same holds for uv, pip, pnpm and
+node-gyp, whose caches unsandboxed installs and runs reuse. Playwright's browsers get no var:
+sandboxed Playwright launches them read-only from their default dir.
 
 Each test runs the hook with bash the way Claude Code does, then sources the env file the way
 Claude Code inlines it into each Bash command: inside the sandbox, where the sandbox runtime sets
@@ -28,10 +29,10 @@ CACHES = (
     ("PIP_CACHE_DIR", "pip"),
     ("PNPM_HOME", "pnpm"),
     ("npm_config_devdir", "node-gyp"),
-    ("PLAYWRIGHT_BROWSERS_PATH", "ms-playwright"),
 )
-# Plus one value: sandboxed uv runs Hayden's Pythons read-only and never downloads one.
-VARS = tuple(v for v, _ in CACHES) + ("UV_PYTHON_DOWNLOADS",)
+# Plus one value: sandboxed uv runs Hayden's Pythons read-only and never downloads one. And one
+# var left unset: sandboxed Playwright launches Hayden's browsers read-only from its default dir.
+VARS = tuple(v for v, _ in CACHES) + ("UV_PYTHON_DOWNLOADS", "PLAYWRIGHT_BROWSERS_PATH")
 SHOW = 'source "$1"; printf "%s\\n"' + "".join(f' "${{{v}-unset}}"' for v in VARS)
 UNSET = ["unset"] * len(VARS)
 
@@ -44,7 +45,7 @@ class SandboxCaches(unittest.TestCase):
         os.makedirs(self.home)
         self.root = os.path.join(self.home, ".cache", "claude-sandbox")
         self.dirs = [os.path.join(self.root, d) for _, d in CACHES]
-        self.want = self.dirs + ["never"]
+        self.want = self.dirs + ["never", "unset"]
         self.envfile = os.path.join(self.tmp, "session-env.sh")
         self.logfile = os.path.join(self.tmp, "state", "dotclaude", "sandbox-caches.log")
         self.env = {k: v for k, v in os.environ.items()

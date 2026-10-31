@@ -726,7 +726,7 @@ need nothing extra.
   `CLAUDE_ENV_FILE` a line that exports, only when `SANDBOX_RUNTIME` is set (which the sandbox
   runtime does inside the sandbox), `npm_config_cache`, `BUN_INSTALL_CACHE_DIR`,
   `UV_CACHE_DIR`, `PIP_CACHE_DIR`, `PNPM_HOME` (pnpm's store), `npm_config_devdir` (node-gyp's
-  headers) and `PLAYWRIGHT_BROWSERS_PATH`, plus `UV_PYTHON_DOWNLOADS=never`. pnpm's metadata
+  headers), plus `UV_PYTHON_DOWNLOADS=never`. pnpm's metadata
   cache needs no var: it stays read-only and pnpm skips writing it. The default caches feed code
   that runs outside the sandbox.
   Plugin MCP servers start as `npx <pkg>@<version>` and run from `~/.npm/_npx/<hash>/`, which
@@ -737,19 +737,22 @@ need nothing extra.
   (N3): unsandboxed installs and runs reuse what their caches hold. So every default is out of
   `allowWrite`, and `~/.cache/claude-sandbox` is the only entry. Unsandboxed commands keep the
   defaults: an excluded `claude -p` would otherwise pass the vars to its MCP servers, as a
-  settings `env` entry would. The first sandboxed install of a package or browser downloads it
-  again; `allowedDomains` lists the download hosts (`nodejs.org`, `cdn.playwright.dev`,
-  `playwright.download.prss.microsoft.com`). Two things come from a terminal instead:
+  settings `env` entry would. The first sandboxed install of a package downloads it again;
+  `allowedDomains` lists the download hosts (`nodejs.org` for node-gyp's headers). Two things
+  stay your own, read-only, and come from a terminal:
   - **Pythons.** Sandboxed uv runs the ones uv installed for you, read-only, and never
     downloads one, so no session can rewrite an interpreter another project's venv points at.
     A version you lack fails with uv's own hint; run `uv python install <version>` in a
     terminal.
-  - **Playwright's Chromium.** Its builds redirect to `storage.googleapis.com`, and allowing
-    that host would let sandboxed code upload to any public-write bucket. From a terminal, run
-    `PLAYWRIGHT_BROWSERS_PATH=~/.cache/claude-sandbox/ms-playwright npx playwright@<the
-    project's version> install chromium` (or `chromium-headless-shell`). The exact version
-    picks the revision the project's Playwright wants, and makes `bin/npx` run it outside the
-    project dir, so a project's own `node_modules/playwright` never runs there.
+  - **Playwright's browsers.** Sandboxed Playwright launches the ones in its default dir
+    (`~/.cache/ms-playwright`), read-only: a launch writes nothing there it needs (its
+    dependency marker write fails quietly, and it rechecks the host instead). A sandboxed
+    `playwright install` fails with a write error; run `npx playwright@<the project's version>
+    install chromium-headless-shell` (or `chromium`) in a terminal. The exact version picks the
+    revision the project's Playwright wants, and makes `bin/npx` run it outside the project
+    dir, so a project's own `node_modules/playwright` never runs there. Only the headless shell
+    runs in the sandbox: full Chromium dies on its single-instance socket, which the sandbox
+    refuses.
 
   The shelf itself is shared: every sandboxed session can write `~/.cache/claude-sandbox`, so a
   session in one project can tamper with a package another project's next sandboxed install
