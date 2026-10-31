@@ -547,6 +547,39 @@ class Rule1PathArguments(Guard):
         self.git("config", "remote.up.fetch", "+refs/heads/*:refs/remotes/up/*", cwd=self.proj)
         self.refused("git push -q up HEAD", os.path.join(self.proj, "up"))
 
+    def test_a_remote_group_is_judged_by_its_members(self):
+        # git fetch takes a remotes.<group> config value's words as the remotes to fetch, each
+        # a remote name or a path, and runs `git fetch <member>` for each (its builtin/fetch.c).
+        o = self.other
+        self.git("remote", "add", "up", "https://github.com/x/up", cwd=self.proj)
+        self.git("config", "remotes.both", "origin up", cwd=self.proj)
+        self.git("config", "remotes.evil", f"origin {o}", cwd=self.proj)
+        self.git("config", "remotes.gone", "origin nothere", cwd=self.proj)
+        self.git("config", "remotes.nest", "origin evil", cwd=self.proj)
+        self.git("config", "remotes.solo", "origin", cwd=self.proj)
+        self.git("config", "remotes.one", o, cwd=self.proj)
+        self.git("config", "remotes.opt", "origin --upload-pack=x", cwd=self.proj)
+        self.git("config", "remotes.sub.grp", f"up {o}", cwd=self.proj)
+        # Members that are remotes pass: the group's own name is no path to git.
+        for call in ("git fetch both", "git fetch --multiple both origin", "git fetch -m both",
+                     "git pull both", "git fetch --multiple solo"):
+            with self.subTest(call=call):
+                self.allowed(call)
+        for call in ("git fetch evil", "git fetch --multiple origin evil", "git pull evil",
+                     "git fetch nest", "git fetch --multiple one", "git fetch sub.grp"):
+            with self.subTest(call=call):
+                self.refused(call, self.other_git)
+        self.assertIn("missing", self.refused("git fetch gone", self.proj))
+        # One member and no --multiple: git fetches the word itself, here a path.
+        self.assertIn("missing", self.refused("git fetch solo", os.path.join(self.proj, "solo")))
+        # A member git's own fetch would read as an option.
+        self.assertIn("option", self.refused("git fetch opt", "--upload-pack=x"))
+        # Members from the global config count too; push and ls-remote take no groups.
+        self.write(os.path.join(self.home, ".gitconfig"),
+                   RECURSE_OFF + f"[remotes]\n\tglob = origin {o}\n")
+        self.refused("git fetch glob", self.other_git)
+        self.assertIn("missing", self.refused("git push -q both HEAD", self.proj))
+
     def test_a_remote_only_an_include_if_defines_is_judged_as_a_path(self):
         # The guard doesn't evaluate an includeIf condition, so git may not read its remotes.
         inc = self.write(os.path.join(self.protect(self.mkdir("cfg")), "remotes"),
