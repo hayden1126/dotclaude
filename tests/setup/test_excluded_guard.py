@@ -506,6 +506,27 @@ class Rule1PathArguments(Guard):
             with self.subTest(call=call):
                 self.assertIn("plain word", self.refused(call))
 
+    def test_git_judges_each_path_its_server_side_tries_in_order(self):
+        # git's server side (enter_repo, non-strict) tries <p>/.git, <p>, <p>.git/.git and
+        # <p>.git in turn and takes the first that is a file or a git dir. A missing one tried
+        # before the one git finds today is where a plant would win.
+        box = self.mkdir("box")
+        found = os.path.join(box, "wt.git")
+        self.git("worktree", "add", "-q", "-b", "wt", found, cwd=self.proj)
+        self.protect(found)
+        p = os.path.join(box, "wt")
+        for call in (f"git fetch {p}", f"git push -q {p} HEAD", f"git ls-remote file://{p}"):
+            with self.subTest(call=call):
+                reason = self.refused(call, os.path.join(p, ".git"))
+                self.assertIn("missing", reason)
+        self.git("config", "remote.origin.url", p, cwd=self.proj)
+        self.assertIn("missing", self.denied("git push", "rule1", os.path.join(p, ".git")))
+        # No session can create a path tried before it: git surely takes wt.git.
+        self.protect(box)
+        for call in (f"git fetch {p}", "git push"):
+            with self.subTest(call=call):
+                self.allowed(call)
+
     def test_git_refuses_a_remote_from_a_legacy_remotes_file(self):
         # .git/remotes/<name> and .git/branches/<name> name a URL outside the judged config.
         for kind in ("remotes", "branches"):

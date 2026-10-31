@@ -829,30 +829,56 @@ def check_repository_word(m, env, cwd, project, sub, word, remotes, groups=None,
     if path is None:
         return
     full = os.path.join(cwd, os.path.expanduser(path))
-    exists = False
-    for found in (full, full + ".git"):
+    check_server_repo(m, env, full, project, word, link=lambda bad: Refusal(
+        "rule1", bad, f"`git {sub}`'s repository {label} goes through {bad}, which a sandboxed "
+        "session can rewrite to point git at another repository after this check. Name the "
+        "repository by its real path in a dir no session can write, or protect that dir.",
+        protect=m), missing=lambda tried, bad: Refusal(
+        "rule1", bad, f"`git {sub}`'s repository {label} names no configured remote, so git "
+        f"takes it as the path {full}, {server_paths(full)}; {tried} is missing and a sandboxed "
+        f"session could create it ({bad}): git would run a repository planted there after this "
+        "check. Name a configured remote, a network URL or an existing path in the project's "
+        "repository, or protect that dir.", protect=m))
+
+
+# Where git's server side (upload-pack, receive-pack: enter_repo, non-strict) looks for the local
+# repository <p>, in this order, taking the first that is a regular file (read as a gitfile) or
+# a git dir.
+SERVER_SUFFIXES = ("/.git", "", ".git/.git", ".git")
+
+
+def server_paths(full):
+    return ("where git's server side tries " + ", ".join(full + s for s in SERVER_SUFFIXES[:-1])
+            + f" and {full}{SERVER_SUFFIXES[-1]} in turn")
+
+
+def check_server_repo(m, env, full, project, arg, url=None, link=None, missing=None):
+    """G-D and the G-E path half for a local repository path git's server side opens (`full`,
+    its trailing slashes dropped as git drops them). Each of <p> and <p>.git that exists is
+    judged along its symlink chain (link(bad) builds the refusal) and the repo there, or at a
+    gitfile's target, as rule 1 judges the cwd, which finds its <dir>/.git too. A missing path
+    git tries (SERVER_SUFFIXES) before the first it would take is refused if a sandboxed
+    session could create it (missing(tried, bad)): a repo planted there would win."""
+    full = full.rstrip("/") or "/"
+    for suffix in ("", ".git"):
+        found = full + suffix
         if not os.path.lexists(found):
             continue
-        exists = True
-        found = m.chain(found, "rule1", lambda bad, found=found: Refusal(
-            "rule1", bad, f"`git {sub}`'s repository {label} goes through {bad}, which a "
-            "sandboxed session can rewrite to point git at another repository after this "
-            "check. Name the repository by its real path in a dir no session can write, or "
-            "protect that dir.", protect=m), final_dir=False)
+        found = m.chain(found, "rule1", link, final_dir=False)
         if os.path.isfile(found):
             try:
                 found = read_gitfile(found)
             except Exception:
                 continue  # no gitfile (a bundle, say): git reads no config from it
         if os.path.lexists(found):
-            check_rule1(m, env, found, project, arg=word)
-    bad = None if exists else m.exposed(full)
-    if bad:
-        raise Refusal("rule1", bad, f"`git {sub}`'s repository {label} names no configured remote, "
-                      f"so git takes it as the path {full}, which is missing and a sandboxed "
-                      f"session could create ({bad}): git would run a repository planted there "
-                      "after this check. Name a configured remote, a network URL or an existing "
-                      "path in the project's repository, or protect that dir.", protect=m)
+            check_rule1(m, env, found, project, arg=arg, url=url)
+    for suffix in SERVER_SUFFIXES:
+        tried = full + suffix
+        if os.path.isfile(tried) or os.path.isdir(tried) and looks_like_gitdir(tried):
+            return
+        bad = None if os.path.lexists(tried) else m.exposed(tried)
+        if bad:
+            raise missing(tried, bad)
 
 
 def check_git_words(sub, args):
@@ -1329,30 +1355,24 @@ def reads_worktree_config(common):
 
 def check_remote_url(m, env, url, top, cwd, project):
     """G-D: a local remote URL (local_url_path) names a repo git runs the server side of outside
-    the sandbox. A relative one is resolved from both the repo top and the cwd. Where it exists
-    it is judged as an existing repository word (<p>, <p>.git, a gitfile: check_rule1); where
-    neither exists, it is refused if a sandboxed session could create it."""
+    the sandbox. A relative one is resolved from both the repo top and the cwd. Each is judged
+    as a repository word is (check_server_repo): what exists along its symlink chain and as
+    rule 1 judges the cwd, a missing path git tries first by whether a session could create
+    it."""
     path = local_url_path(url)
     if path is None:
         return
     path = os.path.expanduser(path) if path.startswith("~") else path
     for full in dict.fromkeys(os.path.join(base, path) for base in (top, cwd)):
-        exists = False
-        for found in (full, full + ".git"):
-            if os.path.isfile(found):
-                try:
-                    found = read_gitfile(found)
-                except Exception:
-                    continue  # no gitfile (a bundle, say): git reads no config from it
-            if os.path.lexists(found):
-                exists = True
-                check_rule1(m, env, found, project, arg=url, url=url)
-        bad = None if exists else m.exposed(full)
-        if bad:
-            raise Refusal("rule1", bad, f"the remote URL {url} names {full}, which is missing and "
-                          f"a sandboxed session could create ({bad}), so git would run a repo "
-                          "it planted. Point the remote at a network URL or a path in the "
-                          "project's repository, or protect that dir.", protect=m)
+        check_server_repo(m, env, full, project, url, url=url, link=lambda bad: Refusal(
+            "rule1", bad, f"the remote URL {url} goes through {bad}, which a sandboxed session "
+            "can rewrite to point git at another repository after this check. Point the remote "
+            "at a network URL or a real path in a dir no session can write, or protect that dir.",
+            protect=m), missing=lambda tried, bad, full=full: Refusal(
+            "rule1", bad, f"the remote URL {url} names {full}, {server_paths(full)}; {tried} is "
+            f"missing and a sandboxed session could create it ({bad}), so git would run a repo "
+            "it planted. Point the remote at a network URL or a path in the project's "
+            "repository, or protect that dir.", protect=m))
 
 
 def check_legacy_remotes(common):
