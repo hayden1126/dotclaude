@@ -1170,7 +1170,14 @@ class Identity(LanesRepo):
         self.lane("new", "chart-fix")
         lane = self.lane_path("chart-fix")
         self.lane("note", "tests green at", "abc123", cwd=lane)
+        # `new` seeds an ask for the fixture's local bare origin, which the excluded-command
+        # guard refuses by design (G-D; ExcludedGuardRules covers it): start with none.
         text = self.read(self.record("chart-fix"))
+        head, rest = text.split("## Asks for Hayden\n", 1)
+        asks, tail = rest.split("## Not mine", 1)
+        asks = "".join(line for line in asks.splitlines(True) if not line.startswith(("-", " ")))
+        text = f"{head}## Asks for Hayden\n{asks}## Not mine{tail}"
+        self.write(self.record("chart-fix"), text)
         state = text.split("## State", 1)[1].split("## Decisions", 1)[0]
         self.assertIn("tests green at abc123", state)
         p = self.run_lane("note", "another session owns #42", cwd=lane)
