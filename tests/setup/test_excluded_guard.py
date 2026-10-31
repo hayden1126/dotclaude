@@ -1154,6 +1154,16 @@ class Rule1RemoteUrls(Guard):
                     self.git("config", "--unset", key, cwd=self.proj)
         self.allowed("git push")
 
+    def test_an_ext_remote_url_is_refused(self):
+        # git runs an ext:: URL's command; protocol.ext.allow keeps it off by default, but the
+        # guard judges no program it can't see.
+        for key in ("remote.origin.url", "url.ext::x.insteadOf"):
+            with self.subTest(key=key):
+                self.remote(key, "ext::x %S" if key.startswith("remote") else "https://h/r")
+                self.assertIn("ext::", self.denied("git push", "rule1", None))
+                self.git("config", "--unset", key, cwd=self.proj)
+        self.allowed("git push")
+
     def test_a_bare_repo_found_as_name_dot_git_is_refused(self):
         bare = os.path.join(self.tmp, "evil.git")
         self.git("init", "-q", "--bare", bare, cwd=self.tmp)

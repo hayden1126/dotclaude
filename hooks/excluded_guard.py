@@ -1284,7 +1284,10 @@ def config_refs(path, home):
 def local_url_path(url):
     """The path a local remote URL names, or None for a network one. Local is `file://` or no
     `<scheme>://` and not scp-like (`[user@]host:path`: a `:` before any `/`), as git tells
-    them apart."""
+    them apart. An ext:: URL, which names a command for git to run, is refused."""
+    if url.lower().startswith("ext::"):
+        raise Refusal("rule1", url, f"the remote URL {url} is an ext:: URL, which names a command "
+                      "for git to run outside the sandbox. Use a network URL instead.")
     if url.lower().startswith("file://"):
         path = url[len("file://"):]
         if not path.startswith("/"):  # git drops a host part: judge no guess at the rest
