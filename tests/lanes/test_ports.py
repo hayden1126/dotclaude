@@ -216,7 +216,7 @@ class Serve(LanesRepo):
         script = (f"import os, subprocess, sys, time; print('warming', flush=True); "
                   f"time.sleep(0.5); os.execv(sys.executable, [sys.executable, {self.server!r}, "
                   f"'127.0.0.1', os.environ['PORT']])")
-        p = self.serve("--port", str(self.lo + 2), "--ready", "listening on [0-9]+", "--",
+        p = self.serve("--port", str(self.lo + 2), "--ready", "^listening on [0-9]+$", "--",
                        sys.executable, "-c", script)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn(f"serving port {self.lo + 2}", p.stdout)
@@ -516,33 +516,86 @@ class Serve(LanesRepo):
 
 
 class ServedRecords(LanesRepo):
+    """`lane done` (and `park`, through survey) and the processes `lane serve` started."""
+
+    def setUp(self):
+        super().setUp()
+        self.lo = free_run(1)
+        self.lane("init", "--ports", f"{self.lo}-{self.lo}")
+        self.lane("new", "web")
+        self.path = self.lane_path("web")
+        self.server = os.path.join(self.tmp, "srv.py")
+        self.write(self.server, SERVER)
+        self.repo = lanelib.Repo(self.main, self.common)
+
+    def serve_script(self, script):
+        """Serve `python -c script {port}` from the lane; the token's processes, each killed at
+        cleanup if done left it running."""
+        p = self.run_lane("serve", "--", sys.executable, "-c", script, "{port}", cwd=self.path)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        token = json.loads(self.read(self.repo.served_path("web", self.lo)))["token"]
+        pids = [int(n) for n in os.listdir("/proc") if n.isdigit()
+                and lanelib.proc_env(int(n), "LANE_SERVE") == token]
+        for pid in pids:
+            start = lanelib.proc_start(pid)
+            self.addCleanup(lambda pid=pid, start=start: lanelib.proc_start(pid) == start
+                            and os.kill(pid, signal.SIGKILL))
+        return token, pids
+
+    def merge(self):
+        """Merge the lane, then hand it off (a Next written after HEAD), as done wants."""
+        self.commit("chart.txt", "axis\n", cwd=self.path)
+        self.git("push", "-q", "origin", "web:main", cwd=self.path)
+        time.sleep(1.05)  # the record past HEAD's one-second commit time
+        self.write(self.record("web"), self.read(self.record("web")).replace(
+            "## Next\n", "## Next\n- Nothing left: the lane is done.\n"))
+
+    def gone(self, pid, start):
+        st = lanelib.proc_stat(pid)
+        return st is None or st[3] != start or st[1] in lanelib.EXITED
+
     def test_done_ends_a_server_that_left_the_lane_and_removes_the_records(self):
         # A daemon that chdirs to / is out of done's view of the lane's processes: done ends it
         # by its record before removing the record, so nothing is left running untracked.
-        lo = free_run(1)
-        self.lane("init", "--ports", f"{lo}-{lo}")
-        self.lane("new", "web")
-        path = self.lane_path("web")
-        server = os.path.join(self.tmp, "srv.py")
-        self.write(server, SERVER)
-        script = (f"import os, subprocess, sys; subprocess.Popen([sys.executable, {server!r}, "
-                  f"'127.0.0.1', sys.argv[1]], start_new_session=True, cwd='/')")
-        p = self.run_lane("serve", "--", sys.executable, "-c", script, "{port}", cwd=path)
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        repo = lanelib.Repo(self.main, self.common)
-        token = json.loads(self.read(repo.served_path("web", lo)))["token"]
-        (daemon,) = [int(n) for n in os.listdir("/proc") if n.isdigit()
-                     and lanelib.proc_env(int(n), "LANE_SERVE") == token]
-        self.addCleanup(lambda: lanelib.proc_alive(lanelib.scan()[daemon])
-                        if daemon in lanelib.scan() else None)
+        _, (daemon,) = self.serve_script(
+            f"import subprocess, sys; subprocess.Popen([sys.executable, {self.server!r}, "
+            f"'127.0.0.1', sys.argv[1]], start_new_session=True, cwd='/')")
+        start = lanelib.proc_start(daemon)
         self.assertEqual(os.readlink(f"/proc/{daemon}/cwd"), "/")
-        self.commit("chart.txt", "axis\n", cwd=path)
-        self.git("push", "-q", "origin", "web:main", cwd=path)
+        self.merge()
         out = self.lane("done", "web")
-        self.assertIn(f"ended what lane serve started on port {lo}", out)
-        self.assertFalse(os.path.exists(f"/proc/{daemon}") and
-                         lanelib.proc_stat(daemon)[1] not in lanelib.EXITED)
-        self.assertFalse(os.path.exists(repo.served_dir("web")))
+        self.assertIn(f"ended what lane serve started on port {self.lo}", out)
+        self.assertTrue(self.gone(daemon, start))
+        self.assertFalse(os.path.exists(self.repo.served_dir("web")))
+
+    def test_done_ends_a_served_tree_with_no_lane_session_id(self):
+        # Served from a plain terminal (no CLAUDE_CODE_SESSION_ID, as the fixture's env has
+        # none), in the lane, with a child whose cwd left it: the record proves both the lane's,
+        # where the session-id rule alone refused the close before any signal.
+        _, pids = self.serve_script(
+            f"import os, subprocess, sys; subprocess.Popen(['sleep', '600'], cwd='/'); "
+            f"os.execv(sys.executable, [sys.executable, {self.server!r}, '127.0.0.1', "
+            f"sys.argv[1]])")
+        self.assertEqual(len(pids), 2)
+        starts = {pid: lanelib.proc_start(pid) for pid in pids}
+        self.assertIsNone(lanelib.proc_env(pids[0], "CLAUDE_CODE_SESSION_ID"))
+        self.merge()
+        out = self.lane("done", "web")
+        self.assertIn("lane serve's, port", out)
+        self.assertTrue(all(self.gone(pid, start) for pid, start in starts.items()))
+
+    def test_survey_counts_a_served_process_as_the_lanes(self):
+        # The class done's rounds and park share: SERVED by the record, refused without it.
+        _, (server,) = self.serve_script(
+            f"import os, sys; os.execv(sys.executable, [sys.executable, {self.server!r}, "
+            f"'127.0.0.1', sys.argv[1]])")
+        mod = load_lane_script()
+        procs = lanelib.scan()
+        hits, refused = mod.survey("web", self.path, procs, serves=mod.serve_proofs(self.repo, "web"))
+        self.assertEqual((hits[server].kind, refused), (mod.SERVED, {}))
+        hits, refused = mod.survey("web", self.path, procs)
+        self.assertNotIn(server, hits)
+        self.assertIn("no session id in its environment", refused[server])
 
 
 if __name__ == "__main__":
