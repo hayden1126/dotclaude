@@ -206,7 +206,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     bubblewrap jail with the sandbox's file rules and no network of its own. Closes a private
     sandbox-audit FINDINGS row (lane ports, 2026-10-31). Open design question: a server that calls
     out needs a proxy with an allowlist. Lane-able after ports PR 1 (`lane`, `lanelib.py`,
-    `tests/lanes`).
+    `tests/lanes`). Scope widened (Hayden, 2026-10-31, via lane cache-gaps): the jail also wraps
+    project hooks, and the lane closes the whole family of private rows that share one root
+    (DS1, H1, N1 to N3) in one mechanism rather than per-tool fixes.
   - **Re-evaluate past design decisions for unflagged exploitability** (Hayden, 2026-10-31, via
     lane ports, session 57b5b44c). Why: a design fork in lane ports offered a standing sandbox
     bypass without naming the threat until Hayden asked; earlier forks may have shipped the same
