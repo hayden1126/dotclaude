@@ -12,22 +12,39 @@
 # dotclaude-npx-shim: setup.sh and the tests know this shim, or a copy of it, by this line.
 set -uo pipefail
 
-# The real npx: the first on PATH that isn't this shim. A relative or empty PATH entry is the
-# cwd, the dir an MCP server starts in, so it is never taken.
+# The real npx: the first on PATH that isn't a copy of this shim (any checkout's link, or a
+# git-bash copy: two would exec each other forever). A relative or empty PATH entry is the cwd,
+# the dir an MCP server starts in, so it is never taken.
+# Builtins only: with no grep on PATH, a failed check would take the shim for the real npx.
+is_a_shim() {
+  local line n=0
+  [[ $1 -ef ${BASH_SOURCE[0]} ]] && return 0
+  while ((n++ < 30)) && IFS= read -r line; do
+    [[ $line == *dotclaude-npx-shim* ]] && return 0
+  done <"$1"
+  return 1
+} 2>/dev/null
 real=""
 IFS=: read -ra dirs <<<"$PATH"
 for d in "${dirs[@]}"; do
-  [[ $d == /* && -x $d/npx && ! $d/npx -ef ${BASH_SOURCE[0]} ]] && { real="$d/npx"; break; }
+  [[ $d == /* && -x $d/npx ]] || continue
+  is_a_shim "$d/npx" && continue
+  real="$d/npx"
+  break
 done
 [[ -n $real ]] || { echo "npx shim: no npx on PATH besides this shim" >&2; exit 127; }
 
-# Claude Code is the native binary (comm `claude`) or, installed with npm, node running its
-# cli.js through a `claude` link on PATH (`node /usr/local/bin/claude`). So with comm `node`,
-# the script is node's first argument that isn't an option: named `claude`, or resolving into
-# the package. /proc where there is one, ps elsewhere (macOS), whose args come space-joined.
+# Claude Code is the native binary (comm `claude`; a session the daemon runs is exec'd by its
+# versioned path, so its comm is the version and its executable sits in claude/versions/) or,
+# installed with npm, node running its cli.js through a `claude` link on PATH (`node
+# /usr/local/bin/claude`). So with comm `node`, the script is node's first argument that isn't
+# an option: named `claude`, or resolving into the package. /proc where there is one, ps
+# elsewhere (macOS: its comm is the executable's path, its args come space-joined).
 parent_is_claude() {
-  local comm a script="" words
+  local comm exe a script="" words
   comm="$(cat "/proc/$PPID/comm" 2>/dev/null || ps -o comm= -p "$PPID" 2>/dev/null)"
+  exe="$(readlink "/proc/$PPID/exe" 2>/dev/null)" || exe="$comm"
+  [[ $exe == */claude/versions/* ]] && return 0
   comm="${comm##*/}"
   [[ $comm == claude ]] && return 0
   [[ $comm == node ]] || return 1

@@ -125,6 +125,35 @@ class NpxShim(unittest.TestCase):
         self.assertEqual(self.npx("-y", "some-mcp", parent="claude"),
                          [PREFIX, "-y", "some-mcp"])
 
+    def test_a_session_the_daemon_runs_counts_too(self):
+        # Exec'd by its versioned path: comm is the version, the executable is in versions/.
+        # A copy of bash there, since /proc's exe resolves a link to the real bash.
+        versions = os.path.join(self.tmp, ".local", "share", "claude", "versions")
+        os.makedirs(versions)
+        shutil.copy(shutil.which("bash"), os.path.join(versions, "2.1.302"))
+        elsewhere = os.path.join(self.tmp, "other")
+        os.makedirs(elsewhere)
+        shutil.copy(shutil.which("bash"), os.path.join(elsewhere, "2.1.302"))
+        script = '"$0" "$@"; :'
+        p = subprocess.run([os.path.join(versions, "2.1.302"), "-c", script, "npx", "some-mcp"],
+                           capture_output=True, text=True, timeout=10,
+                           env={"PATH": self.path, "HOME": self.tmp})
+        self.assertEqual((p.returncode, p.stdout.splitlines()), (0, [PREFIX, "some-mcp"]),
+                         p.stderr)
+        p = subprocess.run([os.path.join(elsewhere, "2.1.302"), "-c", script, "npx", "some-mcp"],
+                           capture_output=True, text=True, timeout=10,
+                           env={"PATH": self.path, "HOME": self.tmp})
+        self.assertEqual(p.stdout.splitlines(), ["some-mcp"], p.stderr)
+
+    def test_two_copies_of_the_shim_on_path_reach_the_real_npx_once(self):
+        # A git-bash copy ahead of a link into another checkout: each would take the other for
+        # the real npx and exec it forever.
+        copy_dir = os.path.join(self.tmp, "copy bin")
+        os.makedirs(copy_dir)
+        shutil.copy(SHIM, os.path.join(copy_dir, "npx"))
+        path = os.pathsep.join([copy_dir, self.shim_dir, self.real_dir, "/usr/bin", "/bin"])
+        self.assertEqual(self.npx("pkg@1.2.3", path=path), [PREFIX, "pkg@1.2.3"])
+
     def test_another_parent_is_not_claude_code(self):
         self.assertEqual(self.npx("some-mcp", parent="claudex"), ["some-mcp"])
 
@@ -198,8 +227,10 @@ class SetupLinksTheShim(unittest.TestCase):
             shutil.copy(os.path.join(REPO, rel), os.path.join(root, rel))
         return root
 
-    def run_block(self):
-        env = dict(os.environ, HOME=self.home, REPO_DIR=self.repo,
+    def run_block(self, path_before=()):
+        """The block's stderr, run with ~/.local/bin first on PATH, after PATH_BEFORE."""
+        path = os.pathsep.join([*path_before, os.path.dirname(self.dst), "/usr/bin", "/bin"])
+        env = dict(os.environ, HOME=self.home, REPO_DIR=self.repo, PATH=path,
                    CLAUDE_DIR=os.path.join(self.home, ".claude"),
                    BACKUP_DIR=os.path.join(self.tmp, "backup"))
         p = subprocess.run(["bash", "-euo", "pipefail", "-c", bin_block()], capture_output=True,
@@ -246,6 +277,27 @@ class SetupLinksTheShim(unittest.TestCase):
         os.symlink(os.path.join(lane, "bin", "npx"), self.dst)
         self.assertEqual(self.run_block(), "")
         self.assertEqual(os.readlink(self.dst), os.path.join(self.repo, "bin", "npx"))
+
+    def test_an_npx_ahead_of_the_shim_on_path_is_named(self):
+        # nvm, fnm, volta or Homebrew before ~/.local/bin: a bare npx never reaches the shim.
+        manager = os.path.join(self.tmp, "nvm bin")
+        os.makedirs(manager)
+        npx = os.path.join(manager, "npx")
+        with open(npx, "w") as f:
+            f.write("#!/bin/sh\n")
+        os.chmod(npx, 0o755)
+        err = self.run_block(path_before=[manager])
+        self.assertIn(f"npx on PATH is {npx}, not the shim", err)
+        self.assertEqual(os.readlink(self.dst), os.path.join(self.repo, "bin", "npx"))
+
+    def test_npms_own_npx_left_in_place_skips_the_path_check(self):
+        # Already named as not dotclaude's: a second warning about PATH would only repeat it.
+        npm = os.path.join(self.tmp, "npx-cli.js")
+        with open(npm, "w") as f:
+            f.write("#!/bin/sh\n")
+        os.chmod(npm, 0o755)
+        os.symlink(npm, self.dst)
+        self.assertNotIn("npx on PATH is", self.run_block())
 
 
 if __name__ == "__main__":

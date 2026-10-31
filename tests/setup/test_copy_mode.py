@@ -145,6 +145,15 @@ class CopyMode(unittest.TestCase):
         self.run_section()
         self.assertEqual(self.read(self.pnpm), PNPM_LINE + "\nstore-dir=/x\n")
 
+    def test_a_rewrite_keeps_the_mode_and_leaves_no_temp(self):
+        # The new text goes to a copy that is renamed over the file, so a failed write can't
+        # truncate it.
+        self.write(self.pnpm, "store-dir=/x\n")
+        os.chmod(self.pnpm, 0o640)
+        self.run_section()
+        self.assertEqual(os.stat(self.pnpm).st_mode & 0o777, 0o640)
+        self.assertEqual(os.listdir(os.path.dirname(self.pnpm)), ["rc"])
+
     def test_an_empty_file_gets_just_the_line(self):
         self.write(self.uv, "")
         self.run_section()

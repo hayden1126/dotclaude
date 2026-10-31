@@ -758,7 +758,7 @@ need nothing extra.
   `npx pkg@<that version>` anywhere. pnpm rehashes a store file only when its mtime moved, which
   the writer can set back; uv, pip and bun don't check. Copy mode keeps uv and pnpm installs
   already made out of reach; bun's still hardlink. Treat what a sandboxed install built as sandbox-made,
-  whichever session built it, before running it from a terminal. A sandboxed npx prints one
+  whichever session built it, before running it from a terminal. Every sandboxed npm or npx run prints one
   `npm warn Unknown env config "devdir"` line: node-gyp reads its dir only from that
   npm-style var. Silent; fails open (errors go to
   `$XDG_STATE_HOME/dotclaude/sandbox-caches.log`), and a sandboxed install then gets a write

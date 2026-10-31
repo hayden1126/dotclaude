@@ -236,6 +236,15 @@ if [[ -d "$HOME/.local/bin" ]]; then
     fi
     link "$exe" "$dst"
   done
+  # The shim works only ahead of the real npx on PATH; a version manager (nvm, fnm, volta) or
+  # Homebrew listed before ~/.local/bin wins, and MCP servers then start with npx's project-dir
+  # lookup (gap N2). This run's PATH stands in for the one Claude Code inherits.
+  npx_dst="$HOME/.local/bin/npx"
+  if [[ -L $npx_dst && $(readlink "$npx_dst") == "$REPO_DIR/bin/npx" ]]; then
+    npx_first="$(command -v npx 2>/dev/null || true)"
+    [[ $npx_first -ef $npx_dst ]] \
+      || warn "npx on PATH is ${npx_first:-none}, not the shim at $npx_dst: MCP servers still start with npx's project-dir lookup. Put ~/.local/bin ahead of it on PATH"
+  fi
 fi
 
 # templates/ — per-file (SPEC/PLAN/STATUS/LANE scaffolds for full-track work)
@@ -487,7 +496,7 @@ fi
 # table that sets KEY to another value (uv's [pip]) is named, and kept. A file it can't read or
 # write is named and skipped, so the rest of setup still runs.
 set_top_key() {
-  local file="$1" key="$2" line="$3" want="$4" sets top="" t rest
+  local file="$1" key="$2" line="$3" want="$4" sets top="" t rest target
   if [[ ! -e $file && ! -L $file ]]; then
     mkdir -p "$(dirname "$file")" && printf '%s\n' "$line" > "$file" \
       && say "set $key in $file" || warn "can't create $file: $key not set"
@@ -521,9 +530,18 @@ set_top_key() {
       || warn "$file sets $key to $top, kept: installs there can hardlink to the shared cache"
     return
   fi
+  # Written to a copy beside the real file (cp -p keeps its mode), then renamed over it: a
+  # failed write (disk full) leaves the old file whole, and a link stays a link.
   rest="$(cat "$file")"
-  printf '%s\n%s' "$line" "${rest:+$rest$'\n'}" > "$file" && say "set $key in $file" \
-    || warn "can't write $file: $key not set"
+  target="$(readlink -f "$file")"
+  if cp -p "$target" "$target.setup.$$" \
+     && printf '%s\n%s' "$line" "${rest:+$rest$'\n'}" > "$target.setup.$$" \
+     && mv -f "$target.setup.$$" "$target"; then
+    say "set $key in $file"
+  else
+    rm -f "$target.setup.$$"
+    warn "can't write $file: $key not set"
+  fi
 }
 
 config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
