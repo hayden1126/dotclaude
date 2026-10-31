@@ -15,7 +15,17 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      worktrees/<name>/commondir, not the main .git/ dir, so the common dir comes from git's real
      layout: a gitdir with a commondir file must sit at <common>/worktrees/<name> with its
      commondir naming that <common>, and <common> must hold no commondir. Any other layout, in
-     the cwd's repo or the project's, is refused.
+     the cwd's repo or the project's, is refused. A path argument a head runs git in is judged
+     the same way, resolved from the cwd (path_arguments: pass-respawn -C, lane adopt PATH, a
+     local repository for git push, fetch, pull and ls-remote), and such a call must spell its
+     words plainly, naming no program for git to run (--receive-pack, --upload-pack, --exec,
+     an ext:: remote), no submodule recursion and no remote from a legacy .git/remotes or
+     .git/branches file (check_git_words); a git repository is judged where git's server side
+     finds it (<path>, <path>.git, a gitfile, a file:// URL with no host, no %-escape), and
+     a git option before those subcommands is refused. The calls are found the way zsh splits
+     the command (ShellLexer): each call of those heads anywhere in a candidate is judged, one
+     in a substitution, subshell or later piece too, and a command it can't read is refused.
+     `delegation-ledger hook` is refused outright, since its paths come on stdin.
   2. The PATH the head resolves through. Every PATH entry must be protected, not only those
      before the head: its children (git, gh, tmux, the tools claude spawns) search PATH too. An
      empty or relative entry is the cwd: refused. Then the resolved file's symlink chain (each
@@ -233,17 +243,413 @@ def first_word(text):
     return words[0] if words else ""
 
 
+def all_pieces(command):
+    return [command.strip(), normalize(command)] + [normalize(p) for p in SPLIT.split(command)]
+
+
+def matching_pieces(command, patterns):
+    """Every piece (whole command first) an excludedCommands pattern matches."""
+    regexes = [pattern_re(p) for p in patterns]
+    return [p for p in all_pieces(command) if p and any(r.fullmatch(p) for r in regexes)]
+
+
+def heads_of(pieces):
+    heads = []
+    for piece in pieces:
+        head = first_word(normalize(piece))
+        if head and head not in heads:
+            heads.append(head)
+    return heads
+
+
 def candidates(command, patterns):
     """The heads of every matching piece (whole command first). Empty: not a candidate."""
-    regexes = [pattern_re(p) for p in patterns]
-    heads = []
-    pieces = [command.strip(), normalize(command)] + [normalize(p) for p in SPLIT.split(command)]
-    for piece in pieces:
-        if piece and any(r.fullmatch(piece) for r in regexes):
-            head = first_word(normalize(piece))
-            if head and head not in heads:
-                heads.append(head)
-    return heads
+    return heads_of(matching_pieces(command, patterns))
+
+
+# --- Path arguments ----------------------------------------------------------------------------
+
+# Rule 1 judges each path argument a head runs git in (itself or through a child) as it judges
+# the cwd: pass-respawn -C (handoff-check runs git status there, then a claude starts there),
+# lane adopt PATH, and a local repository for git push, fetch, pull and ls-remote (git runs the
+# target's receive-pack or upload-pack). Left unjudged by design (docs/delegation.md): lane addr
+# --repo, whose one git lookup there runs under lanelib.HANDED_ENV and starts no repo-local
+# program, and codex-delegate run --dir, which the delegation skill sends to any repo.
+PATH_HEADS = {"pass-respawn", "lane", "git", "delegation-ledger"}
+GIT_PATH_SUBS = {"push", "fetch", "pull", "ls-remote"}
+# Long options of those whose value is a program git runs (git takes any unique prefix), and
+# ls-remote's short -u for --upload-pack; an `ext::` remote runs a command too.
+GIT_PROGRAM_OPTIONS = ("receive-pack", "upload-pack", "exec")
+# --recurse-submodules (any prefix git takes, and its -default form) runs git in each
+# submodule's own gitdir, whose config the guard never judges; --no-recurse-submodules is fine.
+GIT_RECURSE = "recurse-submodules"
+# zsh's operators, longest first. A redirection takes the next word as its target; any other
+# ends a piece.
+CONTROL_OPS = (";;&", ";;", ";&", ";|", "&&", "||", "|&", "&|", "&!", ";", "&", "|", "\n")
+REDIRECT_OPS = ("&>>|", "&>>!", ">>&|", ">>&!", "<<<", "<<-", "&>>", "&>|", "&>!", ">>|", ">>!",
+                ">&|", ">&!", ">>&", "<<", ">>", "<>", ">|", ">!", ">&", "<&", "&>", "<", ">")
+SHELL_OPS = sorted(CONTROL_OPS + REDIRECT_OPS, key=len, reverse=True)
+WORD_END = " \t\n;&|<>)"
+ARITHMETIC = ("arithmetic ($((...)), ((...)) or $[...]), which the guard doesn't read; do the "
+              "arithmetic in a separate Bash call")
+FD = re.compile(r"[0-9]+")  # ASCII only: str.isdigit() takes ² and other digits zsh doesn't
+# Words after which the next word is in command position (a `{` there opens a group).
+COMMAND_WORDS = {"{", "!", "if", "then", "else", "elif", "while", "until", "do", "time"}
+# A word the shell hands on as typed: no expansion, glob, quote or space. `~` only as $HOME.
+PLAIN_WORD = re.compile(r"(~(?=/|$))?[A-Za-z0-9_./:@%+,=-]*")
+
+
+def path_arguments(words):
+    """(path, existing_only) for each path argument in words, a piece's argv. Every spelling
+    counts, every repeat too (argparse keeps the last; the guard judges all). git's repository
+    words also name remotes and refs, so only a path that exists counts there."""
+    head, args = os.path.basename(words[0]), words[1:]
+    out = []
+    if head == "pass-respawn":
+        for i, w in enumerate(args):
+            if w == "-C" and i + 1 < len(args):
+                out.append(args[i + 1])
+            elif w.startswith("-C") and w != "-C":
+                # `-C=x` is x on Python 3.12 and `=x` on older ones: judge both.
+                out += [w[2:]] + ([w[3:]] if w.startswith("-C=") else [])
+        return [(p, False) for p in out]
+    if head == "lane" and args[:1] == ["adopt"]:
+        # Every word but its options; `--id`'s value is judged too (an over-match only adds checks).
+        return [(w, False) for w in args[1:]
+                if w not in ("--", "--id", "-h", "--help") and not w.startswith("--id=")]
+    if head == "git" and args[:1] and args[0] in GIT_PATH_SUBS:
+        for w in args[1:]:
+            if w.startswith("-"):
+                if "=" in w:
+                    out.append(w.split("=", 1)[1])
+            else:
+                out.append(w)
+        return [(p, True) for p in out]
+    return []
+
+
+class Op(str):
+    """An operator outside quotes, as opposed to a word with the same text."""
+
+
+class ShellLexer:
+    """zsh's words and operators for a command, enough to find each call and its arguments.
+    Quotes are removed; backslash-newline joins; a comment and a heredoc's body are skipped; a
+    redirection's fd number is dropped. A `$(...)`, backtick, `<(...)`, `${...}`, `$'...'` or
+    zsh glob group `(...)` stays in its word as a marker no plain word matches, and the commands
+    inside (an unquoted heredoc's too) are lexed into `subs`, so their calls are judged as well.
+    Raises ValueError where the text doesn't parse (an unclosed quote or substitution) and for
+    what it doesn't read: arithmetic (`$((`, `((`, `$[`), a heredoc delimiter holding an
+    expansion, and a heredoc with no end line."""
+
+    def __init__(self, text):
+        self.s, self.i, self.subs, self.heredocs = text, 0, [], []
+
+    def peek(self, k=0):
+        return self.s[self.i + k:self.i + k + 1]
+
+    def nested(self):
+        """Lex the command after a `(` up to its `)` into subs."""
+        self.subs.append(self.command(nested=True))
+
+    def command(self, nested=False):
+        """The tokens up to the end, or with nested, up to the `)` closing a `(` already read."""
+        out, cases, braces, delim_for = [], 0, 0, None
+        while c := self.peek():
+            if c in " \t" or c == "\\" and self.peek(1) == "\n":
+                self.i += 1 if c != "\\" else 2
+            elif c == "#":  # a word's first character: a comment
+                while self.peek() not in ("", "\n"):
+                    self.i += 1
+            elif c == ")":
+                self.i += 1
+                if nested and not cases:
+                    return out
+                out.append(Op(";"))  # a case pattern's end, or a stray
+            elif c == "(" or c in "<>" and self.peek(1) == "(":
+                if c == "(" and self.peek(1) == "(":
+                    raise ValueError(ARITHMETIC)
+                self.i += 1 if c == "(" else 2
+                self.nested()
+                out.append(f"{c if c != '(' else ''}(…)")
+            elif op := next((o for o in SHELL_OPS if self.s.startswith(o, self.i)), None):
+                self.i += len(op)
+                out.append(Op(op))
+                if op in ("<<", "<<-"):
+                    delim_for = op
+                elif op == "\n":
+                    self.read_heredocs()
+            else:
+                at_command = not out or isinstance(out[-1], Op) or out[-1] in COMMAND_WORDS
+                word, quoted = self.word()
+                if delim_for:
+                    if "…" in word:
+                        raise ValueError("a heredoc delimiter holding an expansion; use a plain one, like EOF")
+                    self.heredocs.append((word, delim_for == "<<-", not quoted))
+                    delim_for = None
+                elif FD.fullmatch(word) and not quoted and self.peek() in ("<", ">"):
+                    continue  # an fd number: 2>&1
+                elif not quoted and word == "}" and braces:
+                    braces -= 1
+                    out.append(Op(";"))  # a group's end, even after arguments
+                    continue
+                out.append(word)
+                if not quoted and word == "{" and at_command:
+                    braces += 1
+                elif not quoted and word == "case":
+                    cases += 1
+                elif not quoted and word == "esac" and cases:
+                    cases -= 1
+        if nested:
+            raise ValueError("an unclosed `(`")
+        return out
+
+    def word(self):
+        """(text, quoted) for the word at self.i."""
+        parts, quoted = [], False
+        while (c := self.peek()) and c not in WORD_END:
+            n = self.peek(1)
+            if c == "\\":
+                if n != "\n":
+                    parts.append(n or "\\")
+                    quoted = True
+                self.i += 2
+            elif c == "'":
+                end = self.s.find("'", self.i + 1)
+                if end < 0:
+                    raise ValueError("an unclosed '")
+                parts.append(self.s[self.i + 1:end])
+                self.i, quoted = end + 1, True
+            elif c == '"':
+                self.i += 1
+                parts.append(self.expanded('"'))
+                quoted = True
+            elif c == "$" and n == "'":
+                end = self.i + 2
+                while end < len(self.s) and self.s[end] != "'":
+                    end += 2 if self.s[end] == "\\" else 1
+                if end >= len(self.s):
+                    raise ValueError("an unclosed $'")
+                parts.append("$'…'")
+                self.i, quoted = end + 1, True
+            elif c == "(":  # glued to the word: a zsh glob group
+                if n == "(":
+                    raise ValueError(ARITHMETIC)
+                self.i += 1
+                self.nested()
+                parts.append("(…)")
+            elif marker := self.expansion():
+                parts.append(marker)
+            else:
+                parts.append(c)
+                self.i += 1
+        return "".join(parts), quoted
+
+    def expansion(self):
+        """At a `$(`, `${` or backtick: lex it into subs and return its marker; else ""."""
+        c, n = self.peek(), self.peek(1)
+        if c == "$" and (n == "[" or n == "(" and self.peek(2) == "("):
+            raise ValueError(ARITHMETIC)
+        if c == "$" and n == "(":
+            self.i += 2
+            self.nested()
+            return "$(…)"
+        if c == "$" and n == "{":
+            self.i += 2
+            depth = 0
+            while (c := self.peek()) != "}" or depth:
+                if not c or c in "'\"":
+                    raise ValueError("a ${...} holding a quote; set the value in a separate Bash call")
+                if c == "\\":
+                    self.i += 2
+                elif not self.expansion():
+                    depth += {"{": 1, "}": -1}.get(c, 0)
+                    self.i += 1
+            self.i += 1
+            return "${…}"
+        if c == "`":
+            end, inner = self.i + 1, []
+            while end < len(self.s) and self.s[end] != "`":
+                if self.s[end] == "\\" and self.s[end + 1:end + 2] == "\n":
+                    end += 2  # zsh joins the line before it reads the command inside
+                    continue
+                if self.s[end] == "\\" and self.s[end + 1:end + 2] in ("`", "\\", "$"):
+                    end += 1
+                inner.append(self.s[end:end + 1])
+                end += 1
+            if end >= len(self.s):
+                raise ValueError("an unclosed `")
+            sub = ShellLexer("".join(inner))
+            self.subs += [sub.command()] + sub.subs
+            self.i = end + 1
+            return "`…`"
+        return ""
+
+    def expanded(self, end):
+        """Text up to the unescaped `end` (consumed), or to the text's end with end None, read as
+        inside double quotes: a backslash quotes $ ` " \\ and joins a newline."""
+        parts = []
+        while (c := self.peek()) != end:
+            if not c:
+                raise ValueError('an unclosed "')
+            n = self.peek(1)
+            if c == "\\":
+                parts.append("" if n == "\n" else n if n in '$`"\\' else "\\" + n)
+                self.i += 2
+            elif marker := self.expansion():
+                parts.append(marker)
+            else:
+                parts.append(c)
+                self.i += 1
+        self.i += 1
+        return "".join(parts)
+
+    def line(self):
+        """The physical line at self.i, consumed with its newline."""
+        nl = self.s.find("\n", self.i)
+        end = len(self.s) if nl < 0 else nl
+        line, self.i = self.s[self.i:end], end + (nl >= 0)
+        return line
+
+    def read_heredocs(self):
+        """After a newline: skip each pending heredoc's body to its delimiter line, lexing an
+        unquoted one's substitutions. In an unquoted one a backslash-newline joins lines before
+        the delimiter is matched."""
+        pending, self.heredocs = self.heredocs, []
+        for delim, strip_tabs, expand in pending:
+            start = self.i
+            while True:
+                if self.i >= len(self.s):
+                    raise ValueError("a heredoc with no end line; end it with its delimiter line")
+                body_end, line = self.i, self.line()
+                while expand and (len(line) - len(line.rstrip("\\"))) % 2 and self.i < len(self.s):
+                    line = line[:-1] + self.line()
+                if (line.lstrip("\t") if strip_tabs else line) == delim:
+                    break
+            if expand:
+                sub = ShellLexer(self.s[start:body_end])
+                sub.expanded("")
+                self.subs += sub.subs
+
+
+def path_calls(command):
+    """(argv, targets) for each call of a PATH_HEADS program, the way zsh splits the command
+    (ShellLexer): in every piece between control operators, a substitution's too, each word
+    naming one starts a call running to the piece's end (subshells, groups, `if`, `VAR=`
+    prefixes and wrappers like `env` included), less the piece's redirections, whose targets
+    are judged as plain words too (a `$(...)` there runs before git does)."""
+    lexer = ShellLexer(command)
+    streams = [lexer.command()] + lexer.subs
+    for tokens in streams:
+        pieces, words, targets, i = [], [], [], 0
+        while i < len(tokens):
+            t = tokens[i]
+            i += 1
+            if not isinstance(t, Op):
+                words.append(t)
+            elif t in REDIRECT_OPS:
+                if i < len(tokens) and not isinstance(tokens[i], Op):
+                    targets.append(tokens[i])
+                    i += 1
+            else:
+                pieces.append((words, targets))
+                words, targets = [], []
+        pieces.append((words, targets))
+        for words, targets in pieces:
+            for i, w in enumerate(words):
+                if os.path.basename(w) in PATH_HEADS:
+                    yield words[i:], targets
+
+
+def check_calls(m, env, cwd, project, command):
+    """Rule 1 for the path arguments of every PATH_HEADS call in the command."""
+    try:
+        calls = list(path_calls(command))
+    except ValueError as e:
+        raise Refusal("rule1", "(command)", "the guard can't read this command as zsh would, so "
+                      f"it can't find the path arguments in it: {e}. Or run the excluded command "
+                      "as its own plain Bash call.")
+    for words, targets in calls:
+        check_path_arguments(m, env, cwd, project, words, targets)
+
+
+def check_path_arguments(m, env, cwd, project, words, targets):
+    """Rule 1 for each path argument of one call (path_arguments), resolved from cwd."""
+    head = os.path.basename(words[0])
+    sub = next((w for w in words[1:] if not w.startswith("-")), None)
+    if head == "git" and words[1:2] and words[1].startswith("-") and any(
+            w in GIT_PATH_SUBS for w in words[2:]):
+        raise Refusal("rule1", words[1], f"`git` with {words[1]!r} before its subcommand: the "
+                      "guard judges git push, fetch, pull and ls-remote only with no git option "
+                      "before the subcommand. Run it bare (no option before the subcommand) "
+                      "from a session in that repository, or with the sandbox off.")
+    if head == "delegation-ledger":
+        if sub == "hook":
+            raise Refusal("rule1", head, "`delegation-ledger hook` reads the checkout it runs "
+                          "git in from its stdin, which the guard can't judge. Claude Code's "
+                          "hooks run it directly, never through Bash.")
+        return
+    if head == "lane" and sub != "adopt" or head == "git" and sub not in GIT_PATH_SUBS:
+        return
+    name = head if head == "pass-respawn" else f"{head} {sub}"
+    for w in words[1:] + targets:
+        # git %-decodes a file:// URL's path, so a `%` could spell any path.
+        if not PLAIN_WORD.fullmatch(w) or w.startswith("=") or head == "git" and "%" in w:
+            raise Refusal("rule1", w, f"`{name}` takes a path argument, and {w!r} is not a plain "
+                          "word (an expansion, glob, quote, space or %-escape that would be "
+                          "rewritten before git sees it). Spell paths and refs as plain words.")
+    if head == "git":
+        check_git_words(sub, words[2:], discover(cwd, env))
+    for path, existing_only in path_arguments(words):
+        if existing_only and path.startswith("file://"):
+            path = path[len("file://"):]
+            if not path.startswith("/"):  # git drops a host part: judge no guess at the rest
+                raise Refusal("rule1", path, f"`git {sub}` names a file:// URL with a host part "
+                              f"(file://{path}); give the repository as a plain path.")
+        full = os.path.join(cwd, os.path.expanduser(path))
+        if not existing_only:
+            check_rule1(m, env, full, project, arg=path)
+            continue
+        # git's server side tries <path> and then <path>.git, and reads a file there as a
+        # gitfile; a dir it judges as rule 1 judges the cwd (which also finds <dir>/.git).
+        for found in (full, full + ".git"):
+            if os.path.isfile(found):
+                try:
+                    found = read_gitfile(found)
+                except Exception:
+                    continue  # no gitfile (a bundle, say): git reads no config from it
+            if os.path.lexists(found):
+                check_rule1(m, env, found, project, arg=path)
+
+
+def check_git_words(sub, args, repo):
+    """Refuse a git push, fetch, pull or ls-remote word naming what rule 1 can't judge: a program
+    for git to run (an option of GIT_PROGRAM_OPTIONS by any prefix, ls-remote's -u, an ext::
+    remote, also as an option's value), submodule recursion, or a remote defined by a legacy
+    file in the project's git dir (.git/remotes, .git/branches: outside the judged config)."""
+    for w in args:
+        name = w[2:].split("=", 1)[0] if w.startswith("--") else ""
+        value = w.split("=", 1)[1] if name and "=" in w else w
+        if (name and any(o.startswith(name) for o in GIT_PROGRAM_OPTIONS)
+                or sub == "ls-remote" and re.match(r"-[^-]*u", w) or value.startswith("ext::")):
+            raise Refusal("rule1", w, f"`git {sub}` with {w!r} names a program for git to run "
+                          "outside the sandbox, which the guard can't judge. Run it without that "
+                          "option.")
+        if (len(name) >= 4 and (GIT_RECURSE.startswith(name) or name.startswith(GIT_RECURSE))
+                and value not in ("no", "false")):
+            raise Refusal("rule1", w, f"`git {sub}` with {w!r} runs git in each submodule's "
+                          "own git dir, whose config the guard doesn't judge. Run it without "
+                          "submodule recursion.")
+        # The repository word: a positional, or --repo's value (git takes a prefix of it).
+        # git takes it as a remote's nick only with no `/` and not `.` or `..`.
+        nick = (value if len(name) >= 3 and "repo".startswith(name) and "=" in w
+                else None if w.startswith("-") else w)
+        if repo and nick and "/" not in nick and nick not in (".", "..") and any(
+                os.path.lexists(os.path.join(repo[1], kind, nick))
+                for kind in ("remotes", "branches")):
+            raise Refusal("rule1", w, f"`git {sub}` names {nick!r}, a remote a legacy file in the "
+                          f"project's git dir ({repo[1]}/remotes or /branches) defines, outside "
+                          "the config the guard judges. Define it in .git/config instead.")
 
 
 # --- Machine view ------------------------------------------------------------------------------
@@ -508,13 +914,18 @@ def config_refs(path, home):
     return includes, hooks
 
 
-def check_rule1(m, env, cwd, project):
+def check_rule1(m, env, cwd, project, arg=None):
+    """Rule 1 for the repo at cwd: the call's own cwd, or the path argument arg resolved to
+    cwd (check_path_arguments)."""
     repo = discover(cwd, env)
     proj = discover(project, {k: env[k] for k in ("GIT_CEILING_DIRECTORIES",) if k in env})
     if repo and (proj is None or repo[1] != proj[1]):
+        what, fix = ((f"the path argument {arg}", "Name a path in the project's repository")
+                     if arg is not None else
+                     ("the working directory", "Run it from the project's repository"))
         raise Refusal("rule1", repo[0],
-                      f"the working directory resolves to the git dir {repo[0]}, not the project's "
-                      "repository. Run it from the project's repository.")
+                      f"{what} is in the repository with git dir {repo[0]}, not the project's. "
+                      f"{fix}, or run it from a session launched in that repository.")
     home = m.home
     trusted, files = [], []
     if repo:
@@ -656,13 +1067,14 @@ def check_rule3(head, cwd, project):
                       "the project root.")
 
 
-def judge(heads, cwd, env, settings):
+def judge(heads, cwd, env, settings, command=""):
     project = env.get("CLAUDE_PROJECT_DIR")
     if not project:
         raise Refusal("project", "(unset)", "CLAUDE_PROJECT_DIR is unset, so the guard can't tell "
                       "the project's repository; refusing an excluded command.")
     m = Machine(env, settings, cwd)
     check_rule1(m, env, cwd, project)
+    check_calls(m, env, cwd, project, command)
     for head in heads:
         check_rule2(m, head, env.get("PATH", ""))
         check_rule3(head, cwd, project)
@@ -1140,7 +1552,7 @@ def main():
     session = str(event.get("session_id"))[:8]
     try:
         settings, errors = load_settings(env)
-        heads = candidates(command, settings["excludedCommands"])
+        heads = heads_of(matching_pieces(command, settings["excludedCommands"]))
         if errors and not heads:
             log(f"unread settings {errors}: treating as a candidate")
             heads = [first_word(normalize(command)) or "(unknown)"]
@@ -1151,7 +1563,7 @@ def main():
     if not heads:
         return
     try:
-        judge(heads, cwd, env, settings)
+        judge(heads, cwd, env, settings, command)
     except Refusal as r:
         log(f"deny {r.rule} {r.path} head={heads[0]} session={session}")
         deny(f"excluded-guard ({r.rule}): {r.reason}")
