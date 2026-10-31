@@ -67,10 +67,45 @@ class CopyMode(unittest.TestCase):
         self.assertEqual(self.read(self.uv),
                          UV_LINE + '\n[pip]\nindex-url = "https://example.org/simple"\n')
 
-    def test_the_key_inside_a_table_does_not_count(self):
+    def test_the_key_inside_a_table_is_named_and_kept(self):
+        # uv's [pip] link-mode governs `uv pip` installs: the top-level line still goes in, and
+        # the table's other value is named.
         self.write(self.uv, '[pip]\nlink-mode = "hardlink"\n')
-        self.run_section()
-        self.assertTrue(self.read(self.uv).startswith(UV_LINE + "\n[pip]\n"))
+        err = self.run_section()
+        self.assertEqual(self.read(self.uv), UV_LINE + '\n[pip]\nlink-mode = "hardlink"\n')
+        self.assertIn("in [pip]", err)
+
+    def test_a_table_that_sets_copy_is_silent(self):
+        self.write(self.uv, "[pip]\nlink-mode = 'copy'\n")
+        self.assertEqual(self.run_section(), "")
+
+    def test_a_quoted_key_counts(self):
+        # Adding a second link-mode beside a quoted one would be a duplicate key, and uv refuses
+        # the whole file.
+        self.write(self.uv, '"link-mode" = "hardlink"\n')
+        err = self.run_section()
+        self.assertEqual(self.read(self.uv), '"link-mode" = "hardlink"\n')
+        self.assertIn(self.uv, err)
+
+    def test_a_trailing_comment_is_not_the_value(self):
+        self.write(self.uv, 'link-mode = "copy"  # set by hand\n')
+        self.write(self.pnpm, "package-import-method=copy ; set by hand\n")
+        self.assertEqual(self.run_section(), "")
+
+    def test_an_unreadable_file_is_named_and_setup_goes_on(self):
+        self.write(self.uv, 'python-preference = "managed"\n')
+        os.chmod(self.uv, 0o000)
+        self.addCleanup(os.chmod, self.uv, 0o600)
+        err = self.run_section()  # exit 0: the sections after this one still run
+        self.assertIn(self.uv, err)
+        os.chmod(self.uv, 0o600)
+        self.assertEqual(self.read(self.uv), 'python-preference = "managed"\n')
+        self.assertEqual(self.read(self.pnpm), PNPM_LINE + "\n")
+
+    def test_a_dir_in_the_way_is_named_and_setup_goes_on(self):
+        os.makedirs(self.pnpm)
+        self.assertIn(self.pnpm, self.run_section())
+        self.assertEqual(self.read(self.uv), UV_LINE + "\n")
 
     def test_an_existing_value_is_kept_and_named(self):
         self.write(self.uv, 'link-mode = "symlink"\n')

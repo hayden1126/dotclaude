@@ -216,7 +216,16 @@ if [[ -d "$HOME/.local/bin" ]]; then
              "$REPO_DIR"/skills/pass/scripts/pass-respawn \
              "$REPO_DIR"/skills/exam-prep/scripts/ed-pull; do
     [[ -x "$exe" ]] || continue
-    link "$exe" "$HOME/.local/bin/$(basename "$exe")"
+    # With npm's prefix at ~/.local, ~/.local/bin/npx is npm's own: the shim would take its
+    # place and find no npx behind it. Left alone and named; MCP launches then keep npx's
+    # project-dir lookup (gap N2) until it moves.
+    dst="$HOME/.local/bin/$(basename "$exe")"
+    if [[ $(basename "$exe") == npx && ( -e $dst || -L $dst ) ]] \
+       && [[ ! -f "$(dirname "$(readlink -f "$dst")")/../hooks/sandbox-caches.sh" ]]; then
+      warn "$dst isn't dotclaude's (npm's own, with npm's prefix at ~/.local?): left alone, so MCP servers still start with npx's project-dir lookup. Set npm's prefix elsewhere, then rerun setup"
+      continue
+    fi
+    link "$exe" "$dst"
   done
 fi
 
@@ -465,31 +474,47 @@ fi
 # `bun install --backend=copyfile`.
 
 # Put LINE at the top of FILE (above any [table], where a TOML key would belong to the table)
-# unless the top level already sets KEY. Written in place, so a linked file stays a link.
+# unless the top level already sets KEY. Written in place, so a linked file stays a link. A
+# table that sets KEY to another value (uv's [pip]) is named, and kept. A file it can't read or
+# write is named and skipped, so the rest of setup still runs.
 set_top_key() {
-  local file="$1" key="$2" line="$3" want="$4" cur
-  if [[ ! -e $file ]]; then
-    mkdir -p "$(dirname "$file")"
-    printf '%s\n' "$line" > "$file"
-    say "set $key in $file"; return
+  local file="$1" key="$2" line="$3" want="$4" sets top="" t rest
+  if [[ ! -e $file && ! -L $file ]]; then
+    mkdir -p "$(dirname "$file")" && printf '%s\n' "$line" > "$file" \
+      && say "set $key in $file" || warn "can't create $file: $key not set"
+    return
   fi
-  cur="$(awk -v k="$key" '
-    /^[[:space:]]*\[/ { exit }
-    { l = $0; sub(/^[[:space:]]+/, "", l) }
-    index(l, k) == 1 && substr(l, length(k) + 1) ~ /^[[:space:]]*=/ {
+  [[ -f $file && -r $file && -w $file ]] || { warn "can't read or write $file: $key not set"; return; }
+  # One line per place that sets KEY: "=value" at the top level, "table=value" in a table. A
+  # quoted key counts, and a trailing comment is not part of the value.
+  sets="$(awk -v k="$key" '
+    /^[[:space:]]*\[/ { t = $0; sub(/^[[:space:]]*\[+[[:space:]]*/, "", t); sub(/[[:space:]]*\].*$/, "", t); next }
+    {
+      l = $0; sub(/^[[:space:]]+/, "", l); q = substr(l, 1, 1)
+      if (q == "\"" || q == "'\''") {
+        if (substr(l, length(k) + 2, 1) != q) next
+        l = substr(l, 2, length(k)) substr(l, length(k) + 3)
+      }
+      if (index(l, k) != 1 || substr(l, length(k) + 1) !~ /^[[:space:]]*=/) next
       v = substr(l, length(k) + 1); sub(/^[[:space:]]*=[[:space:]]*/, "", v)
-      gsub(/["'\''[:space:]]/, "", v); print "=" v; exit
+      sub(/[[:space:]]*[#;].*$/, "", v); gsub(/["'\''[:space:]]/, "", v)
+      print t "=" v
     }' "$file")"
-  if [[ $cur == "=$want" ]]; then
-    return
-  elif [[ -n $cur ]]; then
-    warn "$file sets $key to ${cur#=}, kept: installs there can hardlink to the shared cache"
+  while IFS= read -r t; do
+    if [[ $t == =* ]]; then
+      [[ -n $top ]] || top="${t#=}"
+    elif [[ -n $t && ${t#*=} != "$want" ]]; then
+      warn "$file sets $key to ${t#*=} in [${t%%=*}], kept: those installs can hardlink to the shared cache"
+    fi
+  done <<<"$sets"
+  if [[ -n $top ]]; then
+    [[ $top == "$want" ]] \
+      || warn "$file sets $key to $top, kept: installs there can hardlink to the shared cache"
     return
   fi
-  local rest
   rest="$(cat "$file")"
-  printf '%s\n%s' "$line" "${rest:+$rest$'\n'}" > "$file"
-  say "set $key in $file"
+  printf '%s\n%s' "$line" "${rest:+$rest$'\n'}" > "$file" && say "set $key in $file" \
+    || warn "can't write $file: $key not set"
 }
 
 config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
