@@ -17,7 +17,7 @@ from unittest import mock
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOL = os.path.join(REPO, "bin", "cache-unlink")
-CACHE_ENV = ("UV_CACHE_DIR", "PNPM_HOME", "BUN_INSTALL", "BUN_INSTALL_CACHE_DIR",
+CACHE_ENV = ("SANDBOX_RUNTIME", "UV_CACHE_DIR", "PNPM_HOME", "BUN_INSTALL", "BUN_INSTALL_CACHE_DIR",
              "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME")
 
 
@@ -158,6 +158,12 @@ class CacheUnlink(Base):
         a = self.put(os.path.join(self.uv, "archive-v0", "h1", "m.py"))
         self.link(a, os.path.join(self.code, "m.py"))
         self.assertIn("1 files  ~/code\n", self.run_tool(self.code).stdout)
+
+    def test_inside_the_sandbox_it_refuses(self):
+        # There the cache vars name the sandbox's own caches: the report would miss the real ones.
+        p = self.run_tool(self.code, SANDBOX_RUNTIME="1")
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("run it from a terminal", p.stderr)
 
     def test_a_missing_dir_is_a_usage_error(self):
         p = self.run_tool(os.path.join(self.tmp, "nope"))

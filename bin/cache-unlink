@@ -209,6 +209,9 @@ def main(argv=None):
     ap.add_argument("--cache", action="append", default=[], metavar="DIR",
                     help="another cache dir to count (a store this misses)")
     args = ap.parse_args(argv)
+    if os.environ.get("SANDBOX_RUNTIME"):
+        # There the cache vars name the sandbox's own caches, so the report would miss yours.
+        ap.error("run it from a terminal, not in Claude Code's sandbox")
 
     roots = []
     for d in args.dirs:
