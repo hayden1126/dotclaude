@@ -184,6 +184,18 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     holder and read the lock as free. Lane-able (`lane`,
     `lanelib.py`, `tests/lanes`, `docs/lanes.md`), after ports; overlaps lane park. Tell the
     capella-studio lead when it lands.
+  - **Subagent Bash moves to the background at 180 s** (medium; lane pass-fixes, session
+    0eb4c7ff, 2026-10-30; Claude Code 2.1.316). A subagent's foreground `./wait.sh` (timeout
+    600000) was moved to the background after 180 s; the agent handed back early ("not written"),
+    resumed on the job's notice and did the work, and its second SubagentHandback was refused
+    ("your report was already delivered"), so the parent heard the opposite of what happened.
+    The delegation skill's "a long command runs in the foreground (up to the Bash tool's 10-minute
+    limit)" and BRIEF.md's Budget line no longer hold for subagents past 180 s. Evidence: lane
+    pass-fixes' `.lane/artifacts/pass-compact-smoke.md` (archived with the lane), agent
+    transcript `agent-a6301324f3813f8b5` of probe session 668e9503. Fix: the docs say wait on a
+    moved command's output before reporting, and the report check refuses a handback while one
+    of the agent's own background commands still runs. Lane-able (`skills/delegation/`, its
+    hooks and `tests/delegation`).
   - **Approval-marker tests flake at midnight** (low; lane park, 2026-10-30). Two
     `tests/lanes/test_handoff_check.py` PlainRepo tests (a dated marker passes, a future one fails)
     failed once in a full `tests/lanes` run that crossed local midnight, then passed on rerun.
