@@ -3,8 +3,9 @@
 
 Works in a lane (the record is <lane>/.lane/STATUS.md), in the main checkout of a lanes repo and
 in a plain repo (the root STATUS.md). Checks:
-  clean      the tree is clean, or each leftover's repo-relative path is named in the status file;
-             agent worktrees (.claude/worktrees/) and sandbox /dev/null stubs never count
+  clean      the repo's own config sets no filter clean or process command and no lfs.extension
+             key (git status would run it; global and system ones pass), and the tree is clean, or each leftover's
+             repo-relative path is named in the status file; agent worktrees (.claude/worktrees/) and sandbox /dev/null stubs never count
   fresh      the status file was written after HEAD's commit (or HEAD carries it) and after this
              session started: in a lane the latest lane.json sessions[].startedAt; elsewhere the
              session named by $CLAUDE_CODE_SESSION_ID, else the newest Claude session file whose
@@ -92,6 +93,28 @@ def sandbox_stub(path: str) -> bool:
         return stat.S_ISCHR(os.stat(path).st_mode)
     except OSError:
         return False
+
+
+def repo_filter(repo: lanelib.Repo) -> str | None:
+    """Why `git status` can't run in the checkout, or None: a filter's clean or process command,
+    or any lfs.extension key, set in the repo's own config (local, worktree or command scope),
+    which status runs on a file the checkout routes to it. Global and system config, which the session can't write, may set
+    one (git lfs install does). Unreadable config fails closed."""
+    # git-lfs, a filter installed globally, runs an lfs.extension's commands: the repo's own
+    # count too (not probed: no git-lfs on HAYPC).
+    p = git(["config", "--show-scope", "-z", "--get-regexp",
+             r"^(filter\..*\.(clean|process)|lfs\.extension\..*)$"], repo.toplevel)
+    # -z: each entry is scope NUL key LF value NUL, since a value may hold a newline.
+    fields = p.stdout.split("\0")
+    if p.returncode not in (0, 1) or fields[-1] != "" or len(fields) % 2 != 1:  # 1: none set
+        return f"its filter config can't be read ({p.stderr.strip() or p.returncode})"
+    keys = [kv.split("\n", 1)[0] for scope, kv in zip(fields[0:-1:2], fields[1:-1:2])
+            if scope not in ("global", "system")]
+    if keys:
+        return (f"the repository's own config sets {', '.join(keys)}, a program `git status` "
+                "would run, so the tree went unchecked. Remove it, or set it in your global "
+                "config")
+    return None
 
 
 def leftovers(repo: lanelib.Repo) -> list[str]:
@@ -190,12 +213,14 @@ def check(cwd: str, closing: bool = False,
     except OSError:
         return header, [f"no status file at {status}"], []
 
-    dirty = [p for p in leftovers(repo) if not named(p, text)]
-    if dirty:
+    if why := repo_filter(repo):
+        fails.append(why)
+    elif dirty := [p for p in leftovers(repo) if not named(p, text)]:
         fails.append("uncommitted and not named in the status file: " + ", ".join(dirty))
 
     mtime = os.path.getmtime(status)
-    head = git(["log", "-1", "--format=%ct"], repo.toplevel)
+    # --no-show-signature: log.showSignature would run gpg.program, which the repo's config names.
+    head = git(["log", "-1", "--no-show-signature", "--format=%ct"], repo.toplevel)
     if head.returncode == 0 and head.stdout.strip():
         if mtime < float(head.stdout.strip()) and not head_carries(repo, status):
             fails.append("the status file is older than HEAD's commit: update it after the last "

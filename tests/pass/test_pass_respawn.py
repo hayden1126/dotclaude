@@ -107,7 +107,32 @@ case "$1" in
         *) printf '%s\n' "$FAKE_TMUX_SERVER" ;;
       esac
     fi ;;
-  capture-pane) printf '%s\n' "$FAKE_TMUX_SCREEN" ;;
+  send-keys)
+    # The input box: typing fills $FAKE_TMUX_BOX and Enter empties it, unless
+    # $FAKE_TMUX_BOX.newlines counts Enters that land as a newline (the text stays).
+    if [ -n "$FAKE_TMUX_BOX" ]; then
+      if [ "$4" = -l ]; then
+        printf '%s' "$5" >> "$FAKE_TMUX_BOX"
+        printf '%s\n' "${FAKE_TMUX_LAG:-0}" > "$FAKE_TMUX_BOX.lag"
+      elif [ "$4" = Enter ]; then
+        n=$(cat "$FAKE_TMUX_BOX.newlines" 2>/dev/null || echo 0)
+        if [ "$n" -gt 0 ]; then echo $((n - 1)) > "$FAKE_TMUX_BOX.newlines"
+        else : > "$FAKE_TMUX_BOX"; fi
+      fi
+    fi ;;
+  capture-pane)
+    # The box while it holds text, wrapped at $FAKE_TMUX_WRAP columns (mid-word too), once
+    # $FAKE_TMUX_LAG captures have passed since the typing; the static screen otherwise.
+    lag=$(cat "$FAKE_TMUX_BOX.lag" 2>/dev/null || echo 0)
+    if [ "$lag" -gt 0 ]; then
+      echo $((lag - 1)) > "$FAKE_TMUX_BOX.lag"
+      printf '%s\n' "$FAKE_TMUX_SCREEN"
+    elif [ -s "$FAKE_TMUX_BOX" ]; then
+      printf '%s%s%s\n' "$FAKE_TMUX_BEFORE" "$(fold -w "${FAKE_TMUX_WRAP:-80}" "$FAKE_TMUX_BOX")" \
+        "$FAKE_TMUX_AFTER"
+    else
+      printf '%s\n' "$FAKE_TMUX_SCREEN"
+    fi ;;
   list-clients) [ -n "$FAKE_TMUX_CLIENTS" ] && printf '%s\n' "$FAKE_TMUX_CLIENTS" ;;
 esac
 exit 0
@@ -147,6 +172,9 @@ def marked(text, day=TODAY):
 
 
 APPROVED = marked(GOOD)
+# An unapproved compact resume prompt's tail when the stop record can't say whether an agent runs.
+UNSURE = (" Call EnterPlanMode first, unless a background agent is still running: then plan in "
+          "chat and call it only after it hands back.")
 SID = "sess-0001"
 CLAUDE, PANE_SHELL, SHELL = 900000, 899999, 900001
 PANE_TTY = "/dev/pts/4"  # the pane's tty, as #{pane_tty} names it
@@ -165,6 +193,7 @@ def screen(box):
 
 
 EMPTY_BOX = screen("")
+BOX_BEFORE, BOX_AFTER = screen("\0").split("\0")  # the fake tmux renders its box between
 
 
 def table(*extra, claude=True):
@@ -193,6 +222,7 @@ class Base(LanesRepo):
         super().setUp()
         self.mod = load()
         self.mod.POLL, self.mod.SETTLE, self.mod.COMPACT_GAP = 0.01, 0.05, 0.01
+        self.mod.SHOW_WAIT, self.mod.SENT_WAIT, self.mod.BOX_POLL = 0.3, 0.2, 0.01
         self.real_roots = self.mod.writable_roots
         self.mod.writable_roots = (lambda repo, cwd, launch=None, session_argv=None:
                                    [repo.toplevel, repo.main] if repo else [])
@@ -214,7 +244,10 @@ class Base(LanesRepo):
                         FAKE_TMUX_SERVER=SERVER, FAKE_TMUX_PANE=f"{PANE_SHELL} claude {PANE_TTY}",
                         FAKE_TMUX_FAIL="", FAKE_TMUX_MODE="0", FAKE_TMUX_SCREEN=EMPTY_BOX,
                         FAKE_TMUX_WHERE=WHERE, FAKE_TMUX_CLIENTS=CLIENTS,
-                        FAKE_TOAST_LOG=self.toast_log, FAKE_TOAST_EXIT="0")
+                        FAKE_TOAST_LOG=self.toast_log, FAKE_TOAST_EXIT="0",
+                        FAKE_TMUX_BOX=os.path.join(self.tmp, "box"), FAKE_TMUX_LAG="0",
+                        FAKE_TMUX_WRAP="47",
+                        FAKE_TMUX_BEFORE=BOX_BEFORE, FAKE_TMUX_AFTER=BOX_AFTER)
         patch = mock.patch.dict(os.environ, self.env, clear=True)
         patch.start()
         self.addCleanup(patch.stop)
@@ -341,7 +374,8 @@ class Base(LanesRepo):
         """A fresh turn for another call in the same test: a new script, no stop yet."""
         self.script = list(script) or ["busy", "idle"]
         self.status, self.stopped = None, False
-        for path in (self.tmux_log, self.toast_log):
+        box = os.environ["FAKE_TMUX_BOX"]
+        for path in (self.tmux_log, self.toast_log, box, box + ".lag", box + ".newlines"):
             with contextlib.suppress(FileNotFoundError):
                 os.remove(path)
 
@@ -563,7 +597,8 @@ class Plain(Base):
         self.assertIn("STATUS.md holds the exact facts", focus)
         for argv in (["send-keys", "-t", "%4", "-l", f"/compact {focus}"],
                      ["send-keys", "-t", "%4", "Enter"],
-                     ["send-keys", "-t", "%4", "-l", self.PROMPT + " Call EnterPlanMode first."]):
+                     # At the call the stop record can't speak for this turn yet.
+                     ["send-keys", "-t", "%4", "-l", self.PROMPT + UNSURE]):
             self.assertIn(shlex.join([self.tmux, *argv]), lines)
 
     def test_approved_compact_skips_plan_mode(self):
@@ -839,6 +874,168 @@ class Plain(Base):
         self.assertFalse(os.path.exists(self.carry_marker()))
         self.assertIn("mode=compact outcome=compact", self.log())
         self.assertFalse(os.path.exists(self.last_reply()))  # the conversation survives
+
+    def typed_prompt(self):
+        """The resume prompt a --foreground compact pass typed."""
+        code, out = self.run_pass("--compact", "--foreground")
+        self.assertEqual(code, 0, out)
+        return [a[-1] for a in self.calls("tmux", "send-keys")][2]
+
+    # --- the keys land as typed (an Enter read with the text as one paste is a newline) ---
+
+    def newlines(self, n):
+        """The next n Enters land as a newline: the text stays in the box."""
+        self.write(os.environ["FAKE_TMUX_BOX"] + ".newlines", f"{n}\n")
+
+    def keys(self):
+        return [a[-1] for a in self.calls("tmux", "send-keys")]
+
+    def test_each_enter_waits_until_the_box_shows_the_typed_line(self):
+        os.environ["FAKE_TMUX_LAG"] = "3"  # the box shows the text only at the 4th capture
+        code, out = self.run_pass("--compact", "--foreground")
+        self.assertEqual(code, 0, out)
+        prompt = self.PROMPT + " Call EnterPlanMode first."
+        self.assertEqual(self.keys(), [f"/compact {self.mod.compact_focus('STATUS.md')}",
+                                       "Enter", prompt, "Enter"])
+        log = [a[0] for a in self.calls("tmux")]
+        calls = [a[1] for a in self.calls("tmux")]
+        for typed_at in (i for i, a in enumerate(self.calls("tmux")) if "-l" in a):
+            before_enter = calls[typed_at + 1:calls.index("send-keys", typed_at + 1)]
+            self.assertEqual(before_enter.count("capture-pane"), 4, (before_enter, log))
+        self.assertIn("mode=compact outcome=compact", self.log())
+
+    def test_an_enter_that_lands_as_a_newline_gets_one_more(self):
+        self.newlines(1)  # /compact's Enter lands as a newline
+        code, out = self.run_pass("--compact", "--foreground")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.keys()[1:4], ["Enter", "Enter", self.PROMPT +
+                                            " Call EnterPlanMode first."])
+        self.assertIn("mode=compact outcome=compact", self.log())
+
+    def test_a_resume_prompt_still_in_the_box_after_two_enters_is_handed_over(self):
+        prompt = self.PROMPT + " Call EnterPlanMode first."
+        real = self.mod.tmux
+
+        def tmux(plan, *args):  # the prompt's two Enters both land as newlines
+            if args[-1:] == (prompt,):
+                self.newlines(2)
+            return real(plan, *args)
+        self.mod.tmux = tmux
+        try:
+            code, out = self.run_pass("--compact", "--foreground")
+        finally:
+            self.mod.tmux = real
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.keys()[2:], [prompt, "Enter", "Enter"])
+        (line,) = [ln for ln in self.log().splitlines() if "outcome=failed" in ln]
+        self.assertIn("send-keys 4 of 4: the input box still showed it after two Enters", line)
+        self.assertLoud("press Enter")
+        self.assertEqual(self.notice()["outcome"], "failed")
+
+    def test_a_line_the_box_never_shows_gets_no_enter(self):
+        os.environ["FAKE_TMUX_LAG"] = "1000"
+        code, out = self.run_pass("--compact", "--foreground")
+        self.assertEqual(code, 1, out)
+        # /compact typed but never seen: no Enter, so nothing compacts and nothing else is typed.
+        self.assertEqual(self.keys(), [f"/compact {self.mod.compact_focus('STATUS.md')}"])
+        (line,) = [ln for ln in self.log().splitlines() if "outcome=failed" in ln]
+        self.assertIn("send-keys 2 of 4: not sent: the input box didn't show the typed text",
+                      line)
+        # The typed line may sit in the box, so the tab says so (review round 1).
+        self.assertLoud("didn't show the typed /compact line, so no Enter went; it may sit in "
+                        "the box")
+
+    def test_compact_still_in_the_box_after_two_enters_hands_over_the_prompt(self):
+        # Its Enters went out: /compact may yet run, so another pass could compact twice.
+        self.newlines(2)
+        code, out = self.run_pass("--compact", "--foreground")
+        self.assertEqual(code, 1, out)
+        prompt = self.PROMPT + " Call EnterPlanMode first."
+        self.assertEqual(self.keys()[1:], ["Enter", "Enter"])
+        self.assertLoud("/compact may not have gone")
+        n = self.notice()
+        self.assertEqual(n["outcome"], "failed")
+        self.assertIn(prompt, n["text"])
+        self.assertIn("so it may or may not run", n["text"])
+
+    def test_a_compact_enter_that_may_have_gone_hands_over_the_prompt(self):
+        # Review round 2: tmux giving no answer at /compact's Enter, or failing the second Enter
+        # after the first went, may leave /compact running: another pass could compact twice.
+        prompt = self.PROMPT + " Call EnterPlanMode first."
+        real = self.mod.tmux
+        for enters, answer in ((1, None), (2, None),
+                               (2, subprocess.CompletedProcess([], 1, "", "lost"))):
+            with self.subTest(enters=enters, answer=answer):
+                self.reset()
+                self.newlines(enters - 1)  # a first Enter that lands as a newline
+                seen = []
+
+                def tmux(plan, *args, enters=enters, answer=answer, seen=seen):
+                    if args[0] == "send-keys" and args[-1] == "Enter":
+                        seen.append(args)
+                        if len(seen) == enters:
+                            return answer
+                    return real(plan, *args)
+                self.mod.tmux = tmux
+                try:
+                    code, out = self.run_pass("--compact", "--foreground")
+                finally:
+                    self.mod.tmux = real
+                self.assertEqual(code, 1, out)
+                self.assertLoud("/compact may not have gone")
+                self.assertIn(prompt, self.notice()["text"])
+
+    def test_an_enter_whose_box_cant_be_read_is_not_counted_as_sent(self):
+        prompt = self.PROMPT + " Call EnterPlanMode first."
+        real, after = self.mod.tmux, []
+
+        def tmux(plan, *args):  # tmux stops answering captures after the prompt's Enter
+            if args[-1:] == (prompt,):
+                after.append(True)
+            if after and args[0] == "capture-pane" and len(after) > 1:
+                return None
+            if after and args[-1:] == ("Enter",):
+                after.append(True)
+            return real(plan, *args)
+        self.mod.tmux = tmux
+        try:
+            code, out = self.run_pass("--compact", "--foreground")
+        finally:
+            self.mod.tmux = real
+        self.assertEqual(code, 1, out)
+        self.assertNotIn("outcome=compact", self.log())
+        (line,) = [ln for ln in self.log().splitlines() if "outcome=failed" in ln]
+        self.assertIn("send-keys 4 of 4: tmux didn't answer after the Enter", line)
+        self.assertLoud("press Enter")
+
+    def test_a_compact_pass_with_a_live_agent_holds_off_plan_mode(self):
+        # Plan mode reaches a running background agent and stops its edits (2026-10-20); a
+        # permissionMode in its frontmatter doesn't keep it out (probed 2026-10-29).
+        self.stop_waits = ["subagent"]
+        self.stop_tasks = [{"label": "subagent", "id": "a1", "description": "Write the chart fix"},
+                           {"label": "shell", "id": "b1", "description": "npm test"}]
+        self.assertEqual(self.typed_prompt(),
+                         self.PROMPT + ' A background agent is still running (subagent "Write '
+                         'the chart fix" (a1)): plan in chat, and call EnterPlanMode only after '
+                         'it hands back.')
+        self.assertIn('plan mode after hand-back: subagent "Write the chart fix" (a1)', self.log())
+
+    def test_a_compact_pass_with_only_shells_and_monitors_enters_plan_mode(self):
+        self.stop_waits = ["shell"]
+        self.stop_tasks = [{"label": "shell", "id": "b1"}, {"label": "monitor", "id": "m1"}, WATCH]
+        self.assertEqual(self.typed_prompt(), self.PROMPT + " Call EnterPlanMode first.")
+
+    def test_a_compact_pass_with_no_stop_record_says_both_ways(self):
+        self.stop_waits = None  # the Stop wrote no record
+        self.assertEqual(self.typed_prompt(), self.PROMPT + UNSURE)
+
+    def test_an_approved_compact_pass_with_a_live_agent_just_continues(self):
+        self.commit("STATUS.md", APPROVED, msg="Handoff")
+        self.stop_waits = ["subagent"]
+        self.stop_tasks = [{"label": "subagent", "id": "a1"}]
+        prompt = self.typed_prompt()
+        self.assertNotIn("EnterPlanMode", prompt)
+        self.assertIn("then continue with the approved next step.", prompt)
 
     REPLIES = [{"prompt_id": "p1", "text": "Earlier: the tests pass.", "time": 1.0},
                {"prompt_id": "p2", "text": "Done: the PR is up.", "time": 2.0},
@@ -1296,7 +1493,9 @@ class Plain(Base):
         for line in ['monitor "deploy events" (b0fzd27l4): blocks a plain pass',
                      'shell "npm run dev" (b2): blocks a plain pass; the turn waits on it',
                      f"artifact watch {URL} (s31udgb0s): doesn't block a plain pass",
-                     "dream (d1): doesn't block a plain pass", "teammate: blocks a plain pass"]:
+                     "dream (d1): doesn't block a plain pass",
+                     "teammate: blocks a plain pass; a compact pass resumes without plan mode "
+                     "until it hands back"]:
             self.assertIn("\n  " + line + "\n", out)
         # Read-only: nothing shown, logged or queued.
         self.assertEqual((self.notices(), self.log()), ([], ""))
@@ -2366,7 +2565,7 @@ class Lane(Base):
         self.assertIn(shlex.join([self.tmux, "send-keys", "-t", "%4", "-l",
                                   f"/compact {self.mod.compact_focus('.lane/STATUS.md')}"]),
                       out.splitlines())
-        self.assertIn(self.PROMPT + " Call EnterPlanMode first.", out)
+        self.assertIn(self.PROMPT + UNSURE, out)
 
     def test_the_waiter_in_a_lane_respawns(self):
         code, out = self.run_pass("--foreground", cwd=self.path)
@@ -2602,6 +2801,29 @@ class Units(unittest.TestCase):
         for tasks in ([{"label": "dream", "id": "d1"}], [WATCH], []):
             self.assertIsNone(self.mod.stop_problem(plan, {"time": 1.0, "waits": [],
                                                            "tasks": tasks}))
+
+    def test_live_agents_are_the_tasks_plan_mode_reaches(self):
+        live = self.mod.live_agents
+        for label in ("subagent", "teammate", "workflow"):
+            with self.subTest(label=label):
+                rec = {"time": 2.0, "waits": [], "tasks": [{"label": label, "id": "t1"}]}
+                self.assertEqual(live(rec, 1.0), [{"label": label, "id": "t1"}])
+        for label in ("shell", "monitor", "cloud session", "dream", "artifact watch", "MCP task"):
+            with self.subTest(label=label):
+                self.assertEqual(live({"time": 2.0, "waits": [], "tasks": [label]}, 1.0), [])
+        # A kind neither set names leaves it unknown, unless an agent is listed anyway.
+        self.assertIsNone(live({"time": 2.0, "waits": [], "tasks": ["unlabeled"]}, 1.0))
+        self.assertEqual(live({"time": 2.0, "waits": [], "tasks": ["unlabeled", "subagent"]},
+                              1.0), [{"label": "subagent"}])
+        # A wait the tasks don't describe still counts, by its label.
+        self.assertEqual(live({"time": 2.0, "waits": ["workflow"], "tasks": []}, 1.0),
+                         [{"label": "workflow"}])
+        # Unknown: no record, one from before the call, or one whose lists can't be read.
+        for rec in (None, {"time": 0.5, "waits": [], "tasks": []}, {"time": "x", "tasks": []},
+                    {"time": 2.0, "waits": [], "tasks": "?"}, {"time": 2.0, "waits": 3,
+                                                                 "tasks": []}):
+            with self.subTest(rec=rec):
+                self.assertIsNone(live(rec, 1.0))
 
     def test_the_stop_record_is_read_as_utf8_in_any_locale(self):
         # stop_ring.py writes it as UTF-8. The C locale with Python's UTF-8 mode and coercion off
