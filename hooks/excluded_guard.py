@@ -878,32 +878,46 @@ def parse_value(raw):
     return "".join(out).strip()
 
 
+# `[section "subsection"]`, the subsection's `\"` and `\\` escaped; or `[section]`/`[section.sub]`.
+CONFIG_HEADER = re.compile(r'\[\s*([^\s\]"]*)\s*(?:"((?:[^"\\]|\\.)*)"\s*)?\]')
+
+
 def config_entries(path):
-    """(section, key, value) for each `key = value` in a git config file. Section is lowercased
-    and its subsection dropped: `[includeIf "gitdir:x"]` reads as `includeif`."""
+    """(section, subsection, key, value) for each `key = value` in a git config file. Section and
+    key are lowercased; a quoted subsection is kept as written (escapes undone), a deprecated
+    `[section.sub]` one lowercased, and "" stands for none: `[includeIf "gitdir:x"]` reads as
+    ("includeif", "gitdir:x")."""
     with open(path, errors="replace") as f:
         text = f.read().replace("\\\n", "")
-    section = ""
+    section, subsection = "", ""
     for line in text.splitlines():
         line = line.strip()
         if line.startswith("["):
-            end = line.find("]")
-            if end < 0:
-                continue
-            header = line[1:end].strip()
-            section = re.split(r'[\s."]', header, 1)[0].lower()
-            line = line[end + 1:].strip()
+            m = CONFIG_HEADER.match(line)
+            if m:
+                name, quoted = m.group(1), m.group(2)
+                if quoted is not None:
+                    section, subsection = name.lower(), re.sub(r"\\(.)", r"\1", quoted)
+                else:
+                    section, _, subsection = name.lower().partition(".")
+                line = line[m.end():].strip()
+            else:  # a header git would reject: read its section name, as before
+                end = line.find("]")
+                if end < 0:
+                    continue
+                section = re.split(r'[\s."]', line[1:end].strip(), 1)[0].lower()
+                subsection, line = "", line[end + 1:].strip()
         if not line or line[0] in "#;":
             continue
         key, eq, value = line.partition("=")
         key = key.strip().lower()
-        yield section, key, parse_value(value) if eq else "true"
+        yield section, subsection, key, parse_value(value) if eq else "true"
 
 
 def config_refs(path, home):
     """Include targets and core.hooksPath values named in one config file."""
     includes, hooks = [], []
-    for section, key, value in config_entries(path):
+    for section, _, key, value in config_entries(path):
         if not value:
             continue
         if section in ("include", "includeif") and key == "path":

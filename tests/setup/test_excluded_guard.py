@@ -1791,5 +1791,25 @@ class DiscoveryMatchesGit(Guard):
         self.assertGreaterEqual(compared, 13)  # not vacuous: the two markers refuse, 13 match
 
 
+class ConfigEntries(unittest.TestCase):
+    """config_entries reads each entry with its subsection, as git does: a quoted one kept as
+    written (escapes undone), a `[section.sub]` one lowercased, "" for none."""
+
+    def test_entries_keep_their_subsection(self):
+        guard = load_guard()
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "config")
+            with open(path, "w") as f:
+                f.write('[core]\n\thooksPath = h\n[Remote "Up.Stream"]\n\tURL = /a/b\n'
+                        '[url "/x/y z"] insteadOf = https://h/\n'
+                        '[url "q\\"\\\\"]\n\tpushInsteadOf\n'
+                        '[Old.Sub]\n\tk = v ; c\n[includeIf "gitdir:~/w/"]\n\tpath = i\n')
+            self.assertEqual(list(guard.config_entries(path)), [
+                ("core", "", "hookspath", "h"), ("remote", "Up.Stream", "url", "/a/b"),
+                ("url", "/x/y z", "insteadof", "https://h/"),
+                ("url", 'q"\\', "pushinsteadof", "true"), ("old", "sub", "k", "v"),
+                ("includeif", "gitdir:~/w/", "path", "i")])
+
+
 if __name__ == "__main__":
     unittest.main()
