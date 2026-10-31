@@ -98,7 +98,7 @@ writer, and every other place links to it.
 | 9 | What is this lane blocked on Hayden for? | Asks | the record's "Asks for Hayden" (a design pick, push or merge approval), shown by `lane asks` across lanes. Each ask has one owner, and the lead's stay in its window ("Who asks what") | the lane; cleared after Hayden answers | living |
 | 10 | What did a delegate produce? | Report (up) | a subagent's report JSON (the delegation contract); a lane's hand-back is a passing `handoff-check` plus a State summary; the PR body to outsiders | the delegate | ephemeral, then PR |
 | 11 | Proof behind a claim | Evidence | `.lane/artifacts/` (mocks, shots, gate logs), mirrored so it survives `worktree remove`; rulings point here | the lane | archived with the record |
-| 12 | Shared machine resources | Env state | `lane.json` port, live sessions and `lane lock` holders (derived; a hand-kept "machine state" list drifts) | the CLI | live |
+| 12 | Shared machine resources | Env state | `lane.json` port block, `lane serve`'s listener check, live sessions and `lane lock` holders (derived; a hand-kept "machine state" list drifts) | the CLI | live |
 | 13 | Heads-up between peers | Message | SendMessage to the `uds:` address `lane addr <id>` prints, resolved before each send. A nudge only: anything that matters lands in a doc first, and a message never carries state or consent. A lane's `merged #N` to the lead is one: the lead proves the merge itself and acts on Hayden's standing approval | anyone | ephemeral |
 | 14 | What did we learn? | Lessons | memory (Hayden's preferences, traps), `docs/` | any session | durable |
 | 15 | What happened? | History | git, PRs, transcripts. Never copied into a doc; docs point to them by SHA, PR # or session id | n/a | durable |
@@ -687,6 +687,54 @@ checkout). Past that, nothing needs a new check. A repo counts only when its con
 state dir, which only a bare `lane init` writes, and its lead comes from the lead record beside
 that config.
 
+## Ports and `lane serve` (lane ports, 2026-10-31)
+
+A lane's run script in capella-studio (lane prefs, session 78db7f95) started a dev server on a
+port another lane's server held. The start failed, nothing said so, and the checks that followed
+tested the other lane's server. Two pieces close that.
+
+**A block of ports per lane.** `lane init --ports 5191-5199 --block 3` hands each new lane three
+ports in a row, the first run in the range that no held lane's block touches. `lane.json` keeps
+`port` (the first) and `block` (the count); a record from before blocks has no `block` and holds
+its one port, so old and new lanes share a range. `ls`, `whoami` and the lane-identity hook show
+the block (`5191-5193`), and the setup command gets `LANE_PORTS=5191-5193` beside `LANE_PORT`.
+
+**`lane serve [--port N] [--ready RE] -- <cmd>`.** From inside a lane:
+1. It takes `--port`, which must be in the lane's block, or the block's first port with nothing
+   listening. It refuses a port that already has a listener and names the holder (pid, command,
+   the lane its cwd is in), since a server started there would fail to bind.
+2. It starts the command in a session of its own, with `PORT` and `LANE_PORT` set, `{port}` in
+   the command replaced, a per-serve token in `LANE_SERVE`, and its output in the lane's
+   `.lane-serve/<port>.log` (gitignored by a `*` inside).
+3. It waits (60 s, `--timeout`) for the `--ready` line, if given, and then for a listener on the
+   port. Every listener there, IPv4 and IPv6, must be the serve's: in its session, or carrying
+   its token. Anything else fails the serve, names the holder and ends what the serve started.
+   This is the check that closes the bug. A server that dies first fails the serve with its exit
+   status and the log's tail.
+
+Why a token, not the session alone? A wrapper (`sh -c 'node srv.js &'`) exits after starting the
+server, and a daemon leaves the session with `setsid`. Both keep the token their environment
+inherited, so both still count as the serve's, while another lane's server has no token at all.
+
+**`lane serve --stop PORT`** ends what a serve of this lane started there: every process carrying
+its token, plus its leader's session while the leader still runs as the recorded process (by pid
+and start). Each signal goes through the pidfd check `done` uses, so a reused pid is never hit.
+The record lives in the state dir (`<repo>-<hash>.served/<id>/<port>.json`: pid, start, boot,
+token), which only a sandbox-off command can write, so no lane's sandboxed Bash can point
+`--stop` at another process. `done` removes the lane's records. A served server carries the lane
+session's `CLAUDE_CODE_SESSION_ID`, so `done` and `park` end it with the lane's sessions anyway.
+
+**Why serve runs sandbox-off, and asks each time.** The Bash sandbox gives each command its own
+network and pid namespace: inside it, `/proc/net/tcp` lists only the command's own sockets, and a
+server started there is out of reach of the browser and of later commands. So `serve` refuses in
+the sandbox and runs when its caller turns the sandbox off. Hayden picked this over an
+`excludedCommands` entry (2026-10-31): an exempt `serve` would run any command outside the
+sandbox with no prompt. A private sandbox-audit row (lane ports, 2026-10-31) has the rest, and a
+backlog item tracks the fix.
+
+`lane.json` is sandbox-writable, so `serve` checks a lane's block against the config's range and
+every other lane's block before it uses it.
+
 ## Layout
 
 Claude Code treats every path under `.git/` as a "sensitive file", so Edit/Write there always
@@ -699,9 +747,10 @@ stays in the common dir, which sandboxed Bash can write (S1).
   STATUS.md                     the lane's prose (templates/LANE.md): Brief, State, Decisions, Asks for Hayden, Not mine, Next
   PLAN.md                       the lane's working design (optional)
   artifacts/                    evidence that rulings point at (mocks, shots, gate logs)
+<lane worktree>/.lane-serve/    `lane serve` logs, <port>.log, gitignored by a `*` inside
 
 $XDG_STATE_HOME/dotclaude/lanes/<repo>-<hash>.toml
-                                the config: root, setup cmd, port range, live-lane cap, base
+                                the config: root, setup cmd, port range, block, live-lane cap, base
                                 (<remote>/<branch>, default origin/main), locks, autopass,
                                 model, effort, trial-link, trial-locks; written only
                                 by a bare `lane init`
@@ -716,11 +765,15 @@ $XDG_STATE_HOME/dotclaude/lanes/<repo>-<hash>.closing/<id>.json
 $XDG_STATE_HOME/dotclaude/lanes/<repo>-<hash>.parked/<id>.json
                                 lane <id>'s parked flag ("Parked lanes"), written only by a
                                 bare `lane park`, removed by `lane open` and `lane done`
+$XDG_STATE_HOME/dotclaude/lanes/<repo>-<hash>.served/<id>/<port>.json
+                                what `lane serve` started on a port ("Ports and `lane serve`"),
+                                written only by a sandbox-off serve, removed by `serve --stop`
+                                and `lane done`
 
 <common-dir>/lanes/             CLI-owned; written by `lane` and by hooks, never by the Edit tool
   .lock                         flock for every CLI write (claims are atomic)
   _locks/<name>                 one flock per shared gate (`lane lock`), holding the holder line
-  <id>/lane.json                id, branch, path, base_sha, port, claims[], state, sessions[], created/updated, opened
+  <id>/lane.json                id, branch, path, base_sha, port, block, claims[], state, sessions[], created/updated, opened
   <id>/mirror/                  copy of <lane>/.lane/, refreshed by a Stop and SessionEnd hook, so a raw
                                 `git worktree remove` (which deletes ignored files) loses nothing
   _closed/<id>-<date>/          lane.json + .lane/ archived on `lane done`
@@ -845,7 +898,7 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
 ## The pieces
 
 - **`lane` CLI** (`skills/lanes/scripts/lane`, shared core in `lanelib.py` beside it). Every write
-  takes the flock, so two `lane claim 42` calls can't both win. `lane new` reserves the port and
+  takes the flock, so two `lane claim 42` calls can't both win. `lane new` reserves the ports and
   writes `lane.json` under the lock, then runs the setup command outside it, so a slow
   `npm ci` never blocks a claim; a failed setup leaves the lane registered for a retry or
   `lane done --abandon`. Before any of that, `new` refuses a branch name any PR has used

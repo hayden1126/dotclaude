@@ -3,7 +3,7 @@
 SessionStart (startup, resume, clear, compact):
   in a lane     tells the model its absolute identity (lane id, what its worktree has checked
                 out: a branch, or a detached HEAD's commit; lane.json's branch, labeled, when
-                HEAD can't be read; claims, port, record path)
+                HEAD can't be read; claims, ports, record path)
                 and the rules that keep it absolute, and appends {session_id, startedAt} to
                 lane.json sessions[] (not again for a session already listed and not ended, so a
                 compact keeps its start). On compact it adds "re-read your record": the summary

@@ -32,7 +32,7 @@ what. `docs/lanes.md` holds the design and why; this is the operating guide.
 ## At session start
 
 The `lane-identity` hook names your lane, the branch (or detached commit) your worktree has checked
-out, claims, port and record. Then read, in order:
+out, claims, ports and record. Then read, in order:
 
 1. your record, `<lane>/.lane/STATUS.md` (Brief, Asks for Hayden, Next);
 2. the project STATUS.md (direction, backlog);
@@ -45,9 +45,9 @@ an unregistered worktree: `lane whoami` tells you which.
 ## Lifecycle
 
 1. **Init, once per repo**, from the main checkout:
-   `lane init --root ~/code/<repo>-lanes --setup "npm ci" --ports 5191-5199 --cap 4`. It asks
-   for Hayden's click: `--setup` names the command each new lane runs, and `--root` moves where
-   lanes live. `--model` and `--effort` set the claude model and effort each `lane open`
+   `lane init --root ~/code/<repo>-lanes --setup "npm ci" --ports 5191-5199 --block 3 --cap 4`.
+   It asks for Hayden's click: `--setup` names the command each new lane runs, and `--root`
+   moves where lanes live. `--block` hands each new lane that many ports in a row (default 1). `--model` and `--effort` set the claude model and effort each `lane open`
    launches with (an empty value: the `ANTHROPIC_MODEL` pin, or the user's default effort).
    In a repo whose suites need built dirs the setup made (a Node repo's `node_modules`),
    `lane init --trial-link node_modules` has each `lane trial` symlink the lane's into its
@@ -56,7 +56,7 @@ an unregistered worktree: `lane whoami` tells you which.
    --overlaps api-docs --done-when "axis test green"`. It fetches (and refuses if the fetch
    fails: a lane branches only from the commit the remote reports), branches from `origin/main`
    with no upstream, copies the gitignored files `.worktreeinclude` lists, seeds the record with
-   the brief, hands out a port and runs the setup command. Then it checks the worktree as the
+   the brief, hands out a block of ports and runs the setup command. Then it checks the worktree as the
    excluded-command guard will, and seeds any Edit deny rule a dir needs (a `core.hooksPath` the
    setup set, say) into the record's Asks for Hayden. Start the lane's session with
    `lane open chart-fix` (bare, from inside tmux): a new tmux window in the lane, in plan mode,
@@ -74,6 +74,13 @@ an unregistered worktree: `lane whoami` tells you which.
    `overlap`, the lines under the board name the other lane and the files you both change:
    tell that lane (`lane addr <id>`, a nudge), note it in your record, and run
    `lane trial <id> --run "<suite>" ...` early instead of finding out at ready.
+
+   **Start a dev server with `lane serve -- <cmd>`**, never bare: `{port}` in the command (or
+   `$PORT`) is a port from the lane's block. serve proves the port's listener is the server it
+   started, so a server that failed to bind a port another lane holds fails here, instead of
+   your checks testing that lane's server. It refuses in the sandbox, so run it with the sandbox
+   off (each start asks). `--ready RE` waits for a log line too; the log is
+   `.lane-serve/<port>.log`. `lane serve --stop <port>` ends it; `done` and `park` end it too.
 
    **Tell the lead before you reach past your worktree.** Before an act whose effect leaves the
    lane's worktree (an install from the lane, anything that takes a cap slot), and whenever the
@@ -380,6 +387,7 @@ resend passes.
 | `lane open <id>` | the lane's session in a new tmux window, in plan mode; `--model`/`--effort` override init's defaults for the launch; `--focus` switches to it, or to the live session's window; `--print` shows the tmux command |
 | `lane addr <id>` / `lane addr lead` | `uds:<socket>`, the SendMessage address of the lane's (or the lead's) one live session; refuses on none or several, except that `lead` picks the recorded lead or its resume among several (and refuses with the way to pick when none is). A stopped session (Ctrl+Z) is never an address: the refusal names its window to `fg` it in. `--repo PATH` looks in the lanes repo whose main checkout holds PATH instead of the cwd's, from any dir: a session in another repo reports a dotclaude bug to what `lane addr --repo ~/dotclaude lead` prints. Bare: it must see other processes |
 | `lane lead` | makes the session that runs it the lead (from the main checkout only; Hayden: `! lane lead` at its prompt). Bare |
+| `lane serve -- <cmd>` | from a lane, sandbox off: start `<cmd>` on a port of the lane's block (`{port}` or `$PORT`; `--port N` picks one) in a session of its own, wait for its listener (after `--ready RE`, if given), and fail unless every listener on the port is the serve's; `--stop PORT` ends what a serve started there |
 | `lane lock gate -- <cmd>` | run `<cmd>` under the named lock, waiting while another run holds it; `--wait SECS` gives up with exit 75 (docs/lanes.md: telling it from the command's own 75) |
 | `lane trial --run "<suite>" ...` | from a lane: merge origin/main and every other live lane's commits (or only the ids given) onto its HEAD in a scratch tree, run each suite there under the `suite` lock (and init's `--trial-locks`), and rerun a failed one on HEAD plus origin/main alone to tell the merge's failures from the location's; with nothing merged, run them once on HEAD plus origin/main; exit 0 clean, 1 on a conflict, a failure of the merge's own or one with no test id to compare (a lane that conflicts with origin/main alone is untried, not a failure), 75 on `--wait`; `--keep` keeps the tree; `--link PATH` symlinks a lane dir into it |
 | `lane new` / `adopt` / `done` | lifecycle, above |
@@ -392,7 +400,7 @@ live session), `stopped` (a session
 there is stopped with Ctrl+Z: `fg` it in its window; it still holds the lane), `handoff?` (the
 record may be behind, as The lead step 5 spells out: a PR merged after its last write, a commit
 is newer, or a session that started after it has ended; on whenever one of those can't be read),
-`setup-failed` (half made: it still holds its port, claims and a cap slot; finish it with
+`setup-failed` (half made: it still holds its ports, claims and a cap slot; finish it with
 `lane adopt <path>`), `closing` (a `lane done` stopped partway; rerun it), `parked` (`lane
 park` ended its sessions and freed its slot; it never shows `orphan`). With a lane parked or
 the cap passed, a `cap: N of M slots held (K parked)` line follows the board.
@@ -402,8 +410,11 @@ Run `lane init`, `new`, `adopt`, `ls`, `open`, `done`, `park`, `addr` and `lead`
 of other processes. Piped or sandboxed, `ls` says what it skipped (PR state, sessions and window
 show `?`), and `new`, `open`, `done`, `park`, `addr` and `lead` refuse. `lane ls` also names any record it left out (a
 `lane.json` the CLI didn't write, or two claiming one path): look at it before removing it. While one is left out, `new`, `adopt` and `claim` refuse to hand out claims, ports or cap slots. A session file that won't read as JSON makes `open` refuse, naming it: one named `<pid>.json` stops counting once that process ends, any other must be removed. `addr lead` refuses beside one whose process runs in the main checkout (or whose cwd can't be read) or is the recorded lead's. `open --print` still prints, but warns that it
-can't see a live session, so its command may start a second one. Every other subcommand runs
-sandboxed. `lane lock` and `lane trial` must: the commands they run inherit their sandbox.
+can't see a live session, so its command may start a second one. `lane serve` has no
+excludedCommands entry: it refuses in the sandbox, whose own network and pids hide every
+listener but its own, and runs when you turn the sandbox off, so each start meets the usual
+approval. Every other subcommand runs sandboxed. `lane lock` and `lane trial` must: the commands
+they run inherit their sandbox.
 
 `ls`, `new`, `adopt`, `open`, `done`, `park`, `addr` and `lead` have allow rules, so auto mode's classifier never refuses
 them. Each call meets the excluded-command guard first (docs/delegation.md), and the asks on
