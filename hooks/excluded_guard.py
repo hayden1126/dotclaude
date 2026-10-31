@@ -739,9 +739,10 @@ def handed_lane_addr(command):
     return False
 
 
-def check_calls(m, env, cwd, project, command):
+def check_calls(m, env, cwd, project, command, remotes=frozenset()):
     """Rule 1 for the path arguments of every PATH_HEADS call in the command, and G-B for every
-    git and gh call (check_recursion)."""
+    git and gh call (check_recursion). remotes: the names of the remotes the cwd's config
+    defines (check_rule1)."""
     try:
         calls = list(path_calls(command, PATH_HEADS | {"gh"}))
     except ValueError as e:
@@ -750,12 +751,13 @@ def check_calls(m, env, cwd, project, command):
                       "as its own plain Bash call.")
     for words, targets in calls:
         if os.path.basename(words[0]) in PATH_HEADS:
-            check_path_arguments(m, env, cwd, project, words, targets)
+            check_path_arguments(m, env, cwd, project, words, targets, remotes)
         check_recursion(m, env, cwd, words)
 
 
-def check_path_arguments(m, env, cwd, project, words, targets):
-    """Rule 1 for each path argument of one call (path_arguments), resolved from cwd."""
+def check_path_arguments(m, env, cwd, project, words, targets, remotes=frozenset()):
+    """Rule 1 for each path argument of one call (path_arguments), resolved from cwd; a git
+    repository word through check_repository_word."""
     head = os.path.basename(words[0])
     sub = next((w for w in words[1:] if not w.startswith("-")), None)
     if head == "git" and words[1:2] and words[1].startswith("-") and any(
@@ -781,26 +783,52 @@ def check_path_arguments(m, env, cwd, project, words, targets):
                           "rewritten before git sees it). Spell paths and refs as plain words.")
     if head == "git":
         check_git_words(sub, words[2:])
-    for path, existing_only in path_arguments(words):
-        if existing_only and path.startswith("file://"):
-            path = path[len("file://"):]
-            if not path.startswith("/"):  # git drops a host part: judge no guess at the rest
-                raise Refusal("rule1", path, f"`git {sub}` names a file:// URL with a host part "
-                              f"(file://{path}); give the repository as a plain path.")
-        full = os.path.join(cwd, os.path.expanduser(path))
-        if not existing_only:
-            check_rule1(m, env, full, project, arg=path)
+        for word in git_argv(sub, words[2:])[1]:
+            check_repository_word(m, env, cwd, project, sub, word, remotes)
+        return
+    for path, _ in path_arguments(words):
+        check_rule1(m, env, os.path.join(cwd, os.path.expanduser(path)), project, arg=path)
+
+
+def check_repository_word(m, env, cwd, project, sub, word, remotes):
+    """G-E path half for one repository word of git push, fetch, pull or ls-remote (git_argv).
+    A configured remote's name is judged by its URL with the cwd's config (G-D) and nothing
+    more, and a network URL passes. Any other word is a path to git, resolved from the cwd,
+    whether it exists or not: git's server side tries <path> and then <path>.git and reads a
+    file there as a gitfile. Where neither exists, it is refused if a sandboxed session could
+    create it; where one does, its symlink chain (each hop, the dir of each, and a gitfile or
+    other file at its end) must be protected, and the repo is judged as rule 1 judges the cwd
+    (which also finds <dir>/.git)."""
+    if word in remotes:
+        return
+    path = local_url_path(word)
+    if path is None:
+        return
+    full = os.path.join(cwd, os.path.expanduser(path))
+    exists = False
+    for found in (full, full + ".git"):
+        if not os.path.lexists(found):
             continue
-        # git's server side tries <path> and then <path>.git, and reads a file there as a
-        # gitfile; a dir it judges as rule 1 judges the cwd (which also finds <dir>/.git).
-        for found in (full, full + ".git"):
-            if os.path.isfile(found):
-                try:
-                    found = read_gitfile(found)
-                except Exception:
-                    continue  # no gitfile (a bundle, say): git reads no config from it
-            if os.path.lexists(found):
-                check_rule1(m, env, found, project, arg=path)
+        exists = True
+        found = m.chain(found, "rule1", lambda bad, found=found: Refusal(
+            "rule1", bad, f"`git {sub}`'s repository {word} goes through {bad}, which a "
+            "sandboxed session can rewrite to point git at another repository after this "
+            "check. Name the repository by its real path in a dir no session can write, or "
+            "protect that dir.", protect=m), final_dir=False)
+        if os.path.isfile(found):
+            try:
+                found = read_gitfile(found)
+            except Exception:
+                continue  # no gitfile (a bundle, say): git reads no config from it
+        if os.path.lexists(found):
+            check_rule1(m, env, found, project, arg=word)
+    bad = None if exists else m.exposed(full)
+    if bad:
+        raise Refusal("rule1", bad, f"`git {sub}`'s repository {word} names no configured remote, "
+                      f"so git takes it as the path {full}, which is missing and a sandboxed "
+                      f"session could create ({bad}): git would run a repository planted there "
+                      "after this check. Name a configured remote, a network URL or an existing "
+                      "path in the project's repository, or protect that dir.", protect=m)
 
 
 def check_git_words(sub, args):
@@ -923,27 +951,33 @@ class Machine:
         return self.memo["exposed", p]
 
     def _exposed(self, p):
+        return self.linked(p) or (p if self.writable(p) else None)
+
+    def linked(self, p):
+        """The first writable symlinked ancestor of `p`, or None."""
         parts = p.strip("/").split("/")
         for i in range(1, len(parts)):
             a = "/" + "/".join(parts[:i])
             if os.path.islink(a) and self.writable(a):
                 return a
-        return p if self.writable(p) else None
+        return None
 
-    def chain(self, path, rule, refuse):
+    def chain(self, path, rule, refuse, final_dir=True):
         """Follow `path`'s symlink chain, raising `refuse(bad)` for the first hop, or dir of a
-        hop, that is exposed. Returns the final target. Rules 1 and 2 both judge files this way."""
+        hop, that is exposed. Returns the final target. Rules 1 and 2 both judge files this way.
+        final_dir False leaves a real dir at the chain's end to rule 1 (a repository's own dir),
+        judging only its symlinked ancestors."""
         p = os.path.abspath(os.path.join(self.cwd, path))
-        if ("chain", p) not in self.memo:
-            self.memo["chain", p] = self._chain(p)
-        kind, at = self.memo["chain", p]
+        if ("chain", p, final_dir) not in self.memo:
+            self.memo["chain", p, final_dir] = self._chain(p, final_dir)
+        kind, at = self.memo["chain", p, final_dir]
         if kind == "bad":
             raise refuse(at)
         if kind == "loop":
             raise Refusal(rule, at, f"{path} has a symlink loop at {at}; could not verify it.")
         return at
 
-    def _chain(self, p):
+    def _chain(self, p, final_dir=True):
         """("ok", final target), ("bad", the exposed path) or ("loop", where it gave up)."""
         for _ in range(40):
             if self.always_protected(p):
@@ -951,6 +985,9 @@ class Machine:
             # A file or symlink is replaced by whoever writes its dir; a real dir stands on its
             # own, as a PATH entry does.
             real_dir = os.path.isdir(p) and not os.path.islink(p)
+            if real_dir and not final_dir:
+                bad = self.linked(p)
+                return ("bad", bad) if bad else ("ok", p)
             for x in (p,) if real_dir else (p, os.path.dirname(p)):
                 bad = self.exposed(x)
                 if bad:
@@ -1130,23 +1167,26 @@ def config_entries(path):
 
 
 def config_refs(path, home):
-    """Include targets, core.hooksPath values and remote URLs named in one config file. The URLs
-    are each remote.<n>.url and pushurl value and each url.<base>.insteadOf or pushInsteadOf
-    base: the URL git ends up using."""
-    includes, hooks, urls = [], [], []
+    """Include targets (path, whether an includeIf names it), core.hooksPath values, remote URLs
+    and remote names in one config file. The URLs are each remote.<n>.url and pushurl value and
+    each url.<base>.insteadOf or pushInsteadOf base: the URL git ends up using. The names are
+    each <n> with a remote.<n>.url: git takes a name with none as a path."""
+    includes, hooks, urls, names = [], [], [], []
     for section, subsection, key, value in config_entries(path):
         if section == "remote" and key in ("url", "pushurl") and value:
             urls.append(value)
+            if key == "url":
+                names.append(subsection)
         elif section == "url" and key in ("insteadof", "pushinsteadof") and subsection:
             urls.append(subsection)
         if not value:
             continue
         if section in ("include", "includeif") and key == "path":
             v = expand(value, home)
-            includes.append(os.path.join(os.path.dirname(path), v))
+            includes.append((os.path.join(os.path.dirname(path), v), section == "includeif"))
         elif section == "core" and key == "hookspath":
             hooks.append(expand(value, home))
-    return includes, hooks, urls
+    return includes, hooks, urls, names
 
 
 def local_url_path(url):
@@ -1175,7 +1215,9 @@ def check_rule1(m, env, cwd, project, arg=None, url=None, walk=True):
     cwd (check_path_arguments), or the repo a local remote URL names (url: the URL as the
     config spells it). Only the call's own cwd has its remote URLs judged (check_remote_url),
     one level deep: a URL's repo doesn't have its own judged. walk False skips G-E's cwd half
-    (check_below_top), for a call that runs no git in its cwd (handed_lane_addr)."""
+    (check_below_top), for a call that runs no git in its cwd (handed_lane_addr). Returns the
+    names of the remotes git surely reads (check_repository_word): none from an includeIf file,
+    whose condition the guard doesn't evaluate, or from a config.worktree git may not read."""
     repo = discover(cwd, env)
     proj = discover(project, {k: env[k] for k in ("GIT_CEILING_DIRECTORIES",) if k in env})
     kind = "url" if url is not None else "arg" if arg is not None else "cwd"
@@ -1191,7 +1233,7 @@ def check_rule1(m, env, cwd, project, arg=None, url=None, walk=True):
     if walk:
         check_below_top(m, env, cwd, project, repo, what, kind)
     home = m.home
-    trusted, files = [], []
+    trusted, files, unsure = [], [], set()
     if repo:
         gitdir, common, top = repo
         check_legacy_remotes(common)
@@ -1199,6 +1241,8 @@ def check_rule1(m, env, cwd, project, arg=None, url=None, walk=True):
         trusted = [os.path.join(common, "config")]
         worktree_cfg = os.path.join(gitdir, "config.worktree")
         (trusted if gitdir == proj[0] else files).append(worktree_cfg)
+        if not reads_worktree_config(common):
+            unsure.add(os.path.abspath(os.path.join(cwd, worktree_cfg)))
     if env.get("GIT_CONFIG_GLOBAL"):
         files.append(expand(env["GIT_CONFIG_GLOBAL"], home))
     else:
@@ -1208,12 +1252,13 @@ def check_rule1(m, env, cwd, project, arg=None, url=None, walk=True):
     if not env.get("GIT_CONFIG_NOSYSTEM") or env["GIT_CONFIG_NOSYSTEM"].lower() in ("0", "false",
                                                                                    "no", "off"):
         files.append(env.get("GIT_CONFIG_SYSTEM") or "/etc/gitconfig")
-    seen, urls = set(), []
-    queue = [(f, True, 0) for f in trusted] + [(f, False, 0) for f in files]
+    seen, urls, remotes = set(), [], set()
+    queue = [(f, True, 0, True) for f in trusted] + [(f, False, 0, True) for f in files]
     hooks_base = repo[2] if repo else cwd
     while queue:
-        path, is_trusted, depth = queue.pop(0)
+        path, is_trusted, depth, certain = queue.pop(0)
         path = os.path.abspath(os.path.join(cwd, path))
+        certain = certain and path not in unsure
         if path in seen or not os.path.lexists(path):
             continue
         seen.add(path)
@@ -1224,15 +1269,27 @@ def check_rule1(m, env, cwd, project, arg=None, url=None, walk=True):
                 f"write ({bad}).", protect=m))
         if not os.path.isfile(target):
             continue  # judged above; only a regular file is parsed
-        includes, hooks, found = config_refs(target, home)
+        includes, hooks, found, names = config_refs(target, home)
         if depth < INCLUDE_DEPTH:
-            queue += [(i, False, depth + 1) for i in includes]
+            queue += [(i, False, depth + 1, certain and not cond) for i, cond in includes]
         for h in hooks:
             check_hooks_dir(m, os.path.join(hooks_base, h))
         urls += found
+        if certain:
+            remotes.update(names)
     if arg is None and url is None:
         for u in dict.fromkeys(urls):
             check_remote_url(m, env, u, hooks_base, cwd, project)
+    return remotes
+
+
+def reads_worktree_config(common):
+    """Whether git reads a worktree's config.worktree: extensions.worktreeConfig is on in the
+    common config itself (its repository format: no includes)."""
+    local = os.path.join(common, "config")
+    ext = [v for s, sub, k, v in (config_entries(local) if os.path.isfile(local) else [])
+           if s == "extensions" and not sub and k == "worktreeconfig"]
+    return bool(ext) and ext[-1].lower() not in GIT_FALSE
 
 
 def check_remote_url(m, env, url, top, cwd, project):
@@ -1315,13 +1372,8 @@ def config_occurrences(env, repo, home):
                   (os.path.join(home, ".gitconfig"), True)]
     if repo:
         gitdir, common, _ = repo
-        local = os.path.join(common, "config")
-        # git reads config.worktree only with extensions.worktreeConfig set in the common
-        # config itself (its repository format: no includes).
-        ext = [v for s, sub, k, v in (config_entries(local) if os.path.isfile(local) else [])
-               if s == "extensions" and not sub and k == "worktreeconfig"]
-        files += [(local, True), (os.path.join(gitdir, "config.worktree"),
-                                  bool(ext) and ext[-1].lower() not in GIT_FALSE)]
+        files += [(os.path.join(common, "config"), True),
+                  (os.path.join(gitdir, "config.worktree"), reads_worktree_config(common))]
     out = []
     for path, certain in files:
         out += file_occurrences(path, certain, home, 0)
@@ -1561,8 +1613,8 @@ def judge(heads, cwd, env, settings, command=""):
         raise Refusal("project", "(unset)", "CLAUDE_PROJECT_DIR is unset, so the guard can't tell "
                       "the project's repository; refusing an excluded command.")
     m = Machine(env, settings, cwd)
-    check_rule1(m, env, cwd, project, walk=not handed_lane_addr(command))
-    check_calls(m, env, cwd, project, command)
+    remotes = check_rule1(m, env, cwd, project, walk=not handed_lane_addr(command))
+    check_calls(m, env, cwd, project, command, remotes)
     for head in heads:
         check_rule2(m, head, env.get("PATH", ""))
         check_rule3(head, cwd, project)

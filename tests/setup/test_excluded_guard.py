@@ -69,6 +69,7 @@ class Guard(unittest.TestCase):
         self.lane = os.path.join(self.tmp, "lane")
         self.git("init", "-q", self.proj, cwd=self.tmp)
         self.git("commit", "-q", "--allow-empty", "-m", "init", cwd=self.proj)
+        self.git("remote", "add", "origin", "https://github.com/x/y", cwd=self.proj)
         self.git("worktree", "add", "-q", "-b", "lane", self.lane, cwd=self.proj)
         self.bin = self.make_bin("bin")
         self.wbin = self.make_bin("wbin", protect=False)
@@ -341,9 +342,13 @@ class Rule1PathArguments(Guard):
     PATH_HEADS = ["pass-respawn", "pass-respawn *", "lane adopt *", "git push -*", "git fetch *",
                   "git pull *", "git ls-remote *", "delegation-ledger *", "codex-delegate *"]
 
+    def write_settings(self, extra=None):
+        # protect() rewrites the settings too: keep this class's patterns in every rewrite.
+        super().write_settings({"excludedCommands": EXCLUDED + self.PATH_HEADS, **(extra or {})})
+
     def setUp(self):
         super().setUp()
-        self.write_settings({"excludedCommands": EXCLUDED + self.PATH_HEADS})
+        self.write_settings()
         self.other = self.mkdir("other")
         self.git("init", "-q", self.other, cwd=self.tmp)
         self.other_git = os.path.join(self.other, ".git")
@@ -509,7 +514,62 @@ class Rule1PathArguments(Guard):
                 self.assertIn("legacy", self.refused("git push -q evil HEAD"))
                 self.assertIn("legacy", self.refused("git fetch evil"))
                 os.remove(planted)
-        self.allowed("git push -q evil HEAD")  # no such file: git finds no remote
+        # No such file: git finds no remote, and takes the word as a path (G-E path half).
+        self.assertIn("missing", self.refused("git push -q evil HEAD"))
+
+    def test_a_missing_repository_a_session_could_create_is_refused_g_e(self):
+        # G-E path half: a word that names no configured remote is a path to git, existing or
+        # not, and a repo planted there after the check is the one git would run.
+        for call, bad in (("git push -q nothere HEAD", self.proj),
+                          (f"git fetch {self.tmp}/nothere", self.tmp),
+                          (f"git push -q file://{self.tmp}/nothere HEAD", self.tmp),
+                          ("git fetch --multiple origin nothere", self.proj),
+                          ("git push -q --repo=nothere", self.proj)):
+            with self.subTest(call=call):
+                reason = self.refused(call, bad)
+                self.assertIn("missing", reason)
+                self.assertIn("configured remote", reason)
+        safe = self.protect(self.mkdir("safe"))
+        for call in (f"git fetch {safe}/nothere", "git fetch https://github.com/x/z",
+                     "git fetch git@github.com:x/z.git", "git push -q origin HEAD"):
+            with self.subTest(call=call):
+                self.allowed(call)
+
+    def test_a_configured_remote_is_judged_by_its_url_only(self):
+        # A remote's word is no path: its URL is judged with the cwd's config (G-D).
+        self.mkdir("proj", "up")
+        self.git("remote", "add", "up", "https://github.com/x/up", cwd=self.proj)
+        self.allowed("git push -q up HEAD")
+        self.git("config", "remote.up.url", self.other, cwd=self.proj)
+        self.refused("git push -q up HEAD", self.other_git)
+        # A remote with no url is no remote to git: it takes the name as a path.
+        self.git("config", "--unset", "remote.up.url", cwd=self.proj)
+        self.git("config", "remote.up.fetch", "+refs/heads/*:refs/remotes/up/*", cwd=self.proj)
+        self.refused("git push -q up HEAD", os.path.join(self.proj, "up"))
+
+    def test_a_remote_only_an_include_if_defines_is_judged_as_a_path(self):
+        # The guard doesn't evaluate an includeIf condition, so git may not read its remotes.
+        inc = self.write(os.path.join(self.protect(self.mkdir("cfg")), "remotes"),
+                         "[remote \"inc\"]\n\turl = https://github.com/x/inc\n")
+        self.write(os.path.join(self.home, ".gitconfig"),
+                   RECURSE_OFF + f'[includeIf "gitdir:{self.tmp}/nowhere/"]\n\tpath = {inc}\n')
+        self.refused("git push -q inc HEAD", self.proj)
+        self.write(os.path.join(self.home, ".gitconfig"), RECURSE_OFF + f"[include]\n\tpath = {inc}\n")
+        self.allowed("git push -q inc HEAD")
+
+    def test_an_existing_repository_is_judged_along_its_symlink_chain(self):
+        # A link a session can rewrite could point git elsewhere after the check.
+        link = os.path.join(self.tmp, "link")
+        os.symlink(self.proj, link)
+        for call in (f"git push -q {link} HEAD", f"git fetch {link}"):
+            with self.subTest(call=call):
+                self.refused(call, link)
+        safe = self.protect(self.mkdir("safe"))
+        os.symlink(self.proj, os.path.join(safe, "proj"))
+        self.allowed(f"git push -q {safe}/proj HEAD")
+        # A gitfile in a dir a session can write could be rewritten after the check too.
+        gitfile = self.write(os.path.join(self.proj, "gf"), f"gitdir: {self.proj}/.git\n")
+        self.refused("git push -q gf HEAD", gitfile)
 
     def test_git_refuses_submodule_recursion(self):
         for call in ("git fetch --recurse-submodules", "git pull --recurse-submodules=yes",
