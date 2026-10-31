@@ -285,8 +285,13 @@ For a match it refuses, naming the path, when:
    expansion, glob, quote or space), its redirection targets too, since the guard reads the
    text before the shell rewrites it. The guard finds these calls as zsh splits the command,
    anywhere in it (a later piece, a subshell, a substitution), and refuses a command it can't
-   read and a git option before those subcommands. A git repository is judged where git's own
-   lookup finds it (a `.git` suffix, a gitfile, a `file://` URL). An option of those git calls that names a program for git to run, an
+   read and a git option before those subcommands. git's words are read as its own option
+   parser reads them, from tables of git 2.43's options (`git <sub> -h`, captured in
+   `tests/setup/data/git-help/` and tied to the tables by a test that also fails on another git
+   version): the repository is the first positional or `--repo`'s value (every positional with
+   `fetch --multiple`), later positionals are refspecs and never paths, and an option the
+   tables don't list, or an ambiguous prefix, is refused by name. A git repository is judged
+   where git's own lookup finds it (a `.git` suffix, a gitfile, a `file://` URL). An option of those git calls that names a program for git to run, an
    `ext::` remote, `--recurse-submodules` and a `%` in any word are refused, and
    `delegation-ledger hook` runs only as a hook, never through Bash. A repo whose common git
    dir holds any entry in `remotes/` or `branches/` (legacy remote files, outside the judged

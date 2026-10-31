@@ -19,8 +19,11 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      the same way, resolved from the cwd (path_arguments: pass-respawn -C, lane adopt PATH, a
      local repository for git push, fetch, pull and ls-remote), and such a call must spell its
      words plainly, naming no program for git to run (--receive-pack, --upload-pack, --exec,
-     an ext:: remote) and no submodule recursion (check_git_words); a git repository is judged
-     where git's server side
+     an ext:: remote) and no submodule recursion (check_git_words). git's words are read as
+     its parse-options reads them (git_argv, with git 2.43's option tables): the repository
+     is the first positional or --repo's value (every positional with fetch --multiple), the
+     later ones are refspecs, never paths, and an option the tables don't list, or an
+     ambiguous prefix, is refused. A git repository is judged where git's server side
      finds it (<path>, <path>.git, a gitfile, a file:// URL with no host, no %-escape), and
      a git option before those subcommands is refused. The calls are found the way zsh splits
      the command (ShellLexer): each call of those heads anywhere in a candidate is judged, one
@@ -301,6 +304,65 @@ GIT_PROGRAM_OPTIONS = ("receive-pack", "upload-pack", "exec")
 # --recurse-submodules (any prefix git takes, and its -default form) runs git in each
 # submodule's own gitdir, whose config the guard never judges; --no-recurse-submodules is fine.
 GIT_RECURSE = "recurse-submodules"
+# git 2.43's options of each GIT_PATH_SUBS command, as `git <sub> -h` lists them
+# (tests/setup/data/git-help; a test ties the two): `-x,` a short letter, `--[no-]` a long name
+# with its `no-` form, `<>` a value git takes as `=v` or the next word (a short letter's glued
+# or the next word), `[=]` one it takes only as `=v` (a short letter's only glued). git takes
+# any unique prefix of a long name.
+GIT_OPTION_SPEC = {
+    "push": """
+        -v,--[no-]verbose -q,--[no-]quiet --[no-]repo<> --[no-]all --[no-]branches --[no-]mirror
+        -d,--[no-]delete --[no-]tags -n,--[no-]dry-run --[no-]porcelain -f,--[no-]force
+        --[no-]force-with-lease[=] --[no-]force-if-includes --[no-]recurse-submodules<>
+        --[no-]thin --[no-]receive-pack<> --[no-]exec<> -u,--[no-]set-upstream --[no-]progress
+        --[no-]prune --no-verify --verify --[no-]follow-tags --[no-]signed[=] --[no-]atomic
+        -o,--[no-]push-option<> -4,--ipv4 -6,--ipv6""",
+    "fetch": """
+        -v,--[no-]verbose -q,--[no-]quiet --[no-]all --[no-]set-upstream -a,--[no-]append
+        --[no-]atomic --[no-]upload-pack<> -f,--[no-]force -m,--[no-]multiple -t,--[no-]tags -n
+        -j,--[no-]jobs<> --[no-]prefetch -p,--[no-]prune -P,--[no-]prune-tags
+        --[no-]recurse-submodules[=] --[no-]dry-run --[no-]porcelain --[no-]write-fetch-head
+        -k,--[no-]keep -u,--[no-]update-head-ok --[no-]progress --[no-]depth<>
+        --[no-]shallow-since<> --[no-]shallow-exclude<> --[no-]deepen<> --unshallow --refetch
+        --[no-]update-shallow --refmap<> -o,--[no-]server-option<> -4,--ipv4 -6,--ipv6
+        --[no-]negotiation-tip<> --[no-]negotiate-only --[no-]filter<> --[no-]auto-maintenance
+        --[no-]auto-gc --[no-]show-forced-updates --[no-]write-commit-graph --[no-]stdin""",
+    "pull": """
+        -v,--[no-]verbose -q,--[no-]quiet --[no-]progress --[no-]recurse-submodules[=]
+        -r,--[no-]rebase[=] -n --[no-]stat --[no-]log[=] --[no-]signoff[=] --[no-]squash
+        --[no-]commit --[no-]edit --[no-]cleanup<> --[no-]ff --ff-only --[no-]verify
+        --[no-]verify-signatures --[no-]autostash -s,--[no-]strategy<>
+        -X,--[no-]strategy-option<> -S,--[no-]gpg-sign[=] --[no-]allow-unrelated-histories
+        --[no-]all -a,--[no-]append --[no-]upload-pack<> -f,--[no-]force -t,--[no-]tags
+        -p,--[no-]prune -j,--[no-]jobs[=] --[no-]dry-run -k,--[no-]keep --[no-]depth<>
+        --[no-]shallow-since<> --[no-]shallow-exclude<> --[no-]deepen<> --unshallow
+        --[no-]update-shallow --refmap<> -o,--[no-]server-option<> -4,--[no-]ipv4
+        -6,--[no-]ipv6 --[no-]negotiation-tip<> --[no-]show-forced-updates --[no-]set-upstream""",
+    "ls-remote": """
+        -q,--[no-]quiet --[no-]upload-pack<> -t,--[no-]tags -h,--[no-]heads --[no-]refs
+        --[no-]get-url --[no-]sort<> --[no-]exit-code --[no-]symref -o,--[no-]server-option<>""",
+}
+
+
+def option_table(spec):
+    """(long, short) from a GIT_OPTION_SPEC entry: long name -> "none", "required" or
+    "optional" (a `--[no-]` name's `no-` form taking none); short letter -> (kind, long name or
+    None)."""
+    long, short = {}, {}
+    for token in spec.split():
+        letter, neg, name, value = re.fullmatch(
+            r"(?:-(\w),?)?(?:--(\[no-\])?([a-z0-9-]+))?(<>|\[=\])?", token).groups()
+        kind = {"<>": "required", "[=]": "optional", None: "none"}[value]
+        if name:
+            long[name] = kind
+            if neg:
+                long["no-" + name] = "none"
+        if letter:
+            short[letter] = (kind, name)
+    return long, short
+
+
+GIT_OPTIONS = {sub: option_table(spec) for sub, spec in GIT_OPTION_SPEC.items()}
 # zsh's operators, longest first. A redirection takes the next word as its target; any other
 # ends a piece.
 CONTROL_OPS = (";;&", ";;", ";&", ";|", "&&", "||", "|&", "&|", "&!", ";", "&", "|", "\n")
@@ -317,10 +379,74 @@ COMMAND_WORDS = {"{", "!", "if", "then", "else", "elif", "while", "until", "do",
 PLAIN_WORD = re.compile(r"(~(?=/|$))?[A-Za-z0-9_./:@%+,=-]*")
 
 
+def git_argv(sub, args):
+    """(options, repositories, refspecs) for `git <sub> args`, read as git 2.43's parse-options
+    reads them with GIT_OPTIONS: options as (long name, or `-x` for a letter with none; value
+    or None), in order. The repositories are the first positional and each --repo value (push),
+    or with fetch --multiple every positional; the other positionals are refspecs (ls-remote's
+    patterns). An option in neither table, an ambiguous prefix, or a value git would refuse is
+    refused, naming the option (fail closed)."""
+    long, short = GIT_OPTIONS[sub]
+
+    def refuse(w, why):
+        return Refusal("rule1", w, f"`git {sub}` with {w!r}: {why}, so the guard can't tell which "
+                       "word is the repository. It reads the options git 2.43's "
+                       f"`git {sub} -h` lists (tests/setup/data/git-help); spell the option out "
+                       "in full from that list, or drop it.")
+    options, positional, i = [], [], 0
+    while i < len(args):
+        w = args[i]
+        i += 1
+        if w in ("--", "--end-of-options"):
+            positional += args[i:]
+            break
+        if w.startswith("--"):
+            name, eq, value = w[2:].partition("=")
+            match = [name] if name in long else [n for n in long if n.startswith(name)]
+            if len(match) != 1:
+                raise refuse(w, "an option it doesn't list" if not match else
+                             f"an ambiguous prefix ({', '.join('--' + n for n in match[:4])})")
+            name, kind = match[0], long[match[0]]
+            if kind == "none" and eq:
+                raise refuse(w, "an option that takes no value")
+            if kind == "required" and not eq:
+                if i >= len(args):
+                    raise refuse(w, "an option missing its value")
+                value, i = args[i], i + 1
+            options.append((name, value if kind != "none" and (eq or kind == "required")
+                            else None))
+        elif w.startswith("-") and w != "-":
+            for j, c in enumerate(w[1:], 2):
+                if c not in short:
+                    raise refuse(w, f"an option letter (-{c}) it doesn't list")
+                kind, name = short[c]
+                if kind == "none":
+                    options.append((name or "-" + c, None))
+                    continue
+                value = w[j:]
+                if kind == "required" and not value:
+                    if i >= len(args):
+                        raise refuse(w, "an option missing its value")
+                    value, i = args[i], i + 1
+                options.append((name or "-" + c, value or None))
+                break
+        else:
+            positional.append(w)
+    multiple = False
+    for name, _ in options:
+        if name in ("multiple", "no-multiple"):
+            multiple = name == "multiple"
+    repos = [v for n, v in options if n == "repo" and v is not None]
+    if multiple:
+        return options, repos + positional, []
+    return options, repos + positional[:1], positional[1:]
+
+
 def path_arguments(words):
     """(path, existing_only) for each path argument in words, a piece's argv. Every spelling
     counts, every repeat too (argparse keeps the last; the guard judges all). git's repository
-    words also name remotes and refs, so only a path that exists counts there."""
+    words (git_argv) also name remotes, so only a path that exists counts there; its option
+    values and refspecs are never paths."""
     head, args = os.path.basename(words[0]), words[1:]
     out = []
     if head == "pass-respawn":
@@ -344,13 +470,7 @@ def path_arguments(words):
                 out.append(w)
         return [(w, False) for w in out]
     if head == "git" and args[:1] and args[0] in GIT_PATH_SUBS:
-        for w in args[1:]:
-            if w.startswith("-"):
-                if "=" in w:
-                    out.append(w.split("=", 1)[1])
-            else:
-                out.append(w)
-        return [(p, True) for p in out]
+        return [(p, True) for p in git_argv(args[0], args[1:])[1]]
     return []
 
 
@@ -1172,18 +1292,6 @@ RECURSE_KEYS = {"fetch.recursesubmodules", "submodule.recurse"}
 GIT_FALSE = {"false", "no", "off", "0", ""}
 RECURSE_FIX = ("Run `git config --global fetch.recurseSubmodules false` (dotclaude's ./setup.sh "
                "sets it)")
-# Options of git fetch and pull that take no separate value: a --no-recurse-submodules right
-# after one is an option, not that option's value. Any other option before it doesn't count.
-NO_VALUE_OPTIONS = {
-    "--quiet", "--verbose", "--progress", "--no-progress", "--all", "--prune", "--no-prune",
-    "--tags", "--no-tags", "--force", "--dry-run", "--append", "--atomic", "--keep",
-    "--unshallow", "--update-shallow", "--ipv4", "--ipv6", "--ff", "--no-ff", "--ff-only",
-    "--rebase", "--no-rebase", "--autostash", "--no-autostash", "--stat", "--no-stat",
-    "--commit", "--no-commit", "--edit", "--no-edit", "--squash", "--no-squash", "--verify",
-    "--no-verify", "--set-upstream", "--prune-tags", "--write-fetch-head",
-    "--no-write-fetch-head", "--show-forced-updates", "--no-show-forced-updates", "--multiple",
-    "--no-recurse-submodules"}
-NO_VALUE_SHORT = re.compile(r"-[qvptnfaPk46]+")
 # gh forms that run git fetch or pull inside (gh 2.89): (first, second word, what git runs).
 GH_GIT_FORMS = {("pr", "checkout"): "fetch", ("pr", "merge"): "pull",
                 ("issue", "develop"): "pull"}
@@ -1289,22 +1397,21 @@ def recursion_on(env, repo, home, pull=False):
     return on
 
 
-def recursion_flag(args):
-    """Whether git fetch or pull args turn recursion off on the command line: a
-    --no-recurse-submodules (or --recurse-submodules=<false>) before any `--`, after a word
-    that can't take it as its value."""
-    prev = None
-    for w in args:
-        if w == "--":
-            return False
-        off = w == "--no-recurse-submodules" or (
-            w.startswith("--recurse-submodules=") and w.split("=", 1)[1].lower() in GIT_FALSE
-            and w.split("=", 1)[1])
-        if off and (prev is None or not prev.startswith("-") or prev.startswith("--") and "="
-                    in prev or prev in NO_VALUE_OPTIONS or NO_VALUE_SHORT.fullmatch(prev)):
-            return True
-        prev = w
-    return False
+def recursion_flag(sub, args):
+    """Whether git fetch or pull args turn recursion off on the command line: the last
+    --[no-]recurse-submodules option, as git_argv reads them (any prefix git takes), is
+    --no-recurse-submodules or has a false value. Args git_argv refuses turn nothing off."""
+    try:
+        options = git_argv(sub, args)[0]
+    except Refusal:
+        return False
+    off = False
+    for name, value in options:
+        if name == "no-recurse-submodules":
+            off = True
+        elif name == "recurse-submodules":
+            off = bool(value) and value.lower() in GIT_FALSE
+    return off
 
 
 def check_recursion(m, env, cwd, words):
@@ -1314,7 +1421,7 @@ def check_recursion(m, env, cwd, words):
     head = os.path.basename(words[0])
     if head == "git" and words[1:2] in (["fetch"], ["pull"]):
         sub, name = words[1], f"git {words[1]}"
-        if recursion_flag(words[2:]):
+        if recursion_flag(sub, words[2:]):
             return
         fix = (f"{RECURSE_FIX}, or add `--no-recurse-submodules` right after `{sub}`"
                + (" (that also skips the submodule update)" if sub == "pull" else ""))

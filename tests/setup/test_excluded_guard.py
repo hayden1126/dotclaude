@@ -14,6 +14,7 @@ import io
 import json
 import os
 import random
+import re
 import shutil
 import stat
 import subprocess
@@ -30,6 +31,7 @@ EXCLUDED = ["git push", "git push origin *", "gh pr *", "lane ls", "lane ls *", 
             "claude *", "codex login status"]
 HEADS = ("git", "gh", "lane", "claude", "codex")
 MARKER = "#!/bin/sh\necho marker\n"
+GIT_HELP = os.path.join(REPO, "tests", "setup", "data", "git-help")
 
 
 def load_guard():
@@ -435,12 +437,34 @@ class Rule1PathArguments(Guard):
             with self.subTest(call=call):
                 self.allowed(call)
 
-    @unittest.expectedFailure
     def test_a_refspec_named_like_a_dir_of_the_project_passes(self):
-        # A false refusal until refspec words stop being path candidates (W2 item 7): `feat`
-        # is judged as a path, and proj/feat sits below the repo top (Rule1BelowTop).
+        # Only the repository word is a path candidate (git_argv): `feat` is a refspec, though
+        # proj/feat sits below the repo top (Rule1BelowTop).
         self.mkdir("proj", "feat")
         self.allowed("git push origin feat")
+
+    def test_the_repository_word_is_read_as_git_parses_its_options(self):
+        # An option's value and a refspec are no repository; with fetch --multiple every
+        # positional is one.
+        o = self.other
+        for call in (f"git push -o {o} origin", f"git push --push-option {o} origin",
+                     f"git push -q -o{o} origin", f"git push -qo {o} origin", f"git push origin {o}",
+                     f"git push --push-o={o} origin", f"git fetch origin main {o}"):
+            with self.subTest(call=call):
+                self.allowed(call)
+        for call in (f"git fetch --multiple origin {o}", f"git fetch -m origin {o}",
+                     f"git pull -j {o}", f"git push -o x -- {o}", f"git push --no-repo {o}"):
+            with self.subTest(call=call):
+                self.refused(call, self.other_git)
+
+    def test_an_option_git_doesnt_list_or_cant_resolve_is_refused_by_name(self):
+        for call, word in (("git push --bogus origin", "--bogus"), ("git push -x origin", "-x"),
+                           ("git push --f origin", "--f"), ("git push origin --repo", "--repo"),
+                           ("git fetch --quiet=1 origin", "--quiet=1"),
+                           ("git push -h", "-h"), ("git fetch -qZ origin", "-qZ")):
+            with self.subTest(call=call):
+                reason = self.refused(call, word)
+                self.assertIn("git-help", reason)
 
     def test_git_with_an_option_naming_a_program_is_refused(self):
         # Review round 1 (high): the value is a program git runs, not a repository to judge.
@@ -1016,7 +1040,9 @@ class SubmoduleRecursion(Guard):
         for call in ("git fetch --no-recurse-submodules origin", "git pull --no-recurse-submodules",
                      "git fetch -q --prune --no-recurse-submodules", "gh pr view 5",
                      "git fetch origin main --no-recurse-submodules",
-                     "git fetch --recurse-submodules=no origin", "gh issue view 3"):
+                     "git fetch --recurse-submodules=no origin", "gh issue view 3",
+                     "git fetch --dry --no-recurse-submodules origin", "git fetch --no-rec origin",
+                     "git pull -r --no-recurse-submodules", "git fetch -j 2 --no-recurse-sub"):
             with self.subTest(call=call):
                 self.allowed(call)
         for config in (RECURSE_OFF, "[submodule]\n\trecurse = true\n" + RECURSE_OFF,
@@ -1054,6 +1080,72 @@ class SubmoduleRecursion(Guard):
         self.write(self.gitconfig, RECURSE_OFF)
         self.assertIn("--recurse-submodules",
                       self.denied("gh pr checkout --recurse-submodules 5", "rule1"))
+
+
+def parse_git_help(text):
+    """(long, short) option tables from `git <sub> -h` text, read on their own (not with the
+    guard's spec reader): long name -> none, required or optional (a `--[no-]` name's `no-`
+    form too, taking none); short letter -> (kind, long name or None)."""
+    long, short = {}, {}
+    for line in text.splitlines():
+        m = re.match(r" {4}(?:-(?P<s>\w)(?:, |(?=\s|$)))?(?:--(?P<neg>\[no-\])?(?P<l>[a-z0-9-]+))?"
+                     r"(?P<opt>\[=[^\]]*\])?(?P<req> [<(]\S+)?(?:\s|$)", line)
+        if not m or not (m["s"] or m["l"]):
+            continue
+        kind = "optional" if m["opt"] else "required" if m["req"] else "none"
+        if m["l"]:
+            long[m["l"]] = kind
+            if m["neg"]:
+                long["no-" + m["l"]] = "none"
+        if m["s"]:
+            short[m["s"]] = (kind, m["l"])
+    return long, short
+
+
+class GitOptionTables(unittest.TestCase):
+    """git_argv's option tables are git 2.43's own, as `git <sub> -h` prints them."""
+
+    def test_the_tables_match_the_captured_help(self):
+        guard = load_guard()
+        self.assertEqual(sorted(guard.GIT_OPTIONS), sorted(guard.GIT_PATH_SUBS))
+        for sub in sorted(guard.GIT_PATH_SUBS):
+            with self.subTest(sub=sub):
+                self.assertEqual(guard.GIT_OPTIONS[sub],
+                                 parse_git_help(slurp(os.path.join(GIT_HELP, f"{sub}.txt"))))
+
+    def test_the_captures_are_of_the_installed_git(self):
+        # A git upgrade fails this until the captures are retaken (`git <sub> -h`, exit 129)
+        # and the tables updated.
+        version = subprocess.run(["git", "--version"], capture_output=True, text=True,
+                                 check=True).stdout.strip()
+        self.assertEqual(version, slurp(os.path.join(GIT_HELP, "VERSION")).strip())
+
+    def test_git_argv_reads_options_values_and_positionals_as_git_does(self):
+        argv = load_guard().git_argv
+        cases = {
+            ("push", "-o", "x", "origin", "main"): ["origin"],
+            ("push", "-qox", "origin"): ["origin"],
+            ("push", "--repo", "a", "b"): ["a", "b"],
+            ("push", "--rep=a"): ["a"],
+            ("push", "--force-with-lease", "origin"): ["origin"],
+            ("push", "--recurse-submodules", "check", "origin"): ["origin"],
+            ("fetch", "-j", "4", "origin"): ["origin"],
+            ("fetch", "--multiple", "a", "b"): ["a", "b"],
+            ("fetch", "-m", "--no-multiple", "a", "b"): ["a"],
+            ("fetch", "--", "-x", "y"): ["-x"],
+            ("fetch", "--end-of-options", "--all"): ["--all"],
+            ("pull", "-j", "4", "origin"): ["4"],
+            ("pull", "-r", "origin"): ["origin"],
+            ("pull", "-S", "origin"): ["origin"],
+            ("ls-remote", "-h", "origin", "main"): ["origin"],
+            ("ls-remote", "--sort", "x", "origin"): ["origin"],
+        }
+        for (sub, *args), repos in cases.items():
+            with self.subTest(args=args):
+                self.assertEqual(argv(sub, args)[1], repos)
+        options, repos, refspecs = argv("push", ["-vu", "--no-verify", "origin", "a", "b"])
+        self.assertEqual((options, refspecs), ([("verbose", None), ("set-upstream", None),
+                                                ("no-verify", None)], ["a", "b"]))
 
 
 class SubmoduleRecursionMatchesGit(Guard):
