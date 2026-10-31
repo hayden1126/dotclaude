@@ -9,6 +9,7 @@
 # /lib/node_modules, global config /etc/npmrc, npm_config_prefix=/ in the package's env).
 # Anything else, such as Hayden's own `npx tsc` in a project, reaches the real npx untouched.
 # tests/setup/test_npx_shim.py holds the cases.
+# dotclaude-npx-shim: setup.sh and the tests know this shim, or a copy of it, by this line.
 set -uo pipefail
 
 # The real npx: the first on PATH that isn't this shim. A relative or empty PATH entry is the
@@ -21,15 +22,29 @@ done
 [[ -n $real ]] || { echo "npx shim: no npx on PATH besides this shim" >&2; exit 127; }
 
 # Claude Code is the native binary (comm `claude`) or, installed with npm, node running its
-# cli.js. /proc where there is one, ps elsewhere (macOS).
+# cli.js through a `claude` link on PATH (`node /usr/local/bin/claude`). So with comm `node`,
+# the script is node's first argument that isn't an option: named `claude`, or resolving into
+# the package. /proc where there is one, ps elsewhere (macOS), whose args come space-joined.
 parent_is_claude() {
-  local comm args
+  local comm a script="" words
   comm="$(cat "/proc/$PPID/comm" 2>/dev/null || ps -o comm= -p "$PPID" 2>/dev/null)"
   comm="${comm##*/}"
   [[ $comm == claude ]] && return 0
   [[ $comm == node ]] || return 1
-  args="$(tr '\0' ' ' <"/proc/$PPID/cmdline" 2>/dev/null || ps -o args= -p "$PPID" 2>/dev/null)"
-  [[ $args == *@anthropic-ai/claude-code/* ]]
+  if [[ -r /proc/$PPID/cmdline ]]; then
+    words=()
+    while IFS= read -r -d '' a; do words+=("$a"); done <"/proc/$PPID/cmdline"
+  else
+    read -ra words <<<"$(ps -o args= -p "$PPID" 2>/dev/null)"
+  fi
+  ((${#words[@]} > 1)) || return 1  # bash 3.2 (macOS) calls an empty slice unbound
+  for a in "${words[@]:1}"; do
+    [[ $a == -* ]] || { script="$a"; break; }
+  done
+  [[ -n $script ]] || return 1
+  [[ ${script##*/} == claude ]] && return 0
+  script="$(readlink -f -- "$script" 2>/dev/null)"
+  [[ $script == */@anthropic-ai/claude-code/* ]]
 }
 
 # The package spec: a -p/--package value, else the first operand. The value of an option npm
@@ -41,7 +56,8 @@ for ((i = 1; i <= $#; i++)); do
     --) ((i++)); spec="${!i-}"; break ;;
     -p|--package) ((i++)); spec="${!i-}"; break ;;
     --package=*) spec="${a#--package=}"; break ;;
-    -c|--call|--registry|--cache|--prefix|--userconfig|--globalconfig|--loglevel|-w|--workspace|--node-options|--script-shell)
+    -c|--call|--registry|--cache|--prefix|--userconfig|--globalconfig|--loglevel|-w|--workspace|\
+    --node-options|--script-shell|--before|--tag|--omit|--include|--location)
       ((i++)) ;;
     -*) ;;
     *) spec="$a"; break ;;

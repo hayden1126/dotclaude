@@ -209,6 +209,17 @@ done
 # bin/ (claude-file-history). Opt-in by directory: if ~/.local/bin does not exist,
 # each still works via its absolute path.
 if [[ -d "$HOME/.local/bin" ]]; then
+  # With npm's prefix at ~/.local, ~/.local/bin/npx is npm's own: the shim would take its place
+  # and find no npx behind it. So npx goes in only where nothing is, or where the shim already
+  # is: a link into a checkout (bin/npx beside hooks/sandbox-caches.sh), a dangling link (a
+  # closed lane's, which section 7 would prune, leaving no shim), or a copy (git-bash, where
+  # ln -s copies), known by its marker line.
+  npx_slot_is_ours() {
+    [[ -e $1 || -L $1 ]] || return 0
+    [[ -L $1 && ! -e $1 ]] && return 0
+    [[ -f "$(dirname "$(readlink -f "$1")")/../hooks/sandbox-caches.sh" ]] && return 0
+    grep -qF dotclaude-npx-shim "$1" 2>/dev/null
+  }
   chmod +x "$REPO_DIR"/bin/* 2>/dev/null || true
   for exe in "$REPO_DIR"/bin/* "$REPO_DIR"/skills/*/scripts/deckkit \
              "$REPO_DIR"/skills/delegation/scripts/{codex-delegate,delegation-ledger,gh-public} \
@@ -216,12 +227,10 @@ if [[ -d "$HOME/.local/bin" ]]; then
              "$REPO_DIR"/skills/pass/scripts/pass-respawn \
              "$REPO_DIR"/skills/exam-prep/scripts/ed-pull; do
     [[ -x "$exe" ]] || continue
-    # With npm's prefix at ~/.local, ~/.local/bin/npx is npm's own: the shim would take its
-    # place and find no npx behind it. Left alone and named; MCP launches then keep npx's
-    # project-dir lookup (gap N2) until it moves.
+    # Any other npx there is left alone and named; MCP launches then keep npx's project-dir
+    # lookup (gap N2) until it moves.
     dst="$HOME/.local/bin/$(basename "$exe")"
-    if [[ $(basename "$exe") == npx && ( -e $dst || -L $dst ) ]] \
-       && [[ ! -f "$(dirname "$(readlink -f "$dst")")/../hooks/sandbox-caches.sh" ]]; then
+    if [[ $(basename "$exe") == npx ]] && ! npx_slot_is_ours "$dst"; then
       warn "$dst isn't dotclaude's (npm's own, with npm's prefix at ~/.local?): left alone, so MCP servers still start with npx's project-dir lookup. Set npm's prefix elsewhere, then rerun setup"
       continue
     fi
@@ -519,7 +528,19 @@ set_top_key() {
 
 config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
 set_top_key "$config_home/uv/uv.toml" link-mode 'link-mode = "copy"' copy
-set_top_key "$config_home/pnpm/rc" package-import-method package-import-method=copy copy
+# pnpm's global rc is in XDG_CONFIG_HOME when that is set, else ~/Library/Preferences on macOS
+# and ~/.config elsewhere (Windows: LOCALAPPDATA, which the check below names).
+pnpm_dir="$config_home/pnpm"
+[[ -z ${XDG_CONFIG_HOME:-} && $(uname -s) == Darwin ]] && pnpm_dir="$HOME/Library/Preferences/pnpm"
+set_top_key "$pnpm_dir/rc" package-import-method package-import-method=copy copy
+# Then ask pnpm itself, from /, so no project's .npmrc counts: a ~/.npmrc or an OS path this
+# missed would show here. COREPACK_ENABLE_NETWORK=0 stops a corepack pnpm from downloading one.
+if command -v pnpm >/dev/null 2>&1; then
+  pnpm_import="$(cd / && COREPACK_ENABLE_NETWORK=0 pnpm config get package-import-method \
+    </dev/null 2>/dev/null)" || pnpm_import=""
+  [[ -z $pnpm_import || $pnpm_import == copy ]] \
+    || warn "pnpm reads package-import-method as $pnpm_import, not copy (set in ~/.npmrc, or a config dir this missed): its installs can hardlink to the shared cache"
+fi
 
 # ---------------------------------------------------------------------------
 # 7. Stale links and plugin changes

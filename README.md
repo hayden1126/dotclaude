@@ -753,8 +753,11 @@ need nothing extra.
 
   The shelf itself is shared: every sandboxed session can write `~/.cache/claude-sandbox`, so a
   session in one project can tamper with a package another project's next sandboxed install
-  takes from it (npm checks hashes on each read; uv, pip, pnpm and bun don't). Copy mode keeps
-  uv and pnpm installs already made out of reach; bun's still hardlink. Treat what a sandboxed install built as sandbox-made,
+  takes from it. npm checks the hash of what it reads from its cache, but npx reuses a package
+  tree it already unpacked there without a check, so an edit to it runs in the next sandboxed
+  `npx pkg@<that version>` anywhere. pnpm rehashes a store file only when its mtime moved, which
+  the writer can set back; uv, pip and bun don't check. Copy mode keeps uv and pnpm installs
+  already made out of reach; bun's still hardlink. Treat what a sandboxed install built as sandbox-made,
   whichever session built it, before running it from a terminal. A sandboxed npx prints one
   `npm warn Unknown env config "devdir"` line: node-gyp reads its dir only from that
   npm-style var. Silent; fails open (errors go to

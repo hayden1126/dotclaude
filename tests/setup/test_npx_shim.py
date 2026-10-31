@@ -14,6 +14,16 @@ import unittest
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SHIM = os.path.join(REPO, "bin", "npx")
 PREFIX = "--prefix=/"
+MARKER = b"dotclaude-npx-shim"
+
+
+def is_a_shim(path):
+    """True for any copy of the shim, linked from any checkout or copied: it holds the marker."""
+    try:
+        with open(path, "rb") as f:
+            return MARKER in f.read(4096)
+    except OSError:
+        return False
 
 
 class NpxShim(unittest.TestCase):
@@ -33,9 +43,10 @@ class NpxShim(unittest.TestCase):
         self.path = os.pathsep.join([self.shim_dir, self.shim_dir, self.real_dir, "/usr/bin",
                                      "/bin"])
 
-    def npx(self, *args, parent=None, path=None, script='"$0" "$@"; :'):
+    def npx(self, *args, parent=None, path=None, script='"$0" "$@"; :', argv1=None):
         """The args the real npx got, run as `npx` from PATH; with parent, from a process of
-        that name (Claude Code's comm is `claude`)."""
+        that name (Claude Code's comm is `claude`). With argv1, the parent runs that script
+        file (after any options in a list) in place of `-c script`."""
         env = {"PATH": path or self.path, "HOME": self.tmp}
         cmd = ["npx", *args]
         if parent:
@@ -44,7 +55,10 @@ class NpxShim(unittest.TestCase):
             named = os.path.join(self.tmp, parent)
             if not os.path.lexists(named):
                 os.symlink(shutil.which("bash"), named)
-            cmd = [named, "-c", script, *cmd]
+            if argv1 is None:
+                cmd = [named, "-c", script, *cmd]
+            else:
+                cmd = [named, *([argv1] if isinstance(argv1, str) else argv1), *cmd]
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=10, env=env)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(p.stderr, "")
@@ -74,16 +88,37 @@ class NpxShim(unittest.TestCase):
     def test_an_option_value_is_not_taken_for_the_spec(self):
         for args in (["--registry", "https://r.example", "pkg@1.2.3"],
                      ["--cache", "/c", "-y", "pkg@1.2.3"], ["-p", "pkg@1.2.3", "cmd"],
-                     ["--package=pkg@1.2.3", "cmd"], ["pkg@v1.2.3"]):
+                     ["--package=pkg@1.2.3", "cmd"], ["pkg@v1.2.3"],
+                     ["--tag", "latest", "pkg@1.2.3"], ["--before", "2026-01-01", "pkg@1.2.3"],
+                     ["--omit", "dev", "--include", "peer", "--location", "user", "pkg@1.2.3"]):
             self.assertEqual(self.npx(*args), [PREFIX, *args], args)
 
     def test_an_unpinned_package_option_reaches_npx_untouched(self):
         self.assertEqual(self.npx("-p", "pkg", "cmd"), ["-p", "pkg", "cmd"])
 
     def test_a_launch_by_claude_code_installed_with_npm_counts_too(self):
-        # comm is `node`; its args name Claude Code's cli.js. The marker rides in the script.
-        script = ': /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js; "$0" "$@"; :'
-        self.assertEqual(self.npx("some-mcp", parent="node", script=script), [PREFIX, "some-mcp"])
+        # comm is `node`, and node runs Claude Code's cli.js, through the `claude` link npm
+        # puts on PATH or by its own path. A bash named `node` stands in: its script file is
+        # its first argument, as node's is, and an option before it is skipped.
+        pkg = os.path.join(self.tmp, "lib", "node_modules", "@anthropic-ai", "claude-code")
+        os.makedirs(pkg)
+        cli = os.path.join(pkg, "cli.js")
+        with open(cli, "w") as f:
+            f.write('"$@"; :\n')
+        link = os.path.join(self.tmp, "claude-link")
+        os.symlink(cli, link)
+        on_path = os.path.join(self.tmp, "bin", "claude")
+        os.makedirs(os.path.dirname(on_path))
+        os.symlink(cli, on_path)
+        for script in (on_path, cli, link):
+            self.assertEqual(self.npx("some-mcp", parent="node", argv1=script),
+                             [PREFIX, "some-mcp"], script)
+        self.assertEqual(self.npx("some-mcp", parent="node", argv1=["--norc", cli]),
+                         [PREFIX, "some-mcp"])
+        other = os.path.join(self.tmp, "server.js")
+        with open(other, "w") as f:
+            f.write('"$@"; :\n')
+        self.assertEqual(self.npx("some-mcp", parent="node", argv1=other), ["some-mcp"])
         self.assertEqual(self.npx("some-mcp", parent="node"), ["some-mcp"])
 
     def test_a_launch_by_claude_code_skips_the_project_dir_whatever_the_spec(self):
@@ -105,11 +140,9 @@ class NpxShim(unittest.TestCase):
 
     def test_the_planted_tree_does_not_run(self):
         # The real npx, offline: a planted ./node_modules/semver must lose to the npx cache.
-        # PATH without any installed copy of the shim, for the control run.
-        bare = os.pathsep.join(
-            d for d in os.environ["PATH"].split(os.pathsep)
-            if not (os.path.exists(os.path.join(d, "npx"))
-                    and os.path.samefile(os.path.join(d, "npx"), SHIM)))
+        # PATH without any installed shim, this checkout's or another's, for the control run.
+        bare = os.pathsep.join(d for d in os.environ["PATH"].split(os.pathsep)
+                               if not is_a_shim(os.path.join(d, "npx")))
         if not shutil.which("npx", path=bare):
             self.skipTest("npx not installed")
         proj = os.path.join(self.tmp, "proj")
@@ -185,6 +218,27 @@ class SetupLinksTheShim(unittest.TestCase):
         os.symlink(npm, self.dst)
         self.assertIn(self.dst, self.run_block())
         self.assertEqual(os.readlink(self.dst), npm)
+
+    def test_a_dangling_link_into_a_removed_checkout_is_replaced(self):
+        # A closed lane's install, its worktree gone: left in place, section 7 would prune it
+        # and leave no shim at all.
+        lane = self.checkout("closed-lane")
+        os.symlink(os.path.join(lane, "bin", "npx"), self.dst)
+        shutil.rmtree(lane)
+        self.assertEqual(self.run_block(), "")
+        self.assertEqual(os.readlink(self.dst), os.path.join(self.repo, "bin", "npx"))
+
+    def test_a_copied_shim_is_replaced(self):
+        # git-bash, where ln -s copies: the copy has no checkout beside it, only its marker.
+        shutil.copy(SHIM, self.dst)
+        self.assertNotIn("isn't dotclaude's", self.run_block())
+        self.assertEqual(os.readlink(self.dst), os.path.join(self.repo, "bin", "npx"))
+
+    def test_npms_own_npx_as_a_file_is_left_alone(self):
+        with open(self.dst, "w") as f:
+            f.write("#!/bin/sh\nexec node npx-cli.js \"$@\"\n")
+        self.assertIn(self.dst, self.run_block())
+        self.assertFalse(os.path.islink(self.dst))
 
     def test_another_checkouts_shim_is_replaced(self):
         # A lane's install linked its own copy; the next install from another checkout relinks.

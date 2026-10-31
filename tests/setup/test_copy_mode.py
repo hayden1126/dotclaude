@@ -36,9 +36,22 @@ class CopyMode(unittest.TestCase):
         self.config = os.path.join(self.tmp, "config dir")  # a space, to prove the quoting
         self.uv = os.path.join(self.config, "uv", "uv.toml")
         self.pnpm = os.path.join(self.config, "pnpm", "rc")
+        # A fake pnpm first on PATH answers `pnpm config get` with FAKE_PNPM (default copy), so
+        # no test runs the real one (a corepack pnpm with this HOME would have nothing cached).
+        self.bin = os.path.join(self.tmp, "fake bin")
+        os.makedirs(self.bin)
+        self.fake("pnpm", 'printf "%s\\n" "${FAKE_PNPM-copy}"')
 
-    def run_section(self):
-        env = dict(os.environ, XDG_CONFIG_HOME=self.config, HOME=self.tmp)
+    def fake(self, name, body):
+        path = os.path.join(self.bin, name)
+        with open(path, "w") as f:
+            f.write("#!/bin/sh\n" + body + "\n")
+        os.chmod(path, 0o755)
+
+    def run_section(self, **extra):
+        env = dict(os.environ, XDG_CONFIG_HOME=self.config, HOME=self.tmp,
+                   PATH=os.pathsep.join([self.bin, os.environ["PATH"]]))
+        env.update(extra)
         p = subprocess.run(["bash", "-euo", "pipefail", "-c", section()], capture_output=True,
                            text=True, timeout=10, env=env)
         self.assertEqual(p.returncode, 0, p.stderr)
@@ -147,13 +160,47 @@ class CopyMode(unittest.TestCase):
         self.assertTrue(os.path.islink(self.uv))
         self.assertEqual(self.read(target), UV_LINE + '\npython-preference = "managed"\n')
 
-    def test_without_xdg_config_home_it_uses_dot_config(self):
+    def run_without_xdg(self):
         env = {k: v for k, v in os.environ.items() if k != "XDG_CONFIG_HOME"}
-        env["HOME"] = self.tmp
+        env.update(HOME=self.tmp, PATH=os.pathsep.join([self.bin, os.environ["PATH"]]))
         subprocess.run(["bash", "-euo", "pipefail", "-c", section()], check=True, env=env,
                        capture_output=True, timeout=10)
+
+    def test_without_xdg_config_home_it_uses_dot_config(self):
+        self.run_without_xdg()
         self.assertEqual(self.read(os.path.join(self.tmp, ".config", "uv", "uv.toml")),
                          UV_LINE + "\n")
+        self.assertEqual(self.read(os.path.join(self.tmp, ".config", "pnpm", "rc")),
+                         PNPM_LINE + "\n")
+
+    def test_on_macos_pnpms_rc_is_in_library_preferences(self):
+        # uv keeps ~/.config there; pnpm, without XDG_CONFIG_HOME, reads ~/Library/Preferences.
+        self.fake("uname", "echo Darwin")
+        self.run_without_xdg()
+        self.assertEqual(self.read(os.path.join(self.tmp, ".config", "uv", "uv.toml")),
+                         UV_LINE + "\n")
+        self.assertEqual(
+            self.read(os.path.join(self.tmp, "Library", "Preferences", "pnpm", "rc")),
+            PNPM_LINE + "\n")
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, ".config", "pnpm")))
+
+    def test_on_macos_xdg_config_home_still_wins_for_pnpm(self):
+        self.fake("uname", "echo Darwin")
+        self.run_section()
+        self.assertEqual(self.read(self.pnpm), PNPM_LINE + "\n")
+
+    def test_pnpm_reading_another_value_is_named(self):
+        # A ~/.npmrc that sets it, or a config dir the step missed: pnpm's own answer counts.
+        err = self.run_section(FAKE_PNPM="hardlink")
+        self.assertIn("pnpm reads package-import-method as hardlink", err)
+        self.assertEqual(self.read(self.pnpm), PNPM_LINE + "\n")
+
+    def test_pnpm_failing_or_absent_is_silent(self):
+        self.fake("pnpm", "exit 1")
+        self.assertEqual(self.run_section(), "")
+        os.remove(os.path.join(self.bin, "pnpm"))
+        self.assertEqual(self.run_section(PATH=os.pathsep.join([self.bin, "/usr/bin", "/bin"])),
+                         "")
 
 
 if __name__ == "__main__":
