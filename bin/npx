@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# npx shim, linked into ~/.local/bin ahead of the real npx by setup.sh (sandbox gap N2). Claude
+# Code starts stdio MCP servers in the project dir, which sandboxed Bash and the file tools can
+# write, and npx prefers a matching package in that dir's node_modules, and reads its .npmrc,
+# over its own cache. So a launch by Claude Code (the parent's comm is `claude`), or any
+# exact-version spec such as a plugin server's `npx chrome-devtools-mcp@1.11.0`, gets --prefix=/
+# first: npm then takes / as the project, where only root can create either. The flag must come
+# before the spec, or npx hands it to the package. Anything else, such as Hayden's own
+# `npx tsc` in a project, reaches the real npx untouched.
+# tests/setup/test_npx_shim.py holds the cases.
+set -uo pipefail
+
+# The real npx: the first on PATH that isn't this shim. A relative or empty PATH entry is the
+# cwd, the dir an MCP server starts in, so it is never taken.
+real=""
+IFS=: read -ra dirs <<<"$PATH"
+for d in "${dirs[@]}"; do
+  [[ $d == /* && -x $d/npx && ! $d/npx -ef ${BASH_SOURCE[0]} ]] && { real="$d/npx"; break; }
+done
+[[ -n $real ]] || { echo "npx shim: no npx on PATH besides this shim" >&2; exit 127; }
+
+# The first operand: the package spec, or a -p/--package value, where pinning it is as harmless.
+spec=""
+for ((i = 1; i <= $#; i++)); do
+  case "${!i}" in
+    --) ((i++)); spec="${!i-}"; break ;;
+    -*) ;;
+    *) spec="${!i}"; break ;;
+  esac
+done
+exact='^(@[^/@]+/)?[^/@]+@[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]*)?$'
+
+if [[ "$(cat "/proc/$PPID/comm" 2>/dev/null)" == claude || $spec =~ $exact ]]; then
+  exec "$real" --prefix=/ "$@"
+fi
+exec "$real" "$@"
