@@ -40,6 +40,8 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      argument or URL's repo below its repo top, or in no repo, is refused when a dir git looks
      in on its way up (to the top, or to / or a ceiling) is writable (G-E): a repo planted
      there after the check would be the one git uses. The refusal names the top to run from.
+     A command that is one `lane addr --repo X` call alone skips the cwd's walk: lane then
+     resolves only X's lanes repo and runs no git in the cwd (handed_lane_addr).
   2. The PATH the head resolves through. Every PATH entry must be protected, not only those
      before the head: its children (git, gh, tmux, the tools claude spawns) search PATH too. An
      empty or relative entry is the cwd: refused. Then the resolved file's symlink chain (each
@@ -556,12 +558,9 @@ class ShellLexer:
                 self.subs += sub.subs
 
 
-def path_calls(command, heads=PATH_HEADS):
-    """(argv, targets) for each call of a `heads` program, the way zsh splits the command
-    (ShellLexer): in every piece between control operators, a substitution's too, each word
-    naming one starts a call running to the piece's end (subshells, groups, `if`, `VAR=`
-    prefixes and wrappers like `env` included), less the piece's redirections, whose targets
-    are judged as plain words too (a `$(...)` there runs before git does)."""
+def shell_pieces(command):
+    """(words, redirection targets) for each piece between control operators, the way zsh
+    splits the command (ShellLexer), each substitution's pieces after the command's own."""
     lexer = ShellLexer(command)
     streams = [lexer.command()] + lexer.subs
     for tokens in streams:
@@ -579,10 +578,45 @@ def path_calls(command, heads=PATH_HEADS):
                 pieces.append((words, targets))
                 words, targets = [], []
         pieces.append((words, targets))
-        for words, targets in pieces:
-            for i, w in enumerate(words):
-                if os.path.basename(w) in heads:
-                    yield words[i:], targets
+        yield from pieces
+
+
+def path_calls(command, heads=PATH_HEADS):
+    """(argv, targets) for each call of a `heads` program in the command (shell_pieces): in
+    every piece, each word naming one starts a call running to the piece's end (subshells,
+    groups, `if`, `VAR=` prefixes and wrappers like `env` included), less the piece's
+    redirections, whose targets are judged as plain words too (a `$(...)` there runs before git
+    does)."""
+    for words, targets in shell_pieces(command):
+        for i, w in enumerate(words):
+            if os.path.basename(w) in heads:
+                yield words[i:], targets
+
+
+def handed_lane_addr(command):
+    """Whether the command is one `lane addr` call alone, with --repo given in a spelling
+    argparse takes (`--repo X`, `--repo=X`, a unique prefix; before any `--`). lane then resolves
+    only the lanes repo X names, under lanelib.HANDED_ENV, and runs no git in the cwd, so G-E's
+    cwd half doesn't apply to it. A prefix, an `env` wrapper, a second call or a substitution
+    each leave the command judged as any other."""
+    try:
+        pieces = [p for p in shell_pieces(command) if p[0] or p[1]]
+    except ValueError:
+        return False
+    if len(pieces) != 1:
+        return False
+    words = pieces[0][0]
+    if len(words) < 2 or os.path.basename(words[0]) != "lane" or words[1] != "addr":
+        return False
+    args = words[2:]
+    for i, w in enumerate(args):
+        if w == "--":
+            return False
+        name, eq, _ = w.partition("=")
+        if len(name) > 2 and "--repo".startswith(name) and (
+                eq or i + 1 < len(args) and not args[i + 1].startswith("-")):
+            return True
+    return False
 
 
 def check_calls(m, env, cwd, project, command):
@@ -1016,11 +1050,12 @@ def local_url_path(url):
     return url
 
 
-def check_rule1(m, env, cwd, project, arg=None, url=None):
+def check_rule1(m, env, cwd, project, arg=None, url=None, walk=True):
     """Rule 1 for the repo at cwd: the call's own cwd, or the path argument arg resolved to
     cwd (check_path_arguments), or the repo a local remote URL names (url: the URL as the
     config spells it). Only the call's own cwd has its remote URLs judged (check_remote_url),
-    one level deep: a URL's repo doesn't have its own judged."""
+    one level deep: a URL's repo doesn't have its own judged. walk False skips G-E's cwd half
+    (check_below_top), for a call that runs no git in its cwd (handed_lane_addr)."""
     repo = discover(cwd, env)
     proj = discover(project, {k: env[k] for k in ("GIT_CEILING_DIRECTORIES",) if k in env})
     kind = "url" if url is not None else "arg" if arg is not None else "cwd"
@@ -1033,7 +1068,8 @@ def check_rule1(m, env, cwd, project, arg=None, url=None):
         raise Refusal("rule1", repo[0],
                       f"{what} is in the repository with git dir {repo[0]}, not the project's. "
                       f"{fix}, or run it from a session launched in that repository.")
-    check_below_top(m, env, cwd, project, repo, what, kind)
+    if walk:
+        check_below_top(m, env, cwd, project, repo, what, kind)
     home = m.home
     trusted, files = [], []
     if repo:
@@ -1418,7 +1454,7 @@ def judge(heads, cwd, env, settings, command=""):
         raise Refusal("project", "(unset)", "CLAUDE_PROJECT_DIR is unset, so the guard can't tell "
                       "the project's repository; refusing an excluded command.")
     m = Machine(env, settings, cwd)
-    check_rule1(m, env, cwd, project)
+    check_rule1(m, env, cwd, project, walk=not handed_lane_addr(command))
     check_calls(m, env, cwd, project, command)
     for head in heads:
         check_rule2(m, head, env.get("PATH", ""))

@@ -268,7 +268,10 @@ For a match it refuses, naming the path, when:
    from no repo, the call is refused when a dir git looks in on its way up (to the top, or to
    `/` or a `GIT_CEILING_DIRECTORIES` entry) is writable, since a repo planted there after the
    check would be the one git uses (G-E). The refusal names the top to run from. Path arguments
-   and local remote URLs are held to the same rule. The project's own `config` and `hooks/` are trusted, and
+   and local remote URLs are held to the same rule. A command that is one `lane addr --repo X`
+   call alone (no other call, wrapper or substitution) skips the cwd's walk, since with `--repo`
+   lane resolves only X's lanes repo and runs no git in the cwd; it still has the rest of rule 1
+   judged. The project's own `config` and `hooks/` are trusted, and
    so is `config.worktree` when the cwd's gitdir is the project's own, since Claude Code keeps
    them read-only for the session; another worktree's `config.worktree` is judged. That trust
    rests on Claude Code protecting the session's gitfile and its `worktrees/<name>/commondir`,

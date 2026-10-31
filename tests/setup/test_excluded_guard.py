@@ -211,6 +211,14 @@ class Rule1Repository(Guard):
         # Rule1PathArguments pins the exemption).
         call = "lane addr --repo ~/dotclaude lead"
         self.allowed(call)
+        # From a writable cwd in no repo too: with --repo, lane runs no git in the cwd, so G-E's
+        # cwd half doesn't apply (Rule1BelowTop pins that a bare `lane addr` is still refused).
+        self.env["CLAUDE_PROJECT_DIR"] = self.home
+        for spelling in (call, "lane addr --repo=~/dotclaude lead", "lane addr lead --repo x",
+                         "lane addr --rep ~/dotclaude lead", "lane addr --r=x lead",
+                         "lane addr --repo ~/dotclaude lead 2>&1"):
+            with self.subTest(call=spelling):
+                self.allowed(spelling, cwd=self.home)
         other = self.mkdir("other")
         self.git("init", "-q", other, cwd=self.tmp)
         self.env["CLAUDE_PROJECT_DIR"] = other
@@ -280,7 +288,14 @@ class Rule1BelowTop(Guard):
                 reason = self.denied("git push", "rule1", plain, cwd=plain)
                 self.assertIn("repository top", reason)
         self.env["CLAUDE_PROJECT_DIR"] = self.home
-        self.denied("lane addr --repo ~/dotclaude lead", "rule1", self.home, cwd=self.home)
+        # Only a command that is one `lane addr --repo` call alone skips this check: lane then runs
+        # no git in the cwd (Rule1Repository). Any other call, or one more, is judged.
+        for call in ("lane addr lead", "lane addr -- --repo", "lane addr lead --repo",
+                     "lane addr --repo x lead; lane ls", "lane addr --repo x lead && lane addr y",
+                     "lane addr --repo $(lane ls) lead", "x=1 lane addr --repo x lead",
+                     "lane ls --repo x"):
+            with self.subTest(call=call):
+                self.denied(call, "rule1", self.home, cwd=self.home)
         # Outside every write root no sandboxed session can plant a repo.
         self.env["CLAUDE_PROJECT_DIR"] = "/usr"
         self.allowed("git push", cwd="/usr")
