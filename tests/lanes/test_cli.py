@@ -3810,6 +3810,24 @@ class SwitchedBranch(LanesRepo):
         self.assertEqual(self.lane_json("chart-fix")["state"], "active")
 
 
+class FetchNoRecursion(unittest.TestCase):
+    """G-B: lane runs its own fetches outside the sandbox, where a submodule's git dir (which a
+    sandboxed session can write) must not get git run in it, so each turns recursion off."""
+
+    def test_every_fetch_lane_runs_skips_submodules(self):
+        import ast
+        with open(LANE) as f:
+            tree = ast.parse(f.read())
+        fetches = [node.args[0] for node in ast.walk(tree)
+                   if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "git"
+                   and node.args and isinstance(node.args[0], ast.List) and node.args[0].elts
+                   and getattr(node.args[0].elts[0], "value", None) == "fetch"]
+        self.assertEqual(len(fetches), 3)  # fetch(), fetched_base, remote_tip
+        for call in fetches:
+            words = [getattr(e, "value", None) for e in call.elts]
+            self.assertIn("--no-recurse-submodules", words, ast.unparse(call))
+
+
 class ExcludedGuardRules(LanesRepo):
     """`new` names the Edit deny rule a lane's worktree needs before the excluded-command guard
     passes its excluded calls; `done` names the ones its removed worktree leaves behind."""
@@ -3831,9 +3849,13 @@ class ExcludedGuardRules(LanesRepo):
         self.assertEqual(self.lane_json("chart-fix")["state"], "active")
 
     def test_a_clean_worktree_says_nothing(self):
+        # Nothing but the fixture's origin: a local bare repo outside the project, whose remote
+        # URL the guard refuses by design (G-D: git runs that repo's side outside the sandbox).
         p = self.run_lane("new", "chart-fix")
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertNotIn("excluded-guard", p.stderr)
+        found = [line for line in p.stderr.splitlines() if line.startswith("lane:   ")]
+        self.assertEqual(len(found), 1, p.stderr)
+        self.assertIn(f"the remote URL {self.origin} is in the repository", found[0])
         self.assertNotIn("Edit(", self.asks("chart-fix"))
 
     def test_finishing_a_failed_setup_seeds_the_ask_too(self):
