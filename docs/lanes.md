@@ -326,7 +326,7 @@ sessions in the main checkout"), so no lane could send `merged #N`. The tab bar 
 lane was told to pick `main:@3` from the refusal.
 
 Hayden's rule: **the lead is the last main-checkout session to act as lead.** A bare `lane init`,
-`new`, `adopt`, `open` (not `--print`) or `done` that succeeds records the Claude session above
+`new`, `adopt`, `open` (not `--print`), `done` or `park` that succeeds records the Claude session above
 it, and `lane lead` does so on purpose. The other two candidates lose on the one real case:
 
 | Situation | Last to act | Oldest | None until Hayden picks |
@@ -582,6 +582,75 @@ offers a by-path removal that can recurse or follow a link (a test pins it); the
 it names, `unlink` for a `.lane-trial` that is a symlink, does neither. The trial adds its trees with `worktree.useRelativePaths=false`, so that text is
 always an absolute path.
 
+## Parked lanes (lane park, 2026-10-29)
+
+Finished lanes waited hours for their merge turn (5.4 h and 5.6 h on 2026-10-28) while each held
+a cap slot, a Claude session and its dev servers. `lane park <id>` ends the lane's sessions and
+frees its cap slot, keeping its worktree, branch, record and claims. `lane open <id>` unparks
+it. A lane that only waits its turn sends the lead `park me`, and the lead parks it without
+asking Hayden, since `open` undoes it.
+
+**Where the flag lives.** In the state dir, beside `done`'s proof:
+`<repo>-<hash>.parked/<id>.json`, holding the lane's id, created stamp, path and when it was
+parked. Hayden picked the state dir over a lane.json field (2026-10-29): only bare commands
+write the state dir, so no lane's sandboxed Bash can park itself out of the cap or unpark
+another lane. A flag whose id, created stamp or path doesn't match the record, or that won't
+read, counts as not parked, so a bad flag fails toward the lane holding its slot. `done`
+removes it with the proof.
+
+**Who holds a slot.** A live lane (its worktree exists) holds one unless it is parked with no
+session in it. A session someone starts in a parked lane by hand (`cd <lane> && claude`) holds
+the slot again, so the count never trusts the flag alone; with session liveness unknown, a
+parked lane holds its slot too. `lane new` refuses at the cap, counted this way.
+
+**The over-cap rule.** `lane open` of a parked lane refuses while the other slot holders already
+pass the cap, and at the cap it opens and says `lane X is over the cap of N by one: for its
+rebase and merge` (Hayden's pick: a parked lane may unpark over a full cap to merge, at most one
+lane over at a time). It clears the flag only once `tmux new-window` succeeds. `open --print`
+refuses a parked lane, since it would start a session the flag doesn't know of. One hold of
+the lanes lock spans the cap check, `tmux new-window` and the flag's removal, so a second
+`open` of a parked lane waits and then counts the first as holding its slot; a second
+`open` of the same lane finds its flag gone under the lock and refuses (the first one's claude
+may not have written its session file yet). `open` of a
+lane that isn't parked has no cap check, as before.
+
+**The gates.** Every one runs before any signal, in this order: the record (not stale,
+`setup-failed` or `closing`), `lead_only` (a lane can't park itself: the command would end the
+session that runs it), already parked with no session (which needs the session files, so it
+comes after `lead_only`'s sandbox check), `done`'s git hardening and its
+`extensions.worktreeConfig` refusal, a clean tree, HEAD pushed (an ancestor of the commit the
+remote's own `refs/heads/<branch>` is at, asked with `ls-remote` and fetched, never the
+remote-tracking ref a lane can plant, and with replace refs and grafts off; or of the base's
+commit, the same way, for a lane whose PR merged with nothing new since), or an open PR whose head is
+HEAD or a local commit HEAD is an ancestor of (a PR at any other commit refuses: HEAD's work
+would sit outside it), the plain `handoff-check` (not `--closing`, so a
+`Keep open:` lane parks), no `handoff?` (gh unavailable fails closed), no lock the lane holds
+(each config lock and `suite`), no install hold, no busy session, then `done`'s survey and
+self-guard. The gates take a while (a fetch, gh, handoff-check), so the session statuses are
+read again from the session files the survey reads: a session that went busy, or one waiting on
+a permission dialog or a question, refuses (every other gate can pass mid-turn, and the SIGTERM
+would cut the turn off or lose the question). A parked lane with a session in it reruns them
+all. The pushed, lock and busy gates guard a cooperative lane against mistakes: the lane's own
+sandbox can still defeat the pushed gate (move its work to another branch and reset), which is
+acceptable, since the worktree and branch are kept, so nothing is lost, and the flag itself
+can't be forged.
+
+**Ending.** The same `save_proof`, `end_lane` and open-sessions sweep as `done`, with the verb
+passed in so a refusal says `rerun lane park X`. There is no `closing` state. A session that
+`open` starts between the survey and `end_lane`'s final look shows up there, which refuses the
+park and leaves the lane unparked. One that starts after the final look runs in a lane that
+ends up parked; it holds the slot all the same (a parked lane with a session holds one), and
+the board shows it `parked` with a live session. The open-sessions sweep runs once something
+was ended, or once the final look passed with nothing to end: a refused park that ended nothing
+keeps every restore entry. On success, under the lanes lock, the flag is written and the proof
+removed.
+
+**The board.** A parked lane shows `parked` and never `orphan`; `--json` rows carry `parked`
+(the stamp, or null). With a lane parked or the cap passed, a `cap: N of M slots held (K
+parked)` line follows, with `, X over` past the cap. It counts the same records as `new`, twins included, by the same rule. The lead sends a parked lane no "main
+moved" message: its `rebase` flag carries that to its unpark. `lane trial` keeps merging parked
+lanes, which are live and will merge.
+
 ## Bug reports from other repos (lane bug-route, 2026-10-18)
 
 On 2026-10-18 a session in `~/code/karaoke` had a bug report for dotclaude's tooling (lane
@@ -642,7 +711,11 @@ $XDG_STATE_HOME/dotclaude/lanes/<repo>-<hash>.lead.json
                                 checkout")
 $XDG_STATE_HOME/dotclaude/lanes/<repo>-<hash>.closing/<id>.json
                                 the pane shells a `lane done` of lane <id> proved the lane's,
-                                kept for a rerun until the close completes
+                                kept for a rerun until the close completes (a `lane park` keeps
+                                its own there the same way)
+$XDG_STATE_HOME/dotclaude/lanes/<repo>-<hash>.parked/<id>.json
+                                lane <id>'s parked flag ("Parked lanes"), written only by a
+                                bare `lane park`, removed by `lane open` and `lane done`
 
 <common-dir>/lanes/             CLI-owned; written by `lane` and by hooks, never by the Edit tool
   .lock                         flock for every CLI write (claims are atomic)
@@ -677,11 +750,13 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
 - **S3, `excludedCommands`:** `lane new` fetches and `lane ls` asks gh for PR state, and both
   need the credential the sandbox hides; `ls`, `open`, `done`, `addr` and `lead` also need to
   see other processes. PR 1 excluded `lane *`. PR 2 narrowed it to `lane init`, `new`, `adopt`, `ls`,
-  `open` and `done` (lane-addr added `addr`, and two-sessions `lead`), each by name, because `lane lock -- <cmd>` must stay sandboxed: under
+  `open` and `done` (lane-addr added `addr`, two-sessions `lead`, and park `park`), each by name, because `lane lock -- <cmd>` must stay sandboxed: under
   `lane *`, any command wrapped in it ran sandbox-off without the `dangerouslyDisableSandbox`
   flag the delete guard checks. `whoami`, `claim`, `release`, `who`, `note`, `asks` and `lock`
   touch only `<common-dir>/lanes/` and the lane's `.lane/`, which a lane-rooted sandbox can
-  write (S1). A sandboxed (piped) `ls` says what it skipped; `new`, `open`, `done`, `addr` and `lead` refuse.
+  write (S1). A sandboxed (piped) `ls` says what it skipped; `new`, `open`, `done`, `park`, `addr` and `lead` refuse.
+  `park` fetches, asks gh, sees and signals the lane's sessions and writes its flag in the
+  state dir, so it needs all three.
   `trial` must stay sandboxed too, and refuses to run anywhere else (the `lane trial` section).
   `new` and `adopt` also run the config's `setup` command through a shell, sandbox-off, and
   `new` makes its worktree under the config's `root`. So the config lives in the state dir, not
@@ -718,13 +793,16 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
     or the mirror offers a removal by path (a test scans the CLI's messages).
   - `done` signals a process only on kernel facts (`/proc`) and Claude Code's own files (session
     files, transcripts), never on `lane.json` (the pieces, `lane done`).
+  - An accepted limit: `is_live` trusts `lane.json`'s path, so a lane that points its own path
+    at a missing dir drops out of `new`'s cap count. Counting by `git worktree list` wouldn't
+    close it, since git's worktree admin dir is sandbox-writable too.
   PR 3 adds `pass-respawn` to `excludedCommands` (bare and with arguments): it needs the tmux socket and
   the session's processes, and its docstring lists what it reads and why each input is safe.
   The excluded-command inventory (2026-10-13, `tests/delegation/command_inventory.py`) adds three
   asks: `lane init --setup` names the command each new lane runs, `lane init --root` moves where
   lanes live, and `lane done --abandon` closes unmerged work. The rest of `lane` asks nothing.
   The excluded-command guard (docs/delegation.md) then let `ls`, `new`, `adopt`, `open`, `done`,
-  `addr` and `lead` take allow rules, so the classifier never refuses them: an allow rule skips the
+  `park`, `addr` and `lead` take allow rules, so the classifier never refuses them: an allow rule skips the
   classifier, and the guard checks each call's git config, PATH and cwd first. The three asks
   still win.
   A lane that installs from its worktree (`lane lock install -- ./setup.sh`) points the installed

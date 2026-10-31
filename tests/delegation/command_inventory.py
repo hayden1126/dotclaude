@@ -70,6 +70,8 @@ EXCLUDED = [
              ["lane open chart-fix", "lane open chart-fix --print"]),
     Excluded("lane done *", "checks the merge with gh, sees and signals the lane's sessions",
              ["lane done chart-fix"]),
+    Excluded("lane park *", "checks the push with gh, sees and signals the lane's sessions, "
+             "writes its flag in the state dir", ["lane park chart-fix"]),
     Excluded("lane addr *", "sees other sessions' processes to tell a live one from a stale file",
              ["lane addr chart-fix", "lane addr lead", "lane addr --repo ~/dotclaude lead"]),
     Excluded("lane lead", "sees the session above it and writes the lead record in the state dir",
@@ -388,7 +390,8 @@ DENIES = CLAUDE_DENY
 # The hot path (rule D): calls skills and real use make, which must match an excluded entry and
 # no ask or deny.
 NO_ASK = ["lane ls", "lane ls --json", "lane open chart-fix", "lane open chart-fix --print",
-          "lane new chart-fix --claim 42 --goal x", "lane done chart-fix", "lane init --cap 4",
+          "lane new chart-fix --claim 42 --goal x", "lane done chart-fix", "lane park chart-fix",
+          "lane init --cap 4",
           "lane adopt ../x", "lane lead", "lane addr lead", "lane addr --repo ~/dotclaude lead",
           "pass-respawn -C /x --compact", "pass-respawn -C /x --print",
           "ed-pull list", "ed-pull pull", "ed-pull pull --full", "ed-pull rebuild",
