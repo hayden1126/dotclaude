@@ -708,16 +708,24 @@ the block (`5191-5193`), and the setup command gets `LANE_PORTS=5191-5193` besid
    `.lane-serve/<port>.log` (gitignored by a `*` inside).
 3. It waits (60 s, `--timeout`) for a line matching `--ready`, if given (each line of the log's
    first 1 MiB; `^` and `$` mark a line's ends), and then for a listener on the port. Every
-   listener there, IPv4 and IPv6, must carry the serve's token. Anything else fails the serve,
-   names the holder and ends what the serve started. This is the check that closes the bug. A
+   listener there, IPv4 and IPv6, must carry the serve's token and run in the lane's dir.
+   Anything else fails the serve, names the holder and ends what the serve started. This is the check that closes the bug. A
    server that dies first (with nothing of it left running) fails the serve with its exit status
    and the log's tail.
 
 **One proof: the token.** A wrapper (`sh -c 'node srv.js &'`) exits after starting the server,
 and a daemon leaves the session with `setsid`. Both keep the token their environment inherited,
-while another lane's server has none. `--stop`, `done` and `park` go by the token alone, and the
+while another lane's server has none. `--stop`, `done` and `park` go by the token, and the
 listener check does too, so a serve never succeeds on a server they couldn't reach: a listener
-in the serve's session that cleared its environment (`env -i`) fails it, saying so. Rounds 2 to
+in the serve's session that cleared its environment (`env -i`) fails it, saying so.
+
+**Only in the lane.** A served command can start a per-user daemon on first use (Gradle's,
+watchman, sccache) that inherits the token and then works for other lanes too. So nothing
+outside the lane's dir is ever signalled for a token: `--stop` and a failed serve name such a
+process and leave it, `done` refuses by name before any signal while one runs (its record kept;
+`--stop` in the lane drops the record), and the listener check fails a server that daemonizes
+out of the lane (`chdir("/")`): run it in the foreground. Hayden picked this over killing every
+carrier (2026-10-31, round 5). Rounds 2 to
 4 of the review each found a process orphaned by a session-based proof, which dies with the
 session's leader; Hayden picked the token as the one proof (2026-10-31). The session still
 serves one job: while serve waits it never reaps its leader (it looks with `WNOWAIT`), so the
@@ -725,20 +733,19 @@ leader's pid can't be handed on, and a failed serve ends the session's members, 
 cleared their environment included, before it reaps.
 
 **`lane serve --stop PORT`** ends what a serve of this lane started there: every process carrying
-its token. Each signal goes through the pidfd check `done` uses, so a reused pid is never hit.
+its token in the lane's dir. Each signal goes through the pidfd check `done` uses, so a reused
+pid is never hit.
 The record lives in the state dir (`<repo>-<hash>.served/<id>/<port>.json`: pid, start, boot,
 token), which only a sandbox-off command can write, so no lane's sandboxed Bash can point
 `--stop` at another process.
 
 **`done` and `park`.** Their survey of what runs in the lane counts a process carrying one of the
 lane's serve tokens as the lane's, a class of its own (SERVED), whatever session id it carries:
-a server started from a plain terminal has none. Its children must be the lane's too, or carry
-the token: one that cleared its environment and left the lane's dir refuses the close by name,
-before any signal. So `park` ends a served server whose cwd is in the
-lane, and keeps its record for a `--stop` after the unpark. `done` then ends, by the records,
-whatever of the lane's serves runs elsewhere (a daemon's `chdir("/")`), each signal held as
-`done` holds any (a process with a git file open), and refuses the close while one still runs.
-Only then does it remove the records.
+a server started from a plain terminal has none. Its children must be the lane's too: one
+outside the lane's dir refuses the close by name, before any signal. So `park` ends a served
+server in the lane and keeps its record for a `--stop` after the unpark. `done` also refuses,
+before any signal, while any of the lane's token carriers runs outside the lane, and looks again
+after its signals; only then does it remove the records.
 
 **Known limits.** The check runs once, when the first listener appears: a listener that binds
 the port after that goes unseen. A listener another user owns (its fds can't be read) always
@@ -746,7 +753,9 @@ fails the serve, since nothing proves it the serve's. A server that rewrites its
 area (setproctitle, as gunicorn does) may lose the token: serve then fails on it, as on any
 listener that cleared its environment. A process that cleared it and isn't listening is left by
 `--stop`, and `done` and `park` refuse it by name while it runs in the lane or under a lane
-process. The token is readable to any lane's sandboxed Bash (the state
+process. serve sets SIGCHLD back to the default (an ignored one survives exec and would reap
+its leader) and only notes SIGINT and SIGTERM, acting on them at its next look, so neither an
+interrupt mid-start nor a second signal mid-cleanup leaves what it started running. The token is readable to any lane's sandboxed Bash (the state
 dir is), so a lane that keeps starting processes with another lane's token can stall that
 lane's `done` (it refuses while they run) and hold its port; it can't aim a signal at anything
 it doesn't own.

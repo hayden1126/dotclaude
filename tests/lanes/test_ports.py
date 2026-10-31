@@ -509,13 +509,41 @@ class Serve(LanesRepo):
         self.assertEqual(self.mine("sleep 600"), [])
         self.assertIsNone(self.served(self.lo))
 
+    def test_a_second_signal_cannot_cut_the_cleanup_short(self):
+        # The server ignores SIGTERM, so the cleanup waits out the grace before its SIGKILL; a
+        # SIGTERM to serve meanwhile is only noted, and the cleanup still finishes.
+        proc = self.start_serve("--", "sh", "-c", f'trap "" TERM; sleep 600; : {self.tmp}')
+        proc.send_signal(signal.SIGINT)
+        time.sleep(0.3)
+        proc.send_signal(signal.SIGTERM)
+        out, err = proc.communicate(timeout=30)
+        self.assertEqual(proc.returncode, -signal.SIGINT, out + err)
+        self.assertEqual([x for x in self.mine("sleep 600; :") if x != proc.pid], [])
+        self.assertIsNone(self.served(self.lo))
+
+    def test_serve_holds_its_leader_even_when_started_with_sigchld_ignored(self):
+        # An ignored SIGCHLD survives exec and would have the kernel reap the leader, so its pid
+        # (the session's id) could be handed on: serve sets it back to the default.
+        # (dash's `trap '' CHLD` sets no kernel-level ignore; this launcher does, then execs.)
+        launch = ("import os, signal, sys; signal.signal(signal.SIGCHLD, signal.SIG_IGN); "
+                  "os.execv(sys.executable, [sys.executable, *sys.argv[1:]])")
+        p = subprocess.run([sys.executable, "-c", launch, LANE,
+                            "serve", "--timeout", "1", "--", "sh", "-c",
+                            f'env -i sh -c "sleep 600; : {self.tmp}" & exit 0'],
+                           cwd=self.path, env=self.env, capture_output=True, text=True,
+                           timeout=60)
+        self.addCleanup(self.stop_all)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("nothing listened", p.stderr)
+        self.assertEqual(self.mine("sleep 600; :"), [])  # ended through the held session
+
     def test_stop_keeps_the_record_while_a_process_outlives_sigkill(self):
         p = self.serve("--", sys.executable, self.server, "127.0.0.1", "{port}")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         mod = load_lane_script()
         repo = lanelib.resolve(self.path)
         _, lane = repo.identity()
-        with mock.patch.object(mod, "end_serve", return_value=["4242 stuck"]):
+        with mock.patch.object(mod, "end_serve", return_value=(["4242 stuck"], "")):
             with self.assertRaises(mod.LaneError) as e:
                 mod.serve_stop(repo, lane, self.lo)
         self.assertIn("4242 stuck", str(e.exception))
@@ -572,35 +600,73 @@ class ServedRecords(LanesRepo):
         st = lanelib.proc_stat(pid)
         return st is None or st[3] != start or st[1] in lanelib.EXITED
 
-    def test_done_ends_a_server_that_left_the_lane_and_removes_the_records(self):
-        # A daemon that chdirs to / is out of done's view of the lane's processes: done ends it
-        # by its record before removing the record, so nothing is left running untracked.
-        _, (daemon,) = self.serve_script(
-            f"import subprocess, sys; subprocess.Popen([sys.executable, {self.server!r}, "
-            f"'127.0.0.1', sys.argv[1]], start_new_session=True, cwd='/')")
-        start = lanelib.proc_start(daemon)
-        self.assertEqual(os.readlink(f"/proc/{daemon}/cwd"), "/")
-        self.merge()
-        out = self.lane("done", "web")
-        self.assertIn(f"ended what lane serve started on port {self.lo}", out)
-        self.assertTrue(self.gone(daemon, start))
-        self.assertFalse(os.path.exists(self.repo.served_dir("web")))
+    def outside_child(self, script_head):
+        """Serve a server whose child (a sleep tagged with this test's dir) runs outside the
+        lane, carrying the token; (server pid, child pid)."""
+        _, pids = self.serve_script(
+            f"import os, subprocess, sys; {script_head}; os.execv(sys.executable, "
+            f"[sys.executable, {self.server!r}, '127.0.0.1', sys.argv[1]])")
+        child = [x for x in pids if "sleep 600; :" in " ".join(lanelib.proc_cmdline(x) or [])]
+        server = [x for x in pids if x not in child]
+        return server[0], child[0]
+
+    def test_a_daemon_that_leaves_the_lane_fails_the_serve_and_is_named(self):
+        # --stop and done never signal a token carrier outside the lane (it may be a shared
+        # daemon), so serve won't succeed on a listener there: it fails, names it, leaves it.
+        script = (f"import subprocess, sys; subprocess.Popen([sys.executable, {self.server!r}, "
+                  f"'127.0.0.1', sys.argv[1], {self.tmp!r}], start_new_session=True, cwd='/')")
+        p = self.run_lane("serve", "--", sys.executable, "-c", script, "{port}", cwd=self.path)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("listener runs outside the lane's dir", p.stderr)
+        self.assertIn("Run the server in the foreground", p.stderr)
+        self.assertIn("never signalled", p.stderr)
+        (daemon,) = [int(n) for n in os.listdir("/proc") if n.isdigit()
+                     and self.tmp in " ".join(lanelib.proc_cmdline(int(n)) or [])
+                     and self.server in " ".join(lanelib.proc_cmdline(int(n)) or [])]
+        self.addCleanup(os.kill, daemon, signal.SIGKILL)
+        self.assertIsNone(load_lane_script().load_served(self.repo, "web", self.lo))
 
     def test_done_ends_a_served_tree_with_no_lane_session_id(self):
-        # Served from a plain terminal (no CLAUDE_CODE_SESSION_ID, as the fixture's env has
-        # none), in the lane, with a child whose cwd left it: the record proves both the lane's,
-        # where the session-id rule alone refused the close before any signal.
-        _, pids = self.serve_script(
-            f"import os, subprocess, sys; subprocess.Popen(['sleep', '600'], cwd='/'); "
-            f"os.execv(sys.executable, [sys.executable, {self.server!r}, '127.0.0.1', "
-            f"sys.argv[1]])")
-        self.assertEqual(len(pids), 2)
-        starts = {pid: lanelib.proc_start(pid) for pid in pids}
-        self.assertIsNone(lanelib.proc_env(pids[0], "CLAUDE_CODE_SESSION_ID"))
+        # Served from a plain terminal (no CLAUDE_CODE_SESSION_ID: the fixture's env has none),
+        # in the lane, with a child: the record proves both the lane's, where the session-id
+        # rule alone refused the close before any signal.
+        server, child = self.outside_child(
+            f"subprocess.Popen(['sh', '-c', 'sleep 600; : {self.tmp}'])")
+        starts = {pid: lanelib.proc_start(pid) for pid in (server, child)}
+        self.assertIsNone(lanelib.proc_env(server, "CLAUDE_CODE_SESSION_ID"))
         self.merge()
         out = self.lane("done", "web")
         self.assertIn("lane serve's, port", out)
         self.assertTrue(all(self.gone(pid, start) for pid, start in starts.items()))
+        self.assertFalse(os.path.exists(self.repo.served_dir("web")))
+
+    def test_done_names_a_token_carrier_outside_the_lane_and_signals_nothing(self):
+        # It may be a shared daemon (Gradle's, watchman) working for other lanes too: done
+        # refuses by name before any signal and keeps the record, whether the carrier runs
+        # under the server or was reparented away (a double fork); --stop drops the record,
+        # and then done goes on, the daemon left running.
+        for form, head in (
+                ("child", f"subprocess.Popen(['sh', '-c', 'sleep 600; : {self.tmp}'], cwd='/')"),
+                ("reparented", f"subprocess.run(['sh', '-c', '(sleep 600; : {self.tmp}) & "
+                               f"exit 0'], cwd='/')")):
+            with self.subTest(form=form):
+                server, child = self.outside_child(head)
+                starts = {pid: lanelib.proc_start(pid) for pid in (server, child)}
+                if form == "child":
+                    self.merge()
+                p = self.run_lane("done", "web")
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertIn(f"{child} sh", p.stderr)
+                self.assertIn("outside lane web" if form == "child" else "never signals",
+                              p.stderr)
+                self.assertFalse(any(self.gone(pid, start) for pid, start in starts.items()))
+                self.assertTrue(os.path.exists(self.repo.served_path("web", self.lo)))
+                p = self.run_lane("serve", "--stop", str(self.lo), cwd=self.path)
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertIn("never signalled", p.stderr)
+                self.assertTrue(self.gone(server, starts[server]))
+                self.assertFalse(self.gone(child, starts[child]))
+        self.lane("done", "web")
 
     def test_done_refuses_by_name_a_child_that_cleared_its_environment_and_left(self):
         # Round 4's case: the token is the only proof, so a child that cleared it and left the

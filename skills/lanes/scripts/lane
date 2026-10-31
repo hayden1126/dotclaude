@@ -2299,28 +2299,46 @@ def session_of(pid: int) -> int | None:
 def served_by(pid: int, token: str, sid: int | None = None) -> bool:
     """Whether pid is part of the serve whose token is token: it started with the token in its
     environment, which every process the server starts inherits, in its session or out of it
-    (a daemon's setsid). The token is the one proof `--stop`, `done` and `park` go by. sid only
-    from `serve` itself, while it holds its leader unreaped (its pid, the session's id, can't be
-    handed on then), to end the session's members when the serve fails."""
+    (a daemon's setsid). sid only from `serve` itself, while it holds its leader unreaped (its
+    pid, the session's id, can't be handed on then), to end the session's members when the
+    serve fails."""
     if sid is not None and session_of(pid) == sid:
         return True
     return lanelib.proc_env(pid, SERVE_ENV) == token
 
 
-def served_procs(token: str, sid: int | None = None) -> list[lanelib.Proc]:
-    """The running processes of the serve with token (and, from `serve`, session sid)."""
+def in_dir(p: lanelib.Proc, root: str) -> bool:
+    return p.cwd is not None and lanelib.inside(p.cwd, root)
+
+
+def served_procs(token: str, root: str, sid: int | None = None,
+) -> tuple[list[lanelib.Proc], list[lanelib.Proc]]:
+    """The running processes of the serve with token: (ours, outside). Ours run in the lane's
+    dir root (or, from `serve`, in session sid); outside, the token carriers elsewhere. A served
+    command can start a per-user daemon (Gradle's, watchman, sccache) that inherits the token
+    and then works for other lanes too, so nothing outside is ever signalled: only named."""
     me = os.getpid()
-    return [p for p in lanelib.scan(full=False).values()
-            if p.state not in lanelib.EXITED and p.pid != me and served_by(p.pid, token, sid)]
+    ours, outside = [], []
+    for p in lanelib.scan().values():
+        if p.state in lanelib.EXITED or p.pid == me or not served_by(p.pid, token, sid):
+            continue
+        in_session = sid is not None and session_of(p.pid) == sid
+        (ours if in_session or in_dir(p, root) else outside).append(p)
+    return ours, outside
 
 
-def end_serve(token: str, sid: int | None = None, send=None) -> list[str]:
-    """SIGTERM every process of the serve, SIGKILL what outlives the grace, and look again for
-    any it started meanwhile; each signal through send (signal_proc, or `done`'s guarded), so a
-    pid reused since the scan is never hit. What still runs, named."""
+def named(procs: list[lanelib.Proc]) -> str:
+    return ", ".join(shown(f"{p.pid} {p.comm} (cwd {p.cwd or '?'})") for p in procs)
+
+
+def end_serve(token: str, root: str, sid: int | None = None, send=None) -> tuple[list[str], str]:
+    """SIGTERM the serve's own processes (served_procs), SIGKILL what outlives the grace, and look
+    again for any it started meanwhile; each signal through send (signal_proc, or `done`'s
+    guarded), so a pid reused since the scan is never hit. (ours still running, named; the
+    token carriers outside the lane, named, never signalled)."""
     send = send or signal_proc
     for _ in range(2):
-        group = served_procs(token, sid)
+        group, _ = served_procs(token, root, sid)
         for p in group:
             send(p, signal.SIGTERM)
         deadline = time.monotonic() + grace()
@@ -2332,7 +2350,8 @@ def end_serve(token: str, sid: int | None = None, send=None) -> list[str]:
         deadline = time.monotonic() + 1
         while any(lanelib.proc_alive(p) for p in group) and time.monotonic() < deadline:
             time.sleep(SERVE_POLL)
-    return [f"{p.pid} {p.comm}" for p in served_procs(token, sid)]
+    ours, outside = served_procs(token, root, sid)
+    return [f"{p.pid} {p.comm}" for p in ours], named(outside)
 
 
 def load_served(repo: Repo, lane_id: str, port: int) -> dict | None:
@@ -2355,9 +2374,9 @@ def this_boot(rec: dict) -> bool:
         return False
 
 
-def served_live(rec: dict) -> list[lanelib.Proc]:
-    """What still runs of the serve rec names: the processes carrying its token."""
-    return served_procs(rec["token"]) if this_boot(rec) else []
+def served_live(rec: dict, root: str) -> tuple[list[lanelib.Proc], list[lanelib.Proc]]:
+    """What still runs of the serve rec names, (ours, outside) as served_procs sorts them."""
+    return served_procs(rec["token"], root) if this_boot(rec) else ([], [])
 
 
 def served_records(repo: Repo, lane_id: str) -> list[dict]:
@@ -2372,27 +2391,24 @@ def served_records(repo: Repo, lane_id: str) -> list[dict]:
 
 def serve_proofs(repo: Repo, lane_id: str) -> list[tuple[str, int]]:
     """(token, port) for each of the lane's serve records from this boot: survey counts a
-    process carrying one as the lane's, SERVED."""
+    process in the lane carrying one as the lane's, SERVED."""
     return [(rec["token"], rec["port"]) for rec in served_records(repo, lane_id) if this_boot(rec)]
 
 
-def end_lane_serves(repo: Repo, lane_id: str) -> None:
-    """After `done` ended what runs in the lane: end what each of the lane's serves still runs
-    elsewhere (a daemon's chdir takes it out of the lane's dir), each signal guarded as `done`'s
-    are, so no record is removed while its server runs."""
-    def send(p, sig):
-        return guarded(p, sig, repo.common_dir) is None
-    left = []
+def outside_serves(repo: Repo, lane_id: str, path: str) -> None:
+    """Refuse `done` while a token carrier of the lane's serves runs outside the lane: it may be
+    a shared daemon working for other lanes too, so `done` names it and never signals it, and
+    its record stays until it is gone."""
+    lines = []
     for rec in served_records(repo, lane_id):
-        if served_live(rec):
-            still = end_serve(rec["token"], send=send)
-            left += [f"{x} (port {rec['port']})" for x in still]
-            if not still:
-                say(f"  ended what lane serve started on port {rec['port']}")
-    if left:
-        raise LaneError(f"lane {lane_id}'s served processes still run (one holding a git file is "
-                        f"left alone, as `done` leaves any): {', '.join(left)}. Rerun `lane done "
-                        f"{lane_id}` once they are gone")
+        if outside := served_live(rec, path)[1]:
+            lines.append(f"port {rec['port']}: {named(outside)}")
+    if lines:
+        raise LaneError(f"lane {lane_id}'s serves left processes running outside the lane, which "
+                        f"`done` never signals (one may be a shared daemon, Gradle's or "
+                        f"watchman, working for other lanes too): {'; '.join(lines)}. End them "
+                        f"yourself if they are the lane's, or run `lane serve --stop <port>` in "
+                        f"the lane to drop the record, then rerun `lane done {lane_id}`")
 
 
 def remove_served(repo: Repo, lane_id: str, port: int, token: str) -> None:
@@ -2488,7 +2504,8 @@ def serve_port(repo: Repo, lane: dict, block: range, want: int | None, lanes: li
         raise LaneError(f"port {want} is not in lane {lane['id']}'s ports {span}")
     for port in [want] if want is not None else block:
         holders = port_holders(port, lanes)
-        if not holders and (rec := load_served(repo, lane["id"], port)) and served_live(rec):
+        if not holders and (rec := load_served(repo, lane["id"], port)) \
+                and served_live(rec, lane["path"])[0]:
             holders = ["a server lane serve started there still runs but isn't listening: "
                        f"`lane serve --stop {port}`"]
         if not holders:
@@ -2505,6 +2522,9 @@ def cmd_serve(args) -> int:
     sandbox_off("lane serve")
     repo = lanes_repo()
     lane = serving_lane(repo)
+    if lane.get("state") == "closing":
+        raise LaneError(f"lane {lane['id']} is closing (a `lane done` stopped partway): nothing "
+                        "serves from it until that close is rerun or it is opened again")
     if args.stop is not None:
         return serve_stop(repo, lane, args.stop)
     if not args.command:
@@ -2518,9 +2538,14 @@ def cmd_serve(args) -> int:
     block = lane_block(repo, lane)
     lanes = repo.lanes(shared=True)
     top = usable_path(repo, lane)
-    # A SIGTERM (the Bash tool's, a timeout's) ends serve as Ctrl-C does: from the server's start
-    # on, through the cleanup that ends what it started.
-    signal.signal(signal.SIGTERM, signal.default_int_handler)
+    # From here, SIGINT and SIGTERM (the Bash tool's, a timeout's) only note the signal: serve acts
+    # on it at its next look, once what it started is recorded, and a second one can't cut its
+    # cleanup short. A handler resets at exec, so the server gets the default ones. SIGCHLD back
+    # to the default too: ignored, it would reap the leader serve must hold unreaped.
+    signals: list[int] = []
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, lambda signum, _frame: signals.append(signum))
+    signal.signal(signal.SIGCHLD, signal.SIG_DFL)
     with lock(repo):
         port = serve_port(repo, lane, block, args.port, lanes)
         fd, log = serve_log(top, port)
@@ -2534,12 +2559,10 @@ def cmd_serve(args) -> int:
         except OSError as e:
             os.close(fd)
             raise LaneError(shown(f"can't run {argv[0]}: {e.strerror or e}"))
-
         # serve never reaps its leader while it waits (exited() looks with WNOWAIT), so the
         # leader's pid, its session's id, can't be handed on: the session is the serve's until
         # fail()'s wait, which ends its members first.
         sid = child.pid
-
         try:
             if not (start := lanelib.proc_start(child.pid)):
                 raise OSError(errno.ESRCH, "its leader's start can't be read")
@@ -2547,8 +2570,8 @@ def cmd_serve(args) -> int:
                 "lane": lane["id"], "port": port, "pid": child.pid, "start": start,
                 "boot": lanelib.boot_id(), "token": token, "argv": argv, "log": log,
                 "started": now_iso()})
-        except BaseException as e:  # an interrupt too: nothing unrecorded is left running
-            end_serve(token, sid)
+        except BaseException as e:
+            end_serve(token, top, sid)
             os.close(fd)
             if isinstance(e, OSError):
                 raise LaneError(f"can't record the serve at {repo.served_path(lane['id'], port)} "
@@ -2564,7 +2587,7 @@ def cmd_serve(args) -> int:
         return info.si_status if info.si_code == os.CLD_EXITED else -info.si_status
 
     def fail(why: str) -> int:
-        left = end_serve(token, sid)
+        left, outside = end_serve(token, top, sid)
         with contextlib.suppress(subprocess.TimeoutExpired):
             child.wait(timeout=1)
         if not left:
@@ -2572,6 +2595,8 @@ def cmd_serve(args) -> int:
         tail = shown(log_text(fd, SERVE_TAIL, tail=True)).strip()
         warn(why + (f"\nleft running: {', '.join(left)}; `lane serve --stop {port}` retries"
                     if left else "")
+             + (f"\nleft running outside the lane, never signalled (one may be a shared "
+                f"daemon): {outside}" if outside else "")
              + (f"\n--- {log} (tail)\n{tail}" if tail else ""))
         return 1
 
@@ -2580,62 +2605,96 @@ def cmd_serve(args) -> int:
     seen = ready is None
     try:
         while True:
+            if signals:
+                fail("interrupted: what the serve started in the lane is ended")
+                return -signals[0]
             rc = exited()
             if not seen:
                 seen = bool(ready.search(log_text(fd, SERVE_READ)))
             if seen and (inodes := lanelib.listeners(port)):
-                owners = list(lanelib.socket_pids(inodes).values())
-                # A listener counts only by the token, the proof `--stop` and `done` go by, so a
-                # serve never succeeds on a server they couldn't reach.
-                foreign = [pids for pids in owners
-                           if not pids or not all(served_by(x, token) for x in pids)]
-                if cleared := [x for x in foreign if x and all(served_by(y, token, sid) for y in x)]:
-                    return fail(shown(
-                        f"port {port}'s listener is in the serve's session but cleared its "
-                        f"environment ({'; '.join(holder_text(x, lanes) for x in cleared)}), so "
-                        f"`lane serve --stop` couldn't reach it: the serve's processes are ended. "
-                        f"Start it with its environment kept"))
-                if foreign:
-                    return fail(shown(
-                        f"port {port}'s listener is not the server lane serve started: "
-                        f"{'; '.join(holder_text(x, lanes) for x in foreign)}. Checks against "
-                        f"port {port} would test that one, so the serve's processes are ended"))
+                if why := listener_problem(port, lanelib.socket_pids(inodes), token, sid, top,
+                                           lanes):
+                    return fail(why)
                 say(f"serving port {port}: pid {child.pid}, log {log}; "
                     f"stop it with `lane serve --stop {port}`")
                 return 0
-            if rc is not None and not [p for p in served_procs(token, sid) if p.pid != sid]:
+            if rc is not None and not [p for p in served_procs(token, top, sid)[0]
+                                       if p.pid != sid]:
                 how = f"status {rc}" if rc >= 0 else f"signal {-rc}"
                 return fail(shown(f"{argv[0]} exited with {how} before it listened on port "
-                                  f"{port}, and left nothing running"))
+                                  f"{port}, and left nothing running in the lane"))
             if time.monotonic() > deadline:
                 return fail(f"nothing listened on port {port} within {secs:g} s" if seen else
                             f"no line matched --ready {args.ready!r} within {secs:g} s")
             time.sleep(SERVE_POLL)
-    except KeyboardInterrupt:
-        fail("interrupted: the serve's processes are ended")
-        return -signal.SIGINT
+    except BaseException as e:  # whatever breaks the wait, nothing it started is left behind
+        fail(shown(f"serve failed ({type(e).__name__}: {e}): what it started in the lane is "
+                   "ended"))
+        raise
     finally:
         os.close(fd)
 
 
+def listener_problem(port: int,
+    owners: dict[int, set[int]],
+    token: str,
+    sid: int,
+    top: str,
+    lanes: list[dict],
+) -> str | None:
+    """Why port's listeners aren't the serve's, or None. Each holder must carry the token and run
+    in the lane's dir: the proof `--stop` and `done` go by, so a serve never succeeds on a server
+    they couldn't reach."""
+    procs = lanelib.scan()
+    foreign, cleared, outside = [], [], []
+    for pids in owners.values():
+        if not pids:
+            foreign.append(pids)
+        elif not all(served_by(x, token) for x in pids):
+            (cleared if all(served_by(x, token, sid) for x in pids) else foreign).append(pids)
+        elif not all(x in procs and in_dir(procs[x], top) for x in pids):
+            outside.append(pids)
+    if foreign:
+        return shown(f"port {port}'s listener is not the server lane serve started: "
+                     f"{'; '.join(holder_text(x, lanes) for x in foreign)}. Checks against port "
+                     f"{port} would test that one, so the serve's processes are ended")
+    if cleared:
+        return shown(f"port {port}'s listener is in the serve's session but cleared its "
+                     f"environment ({'; '.join(holder_text(x, lanes) for x in cleared)}), so "
+                     "`lane serve --stop` couldn't reach it: the serve's processes are ended. "
+                     "Start it with its environment kept")
+    if outside:
+        return shown(f"port {port}'s listener runs outside the lane's dir "
+                     f"({'; '.join(named([procs[x] for x in pids if x in procs]) for pids in outside)}),"
+                     " so `lane serve --stop` and `lane done` wouldn't end it: the serve's "
+                     "processes are ended. Run the server in the foreground, from the lane")
+    return None
+
+
 def serve_stop(repo: Repo, lane: dict, port: int) -> int:
     """End what a serve of this lane started on port, proved by the record serve wrote in the
-    state dir (no lane's sandboxed Bash can write it): the processes carrying its token."""
+    state dir (no lane's sandboxed Bash can write it): the processes carrying its token in the
+    lane's dir. One outside the lane is named, never signalled (it may be a shared daemon)."""
     rec = load_served(repo, lane["id"], port)
     if rec is None:
         holders = port_holders(port, repo.lanes(shared=True))
         raise LaneError(shown(f"lane {lane['id']}'s serve started nothing on port {port}"
                               + (f"; its listener is {'; '.join(holders)}, which isn't this "
                                  "lane's to stop" if holders else "")))
-    if not served_live(rec):
-        remove_served(repo, lane["id"], port, rec["token"])
+    ours, outside = served_live(rec, lane["path"])
+    if ours:
+        left, out = end_serve(rec["token"], lane["path"])
+        if left:
+            raise LaneError(f"port {port}: these outlived SIGKILL: {', '.join(left)}. The "
+                            f"record stays, so `lane serve --stop {port}` can retry")
+        say(f"stopped port {port}: ended what the serve of pid {rec['pid']} started in the lane")
+    else:
+        out = named(outside)
         say(f"port {port}: the server lane serve started (pid {rec['pid']}) is already gone")
-        return 0
-    if left := end_serve(rec["token"]):
-        raise LaneError(f"port {port}: these outlived SIGKILL: {', '.join(left)}. The record "
-                        f"stays, so `lane serve --stop {port}` can retry")
     remove_served(repo, lane["id"], port, rec["token"])
-    say(f"stopped port {port}: ended what the serve of pid {rec['pid']} started")
+    if out:
+        warn(f"port {port}: left running outside the lane, never signalled (one may be a shared "
+             f"daemon, working for other lanes too): {out}")
     return 0
 
 
@@ -3636,10 +3695,10 @@ def survey(lane_id: str,
     still its OWNED children. The rest in order: SESSION, OWNED, SERVED, PANE, LEFTOVER. A
     SERVED process carries the token of a `lane serve` of this lane (serves, from serve_proofs),
     whose record in the state dir is the proof, whatever session id it carries. A PANE is a tmux pane's shell (its parent a tmux server) with no foreign session
-    id. A LEFTOVER's or SERVED's every descendant, anywhere, must be a hit too, or a SERVED
-    process outside the lane, which end_lane_serves ends after: a tmux server or a `--bg` daemon
-    started from a lane Bash carries the lane's session id, and its panes or sessions run
-    elsewhere. files are Claude Code's session files (lanelib.session_files, read here when not
+    id. A LEFTOVER's or SERVED's every descendant, anywhere, must be a hit too: a tmux server or
+    a `--bg` daemon started from a lane Bash carries the lane's session id, and its panes or
+    sessions run elsewhere. A token carrier outside the lane is never signalled
+    (outside_serves). files are Claude Code's session files (lanelib.session_files, read here when not
     given)."""
     if files is None:
         files = lanelib.session_files()
@@ -3733,8 +3792,7 @@ def survey(lane_id: str,
     for pid, h in list(hits.items()):
         if h.kind in (LEFTOVER, SERVED):
             for d in lanelib.descendants(pid, kids):
-                if d not in hits and d not in refused and d != me and d in procs \
-                        and served_port(d) is None:
+                if d not in hits and d not in refused and d != me and d in procs:
                     refused[d] = described(procs[d], f"runs under {pid} {h.proc.comm} ({h.why}), "
                                                      f"outside lane {lane_id}")
     return hits, refused
@@ -4737,6 +4795,7 @@ def cmd_done(args) -> None:
                           f"End or move them, then rerun `lane done {args.id}`")
         if hits:
             closing_check(args.id, path, args.abandon)
+    outside_serves(repo, args.id, path)  # nothing signalled yet: a serve left processes outside
     for hit in work_references(repo, lane) if present else []:
         warn(shown(f"reference into {lane['id']}/work: {hit}"))  # a path from another lane
     if hits:
@@ -4764,7 +4823,7 @@ def cmd_done(args) -> None:
         if present:
             end_lane(repo, lane, path, hits)  # its final look only
         sweep_open_sessions(path)
-    end_lane_serves(repo, args.id)  # before the close: a refusal leaves the lane to rerun
+    outside_serves(repo, args.id, path)  # again: one may have left the lane meanwhile
     archive = close_record(repo, lane, path, state, how, present, heads.get(path))
     try:
         os.remove(repo.closing_path(args.id))
