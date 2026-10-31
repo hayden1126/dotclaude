@@ -257,14 +257,18 @@ class Baseline(unittest.TestCase):
         with open(os.path.join(REPO, "hooks", "sandbox-caches.sh")) as f:
             self.assertIn('root="$HOME/.cache/claude-sandbox"', f.read())
         cache_vars = ("npm_config_cache", "bun_install_cache_dir", "uv_cache_dir",
-                      "uv_python_install_dir", "uv_python_bin_dir", "pip_cache_dir", "pnpm_home",
-                      "npm_config_devdir", "playwright_browsers_path")
+                      "uv_python_downloads", "pip_cache_dir", "pnpm_home", "npm_config_devdir",
+                      "playwright_browsers_path")
         self.assertFalse([k for k in S.get("env", {}) if k.lower() in cache_vars])
-        # Sandboxed installs fetch into their own dirs: Pythons, gyp headers, browsers.
+        # Sandboxed installs fetch into their own dirs: gyp headers, browsers. Not Pythons
+        # (sandboxed uv runs Hayden's, read-only), nor Playwright's Chromium, whose builds
+        # redirect to storage.googleapis.com, where any public-write bucket takes uploads.
         hosts = S["sandbox"]["network"]["allowedDomains"]
-        for host in ("releases.astral.sh", "nodejs.org", "cdn.playwright.dev",
-                     "playwright.download.prss.microsoft.com"):
+        for host in ("nodejs.org", "cdn.playwright.dev", "playwright.download.prss.microsoft.com"):
             self.assertIn(host, hosts)
+        for host in ("releases.astral.sh", "storage.googleapis.com"):
+            self.assertNotIn(host, hosts)
+        self.assertNotIn("~/.local/share/uv", allow)
         hook = 'bash "$HOME/.claude/hooks/sandbox-caches.sh"'
         (entry,) = [e for e in S["hooks"]["SessionStart"]
                     if any("sandbox-caches" in h["command"] for h in e["hooks"])]

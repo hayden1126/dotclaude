@@ -25,14 +25,13 @@ CACHES = (
     ("npm_config_cache", "npm"),
     ("BUN_INSTALL_CACHE_DIR", "bun"),
     ("UV_CACHE_DIR", "uv"),
-    ("UV_PYTHON_INSTALL_DIR", "uv-python"),
-    ("UV_PYTHON_BIN_DIR", "uv-bin"),
     ("PIP_CACHE_DIR", "pip"),
     ("PNPM_HOME", "pnpm"),
     ("npm_config_devdir", "node-gyp"),
     ("PLAYWRIGHT_BROWSERS_PATH", "ms-playwright"),
 )
-VARS = tuple(v for v, _ in CACHES)
+# Plus one value: sandboxed uv runs Hayden's Pythons read-only and never downloads one.
+VARS = tuple(v for v, _ in CACHES) + ("UV_PYTHON_DOWNLOADS",)
 SHOW = 'source "$1"; printf "%s\\n"' + "".join(f' "${{{v}-unset}}"' for v in VARS)
 UNSET = ["unset"] * len(VARS)
 
@@ -44,7 +43,8 @@ class SandboxCaches(unittest.TestCase):
         self.home = os.path.join(self.tmp, "home dir")  # a space, to prove the quoting
         os.makedirs(self.home)
         self.root = os.path.join(self.home, ".cache", "claude-sandbox")
-        self.want = [os.path.join(self.root, d) for _, d in CACHES]
+        self.dirs = [os.path.join(self.root, d) for _, d in CACHES]
+        self.want = self.dirs + ["never"]
         self.envfile = os.path.join(self.tmp, "session-env.sh")
         self.logfile = os.path.join(self.tmp, "state", "dotclaude", "sandbox-caches.log")
         self.env = {k: v for k, v in os.environ.items()
@@ -83,7 +83,7 @@ class SandboxCaches(unittest.TestCase):
         # tools can't create the dirs themselves: the hook (unsandboxed) must.
         self.run_hook()
         self.assertEqual(self.sourced(), self.want)
-        for d in (self.root, *self.want):
+        for d in (self.root, *self.dirs):
             self.assertTrue(os.path.isdir(d), d)
         self.assertEqual(stat.S_IMODE(os.stat(self.root).st_mode), 0o700)
         self.assertEqual(self.logged(), "")

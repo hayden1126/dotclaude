@@ -725,10 +725,10 @@ need nothing extra.
   `~/.cache/claude-sandbox` (the sandbox skips a missing `allowWrite` path) and appends to
   `CLAUDE_ENV_FILE` a line that exports, only when `SANDBOX_RUNTIME` is set (which the sandbox
   runtime does inside the sandbox), `npm_config_cache`, `BUN_INSTALL_CACHE_DIR`,
-  `UV_CACHE_DIR`, `UV_PYTHON_INSTALL_DIR`, `UV_PYTHON_BIN_DIR`, `PIP_CACHE_DIR`, `PNPM_HOME`
-  (pnpm's store), `npm_config_devdir` (node-gyp's headers) and `PLAYWRIGHT_BROWSERS_PATH`.
-  pnpm's metadata cache needs no var: it stays read-only and pnpm skips writing it. The default
-  caches feed code that runs outside the sandbox.
+  `UV_CACHE_DIR`, `PIP_CACHE_DIR`, `PNPM_HOME` (pnpm's store), `npm_config_devdir` (node-gyp's
+  headers) and `PLAYWRIGHT_BROWSERS_PATH`, plus `UV_PYTHON_DOWNLOADS=never`. pnpm's metadata
+  cache needs no var: it stays read-only and pnpm skips writing it. The default caches feed code
+  that runs outside the sandbox.
   Plugin MCP servers start as `npx <pkg>@<version>` and run from `~/.npm/_npx/<hash>/`, which
   npx reuses without rechecking: with `~/.npm` writable, an edit from sandboxed Bash ran at the
   next launch (sandbox gap N1, 2026-10-25). Bun's global installs are hardlinks into
@@ -737,15 +737,26 @@ need nothing extra.
   (N3): unsandboxed installs and runs reuse what their caches hold. So every default is out of
   `allowWrite`, and `~/.cache/claude-sandbox` is the only entry. Unsandboxed commands keep the
   defaults: an excluded `claude -p` would otherwise pass the vars to its MCP servers, as a
-  settings `env` entry would. The first sandboxed install of a package, Python or browser
-  downloads it again; `allowedDomains` lists the download hosts (`releases.astral.sh`,
-  `nodejs.org`, `cdn.playwright.dev`, `playwright.download.prss.microsoft.com`). Playwright's
-  Chromium builds are the exception: they redirect to `storage.googleapis.com`, and allowing that
-  host would let sandboxed code upload to any public-write bucket. So install a Chromium revision
-  from a terminal, into the sandbox's dir:
-  `PLAYWRIGHT_BROWSERS_PATH=~/.cache/claude-sandbox/ms-playwright npx playwright install chromium`
-  (or `chromium-headless-shell`). A sandboxed npx
-  prints one `npm warn Unknown env config "devdir"` line: node-gyp reads its dir only from that
+  settings `env` entry would. The first sandboxed install of a package or browser downloads it
+  again; `allowedDomains` lists the download hosts (`nodejs.org`, `cdn.playwright.dev`,
+  `playwright.download.prss.microsoft.com`). Two things come from a terminal instead:
+  - **Pythons.** Sandboxed uv runs the ones uv installed for you, read-only, and never
+    downloads one, so no session can rewrite an interpreter another project's venv points at.
+    A version you lack fails with uv's own hint; run `uv python install <version>` in a
+    terminal.
+  - **Playwright's Chromium.** Its builds redirect to `storage.googleapis.com`, and allowing
+    that host would let sandboxed code upload to any public-write bucket. From a terminal, run
+    `PLAYWRIGHT_BROWSERS_PATH=~/.cache/claude-sandbox/ms-playwright npx playwright@<the
+    project's version> install chromium` (or `chromium-headless-shell`). The exact version
+    picks the revision the project's Playwright wants, and makes `bin/npx` run it outside the
+    project dir, so a project's own `node_modules/playwright` never runs there.
+
+  The shelf itself is shared: every sandboxed session can write `~/.cache/claude-sandbox`, so a
+  session in one project can tamper with a package another project's next sandboxed install
+  takes from it (npm checks hashes on each read; uv, pip, pnpm and bun don't). Copy mode keeps
+  uv and pnpm installs already made out of reach; bun's still hardlink. Treat what a sandboxed install built as sandbox-made,
+  whichever session built it, before running it from a terminal. A sandboxed npx prints one
+  `npm warn Unknown env config "devdir"` line: node-gyp reads its dir only from that
   npm-style var. Silent; fails open (errors go to
   `$XDG_STATE_HOME/dotclaude/sandbox-caches.log`), and a sandboxed install then gets a write
   error on the default cache.
