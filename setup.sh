@@ -226,7 +226,7 @@ if [[ -d "$HOME/.local/bin" ]]; then
              "$REPO_DIR"/skills/lanes/scripts/lane "$REPO_DIR"/skills/handoff/scripts/handoff-check \
              "$REPO_DIR"/skills/pass/scripts/pass-respawn \
              "$REPO_DIR"/skills/exam-prep/scripts/ed-pull; do
-    [[ -x "$exe" ]] || continue
+    [[ -f "$exe" && -x "$exe" ]] || continue  # a dir (bin/__pycache__) is -x too
     # Any other npx there is left alone and named; MCP launches then keep npx's project-dir
     # lookup (gap N2) until it moves.
     dst="$HOME/.local/bin/$(basename "$exe")"

@@ -278,6 +278,12 @@ class SetupLinksTheShim(unittest.TestCase):
         self.assertEqual(self.run_block(), "")
         self.assertEqual(os.readlink(self.dst), os.path.join(self.repo, "bin", "npx"))
 
+    def test_a_dir_in_bin_is_not_linked(self):
+        # Python leaves bin/__pycache__ behind; a dir passes -x.
+        os.makedirs(os.path.join(self.repo, "bin", "__pycache__"))
+        self.run_block()
+        self.assertFalse(os.path.lexists(os.path.join(os.path.dirname(self.dst), "__pycache__")))
+
     def test_an_npx_ahead_of_the_shim_on_path_is_named(self):
         # nvm, fnm, volta or Homebrew before ~/.local/bin: a bare npx never reaches the shim.
         manager = os.path.join(self.tmp, "nvm bin")
