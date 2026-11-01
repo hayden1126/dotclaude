@@ -17,7 +17,9 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      worktrees/<name>/commondir, not the main .git/ dir, so the common dir comes from git's real
      layout: a gitdir with a commondir file must sit at <common>/worktrees/<name> with its
      commondir naming that <common>, and <common> must hold no commondir. Any other layout, in
-     the cwd's repo or the project's, is refused. A git dir git might look past refuses
+     the cwd's repo or the project's, is refused. Pointer files (commondir, a gitfile, which
+     must start exactly `gitdir: `, and a worktree's gitdir) are read as git reads them, only
+     trailing LFs and CRs trimmed (read_pointer). A git dir git might look past refuses
      (looks_like_gitdir: a .git dir, or a dir with HEAD and refs/, objects/ or a commondir, that
      fails git's is_git_directory, a HEAD naming refs/... (after `ref:` and git's whitespace,
      which is only space, tab, CR and LF) or an object id and objects/ and refs/), at the
@@ -1214,8 +1216,7 @@ def gitdir_info(gitdir, at_root=False):
     pointer = os.path.join(gitdir, "commondir")
     if not os.path.lexists(pointer):
         return gitdir, gitdir
-    with open(pointer) as f:
-        common = os.path.realpath(os.path.join(gitdir, f.read().strip()))
+    common = os.path.realpath(os.path.join(gitdir, read_pointer(pointer)))
     parent = os.path.dirname(gitdir)
     if (at_root or os.path.basename(parent) != "worktrees"
             or common != os.path.dirname(parent)
@@ -1225,14 +1226,23 @@ def gitdir_info(gitdir, at_root=False):
     return gitdir, common
 
 
+def read_pointer(path):
+    """A git pointer file's text (commondir, a gitfile, a worktree's gitdir) as git 2.43 reads
+    it: the whole file, only trailing LFs and CRs trimmed, up to a NUL (git then uses it as a C
+    string). Leading and any other whitespace is part of the path."""
+    with open(path, "rb") as f:
+        data = f.read()
+    return os.fsdecode(data.rstrip(b"\r\n").split(b"\0", 1)[0])
+
+
 def read_gitfile(path, base=None):
     """The gitdir a gitfile names, a relative one joined to `base` (by default the gitfile's own
-    dir): git joins it to the dir of the path it opened, a symlink's dir and not its target's."""
-    with open(path) as f:
-        line = f.readline().strip()
-    if not line.startswith("gitdir:"):
+    dir): git joins it to the dir of the path it opened, a symlink's dir and not its target's.
+    git wants exactly `gitdir: ` first and takes the rest as the path (read_pointer)."""
+    text = read_pointer(path)
+    if not text.startswith("gitdir: ") or text == "gitdir: ":
         raise ValueError(f"invalid gitfile {path}")
-    target = line[len("gitdir:"):].strip()
+    target = text[len("gitdir: "):]
     return os.path.join(os.path.dirname(path) if base is None else base, target)
 
 
@@ -1254,8 +1264,7 @@ def worktree_top(top, proj):
         return os.path.realpath(dotgit) == proj[1]
     try:
         gitdir = os.path.realpath(read_gitfile(dotgit))
-        with open(os.path.join(gitdir, "gitdir")) as f:
-            back = os.path.realpath(os.path.join(gitdir, f.read().strip()))
+        back = os.path.realpath(os.path.join(gitdir, read_pointer(os.path.join(gitdir, "gitdir"))))
     except (OSError, ValueError):
         return False
     return os.path.dirname(gitdir) == os.path.join(proj[1], "worktrees") and back == dotgit
@@ -1289,8 +1298,7 @@ def is_git_directory(d, env, start):
         return False
     common, pointer = d, os.path.join(d, "commondir")
     if os.path.exists(pointer):
-        with open(pointer) as f:
-            common = os.path.join(d, f.read().strip())
+        common = os.path.join(d, read_pointer(pointer))
     objects = env.get("GIT_OBJECT_DIRECTORY")
     objects = os.path.join(start, objects) if objects else os.path.join(common, "objects")
     return os.access(objects, os.X_OK) and os.access(os.path.join(common, "refs"), os.X_OK)

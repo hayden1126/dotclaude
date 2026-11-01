@@ -1091,6 +1091,47 @@ class Rule1Layout(Guard):
         self.env["CLAUDE_PROJECT_DIR"] = self.proj
         self.assertIn("unexpected layout", self.denied("git push", "rule1", gitdir))
 
+    def test_pointer_files_are_trimmed_as_git_trims_them(self):
+        # git trims only a trailing LF or CR from commondir and a gitfile's `gitdir: ` value,
+        # and wants exactly `gitdir: `; any other whitespace is part of the path (review
+        # round 3). git's verdict is checked alongside.
+        lane_gitdir = os.path.join(self.proj, ".git", "worktrees", "lane")
+        commondir = os.path.join(lane_gitdir, "commondir")
+        gitfile = os.path.join(self.lane, ".git")
+        back = os.path.join(lane_gitdir, "gitdir")
+        originals = {p: slurp(p) for p in (commondir, gitfile, back)}
+        cases = [(commondir, "../..\r\n", True), (commondir, " ../..\n", False),
+                 (commondir, "../..\t\n", False), (gitfile, f"gitdir: {lane_gitdir}\r\n", True),
+                 (gitfile, f"gitdir:  {lane_gitdir}\n", False),
+                 (gitfile, f"gitdir:{lane_gitdir}\n", False),
+                 (gitfile, f"gitdir: {lane_gitdir}\nmore\n", False)]
+        for path, text, works in cases:
+            with self.subTest(path=os.path.basename(path), text=text):
+                self.write(path, text)
+                p = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-dir"],
+                                   cwd=self.lane, capture_output=True, text=True,
+                                   env={"PATH": "/usr/bin:/bin", "HOME": self.home,
+                                        "GIT_CEILING_DIRECTORIES": self.tmp})
+                # git finds the lane's gitdir, or none (it looks past a broken one, or dies).
+                self.assertEqual(p.stdout.strip() == lane_gitdir, works, p.stdout + p.stderr)
+                self.env["CLAUDE_PROJECT_DIR"] = self.lane
+                try:
+                    out = self.fire("git push", cwd=self.lane)  # any refusal: git dies or skips
+                    self.assertEqual(out is None, works, out)
+                finally:
+                    self.write(path, originals[path])
+        # The worktree's back pointer, which marks a worktree top of the project's common dir
+        # (worktree_top), is trimmed the same way: from the main checkout's session, a lane
+        # whose pointer reads otherwise is judged along its .git, which is writable here.
+        self.env["CLAUDE_PROJECT_DIR"] = self.proj
+        for text, works in ((gitfile + "\r\n", True), (" " + gitfile + "\n", False)):
+            with self.subTest(back=text):
+                self.write(back, text)
+                if works:
+                    self.allowed("git push", cwd=self.lane)
+                else:
+                    self.denied("git push", "rule1", cwd=self.lane)
+
     def test_a_lane_commondir_naming_another_dir_is_refused(self):
         other = self.mkdir("other")
         self.git("init", "-q", other, cwd=self.tmp)
