@@ -70,31 +70,37 @@ From a terminal:
    (without that flag the list includes system Pythons); `uv tool list --show-with
    --show-version-specifiers --show-extras --show-python` (for a tool installed from git or a
    local path, copy its source from `~/.local/share/uv/tools/<tool>/uv-receipt.toml`); `pnpm
-   ls -g`; `npm ls -g --depth=0`; `pip list --user --format=freeze`; `pipx list`. Check where
-   pnpm and uv themselves live: if `head -3 "$(command -v pnpm)"` names a path under
-   `~/.local/share/pnpm` (how `pnpm self-update` and `pnpm add -g pnpm` install it, as a script,
-   not a link), or `readlink -f "$(command -v uv)"` resolves under `~/.local/share/uv`, step 2
-   deletes it: reinstall it from its own installer (corepack or pnpm's, uv's) before step 3.
+   ls -g`; `npm ls -g --depth=0`; `python3 -m pip list --user --format=freeze`; `pipx list`;
+   and pipx's shared dir, `pipx environment --value PIPX_SHARED_LIBS` (older pipx: read it off
+   `pipx environment`; it moves with the pipx version and PIPX_HOME). Check where the tools
+   themselves live, since step 2 can delete them: pnpm if `head -3 "$(command -v pnpm)"` names
+   a path under `~/.local/share/pnpm` (how `pnpm self-update` and `pnpm add -g pnpm` install
+   it, as a script, not a link); uv if `readlink -f "$(command -v uv)"` resolves under
+   `~/.local/share/uv`. Reinstall such a tool from its own installer (corepack or pnpm's,
+   uv's) before step 3. npm and corepack come with Node and stay: if you ever upgraded npm with
+   `npm install -g npm`, that npm was built from `~/.npm`, so reinstall Node itself instead.
 2. With no Claude session open (plugin MCP servers run from `~/.npm/_npx`, and deleting a live
-   tree breaks them), delete, by path (not through `uv cache clean`, `pip cache purge` or `pnpm store path`,
-   which clear only the cache now configured, and for pnpm only its current version's folder):
-   `rm -rf ~/.npm ~/.cache/uv ~/.cache/pip ~/.cache/pnpm ~/.cache/node-gyp
+   tree breaks them), delete, by path (not through `uv cache clean`, `pip cache purge` or `pnpm
+   store path`, which clear only the cache now configured, and for pnpm only its current
+   version's folder): `rm -rf ~/.npm ~/.cache/uv ~/.cache/pip ~/.cache/pnpm ~/.cache/node-gyp
    ~/.cache/ms-playwright ~/.local/share/uv/python ~/.local/share/uv/tools
-   ~/.local/share/pnpm/store ~/.local/share/pnpm/global ~/.local/share/pnpm/.tools
-   ~/.local/share/pipx/shared`. Then uninstall npm's globals (`npm uninstall -g <each>`, with
-   sudo when `npm prefix -g` is system-owned) and pip's `--user` packages (`pip uninstall
-   <each>`), and delete every environment built through those dirs: each project's `.venv`,
+   ~/.local/share/pnpm/store ~/.local/share/pnpm/global ~/.local/share/pnpm/.tools <pipx's
+   shared dir>`. Then uninstall npm's globals except npm and corepack (`npm uninstall -g
+   <each>`, with sudo when `npm prefix -g` is system-owned) and pip's `--user` packages
+   (`python3 -m pip uninstall <each>`, adding `--break-system-packages` where a distro Python
+   refuses), and delete every environment built through those dirs: each project's `.venv`,
    `venv` and `node_modules`, and tool envs such as `.tox`, `~/.cache/pre-commit`, poetry's
    and hatch's envs and Jupyter kernels' venvs. Leave pipx's own venvs: `pipx reinstall-all`
    reads them, then builds each anew, and builds its shared pip fresh once that dir is gone.
    `~/.npm` holds npm's download cache and the trees npx reuses; `~/.cache/pnpm` pnpm's
    metadata and the trees `pnpm dlx` reuses; node-gyp's headers reached every native addon
    npm or pnpm built.
-3. Install fresh: `uv python install <the versions>`, `uv tool install` each tool with what
-   step 1 noted, `pnpm add -g` and `npm install -g` the globals, `pip install --user` the
-   `--user` packages, `pipx reinstall-all`, each project's environment (`uv sync`, `pnpm
-   install`, `npm ci`, a new venv) and each tool env above, and Playwright's browsers: `npx
-   playwright@<each project's version> install chromium-headless-shell`.
+3. Install fresh, npm's globals first (pnpm may be one of them): `npm install -g` the globals,
+   `pnpm add -g` pnpm's, `uv python install <the versions>`, `uv tool install` each tool with
+   what step 1 noted, `python3 -m pip install --user` the `--user` packages, `pipx
+   reinstall-all`, each project's environment (`uv sync`, `pnpm install`, `npm ci`, a new venv)
+   and each tool env above, and Playwright's browsers: `npx playwright@<each project's
+   version> install chromium-headless-shell`.
 
 A project you'd rather not rebuild can be un-linked instead (`cache-unlink --apply <dir>`): that
 ends its links into the caches but keeps the bytes, so it can't undo an edit made before.
