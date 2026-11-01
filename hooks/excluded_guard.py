@@ -65,7 +65,7 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      url.<base>.insteadOf or pushInsteadOf whose base is a local path is refused: git appends
      the rest of the original URL to it. A URL's own repo doesn't have its URLs judged. git
      fetch, pull and push, and gh pr checkout, gh pr merge, gh issue develop and gh pr create
-     (which run them), recurse into each submodule's own git dir (G-B). A git call whose last
+     (which run them; gh's aliases pr co and pr new too), recurse into each submodule's own git dir (G-B). A git call whose last
      --[no-]recurse-submodules flag (any prefix git takes, as git_argv resolves it, one source
      for check_git_words and check_recursion) turns recursion on is refused, one whose last
      flag turns it off passes, and with no flag it is refused unless the effective config has
@@ -1658,6 +1658,8 @@ PUSH_FIX = ("Unset push.recurseSubmodules and submodule.recurse, or set the one 
 GH_GIT_FORMS = {("pr", "checkout"): ("pull", "git fetch and git checkout"),
                 ("pr", "merge"): ("pull", "git pull"), ("issue", "develop"): ("pull", "git pull"),
                 ("pr", "create"): ("push", "git push")}
+# gh 2.89's built-in aliases of those forms (`Aliases:` in pkg/cmd/pr and pkg/cmd/issue).
+GH_ALIASES = {("pr", "co"): ("pr", "checkout"), ("pr", "new"): ("pr", "create")}
 # The values Go's strconv.ParseBool reads as false, as gh's flag parser takes `--flag=v`. Only
 # `--recurse-submodules=<one of these>` leaves gh pr checkout's submodule update off; any other
 # value is true or an error.
@@ -1828,10 +1830,11 @@ def check_recursion(m, env, cwd, words):
                 skip = True
             elif not w.startswith("-"):
                 positional.append(w)
-        sub, runs = GH_GIT_FORMS.get(tuple(positional[:2]), (None, None))
+        form = GH_ALIASES.get(tuple(positional[:2]), tuple(positional[:2]))
+        sub, runs = GH_GIT_FORMS.get(form, (None, None))
         if not sub:
             return
-        name = f"gh {' '.join(positional[:2])}"
+        name = f"gh {' '.join(form)}"
         recurse = [w for w in words if w.startswith("--recurse-submodules")
                    and w.partition("=")[2] not in GO_FALSE]
         if name == "gh pr checkout" and recurse:

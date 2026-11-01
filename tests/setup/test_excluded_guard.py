@@ -1458,6 +1458,16 @@ class SubmoduleRecursion(Guard):
             with self.subTest(call=call):
                 self.allowed(call)
 
+    def test_ghs_built_in_aliases_are_judged_as_their_commands(self):
+        # gh 2.89's pr create takes the alias `new` and pr checkout `co` (Aliases: in
+        # pkg/cmd/pr); no other form here has one.
+        self.assertIn("submodule", self.denied("gh pr co 5", "rule1"))
+        self.assertIn("--recurse-submodules",
+                      self.denied("gh pr co --recurse-submodules 5", "rule1"))
+        self.write(self.gitconfig, RECURSE_OFF + "[push]\n\trecurseSubmodules = check\n")
+        self.assertIn("push.recurseSubmodules", self.denied("gh pr new --fill", "rule1"))
+        self.allowed("gh pr co 5")
+
     def test_pull_also_needs_submodule_recurse_off(self):
         # pull updates each submodule after the merge when submodule.recurse is on, whatever
         # fetch.recurseSubmodules says.

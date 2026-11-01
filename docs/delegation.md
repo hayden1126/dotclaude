@@ -328,7 +328,7 @@ For a match it refuses, naming the path, when:
    `url.<base>.insteadOf` or `pushInsteadOf` whose base is a local path is refused: git appends
    the rest of the original URL to the base, so use a network base. `git fetch`, `pull` and
    `push`, and `gh pr checkout`, `gh pr merge`, `gh issue develop` and `gh pr create` (which run
-   them), run git in each submodule's own git dir (G-B). A git call whose last
+   them; gh's built-in aliases `gh pr co` and `gh pr new` too), run git in each submodule's own git dir (G-B). A git call whose last
    `--[no-]recurse-submodules` flag (any prefix git takes: pull reads `--rec` as
    `--recurse-submodules`) turns recursion on is refused, one whose last flag turns it off
    passes, and with no flag it is refused unless the effective config has recursion off. For
