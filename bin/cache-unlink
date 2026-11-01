@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Find, and on request un-link, project files that are hardlinks into a shared package cache.
 
 uv and pnpm (and bun) install a project's packages as hardlinks into their shared cache, so the

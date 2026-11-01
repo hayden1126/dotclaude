@@ -63,10 +63,12 @@ passes. On Windows (git-bash), which has no Bash sandbox, setup skips copy mode.
 `~/.local/share/uv/python` and pnpm's store directly, and unsandboxed runs still use what they
 hold, or what was built from them. Setup says so on every run, once the settings it replaced had
 those entries, until you remove the marker it names (an `allowWrite` entry for one of them left in
-`settings.machine.json` keeps the gap open: remove it there and rerun `./setup.sh` before the
-rebuild). Checking the caches can't clear them: the sandbox could write their checksum files too,
-so only a rebuild does. The rule, from a terminal with no Claude session open (plugin MCP servers
-run from `~/.npm/_npx`):
+`settings.machine.json` keeps the gap open: remove it there now, and rerun `./setup.sh` after the
+rebuild, before the next Claude session, since setup runs `claude` and bun). Checking the caches
+can't clear them: the sandbox could write their checksum files too, so only a rebuild does. A
+rebuild stops what runs from them; it can't undo what a planted file already did elsewhere, so a
+sign of tampering means treating the machine as compromised. The rule, from a terminal with no
+Claude session open (plugin MCP servers run from `~/.npm/_npx`):
 - **Note** what you'll put back (your global packages, uv's Pythons and tools, pipx apps, `--user`
   packages, Playwright's browsers) from the files, not by running the tools: a planted npm or pip
   runs at `npm ls -g` too. Look in the global `node_modules`, `~/.local/share/uv/tools` and
@@ -87,10 +89,10 @@ run from `~/.npm/_npx`):
   runs whatever was planted there, its own uninstall included. **Then put the installers back
   from their own sources** (Node with its npm, uv, pnpm, bun, pip, pipx), before the next step.
 - **Delete, then rebuild, everything built through them**: uv's tool envs, npm's, pnpm's, bun's
-  and pip's global and `--user` packages, pipx's shared pip and its apps (`pipx reinstall-all`
-  once the shared dir is gone), each project's `.venv`, `venv` and `node_modules`, and tool envs
-  such as `.tox`, pre-commit's, poetry's and Jupyter kernels'. A reinstall over an old one isn't
-  enough: it keeps files it doesn't track.
+  and pip's global and `--user` packages, pipx's shared pip and its apps (delete its shared dir,
+  then run `pipx reinstall-all`, which removes and recreates each app's venv), each project's
+  `.venv`, `venv` and `node_modules`, and tool envs such as `.tox`, pre-commit's, poetry's and
+  Jupyter kernels'. A reinstall over an old one isn't enough: it keeps files it doesn't track.
 
 This can't list every tool on every machine; the rule covers the rest. Skipping the rebuild for a
 project keeps whatever was planted in it: `cache-unlink --apply <dir>` only ends its links into

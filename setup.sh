@@ -184,19 +184,24 @@ except Exception:
 old = ("~/.npm", "~/.bun/install/cache", "~/.cache/uv", "~/.cache/pip", "~/.cache/pnpm", "~/.cache/node-gyp",
        "~/.cache/ms-playwright", "~/.local/share/uv", "~/.local/share/pnpm")
 home = os.path.expanduser("~").rstrip("/")
-for p in (p for p in allow if isinstance(p, str)):
+for entry in (e for e in allow if isinstance(e, str)):
+    p = entry[1:] if entry.startswith("//") else entry  # `//abs` is an absolute spelling
     p = p.rstrip("/") or "/"
+    if p.startswith("/") and home.startswith(p.rstrip("/") + "/"):
+        p = "~"  # a parent of home reopens every cache
     for h in (home, "$HOME"):  # an overlay may spell home out
         if h and (p == h or p.startswith(h + "/")):
             p = "~" + p[len(h):]
             break
     if any(p == o or p.startswith(o + "/") or o.startswith(p + "/") for o in old):
-        print(1)
+        # The entry itself, on one line, so the warning can name it.
+        print("".join(c if c.isprintable() else "?" for c in entry), end="")
         break
 PY
 }
 old_cache_writes="$(old_cache_check)"
-[[ -z $old_cache_writes ]] || { mkdir -p "$STATE_DIR" && : >"$STATE_DIR/rebuild-caches-pending"; } \
+[[ -z $old_cache_writes ]] \
+  || { mkdir -p "$STATE_DIR" && printf '%s\n' "$old_cache_writes" >"$STATE_DIR/rebuild-caches-pending"; } \
   || warn "can't write $STATE_DIR/rebuild-caches-pending: the older install's caches need a rebuild (README, \"Upgrading from an older install\")"
 MERGED_SETTINGS="$(mktemp)"  # section 1's exit trap removes it
 chmod 644 "$MERGED_SETTINGS"  # mktemp's 0600 would carry over to the installed copy
@@ -601,12 +606,16 @@ case "$(uname -s)" in
       [[ -z $pnpm_import || $pnpm_import == copy ]] \
         || warn "pnpm reads package-import-method as $pnpm_import, not copy (set in ~/.npmrc, or a config dir this missed): its installs can hardlink to the shared cache"
     fi
-    [[ -z $copy_mode_new ]] \
-      || warn "copy mode is new here: uv and pnpm installs made before it still share files with their caches. List them with \`cache-unlink <your project dirs>\`, then rerun it with --apply"
-    # Section 2's marker, from the settings a run replaced.
+    # Section 2's marker, from the settings a run replaced. While it stands, the rebuild replaces
+    # every project env (fresh installs, in copy mode), so the cache-unlink hint would only
+    # send the user to a tool first.
     rebuild_marker="${STATE_DIR:-}/rebuild-caches-pending"
-    [[ -z ${STATE_DIR:-} || ! -e $rebuild_marker ]] \
-      || warn "an older install let the sandbox write the package caches, uv's Pythons or Playwright's browsers, and unsandboxed runs still use them: rebuild them once (README, \"Upgrading from an older install\"), then rm $rebuild_marker"
+    if [[ -n ${STATE_DIR:-} && -e $rebuild_marker ]]; then
+      rebuild_entry="$(head -c 300 "$rebuild_marker" | head -n 1 | tr -cd '[:print:]')" || rebuild_entry=""
+      warn "an older install let the sandbox write the package caches, uv's Pythons or Playwright's browsers${rebuild_entry:+ (allowWrite entry $rebuild_entry; if settings.machine.json has it, remove it there)}, and unsandboxed runs still use them: rebuild them once (README, \"Upgrading from an older install\"), then rm $rebuild_marker"
+    elif [[ -n $copy_mode_new ]]; then
+      warn "copy mode is new here: uv and pnpm installs made before it still share files with their caches. List them with \`cache-unlink <your project dirs>\`, then rerun it with --apply"
+    fi
     ;;
 esac
 

@@ -130,6 +130,15 @@ class CopyMode(unittest.TestCase):
         with open(os.path.join(REPO, "README.md")) as f:
             self.assertIn("**Upgrading from an older install.**", f.read())
 
+    def test_a_pending_rebuild_names_the_entry_and_drops_the_unlink_hint(self):
+        # Rebuilt projects install fresh in copy mode, so cache-unlink would only come first.
+        state = os.path.join(self.tmp, "state")
+        self.write(os.path.join(state, "rebuild-caches-pending"), "~/.cache/uv\n")
+        err = self.run_section(STATE_DIR=state)
+        self.assertIn(REBUILD, err)
+        self.assertIn("~/.cache/uv", err)
+        self.assertFalse(self.hinted)
+
     def test_a_rerun_adds_nothing(self):
         self.run_section()
         self.run_section()
@@ -287,8 +296,13 @@ class OlderInstallCheck(unittest.TestCase):
                            capture_output=True, text=True, timeout=10,
                            env=dict(os.environ, CLAUDE_DIR=tmp, STATE_DIR=state))
         self.assertEqual((p.returncode, p.stderr), (0, ""))
-        marker = os.path.exists(os.path.join(state, "rebuild-caches-pending"))
-        self.assertEqual(marker, p.stdout == "1")
+        marker = os.path.join(state, "rebuild-caches-pending")
+        if p.stdout:
+            # The marker names the entry, so the warning can point at it.
+            with open(marker) as f:
+                self.assertEqual(f.read(), p.stdout + "\n")
+        else:
+            self.assertFalse(os.path.exists(marker))
         return p.stdout
 
     def allow(self, *paths):
@@ -297,12 +311,14 @@ class OlderInstallCheck(unittest.TestCase):
     def test_an_old_cache_entry_marks_an_older_install(self):
         for entry in ("~/.npm", "~/.cache/uv", "~/.cache/ms-playwright/", "~/.local/share/uv/python",
                       "~/.local/share/pnpm/store", "~/.cache", "~"):
-            self.assertEqual(self.check(self.allow("~/.cache/claude-sandbox", entry)), "1", entry)
+            self.assertEqual(self.check(self.allow("~/.cache/claude-sandbox", entry)), entry, entry)
 
     def test_an_absolute_spelling_counts_too(self):
         home = os.path.expanduser("~")
-        for entry in (home + "/.npm", home + "/.cache/", home, "$HOME/.cache/pip"):
-            self.assertEqual(self.check(self.allow(entry)), "1", entry)
+        # A parent of home reopens every cache too; `//` is an absolute spelling.
+        for entry in (home + "/.npm", home + "/.cache/", home, "$HOME/.cache/pip", "/",
+                      os.path.dirname(home), "//" + home.lstrip("/") + "/.npm"):
+            self.assertEqual(self.check(self.allow(entry)), entry, entry)
         for entry in (home + "/.cache/claude-sandbox", home + "x/.npm", "/opt/.npm"):
             self.assertEqual(self.check(self.allow(entry)), "", entry)
 
