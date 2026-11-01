@@ -170,6 +170,40 @@ copy_managed() {
 # kept; a live value the baseline overrides is named on stderr. Installed from a checkout other
 # than ~/dotclaude (a lane), that checkout's copies of the write-protected paths join denyWrite.
 # Without an overlay, such a key or another checkout, the baseline is copied byte for byte.
+# Before the copy replaces it: did the installed settings let the sandbox write the package
+# caches, uv's Pythons or Playwright's browsers (an older dotclaude)? Then a marker in the state
+# dir has section 6 point to the rebuild step on every run until Hayden removes it: the copy
+# below erases the evidence, so a run stopped before section 6 must not lose the hint.
+old_cache_check() {
+  python3 -I - "$CLAUDE_DIR/settings.json" 2>/dev/null <<'PY' || true
+import json, os, sys
+try:
+    allow = json.load(open(sys.argv[1]))["sandbox"]["filesystem"]["allowWrite"]
+except Exception:
+    sys.exit()
+old = ("~/.npm", "~/.bun/install/cache", "~/.cache/uv", "~/.cache/pip", "~/.cache/pnpm", "~/.cache/node-gyp",
+       "~/.cache/ms-playwright", "~/.local/share/uv", "~/.local/share/pnpm")
+home = os.path.expanduser("~").rstrip("/")
+for entry in (e for e in allow if isinstance(e, str) and e):
+    p = entry[1:] if entry.startswith("//") else entry  # `//abs` is an absolute spelling
+    p = p.rstrip("/") or "/"
+    if p.startswith("/") and home.startswith(p.rstrip("/") + "/"):
+        p = "~"  # a parent of home reopens every cache
+    for h in (home, "$HOME"):  # an overlay may spell home out
+        if h and (p == h or p.startswith(h + "/")):
+            p = "~" + p[len(h):]
+            break
+    if any(p == o or p.startswith(o + "/") or o.startswith(p + "/") for o in old):
+        # The entry itself, on one line of printable ASCII (any locale can print it, and the
+        # warning's byte-wise filter keeps it whole), so the warning can name it.
+        print("".join(c if " " <= c <= "~" else "?" for c in entry), end="")
+        break
+PY
+}
+old_cache_writes="$(old_cache_check)"
+[[ -z $old_cache_writes ]] \
+  || { mkdir -p "$STATE_DIR" && printf '%s\n' "$old_cache_writes" >"$STATE_DIR/rebuild-caches-pending"; } \
+  || warn "can't write $STATE_DIR/rebuild-caches-pending: the older install's caches need a rebuild (README, \"Upgrading from an older install\")"
 MERGED_SETTINGS="$(mktemp)"  # section 1's exit trap removes it
 chmod 644 "$MERGED_SETTINGS"  # mktemp's 0600 would carry over to the installed copy
 python3 -I "$REPO_DIR/merge-settings.py" --checkout "$REPO_DIR" "$REPO_DIR/settings.json" \
@@ -209,15 +243,42 @@ done
 # bin/ (claude-file-history). Opt-in by directory: if ~/.local/bin does not exist,
 # each still works via its absolute path.
 if [[ -d "$HOME/.local/bin" ]]; then
+  # With npm's prefix at ~/.local, ~/.local/bin/npx is npm's own: the shim would take its place
+  # and find no npx behind it. So npx goes in only where nothing is, or where the shim already
+  # is: a link into a checkout (bin/npx beside hooks/sandbox-caches.sh), a dangling link (a
+  # closed lane's, which section 7 would prune, leaving no shim), or a copy (git-bash, where
+  # ln -s copies), known by its marker line.
+  npx_slot_is_ours() {
+    [[ -e $1 || -L $1 ]] || return 0
+    [[ -L $1 && ! -e $1 ]] && return 0
+    [[ -f "$(dirname "$(readlink -f "$1")")/../hooks/sandbox-caches.sh" ]] && return 0
+    grep -qF dotclaude-npx-shim "$1" 2>/dev/null
+  }
   chmod +x "$REPO_DIR"/bin/* 2>/dev/null || true
   for exe in "$REPO_DIR"/bin/* "$REPO_DIR"/skills/*/scripts/deckkit \
              "$REPO_DIR"/skills/delegation/scripts/{codex-delegate,delegation-ledger,gh-public} \
              "$REPO_DIR"/skills/lanes/scripts/lane "$REPO_DIR"/skills/handoff/scripts/handoff-check \
              "$REPO_DIR"/skills/pass/scripts/pass-respawn \
              "$REPO_DIR"/skills/exam-prep/scripts/ed-pull; do
-    [[ -x "$exe" ]] || continue
-    link "$exe" "$HOME/.local/bin/$(basename "$exe")"
+    [[ -f "$exe" && -x "$exe" ]] || continue  # a dir (bin/__pycache__) is -x too
+    # Any other npx there is left alone and named; MCP launches then keep npx's project-dir
+    # lookup (gap N2) until it moves.
+    dst="$HOME/.local/bin/$(basename "$exe")"
+    if [[ $(basename "$exe") == npx ]] && ! npx_slot_is_ours "$dst"; then
+      warn "$dst isn't dotclaude's (npm's own, with npm's prefix at ~/.local?): left alone, so MCP servers still start with npx's project-dir lookup. Set npm's prefix elsewhere, then rerun setup"
+      continue
+    fi
+    link "$exe" "$dst"
   done
+  # The shim works only ahead of the real npx on PATH; a version manager (nvm, fnm, volta) or
+  # Homebrew listed before ~/.local/bin wins, and MCP servers then start with npx's project-dir
+  # lookup (gap N2). This run's PATH stands in for the one Claude Code inherits.
+  npx_dst="$HOME/.local/bin/npx"
+  if [[ -L $npx_dst && $(readlink "$npx_dst") == "$REPO_DIR/bin/npx" ]]; then
+    npx_first="$(command -v npx 2>/dev/null || true)"
+    [[ $npx_first -ef $npx_dst ]] \
+      || warn "npx on PATH is ${npx_first:-none}, not the shim at $npx_dst: MCP servers still start with npx's project-dir lookup. Put ~/.local/bin ahead of it on PATH"
+  fi
 fi
 
 # templates/ — per-file (SPEC/PLAN/STATUS/LANE scaffolds for full-track work)
@@ -465,7 +526,114 @@ if [[ "$(uname -s)" == "Linux" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 6. Stale links and plugin changes
+# 6. Copy mode for uv and pnpm installs (~/.config/uv/uv.toml, ~/.config/pnpm/rc)
+# ---------------------------------------------------------------------------
+# uv and pnpm hardlink a project's packages to their shared cache, so a sandboxed session working
+# in a project installed outside the sandbox could edit a cache file in place through the
+# project's copy, and later installs of that package anywhere would get the edit (sandbox gap
+# N3). Copy mode gives each project files of its own. A project's own setting beats the user
+# file, but a project that sets it controls its install anyway (its scripts, its build backend).
+# A value the file already sets stays, named on stderr. bun has no such setting, only
+# `bun install --backend=copyfile`. Copy mode covers new installs only: the run that first sets
+# it points to bin/cache-unlink, which finds and un-links the installs made before, unless a
+# rebuild is pending (the rebuild replaces those installs).
+
+# Put LINE at the top of FILE (above any [table], where a TOML key would belong to the table)
+# unless the top level already sets KEY. Written in place, so a linked file stays a link. A
+# table that sets KEY to another value (uv's [pip]) is named, and kept. A file it can't read or
+# write is named and skipped, so the rest of setup still runs. Sets copy_mode_new on a write.
+copy_mode_new=""
+set_top_key() {
+  local file="$1" key="$2" line="$3" want="$4" sets top="" t rest target
+  if [[ ! -e $file && ! -L $file ]]; then
+    if mkdir -p "$(dirname "$file")" && printf '%s\n' "$line" > "$file"; then
+      say "set $key in $file"
+      copy_mode_new=1
+    else
+      warn "can't create $file: $key not set"
+    fi
+    return
+  fi
+  [[ -f $file && -r $file && -w $file ]] || { warn "can't read or write $file: $key not set"; return; }
+  # One line per place that sets KEY: "=value" at the top level, "table=value" in a table. A
+  # quoted key counts, and a trailing comment is not part of the value.
+  sets="$(awk -v k="$key" '
+    /^[[:space:]]*\[/ { t = $0; sub(/^[[:space:]]*\[+[[:space:]]*/, "", t); sub(/[[:space:]]*\].*$/, "", t); next }
+    {
+      l = $0; sub(/^[[:space:]]+/, "", l); q = substr(l, 1, 1)
+      if (q == "\"" || q == "'\''") {
+        if (substr(l, length(k) + 2, 1) != q) next
+        l = substr(l, 2, length(k)) substr(l, length(k) + 3)
+      }
+      if (index(l, k) != 1 || substr(l, length(k) + 1) !~ /^[[:space:]]*=/) next
+      v = substr(l, length(k) + 1); sub(/^[[:space:]]*=[[:space:]]*/, "", v)
+      sub(/[[:space:]]*[#;].*$/, "", v); gsub(/["'\''[:space:]]/, "", v)
+      print t "=" v
+    }' "$file")"
+  while IFS= read -r t; do
+    if [[ $t == =* ]]; then
+      [[ -n $top ]] || top="${t#=}"
+    elif [[ -n $t && ${t#*=} != "$want" ]]; then
+      warn "$file sets $key to ${t#*=} in [${t%%=*}], kept: those installs can hardlink to the shared cache"
+    fi
+  done <<<"$sets"
+  if [[ -n $top ]]; then
+    [[ $top == "$want" ]] \
+      || warn "$file sets $key to $top, kept: installs there can hardlink to the shared cache"
+    return
+  fi
+  # Written to a copy beside the real file (cp -p keeps its mode), then renamed over it: a
+  # failed write (disk full) leaves the old file whole, and a link stays a link.
+  # The newline goes on in its own step: bash versions differ on $'\n' inside "${v:+...}".
+  rest="$(cat "$file")"
+  [[ -z $rest ]] || rest+=$'\n'
+  target="$(readlink -f "$file")"
+  if cp -p "$target" "$target.setup.$$" \
+     && printf '%s\n%s' "$line" "$rest" > "$target.setup.$$" \
+     && mv -f "$target.setup.$$" "$target"; then
+    say "set $key in $file"
+    copy_mode_new=1
+  else
+    rm -f "$target.setup.$$"
+    warn "can't write $file: $key not set"
+  fi
+}
+
+# Windows (git-bash) has no Bash sandbox to write a project, so copy mode buys nothing there (and
+# its config dirs are APPDATA's, not these).
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) say "copy mode skipped: no Bash sandbox on Windows" ;;
+  *)
+    config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+    set_top_key "$config_home/uv/uv.toml" link-mode 'link-mode = "copy"' copy
+    # pnpm's global rc is in XDG_CONFIG_HOME when that is set, else ~/Library/Preferences on
+    # macOS and ~/.config elsewhere.
+    pnpm_dir="$config_home/pnpm"
+    [[ -z ${XDG_CONFIG_HOME:-} && $(uname -s) == Darwin ]] && pnpm_dir="$HOME/Library/Preferences/pnpm"
+    set_top_key "$pnpm_dir/rc" package-import-method package-import-method=copy copy
+    # Then ask pnpm itself, from /, so no project's .npmrc counts: a ~/.npmrc or an OS path this
+    # missed would show here. COREPACK_ENABLE_NETWORK=0 stops a corepack pnpm downloading one.
+    if command -v pnpm >/dev/null 2>&1; then
+      pnpm_import="$(cd / && COREPACK_ENABLE_NETWORK=0 pnpm config get package-import-method \
+        </dev/null 2>/dev/null)" || pnpm_import=""
+      [[ -z $pnpm_import || $pnpm_import == copy ]] \
+        || warn "pnpm reads package-import-method as $pnpm_import, not copy (set in ~/.npmrc, or a config dir this missed): its installs can hardlink to the shared cache"
+    fi
+    # Section 2's marker, from the settings a run replaced. While it stands, the rebuild replaces
+    # every project env (fresh installs, in copy mode), so the cache-unlink hint would only
+    # send the user to a tool first.
+    rebuild_marker="${STATE_DIR:-}/rebuild-caches-pending"
+    if [[ -n ${STATE_DIR:-} && -e $rebuild_marker ]]; then
+      rebuild_entry="$(head -c 300 "$rebuild_marker" | head -n 1 | tr -cd '[:print:]')" || rebuild_entry=""
+      warn "an older install let the sandbox write the package caches, uv's Pythons or Playwright's browsers${rebuild_entry:+ (allowWrite entry $rebuild_entry; if settings.machine.json has it, remove it there)}, and unsandboxed runs still use them: rebuild them once (README, \"Upgrading from an older install\"), rerun ./setup.sh, then rm $rebuild_marker"
+    elif [[ -n $copy_mode_new ]]; then
+      warn "copy mode is new here: uv and pnpm installs made before it still share files with their caches. List them with \`cache-unlink <your project dirs>\`, then rerun it with --apply"
+    fi
+    ;;
+esac
+
+# ---------------------------------------------------------------------------
+# 7. Stale links and plugin changes
 # ---------------------------------------------------------------------------
 # After the last link: remove the managed links this run didn't replace that point into another
 # live lane worktree (a file only that lane has), and the dangling ones into this checkout or
@@ -485,7 +653,7 @@ python3 -I "$REPO_DIR/hooks/excluded_guard.py" --scan \
   || warn "the excluded-command guard would refuse the calls above: look at each dir, fix each as the scan says (most by pasting the settings.machine.json it printed), and rerun setup where its last line says"
 
 # ---------------------------------------------------------------------------
-# 7. Final checklist
+# 8. Final checklist
 # ---------------------------------------------------------------------------
 cat <<'EOF'
 

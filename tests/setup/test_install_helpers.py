@@ -747,7 +747,9 @@ class SetupWiring(unittest.TestCase):
                       calls["setup.sh"])
         self.assertIn('python3 -I "$REPO_DIR/install-state.py" plugins '
                       '|| warn "the plugin change check failed (see above)"', calls["setup.sh"])
-        self.assertEqual(len(calls["setup.sh"]), 12)
+        self.assertIn('python3 -I - "$CLAUDE_DIR/settings.json" 2>/dev/null <<\'PY\' || true',
+                      calls["setup.sh"])  # section 2's check of the settings it replaces
+        self.assertEqual(len(calls["setup.sh"]), 13)
         self.assertEqual(len(calls["sync.sh"]), 2)
         self.assertEqual(len(calls["setup-tmux.sh"]), 2)  # swap_in's os.replace and the .tmux.conf write
         self.assertEqual(len(calls["setup-chrome-wsl.sh"]), 2)  # the plugin version and the config merge
