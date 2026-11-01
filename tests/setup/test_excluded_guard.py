@@ -451,8 +451,11 @@ class Rule1PathArguments(Guard):
         self.allowed("lane done x")
 
     def test_lane_adopt_path_in_another_repo_is_refused(self):
+        # --id's value is the next word whatever it starts with (argparse takes `-1` as one),
+        # so the word after that is PATH (review round 3).
         for call in (f"lane adopt {self.other}", f"lane adopt --id x {self.other}",
-                     f"lane adopt -- {self.other}"):
+                     f"lane adopt -- {self.other}", f"lane adopt --id -1 {self.other}",
+                     f"lane adopt --i -x {self.other}"):
             with self.subTest(call=call):
                 self.refused(call, self.other_git)
         # After `--` argparse takes every word as PATH, one that looks like an option too
@@ -463,7 +466,7 @@ class Rule1PathArguments(Guard):
                 self.refused(f"lane adopt -- {name}", self.other_git)
         self.allowed(f"lane adopt {self.lane}")
         for call in (f"lane adopt --id=lane {self.lane}", f"lane adopt --id x {self.lane}",
-                     f"lane adopt {self.lane} --i x"):
+                     f"lane adopt {self.lane} --i x", f"lane adopt --id -1 {self.lane}"):
             with self.subTest(call=call):
                 self.allowed(call)
 

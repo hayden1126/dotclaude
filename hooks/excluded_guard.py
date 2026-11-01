@@ -547,15 +547,16 @@ def path_arguments(words):
                 out.append(w[2:])
         return [(p, False) for p in out]
     if head == "lane" and args[:1] == ["adopt"]:
-        # Every word but its options and `--id`'s value (argparse takes `--i` for it too): a
-        # missing path a sandboxed session could create is refused (check_below_top). After
-        # `--` every word is PATH to argparse, one that looks like an option too.
+        # Every word but its options and `--id`'s value (argparse takes `--i` for it too, and
+        # the next word whatever it starts with, `-1` say): a missing path a sandboxed session
+        # could create is refused (check_below_top). After `--` every word is PATH to
+        # argparse, one that looks like an option too.
         out, skip = [], False
         for i, w in enumerate(args[1:], 2):
             if w == "--":
                 out += args[i:]
                 break
-            if skip and not w.startswith("-"):
+            if skip:
                 skip = False
             elif w in ("--i", "--id"):
                 skip = True
