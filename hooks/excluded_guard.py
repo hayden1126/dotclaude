@@ -858,7 +858,7 @@ def check_repository_word(m, env, cwd, project, sub, word, remotes, groups=None,
     the word itself as a remote or a path otherwise. A member git's fetch would read as an
     option, or an ext:: one, is refused. Members from a file git may not read are judged too,
     but never count toward skipping the word itself. A configured remote's name is judged by its
-    URL with the cwd's config (G-D) and nothing more, and a network URL passes. Any other word is a path to git, resolved from the cwd,
+    URL with the cwd's config (G-D) and nothing more, and a network URL passes. Any other word is a path to git, resolved from the repo top (where git opens it) and the cwd,
     whether it exists or not: git's server side tries <path> and then <path>.git and reads a
     file there as a gitfile. Where neither exists, it is refused if a sandboxed session could
     create it; where one does, its symlink chain (each hop, the dir of each, and a gitfile or
@@ -883,7 +883,17 @@ def check_repository_word(m, env, cwd, project, sub, word, remotes, groups=None,
     path = local_url_path(word)
     if path is None:
         return
-    full = os.path.join(cwd, os.path.expanduser(path))
+    # git opens a relative one from the repo top it moved to; the cwd too (over-matching only
+    # adds checks).
+    repo = discover(cwd, env)
+    bases = (repo[2], cwd) if repo else (cwd,)
+    for full in dict.fromkeys(os.path.join(b, os.path.expanduser(path)) for b in bases):
+        check_server_word(m, env, full, project, sub, word, label)
+
+
+def check_server_word(m, env, full, project, sub, word, label):
+    """check_server_repo for one base of a repository word, with check_repository_word's
+    refusals."""
     check_server_repo(m, env, full, project, word, link=lambda bad: Refusal(
         "rule1", bad, f"`git {sub}`'s repository {label} goes through {bad}, which a sandboxed "
         "session can rewrite to point git at another repository after this check. Name the "

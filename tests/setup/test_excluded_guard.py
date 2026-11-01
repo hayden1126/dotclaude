@@ -558,6 +558,21 @@ class Rule1PathArguments(Guard):
             with self.subTest(call=call):
                 self.allowed(call)
 
+    def test_a_relative_repository_word_is_judged_from_the_repo_top_too(self):
+        # git moves to the repo top before it opens a relative local repository, so from a
+        # subdir `r.git` names <top>/r.git. The guard judges both bases.
+        sub = self.protect(self.mkdir("proj", "sub"))
+        bare = os.path.join(self.tmp, "r.git")
+        self.git("init", "-q", "--bare", bare, cwd=self.tmp)
+        os.symlink(bare, os.path.join(self.proj, "r.git"))
+        self.assertEqual(subprocess.run(["git", "ls-remote", "r.git"], cwd=sub,
+                                        env={"PATH": "/usr/bin:/bin", "HOME": self.home},
+                                        capture_output=True).returncode, 0)
+        for call in ("git push -q nothere HEAD", "git fetch nothere"):
+            with self.subTest(call=call):
+                self.assertIn("missing", self.denied(call, "rule1", self.proj, cwd=sub))
+        self.denied("git push -q r.git HEAD", "rule1", os.path.join(self.proj, "r.git"), cwd=sub)
+
     def test_a_configured_remote_is_judged_by_its_url_only(self):
         # A remote's word is no path: its URL is judged with the cwd's config (G-D).
         self.mkdir("proj", "up")
