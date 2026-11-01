@@ -603,6 +603,40 @@ class Rule1PathArguments(Guard):
         self.refused("git fetch glob", self.other_git)
         self.assertIn("missing", self.refused("git push -q both HEAD", self.proj))
 
+    def test_the_default_remote_must_be_a_configured_remote(self):
+        # With no repository word git takes the branch's pushRemote or remote, or
+        # remote.pushDefault, else origin. One the config doesn't define is read from a legacy
+        # remote file a session could plant after the check, and a branch's or pushDefault's is
+        # taken as a path, so each is judged as a repository word too.
+        bare = ("git push", "git push -q", "git fetch -q", "git pull -q", "git ls-remote -q")
+        named = ("git push -q origin HEAD", "git fetch https://github.com/x/z")
+        for call in bare + named:
+            with self.subTest(call=call):
+                self.allowed(call)
+        self.git("config", "--unset", "remote.origin.url", cwd=self.proj)
+        for call in bare:
+            with self.subTest(call=call):
+                reason = self.refused(call, "origin")
+                self.assertIn("Name the remote on the command line", reason)
+        self.allowed("git fetch https://github.com/x/z")
+        self.git("config", "remote.origin.url", "https://github.com/x/y", cwd=self.proj)
+        for key in ("branch.x.remote", "branch.x.pushRemote", "remote.pushDefault"):
+            for value in ("https://github.com/x/z", "."):
+                with self.subTest(key=key, value=value):
+                    self.git("config", key, value, cwd=self.proj)
+                    self.assertIn(key, self.refused("git push", value))
+                    self.refused("git fetch -q", value)
+                    for call in named:
+                        self.allowed(call)
+            self.git("config", key, "origin", cwd=self.proj)
+            self.allowed("git push")
+            # A value naming no remote is a path to git: a missing one a session could create.
+            self.git("config", key, "nothere", cwd=self.proj)
+            with self.subTest(key=key, value="nothere"):
+                self.assertIn("missing", self.refused("git push -q origin HEAD", self.proj))
+            self.git("config", "--unset", key, cwd=self.proj)
+        self.allowed("git push")
+
     def test_a_remote_only_an_include_if_defines_is_judged_as_a_path(self):
         # The guard doesn't evaluate an includeIf condition, so git may not read its remotes.
         inc = self.write(os.path.join(self.protect(self.mkdir("cfg")), "remotes"),
@@ -1005,6 +1039,7 @@ class Rule1Layout(Guard):
         # <tmp>/worktrees/.git with commondir ../.. would pass the name and target checks.
         top = os.path.join(self.tmp, "worktrees")
         self.git("init", "-q", top, cwd=self.tmp)
+        self.git("remote", "add", "origin", "https://github.com/x/y", cwd=top)
         self.env["CLAUDE_PROJECT_DIR"] = top
         self.allowed("git push", cwd=top)
         self.write(os.path.join(top, ".git", "commondir"), "../..\n")
@@ -1165,6 +1200,13 @@ class Rule1RemoteUrls(Guard):
     def remote(self, key, value):
         self.git("config", key, value, cwd=self.proj)
 
+    def restore(self, key):
+        """Unset key, or put origin's network URL back: a bare `git push` needs origin."""
+        if key == "remote.origin.url":
+            self.remote(key, "https://github.com/x/y")
+        else:
+            self.git("config", "--unset", key, cwd=self.proj)
+
     def test_a_remote_url_naming_another_repo_is_refused(self):
         for key in ("remote.origin.url", "remote.up.pushurl"):
             for value in (self.other, f"file://{self.other}", "../other", self.other_git):
@@ -1174,7 +1216,7 @@ class Rule1RemoteUrls(Guard):
                         reason = self.denied(call, "rule1", self.other_git)
                         self.assertIn(f"the remote URL {value}", reason)
                         self.assertIn("network URL", reason)
-                    self.git("config", "--unset", key, cwd=self.proj)
+                    self.restore(key)
         self.allowed("git push")
 
     def test_an_ext_remote_url_is_refused(self):
@@ -1184,7 +1226,7 @@ class Rule1RemoteUrls(Guard):
             with self.subTest(key=key):
                 self.remote(key, "ext::x %S" if key.startswith("remote") else "https://h/r")
                 self.assertIn("ext::", self.denied("git push", "rule1", None))
-                self.git("config", "--unset", key, cwd=self.proj)
+                self.restore(key)
         self.allowed("git push")
 
     def test_a_bare_repo_found_as_name_dot_git_is_refused(self):
