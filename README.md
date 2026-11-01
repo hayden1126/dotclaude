@@ -61,29 +61,32 @@ passes. On Windows (git-bash), which has no Bash sandbox, setup skips copy mode.
 **Upgrading from an older install.** Before this, the sandbox could write `~/.cache/uv`,
 `~/.cache/pip`, `~/.cache/pnpm`, `~/.cache/node-gyp`, `~/.cache/ms-playwright`,
 `~/.local/share/uv/python` and pnpm's store directly, and unsandboxed runs still use what they
-hold. `cache-unlink` keeps the bytes it copies, so it can't undo an edit made then. Setup says
-so on every run, once the settings it replaced had those entries, until you remove the marker
-it names. Rebuild from a terminal, in this order:
-1. Un-link: `cache-unlink --apply ~/code ~/.local/share/uv/tools ~/.local/share/pnpm`, leaving
-   out any of those dirs you don't have (it stops on a missing one). That covers what step 3
-   doesn't reinstall: your projects, uv's tool envs and pnpm's global packages link to the
-   caches too.
-2. Remove what the sandbox could write, whole, by path: `rm -rf ~/.cache/uv ~/.cache/pip
-   ~/.cache/pnpm ~/.cache/node-gyp ~/.cache/ms-playwright ~/.local/share/pnpm/store`.
-   By path, not through `uv cache clean`, `pip cache purge` or `pnpm store path`: those clear
-   the cache now configured (a var or a config file can move it) and pnpm's names only its
-   current version's folder (`store/v3`), while the sandbox could write these defaults whole.
-   `~/.cache/pnpm` holds pnpm's metadata and the trees `pnpm dlx` reuses.
-3. Reinstall what was built from them: `uv python install --reinstall <each version uv python
-   list --only-installed --python-preference only-managed shows>` (without that flag the list
-   includes system Pythons, which this would download as new managed copies); `uv tool upgrade
-   --all --reinstall`; pnpm's globals and the pnpm versions it installed for projects (note
-   `pnpm ls -g`, `rm -rf ~/.local/share/pnpm/global ~/.local/share/pnpm/.tools`, then `pnpm add
-   -g` them: re-adding over the old dirs keeps their files); pipx's and pip's `--user` installs
-   (`pipx reinstall-all`, `pip install --user --force-reinstall --no-cache-dir <them>`); each
-   project's environment (`uv sync --reinstall`, `pnpm install --force`, or a fresh venv for one
-   pip built); and Playwright's browsers: `npx playwright@<each project's version> install
-   chromium-headless-shell`.
+hold, or what was built from it. Setup says so on every run, once the settings it replaced had
+those entries, until you remove the marker it names. In-place reinstalls aren't enough (they
+keep files they don't track, and links they don't reset), so delete and install fresh, from a
+terminal:
+1. Note what to put back: `uv python list --only-installed --python-preference only-managed`
+   (without that flag the list includes system Pythons), `uv tool list`, `pnpm ls -g`, `npm ls
+   -g --depth=0`, `pipx list`. If `readlink -f "$(command -v pnpm)"` or the same for `uv`
+   resolves into a dir below, reinstall that tool from its own installer after step 2.
+2. Delete the dirs the sandbox could write, and everything built from them, by path (not
+   through `uv cache clean`, `pip cache purge` or `pnpm store path`, which clear only the
+   cache now configured, and for pnpm only its current version's folder): `rm -rf ~/.cache/uv
+   ~/.cache/pip ~/.cache/pnpm ~/.cache/node-gyp ~/.cache/ms-playwright ~/.npm/_npx
+   ~/.local/share/uv/python ~/.local/share/uv/tools ~/.local/share/pnpm/store
+   ~/.local/share/pnpm/global ~/.local/share/pnpm/.tools`, plus each project's `.venv` and
+   `node_modules` (leave pipx's venvs: `pipx reinstall-all` reads them, then builds each anew).
+   `~/.cache/pnpm` holds pnpm's metadata and the trees
+   `pnpm dlx` reuses; `~/.npm/_npx` the trees npx reuses; node-gyp's headers reached every
+   native addon npm or pnpm built.
+3. Install fresh: `uv python install <the versions>`, `uv tool install <each tool>`, `pnpm add
+   -g` and `npm install -g` the globals, `pipx reinstall-all`, `pip install --user
+   --force-reinstall --no-cache-dir` any `--user` packages, each project's environment (`uv
+   sync`, `pnpm install`, `npm ci`, a new venv), and Playwright's browsers: `npx
+   playwright@<each project's version> install chromium-headless-shell`.
+
+A project you'd rather not rebuild can be un-linked instead (`cache-unlink --apply <dir>`): that
+ends its links into the caches but keeps the bytes, so it can't undo an edit made before.
 
 Auditing the caches against their own checksums is the alternative; HAYPC's were audited on
 2026-10-31 and were clean.

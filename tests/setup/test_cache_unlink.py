@@ -137,6 +137,9 @@ class CacheUnlink(Base):
         p = self.run_tool("--apply", "--keep", os.path.join(self.code, "dotfilez"), self.code)
         self.assertEqual(p.returncode, 2)
         self.assertIn("--keep: not a dir", p.stderr)
+        p = self.run_tool("--apply", "--keep", self.tmp, os.path.join(self.code, "dotfiles"))
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("is under none of the dirs searched", p.stderr)
         self.assertTrue(os.path.samefile(dotfile, kept))
 
     def test_a_symlink_in_a_project_is_never_walked(self):

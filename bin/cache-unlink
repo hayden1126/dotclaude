@@ -291,6 +291,9 @@ def main(argv=None):
         if not os.path.isdir(d):  # a typo there would un-link the very link it meant to keep
             ap.error(f"--keep: not a dir: {d}")
     roots = disjoint(roots)
+    for d in args.keep:  # one outside every DIR (a relative path from the wrong cwd) keeps nothing
+        if not any(under(os.path.realpath(d), r) for r in roots):
+            ap.error(f"--keep: {d} is under none of the dirs searched")
     caches = default_caches(roots)
     if args.cache:
         caches["other"] = [os.path.realpath(d) for d in args.cache if os.path.isdir(d)]
