@@ -174,7 +174,8 @@ copy_managed() {
 # caches, uv's Pythons or Playwright's browsers (an older dotclaude)? Then a marker in the state
 # dir has section 6 point to the rebuild step on every run until Hayden removes it: the copy
 # below erases the evidence, so a run stopped before section 6 must not lose the hint.
-old_cache_writes="$(python3 -I - "$CLAUDE_DIR/settings.json" 2>/dev/null <<'PY' || true
+old_cache_check() {
+  python3 -I - "$CLAUDE_DIR/settings.json" 2>/dev/null <<'PY' || true
 import json, sys
 try:
     allow = json.load(open(sys.argv[1]))["sandbox"]["filesystem"]["allowWrite"]
@@ -188,7 +189,8 @@ for p in (p for p in allow if isinstance(p, str)):
         print(1)
         break
 PY
-)"
+}
+old_cache_writes="$(old_cache_check)"
 [[ -z $old_cache_writes ]] || { mkdir -p "$STATE_DIR" && : >"$STATE_DIR/rebuild-caches-pending"; } \
   || warn "can't write $STATE_DIR/rebuild-caches-pending: the older install's caches need a rebuild (README, \"Upgrading from an older install\")"
 MERGED_SETTINGS="$(mktemp)"  # section 1's exit trap removes it

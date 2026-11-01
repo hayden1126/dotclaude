@@ -25,7 +25,7 @@ def old_cache_check():
     with open(SETUP) as f:
         text = f.read()
     helpers = text[text.index("say()"):text.index("# ----", text.index("say()"))]
-    start = text.index('old_cache_writes="$(')
+    start = text.index("old_cache_check() {")
     end = text.index('MERGED_SETTINGS="$(mktemp)"', start)
     return helpers + text[start:end] + 'printf "%s" "$old_cache_writes"'
 
