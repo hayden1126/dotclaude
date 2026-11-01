@@ -315,7 +315,8 @@ For a match it refuses, naming the path, when:
    after the check. Name the remote on the command line or configure it. Each such value that
    names no remote is also judged as a path, as a remote URL is. A `file://` URL with a host part or a
    `%`-escape is refused. An option of those git calls that names a program for git to run, an
-   `ext::` remote, `--recurse-submodules` and a `%` in a repository word are refused, and
+   `ext::` remote, a recursion flag that turns recursion on and a `%` in a repository word are
+   refused, and
    `delegation-ledger hook` runs only as a hook, never through Bash. A repo whose common git
    dir holds any entry in `remotes/` or `branches/` (legacy remote files, outside the judged
    config) is refused for every excluded call (G-C). Each local-path remote URL in the cwd's
@@ -324,8 +325,11 @@ For a match it refuses, naming the path, when:
    `url.<base>.insteadOf` or `pushInsteadOf` whose base is a local path is refused: git appends
    the rest of the original URL to the base, so use a network base. `git fetch`, `pull` and
    `push`, and `gh pr checkout`, `gh pr merge`, `gh issue develop` and `gh pr create` (which run
-   them), are refused unless the git call carries `--no-recurse-submodules` or the effective
-   config has submodule recursion off (G-B). For fetch the last `fetch.recurseSubmodules` or
+   them), run git in each submodule's own git dir (G-B). A git call whose last
+   `--[no-]recurse-submodules` flag (any prefix git takes: pull reads `--rec` as
+   `--recurse-submodules`) turns recursion on is refused, one whose last flag turns it off
+   passes, and with no flag it is refused unless the effective config has recursion off. For
+   fetch the last `fetch.recurseSubmodules` or
    `submodule.recurse` git reads must be false; for pull and `gh pr checkout` (whose
    `git checkout` honours it) `submodule.recurse` too; for push the last
    `push.recurseSubmodules` or `submodule.recurse` (probed with git 2.43: `check`, `on-demand`

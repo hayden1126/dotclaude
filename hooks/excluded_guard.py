@@ -61,9 +61,12 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      url.<base>.insteadOf or pushInsteadOf whose base is a local path is refused: git appends
      the rest of the original URL to it. A URL's own repo doesn't have its URLs judged. git
      fetch, pull and push, and gh pr checkout, gh pr merge, gh issue develop and gh pr create
-     (which run them), are refused unless the git call carries --no-recurse-submodules or the
-     effective config has submodule recursion off (G-B), else git runs in each submodule's own
-     git dir: for fetch the last fetch.recurseSubmodules or submodule.recurse git reads must be
+     (which run them), recurse into each submodule's own git dir (G-B). A git call whose last
+     --[no-]recurse-submodules flag (any prefix git takes, as git_argv resolves it, one source
+     for check_git_words and check_recursion) turns recursion on is refused, one whose last
+     flag turns it off passes, and with no flag it is refused unless the effective config has
+     recursion off; fetch's hidden --recurse-submodules-default refuses with any value but a
+     false one. For fetch the last fetch.recurseSubmodules or submodule.recurse git reads must be
      false; for pull and gh pr checkout (whose git checkout honours it) submodule.recurse too;
      for push the last push.recurseSubmodules or submodule.recurse, unset counting as off. A
      set but empty GIT_CONFIG_GLOBAL or GIT_CONFIG_SYSTEM names no file, as git reads it. The
@@ -979,7 +982,16 @@ def check_git_words(sub, args):
     """Refuse a git push, fetch, pull or ls-remote word naming what rule 1 can't judge: a program
     for git to run (an option of GIT_PROGRAM_OPTIONS by any prefix, ls-remote's -u, an ext::
     remote, also as an option's value) or submodule recursion. A legacy remote file refuses in
-    check_rule1, whatever the call names (G-C)."""
+    check_rule1, whatever the call names (G-C). Recursion is read as git reads it (git_argv,
+    recursion_cli); args git_argv refuses are refused later, where it names the option."""
+    try:
+        options = git_argv(sub, args)[0]
+    except Refusal:
+        options = []
+    if recursion_cli(options) == "on":
+        raise Refusal("rule1", sub, f"`git {sub} {' '.join(args)}` turns submodule recursion "
+                      "on, which runs git in each submodule's own git dir, whose config the guard "
+                      "doesn't judge. Run it without submodule recursion.")
     for w in args:
         name = w[2:].split("=", 1)[0] if w.startswith("--") else ""
         value = w.split("=", 1)[1] if name and "=" in w else w
@@ -988,11 +1000,23 @@ def check_git_words(sub, args):
             raise Refusal("rule1", w, f"`git {sub}` with {w!r} names a program for git to run "
                           "outside the sandbox, which the guard can't judge. Run it without that "
                           "option.")
-        if (len(name) >= 4 and (GIT_RECURSE.startswith(name) or name.startswith(GIT_RECURSE))
-                and value not in ("no", "false")):
-            raise Refusal("rule1", w, f"`git {sub}` with {w!r} runs git in each submodule's "
-                          "own git dir, whose config the guard doesn't judge. Run it without "
-                          "submodule recursion.")
+
+
+def recursion_cli(options):
+    """"on", "off" or None (no flag) for the submodule recursion a git fetch, pull or push call's
+    options (git_argv's, so any prefix git takes is resolved) set: the last --recurse-submodules
+    or --no-recurse-submodules decides, a value that isn't a git false (none, or an empty one)
+    turning it on. fetch's hidden --recurse-submodules-default with any value but a false one
+    counts as on wherever it sits: the guard doesn't weigh it against the rest."""
+    state, default_on = None, False
+    for name, value in options:
+        if name == "no-" + GIT_RECURSE:
+            state = "off"
+        elif name == GIT_RECURSE:
+            state = "off" if value and value.lower() in GIT_FALSE else "on"
+        elif name == GIT_RECURSE + "-default":
+            default_on = not (value and value.lower() in GIT_FALSE)
+    return "on" if default_on else state
 
 
 # --- Machine view ------------------------------------------------------------------------------
@@ -1728,32 +1752,22 @@ def recursion_on(env, repo, home, sub="fetch"):
     return [v for v in verdicts if v]
 
 
-def recursion_flag(sub, args):
-    """Whether git fetch, pull or push args turn recursion off on the command line: the last
-    --[no-]recurse-submodules option, as git_argv reads them (any prefix git takes), is
-    --no-recurse-submodules or has a false value. Args git_argv refuses turn nothing off."""
-    try:
-        options = git_argv(sub, args)[0]
-    except Refusal:
-        return False
-    off = False
-    for name, value in options:
-        if name == "no-recurse-submodules":
-            off = True
-        elif name == "recurse-submodules":
-            off = bool(value) and value.lower() in GIT_FALSE
-    return off
-
-
 def check_recursion(m, env, cwd, words):
     """G-B for one call: git fetch, pull or push, or a gh form that runs one, recurses into each
-    submodule's own git dir, which a sandboxed session can write. Refuse unless the git call
-    carries --no-recurse-submodules or the effective config has recursion off."""
+    submodule's own git dir, which a sandboxed session can write. Refuse when the git call's
+    last recursion flag turns it on (recursion_cli, any prefix git takes), and pass when it turns
+    it off; with no flag, refuse unless the effective config has recursion off. Args git_argv
+    can't read refuse."""
     head = os.path.basename(words[0])
     if head == "git" and words[1:2] in (["fetch"], ["pull"], ["push"]):
         sub, name = words[1], f"git {words[1]}"
         runs = f"git {sub}"
-        if recursion_flag(sub, words[2:]):
+        flag = recursion_cli(git_argv(sub, words[2:])[0])
+        if flag == "on":
+            raise Refusal("rule1", sub, f"`{name}` turns submodule recursion on on the command "
+                          "line, which runs git in each submodule's own git dir, where a "
+                          "sandboxed session can write. Run it without submodule recursion.")
+        if flag == "off":
             return
         fix = (f"{PUSH_FIX if sub == 'push' else RECURSE_FIX}, or add `--no-recurse-submodules` "
                f"right after `{sub}`"

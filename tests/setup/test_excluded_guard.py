@@ -1441,6 +1441,23 @@ class SubmoduleRecursion(Guard):
         self.assertIn(f"push.recurseSubmodules=check in {self.gitconfig}",
                       self.denied("git push", "rule1", "push.recurseSubmodules"))
 
+    def test_a_recursion_flag_in_any_prefix_refuses_whatever_the_config(self):
+        # git takes any unique prefix (git_argv): pull's --rec is --recurse-submodules, and the
+        # last such flag on the command line beats a config switch-off (review round 2).
+        self.write(self.gitconfig, RECURSE_OFF)
+        for call in ("git pull --rec", "git pull --rec=yes", "git pull --recurse-sub",
+                     "git pull --no-recurse-submodules --rec", "git fetch --recurse-submodules",
+                     "git fetch --recurse-submodules=on-demand origin",
+                     "git push origin --recurse-submodules=check main"):
+            with self.subTest(call=call):
+                self.assertIn("each submodule", self.denied(call, "rule1"))
+        self.denied("git fetch --recurse-sub", "rule1")
+        for call in ("git pull --recurse-submodules=no", "git fetch --recurse-submodules=off",
+                     "git pull --recurse-submodules --no-recurse-submodules",
+                     "git push origin --recurse-submodules=no main"):
+            with self.subTest(call=call):
+                self.allowed(call)
+
     def test_pull_also_needs_submodule_recurse_off(self):
         # pull updates each submodule after the merge when submodule.recurse is on, whatever
         # fetch.recurseSubmodules says.
@@ -1566,8 +1583,9 @@ class SubmoduleRecursionMatchesGit(Guard):
     config makes a fetch there run a marker program, recursion counts as off exactly when a
     plain `git fetch` leaves the marker unrun."""
 
-    def test_the_guard_agrees_with_git(self):
-        guard = load_guard()
+    def submodule_clone(self):
+        """(clone, fired, global config): a clone whose submodule's fetch runs a marker that
+        appends to `fired`."""
         sub, up, clone = (os.path.join(self.tmp, n) for n in ("s", "u", "c"))
         allow = ("-c", "protocol.file.allow=always")
         self.git("init", "-q", sub, cwd=self.tmp)
@@ -1583,9 +1601,48 @@ class SubmoduleRecursionMatchesGit(Guard):
         prog = self.write(os.path.join(self.tmp, "prog"),
                           f"#!/bin/sh\necho x >> {fired}\nexit 1\n", 0o755)
         self.git("config", "remote.origin.uploadpack", prog, cwd=os.path.join(clone, "sub"))
+        return clone, fired, os.path.join(self.tmp, "g", "config")
+
+    def test_a_command_line_recursion_flag_agrees_with_git(self):
+        # With recursion off in the config, the last recursion flag on the command line decides:
+        # git runs a fetch in the submodule (its upload-pack marker fires, and git says so)
+        # exactly when the guard reads the flags as turning it on, and git refuses what
+        # git_argv does.
+        guard = load_guard()
+        clone, fired, glob_cfg = self.submodule_clone()
+        self.write(glob_cfg, "[protocol]\n\tallow = always\n" + RECURSE_OFF)
+        env = {"PATH": "/usr/bin:/bin", "HOME": self.home, "GIT_CONFIG_NOSYSTEM": "1",
+               "GIT_CONFIG_GLOBAL": glob_cfg}
+        calls = [("pull", "--rec"), ("pull", "--rec=yes"), ("pull", "--recurse-sub"),
+                 ("pull", "--no-rec"), ("pull", "--rec", "--no-rec"), ("pull", "--no-rec", "--rec"),
+                 ("pull", "--rec=no"), ("pull", "--recurse-submodules=on-demand"),
+                 ("fetch", "--recurse-submodules"), ("fetch", "--recurse-submodules=yes"),
+                 ("fetch", "--recurse-submodules=no"), ("fetch", "--no-recurse-submodules")]
+        for sub, *args in calls:
+            with self.subTest(call=(sub, *args)):
+                p = subprocess.run(["git", "-C", clone, sub, *args], env=env,
+                                   capture_output=True, text=True)
+                ran = os.path.exists(fired)
+                self.assertEqual(ran, "Fetching submodule sub" in p.stdout + p.stderr)
+                try:
+                    on = guard.recursion_cli(guard.git_argv(sub, args)[0]) == "on"
+                except guard.Refusal:
+                    self.assertEqual(p.returncode, 129, p.stderr)  # git refuses it too
+                    continue
+                if "on-demand" in args[-1] or "default" in args[-1]:
+                    # on-demand fetches only changed submodules (none here); the hidden default
+                    # is refused outright, as the guard doesn't weigh it.
+                    self.assertTrue(on)
+                    continue
+                self.assertEqual(on, ran, p.stderr[-400:])
+                if os.path.exists(fired):
+                    os.remove(fired)
+
+    def test_the_guard_agrees_with_git(self):
+        guard = load_guard()
+        clone, fired, glob_cfg = self.submodule_clone()
         local = os.path.join(clone, ".git", "config")
         base_local = slurp(local)
-        glob_cfg = os.path.join(self.tmp, "g", "config")
         inc_off = self.write(os.path.join(self.tmp, "g", "off"), RECURSE_OFF)
         inc_on = self.write(os.path.join(self.tmp, "g", "on"), "[submodule]\n\trecurse\n")
         on = "[fetch]\n\trecurseSubmodules = true\n"
