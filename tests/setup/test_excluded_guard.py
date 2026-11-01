@@ -1251,13 +1251,22 @@ class Rule1RemoteUrls(Guard):
                 self.remote("remote.origin.url", value)
                 self.denied("git push", "rule1")
 
-    def test_a_url_rewrite_base_is_judged(self):
+    def test_a_url_rewrite_to_a_local_base_is_refused(self):
+        # git appends the rest of the original URL to the base, so a local base names a path
+        # the guard can't judge from the base alone, even the project's own.
         for key in ("insteadOf", "pushInsteadOf"):
-            with self.subTest(key=key):
-                self.write(os.path.join(self.home, ".gitconfig"),
-                           f'[url "{self.other}"]\n\t{key} = https://github.com/\n')
-                self.assertIn(f"the remote URL {self.other}",
-                              self.denied("git push", "rule1", self.other_git))
+            for base in (self.other, self.proj, "../x/", "file:///x/", "."):
+                with self.subTest(key=key, base=base):
+                    self.write(os.path.join(self.home, ".gitconfig"),
+                               f'[url "{base}"]\n\t{key} = https://github.com/\n')
+                    reason = self.denied("git push", "rule1", base)
+                    self.assertIn(f"url.{base}.{key}", reason)
+                    self.assertIn("network base", reason)
+            for base in ("https://mirror.example/", "git@github.com:", "ssh://h/"):
+                with self.subTest(key=key, base=base):
+                    self.write(os.path.join(self.home, ".gitconfig"),
+                               f'[url "{base}"]\n\t{key} = https://github.com/\n')
+                    self.allowed("git push")
         os.remove(os.path.join(self.home, ".gitconfig"))
         self.allowed("git push")
 

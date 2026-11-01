@@ -41,9 +41,9 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      (the cwd's or a path argument's) whose common dir holds any entry in remotes/ or
      branches/ is refused (G-C): git reads a legacy remote there, outside the judged config.
      Each local-path remote URL in the cwd's config chain, trusted files too (remote.*.url and
-     pushurl, each url.<base>.insteadOf and pushInsteadOf base), is judged too (G-D), as a
-     repository word's path is (check_server_repo). A URL's own repo doesn't have its URLs
-     judged. git fetch and
+     pushurl), is judged too (G-D), as a repository word's path is (check_server_repo), and a
+     url.<base>.insteadOf or pushInsteadOf whose base is a local path is refused: git appends
+     the rest of the original URL to it. A URL's own repo doesn't have its URLs judged. git fetch and
      pull, and gh pr checkout, gh pr merge and gh issue develop (which run them), are refused
      unless the git call carries --no-recurse-submodules or the effective config has submodule
      recursion off (G-B): the last fetch.recurseSubmodules or submodule.recurse git reads must
@@ -1298,14 +1298,16 @@ def config_entries(path):
 
 def config_refs(path, home):
     """Include targets (path, whether an includeIf names it), core.hooksPath values, remote URLs
-    and remote names in one config file. The URLs are each remote.<n>.url and pushurl value and
-    each url.<base>.insteadOf or pushInsteadOf base: the URL git ends up using. The names are
+    and remote names in one config file. The URLs are each remote.<n>.url and pushurl value. The
+    rewrites are (key, base) for each url.<base>.insteadOf or pushInsteadOf: git swaps a
+    matching URL's prefix for the base and keeps the rest, so a URL git ends up using starts
+    with the base but is not the base itself (check_rule1 refuses a local one). The names are
     each <n> with a remote.<n>.url: git takes a name with none as a path. The groups are
     (group, members) for each remotes.<group> value, split on space, tab and newline as git
     fetch splits it; a three-level key's group is <subsection>.<key>, as git matches it. The
     defaults are (key, value) for each branch.<b>.remote, branch.<b>.pushRemote and
     remote.pushDefault: the remote git takes when a call names none."""
-    includes, hooks, urls, names, groups, defaults = [], [], [], [], [], []
+    includes, hooks, urls, names, groups, defaults, rewrites = [], [], [], [], [], [], []
     for section, subsection, key, value in config_entries(path):
         if section == "branch" and subsection and key in ("remote", "pushremote") and value:
             defaults.append((f"branch.{subsection}.{DEFAULT_KEYS[key]}", value))
@@ -1319,7 +1321,7 @@ def config_refs(path, home):
             if key == "url":
                 names.append(subsection)
         elif section == "url" and key in ("insteadof", "pushinsteadof") and subsection:
-            urls.append(subsection)
+            rewrites.append((f"url.{subsection}.{REWRITE_KEYS[key]}", subsection))
         if not value:
             continue
         if section in ("include", "includeif") and key == "path":
@@ -1327,10 +1329,11 @@ def config_refs(path, home):
             includes.append((os.path.join(os.path.dirname(path), v), section == "includeif"))
         elif section == "core" and key == "hookspath":
             hooks.append(expand(value, home))
-    return includes, hooks, urls, names, groups, defaults
+    return includes, hooks, urls, names, groups, defaults, rewrites
 
 
 DEFAULT_KEYS = {"remote": "remote", "pushremote": "pushRemote"}
+REWRITE_KEYS = {"insteadof": "insteadOf", "pushinsteadof": "pushInsteadOf"}
 
 
 def local_url_path(url):
@@ -1411,7 +1414,7 @@ def check_rule1(m, env, cwd, project, arg=None, url=None, walk=True):
     if not env.get("GIT_CONFIG_NOSYSTEM") or env["GIT_CONFIG_NOSYSTEM"].lower() in ("0", "false",
                                                                                    "no", "off"):
         files.append(env.get("GIT_CONFIG_SYSTEM") or "/etc/gitconfig")
-    seen, urls, remotes, groups, defaults = set(), [], set(), {}, []
+    seen, urls, remotes, groups, defaults, rewrites = set(), [], set(), {}, [], []
     queue = [(f, True, 0, True) for f in trusted] + [(f, False, 0, True) for f in files]
     hooks_base = repo[2] if repo else cwd
     while queue:
@@ -1428,8 +1431,9 @@ def check_rule1(m, env, cwd, project, arg=None, url=None, walk=True):
                 f"write ({bad}).", protect=m))
         if not os.path.isfile(target):
             continue  # judged above; only a regular file is parsed
-        includes, hooks, found, names, members, named = config_refs(target, home)
+        includes, hooks, found, names, members, named, swaps = config_refs(target, home)
         defaults += named
+        rewrites += swaps
         if depth < INCLUDE_DEPTH:
             queue += [(i, False, depth + 1, certain and not cond) for i, cond in includes]
         for h in hooks:
@@ -1442,6 +1446,12 @@ def check_rule1(m, env, cwd, project, arg=None, url=None, walk=True):
             entry[0].extend(words)
             entry[1][0] += len(words) if certain else 0
     if arg is None and url is None:
+        for key, base in rewrites:
+            if local_url_path(base) is not None:  # refuses an ext:: base itself
+                raise Refusal("rule1", base, f"the config sets {key}: git rewrites a matching "
+                              "remote URL to this local base with the rest of the URL "
+                              "appended, a path the guard can't judge from the base alone. Use "
+                              "a network base (scheme://host/... or host:) instead.")
         for u in dict.fromkeys(urls):
             check_remote_url(m, env, u, hooks_base, cwd, project)
         for key, value in dict.fromkeys(defaults):
