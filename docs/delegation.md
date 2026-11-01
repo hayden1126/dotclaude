@@ -359,7 +359,9 @@ For a match it refuses, naming the path, when:
    dir of the config path git opened, not a symlink target's), and a `core.hooksPath`
    dir and each file in it. Each is followed through its symlinks (each hop and the dir of each
    must be write-protected), and anything that exists there is judged, not only a regular file.
-   A repo whose install step points `core.hooksPath` into the repo (husky and similar) is
+   `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY` and `GIT_ALTERNATE_OBJECT_DIRECTORIES` are refused
+   while set, even empty: they move where git takes config or objects from, which the guard
+   doesn't model, so unset them for excluded commands. A repo whose install step points `core.hooksPath` into the repo (husky and similar) is
    refused on its first excluded call, `gh` included (it runs git, and `gh pr checkout` runs
    hooks), until an Edit deny rule for that dir is in `settings.machine.json` and `./setup.sh`
    reruns. The refusal names the dir and the rule.

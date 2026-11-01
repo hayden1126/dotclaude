@@ -57,6 +57,8 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      refused unless origin names such a remote too. A file:// URL must have no host and no %-escape, and a git option before those
      subcommands is refused. GIT_CONFIG_COUNT and GIT_CONFIG_PARAMETERS may set only the
      recursion keys below: any other key refuses, since rule 1 judges config files only.
+     GIT_COMMON_DIR, GIT_OBJECT_DIRECTORY and GIT_ALTERNATE_OBJECT_DIRECTORIES refuse while set,
+     even empty: they move where git takes config or objects from, which rule 1 doesn't model.
      Known limit: a worktree top is recognised through <common>/worktrees/<n>/gitdir, which
      sits in the writable main git dir, so its trust rests on the same layout checks as the
      cwd's (gitdir_info), not on a protected file. The calls are found the way zsh splits
@@ -1714,6 +1716,8 @@ GH_GROUPS = {form[0] for form in (*GH_GIT_FORMS, *GH_ALIASES)}
 # `--recurse-submodules=<one of these>` leaves gh pr checkout's submodule update off; any other
 # value is true or an error.
 GO_FALSE = {"false", "0", "f", "F", "FALSE", "False"}
+# Variables that move where git takes config (the common dir) or objects from (check_env_config).
+GIT_LOCATION_VARS = ("GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES")
 
 
 def env_config_pairs(env):
@@ -1747,7 +1751,14 @@ def env_config_pairs(env):
 def check_env_config(env):
     """Rule 1 judges config files, and from the environment only the recursion keys: any other
     key GIT_CONFIG_COUNT or GIT_CONFIG_PARAMETERS sets (a remote URL, an insteadOf, a branch's
-    remote, an include) would reach every git the call runs unjudged, so it refuses."""
+    remote, an include) would reach every git the call runs unjudged, so it refuses. So does
+    any of GIT_LOCATION_VARS set, even empty: each moves where git takes config or objects
+    from, which rule 1 doesn't model."""
+    for var in GIT_LOCATION_VARS:
+        if var in env:
+            raise Refusal("rule1", var, f"{var} is set, which moves where git takes its config "
+                          "or objects from, and the guard doesn't judge that; unset it for "
+                          "excluded commands.")
     for key, _, source in env_config_pairs(env):
         section, _, rest = key.partition(".")
         sub, _, name = rest.rpartition(".")

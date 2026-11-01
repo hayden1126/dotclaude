@@ -1388,6 +1388,21 @@ class Rule1EnvConfig(Guard):
                     del self.env[k]
         self.allowed("git push")
 
+    def test_a_git_dir_location_variable_is_refused(self):
+        # These move where git takes config or objects from, which rule 1 doesn't model
+        # (review round 3).
+        # Set but empty counts too: git 2.43 then finds no repository at all for the first two
+        # (probed), not the one the guard would judge.
+        for var in ("GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
+            for value in (self.mkdir("elsewhere"), ""):
+                with self.subTest(var=var, value=value):
+                    self.env[var] = value
+                    for call in ("git push", "gh pr view 5", "lane ls"):
+                        self.assertIn("unset it for excluded commands",
+                                      self.denied(call, "rule1", var))
+            del self.env[var]
+        self.allowed("git push")
+
     def test_the_recursion_keys_alone_pass(self):
         self.env.update({"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "fetch.recurseSubmodules",
                          "GIT_CONFIG_VALUE_0": "false",
