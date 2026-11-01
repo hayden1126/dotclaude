@@ -421,6 +421,23 @@ class Rule1PathArguments(Guard):
         # The candidate split isn't quote-aware: a quoted `;` leaves a piece shlex can't read.
         self.refused(f'pass-respawn -C "{self.other};x"')
 
+    def test_lanes_own_fetch_needs_origin_configured(self):
+        # lane new, done and park run their own `git fetch ... origin` (review round 2): as for
+        # a git call naming no repository, origin must name a remote the config surely defines.
+        self.write_settings({"excludedCommands": EXCLUDED + self.PATH_HEADS + [
+            "lane new *", "lane done", "lane done *", "lane park *"]})
+        calls = ("lane new x", "lane done", "lane done x", "lane park x")
+        for call in calls:
+            with self.subTest(call=call):
+                self.allowed(call)
+        self.git("config", "--unset", "remote.origin.url", cwd=self.proj)
+        for call in calls:
+            with self.subTest(call=call):
+                self.assertIn("lane", self.refused(call, "origin"))
+        self.allowed("lane ls")
+        self.git("config", "remote.origin.url", "https://github.com/x/y", cwd=self.proj)
+        self.allowed("lane done x")
+
     def test_lane_adopt_path_in_another_repo_is_refused(self):
         for call in (f"lane adopt {self.other}", f"lane adopt --id x {self.other}",
                      f"lane adopt -- {self.other}"):

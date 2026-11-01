@@ -316,7 +316,9 @@ For a match it refuses, naming the path, when:
    default remote (`branch.<b>.pushRemote` or `remote`, `remote.pushDefault`, else `origin`):
    it is refused unless each such value in the config chain and `origin` name a remote the
    config surely defines, since git reads any other name from a legacy remote file planted
-   after the check. Name the remote on the command line or configure it. Each such value that
+   after the check. Name the remote on the command line or configure it. `lane new`, `lane
+   done` and `lane park` run their own fetch of `origin`, so they are refused unless `origin`
+   names such a remote too. Each such value that
    names no remote is also judged as a path, as a remote URL is. A `file://` URL with a host part or a
    `%`-escape is refused. An option of those git calls that names a program for git to run, an
    `ext::` remote, a recursion flag that turns recursion on and a `%` in a repository word are

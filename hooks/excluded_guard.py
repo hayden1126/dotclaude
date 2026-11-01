@@ -50,7 +50,8 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      surely defines, since git reads any other name from a legacy remote file planted after the
      check; only a nickname needs that, since git reads no legacy file for `.`, `..` or a value
      holding a `/`, and each value naming no such remote is judged as a path, as a remote URL
-     is. A file:// URL must have no host and no %-escape, and a git option before those
+     is. lane new, done and park (LANE_FETCHES) run their own fetch of origin, so they are
+     refused unless origin names such a remote too. A file:// URL must have no host and no %-escape, and a git option before those
      subcommands is refused. GIT_CONFIG_COUNT and GIT_CONFIG_PARAMETERS may set only the
      recursion keys below: any other key refuses, since rule 1 judges config files only.
      Known limit: a worktree top is recognised through <common>/worktrees/<n>/gitdir, which
@@ -339,6 +340,8 @@ def candidates(command, patterns):
 # program, and codex-delegate run --dir, which the delegation skill sends to any repo.
 PATH_HEADS = {"pass-respawn", "lane", "git", "delegation-ledger"}
 GIT_PATH_SUBS = {"push", "fetch", "pull", "ls-remote"}
+# lane commands that run their own `git fetch ... origin` in the cwd's repo.
+LANE_FETCHES = {"new", "done", "park"}
 # Long options of those whose value is a program git runs (git takes any unique prefix), and
 # ls-remote's short -u for --upload-pack; an `ext::` remote runs a command too.
 GIT_PROGRAM_OPTIONS = ("receive-pack", "upload-pack", "exec")
@@ -851,6 +854,13 @@ def check_path_arguments(m, env, cwd, project, words, targets, remotes=frozenset
             raise Refusal("rule1", head, "`delegation-ledger hook` reads the checkout it runs "
                           "git in from its stdin, which the guard can't judge. Claude Code's "
                           "hooks run it directly, never through Bash.")
+        return
+    if head == "lane" and sub in LANE_FETCHES:
+        if defaults is not None and "origin" not in remotes:
+            raise Refusal("rule1", "origin", f"`lane {sub}` runs its own `git fetch` of origin, "
+                          "which no config git surely reads defines as a remote, so git could "
+                          "read a legacy remote file planted after this check, or take it as a "
+                          "path. Configure it (`git remote add origin <url>`).")
         return
     if head == "lane" and sub != "adopt" or head == "git" and sub not in GIT_PATH_SUBS:
         return
