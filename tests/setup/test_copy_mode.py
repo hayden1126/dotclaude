@@ -136,8 +136,17 @@ class CopyMode(unittest.TestCase):
         self.write(os.path.join(state, "rebuild-caches-pending"), "~/.cache/uv\n")
         err = self.run_section(STATE_DIR=state)
         self.assertIn(REBUILD, err)
-        self.assertIn("~/.cache/uv", err)
+        self.assertIn("allowWrite entry ~/.cache/uv; if settings.machine.json has it", err)
+        # The rm comes after a setup rerun, which replaces the copy the check reads.
+        self.assertIn("rerun ./setup.sh, then rm", err)
         self.assertFalse(self.hinted)
+        # A marker holding control bytes or several lines names only its printable first line.
+        self.write(os.path.join(state, "rebuild-caches-pending"), "~/.npm\x1b]0;x\x07\njunk\n")
+        err = self.run_section(STATE_DIR=state)
+        self.assertIn("allowWrite entry ~/.npm]0;x;", err)
+        self.assertNotIn("junk", err)
+        self.assertNotIn("\x1b]", err)  # warn's own colour codes start with ESC [
+        self.assertNotIn("\x07", err)
 
     def test_a_rerun_adds_nothing(self):
         self.run_section()
@@ -321,6 +330,13 @@ class OlderInstallCheck(unittest.TestCase):
             self.assertEqual(self.check(self.allow(entry)), entry, entry)
         for entry in (home + "/.cache/claude-sandbox", home + "x/.npm", "/opt/.npm"):
             self.assertEqual(self.check(self.allow(entry)), "", entry)
+
+    def test_an_empty_entry_hides_nothing(self):
+        self.assertEqual(self.check(self.allow("", "~/.npm")), "~/.npm")
+
+    def test_the_entry_comes_out_as_printable_ascii(self):
+        self.assertEqual(self.check(self.allow("~/.npm/\x1b[31m\n")), "~/.npm/?[31m?")
+        self.assertEqual(self.check(self.allow("~/.cache/uv/zoë")), "~/.cache/uv/zo?")
 
     def test_the_new_settings_or_none_dont(self):
         self.assertEqual(self.check(self.allow("~/.cache/claude-sandbox")), "")

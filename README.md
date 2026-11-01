@@ -46,10 +46,12 @@ It also sets copy mode for uv and pnpm in their user configs (`link-mode = "copy
 installed packages are its own files, not hardlinks into the shared cache (sandbox gap N3). A
 value the file already sets is kept and named on stderr. bun has no such setting. pnpm's file is
 `~/Library/Preferences/pnpm/rc` on macOS, and setup then asks pnpm which value it reads. Copy
-mode covers new installs only, so the run that first sets it points to `cache-unlink`: from a
-terminal, `cache-unlink ~/code` counts, per project, the files that are still hardlinks into the
-uv, pnpm or bun cache (`--files` lists them), and `cache-unlink --apply ~/code` gives each a copy
-of its own (same bytes, mode and times; nothing to reinstall). It names every cache it searched.
+mode covers new installs only, so the run that first sets it points to `cache-unlink` (unless a
+rebuild is pending, below: that replaces those installs). From a terminal, `cache-unlink ~/code`
+counts, per project, the files that are still hardlinks into the uv, pnpm or bun cache (`--files`
+lists them), and `cache-unlink --apply ~/code` gives each a copy of its own (same bytes, mode and
+times; nothing to reinstall). It names every cache it searched. It runs `/usr/bin/python3 -I`;
+where that path is missing, run `python3 -I "$(command -v cache-unlink)"`.
 A file linked to something outside the dirs you named counts too (`linked outside`: a cache it
 didn't find, or harmless links such as the git objects a local `git clone` shares with its
 source; un-linking those costs only disk), and so does one linked across two projects (`linked
@@ -62,13 +64,14 @@ passes. On Windows (git-bash), which has no Bash sandbox, setup skips copy mode.
 `~/.bun/install/cache`, `~/.cache/uv`, `~/.cache/pip`, `~/.cache/pnpm`, `~/.cache/node-gyp`, `~/.cache/ms-playwright`,
 `~/.local/share/uv/python` and pnpm's store directly, and unsandboxed runs still use what they
 hold, or what was built from them. Setup says so on every run, once the settings it replaced had
-those entries, until you remove the marker it names (an `allowWrite` entry for one of them left in
-`settings.machine.json` keeps the gap open: remove it there now, and rerun `./setup.sh` after the
-rebuild, before the next Claude session, since setup runs `claude` and bun). Checking the caches
-can't clear them: the sandbox could write their checksum files too, so only a rebuild does. A
-rebuild stops what runs from them; it can't undo what a planted file already did elsewhere, so a
-sign of tampering means treating the machine as compromised. The rule, from a terminal with no
-Claude session open (plugin MCP servers run from `~/.npm/_npx`):
+those entries, until you remove the marker it names. An `allowWrite` entry for one of them left in
+`settings.machine.json` keeps the gap open: remove it there now. After the rebuild, rerun
+`./setup.sh` before the next Claude session (not before the rebuild: setup runs `claude`, bun and
+pnpm), then remove the marker. Checking the caches can't clear them: the sandbox could write
+their checksum files too, so only a rebuild does. A rebuild stops what runs from them; it can't
+undo what a planted file already did elsewhere, so a sign of tampering means treating the machine
+as compromised. The rule, from a terminal with no Claude session open (plugin MCP servers run
+from `~/.npm/_npx`):
 - **Note** what you'll put back (your global packages, uv's Pythons and tools, pipx apps, `--user`
   packages, Playwright's browsers) from the files, not by running the tools: a planted npm or pip
   runs at `npm ls -g` too. Look in the global `node_modules`, `~/.local/share/uv/tools` and

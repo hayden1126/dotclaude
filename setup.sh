@@ -184,7 +184,7 @@ except Exception:
 old = ("~/.npm", "~/.bun/install/cache", "~/.cache/uv", "~/.cache/pip", "~/.cache/pnpm", "~/.cache/node-gyp",
        "~/.cache/ms-playwright", "~/.local/share/uv", "~/.local/share/pnpm")
 home = os.path.expanduser("~").rstrip("/")
-for entry in (e for e in allow if isinstance(e, str)):
+for entry in (e for e in allow if isinstance(e, str) and e):
     p = entry[1:] if entry.startswith("//") else entry  # `//abs` is an absolute spelling
     p = p.rstrip("/") or "/"
     if p.startswith("/") and home.startswith(p.rstrip("/") + "/"):
@@ -194,8 +194,9 @@ for entry in (e for e in allow if isinstance(e, str)):
             p = "~" + p[len(h):]
             break
     if any(p == o or p.startswith(o + "/") or o.startswith(p + "/") for o in old):
-        # The entry itself, on one line, so the warning can name it.
-        print("".join(c if c.isprintable() else "?" for c in entry), end="")
+        # The entry itself, on one line of printable ASCII (any locale can print it, and the
+        # warning's byte-wise filter keeps it whole), so the warning can name it.
+        print("".join(c if " " <= c <= "~" else "?" for c in entry), end="")
         break
 PY
 }
@@ -523,7 +524,8 @@ fi
 # file, but a project that sets it controls its install anyway (its scripts, its build backend).
 # A value the file already sets stays, named on stderr. bun has no such setting, only
 # `bun install --backend=copyfile`. Copy mode covers new installs only: the run that first sets
-# it points to bin/cache-unlink, which finds and un-links the installs made before.
+# it points to bin/cache-unlink, which finds and un-links the installs made before, unless a
+# rebuild is pending (the rebuild replaces those installs).
 
 # Put LINE at the top of FILE (above any [table], where a TOML key would belong to the table)
 # unless the top level already sets KEY. Written in place, so a linked file stays a link. A
@@ -612,7 +614,7 @@ case "$(uname -s)" in
     rebuild_marker="${STATE_DIR:-}/rebuild-caches-pending"
     if [[ -n ${STATE_DIR:-} && -e $rebuild_marker ]]; then
       rebuild_entry="$(head -c 300 "$rebuild_marker" | head -n 1 | tr -cd '[:print:]')" || rebuild_entry=""
-      warn "an older install let the sandbox write the package caches, uv's Pythons or Playwright's browsers${rebuild_entry:+ (allowWrite entry $rebuild_entry; if settings.machine.json has it, remove it there)}, and unsandboxed runs still use them: rebuild them once (README, \"Upgrading from an older install\"), then rm $rebuild_marker"
+      warn "an older install let the sandbox write the package caches, uv's Pythons or Playwright's browsers${rebuild_entry:+ (allowWrite entry $rebuild_entry; if settings.machine.json has it, remove it there)}, and unsandboxed runs still use them: rebuild them once (README, \"Upgrading from an older install\"), rerun ./setup.sh, then rm $rebuild_marker"
     elif [[ -n $copy_mode_new ]]; then
       warn "copy mode is new here: uv and pnpm installs made before it still share files with their caches. List them with \`cache-unlink <your project dirs>\`, then rerun it with --apply"
     fi
