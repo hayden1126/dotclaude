@@ -953,14 +953,16 @@ def check_repository_word(m, env, cwd, project, sub, word, remotes, groups=None,
     # adds checks).
     repo = discover(cwd, env)
     bases = (repo[2], cwd) if repo else (cwd,)
-    for full in dict.fromkeys(os.path.join(b, os.path.expanduser(path)) for b in bases):
-        check_server_word(m, env, full, project, sub, word, label)
+    path = os.path.expanduser(path)
+    for base in dict.fromkeys(bases[:1] if os.path.isabs(path) else bases):
+        check_server_word(m, env, base, path, project, sub, word, label)
 
 
-def check_server_word(m, env, full, project, sub, word, label):
+def check_server_word(m, env, base, path, project, sub, word, label):
     """check_server_repo for one base of a repository word, with check_repository_word's
     refusals."""
-    check_server_repo(m, env, full, project, word, link=lambda bad: Refusal(
+    full = os.path.join(base, path).rstrip("/") or "/"
+    check_server_repo(m, env, base, path, project, word, link=lambda bad: Refusal(
         "rule1", bad, f"`git {sub}`'s repository {label} goes through {bad}, which a sandboxed "
         "session can rewrite to point git at another repository after this check. Name the "
         "repository by its real path in a dir no session can write, or protect that dir.",
@@ -983,16 +985,19 @@ def server_paths(full):
             + f" and {full}{SERVER_SUFFIXES[-1]} in turn")
 
 
-def check_server_repo(m, env, full, project, arg, url=None, link=None, missing=None):
-    """G-D and the G-E path half for a local repository path git's server side opens (`full`,
-    its trailing slashes dropped as git drops them). Each of <p> and <p>.git that exists is
-    judged along its symlink chain (link(bad) builds the refusal) and the repo there, or at a
-    gitfile's target, as rule 1 judges the cwd, which finds its <dir>/.git too. A missing path
-    git tries (SERVER_SUFFIXES) before the first it would take is refused if a sandboxed
-    session could create it (missing(tried, bad)): a repo planted there would win."""
-    full = full.rstrip("/") or "/"
+def check_server_repo(m, env, base, path, project, arg, link, missing, url=None):
+    """G-D and the G-E path half for a local repository path git's server side opens: `path` as
+    the word spells it (its trailing slashes dropped as git drops them), a relative one opened
+    from `base`. Each of <p> and <p>.git that exists is judged along its symlink chain
+    (link(bad) builds the refusal) and the repo there, or at a gitfile's target, as rule 1
+    judges the cwd, which finds its <dir>/.git too. A missing path git tries (SERVER_SUFFIXES)
+    before the first it would take is refused if a sandboxed session could create it
+    (missing(tried, bad)): a repo planted there would win."""
+    path = path.rstrip("/") or "/"
+    # Each path as the OS opens it: a `..` after a symlink leaves the symlink's target, where a
+    # lexical fold would land elsewhere (Machine.opened). The suffix joins the word as written.
     for suffix in ("", ".git"):
-        opened = full + suffix
+        opened = m.opened(path + suffix, "rule1", link, base=base)
         if not os.path.lexists(opened):
             continue
         found = m.chain(opened, "rule1", link, final_dir=False)
@@ -1006,7 +1011,7 @@ def check_server_repo(m, env, full, project, arg, url=None, link=None, missing=N
         if os.path.lexists(found):
             check_rule1(m, env, found, project, arg=arg, url=url)
     for suffix in SERVER_SUFFIXES:
-        tried = full + suffix
+        tried = m.opened(path + suffix, "rule1", link, base=base)
         if os.path.isfile(tried) or os.path.isdir(tried) and looks_like_gitdir(
                 tried, env, dotgit=tried.endswith("/.git")):
             return
@@ -1163,23 +1168,35 @@ class Machine:
                 return a
         return None
 
-    def opened(self, path, rule, refuse):
+    def opened(self, path, rule, refuse, base=None):
         """`path` as the OS opens it, with no `..` left: each `..` is taken after the symlinks
         before it, where os.path.abspath would fold `a/link/..` to `a` lexically. Each symlink
         before the last `..` is judged along its chain, and a dir a `..` leaves must not be one
         a sandboxed session could swap for a symlink (writable, in a writable dir): both decide
-        where the path lands. What follows the last `..` is kept as written, for chain()."""
-        parts = [x for x in os.path.join(self.cwd, path).split("/") if x not in ("", ".")]
+        where the path lands. What follows the last `..` is kept as written, for chain().
+        A relative `path` is resolved from the cwd, or from `base`: the dir git opens it from,
+        already its cwd. A `..` that climbs the base's own ancestors follows the cwd's inode,
+        which no path swap redirects, so only the dirs the word itself spells are judged there
+        (the base's symlinked ancestors are judged as chain() judges a repository's dir)."""
+        anchored = base is not None and not os.path.isabs(path)
+        parts = [x for x in os.path.join(base if anchored else self.cwd, path).split("/")
+                 if x not in ("", ".")]
         if ".." not in parts:
             return "/" + "/".join(parts)
-        last = len(parts) - parts[::-1].index("..")
         cur = "/"
+        if anchored:
+            self.chain(base, rule, refuse, final_dir=False)
+            cur = os.path.realpath(base)
+            parts = [x for x in path.split("/") if x not in ("", ".")]
+        last = len(parts) - parts[::-1].index("..")
         for part in parts[:last]:
             if part == "..":
-                if cur != "/" and self.writable(cur) and self.exposed(os.path.dirname(cur)):
+                if not anchored and cur != "/" and self.writable(cur) and self.exposed(
+                        os.path.dirname(cur)):
                     raise refuse(cur)
                 cur = os.path.dirname(cur)
                 continue
+            anchored = False
             cur = os.path.join(cur, part)
             if os.path.islink(cur):
                 self.chain(cur, rule, refuse, final_dir=False)
@@ -1696,8 +1713,9 @@ def check_remote_url(m, env, url, top, cwd, project, label=None):
         return
     path = os.path.expanduser(path) if path.startswith("~") else path
     label = label or f"the remote URL {url}"
-    for full in dict.fromkeys(os.path.join(base, path) for base in (top, cwd)):
-        check_server_repo(m, env, full, project, url, url=url, link=lambda bad: Refusal(
+    for base in dict.fromkeys((top,) if os.path.isabs(path) else (top, cwd)):
+        full = os.path.join(base, path).rstrip("/") or "/"
+        check_server_repo(m, env, base, path, project, url, url=url, link=lambda bad: Refusal(
             "rule1", bad, f"{label} goes through {bad}, which a sandboxed session "
             "can rewrite to point git at another repository after this check. Point the remote "
             "at a network URL or a real path in a dir no session can write, or protect that dir.",

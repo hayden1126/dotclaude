@@ -535,6 +535,33 @@ class Rule1PathArguments(Guard):
             with self.subTest(call=call):
                 self.allowed(call)
 
+    def test_a_repository_word_with_dotdot_after_a_symlink_is_judged_where_git_opens_it(self):
+        # Review round 4: `l/..` with l a symlink opens l's target's parent, not the cwd; the
+        # guard must not fold it lexically to the project top.
+        evil = os.path.join(self.tmp, "e")
+        os.makedirs(os.path.join(evil, "sub"))
+        self.git("init", "-q", evil, cwd=self.tmp)
+        os.symlink(os.path.join(evil, "sub"), os.path.join(self.proj, "l"))
+        # Push only as a candidate form: a plain `git push l/.. main` runs sandboxed.
+        for call in ("git push -q l/.. main", "git push origin --repo=l/..",
+                     "git ls-remote l/..", "git fetch l/.. main"):
+            with self.subTest(call=call):
+                self.assertIn(os.path.join(self.proj, "l"), self.denied(call, "rule1"))
+        # A protected symlink passes its chain, and git lands in e's repo, judged as rule 1
+        # judges the cwd: never the project's own, where a lexical fold would land.
+        safe = self.protect(self.mkdir("proj", "safe"))
+        os.symlink(self.protect(os.path.join(evil, "sub")), os.path.join(safe, "l"))
+        reason = self.denied("git fetch safe/l/.. main", "rule1")
+        self.assertNotIn(os.path.join(evil, "sub"), reason)
+        self.assertIn(evil, reason)
+
+    def test_an_absolute_repository_word_whose_dotdot_leaves_a_swappable_dir_is_refused(self):
+        # A `..` the word itself spells leaves a dir a sandboxed session could swap for a
+        # symlink (writable, in a writable dir), which would move where git lands.
+        w = self.mkdir("w")
+        word = os.path.join(w, "..", "proj")
+        self.assertIn(w, self.denied(f"git fetch {word} main", "rule1"))
+
     def test_git_judges_a_repository_as_its_server_side_finds_it(self):
         # Review round 2: git tries <word>.git when <word> is missing, reads a file there as a
         # gitfile, and takes a file:// URL's path past any host part, %-decoded.
@@ -1379,6 +1406,19 @@ class Rule1RemoteUrls(Guard):
                         self.assertIn(f"the remote URL {value}", reason)
                         self.assertIn("network URL", reason)
                     self.restore(key)
+        self.allowed("git push")
+
+    def test_a_remote_url_with_dotdot_after_a_symlink_is_judged_where_git_opens_it(self):
+        # Review round 4: a URL `l/..` with l a symlink opens l's target's parent; folding it
+        # lexically would judge the project instead.
+        evil = os.path.join(self.tmp, "e")
+        os.makedirs(os.path.join(evil, "sub"))
+        self.git("init", "-q", evil, cwd=self.tmp)
+        os.symlink(os.path.join(evil, "sub"), os.path.join(self.proj, "l"))
+        self.remote("remote.origin.url", "l/..")
+        reason = self.denied("git push", "rule1", os.path.join(self.proj, "l"))
+        self.assertIn("the remote URL l/..", reason)
+        self.restore("remote.origin.url")
         self.allowed("git push")
 
     def test_an_ext_remote_url_is_refused(self):
