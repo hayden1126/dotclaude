@@ -443,6 +443,12 @@ class Rule1PathArguments(Guard):
                      f"lane adopt -- {self.other}"):
             with self.subTest(call=call):
                 self.refused(call, self.other_git)
+        # After `--` argparse takes every word as PATH, one that looks like an option too
+        # (review round 2).
+        for name in ("--id", "-h", "--help", "--i"):
+            os.symlink(self.other, os.path.join(self.proj, name))
+            with self.subTest(name=name):
+                self.refused(f"lane adopt -- {name}", self.other_git)
         self.allowed(f"lane adopt {self.lane}")
         for call in (f"lane adopt --id=lane {self.lane}", f"lane adopt --id x {self.lane}",
                      f"lane adopt {self.lane} --i x"):

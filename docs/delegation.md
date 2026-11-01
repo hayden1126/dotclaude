@@ -287,7 +287,8 @@ For a match it refuses, naming the path, when:
    a worktree top of its common dir (a lane, whose gitfile names `<common>/worktrees/<name>`
    and is named back there): one in a writable dir could be repointed after the check. Rule 1
    judges path arguments too, resolved from the cwd: `pass-respawn -C` (its `-C=<path>`
-   spelling, which argparse reads two ways, is refused: use `-C <path>`), `lane adopt PATH`, and
+   spelling, which argparse reads two ways, is refused: use `-C <path>`), `lane adopt PATH`
+   (each word after `--` too), and
    a local repository given to `git push`, `fetch`, `pull` or `ls-remote`, a relative one from
    the repo top too, where git opens it. Such a call must spell each word plainly (no
    expansion, glob, quote or space), its redirection targets too, since the guard reads the

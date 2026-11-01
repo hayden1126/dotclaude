@@ -25,7 +25,8 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      common dir (worktree_top): one in a writable dir could be repointed after the check. A
      path argument a head runs git in is judged the same way, resolved from the cwd
      (path_arguments: pass-respawn -C, whose -C=<path> spelling argparse reads two ways and is
-     refused, lane adopt PATH, a local repository for git push, fetch, pull and ls-remote,
+     refused, lane adopt PATH (each word after `--` too), a local repository for git push,
+     fetch, pull and ls-remote,
      relative ones from the repo top too, where git opens them), and such a call must spell its
      words plainly, naming no program for git to run (--receive-pack, --upload-pack, --exec,
      an ext:: remote) and no submodule recursion (check_git_words). git's words are read as
@@ -536,9 +537,13 @@ def path_arguments(words):
         return [(p, False) for p in out]
     if head == "lane" and args[:1] == ["adopt"]:
         # Every word but its options and `--id`'s value (argparse takes `--i` for it too): a
-        # missing path a sandboxed session could create is refused (check_below_top).
+        # missing path a sandboxed session could create is refused (check_below_top). After
+        # `--` every word is PATH to argparse, one that looks like an option too.
         out, skip = [], False
-        for w in args[1:]:
+        for i, w in enumerate(args[1:], 2):
+            if w == "--":
+                out += args[i:]
+                break
             if skip and not w.startswith("-"):
                 skip = False
             elif w in ("--i", "--id"):
