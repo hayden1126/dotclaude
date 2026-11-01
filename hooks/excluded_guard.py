@@ -35,7 +35,7 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      fetch, pull and ls-remote,
      relative ones from the repo top too, where git opens them), and such a call must spell its
      words plainly, naming no program for git to run (--receive-pack, --upload-pack, --exec,
-     an ext:: remote) and no submodule recursion (check_git_words). git's words are read as
+     an ext:: remote: check_git_words) and no submodule recursion (check_recursion). git's words are read as
      its parse-options reads them (git_argv, with git 2.43's option tables, which also hold
      fetch's hidden --recurse-submodules-default that `-h` omits; item 7): the
      repository is the first positional or --repo's value (every positional with fetch
@@ -82,8 +82,8 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      other than -R or --repo's spellings before its first word, or before the subcommand of
      the pr or issue group, is refused: cobra takes an unknown flag's next word as its value,
      so the form gh runs could differ from the one read. A git call whose last
-     --[no-]recurse-submodules flag (any prefix git takes, as git_argv resolves it, one source
-     for check_git_words and check_recursion) turns recursion on is refused, one whose last
+     --[no-]recurse-submodules flag (any prefix git takes, as git_argv resolves it; only
+     check_recursion decides) turns recursion on is refused, one whose last
      flag turns it off passes, and with no flag it is refused unless the effective config has
      recursion off; fetch's hidden --recurse-submodules-default refuses with any value but a
      false one. For fetch the last fetch.recurseSubmodules or submodule.recurse git reads must be
@@ -1018,21 +1018,17 @@ def check_server_repo(m, env, full, project, arg, url=None, link=None, missing=N
 def check_git_words(sub, args):
     """Refuse a git push, fetch, pull or ls-remote word naming what rule 1 can't judge: a program
     for git to run (an option of GIT_PROGRAM_OPTIONS by any prefix, ls-remote's -u, an ext::
-    remote, also as an option's value) or submodule recursion. A legacy remote file refuses in
-    check_rule1, whatever the call names (G-C). Recursion is read as git reads it (git_argv,
-    recursion_cli); args git_argv refuses are refused later, where it names the option."""
-    try:
-        options = git_argv(sub, args)[0]
-    except Refusal:
-        options = []
-    if recursion_cli(options) == "on":
-        raise Refusal("rule1", sub, f"`git {sub} {' '.join(args)}` turns submodule recursion "
-                      "on, which runs git in each submodule's own git dir, whose config the guard "
-                      "doesn't judge. Run it without submodule recursion.")
+    remote, also as an option's value). A legacy remote file refuses in check_rule1, whatever
+    the call names (G-C), and submodule recursion in check_recursion, which serves gh too. A
+    long option counts by the one name git's table resolves it to (`git pull --rec` is
+    --recurse-submodules), else by any prefix of a program option."""
+    table = GIT_OPTIONS[sub][0]
     for w in args:
         name = w[2:].split("=", 1)[0] if w.startswith("--") else ""
         value = w.split("=", 1)[1] if name and "=" in w else w
-        if (name and any(o.startswith(name) for o in GIT_PROGRAM_OPTIONS)
+        match = [name] if name in table else [n for n in table if n.startswith(name)]
+        if (name and (match[0] in GIT_PROGRAM_OPTIONS if len(match) == 1
+                      else any(o.startswith(name) for o in GIT_PROGRAM_OPTIONS))
                 or sub == "ls-remote" and re.match(r"-[^-]*u", w) or value.startswith("ext::")):
             raise Refusal("rule1", w, f"`git {sub}` with {w!r} names a program for git to run "
                           "outside the sandbox, which the guard can't judge. Run it without that "
