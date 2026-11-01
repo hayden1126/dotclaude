@@ -326,8 +326,10 @@ For a match it refuses, naming the path, when:
    config) is refused for every excluded call (G-C). Each local-path remote URL in the cwd's
    config, the repo's own trusted config included (`remote.<n>.url` and `pushurl`), is judged
    as a local repository word is, each path git's server side tries included (G-D). A
-   `url.<base>.insteadOf` or `pushInsteadOf` whose base is a local path is refused: git appends
-   the rest of the original URL to the base, so use a network base. `git fetch`, `pull` and
+   `url.<base>.insteadOf` or `pushInsteadOf` whose base is not a network URL with a host is
+   refused: git appends the rest of the original URL to the base, so use a network base. Only
+   `<scheme>://<host>...` with a scheme other than `file`, or scp-like `[user@]<host>:`, passes;
+   an empty base, any `file:` one, an empty host and `ext:` are refused. `git fetch`, `pull` and
    `push`, and `gh pr checkout`, `gh pr merge`, `gh issue develop` and `gh pr create` (which run
    them; gh's built-in aliases `gh pr co` and `gh pr new` too), run git in each submodule's own git dir (G-B). A git call whose last
    `--[no-]recurse-submodules` flag (any prefix git takes: pull reads `--rec` as

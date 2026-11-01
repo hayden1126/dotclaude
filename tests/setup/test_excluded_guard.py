@@ -1293,14 +1293,20 @@ class Rule1RemoteUrls(Guard):
         # git appends the rest of the original URL to the base, so a local base names a path
         # the guard can't judge from the base alone, even the project's own.
         for key in ("insteadOf", "pushInsteadOf"):
-            for base in (self.other, self.proj, "../x/", "file:///x/", "."):
+            # Only <scheme>://<host>... (not file) or scp-like [user@]host: passes (review
+            # round 2): an empty base, any file: one, an empty host or `ext:` (which a rest
+            # starting `:` turns into an ext:: URL) is refused.
+            for base in (self.other, self.proj, "../x/", "file:///x/", ".", "", "file:/",
+                         "file://", "/x", "x", "FILE://h/x", "https://", "https:///x", ":x",
+                         "@:", "ext:", "u@/x:"):
                 with self.subTest(key=key, base=base):
                     self.write(os.path.join(self.home, ".gitconfig"),
                                f'[url "{base}"]\n\t{key} = https://github.com/\n')
                     reason = self.denied("git push", "rule1", base)
                     self.assertIn(f"url.{base}.{key}", reason)
                     self.assertIn("network base", reason)
-            for base in ("https://mirror.example/", "git@github.com:", "ssh://h/"):
+            for base in ("https://mirror.example/", "git@github.com:", "ssh://h/",
+                         "https://github.com/", "github.com:", "ssh://git@h:22/x"):
                 with self.subTest(key=key, base=base):
                     self.write(os.path.join(self.home, ".gitconfig"),
                                f'[url "{base}"]\n\t{key} = https://github.com/\n')

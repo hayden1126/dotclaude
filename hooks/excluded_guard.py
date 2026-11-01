@@ -63,8 +63,10 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      branches/ is refused (G-C): git reads a legacy remote there, outside the judged config.
      Each local-path remote URL in the cwd's config chain, trusted files too (remote.*.url and
      pushurl), is judged too (G-D), as a repository word's path is (check_server_repo), and a
-     url.<base>.insteadOf or pushInsteadOf whose base is a local path is refused: git appends
-     the rest of the original URL to it. A URL's own repo doesn't have its URLs judged. git
+     url.<base>.insteadOf or pushInsteadOf whose base is not a network URL with a host is
+     refused (network_base: only <scheme>://<host>... with a scheme other than file, or
+     scp-like [user@]<host>:; an empty base, any file: one, an empty host and ext: refuse): git
+     appends the rest of the original URL to it. A URL's own repo doesn't have its URLs judged. git
      fetch, pull and push, and gh pr checkout, gh pr merge, gh issue develop and gh pr create
      (which run them; gh's aliases pr co and pr new too), recurse into each submodule's own git dir (G-B). A git call whose last
      --[no-]recurse-submodules flag (any prefix git takes, as git_argv resolves it, one source
@@ -1416,7 +1418,8 @@ def config_refs(path, home):
     and remote names in one config file. The URLs are each remote.<n>.url and pushurl value. The
     rewrites are (key, base) for each url.<base>.insteadOf or pushInsteadOf: git swaps a
     matching URL's prefix for the base and keeps the rest, so a URL git ends up using starts
-    with the base but is not the base itself (check_rule1 refuses a local one). The names are
+    with the base but is not the base itself (check_rule1 refuses all but a network_base). An
+    empty base counts too. The names are
     each <n> with a remote.<n>.url: git takes a name with none as a path. The groups are
     (group, members) for each remotes.<group> value, split on space, tab and newline as git
     fetch splits it; a three-level key's group is <subsection>.<key>, as git matches it. The
@@ -1435,7 +1438,7 @@ def config_refs(path, home):
             urls.append(value)
             if key == "url":
                 names.append(subsection)
-        elif section == "url" and key in ("insteadof", "pushinsteadof") and subsection:
+        elif section == "url" and key in ("insteadof", "pushinsteadof"):  # an empty base too
             rewrites.append((f"url.{subsection}.{REWRITE_KEYS[key]}", subsection))
         if not value:
             continue
@@ -1473,6 +1476,19 @@ def local_url_path(url):
     if colon >= 0 and (slash < 0 or colon < slash):
         return None
     return url
+
+
+def network_base(base):
+    """Whether a url.<base>.insteadOf or pushInsteadOf base is a network URL with a host:
+    `<scheme>://[user@]<host>...` with a scheme other than file, or scp-like `[user@]<host>:`.
+    Anything else (an empty base, any file: one, an empty host, a local path) is not, and nor is
+    `ext:`, which a rest starting `:` turns into an ext:: URL that runs a command."""
+    if base.lower().startswith(("file:", "ext:")):
+        return False
+    m = re.match(r"[A-Za-z][A-Za-z0-9+.-]*://(?:[^/@]*@)?([^/:]*)", base)
+    if m:
+        return bool(m.group(1))
+    return bool(re.match(r"(?:[^@/:]+@)?[^@/:]+:", base)) and local_url_path(base) is None
 
 
 def check_rule1(m, env, cwd, project, arg=None, url=None, walk=True):
@@ -1554,11 +1570,12 @@ def check_rule1(m, env, cwd, project, arg=None, url=None, walk=True):
             entry[1][0] += len(words) if certain else 0
     if arg is None and url is None:
         for key, base in rewrites:
-            if local_url_path(base) is not None:  # refuses an ext:: base itself
+            if not network_base(base):
                 raise Refusal("rule1", base, f"the config sets {key}: git rewrites a matching "
-                              "remote URL to this local base with the rest of the URL "
-                              "appended, a path the guard can't judge from the base alone. Use "
-                              "a network base (scheme://host/... or host:) instead.")
+                              "remote URL to this base with the rest of the URL appended, and "
+                              "a base that isn't a network URL with a host can name a path or "
+                              "a program the guard can't judge from the base alone. Use a "
+                              "network base (scheme://host/... or [user@]host:) instead.")
         for u in dict.fromkeys(urls):
             check_remote_url(m, env, u, hooks_base, cwd, project)
         for key, value in dict.fromkeys(defaults):
