@@ -93,7 +93,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **Live lanes** (briefs in each record). Merge order: 1 guard-gaps (`fix/guard-design-gaps`,
     carries the lead's notes; opened 2026-10-31 on Hayden's order: the excluded-guard design gaps
     below; it installs next, now that #157 released the hold), 2 ports (opened 2026-10-31 on
-    Hayden's order: ports below; reopened 2026-11-01 after its background session ended), 3
+    Hayden's order: ports below; reopened 2026-11-01 after its background session ended; parked
+    2026-11-01 at its pushed #155 head, `lane open ports` unparks it at its turn), 3
     design-audit (`chore/design-decision-audit`, opened 2026-11-01 on Hayden's pick: the
     design-decision re-evaluation, findings private; it may end with no PR), 4 practices
     (`feat/practices-auth-secrets`, its next PR; paused by Hayden since 2026-10-24, last so it
@@ -332,8 +333,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Four lanes run, cap full (In flight, Live lanes; state in their records, `lane ls`). Next
-     lane when a slot frees: Hayden's pick (Backlog, first item). Running sessions took
+  0. Three lanes run plus ports parked (In flight, Live lanes; state in their records,
+     `lane ls`). One slot is free: Hayden's pick (Backlog, first item). Running sessions took
      #157's cache narrowing live at its install (2026-10-31 14:39 local): a session started
      before it needs a `/pass` before a sandboxed uv, pip, pnpm, node-gyp, bun or Playwright run. Pending with Hayden, outside the lanes: `wsl --shutdown` at a break applies the 18 GB
      WSL cap set in `C:\Users\hayde\.wslconfig` on 2026-10-23 (backup `.wslconfig.bak-20261023`).
