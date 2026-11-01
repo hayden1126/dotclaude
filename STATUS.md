@@ -98,7 +98,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     design-audit (`chore/design-decision-audit`, opened 2026-11-01 on Hayden's pick: the
     design-decision re-evaluation, findings private; it may end with no PR), 4 practices
     (`feat/practices-auth-secrets`, its next PR; paused by Hayden since 2026-10-24, last so it
-    blocks no install; it conflicts with origin/main on its own, per lane-fixes' trial).
+    blocks no install; it conflicts with origin/main on its own, per lane-fixes' trial), 5
+    subagent-wait (`fix/subagent-moved-command`, opened 2026-11-01 on Hayden's pick: the subagent
+    180 s fix below).
     Merged and installed from main, all closed: chrome-dup (#151, 2026-10-29: one chrome-devtools
     server, the plugin's; sandbox gap fixes N1 and N3's bun part, `hooks/sandbox-caches.sh`; its
     install changed running sessions' sandbox live, [[cc-sandbox-config-reloads-live]]),
@@ -120,7 +122,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   Backlog:
   - **Next lane when a slot frees (Hayden's pick):** the serve jail (the lead's recommendation,
     since it closes live private rows), shared lane locks and structured `Keep open` all wait for
-    ports PR 1, whose lane CLI files they share; the subagent 180 s fix can open any time.
+    ports PR 1, whose lane CLI files they share.
   - G8 open probes (a) and (b) (Hayden's pick, 2026-10-14): Hayden runs
     `~/scratch/sandbox-audit/g8-probe/run.py` by hand with the sandbox off, because the auto-mode
     classifier refused the run. Results go into the private findings file's G8 section.
@@ -175,7 +177,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     holder and read the lock as free. Lane-able (`lane`,
     `lanelib.py`, `tests/lanes`, `docs/lanes.md`), after ports. Tell the
     capella-studio lead when it lands.
-  - **Subagent Bash moves to the background at 180 s** (medium; lane pass-fixes, session
+  - **Subagent Bash moves to the background at 180 s** (lane subagent-wait; medium; lane pass-fixes, session
     0eb4c7ff, 2026-10-30; Claude Code 2.1.316). A subagent's foreground `./wait.sh` (timeout
     600000) was moved to the background after 180 s; the agent handed back early ("not written"),
     resumed on the job's notice and did the work, and its second SubagentHandback was refused
@@ -333,8 +335,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Three lanes run plus ports parked (In flight, Live lanes; state in their records,
-     `lane ls`). One slot is free: Hayden's pick (Backlog, first item). Running sessions took
+  0. Four lanes run plus ports parked, cap full (In flight, Live lanes; state in their
+     records, `lane ls`). Next lane when a slot frees: Hayden's pick (Backlog, first item). Running sessions took
      #157's cache narrowing live at its install (2026-10-31 14:39 local): a session started
      before it needs a `/pass` before a sandboxed uv, pip, pnpm, node-gyp, bun or Playwright run. Pending with Hayden, outside the lanes: `wsl --shutdown` at a break applies the 18 GB
      WSL cap set in `C:\Users\hayde\.wslconfig` on 2026-10-23 (backup `.wslconfig.bak-20261023`).
