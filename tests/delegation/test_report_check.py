@@ -294,6 +294,28 @@ class WaitCheck(unittest.TestCase):
             self.transcript([moved_result("b1", path), notice])
             self.assertIsNone(self.run_hook(self.handback()), notice)
 
+    def test_a_launch_in_the_same_batch_counts_before_its_result_lands(self):
+        # the live `early` case, 2026-11-01: the agent sent the run_in_background Bash call and
+        # the handback in one message, and the launch's tool_result wasn't in the transcript
+        # yet when the handback's hook read it; the tool_use entry was
+        def use(tid, **inp):
+            return {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": tid, "name": "Bash", "input": inp}]}}
+        cmd = "python3 -c \"import time; time.sleep(45)\""
+        self.transcript([use("toolu_bg", command=cmd, run_in_background=True)])
+        reason = self.reason(self.run_hook(self.handback()))
+        self.assertIn("time.sleep(45)", reason)
+        # a foreground call's missing result isn't a launch: the batch's calls run in order
+        self.transcript([use("toolu_fg", command="ls")])
+        self.assertIsNone(self.run_hook(self.handback()))
+        # once its result lands, the launch line decides
+        path = self.output("b9", "x\n[exited with code 0]")
+        self.transcript([use("toolu_b9", command=cmd, run_in_background=True),
+                         dict(launched_result("b9", path), message={"role": "user", "content": [
+                             dict(launched_result("b9", path)["message"]["content"][0],
+                                  tool_use_id="toolu_b9")]})])
+        self.assertIsNone(self.run_hook(self.handback()))
+
     def test_only_the_unfinished_ones_are_named(self):
         done, running = self.output("bdone", "x\n[exited with code 0]"), self.output("brun")
         self.transcript([moved_result("bdone", done), launched_result("brun", running)])

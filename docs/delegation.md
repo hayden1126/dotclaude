@@ -1525,7 +1525,11 @@ background with ID: X` (`run_in_background`), `Command was moved to the backgrou
 cap, or a queued message), `Command did not complete within its Ns timeout and was moved to the
 background (ID: X)`, or `Command was manually backgrounded by user with ID: X` (Ctrl+B). Each
 names the output file. It has ended when a task notification for it is in that transcript, or its
-output file ends with `[exited with code N]` or `[killed]`. A report while one hasn't ended is
+output file ends with `[exited with code N]` or `[killed]`. A `run_in_background` Bash call whose
+result isn't in the transcript yet counts too, named by its command: in the second live `early`
+run the agent sent the launch and the handback in one message, and the launch's result was
+written after the handback's hook read the transcript (the calls themselves ran in order). A
+report while one hasn't ended is
 sent back, at the handback (auto mode) or at SubagentStop (other modes), naming the command and
 its output file and saying how to wait.
 

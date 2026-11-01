@@ -953,9 +953,10 @@ def early(root, env):
                   and "task-notification" in json.dumps(e.get("origin") or
                                                         (e.get("attachment") or {}).get("origin"))),
                  None)
-    delivered = next((i for i, e in enumerate(ents) if isinstance(e.get("toolUseResult"), dict)
-                      and e["toolUseResult"].get("success") is True
-                      and "Report delivered" in str(e["toolUseResult"].get("message"))), None)
+    # the handback's result entry carries no toolUseResult (2.1.316): read its text
+    delivered = next((i for i, e in enumerate(ents) if e.get("type") == "user"
+                      and '"success":true' in text_of_result(e).replace(" ", "")
+                      and "Report delivered" in text_of_result(e)), None)
     reports = [(e.get("tool_input") or {}).get("message") or ""
                for e in raw_events(root, sid, "PostToolUse")
                if e.get("agent_id") == aid and e.get("tool_name") == "SubagentHandback"]
