@@ -264,31 +264,111 @@ settings.
 For a match it refuses, naming the path, when:
 1. **The git repo is not the project's.** The cwd must resolve to the same common git dir as
    `CLAUDE_PROJECT_DIR`, or to no repo. A nested repo, a planted gitfile or a repo in a temp dir
-   has a config the session can write. The project's own `config` and `hooks/` are trusted, and
+   has a config the session can write. The cwd must also be its repo's top: from below it, or
+   from no repo, the call is refused when a dir git looks in on its way up (to the top, or to
+   `/` or a `GIT_CEILING_DIRECTORIES` entry) is writable, since a repo planted there after the
+   check would be the one git uses (G-E). The refusal names the top to run from. Path arguments
+   and local remote URLs are held to the same rule. A command that is one `lane addr --repo X`
+   call alone (no other call, wrapper or substitution) skips the cwd's walk, since with `--repo`
+   lane resolves only X's lanes repo and runs no git in the cwd; it still has the rest of rule 1
+   judged. The project's own `config` and `hooks/` are trusted, and
    so is `config.worktree` when the cwd's gitdir is the project's own, since Claude Code keeps
-   them read-only for the session; another worktree's `config.worktree` is judged. That trust
+   them read-only for the session; another worktree's `config.worktree` is judged when git reads it
+   (`extensions.worktreeConfig` on in the common config). That trust
    rests on Claude Code protecting the session's gitfile and its `worktrees/<name>/commondir`,
    not the main `.git/` dir, so the common dir comes from git's real layout: a gitdir with a
    `commondir` file must sit at `<common>/worktrees/<name>` and name that `<common>`, which holds
-   no `commondir` itself. Any other layout, in the cwd's repo or the project's, is refused. A
-   dir counts as a repo as soon as git would take it as one: a `.git` entry, or `HEAD` with
-   `objects/` and `refs/` or with a `commondir`. Rule 1 judges path arguments too, resolved
-   from the cwd: `pass-respawn -C`, `lane adopt PATH`, and a local repository given to
-   `git push`, `fetch`, `pull` or `ls-remote`. Such a call must spell each word plainly (no
+   no `commondir` itself. Any other layout, in the cwd's repo or the project's, is refused.
+   Pointer files (`commondir`, a gitfile, which must start exactly `gitdir: `, and a worktree's
+   `gitdir`) are read as git reads them, with only trailing LFs and CRs trimmed. A
+   dir counts as a repo when git's `is_git_directory` takes it: a `HEAD` naming `refs/...`
+   (after `ref:` and git's own whitespace, which is only space, tab, CR and LF) or an object
+   id, and `objects/` and `refs/` (in the dir a `commondir` names, if any). A git
+   dir git might look past (a `.git` dir, or a dir with `HEAD` and `refs/`, `objects/` or a
+   `commondir`, that fails that check) is refused, at the cwd's walk and at each path git's
+   server side tries: git would skip it and use the next repository it finds. A repo's own `<top>/.git` (a gitfile or a
+   `.git` hop) is judged along its symlinks like any other file, except at the project's top or
+   a worktree top of its common dir (a lane, whose gitfile names `<common>/worktrees/<name>`
+   and is named back there): one in a writable dir could be repointed after the check. Rule 1
+   judges path arguments too, resolved from the cwd: `pass-respawn -C` (its `-C=<path>`
+   spelling, which argparse reads two ways, is refused: use `-C <path>`), `lane adopt PATH`
+   (each word after `--` too), and
+   a local repository given to `git push`, `fetch`, `pull` or `ls-remote`, a relative one from
+   the repo top too, where git opens it. Such a call must spell each word plainly (no
    expansion, glob, quote or space), its redirection targets too, since the guard reads the
-   text before the shell rewrites it. The guard finds these calls as zsh splits the command,
+   text before the shell rewrites it. A git refspec or option value may also use the revision
+   spellings zsh hands on unchanged with the options Claude Code's shell snapshot sets
+   (item 10, tested against zsh): `~` and `^` anywhere but a leading `~`, `@{...}` or `^{...}`
+   with no `,`, `..` or brace inside, and `%`. A spelling zsh rewrites (`@{a,b}`, `@{1..3}`,
+   `~1`) stays refused. The guard finds these calls as zsh splits the command,
    anywhere in it (a later piece, a subshell, a substitution), and refuses a command it can't
-   read and a git option before those subcommands. A git repository is judged where git's own
-   lookup finds it (a `.git` suffix, a gitfile, a `file://` URL). An option of those git calls that names a program for git to run, an
-   `ext::` remote, submodule recursion, a remote defined outside `.git/config` (the legacy
-   `.git/remotes` and `.git/branches` files) and a `%` in any word are refused, and
-   `delegation-ledger hook` runs only as a hook, never through Bash. The
+   read and a git option before those subcommands. git's words are read as its own option
+   parser reads them, from tables of git 2.43's options (`git <sub> -h`, captured in
+   `tests/setup/data/git-help/` and tied to the tables by a test that also fails on another git
+   version; the tables also hold the options `-h` hides but git parses, fetch's
+   `--recurse-submodules-default`, which makes `git fetch --no-rec` ambiguous): the repository is the first positional or `--repo`'s value (every positional with
+   `fetch --multiple`), later positionals are refspecs and never paths, and an option the
+   tables don't list, or an ambiguous prefix, is refused by name (item 7). A repository word
+   that names a remote the config surely defines is judged by its URL (G-D). For `fetch` and
+   `pull`, one that names a `remotes.<group>` value is judged by each member in turn, as git
+   fetches them, and a member git would read as an option is refused. Any other repository
+   word is a local path to git, judged whether it exists or not (G-E, item 8), where git's
+   server side looks for it: `<p>/.git`, `<p>`, `<p>.git/.git` and `<p>.git` in that order, the
+   first that is a file or a git dir winning. Each is taken as the OS opens it: a `..` after a
+   symlink lands beside its target (a relative word's `..` past the repo top or cwd it starts
+   from follows git's own cwd). Each that exists is judged along its symlinks and
+   as the cwd's repo is (a gitfile's relative gitdir read from the dir of the path git opened,
+   not a symlink target's); one that is missing, tried before the first git would take, is
+   refused when a sandboxed session could create it. A call naming no repository takes the
+   default remote (`branch.<b>.pushRemote` or `remote`, `remote.pushDefault`, else `origin`):
+   it is refused unless each such value in the config chain and `origin` name a remote the
+   config surely defines, since git reads any other name from a legacy remote file planted
+   after the check. Name the remote on the command line or configure it. `lane new`, `lane
+   done` and `lane park` run their own fetch of `origin`, so they are refused unless `origin`
+   names such a remote too. Each such value that
+   names no remote is also judged as a path, as a remote URL is. A `file://` URL with a host part or a
+   `%`-escape is refused. An option of those git calls that names a program for git to run, an
+   `ext::` remote, a recursion flag that turns recursion on and a `%` in a repository word are
+   refused, and
+   `delegation-ledger hook` runs only as a hook, never through Bash. A repo whose common git
+   dir holds any entry in `remotes/` or `branches/` (legacy remote files, outside the judged
+   config) is refused for every excluded call (G-C). Each local-path remote URL in the cwd's
+   config, the repo's own trusted config included (`remote.<n>.url` and `pushurl`), is judged
+   as a local repository word is, each path git's server side tries included (G-D). A
+   `url.<base>.insteadOf` or `pushInsteadOf` whose base is not a network URL with a host is
+   refused: git appends the rest of the original URL to the base, so use a network base. Only
+   `<scheme>://<host>...` with a scheme other than `file`, or scp-like `[user@]<host>:`, passes;
+   an empty base, any `file:` one, an empty host and `ext:` are refused. `git fetch`, `pull` and
+   `push`, and `gh pr checkout`, `gh pr merge`, `gh issue develop` and `gh pr create` (which run
+   them; gh's built-in aliases `gh pr co` and `gh pr new` too), run git in each submodule's own git dir (G-B). A `gh` call with a
+   flag before its first word, or before the subcommand of `gh pr` or `gh issue`, is refused
+   unless the flag is `-R` or `--repo` in one of its spellings: gh's parser takes an unknown
+   flag's next word as its value (`gh pr -b x checkout` runs `pr checkout`), so put flags
+   after the subcommand. A git call whose last
+   `--[no-]recurse-submodules` flag (any prefix git takes: pull reads `--rec` as
+   `--recurse-submodules`) turns recursion on is refused, one whose last flag turns it off
+   passes, and with no flag it is refused unless the effective config has recursion off. For
+   fetch the last `fetch.recurseSubmodules` or
+   `submodule.recurse` git reads must be false; for pull and `gh pr checkout` (whose
+   `git checkout` honours it) `submodule.recurse` too; for push the last
+   `push.recurseSubmodules` or `submodule.recurse` (probed with git 2.43: `check`, `on-demand`
+   and `only` all run git in the submodule), unset counting as off. The refusal names the key
+   and file that turn it on, and says when a switch-off sits in a file git may not read (an
+   `includeIf` file), which doesn't count. `gh pr checkout --recurse-submodules` is refused in
+   every spelling gh takes but a false `=` value. `./setup.sh` sets
+   `fetch.recurseSubmodules false` in the global config on every run and warns when
+   `submodule.recurse` is true there, and `lane`'s own fetches pass the flag. The
    other config git reads must be write-protected: the global and XDG files (or
    `GIT_CONFIG_GLOBAL`), `/etc/gitconfig` (or `GIT_CONFIG_SYSTEM`, skipped under
-   `GIT_CONFIG_NOSYSTEM`), every `include.path` and `includeIf` target, and a `core.hooksPath`
+   `GIT_CONFIG_NOSYSTEM`; either variable set but empty names no file, as git reads it), every `include.path` and `includeIf` target (a relative one from the
+   dir of the config path git opened, not a symlink target's, and a `..` taken after the
+   symlinks before it, as the OS opens the path: `a/link/../x` is beside link's target, not
+   `a/x`), and a `core.hooksPath`
    dir and each file in it. Each is followed through its symlinks (each hop and the dir of each
    must be write-protected), and anything that exists there is judged, not only a regular file.
-   A repo whose install step points `core.hooksPath` into the repo (husky and similar) is
+   `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY` and `GIT_ALTERNATE_OBJECT_DIRECTORIES` are refused
+   while set, even empty: they move where git takes config or objects from, which the guard
+   doesn't model, so unset them for excluded commands. A repo whose install step points `core.hooksPath` into the repo (husky and similar) is
    refused on its first excluded call, `gh` included (it runs git, and `gh pr checkout` runs
    hooks), until an Edit deny rule for that dir is in `settings.machine.json` and `./setup.sh`
    reruns. The refusal names the dir and the rule.
