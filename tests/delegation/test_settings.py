@@ -242,19 +242,35 @@ class Baseline(unittest.TestCase):
     def test_sandboxed_package_managers_write_their_own_caches(self):
         # Sandbox gaps N1 and N3 (2026-10-25): plugin MCP servers run unsandboxed from
         # ~/.npm/_npx, which npx reuses without rechecking, and bun's global installs (the status
-        # line's ccstatusline) are hardlinks into ~/.bun/install/cache. Both leave allowWrite;
-        # the hook points sandboxed Bash at ~/.cache/claude-sandbox through CLAUDE_ENV_FILE. A
-        # settings env entry would reach the MCP servers and the status line.
+        # line's ccstatusline) are hardlinks into ~/.bun/install/cache; uv, pip, pnpm, node-gyp
+        # and Playwright reuse their caches the same way. All leave allowWrite; the hook points
+        # sandboxed Bash at ~/.cache/claude-sandbox through CLAUDE_ENV_FILE, except Playwright,
+        # which launches Hayden's browsers read-only. A settings env entry would reach the MCP
+        # servers and the status line.
         allow = S["sandbox"]["filesystem"]["allowWrite"]
-        for default in ("~/.npm", "~/.bun/install/cache"):
+        for default in ("~/.npm", "~/.bun/install/cache", "~/.cache/uv", "~/.cache/pip",
+                        "~/.cache/pnpm", "~/.cache/node-gyp", "~/.cache/ms-playwright",
+                        "~/.local/share/uv", "~/.local/share/pnpm"):
             # Neither the dir, anything under it, nor a parent of it (a "~" entry reopens both).
             self.assertFalse([p for p in allow if p == default or p.startswith(default + "/")
                               or default.startswith(p.rstrip("/") + "/")], allow)
         self.assertIn("~/.cache/claude-sandbox", allow)
         with open(os.path.join(REPO, "hooks", "sandbox-caches.sh")) as f:
             self.assertIn('root="$HOME/.cache/claude-sandbox"', f.read())
-        self.assertFalse([k for k in S.get("env", {})
-                          if k.lower() in ("npm_config_cache", "bun_install_cache_dir")])
+        cache_vars = ("npm_config_cache", "bun_install_cache_dir", "uv_cache_dir",
+                      "uv_python_downloads", "pip_cache_dir", "pnpm_home", "npm_config_devdir",
+                      "playwright_browsers_path")
+        self.assertFalse([k for k in S.get("env", {}) if k.lower() in cache_vars])
+        # Sandboxed installs fetch into their own dirs: gyp headers. Not Pythons or Playwright's
+        # browsers: sandboxed uv and Playwright run Hayden's own, read-only, so neither downloads
+        # one (Chromium's builds would redirect to storage.googleapis.com, where any
+        # public-write bucket takes uploads).
+        hosts = S["sandbox"]["network"]["allowedDomains"]
+        self.assertIn("nodejs.org", hosts)
+        for host in ("releases.astral.sh", "storage.googleapis.com", "cdn.playwright.dev",
+                     "playwright.download.prss.microsoft.com"):
+            self.assertNotIn(host, hosts)
+        self.assertNotIn("~/.local/share/uv", allow)
         hook = 'bash "$HOME/.claude/hooks/sandbox-caches.sh"'
         (entry,) = [e for e in S["hooks"]["SessionStart"]
                     if any("sandbox-caches" in h["command"] for h in e["hooks"])]
