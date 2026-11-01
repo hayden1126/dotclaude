@@ -1239,6 +1239,28 @@ class Rule1Config(Guard):
         self.env["GIT_CONFIG_GLOBAL"] = real
         self.denied("git push", "rule1", real)
 
+    def test_a_relative_include_is_read_from_the_dir_of_the_path_git_opened(self):
+        # git joins a relative include.path to the dir of the config path it opened, not to a
+        # symlink target's (review round 2), as file_occurrences already does.
+        opened_dir = self.protect(self.mkdir("popen"))
+        target_dir = self.protect(self.mkdir("ptarget"))
+        writable = self.mkdir("wcfg")
+        real = self.write(os.path.join(target_dir, "global"), "[include]\n\tpath = sub/inc\n")
+        link = os.path.join(opened_dir, "global")
+        os.symlink(real, link)
+        os.symlink(writable, os.path.join(opened_dir, "sub"))
+        inc = self.write(os.path.join(writable, "inc"), "[x]\n\ty = opened\n")
+        p = subprocess.run(["git", "config", "--global", "--includes", "x.y"], cwd=self.tmp,
+                           env={"PATH": "/usr/bin:/bin", "HOME": self.home,
+                                "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": link},
+                           capture_output=True, text=True)
+        self.assertEqual(p.stdout.strip(), "opened")  # git read <opened dir>/sub/inc
+        self.env["GIT_CONFIG_GLOBAL"] = link
+        self.denied("git push", "rule1", os.path.join(opened_dir, "sub"))
+        os.remove(inc)
+        os.remove(os.path.join(opened_dir, "sub"))
+        self.allowed("git push")
+
     def test_a_writable_git_config_system_is_refused_unless_nosystem(self):
         system = self.write(os.path.join(self.tmp, "wcfg", "system"), "")
         self.env["GIT_CONFIG_SYSTEM"] = system

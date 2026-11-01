@@ -350,7 +350,8 @@ For a match it refuses, naming the path, when:
    `submodule.recurse` is true there, and `lane`'s own fetches pass the flag. The
    other config git reads must be write-protected: the global and XDG files (or
    `GIT_CONFIG_GLOBAL`), `/etc/gitconfig` (or `GIT_CONFIG_SYSTEM`, skipped under
-   `GIT_CONFIG_NOSYSTEM`; either variable set but empty names no file, as git reads it), every `include.path` and `includeIf` target, and a `core.hooksPath`
+   `GIT_CONFIG_NOSYSTEM`; either variable set but empty names no file, as git reads it), every `include.path` and `includeIf` target (a relative one from the
+   dir of the config path git opened, not a symlink target's), and a `core.hooksPath`
    dir and each file in it. Each is followed through its symlinks (each hop and the dir of each
    must be write-protected), and anything that exists there is judged, not only a regular file.
    A repo whose install step points `core.hooksPath` into the repo (husky and similar) is

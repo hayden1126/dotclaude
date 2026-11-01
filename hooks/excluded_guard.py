@@ -6,8 +6,9 @@ act on anything a sandboxed session can write. For a call that matches, three ch
   1. The git config the cwd resolves to. A repo at the cwd must be the project's own repository
      (same common git dir as CLAUDE_PROJECT_DIR); a nested repo, a planted gitfile or a repo in a
      temp dir is refused. Every other config file git reads (global, XDG, system, each
-     include.path / includeIf.*.path target, recursively, and a core.hooksPath dir and each file
-     in it) must be protected, judged along its symlink chain: each hop and the dir of each. Any
+     include.path / includeIf.*.path target, recursively, a relative one read from the dir of
+     the path git opened and not a symlink target's, and a core.hooksPath dir and each file in
+     it) must be protected, judged along its symlink chain: each hop and the dir of each. Any
      path that exists is judged; only a regular file is parsed. The project repo's own config
      and hooks/ are trusted (Claude Code protects them for the session), and so is
      config.worktree when the cwd's gitdir is the project's own; another worktree's is judged.
@@ -1428,8 +1429,9 @@ def config_entries(path):
         yield section, subsection, key, parse_value(value) if eq else "true"
 
 
-def config_refs(path, home):
-    """Include targets (path, whether an includeIf names it), core.hooksPath values, remote URLs
+def config_refs(path, home, base=None):
+    """Include targets (path, whether an includeIf names it; a relative one joined to `base`,
+    by default the file's own dir), core.hooksPath values, remote URLs
     and remote names in one config file. The URLs are each remote.<n>.url and pushurl value. The
     rewrites are (key, base) for each url.<base>.insteadOf or pushInsteadOf: git swaps a
     matching URL's prefix for the base and keeps the rest, so a URL git ends up using starts
@@ -1459,7 +1461,8 @@ def config_refs(path, home):
             continue
         if section in ("include", "includeif") and key == "path":
             v = expand(value, home)
-            includes.append((os.path.join(os.path.dirname(path), v), section == "includeif"))
+            includes.append((os.path.join(base or os.path.dirname(path), v),
+                             section == "includeif"))
         elif section == "core" and key == "hookspath":
             hooks.append(expand(value, home))
     return includes, hooks, urls, names, groups, defaults, rewrites
@@ -1569,7 +1572,9 @@ def check_rule1(m, env, cwd, project, arg=None, url=None, walk=True):
                 f"write ({bad}).", protect=m))
         if not os.path.isfile(target):
             continue  # judged above; only a regular file is parsed
-        includes, hooks, found, names, members, named, swaps = config_refs(target, home)
+        # A relative include is read from the dir of the path git opened, not the target's.
+        includes, hooks, found, names, members, named, swaps = config_refs(
+            target, home, os.path.dirname(path))
         defaults += named
         rewrites += swaps
         if depth < INCLUDE_DEPTH:
