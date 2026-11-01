@@ -273,7 +273,8 @@ For a match it refuses, naming the path, when:
    lane resolves only X's lanes repo and runs no git in the cwd; it still has the rest of rule 1
    judged. The project's own `config` and `hooks/` are trusted, and
    so is `config.worktree` when the cwd's gitdir is the project's own, since Claude Code keeps
-   them read-only for the session; another worktree's `config.worktree` is judged. That trust
+   them read-only for the session; another worktree's `config.worktree` is judged when git reads it
+   (`extensions.worktreeConfig` on in the common config). That trust
    rests on Claude Code protecting the session's gitfile and its `worktrees/<name>/commondir`,
    not the main `.git/` dir, so the common dir comes from git's real layout: a gitdir with a
    `commondir` file must sit at `<common>/worktrees/<name>` and name that `<common>`, which holds

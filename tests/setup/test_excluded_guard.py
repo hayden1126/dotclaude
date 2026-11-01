@@ -233,6 +233,8 @@ class Rule1Repository(Guard):
         self.env["CLAUDE_PROJECT_DIR"] = self.lane
         self.allowed("git push", cwd=self.proj)
         cfg = self.write(os.path.join(self.proj, ".git", "config.worktree"), "")
+        self.allowed("git push", cwd=self.proj)  # git reads it only with the extension on
+        self.git("config", "extensions.worktreeConfig", "true", cwd=self.proj)
         self.denied("git push", "rule1", cfg, cwd=self.proj)
 
     def test_a_legacy_remote_file_in_the_common_dir_is_refused_g_c(self):
@@ -356,6 +358,16 @@ class Rule1PathArguments(Guard):
 
     def refused(self, call, path=None):
         return self.denied(call, "rule1", path)
+
+    def test_a_lanes_config_worktree_is_judged_only_when_git_reads_it(self):
+        # The sandbox leaves an empty file where it mounts over a missing protected one; git
+        # reads another worktree's config.worktree only with extensions.worktreeConfig on in the
+        # common config (review round 3).
+        cfg = self.write(os.path.join(self.proj, ".git", "worktrees", "lane", "config.worktree"),
+                         "")
+        self.allowed(f"pass-respawn -C {self.lane}")
+        self.git("config", "extensions.worktreeConfig", "true", cwd=self.proj)
+        self.refused(f"pass-respawn -C {self.lane}", cfg)
 
     def test_pass_respawn_C_in_another_repo_is_refused_in_every_spelling(self):
         o = self.other

@@ -11,7 +11,8 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      it) must be protected, judged along its symlink chain: each hop and the dir of each. Any
      path that exists is judged; only a regular file is parsed. The project repo's own config
      and hooks/ are trusted (Claude Code protects them for the session), and so is
-     config.worktree when the cwd's gitdir is the project's own; another worktree's is judged.
+     config.worktree when the cwd's gitdir is the project's own; another worktree's is judged
+     when git reads it (extensions.worktreeConfig on in the common config).
      That trust rests on Claude Code protecting the session's gitfile and its
      worktrees/<name>/commondir, not the main .git/ dir, so the common dir comes from git's real
      layout: a gitdir with a commondir file must sit at <common>/worktrees/<name> with its
@@ -1559,10 +1560,16 @@ def check_rule1(m, env, cwd, project, arg=None, url=None, walk=True):
         gitdir, common, top = repo
         check_legacy_remotes(common)
         # Claude Code protects the session's own gitdir, so config.worktree is trusted only there.
+        # Another worktree's is judged only when git reads it: the sandbox leaves an empty file
+        # where it mounts over a missing protected one.
         trusted = [os.path.join(common, "config")]
         worktree_cfg = os.path.join(gitdir, "config.worktree")
-        (trusted if gitdir == proj[0] else files).append(worktree_cfg)
-        if not reads_worktree_config(common):
+        reads = reads_worktree_config(common)
+        if gitdir == proj[0]:
+            trusted.append(worktree_cfg)
+        elif reads:
+            files.append(worktree_cfg)
+        if not reads:
             unsure.add(os.path.abspath(os.path.join(cwd, worktree_cfg)))
     files += config_files(env, home)
     seen, urls, remotes, groups, defaults, rewrites = set(), [], set(), {}, [], []
