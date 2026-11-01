@@ -711,7 +711,8 @@ class Rm(Base):
 
     def test_rm_inside_root_temp_and_allow_write_passes(self):
         for cmd in ("rm -rf build", "rm -rf /tmp/claude-%d/x" % os.getuid(), "rm -f *.pyc",
-                    "rm -rf ~/.cache/uv/some-entry", "find build -name '*.o' -delete"):
+                    "rm -rf ~/.cache/claude-sandbox/uv/some-entry",  # allowWrite's only cache dir
+                    "find build -name '*.o' -delete"):
             self.assertIsNone(self.bash(cmd), cmd)
 
 

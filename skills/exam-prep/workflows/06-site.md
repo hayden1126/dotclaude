@@ -85,9 +85,10 @@ From the hub root:
    Playwright in `_build/node_modules/`, the hub's `node_modules/` or npm's global root, or at the
    package directory `EXAM_PREP_PLAYWRIGHT` names. With none, it says so and exits 2: install it
    once outside the hub's tracked files (`npm install playwright` in `_build/`, whose
-   `node_modules/` and `package*.json` are gitignored, then `npx playwright install chromium`), with
-   `allowed_domains` registry.npmjs.org, cdn.playwright.dev, playwright.download.prss.microsoft.com
-   and storage.googleapis.com (a sandbox denial names any other host it needs).
+   `node_modules/` and `package*.json` are gitignored), with `allowed_domains` registry.npmjs.org
+   (a sandbox denial names any other host it needs). Its browser comes from the user's terminal:
+   sandboxed Bash can't write Playwright's browsers dir, so ask them to run `npx
+   playwright@<the version _build/ installed> install chromium-headless-shell` there.
 4. Look at the screenshots yourself against `<skill>/templates/chassis-shots/`: the checks pass on
    a page that still looks wrong.
 

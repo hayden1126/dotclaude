@@ -1509,7 +1509,9 @@ wins.
     is not in `allowWrite`; sandboxed Bash's npm uses `~/.cache/claude-sandbox/npm` (README,
     `sandbox-caches.sh`). Bun's global installs are hardlinks into `~/.bun/install/cache`
     (the status line's `ccstatusline`, gap N3), so that cache is out too, for
-    `~/.cache/claude-sandbox/bun`. The sandbox runtime sets `SANDBOX_RUNTIME=1` inside the
+    `~/.cache/claude-sandbox/bun`. uv, pip, pnpm, node-gyp and Playwright are the same class
+    (N3), so `~/.cache/claude-sandbox` is the only `allowWrite` entry and the hook exports each
+    tool's var. The sandbox runtime sets `SANDBOX_RUNTIME=1` inside the
     sandbox, and Claude Code inlines `CLAUDE_ENV_FILE` into the command it runs there (2.1.310).
     Every npx run writes into its tree (a lock and `package.json`), so a `denyWrite` on `_npx`
     alone would break sandboxed npx;
