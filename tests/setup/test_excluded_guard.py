@@ -1394,6 +1394,23 @@ class SubmoduleRecursion(Guard):
         self.assertEqual(files({"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/g"}, self.home),
                          ["/g"])
 
+    def test_the_refusal_names_the_key_on_and_a_switch_off_that_doesnt_count(self):
+        reason = self.denied("git fetch", "rule1", "fetch.recurseSubmodules")
+        self.assertIn("none of fetch.recurseSubmodules or submodule.recurse is set", reason)
+        self.write(self.gitconfig, RECURSE_OFF + "[submodule]\n\trecurse = yes\n")
+        reason = self.denied("git fetch", "rule1", "submodule.recurse")
+        self.assertIn(f"submodule.recurse=yes in {self.gitconfig}", reason)
+        # A switch-off from an includeIf file: git may not read it, so it doesn't count.
+        off = self.write(os.path.join(self.protect(self.mkdir("inc")), "off"), RECURSE_OFF)
+        self.write_settings({"excludedCommands": EXCLUDED + self.FORMS})  # protect() reset it
+        self.write(self.gitconfig, f'[includeIf "gitdir:{self.proj}/"]\n\tpath = {off}\n')
+        reason = self.denied("git fetch", "rule1", "fetch.recurseSubmodules")
+        self.assertIn(f"fetch.recurseSubmodules=false in {off} doesn't count", reason)
+        self.assertIn("includeIf", reason)
+        self.write(self.gitconfig, "[push]\n\trecurseSubmodules = check\n")
+        self.assertIn(f"push.recurseSubmodules=check in {self.gitconfig}",
+                      self.denied("git push", "rule1", "push.recurseSubmodules"))
+
     def test_pull_also_needs_submodule_recurse_off(self):
         # pull updates each submodule after the merge when submodule.recurse is on, whatever
         # fetch.recurseSubmodules says.

@@ -306,12 +306,13 @@ PY
 
 # git: no submodule recursion on fetch or pull (excluded-guard G-B). A fetch outside the
 # sandbox would run git in each submodule's own git dir, which a sandboxed session can write;
-# the guard refuses fetch and pull until this is off. Set only when it isn't false already.
-if [ "$(git config --global --includes --type=bool --get fetch.recurseSubmodules 2>/dev/null)" = false ]; then
-    say "git: fetch.recurseSubmodules is already false globally"
-else
-    git config --global --replace-all fetch.recurseSubmodules false
-    say "git: set fetch.recurseSubmodules false globally (excluded-guard G-B)"
+# the guard refuses fetch and pull until this is off. Set on every run, in the global file
+# itself: a value from an includeIf file doesn't count for the guard. submodule.recurse on
+# turns recursion back on for pull, gh pr checkout and push, so warn about it.
+git config --global --replace-all fetch.recurseSubmodules false
+say "git: set fetch.recurseSubmodules false globally (excluded-guard G-B)"
+if [ "$(git config --global --type=bool --get submodule.recurse 2>/dev/null)" = true ]; then
+    warn "git: submodule.recurse is true globally, so excluded-guard refuses git pull, gh pr checkout and git push (G-B): run \`git config --global submodule.recurse false\`"
 fi
 
 # ---------------------------------------------------------------------------

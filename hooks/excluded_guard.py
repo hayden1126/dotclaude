@@ -1570,8 +1570,9 @@ GO_FALSE = {"false", "0", "f", "F", "FALSE", "False"}
 
 
 def config_occurrences(env, repo, home):
-    """(key, value, certain) for each fetch.recurseSubmodules and submodule.recurse git reads,
-    in git's order: system, XDG, global, the repo's config, its config.worktree, each include
+    """(key, value, certain, source) for each fetch.recurseSubmodules, push.recurseSubmodules
+    and submodule.recurse git reads (source: the file, or the variable that sets it), in git's
+    order: system, XDG, global, the repo's config, its config.worktree, each include
     in place, then GIT_CONFIG_COUNT's keys and GIT_CONFIG_PARAMETERS. A value from an includeIf
     (whose condition the guard doesn't evaluate), or a config.worktree git may not read, is not
     certain."""
@@ -1593,7 +1594,8 @@ def config_occurrences(env, repo, home):
             if f"GIT_CONFIG_KEY_{i}" not in env:
                 raise Refusal("rule1", "GIT_CONFIG_COUNT", f"GIT_CONFIG_KEY_{i} is unset under "
                               "GIT_CONFIG_COUNT. Unset GIT_CONFIG_COUNT for excluded commands.")
-            pairs.append((env[f"GIT_CONFIG_KEY_{i}"], env.get(f"GIT_CONFIG_VALUE_{i}", "")))
+            pairs.append((env[f"GIT_CONFIG_KEY_{i}"], env.get(f"GIT_CONFIG_VALUE_{i}", ""),
+                          "GIT_CONFIG_COUNT"))
     params = env.get("GIT_CONFIG_PARAMETERS")
     if params:
         try:
@@ -1603,15 +1605,15 @@ def config_occurrences(env, repo, home):
                           "GIT_CONFIG_PARAMETERS. Unset it for excluded commands.")
         for w in words:
             key, eq, value = w.partition("=")
-            pairs.append((key, value if eq else "true"))
-    for key, value in pairs:
+            pairs.append((key, value if eq else "true", "GIT_CONFIG_PARAMETERS"))
+    for key, value, source in pairs:
         section, _, rest = key.partition(".")
         sub, _, name = rest.rpartition(".")
         if section.lower() in ("include", "includeif") and name.lower() == "path":
             if os.path.isabs(value):  # git refuses a relative one from the command line
                 out += file_occurrences(value, section.lower() == "include" and not sub, home, 1)
         elif not sub and f"{section}.{name}".lower() in RECURSE_KEYS | PUSH_KEYS:
-            out.append((f"{section}.{name}".lower(), value, True))
+            out.append((f"{section}.{name}".lower(), value, True, source))
     return out
 
 
@@ -1627,38 +1629,59 @@ def file_occurrences(path, certain, home, depth):
                 out += file_occurrences(target, certain and section == "include" and not sub,
                                         home, depth + 1)
         elif not sub and f"{section}.{key}" in RECURSE_KEYS | PUSH_KEYS:
-            out.append((f"{section}.{key}", value, certain))
+            out.append((f"{section}.{key}", value, certain, path))
     return out
 
 
-def config_false(occurrences, keys, unset):
-    """Whether the last of `keys` git reads is surely a git false value (`unset` when none is
-    set). A value that is not certain can only turn it on."""
-    off = unset
-    for key, value, certain in occurrences:
-        if key in keys:
-            false = value.lower() in GIT_FALSE
-            off = false if certain else off and false
-    return off
+KEY_NAMES = {"fetch.recursesubmodules": "fetch.recurseSubmodules",
+             "push.recursesubmodules": "push.recurseSubmodules",
+             "submodule.recurse": "submodule.recurse"}
+
+
+def recursion_verdict(occurrences, keys, unset):
+    """(key, why) for what turns recursion on, or None when the last of `keys` git reads is
+    surely a git false value (`unset` when none is set). A value that is not certain can only
+    turn it on. key is the one to switch off; why names the value and file that turn it on (or
+    that none is set), and each later switch-off from a file git may not read, which doesn't
+    count."""
+    off, on_at, ignored = unset, None, []
+    for key, value, certain, source in occurrences:
+        if key not in keys:
+            continue
+        false = value.lower() in GIT_FALSE
+        if certain:
+            off, on_at, ignored = false, None if false else (key, value, source), []
+        elif false:
+            ignored.append((key, source))
+        else:
+            off, on_at, ignored = False, (key, value, source), []
+    if off:
+        return None
+    names = " or ".join(KEY_NAMES[k] for k in sorted(keys))
+    if on_at:
+        key, why = on_at[0], f"{KEY_NAMES[on_at[0]]}={on_at[1]} in {on_at[2]}"
+    else:
+        key = sorted(keys)[0]
+        why = f"none of {names} is set, and git then recurses into changed submodules"
+    for k, source in ignored:
+        why += (f"; {KEY_NAMES[k]}=false in {source} doesn't count: git may not read that file "
+                "(an includeIf, whose condition the guard doesn't evaluate, or a config.worktree "
+                "without extensions.worktreeConfig)")
+    return KEY_NAMES[key], why
 
 
 def recursion_on(env, repo, home, sub="fetch"):
-    """What turns submodule recursion on for a git fetch, pull or push (sub) from `repo`: []
-    when the effective config surely has it off. pull also updates each submodule after its
+    """What turns submodule recursion on for a git fetch, pull or push (sub) from `repo`, as
+    recursion_verdict's (key, why) pairs: [] when the effective config surely has it off. pull also updates each submodule after its
     merge when submodule.recurse alone is on. push reads PUSH_KEYS alone, unset counting off."""
     occ = config_occurrences(env, repo, home)
-    pull = sub == "pull"
     if sub == "push":
-        last = [k for k, _, _ in occ if k in PUSH_KEYS][-1:]
-        name = {"submodule.recurse": "submodule.recurse"}.get(last[0] if last else "",
-                                                              "push.recurseSubmodules")
-        return [] if config_false(occ, PUSH_KEYS, unset=True) else [name]
-    on = []
-    if not config_false(occ, RECURSE_KEYS, unset=False):
-        on.append("fetch.recurseSubmodules")
-    if pull and not config_false(occ, {"submodule.recurse"}, unset=True):
-        on.append("submodule.recurse")
-    return on
+        verdicts = [recursion_verdict(occ, PUSH_KEYS, unset=True)]
+    else:
+        verdicts = [recursion_verdict(occ, RECURSE_KEYS, unset=False)]
+        if sub == "pull":
+            verdicts.append(recursion_verdict(occ, {"submodule.recurse"}, unset=True))
+    return [v for v in verdicts if v]
 
 
 def recursion_flag(sub, args):
@@ -1715,11 +1738,12 @@ def check_recursion(m, env, cwd, words):
         return
     on = recursion_on(env, discover(cwd, env), m.home, sub)
     if on:
-        raise Refusal("rule1", on[0], f"`{name}` runs {runs} with submodule recursion on in "
-                      f"the effective git config ({' and '.join(on)}), which runs git in each "
-                      "submodule's own git dir, where a sandboxed session can write. "
+        keys = [k for k, _ in on]
+        raise Refusal("rule1", keys[0], f"`{name}` runs {runs} with submodule recursion on in "
+                      f"the effective git config ({'; and '.join(w for _, w in on)}), which runs "
+                      "git in each submodule's own git dir, where a sandboxed session can write. "
                       + fix + (". For pull, also set submodule.recurse false"
-                               if "submodule.recurse" in on else "") + ".")
+                               if sub == "pull" and "submodule.recurse" in keys else "") + ".")
 
 
 def check_hooks_dir(m, hdir):
