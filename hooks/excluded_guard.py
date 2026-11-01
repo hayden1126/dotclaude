@@ -29,7 +29,8 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      relative ones from the repo top too, where git opens them), and such a call must spell its
      words plainly, naming no program for git to run (--receive-pack, --upload-pack, --exec,
      an ext:: remote) and no submodule recursion (check_git_words). git's words are read as
-     its parse-options reads them (git_argv, with git 2.43's option tables; item 7): the
+     its parse-options reads them (git_argv, with git 2.43's option tables, which also hold
+     fetch's hidden --recurse-submodules-default that `-h` omits; item 7): the
      repository is the first positional or --repo's value (every positional with fetch
      --multiple), the later ones are refspecs, never paths, and an option the tables don't
      list, or an ambiguous prefix, is refused. A refspec or option value may also use git's
@@ -346,7 +347,8 @@ GIT_RECURSE = "recurse-submodules"
 # (tests/setup/data/git-help; a test ties the two): `-x,` a short letter, `--[no-]` a long name
 # with its `no-` form, `<>` a value git takes as `=v` or the next word (a short letter's glued
 # or the next word), `[=]` one it takes only as `=v` (a short letter's only glued). git takes
-# any unique prefix of a long name.
+# any unique prefix of a long name. fetch's last entry is hidden from `-h` (PARSE_OPT_HIDDEN)
+# but parsed, so `fetch --no-rec` is ambiguous to git; the test lists such hidden ones.
 GIT_OPTION_SPEC = {
     "push": """
         -v,--[no-]verbose -q,--[no-]quiet --[no-]repo<> --[no-]all --[no-]branches --[no-]mirror
@@ -364,7 +366,8 @@ GIT_OPTION_SPEC = {
         --[no-]shallow-since<> --[no-]shallow-exclude<> --[no-]deepen<> --unshallow --refetch
         --[no-]update-shallow --refmap<> -o,--[no-]server-option<> -4,--ipv4 -6,--ipv6
         --[no-]negotiation-tip<> --[no-]negotiate-only --[no-]filter<> --[no-]auto-maintenance
-        --[no-]auto-gc --[no-]show-forced-updates --[no-]write-commit-graph --[no-]stdin""",
+        --[no-]auto-gc --[no-]show-forced-updates --[no-]write-commit-graph --[no-]stdin
+        --[no-]recurse-submodules-default<>""",
     "pull": """
         -v,--[no-]verbose -q,--[no-]quiet --[no-]progress --[no-]recurse-submodules[=]
         -r,--[no-]rebase[=] -n --[no-]stat --[no-]log[=] --[no-]signoff[=] --[no-]squash

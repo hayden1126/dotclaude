@@ -300,7 +300,8 @@ For a match it refuses, naming the path, when:
    read and a git option before those subcommands. git's words are read as its own option
    parser reads them, from tables of git 2.43's options (`git <sub> -h`, captured in
    `tests/setup/data/git-help/` and tied to the tables by a test that also fails on another git
-   version): the repository is the first positional or `--repo`'s value (every positional with
+   version; the tables also hold the options `-h` hides but git parses, fetch's
+   `--recurse-submodules-default`, which makes `git fetch --no-rec` ambiguous): the repository is the first positional or `--repo`'s value (every positional with
    `fetch --multiple`), later positionals are refspecs and never paths, and an option the
    tables don't list, or an ambiguous prefix, is refused by name (item 7). A repository word
    that names a remote the config surely defines is judged by its URL (G-D). For `fetch` and

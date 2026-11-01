@@ -1376,10 +1376,15 @@ class SubmoduleRecursion(Guard):
                      "git fetch -q --prune --no-recurse-submodules", "gh pr view 5",
                      "git fetch origin main --no-recurse-submodules",
                      "git fetch --recurse-submodules=no origin", "gh issue view 3",
-                     "git fetch --dry --no-recurse-submodules origin", "git fetch --no-rec origin",
-                     "git pull -r --no-recurse-submodules", "git fetch -j 2 --no-recurse-sub"):
+                     "git fetch --dry --no-recurse-submodules origin", "git pull --no-rec origin",
+                     "git pull -r --no-recurse-submodules", "git pull -j2 --no-recurse-sub"):
             with self.subTest(call=call):
                 self.allowed(call)
+        # fetch's hidden --recurse-submodules-default makes these ambiguous, and git refuses
+        # them (SubmoduleRecursionMatchesGit).
+        for call in ("git fetch --no-rec origin", "git fetch -j 2 --no-recurse-sub"):
+            with self.subTest(call=call):
+                self.assertIn("ambiguous", self.denied(call, "rule1"))
         for config in (RECURSE_OFF, "[submodule]\n\trecurse = true\n" + RECURSE_OFF,
                        "[fetch]\n\trecurseSubmodules = no\n"):
             self.write(self.gitconfig, config)
@@ -1451,7 +1456,11 @@ class SubmoduleRecursion(Guard):
                      "git push origin --recurse-submodules=check main"):
             with self.subTest(call=call):
                 self.assertIn("each submodule", self.denied(call, "rule1"))
-        self.denied("git fetch --recurse-sub", "rule1")
+        self.assertIn("ambiguous", self.denied("git fetch --recurse-sub", "rule1"))
+        self.denied("git fetch --rec origin", "rule1")  # also a prefix of --receive-pack
+        self.assertIn("each submodule",
+                      self.denied("git fetch --recurse-submodules-default=yes origin", "rule1"))
+        self.allowed("git fetch --recurse-submodules-default=no origin")
         for call in ("git pull --recurse-submodules=no", "git fetch --recurse-submodules=off",
                      "git pull --recurse-submodules --no-recurse-submodules",
                      "git push origin --recurse-submodules=no main"):
@@ -1545,13 +1554,23 @@ def parse_git_help(text):
 class GitOptionTables(unittest.TestCase):
     """git_argv's option tables are git 2.43's own, as `git <sub> -h` prints them."""
 
+    # Options git 2.43 parses but `-h` hides (PARSE_OPT_HIDDEN), read off git's source and
+    # confirmed by git itself: `git fetch --no-rec` errors "ambiguous option: no-rec (could be
+    # --no-recurse-submodules or --no-recurse-submodules-default)", and the next word is its
+    # value. pull and push reject it as unknown.
+    HIDDEN = {"fetch": {"recurse-submodules-default": "required",
+                        "no-recurse-submodules-default": "none"}}
+
     def test_the_tables_match_the_captured_help(self):
         guard = load_guard()
         self.assertEqual(sorted(guard.GIT_OPTIONS), sorted(guard.GIT_PATH_SUBS))
         for sub in sorted(guard.GIT_PATH_SUBS):
             with self.subTest(sub=sub):
+                long, short = parse_git_help(slurp(os.path.join(GIT_HELP, f"{sub}.txt")))
+                for name in self.HIDDEN.get(sub, {}):
+                    self.assertNotIn(name, long)  # a hidden one `-h` lists isn't hidden
                 self.assertEqual(guard.GIT_OPTIONS[sub],
-                                 parse_git_help(slurp(os.path.join(GIT_HELP, f"{sub}.txt"))))
+                                 ({**long, **self.HIDDEN.get(sub, {})}, short))
 
     def test_the_captures_are_of_the_installed_git(self):
         # A git upgrade fails this until the captures are retaken (`git <sub> -h`, exit 129)
@@ -1627,7 +1646,11 @@ class SubmoduleRecursionMatchesGit(Guard):
                  ("pull", "--no-rec"), ("pull", "--rec", "--no-rec"), ("pull", "--no-rec", "--rec"),
                  ("pull", "--rec=no"), ("pull", "--recurse-submodules=on-demand"),
                  ("fetch", "--recurse-submodules"), ("fetch", "--recurse-submodules=yes"),
-                 ("fetch", "--recurse-submodules=no"), ("fetch", "--no-recurse-submodules")]
+                 ("fetch", "--recurse-submodules=no"), ("fetch", "--no-recurse-submodules"),
+                 ("fetch", "--rec"), ("fetch", "--no-rec"), ("fetch", "--recurse-sub"),
+                 ("fetch", "--no-recurse-sub"), ("fetch", "--recurse-submodules-default=yes"),
+                 ("fetch", "--recurse-submodules-default", "yes"),
+                 ("fetch", "--no-recurse-submodules-default")]
         for sub, *args in calls:
             with self.subTest(call=(sub, *args)):
                 p = subprocess.run(["git", "-C", clone, sub, *args], env=env,
@@ -1639,7 +1662,7 @@ class SubmoduleRecursionMatchesGit(Guard):
                 except guard.Refusal:
                     self.assertEqual(p.returncode, 129, p.stderr)  # git refuses it too
                     continue
-                if "on-demand" in args[-1] or "default" in args[-1]:
+                if "on-demand" in args[-1] or "default=" in args[-1] or args[-1] == "yes":
                     # on-demand fetches only changed submodules (none here); the hidden default
                     # is refused outright, as the guard doesn't weigh it.
                     self.assertTrue(on)
