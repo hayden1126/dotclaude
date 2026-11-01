@@ -121,6 +121,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
 
   Backlog:
+  - **DA15 fix lane: next to open** (high; Hayden's pick, 2026-11-01, via lane design-audit).
+    Private: sandbox-audit FINDINGS, "Design-decision audit, 2026-11", row DA15 (mechanics, probe
+    and fix). Small. Files: `skills/lanes/scripts/lane`, `lanelib.py`, handoff-check, `setup.sh`,
+    the lanes skill's post-merge step and their tests, the same lane CLI files ports changes, so
+    it opens when a slot frees after #155 merges. Until it lands, the lead runs the row's pre-check
+    before each post-merge chain.
   - **Next lane when a slot frees (Hayden's pick):** the serve jail (the lead's recommendation,
     since it closes live private rows), shared lane locks and structured `Keep open` all wait for
     ports PR 1, whose lane CLI files they share.
@@ -338,7 +344,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 ## Notes for next session
 - **Next (lead, main checkout):**
   0. Four lanes run, cap full (In flight, Live lanes; state in their records, `lane ls`). Next
-     lane when a slot frees: Hayden's pick (Backlog, first item). Since #156's install, a lone
+     lane when a slot frees: DA15's fix lane (Backlog, first item). Before each post-merge
+     chain, run the pre-check in private FINDINGS row DA15. Since #156's install, a lone
      excluded call (gh, git push or fetch, lane) runs only from a repo's top. Running sessions took
      #157's cache narrowing live at its install (2026-10-31 14:39 local): a session started
      before it needs a `/pass` before a sandboxed uv, pip, pnpm, node-gyp, bun or Playwright run. Pending with Hayden, outside the lanes: `wsl --shutdown` at a break applies the 18 GB
