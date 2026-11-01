@@ -1275,8 +1275,18 @@ class SubmoduleRecursion(Guard):
 
     def test_gh_pr_checkout_with_recursion_is_refused_outright(self):
         self.write(self.gitconfig, RECURSE_OFF)
-        self.assertIn("--recurse-submodules",
-                      self.denied("gh pr checkout --recurse-submodules 5", "rule1"))
+        # gh's flag parser (pflag) takes a bool flag's value glued on after `=`, as Go's
+        # strconv.ParseBool reads it.
+        for flag in ("--recurse-submodules", "--recurse-submodules=true", "--recurse-submodules=1",
+                     "--recurse-submodules=t", "--recurse-submodules=TRUE",
+                     "--recurse-submodules=T", "--recurse-submodules=True",
+                     "--recurse-submodules=", "--recurse-submodules=no"):
+            with self.subTest(flag=flag):
+                self.assertIn("--recurse-submodules",
+                              self.denied(f"gh pr checkout {flag} 5", "rule1"))
+        for value in ("false", "0", "f", "F", "FALSE", "False"):
+            with self.subTest(value=value):
+                self.allowed(f"gh pr checkout --recurse-submodules={value} 5")
 
 
 def parse_git_help(text):

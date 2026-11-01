@@ -1447,6 +1447,10 @@ RECURSE_FIX = ("Run `git config --global fetch.recurseSubmodules false` (dotclau
 # gh forms that run git fetch or pull inside (gh 2.89): (first, second word, what git runs).
 GH_GIT_FORMS = {("pr", "checkout"): "fetch", ("pr", "merge"): "pull",
                 ("issue", "develop"): "pull"}
+# The values Go's strconv.ParseBool reads as false, as gh's flag parser takes `--flag=v`. Only
+# `--recurse-submodules=<one of these>` leaves gh pr checkout's submodule update off; any other
+# value is true or an error.
+GO_FALSE = {"false", "0", "f", "F", "FALSE", "False"}
 
 
 def config_occurrences(env, repo, home):
@@ -1585,10 +1589,12 @@ def check_recursion(m, env, cwd, words):
         if not sub:
             return
         name = f"gh {' '.join(positional[:2])}"
-        if name == "gh pr checkout" and "--recurse-submodules" in words:
-            raise Refusal("rule1", "--recurse-submodules", "`gh pr checkout --recurse-submodules` "
-                          "updates each submodule, running git in its own git dir, which a "
-                          "sandboxed session can write. Run it without --recurse-submodules.")
+        recurse = [w for w in words if w.startswith("--recurse-submodules")
+                   and w.partition("=")[2] not in GO_FALSE]
+        if name == "gh pr checkout" and recurse:
+            raise Refusal("rule1", recurse[0], f"`gh pr checkout {recurse[0]}` updates each "
+                          "submodule, running git in its own git dir, which a sandboxed session "
+                          "can write. Run it without --recurse-submodules.")
         fix = f"{RECURSE_FIX}; gh passes git no flag to turn it off"
     else:
         return
