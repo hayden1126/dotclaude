@@ -278,8 +278,9 @@ For a match it refuses, naming the path, when:
    not the main `.git/` dir, so the common dir comes from git's real layout: a gitdir with a
    `commondir` file must sit at `<common>/worktrees/<name>` and name that `<common>`, which holds
    no `commondir` itself. Any other layout, in the cwd's repo or the project's, is refused. A
-   dir counts as a repo when git's `is_git_directory` takes it: a `HEAD` naming `refs/...` or
-   an object id, and `objects/` and `refs/` (in the dir a `commondir` names, if any). A git
+   dir counts as a repo when git's `is_git_directory` takes it: a `HEAD` naming `refs/...`
+   (after `ref:` and git's own whitespace, which is only space, tab, CR and LF) or an object
+   id, and `objects/` and `refs/` (in the dir a `commondir` names, if any). A git
    dir git might look past (a `.git` dir, or a dir with `HEAD` and `refs/`, `objects/` or a
    `commondir`, that fails that check) is refused, at the cwd's walk and at each path git's
    server side tries: git would skip it and use the next repository it finds. A repo's own `<top>/.git` (a gitfile or a

@@ -18,8 +18,9 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      commondir naming that <common>, and <common> must hold no commondir. Any other layout, in
      the cwd's repo or the project's, is refused. A git dir git might look past refuses
      (looks_like_gitdir: a .git dir, or a dir with HEAD and refs/, objects/ or a commondir, that
-     fails git's is_git_directory, a HEAD naming refs/... or an object id and objects/ and
-     refs/), at the cwd's walk and each path git's server side tries alike: git would skip it
+     fails git's is_git_directory, a HEAD naming refs/... (after `ref:` and git's whitespace,
+     which is only space, tab, CR and LF) or an object id and objects/ and refs/), at the
+     cwd's walk and each path git's server side tries alike: git would skip it
      and use the next repository it finds. A repo's own <top>/.git (a gitfile or a
      .git hop) is judged along its symlink chain like any other file, at the cwd, a path
      argument or a server path alike, except at the project's top or a worktree top of its
@@ -1254,10 +1255,14 @@ def worktree_top(top, proj):
     return os.path.dirname(gitdir) == os.path.join(proj[1], "worktrees") and back == dotgit
 
 
+# git's own isspace (sane_ctype's GIT_SPACE): only these four, never C's \v or \f.
+GIT_SPACE = b" \t\n\r"
+
+
 def valid_head(path):
     """Whether git 2.43's validate_headref takes `path`: a symlink whose text starts `refs/`, or
-    a file whose first 255 bytes are `ref:`, optional whitespace and `refs/...`, or start with an
-    object id's 40 hex digits."""
+    a file whose first 255 bytes are `ref:`, optional whitespace (GIT_SPACE) and `refs/...`, or
+    start with an object id's 40 hex digits."""
     try:
         if os.path.islink(path):
             return os.readlink(path).startswith("refs/")
@@ -1265,7 +1270,7 @@ def valid_head(path):
             data = f.read(255)
     except OSError:
         return False
-    if data.startswith(b"ref:") and data[4:].lstrip(b" \t\n\v\f\r").startswith(b"refs/"):
+    if data.startswith(b"ref:") and data[4:].lstrip(GIT_SPACE).startswith(b"refs/"):
         return True
     return re.match(rb"[0-9a-fA-F]{40}", data) is not None
 

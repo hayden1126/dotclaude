@@ -2822,7 +2822,10 @@ class DiscoveryMatchesGit(Guard):
         os.remove(head)
         os.symlink("refs/heads/x", head)
         self.allowed("git push")
-        for text in ("junk\n", "ref: heads/main\n", "", sha[:39], "x" + sha):
+        # git's isspace is only space, \t, \n and \r: a \v or \f after `ref:` breaks the HEAD
+        # (review round 3).
+        for text in ("junk\n", "ref: heads/main\n", "", sha[:39], "x" + sha,
+                     "ref:\vrefs/heads/main\n", "ref: \frefs/heads/main\n"):
             with self.subTest(head=text):
                 os.remove(head)
                 self.write(head, text)
@@ -2855,6 +2858,10 @@ class DiscoveryMatchesGit(Guard):
         for call in ("git push nested", "git push bareish"):
             with self.subTest(call=call):
                 self.assertIn("looks broken", self.denied(call, "rule1"))
+        # The server side's loop too: a <p>/.git whose HEAD has a \v after `ref:` is one git's
+        # server side skips (review round 3).
+        self.write(os.path.join(self.proj, "nested", ".git", "HEAD"), "ref:\vrefs/heads/main\n")
+        self.assertIn("looks broken", self.denied("git push nested", "rule1"))
 
 
 class ConfigEntries(unittest.TestCase):
