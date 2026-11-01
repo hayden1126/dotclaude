@@ -71,9 +71,14 @@ LAUNCH_MARKS = (b"Command running in background with ID: ",
                 b'"backgroundTaskId"')
 NOTICE_MARK = b"task-notification"
 FORK_MARK = b"<fork-boilerplate>"
+ASSISTANT_RE = re.compile(rb'"type":\s*"assistant"')
 BASH_USE_RE = re.compile(rb'"name":\s*"Bash"')
 RESULT_ID_RE = re.compile(rb'"tool_use_id":\s*"([^"]+)"')
 KILLED_RE = re.compile(rb"\[killed\]\s*\Z")
+EXITED_RE = re.compile(rb"\[exited with code -?\d+\]\s*\Z")
+# a later call's result that shows a command's end: a cat or tail of its output file, or a
+# task-output call's status
+SEEN_RE = re.compile(r"exited with code -?\d+|<exit_code>|<status>(?:completed|failed|killed)</status>")
 TAIL_BYTES = 256
 # Claude Code stops a background command at its timeout, 2 hours at most: a launch older than
 # this has ended even when no exit line or notice says so (its Claude Code process died).
@@ -148,23 +153,31 @@ def is_fork_boundary(e):
 
 
 def launches(e):
-    """(task, output file or None) for each background launch in this entry's tool results:
-    the note's text, else toolUseResult's backgroundTaskId (output unknown)."""
+    """(task, output file or None) for each background launch in this entry's tool results.
+    The note is where Claude Code puts it: run_in_background's opens the result (its stdout is
+    empty at launch), a moved command's starts a line after its output. And it counts only
+    when the entry has no toolUseResult or one naming that id: a command that prints the note
+    (a transcript dump) has a toolUseResult without it. A backgroundTaskId with no note counts
+    too (output unknown)."""
     msg = e.get("message")
     content = msg.get("content") if e.get("type") == "user" and isinstance(msg, dict) else None
     if not isinstance(content, list):
         return
+    result = e.get("toolUseResult")
+    named_id = result.get("backgroundTaskId") if isinstance(result, dict) else None
     found = set()
     for c in content:
-        if isinstance(c, dict) and c.get("type") == "tool_result":
-            m = LAUNCH_RE.search(dc.text_of(c.get("content")))
-            if m:
-                found.add(m.group(1))
-                yield m.group(1), m.group(2)
-    result = e.get("toolUseResult")
-    task = result.get("backgroundTaskId") if isinstance(result, dict) else None
-    if isinstance(task, str) and task not in found:
-        yield task, None
+        if not (isinstance(c, dict) and c.get("type") == "tool_result"):
+            continue
+        m = LAUNCH_RE.search(dc.text_of(c.get("content")))
+        if not m or (m.group(0).startswith("Command running") and m.start() != 0):
+            continue
+        if isinstance(result, dict) and named_id != m.group(1):
+            continue
+        found.add(m.group(1))
+        yield m.group(1), m.group(2)
+    if isinstance(named_id, str) and named_id not in found:
+        yield named_id, None
 
 
 def bash_uses(e):
@@ -177,29 +190,35 @@ def bash_uses(e):
             yield c["id"], str(c["input"].get("command") or "")[:120]
 
 
+def tail_matches(path, pattern):
+    try:
+        with open(path, "rb") as f:
+            f.seek(max(0, os.fstat(f.fileno()).st_size - TAIL_BYTES))
+            return bool(pattern.search(f.read()))
+    except (OSError, ValueError):   # ValueError: a NUL in a scraped path
+        return None
+
+
 def output_killed(path):
     """True when the output file ends with [killed] (a TaskStop, or the kill at a final
     response, neither of which leaves a notice), or can't be read (fail open)."""
     if path is None:
         return False
-    try:
-        with open(path, "rb") as f:
-            f.seek(max(0, os.fstat(f.fileno()).st_size - TAIL_BYTES))
-            return bool(KILLED_RE.search(f.read()))
-    except (OSError, ValueError):   # ValueError: a NUL in a scraped path
-        return True
+    return tail_matches(path, KILLED_RE) is not False
 
 
 def running_tasks(path):
     """[(name, output file or None)] for the agent's own background commands whose end it
     hasn't seen, or [] on any error (fail open, the schema check still runs). One has ended
-    when its notice is in the transcript, its output file ends with [killed], or its launch is
-    older than MAX_BACKGROUND_S. An exit line alone isn't enough: the notice comes with the
-    agent's next tool result, so an exit line without one ended after the agent last looked.
-    A Bash call whose result isn't in the transcript yet counts too, named by its command:
-    sent in one message with the handback, its result is written after the handback's hook
-    reads the transcript (2.1.316, the live `early` case). In a fork, only what follows its
-    inherited history counts."""
+    when its notice is in the transcript, its output file ends with [killed], its launch is
+    older than MAX_BACKGROUND_S, or a later call that names it or its output file got a result
+    showing the end (a cat, a tail, a task-output call). An exit line alone isn't enough: the
+    notice comes with the agent's next tool result, so an exit line without one ended after
+    the agent last looked. A Bash call in the agent's latest message whose result isn't in the
+    transcript yet counts too, named by its command: sent in one message with the handback,
+    its result is written after the handback's hook reads the transcript (2.1.316, the live
+    `early` case). In a fork, only what follows its inherited history counts, and a fork with
+    no boundary counts nothing."""
     try:
         return _running(path, time.time())  # wall clock: transcript stamps
     except Exception:  # noqa: BLE001  fail open
@@ -208,14 +227,15 @@ def running_tasks(path):
 
 def _running(path, now):
     launched, ended, pending, answered = {}, set(), {}, set()
-    fork = None
-    for line in lines(path) if path else ():
+    fork, start, last_message = None, 0, None
+    for i, line in enumerate(lines(path) if path else ()):
         if fork is None:   # the first line: a fork's transcript opens with fork-context-ref
             first = parsed(line)
             fork = bool(first) and first.get("type") == "fork-context-ref"
         if b'"tool_result"' in line:
-            answered.update(i.decode("utf-8", "replace") for i in RESULT_ID_RE.findall(line))
-        if not (NOTICE_MARK in line or FORK_MARK in line or BASH_USE_RE.search(line)
+            answered.update(r.decode("utf-8", "replace") for r in RESULT_ID_RE.findall(line))
+        assistant = ASSISTANT_RE.search(line)
+        if not (assistant or NOTICE_MARK in line or FORK_MARK in line
                 or any(m in line for m in LAUNCH_MARKS)):
             continue
         e = parsed(line)
@@ -223,18 +243,59 @@ def _running(path, now):
             continue
         if fork and is_fork_boundary(e):
             launched, ended, pending, answered = {}, set(), {}, set()
-            fork = False
+            fork, start = False, i + 1
+            continue
+        if e.get("type") == "assistant":
+            msg = e.get("message")
+            last_message = (msg.get("id") if isinstance(msg, dict) else None) or f"#{i}"
+            if BASH_USE_RE.search(line) and not stale(e, now):
+                pending.update((tid, (cmd, last_message)) for tid, cmd in bash_uses(e))
             continue
         text = dc.notice_text(e)
         if text is not None:
             ended.update(dc.TASK_RE.findall(text))
-        if stale(e, now):
+        if not stale(e, now):
+            for task, output in launches(e):
+                launched.setdefault(task, output)
+    if fork:
+        return []
+    exited = {t: o for t, o in launched.items()
+              if t not in ended and o and tail_matches(o, EXITED_RE)}
+    seen = seen_ends(path, start, exited) if exited else set()
+    running = [(t, o) for t, o in launched.items()
+               if t not in ended and t not in seen and not output_killed(o)]
+    return running + [(f"`{cmd.replace('`', chr(39))}`", None)
+                      for tid, (cmd, message) in pending.items()
+                      if message == last_message and tid not in answered]
+
+
+def seen_ends(path, start, exited):
+    """The tasks among `exited` whose end a later call showed the agent: a tool_use whose
+    input names the task or its output file, with a result that shows an end (SEEN_RE)."""
+    marks = {t: (t.encode(), o.encode()) for t, o in exited.items()}
+    watch, seen = {}, set()
+    for i, line in enumerate(lines(path)):
+        if i < start:
             continue
-        for task, output in launches(e):
-            launched.setdefault(task, output)
-        pending.update(bash_uses(e))
-    running = [(t, o) for t, o in launched.items() if t not in ended and not output_killed(o)]
-    return running + [(f"`{cmd}`", None) for tid, cmd in pending.items() if tid not in answered]
+        named = [t for t, bs in marks.items() if any(b in line for b in bs)]
+        result = b'"tool_result"' in line and any(w.encode() in line for w in watch)
+        if not (named or result):
+            continue
+        e = parsed(line)
+        msg = e.get("message") if e else None
+        content = msg.get("content") if isinstance(msg, dict) else None
+        for c in content if isinstance(content, list) else ():
+            if not isinstance(c, dict):
+                continue
+            if c.get("type") == "tool_use" and isinstance(c.get("id"), str):
+                shown = json.dumps(c.get("input"))
+                for t in named:
+                    if t in shown or exited[t] in shown:
+                        watch[c["id"]] = t
+            elif c.get("type") == "tool_result" and c.get("tool_use_id") in watch:
+                if SEEN_RE.search(dc.text_of(c.get("content"))):
+                    seen.add(watch[c["tool_use_id"]])
+    return seen
 
 
 def agent_transcript(data):
@@ -349,8 +410,8 @@ def refuse(event, reason):
 
 
 def annotated(text, running):
-    note = (f"\n\n[report-check] Note for the caller: this agent handed back while its "
-            f"command {named(running, lead=True)} still ran, so this report may not include its "
+    note = (f"\n\n[report-check] Note for the caller: this agent handed back before it saw its "
+            f"command {named(running, lead=True)} end, so this report may not include its "
             "result. Check its output before relying on the report.")
     if not dc.FENCE_RE.search(text) and dc.extract_report(text)[0] is not None:
         # a whole-message JSON report: fence it, so extract_report still finds it

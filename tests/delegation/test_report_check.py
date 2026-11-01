@@ -319,6 +319,63 @@ class WaitCheck(unittest.TestCase):
         self.transcript([moved_result("b1", path)])
         self.assertIn("b1", self.reason(self.run_hook(self.handback())))
 
+    def test_an_end_seen_through_a_later_call_passes(self):
+        # review round 3: a cat or tail of the output file, or a TaskOutput-style call, whose
+        # result shows the end, is the agent seeing it, notice or not
+        def use(tid, mid, **inp):
+            return {"type": "assistant", "message": {"id": mid, "role": "assistant", "content": [
+                {"type": "tool_use", "id": tid, "name": inp.pop("name", "Bash"), "input": inp}]}}
+
+        def result(tid, text):
+            return {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": tid, "content": text}]}}
+        path = self.output("bseen", "waited\n\n[exited with code 0]")
+        launch = moved_result("bseen", path)
+        self.transcript([launch, use("t1", "m1", command=f"tail -n 3 \"{path}\""),
+                         result("t1", "waited\n\n[exited with code 0]")], aid="s1")
+        self.assertIsNone(self.run_hook(self.handback(aid="s1")))
+        self.transcript([launch, use("t2", "m2", name="TaskOutput", task_id="bseen", block=True),
+                         result("t2", "<status>completed</status>\n<exit_code>0</exit_code>")],
+                        aid="s2")
+        self.assertIsNone(self.run_hook(self.handback(aid="s2")))
+        # the incident: the agent read the file while it was still empty
+        self.transcript([launch, use("t3", "m3", command=f"cat \"{path}\""), result("t3", "")],
+                        aid="s3")
+        self.assertIn("bseen", self.reason(self.run_hook(self.handback(aid="s3"))))
+
+    def test_a_printed_launch_line_is_not_a_launch(self):
+        # review round 3: a command that prints Claude Code's note (a transcript dump) has a
+        # toolUseResult with no backgroundTaskId; the real note's entry has none or the id
+        path = self.output("bprinted")
+        printed = moved_result("bprinted", path)
+        printed["toolUseResult"] = {"stdout": "x", "stderr": "", "interrupted": False}
+        body = printed["message"]["content"][0]
+        body["content"] = "header\n" + body["content"]
+        self.transcript([printed])
+        self.assertIsNone(self.run_hook(self.handback()))
+        # the run_in_background form only opens a result: its stdout is empty at launch
+        late = launched_result("bprinted", path)
+        late["message"]["content"][0]["content"] = "header\n" + late["message"]["content"][0][
+            "content"]
+        self.transcript([late], aid="p2")
+        self.assertIsNone(self.run_hook(self.handback(aid="p2")))
+
+    def test_a_fork_with_no_boundary_counts_nothing(self):
+        # review round 3: a format change that drops <fork-boilerplate> must fail open
+        ref = {"type": "fork-context-ref", "agentId": "a1", "parentSessionId": "s0"}
+        self.transcript([ref, moved_result("blead", self.output("blead"))])
+        self.assertIsNone(self.run_hook(self.handback()))
+
+    def test_only_the_latest_message_has_calls_without_results(self):
+        # review round 3: a Bash call that never got a result (an interrupted stream) mustn't
+        # pin the agent; the race is only between the handback and its own message's calls
+        old = {"type": "assistant", "message": {"id": "m1", "role": "assistant", "content": [
+            {"type": "tool_use", "id": "told", "name": "Bash", "input": {"command": "ls"}}]}}
+        later = {"type": "assistant", "message": {"id": "m2", "role": "assistant", "content": [
+            {"type": "text", "text": "done"}]}}
+        self.transcript([old, later])
+        self.assertIsNone(self.run_hook(self.handback()))
+
     def test_a_launch_line_after_the_commands_output_counts(self):
         # 2.1.316 joins a Bash result as stdout, stderr, then the background note
         path = self.output("bout")
