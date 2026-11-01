@@ -1581,6 +1581,26 @@ class SubmoduleRecursion(Guard):
             with self.subTest(value=value):
                 self.allowed(f"gh pr checkout --recurse-submodules={value} 5")
 
+    def test_a_flag_before_the_gh_subcommand_is_refused(self):
+        # cobra takes an unknown flag's next word as its value, so `gh pr -b x checkout` runs
+        # pr checkout while a positional reading sees `pr x` (review round 3). Only --repo's
+        # spellings may come before the subcommand.
+        self.write(self.gitconfig, RECURSE_OFF)
+        self.write_settings({"excludedCommands": EXCLUDED + self.FORMS + ["gh *"]})
+        for call in ("gh pr -b x checkout 5 --recurse-submodules", "gh pr --foo checkout 5",
+                     "gh -X y pr checkout 5", "gh --foo pr checkout 5", "gh pr -- checkout 5",
+                     "gh issue -x y develop 3", "gh pr -R x/y -b z co 5"):
+            with self.subTest(call=call):
+                self.assertIn("after the subcommand", self.denied(call, "rule1"))
+        # --repo's spellings, flags after the subcommand, and a group with no git form (gh
+        # api's endpoint is no subcommand) pass.
+        for call in ("gh pr -R x/y checkout 5", "gh pr -R=x/y checkout 5", "gh -Rx/y pr checkout 5",
+                     "gh --repo x/y pr checkout 5", "gh pr --repo=x/y checkout 5",
+                     "gh pr checkout 5 -R x/y --force", "gh pr list --limit 5",
+                     "gh api -X GET repos/x/y"):
+            with self.subTest(call=call):
+                self.allowed(call)
+
 
 def parse_git_help(text):
     """(long, short) option tables from `git <sub> -h` text, read on their own (not with the

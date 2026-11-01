@@ -335,7 +335,11 @@ For a match it refuses, naming the path, when:
    `<scheme>://<host>...` with a scheme other than `file`, or scp-like `[user@]<host>:`, passes;
    an empty base, any `file:` one, an empty host and `ext:` are refused. `git fetch`, `pull` and
    `push`, and `gh pr checkout`, `gh pr merge`, `gh issue develop` and `gh pr create` (which run
-   them; gh's built-in aliases `gh pr co` and `gh pr new` too), run git in each submodule's own git dir (G-B). A git call whose last
+   them; gh's built-in aliases `gh pr co` and `gh pr new` too), run git in each submodule's own git dir (G-B). A `gh` call with a
+   flag before its first word, or before the subcommand of `gh pr` or `gh issue`, is refused
+   unless the flag is `-R` or `--repo` in one of its spellings: gh's parser takes an unknown
+   flag's next word as its value (`gh pr -b x checkout` runs `pr checkout`), so put flags
+   after the subcommand. A git call whose last
    `--[no-]recurse-submodules` flag (any prefix git takes: pull reads `--rec` as
    `--recurse-submodules`) turns recursion on is refused, one whose last flag turns it off
    passes, and with no flag it is refused unless the effective config has recursion off. For

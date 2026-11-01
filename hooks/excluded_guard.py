@@ -72,7 +72,10 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      scp-like [user@]<host>:; an empty base, any file: one, an empty host and ext: refuse): git
      appends the rest of the original URL to it. A URL's own repo doesn't have its URLs judged. git
      fetch, pull and push, and gh pr checkout, gh pr merge, gh issue develop and gh pr create
-     (which run them; gh's aliases pr co and pr new too), recurse into each submodule's own git dir (G-B). A git call whose last
+     (which run them; gh's aliases pr co and pr new too), recurse into each submodule's own git dir (G-B). A gh call with a flag word
+     other than -R or --repo's spellings before its first word, or before the subcommand of
+     the pr or issue group, is refused: cobra takes an unknown flag's next word as its value,
+     so the form gh runs could differ from the one read. A git call whose last
      --[no-]recurse-submodules flag (any prefix git takes, as git_argv resolves it, one source
      for check_git_words and check_recursion) turns recursion on is refused, one whose last
      flag turns it off passes, and with no flag it is refused unless the effective config has
@@ -1705,6 +1708,8 @@ GH_GIT_FORMS = {("pr", "checkout"): ("pull", "git fetch and git checkout"),
                 ("pr", "create"): ("push", "git push")}
 # gh 2.89's built-in aliases of those forms (`Aliases:` in pkg/cmd/pr and pkg/cmd/issue).
 GH_ALIASES = {("pr", "co"): ("pr", "checkout"), ("pr", "new"): ("pr", "create")}
+# The groups those forms sit in: a flag before the subcommand there is refused (check_recursion).
+GH_GROUPS = {form[0] for form in (*GH_GIT_FORMS, *GH_ALIASES)}
 # The values Go's strconv.ParseBool reads as false, as gh's flag parser takes `--flag=v`. Only
 # `--recurse-submodules=<one of these>` leaves gh pr checkout's submodule update off; any other
 # value is true or an error.
@@ -1875,6 +1880,14 @@ def check_recursion(m, env, cwd, words):
                 skip = True
             elif not w.startswith("-"):
                 positional.append(w)
+            elif (len(positional) < 2 and not re.match(r"-R.|--repo=", w)
+                  and (not positional or positional[0] in GH_GROUPS)):
+                # cobra takes an unknown flag's next word as its value, so a flag here could
+                # make gh run another form than the positionals read.
+                raise Refusal("rule1", w, f"`{' '.join(words)}` puts {w!r} before its gh "
+                              "subcommand, where gh may take the next word as its value and run "
+                              "another form than the guard reads. Put flags after the "
+                              "subcommand (only -R or --repo may come before it).")
         form = GH_ALIASES.get(tuple(positional[:2]), tuple(positional[:2]))
         sub, runs = GH_GIT_FORMS.get(form, (None, None))
         if not sub:
