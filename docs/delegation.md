@@ -359,7 +359,9 @@ For a match it refuses, naming the path, when:
    other config git reads must be write-protected: the global and XDG files (or
    `GIT_CONFIG_GLOBAL`), `/etc/gitconfig` (or `GIT_CONFIG_SYSTEM`, skipped under
    `GIT_CONFIG_NOSYSTEM`; either variable set but empty names no file, as git reads it), every `include.path` and `includeIf` target (a relative one from the
-   dir of the config path git opened, not a symlink target's), and a `core.hooksPath`
+   dir of the config path git opened, not a symlink target's, and a `..` taken after the
+   symlinks before it, as the OS opens the path: `a/link/../x` is beside link's target, not
+   `a/x`), and a `core.hooksPath`
    dir and each file in it. Each is followed through its symlinks (each hop and the dir of each
    must be write-protected), and anything that exists there is judged, not only a regular file.
    `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY` and `GIT_ALTERNATE_OBJECT_DIRECTORIES` are refused

@@ -7,7 +7,8 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      (same common git dir as CLAUDE_PROJECT_DIR); a nested repo, a planted gitfile or a repo in a
      temp dir is refused. Every other config file git reads (global, XDG, system, each
      include.path / includeIf.*.path target, recursively, a relative one read from the dir of
-     the path git opened and not a symlink target's, and a core.hooksPath dir and each file in
+     the path git opened and not a symlink target's, each `..` taken after the symlinks
+     before it as the OS opens the path (Machine.opened), and a core.hooksPath dir and each file in
      it) must be protected, judged along its symlink chain: each hop and the dir of each. Any
      path that exists is judged; only a regular file is parsed. The project repo's own config
      and hooks/ are trusted (Claude Code protects them for the session), and so is
@@ -1165,6 +1166,29 @@ class Machine:
                 return a
         return None
 
+    def opened(self, path, rule, refuse):
+        """`path` as the OS opens it, with no `..` left: each `..` is taken after the symlinks
+        before it, where os.path.abspath would fold `a/link/..` to `a` lexically. Each symlink
+        before the last `..` is judged along its chain, and a dir a `..` leaves must not be one
+        a sandboxed session could swap for a symlink (writable, in a writable dir): both decide
+        where the path lands. What follows the last `..` is kept as written, for chain()."""
+        parts = [x for x in os.path.join(self.cwd, path).split("/") if x not in ("", ".")]
+        if ".." not in parts:
+            return "/" + "/".join(parts)
+        last = len(parts) - parts[::-1].index("..")
+        cur = "/"
+        for part in parts[:last]:
+            if part == "..":
+                if cur != "/" and self.writable(cur) and self.exposed(os.path.dirname(cur)):
+                    raise refuse(cur)
+                cur = os.path.dirname(cur)
+                continue
+            cur = os.path.join(cur, part)
+            if os.path.islink(cur):
+                self.chain(cur, rule, refuse, final_dir=False)
+                cur = os.path.realpath(cur)
+        return os.path.join(cur, *parts[last:])
+
     def chain(self, path, rule, refuse, final_dir=True):
         """Follow `path`'s symlink chain, raising `refuse(bad)` for the first hop, or dir of a
         hop, that is exposed. Returns the final target. Rules 1 and 2 both judge files this way.
@@ -1585,7 +1609,12 @@ def check_rule1(m, env, cwd, project, arg=None, url=None, walk=True):
     hooks_base = repo[2] if repo else cwd
     while queue:
         path, is_trusted, depth, certain = queue.pop(0)
-        path = os.path.abspath(os.path.join(cwd, path))
+        # As the OS opens it: a lexical fold of `link/..` would judge another file. The key
+        # it gives `seen` is canonical for `.`, `..` and repeated slashes, with no hop dropped.
+        raw = os.path.join(cwd, path)
+        path = m.opened(raw, "rule1", lambda bad, raw=raw: Refusal(
+            "rule1", bad, f"git reads the config file {raw}, whose path goes through {bad}, "
+            "which a sandboxed session can write.", protect=m))
         certain = certain and path not in unsure
         if path in seen or not os.path.lexists(path):
             continue

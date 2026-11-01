@@ -1314,6 +1314,29 @@ class Rule1Config(Guard):
         os.remove(os.path.join(opened_dir, "sub"))
         self.allowed("git push")
 
+    def test_an_include_with_dotdot_after_a_symlink_is_read_where_the_os_opens_it(self):
+        # git opens <p>/link/../inc through the symlink, landing beside link's target; a
+        # lexical fold reads <p>/inc instead (review round 3).
+        protected = self.protect(self.mkdir("pcfg"))
+        writable = self.mkdir("wcfg")
+        os.makedirs(os.path.join(writable, "sub"))
+        os.symlink(os.path.join(writable, "sub"), os.path.join(protected, "link"))
+        self.write(os.path.join(protected, "inc"), "[x]\n\ty = folded\n")
+        inc = self.write(os.path.join(writable, "inc"), "[x]\n\ty = opened\n")
+        self.gitconfig(RECURSE_OFF + f"[include]\n\tpath = {protected}/link/../inc\n")
+        p = subprocess.run(["git", "config", "--global", "--includes", "x.y"], cwd=self.tmp,
+                           env={"PATH": "/usr/bin:/bin", "HOME": self.home,
+                                "GIT_CONFIG_NOSYSTEM": "1"}, capture_output=True, text=True)
+        self.assertEqual(p.stdout.strip(), "opened")  # git read <writable>/inc
+        self.denied("git push", "rule1", writable)
+        # With the link's target protected too, the include passes, and a relative include in
+        # it is read from the dir the OS opened it in.
+        self.protect(writable)
+        self.allowed("git push")
+        self.write(inc, "[include]\n\tpath = ../w2/inner\n")
+        inner = self.write(os.path.join(self.tmp, "w2", "inner"), "")
+        self.denied("git push", "rule1", inner)
+
     def test_a_writable_git_config_system_is_refused_unless_nosystem(self):
         system = self.write(os.path.join(self.tmp, "wcfg", "system"), "")
         self.env["GIT_CONFIG_SYSTEM"] = system
