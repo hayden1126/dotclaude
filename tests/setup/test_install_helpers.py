@@ -829,5 +829,77 @@ class SetupWiring(unittest.TestCase):
             self.assertTrue(os.path.isfile(os.path.join(REPO, "skills", s, "SKILL.md")), s)
 
 
+class RecurseSubmodulesOff(unittest.TestCase):
+    """setup.sh's block at the end of section 4 sets fetch.recurseSubmodules false in the global
+    git config (excluded-guard G-B) on every run, and warns when submodule.recurse is on there.
+    HOME points at a temp dir."""
+
+    MARK = "# git: no submodule recursion"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.home = tmp.name
+        self.gitconfig = os.path.join(self.home, ".gitconfig")
+
+    def block(self):
+        with open(os.path.join(REPO, "setup.sh")) as f:
+            src = f.read()
+        section4 = src.split("\n# 4. ", 1)[1].split("\n# 5. ", 1)[0]
+        self.assertIn(self.MARK, section4)
+        return self.MARK + section4.split(self.MARK, 1)[1].rsplit("\n# ---", 1)[0]
+
+    def run_block(self):
+        env = {"HOME": self.home, "PATH": "/usr/bin:/bin", "GIT_CONFIG_NOSYSTEM": "1"}
+        p = subprocess.run(["bash", "-c", 'set -euo pipefail; say() { echo "$*"; }\n'
+                            'warn() { echo "!! $*"; }\n' + self.block()],
+                           env=env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return p.stdout
+
+    def values(self):
+        p = subprocess.run(["git", "config", "--file", self.gitconfig, "--get-all",
+                            "fetch.recurseSubmodules"], capture_output=True, text=True)
+        return p.stdout.split()
+
+    def test_it_sets_it_on_every_run(self):
+        for _ in range(2):
+            out = self.run_block()
+            self.assertIn("set fetch.recurseSubmodules false", out)
+            self.assertNotIn("already", out)
+            self.assertEqual(self.values(), ["false"])
+
+    def test_another_value_is_replaced(self):
+        for value in ("true", "on-demand"):
+            with self.subTest(value=value):
+                with open(self.gitconfig, "w") as f:
+                    f.write(f"[fetch]\n\trecurseSubmodules = {value}\n"
+                            "[fetch]\n\trecurseSubmodules = yes\n[user]\n\tname = me\n")
+                self.assertIn("set fetch.recurseSubmodules false", self.run_block())
+                self.assertEqual(self.values(), ["false"])
+                with open(self.gitconfig) as f:
+                    self.assertIn("name = me", f.read())
+
+    def test_a_false_value_from_an_include_is_written_directly(self):
+        # The guard doesn't count an includeIf file, whose condition it doesn't evaluate.
+        inc = os.path.join(self.home, "off")
+        with open(inc, "w") as f:
+            f.write("[fetch]\n\trecurseSubmodules = false\n")
+        with open(self.gitconfig, "w") as f:
+            f.write(f'[includeIf "gitdir:/"]\n\tpath = {inc}\n')
+        self.assertIn("set fetch.recurseSubmodules false", self.run_block())
+        self.assertEqual(self.values(), ["false"])
+
+    def test_it_warns_when_submodule_recurse_is_on(self):
+        with open(self.gitconfig, "w") as f:
+            f.write("[submodule]\n\trecurse = yes\n")
+        out = self.run_block()
+        self.assertIn("submodule.recurse is true", out)
+        self.assertIn("git config --global submodule.recurse false", out)
+        with open(self.gitconfig, "w") as f:
+            f.write("[submodule]\n\trecurse = false\n")
+        self.assertNotIn("submodule.recurse", self.run_block())
+
+
 if __name__ == "__main__":
     unittest.main()

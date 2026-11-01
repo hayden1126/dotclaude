@@ -6,26 +6,101 @@ act on anything a sandboxed session can write. For a call that matches, three ch
   1. The git config the cwd resolves to. A repo at the cwd must be the project's own repository
      (same common git dir as CLAUDE_PROJECT_DIR); a nested repo, a planted gitfile or a repo in a
      temp dir is refused. Every other config file git reads (global, XDG, system, each
-     include.path / includeIf.*.path target, recursively, and a core.hooksPath dir and each file
-     in it) must be protected, judged along its symlink chain: each hop and the dir of each. Any
+     include.path / includeIf.*.path target, recursively, a relative one read from the dir of
+     the path git opened and not a symlink target's, each `..` taken after the symlinks
+     before it as the OS opens the path (Machine.opened), and a core.hooksPath dir and each file in
+     it) must be protected, judged along its symlink chain: each hop and the dir of each. Any
      path that exists is judged; only a regular file is parsed. The project repo's own config
      and hooks/ are trusted (Claude Code protects them for the session), and so is
-     config.worktree when the cwd's gitdir is the project's own; another worktree's is judged.
+     config.worktree when the cwd's gitdir is the project's own; another worktree's is judged
+     when git reads it (extensions.worktreeConfig on in the common config).
      That trust rests on Claude Code protecting the session's gitfile and its
      worktrees/<name>/commondir, not the main .git/ dir, so the common dir comes from git's real
      layout: a gitdir with a commondir file must sit at <common>/worktrees/<name> with its
      commondir naming that <common>, and <common> must hold no commondir. Any other layout, in
-     the cwd's repo or the project's, is refused. A path argument a head runs git in is judged
-     the same way, resolved from the cwd (path_arguments: pass-respawn -C, lane adopt PATH, a
-     local repository for git push, fetch, pull and ls-remote), and such a call must spell its
+     the cwd's repo or the project's, is refused. Pointer files (commondir, a gitfile, which
+     must start exactly `gitdir: `, and a worktree's gitdir) are read as git reads them, only
+     trailing LFs and CRs trimmed (read_pointer). A git dir git might look past refuses
+     (looks_like_gitdir: a .git dir, or a dir with HEAD and refs/, objects/ or a commondir, that
+     fails git's is_git_directory, a HEAD naming refs/... (after `ref:` and git's whitespace,
+     which is only space, tab, CR and LF) or an object id and objects/ and refs/), at the
+     cwd's walk and each path git's server side tries alike: git would skip it
+     and use the next repository it finds. A repo's own <top>/.git (a gitfile or a
+     .git hop) is judged along its symlink chain like any other file, at the cwd, a path
+     argument or a server path alike, except at the project's top or a worktree top of its
+     common dir (worktree_top): one in a writable dir could be repointed after the check. A
+     path argument a head runs git in is judged the same way, resolved from the cwd
+     (path_arguments: pass-respawn -C, whose -C=<path> spelling argparse reads two ways and is
+     refused, lane adopt PATH (each word after `--` too), a local repository for git push,
+     fetch, pull and ls-remote,
+     relative ones from the repo top too, where git opens them), and such a call must spell its
      words plainly, naming no program for git to run (--receive-pack, --upload-pack, --exec,
-     an ext:: remote), no submodule recursion and no remote from a legacy .git/remotes or
-     .git/branches file (check_git_words); a git repository is judged where git's server side
-     finds it (<path>, <path>.git, a gitfile, a file:// URL with no host, no %-escape), and
-     a git option before those subcommands is refused. The calls are found the way zsh splits
+     an ext:: remote: check_git_words) and no submodule recursion (check_recursion). git's words are read as
+     its parse-options reads them (git_argv, with git 2.43's option tables, which also hold
+     fetch's hidden --recurse-submodules-default that `-h` omits; item 7): the
+     repository is the first positional or --repo's value (every positional with fetch
+     --multiple), the later ones are refspecs, never paths, and an option the tables don't
+     list, or an ambiguous prefix, is refused. A refspec or option value may also use git's
+     revision spellings zsh hands on unchanged (REFSPEC_WORD, item 10: mid-word ~ and ^, a
+     leading ^, @{...} or ^{...} with no comma, `..` or brace, and %); a repository word stays
+     a PLAIN_WORD with no %. A repository word naming a remote the config surely defines is
+     judged by its URL (G-D); for fetch and pull, one naming a remotes.<group> value is judged
+     by each member in turn, as git fetches them, and a member git would read as an option is
+     refused. Any other word is a local path to git, judged whether it exists or not (G-E path
+     half, item 8), as git's server side finds it: it tries <path>/.git, <path>, <path>.git/.git
+     and <path>.git in turn (check_server_repo), each as the OS opens it (each `..` taken after
+     the symlinks before it; a relative word's `..` past its base, the repo top or the cwd,
+     follows git's own cwd), each that exists is judged along its symlink chain and as the
+     cwd's repo is (a gitfile's relative gitdir read from the dir of the path
+     git opened, not a symlink target's), and one that is missing, before the first git would
+     take, is refused if a sandboxed session could create it. A call naming no repository takes
+     the default remote (branch.<b>.pushRemote or remote, remote.pushDefault, else origin): it
+     is refused unless each such value in the config chain and origin name a remote the config
+     surely defines, since git reads any other name from a legacy remote file planted after the
+     check; only a nickname needs that, since git reads no legacy file for `.`, `..` or a value
+     holding a `/`, and each value naming no such remote is judged as a path, as a remote URL
+     is. lane new, done and park (LANE_FETCHES) run their own fetch of origin, so they are
+     refused unless origin names such a remote too. A file:// URL must have no host and no %-escape, and a git option before those
+     subcommands is refused. GIT_CONFIG_COUNT and GIT_CONFIG_PARAMETERS may set only the
+     recursion keys below: any other key refuses, since rule 1 judges config files only.
+     GIT_COMMON_DIR, GIT_OBJECT_DIRECTORY and GIT_ALTERNATE_OBJECT_DIRECTORIES refuse while set,
+     even empty: they move where git takes config or objects from, which rule 1 doesn't model.
+     Known limit: a worktree top is recognised through <common>/worktrees/<n>/gitdir, which
+     sits in the writable main git dir, so its trust rests on the same layout checks as the
+     cwd's (gitdir_info), not on a protected file. The calls are found the way zsh splits
      the command (ShellLexer): each call of those heads anywhere in a candidate is judged, one
      in a substitution, subshell or later piece too, and a command it can't read is refused.
-     `delegation-ledger hook` is refused outright, since its paths come on stdin.
+     `delegation-ledger hook` is refused outright, since its paths come on stdin. A repo
+     (the cwd's or a path argument's) whose common dir holds any entry in remotes/ or
+     branches/ is refused (G-C): git reads a legacy remote there, outside the judged config.
+     Each local-path remote URL in the cwd's config chain, trusted files too (remote.*.url and
+     pushurl), is judged too (G-D), as a repository word's path is (check_server_repo), and a
+     url.<base>.insteadOf or pushInsteadOf whose base is not a network URL with a host is
+     refused (network_base: only <scheme>://<host>... with a scheme other than file, or
+     scp-like [user@]<host>:; an empty base, any file: one, an empty host and ext: refuse): git
+     appends the rest of the original URL to it. A URL's own repo doesn't have its URLs judged. git
+     fetch, pull and push, and gh pr checkout, gh pr merge, gh issue develop and gh pr create
+     (which run them; gh's aliases pr co and pr new too), recurse into each submodule's own git dir (G-B). A gh call with a flag word
+     other than -R or --repo's spellings before its first word, or before the subcommand of
+     the pr or issue group, is refused: cobra takes an unknown flag's next word as its value,
+     so the form gh runs could differ from the one read. A git call whose last
+     --[no-]recurse-submodules flag (any prefix git takes, as git_argv resolves it; only
+     check_recursion decides) turns recursion on is refused, one whose last
+     flag turns it off passes, and with no flag it is refused unless the effective config has
+     recursion off; fetch's hidden --recurse-submodules-default refuses with any value but a
+     false one. For fetch the last fetch.recurseSubmodules or submodule.recurse git reads must be
+     false; for pull and gh pr checkout (whose git checkout honours it) submodule.recurse too;
+     for push the last push.recurseSubmodules or submodule.recurse, unset counting as off. A
+     set but empty GIT_CONFIG_GLOBAL or GIT_CONFIG_SYSTEM names no file, as git reads it. The
+     refusal names the key and file that turn recursion on, and a switch-off in a file git may
+     not read (an includeIf one) that doesn't count. gh pr checkout's --recurse-submodules is
+     refused in every spelling gh takes but a false `=` value. dotclaude's setup.sh sets
+     fetch.recurseSubmodules false globally on every run. A cwd, path
+     argument or URL's repo below its repo top, or in no repo, is refused when a dir git looks
+     in on its way up (to the top, or to / or a ceiling) is writable (G-E): a repo planted
+     there after the check would be the one git uses. The refusal names the top to run from.
+     A command that is one `lane addr --repo X` call alone skips the cwd's walk: lane then
+     resolves only X's lanes repo and runs no git in the cwd (handed_lane_addr).
   2. The PATH the head resolves through. Every PATH entry must be protected, not only those
      before the head: its children (git, gh, tmux, the tools claude spawns) search PATH too. An
      empty or relative entry is the cwd: refused. Then the resolved file's symlink chain (each
@@ -50,7 +125,9 @@ so "this session can't write it" is not enough.
 Which calls are candidates: a pattern's `*` matches any characters, spaces included; the rest is
 literal. A call is a candidate when the whole command matches, or any piece does after splitting
 on newlines, `;`, `&&`, `||`, `|` and `&` (not quote-aware, so it over-matches: an over-match only
-adds checks to a sandboxed call). excludedCommands and allowWrite are the union of user, managed,
+adds checks to a sandboxed call). Claude Code 2.1.316 runs a compound line and a substitution
+sandboxed whole (G-A, probed), so only a matching call runs outside and the guard judges those;
+re-probe on each Claude Code version. excludedCommands and allowWrite are the union of user, managed,
 project and project-local files (more candidates, more writable: both safe). Protecting entries
 count only from user and managed files: the machine view stands for every session, and other
 sessions don't load this project's settings.
@@ -277,12 +354,75 @@ def candidates(command, patterns):
 # program, and codex-delegate run --dir, which the delegation skill sends to any repo.
 PATH_HEADS = {"pass-respawn", "lane", "git", "delegation-ledger"}
 GIT_PATH_SUBS = {"push", "fetch", "pull", "ls-remote"}
+# lane commands that run their own `git fetch ... origin` in the cwd's repo.
+LANE_FETCHES = {"new", "done", "park"}
 # Long options of those whose value is a program git runs (git takes any unique prefix), and
 # ls-remote's short -u for --upload-pack; an `ext::` remote runs a command too.
 GIT_PROGRAM_OPTIONS = ("receive-pack", "upload-pack", "exec")
 # --recurse-submodules (any prefix git takes, and its -default form) runs git in each
 # submodule's own gitdir, whose config the guard never judges; --no-recurse-submodules is fine.
 GIT_RECURSE = "recurse-submodules"
+# git 2.43's options of each GIT_PATH_SUBS command, as `git <sub> -h` lists them
+# (tests/setup/data/git-help; a test ties the two): `-x,` a short letter, `--[no-]` a long name
+# with its `no-` form, `<>` a value git takes as `=v` or the next word (a short letter's glued
+# or the next word), `[=]` one it takes only as `=v` (a short letter's only glued). git takes
+# any unique prefix of a long name. fetch's last entry is hidden from `-h` (PARSE_OPT_HIDDEN)
+# but parsed, so `fetch --no-rec` is ambiguous to git; the test lists such hidden ones.
+GIT_OPTION_SPEC = {
+    "push": """
+        -v,--[no-]verbose -q,--[no-]quiet --[no-]repo<> --[no-]all --[no-]branches --[no-]mirror
+        -d,--[no-]delete --[no-]tags -n,--[no-]dry-run --[no-]porcelain -f,--[no-]force
+        --[no-]force-with-lease[=] --[no-]force-if-includes --[no-]recurse-submodules<>
+        --[no-]thin --[no-]receive-pack<> --[no-]exec<> -u,--[no-]set-upstream --[no-]progress
+        --[no-]prune --no-verify --verify --[no-]follow-tags --[no-]signed[=] --[no-]atomic
+        -o,--[no-]push-option<> -4,--ipv4 -6,--ipv6""",
+    "fetch": """
+        -v,--[no-]verbose -q,--[no-]quiet --[no-]all --[no-]set-upstream -a,--[no-]append
+        --[no-]atomic --[no-]upload-pack<> -f,--[no-]force -m,--[no-]multiple -t,--[no-]tags -n
+        -j,--[no-]jobs<> --[no-]prefetch -p,--[no-]prune -P,--[no-]prune-tags
+        --[no-]recurse-submodules[=] --[no-]dry-run --[no-]porcelain --[no-]write-fetch-head
+        -k,--[no-]keep -u,--[no-]update-head-ok --[no-]progress --[no-]depth<>
+        --[no-]shallow-since<> --[no-]shallow-exclude<> --[no-]deepen<> --unshallow --refetch
+        --[no-]update-shallow --refmap<> -o,--[no-]server-option<> -4,--ipv4 -6,--ipv6
+        --[no-]negotiation-tip<> --[no-]negotiate-only --[no-]filter<> --[no-]auto-maintenance
+        --[no-]auto-gc --[no-]show-forced-updates --[no-]write-commit-graph --[no-]stdin
+        --[no-]recurse-submodules-default<>""",
+    "pull": """
+        -v,--[no-]verbose -q,--[no-]quiet --[no-]progress --[no-]recurse-submodules[=]
+        -r,--[no-]rebase[=] -n --[no-]stat --[no-]log[=] --[no-]signoff[=] --[no-]squash
+        --[no-]commit --[no-]edit --[no-]cleanup<> --[no-]ff --ff-only --[no-]verify
+        --[no-]verify-signatures --[no-]autostash -s,--[no-]strategy<>
+        -X,--[no-]strategy-option<> -S,--[no-]gpg-sign[=] --[no-]allow-unrelated-histories
+        --[no-]all -a,--[no-]append --[no-]upload-pack<> -f,--[no-]force -t,--[no-]tags
+        -p,--[no-]prune -j,--[no-]jobs[=] --[no-]dry-run -k,--[no-]keep --[no-]depth<>
+        --[no-]shallow-since<> --[no-]shallow-exclude<> --[no-]deepen<> --unshallow
+        --[no-]update-shallow --refmap<> -o,--[no-]server-option<> -4,--[no-]ipv4
+        -6,--[no-]ipv6 --[no-]negotiation-tip<> --[no-]show-forced-updates --[no-]set-upstream""",
+    "ls-remote": """
+        -q,--[no-]quiet --[no-]upload-pack<> -t,--[no-]tags -h,--[no-]heads --[no-]refs
+        --[no-]get-url --[no-]sort<> --[no-]exit-code --[no-]symref -o,--[no-]server-option<>""",
+}
+
+
+def option_table(spec):
+    """(long, short) from a GIT_OPTION_SPEC entry: long name -> "none", "required" or
+    "optional" (a `--[no-]` name's `no-` form taking none); short letter -> (kind, long name or
+    None)."""
+    long, short = {}, {}
+    for token in spec.split():
+        letter, neg, name, value = re.fullmatch(
+            r"(?:-(\w),?)?(?:--(\[no-\])?([a-z0-9-]+))?(<>|\[=\])?", token).groups()
+        kind = {"<>": "required", "[=]": "optional", None: "none"}[value]
+        if name:
+            long[name] = kind
+            if neg:
+                long["no-" + name] = "none"
+        if letter:
+            short[letter] = (kind, name)
+    return long, short
+
+
+GIT_OPTIONS = {sub: option_table(spec) for sub, spec in GIT_OPTION_SPEC.items()}
 # zsh's operators, longest first. A redirection takes the next word as its target; any other
 # ends a piece.
 CONTROL_OPS = (";;&", ";;", ";&", ";|", "&&", "||", "|&", "&|", "&!", ";", "&", "|", "\n")
@@ -297,34 +437,136 @@ FD = re.compile(r"[0-9]+")  # ASCII only: str.isdigit() takes ² and other digit
 COMMAND_WORDS = {"{", "!", "if", "then", "else", "elif", "while", "until", "do", "time"}
 # A word the shell hands on as typed: no expansion, glob, quote or space. `~` only as $HOME.
 PLAIN_WORD = re.compile(r"(~(?=/|$))?[A-Za-z0-9_./:@%+,=-]*")
+# A git word other than the repository (a refspec, an option's value) may also use git's revision
+# spellings zsh hands on unchanged with the options Claude Code's shell snapshot sets (tested
+# against zsh): `~` and `^` anywhere but a leading `~`, and a `{...}` right after `@` or `^`
+# holding no `,`, `..` or brace (zsh's brace expansion).
+REFSPEC_WORD = re.compile(
+    r"(?!~)(?:[A-Za-z0-9_./:@%+,=~^-]|(?<=[@^])\{(?:(?!\.\.)[A-Za-z0-9_./:@%+=~^-])*\})*")
+
+
+def refspec_word(w):
+    """Whether zsh hands a git refspec word on as typed (PLAIN_WORD or REFSPEC_WORD)."""
+    return bool(PLAIN_WORD.fullmatch(w) or REFSPEC_WORD.fullmatch(w)) and not w.startswith("=")
+
+
+def unplain_word(words, targets=()):
+    """The first word of a path-taking call (words: its argv; targets: its redirection
+    targets) that the shell might rewrite before the head sees it, or None. A git push, fetch,
+    pull or ls-remote's other words may be refspec words (refspec_word), and then each
+    repository word (git_argv, which refuses an option it can't read) must be a PLAIN_WORD
+    with no `%`: git %-decodes a file:// URL's path, so a `%` could spell any path. Every
+    other word must be a PLAIN_WORD. No word may start with `=` (zsh's =cmd)."""
+    git = os.path.basename(words[0]) == "git" and words[1:2] and words[1] in GIT_PATH_SUBS
+    for w in words[1:]:
+        if not (refspec_word(w) if git else PLAIN_WORD.fullmatch(w) and w[:1] != "="):
+            return w
+    for w in (git_argv(words[1], words[2:])[1] if git else []) + list(targets):
+        if not PLAIN_WORD.fullmatch(w) or w.startswith("=") or git and "%" in w:
+            return w
+    return None
+
+
+def git_argv(sub, args):
+    """(options, repositories, refspecs) for `git <sub> args`, read as git 2.43's parse-options
+    reads them with GIT_OPTIONS: options as (long name, or `-x` for a letter with none; value
+    or None), in order. The repositories are the first positional and each --repo value (push),
+    or with fetch --multiple every positional; the other positionals are refspecs (ls-remote's
+    patterns). An option in neither table, an ambiguous prefix, or a value git would refuse is
+    refused, naming the option (fail closed)."""
+    long, short = GIT_OPTIONS[sub]
+
+    def refuse(w, why):
+        return Refusal("rule1", w, f"`git {sub}` with {w!r}: {why}, so the guard can't tell which "
+                       "word is the repository. It reads the options git 2.43's "
+                       f"`git {sub} -h` lists (tests/setup/data/git-help); spell the option out "
+                       "in full from that list, or drop it.")
+    options, positional, i = [], [], 0
+    while i < len(args):
+        w = args[i]
+        i += 1
+        if w in ("--", "--end-of-options"):
+            positional += args[i:]
+            break
+        if w.startswith("--"):
+            name, eq, value = w[2:].partition("=")
+            match = [name] if name in long else [n for n in long if n.startswith(name)]
+            if len(match) != 1:
+                raise refuse(w, "an option it doesn't list" if not match else
+                             f"an ambiguous prefix ({', '.join('--' + n for n in match[:4])})")
+            name, kind = match[0], long[match[0]]
+            if kind == "none" and eq:
+                raise refuse(w, "an option that takes no value")
+            if kind == "required" and not eq:
+                if i >= len(args):
+                    raise refuse(w, "an option missing its value")
+                value, i = args[i], i + 1
+            options.append((name, value if kind != "none" and (eq or kind == "required")
+                            else None))
+        elif w.startswith("-") and w != "-":
+            for j, c in enumerate(w[1:], 2):
+                if c not in short:
+                    raise refuse(w, f"an option letter (-{c}) it doesn't list")
+                kind, name = short[c]
+                if kind == "none":
+                    options.append((name or "-" + c, None))
+                    continue
+                value = w[j:]
+                if kind == "required" and not value:
+                    if i >= len(args):
+                        raise refuse(w, "an option missing its value")
+                    value, i = args[i], i + 1
+                options.append((name or "-" + c, value or None))
+                break
+        else:
+            positional.append(w)
+    multiple = False
+    for name, _ in options:
+        if name in ("multiple", "no-multiple"):
+            multiple = name == "multiple"
+    repos = [v for n, v in options if n == "repo" and v is not None]
+    if multiple:
+        return options, repos + positional, []
+    return options, repos + positional[:1], positional[1:]
 
 
 def path_arguments(words):
     """(path, existing_only) for each path argument in words, a piece's argv. Every spelling
     counts, every repeat too (argparse keeps the last; the guard judges all). git's repository
-    words also name remotes and refs, so only a path that exists counts there."""
+    words (git_argv) also name remotes, so only a path that exists counts there; its option
+    values and refspecs are never paths."""
     head, args = os.path.basename(words[0]), words[1:]
     out = []
     if head == "pass-respawn":
         for i, w in enumerate(args):
             if w == "-C" and i + 1 < len(args):
                 out.append(args[i + 1])
+            elif w.startswith("-C="):
+                raise Refusal("rule1", w, f"`pass-respawn {w}`: argparse reads `-C=<path>` as "
+                              "<path> on Python 3.12 and as `=<path>` on older ones, so the "
+                              "guard can't tell which dir it names; use `-C <path>`.")
             elif w.startswith("-C") and w != "-C":
-                # `-C=x` is x on Python 3.12 and `=x` on older ones: judge both.
-                out += [w[2:]] + ([w[3:]] if w.startswith("-C=") else [])
+                out.append(w[2:])
         return [(p, False) for p in out]
     if head == "lane" and args[:1] == ["adopt"]:
-        # Every word but its options; `--id`'s value is judged too (an over-match only adds checks).
-        return [(w, False) for w in args[1:]
-                if w not in ("--", "--id", "-h", "--help") and not w.startswith("--id=")]
-    if head == "git" and args[:1] and args[0] in GIT_PATH_SUBS:
-        for w in args[1:]:
-            if w.startswith("-"):
-                if "=" in w:
-                    out.append(w.split("=", 1)[1])
-            else:
+        # Every word but its options and `--id`'s value (argparse takes `--i` for it too, and
+        # the next word whatever it starts with, `-1` say): a missing path a sandboxed session
+        # could create is refused (check_below_top). After `--` every word is PATH to
+        # argparse, one that looks like an option too.
+        out, skip = [], False
+        for i, w in enumerate(args[1:], 2):
+            if w == "--":
+                out += args[i:]
+                break
+            if skip:
+                skip = False
+            elif w in ("--i", "--id"):
+                skip = True
+            elif w not in ("--", "-h", "--help") and not w.startswith(("--id=", "--i=")):
                 out.append(w)
-        return [(p, True) for p in out]
+        return [(w, False) for w in out]
+    if head == "git" and args[:1] and args[0] in GIT_PATH_SUBS:
+        return [(p, True) for p in git_argv(args[0], args[1:])[1]]
     return []
 
 
@@ -532,12 +774,9 @@ class ShellLexer:
                 self.subs += sub.subs
 
 
-def path_calls(command):
-    """(argv, targets) for each call of a PATH_HEADS program, the way zsh splits the command
-    (ShellLexer): in every piece between control operators, a substitution's too, each word
-    naming one starts a call running to the piece's end (subshells, groups, `if`, `VAR=`
-    prefixes and wrappers like `env` included), less the piece's redirections, whose targets
-    are judged as plain words too (a `$(...)` there runs before git does)."""
+def shell_pieces(command):
+    """(words, redirection targets) for each piece between control operators, the way zsh
+    splits the command (ShellLexer), each substitution's pieces after the command's own."""
     lexer = ShellLexer(command)
     streams = [lexer.command()] + lexer.subs
     for tokens in streams:
@@ -555,26 +794,72 @@ def path_calls(command):
                 pieces.append((words, targets))
                 words, targets = [], []
         pieces.append((words, targets))
-        for words, targets in pieces:
-            for i, w in enumerate(words):
-                if os.path.basename(w) in PATH_HEADS:
-                    yield words[i:], targets
+        yield from pieces
 
 
-def check_calls(m, env, cwd, project, command):
-    """Rule 1 for the path arguments of every PATH_HEADS call in the command."""
+def path_calls(command, heads=PATH_HEADS):
+    """(argv, targets) for each call of a `heads` program in the command (shell_pieces): in
+    every piece, each word naming one starts a call running to the piece's end (subshells,
+    groups, `if`, `VAR=` prefixes and wrappers like `env` included), less the piece's
+    redirections, whose targets are judged as plain words too (a `$(...)` there runs before git
+    does)."""
+    for words, targets in shell_pieces(command):
+        for i, w in enumerate(words):
+            if os.path.basename(w) in heads:
+                yield words[i:], targets
+
+
+def handed_lane_addr(command):
+    """Whether the command is one `lane addr` call alone, with --repo given in a spelling
+    argparse takes (`--repo X`, `--repo=X`, a unique prefix; before any `--`). lane then resolves
+    only the lanes repo X names, under lanelib.HANDED_ENV, and runs no git in the cwd, so G-E's
+    cwd half doesn't apply to it. A prefix, an `env` wrapper, a second call or a substitution
+    each leave the command judged as any other."""
     try:
-        calls = list(path_calls(command))
+        pieces = [p for p in shell_pieces(command) if p[0] or p[1]]
+    except ValueError:
+        return False
+    if len(pieces) != 1:
+        return False
+    words = pieces[0][0]
+    if len(words) < 2 or os.path.basename(words[0]) != "lane" or words[1] != "addr":
+        return False
+    args = words[2:]
+    for i, w in enumerate(args):
+        if w == "--":
+            return False
+        name, eq, _ = w.partition("=")
+        if len(name) > 2 and "--repo".startswith(name) and (
+                eq or i + 1 < len(args) and not args[i + 1].startswith("-")):
+            return True
+    return False
+
+
+def check_calls(m, env, cwd, project, command, remotes=frozenset(), groups=None,
+                defaults=None):
+    """Rule 1 for the path arguments of every PATH_HEADS call in the command, and G-B for every
+    git and gh call (check_recursion). remotes, groups and defaults: the remotes, remote groups
+    and default-remote keys the cwd's config defines (check_rule1)."""
+    try:
+        calls = list(path_calls(command, PATH_HEADS | {"gh"}))
     except ValueError as e:
         raise Refusal("rule1", "(command)", "the guard can't read this command as zsh would, so "
                       f"it can't find the path arguments in it: {e}. Or run the excluded command "
                       "as its own plain Bash call.")
     for words, targets in calls:
-        check_path_arguments(m, env, cwd, project, words, targets)
+        if os.path.basename(words[0]) in PATH_HEADS:
+            check_path_arguments(m, env, cwd, project, words, targets, remotes, groups,
+                                 defaults)
+        check_recursion(m, env, cwd, words)
 
 
-def check_path_arguments(m, env, cwd, project, words, targets):
-    """Rule 1 for each path argument of one call (path_arguments), resolved from cwd."""
+def check_path_arguments(m, env, cwd, project, words, targets, remotes=frozenset(),
+                         groups=None, defaults=None):
+    """Rule 1 for each path argument of one call (path_arguments), resolved from cwd; a git
+    repository word through check_repository_word. A git call naming no repository takes the
+    default remote: each default-remote key's value (defaults: None with no repo) and origin
+    must then name a remote the config surely defines, or git could read a legacy remote file
+    planted after the check."""
     head = os.path.basename(words[0])
     sub = next((w for w in words[1:] if not w.startswith("-")), None)
     if head == "git" and words[1:2] and words[1].startswith("-") and any(
@@ -589,67 +874,189 @@ def check_path_arguments(m, env, cwd, project, words, targets):
                           "git in from its stdin, which the guard can't judge. Claude Code's "
                           "hooks run it directly, never through Bash.")
         return
+    if head == "lane" and sub in LANE_FETCHES:
+        if defaults is not None and "origin" not in remotes:
+            raise Refusal("rule1", "origin", f"`lane {sub}` runs its own `git fetch` of origin, "
+                          "which no config git surely reads defines as a remote, so git could "
+                          "read a legacy remote file planted after this check, or take it as a "
+                          "path. Configure it (`git remote add origin <url>`).")
+        return
     if head == "lane" and sub != "adopt" or head == "git" and sub not in GIT_PATH_SUBS:
         return
     name = head if head == "pass-respawn" else f"{head} {sub}"
-    for w in words[1:] + targets:
-        # git %-decodes a file:// URL's path, so a `%` could spell any path.
-        if not PLAIN_WORD.fullmatch(w) or w.startswith("=") or head == "git" and "%" in w:
-            raise Refusal("rule1", w, f"`{name}` takes a path argument, and {w!r} is not a plain "
-                          "word (an expansion, glob, quote, space or %-escape that would be "
-                          "rewritten before git sees it). Spell paths and refs as plain words.")
     if head == "git":
-        check_git_words(sub, words[2:], discover(cwd, env))
-    for path, existing_only in path_arguments(words):
-        if existing_only and path.startswith("file://"):
-            path = path[len("file://"):]
-            if not path.startswith("/"):  # git drops a host part: judge no guess at the rest
-                raise Refusal("rule1", path, f"`git {sub}` names a file:// URL with a host part "
-                              f"(file://{path}); give the repository as a plain path.")
-        full = os.path.join(cwd, os.path.expanduser(path))
-        if not existing_only:
-            check_rule1(m, env, full, project, arg=path)
+        check_git_words(sub, words[2:])  # first: its refusal names the program option
+    w = unplain_word(words, targets)
+    if w is not None:
+        raise Refusal("rule1", w, f"`{name}` takes a path argument, and {w!r} is not a plain "
+                      "word (an expansion, glob, quote, space or %-escape that would be "
+                      "rewritten before git sees it). Spell paths and refs as plain words.")
+    if head == "git":
+        options, repos, _ = git_argv(sub, words[2:])
+        multiple = [n for n, _ in options if n in ("multiple", "no-multiple")][-1:] == ["multiple"]
+        if not repos and defaults is not None:
+            for key, value in list(dict.fromkeys(defaults)) + [(None, "origin")]:
+                # git reads a legacy remote file only for a nickname: never for `.` (the repo
+                # itself), `..` or a URL or path holding a `/`, each judged as a path elsewhere.
+                if value in remotes or value in (".", "..") or "/" in value:
+                    continue
+                how = (f"{key} names {value!r}" if key else "with none of branch.<b>.remote, "
+                       "branch.<b>.pushRemote or remote.pushDefault naming one, git falls back "
+                       "to 'origin'")
+                raise Refusal("rule1", value, f"`git {sub}` names no repository, so git takes "
+                              f"the default remote; {how}, which no config git surely reads "
+                              "defines as a remote, so git could read a legacy remote file "
+                              "planted after this check, or take it as a path. Name the remote "
+                              f"on the command line, or configure it (`git remote add {value} "
+                              "<url>`).")
+        for word in repos:
+            check_repository_word(m, env, cwd, project, sub, word, remotes, groups or {},
+                                  multiple)
+        return
+    for path, _ in path_arguments(words):
+        check_rule1(m, env, os.path.join(cwd, os.path.expanduser(path)), project, arg=path)
+
+
+def check_repository_word(m, env, cwd, project, sub, word, remotes, groups=None,
+                          multiple=False, seen=frozenset(), label=None):
+    """G-E path half for one repository word of git push, fetch, pull or ls-remote (git_argv).
+    For fetch and pull (which runs fetch), a remote group's name (a remotes.<group> value)
+    stands for its members, each judged as a repository word in turn: git runs `git fetch
+    <member>` for each when the group has two or more (one or more with --multiple), and takes
+    the word itself as a remote or a path otherwise. A member git's fetch would read as an
+    option, or an ext:: one, is refused. Members from a file git may not read are judged too,
+    but never count toward skipping the word itself. A configured remote's name is judged by its
+    URL with the cwd's config (G-D) and nothing more, and a network URL passes. Any other word is a path to git, resolved from the repo top (where git opens it) and the cwd,
+    whether it exists or not: git's server side tries <path> and then <path>.git and reads a
+    file there as a gitfile. Where neither exists, it is refused if a sandboxed session could
+    create it; where one does, its symlink chain (each hop, the dir of each, and a gitfile or
+    other file at its end) must be protected, and the repo is judged as rule 1 judges the cwd
+    (which also finds <dir>/.git)."""
+    label = label or word
+    if sub in ("fetch", "pull") and word in (groups or {}) and word not in seen:
+        members, certain = groups[word]
+        for member in members:
+            if member.startswith(("-", "ext::")):
+                what = "an option" if member.startswith("-") else "a program to run"
+                raise Refusal("rule1", member, f"the remote group {word} holds {member!r}, which "
+                              f"git hands its own `git fetch` as {what}, outside what the guard "
+                              f"judges. Drop it from the group's remotes.{word} value.")
+            check_repository_word(m, env, cwd, project, sub, member, remotes, groups,
+                                  seen=seen | {word},
+                                  label=f"{member} (in the remote group {word})")
+        if certain >= (1 if multiple else 2):
+            return
+    if word in remotes:
+        return
+    path = local_url_path(word)
+    if path is None:
+        return
+    # git opens a relative one from the repo top it moved to; the cwd too (over-matching only
+    # adds checks).
+    repo = discover(cwd, env)
+    bases = (repo[2], cwd) if repo else (cwd,)
+    path = os.path.expanduser(path)
+    for base in dict.fromkeys(bases[:1] if os.path.isabs(path) else bases):
+        check_server_word(m, env, base, path, project, sub, word, label)
+
+
+def check_server_word(m, env, base, path, project, sub, word, label):
+    """check_server_repo for one base of a repository word, with check_repository_word's
+    refusals."""
+    full = os.path.join(base, path).rstrip("/") or "/"
+    check_server_repo(m, env, base, path, project, word, link=lambda bad: Refusal(
+        "rule1", bad, f"`git {sub}`'s repository {label} goes through {bad}, which a sandboxed "
+        "session can rewrite to point git at another repository after this check. Name the "
+        "repository by its real path in a dir no session can write, or protect that dir.",
+        protect=m), missing=lambda tried, bad: Refusal(
+        "rule1", bad, f"`git {sub}`'s repository {label} names no configured remote, so git "
+        f"takes it as the path {full}, {server_paths(full)}; {tried} is missing and a sandboxed "
+        f"session could create it ({bad}): git would run a repository planted there after this "
+        "check. Name a configured remote, a network URL or an existing path in the project's "
+        "repository, or protect that dir.", protect=m))
+
+
+# Where git's server side (upload-pack, receive-pack: enter_repo, non-strict) looks for the local
+# repository <p>, in this order, taking the first that is a regular file (read as a gitfile) or
+# a git dir.
+SERVER_SUFFIXES = ("/.git", "", ".git/.git", ".git")
+
+
+def server_paths(full):
+    return ("where git's server side tries " + ", ".join(full + s for s in SERVER_SUFFIXES[:-1])
+            + f" and {full}{SERVER_SUFFIXES[-1]} in turn")
+
+
+def check_server_repo(m, env, base, path, project, arg, link, missing, url=None):
+    """G-D and the G-E path half for a local repository path git's server side opens: `path` as
+    the word spells it (its trailing slashes dropped as git drops them), a relative one opened
+    from `base`. Each of <p> and <p>.git that exists is judged along its symlink chain
+    (link(bad) builds the refusal) and the repo there, or at a gitfile's target, as rule 1
+    judges the cwd, which finds its <dir>/.git too. A missing path git tries (SERVER_SUFFIXES)
+    before the first it would take is refused if a sandboxed session could create it
+    (missing(tried, bad)): a repo planted there would win."""
+    path = path.rstrip("/") or "/"
+    # Each path as the OS opens it: a `..` after a symlink leaves the symlink's target, where a
+    # lexical fold would land elsewhere (Machine.opened). The suffix joins the word as written.
+    for suffix in ("", ".git"):
+        opened = m.opened(path + suffix, "rule1", link, base=base)
+        if not os.path.lexists(opened):
             continue
-        # git's server side tries <path> and then <path>.git, and reads a file there as a
-        # gitfile; a dir it judges as rule 1 judges the cwd (which also finds <dir>/.git).
-        for found in (full, full + ".git"):
-            if os.path.isfile(found):
-                try:
-                    found = read_gitfile(found)
-                except Exception:
-                    continue  # no gitfile (a bundle, say): git reads no config from it
-            if os.path.lexists(found):
-                check_rule1(m, env, found, project, arg=path)
+        found = m.chain(opened, "rule1", link, final_dir=False)
+        if os.path.isfile(found):
+            try:
+                # A relative gitdir is read from the dir of the path git opened, not from the
+                # symlink target's.
+                found = read_gitfile(found, os.path.dirname(opened))
+            except Exception:
+                continue  # no gitfile (a bundle, say): git reads no config from it
+        if os.path.lexists(found):
+            check_rule1(m, env, found, project, arg=arg, url=url)
+    for suffix in SERVER_SUFFIXES:
+        tried = m.opened(path + suffix, "rule1", link, base=base)
+        if os.path.isfile(tried) or os.path.isdir(tried) and looks_like_gitdir(
+                tried, env, dotgit=tried.endswith("/.git")):
+            return
+        bad = None if os.path.lexists(tried) else m.exposed(tried)
+        if bad:
+            raise missing(tried, bad)
 
 
-def check_git_words(sub, args, repo):
+def check_git_words(sub, args):
     """Refuse a git push, fetch, pull or ls-remote word naming what rule 1 can't judge: a program
     for git to run (an option of GIT_PROGRAM_OPTIONS by any prefix, ls-remote's -u, an ext::
-    remote, also as an option's value), submodule recursion, or a remote defined by a legacy
-    file in the project's git dir (.git/remotes, .git/branches: outside the judged config)."""
+    remote, also as an option's value). A legacy remote file refuses in check_rule1, whatever
+    the call names (G-C), and submodule recursion in check_recursion, which serves gh too. A
+    long option counts by the one name git's table resolves it to (`git pull --rec` is
+    --recurse-submodules), else by any prefix of a program option."""
+    table = GIT_OPTIONS[sub][0]
     for w in args:
         name = w[2:].split("=", 1)[0] if w.startswith("--") else ""
         value = w.split("=", 1)[1] if name and "=" in w else w
-        if (name and any(o.startswith(name) for o in GIT_PROGRAM_OPTIONS)
+        match = [name] if name in table else [n for n in table if n.startswith(name)]
+        if (name and (match[0] in GIT_PROGRAM_OPTIONS if len(match) == 1
+                      else any(o.startswith(name) for o in GIT_PROGRAM_OPTIONS))
                 or sub == "ls-remote" and re.match(r"-[^-]*u", w) or value.startswith("ext::")):
             raise Refusal("rule1", w, f"`git {sub}` with {w!r} names a program for git to run "
                           "outside the sandbox, which the guard can't judge. Run it without that "
                           "option.")
-        if (len(name) >= 4 and (GIT_RECURSE.startswith(name) or name.startswith(GIT_RECURSE))
-                and value not in ("no", "false")):
-            raise Refusal("rule1", w, f"`git {sub}` with {w!r} runs git in each submodule's "
-                          "own git dir, whose config the guard doesn't judge. Run it without "
-                          "submodule recursion.")
-        # The repository word: a positional, or --repo's value (git takes a prefix of it).
-        # git takes it as a remote's nick only with no `/` and not `.` or `..`.
-        nick = (value if len(name) >= 3 and "repo".startswith(name) and "=" in w
-                else None if w.startswith("-") else w)
-        if repo and nick and "/" not in nick and nick not in (".", "..") and any(
-                os.path.lexists(os.path.join(repo[1], kind, nick))
-                for kind in ("remotes", "branches")):
-            raise Refusal("rule1", w, f"`git {sub}` names {nick!r}, a remote a legacy file in the "
-                          f"project's git dir ({repo[1]}/remotes or /branches) defines, outside "
-                          "the config the guard judges. Define it in .git/config instead.")
+
+
+def recursion_cli(options):
+    """"on", "off" or None (no flag) for the submodule recursion a git fetch, pull or push call's
+    options (git_argv's, so any prefix git takes is resolved) set: the last --recurse-submodules
+    or --no-recurse-submodules decides, a value that isn't a git false (none, or an empty one)
+    turning it on. fetch's hidden --recurse-submodules-default with any value but a false one
+    counts as on wherever it sits: the guard doesn't weigh it against the rest."""
+    state, default_on = None, False
+    for name, value in options:
+        if name == "no-" + GIT_RECURSE:
+            state = "off"
+        elif name == GIT_RECURSE:
+            state = "off" if value and value.lower() in GIT_FALSE else "on"
+        elif name == GIT_RECURSE + "-default":
+            default_on = not (value and value.lower() in GIT_FALSE)
+    return "on" if default_on else state
 
 
 # --- Machine view ------------------------------------------------------------------------------
@@ -752,27 +1159,68 @@ class Machine:
         return self.memo["exposed", p]
 
     def _exposed(self, p):
+        return self.linked(p) or (p if self.writable(p) else None)
+
+    def linked(self, p):
+        """The first writable symlinked ancestor of `p`, or None."""
         parts = p.strip("/").split("/")
         for i in range(1, len(parts)):
             a = "/" + "/".join(parts[:i])
             if os.path.islink(a) and self.writable(a):
                 return a
-        return p if self.writable(p) else None
+        return None
 
-    def chain(self, path, rule, refuse):
+    def opened(self, path, rule, refuse, base=None):
+        """`path` as the OS opens it, with no `..` left: each `..` is taken after the symlinks
+        before it, where os.path.abspath would fold `a/link/..` to `a` lexically. Each symlink
+        before the last `..` is judged along its chain, and a dir a `..` leaves must not be one
+        a sandboxed session could swap for a symlink (writable, in a writable dir): both decide
+        where the path lands. What follows the last `..` is kept as written, for chain().
+        A relative `path` is resolved from the cwd, or from `base`: the dir git opens it from,
+        already its cwd. A `..` that climbs the base's own ancestors follows the cwd's inode,
+        which no path swap redirects, so only the dirs the word itself spells are judged there
+        (the base's symlinked ancestors are judged as chain() judges a repository's dir)."""
+        anchored = base is not None and not os.path.isabs(path)
+        parts = [x for x in os.path.join(base if anchored else self.cwd, path).split("/")
+                 if x not in ("", ".")]
+        if ".." not in parts:
+            return "/" + "/".join(parts)
+        cur = "/"
+        if anchored:
+            self.chain(base, rule, refuse, final_dir=False)
+            cur = os.path.realpath(base)
+            parts = [x for x in path.split("/") if x not in ("", ".")]
+        last = len(parts) - parts[::-1].index("..")
+        for part in parts[:last]:
+            if part == "..":
+                if not anchored and cur != "/" and self.writable(cur) and self.exposed(
+                        os.path.dirname(cur)):
+                    raise refuse(cur)
+                cur = os.path.dirname(cur)
+                continue
+            anchored = False
+            cur = os.path.join(cur, part)
+            if os.path.islink(cur):
+                self.chain(cur, rule, refuse, final_dir=False)
+                cur = os.path.realpath(cur)
+        return os.path.join(cur, *parts[last:])
+
+    def chain(self, path, rule, refuse, final_dir=True):
         """Follow `path`'s symlink chain, raising `refuse(bad)` for the first hop, or dir of a
-        hop, that is exposed. Returns the final target. Rules 1 and 2 both judge files this way."""
+        hop, that is exposed. Returns the final target. Rules 1 and 2 both judge files this way.
+        final_dir False leaves a real dir at the chain's end to rule 1 (a repository's own dir),
+        judging only its symlinked ancestors."""
         p = os.path.abspath(os.path.join(self.cwd, path))
-        if ("chain", p) not in self.memo:
-            self.memo["chain", p] = self._chain(p)
-        kind, at = self.memo["chain", p]
+        if ("chain", p, final_dir) not in self.memo:
+            self.memo["chain", p, final_dir] = self._chain(p, final_dir)
+        kind, at = self.memo["chain", p, final_dir]
         if kind == "bad":
             raise refuse(at)
         if kind == "loop":
             raise Refusal(rule, at, f"{path} has a symlink loop at {at}; could not verify it.")
         return at
 
-    def _chain(self, p):
+    def _chain(self, p, final_dir=True):
         """("ok", final target), ("bad", the exposed path) or ("loop", where it gave up)."""
         for _ in range(40):
             if self.always_protected(p):
@@ -780,6 +1228,9 @@ class Machine:
             # A file or symlink is replaced by whoever writes its dir; a real dir stands on its
             # own, as a PATH entry does.
             real_dir = os.path.isdir(p) and not os.path.islink(p)
+            if real_dir and not final_dir:
+                bad = self.linked(p)
+                return ("bad", bad) if bad else ("ok", p)
             for x in (p,) if real_dir else (p, os.path.dirname(p)):
                 bad = self.exposed(x)
                 if bad:
@@ -805,8 +1256,7 @@ def gitdir_info(gitdir, at_root=False):
     pointer = os.path.join(gitdir, "commondir")
     if not os.path.lexists(pointer):
         return gitdir, gitdir
-    with open(pointer) as f:
-        common = os.path.realpath(os.path.join(gitdir, f.read().strip()))
+    common = os.path.realpath(os.path.join(gitdir, read_pointer(pointer)))
     parent = os.path.dirname(gitdir)
     if (at_root or os.path.basename(parent) != "worktrees"
             or common != os.path.dirname(parent)
@@ -816,48 +1266,172 @@ def gitdir_info(gitdir, at_root=False):
     return gitdir, common
 
 
-def read_gitfile(path):
-    with open(path) as f:
-        line = f.readline().strip()
-    if not line.startswith("gitdir:"):
+def read_pointer(path):
+    """A git pointer file's text (commondir, a gitfile, a worktree's gitdir) as git 2.43 reads
+    it: the whole file, only trailing LFs and CRs trimmed, up to a NUL (git then uses it as a C
+    string). Leading and any other whitespace is part of the path."""
+    with open(path, "rb") as f:
+        data = f.read()
+    return os.fsdecode(data.rstrip(b"\r\n").split(b"\0", 1)[0])
+
+
+def read_gitfile(path, base=None):
+    """The gitdir a gitfile names, a relative one joined to `base` (by default the gitfile's own
+    dir): git joins it to the dir of the path it opened, a symlink's dir and not its target's.
+    git wants exactly `gitdir: ` first and takes the rest as the path (read_pointer)."""
+    text = read_pointer(path)
+    if not text.startswith("gitdir: ") or text == "gitdir: ":
         raise ValueError(f"invalid gitfile {path}")
-    target = line[len("gitdir:"):].strip()
-    return os.path.join(os.path.dirname(path), target)
+    target = text[len("gitdir: "):]
+    return os.path.join(os.path.dirname(path) if base is None else base, target)
 
 
-def looks_like_gitdir(d):
-    """A dir git takes as a repo itself: HEAD, plus objects/ and refs/ here or a commondir (git
-    then looks for them in the dir it names). Broader than git, never narrower: a dir counted
-    here meets gitdir_info's layout check."""
-    if not os.path.lexists(os.path.join(d, "HEAD")):
+def worktree_top(top, proj):
+    """Whether `top` (a repo top discover found) is the project's own top or a worktree top of
+    the project's common dir: its .git a real dir that is the common dir (the main worktree), or
+    a gitfile naming <common>/worktrees/<name> whose `gitdir` file names that .git back, as `git
+    worktree add` records it. Only these keep their own .git trusted (Claude Code protects the
+    session's gitfile); any other .git is judged along its chain (check_rule1)."""
+    if proj is None:
         return False
-    return os.path.lexists(os.path.join(d, "commondir")) or (
-        os.path.isdir(os.path.join(d, "objects")) and os.path.isdir(os.path.join(d, "refs")))
+    top = os.path.realpath(top)
+    if top == os.path.realpath(proj[2]):
+        return True
+    dotgit = os.path.join(top, ".git")
+    if os.path.islink(dotgit):
+        return False
+    if os.path.isdir(dotgit):
+        return os.path.realpath(dotgit) == proj[1]
+    try:
+        gitdir = os.path.realpath(read_gitfile(dotgit))
+        back = os.path.realpath(os.path.join(gitdir, read_pointer(os.path.join(gitdir, "gitdir"))))
+    except (OSError, ValueError):
+        return False
+    return os.path.dirname(gitdir) == os.path.join(proj[1], "worktrees") and back == dotgit
+
+
+# git's own isspace (sane_ctype's GIT_SPACE): only these four, never C's \v or \f.
+GIT_SPACE = b" \t\n\r"
+
+
+def valid_head(path):
+    """Whether git 2.43's validate_headref takes `path`: a symlink whose text starts `refs/`, or
+    a file whose first 255 bytes are `ref:`, optional whitespace (GIT_SPACE) and `refs/...`, or
+    start with an object id's 40 hex digits."""
+    try:
+        if os.path.islink(path):
+            return os.readlink(path).startswith("refs/")
+        with open(path, "rb") as f:
+            data = f.read(255)
+    except OSError:
+        return False
+    if data.startswith(b"ref:") and data[4:].lstrip(GIT_SPACE).startswith(b"refs/"):
+        return True
+    return re.match(rb"[0-9a-fA-F]{40}", data) is not None
+
+
+def is_git_directory(d, env, start):
+    """git 2.43's is_git_directory: a valid HEAD (valid_head), and objects/ (or
+    GIT_OBJECT_DIRECTORY, relative to the cwd `start`) and refs/ that git can search, in the dir
+    a `commondir` file names or in d itself. A commondir git can't read refuses (git dies)."""
+    if not valid_head(os.path.join(d, "HEAD")):
+        return False
+    common, pointer = d, os.path.join(d, "commondir")
+    if os.path.exists(pointer):
+        common = os.path.join(d, read_pointer(pointer))
+    objects = env.get("GIT_OBJECT_DIRECTORY")
+    objects = os.path.join(start, objects) if objects else os.path.join(common, "objects")
+    return os.access(objects, os.X_OK) and os.access(os.path.join(common, "refs"), os.X_OK)
+
+
+def looks_like_gitdir(d, env=None, start=None, dotgit=False):
+    """Whether git takes d as a git dir (is_git_directory). A dir it might reject while some of
+    a git dir's parts sit there (any `.git` dir; else HEAD with refs/, objects/ or a commondir)
+    refuses: git would look past it, on up or to the next path its server side tries, and the
+    guard doesn't mimic that skip. Only a dir no git dir check could pass (no HEAD, or HEAD alone)
+    is passed over, as git passes over it."""
+    env = env or {}
+    if is_git_directory(d, env, start or d):
+        return True
+    if not dotgit and not (os.path.lexists(os.path.join(d, "HEAD")) and any(
+            os.path.lexists(os.path.join(d, n)) for n in ("refs", "objects", "commondir"))):
+        return False
+    raise Refusal("rule1", os.path.join(d, "HEAD"), f"the git dir {d} looks broken (git wants a "
+                  "HEAD naming refs/... or an object id, and objects/ and refs/), so git would "
+                  "look past it and use whatever repository it finds next, which the guard "
+                  "doesn't judge. Repair or remove it.")
 
 
 def discover(start, env=None):
-    """(gitdir, common, top) for the repo git would use from `start`, or None."""
+    """(gitdir, common, top) for the repo git would use from `start`, or None. A git dir git
+    might look past refuses (looks_like_gitdir)."""
     env = env or {}
     start = os.path.realpath(start)
     if env.get("GIT_DIR"):
         gitdir, common = gitdir_info(os.path.join(start, env["GIT_DIR"]))
         top = env.get("GIT_WORK_TREE") or start
         return gitdir, common, os.path.realpath(os.path.join(start, top))
-    ceilings = {os.path.realpath(c) for c in (env.get("GIT_CEILING_DIRECTORIES") or "").split(":")
-                if c}
+    ceilings = ceiling_dirs(env)
     d = start
     while True:
         dotgit = os.path.join(d, ".git")
         if os.path.isdir(dotgit):
-            return gitdir_info(dotgit, at_root=True) + (d,)
+            info = gitdir_info(dotgit, at_root=True)  # first: its refusal names a planted layout
+            looks_like_gitdir(dotgit, env, start, dotgit=True)
+            return info + (d,)
         if os.path.isfile(dotgit):
             return gitdir_info(read_gitfile(dotgit)) + (d,)
-        if looks_like_gitdir(d):
+        if looks_like_gitdir(d, env, start):
             return gitdir_info(d) + (d,)
         parent = os.path.dirname(d)
         if parent == d or parent in ceilings:
             return None
         d = parent
+
+
+def ceiling_dirs(env):
+    return {os.path.realpath(c) for c in (env.get("GIT_CEILING_DIRECTORIES") or "").split(":")
+            if c}
+
+
+def searched_dirs(start, env, top):
+    """The dirs git's discovery looks in from `start` before it reaches `top` (the top of the
+    repo it found), or, with top None, every dir it looked in (up to / or a ceiling). Empty
+    with GIT_DIR set: git looks nowhere."""
+    if env.get("GIT_DIR"):
+        return []
+    ceilings, d, out = ceiling_dirs(env), os.path.realpath(start), []
+    while d != top:
+        out.append(d)
+        parent = os.path.dirname(d)
+        if parent == d or parent in ceilings:
+            break
+        d = parent
+    return out
+
+
+def check_below_top(m, env, cwd, project, repo, what, kind):
+    """G-E cwd half: git walks up from cwd to the first repo it finds, and a dir it looks in on
+    the way that a sandboxed session can write could gain a planted repo after the check.
+    Refuse unless cwd is its repo's top, or every dir git looks in from it is protected. kind
+    is what check_rule1 judges: "cwd", "arg" or "url"."""
+    top = repo[2] if repo else None
+    for d in searched_dirs(cwd, env, top):
+        bad = m.exposed(d)
+        if not bad:
+            continue
+        if not top:
+            proj = discover(project, {k: env[k] for k in ("GIT_CEILING_DIRECTORIES",)
+                                      if k in env})
+            top_name = "a repository top" + (f" (the project's is {proj[2]})" if proj else "")
+        else:
+            top_name = f"{top}, the repository top"
+        fix = {"cwd": f"Run it from {top_name}", "arg": f"Name {top_name}, instead",
+               "url": f"Point the remote at a network URL or {top_name}"}[kind]
+        where = (f"is below its repository top {top}" if top else "is in no repository")
+        raise Refusal("rule1", bad, f"{what} {where}, and a sandboxed session can write {bad}, "
+                      "where git looks for a repository on its way up and would use one "
+                      f"planted after this check. {fix}.")
 
 
 def parse_value(raw):
@@ -878,77 +1452,186 @@ def parse_value(raw):
     return "".join(out).strip()
 
 
+# `[section "subsection"]`, the subsection's `\"` and `\\` escaped; or `[section]`/`[section.sub]`.
+CONFIG_HEADER = re.compile(r'\[\s*([^\s\]"]*)\s*(?:"((?:[^"\\]|\\.)*)"\s*)?\]')
+
+
 def config_entries(path):
-    """(section, key, value) for each `key = value` in a git config file. Section is lowercased
-    and its subsection dropped: `[includeIf "gitdir:x"]` reads as `includeif`."""
+    """(section, subsection, key, value) for each `key = value` in a git config file. Section and
+    key are lowercased; a quoted subsection is kept as written (escapes undone), a deprecated
+    `[section.sub]` one lowercased, and "" stands for none: `[includeIf "gitdir:x"]` reads as
+    ("includeif", "gitdir:x")."""
     with open(path, errors="replace") as f:
         text = f.read().replace("\\\n", "")
-    section = ""
+    section, subsection = "", ""
     for line in text.splitlines():
         line = line.strip()
         if line.startswith("["):
-            end = line.find("]")
-            if end < 0:
-                continue
-            header = line[1:end].strip()
-            section = re.split(r'[\s."]', header, 1)[0].lower()
-            line = line[end + 1:].strip()
+            m = CONFIG_HEADER.match(line)
+            if m:
+                name, quoted = m.group(1), m.group(2)
+                if quoted is not None:
+                    section, subsection = name.lower(), re.sub(r"\\(.)", r"\1", quoted)
+                else:
+                    section, _, subsection = name.lower().partition(".")
+                line = line[m.end():].strip()
+            else:  # a header git would reject: read its section name, as before
+                end = line.find("]")
+                if end < 0:
+                    continue
+                section = re.split(r'[\s."]', line[1:end].strip(), 1)[0].lower()
+                subsection, line = "", line[end + 1:].strip()
         if not line or line[0] in "#;":
             continue
         key, eq, value = line.partition("=")
         key = key.strip().lower()
-        yield section, key, parse_value(value) if eq else "true"
+        yield section, subsection, key, parse_value(value) if eq else "true"
 
 
-def config_refs(path, home):
-    """Include targets and core.hooksPath values named in one config file."""
-    includes, hooks = [], []
-    for section, key, value in config_entries(path):
+def config_refs(path, home, base=None):
+    """Include targets (path, whether an includeIf names it; a relative one joined to `base`,
+    by default the file's own dir), core.hooksPath values, remote URLs
+    and remote names in one config file. The URLs are each remote.<n>.url and pushurl value. The
+    rewrites are (key, base) for each url.<base>.insteadOf or pushInsteadOf: git swaps a
+    matching URL's prefix for the base and keeps the rest, so a URL git ends up using starts
+    with the base but is not the base itself (check_rule1 refuses all but a network_base). An
+    empty base counts too. The names are
+    each <n> with a remote.<n>.url: git takes a name with none as a path. The groups are
+    (group, members) for each remotes.<group> value, split on space, tab and newline as git
+    fetch splits it; a three-level key's group is <subsection>.<key>, as git matches it. The
+    defaults are (key, value) for each branch.<b>.remote, branch.<b>.pushRemote and
+    remote.pushDefault: the remote git takes when a call names none."""
+    includes, hooks, urls, names, groups, defaults, rewrites = [], [], [], [], [], [], []
+    for section, subsection, key, value in config_entries(path):
+        if section == "branch" and subsection and key in ("remote", "pushremote") and value:
+            defaults.append((f"branch.{subsection}.{DEFAULT_KEYS[key]}", value))
+        elif section == "remote" and not subsection and key == "pushdefault" and value:
+            defaults.append(("remote.pushDefault", value))
+        if section == "remotes":
+            groups.append((f"{subsection}.{key}" if subsection else key,
+                           [w for w in re.split("[ \t\n]", value) if w]))
+        if section == "remote" and key in ("url", "pushurl") and value:
+            urls.append(value)
+            if key == "url":
+                names.append(subsection)
+        elif section == "url" and key in ("insteadof", "pushinsteadof"):  # an empty base too
+            rewrites.append((f"url.{subsection}.{REWRITE_KEYS[key]}", subsection))
         if not value:
             continue
         if section in ("include", "includeif") and key == "path":
             v = expand(value, home)
-            includes.append(os.path.join(os.path.dirname(path), v))
+            includes.append((os.path.join(base or os.path.dirname(path), v),
+                             section == "includeif"))
         elif section == "core" and key == "hookspath":
             hooks.append(expand(value, home))
-    return includes, hooks
+    return includes, hooks, urls, names, groups, defaults, rewrites
 
 
-def check_rule1(m, env, cwd, project, arg=None):
+DEFAULT_KEYS = {"remote": "remote", "pushremote": "pushRemote"}
+REWRITE_KEYS = {"insteadof": "insteadOf", "pushinsteadof": "pushInsteadOf"}
+
+
+def local_url_path(url):
+    """The path a local remote URL names, or None for a network one. Local is `file://` or no
+    `<scheme>://` and not scp-like (`[user@]host:path`: a `:` before any `/`), as git tells
+    them apart. An ext:: URL, which names a command for git to run, is refused."""
+    if url.lower().startswith("ext::"):
+        raise Refusal("rule1", url, f"the remote URL {url} is an ext:: URL, which names a command "
+                      "for git to run outside the sandbox. Use a network URL instead.")
+    if url.lower().startswith("file://"):
+        path = url[len("file://"):]
+        if not path.startswith("/"):  # git drops a host part: judge no guess at the rest
+            raise Refusal("rule1", url, f"the remote URL {url} is a file:// URL with a host part; "
+                          "give the repository as a plain path or a network URL.")
+        if "%" in path:  # git %-decodes it, so a `%` could spell any path
+            raise Refusal("rule1", url, f"the remote URL {url} holds a %-escape, which git "
+                          "decodes before it reads the path; spell the path plainly.")
+        return path
+    if re.match(r"[A-Za-z][A-Za-z0-9+.-]*://", url):
+        return None
+    colon, slash = url.find(":"), url.find("/")
+    if colon >= 0 and (slash < 0 or colon < slash):
+        return None
+    return url
+
+
+def network_base(base):
+    """Whether a url.<base>.insteadOf or pushInsteadOf base is a network URL with a host:
+    `<scheme>://[user@]<host>...` with a scheme other than file, or scp-like `[user@]<host>:`.
+    Anything else (an empty base, any file: one, an empty host, a local path) is not, and nor is
+    `ext:`, which a rest starting `:` turns into an ext:: URL that runs a command."""
+    if base.lower().startswith(("file:", "ext:")):
+        return False
+    m = re.match(r"[A-Za-z][A-Za-z0-9+.-]*://(?:[^/@]*@)?([^/:]*)", base)
+    if m:
+        return bool(m.group(1))
+    return bool(re.match(r"(?:[^@/:]+@)?[^@/:]+:", base)) and local_url_path(base) is None
+
+
+def check_rule1(m, env, cwd, project, arg=None, url=None, walk=True):
     """Rule 1 for the repo at cwd: the call's own cwd, or the path argument arg resolved to
-    cwd (check_path_arguments)."""
+    cwd (check_path_arguments), or the repo a local remote URL names (url: the URL as the
+    config spells it). Only the call's own cwd has its remote URLs judged (check_remote_url),
+    one level deep: a URL's repo doesn't have its own judged. walk False skips G-E's cwd half
+    (check_below_top), for a call that runs no git in its cwd (handed_lane_addr). Returns
+    (remotes, groups, defaults) for check_repository_word: the names of the remotes git surely
+    reads (none from an includeIf file, whose condition the guard doesn't evaluate, or from a
+    config.worktree git may not read), for each remote group (members from every file, the
+    count of those from files git surely reads), and the default-remote keys (config_refs) from
+    every file, or None with no repo. For the call's own cwd, each default naming no remote git
+    surely reads is judged as a path, as a remote URL is."""
     repo = discover(cwd, env)
     proj = discover(project, {k: env[k] for k in ("GIT_CEILING_DIRECTORIES",) if k in env})
+    kind = "url" if url is not None else "arg" if arg is not None else "cwd"
+    what = {"url": f"the remote URL {url}", "arg": f"the path argument {arg}",
+            "cwd": "the working directory"}[kind]
     if repo and (proj is None or repo[1] != proj[1]):
-        what, fix = ((f"the path argument {arg}", "Name a path in the project's repository")
-                     if arg is not None else
-                     ("the working directory", "Run it from the project's repository"))
+        fix = {"url": "Point the remote at a network URL or a path in the project's repository",
+               "arg": "Name a path in the project's repository",
+               "cwd": "Run it from the project's repository"}[kind]
         raise Refusal("rule1", repo[0],
                       f"{what} is in the repository with git dir {repo[0]}, not the project's. "
                       f"{fix}, or run it from a session launched in that repository.")
+    if repo and not env.get("GIT_DIR") and not worktree_top(repo[2], proj):
+        dotgit = os.path.join(repo[2], ".git")
+        if os.path.lexists(dotgit):
+            m.chain(dotgit, "rule1", lambda bad: Refusal(
+                "rule1", bad, f"{what} is in a repository found through {dotgit}, which a "
+                f"sandboxed session can write ({bad}), so it could point git at another "
+                "repository after this check. Name the project's top or one of its lanes, or "
+                "protect that dir.", protect=m))
+    if walk:
+        check_below_top(m, env, cwd, project, repo, what, kind)
     home = m.home
-    trusted, files = [], []
+    trusted, files, unsure = [], [], set()
     if repo:
         gitdir, common, top = repo
+        check_legacy_remotes(common)
         # Claude Code protects the session's own gitdir, so config.worktree is trusted only there.
+        # Another worktree's is judged only when git reads it: the sandbox leaves an empty file
+        # where it mounts over a missing protected one.
         trusted = [os.path.join(common, "config")]
         worktree_cfg = os.path.join(gitdir, "config.worktree")
-        (trusted if gitdir == proj[0] else files).append(worktree_cfg)
-    if env.get("GIT_CONFIG_GLOBAL"):
-        files.append(expand(env["GIT_CONFIG_GLOBAL"], home))
-    else:
-        files.append(os.path.join(home, ".gitconfig"))
-        xdg = env.get("XDG_CONFIG_HOME") or os.path.join(home, ".config")
-        files.append(os.path.join(xdg, "git", "config"))
-    if not env.get("GIT_CONFIG_NOSYSTEM") or env["GIT_CONFIG_NOSYSTEM"].lower() in ("0", "false",
-                                                                                   "no", "off"):
-        files.append(env.get("GIT_CONFIG_SYSTEM") or "/etc/gitconfig")
-    seen = set()
-    queue = [(f, True, 0) for f in trusted] + [(f, False, 0) for f in files]
+        reads = reads_worktree_config(common)
+        if gitdir == proj[0]:
+            trusted.append(worktree_cfg)
+        elif reads:
+            files.append(worktree_cfg)
+        if not reads:
+            unsure.add(os.path.abspath(os.path.join(cwd, worktree_cfg)))
+    files += config_files(env, home)
+    seen, urls, remotes, groups, defaults, rewrites = set(), [], set(), {}, [], []
+    queue = [(f, True, 0, True) for f in trusted] + [(f, False, 0, True) for f in files]
     hooks_base = repo[2] if repo else cwd
     while queue:
-        path, is_trusted, depth = queue.pop(0)
-        path = os.path.abspath(os.path.join(cwd, path))
+        path, is_trusted, depth, certain = queue.pop(0)
+        # As the OS opens it: a lexical fold of `link/..` would judge another file. The key
+        # it gives `seen` is canonical for `.`, `..` and repeated slashes, with no hop dropped.
+        raw = os.path.join(cwd, path)
+        path = m.opened(raw, "rule1", lambda bad, raw=raw: Refusal(
+            "rule1", bad, f"git reads the config file {raw}, whose path goes through {bad}, "
+            "which a sandboxed session can write.", protect=m))
+        certain = certain and path not in unsure
         if path in seen or not os.path.lexists(path):
             continue
         seen.add(path)
@@ -959,11 +1642,346 @@ def check_rule1(m, env, cwd, project, arg=None):
                 f"write ({bad}).", protect=m))
         if not os.path.isfile(target):
             continue  # judged above; only a regular file is parsed
-        includes, hooks = config_refs(target, home)
+        # A relative include is read from the dir of the path git opened, not the target's.
+        includes, hooks, found, names, members, named, swaps = config_refs(
+            target, home, os.path.dirname(path))
+        defaults += named
+        rewrites += swaps
         if depth < INCLUDE_DEPTH:
-            queue += [(i, False, depth + 1) for i in includes]
+            queue += [(i, False, depth + 1, certain and not cond) for i, cond in includes]
         for h in hooks:
             check_hooks_dir(m, os.path.join(hooks_base, h))
+        urls += found
+        if certain:
+            remotes.update(names)
+        for group, words in members:
+            entry = groups.setdefault(group, ([], [0]))
+            entry[0].extend(words)
+            entry[1][0] += len(words) if certain else 0
+    if arg is None and url is None:
+        for key, base in rewrites:
+            if not network_base(base):
+                raise Refusal("rule1", base, f"the config sets {key}: git rewrites a matching "
+                              "remote URL to this base with the rest of the URL appended, and "
+                              "a base that isn't a network URL with a host can name a path or "
+                              "a program the guard can't judge from the base alone. Use a "
+                              "network base (scheme://host/... or [user@]host:) instead.")
+        for u in dict.fromkeys(urls):
+            check_remote_url(m, env, u, hooks_base, cwd, project)
+        for key, value in dict.fromkeys(defaults):
+            if value not in remotes:  # git takes it as a path (G-E path half)
+                check_remote_url(m, env, value, hooks_base, cwd, project,
+                                 label=f"{key} ({value}, no configured remote)")
+    return (remotes, {g: (words, n) for g, (words, [n]) in groups.items()},
+            defaults if repo else None)
+
+
+def config_files(env, home):
+    """The system, XDG and global config files git reads, in git's order. A set but empty
+    GIT_CONFIG_SYSTEM or GIT_CONFIG_GLOBAL names no file (git reads none there), and with
+    GIT_CONFIG_GLOBAL set git reads no XDG file either."""
+    files = []
+    nosystem = env.get("GIT_CONFIG_NOSYSTEM")
+    if not nosystem or nosystem.lower() in ("0", "false", "no", "off"):
+        if "GIT_CONFIG_SYSTEM" not in env:
+            files.append("/etc/gitconfig")
+        elif env["GIT_CONFIG_SYSTEM"]:
+            files.append(env["GIT_CONFIG_SYSTEM"])
+    if "GIT_CONFIG_GLOBAL" not in env:
+        xdg = env.get("XDG_CONFIG_HOME") or os.path.join(home, ".config")
+        files += [os.path.join(xdg, "git", "config"), os.path.join(home, ".gitconfig")]
+    elif env["GIT_CONFIG_GLOBAL"]:
+        files.append(expand(env["GIT_CONFIG_GLOBAL"], home))
+    return files
+
+
+def reads_worktree_config(common):
+    """Whether git reads a worktree's config.worktree: extensions.worktreeConfig is on in the
+    common config itself (its repository format: no includes)."""
+    local = os.path.join(common, "config")
+    ext = [v for s, sub, k, v in (config_entries(local) if os.path.isfile(local) else [])
+           if s == "extensions" and not sub and k == "worktreeconfig"]
+    return bool(ext) and ext[-1].lower() not in GIT_FALSE
+
+
+def check_remote_url(m, env, url, top, cwd, project, label=None):
+    """G-D: a local remote URL (local_url_path) names a repo git runs the server side of outside
+    the sandbox. A relative one is resolved from both the repo top and the cwd. Each is judged
+    as a repository word is (check_server_repo): what exists along its symlink chain and as
+    rule 1 judges the cwd, a missing path git tries first by whether a session could create
+    it."""
+    path = local_url_path(url)
+    if path is None:
+        return
+    path = os.path.expanduser(path) if path.startswith("~") else path
+    label = label or f"the remote URL {url}"
+    for base in dict.fromkeys((top,) if os.path.isabs(path) else (top, cwd)):
+        full = os.path.join(base, path).rstrip("/") or "/"
+        check_server_repo(m, env, base, path, project, url, url=url, link=lambda bad: Refusal(
+            "rule1", bad, f"{label} goes through {bad}, which a sandboxed session "
+            "can rewrite to point git at another repository after this check. Point the remote "
+            "at a network URL or a real path in a dir no session can write, or protect that dir.",
+            protect=m), missing=lambda tried, bad, full=full: Refusal(
+            "rule1", bad, f"{label} names {full}, {server_paths(full)}; {tried} is "
+            f"missing and a sandboxed session could create it ({bad}), so git would run a repo "
+            "it planted. Point the remote at a network URL or a path in the project's "
+            "repository, or protect that dir.", protect=m))
+
+
+def check_legacy_remotes(common):
+    """G-C: git reads a remote it finds in no config from <common>/remotes/<name> or
+    <common>/branches/<name>. Those dirs sit in the main git dir, which a sandboxed session can
+    write, and any call that resolves a remote reads them (the default remote, gh's own git), so
+    any entry there refuses. An empty dir passes (git init makes branches/)."""
+    for kind in ("remotes", "branches"):
+        d = os.path.join(common, kind)
+        try:
+            names = sorted(os.listdir(d))
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except OSError as e:
+            raise Refusal("rule1", d, f"could not read {d} ({type(e).__name__}), where git finds "
+                          "legacy remotes; refusing an excluded command.")
+        if names:
+            entry = os.path.join(d, names[0])
+            raise Refusal("rule1", entry, f"{entry} defines a legacy remote, read from the git "
+                          "dir a sandboxed session can write, outside the config the guard "
+                          "judges. Define the remote in the config instead (`git remote add "
+                          f"<name> <url>`), then remove each entry in {d}.")
+
+
+# --- G-B: submodule recursion ------------------------------------------------------------------
+
+# git fetch (and pull, through it) reads both keys into one setting, so the later one wins.
+RECURSE_KEYS = {"fetch.recursesubmodules", "submodule.recurse"}
+# git push reads these two the same way (probed with git 2.43: SubmoduleRecursionMatchesGit),
+# unset is off, and check, on-demand and only all run git in each submodule.
+PUSH_KEYS = {"push.recursesubmodules", "submodule.recurse"}
+GIT_FALSE = {"false", "no", "off", "0", ""}
+RECURSE_FIX = ("Run `git config --global fetch.recurseSubmodules false` (dotclaude's ./setup.sh "
+               "sets it)")
+PUSH_FIX = ("Unset push.recurseSubmodules and submodule.recurse, or set the one git reads last "
+            "false (`git config --global push.recurseSubmodules false` when the global config "
+            "sets it)")
+# gh forms that run git fetch, pull or push inside (gh 2.89): (first, second word) -> (the rule
+# that judges it, what git runs). gh pr checkout runs git checkout after its fetch, and checkout
+# honours submodule.recurse, so it takes the pull rule.
+GH_GIT_FORMS = {("pr", "checkout"): ("pull", "git fetch and git checkout"),
+                ("pr", "merge"): ("pull", "git pull"), ("issue", "develop"): ("pull", "git pull"),
+                ("pr", "create"): ("push", "git push")}
+# gh 2.89's built-in aliases of those forms (`Aliases:` in pkg/cmd/pr and pkg/cmd/issue).
+GH_ALIASES = {("pr", "co"): ("pr", "checkout"), ("pr", "new"): ("pr", "create")}
+# The groups those forms sit in: a flag before the subcommand there is refused (check_recursion).
+GH_GROUPS = {form[0] for form in (*GH_GIT_FORMS, *GH_ALIASES)}
+# The values Go's strconv.ParseBool reads as false, as gh's flag parser takes `--flag=v`. Only
+# `--recurse-submodules=<one of these>` leaves gh pr checkout's submodule update off; any other
+# value is true or an error.
+GO_FALSE = {"false", "0", "f", "F", "FALSE", "False"}
+# Variables that move where git takes config (the common dir) or objects from (check_env_config).
+GIT_LOCATION_VARS = ("GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES")
+
+
+def env_config_pairs(env):
+    """(key, value, source) for each config entry GIT_CONFIG_COUNT and GIT_CONFIG_PARAMETERS set,
+    in git's order; refuses what the guard can't read."""
+    count = env.get("GIT_CONFIG_COUNT")
+    pairs = []
+    if count:
+        if not re.fullmatch(r"[0-9]+", count):
+            raise Refusal("rule1", "GIT_CONFIG_COUNT", f"GIT_CONFIG_COUNT is {count!r}, which the "
+                          "guard can't read. Unset it for excluded commands.")
+        for i in range(int(count)):
+            if f"GIT_CONFIG_KEY_{i}" not in env:
+                raise Refusal("rule1", "GIT_CONFIG_COUNT", f"GIT_CONFIG_KEY_{i} is unset under "
+                              "GIT_CONFIG_COUNT. Unset GIT_CONFIG_COUNT for excluded commands.")
+            pairs.append((env[f"GIT_CONFIG_KEY_{i}"], env.get(f"GIT_CONFIG_VALUE_{i}", ""),
+                          "GIT_CONFIG_COUNT"))
+    params = env.get("GIT_CONFIG_PARAMETERS")
+    if params:
+        try:
+            words = shlex.split(params)
+        except ValueError:
+            raise Refusal("rule1", "GIT_CONFIG_PARAMETERS", "the guard can't read "
+                          "GIT_CONFIG_PARAMETERS. Unset it for excluded commands.")
+        for w in words:
+            key, eq, value = w.partition("=")
+            pairs.append((key, value if eq else "true", "GIT_CONFIG_PARAMETERS"))
+    return pairs
+
+
+def check_env_config(env):
+    """Rule 1 judges config files, and from the environment only the recursion keys: any other
+    key GIT_CONFIG_COUNT or GIT_CONFIG_PARAMETERS sets (a remote URL, an insteadOf, a branch's
+    remote, an include) would reach every git the call runs unjudged, so it refuses. So does
+    any of GIT_LOCATION_VARS set, even empty: each moves where git takes config or objects
+    from, which rule 1 doesn't model."""
+    for var in GIT_LOCATION_VARS:
+        if var in env:
+            raise Refusal("rule1", var, f"{var} is set, which moves where git takes its config "
+                          "or objects from, and the guard doesn't judge that; unset it for "
+                          "excluded commands.")
+    for key, _, source in env_config_pairs(env):
+        section, _, rest = key.partition(".")
+        sub, _, name = rest.rpartition(".")
+        if sub or f"{section}.{name}".lower() not in RECURSE_KEYS | PUSH_KEYS:
+            raise Refusal("rule1", source, f"{source} sets the git config key {key!r}, which the "
+                          "guard doesn't judge from the environment. Unset it for excluded "
+                          "commands, or set the key in a config file.")
+
+
+def config_occurrences(env, repo, home):
+    """(key, value, certain, source) for each fetch.recurseSubmodules, push.recurseSubmodules
+    and submodule.recurse git reads (source: the file, or the variable that sets it), in git's
+    order: system, XDG, global, the repo's config, its config.worktree, each include
+    in place, then GIT_CONFIG_COUNT's keys and GIT_CONFIG_PARAMETERS. A value from an includeIf
+    (whose condition the guard doesn't evaluate), or a config.worktree git may not read, is not
+    certain."""
+    files = [(f, True) for f in config_files(env, home)]
+    if repo:
+        gitdir, common, _ = repo
+        files += [(os.path.join(common, "config"), True),
+                  (os.path.join(gitdir, "config.worktree"), reads_worktree_config(common))]
+    out = []
+    for path, certain in files:
+        out += file_occurrences(path, certain, home, 0)
+    pairs = env_config_pairs(env)
+    for key, value, source in pairs:
+        section, _, rest = key.partition(".")
+        sub, _, name = rest.rpartition(".")
+        if section.lower() in ("include", "includeif") and name.lower() == "path":
+            if os.path.isabs(value):  # git refuses a relative one from the command line
+                out += file_occurrences(value, section.lower() == "include" and not sub, home, 1)
+        elif not sub and f"{section}.{name}".lower() in RECURSE_KEYS | PUSH_KEYS:
+            out.append((f"{section}.{name}".lower(), value, True, source))
+    return out
+
+
+def file_occurrences(path, certain, home, depth):
+    """config_occurrences for one file, its includes read in place."""
+    if depth > INCLUDE_DEPTH or not os.path.isfile(path):
+        return []
+    out = []
+    for section, sub, key, value in config_entries(path):
+        if section in ("include", "includeif") and key == "path":
+            if value:
+                target = os.path.join(os.path.dirname(path), expand(value, home))
+                out += file_occurrences(target, certain and section == "include" and not sub,
+                                        home, depth + 1)
+        elif not sub and f"{section}.{key}" in RECURSE_KEYS | PUSH_KEYS:
+            out.append((f"{section}.{key}", value, certain, path))
+    return out
+
+
+KEY_NAMES = {"fetch.recursesubmodules": "fetch.recurseSubmodules",
+             "push.recursesubmodules": "push.recurseSubmodules",
+             "submodule.recurse": "submodule.recurse"}
+
+
+def recursion_verdict(occurrences, keys, unset):
+    """(key, why) for what turns recursion on, or None when the last of `keys` git reads is
+    surely a git false value (`unset` when none is set). A value that is not certain can only
+    turn it on. key is the one to switch off; why names the value and file that turn it on (or
+    that none is set), and each later switch-off from a file git may not read, which doesn't
+    count."""
+    off, on_at, ignored = unset, None, []
+    for key, value, certain, source in occurrences:
+        if key not in keys:
+            continue
+        false = value.lower() in GIT_FALSE
+        if certain:
+            off, on_at, ignored = false, None if false else (key, value, source), []
+        elif false:
+            ignored.append((key, source))
+        else:
+            off, on_at, ignored = False, (key, value, source), []
+    if off:
+        return None
+    names = " or ".join(KEY_NAMES[k] for k in sorted(keys))
+    if on_at:
+        key, why = on_at[0], f"{KEY_NAMES[on_at[0]]}={on_at[1]} in {on_at[2]}"
+    else:
+        key = sorted(keys)[0]
+        why = f"none of {names} is set, and git then recurses into changed submodules"
+    for k, source in ignored:
+        why += (f"; {KEY_NAMES[k]}=false in {source} doesn't count: git may not read that file "
+                "(an includeIf, whose condition the guard doesn't evaluate, or a config.worktree "
+                "without extensions.worktreeConfig)")
+    return KEY_NAMES[key], why
+
+
+def recursion_on(env, repo, home, sub="fetch"):
+    """What turns submodule recursion on for a git fetch, pull or push (sub) from `repo`, as
+    recursion_verdict's (key, why) pairs: [] when the effective config surely has it off. pull also updates each submodule after its
+    merge when submodule.recurse alone is on. push reads PUSH_KEYS alone, unset counting off."""
+    occ = config_occurrences(env, repo, home)
+    if sub == "push":
+        verdicts = [recursion_verdict(occ, PUSH_KEYS, unset=True)]
+    else:
+        verdicts = [recursion_verdict(occ, RECURSE_KEYS, unset=False)]
+        if sub == "pull":
+            verdicts.append(recursion_verdict(occ, {"submodule.recurse"}, unset=True))
+    return [v for v in verdicts if v]
+
+
+def check_recursion(m, env, cwd, words):
+    """G-B for one call: git fetch, pull or push, or a gh form that runs one, recurses into each
+    submodule's own git dir, which a sandboxed session can write. Refuse when the git call's
+    last recursion flag turns it on (recursion_cli, any prefix git takes), and pass when it turns
+    it off; with no flag, refuse unless the effective config has recursion off. Args git_argv
+    can't read refuse."""
+    head = os.path.basename(words[0])
+    if head == "git" and words[1:2] in (["fetch"], ["pull"], ["push"]):
+        sub, name = words[1], f"git {words[1]}"
+        runs = f"git {sub}"
+        flag = recursion_cli(git_argv(sub, words[2:])[0])
+        if flag == "on":
+            raise Refusal("rule1", sub, f"`{name}` turns submodule recursion on on the command "
+                          "line, which runs git in each submodule's own git dir, where a "
+                          "sandboxed session can write. Run it without submodule recursion.")
+        if flag == "off":
+            return
+        fix = (f"{PUSH_FIX if sub == 'push' else RECURSE_FIX}, or add `--no-recurse-submodules` "
+               f"right after `{sub}`"
+               + (" (that also skips the submodule update)" if sub == "pull" else ""))
+    elif head == "gh":
+        positional, skip = [], False
+        for w in words[1:]:
+            if skip:
+                skip = False
+            elif w in ("-R", "--repo"):
+                skip = True
+            elif not w.startswith("-"):
+                positional.append(w)
+            elif (len(positional) < 2 and not re.match(r"-R.|--repo=", w)
+                  and (not positional or positional[0] in GH_GROUPS)):
+                # cobra takes an unknown flag's next word as its value, so a flag here could
+                # make gh run another form than the positionals read.
+                raise Refusal("rule1", w, f"`{' '.join(words)}` puts {w!r} before its gh "
+                              "subcommand, where gh may take the next word as its value and run "
+                              "another form than the guard reads. Put flags after the "
+                              "subcommand (only -R or --repo may come before it).")
+        form = GH_ALIASES.get(tuple(positional[:2]), tuple(positional[:2]))
+        sub, runs = GH_GIT_FORMS.get(form, (None, None))
+        if not sub:
+            return
+        name = f"gh {' '.join(form)}"
+        recurse = [w for w in words if w.startswith("--recurse-submodules")
+                   and w.partition("=")[2] not in GO_FALSE]
+        if name == "gh pr checkout" and recurse:
+            raise Refusal("rule1", recurse[0], f"`gh pr checkout {recurse[0]}` updates each "
+                          "submodule, running git in its own git dir, which a sandboxed session "
+                          "can write. Run it without --recurse-submodules.")
+        fix = f"{PUSH_FIX if sub == 'push' else RECURSE_FIX}; gh passes git no flag to turn it off"
+    else:
+        return
+    on = recursion_on(env, discover(cwd, env), m.home, sub)
+    if on:
+        keys = [k for k, _ in on]
+        raise Refusal("rule1", keys[0], f"`{name}` runs {runs} with submodule recursion on in "
+                      f"the effective git config ({'; and '.join(w for _, w in on)}), which runs "
+                      "git in each submodule's own git dir, where a sandboxed session can write. "
+                      + fix + (". For pull, also set submodule.recurse false"
+                               if sub == "pull" and "submodule.recurse" in keys else "") + ".")
 
 
 def check_hooks_dir(m, hdir):
@@ -1072,9 +2090,11 @@ def judge(heads, cwd, env, settings, command=""):
     if not project:
         raise Refusal("project", "(unset)", "CLAUDE_PROJECT_DIR is unset, so the guard can't tell "
                       "the project's repository; refusing an excluded command.")
+    check_env_config(env)
     m = Machine(env, settings, cwd)
-    check_rule1(m, env, cwd, project)
-    check_calls(m, env, cwd, project, command)
+    remotes, groups, defaults = check_rule1(m, env, cwd, project,
+                                            walk=not handed_lane_addr(command))
+    check_calls(m, env, cwd, project, command, remotes, groups, defaults)
     for head in heads:
         check_rule2(m, head, env.get("PATH", ""))
         check_rule3(head, cwd, project)

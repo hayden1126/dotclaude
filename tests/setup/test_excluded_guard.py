@@ -9,11 +9,13 @@ protected by location.
 """
 import concurrent.futures
 import contextlib
+import glob
 import importlib.util
 import io
 import json
 import os
 import random
+import re
 import shutil
 import stat
 import subprocess
@@ -30,6 +32,7 @@ EXCLUDED = ["git push", "git push origin *", "gh pr *", "lane ls", "lane ls *", 
             "claude *", "codex login status"]
 HEADS = ("git", "gh", "lane", "claude", "codex")
 MARKER = "#!/bin/sh\necho marker\n"
+GIT_HELP = os.path.join(REPO, "tests", "setup", "data", "git-help")
 
 
 def load_guard():
@@ -59,12 +62,15 @@ class Guard(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp)
         self.addCleanup(unlock, self.tmp)
         self.home = self.mkdir("home")
+        # As setup.sh leaves it: without it every git fetch and pull is refused (G-B).
+        self.write(os.path.join(self.home, ".gitconfig"), RECURSE_OFF)
         self.deny_write = []  # paths an Edit deny rule covers (both routes)
         self.sandbox_deny = []  # raw denyWrite lines (sandboxed Bash only)
         self.proj = os.path.join(self.tmp, "proj")
         self.lane = os.path.join(self.tmp, "lane")
         self.git("init", "-q", self.proj, cwd=self.tmp)
         self.git("commit", "-q", "--allow-empty", "-m", "init", cwd=self.proj)
+        self.git("remote", "add", "origin", "https://github.com/x/y", cwd=self.proj)
         self.git("worktree", "add", "-q", "-b", "lane", self.lane, cwd=self.proj)
         self.bin = self.make_bin("bin")
         self.wbin = self.make_bin("wbin", protect=False)
@@ -161,8 +167,10 @@ class Rule1Repository(Guard):
         self.allowed("git push origin lane", cwd=self.lane)
         self.allowed("lane ls", cwd=self.lane)
 
-    def test_a_subdir_of_the_root_in_the_same_repo_passes(self):
-        self.allowed("git push", cwd=self.mkdir("proj", "sub", "deeper"))
+    def test_a_protected_subdir_of_the_root_in_the_same_repo_passes(self):
+        # A writable one is refused (Rule1BelowTop).
+        self.protect(self.mkdir("proj", "sub"))
+        self.allowed("git push", cwd=self.protect(self.mkdir("proj", "sub", "deeper")))
 
     def test_a_nested_repo_under_the_root_is_refused(self):
         nested = self.mkdir("proj", "sub", "nested")
@@ -188,8 +196,9 @@ class Rule1Repository(Guard):
         self.git("init", "-q", other, cwd=self.tmp)
         self.denied("gh pr view", "rule1", cwd=other)
 
-    def test_no_repo_at_the_cwd_passes(self):
-        plain = self.mkdir("plain")
+    def test_no_repo_at_a_protected_cwd_passes(self):
+        # A writable one is refused (Rule1BelowTop).
+        plain = self.protect(self.mkdir("plain"))
         self.env["CLAUDE_PROJECT_DIR"] = plain
         self.allowed("git push", cwd=plain)
 
@@ -197,8 +206,8 @@ class Rule1Repository(Guard):
         self.env["CLAUDE_PROJECT_DIR"] = self.mkdir("plain")
         self.denied("git push", "rule1")
 
-    def test_a_cwd_with_no_repo_passes_while_the_project_is_a_repo(self):
-        self.allowed("git push", cwd=self.mkdir("plain"))
+    def test_a_protected_cwd_with_no_repo_passes_while_the_project_is_a_repo(self):
+        self.allowed("git push", cwd=self.protect(self.mkdir("plain")))
 
     def test_lane_addr_repo_runs_from_another_repo_and_from_home(self):
         # The global CLAUDE.md line's call, from a session outside dotclaude: the guard judges
@@ -206,20 +215,128 @@ class Rule1Repository(Guard):
         # Rule1PathArguments pins the exemption).
         call = "lane addr --repo ~/dotclaude lead"
         self.allowed(call)
+        # From a writable cwd in no repo too: with --repo, lane runs no git in the cwd, so G-E's
+        # cwd half doesn't apply (Rule1BelowTop pins that a bare `lane addr` is still refused).
         self.env["CLAUDE_PROJECT_DIR"] = self.home
-        self.allowed(call, cwd=self.home)
+        for spelling in (call, "lane addr --repo=~/dotclaude lead", "lane addr lead --repo x",
+                         "lane addr --rep ~/dotclaude lead", "lane addr --r=x lead",
+                         "lane addr --repo ~/dotclaude lead 2>&1"):
+            with self.subTest(call=spelling):
+                self.allowed(spelling, cwd=self.home)
+        other = self.mkdir("other")
+        self.git("init", "-q", other, cwd=self.tmp)
+        self.env["CLAUDE_PROJECT_DIR"] = other
+        self.allowed(call, cwd=other)
 
     def test_another_worktrees_config_worktree_is_judged(self):
         # A lane-like project, cwd in the main checkout: same common dir, a different gitdir.
         self.env["CLAUDE_PROJECT_DIR"] = self.lane
         self.allowed("git push", cwd=self.proj)
         cfg = self.write(os.path.join(self.proj, ".git", "config.worktree"), "")
+        self.allowed("git push", cwd=self.proj)  # git reads it only with the extension on
+        self.git("config", "extensions.worktreeConfig", "true", cwd=self.proj)
         self.denied("git push", "rule1", cfg, cwd=self.proj)
+
+    def test_a_legacy_remote_file_in_the_common_dir_is_refused_g_c(self):
+        # G-C: git reads a remote from <common>/remotes or <common>/branches, outside the judged
+        # config, for any call that resolves a remote (the default one, gh's own git too).
+        common = os.path.join(self.proj, ".git")
+        os.makedirs(os.path.join(common, "branches"), exist_ok=True)  # empty, as git init makes
+        self.allowed("git push")
+        for kind in ("remotes", "branches"):
+            with self.subTest(kind=kind):
+                entry = self.write(os.path.join(common, kind, "origin"), "x\n")
+                for call, cwd in (("git push", self.proj), ("gh pr view 5", self.proj),
+                                  ("git push origin lane", self.lane)):
+                    if cwd == self.lane:
+                        self.env["CLAUDE_PROJECT_DIR"] = self.lane
+                    reason = self.denied(call, "rule1", entry, cwd=cwd)
+                    self.env["CLAUDE_PROJECT_DIR"] = self.proj
+                    self.assertIn("legacy", reason)
+                    self.assertIn("git remote add", reason)
+                os.remove(entry)
+        self.allowed("git push")
 
     def test_the_projects_own_config_worktree_is_trusted(self):
         self.env["CLAUDE_PROJECT_DIR"] = self.lane
         self.write(os.path.join(self.proj, ".git", "worktrees", "lane", "config.worktree"), "")
         self.allowed("git push", cwd=self.lane)
+
+
+class Rule1BelowTop(Guard):
+    """G-E cwd half: git finds a repo by walking up from where it runs, so a dir it passes on
+    the way that a sandboxed session can write could gain a planted repo between the check and
+    the run. A call from below its repo top, or from no repo, is refused unless every dir git
+    looks in on the way is protected."""
+
+    PATH_HEADS = ["pass-respawn", "pass-respawn *", "lane adopt *"]
+
+    def setUp(self):
+        super().setUp()
+        self.write_settings({"excludedCommands": EXCLUDED + self.PATH_HEADS})
+
+    def test_a_call_from_below_the_repo_top_is_refused_with_the_top_to_run_from(self):
+        deeper = self.mkdir("proj", "sub", "deeper")
+        for call in ("git push", "gh pr view 5", "lane ls"):
+            with self.subTest(call=call):
+                reason = self.denied(call, "rule1", deeper, cwd=deeper)
+                self.assertIn(f"Run it from {self.proj}", reason)
+        lane_sub = self.mkdir("lane", "sub")
+        self.env["CLAUDE_PROJECT_DIR"] = self.lane
+        self.assertIn(f"Run it from {self.lane}",
+                      self.denied("git push", "rule1", lane_sub, cwd=lane_sub))
+
+    def test_a_call_from_no_repo_is_refused_unless_no_session_can_write_the_way_up(self):
+        plain = self.mkdir("plain")
+        for project in (self.proj, plain):
+            with self.subTest(project=project):
+                self.env["CLAUDE_PROJECT_DIR"] = project
+                reason = self.denied("git push", "rule1", plain, cwd=plain)
+                self.assertIn("repository top", reason)
+        self.env["CLAUDE_PROJECT_DIR"] = self.home
+        # Only a command that is one `lane addr --repo` call alone skips this check: lane then runs
+        # no git in the cwd (Rule1Repository). Any other call, or one more, is judged.
+        for call in ("lane addr lead", "lane addr -- --repo", "lane addr lead --repo",
+                     "lane addr --repo x lead; lane ls", "lane addr --repo x lead && lane addr y",
+                     "lane addr --repo $(lane ls) lead", "x=1 lane addr --repo x lead",
+                     "lane ls --repo x"):
+            with self.subTest(call=call):
+                self.denied(call, "rule1", self.home, cwd=self.home)
+        # Outside every write root no sandboxed session can plant a repo.
+        self.env["CLAUDE_PROJECT_DIR"] = "/usr"
+        self.allowed("git push", cwd="/usr")
+
+    def test_the_repo_top_and_protected_dirs_on_the_way_pass(self):
+        self.allowed("git push")
+        self.env["CLAUDE_PROJECT_DIR"] = self.lane
+        self.allowed("git push origin lane", cwd=self.lane)
+        self.env["CLAUDE_PROJECT_DIR"] = self.proj
+        deeper = self.mkdir("proj", "sub", "deeper")
+        self.protect(os.path.join(self.proj, "sub", "deeper"))
+        # proj/sub is still writable: a repo planted there would be found from deeper.
+        self.denied("git push", "rule1", os.path.join(self.proj, "sub"), cwd=deeper)
+        self.protect(os.path.join(self.proj, "sub"))
+        self.allowed("git push", cwd=deeper)
+
+    def test_a_path_argument_below_its_repo_top_or_in_no_repo_is_refused(self):
+        sub = self.mkdir("proj", "sub")
+        plain = self.mkdir("plain")
+        for call, bad in ((f"pass-respawn -C {sub}", sub), ("pass-respawn -C sub", sub),
+                          (f"pass-respawn -C {plain}", plain), (f"lane adopt {sub}", sub)):
+            with self.subTest(call=call):
+                self.assertIn("repository top", self.denied(call, "rule1", bad))
+        for call in (f"pass-respawn -C {self.proj}", f"pass-respawn -C {self.lane}",
+                     "pass-respawn -C .", f"lane adopt {self.lane}"):
+            with self.subTest(call=call):
+                self.allowed(call)
+
+    def test_project_refusals_pass_for_a_lane_root(self):
+        # lane new reports project_refusals for the new lane's root: a repo top.
+        guard = load_guard()
+        refusals, error = guard.project_refusals(self.env, self.lane)
+        self.assertEqual(([r.reason for r in refusals], error), ([], None))
+        refusals, _ = guard.project_refusals(self.env, self.mkdir("lane", "sub"), self.lane)
+        self.assertTrue(refusals)
 
 
 class Rule1PathArguments(Guard):
@@ -228,9 +345,13 @@ class Rule1PathArguments(Guard):
     PATH_HEADS = ["pass-respawn", "pass-respawn *", "lane adopt *", "git push -*", "git fetch *",
                   "git pull *", "git ls-remote *", "delegation-ledger *", "codex-delegate *"]
 
+    def write_settings(self, extra=None):
+        # protect() rewrites the settings too: keep this class's patterns in every rewrite.
+        super().write_settings({"excludedCommands": EXCLUDED + self.PATH_HEADS, **(extra or {})})
+
     def setUp(self):
         super().setUp()
-        self.write_settings({"excludedCommands": EXCLUDED + self.PATH_HEADS})
+        self.write_settings()
         self.other = self.mkdir("other")
         self.git("init", "-q", self.other, cwd=self.tmp)
         self.other_git = os.path.join(self.other, ".git")
@@ -238,9 +359,19 @@ class Rule1PathArguments(Guard):
     def refused(self, call, path=None):
         return self.denied(call, "rule1", path)
 
+    def test_a_lanes_config_worktree_is_judged_only_when_git_reads_it(self):
+        # The sandbox leaves an empty file where it mounts over a missing protected one; git
+        # reads another worktree's config.worktree only with extensions.worktreeConfig on in the
+        # common config (review round 3).
+        cfg = self.write(os.path.join(self.proj, ".git", "worktrees", "lane", "config.worktree"),
+                         "")
+        self.allowed(f"pass-respawn -C {self.lane}")
+        self.git("config", "extensions.worktreeConfig", "true", cwd=self.proj)
+        self.refused(f"pass-respawn -C {self.lane}", cfg)
+
     def test_pass_respawn_C_in_another_repo_is_refused_in_every_spelling(self):
         o = self.other
-        for call in (f"pass-respawn -C {o}", f"pass-respawn -C{o}", f"pass-respawn -C={o}",
+        for call in (f"pass-respawn -C {o}", f"pass-respawn -C{o}",
                      f"pass-respawn --compact -C {o}", f"pass-respawn -C {self.proj} -C {o}",
                      f"pass-respawn -C {o} --print", f"pass-respawn -C {o} | cat"):
             with self.subTest(call=call):
@@ -249,11 +380,18 @@ class Rule1PathArguments(Guard):
                               f"{self.other_git}, not the project's", reason)
                 self.assertIn("a session launched in that repository", reason)
 
+    def test_pass_respawn_C_equals_is_refused_outright(self):
+        # argparse reads `-C=x` as x on Python 3.12 and as `=x` on older ones.
+        for call in (f"pass-respawn -C={self.lane}", f"pass-respawn -C={self.proj}",
+                     "pass-respawn -C=.", f"pass-respawn --compact -C={self.other}"):
+            with self.subTest(call=call):
+                self.assertIn("use `-C <path>`", self.refused(call, "-C="))
+
     def test_pass_respawn_C_in_the_project_passes(self):
         for call in (f"pass-respawn -C {self.proj}", f"pass-respawn -C {self.proj} --compact",
                      "pass-respawn -C .", "pass-respawn", "pass-respawn --cancel",
-                     f"pass-respawn -C {self.mkdir('proj', 'sub')}", "pass-respawn -C sub",
-                     f"pass-respawn -C {self.mkdir('plain')}"):
+                     f"pass-respawn -C {self.protect(self.mkdir('proj', 'sub'))}",
+                     "pass-respawn -C sub", f"pass-respawn -C {self.protect(self.mkdir('plain'))}"):
             with self.subTest(call=call):
                 self.allowed(call)
 
@@ -264,8 +402,8 @@ class Rule1PathArguments(Guard):
 
     def test_a_relative_path_is_judged_from_the_cwd(self):
         self.refused("pass-respawn -C ../other", self.other_git)
-        # From proj/x, ../other is proj/other: the project's own path, missing or not.
-        self.allowed("pass-respawn -C ../other", cwd=self.mkdir("proj", "x"))
+        # From the lane, ../proj is the project's own top.
+        self.allowed("pass-respawn -C ../proj", cwd=self.lane)
 
     def test_a_home_relative_path_is_expanded(self):
         mine = self.mkdir("home", "repo")
@@ -295,13 +433,42 @@ class Rule1PathArguments(Guard):
         # The candidate split isn't quote-aware: a quoted `;` leaves a piece shlex can't read.
         self.refused(f'pass-respawn -C "{self.other};x"')
 
+    def test_lanes_own_fetch_needs_origin_configured(self):
+        # lane new, done and park run their own `git fetch ... origin` (review round 2): as for
+        # a git call naming no repository, origin must name a remote the config surely defines.
+        self.write_settings({"excludedCommands": EXCLUDED + self.PATH_HEADS + [
+            "lane new *", "lane done", "lane done *", "lane park *"]})
+        calls = ("lane new x", "lane done", "lane done x", "lane park x")
+        for call in calls:
+            with self.subTest(call=call):
+                self.allowed(call)
+        self.git("config", "--unset", "remote.origin.url", cwd=self.proj)
+        for call in calls:
+            with self.subTest(call=call):
+                self.assertIn("lane", self.refused(call, "origin"))
+        self.allowed("lane ls")
+        self.git("config", "remote.origin.url", "https://github.com/x/y", cwd=self.proj)
+        self.allowed("lane done x")
+
     def test_lane_adopt_path_in_another_repo_is_refused(self):
+        # --id's value is the next word whatever it starts with (argparse takes `-1` as one),
+        # so the word after that is PATH (review round 3).
         for call in (f"lane adopt {self.other}", f"lane adopt --id x {self.other}",
-                     f"lane adopt -- {self.other}"):
+                     f"lane adopt -- {self.other}", f"lane adopt --id -1 {self.other}",
+                     f"lane adopt --i -x {self.other}"):
             with self.subTest(call=call):
                 self.refused(call, self.other_git)
+        # After `--` argparse takes every word as PATH, one that looks like an option too
+        # (review round 2).
+        for name in ("--id", "-h", "--help", "--i"):
+            os.symlink(self.other, os.path.join(self.proj, name))
+            with self.subTest(name=name):
+                self.refused(f"lane adopt -- {name}", self.other_git)
         self.allowed(f"lane adopt {self.lane}")
-        self.allowed(f"lane adopt --id=lane {self.lane}")
+        for call in (f"lane adopt --id=lane {self.lane}", f"lane adopt --id x {self.lane}",
+                     f"lane adopt {self.lane} --i x", f"lane adopt --id -1 {self.lane}"):
+            with self.subTest(call=call):
+                self.allowed(call)
 
     def test_git_with_a_local_repository_in_another_repo_is_refused(self):
         o = self.other
@@ -313,14 +480,42 @@ class Rule1PathArguments(Guard):
                 self.refused(call, self.other_git)
 
     def test_git_with_remotes_refs_and_urls_passes(self):
-        self.mkdir("proj", "feat")  # a ref that is also a dir of the project
         for call in ("git push", "git push origin feat/x", "git push -u origin HEAD:refs/heads/x",
-                     "git push origin feat", "git push --force-with-lease origin main",
+                     "git push --force-with-lease origin main",
                      "git fetch origin", "git fetch --prune origin", "git pull --ff-only",
                      "git ls-remote https://github.com/x/y", "git fetch git@github.com:x/y.git",
                      f"git push -q {self.proj}", f"git fetch {self.lane}"):
             with self.subTest(call=call):
                 self.allowed(call)
+
+    def test_a_refspec_named_like_a_dir_of_the_project_passes(self):
+        # Only the repository word is a path candidate (git_argv): `feat` is a refspec, though
+        # proj/feat sits below the repo top (Rule1BelowTop).
+        self.mkdir("proj", "feat")
+        self.allowed("git push origin feat")
+
+    def test_the_repository_word_is_read_as_git_parses_its_options(self):
+        # An option's value and a refspec are no repository; with fetch --multiple every
+        # positional is one.
+        o = self.other
+        for call in (f"git push -o {o} origin", f"git push --push-option {o} origin",
+                     f"git push -q -o{o} origin", f"git push -qo {o} origin", f"git push origin {o}",
+                     f"git push --push-o={o} origin", f"git fetch origin main {o}"):
+            with self.subTest(call=call):
+                self.allowed(call)
+        for call in (f"git fetch --multiple origin {o}", f"git fetch -m origin {o}",
+                     f"git pull -j {o}", f"git push -o x -- {o}", f"git push --no-repo {o}"):
+            with self.subTest(call=call):
+                self.refused(call, self.other_git)
+
+    def test_an_option_git_doesnt_list_or_cant_resolve_is_refused_by_name(self):
+        for call, word in (("git push --bogus origin", "--bogus"), ("git push -x origin", "-x"),
+                           ("git push --f origin", "--f"), ("git push origin --repo", "--repo"),
+                           ("git fetch --quiet=1 origin", "--quiet=1"),
+                           ("git push -h", "-h"), ("git fetch -qZ origin", "-qZ")):
+            with self.subTest(call=call):
+                reason = self.refused(call, word)
+                self.assertIn("git-help", reason)
 
     def test_git_with_an_option_naming_a_program_is_refused(self):
         # Review round 1 (high): the value is a program git runs, not a repository to judge.
@@ -340,6 +535,33 @@ class Rule1PathArguments(Guard):
             with self.subTest(call=call):
                 self.allowed(call)
 
+    def test_a_repository_word_with_dotdot_after_a_symlink_is_judged_where_git_opens_it(self):
+        # Review round 4: `l/..` with l a symlink opens l's target's parent, not the cwd; the
+        # guard must not fold it lexically to the project top.
+        evil = os.path.join(self.tmp, "e")
+        os.makedirs(os.path.join(evil, "sub"))
+        self.git("init", "-q", evil, cwd=self.tmp)
+        os.symlink(os.path.join(evil, "sub"), os.path.join(self.proj, "l"))
+        # Push only as a candidate form: a plain `git push l/.. main` runs sandboxed.
+        for call in ("git push -q l/.. main", "git push origin --repo=l/..",
+                     "git ls-remote l/..", "git fetch l/.. main"):
+            with self.subTest(call=call):
+                self.assertIn(os.path.join(self.proj, "l"), self.denied(call, "rule1"))
+        # A protected symlink passes its chain, and git lands in e's repo, judged as rule 1
+        # judges the cwd: never the project's own, where a lexical fold would land.
+        safe = self.protect(self.mkdir("proj", "safe"))
+        os.symlink(self.protect(os.path.join(evil, "sub")), os.path.join(safe, "l"))
+        reason = self.denied("git fetch safe/l/.. main", "rule1")
+        self.assertNotIn(os.path.join(evil, "sub"), reason)
+        self.assertIn(evil, reason)
+
+    def test_an_absolute_repository_word_whose_dotdot_leaves_a_swappable_dir_is_refused(self):
+        # A `..` the word itself spells leaves a dir a sandboxed session could swap for a
+        # symlink (writable, in a writable dir), which would move where git lands.
+        w = self.mkdir("w")
+        word = os.path.join(w, "..", "proj")
+        self.assertIn(w, self.denied(f"git fetch {word} main", "rule1"))
+
     def test_git_judges_a_repository_as_its_server_side_finds_it(self):
         # Review round 2: git tries <word>.git when <word> is missing, reads a file there as a
         # gitfile, and takes a file:// URL's path past any host part, %-decoded.
@@ -353,9 +575,31 @@ class Rule1PathArguments(Guard):
                      f"git ls-remote {bare}", f"git fetch {self.tmp}/evil"):
             with self.subTest(call=call):
                 self.refused(call)
-        for call in (f"git push -q file://{self.tmp}/%65vil.git HEAD", "git push origin 100%"):
+        for call in (f"git push -q file://{self.tmp}/%65vil.git HEAD", "git push -q 100% HEAD",
+                     "git push -q --repo=a%b HEAD"):
             with self.subTest(call=call):
                 self.assertIn("plain word", self.refused(call))
+
+    def test_git_judges_each_path_its_server_side_tries_in_order(self):
+        # git's server side (enter_repo, non-strict) tries <p>/.git, <p>, <p>.git/.git and
+        # <p>.git in turn and takes the first that is a file or a git dir. A missing one tried
+        # before the one git finds today is where a plant would win.
+        box = self.mkdir("box")
+        found = os.path.join(box, "wt.git")
+        self.git("worktree", "add", "-q", "-b", "wt", found, cwd=self.proj)
+        self.protect(found)
+        p = os.path.join(box, "wt")
+        for call in (f"git fetch {p}", f"git push -q {p} HEAD", f"git ls-remote file://{p}"):
+            with self.subTest(call=call):
+                reason = self.refused(call, os.path.join(p, ".git"))
+                self.assertIn("missing", reason)
+        self.git("config", "remote.origin.url", p, cwd=self.proj)
+        self.assertIn("missing", self.denied("git push", "rule1", os.path.join(p, ".git")))
+        # No session can create a path tried before it: git surely takes wt.git.
+        self.protect(box)
+        for call in (f"git fetch {p}", "git push"):
+            with self.subTest(call=call):
+                self.allowed(call)
 
     def test_git_refuses_a_remote_from_a_legacy_remotes_file(self):
         # .git/remotes/<name> and .git/branches/<name> name a URL outside the judged config.
@@ -365,7 +609,183 @@ class Rule1PathArguments(Guard):
                 self.assertIn("legacy", self.refused("git push -q evil HEAD"))
                 self.assertIn("legacy", self.refused("git fetch evil"))
                 os.remove(planted)
-        self.allowed("git push -q evil HEAD")  # no such file: git finds no remote
+        # No such file: git finds no remote, and takes the word as a path (G-E path half).
+        self.assertIn("missing", self.refused("git push -q evil HEAD"))
+
+    def test_a_missing_repository_a_session_could_create_is_refused_g_e(self):
+        # G-E path half: a word that names no configured remote is a path to git, existing or
+        # not, and a repo planted there after the check is the one git would run.
+        for call, bad in (("git push -q nothere HEAD", self.proj),
+                          (f"git fetch {self.tmp}/nothere", self.tmp),
+                          (f"git push -q file://{self.tmp}/nothere HEAD", self.tmp),
+                          ("git fetch --multiple origin nothere", self.proj),
+                          ("git push -q --repo=nothere", self.proj)):
+            with self.subTest(call=call):
+                reason = self.refused(call, bad)
+                self.assertIn("missing", reason)
+                self.assertIn("configured remote", reason)
+        safe = self.protect(self.mkdir("safe"))
+        for call in (f"git fetch {safe}/nothere", "git fetch https://github.com/x/z",
+                     "git fetch git@github.com:x/z.git", "git push -q origin HEAD"):
+            with self.subTest(call=call):
+                self.allowed(call)
+
+    def test_a_relative_repository_word_is_judged_from_the_repo_top_too(self):
+        # git moves to the repo top before it opens a relative local repository, so from a
+        # subdir `r.git` names <top>/r.git. The guard judges both bases.
+        sub = self.protect(self.mkdir("proj", "sub"))
+        bare = os.path.join(self.tmp, "r.git")
+        self.git("init", "-q", "--bare", bare, cwd=self.tmp)
+        os.symlink(bare, os.path.join(self.proj, "r.git"))
+        self.assertEqual(subprocess.run(["git", "ls-remote", "r.git"], cwd=sub,
+                                        env={"PATH": "/usr/bin:/bin", "HOME": self.home},
+                                        capture_output=True).returncode, 0)
+        for call in ("git push -q nothere HEAD", "git fetch nothere"):
+            with self.subTest(call=call):
+                self.assertIn("missing", self.denied(call, "rule1", self.proj, cwd=sub))
+        self.denied("git push -q r.git HEAD", "rule1", os.path.join(self.proj, "r.git"), cwd=sub)
+
+    def test_a_configured_remote_is_judged_by_its_url_only(self):
+        # A remote's word is no path: its URL is judged with the cwd's config (G-D).
+        self.mkdir("proj", "up")
+        self.git("remote", "add", "up", "https://github.com/x/up", cwd=self.proj)
+        self.allowed("git push -q up HEAD")
+        self.git("config", "remote.up.url", self.other, cwd=self.proj)
+        self.refused("git push -q up HEAD", self.other_git)
+        # A remote with no url is no remote to git: it takes the name as a path.
+        self.git("config", "--unset", "remote.up.url", cwd=self.proj)
+        self.git("config", "remote.up.fetch", "+refs/heads/*:refs/remotes/up/*", cwd=self.proj)
+        self.refused("git push -q up HEAD", os.path.join(self.proj, "up"))
+
+    def test_a_remote_group_is_judged_by_its_members(self):
+        # git fetch takes a remotes.<group> config value's words as the remotes to fetch, each
+        # a remote name or a path, and runs `git fetch <member>` for each (its builtin/fetch.c).
+        o = self.other
+        self.git("remote", "add", "up", "https://github.com/x/up", cwd=self.proj)
+        self.git("config", "remotes.both", "origin up", cwd=self.proj)
+        self.git("config", "remotes.evil", f"origin {o}", cwd=self.proj)
+        self.git("config", "remotes.gone", "origin nothere", cwd=self.proj)
+        self.git("config", "remotes.nest", "origin evil", cwd=self.proj)
+        self.git("config", "remotes.solo", "origin", cwd=self.proj)
+        self.git("config", "remotes.one", o, cwd=self.proj)
+        self.git("config", "remotes.opt", "origin --upload-pack=x", cwd=self.proj)
+        self.git("config", "remotes.sub.grp", f"up {o}", cwd=self.proj)
+        # Members that are remotes pass: the group's own name is no path to git.
+        for call in ("git fetch both", "git fetch --multiple both origin", "git fetch -m both",
+                     "git pull both", "git fetch --multiple solo"):
+            with self.subTest(call=call):
+                self.allowed(call)
+        for call in ("git fetch evil", "git fetch --multiple origin evil", "git pull evil",
+                     "git fetch nest", "git fetch --multiple one", "git fetch sub.grp"):
+            with self.subTest(call=call):
+                self.refused(call, self.other_git)
+        self.assertIn("missing", self.refused("git fetch gone", self.proj))
+        # One member and no --multiple: git fetches the word itself, here a path.
+        self.assertIn("missing", self.refused("git fetch solo", os.path.join(self.proj, "solo")))
+        # A member git's own fetch would read as an option.
+        self.assertIn("option", self.refused("git fetch opt", "--upload-pack=x"))
+        # Members from the global config count too; push and ls-remote take no groups.
+        self.write(os.path.join(self.home, ".gitconfig"),
+                   RECURSE_OFF + f"[remotes]\n\tglob = origin {o}\n")
+        self.refused("git fetch glob", self.other_git)
+        self.assertIn("missing", self.refused("git push -q both HEAD", self.proj))
+
+    def test_the_default_remote_must_be_a_configured_remote(self):
+        # With no repository word git takes the branch's pushRemote or remote, or
+        # remote.pushDefault, else origin. One the config doesn't define is read from a legacy
+        # remote file a session could plant after the check, and a branch's or pushDefault's is
+        # taken as a path, so each is judged as a repository word too.
+        bare = ("git push", "git push -q", "git fetch -q", "git pull -q", "git ls-remote -q")
+        named = ("git push -q origin HEAD", "git fetch https://github.com/x/z")
+        for call in bare + named:
+            with self.subTest(call=call):
+                self.allowed(call)
+        self.git("config", "--unset", "remote.origin.url", cwd=self.proj)
+        for call in bare:
+            with self.subTest(call=call):
+                reason = self.refused(call, "origin")
+                self.assertIn("Name the remote on the command line", reason)
+        self.allowed("git fetch https://github.com/x/z")
+        self.git("config", "remote.origin.url", "https://github.com/x/y", cwd=self.proj)
+        for key in ("branch.x.remote", "branch.x.pushRemote", "remote.pushDefault"):
+            # Not a nickname (a URL, `.` for the repo itself, a path with a `/`): git never
+            # reads a legacy remote file for it, and the URL or path is judged as one.
+            for value in ("https://github.com/x/z", "."):
+                with self.subTest(key=key, value=value):
+                    self.git("config", key, value, cwd=self.proj)
+                    for call in ("git push", "git fetch -q") + named:
+                        self.allowed(call)
+            # A nickname no config defines is still refused.
+            self.git("config", key, "upstream", cwd=self.proj)
+            with self.subTest(key=key, value="upstream"):
+                self.assertIn(key, self.refused("git push", "upstream"))
+            self.git("config", key, "origin", cwd=self.proj)
+            self.allowed("git push")
+            # A value naming no remote is a path to git: a missing one a session could create.
+            self.git("config", key, "nothere", cwd=self.proj)
+            with self.subTest(key=key, value="nothere"):
+                self.assertIn("missing", self.refused("git push -q origin HEAD", self.proj))
+            self.git("config", "--unset", key, cwd=self.proj)
+        self.allowed("git push")
+
+    def test_a_remote_only_an_include_if_defines_is_judged_as_a_path(self):
+        # The guard doesn't evaluate an includeIf condition, so git may not read its remotes.
+        inc = self.write(os.path.join(self.protect(self.mkdir("cfg")), "remotes"),
+                         "[remote \"inc\"]\n\turl = https://github.com/x/inc\n")
+        self.write(os.path.join(self.home, ".gitconfig"),
+                   RECURSE_OFF + f'[includeIf "gitdir:{self.tmp}/nowhere/"]\n\tpath = {inc}\n')
+        self.refused("git push -q inc HEAD", self.proj)
+        self.write(os.path.join(self.home, ".gitconfig"), RECURSE_OFF + f"[include]\n\tpath = {inc}\n")
+        self.allowed("git push -q inc HEAD")
+
+    def test_an_existing_repository_is_judged_along_its_symlink_chain(self):
+        # A link a session can rewrite could point git elsewhere after the check.
+        link = os.path.join(self.tmp, "link")
+        os.symlink(self.proj, link)
+        for call in (f"git push -q {link} HEAD", f"git fetch {link}"):
+            with self.subTest(call=call):
+                self.refused(call, link)
+        safe = self.protect(self.mkdir("safe"))
+        os.symlink(self.proj, os.path.join(safe, "proj"))
+        self.allowed(f"git push -q {safe}/proj HEAD")
+        # A gitfile in a dir a session can write could be rewritten after the check too.
+        gitfile = self.write(os.path.join(self.proj, "gf"), f"gitdir: {self.proj}/.git\n")
+        self.refused("git push -q gf HEAD", gitfile)
+
+    def test_a_relative_gitdir_through_a_symlink_resolves_from_the_link_dir(self):
+        # git reads a gitfile's relative gitdir from the dir of the path it opened, not from the
+        # symlink target's dir.
+        safe = self.protect(self.mkdir("safe"))
+        gf = self.write(os.path.join(safe, "inner", "gf"), "gitdir: ../x\n")
+        os.symlink(gf, os.path.join(safe, "link"))
+        os.symlink(os.path.join(self.proj, ".git"), os.path.join(safe, "x"))  # from the target
+        foreign = os.path.join(self.tmp, "x")  # from the link's dir: what git opens
+        self.git("init", "-q", "--bare", foreign, cwd=self.tmp)
+        self.assertEqual(self.git("ls-remote", os.path.join(safe, "link"), cwd=self.tmp), "")
+        self.assertIn("not the project's", self.refused(f"git push -q {safe}/link HEAD", foreign))
+
+    def test_a_gitfile_on_a_judged_path_is_judged_along_its_chain(self):
+        # A <p>/.git gitfile naming the project's gitdir, in a dir a session can write, could be
+        # repointed at another repository after the check. Only the project's top and its lanes'
+        # tops keep their own .git trusted.
+        sub = self.mkdir("proj", "sub")
+        gitfile = self.write(os.path.join(sub, ".git"), f"gitdir: {self.proj}/.git\n")
+        for call in ("git push -q sub HEAD", "pass-respawn -C sub", f"git fetch {sub}",
+                     "lane adopt sub"):
+            with self.subTest(call=call):
+                self.assertIn("could point git at another repository",
+                              self.refused(call, gitfile))
+        self.denied("git push", "rule1", gitfile, cwd=sub)
+        lane_gitfile = os.path.join(self.lane, ".git")
+        for call in ("git push -q . HEAD", f"git push -q {self.lane} HEAD",
+                     f"pass-respawn -C {self.lane}", f"git fetch {self.proj}"):
+            with self.subTest(call=call):
+                self.allowed(call)
+        # A gitfile naming a lane's gitdir is no lane top unless the lane's gitdir names it back.
+        self.write(gitfile, open(lane_gitfile).read())
+        self.refused("pass-respawn -C sub", gitfile)
+        self.env["CLAUDE_PROJECT_DIR"] = self.lane
+        self.allowed(f"pass-respawn -C {self.proj}", cwd=self.lane)
 
     def test_git_refuses_submodule_recursion(self):
         for call in ("git fetch --recurse-submodules", "git pull --recurse-submodules=yes",
@@ -442,6 +862,23 @@ class Rule1PathArguments(Guard):
                      "gh pr view 5 --json body --jq .body | grep -c '^#'"):
             with self.subTest(call=call):
                 self.allowed(call)
+
+    def test_a_refspec_may_use_gits_revision_spellings(self):
+        # Item 10: zsh hands these on unchanged (RefspecSpellingsMatchZsh), so a refspec or an
+        # option value may hold them; a repository word stays a PLAIN_WORD.
+        for call in ("git push origin HEAD~1:refs/heads/x", "git push origin main^:refs/heads/y",
+                     "git fetch origin ^refs/heads/skip", "git push origin HEAD@{1}:refs/heads/x",
+                     "git push origin x^{commit}:refs/heads/y", "git push origin 100%",
+                     "git push origin @{-1}:x", "git push origin @{2.days.ago}:x",
+                     "git push origin @{u}", "git push -o a~1 origin", "git fetch origin feat~2"):
+            with self.subTest(call=call):
+                self.allowed(call)
+        for call in ("git push origin @{a,b}", "git push origin @{1..3}", "git push origin ~1",
+                     "git push origin x{a}", "git push origin @{a{b}}", "git push origin x}",
+                     "git push -q x~1 HEAD", "git push -q ^x HEAD", "git push -o ~1 origin",
+                     "git push -q a@{u} HEAD"):
+            with self.subTest(call=call):
+                self.assertIn("plain word", self.refused(call))
 
     def test_git_refuses_ext_in_an_option_value(self):
         self.assertIn("names a program", self.refused("git push --repo=ext::sh HEAD"))
@@ -540,15 +977,64 @@ class LexerMatchesZsh(unittest.TestCase):
         for command, calls in zip(commands, ran):
             try:
                 found = [w for w, _ in guard.path_calls(command)]
-            except ValueError:
-                continue
-            if any(not guard.PLAIN_WORD.fullmatch(w) for c in found for w in c[2:]):
+                if any(guard.unplain_word(c) is not None for c in found):
+                    continue
+            except (ValueError, guard.Refusal):
                 continue
             judged += 1
             if any(c not in found for c in calls):
                 missed.append((command, calls, found))
         self.assertEqual(missed[:3], [])
         self.assertGreater(judged, n // 2, "most generated commands should be read, not refused")
+
+
+def snapshot_setopts():
+    """The top-level setopt and unsetopt lines of a Claude Code shell snapshot (the options its
+    Bash tool's zsh runs with), newest first, or None when none is readable."""
+    snaps = glob.glob(os.path.expanduser("~/.claude/shell-snapshots/snapshot-zsh-*.sh"))
+    for snap in sorted(snaps, key=lambda f: -os.path.getmtime(f)):
+        try:
+            lines = slurp(snap).splitlines()
+        except OSError:
+            continue
+        opts = [line for line in lines if re.match(r"(setopt|unsetopt)\b", line)]
+        if opts:
+            return opts
+    return None
+
+
+@unittest.skipUnless(ZSH, "zsh is not installed")
+class RefspecSpellingsMatchZsh(unittest.TestCase):
+    """Item 10: each spelling a git refspec word may use beyond PLAIN_WORD is one zsh, with the
+    options a Claude Code snapshot sets, hands on unchanged; each it rewrites stays refused."""
+
+    ACCEPTED = ("HEAD~1", "HEAD~", "main~3", "x~y", "x~1~2", "a~", "x:~1", "a=~1", "HEAD^",
+                "HEAD^2", "HEAD^^", "^main", "x^1:refs/heads/y", "x^{tree}", "x^{}", "^{/fix}",
+                "HEAD@{1}", "@{u}", "@{-1}", "main@{upstream}", "HEAD@{2.days.ago}", "@{0}",
+                "@{}", "@{1.2}", "@{x}y", "a@{b}@{c}", "@{@}", "HEAD@{1}~2^3", "100%", "a%b",
+                "%1", "%%", "@{1}%", "%x~1", "+HEAD~2:x", "feat/x~1:refs/heads/y", "a,b")
+    REWRITTEN = ("@{a,b}", "@{1..3}", "@{a..b}", "~1", "~+", "~-", "x{a,b}", "@{a{b,c}}")
+
+    def zsh_word(self, opts, word):
+        with tempfile.TemporaryDirectory() as d:
+            p = subprocess.run([ZSH, "-f", "-c", "\n".join(opts) + f"\nprint -rn -- {word}\n"],
+                               cwd=d, capture_output=True, text=True, timeout=10,
+                               env={"PATH": "/usr/bin:/bin", "HOME": d}, stdin=subprocess.DEVNULL)
+        return p.stdout if p.returncode == 0 else None
+
+    def test_each_accepted_spelling_is_handed_on_unchanged(self):
+        opts = snapshot_setopts()
+        if opts is None:
+            self.skipTest("no readable shell snapshot under ~/.claude/shell-snapshots")
+        guard = load_guard()
+        for word in self.ACCEPTED:
+            with self.subTest(word=word):
+                self.assertTrue(guard.refspec_word(word), "the guard refuses it")
+                self.assertEqual(self.zsh_word(opts, word), word)
+        for word in self.REWRITTEN:
+            with self.subTest(word=word):
+                self.assertFalse(guard.refspec_word(word), "the guard takes it")
+                self.assertNotEqual(self.zsh_word(opts, word), word, "zsh keeps it: drop it here")
 
 
 FUZZ_NOISE = (
@@ -559,6 +1045,10 @@ FUZZ_NOISE = (
     "cat <<<'x y'", "echo 2>/dev/null", "echo >|f", "echo $'\\x27'", "echo '<<E'", "echo \\<<E",
     "echo $((1<<2))", "echo $[ ##a ]", "(( x = 1 << 2 ))", "echo \u00b2>f",
 )
+# Refspec words after a call's repository word: ones zsh hands on unchanged (item 10) and ones
+# it rewrites, which the guard must refuse rather than misread.
+FUZZ_REFSPECS = ("HEAD~1", "x^{tree}", "@{u}", "main@{1}~2", "^main", "100%", "x:~1", "@{a,b}",
+                 "@{1..3}", "~1", "x{a,b}", "'@{a,b}'", "HEAD^2:refs/heads/y", "a~b%c")
 FUZZ_REDIRECTS = ("2>&1", ">|f", "&>f", ">!f", "2>f", "<<<x", ">f", "1>f", "<<<'a b'", "2>>f", "<f")
 
 
@@ -571,6 +1061,7 @@ def fuzz_commands(seed, n):
         count[0] += 1
         target = rng.choice(("r{}", "'r{}'", '"r{}"', "r''{}", "\\r{}", "\u00b2>f r{}")).format(count[0])
         words = ["git", "push", "-q", target]
+        words += [rng.choice(FUZZ_REFSPECS) for _ in range(rng.choice((0, 0, 1, 2)))]
         for _ in range(rng.randrange(3)):
             words.insert(rng.randrange(2, len(words) + 1), rng.choice(FUZZ_REDIRECTS))
         return " ".join(words) + ("" if rng.random() < 0.8 else " # ' ) \" (")
@@ -630,6 +1121,47 @@ class Rule1Layout(Guard):
         self.env["CLAUDE_PROJECT_DIR"] = self.proj
         self.assertIn("unexpected layout", self.denied("git push", "rule1", gitdir))
 
+    def test_pointer_files_are_trimmed_as_git_trims_them(self):
+        # git trims only a trailing LF or CR from commondir and a gitfile's `gitdir: ` value,
+        # and wants exactly `gitdir: `; any other whitespace is part of the path (review
+        # round 3). git's verdict is checked alongside.
+        lane_gitdir = os.path.join(self.proj, ".git", "worktrees", "lane")
+        commondir = os.path.join(lane_gitdir, "commondir")
+        gitfile = os.path.join(self.lane, ".git")
+        back = os.path.join(lane_gitdir, "gitdir")
+        originals = {p: slurp(p) for p in (commondir, gitfile, back)}
+        cases = [(commondir, "../..\r\n", True), (commondir, " ../..\n", False),
+                 (commondir, "../..\t\n", False), (gitfile, f"gitdir: {lane_gitdir}\r\n", True),
+                 (gitfile, f"gitdir:  {lane_gitdir}\n", False),
+                 (gitfile, f"gitdir:{lane_gitdir}\n", False),
+                 (gitfile, f"gitdir: {lane_gitdir}\nmore\n", False)]
+        for path, text, works in cases:
+            with self.subTest(path=os.path.basename(path), text=text):
+                self.write(path, text)
+                p = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-dir"],
+                                   cwd=self.lane, capture_output=True, text=True,
+                                   env={"PATH": "/usr/bin:/bin", "HOME": self.home,
+                                        "GIT_CEILING_DIRECTORIES": self.tmp})
+                # git finds the lane's gitdir, or none (it looks past a broken one, or dies).
+                self.assertEqual(p.stdout.strip() == lane_gitdir, works, p.stdout + p.stderr)
+                self.env["CLAUDE_PROJECT_DIR"] = self.lane
+                try:
+                    out = self.fire("git push", cwd=self.lane)  # any refusal: git dies or skips
+                    self.assertEqual(out is None, works, out)
+                finally:
+                    self.write(path, originals[path])
+        # The worktree's back pointer, which marks a worktree top of the project's common dir
+        # (worktree_top), is trimmed the same way: from the main checkout's session, a lane
+        # whose pointer reads otherwise is judged along its .git, which is writable here.
+        self.env["CLAUDE_PROJECT_DIR"] = self.proj
+        for text, works in ((gitfile + "\r\n", True), (" " + gitfile + "\n", False)):
+            with self.subTest(back=text):
+                self.write(back, text)
+                if works:
+                    self.allowed("git push", cwd=self.lane)
+                else:
+                    self.denied("git push", "rule1", cwd=self.lane)
+
     def test_a_lane_commondir_naming_another_dir_is_refused(self):
         other = self.mkdir("other")
         self.git("init", "-q", other, cwd=self.tmp)
@@ -651,6 +1183,7 @@ class Rule1Layout(Guard):
         # <tmp>/worktrees/.git with commondir ../.. would pass the name and target checks.
         top = os.path.join(self.tmp, "worktrees")
         self.git("init", "-q", top, cwd=self.tmp)
+        self.git("remote", "add", "origin", "https://github.com/x/y", cwd=top)
         self.env["CLAUDE_PROJECT_DIR"] = top
         self.allowed("git push", cwd=top)
         self.write(os.path.join(top, ".git", "commondir"), "../..\n")
@@ -718,6 +1251,7 @@ class Rule1Config(Guard):
 
     def test_a_symlinked_gitconfig_is_judged_by_its_hops_and_target(self):
         real = self.write(os.path.join(self.tmp, "wcfg", "gitconfig"), "")
+        os.remove(os.path.join(self.home, ".gitconfig"))
         os.symlink(real, os.path.join(self.home, ".gitconfig"))
         self.denied("git push", "rule1", os.path.join(self.home, ".gitconfig"))
 
@@ -778,6 +1312,7 @@ class Rule1Config(Guard):
     def test_git_config_global_replaces_the_normal_global_files(self):
         # The normal global files are writable; GIT_CONFIG_GLOBAL makes git skip them.
         real = self.write(os.path.join(self.tmp, "wcfg", "gitconfig"), "")
+        os.remove(os.path.join(self.home, ".gitconfig"))
         os.symlink(real, os.path.join(self.home, ".gitconfig"))
         self.write(os.path.join(self.home, ".config", "git", "config"), "")
         self.denied("git push", "rule1")
@@ -787,12 +1322,648 @@ class Rule1Config(Guard):
         self.env["GIT_CONFIG_GLOBAL"] = real
         self.denied("git push", "rule1", real)
 
+    def test_a_relative_include_is_read_from_the_dir_of_the_path_git_opened(self):
+        # git joins a relative include.path to the dir of the config path it opened, not to a
+        # symlink target's (review round 2), as file_occurrences already does.
+        opened_dir = self.protect(self.mkdir("popen"))
+        target_dir = self.protect(self.mkdir("ptarget"))
+        writable = self.mkdir("wcfg")
+        real = self.write(os.path.join(target_dir, "global"), "[include]\n\tpath = sub/inc\n")
+        link = os.path.join(opened_dir, "global")
+        os.symlink(real, link)
+        os.symlink(writable, os.path.join(opened_dir, "sub"))
+        inc = self.write(os.path.join(writable, "inc"), "[x]\n\ty = opened\n")
+        p = subprocess.run(["git", "config", "--global", "--includes", "x.y"], cwd=self.tmp,
+                           env={"PATH": "/usr/bin:/bin", "HOME": self.home,
+                                "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": link},
+                           capture_output=True, text=True)
+        self.assertEqual(p.stdout.strip(), "opened")  # git read <opened dir>/sub/inc
+        self.env["GIT_CONFIG_GLOBAL"] = link
+        self.denied("git push", "rule1", os.path.join(opened_dir, "sub"))
+        os.remove(inc)
+        os.remove(os.path.join(opened_dir, "sub"))
+        self.allowed("git push")
+
+    def test_an_include_with_dotdot_after_a_symlink_is_read_where_the_os_opens_it(self):
+        # git opens <p>/link/../inc through the symlink, landing beside link's target; a
+        # lexical fold reads <p>/inc instead (review round 3).
+        protected = self.protect(self.mkdir("pcfg"))
+        writable = self.mkdir("wcfg")
+        os.makedirs(os.path.join(writable, "sub"))
+        os.symlink(os.path.join(writable, "sub"), os.path.join(protected, "link"))
+        self.write(os.path.join(protected, "inc"), "[x]\n\ty = folded\n")
+        inc = self.write(os.path.join(writable, "inc"), "[x]\n\ty = opened\n")
+        self.gitconfig(RECURSE_OFF + f"[include]\n\tpath = {protected}/link/../inc\n")
+        p = subprocess.run(["git", "config", "--global", "--includes", "x.y"], cwd=self.tmp,
+                           env={"PATH": "/usr/bin:/bin", "HOME": self.home,
+                                "GIT_CONFIG_NOSYSTEM": "1"}, capture_output=True, text=True)
+        self.assertEqual(p.stdout.strip(), "opened")  # git read <writable>/inc
+        self.denied("git push", "rule1", writable)
+        # With the link's target protected too, the include passes, and a relative include in
+        # it is read from the dir the OS opened it in.
+        self.protect(writable)
+        self.allowed("git push")
+        self.write(inc, "[include]\n\tpath = ../w2/inner\n")
+        inner = self.write(os.path.join(self.tmp, "w2", "inner"), "")
+        self.denied("git push", "rule1", inner)
+
     def test_a_writable_git_config_system_is_refused_unless_nosystem(self):
         system = self.write(os.path.join(self.tmp, "wcfg", "system"), "")
         self.env["GIT_CONFIG_SYSTEM"] = system
         self.denied("git push", "rule1", system)
         self.env["GIT_CONFIG_NOSYSTEM"] = "1"
         self.allowed("git push")
+
+
+class Rule1RemoteUrls(Guard):
+    """G-D: a local-path remote URL or url.<base> rewrite in the config chain, the repo's own
+    trusted config included, is judged as a path argument: an existing repo as rule 1 judges the
+    cwd, a missing path by whether a sandboxed session could create it."""
+
+    def setUp(self):
+        super().setUp()
+        self.other = self.mkdir("other")
+        self.git("init", "-q", self.other, cwd=self.tmp)
+        self.other_git = os.path.join(self.other, ".git")
+
+    def remote(self, key, value):
+        self.git("config", key, value, cwd=self.proj)
+
+    def restore(self, key):
+        """Unset key, or put origin's network URL back: a bare `git push` needs origin."""
+        if key == "remote.origin.url":
+            self.remote(key, "https://github.com/x/y")
+        else:
+            self.git("config", "--unset", key, cwd=self.proj)
+
+    def test_a_remote_url_naming_another_repo_is_refused(self):
+        for key in ("remote.origin.url", "remote.up.pushurl"):
+            for value in (self.other, f"file://{self.other}", "../other", self.other_git):
+                with self.subTest(key=key, value=value):
+                    self.remote(key, value)
+                    for call in ("git push", "gh pr view 5"):
+                        reason = self.denied(call, "rule1", self.other_git)
+                        self.assertIn(f"the remote URL {value}", reason)
+                        self.assertIn("network URL", reason)
+                    self.restore(key)
+        self.allowed("git push")
+
+    def test_a_remote_url_with_dotdot_after_a_symlink_is_judged_where_git_opens_it(self):
+        # Review round 4: a URL `l/..` with l a symlink opens l's target's parent; folding it
+        # lexically would judge the project instead.
+        evil = os.path.join(self.tmp, "e")
+        os.makedirs(os.path.join(evil, "sub"))
+        self.git("init", "-q", evil, cwd=self.tmp)
+        os.symlink(os.path.join(evil, "sub"), os.path.join(self.proj, "l"))
+        self.remote("remote.origin.url", "l/..")
+        reason = self.denied("git push", "rule1", os.path.join(self.proj, "l"))
+        self.assertIn("the remote URL l/..", reason)
+        self.restore("remote.origin.url")
+        self.allowed("git push")
+
+    def test_an_ext_remote_url_is_refused(self):
+        # git runs an ext:: URL's command; protocol.ext.allow keeps it off by default, but the
+        # guard judges no program it can't see.
+        for key in ("remote.origin.url", "url.ext::x.insteadOf"):
+            with self.subTest(key=key):
+                self.remote(key, "ext::x %S" if key.startswith("remote") else "https://h/r")
+                self.assertIn("ext::", self.denied("git push", "rule1", None))
+                self.restore(key)
+        self.allowed("git push")
+
+    def test_a_bare_repo_found_as_name_dot_git_is_refused(self):
+        bare = os.path.join(self.tmp, "evil.git")
+        self.git("init", "-q", "--bare", bare, cwd=self.tmp)
+        self.remote("remote.origin.url", os.path.join(self.tmp, "evil"))
+        self.denied("git push", "rule1", bare)
+
+    def test_a_missing_path_a_sandboxed_session_could_create_is_refused(self):
+        for value in (os.path.join(self.tmp, "nothing", "repo"), "file:///" + self.tmp[1:] + "/x",
+                      "../missing"):
+            with self.subTest(value=value):
+                self.remote("remote.origin.url", value)
+                reason = self.denied("git push", "rule1")
+                self.assertIn("missing", reason)
+        self.remote("remote.origin.url", "/nonexistent-excluded-guard-test/repo")
+        self.allowed("git push")
+
+    def test_a_file_url_with_a_host_part_or_escape_is_refused(self):
+        for value in ("file://host/x", f"file://{self.tmp}/%6fther"):
+            with self.subTest(value=value):
+                self.remote("remote.origin.url", value)
+                self.denied("git push", "rule1")
+
+    def test_a_url_rewrite_to_a_local_base_is_refused(self):
+        # git appends the rest of the original URL to the base, so a local base names a path
+        # the guard can't judge from the base alone, even the project's own.
+        for key in ("insteadOf", "pushInsteadOf"):
+            # Only <scheme>://<host>... (not file) or scp-like [user@]host: passes (review
+            # round 2): an empty base, any file: one, an empty host or `ext:` (which a rest
+            # starting `:` turns into an ext:: URL) is refused.
+            for base in (self.other, self.proj, "../x/", "file:///x/", ".", "", "file:/",
+                         "file://", "/x", "x", "FILE://h/x", "https://", "https:///x", ":x",
+                         "@:", "ext:", "u@/x:"):
+                with self.subTest(key=key, base=base):
+                    self.write(os.path.join(self.home, ".gitconfig"),
+                               f'[url "{base}"]\n\t{key} = https://github.com/\n')
+                    reason = self.denied("git push", "rule1", base)
+                    self.assertIn(f"url.{base}.{key}", reason)
+                    self.assertIn("network base", reason)
+            for base in ("https://mirror.example/", "git@github.com:", "ssh://h/",
+                         "https://github.com/", "github.com:", "ssh://git@h:22/x"):
+                with self.subTest(key=key, base=base):
+                    self.write(os.path.join(self.home, ".gitconfig"),
+                               f'[url "{base}"]\n\t{key} = https://github.com/\n')
+                    self.allowed("git push")
+        os.remove(os.path.join(self.home, ".gitconfig"))
+        self.allowed("git push")
+
+    def test_network_urls_and_the_projects_own_paths_pass(self):
+        for value in ("https://github.com/x/y", "git@github.com:x/y.git", "ssh://h/x",
+                      "host:path/x", self.lane, self.proj, "."):
+            with self.subTest(value=value):
+                self.remote("remote.origin.url", value)
+                self.allowed("git push")
+
+
+RECURSE_OFF = "[fetch]\n\trecurseSubmodules = false\n"  # what setup.sh sets
+
+
+class Rule1EnvConfig(Guard):
+    """GIT_CONFIG_COUNT and GIT_CONFIG_PARAMETERS set config for every git an excluded call runs.
+    Rule 1 reads only the recursion keys from them, so any other key there refuses."""
+
+    def test_an_env_config_key_rule_1_does_not_read_is_refused(self):
+        cases = [{"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "remote.origin.url",
+                  "GIT_CONFIG_VALUE_0": "/tmp/x"},
+                 {"GIT_CONFIG_PARAMETERS": "'url./tmp/x.insteadOf=https://h/'"},
+                 {"GIT_CONFIG_PARAMETERS": "'branch.main.remote=/tmp/x'"}]
+        for extra in cases:
+            with self.subTest(extra=extra):
+                self.env.update(extra)
+                for call in ("git push", "gh pr view 5", "lane ls"):
+                    self.denied(call, "rule1", "GIT_CONFIG")
+                for k in extra:
+                    del self.env[k]
+        self.allowed("git push")
+
+    def test_a_git_dir_location_variable_is_refused(self):
+        # These move where git takes config or objects from, which rule 1 doesn't model
+        # (review round 3).
+        # Set but empty counts too: git 2.43 then finds no repository at all for the first two
+        # (probed), not the one the guard would judge.
+        for var in ("GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
+            for value in (self.mkdir("elsewhere"), ""):
+                with self.subTest(var=var, value=value):
+                    self.env[var] = value
+                    for call in ("git push", "gh pr view 5", "lane ls"):
+                        self.assertIn("unset it for excluded commands",
+                                      self.denied(call, "rule1", var))
+            del self.env[var]
+        self.allowed("git push")
+
+    def test_the_recursion_keys_alone_pass(self):
+        self.env.update({"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "fetch.recurseSubmodules",
+                         "GIT_CONFIG_VALUE_0": "false",
+                         "GIT_CONFIG_PARAMETERS": "'submodule.recurse=false'"})
+        self.allowed("git push")
+        self.allowed("git fetch origin")
+
+
+class SubmoduleRecursion(Guard):
+    """G-B: git fetch and pull, and the gh forms that run them, recurse into submodules, whose
+    own git dirs a sandboxed session can write. They pass only with --no-recurse-submodules
+    (git) or recursion off in the effective config."""
+
+    FORMS = ["git fetch", "git fetch *", "git pull", "git pull *", "gh issue *"]
+
+    def setUp(self):
+        super().setUp()
+        self.write_settings({"excludedCommands": EXCLUDED + self.FORMS})
+        self.gitconfig = os.path.join(self.home, ".gitconfig")
+        os.remove(self.gitconfig)
+
+    def test_recursion_on_by_default_refuses_with_the_fix(self):
+        for call in ("git fetch", "git fetch origin", "git pull --ff-only", "git fetch -q origin",
+                     "gh pr list; git fetch origin", "gh pr checkout 5", "gh pr merge 5 --squash",
+                     "gh pr merge -d 5", "gh issue develop 3 --checkout",
+                     "git fetch -o --no-recurse-submodules origin",
+                     "git fetch origin -- --no-recurse-submodules"):
+            with self.subTest(call=call):
+                reason = self.denied(call, "rule1")
+                self.assertIn("git config --global fetch.recurseSubmodules false", reason)
+                self.assertIn("setup.sh", reason)
+                if call.startswith("git"):
+                    self.assertIn("--no-recurse-submodules", reason)
+
+    def test_the_flag_or_the_config_switch_off_passes(self):
+        for call in ("git fetch --no-recurse-submodules origin", "git pull --no-recurse-submodules",
+                     "git fetch -q --prune --no-recurse-submodules", "gh pr view 5",
+                     "git fetch origin main --no-recurse-submodules",
+                     "git fetch --recurse-submodules=no origin", "gh issue view 3",
+                     "git fetch --dry --no-recurse-submodules origin", "git pull --no-rec origin",
+                     "git pull -r --no-recurse-submodules", "git pull -j2 --no-recurse-sub"):
+            with self.subTest(call=call):
+                self.allowed(call)
+        # fetch's hidden --recurse-submodules-default makes these ambiguous, and git refuses
+        # them (SubmoduleRecursionMatchesGit).
+        for call in ("git fetch --no-rec origin", "git fetch -j 2 --no-recurse-sub"):
+            with self.subTest(call=call):
+                self.assertIn("ambiguous", self.denied(call, "rule1"))
+        for config in (RECURSE_OFF, "[submodule]\n\trecurse = true\n" + RECURSE_OFF,
+                       "[fetch]\n\trecurseSubmodules = no\n"):
+            self.write(self.gitconfig, config)
+            # gh pr checkout runs git checkout after its fetch, which honours submodule.recurse.
+            pulls = (("git pull", "gh issue develop 3", "gh pr checkout 5")
+                     if "recurse =" not in config else ())
+            for call in ("git fetch", "git fetch origin") + pulls:
+                with self.subTest(config=config, call=call):
+                    self.allowed(call)
+        self.git("config", "fetch.recurseSubmodules", "false", cwd=self.proj)  # trusted local
+        os.remove(self.gitconfig)
+        self.allowed("git fetch origin")
+
+    def test_a_later_value_or_the_environment_wins(self):
+        self.write(self.gitconfig, RECURSE_OFF + "[submodule]\n\trecurse = true\n")
+        self.denied("git fetch", "rule1")
+        self.write(self.gitconfig, RECURSE_OFF)
+        self.env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="fetch.recurseSubmodules",
+                        GIT_CONFIG_VALUE_0="on-demand")
+        self.denied("git fetch", "rule1")
+        self.env["GIT_CONFIG_PARAMETERS"] = "'fetch.recurseSubmodules'='false'"
+        self.allowed("git fetch")
+
+    def test_an_empty_global_or_system_variable_names_no_file(self):
+        # git reads no file for a set but empty GIT_CONFIG_GLOBAL (and no XDG file either) or
+        # GIT_CONFIG_SYSTEM, so a switch-off in ~/.gitconfig doesn't count then.
+        self.write(self.gitconfig, RECURSE_OFF)
+        p = subprocess.run(["git", "config", "--get", "fetch.recurseSubmodules"], cwd=self.tmp,
+                           env={"PATH": "/usr/bin:/bin", "HOME": self.home,
+                                "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": ""},
+                           capture_output=True, text=True)
+        self.assertEqual((p.returncode, p.stdout), (1, ""))
+        self.allowed("git fetch")
+        xdg = self.write(os.path.join(self.home, ".config", "git", "config"), "")
+        self.denied("git fetch", "rule1", xdg)
+        self.env["GIT_CONFIG_GLOBAL"] = ""
+        self.denied("git fetch", "rule1", "fetch.recurseSubmodules")
+        self.allowed("git fetch --no-recurse-submodules")
+        files = load_guard().config_files
+        self.assertEqual(files({"GIT_CONFIG_SYSTEM": "", "GIT_CONFIG_GLOBAL": ""}, self.home), [])
+        self.assertEqual(files({"GIT_CONFIG_SYSTEM": "/s"}, self.home), ["/s", xdg, self.gitconfig])
+        self.assertEqual(files({"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/g"}, self.home),
+                         ["/g"])
+
+    def test_the_refusal_names_the_key_on_and_a_switch_off_that_doesnt_count(self):
+        reason = self.denied("git fetch", "rule1", "fetch.recurseSubmodules")
+        self.assertIn("none of fetch.recurseSubmodules or submodule.recurse is set", reason)
+        self.write(self.gitconfig, RECURSE_OFF + "[submodule]\n\trecurse = yes\n")
+        reason = self.denied("git fetch", "rule1", "submodule.recurse")
+        self.assertIn(f"submodule.recurse=yes in {self.gitconfig}", reason)
+        # A switch-off from an includeIf file: git may not read it, so it doesn't count.
+        off = self.write(os.path.join(self.protect(self.mkdir("inc")), "off"), RECURSE_OFF)
+        self.write_settings({"excludedCommands": EXCLUDED + self.FORMS})  # protect() reset it
+        self.write(self.gitconfig, f'[includeIf "gitdir:{self.proj}/"]\n\tpath = {off}\n')
+        reason = self.denied("git fetch", "rule1", "fetch.recurseSubmodules")
+        self.assertIn(f"fetch.recurseSubmodules=false in {off} doesn't count", reason)
+        self.assertIn("includeIf", reason)
+        self.write(self.gitconfig, "[push]\n\trecurseSubmodules = check\n")
+        self.assertIn(f"push.recurseSubmodules=check in {self.gitconfig}",
+                      self.denied("git push", "rule1", "push.recurseSubmodules"))
+
+    def test_a_recursion_flag_in_any_prefix_refuses_whatever_the_config(self):
+        # git takes any unique prefix (git_argv): pull's --rec is --recurse-submodules, and the
+        # last such flag on the command line beats a config switch-off (review round 2).
+        self.write(self.gitconfig, RECURSE_OFF)
+        for call in ("git pull --rec", "git pull --rec=yes", "git pull --recurse-sub",
+                     "git pull --no-recurse-submodules --rec", "git fetch --recurse-submodules",
+                     "git fetch --recurse-submodules=on-demand origin",
+                     "git push origin --recurse-submodules=check main"):
+            with self.subTest(call=call):
+                self.assertIn("each submodule", self.denied(call, "rule1"))
+        self.assertIn("ambiguous", self.denied("git fetch --recurse-sub", "rule1"))
+        self.denied("git fetch --rec origin", "rule1")  # also a prefix of --receive-pack
+        self.assertIn("each submodule",
+                      self.denied("git fetch --recurse-submodules-default=yes origin", "rule1"))
+        self.allowed("git fetch --recurse-submodules-default=no origin")
+        for call in ("git pull --recurse-submodules=no", "git fetch --recurse-submodules=off",
+                     "git pull --recurse-submodules --no-recurse-submodules",
+                     "git push origin --recurse-submodules=no main"):
+            with self.subTest(call=call):
+                self.allowed(call)
+
+    def test_ghs_built_in_aliases_are_judged_as_their_commands(self):
+        # gh 2.89's pr create takes the alias `new` and pr checkout `co` (Aliases: in
+        # pkg/cmd/pr); no other form here has one.
+        self.assertIn("submodule", self.denied("gh pr co 5", "rule1"))
+        self.assertIn("--recurse-submodules",
+                      self.denied("gh pr co --recurse-submodules 5", "rule1"))
+        self.write(self.gitconfig, RECURSE_OFF + "[push]\n\trecurseSubmodules = check\n")
+        self.assertIn("push.recurseSubmodules", self.denied("gh pr new --fill", "rule1"))
+        self.allowed("gh pr co 5")
+
+    def test_pull_also_needs_submodule_recurse_off(self):
+        # pull updates each submodule after the merge when submodule.recurse is on, whatever
+        # fetch.recurseSubmodules says.
+        self.write(self.gitconfig, "[submodule]\n\trecurse = true\n" + RECURSE_OFF)
+        self.allowed("git fetch")
+        for call in ("git pull", "gh pr merge -d 5", "gh pr checkout 5"):
+            with self.subTest(call=call):
+                self.assertIn("submodule.recurse", self.denied(call, "rule1"))
+        self.allowed("git pull --no-recurse-submodules")
+
+    def test_push_needs_push_recursion_off(self):
+        # git push reads push.recurseSubmodules and submodule.recurse, the last one wins, and
+        # unset is off (SubmoduleRecursionMatchesGit). gh pr create runs git push.
+        pushes = ("git push", "git push origin main", "gh pr create --fill")
+        for call in pushes:
+            with self.subTest(call=call):
+                self.allowed(call)
+        push_on = "[push]\n\trecurseSubmodules = {}\n"
+        for config in (push_on.format("check"), push_on.format("on-demand"),
+                       push_on.format("only"), "[submodule]\n\trecurse = true\n",
+                       "[submodule]\n\trecurse\n",
+                       push_on.format("no") + "[submodule]\n\trecurse = yes\n",
+                       "[submodule]\n\trecurse = false\n" + push_on.format("check")):
+            self.write(self.gitconfig, config)
+            for call in pushes:
+                with self.subTest(config=config, call=call):
+                    self.assertIn("push", self.denied(call, "rule1"))
+            for call in ("git push origin --no-recurse-submodules main",
+                         "git push origin --recurse-submodules=no main"):
+                with self.subTest(config=config, call=call):
+                    self.allowed(call)
+        for config in (push_on.format("no"), "[submodule]\n\trecurse = true\n" + push_on.format("0"),
+                       push_on.format("check") + "[submodule]\n\trecurse = false\n"):
+            self.write(self.gitconfig, config)
+            for call in pushes:
+                with self.subTest(config=config, call=call):
+                    self.allowed(call)
+
+    def test_gh_pr_checkout_with_recursion_is_refused_outright(self):
+        self.write(self.gitconfig, RECURSE_OFF)
+        # gh's flag parser (pflag) takes a bool flag's value glued on after `=`, as Go's
+        # strconv.ParseBool reads it.
+        for flag in ("--recurse-submodules", "--recurse-submodules=true", "--recurse-submodules=1",
+                     "--recurse-submodules=t", "--recurse-submodules=TRUE",
+                     "--recurse-submodules=T", "--recurse-submodules=True",
+                     "--recurse-submodules=", "--recurse-submodules=no"):
+            with self.subTest(flag=flag):
+                self.assertIn("--recurse-submodules",
+                              self.denied(f"gh pr checkout {flag} 5", "rule1"))
+        for value in ("false", "0", "f", "F", "FALSE", "False"):
+            with self.subTest(value=value):
+                self.allowed(f"gh pr checkout --recurse-submodules={value} 5")
+
+    def test_a_flag_before_the_gh_subcommand_is_refused(self):
+        # cobra takes an unknown flag's next word as its value, so `gh pr -b x checkout` runs
+        # pr checkout while a positional reading sees `pr x` (review round 3). Only --repo's
+        # spellings may come before the subcommand.
+        self.write(self.gitconfig, RECURSE_OFF)
+        self.write_settings({"excludedCommands": EXCLUDED + self.FORMS + ["gh *"]})
+        for call in ("gh pr -b x checkout 5 --recurse-submodules", "gh pr --foo checkout 5",
+                     "gh -X y pr checkout 5", "gh --foo pr checkout 5", "gh pr -- checkout 5",
+                     "gh issue -x y develop 3", "gh pr -R x/y -b z co 5"):
+            with self.subTest(call=call):
+                self.assertIn("after the subcommand", self.denied(call, "rule1"))
+        # --repo's spellings, flags after the subcommand, and a group with no git form (gh
+        # api's endpoint is no subcommand) pass.
+        for call in ("gh pr -R x/y checkout 5", "gh pr -R=x/y checkout 5", "gh -Rx/y pr checkout 5",
+                     "gh --repo x/y pr checkout 5", "gh pr --repo=x/y checkout 5",
+                     "gh pr checkout 5 -R x/y --force", "gh pr list --limit 5",
+                     "gh api -X GET repos/x/y"):
+            with self.subTest(call=call):
+                self.allowed(call)
+
+
+def parse_git_help(text):
+    """(long, short) option tables from `git <sub> -h` text, read on their own (not with the
+    guard's spec reader): long name -> none, required or optional (a `--[no-]` name's `no-`
+    form too, taking none); short letter -> (kind, long name or None)."""
+    long, short = {}, {}
+    for line in text.splitlines():
+        m = re.match(r" {4}(?:-(?P<s>\w)(?:, |(?=\s|$)))?(?:--(?P<neg>\[no-\])?(?P<l>[a-z0-9-]+))?"
+                     r"(?P<opt>\[=[^\]]*\])?(?P<req> [<(]\S+)?(?:\s|$)", line)
+        if not m or not (m["s"] or m["l"]):
+            continue
+        kind = "optional" if m["opt"] else "required" if m["req"] else "none"
+        if m["l"]:
+            long[m["l"]] = kind
+            if m["neg"]:
+                long["no-" + m["l"]] = "none"
+        if m["s"]:
+            short[m["s"]] = (kind, m["l"])
+    return long, short
+
+
+class GitOptionTables(unittest.TestCase):
+    """git_argv's option tables are git 2.43's own, as `git <sub> -h` prints them."""
+
+    # Options git 2.43 parses but `-h` hides (PARSE_OPT_HIDDEN), read off git's source and
+    # confirmed by git itself: `git fetch --no-rec` errors "ambiguous option: no-rec (could be
+    # --no-recurse-submodules or --no-recurse-submodules-default)", and the next word is its
+    # value. pull and push reject it as unknown.
+    HIDDEN = {"fetch": {"recurse-submodules-default": "required",
+                        "no-recurse-submodules-default": "none"}}
+
+    def test_the_tables_match_the_captured_help(self):
+        guard = load_guard()
+        self.assertEqual(sorted(guard.GIT_OPTIONS), sorted(guard.GIT_PATH_SUBS))
+        for sub in sorted(guard.GIT_PATH_SUBS):
+            with self.subTest(sub=sub):
+                long, short = parse_git_help(slurp(os.path.join(GIT_HELP, f"{sub}.txt")))
+                for name in self.HIDDEN.get(sub, {}):
+                    self.assertNotIn(name, long)  # a hidden one `-h` lists isn't hidden
+                self.assertEqual(guard.GIT_OPTIONS[sub],
+                                 ({**long, **self.HIDDEN.get(sub, {})}, short))
+
+    def test_the_captures_are_of_the_installed_git(self):
+        # A git upgrade fails this until the captures are retaken (`git <sub> -h`, exit 129)
+        # and the tables updated.
+        version = subprocess.run(["git", "--version"], capture_output=True, text=True,
+                                 check=True).stdout.strip()
+        self.assertEqual(version, slurp(os.path.join(GIT_HELP, "VERSION")).strip())
+
+    def test_git_argv_reads_options_values_and_positionals_as_git_does(self):
+        argv = load_guard().git_argv
+        cases = {
+            ("push", "-o", "x", "origin", "main"): ["origin"],
+            ("push", "-qox", "origin"): ["origin"],
+            ("push", "--repo", "a", "b"): ["a", "b"],
+            ("push", "--rep=a"): ["a"],
+            ("push", "--force-with-lease", "origin"): ["origin"],
+            ("push", "--recurse-submodules", "check", "origin"): ["origin"],
+            ("fetch", "-j", "4", "origin"): ["origin"],
+            ("fetch", "--multiple", "a", "b"): ["a", "b"],
+            ("fetch", "-m", "--no-multiple", "a", "b"): ["a"],
+            ("fetch", "--", "-x", "y"): ["-x"],
+            ("fetch", "--end-of-options", "--all"): ["--all"],
+            ("pull", "-j", "4", "origin"): ["4"],
+            ("pull", "-r", "origin"): ["origin"],
+            ("pull", "-S", "origin"): ["origin"],
+            ("ls-remote", "-h", "origin", "main"): ["origin"],
+            ("ls-remote", "--sort", "x", "origin"): ["origin"],
+        }
+        for (sub, *args), repos in cases.items():
+            with self.subTest(args=args):
+                self.assertEqual(argv(sub, args)[1], repos)
+        options, repos, refspecs = argv("push", ["-vu", "--no-verify", "origin", "a", "b"])
+        self.assertEqual((options, refspecs), ([("verbose", None), ("set-upstream", None),
+                                                ("no-verify", None)], ["a", "b"]))
+
+
+class SubmoduleRecursionMatchesGit(Guard):
+    """The guard's effective-config verdict against real git: in a clone whose submodule's own
+    config makes a fetch there run a marker program, recursion counts as off exactly when a
+    plain `git fetch` leaves the marker unrun."""
+
+    def submodule_clone(self):
+        """(clone, fired, global config): a clone whose submodule's fetch runs a marker that
+        appends to `fired`."""
+        sub, up, clone = (os.path.join(self.tmp, n) for n in ("s", "u", "c"))
+        allow = ("-c", "protocol.file.allow=always")
+        self.git("init", "-q", sub, cwd=self.tmp)
+        self.git("commit", "-q", "--allow-empty", "-m", "s", cwd=sub)
+        self.git("init", "-q", up, cwd=self.tmp)
+        self.git("commit", "-q", "--allow-empty", "-m", "u", cwd=up)
+        self.git(*allow, "submodule", "add", "-q", sub, "sub", cwd=up)
+        self.git("config", "-f", ".gitmodules", "submodule.sub.fetchRecurseSubmodules", "true",
+                 cwd=up)
+        self.git("commit", "-q", "-am", "sub", cwd=up)
+        self.git(*allow, "clone", "-q", "--recurse-submodules", up, clone, cwd=self.tmp)
+        fired = os.path.join(self.tmp, "fired")
+        prog = self.write(os.path.join(self.tmp, "prog"),
+                          f"#!/bin/sh\necho x >> {fired}\nexit 1\n", 0o755)
+        self.git("config", "remote.origin.uploadpack", prog, cwd=os.path.join(clone, "sub"))
+        return clone, fired, os.path.join(self.tmp, "g", "config")
+
+    def test_a_command_line_recursion_flag_agrees_with_git(self):
+        # With recursion off in the config, the last recursion flag on the command line decides:
+        # git runs a fetch in the submodule (its upload-pack marker fires, and git says so)
+        # exactly when the guard reads the flags as turning it on, and git refuses what
+        # git_argv does.
+        guard = load_guard()
+        clone, fired, glob_cfg = self.submodule_clone()
+        self.write(glob_cfg, "[protocol]\n\tallow = always\n" + RECURSE_OFF)
+        env = {"PATH": "/usr/bin:/bin", "HOME": self.home, "GIT_CONFIG_NOSYSTEM": "1",
+               "GIT_CONFIG_GLOBAL": glob_cfg}
+        calls = [("pull", "--rec"), ("pull", "--rec=yes"), ("pull", "--recurse-sub"),
+                 ("pull", "--no-rec"), ("pull", "--rec", "--no-rec"), ("pull", "--no-rec", "--rec"),
+                 ("pull", "--rec=no"), ("pull", "--recurse-submodules=on-demand"),
+                 ("fetch", "--recurse-submodules"), ("fetch", "--recurse-submodules=yes"),
+                 ("fetch", "--recurse-submodules=no"), ("fetch", "--no-recurse-submodules"),
+                 ("fetch", "--rec"), ("fetch", "--no-rec"), ("fetch", "--recurse-sub"),
+                 ("fetch", "--no-recurse-sub"), ("fetch", "--recurse-submodules-default=yes"),
+                 ("fetch", "--recurse-submodules-default", "yes"),
+                 ("fetch", "--no-recurse-submodules-default")]
+        for sub, *args in calls:
+            with self.subTest(call=(sub, *args)):
+                p = subprocess.run(["git", "-C", clone, sub, *args], env=env,
+                                   capture_output=True, text=True)
+                ran = os.path.exists(fired)
+                self.assertEqual(ran, "Fetching submodule sub" in p.stdout + p.stderr)
+                try:
+                    on = guard.recursion_cli(guard.git_argv(sub, args)[0]) == "on"
+                except guard.Refusal:
+                    self.assertEqual(p.returncode, 129, p.stderr)  # git refuses it too
+                    continue
+                if "on-demand" in args[-1] or "default=" in args[-1] or args[-1] == "yes":
+                    # on-demand fetches only changed submodules (none here); the hidden default
+                    # is refused outright, as the guard doesn't weigh it.
+                    self.assertTrue(on)
+                    continue
+                self.assertEqual(on, ran, p.stderr[-400:])
+                if os.path.exists(fired):
+                    os.remove(fired)
+
+    def test_the_guard_agrees_with_git(self):
+        guard = load_guard()
+        clone, fired, glob_cfg = self.submodule_clone()
+        local = os.path.join(clone, ".git", "config")
+        base_local = slurp(local)
+        inc_off = self.write(os.path.join(self.tmp, "g", "off"), RECURSE_OFF)
+        inc_on = self.write(os.path.join(self.tmp, "g", "on"), "[submodule]\n\trecurse\n")
+        on = "[fetch]\n\trecurseSubmodules = true\n"
+        sub_on = "[submodule]\n\trecurse = true\n"
+        wt_ext = "[extensions]\n\tworktreeConfig = true\n"
+        layouts = [  # (global, local, config.worktree, env)
+            ("", "", "", {}), (RECURSE_OFF, "", "", {}), (RECURSE_OFF, on, "", {}),
+            (RECURSE_OFF, sub_on, "", {}), (sub_on, RECURSE_OFF, "", {}),
+            (f"[include]\n\tpath = {inc_off}\n", "", "", {}),
+            (f"[include]\n\tpath = off\n{sub_on}", "", "", {}),
+            (RECURSE_OFF, "", "", {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "submodule.recurse",
+                                   "GIT_CONFIG_VALUE_0": "true"}),
+            (on, "", "", {"GIT_CONFIG_PARAMETERS": "'fetch.recurseSubmodules=false'"}),
+            ("", "", "", {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "fetch.recurseSubmodules",
+                          "GIT_CONFIG_VALUE_0": "false",
+                          "GIT_CONFIG_PARAMETERS": "'submodule.recurse'='true'"}),
+            (on, wt_ext, RECURSE_OFF, {}), (on, "", RECURSE_OFF, {}),
+            (f'{RECURSE_OFF}[includeIf "gitdir:{clone}/"]\n\tpath = {inc_on}\n', "", "", {}),
+        ] + [(f"[fetch]\n\trecurseSubmodules = {v}\n", "", "", {})
+             for v in ("no", "off", "0", "", "FALSE", "on-demand", "yes")]
+        for glob_text, local_text, wt_text, extra in layouts:
+            with self.subTest(glob=glob_text, local=local_text, wt=wt_text, env=extra):
+                self.write(glob_cfg, "[protocol]\n\tallow = always\n" + glob_text)
+                self.write(local, base_local + local_text)
+                self.write(os.path.join(clone, ".git", "config.worktree"), wt_text)
+                env = {"PATH": "/usr/bin:/bin", "HOME": self.home, "GIT_CONFIG_NOSYSTEM": "1",
+                       "GIT_CONFIG_GLOBAL": glob_cfg, **extra}
+                subprocess.run(["git", "fetch", "-q"], cwd=clone, env=env, capture_output=True)
+                ran = os.path.exists(fired)
+                if ran:
+                    os.remove(fired)
+                on_now = guard.recursion_on(env, guard.discover(clone, env), self.home)
+                if "on-demand" in glob_text:  # on-demand fetches only changed submodules
+                    self.assertTrue(on_now)
+                    continue
+                self.assertEqual(bool(on_now), ran, on_now)
+
+    def test_push_agrees_with_git(self):
+        # A push of a commit that moves a submodule runs git in it (GIT_TRACE shows the
+        # run_command with `cd sub`) exactly when the guard counts push recursion on.
+        guard = load_guard()
+        glob_cfg = os.path.join(self.tmp, "g", "config")
+        self.write(glob_cfg, "[protocol]\n\tallow = always\n")
+        env = {"PATH": "/usr/bin:/bin", "HOME": self.home, "GIT_CONFIG_NOSYSTEM": "1",
+               "GIT_CONFIG_GLOBAL": glob_cfg, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+
+        def run(*args, cwd, extra=None):
+            return subprocess.run(["git", *args], cwd=cwd, env=dict(env, **(extra or {})),
+                                  capture_output=True, text=True)
+        sub, seed, clone = (os.path.join(self.tmp, n) for n in ("s", "seed", "c"))
+        run("init", "-q", "-b", "main", "--bare", sub, cwd=self.tmp)
+        run("init", "-q", seed, cwd=self.tmp)
+        run("commit", "-q", "--allow-empty", "-m", "s", cwd=seed)
+        run("push", "-q", sub, "HEAD:refs/heads/main", cwd=seed)
+        run("init", "-q", clone, cwd=self.tmp)
+        run("commit", "-q", "--allow-empty", "-m", "c", cwd=clone)
+        self.assertEqual(run("submodule", "add", "-q", sub, "sub", cwd=clone).returncode, 0)
+        run("commit", "-q", "-m", "add", cwd=clone)
+        run("commit", "-q", "--allow-empty", "-m", "new", cwd=os.path.join(clone, "sub"))
+        run("commit", "-q", "-am", "bump", cwd=clone)
+        local = os.path.join(clone, ".git", "config")
+        base_local = slurp(local)
+        push, recurse = "[push]\n\trecurseSubmodules = {}\n", "[submodule]\n\trecurse = {}\n"
+        layouts = [("", "")] + [(push.format(v), "") for v in (
+            "check", "on-demand", "only", "no", "false", "0", "off", "", "NO")] + [
+            (recurse.format(v), "") for v in ("true", "false", "yes", "1", "")] + [
+            (recurse.format("true") + push.format("no"), ""),
+            (push.format("no") + recurse.format("true"), ""),
+            (push.format("check") + recurse.format("false"), ""),
+            (recurse.format("false") + push.format("check"), ""),
+            (push.format("no"), recurse.format("true")), (recurse.format("true"), push.format("no"))]
+        for i, (glob_text, local_text) in enumerate(layouts):
+            with self.subTest(glob=glob_text, local=local_text):
+                self.write(glob_cfg, "[protocol]\n\tallow = always\n" + glob_text)
+                self.write(local, base_local + local_text)
+                bare = os.path.join(self.tmp, f"b{i}")
+                run("init", "-q", "--bare", bare, cwd=self.tmp)
+                p = run("push", bare, "HEAD:refs/heads/main", cwd=clone, extra={"GIT_TRACE": "1"})
+                ran = any("run_command" in line and "cd sub" in line
+                          for line in p.stderr.splitlines())
+                on_now = guard.recursion_on(env, guard.discover(clone, env), self.home, "push")
+                self.assertEqual(bool(on_now), ran, on_now)
 
 
 class Rule2Path(Guard):
@@ -1006,16 +2177,16 @@ class Rule2Path(Guard):
 class Rule3ProjectRoot(Guard):
     def test_claude_runs_only_from_the_project_root(self):
         self.allowed("claude --version")
-        sub = self.mkdir("proj", "sub")
+        sub = self.protect(self.mkdir("proj", "sub"))  # else rule 1 refuses it first
         self.denied("claude --version", "rule3", sub, cwd=sub)
 
     def test_codex_runs_only_from_the_project_root(self):
         self.allowed("codex login status")
-        sub = self.mkdir("proj", "sub")
+        sub = self.protect(self.mkdir("proj", "sub"))
         self.denied("codex login status", "rule3", sub, cwd=sub)
 
     def test_git_from_a_subdir_is_not_held_to_rule_3(self):
-        self.allowed("git push", cwd=self.mkdir("proj", "sub"))
+        self.allowed("git push", cwd=self.protect(self.mkdir("proj", "sub")))
 
 
 class Matching(Guard):
@@ -1789,6 +2960,82 @@ class DiscoveryMatchesGit(Guard):
                 self.assertEqual(found[:2], want)
                 compared += 1
         self.assertGreaterEqual(compared, 13)  # not vacuous: the two markers refuse, 13 match
+
+    def test_a_git_dir_git_would_look_past_refuses(self):
+        # git's is_git_directory also wants a valid HEAD (`ref: refs/...`, a symlink into refs/
+        # or an object id) and objects/ and refs/, and walks on up past a dir that fails. The
+        # guard refuses there rather than mimic the skip (review round 2).
+        guard = load_guard()
+        head = os.path.join(self.proj, ".git", "HEAD")
+        real = slurp(head)
+        sha = self.git("rev-parse", "HEAD", cwd=self.proj).strip()
+        for text in (real, real.strip(), "ref:\t refs/heads/x\n", sha + "\n", sha.upper()):
+            with self.subTest(head=text):
+                self.write(head, text)
+                self.allowed("git push")
+        os.remove(head)
+        os.symlink("refs/heads/x", head)
+        self.allowed("git push")
+        # git's isspace is only space, \t, \n and \r: a \v or \f after `ref:` breaks the HEAD
+        # (review round 3).
+        for text in ("junk\n", "ref: heads/main\n", "", sha[:39], "x" + sha,
+                     "ref:\vrefs/heads/main\n", "ref: \frefs/heads/main\n"):
+            with self.subTest(head=text):
+                os.remove(head)
+                self.write(head, text)
+                self.assertIn("looks broken", self.denied("git push", "rule1", os.path.dirname(head)))
+                p = subprocess.run(["git", "rev-parse", "--git-dir"], cwd=self.proj,
+                                   capture_output=True, text=True,
+                                   env={"PATH": "/usr/bin:/bin", "HOME": self.home,
+                                        "GIT_CEILING_DIRECTORIES": self.tmp})
+                self.assertNotEqual(p.returncode, 0)  # git looks past it, finding none here
+        self.write(head, real)
+        os.remove(os.path.join(self.proj, ".git", "HEAD"))
+        os.symlink("heads/x", head)
+        self.denied("git push", "rule1", os.path.dirname(head))
+        os.remove(head)
+        self.write(head, real)
+        self.allowed("git push")
+        # A nested .git dir or a bare-looking dir git skips refuses too, at the cwd and as a
+        # server path git's server side would skip.
+        nested = self.mkdir("proj", "nested", ".git", "objects")
+        self.mkdir("proj", "nested", ".git", "refs")
+        self.write(os.path.join(self.proj, "nested", ".git", "HEAD"), "junk\n")
+        bareish = os.path.dirname(self.mkdir("proj", "bareish", "refs"))
+        self.write(os.path.join(bareish, "HEAD"), "junk\n")
+        for cwd in (os.path.dirname(nested), bareish):
+            with self.subTest(cwd=cwd):
+                with self.assertRaises(guard.Refusal) as e:
+                    guard.discover(cwd, {"GIT_CEILING_DIRECTORIES": self.tmp})
+                self.assertIn("looks broken", e.exception.reason)
+        self.write_settings({"excludedCommands": EXCLUDED + ["git push *"]})
+        for call in ("git push nested", "git push bareish"):
+            with self.subTest(call=call):
+                self.assertIn("looks broken", self.denied(call, "rule1"))
+        # The server side's loop too: a <p>/.git whose HEAD has a \v after `ref:` is one git's
+        # server side skips (review round 3).
+        self.write(os.path.join(self.proj, "nested", ".git", "HEAD"), "ref:\vrefs/heads/main\n")
+        self.assertIn("looks broken", self.denied("git push nested", "rule1"))
+
+
+class ConfigEntries(unittest.TestCase):
+    """config_entries reads each entry with its subsection, as git does: a quoted one kept as
+    written (escapes undone), a `[section.sub]` one lowercased, "" for none."""
+
+    def test_entries_keep_their_subsection(self):
+        guard = load_guard()
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "config")
+            with open(path, "w") as f:
+                f.write('[core]\n\thooksPath = h\n[Remote "Up.Stream"]\n\tURL = /a/b\n'
+                        '[url "/x/y z"] insteadOf = https://h/\n'
+                        '[url "q\\"\\\\"]\n\tpushInsteadOf\n'
+                        '[Old.Sub]\n\tk = v ; c\n[includeIf "gitdir:~/w/"]\n\tpath = i\n')
+            self.assertEqual(list(guard.config_entries(path)), [
+                ("core", "", "hookspath", "h"), ("remote", "Up.Stream", "url", "/a/b"),
+                ("url", "/x/y z", "insteadof", "https://h/"),
+                ("url", 'q"\\', "pushinsteadof", "true"), ("old", "sub", "k", "v"),
+                ("includeif", "gitdir:~/w/", "path", "i")])
 
 
 if __name__ == "__main__":

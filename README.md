@@ -272,7 +272,7 @@ sees it.
 | `hooks/lane-identity.sh` | SessionStart/Stop/SessionEnd hook: tells a lane session its identity and registers it, prints one board line in a lanes repo's main checkout and relinks the lead record on a proven resume, /clear or /pass of the lead, mirrors a lane's record; a shim over `hooks/lane_identity.py`; fails open | symlink `~/.claude/hooks/lane-identity.sh` and `lane_identity.py` |
 | `hooks/lane-guard.sh` | PreToolUse(Edit/Write/MultiEdit) hook: denies writes to another lane's record or the lanes CLI's data, and relative identity in status files; a shim over `hooks/lane_guard.py`; fails open | symlink `~/.claude/hooks/lane-guard.sh` and `lane_guard.py` |
 | `hooks/delete-guard.sh` | PreToolUse(Bash) hook, sandbox-off commands only: denies a delete whose path uses a variable the command didn't set, a command substitution that would widen it if empty, or a top-level or home tree; a shim over `hooks/delete_guard.py`; fails open | symlink `~/.claude/hooks/delete-guard.sh` and `delete_guard.py` |
-| `hooks/excluded-guard.sh` | PreToolUse(Bash) hook, excluded commands only: refuses one whose cwd resolves to another repo, whose git config or PATH a sandboxed session could write, or a `claude` or `codex` call outside the project root; a shim over `hooks/excluded_guard.py`; fails closed for excluded heads | symlink `~/.claude/hooks/excluded-guard.sh` and `excluded_guard.py` |
+| `hooks/excluded-guard.sh` | PreToolUse(Bash) hook, excluded commands only: refuses one whose cwd resolves to another repo or to a broken git dir git would look past, or sits below its repo top, whose git config, legacy remote files, local remote URLs, local repository words (a remote group's members too) or PATH a sandboxed session could write, a default remote (or `lane`'s own `origin`) the config doesn't define, a `url.<base>` rewrite base that isn't a network URL with a host, a fetch, pull or push with submodule recursion on, a `gh` flag before a `pr` or `issue` subcommand, git's dir location variables set, or a `claude` or `codex` call outside the project root; a shim over `hooks/excluded_guard.py`; fails closed for excluded heads | symlink `~/.claude/hooks/excluded-guard.sh` and `excluded_guard.py` |
 | `hooks/excluded-check.sh` | SessionStart hook: shows what the excluded-command guard would refuse from the session's project and PATH, with the Edit deny rule for each dir, once per change in those findings; runs `excluded_guard.py --session`; fails open | symlink `~/.claude/hooks/excluded-check.sh` |
 | `hooks/memory-git.sh` | SessionStart/Stop hook: commits every project's auto-memory to a local-only git repo (`$XDG_STATE_HOME/dotclaude/memory.git`); never blocks | symlink `~/.claude/hooks/memory-git.sh` |
 | `hooks/blank-display.sh` | SessionStart hook: in a repo that opts in with `git config dotclaude.blankDisplay true` (every worktree of it), sets `DISPLAY` and `WAYLAND_DISPLAY` empty for Bash through `CLAUDE_ENV_FILE`, so a headed browser can't open in front of you; silent elsewhere; a shim over `hooks/blank_display.py`; fails open; see docs/chrome-devtools-wsl.md "Background Windows Chrome for probes" | symlink `~/.claude/hooks/blank-display.sh` and `blank_display.py` |
@@ -725,8 +725,14 @@ need nothing extra.
 - **PreToolUse(`Bash`): `excluded-guard.sh`** (in this repo), for commands that match
   `sandbox.excludedCommands` and so run outside the sandbox. Rule: such a command must not act on
   anything a sandboxed session can write. It refuses a call whose cwd resolves to a git repo
-  other than the project's, whose other git config or PATH dirs a sandboxed session could write,
-  or a `claude` or `codex` call outside the project root. Fails closed for excluded heads; denies go to `$XDG_STATE_HOME/dotclaude/excluded-guard.log`.
+  other than the project's or sits below its repo top (run it from the top), whose other git config or PATH dirs a sandboxed session could write,
+  whose local repository (a path or local remote URL, wherever git's server side looks for it,
+  or a fetch group's members) a sandboxed session could write or create, a call naming no
+  repository whose default remote the config doesn't surely define, a fetch, pull or push with
+  submodule recursion on, a `gh` flag other than `-R`/`--repo` before a `pr` or `issue`
+  subcommand (put flags after it), a call while `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY` or
+  `GIT_ALTERNATE_OBJECT_DIRECTORIES` is set, a word the shell would rewrite (a git refspec may use git's revision
+  spellings zsh leaves alone), or a `claude` or `codex` call outside the project root. Fails closed for excluded heads; denies go to `$XDG_STATE_HOME/dotclaude/excluded-guard.log`.
   docs/delegation.md "The excluded-command guard" has the checks and what they don't cover.
 - **SessionStart: `excluded-check.sh`** (in this repo). The same guard's view of the session's
   project and PATH, so a missing Edit deny rule shows when a session starts, not when a push gets
