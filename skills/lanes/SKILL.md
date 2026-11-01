@@ -47,8 +47,8 @@ an unregistered worktree: `lane whoami` tells you which.
 1. **Init, once per repo**, from the main checkout:
    `lane init --root ~/code/<repo>-lanes --setup "npm ci" --ports 5191-5199 --block 3 --cap 4`.
    It asks for Hayden's click: `--setup` names the command each new lane runs, and `--root`
-   moves where lanes live. `--block` hands each new lane that many ports in a row (default 1). `--model` and `--effort` set the claude model and effort each `lane open`
-   launches with (an empty value: the `ANTHROPIC_MODEL` pin, or the user's default effort).
+   moves where lanes live. `--block` hands each new lane that many ports in a row (default 1).
+   `--model` and `--effort` set the claude model and effort each `lane open` launches with (an empty value: the `ANTHROPIC_MODEL` pin, or the user's default effort).
    In a repo whose suites need built dirs the setup made (a Node repo's `node_modules`),
    `lane init --trial-link node_modules` has each `lane trial` symlink the lane's into its
    scratch tree (comma-separated for more; an empty value removes it).
@@ -56,8 +56,8 @@ an unregistered worktree: `lane whoami` tells you which.
    --overlaps api-docs --done-when "axis test green"`. It fetches (and refuses if the fetch
    fails: a lane branches only from the commit the remote reports), branches from `origin/main`
    with no upstream, copies the gitignored files `.worktreeinclude` lists, seeds the record with
-   the brief, hands out a block of ports and runs the setup command. Then it checks the worktree as the
-   excluded-command guard will, and seeds any Edit deny rule a dir needs (a `core.hooksPath` the
+   the brief, hands out a block of ports and runs the setup command. Then it checks the
+   worktree as the excluded-command guard will, and seeds any Edit deny rule a dir needs (a `core.hooksPath` the
    setup set, say) into the record's Asks for Hayden. Start the lane's session with
    `lane open chart-fix` (bare, from inside tmux): a new tmux window in the lane, in plan mode,
    told to read its record and plan the brief. `lane open chart-fix --model sonnet --effort low`
@@ -76,13 +76,14 @@ an unregistered worktree: `lane whoami` tells you which.
    `lane trial <id> --run "<suite>" ...` early instead of finding out at ready.
 
    **Start a dev server with `lane serve -- <cmd>`**, never bare: `{port}` in the command (or
-   `$PORT`) is a port from the lane's block. serve proves the port's listener is the server it
-   started, so a server that failed to bind a port another lane holds fails here, instead of
-   your checks testing that lane's server. It refuses in the sandbox, so run it with the sandbox
-   off (each start asks). `--ready RE` waits for a log line too; the log is
-   `.lane-serve/<port>.log`. `lane serve --stop <port>` ends it; `done` and `park` end it too. Nothing outside the lane's
-   dir is signalled (a shared daemon such as Gradle's may carry the token), so run the server in
-   the foreground, from the lane.
+   `$PORT`) is the block's first free port, or `--port N`. serve proves the port's listener is
+   the server it started, so a server that failed to bind a port another lane holds fails
+   here, instead of your checks testing that lane's server. It refuses in the sandbox, so run
+   it with the sandbox off (each start asks). It waits up to 60 s (`--timeout`), for a
+   `--ready RE` match in its log too; the log is `.lane-serve/<port>.log`. `lane serve --stop
+   <port>` ends it; `done` and `park` end it too. Nothing outside the lane's dir is signalled
+   (a shared daemon such as Gradle's may carry the token), so run the server in the
+   foreground, from the lane.
 
    **Tell the lead before you reach past your worktree.** Before an act whose effect leaves the
    lane's worktree (an install from the lane, anything that takes a cap slot), and whenever the
@@ -380,7 +381,7 @@ resend passes.
 | Command | What it does |
 |---|---|
 | `lane whoami` | your lane id, `main`, `unregistered` or `plain` (`--json` for scripts) |
-| `lane ls` | the board: branch, ahead/behind, PR, port, claims, live sessions, context (CTX: `312k*` past the auto-pass soft tier, `523k!` past hard), state (STATE: busy, idle, waiting, shell; message a lane idle past soft to run /pass), tmux window, flags; then any held locks, each pair of lanes whose changed files overlap (with the files), a main checkout with two or more live sessions (each one's window, the lead first) or a stopped lead (its window to `fg` it in), and the install hold |
+| `lane ls` | the board: branch, ahead/behind, PR, port block, claims, live sessions, context (CTX: `312k*` past the auto-pass soft tier, `523k!` past hard), state (STATE: busy, idle, waiting, shell; message a lane idle past soft to run /pass), tmux window, flags; then any held locks, each pair of lanes whose changed files overlap (with the files), a main checkout with two or more live sessions (each one's window, the lead first) or a stopped lead (its window to `fg` it in), and the install hold |
 | `lane ls --requests` | request to lane, from claims only |
 | `lane who 42` | the lane that claims #42, or "unclaimed" (with a warning while a left-out record may hold it) |
 | `lane claim 42` / `lane release 42` | claim or drop a request for your lane |

@@ -24,7 +24,8 @@ Layout (PLAN.md "Layout"):
                                 removed by `lane open` and `lane done`
   <state-dir>/lanes/<repo>-<hash>.served/<id>/<port>.json
                                 what `lane serve` started on a port (Repo.served_path), which
-                                `serve --stop` ends by; `lane done` removes the dir
+                                `serve --stop` ends by; `lane done` removes the dir once
+                                nothing the records name still runs
 """
 import contextlib
 import datetime
@@ -386,7 +387,7 @@ class Repo:
     def served_dir(self, lane_id: str) -> str:
         """Lane lane_id's serve records, beside the config: `serve --stop` signals by them, so
         only a sandbox-off `lane serve` may write them, never a lane's sandboxed Bash. `lane
-        done` removes the dir."""
+        done` removes the dir once nothing the records name still runs."""
         return os.path.join(self.config_path.removesuffix(".toml") + ".served", lane_id)
 
     def served_path(self, lane_id: str, port: int) -> str:

@@ -700,16 +700,18 @@ its one port, so old and new lanes share a range. `ls`, `whoami` and the lane-id
 the block (`5191-5193`), and the setup command gets `LANE_PORTS=5191-5193` beside `LANE_PORT`.
 
 **`lane serve [--port N] [--ready RE] -- <cmd>`.** From inside a lane:
-1. It takes `--port`, which must be in the lane's block, or the block's first port with nothing
-   listening. It refuses a port that already has a listener and names the holder (pid, command,
-   the lane its cwd is in), since a server started there would fail to bind.
+1. It takes `--port`, which must be in the lane's block, or else the first port of the block
+   with no listener and no live serve. It refuses a port that already has a listener and names
+   the holder (pid, command, the lane its cwd is in), since a server started there would fail
+   to bind, and one where an earlier serve still runs without listening (`--stop` it first).
 2. It starts the command in a session of its own, with `PORT` and `LANE_PORT` set, `{port}` in
    the command replaced, a per-serve token in `LANE_SERVE`, and its output in the lane's
    `.lane-serve/<port>.log` (gitignored by a `*` inside).
-3. It waits (60 s, `--timeout`) for a line matching `--ready`, if given (each line of the log's
-   first 1 MiB; `^` and `$` mark a line's ends), and then for a listener on the port. Every
+3. It waits (60 s, `--timeout`) for a match of `--ready`, if given (searched in the log's first
+   1 MiB, with `^` and `$` marking a line's ends), and then for a listener on the port. Every
    listener there, IPv4 and IPv6, must carry the serve's token and run in the lane's dir.
-   Anything else fails the serve, names the holder and ends what the serve started. This is the check that closes the bug. A
+   Anything else fails the serve, names the holder and ends what the serve started. This is the
+   check that closes the bug. A
    server that dies first (with nothing of it left running) fails the serve with its exit status
    and the log's tail.
 
@@ -849,6 +851,8 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   flag the delete guard checks. `whoami`, `claim`, `release`, `who`, `note`, `asks` and `lock`
   touch only `<common-dir>/lanes/` and the lane's `.lane/`, which a lane-rooted sandbox can
   write (S1). A sandboxed (piped) `ls` says what it skipped; `new`, `open`, `done`, `park`, `addr` and `lead` refuse.
+  `serve` has no entry: it refuses in the sandbox and runs only when its caller turns the
+  sandbox off, so each start meets the usual approval ("Ports and `lane serve`").
   `park` fetches, asks gh, sees and signals the lane's sessions and writes its flag in the
   state dir, so it needs all three.
   `trial` must stay sandboxed too, and refuses to run anywhere else (the `lane trial` section).

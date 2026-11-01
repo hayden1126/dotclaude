@@ -36,10 +36,11 @@ and runs only when its caller turns the sandbox off, so each start meets the usu
 
 `serve`, from inside a lane, starts a command in a session of its own on a port of the lane's
 block, with PORT, LANE_PORT and a per-serve LANE_SERVE token in its environment, and waits for
-its listener (after a --ready line, if given). It succeeds only when every listener on the port
-is the serve's (in its session, or carrying its token), so a server that failed to bind a port
+its listener (after a --ready match, if given). It succeeds only when every listener on the
+port carries its token and runs in the lane's dir, so a server that failed to bind a port
 another server holds fails the serve instead of leaving checks to test the other one. The
-record of what it started lives in the state dir; `serve --stop PORT` ends by it.
+record of what it started lives in the state dir; `serve --stop PORT` ends by it, and nothing
+outside the lane's dir is ever signalled for a token.
 
 `trial`, from inside a lane, merges the base and every other live lane's commits (or only the
 ids given) onto the lane's HEAD in dangling commits, checks the merge out in a fresh scratch
