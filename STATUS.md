@@ -90,13 +90,13 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - #144 (exam-prep): rules public, evidence private (Hayden, 2026-10-20).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
-  - **Live lanes** (briefs in each record). Merge order: 1 ports (`feat/lane-ports`, #155,
-    carries the lead's notes; opened 2026-10-31 on Hayden's order: ports below; parked 2026-11-01
-    at its pushed head and unparked the same day for its turn), 2 design-audit
-    (`chore/design-decision-audit`, opened 2026-11-01 on Hayden's pick: the design-decision
-    re-evaluation, findings private; it may end with no PR), 3 subagent-wait
-    (`fix/subagent-moved-command`, opened 2026-11-01 on Hayden's pick: the subagent 180 s fix
-    below), 4 practices (`feat/practices-auth-secrets`, its next PR; paused by Hayden since
+  - **Live lanes** (briefs in each record). Merge order: 1 design-audit
+    (`chore/design-decision-audit`, carries the lead's notes; opened 2026-11-01 on Hayden's pick:
+    the design-decision re-evaluation, findings private; its PR is the public ask-time threat
+    rule), 2 subagent-wait (`fix/subagent-moved-command`, opened 2026-11-01 on Hayden's pick: the
+    subagent 180 s fix below, plus a one-line hermeticity fix in `test_hook_payloads`), 3 ports
+    (PR 2 next: `lane port claim/who/ls` and the SessionStart "your ports" line; its record says
+    `Keep open`), 4 practices (`feat/practices-auth-secrets`, its next PR; paused by Hayden since
     2026-10-24, last so it blocks no install; it conflicts with origin/main on its own, per
     lane-fixes' trial).
     Merged and installed from main, all closed: chrome-dup (#151, 2026-10-29: one chrome-devtools
@@ -116,20 +116,42 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     design gaps G-A to G-E; setup sets the global `fetch.recurseSubmodules=false`; a lone
     excluded call from below its repo top, or from no repo under a writable dir, is refused with
     "run it from the top"; its replay counted 87 new refusals in about 4,360 past calls).
+    Merged and installed, lane kept open for its next PR: ports (#155, 2026-11-01: `lane serve`
+    with the listener check, a block of ports per lane in `lane ls`, the midnight test flake).
     #154's install made new refusals live in every session: arithmetic like `$((SECONDS+12))` and
     `git -C <dir> fetch` in a command that would leave the sandbox.
   - Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
 
   Backlog:
-  - **DA15 fix lane: next to open** (high; Hayden's pick, 2026-11-01, via lane design-audit).
-    Private: sandbox-audit FINDINGS, "Design-decision audit, 2026-11", row DA15 (mechanics, probe
-    and fix). Small. Files: `skills/lanes/scripts/lane`, `lanelib.py`, handoff-check, `setup.sh`,
-    the lanes skill's post-merge step and their tests, the same lane CLI files ports changes, so
-    it opens when a slot frees after #155 merges. Until it lands, the lead runs the row's pre-check
-    before each post-merge chain.
-  - **Next lane when a slot frees (Hayden's pick):** the serve jail (the lead's recommendation,
-    since it closes live private rows), shared lane locks and structured `Keep open` all wait for
-    ports PR 1, whose lane CLI files they share.
+  - **Fix lanes from lane design-audit** (Hayden's picks, 2026-11-01). Private: sandbox-audit
+    FINDINGS, "Design-decision audit, 2026-11", one row per id with the detail. Most severe first:
+    1. DA15 with DA16 (high): next to open. Files: `skills/lanes/scripts/lane`, `lanelib.py`,
+       handoff-check, `setup.sh`, `skills/lanes/SKILL.md` (the post-merge step) and their tests,
+       the files ports' PR 2 also changes. Until it lands, the lead runs DA15's pre-check and
+       DA16's stopgap before each post-merge chain (both in the private rows).
+    2. DA17 (high, cheap): `hooks/*.sh`, `skills/*/scripts`, `tests/setup`; Hayden also has a
+       step of his own in the row.
+    3. DA12 (high), then DA13 (medium): `settings.json`, `tests/delegation/test_settings.py`
+       (lane practices changes both), a session-start warning.
+    4. DA1 (high): needs its own design review rounds first. Files: `setup.sh`,
+       `setup-tmux.sh`, `install-state.py`, `merge-settings.py`, `hooks/excluded_guard.py`, the
+       lane CLI, README, `docs/lanes.md` and the lanes skill.
+    5. DA4 (medium): `hooks/delete_guard.py` (lane practices changes it) and a global CLAUDE.md
+       line.
+    6. DA2 (medium): the lead's incoming-message path.
+    7. DA14 (medium): a probe, then ask rules as a labelled tripwire.
+    8. Low: DA8 (probe, then trim), DA9 (pin from a repo file, with a test), DA6 (a setup.sh
+       warning).
+    9. Prose only: DA3 (a memory line plus the delegation skill; lane practices to be told when
+       it next runs) and DA5 (a global CLAUDE.md line).
+    Accepted by Hayden: DA7, DA10, DA11.
+  - **A systematic sweep of what code outside the sandbox reads or runs that a session can
+    write** (Hayden, 2026-11-01, via lane design-audit). The shared git dir, home config,
+    interpreter paths and state files: design-audit's review rounds 4 and 5 kept finding highs
+    beyond its inventory. Findings private. Read-only, like design-audit.
+  - **Next lane when a slot frees (Hayden's pick):** the DA15/DA16 lane (above), then the serve
+    jail (it closes live private rows), shared lane locks and structured `Keep open`. All four
+    share the lane CLI files with ports' PR 2.
   - G8 open probes (a) and (b) (Hayden's pick, 2026-10-14): Hayden runs
     `~/scratch/sandbox-audit/g8-probe/run.py` by hand with the sandbox off, because the auto-mode
     classifier refused the run. Results go into the private findings file's G8 section.
@@ -344,8 +366,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 ## Notes for next session
 - **Next (lead, main checkout):**
   0. Four lanes run, cap full (In flight, Live lanes; state in their records, `lane ls`). Next
-     lane when a slot frees: DA15's fix lane (Backlog, first item). Before each post-merge
-     chain, run the pre-check in private FINDINGS row DA15. Since #156's install, a lone
+     lane when a slot frees: the DA15/DA16 lane (Backlog, first item). Before each post-merge
+     chain, run DA15's pre-check and DA16's stopgap from the private FINDINGS rows. Since #156's install, a lone
      excluded call (gh, git push or fetch, lane) runs only from a repo's top. Running sessions took
      #157's cache narrowing live at its install (2026-10-31 14:39 local): a session started
      before it needs a `/pass` before a sandboxed uv, pip, pnpm, node-gyp, bun or Playwright run. Pending with Hayden, outside the lanes: `wsl --shutdown` at a break applies the 18 GB
