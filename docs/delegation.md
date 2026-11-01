@@ -279,9 +279,14 @@ For a match it refuses, naming the path, when:
    `commondir` file must sit at `<common>/worktrees/<name>` and name that `<common>`, which holds
    no `commondir` itself. Any other layout, in the cwd's repo or the project's, is refused. A
    dir counts as a repo as soon as git would take it as one: a `.git` entry, or `HEAD` with
-   `objects/` and `refs/` or with a `commondir`. Rule 1 judges path arguments too, resolved
-   from the cwd: `pass-respawn -C`, `lane adopt PATH`, and a local repository given to
-   `git push`, `fetch`, `pull` or `ls-remote`. Such a call must spell each word plainly (no
+   `objects/` and `refs/` or with a `commondir`. A repo's own `<top>/.git` (a gitfile or a
+   `.git` hop) is judged along its symlinks like any other file, except at the project's top or
+   a worktree top of its common dir (a lane, whose gitfile names `<common>/worktrees/<name>`
+   and is named back there): one in a writable dir could be repointed after the check. Rule 1
+   judges path arguments too, resolved from the cwd: `pass-respawn -C` (its `-C=<path>`
+   spelling, which argparse reads two ways, is refused: use `-C <path>`), `lane adopt PATH`, and
+   a local repository given to `git push`, `fetch`, `pull` or `ls-remote`, a relative one from
+   the repo top too, where git opens it. Such a call must spell each word plainly (no
    expansion, glob, quote or space), its redirection targets too, since the guard reads the
    text before the shell rewrites it. A git refspec or option value may also use the revision
    spellings zsh hands on unchanged with the options Claude Code's shell snapshot sets
@@ -301,24 +306,38 @@ For a match it refuses, naming the path, when:
    word is a local path to git, judged whether it exists or not (G-E, item 8), where git's
    server side looks for it: `<p>/.git`, `<p>`, `<p>.git/.git` and `<p>.git` in that order, the
    first that is a file or a git dir winning. Each that exists is judged along its symlinks and
-   as the cwd's repo is; one that is missing, tried before the first git would take, is
-   refused when a sandboxed session could create it. A `file://` URL with a host part or a
+   as the cwd's repo is (a gitfile's relative gitdir read from the dir of the path git opened,
+   not a symlink target's); one that is missing, tried before the first git would take, is
+   refused when a sandboxed session could create it. A call naming no repository takes the
+   default remote (`branch.<b>.pushRemote` or `remote`, `remote.pushDefault`, else `origin`):
+   it is refused unless each such value in the config chain and `origin` name a remote the
+   config surely defines, since git reads any other name from a legacy remote file planted
+   after the check. Name the remote on the command line or configure it. Each such value that
+   names no remote is also judged as a path, as a remote URL is. A `file://` URL with a host part or a
    `%`-escape is refused. An option of those git calls that names a program for git to run, an
    `ext::` remote, `--recurse-submodules` and a `%` in a repository word are refused, and
    `delegation-ledger hook` runs only as a hook, never through Bash. A repo whose common git
    dir holds any entry in `remotes/` or `branches/` (legacy remote files, outside the judged
    config) is refused for every excluded call (G-C). Each local-path remote URL in the cwd's
-   config, the repo's own trusted config included (`remote.<n>.url` and `pushurl`, each
-   `url.<base>.insteadOf` and `pushInsteadOf` base), is judged as a local repository word is,
-   each path git's server side tries included (G-D). `git fetch` and `pull`, and `gh pr checkout`, `gh pr merge` and `gh issue develop`
-   (which run them), are refused unless the git call carries `--no-recurse-submodules` or the
-   effective config has submodule recursion off (G-B): the last `fetch.recurseSubmodules` or
-   `submodule.recurse` git reads must be false (for pull, `submodule.recurse` too).
-   `./setup.sh` sets `fetch.recurseSubmodules false` in the global config, and `lane`'s own
-   fetches pass the flag. The
+   config, the repo's own trusted config included (`remote.<n>.url` and `pushurl`), is judged
+   as a local repository word is, each path git's server side tries included (G-D). A
+   `url.<base>.insteadOf` or `pushInsteadOf` whose base is a local path is refused: git appends
+   the rest of the original URL to the base, so use a network base. `git fetch`, `pull` and
+   `push`, and `gh pr checkout`, `gh pr merge`, `gh issue develop` and `gh pr create` (which run
+   them), are refused unless the git call carries `--no-recurse-submodules` or the effective
+   config has submodule recursion off (G-B). For fetch the last `fetch.recurseSubmodules` or
+   `submodule.recurse` git reads must be false; for pull and `gh pr checkout` (whose
+   `git checkout` honours it) `submodule.recurse` too; for push the last
+   `push.recurseSubmodules` or `submodule.recurse` (probed with git 2.43: `check`, `on-demand`
+   and `only` all run git in the submodule), unset counting as off. The refusal names the key
+   and file that turn it on, and says when a switch-off sits in a file git may not read (an
+   `includeIf` file), which doesn't count. `gh pr checkout --recurse-submodules` is refused in
+   every spelling gh takes but a false `=` value. `./setup.sh` sets
+   `fetch.recurseSubmodules false` in the global config on every run and warns when
+   `submodule.recurse` is true there, and `lane`'s own fetches pass the flag. The
    other config git reads must be write-protected: the global and XDG files (or
    `GIT_CONFIG_GLOBAL`), `/etc/gitconfig` (or `GIT_CONFIG_SYSTEM`, skipped under
-   `GIT_CONFIG_NOSYSTEM`), every `include.path` and `includeIf` target, and a `core.hooksPath`
+   `GIT_CONFIG_NOSYSTEM`; either variable set but empty names no file, as git reads it), every `include.path` and `includeIf` target, and a `core.hooksPath`
    dir and each file in it. Each is followed through its symlinks (each hop and the dir of each
    must be write-protected), and anything that exists there is judged, not only a regular file.
    A repo whose install step points `core.hooksPath` into the repo (husky and similar) is

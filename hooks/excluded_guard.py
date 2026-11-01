@@ -15,9 +15,14 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      worktrees/<name>/commondir, not the main .git/ dir, so the common dir comes from git's real
      layout: a gitdir with a commondir file must sit at <common>/worktrees/<name> with its
      commondir naming that <common>, and <common> must hold no commondir. Any other layout, in
-     the cwd's repo or the project's, is refused. A path argument a head runs git in is judged
-     the same way, resolved from the cwd (path_arguments: pass-respawn -C, lane adopt PATH, a
-     local repository for git push, fetch, pull and ls-remote), and such a call must spell its
+     the cwd's repo or the project's, is refused. A repo's own <top>/.git (a gitfile or a
+     .git hop) is judged along its symlink chain like any other file, at the cwd, a path
+     argument or a server path alike, except at the project's top or a worktree top of its
+     common dir (worktree_top): one in a writable dir could be repointed after the check. A
+     path argument a head runs git in is judged the same way, resolved from the cwd
+     (path_arguments: pass-respawn -C, whose -C=<path> spelling argparse reads two ways and is
+     refused, lane adopt PATH, a local repository for git push, fetch, pull and ls-remote,
+     relative ones from the repo top too, where git opens them), and such a call must spell its
      words plainly, naming no program for git to run (--receive-pack, --upload-pack, --exec,
      an ext:: remote) and no submodule recursion (check_git_words). git's words are read as
      its parse-options reads them (git_argv, with git 2.43's option tables; item 7): the
@@ -32,8 +37,13 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      refused. Any other word is a local path to git, judged whether it exists or not (G-E path
      half, item 8), as git's server side finds it: it tries <path>/.git, <path>, <path>.git/.git
      and <path>.git in turn (check_server_repo), each that exists is judged along its symlink
-     chain and as the cwd's repo is, and one that is missing, before the first git would take,
-     is refused if a sandboxed session could create it. A file:// URL must have no host and no
+     chain and as the cwd's repo is (a gitfile's relative gitdir read from the dir of the path
+     git opened, not a symlink target's), and one that is missing, before the first git would
+     take, is refused if a sandboxed session could create it. A call naming no repository takes
+     the default remote (branch.<b>.pushRemote or remote, remote.pushDefault, else origin): it
+     is refused unless each such value in the config chain and origin name a remote the config
+     surely defines, since git reads any other name from a legacy remote file planted after the
+     check; and each value naming no such remote is judged as a path, as a remote URL is. A file:// URL must have no host and no
      %-escape, and a git option before those subcommands is refused. The calls are found the way zsh splits
      the command (ShellLexer): each call of those heads anywhere in a candidate is judged, one
      in a substitution, subshell or later piece too, and a command it can't read is refused.
@@ -43,12 +53,18 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      Each local-path remote URL in the cwd's config chain, trusted files too (remote.*.url and
      pushurl), is judged too (G-D), as a repository word's path is (check_server_repo), and a
      url.<base>.insteadOf or pushInsteadOf whose base is a local path is refused: git appends
-     the rest of the original URL to it. A URL's own repo doesn't have its URLs judged. git fetch and
-     pull, and gh pr checkout, gh pr merge and gh issue develop (which run them), are refused
-     unless the git call carries --no-recurse-submodules or the effective config has submodule
-     recursion off (G-B): the last fetch.recurseSubmodules or submodule.recurse git reads must
-     be false (for pull, submodule.recurse too), else git runs in each submodule's own git
-     dir. dotclaude's setup.sh sets fetch.recurseSubmodules false globally. A cwd, path
+     the rest of the original URL to it. A URL's own repo doesn't have its URLs judged. git
+     fetch, pull and push, and gh pr checkout, gh pr merge, gh issue develop and gh pr create
+     (which run them), are refused unless the git call carries --no-recurse-submodules or the
+     effective config has submodule recursion off (G-B), else git runs in each submodule's own
+     git dir: for fetch the last fetch.recurseSubmodules or submodule.recurse git reads must be
+     false; for pull and gh pr checkout (whose git checkout honours it) submodule.recurse too;
+     for push the last push.recurseSubmodules or submodule.recurse, unset counting as off. A
+     set but empty GIT_CONFIG_GLOBAL or GIT_CONFIG_SYSTEM names no file, as git reads it. The
+     refusal names the key and file that turn recursion on, and a switch-off in a file git may
+     not read (an includeIf one) that doesn't count. gh pr checkout's --recurse-submodules is
+     refused in every spelling gh takes but a false `=` value. dotclaude's setup.sh sets
+     fetch.recurseSubmodules false globally on every run. A cwd, path
      argument or URL's repo below its repo top, or in no repo, is refused when a dir git looks
      in on its way up (to the top, or to / or a ceiling) is writable (G-E): a repo planted
      there after the check would be the one git uses. The refusal names the top to run from.
