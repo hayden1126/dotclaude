@@ -490,9 +490,12 @@ def path_arguments(words):
         for i, w in enumerate(args):
             if w == "-C" and i + 1 < len(args):
                 out.append(args[i + 1])
+            elif w.startswith("-C="):
+                raise Refusal("rule1", w, f"`pass-respawn {w}`: argparse reads `-C=<path>` as "
+                              "<path> on Python 3.12 and as `=<path>` on older ones, so the "
+                              "guard can't tell which dir it names; use `-C <path>`.")
             elif w.startswith("-C") and w != "-C":
-                # `-C=x` is x on Python 3.12 and `=x` on older ones: judge both, x first.
-                out += ([w[3:]] if w.startswith("-C=") else []) + [w[2:]]
+                out.append(w[2:])
         return [(p, False) for p in out]
     if head == "lane" and args[:1] == ["adopt"]:
         # Every word but its options and `--id`'s value (argparse takes `--i` for it too): a

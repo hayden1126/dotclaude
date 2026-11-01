@@ -359,7 +359,7 @@ class Rule1PathArguments(Guard):
 
     def test_pass_respawn_C_in_another_repo_is_refused_in_every_spelling(self):
         o = self.other
-        for call in (f"pass-respawn -C {o}", f"pass-respawn -C{o}", f"pass-respawn -C={o}",
+        for call in (f"pass-respawn -C {o}", f"pass-respawn -C{o}",
                      f"pass-respawn --compact -C {o}", f"pass-respawn -C {self.proj} -C {o}",
                      f"pass-respawn -C {o} --print", f"pass-respawn -C {o} | cat"):
             with self.subTest(call=call):
@@ -367,6 +367,13 @@ class Rule1PathArguments(Guard):
                 self.assertIn(f"the path argument {o} is in the repository with git dir "
                               f"{self.other_git}, not the project's", reason)
                 self.assertIn("a session launched in that repository", reason)
+
+    def test_pass_respawn_C_equals_is_refused_outright(self):
+        # argparse reads `-C=x` as x on Python 3.12 and as `=x` on older ones.
+        for call in (f"pass-respawn -C={self.lane}", f"pass-respawn -C={self.proj}",
+                     "pass-respawn -C=.", f"pass-respawn --compact -C={self.other}"):
+            with self.subTest(call=call):
+                self.assertIn("use `-C <path>`", self.refused(call, "-C="))
 
     def test_pass_respawn_C_in_the_project_passes(self):
         for call in (f"pass-respawn -C {self.proj}", f"pass-respawn -C {self.proj} --compact",
