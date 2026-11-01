@@ -90,17 +90,15 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - #144 (exam-prep): rules public, evidence private (Hayden, 2026-10-20).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
-  - **Live lanes** (briefs in each record). Merge order: 1 guard-gaps (`fix/guard-design-gaps`,
-    carries the lead's notes; opened 2026-10-31 on Hayden's order: the excluded-guard design gaps
-    below; it installs next, now that #157 released the hold), 2 ports (opened 2026-10-31 on
-    Hayden's order: ports below; reopened 2026-11-01 after its background session ended; parked
-    2026-11-01 at its pushed #155 head, `lane open ports` unparks it at its turn), 3
-    design-audit (`chore/design-decision-audit`, opened 2026-11-01 on Hayden's pick: the
-    design-decision re-evaluation, findings private; it may end with no PR), 4 practices
-    (`feat/practices-auth-secrets`, its next PR; paused by Hayden since 2026-10-24, last so it
-    blocks no install; it conflicts with origin/main on its own, per lane-fixes' trial), 5
-    subagent-wait (`fix/subagent-moved-command`, opened 2026-11-01 on Hayden's pick: the subagent
-    180 s fix below).
+  - **Live lanes** (briefs in each record). Merge order: 1 ports (`feat/lane-ports`, #155,
+    carries the lead's notes; opened 2026-10-31 on Hayden's order: ports below; parked 2026-11-01
+    at its pushed head and unparked the same day for its turn), 2 design-audit
+    (`chore/design-decision-audit`, opened 2026-11-01 on Hayden's pick: the design-decision
+    re-evaluation, findings private; it may end with no PR), 3 subagent-wait
+    (`fix/subagent-moved-command`, opened 2026-11-01 on Hayden's pick: the subagent 180 s fix
+    below), 4 practices (`feat/practices-auth-secrets`, its next PR; paused by Hayden since
+    2026-10-24, last so it blocks no install; it conflicts with origin/main on its own, per
+    lane-fixes' trial).
     Merged and installed from main, all closed: chrome-dup (#151, 2026-10-29: one chrome-devtools
     server, the plugin's; sandbox gap fixes N1 and N3's bun part, `hooks/sandbox-caches.sh`; its
     install changed running sessions' sandbox live, [[cc-sandbox-config-reloads-live]]),
@@ -114,12 +112,21 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     mode, `bin/cache-unlink`; a session started before its install needs a `/pass` for the new
     cache env, and its plugin MCP servers pick up the shim only on restart),
     park (#153, 2026-10-31: `lane park`, a parked state outside the cap; the smoke ran in a
-    throwaway lanes repo, nothing public).
+    throwaway lanes repo, nothing public), guard-gaps (#156, 2026-11-01: the excluded-guard
+    design gaps G-A to G-E; setup sets the global `fetch.recurseSubmodules=false`; a lone
+    excluded call from below its repo top, or from no repo under a writable dir, is refused with
+    "run it from the top"; its replay counted 87 new refusals in about 4,360 past calls).
     #154's install made new refusals live in every session: arithmetic like `$((SECONDS+12))` and
     `git -C <dir> fetch` in a command that would leave the sandbox.
   - Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
 
   Backlog:
+  - **DA15 fix lane: next to open** (high; Hayden's pick, 2026-11-01, via lane design-audit).
+    Private: sandbox-audit FINDINGS, "Design-decision audit, 2026-11", row DA15 (mechanics, probe
+    and fix). Small. Files: `skills/lanes/scripts/lane`, `lanelib.py`, handoff-check, `setup.sh`,
+    the lanes skill's post-merge step and their tests, the same lane CLI files ports changes, so
+    it opens when a slot frees after #155 merges. Until it lands, the lead runs the row's pre-check
+    before each post-merge chain.
   - **Next lane when a slot frees (Hayden's pick):** the serve jail (the lead's recommendation,
     since it closes live private rows), shared lane locks and structured `Keep open` all wait for
     ports PR 1, whose lane CLI files they share.
@@ -160,10 +167,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **A probe of one command lane pass-fixes leaves exempt** (2026-10-29; private: sandbox-audit
     FINDINGS, G5b section, "Fix 4 scope", exemption (b)). It is a paid Codex run. Deferred by
     Hayden (2026-10-29): no Codex subscription now. Reopen when he has one.
-  - **Excluded-guard design gaps** (lane guard-gaps; two high, three medium; lane pass-fixes' review round 3,
-    2026-10-30; Hayden split them out of its PR). Private: sandbox-audit FINDINGS, "Excluded-guard
-    design gaps, 2026-10-30", G-A to G-E, plus a few false-refusal lows. G-A starts with one live
-    probe.
+  - **Excluded-guard follow-ups from #156** (low; lane guard-gaps, 2026-11-01; listed in #156's
+    body): `config_entries` whitespace and line breaks differ from git's; `Machine._chain` and
+    `check_hooks_dir` fold `..` lexically; gh user aliases aren't modelled; LANE_FETCHES doesn't
+    expand a `remotes.origin` group; candidacy could narrow to the lines Claude Code really
+    exempts. Lane-able (`hooks/excluded_guard.py`, `tests/setup/test_excluded_guard.py`).
   - **`lane lock <name> --shared -- <cmd>`** (feature; capella-studio lead, session 6bceec36,
     on Hayden's pick in capella lane checkfix's window, 2026-10-30). Shared holders coexist; an
     exclusive holder waits for all of them, and a queued exclusive waiter blocks new shared ones
@@ -335,8 +343,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Four lanes run plus ports parked, cap full (In flight, Live lanes; state in their
-     records, `lane ls`). Next lane when a slot frees: Hayden's pick (Backlog, first item). Running sessions took
+  0. Four lanes run, cap full (In flight, Live lanes; state in their records, `lane ls`). Next
+     lane when a slot frees: DA15's fix lane (Backlog, first item). Before each post-merge
+     chain, run the pre-check in private FINDINGS row DA15. Since #156's install, a lone
+     excluded call (gh, git push or fetch, lane) runs only from a repo's top. Running sessions took
      #157's cache narrowing live at its install (2026-10-31 14:39 local): a session started
      before it needs a `/pass` before a sandboxed uv, pip, pnpm, node-gyp, bun or Playwright run. Pending with Hayden, outside the lanes: `wsl --shutdown` at a break applies the 18 GB
      WSL cap set in `C:\Users\hayde\.wslconfig` on 2026-10-23 (backup `.wslconfig.bak-20261023`).
