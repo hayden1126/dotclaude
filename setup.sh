@@ -181,7 +181,7 @@ try:
     allow = json.load(open(sys.argv[1]))["sandbox"]["filesystem"]["allowWrite"]
 except Exception:
     sys.exit()
-old = ("~/.npm", "~/.cache/uv", "~/.cache/pip", "~/.cache/pnpm", "~/.cache/node-gyp",
+old = ("~/.npm", "~/.bun/install/cache", "~/.cache/uv", "~/.cache/pip", "~/.cache/pnpm", "~/.cache/node-gyp",
        "~/.cache/ms-playwright", "~/.local/share/uv", "~/.local/share/pnpm")
 for p in (p for p in allow if isinstance(p, str)):
     p = p.rstrip("/") or "/"

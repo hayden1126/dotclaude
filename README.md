@@ -59,59 +59,29 @@ session working in those dirs, since one could swap a dir for an empty one while
 passes. On Windows (git-bash), which has no Bash sandbox, setup skips copy mode.
 
 **Upgrading from an older install.** Before this, the sandbox could write all of `~/.npm`,
-`~/.cache/uv`, `~/.cache/pip`, `~/.cache/pnpm`, `~/.cache/node-gyp`, `~/.cache/ms-playwright`,
+`~/.bun/install/cache`, `~/.cache/uv`, `~/.cache/pip`, `~/.cache/pnpm`, `~/.cache/node-gyp`, `~/.cache/ms-playwright`,
 `~/.local/share/uv/python` and pnpm's store directly, and unsandboxed runs still use what they
-hold, or what was built from it. Setup says so on every run, once the settings it replaced had
-those entries, until you remove the marker it names. The rule: delete each of those dirs and
-every environment built through one, put the installers themselves back from their own sources,
-and only then install the rest fresh with them. In-place reinstalls aren't enough (they keep
-files they don't track and links they don't reset), and an installer that came through one of
-those dirs may itself hold an edit. From a terminal, with no Claude session open (plugin MCP
-servers run from `~/.npm/_npx`, and deleting a live tree breaks them):
-1. Note what to put back: `uv python list --only-installed --python-preference only-managed`
-   (without that flag the list includes system Pythons); `uv tool list --show-with
-   --show-version-specifiers --show-extras --show-python` (for a tool installed from git or a
-   local path, copy its source from `~/.local/share/uv/tools/<tool>/uv-receipt.toml`); `pnpm
-   ls -g`; `npm ls -g --depth=0`; `<python> -m pip list --user --format=freeze` for each
-   Python you have; `pipx list`; pipx's shared dir, `pipx environment --value
-   PIPX_SHARED_LIBS` (older pipx: read it off `pipx environment`; it moves with the pipx
-   version and PIPX_HOME); and how you installed Node, uv, pnpm, pip and pipx.
-2. Delete, by path (not through `uv cache clean`, `pip cache purge` or `pnpm store path`, which
-   clear only the cache now configured, and for pnpm only its current version's folder): `rm
-   -rf ~/.npm ~/.cache/uv ~/.cache/pip ~/.cache/pnpm ~/.cache/node-gyp ~/.cache/ms-playwright
-   ~/.local/share/uv/python ~/.local/share/uv/tools ~/.local/share/pnpm/store
-   ~/.local/share/pnpm/global ~/.local/share/pnpm/.tools <pipx's shared dir>`, and every
-   environment built through those dirs: each project's `.venv`, `venv` and `node_modules`, and
-   tool envs such as `.tox`, `~/.cache/pre-commit`, poetry's and hatch's envs and Jupyter
-   kernels' venvs. Leave pipx's own venvs: `pipx reinstall-all` reads them, then builds each
-   anew, and builds its shared pip fresh once that dir is gone. `~/.npm` holds npm's download
-   cache and the trees npx reuses; `~/.cache/pnpm` pnpm's metadata and the trees `pnpm dlx`
-   reuses; node-gyp's headers reached every native addon npm or pnpm built.
-3. Put the installers back from their own sources, whatever installed them before, so none
-   that came through those dirs runs again: Node (remove its package or nvm version, then
-   install it again, which brings a fresh npm and, through Node 24, corepack); pipx from its
-   distro package (after `<python> -m pip uninstall pipx` if pip installed it); uv from its
-   standalone installer (after `pipx uninstall uv`
-   or `<python> -m pip uninstall uv` if one of those installed it); pnpm from corepack or its
-   own installer (after `npm uninstall -g pnpm` if npm installed it); and pip for a Python
-   whose only pip was a `--user` one (`<python> -m ensurepip --user`, or the distro package).
-4. Remove the old globals with those fresh tools: `npm uninstall -g <each>` but npm itself
-   (with sudo when `npm prefix -g` is system-owned; corepack too where it is an npm global,
-   from Node 25 or an `npm install -g corepack`), and `<python> -m pip uninstall <each>` user
-   package but pip (add `--break-system-packages` where a distro Python refuses, here and in
-   step 5).
-5. Install the rest fresh: npm's and pnpm's globals (`npm install -g`, `pnpm add -g`), `uv
-   python install <the versions>`, `uv tool install` each tool with what step 1 noted, each
-   Python's `--user` packages (`<python> -m pip install --user`), `pipx reinstall-all`, each
-   project's environment (`uv sync`, `pnpm install`, `npm ci`, a new venv) and each tool env
-   above, and Playwright's browsers: `npx playwright@<each project's version> install
-   chromium-headless-shell`.
+hold, or what was built from them. Setup says so on every run, once the settings it replaced had
+those entries, until you remove the marker it names. Checking the caches can't clear them: the
+sandbox could write their checksum files too, so only a rebuild does. The rule, from a terminal
+with no Claude session open (plugin MCP servers run from `~/.npm/_npx`):
+- **Note** what you'll put back (your global packages, uv's Pythons and tools, pipx apps, `--user`
+  packages), then **delete those dirs by path**: `rm -rf ~/.npm ~/.bun/install/cache ~/.cache/uv ~/.cache/pip
+  ~/.cache/pnpm ~/.cache/node-gyp ~/.cache/ms-playwright ~/.local/share/uv/python
+  ~/.local/share/pnpm/store`. Not `uv cache clean`, `pip cache purge` or `pnpm store path`:
+  they clear only the cache now configured, and pnpm's only its current version's folder.
+- **Reinstall the installers from their own sources first** (Node with its npm, uv, pnpm, pip,
+  pipx), and remove any copy of one that came through those dirs: an npm upgraded with `npm
+  install -g npm`, a pip or uv installed with `pip install --user`, a pnpm or corepack installed
+  by npm or by itself. A tool built through those dirs runs whatever was planted there.
+- **Delete, then rebuild, everything built through them**: uv's tool envs, npm's, pnpm's, bun's
+  and pip's global and `--user` packages, pipx's shared pip, each project's `.venv`, `venv` and
+  `node_modules`, and tool envs such as `.tox`, pre-commit's, poetry's and Jupyter kernels'.
+  A reinstall over an old one isn't enough: it keeps files it doesn't track.
 
-A project you'd rather not rebuild can be un-linked instead (`cache-unlink --apply <dir>`): that
-ends its links into the caches but keeps the bytes, so it can't undo an edit made before.
-
-Auditing the caches against their own checksums is the alternative; HAYPC's were audited on
-2026-10-31 and were clean.
+This can't list every tool on every machine; the rule covers the rest. A project
+you'd rather not rebuild can be un-linked instead (`cache-unlink --apply <dir>`), which ends its
+links into the caches but keeps the bytes, so it can't undo an edit made before.
 
 Each run replaces that copy, so a value added to a key the baseline sets is lost. Settings that belong
 to one machine, such as hooks for its own scripts or `sandbox.excludedCommands` for its own tools, go
