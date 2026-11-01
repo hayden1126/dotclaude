@@ -916,13 +916,15 @@ def check_server_repo(m, env, full, project, arg, url=None, link=None, missing=N
     session could create it (missing(tried, bad)): a repo planted there would win."""
     full = full.rstrip("/") or "/"
     for suffix in ("", ".git"):
-        found = full + suffix
-        if not os.path.lexists(found):
+        opened = full + suffix
+        if not os.path.lexists(opened):
             continue
-        found = m.chain(found, "rule1", link, final_dir=False)
+        found = m.chain(opened, "rule1", link, final_dir=False)
         if os.path.isfile(found):
             try:
-                found = read_gitfile(found)
+                # A relative gitdir is read from the dir of the path git opened, not from the
+                # symlink target's.
+                found = read_gitfile(found, os.path.dirname(opened))
             except Exception:
                 continue  # no gitfile (a bundle, say): git reads no config from it
         if os.path.lexists(found):
@@ -1129,13 +1131,15 @@ def gitdir_info(gitdir, at_root=False):
     return gitdir, common
 
 
-def read_gitfile(path):
+def read_gitfile(path, base=None):
+    """The gitdir a gitfile names, a relative one joined to `base` (by default the gitfile's own
+    dir): git joins it to the dir of the path it opened, a symlink's dir and not its target's."""
     with open(path) as f:
         line = f.readline().strip()
     if not line.startswith("gitdir:"):
         raise ValueError(f"invalid gitfile {path}")
     target = line[len("gitdir:"):].strip()
-    return os.path.join(os.path.dirname(path), target)
+    return os.path.join(os.path.dirname(path) if base is None else base, target)
 
 
 def worktree_top(top, proj):

@@ -661,6 +661,18 @@ class Rule1PathArguments(Guard):
         gitfile = self.write(os.path.join(self.proj, "gf"), f"gitdir: {self.proj}/.git\n")
         self.refused("git push -q gf HEAD", gitfile)
 
+    def test_a_relative_gitdir_through_a_symlink_resolves_from_the_link_dir(self):
+        # git reads a gitfile's relative gitdir from the dir of the path it opened, not from the
+        # symlink target's dir.
+        safe = self.protect(self.mkdir("safe"))
+        gf = self.write(os.path.join(safe, "inner", "gf"), "gitdir: ../x\n")
+        os.symlink(gf, os.path.join(safe, "link"))
+        os.symlink(os.path.join(self.proj, ".git"), os.path.join(safe, "x"))  # from the target
+        foreign = os.path.join(self.tmp, "x")  # from the link's dir: what git opens
+        self.git("init", "-q", "--bare", foreign, cwd=self.tmp)
+        self.assertEqual(self.git("ls-remote", os.path.join(safe, "link"), cwd=self.tmp), "")
+        self.assertIn("not the project's", self.refused(f"git push -q {safe}/link HEAD", foreign))
+
     def test_a_gitfile_on_a_judged_path_is_judged_along_its_chain(self):
         # A <p>/.git gitfile naming the project's gitdir, in a dir a session can write, could be
         # repointed at another repository after the check. Only the project's top and its lanes'
