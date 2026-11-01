@@ -337,7 +337,7 @@ def stopped_note(who: str, session: dict) -> str:
 
 
 def fetch(repo: Repo) -> bool:
-    p = git(["fetch", "--quiet", "origin"], repo.toplevel)
+    p = git(["fetch", "--quiet", "--no-recurse-submodules", "origin"], repo.toplevel)
     if p.returncode != 0:
         line = (p.stderr.strip().splitlines() or ["unknown error"])[-1]
         warn(f"fetch skipped ({line}); using the local remote-tracking refs")
@@ -397,7 +397,7 @@ def fetched_base(repo: Repo, cfg: dict) -> str:
     shas = [f[0] for f in map(str.split, p.stdout.splitlines()) if len(f) == 2 and f[1] == head]
     if len(shas) != 1 or not lanelib.SHA_RE.fullmatch(shas[0]):
         raise LaneError(f"the remote has no {head} for base {remote}/{branch}")
-    p = git(["fetch", "--quiet", remote], repo.toplevel)
+    p = git(["fetch", "--quiet", "--no-recurse-submodules", remote], repo.toplevel)
     if p.returncode != 0:
         raise failed("fetch", p)
     if rev(repo, shas[0]) != shas[0]:
@@ -4450,7 +4450,7 @@ def remote_tip(repo: Repo, remote: str, branch: str, lane_id: str) -> str | None
         raise LaneError(f"{remote}'s answer for {head} is no single commit, so lane {lane_id}'s "
                         "push can't be checked")
     if rev(repo, shas[0]) != shas[0]:
-        p = git(["fetch", "--quiet", remote], repo.toplevel)
+        p = git(["fetch", "--quiet", "--no-recurse-submodules", remote], repo.toplevel)
         if p.returncode != 0:
             line = (p.stderr.strip().splitlines() or ["unknown error"])[-1]
             raise LaneError(shown(f"can't fetch {remote} ({line}), so lane {lane_id}'s push "
