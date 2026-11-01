@@ -8,7 +8,7 @@ import tempfile
 import time
 import unittest
 
-from _paths import HOOKS, SCRIPTS
+from _paths import HOOKS, REPO, SCRIPTS
 
 SCRIPT = os.path.join(SCRIPTS, "report-check")
 SHIM = os.path.join(HOOKS, "report-check.sh")
@@ -265,11 +265,33 @@ class WaitCheck(unittest.TestCase):
             self.transcript([entry], aid=aid)
             self.assertIn(task, self.reason(self.run_hook(self.handback(aid=aid))), task)
 
+    def meta(self, aid="a1", **fields):
+        with open(os.path.join(self.subagents, f"agent-{aid}.meta.json"), "w") as f:
+            json.dump(dict({"agentType": "smoke-writer"}, **fields), f)
+
     def test_a_stop_while_it_runs_is_blocked(self):
         self.incident()
+        self.meta()
         out = self.run_hook(self.stop("waiting"))
         self.assertEqual(out["decision"], "block")
         self.assertIn("b5cavw0cz", out["reason"])
+
+    def test_a_stop_with_no_meta_file_is_not_wait_checked(self):
+        # a plain subagent's meta.json exists by SubagentStop; a teammate's stop fires per
+        # message, and one whose meta is missing or torn can't be told apart (review round 2)
+        self.incident()
+        self.assertIsNone(self.run_hook(self.stop("per-message reply")))
+
+    def test_the_brief_and_docs_quote_the_wait_command_as_the_hook_gives_it(self):
+        # review round 2: BRIEF.md wrapped it inside its single-quoted sh -c, which breaks
+        # when pasted; each copy must be the hook's command on one line
+        self.incident()
+        reason = self.reason(self.run_hook(self.handback()))
+        path = os.path.join(self.tasks, "b5cavw0cz.output")
+        command = re.search(r"`(timeout [^`]+)`", reason).group(1).replace(f'"{path}"', '"<file>"')
+        for doc in ("skills/delegation/BRIEF.md", "docs/delegation.md"):
+            with open(os.path.join(REPO, doc)) as f:
+                self.assertIn(command, f.read(), doc)
 
     def test_an_empty_stop_message_is_still_skipped(self):
         # auto mode's second stop, after the handback the PreToolUse check already saw
@@ -282,11 +304,35 @@ class WaitCheck(unittest.TestCase):
         self.assertIn("b16qirr06", self.reason(self.run_hook(self.handback())))
 
     def test_a_finished_command_passes(self):
-        for tail in ("waited\n\n[exited with code 0]", "beta\n\n[exited with code 3]",
-                     "\n[killed]"):
+        # an exit line with its notice (the agent has seen the result), or [killed] (TaskStop,
+        # or killed at a final response; neither leaves a notice)
+        for tail, notice in (("waited\n\n[exited with code 0]", True),
+                             ("beta\n\n[exited with code 3]", True), ("\n[killed]\n", False)):
             path = self.output("b1", tail)
-            self.transcript([moved_result("b1", path)])
+            self.transcript([moved_result("b1", path)] + ([mid_turn_notice("b1")] if notice else []))
             self.assertIsNone(self.run_hook(self.handback()), tail)
+
+    def test_an_exit_line_the_agent_has_not_seen_is_refused(self):
+        # review round 2: the command exits while the agent writes its "not written" report;
+        # its notice comes only with the agent's next tool result, so none means unseen
+        path = self.output("b1", "waited\n\n[exited with code 0]")
+        self.transcript([moved_result("b1", path)])
+        self.assertIn("b1", self.reason(self.run_hook(self.handback())))
+
+    def test_a_launch_line_after_the_commands_output_counts(self):
+        # 2.1.316 joins a Bash result as stdout, stderr, then the background note
+        path = self.output("bout")
+        entry = moved_result("bout", path)
+        body = entry["message"]["content"][0]
+        body["content"] = "partial output\nmore\n" + body["content"]
+        self.transcript([entry])
+        self.assertIn("bout", self.reason(self.run_hook(self.handback())))
+
+    def test_a_structured_task_id_counts_without_the_text(self):
+        entry = moved_result("bstruct", self.output("bstruct"))
+        entry["message"]["content"][0]["content"] = "(output elided)"
+        self.transcript([entry])
+        self.assertIn("bstruct", self.reason(self.run_hook(self.handback())))
 
     def test_a_completion_notice_passes(self):
         for notice in (mid_turn_notice("b1"), mid_turn_notice("b1", "failed"),
@@ -308,29 +354,37 @@ class WaitCheck(unittest.TestCase):
         self.assertIn("time.sleep(45)", reason)
         # a foreground call in the same batch too (review round 1): one moved at 180 s has the
         # same lag, and its result is unseen by the report either way
-        self.transcript([use("toolu_fg", command="ls -la")])
-        self.assertIn("ls -la", self.reason(self.run_hook(self.handback())))
-        # once its result lands, the launch line decides
+        self.transcript([use("toolu_fg", command="ls -la")], aid="g2")
+        self.assertIn("ls -la", self.reason(self.run_hook(self.handback(aid="g2"))))
+        # once its result lands, the launch decides, and its notice ends it
         path = self.output("b9", "x\n[exited with code 0]")
         self.transcript([use("toolu_b9", command=cmd, run_in_background=True),
                          dict(launched_result("b9", path), message={"role": "user", "content": [
                              dict(launched_result("b9", path)["message"]["content"][0],
-                                  tool_use_id="toolu_b9")]})])
-        self.assertIsNone(self.run_hook(self.handback()))
+                                  tool_use_id="toolu_b9")]}), mid_turn_notice("b9")], aid="g3")
+        self.assertIsNone(self.run_hook(self.handback(aid="g3")))
 
     def test_a_forks_inherited_history_is_not_its_own(self):
-        # a fork's transcript holds the parent's tail before <fork-boilerplate> (review round 1)
+        # a fork's transcript opens with a fork-context-ref entry, then the parent's tail, then
+        # <fork-boilerplate> (review round 1; real fork transcripts, 2.1.316)
+        ref = {"type": "fork-context-ref", "agentId": "a1", "parentSessionId": "s0"}
         path = self.output("blead")
         boundary = {"type": "user", "message": {"role": "user", "content": [
             {"type": "text", "text": "<fork-boilerplate>\nYou are a worker fork. The transcript "
                                      "above is the parent's history</fork-boilerplate>"}]}}
-        self.transcript([moved_result("blead", path), boundary])
+        self.transcript([ref, moved_result("blead", path), boundary])
         self.assertIsNone(self.run_hook(self.handback()))
         mine = self.output("bmine")
-        self.transcript([moved_result("blead", path), boundary, moved_result("bmine", mine)])
+        self.transcript([ref, moved_result("blead", path), boundary, moved_result("bmine", mine)])
         reason = self.reason(self.run_hook(self.handback()))
         self.assertIn("bmine", reason)
         self.assertNotIn("blead", reason)
+        # review round 2: only a fork's first boundary counts, and a quoted marker in any
+        # other transcript resets nothing
+        self.transcript([ref, boundary, moved_result("bmine", mine), boundary], aid="f2")
+        self.assertIn("bmine", self.reason(self.run_hook(self.handback(aid="f2"))))
+        self.transcript([moved_result("bmine", mine), boundary], aid="f3")
+        self.assertIn("bmine", self.reason(self.run_hook(self.handback(aid="f3"))))
 
     def test_a_launch_older_than_any_background_limit_has_ended(self):
         # Claude Code stops a background command within 2 hours; one whose exit line never came
@@ -373,7 +427,9 @@ class WaitCheck(unittest.TestCase):
         repo = os.path.join(self.tmp.name, "repo")
         os.makedirs(repo)
         subprocess.run(["git", "init", "-q", repo], check=True)
-        for atype in ("researcher", "general-purpose"):
+        # a writer's root is its worktree, from its meta.json
+        self.meta("ap", worktreePath=repo)
+        for atype in ("researcher", "general-purpose", "writer"):
             p = subprocess.run(
                 ["python3", os.path.join(SCRIPTS, "subagent-policy")], capture_output=True,
                 text=True, env=self.env, input=json.dumps({
@@ -385,7 +441,8 @@ class WaitCheck(unittest.TestCase):
 
     def test_only_the_unfinished_ones_are_named(self):
         done, running = self.output("bdone", "x\n[exited with code 0]"), self.output("brun")
-        self.transcript([moved_result("bdone", done), launched_result("brun", running)])
+        self.transcript([moved_result("bdone", done), mid_turn_notice("bdone"),
+                         launched_result("brun", running)])
         reason = self.reason(self.run_hook(self.handback()))
         self.assertIn("brun", reason)
         self.assertNotIn("bdone", reason)
@@ -426,11 +483,13 @@ class WaitCheck(unittest.TestCase):
         # the wait is over the cap's first refusal; a schema miss takes the second
         with open(path, "w") as f:
             f.write("waited\n\n[exited with code 0]")
+        self.transcript([moved_result("b5cavw0cz", path), mid_turn_notice("b5cavw0cz")])
         reason = self.reason(self.run_hook(self.handback("no json", atype="Explore")))
         self.assertIn("attempt 2 of 3", reason)
         self.assertIn("report contract", reason)
         with open(path, "w") as f:
             f.write("")
+        self.transcript([moved_result("b5cavw0cz", path)])
         out = self.run_hook(self.handback("third try", atype="Explore"))
         hso = out["hookSpecificOutput"]
         self.assertEqual(hso["permissionDecision"], "allow")
@@ -444,6 +503,7 @@ class WaitCheck(unittest.TestCase):
         self.reason(self.run_hook(self.handback()))
         with open(path, "w") as f:
             f.write("waited\n\n[exited with code 0]")
+        self.transcript([moved_result("b5cavw0cz", path), mid_turn_notice("b5cavw0cz")])
         self.assertIsNone(self.run_hook(self.handback()))
         self.transcript([moved_result("b2", self.output("b2"))])
         self.assertIn("attempt 1 of 3", self.reason(self.run_hook(self.handback())))

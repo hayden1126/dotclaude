@@ -1524,15 +1524,22 @@ of its tool results starts with one of Claude Code's background lines: `Command 
 background with ID: X` (`run_in_background`), `Command was moved to the background (ID: X)` (the
 cap, or a queued message), `Command did not complete within its Ns timeout and was moved to the
 background (ID: X)`, or `Command was manually backgrounded by user with ID: X` (Ctrl+B). Each
-names the output file. It has ended when a task notification for it is in that transcript, or its
-output file ends with `[exited with code N]` or `[killed]`, or when its launch is older than any
-background command can run (2 hours, plus 10 minutes of slack), which covers a Claude Code
-process that died before writing either. A Bash call whose result isn't in the transcript yet
+names the output file; a launch with only `toolUseResult.backgroundTaskId` counts too. The note
+may follow the command's own output, since a Bash result is its stdout, its stderr, then the
+note. It has ended when a task notification for it is in that transcript, when its output file
+ends with `[killed]` (a TaskStop, or the kill at a final response, neither of which leaves a
+notice), or when its launch is older than any background command can run (2 hours, plus 10
+minutes of slack), which covers a Claude Code process that died first. An `[exited with code
+N]` line alone isn't enough (review round 2): a mid-turn notice arrives with the agent's next
+tool result, so an exit line without one came after the agent last looked, and the report it is
+sending may be the incident's "not written". A Bash call whose result isn't in the transcript yet
 counts too, named by its command: in the second live `early` run the agent sent the launch and
 the handback in one message, and the launch's result was written after the handback's hook read
 the transcript (the calls themselves ran in order). That holds for a foreground call in the same
 message, which may have been moved, and whose result the report hasn't seen either way. In a
-fork, only what follows its inherited history (the `<fork-boilerplate>` entry) counts. A report
+fork (a transcript that opens with a `fork-context-ref` entry), only what follows its first
+`<fork-boilerplate>` entry counts. A SubagentStop with no meta.json isn't wait-checked: a plain
+subagent's exists by then, and the stop may be a teammate's per-message one. A report
 while one hasn't ended is sent back, at the handback (auto mode) or at SubagentStop (other
 modes), naming the command and its output file and saying how to wait.
 
@@ -1540,14 +1547,19 @@ modes), naming the command and its output file and saying how to wait.
 <file>`) refused by Claude Code itself: it blocks a Bash call whose first part is a bare `sleep`
 of 25 s or more ("Do not chain shorter sleeps"). The agent then started a Monitor and ended its
 turn, which only drew the hand-back nudge, and it judged the command dead from a sandboxed `ps`
-that can't see it. So the refusal now gives one bounded foreground call, `timeout 110 sh -c
-'until tail -n 1 "<file>" | grep -qE "^\[(exited with code|killed)"; do sleep 2; done'`, to
-repeat until the file ends, and says to judge by the file, not `ps`, and not to end the turn on a
-Monitor. The bound stays under the Bash tool's 2-minute default timeout, so the wait isn't moved
-to the background itself (review round 1). Claude Code's own background note says the same
-("wait with one foreground shell command that blocks until the output file shows what you
-need"). The policy allows the call for researcher and general-purpose (a test runs it through
-`subagent-policy`).
+that can't see it. So the refusal now gives one bounded foreground call to repeat until the file
+ends:
+
+```
+timeout 110 sh -c 'until tail -n 2 "<file>" | grep -qE "^\[(exited with code|killed)"; do sleep 2; done'; tail -n 3 "<file>"
+```
+
+It also says to judge by the file, not `ps`, and not to end the turn on a Monitor. The bound
+stays under the Bash tool's 2-minute default timeout, so the wait isn't moved to the background
+itself (review round 1). Claude Code's own background note says the same ("wait with one
+foreground shell command that blocks until the output file shows what you need"). The policy
+allows the call for researcher, general-purpose and writer, and BRIEF.md and this page quote it as
+the hook gives it (tests in `test_report_check.py`).
 
 **Why every subagent.** The schema check covers our four roles because only they end with the
 JSON contract. A report that misses a running command's result misleads the lead whatever the

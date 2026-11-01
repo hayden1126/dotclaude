@@ -914,7 +914,7 @@ def run_codex(keep, cases):
 
 EARLY_SLEEP_S = 45
 NOTE_MARK = "[report-check] Note for the caller"
-LAUNCH_ID_RE = re.compile(r"Command running in background with ID: ([A-Za-z0-9_-]+)")
+LAUNCH_ID_RE = re.compile(r"Command running in background with ID: ([A-Za-z0-9]+)")
 
 
 def early(root, env):
