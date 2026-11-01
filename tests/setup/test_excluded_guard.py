@@ -1296,6 +1296,34 @@ class SubmoduleRecursion(Guard):
                 self.assertIn("submodule.recurse", self.denied(call, "rule1"))
         self.allowed("git pull --no-recurse-submodules")
 
+    def test_push_needs_push_recursion_off(self):
+        # git push reads push.recurseSubmodules and submodule.recurse, the last one wins, and
+        # unset is off (SubmoduleRecursionMatchesGit). gh pr create runs git push.
+        pushes = ("git push", "git push origin main", "gh pr create --fill")
+        for call in pushes:
+            with self.subTest(call=call):
+                self.allowed(call)
+        push_on = "[push]\n\trecurseSubmodules = {}\n"
+        for config in (push_on.format("check"), push_on.format("on-demand"),
+                       push_on.format("only"), "[submodule]\n\trecurse = true\n",
+                       "[submodule]\n\trecurse\n",
+                       push_on.format("no") + "[submodule]\n\trecurse = yes\n",
+                       "[submodule]\n\trecurse = false\n" + push_on.format("check")):
+            self.write(self.gitconfig, config)
+            for call in pushes:
+                with self.subTest(config=config, call=call):
+                    self.assertIn("push", self.denied(call, "rule1"))
+            for call in ("git push origin --no-recurse-submodules main",
+                         "git push origin --recurse-submodules=no main"):
+                with self.subTest(config=config, call=call):
+                    self.allowed(call)
+        for config in (push_on.format("no"), "[submodule]\n\trecurse = true\n" + push_on.format("0"),
+                       push_on.format("check") + "[submodule]\n\trecurse = false\n"):
+            self.write(self.gitconfig, config)
+            for call in pushes:
+                with self.subTest(config=config, call=call):
+                    self.allowed(call)
+
     def test_gh_pr_checkout_with_recursion_is_refused_outright(self):
         self.write(self.gitconfig, RECURSE_OFF)
         # gh's flag parser (pflag) takes a bool flag's value glued on after `=`, as Go's
@@ -1438,6 +1466,53 @@ class SubmoduleRecursionMatchesGit(Guard):
                 if "on-demand" in glob_text:  # on-demand fetches only changed submodules
                     self.assertTrue(on_now)
                     continue
+                self.assertEqual(bool(on_now), ran, on_now)
+
+    def test_push_agrees_with_git(self):
+        # A push of a commit that moves a submodule runs git in it (GIT_TRACE shows the
+        # run_command with `cd sub`) exactly when the guard counts push recursion on.
+        guard = load_guard()
+        glob_cfg = os.path.join(self.tmp, "g", "config")
+        self.write(glob_cfg, "[protocol]\n\tallow = always\n")
+        env = {"PATH": "/usr/bin:/bin", "HOME": self.home, "GIT_CONFIG_NOSYSTEM": "1",
+               "GIT_CONFIG_GLOBAL": glob_cfg, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+
+        def run(*args, cwd, extra=None):
+            return subprocess.run(["git", *args], cwd=cwd, env=dict(env, **(extra or {})),
+                                  capture_output=True, text=True)
+        sub, seed, clone = (os.path.join(self.tmp, n) for n in ("s", "seed", "c"))
+        run("init", "-q", "-b", "main", "--bare", sub, cwd=self.tmp)
+        run("init", "-q", seed, cwd=self.tmp)
+        run("commit", "-q", "--allow-empty", "-m", "s", cwd=seed)
+        run("push", "-q", sub, "HEAD:refs/heads/main", cwd=seed)
+        run("init", "-q", clone, cwd=self.tmp)
+        run("commit", "-q", "--allow-empty", "-m", "c", cwd=clone)
+        self.assertEqual(run("submodule", "add", "-q", sub, "sub", cwd=clone).returncode, 0)
+        run("commit", "-q", "-m", "add", cwd=clone)
+        run("commit", "-q", "--allow-empty", "-m", "new", cwd=os.path.join(clone, "sub"))
+        run("commit", "-q", "-am", "bump", cwd=clone)
+        local = os.path.join(clone, ".git", "config")
+        base_local = slurp(local)
+        push, recurse = "[push]\n\trecurseSubmodules = {}\n", "[submodule]\n\trecurse = {}\n"
+        layouts = [("", "")] + [(push.format(v), "") for v in (
+            "check", "on-demand", "only", "no", "false", "0", "off", "", "NO")] + [
+            (recurse.format(v), "") for v in ("true", "false", "yes", "1", "")] + [
+            (recurse.format("true") + push.format("no"), ""),
+            (push.format("no") + recurse.format("true"), ""),
+            (push.format("check") + recurse.format("false"), ""),
+            (recurse.format("false") + push.format("check"), ""),
+            (push.format("no"), recurse.format("true")), (recurse.format("true"), push.format("no"))]
+        for i, (glob_text, local_text) in enumerate(layouts):
+            with self.subTest(glob=glob_text, local=local_text):
+                self.write(glob_cfg, "[protocol]\n\tallow = always\n" + glob_text)
+                self.write(local, base_local + local_text)
+                bare = os.path.join(self.tmp, f"b{i}")
+                run("init", "-q", "--bare", bare, cwd=self.tmp)
+                p = run("push", bare, "HEAD:refs/heads/main", cwd=clone, extra={"GIT_TRACE": "1"})
+                ran = any("run_command" in line and "cd sub" in line
+                          for line in p.stderr.splitlines())
+                on_now = guard.recursion_on(env, guard.discover(clone, env), self.home, "push")
                 self.assertEqual(bool(on_now), ran, on_now)
 
 

@@ -1474,12 +1474,18 @@ def check_legacy_remotes(common):
 
 # git fetch (and pull, through it) reads both keys into one setting, so the later one wins.
 RECURSE_KEYS = {"fetch.recursesubmodules", "submodule.recurse"}
+# git push reads these two the same way (probed with git 2.43: SubmoduleRecursionMatchesGit),
+# unset is off, and check, on-demand and only all run git in each submodule.
+PUSH_KEYS = {"push.recursesubmodules", "submodule.recurse"}
 GIT_FALSE = {"false", "no", "off", "0", ""}
 RECURSE_FIX = ("Run `git config --global fetch.recurseSubmodules false` (dotclaude's ./setup.sh "
                "sets it)")
-# gh forms that run git fetch or pull inside (gh 2.89): (first, second word, what git runs).
+PUSH_FIX = ("Unset push.recurseSubmodules and submodule.recurse, or set the one git reads last "
+            "false (`git config --global push.recurseSubmodules false` when the global config "
+            "sets it)")
+# gh forms that run git fetch, pull or push inside (gh 2.89): (first, second word, what git runs).
 GH_GIT_FORMS = {("pr", "checkout"): "fetch", ("pr", "merge"): "pull",
-                ("issue", "develop"): "pull"}
+                ("issue", "develop"): "pull", ("pr", "create"): "push"}
 # The values Go's strconv.ParseBool reads as false, as gh's flag parser takes `--flag=v`. Only
 # `--recurse-submodules=<one of these>` leaves gh pr checkout's submodule update off; any other
 # value is true or an error.
@@ -1536,7 +1542,7 @@ def config_occurrences(env, repo, home):
         if section.lower() in ("include", "includeif") and name.lower() == "path":
             if os.path.isabs(value):  # git refuses a relative one from the command line
                 out += file_occurrences(value, section.lower() == "include" and not sub, home, 1)
-        elif not sub and f"{section}.{name}".lower() in RECURSE_KEYS:
+        elif not sub and f"{section}.{name}".lower() in RECURSE_KEYS | PUSH_KEYS:
             out.append((f"{section}.{name}".lower(), value, True))
     return out
 
@@ -1552,7 +1558,7 @@ def file_occurrences(path, certain, home, depth):
                 target = os.path.join(os.path.dirname(path), expand(value, home))
                 out += file_occurrences(target, certain and section == "include" and not sub,
                                         home, depth + 1)
-        elif not sub and f"{section}.{key}" in RECURSE_KEYS:
+        elif not sub and f"{section}.{key}" in RECURSE_KEYS | PUSH_KEYS:
             out.append((f"{section}.{key}", value, certain))
     return out
 
@@ -1568,11 +1574,17 @@ def config_false(occurrences, keys, unset):
     return off
 
 
-def recursion_on(env, repo, home, pull=False):
-    """What turns submodule recursion on for a git fetch (or, with pull, a pull) from `repo`:
-    [] when the effective config surely has it off. pull also updates each submodule after its
-    merge when submodule.recurse alone is on."""
+def recursion_on(env, repo, home, sub="fetch"):
+    """What turns submodule recursion on for a git fetch, pull or push (sub) from `repo`: []
+    when the effective config surely has it off. pull also updates each submodule after its
+    merge when submodule.recurse alone is on. push reads PUSH_KEYS alone, unset counting off."""
     occ = config_occurrences(env, repo, home)
+    pull = sub == "pull"
+    if sub == "push":
+        last = [k for k, _, _ in occ if k in PUSH_KEYS][-1:]
+        name = {"submodule.recurse": "submodule.recurse"}.get(last[0] if last else "",
+                                                              "push.recurseSubmodules")
+        return [] if config_false(occ, PUSH_KEYS, unset=True) else [name]
     on = []
     if not config_false(occ, RECURSE_KEYS, unset=False):
         on.append("fetch.recurseSubmodules")
@@ -1582,7 +1594,7 @@ def recursion_on(env, repo, home, pull=False):
 
 
 def recursion_flag(sub, args):
-    """Whether git fetch or pull args turn recursion off on the command line: the last
+    """Whether git fetch, pull or push args turn recursion off on the command line: the last
     --[no-]recurse-submodules option, as git_argv reads them (any prefix git takes), is
     --no-recurse-submodules or has a false value. Args git_argv refuses turn nothing off."""
     try:
@@ -1599,15 +1611,16 @@ def recursion_flag(sub, args):
 
 
 def check_recursion(m, env, cwd, words):
-    """G-B for one call: git fetch or pull, or a gh form that runs one, recurses into each
+    """G-B for one call: git fetch, pull or push, or a gh form that runs one, recurses into each
     submodule's own git dir, which a sandboxed session can write. Refuse unless the git call
     carries --no-recurse-submodules or the effective config has recursion off."""
     head = os.path.basename(words[0])
-    if head == "git" and words[1:2] in (["fetch"], ["pull"]):
+    if head == "git" and words[1:2] in (["fetch"], ["pull"], ["push"]):
         sub, name = words[1], f"git {words[1]}"
         if recursion_flag(sub, words[2:]):
             return
-        fix = (f"{RECURSE_FIX}, or add `--no-recurse-submodules` right after `{sub}`"
+        fix = (f"{PUSH_FIX if sub == 'push' else RECURSE_FIX}, or add `--no-recurse-submodules` "
+               f"right after `{sub}`"
                + (" (that also skips the submodule update)" if sub == "pull" else ""))
     elif head == "gh":
         positional, skip = [], False
@@ -1628,10 +1641,10 @@ def check_recursion(m, env, cwd, words):
             raise Refusal("rule1", recurse[0], f"`gh pr checkout {recurse[0]}` updates each "
                           "submodule, running git in its own git dir, which a sandboxed session "
                           "can write. Run it without --recurse-submodules.")
-        fix = f"{RECURSE_FIX}; gh passes git no flag to turn it off"
+        fix = f"{PUSH_FIX if sub == 'push' else RECURSE_FIX}; gh passes git no flag to turn it off"
     else:
         return
-    on = recursion_on(env, discover(cwd, env), m.home, pull=sub == "pull")
+    on = recursion_on(env, discover(cwd, env), m.home, sub)
     if on:
         raise Refusal("rule1", on[0], f"`{name}` runs git {sub} with submodule recursion on in "
                       f"the effective git config ({' and '.join(on)}), which runs git in each "
