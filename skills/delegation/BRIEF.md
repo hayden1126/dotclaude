@@ -41,8 +41,12 @@ Never work around a denial. Finish the rest of the task if you can, and report `
   role's numbers are in policy.toml `[deadline]`). If the stop comes, hand back `partial`,
   naming what is done and what is left.
 - Report length: <e.g. "at most 400 words before the JSON block">
-- Don't end your turn while a background command you started is still running: nothing wakes
-  you when it finishes. Run it in the foreground, or wait on its output before you report.
+- Don't report or end your turn while a background command you started is still running:
+  nothing wakes you when it finishes, and a `run_in_background` command stops with your report.
+  A foreground Bash call that outlives its timeout (as little as 3 minutes) is moved to the
+  background too. Wait with one foreground call under 3 minutes, repeated until the output
+  file ends with `[exited with code N]`: `timeout 170 sh -c 'until tail -n 1 "<file>" | grep
+  -qE "^\[(exited with code|killed)"; do sleep 2; done'`. Judge by that file, not `ps`.
 
 ## Verification (writers)
 - Run: `<command>`

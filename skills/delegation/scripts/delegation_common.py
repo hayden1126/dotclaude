@@ -489,6 +489,37 @@ def validate_report(obj, schema=None):
     return errs
 
 
+TASK_RE = re.compile(r"<task-id>([^<]+)</task-id>")
+
+
+def text_of(content):
+    """A message's text: the string itself, or its text blocks joined."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(c["text"] for c in content
+                       if isinstance(c, dict) and isinstance(c.get("text"), str))
+    return ""
+
+
+def is_task(origin):
+    return isinstance(origin, dict) and origin.get("kind") == "task-notification"
+
+
+def notice_text(e):
+    """A transcript entry's task-notification text, or None when it isn't one. Two shapes
+    count: a user entry with a task-notification origin (between turns) and an attachment entry
+    whose attachment has one (mid-turn, a queued_command). Its rendered copies, and the
+    queue-operation entry, don't."""
+    attachment = e.get("attachment") if isinstance(e.get("attachment"), dict) else {}
+    if e.get("type") == "user" and is_task(e.get("origin")):
+        msg = e.get("message")
+        return text_of(msg.get("content") if isinstance(msg, dict) else None)
+    if e.get("type") == "attachment" and is_task(attachment.get("origin")):
+        return attachment.get("prompt") if isinstance(attachment.get("prompt"), str) else ""
+    return None
+
+
 FENCE_RE = re.compile(r"```[ \t]*(?:json)?[ \t]*\n\s*(\{.*?\})\s*\n[ \t]*```", re.S | re.I)
 
 
@@ -517,19 +548,26 @@ def report_check(text):
     return (not errs), status, (errs[0] if errs else None)
 
 
-def agent_meta(data, strict=False):
-    """The agent's meta.json, which sits beside its transcript under the parent session's
-    subagents/ directory, or {} when there is none or it is empty (a plain subagent's doesn't
-    exist yet at SubagentStart). One that exists but doesn't read as a JSON object reads as {}
-    too, unless `strict` (the policy's Analyzer): then ValueError, since its worktreePath
-    confines a writer."""
+def agent_file(data, ext):
+    """`agent-<id><ext>` under the parent session's subagents/ directory, which sits beside
+    the parent's transcript (the hook input's transcript_path), or None without both."""
     tp, aid = data.get("transcript_path") or "", norm_id(data.get("agent_id"))
     if not tp or not aid:
-        return {}
+        return None
     base = tp[:-len(".jsonl")] if tp.endswith(".jsonl") else tp
+    return os.path.join(base, "subagents", f"agent-{aid}{ext}")
+
+
+def agent_meta(data, strict=False):
+    """The agent's meta.json, beside its transcript, or {} when there is none or it is empty
+    (a plain subagent's doesn't exist yet at SubagentStart). One that exists but doesn't read
+    as a JSON object reads as {} too, unless `strict` (the policy's Analyzer): then ValueError,
+    since its worktreePath confines a writer."""
+    path = agent_file(data, ".meta.json")
+    if path is None:
+        return {}
     try:
-        return read_object(os.path.join(base, "subagents", f"agent-{aid}.meta.json"),
-                           "agent meta file")
+        return read_object(path, "agent meta file")
     except ValueError:
         if strict:
             raise

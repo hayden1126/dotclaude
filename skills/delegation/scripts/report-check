@@ -1,29 +1,44 @@
 #!/usr/bin/env python3
-"""report-check: send a delegated role's malformed report back, at most twice.
+"""report-check: send a subagent's report back, at most twice, when it comes too early or
+doesn't match the report contract.
 
   PreToolUse(SubagentHandback)  auto mode: the report is tool_input.message
   SubagentStop                  other modes: the report is last_assistant_message
 
+Two checks share one counter:
+- Wait (every subagent): a report while one of the agent's own background commands still
+  runs. A foreground Bash call that outlives its timeout is moved to the background (Claude
+  Code 2.1.316 can cut a background agent's to 180 s), nothing wakes an agent whose turn ended,
+  and a run_in_background command is stopped with the report. So the report would miss the
+  result. A command is the agent's when a tool result in its own transcript starts with one of
+  Claude Code's background lines (LAUNCH_RE). It has ended
+  when a task notification for it is in that transcript, or its output file ends with
+  "[exited with code N]" or "[killed]" (a TaskStop leaves no notice).
+- Schema: the roles in policy.toml [roles].report_checked, whose agent files end with the
+  report.schema.json contract.
+
 Scope:
-- It applies only to the roles in policy.toml [roles].report_checked, whose agent files end
-  with the report.schema.json contract.
-- Agent-team teammates are skipped: their stops fire per message, and a reader's
-  per-section reply isn't a report.
+- Agent-team teammates are skipped: their stops fire per message, and a reader's per-section
+  reply isn't a report.
 - An empty SubagentStop message is skipped. That's auto mode, and the handback path already
   checked it.
 
 Rejections:
-- A rejection names the schema errors and says "attempt N of 3".
-- The third attempt passes whatever it is, and the ledger then records report_ok: false.
+- A rejection says why and "attempt N of 3".
+- The third attempt passes whatever it is, and the ledger then records report_ok: false. A
+  handback that passes while a command still runs carries a note for the caller naming it
+  (updatedInput). So does one past the role's deadline stop, which isn't refused for waiting:
+  the policy then denies every tool but the handback, so the agent can't wait.
 - The counter is a file per session and agent under $XDG_STATE_HOME/dotclaude/report-check/.
-  A valid report clears it. Once it gives up it stays given up for that agent (files older
-  than a day are pruned), so a hook registered twice (user and project settings), which bumps
-  it twice per stop, can't cycle 1, 2, 1, 2 and block forever.
+  A report that passes both checks clears it. Once it gives up it stays given up for that
+  agent (files older than a day are pruned), so a hook registered twice (user and project
+  settings), which bumps it twice per stop, can't cycle 1, 2, 1, 2 and block forever.
 - The pattern is from breadcrumb (github.com/oscarthroedsson/breadcrumb, MIT), reimplemented.
 
 FAILS OPEN on purpose. It checks acceptance, not authority, and a denied handback gets only 3
 nudges before Claude Code drops the report. So any error here allows the report, and a cap of
-2 rejections stays inside those 3 nudges.
+2 rejections stays inside those 3 nudges. A transcript or output file it can't read counts as
+no running command.
 """
 import glob
 import json
@@ -40,11 +55,103 @@ import delegation_common as dc  # noqa: E402
 MAX_REJECTIONS = 2
 PRUNE_SECONDS = 86400
 GAVE_UP = "gave-up"
+# Every form 2.1.316's background note takes (RWr in the binary): run_in_background, the
+# subagent cap and a message moving it, a timeout moving it, and Ctrl+B.
+LAUNCH_RE = re.compile(r"Command (?:running in background with ID: |was moved to the background "
+                       r"\(ID: |did not complete within its \d+s timeout and was moved to the "
+                       r"background \(ID: |was manually backgrounded by user with ID: )"
+                       r"([A-Za-z0-9_-]+)\b.*?Output is being written to: (\S+?\.output)", re.S)
+LAUNCH_MARKS = (b"Command running in background with ID: ",
+                b"was moved to the background (ID: ",
+                b"Command was manually backgrounded by user with ID: ")
+NOTICE_MARK = b"task-notification"
+ENDED_RE = re.compile(rb"\[(?:exited with code -?\d+|killed)\]\s*\Z")
+TAIL_BYTES = 256
 
 
-def checked_roles():
-    with open(dc.policy_path(), "rb") as f:
-        return set(tomllib.load(f)["roles"]["report_checked"])
+def load_policy():
+    """policy.toml, or {} when it won't load: then no role is schema-checked and no deadline
+    applies, while the wait check still runs."""
+    try:
+        with open(dc.policy_path(), "rb") as f:
+            return tomllib.load(f)
+    except (OSError, ValueError):   # TOMLDecodeError and UnicodeDecodeError are ValueErrors
+        return {}
+
+
+def checked_roles(policy):
+    try:
+        return set(policy["roles"]["report_checked"])
+    except (KeyError, TypeError):
+        return set()
+
+
+def past_stop(data, role, policy):
+    """True when the agent's activation is past its role's deadline stop (subagent-policy's
+    rule, read from the same index)."""
+    try:
+        age = dc.activation_age(dc.read_agent_state(dc.norm_id(data.get("agent_id"))),
+                                time.time())  # wall clock: activation_start is a stamp
+        _, stop_s = dc.deadline_for(policy, role)
+    except Exception:  # noqa: BLE001  no clock, no deadline
+        return False
+    return age is not None and age >= stop_s
+
+
+def entries(path, marks):
+    """The transcript's entries whose raw line holds one of `marks`, parsed; others unparsed."""
+    try:
+        with open(path, "rb") as f:
+            for line in f:
+                if not any(m in line for m in marks):
+                    continue
+                try:
+                    e = json.loads(line)
+                except (ValueError, RecursionError):   # json recurses on nesting
+                    continue
+                if isinstance(e, dict):
+                    yield e
+    except OSError:
+        return
+
+
+def launches(e):
+    """(task, output file) for each background launch in this entry's tool results."""
+    msg = e.get("message")
+    content = msg.get("content") if e.get("type") == "user" and isinstance(msg, dict) else None
+    if not isinstance(content, list):
+        return
+    for c in content:
+        if isinstance(c, dict) and c.get("type") == "tool_result":
+            m = LAUNCH_RE.match(dc.text_of(c.get("content")))
+            if m:
+                yield m.group(1), m.group(2)
+
+
+def output_ended(path):
+    """True when the output file ends with Claude Code's exit line, or can't be read."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(max(0, os.fstat(f.fileno()).st_size - TAIL_BYTES))
+            return bool(ENDED_RE.search(f.read()))
+    except OSError:
+        return True
+
+
+def running_tasks(path):
+    """[(task, output file)] for the agent's own background commands that haven't ended."""
+    launched, ended = {}, set()
+    for e in entries(path, LAUNCH_MARKS + (NOTICE_MARK,)):
+        text = dc.notice_text(e)
+        if text is not None:
+            ended.update(dc.TASK_RE.findall(text))
+        for task, output in launches(e):
+            launched.setdefault(task, output)
+    return [(t, o) for t, o in launched.items() if t not in ended and not output_ended(o)]
+
+
+def agent_transcript(data):
+    return data.get("agent_transcript_path") or dc.agent_file(data, ".jsonl")
 
 
 def counter_dir():
@@ -102,6 +209,10 @@ def problems(text):
     return dc.validate_report(obj)
 
 
+def named(running):
+    return ", ".join(f"{t} (output {o})" for t, o in running)
+
+
 def rejection(errs, attempt):
     return ("[report-check] Your report doesn't match the report contract "
             f"(attempt {attempt} of {MAX_REJECTIONS + 1}): " + "; ".join(errs[:4]) + ". "
@@ -111,13 +222,46 @@ def rejection(errs, attempt):
             "above the block.")
 
 
-def decide(data, roles=None):
+def wait_reason(running, errs, attempt):
+    first = running[0][1]
+    reason = (f"[report-check] Don't report yet (attempt {attempt} of {MAX_REJECTIONS + 1}): "
+              f"your background command {named(running)} hasn't finished, so your report would "
+              "miss its result. Nothing wakes you when it ends: don't end your turn (not even "
+              "to wait on a Monitor), and a run_in_background command is stopped with your "
+              "report. Wait with one foreground Bash call shorter than 3 minutes, since a "
+              "longer one is moved to the background too: `timeout 170 sh -c 'until tail -n 1 "
+              f"\"{first}\" | grep -qE \"^\\[(exited with code|killed)\"; do sleep 2; done'; "
+              f"tail -n 3 \"{first}\"`. Repeat it until the output file's last line is "
+              "[exited with code N] or [killed], or until its completion notice arrives. Judge "
+              "only by that file or notice: a sandboxed ps can't see the command. Then finish "
+              "the task and report. If you no longer need the command, stop it with TaskStop.")
+    if errs:
+        reason += (" Your report also misses the report contract (" + "; ".join(errs[:4])
+                   + "): end it with one ```json block of status, summary, artifacts and "
+                   "blocked_actions.")
+    return reason
+
+
+def refuse(event, reason):
+    if event == "PreToolUse":
+        return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                       "permissionDecision": "deny",
+                                       "permissionDecisionReason": reason}}
+    return {"decision": "block", "reason": reason}
+
+
+def annotated(text, running):
+    note = (f"\n\n[report-check] Note for the caller: this agent handed back while its "
+            f"background command {named(running)} still ran, so this report may not include "
+            "its result. Check the output file before relying on it.")
+    return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
+                                   "updatedInput": {"message": text + note}}}
+
+
+def decide(data, policy=None):
     """None to accept, else the hook output dict."""
     event = data.get("hook_event_name")
     if not data.get("agent_id"):
-        return None
-    meta = dc.agent_meta(data)
-    if dc.agent_role(data, meta) not in (roles or checked_roles()) or meta.get("teamName"):
         return None
     if event == "PreToolUse":
         if data.get("tool_name") != "SubagentHandback":
@@ -129,23 +273,27 @@ def decide(data, roles=None):
             return None
     else:
         return None
+    meta = dc.agent_meta(data)
+    if meta.get("teamName"):
+        return None
+    policy = load_policy() if policy is None else policy
+    role = dc.agent_role(data, meta)
+    running = running_tasks(agent_transcript(data))
+    errs = problems(text) if role in checked_roles(policy) else []
     prune()
     path = counter_path(data)
-    errs = problems(text)
-    if not errs:
+    if not running and not errs:
         clear(path)
         return None
-    if read_counter(path) == GAVE_UP:
-        return None
-    attempt = bump(path)
-    if attempt > MAX_REJECTIONS:
-        return None
-    reason = rejection(errs, attempt)
-    if event == "PreToolUse":
-        return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
-                                       "permissionDecision": "deny",
-                                       "permissionDecisionReason": reason}}
-    return {"decision": "block", "reason": reason}
+    waits = bool(running) and not past_stop(data, role, policy)
+    if (waits or errs) and read_counter(path) != GAVE_UP:
+        attempt = bump(path)
+        if attempt <= MAX_REJECTIONS:
+            return refuse(event, wait_reason(running, errs, attempt) if waits
+                          else rejection(errs, attempt))
+    if running and event == "PreToolUse":
+        return annotated(text, running)
+    return None
 
 
 def main():
