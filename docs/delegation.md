@@ -1525,18 +1525,22 @@ with ID: X` (`run_in_background`), `Command was moved to the background (ID: X)`
 queued message), `Command did not complete within its Ns timeout and was moved to the background
 (ID: X)`, or `Command was manually backgrounded by user with ID: X` (Ctrl+B). Each names the
 output file. The line counts only where Claude Code puts it: a Bash result is the command's
-stdout, its stderr, then the note, so `run_in_background`'s opens the result (nothing has printed
-yet) and a moved command's starts a line after its output. And it counts only when the entry has
-no `toolUseResult` or one naming that id: a command that prints the note, such as a transcript
-dump, has a `toolUseResult` without it (review round 3). A `backgroundTaskId` with no note counts
-too, its output unknown.
+stdout, its stderr, then the note, so the note is the result's last line (or is followed only by
+a "Session cwd" hint), `run_in_background`'s opens the result (nothing has printed yet), and the
+last match is the note. When the entry has a `toolUseResult`, it must name that id; it is often
+absent (0 of 8 tool results in probe a, 9 of 9 in the incident, all 2.1.316), so the position is
+what rules out a command that prints note-shaped lines, such as a transcript dump (review rounds
+3 and 4). A `backgroundTaskId` with no note counts too, its output unknown. A wait call that was
+itself moved (a message arriving mid-wait moves the running call) isn't a command to wait on.
 
 A command has ended, as far as the agent is concerned, when:
 - a task notification for it is in the transcript;
 - its output file ends with `[killed]` (a TaskStop, or the kill at a final response, neither of
   which leaves a notice);
-- a later call whose input names the task or its output file got a result showing the end (a
-  `cat` or `tail` of the file, or a task-output call), review round 3;
+- a later call showed the agent the end (review rounds 3 and 4): a task-output call naming the
+  task whose result shows its status, or a call naming that output file and no other launch's
+  whose result holds the file's own `[exited with code N]` line (a `cat` or `tail` of it). A
+  `cat` of two files, or a command's own "exited with code 0" output, doesn't count;
 - or its launch is older than any background command can run (2 hours, plus 10 minutes of
   slack), which covers a Claude Code process that died first.
 
@@ -1550,13 +1554,18 @@ in one message, and the launch's result was written after the handback's hook re
 transcript (the calls themselves ran in order). That holds for a foreground call in the same
 message, which may have been moved, and whose result the report hasn't seen either way. Only the
 latest message counts, so a call that never got a result (an interrupted stream) can't pin the
-agent. In a fork (a transcript that opens with a `fork-context-ref` entry), only what follows its
-first `<fork-boilerplate>` entry counts, and a fork transcript with no such entry counts nothing
-(fail open). A SubagentStop with no meta.json isn't wait-checked: a plain subagent's exists by
-then, and the stop may be a teammate's per-message one. A report while one hasn't ended is sent
-back, at the handback (auto mode) or at SubagentStop (other modes), naming the command and its
-output file and saying how to wait. The live `early` case runs both paths: in `acceptEdits` the
-stop was refused and the command not yet killed when the hook read its file.
+agent. In a fork (a transcript with a `fork-context-ref` entry before any message), only what
+follows its first `<fork-boilerplate>` entry counts, and a fork transcript with no such entry
+counts nothing (fail open). A SubagentStop with no meta.json isn't wait-checked: a plain
+subagent's exists by then, and the stop may be a teammate's per-message one. A report while one
+hasn't ended is sent back, at the handback (auto mode) or at SubagentStop (other modes), naming
+the command and its output file and saying how to wait. An auto-mode stop with text (the agent
+ended its turn instead of handing back, as in the first live run's Monitor turn) is checked too:
+its block keeps the agent going in place of the hand-back nudge, and spends one of the shared
+refusals. The live `early` case runs both paths: in `acceptEdits` the stop was refused in 3 of
+3 runs, so the final-response kill hadn't reached the command's file when the hook read it.
+That order is observed, not documented: if a later version kills first, the file reads
+`[killed]` and the early report passes unrefused (fail open).
 
 **How the agent waits.** The live `early` case found the first advice (`sleep 120; tail -n 2
 <file>`) refused by Claude Code itself: it blocks a Bash call whose first part is a bare `sleep`
@@ -1583,7 +1592,11 @@ agent-team teammate (Hayden, 2026-11-01).
 
 **Why the cap is shared.** A subagent that ends without a delivered report gets 3 nudges, then the
 report is lost. Two refusals from each check could exceed that, so the wait and schema refusals
-share one counter of 2 (Hayden, 2026-11-01). A report the cap lets through while a command still
+share one counter of 2 (Hayden, 2026-11-01). The counter is per activation: it is stored with
+the activation's start from the ledger's index, so a SendMessage resume gets its two refusals
+again, while a hook registered twice still converges within one activation (review round 4; the
+counter's old form, the value alone, reads as the current activation's). A report the cap lets
+through while a command still
 runs isn't silent: the hook returns `updatedInput` with a `[report-check] Note for the caller`
 naming the command and its output file. A probe showed the lead receives the edited message. A
 report that is one bare JSON object is fenced first, so `extract_report` still finds it. Past
@@ -1591,9 +1604,9 @@ the role's deadline stop the wait refusal is skipped and only the note is added,
 then denies every tool but the report path and the agent couldn't wait. A SubagentStop can't
 change the message, so there a report past the cap passes as it is.
 
-**What it can't see.** A tool result that opens with the launch line and has no `toolUseResult`,
-which only Claude Code's own note should produce, reads as a launch. That costs at most the
-shared refusals, and
+**What it can't see.** A tool result whose last line is a launch note and that has no
+`toolUseResult`, which only Claude Code's own note should produce, reads as a launch. That costs
+at most the shared refusals, and
 only while the named output file exists and the agent hasn't been shown its end, for at most the
 2-hour bound. A
 harmless Bash call sent in one message with the report (an `ls`) costs one refusal too. A

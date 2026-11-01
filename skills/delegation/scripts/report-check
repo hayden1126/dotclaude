@@ -23,7 +23,9 @@ Scope:
 - Agent-team teammates are skipped: their stops fire per message, and a reader's per-section
   reply isn't a report.
 - An empty SubagentStop message is skipped. That's auto mode, and the handback path already
-  checked it.
+  checked it. An auto-mode stop with text (the agent ended its turn without a handback) is
+  wait-checked: its block keeps the agent going. A SubagentStop with no meta.json isn't
+  (decide).
 
 Rejections:
 - A rejection says why and "attempt N of 3".
@@ -31,7 +33,8 @@ Rejections:
   handback that passes while a command still runs carries a note for the caller naming it
   (updatedInput). So does one past the role's deadline stop, which isn't refused for waiting:
   the policy then denies every tool but the handback, so the agent can't wait.
-- The counter is a file per session and agent under $XDG_STATE_HOME/dotclaude/report-check/.
+- The counter is a file per session and agent under $XDG_STATE_HOME/dotclaude/report-check/,
+  stored with the activation's start, so a SendMessage resume starts it fresh.
   A report that passes both checks clears it. Once it gives up it stays given up for that
   agent (files older than a day are pruned), so a hook registered twice (user and project
   settings), which bumps it twice per stop, can't cycle 1, 2, 1, 2 and block forever.
@@ -75,15 +78,18 @@ ASSISTANT_RE = re.compile(rb'"type":\s*"assistant"')
 BASH_USE_RE = re.compile(rb'"name":\s*"Bash"')
 RESULT_ID_RE = re.compile(rb'"tool_use_id":\s*"([^"]+)"')
 KILLED_RE = re.compile(rb"\[killed\]\s*\Z")
-EXITED_RE = re.compile(rb"\[exited with code -?\d+\]\s*\Z")
-# a later call's result that shows a command's end: a cat or tail of its output file, or a
-# task-output call's status
-SEEN_RE = re.compile(r"exited with code -?\d+|<exit_code>|<status>(?:completed|failed|killed)</status>")
+EXITED_RE = re.compile(rb"(\[exited with code -?\d+\])\s*\Z")
+# a task-output call's result that shows its task's end
+STATUS_RE = re.compile(r"<status>(?:completed|failed|killed)</status>|<exit_code>")
 TAIL_BYTES = 256
 # Claude Code stops a background command at its timeout, 2 hours at most: a launch older than
 # this has ended even when no exit line or notice says so (its Claude Code process died).
 MAX_BACKGROUND_S = 2 * 3600 + 600
 WAIT_S = 110  # under the Bash tool's 120 s default timeout, past which a call is moved too
+
+
+def is_wait_command(command):
+    return command.startswith(f"timeout {WAIT_S} sh -c 'until tail -n 2 ")
 
 
 def wait_command(file):
@@ -152,31 +158,47 @@ def is_fork_boundary(e):
             and "<fork-boilerplate>" in dc.text_of(msg.get("content")))
 
 
-def launches(e):
+def note_ends(text, m):
+    """True when the note matched by m is the result's last line, or is followed only by
+    Claude Code's cwd hint: nothing comes after its note."""
+    end = text.find("\n", m.end())
+    rest = "" if end < 0 else text[end + 1:].strip()
+    return not rest or rest.startswith("Session cwd")
+
+
+def launches(e, wait_uses):
     """(task, output file or None) for each background launch in this entry's tool results.
-    The note is where Claude Code puts it: run_in_background's opens the result (its stdout is
-    empty at launch), a moved command's starts a line after its output. And it counts only
-    when the entry has no toolUseResult or one naming that id: a command that prints the note
-    (a transcript dump) has a toolUseResult without it. A backgroundTaskId with no note counts
-    too (output unknown)."""
+    The note is where Claude Code puts it, the result's last: run_in_background's opens the
+    result (its stdout is empty at launch), a moved command's follows its output. With a
+    toolUseResult, it must name that id; without one (often absent, 2.1.316), the note must
+    end the result, so a command that prints note-shaped lines (a transcript dump) isn't a
+    launch. A backgroundTaskId with no note counts too (output unknown). A moved wait call
+    (wait_uses) isn't a command to wait on."""
     msg = e.get("message")
     content = msg.get("content") if e.get("type") == "user" and isinstance(msg, dict) else None
     if not isinstance(content, list):
         return
     result = e.get("toolUseResult")
     named_id = result.get("backgroundTaskId") if isinstance(result, dict) else None
-    found = set()
+    found, use_id = set(), None
     for c in content:
         if not (isinstance(c, dict) and c.get("type") == "tool_result"):
             continue
-        m = LAUNCH_RE.search(dc.text_of(c.get("content")))
-        if not m or (m.group(0).startswith("Command running") and m.start() != 0):
+        use_id = use_id or c.get("tool_use_id")
+        if c.get("tool_use_id") in wait_uses:
+            return
+        text = dc.text_of(c.get("content"))
+        matches = list(LAUNCH_RE.finditer(text))
+        if not matches:
             continue
-        if isinstance(result, dict) and named_id != m.group(1):
+        m = matches[-1]
+        if m.group(0).startswith("Command running") and m.start() != 0:
+            continue
+        if named_id != m.group(1) if isinstance(result, dict) else not note_ends(text, m):
             continue
         found.add(m.group(1))
         yield m.group(1), m.group(2)
-    if isinstance(named_id, str) and named_id not in found:
+    if isinstance(named_id, str) and named_id not in found and use_id not in wait_uses:
         yield named_id, None
 
 
@@ -190,21 +212,17 @@ def bash_uses(e):
             yield c["id"], str(c["input"].get("command") or "")[:120]
 
 
-def tail_matches(path, pattern):
-    try:
-        with open(path, "rb") as f:
-            f.seek(max(0, os.fstat(f.fileno()).st_size - TAIL_BYTES))
-            return bool(pattern.search(f.read()))
-    except (OSError, ValueError):   # ValueError: a NUL in a scraped path
-        return None
-
-
 def output_killed(path):
     """True when the output file ends with [killed] (a TaskStop, or the kill at a final
     response, neither of which leaves a notice), or can't be read (fail open)."""
     if path is None:
         return False
-    return tail_matches(path, KILLED_RE) is not False
+    try:
+        with open(path, "rb") as f:
+            f.seek(max(0, os.fstat(f.fileno()).st_size - TAIL_BYTES))
+            return bool(KILLED_RE.search(f.read()))
+    except (OSError, ValueError):   # ValueError: a NUL in a scraped path
+        return True
 
 
 def running_tasks(path):
@@ -226,12 +244,15 @@ def running_tasks(path):
 
 
 def _running(path, now):
-    launched, ended, pending, answered = {}, set(), {}, set()
+    launched, ended, pending, answered, wait_uses = {}, set(), {}, set(), set()
     fork, start, last_message = None, 0, None
     for i, line in enumerate(lines(path) if path else ()):
-        if fork is None:   # the first line: a fork's transcript opens with fork-context-ref
-            first = parsed(line)
-            fork = bool(first) and first.get("type") == "fork-context-ref"
+        if fork is None:   # a fork's transcript has fork-context-ref before any message
+            head = parsed(line) or {}
+            if head.get("type") == "fork-context-ref":
+                fork = True
+            elif head.get("type") in ("user", "assistant"):
+                fork = False
         if b'"tool_result"' in line:
             answered.update(r.decode("utf-8", "replace") for r in RESULT_ID_RE.findall(line))
         assistant = ASSISTANT_RE.search(line)
@@ -248,20 +269,28 @@ def _running(path, now):
         if e.get("type") == "assistant":
             msg = e.get("message")
             last_message = (msg.get("id") if isinstance(msg, dict) else None) or f"#{i}"
-            if BASH_USE_RE.search(line) and not stale(e, now):
-                pending.update((tid, (cmd, last_message)) for tid, cmd in bash_uses(e))
+            if BASH_USE_RE.search(line):
+                for tid, cmd in bash_uses(e):
+                    if is_wait_command(cmd):
+                        wait_uses.add(tid)
+                    elif not stale(e, now):
+                        pending[tid] = (cmd, last_message)
             continue
         text = dc.notice_text(e)
         if text is not None:
             ended.update(dc.TASK_RE.findall(text))
         if not stale(e, now):
-            for task, output in launches(e):
+            for task, output in launches(e, wait_uses):
                 launched.setdefault(task, output)
     if fork:
         return []
-    exited = {t: o for t, o in launched.items()
-              if t not in ended and o and tail_matches(o, EXITED_RE)}
-    seen = seen_ends(path, start, exited) if exited else set()
+    exited = {}
+    for t, o in launched.items():
+        if t not in ended and o:
+            line = exit_line(o)
+            if line:
+                exited[t] = (o, line)
+    seen = seen_ends(path, start, exited, {o for o in launched.values() if o}) if exited else set()
     running = [(t, o) for t, o in launched.items()
                if t not in ended and t not in seen and not output_killed(o)]
     return running + [(f"`{cmd.replace('`', chr(39))}`", None)
@@ -269,10 +298,23 @@ def _running(path, now):
                       if message == last_message and tid not in answered]
 
 
-def seen_ends(path, start, exited):
-    """The tasks among `exited` whose end a later call showed the agent: a tool_use whose
-    input names the task or its output file, with a result that shows an end (SEEN_RE)."""
-    marks = {t: (t.encode(), o.encode()) for t, o in exited.items()}
+def exit_line(path):
+    """The output file's closing [exited with code N] line, or None."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(max(0, os.fstat(f.fileno()).st_size - TAIL_BYTES))
+            m = EXITED_RE.search(f.read())
+    except (OSError, ValueError):
+        return None
+    return m.group(1).decode() if m else None
+
+
+def seen_ends(path, start, exited, outputs):
+    """The tasks among `exited` ({task: (output file, its exit line)}) whose end a later call
+    showed the agent: a task-output call naming the task whose result shows its status, or a
+    call naming that output file and no other launch's whose result holds the file's own
+    exit line (a cat or tail of it)."""
+    marks = {t: (t.encode(), o.encode()) for t, (o, _) in exited.items()}
     watch, seen = {}, set()
     for i, line in enumerate(lines(path)):
         if i < start:
@@ -288,13 +330,18 @@ def seen_ends(path, start, exited):
             if not isinstance(c, dict):
                 continue
             if c.get("type") == "tool_use" and isinstance(c.get("id"), str):
-                shown = json.dumps(c.get("input"))
+                inp = c.get("input") if isinstance(c.get("input"), dict) else {}
+                shown = json.dumps(inp)
                 for t in named:
-                    if t in shown or exited[t] in shown:
-                        watch[c["id"]] = t
+                    out = exited[t][0]
+                    if t in inp.values():
+                        watch[c["id"]] = (t, STATUS_RE)
+                    elif out in shown and not any(o in shown for o in outputs - {out}):
+                        watch[c["id"]] = (t, re.compile(re.escape(exited[t][1])))
             elif c.get("type") == "tool_result" and c.get("tool_use_id") in watch:
-                if SEEN_RE.search(dc.text_of(c.get("content"))):
-                    seen.add(watch[c["tool_use_id"]])
+                t, pattern = watch[c["tool_use_id"]]
+                if pattern.search(dc.text_of(c.get("content"))):
+                    seen.add(t)
     return seen
 
 
@@ -324,22 +371,35 @@ def prune():
             pass
 
 
-def read_counter(path):
+def activation(data):
+    """The agent's current activation start (the ledger's index), or "" without one."""
     try:
-        with open(path) as f:
-            return f.read().strip()
-    except OSError:
+        return str(dc.read_agent_state(dc.norm_id(data.get("agent_id"))).get("activation_start")
+                   or "")
+    except Exception:  # noqa: BLE001  no index, one activation
         return ""
 
 
-def bump(path):
+def read_counter(path, current=""):
+    """The counter for this activation: "1", "2", "gave-up" or "". It is stored as
+    "<value> <activation start>", so a SendMessage resume starts fresh; the old form, the value
+    alone, reads as the current activation's."""
     try:
-        n = int(read_counter(path) or 0)
+        with open(path) as f:
+            value, _, start = f.read().strip().partition(" ")
+    except OSError:
+        return ""
+    return value if not start or start == current else ""
+
+
+def bump(path, current=""):
+    try:
+        n = int(read_counter(path, current) or 0)
     except ValueError:
         n = 0
     n += 1
     with open(path, "w") as f:
-        f.write(str(n) if n <= MAX_REJECTIONS else GAVE_UP)
+        f.write(f"{n if n <= MAX_REJECTIONS else GAVE_UP} {current}".strip())
     return n
 
 
@@ -358,11 +418,12 @@ def problems(text):
 
 
 def named(running, lead=False):
-    """The commands, for the agent or (lead) for the caller's note."""
+    """The commands, for the agent or (lead) for the caller's note, which doesn't repeat a
+    command line the agent sent: the lead may relay the report further."""
     def one(t, o):
         if o:
             return f"{t} (output {o})"
-        return f"{t} (sent with the report; its result wasn't seen)" if lead else (
+        return "a Bash call sent with the report (its result wasn't seen)" if lead else (
             f"{t} (sent with your report: its result names its output file if it went to the "
             "background)")
     return ", ".join(one(t, o) for t, o in running)
@@ -379,7 +440,7 @@ def rejection(errs, attempt):
 
 def wait_reason(running, errs, attempt):
     files = [o for _, o in running if o]
-    file = f'"{files[0]}"' if files else "<file>"
+    file = f'"{files[0]}"' if files else '"<file>"'
     where = "" if files else " (<file> is the output file its result names)"
     each = " Wait on each of their output files the same way." if len(files) > 1 else ""
     reason = (f"[report-check] Don't report yet (attempt {attempt} of {MAX_REJECTIONS + 1}): "
@@ -451,8 +512,9 @@ def decide(data, policy=None):
         clear(path)
         return None
     waits = bool(running) and not past_stop(data, role, policy)
-    if (waits or errs) and read_counter(path) != GAVE_UP:
-        attempt = bump(path)
+    current = activation(data)
+    if (waits or errs) and read_counter(path, current) != GAVE_UP:
+        attempt = bump(path, current)
         if attempt <= MAX_REJECTIONS:
             return refuse(event, wait_reason(running, errs, attempt) if waits
                           else rejection(errs, attempt))

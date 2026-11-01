@@ -343,6 +343,105 @@ class WaitCheck(unittest.TestCase):
                         aid="s3")
         self.assertIn("bseen", self.reason(self.run_hook(self.handback(aid="s3"))))
 
+    def test_a_cat_of_two_files_or_an_early_exit_message_is_not_a_seen_end(self):
+        # review round 4: the seen route needs the use to name that file alone, and its result
+        # to hold the file's own bracketed exit line
+        def use(tid, mid, cmd):
+            return {"type": "assistant", "message": {"id": mid, "role": "assistant", "content": [
+                {"type": "tool_use", "id": tid, "name": "Bash", "input": {"command": cmd}}]}}
+
+        def result(tid, text):
+            return {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": tid, "content": text}]}}
+        a = self.output("ba", "x\n[exited with code 0]")
+        b = self.output("bb", "y\n[exited with code 0]")
+        self.transcript([moved_result("ba", a), mid_turn_notice("ba"), moved_result("bb", b),
+                         use("t1", "m1", f'cat "{a}" "{b}"'),
+                         result("t1", "x\n[exited with code 0]")], aid="c1")
+        self.assertIn("bb", self.reason(self.run_hook(self.handback(aid="c1"))))
+        # the command printed "exited with code 0" itself before its real end
+        self.transcript([moved_result("bb", b), use("t2", "m2", f'tail -n 3 "{b}"'),
+                         result("t2", "child exited with code 0\nstill working")], aid="c2")
+        self.assertIn("bb", self.reason(self.run_hook(self.handback(aid="c2"))))
+
+    def test_a_give_up_is_per_activation(self):
+        # review round 4: a SendMessage resume is a new activation and gets its two refusals
+        agents = os.path.join(self.state, "dotclaude", "agents")
+        os.makedirs(agents)
+
+        def activation(start):
+            with open(os.path.join(agents, "a1.json"), "w") as f:
+                json.dump({"activation_start": start}, f)
+        activation(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))  # wall clock
+        self.incident()
+        for _ in range(2):
+            self.reason(self.run_hook(self.handback()))
+        self.assertEqual(self.run_hook(self.handback())["hookSpecificOutput"]["permissionDecision"],
+                         "allow")
+        activation(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 5)))  # wall clock
+        self.assertIn("attempt 1 of 3", self.reason(self.run_hook(self.handback())))
+
+    def test_a_counter_in_the_old_form_still_counts(self):
+        # the counter file used to hold "1", "2" or "gave-up" alone
+        self.incident()
+        d = os.path.join(self.state, "dotclaude", "report-check")
+        os.makedirs(d)
+        with open(os.path.join(d, "s1-a1"), "w") as f:
+            f.write("gave-up")
+        out = self.run_hook(self.handback())
+        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "allow")
+        with open(os.path.join(d, "s1-a1"), "w") as f:
+            f.write("1")
+        self.assertIn("attempt 2 of 3", self.reason(self.run_hook(self.handback(aid="a1"))))
+
+    def test_without_tool_use_result_the_note_must_end_the_result(self):
+        # review round 4: toolUseResult is often absent (probe transcripts, 2.1.316), so a
+        # printed moved-form line mid-result isn't a launch; Claude Code's own note is last
+        path = self.output("bmid")
+        entry = launched_result("bmid", path)
+        entry["message"]["content"][0]["content"] = (
+            "dump:\nCommand was moved to the background (ID: bmid) after running for 180s. "
+            f"Output is being written to: {path}.\nmore output after it")
+        self.transcript([entry])
+        self.assertIsNone(self.run_hook(self.handback()))
+        entry["message"]["content"][0]["content"] = (
+            "partial\nCommand was moved to the background (ID: bmid) after running for 180s. "
+            f"Output is being written to: {path}. You will be notified.\n"
+            "Session cwd remains /x; directory changes made by the backgrounded command do not "
+            "apply to subsequent commands.")
+        self.transcript([entry], aid="n2")
+        self.assertIn("bmid", self.reason(self.run_hook(self.handback(aid="n2"))))
+
+    def test_the_last_note_in_a_result_is_the_launch(self):
+        # review round 4: stdout may hold an earlier note-shaped line; the real note is last
+        real = self.output("breal")
+        entry = moved_result("breal", real)
+        body = entry["message"]["content"][0]
+        body["content"] = ("Command was moved to the background (ID: bfake) after running for "
+                           "180s. Output is being written to: /nowhere/bfake.output.\n"
+                           + body["content"])
+        self.transcript([entry])
+        reason = self.reason(self.run_hook(self.handback()))
+        self.assertIn(real, reason)
+
+    def test_a_moved_wait_call_is_not_a_command_to_wait_on(self):
+        # review round 4: a message arriving mid-wait can move the wait call itself
+        path = self.output("bjob")
+        wait = f"timeout 110 sh -c 'until tail -n 2 \"{path}\" | grep -qE ...'"
+        use = {"type": "assistant", "message": {"id": "m1", "role": "assistant", "content": [
+            {"type": "tool_use", "id": "twait", "name": "Bash", "input": {"command": wait}}]}}
+        moved = moved_result("bwaitcall", self.output("bwaitcall"))
+        moved["message"]["content"][0]["tool_use_id"] = "twait"
+        self.transcript([moved_result("bjob", path), mid_turn_notice("bjob"), use, moved])
+        self.assertIsNone(self.run_hook(self.handback()))
+
+    def test_a_fork_ref_after_a_header_line_still_marks_a_fork(self):
+        # review round 4: detection mustn't hang on the ref being line 1
+        ref = {"type": "fork-context-ref", "agentId": "a1", "parentSessionId": "s0"}
+        self.transcript([{"type": "summary", "summary": "x"}, ref,
+                         moved_result("blead", self.output("blead"))])
+        self.assertIsNone(self.run_hook(self.handback()))
+
     def test_a_printed_launch_line_is_not_a_launch(self):
         # review round 3: a command that prints Claude Code's note (a transcript dump) has a
         # toolUseResult with no backgroundTaskId; the real note's entry has none or the id
