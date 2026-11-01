@@ -314,7 +314,9 @@ For a match it refuses, naming the path, when:
    fetches them, and a member git would read as an option is refused. Any other repository
    word is a local path to git, judged whether it exists or not (G-E, item 8), where git's
    server side looks for it: `<p>/.git`, `<p>`, `<p>.git/.git` and `<p>.git` in that order, the
-   first that is a file or a git dir winning. Each that exists is judged along its symlinks and
+   first that is a file or a git dir winning. Each is taken as the OS opens it: a `..` after a
+   symlink lands beside its target (a relative word's `..` past the repo top or cwd it starts
+   from follows git's own cwd). Each that exists is judged along its symlinks and
    as the cwd's repo is (a gitfile's relative gitdir read from the dir of the path git opened,
    not a symlink target's); one that is missing, tried before the first git would take, is
    refused when a sandboxed session could create it. A call naming no repository takes the

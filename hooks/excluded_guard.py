@@ -48,8 +48,10 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      by each member in turn, as git fetches them, and a member git would read as an option is
      refused. Any other word is a local path to git, judged whether it exists or not (G-E path
      half, item 8), as git's server side finds it: it tries <path>/.git, <path>, <path>.git/.git
-     and <path>.git in turn (check_server_repo), each that exists is judged along its symlink
-     chain and as the cwd's repo is (a gitfile's relative gitdir read from the dir of the path
+     and <path>.git in turn (check_server_repo), each as the OS opens it (each `..` taken after
+     the symlinks before it; a relative word's `..` past its base, the repo top or the cwd,
+     follows git's own cwd), each that exists is judged along its symlink chain and as the
+     cwd's repo is (a gitfile's relative gitdir read from the dir of the path
      git opened, not a symlink target's), and one that is missing, before the first git would
      take, is refused if a sandboxed session could create it. A call naming no repository takes
      the default remote (branch.<b>.pushRemote or remote, remote.pushDefault, else origin): it
