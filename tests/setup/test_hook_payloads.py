@@ -51,8 +51,11 @@ class Workspace(unittest.TestCase):
         os.makedirs(os.path.join(self.cwd, ".git"))
         self.transcript = os.path.join(self.tmp.name, "cfg", "projects", "slug", "sid.jsonl")
         open(self.transcript, "w").close()
-        self.env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
-        self.env["HOME"] = self.tmp.name
+        # an attended session's env: run from a background session (ATTENDED=0, CLAUDE_JOB_DIR),
+        # excluded-check.sh stays silent and the payload tests failed
+        self.env = {k: v for k, v in os.environ.items()
+                    if k not in ("CLAUDE_PROJECT_DIR", "CLAUDE_JOB_DIR")}
+        self.env.update(HOME=self.tmp.name, CLAUDE_CODE_SESSION_ATTENDED="1")
 
 
 class SessionTitle(Workspace):
