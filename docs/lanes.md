@@ -734,7 +734,9 @@ cleared their environment included, before it reaps.
 
 **`lane serve --stop PORT`** ends what a serve of this lane started there: every process carrying
 its token in the lane's dir. Each signal goes through the pidfd check `done` uses, so a reused
-pid is never hit.
+pid is never hit. It runs in a closing lane too (where a new serve is refused), since
+`done` may say to drop a record with it, and like every serve path it takes the lane's path
+through the same checks `done` uses (no symlink on the way).
 The record lives in the state dir (`<repo>-<hash>.served/<id>/<port>.json`: pid, start, boot,
 token), which only a sandbox-off command can write, so no lane's sandboxed Bash can point
 `--stop` at another process.

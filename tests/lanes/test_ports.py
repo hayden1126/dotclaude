@@ -1,4 +1,5 @@
 """Port blocks: `lane init --block N` hands each new lane N ports in a row from `--ports`."""
+import fcntl
 import importlib.machinery
 import importlib.util
 import json
@@ -537,6 +538,104 @@ class Serve(LanesRepo):
         self.assertIn("nothing listened", p.stderr)
         self.assertEqual(self.mine("sleep 600; :"), [])  # ended through the held session
 
+    def set_state(self, **fields):
+        path = os.path.join(self.common, "lanes", "web", "lane.json")
+        self.write(path, json.dumps(dict(self.lane_json("web"), **fields)))
+
+    def test_stop_runs_in_a_closing_lane_where_a_start_is_refused(self):
+        # done, refused after its signals, says to drop a record with --stop: it must run there.
+        p = self.serve("--", sys.executable, self.server, "127.0.0.1", "{port}")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.set_state(state="closing")
+        p = self.serve("--port", str(self.lo + 1), "--", "true")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("is closing", p.stderr)
+        p = self.run_lane("serve", "--stop", str(self.lo), cwd=self.path)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn(f"stopped port {self.lo}", p.stdout)
+
+    def test_stop_refuses_a_lane_path_reached_through_a_symlink(self):
+        # lane.json is sandbox-writable: a path through a link (here to the lane itself, so the
+        # identity still matches) could be flipped to / while --stop judges cwds inside it.
+        p = self.serve("--", sys.executable, self.server, "127.0.0.1", "{port}")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        link = os.path.join(self.path, "l")
+        os.symlink(".", link)
+        self.set_state(path=link)
+        p = self.run_lane("serve", "--stop", str(self.lo), cwd=self.path)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("through a symlink", p.stderr)
+        self.assertTrue(self.mine(f"{self.server} 127.0.0.1 {self.lo}"))
+        self.set_state(path=self.path)  # so cleanup's --stop ends it
+
+    def hold_lock(self):
+        """Hold the lanes lock, as a slow `lane claim` or `done` would; release it with close."""
+        fd = os.open(os.path.join(self.common, "lanes", ".lock"), os.O_RDWR | os.O_CREAT)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return fd
+
+    def waiting_serve(self, marker):
+        """A serve stuck on the held lock, whose command would make marker."""
+        proc = subprocess.Popen([sys.executable, LANE, "serve", "--", "sh", "-c",
+                                 f"touch {marker}; sleep 600; : {self.tmp}"],
+                                cwd=self.path, env=self.env, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        time.sleep(1)  # into the lock wait
+        self.assertIsNone(proc.poll())
+        return proc
+
+    def test_a_signal_during_the_lock_wait_starts_nothing(self):
+        fd = self.hold_lock()
+        marker = os.path.join(self.tmp, "started")
+        proc = self.waiting_serve(marker)
+        proc.send_signal(signal.SIGTERM)
+        time.sleep(0.3)
+        os.close(fd)
+        out, err = proc.communicate(timeout=30)
+        self.assertEqual(proc.returncode, -signal.SIGTERM, out + err)
+        self.assertFalse(os.path.exists(marker))
+        self.assertIsNone(self.served(self.lo))
+
+    def test_a_lane_marked_closing_during_the_lock_wait_starts_nothing(self):
+        fd = self.hold_lock()
+        marker = os.path.join(self.tmp, "started")
+        proc = self.waiting_serve(marker)
+        self.set_state(state="closing")  # as done does, under the lock
+        os.close(fd)
+        out, err = proc.communicate(timeout=30)
+        self.assertEqual(proc.returncode, 1, out + err)
+        self.assertIn("is closing", err)
+        self.assertFalse(os.path.exists(marker))
+
+    def test_fail_runs_once_even_when_it_raises(self):
+        # A fail() that raises after its wait reaped the leader must not run again: a second
+        # run would match by a session id that wait may have freed.
+        mod = load_lane_script()
+        calls = []
+        real = mod.end_serve
+
+        def spy(token, root, sid=None, send=None):
+            calls.append(sid)
+            return real(token, root, sid, send)
+        with mock.patch.object(mod, "end_serve", spy), \
+                mock.patch.object(mod, "remove_served", side_effect=OSError("lock gone")), \
+                mock.patch.dict(os.environ, self.env), mock.patch("os.getcwd",
+                                                                 return_value=self.path):
+            cwd = os.open(".", os.O_RDONLY)
+            os.chdir(self.path)
+            try:
+                rc = mod.main(["serve", "--timeout", "1", "--", "sh", "-c",
+                               f"sleep 600; : {self.tmp}"])
+            finally:
+                os.fchdir(cwd)
+                os.close(cwd)
+                signal.signal(signal.SIGINT, signal.default_int_handler)
+                signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        self.assertEqual(rc, 1)
+        self.assertEqual(len(calls), 1, calls)
+        self.assertEqual(self.mine("sleep 600; :"), [])
+
     def test_stop_keeps_the_record_while_a_process_outlives_sigkill(self):
         p = self.serve("--", sys.executable, self.server, "127.0.0.1", "{port}")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
@@ -545,7 +644,7 @@ class Serve(LanesRepo):
         _, lane = repo.identity()
         with mock.patch.object(mod, "end_serve", return_value=(["4242 stuck"], "")):
             with self.assertRaises(mod.LaneError) as e:
-                mod.serve_stop(repo, lane, self.lo)
+                mod.serve_stop(repo, lane, self.path, self.lo)
         self.assertIn("4242 stuck", str(e.exception))
         self.assertIn(f"`lane serve --stop {self.lo}` can retry", str(e.exception))
         self.assertIsNotNone(self.served(self.lo))

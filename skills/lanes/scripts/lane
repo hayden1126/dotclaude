@@ -2496,7 +2496,13 @@ def lane_block(repo: Repo, lane: dict) -> range:
     return block
 
 
-def serve_port(repo: Repo, lane: dict, block: range, want: int | None, lanes: list[dict]) -> int:
+def serve_port(repo: Repo,
+    lane: dict,
+    top: str,
+    block: range,
+    want: int | None,
+    lanes: list[dict],
+) -> int:
     """The port to serve on: want, which must be in block, or the block's first with no
     listener; refused while something listens on it or a serve of the lane still runs there."""
     span = f"{block[0]}-{block[-1]}"
@@ -2505,7 +2511,7 @@ def serve_port(repo: Repo, lane: dict, block: range, want: int | None, lanes: li
     for port in [want] if want is not None else block:
         holders = port_holders(port, lanes)
         if not holders and (rec := load_served(repo, lane["id"], port)) \
-                and served_live(rec, lane["path"])[0]:
+                and served_live(rec, top)[0]:
             holders = ["a server lane serve started there still runs but isn't listening: "
                        f"`lane serve --stop {port}`"]
         if not holders:
@@ -2522,11 +2528,13 @@ def cmd_serve(args) -> int:
     sandbox_off("lane serve")
     repo = lanes_repo()
     lane = serving_lane(repo)
-    if lane.get("state") == "closing":
-        raise LaneError(f"lane {lane['id']} is closing (a `lane done` stopped partway): nothing "
-                        "serves from it until that close is rerun or it is opened again")
-    if args.stop is not None:
-        return serve_stop(repo, lane, args.stop)
+    # The lane's path through worktree_problem's checks, once, for every act below: lane.json is
+    # sandbox-writable, and a path reached through a symlink could point anywhere by the time a
+    # cwd is judged inside it.
+    top = usable_path(repo, lane)
+    if args.stop is not None:  # in a closing lane too: `done` may say to drop a record with it
+        return serve_stop(repo, lane, top, args.stop)
+    closing_refusal(lane)
     if not args.command:
         raise LaneError("name the command after --: lane serve [--port N] [--ready RE] -- <cmd...>")
     ready = None
@@ -2537,7 +2545,6 @@ def cmd_serve(args) -> int:
             raise LaneError(f"--ready {args.ready!r} is no regex: {e}")
     block = lane_block(repo, lane)
     lanes = repo.lanes(shared=True)
-    top = usable_path(repo, lane)
     # From here, SIGINT and SIGTERM (the Bash tool's, a timeout's) only note the signal: serve acts
     # on it at its next look, once what it started is recorded, and a second one can't cut its
     # cleanup short. A handler resets at exec, so the server gets the default ones. SIGCHLD back
@@ -2547,8 +2554,16 @@ def cmd_serve(args) -> int:
         signal.signal(sig, lambda signum, _frame: signals.append(signum))
     signal.signal(signal.SIGCHLD, signal.SIG_DFL)
     with lock(repo):
-        port = serve_port(repo, lane, block, args.port, lanes)
+        # The lock may have been waited for: a signal noted meanwhile, or a `done` that marked
+        # the lane closing, ends serve here, before anything starts.
+        if signals:
+            return -signals[0]
+        closing_refusal(repo.lane_at(top) or lane)
+        port = serve_port(repo, lane, top, block, args.port, lanes)
         fd, log = serve_log(top, port)
+        if signals:
+            os.close(fd)
+            return -signals[0]
         argv = [a.replace("{port}", str(port)) for a in args.command]
         token = f"{lane['id']}:{port}:{secrets.token_hex(16)}"
         try:
@@ -2586,7 +2601,12 @@ def cmd_serve(args) -> int:
             return None
         return info.si_status if info.si_code == os.CLD_EXITED else -info.si_status
 
+    failed = []
+
     def fail(why: str) -> int:
+        if failed:  # once: a second run would match by a session id its wait may have freed
+            return 1
+        failed.append(why)
         left, outside = end_serve(token, top, sid)
         with contextlib.suppress(subprocess.TimeoutExpired):
             child.wait(timeout=1)
@@ -2671,7 +2691,14 @@ def listener_problem(port: int,
     return None
 
 
-def serve_stop(repo: Repo, lane: dict, port: int) -> int:
+def closing_refusal(lane: dict) -> None:
+    if lane.get("state") == "closing":
+        raise LaneError(f"lane {lane['id']} is closing (a `lane done` stopped partway): nothing "
+                        "starts serving from it until that close is rerun or it is opened again; "
+                        "`lane serve --stop` still runs")
+
+
+def serve_stop(repo: Repo, lane: dict, top: str, port: int) -> int:
     """End what a serve of this lane started on port, proved by the record serve wrote in the
     state dir (no lane's sandboxed Bash can write it): the processes carrying its token in the
     lane's dir. One outside the lane is named, never signalled (it may be a shared daemon)."""
@@ -2681,9 +2708,9 @@ def serve_stop(repo: Repo, lane: dict, port: int) -> int:
         raise LaneError(shown(f"lane {lane['id']}'s serve started nothing on port {port}"
                               + (f"; its listener is {'; '.join(holders)}, which isn't this "
                                  "lane's to stop" if holders else "")))
-    ours, outside = served_live(rec, lane["path"])
+    ours, outside = served_live(rec, top)
     if ours:
-        left, out = end_serve(rec["token"], lane["path"])
+        left, out = end_serve(rec["token"], top)
         if left:
             raise LaneError(f"port {port}: these outlived SIGKILL: {', '.join(left)}. The "
                             f"record stays, so `lane serve --stop {port}` can retry")
