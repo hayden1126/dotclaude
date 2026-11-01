@@ -1483,9 +1483,12 @@ RECURSE_FIX = ("Run `git config --global fetch.recurseSubmodules false` (dotclau
 PUSH_FIX = ("Unset push.recurseSubmodules and submodule.recurse, or set the one git reads last "
             "false (`git config --global push.recurseSubmodules false` when the global config "
             "sets it)")
-# gh forms that run git fetch, pull or push inside (gh 2.89): (first, second word, what git runs).
-GH_GIT_FORMS = {("pr", "checkout"): "fetch", ("pr", "merge"): "pull",
-                ("issue", "develop"): "pull", ("pr", "create"): "push"}
+# gh forms that run git fetch, pull or push inside (gh 2.89): (first, second word) -> (the rule
+# that judges it, what git runs). gh pr checkout runs git checkout after its fetch, and checkout
+# honours submodule.recurse, so it takes the pull rule.
+GH_GIT_FORMS = {("pr", "checkout"): ("pull", "git fetch and git checkout"),
+                ("pr", "merge"): ("pull", "git pull"), ("issue", "develop"): ("pull", "git pull"),
+                ("pr", "create"): ("push", "git push")}
 # The values Go's strconv.ParseBool reads as false, as gh's flag parser takes `--flag=v`. Only
 # `--recurse-submodules=<one of these>` leaves gh pr checkout's submodule update off; any other
 # value is true or an error.
@@ -1617,6 +1620,7 @@ def check_recursion(m, env, cwd, words):
     head = os.path.basename(words[0])
     if head == "git" and words[1:2] in (["fetch"], ["pull"], ["push"]):
         sub, name = words[1], f"git {words[1]}"
+        runs = f"git {sub}"
         if recursion_flag(sub, words[2:]):
             return
         fix = (f"{PUSH_FIX if sub == 'push' else RECURSE_FIX}, or add `--no-recurse-submodules` "
@@ -1631,7 +1635,7 @@ def check_recursion(m, env, cwd, words):
                 skip = True
             elif not w.startswith("-"):
                 positional.append(w)
-        sub = GH_GIT_FORMS.get(tuple(positional[:2]))
+        sub, runs = GH_GIT_FORMS.get(tuple(positional[:2]), (None, None))
         if not sub:
             return
         name = f"gh {' '.join(positional[:2])}"
@@ -1646,7 +1650,7 @@ def check_recursion(m, env, cwd, words):
         return
     on = recursion_on(env, discover(cwd, env), m.home, sub)
     if on:
-        raise Refusal("rule1", on[0], f"`{name}` runs git {sub} with submodule recursion on in "
+        raise Refusal("rule1", on[0], f"`{name}` runs {runs} with submodule recursion on in "
                       f"the effective git config ({' and '.join(on)}), which runs git in each "
                       "submodule's own git dir, where a sandboxed session can write. "
                       + fix + (". For pull, also set submodule.recurse false"

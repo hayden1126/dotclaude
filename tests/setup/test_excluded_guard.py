@@ -1268,8 +1268,10 @@ class SubmoduleRecursion(Guard):
         for config in (RECURSE_OFF, "[submodule]\n\trecurse = true\n" + RECURSE_OFF,
                        "[fetch]\n\trecurseSubmodules = no\n"):
             self.write(self.gitconfig, config)
-            pulls = ("git pull", "gh issue develop 3") if "recurse =" not in config else ()
-            for call in ("git fetch", "git fetch origin", "gh pr checkout 5") + pulls:
+            # gh pr checkout runs git checkout after its fetch, which honours submodule.recurse.
+            pulls = (("git pull", "gh issue develop 3", "gh pr checkout 5")
+                     if "recurse =" not in config else ())
+            for call in ("git fetch", "git fetch origin") + pulls:
                 with self.subTest(config=config, call=call):
                     self.allowed(call)
         self.git("config", "fetch.recurseSubmodules", "false", cwd=self.proj)  # trusted local
@@ -1291,7 +1293,7 @@ class SubmoduleRecursion(Guard):
         # fetch.recurseSubmodules says.
         self.write(self.gitconfig, "[submodule]\n\trecurse = true\n" + RECURSE_OFF)
         self.allowed("git fetch")
-        for call in ("git pull", "gh pr merge -d 5"):
+        for call in ("git pull", "gh pr merge -d 5", "gh pr checkout 5"):
             with self.subTest(call=call):
                 self.assertIn("submodule.recurse", self.denied(call, "rule1"))
         self.allowed("git pull --no-recurse-submodules")
