@@ -11,9 +11,11 @@ Two checks share one counter:
   Code 2.1.316 can cut a background agent's to 180 s), nothing wakes an agent whose turn ended,
   and a run_in_background command is stopped with the report. So the report would miss the
   result. A command is the agent's when a tool result in its own transcript starts with one of
-  Claude Code's background lines (LAUNCH_RE). It has ended
-  when a task notification for it is in that transcript, or its output file ends with
-  "[exited with code N]" or "[killed]" (a TaskStop leaves no notice).
+  Claude Code's background lines (LAUNCH_RE), after a fork's inherited history. It has ended
+  when a task notification for it is in that transcript, its output file ends with
+  "[exited with code N]" or "[killed]" (a TaskStop leaves no notice), or its launch is older
+  than MAX_BACKGROUND_S. A Bash call sent with the report whose result isn't written yet
+  counts too (running_tasks).
 - Schema: the roles in policy.toml [roles].report_checked, whose agent files end with the
   report.schema.json contract.
 
@@ -60,15 +62,20 @@ GAVE_UP = "gave-up"
 LAUNCH_RE = re.compile(r"Command (?:running in background with ID: |was moved to the background "
                        r"\(ID: |did not complete within its \d+s timeout and was moved to the "
                        r"background \(ID: |was manually backgrounded by user with ID: )"
-                       r"([A-Za-z0-9_-]+)\b.*?Output is being written to: (\S+?\.output)", re.S)
+                       r"([A-Za-z0-9]+)\b.*?Output is being written to: (\S+?\.output)", re.S)
 LAUNCH_MARKS = (b"Command running in background with ID: ",
                 b"was moved to the background (ID: ",
                 b"Command was manually backgrounded by user with ID: ")
 NOTICE_MARK = b"task-notification"
-BG_USE_RE = re.compile(rb'"run_in_background":\s*true')
+FORK_MARK = b"<fork-boilerplate>"
+BASH_USE_RE = re.compile(rb'"name":\s*"Bash"')
 RESULT_ID_RE = re.compile(rb'"tool_use_id":\s*"([^"]+)"')
 ENDED_RE = re.compile(rb"\[(?:exited with code -?\d+|killed)\]\s*\Z")
 TAIL_BYTES = 256
+# Claude Code stops a background command at its timeout, 2 hours at most: a launch older than
+# this has ended even when no exit line or notice says so (its Claude Code process died).
+MAX_BACKGROUND_S = 2 * 3600 + 600
+WAIT_S = 110  # under the Bash tool's 120 s default timeout, past which a call is moved too
 
 
 def load_policy():
@@ -116,6 +123,20 @@ def parsed(line):
     return e if isinstance(e, dict) else None
 
 
+def stale(e, now):
+    """True when the entry is older than any background command can run."""
+    t = dc.entry_time(e)
+    return t is not None and now - t > MAX_BACKGROUND_S
+
+
+def is_fork_boundary(e):
+    """The user entry that ends a fork's inherited history (2.1.316): what comes before it is
+    the parent's, not the fork's."""
+    msg = e.get("message")
+    return (e.get("type") == "user" and isinstance(msg, dict)
+            and "<fork-boilerplate>" in dc.text_of(msg.get("content")))
+
+
 def launches(e):
     """(task, output file) for each background launch in this entry's tool results."""
     msg = e.get("message")
@@ -129,14 +150,14 @@ def launches(e):
                 yield m.group(1), m.group(2)
 
 
-def background_uses(e):
-    """(tool_use id, command) for each run_in_background Bash call in this assistant entry."""
+def bash_uses(e):
+    """(tool_use id, command) for each Bash call in this assistant entry."""
     msg = e.get("message")
     content = msg.get("content") if e.get("type") == "assistant" and isinstance(msg, dict) else None
     for c in content if isinstance(content, list) else ():
         if (isinstance(c, dict) and c.get("type") == "tool_use" and c.get("name") == "Bash"
-                and isinstance(c.get("input"), dict) and c["input"].get("run_in_background")):
-            yield str(c.get("id")), str(c["input"].get("command") or "")[:120]
+                and isinstance(c.get("id"), str) and isinstance(c.get("input"), dict)):
+            yield c["id"], str(c["input"].get("command") or "")[:120]
 
 
 def output_ended(path):
@@ -145,31 +166,45 @@ def output_ended(path):
         with open(path, "rb") as f:
             f.seek(max(0, os.fstat(f.fileno()).st_size - TAIL_BYTES))
             return bool(ENDED_RE.search(f.read()))
-    except OSError:
+    except (OSError, ValueError):   # ValueError: a NUL in a scraped path
         return True
 
 
 def running_tasks(path):
     """[(name, output file or None)] for the agent's own background commands that haven't
-    ended. A run_in_background call whose result isn't in the transcript yet counts too, named
-    by its command: sent in one message with the handback, its result is written after the
-    handback's hook reads the transcript (2.1.316, the live `early` case)."""
+    ended, or [] on any error (fail open, the schema check still runs). A Bash call whose
+    result isn't in the transcript yet counts too, named by its command: sent in one message
+    with the handback, its result is written after the handback's hook reads the transcript
+    (2.1.316, the live `early` case), and the report hasn't seen it either way. In a fork,
+    only what follows its inherited history counts."""
+    try:
+        return _running(path, time.time())  # wall clock: transcript stamps
+    except Exception:  # noqa: BLE001  fail open
+        return []
+
+
+def _running(path, now):
     launched, ended, pending, answered = {}, set(), {}, set()
-    for line in lines(path):
+    for line in lines(path) if path else ():
         if b'"tool_result"' in line:
             answered.update(i.decode("utf-8", "replace") for i in RESULT_ID_RE.findall(line))
-        if not (NOTICE_MARK in line or BG_USE_RE.search(line)
+        if not (NOTICE_MARK in line or FORK_MARK in line or BASH_USE_RE.search(line)
                 or any(m in line for m in LAUNCH_MARKS)):
             continue
         e = parsed(line)
         if e is None:
             continue
+        if is_fork_boundary(e):
+            launched, ended, pending, answered = {}, set(), {}, set()
+            continue
         text = dc.notice_text(e)
         if text is not None:
             ended.update(dc.TASK_RE.findall(text))
+        if stale(e, now):
+            continue
         for task, output in launches(e):
             launched.setdefault(task, output)
-        pending.update(background_uses(e))
+        pending.update(bash_uses(e))
     running = [(t, o) for t, o in launched.items() if t not in ended and not output_ended(o)]
     return running + [(f"`{cmd}`", None) for tid, cmd in pending.items() if tid not in answered]
 
@@ -234,8 +269,8 @@ def problems(text):
 
 
 def named(running):
-    return ", ".join(f"{t} (output {o})" if o else f"{t} (just started: its result names its "
-                     "output file)" for t, o in running)
+    return ", ".join(f"{t} (output {o})" if o else f"{t} (sent with your report: its result "
+                     "names its output file if it went to the background)" for t, o in running)
 
 
 def rejection(errs, attempt):
@@ -248,18 +283,21 @@ def rejection(errs, attempt):
 
 
 def wait_reason(running, errs, attempt):
-    first = next((o for _, o in running if o), "<its output file>")
+    known = next((o for _, o in running if o), None)
+    file = f'"{known}"' if known else "<file>"
+    where = "" if known else " (<file> is the output file its result names)"
     reason = (f"[report-check] Don't report yet (attempt {attempt} of {MAX_REJECTIONS + 1}): "
-              f"your background command {named(running)} hasn't finished, so your report would "
-              "miss its result. Nothing wakes you when it ends: don't end your turn (not even "
-              "to wait on a Monitor), and a run_in_background command is stopped with your "
-              "report. Wait with one foreground Bash call shorter than 3 minutes, since a "
-              "longer one is moved to the background too: `timeout 170 sh -c 'until tail -n 1 "
-              f"\"{first}\" | grep -qE \"^\\[(exited with code|killed)\"; do sleep 2; done'; "
-              f"tail -n 3 \"{first}\"`. Repeat it until the output file's last line is "
-              "[exited with code N] or [killed], or until its completion notice arrives. Judge "
-              "only by that file or notice: a sandboxed ps can't see the command. Then finish "
-              "the task and report. If you no longer need the command, stop it with TaskStop.")
+              f"your command {named(running)} hasn't finished, or you haven't seen its result, "
+              "so your report would miss it. Nothing wakes you when a background command ends: "
+              "don't end your turn (not even to wait on a Monitor), and a run_in_background "
+              "command is stopped with your report. Wait with one foreground Bash call under 2 "
+              "minutes, since a call past its timeout is moved to the background too: "
+              f"`timeout {WAIT_S} sh -c 'until tail -n 1 {file} | grep -qE "
+              f"\"^\\[(exited with code|killed)\"; do sleep 2; done'; tail -n 3 {file}`{where}. "
+              "Repeat it until the file's last line is [exited with code N] or [killed], or "
+              "until its completion notice arrives. Judge only by that file or notice: a "
+              "sandboxed ps can't see the command. Then finish the task and report. If you no "
+              "longer need the command, stop it with TaskStop.")
     if errs:
         reason += (" Your report also misses the report contract (" + "; ".join(errs[:4])
                    + "): end it with one ```json block of status, summary, artifacts and "
@@ -277,8 +315,11 @@ def refuse(event, reason):
 
 def annotated(text, running):
     note = (f"\n\n[report-check] Note for the caller: this agent handed back while its "
-            f"background command {named(running)} still ran, so this report may not include "
-            "its result. Check the output file before relying on it.")
+            f"command {named(running)} still ran, so this report may not include its result. "
+            "Check the output file before relying on it.")
+    if not dc.FENCE_RE.search(text) and dc.extract_report(text)[0] is not None:
+        # a whole-message JSON report: fence it, so extract_report still finds it
+        text = "```json\n" + text.strip() + "\n```"
     return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
                                    "updatedInput": {"message": text + note}}}
 

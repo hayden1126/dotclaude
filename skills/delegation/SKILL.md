@@ -201,14 +201,14 @@ validated (`report_ok`).
   the result is lost and `open` can't flag it. A foreground Bash call that outlives its
   `timeout` is moved to the background, not killed, and for a background agent Claude Code
   may cut that timeout to 3 minutes (2.1.316, behind a server flag). So the agent waits on
-  its output in one foreground call shorter than 3 minutes at a time (an `until` loop on the
-  output file: Claude Code blocks a bare `sleep` of 25 s or more), until the file ends with
-  `[exited with code N]` or its completion notice arrives, and only then reports.
+  its output in one foreground call under the default 2-minute timeout at a time (an `until`
+  loop on the output file: Claude Code blocks a bare `sleep` of 25 s or more), until the file
+  ends with `[exited with code N]` or its completion notice arrives, and only then reports.
   `report-check` enforces it: a report while one of the agent's own background commands
-  still runs is sent back, sharing the schema check's two refusals, and a report that gets
-  through anyway ends with a `[report-check] Note for the caller` naming the command and its
-  output file. Read that file before you rely on the report. `BRIEF.md`'s Budget section says
-  so; keep that line.
+  still runs, or sent in one message with a Bash call, is sent back, sharing the schema
+  check's two refusals. A handback (auto mode) that gets through anyway ends with a
+  `[report-check] Note for the caller` naming the command and its output file; read that file
+  before you rely on the report. `BRIEF.md`'s Budget section says so; keep that line.
 - **Your own wait that may outlast 30 minutes goes through `delegation-ledger wait`.** A
   background Bash command stops at its timeout (30 minutes by default, 2 hours at most), and the
   wake-up note then says not to restart it. Launch the waiter as a bare command with

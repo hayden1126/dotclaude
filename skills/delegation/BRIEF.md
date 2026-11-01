@@ -43,10 +43,11 @@ Never work around a denial. Finish the rest of the task if you can, and report `
 - Report length: <e.g. "at most 400 words before the JSON block">
 - Don't report or end your turn while a background command you started is still running:
   nothing wakes you when it finishes, and a `run_in_background` command stops with your report.
-  A foreground Bash call that outlives its timeout (as little as 3 minutes) is moved to the
-  background too. Wait with one foreground call under 3 minutes, repeated until the output
-  file ends with `[exited with code N]`: `timeout 170 sh -c 'until tail -n 1 "<file>" | grep
-  -qE "^\[(exited with code|killed)"; do sleep 2; done'`. Judge by that file, not `ps`.
+  A foreground Bash call that outlives its timeout (2 minutes by default) is moved to the
+  background too. Wait with one foreground call under 2 minutes, repeated until the output
+  file ends with `[exited with code N]`: `timeout 110 sh -c 'until tail -n 1 "<file>" | grep
+  -qE "^\[(exited with code|killed)"; do sleep 2; done'`. Judge by that file, not `ps`, and
+  send the report in a message of its own, after every call's result.
 
 ## Verification (writers)
 - Run: `<command>`

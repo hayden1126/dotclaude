@@ -81,7 +81,7 @@ Each layer covers what the others can't.
 | Excluded-command guard | `hooks/excluded-guard.sh`, `hooks/excluded_guard.py`, a `Bash` entry in `settings.json` (timeout 5) | Enforces on every thread: an excluded command runs only when its cwd resolves to the project's own repository, the other git config it reads and every PATH dir and file its head resolves through are write-protected, and `claude` or `codex` runs from the project root. See "The excluded-command guard" below. Fails closed for excluded heads |
 | Excluded-command check | `hooks/excluded-check.sh` (`excluded_guard.py --session`), a SessionStart entry in `settings.json` (timeout 5) | Observes: what the guard would refuse from the session's project and PATH, shown once per change in its findings. Fails open |
 | Subagent policy | `hooks/subagent-policy.sh`, `skills/delegation/scripts/subagent-policy`, `skills/delegation/policy.toml` | Enforces: see "Subagent policy" below. Fails closed for the tools it polices |
-| Report check | `hooks/report-check.sh`, `skills/delegation/scripts/report-check` | Enforces acceptance: a schema-invalid report from one of our roles, or any subagent's report while one of its own background commands runs, is sent back twice at most between them; a report let through while a command runs carries a note naming it. Fails open |
+| Report check | `hooks/report-check.sh`, `skills/delegation/scripts/report-check` | Enforces acceptance: a schema-invalid report from one of our roles, or any subagent's report while one of its own background commands runs, is sent back twice at most between them; a handback (auto mode) let through while a command runs carries a note naming it. Fails open |
 | Ledger | `hooks/delegation-ledger.sh`, `skills/delegation/scripts/delegation-ledger`, `skills/delegation/liveness.toml` | Observes: start and stop rows (`agent_type` is the resolved role; a teammate adds `name` and `teammate`), `report_ok`, denial rows, the main-checkout hash for a worktree agent (and the lane's, when the parent session runs in one); the per-agent liveness index (`agents/<id>.json`); `open` (the tool in flight and since when, thresholds in `liveness.toml`); `watch` (one line per live delegation, and a token like `2▶ 1⚠` for the tmux bar); `audit` (`--monthly` adds a month of usage for retuning, and `exclude` keeps probes out of it); `sandbox-denials`. Persuades: the deadline nudge, one PostToolUse `additionalContext` per activation past the role's `nudge_min`, and a `nudge` row. Fails open |
 | Canary and due checks | `hooks/delegation-due.sh`, `skills/delegation/scripts/delegation_checks.py`, `skills/delegation/due.toml` | Observes: `delegation-ledger canary` re-verifies enforcement on this Claude Code version; `due` runs the cheap checks at session start (the quick tier includes a run of the installed watch-guard shim) and shows Hayden what needs their attention, including the watch nudges: unresolved watches whose waiter's exit reaches nobody, and watches that ended while no Claude process listened. Fails open |
 | Public GitHub client | `skills/delegation/scripts/gh-public` | GET-only access to api.github.com for delegated agents, optionally with a public-read token |
@@ -1525,24 +1525,29 @@ background with ID: X` (`run_in_background`), `Command was moved to the backgrou
 cap, or a queued message), `Command did not complete within its Ns timeout and was moved to the
 background (ID: X)`, or `Command was manually backgrounded by user with ID: X` (Ctrl+B). Each
 names the output file. It has ended when a task notification for it is in that transcript, or its
-output file ends with `[exited with code N]` or `[killed]`. A `run_in_background` Bash call whose
-result isn't in the transcript yet counts too, named by its command: in the second live `early`
-run the agent sent the launch and the handback in one message, and the launch's result was
-written after the handback's hook read the transcript (the calls themselves ran in order). A
-report while one hasn't ended is
-sent back, at the handback (auto mode) or at SubagentStop (other modes), naming the command and
-its output file and saying how to wait.
+output file ends with `[exited with code N]` or `[killed]`, or when its launch is older than any
+background command can run (2 hours, plus 10 minutes of slack), which covers a Claude Code
+process that died before writing either. A Bash call whose result isn't in the transcript yet
+counts too, named by its command: in the second live `early` run the agent sent the launch and
+the handback in one message, and the launch's result was written after the handback's hook read
+the transcript (the calls themselves ran in order). That holds for a foreground call in the same
+message, which may have been moved, and whose result the report hasn't seen either way. In a
+fork, only what follows its inherited history (the `<fork-boilerplate>` entry) counts. A report
+while one hasn't ended is sent back, at the handback (auto mode) or at SubagentStop (other
+modes), naming the command and its output file and saying how to wait.
 
 **How the agent waits.** The live `early` case found the first advice (`sleep 120; tail -n 2
 <file>`) refused by Claude Code itself: it blocks a Bash call whose first part is a bare `sleep`
 of 25 s or more ("Do not chain shorter sleeps"). The agent then started a Monitor and ended its
 turn, which only drew the hand-back nudge, and it judged the command dead from a sandboxed `ps`
-that can't see it. So the refusal now gives one bounded foreground call, `timeout 170 sh -c
+that can't see it. So the refusal now gives one bounded foreground call, `timeout 110 sh -c
 'until tail -n 1 "<file>" | grep -qE "^\[(exited with code|killed)"; do sleep 2; done'`, to
 repeat until the file ends, and says to judge by the file, not `ps`, and not to end the turn on a
-Monitor. Claude Code's own background note says the same ("wait with one foreground shell command
-that blocks until the output file shows what you need"). The policy allows the call for
-researcher and general-purpose.
+Monitor. The bound stays under the Bash tool's 2-minute default timeout, so the wait isn't moved
+to the background itself (review round 1). Claude Code's own background note says the same
+("wait with one foreground shell command that blocks until the output file shows what you
+need"). The policy allows the call for researcher and general-purpose (a test runs it through
+`subagent-policy`).
 
 **Why every subagent.** The schema check covers our four roles because only they end with the
 JSON contract. A report that misses a running command's result misleads the lead whatever the
@@ -1553,15 +1558,18 @@ agent-team teammate (Hayden, 2026-11-01).
 report is lost. Two refusals from each check could exceed that, so the wait and schema refusals
 share one counter of 2 (Hayden, 2026-11-01). A report the cap lets through while a command still
 runs isn't silent: the hook returns `updatedInput` with a `[report-check] Note for the caller`
-naming the command and its output file. A probe showed the lead receives the edited message. Past
+naming the command and its output file. A probe showed the lead receives the edited message. A
+report that is one bare JSON object is fenced first, so `extract_report` still finds it. Past
 the role's deadline stop the wait refusal is skipped and only the note is added, since the policy
 then denies every tool but the report path and the agent couldn't wait. A SubagentStop can't
 change the message, so there a report past the cap passes as it is.
 
 **What it can't see.** A tool result whose own output starts with the launch line, which only the
 agent's own command can produce, reads as a launch. That costs at most the shared refusals, and
-only while the named output file exists without an exit line. A transcript or output file it
-can't read counts as no running command (fail open).
+only while the named output file exists without an exit line, for at most the 2-hour bound. A
+harmless Bash call sent in one message with the report (an `ls`) costs one refusal too. A
+transcript or output file it can't read, or any error while reading them, counts as no running
+command (fail open), and the schema check still runs.
 
 ## Verified facts the design rests on
 

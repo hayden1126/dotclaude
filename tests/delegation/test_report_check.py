@@ -3,6 +3,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -233,7 +234,7 @@ class WaitCheck(unittest.TestCase):
         self.assertIn("b5cavw0cz", reason)
         self.assertIn(path, reason)
         self.assertIn("attempt 1 of 3", reason)
-        self.assertIn("shorter than 3 minutes", reason)
+        self.assertIn("under 2 minutes", reason)
 
     def test_the_wait_it_suggests_is_not_blocked_by_claude_code(self):
         # 2.1.316 refuses a Bash call whose first part is a bare `sleep N` with N >= 25
@@ -305,9 +306,10 @@ class WaitCheck(unittest.TestCase):
         self.transcript([use("toolu_bg", command=cmd, run_in_background=True)])
         reason = self.reason(self.run_hook(self.handback()))
         self.assertIn("time.sleep(45)", reason)
-        # a foreground call's missing result isn't a launch: the batch's calls run in order
-        self.transcript([use("toolu_fg", command="ls")])
-        self.assertIsNone(self.run_hook(self.handback()))
+        # a foreground call in the same batch too (review round 1): one moved at 180 s has the
+        # same lag, and its result is unseen by the report either way
+        self.transcript([use("toolu_fg", command="ls -la")])
+        self.assertIn("ls -la", self.reason(self.run_hook(self.handback())))
         # once its result lands, the launch line decides
         path = self.output("b9", "x\n[exited with code 0]")
         self.transcript([use("toolu_b9", command=cmd, run_in_background=True),
@@ -315,6 +317,71 @@ class WaitCheck(unittest.TestCase):
                              dict(launched_result("b9", path)["message"]["content"][0],
                                   tool_use_id="toolu_b9")]})])
         self.assertIsNone(self.run_hook(self.handback()))
+
+    def test_a_forks_inherited_history_is_not_its_own(self):
+        # a fork's transcript holds the parent's tail before <fork-boilerplate> (review round 1)
+        path = self.output("blead")
+        boundary = {"type": "user", "message": {"role": "user", "content": [
+            {"type": "text", "text": "<fork-boilerplate>\nYou are a worker fork. The transcript "
+                                     "above is the parent's history</fork-boilerplate>"}]}}
+        self.transcript([moved_result("blead", path), boundary])
+        self.assertIsNone(self.run_hook(self.handback()))
+        mine = self.output("bmine")
+        self.transcript([moved_result("blead", path), boundary, moved_result("bmine", mine)])
+        reason = self.reason(self.run_hook(self.handback()))
+        self.assertIn("bmine", reason)
+        self.assertNotIn("blead", reason)
+
+    def test_a_launch_older_than_any_background_limit_has_ended(self):
+        # Claude Code stops a background command within 2 hours; one whose exit line never came
+        # (its Claude Code process died) must not pin the agent as running (review round 1)
+        old = dict(moved_result("bold", self.output("bold")),
+                   timestamp=time.strftime("%Y-%m-%dT%H:%M:%S.000Z",
+                                           time.gmtime(time.time() - 3 * 3600)))  # wall clock
+        self.transcript([old])
+        self.assertIsNone(self.run_hook(self.handback()))
+        fresh = dict(old, timestamp=time.strftime("%Y-%m-%dT%H:%M:%S.000Z",
+                                                  time.gmtime(time.time() - 60)))  # wall clock
+        self.transcript([fresh])
+        self.assertIsNotNone(self.run_hook(self.handback()))
+
+    def test_no_transcript_path_still_runs_the_schema_check(self):
+        payload = self.handback("no json", atype="Explore")
+        del payload["transcript_path"]
+        self.assertIn("report contract", self.reason(self.run_hook(payload)))
+
+    def test_the_note_keeps_a_whole_message_json_report_valid(self):
+        # extract_report falls back to the whole message as JSON; the note mustn't break that
+        self.incident()
+        agents = os.path.join(self.state, "dotclaude", "agents")
+        os.makedirs(agents)
+        start = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 6 * 3600))  # wall clock
+        with open(os.path.join(agents, "a1.json"), "w") as f:
+            json.dump({"activation_start": start}, f)
+        out = self.run_hook(self.handback(json.dumps(VALID), atype="Explore"))
+        message = out["hookSpecificOutput"]["updatedInput"]["message"]
+        self.assertIn("Note for the caller", message)
+        sys.path.insert(0, SCRIPTS)
+        import delegation_common as dc
+        self.assertEqual(dc.extract_report(message)[0], VALID)
+
+    def test_the_suggested_wait_passes_the_subagent_policy(self):
+        # docs/delegation.md says the policy allows it for researcher and general-purpose
+        self.incident()
+        command = re.search(r"`(timeout [^`]+)`",
+                            self.reason(self.run_hook(self.handback()))).group(1)
+        repo = os.path.join(self.tmp.name, "repo")
+        os.makedirs(repo)
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        for atype in ("researcher", "general-purpose"):
+            p = subprocess.run(
+                ["python3", os.path.join(SCRIPTS, "subagent-policy")], capture_output=True,
+                text=True, env=self.env, input=json.dumps({
+                    "hook_event_name": "PreToolUse", "tool_name": "Bash", "agent_id": "ap",
+                    "agent_type": atype, "session_id": "s1", "cwd": repo,
+                    "transcript_path": os.path.join(self.proj_dir, "s1.jsonl"),
+                    "tool_input": {"command": command}}))
+            self.assertEqual(p.stdout.strip(), "", f"{atype}: {p.stdout}")
 
     def test_only_the_unfinished_ones_are_named(self):
         done, running = self.output("bdone", "x\n[exited with code 0]"), self.output("brun")

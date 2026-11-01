@@ -492,6 +492,14 @@ def validate_report(obj, schema=None):
 TASK_RE = re.compile(r"<task-id>([^<]+)</task-id>")
 
 
+def entry_time(e):
+    """A transcript entry's timestamp in epoch seconds, or None (it carries milliseconds)."""
+    try:
+        return datetime.datetime.fromisoformat(e["timestamp"].replace("Z", "+00:00")).timestamp()
+    except (KeyError, AttributeError, TypeError, ValueError):
+        return None
+
+
 def text_of(content):
     """A message's text: the string itself, or its text blocks joined."""
     if isinstance(content, str):
