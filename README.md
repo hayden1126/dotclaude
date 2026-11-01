@@ -762,7 +762,7 @@ need nothing extra.
     open.
 - **SessionStart (`startup|resume|clear|compact`) / Stop / SessionEnd: `lane-identity.sh`** (in this
   repo). In a lane it tells the session its lane id, what its worktree has checked out (a branch, or
-  a detached HEAD's commit), claims, port and record, and registers it in `lane.json`; after a
+  a detached HEAD's commit), claims, ports and record, and registers it in `lane.json`; after a
   compact it adds "re-read your record". In the main checkout of a lanes repo it prints one board
   line, and on SessionStart and Stop it runs `lane lead` when the session proves it continues the
   recorded lead (a resume, a /clear or a /pass successor). On Stop and SessionEnd it mirrors the
@@ -846,7 +846,7 @@ checkout: a *lane*. One shared STATUS.md broke this. A line like "another sessio
 and status single-writer:
 
 - `lane new chart-fix --claim 42 --goal "..."` makes the worktree and branch from `origin/main`,
-  copies the files `.worktreeinclude` lists, hands out a port, runs the repo's setup command and
+  copies the files `.worktreeinclude` lists, hands out a block of ports, runs the repo's setup command and
   seeds the lane's record (`<lane>/.lane/STATUS.md`, from `templates/LANE.md`).
 - `lane open chart-fix` starts the lane's session in a new tmux window, in plan mode, told to
   read its record; `--focus` switches to a session already running there. `--model` and
@@ -870,6 +870,11 @@ and status single-writer:
   `lane addr --repo ~/dotclaude lead` prints.
 - `lane lock gate -- npm run e2e` runs a shared gate under a named lock, so a second lane's run
   waits instead of colliding.
+- `lane serve -- npm run dev -- --port {port}` starts a lane's dev server on a port of its
+  block (`lane init --block N` gives each lane N ports) and fails unless the port's listener is
+  that server. A server that failed to bind a port another lane holds can't leave checks
+  testing the other lane's. It runs only with the sandbox off; `--stop PORT` ends it
+  (docs/lanes.md, "Ports and `lane serve`").
 - `lane trial --run "<suite>" ...`, before a lane asks for ready, merges origin/main and every
   other live lane's commits onto it in a scratch tree and runs each suite there under the
   `suite` lock (after any the config's `trial-locks` names, such as a repo's own quiet-machine
