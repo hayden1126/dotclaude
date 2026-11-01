@@ -747,7 +747,8 @@ a server started from a plain terminal has none. Its children must be the lane's
 outside the lane's dir refuses the close by name, before any signal. So `park` ends a served
 server in the lane and keeps its record for a `--stop` after the unpark. `done` also refuses,
 before any signal, while any of the lane's token carriers runs outside the lane, and looks again
-after its signals; only then does it remove the records.
+after its signals; only then does it remove the records, and it keeps any whose processes still
+run (a serve started after its last look).
 
 **Known limits.** The check runs once, when the first listener appears: a listener that binds
 the port after that goes unseen. A listener another user owns (its fds can't be read) always

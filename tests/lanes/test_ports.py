@@ -581,8 +581,15 @@ class Serve(LanesRepo):
                                 cwd=self.path, env=self.env, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True)
         self.addCleanup(lambda: proc.poll() is None and proc.kill())
-        time.sleep(1)  # into the lock wait
-        self.assertIsNone(proc.poll())
+        # Into the lock wait, seen in /proc/locks as a blocked FLOCK waiter on .lock's inode
+        # (`->` marks one), not guessed from a sleep a loaded machine can outrun.
+        inode = os.stat(os.path.join(self.common, "lanes", ".lock")).st_ino
+        deadline = time.monotonic() + 30
+        while not any("->" in line and "FLOCK" in line and line.split()[-3].endswith(f":{inode}")
+                      for line in open("/proc/locks").read().splitlines()):
+            self.assertIsNone(proc.poll(), proc.stderr.read() if proc.poll() is not None else "")
+            self.assertLess(time.monotonic(), deadline, "the serve never waited on the lock")
+            time.sleep(0.02)
         return proc
 
     def test_a_signal_during_the_lock_wait_starts_nothing(self):
@@ -766,6 +773,35 @@ class ServedRecords(LanesRepo):
                 self.assertTrue(self.gone(server, starts[server]))
                 self.assertFalse(self.gone(child, starts[child]))
         self.lane("done", "web")
+
+    def test_done_keeps_a_record_while_what_it_names_runs(self):
+        # The window the refusals can't close: a serve started after done's last look (a lane
+        # with nothing running is never marked closing). Its record outlives the close. The
+        # refusal is patched out here to stand in for the race; the server in the lane is gone,
+        # its child outside the lane (with the token) still runs.
+        server, child = self.outside_child(
+            f"subprocess.Popen(['sh', '-c', 'sleep 600; : {self.tmp}'], cwd='/', "
+            f"start_new_session=True)")
+        start = lanelib.proc_start(server)
+        os.kill(server, signal.SIGKILL)
+        deadline = time.monotonic() + 10
+        while not self.gone(server, start):
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(0.02)
+        self.merge()
+        mod = load_lane_script()
+        with mock.patch.object(mod, "outside_serves"), mock.patch.dict(os.environ, self.env):
+            cwd = os.open(".", os.O_RDONLY)
+            os.chdir(self.main)
+            try:
+                with mock.patch.object(mod, "warn") as warned:
+                    self.assertIn(mod.main(["done", "web"]), (0, None))
+            finally:
+                os.fchdir(cwd)
+                os.close(cwd)
+        self.assertIn("serve records are kept", " ".join(str(c) for c in warned.call_args_list))
+        self.assertTrue(os.path.exists(self.repo.served_path("web", self.lo)))
+        self.assertFalse(self.gone(child, lanelib.proc_start(child)))
 
     def test_done_refuses_by_name_a_child_that_cleared_its_environment_and_left(self):
         # Round 4's case: the token is the only proof, so a child that cleared it and left the

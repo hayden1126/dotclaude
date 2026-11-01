@@ -2558,7 +2558,10 @@ def cmd_serve(args) -> int:
         # the lane closing, ends serve here, before anything starts.
         if signals:
             return -signals[0]
-        closing_refusal(repo.lane_at(top) or lane)
+        if (now := repo.lane_at(top)) is None:
+            raise LaneError(f"lane {lane['id']}'s record no longer names {top} (closed, or "
+                            "changed while serve waited for the lanes lock): nothing started")
+        closing_refusal(now)
         port = serve_port(repo, lane, top, block, args.port, lanes)
         fd, log = serve_log(top, port)
         if signals:
@@ -4868,13 +4871,20 @@ def cmd_done(args) -> None:
         warn(f"lane {args.id}'s parked flag is kept at {repo.parked_path(args.id)} ({e.strerror}): "
              f"harmless, since no later lane {args.id} takes it (it names this one's created "
              "stamp)")
-    try:
-        shutil.rmtree(repo.served_dir(args.id))
-    except FileNotFoundError:
-        pass
-    except OSError as e:
-        warn(f"lane {args.id}'s serve records are kept at {repo.served_dir(args.id)} "
-             f"({e.strerror}): harmless, since what each names is ended")
+    # A serve started after the last look (a lane with nothing running is never marked
+    # closing) keeps its record: one is removed only while nothing carrying its token runs.
+    if live := [f"port {rec['port']}: {named(sum(served_live(rec, path), []))}"
+                for rec in served_records(repo, args.id) if any(served_live(rec, path))]:
+        warn(f"lane {args.id}'s serve records are kept at {repo.served_dir(args.id)}, since "
+             f"what they name still runs: {'; '.join(live)}")
+    else:
+        try:
+            shutil.rmtree(repo.served_dir(args.id))
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            warn(f"lane {args.id}'s serve records are kept at {repo.served_dir(args.id)} "
+                 f"({e.strerror}): harmless, since what each names is ended")
     say(f"lane {args.id} closed ({how}); archived to {archive}")
     delete_branches(repo, branches)
     orphaned_rules(args.id, path)
