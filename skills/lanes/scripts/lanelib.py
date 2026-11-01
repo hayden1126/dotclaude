@@ -22,6 +22,10 @@ Layout (PLAN.md "Layout"):
   <state-dir>/lanes/<repo>-<hash>.parked/<id>.json
                                 lane <id>'s parked flag (Repo.parked_path): written by `lane park`,
                                 removed by `lane open` and `lane done`
+  <state-dir>/lanes/<repo>-<hash>.served/<id>/<port>.json
+                                what `lane serve` started on a port (Repo.served_path), which
+                                `serve --stop` ends by; `lane done` removes the dir once
+                                nothing the records name still runs
 """
 import contextlib
 import datetime
@@ -380,6 +384,17 @@ class Repo:
         sandboxed Bash park itself out of the cap, or unpark another."""
         return os.path.join(self.config_path.removesuffix(".toml") + ".parked", lane_id + ".json")
 
+    def served_dir(self, lane_id: str) -> str:
+        """Lane lane_id's serve records, beside the config: `serve --stop` signals by them, so
+        only a sandbox-off `lane serve` may write them, never a lane's sandboxed Bash. `lane
+        done` removes the dir once nothing the records name still runs."""
+        return os.path.join(self.config_path.removesuffix(".toml") + ".served", lane_id)
+
+    def served_path(self, lane_id: str, port: int) -> str:
+        """What `lane serve` started on port: its leader's pid, start and boot, and the token
+        in the environment of everything it started."""
+        return os.path.join(self.served_dir(lane_id), f"{port}.json")
+
     @property
     def has_lanes(self) -> bool:
         """A lanes repo: `lane init` wrote its config."""
@@ -528,6 +543,27 @@ def record_is_link(lane: dict) -> bool:
 
 def record_path(lane: dict) -> str:
     return os.path.join(record_dir(lane), "STATUS.md")
+
+
+def port_block(lane: dict) -> range | None:
+    """The ports a lane holds: `block` ports from `port` (a lane.json without `block`, as the
+    CLI wrote it before blocks, holds its one port), or None with no port."""
+    port = lane.get("port")
+    return None if port is None else range(port, port + lane.get("block", 1))
+
+
+def block_text(lane: dict) -> str | None:
+    """'5191' or '5191-5193', or None with no port."""
+    block = port_block(lane)
+    if block is None:
+        return None
+    return str(block[0]) if len(block) == 1 else f"{block[0]}-{block[-1]}"
+
+
+def ports_text(lane: dict) -> str:
+    """'port 5191', 'ports 5191-5193' or 'port none', for the CLI's lines and the hook's."""
+    text = block_text(lane)
+    return f"port{'s' if text and '-' in text else ''} {text or 'none'}"
 
 
 def walk_record(src: str, rel: str = ""):
@@ -1039,6 +1075,10 @@ def record_problem(lane, lane_id: str) -> str | None:
     port = lane.get("port")
     if port is not None and (type(port) is not int or not 0 < port < 65536):
         return f"bad port {port!r}"
+    block = lane.get("block")
+    if block is not None and (type(block) is not int or block < 1 or port is None
+                              or port + block > 65536):
+        return f"bad block {block!r} for port {port!r}"
     claims = lane.get("claims", [])
     if not isinstance(claims, list) or not all(isinstance(c, str) and CLAIM_RE.fullmatch(c)
                                                for c in claims):
@@ -1500,6 +1540,58 @@ def scan(proc: str = PROC, full: bool = True) -> dict[int, Proc]:
     return out
 
 
+TCP_LISTEN = "0A"  # /proc/net/tcp{,6} `st` of a listening socket
+
+
+def listeners(port: int, proc: str = PROC) -> set[int]:
+    """The inodes of the TCP sockets listening on port, IPv4 and IPv6, in this network
+    namespace (the Bash sandbox has its own, so inside it these are only its own)."""
+    out = set()
+    for name in ("tcp", "tcp6"):
+        try:
+            with open(os.path.join(proc, "net", name)) as f:
+                lines = f.read().splitlines()[1:]
+        except OSError:
+            continue
+        for line in lines:
+            fields = line.split()
+            if len(fields) < 10 or fields[3] != TCP_LISTEN:
+                continue
+            local = fields[1].rpartition(":")[2]
+            with contextlib.suppress(ValueError):
+                if int(local, 16) == port and int(fields[9]) > 0:
+                    out.add(int(fields[9]))
+    return out
+
+
+def socket_pids(inodes: set[int], proc: str = PROC) -> dict[int, set[int]]:
+    """inode -> the pids with an fd on that socket, for each of inodes; a socket whose holders'
+    fds can't be read (another user's process) maps to no pid."""
+    out = {i: set() for i in inodes}
+    if not inodes:
+        return out
+    try:
+        names = os.listdir(proc)
+    except OSError:
+        return out
+    for name in names:
+        if not (name.isascii() and name.isdigit()):
+            continue
+        fd_dir = os.path.join(proc, name, "fd")
+        try:
+            fds = os.listdir(fd_dir)
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                target = os.readlink(os.path.join(fd_dir, fd))
+            except OSError:
+                continue
+            if target.startswith("socket:[") and (i := int(target[8:-1])) in out:
+                out[i].add(int(name))
+    return out
+
+
 def children(procs: dict[int, Proc]) -> dict[int, list[int]]:
     """ppid -> the pids of its children that haven't exited, from one scan."""
     out = {}
@@ -1787,6 +1879,17 @@ ENVIRON_MAX = 1 << 20  # bytes of /proc/<pid>/environ read for TMUX and TMUX_PAN
 LEAD_MAX = 4096  # bytes of a lead record; a longer one is no record
 PANE = re.compile(r"%[0-9]{1,9}")
 NUMBER = re.compile(r"[0-9]{1,20}")
+
+
+def proc_env(pid: int, key: str, proc: str = PROC) -> str | None:
+    """The value of key in the environment pid started with, or None: unset, or unreadable
+    (gone, another user's). Read bounded, never through a link or waiting on a FIFO."""
+    raw = read_head(os.path.join(proc, str(pid), "environ"), ENVIRON_MAX)
+    want = key.encode() + b"="
+    for entry in (raw or b"").split(b"\0"):
+        if entry.startswith(want):
+            return entry[len(want):].decode(errors="replace")
+    return None
 
 
 def proc_tmux(pid: int, proc: str = PROC) -> tuple[str, int, int, str] | None:

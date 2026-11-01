@@ -3,7 +3,7 @@
 SessionStart (startup, resume, clear, compact):
   in a lane     tells the model its absolute identity (lane id, what its worktree has checked
                 out: a branch, or a detached HEAD's commit; lane.json's branch, labeled, when
-                HEAD can't be read; claims, port, record path)
+                HEAD can't be read; claims, ports, record path)
                 and the rules that keep it absolute, and appends {session_id, startedAt} to
                 lane.json sessions[] (not again for a session already listed and not ended, so a
                 compact keeps its start). On compact it adds "re-read your record": the summary
@@ -94,7 +94,7 @@ def lane_context(lane: dict, source: str, where: str) -> str:
     claims = ", ".join(lane.get("claims", [])) or "none"
     lines = [
         f"You are lane `{lane['id']}`: {where}, claims {claims}, "
-        f"port {lane.get('port') or 'none'}. Your record is {lanelib.record_path(lane)} "
+        f"{lanelib.ports_text(lane)}. Your record is {lanelib.record_path(lane)} "
         "(Brief, State, Decisions, Asks for Hayden, Not mine, Next): read it before acting.",
         "Other lanes' records are read-only. Ownership comes only from `lane who #<n>` (claims), "
         "never from prose, agent lists or tab titles. Never write relative identity ('another "
