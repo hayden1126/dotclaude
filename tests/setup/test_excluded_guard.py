@@ -627,6 +627,29 @@ class Rule1PathArguments(Guard):
         gitfile = self.write(os.path.join(self.proj, "gf"), f"gitdir: {self.proj}/.git\n")
         self.refused("git push -q gf HEAD", gitfile)
 
+    def test_a_gitfile_on_a_judged_path_is_judged_along_its_chain(self):
+        # A <p>/.git gitfile naming the project's gitdir, in a dir a session can write, could be
+        # repointed at another repository after the check. Only the project's top and its lanes'
+        # tops keep their own .git trusted.
+        sub = self.mkdir("proj", "sub")
+        gitfile = self.write(os.path.join(sub, ".git"), f"gitdir: {self.proj}/.git\n")
+        for call in ("git push -q sub HEAD", "pass-respawn -C sub", f"git fetch {sub}",
+                     "lane adopt sub"):
+            with self.subTest(call=call):
+                self.assertIn("could point git at another repository",
+                              self.refused(call, gitfile))
+        self.denied("git push", "rule1", gitfile, cwd=sub)
+        lane_gitfile = os.path.join(self.lane, ".git")
+        for call in ("git push -q . HEAD", f"git push -q {self.lane} HEAD",
+                     f"pass-respawn -C {self.lane}", f"git fetch {self.proj}"):
+            with self.subTest(call=call):
+                self.allowed(call)
+        # A gitfile naming a lane's gitdir is no lane top unless the lane's gitdir names it back.
+        self.write(gitfile, open(lane_gitfile).read())
+        self.refused("pass-respawn -C sub", gitfile)
+        self.env["CLAUDE_PROJECT_DIR"] = self.lane
+        self.allowed(f"pass-respawn -C {self.proj}", cwd=self.lane)
+
     def test_git_refuses_submodule_recursion(self):
         for call in ("git fetch --recurse-submodules", "git pull --recurse-submodules=yes",
                      "git push --recurse-submodules=on-demand origin", "git fetch --recurse",

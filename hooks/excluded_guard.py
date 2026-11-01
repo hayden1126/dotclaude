@@ -1120,6 +1120,31 @@ def read_gitfile(path):
     return os.path.join(os.path.dirname(path), target)
 
 
+def worktree_top(top, proj):
+    """Whether `top` (a repo top discover found) is the project's own top or a worktree top of
+    the project's common dir: its .git a real dir that is the common dir (the main worktree), or
+    a gitfile naming <common>/worktrees/<name> whose `gitdir` file names that .git back, as `git
+    worktree add` records it. Only these keep their own .git trusted (Claude Code protects the
+    session's gitfile); any other .git is judged along its chain (check_rule1)."""
+    if proj is None:
+        return False
+    top = os.path.realpath(top)
+    if top == os.path.realpath(proj[2]):
+        return True
+    dotgit = os.path.join(top, ".git")
+    if os.path.islink(dotgit):
+        return False
+    if os.path.isdir(dotgit):
+        return os.path.realpath(dotgit) == proj[1]
+    try:
+        gitdir = os.path.realpath(read_gitfile(dotgit))
+        with open(os.path.join(gitdir, "gitdir")) as f:
+            back = os.path.realpath(os.path.join(gitdir, f.read().strip()))
+    except (OSError, ValueError):
+        return False
+    return os.path.dirname(gitdir) == os.path.join(proj[1], "worktrees") and back == dotgit
+
+
 def looks_like_gitdir(d):
     """A dir git takes as a repo itself: HEAD, plus objects/ and refs/ here or a commondir (git
     then looks for them in the dir it names). Broader than git, never narrower: a dir counted
@@ -1327,6 +1352,14 @@ def check_rule1(m, env, cwd, project, arg=None, url=None, walk=True):
         raise Refusal("rule1", repo[0],
                       f"{what} is in the repository with git dir {repo[0]}, not the project's. "
                       f"{fix}, or run it from a session launched in that repository.")
+    if repo and not env.get("GIT_DIR") and not worktree_top(repo[2], proj):
+        dotgit = os.path.join(repo[2], ".git")
+        if os.path.lexists(dotgit):
+            m.chain(dotgit, "rule1", lambda bad: Refusal(
+                "rule1", bad, f"{what} is in a repository found through {dotgit}, which a "
+                f"sandboxed session can write ({bad}), so it could point git at another "
+                "repository after this check. Name the project's top or one of its lanes, or "
+                "protect that dir.", protect=m))
     if walk:
         check_below_top(m, env, cwd, project, repo, what, kind)
     home = m.home
