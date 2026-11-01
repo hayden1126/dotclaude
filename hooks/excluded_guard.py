@@ -43,8 +43,14 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      the default remote (branch.<b>.pushRemote or remote, remote.pushDefault, else origin): it
      is refused unless each such value in the config chain and origin name a remote the config
      surely defines, since git reads any other name from a legacy remote file planted after the
-     check; and each value naming no such remote is judged as a path, as a remote URL is. A file:// URL must have no host and no
-     %-escape, and a git option before those subcommands is refused. The calls are found the way zsh splits
+     check; only a nickname needs that, since git reads no legacy file for `.`, `..` or a value
+     holding a `/`, and each value naming no such remote is judged as a path, as a remote URL
+     is. A file:// URL must have no host and no %-escape, and a git option before those
+     subcommands is refused. GIT_CONFIG_COUNT and GIT_CONFIG_PARAMETERS may set only the
+     recursion keys below: any other key refuses, since rule 1 judges config files only.
+     Known limit: a worktree top is recognised through <common>/worktrees/<n>/gitdir, which
+     sits in the writable main git dir, so its trust rests on the same layout checks as the
+     cwd's (gitdir_info), not on a protected file. The calls are found the way zsh splits
      the command (ShellLexer): each call of those heads anywhere in a candidate is judged, one
      in a substitution, subshell or later piece too, and a command it can't read is refused.
      `delegation-ledger hook` is refused outright, since its paths come on stdin. A repo
@@ -849,7 +855,9 @@ def check_path_arguments(m, env, cwd, project, words, targets, remotes=frozenset
         multiple = [n for n, _ in options if n in ("multiple", "no-multiple")][-1:] == ["multiple"]
         if not repos and defaults is not None:
             for key, value in list(dict.fromkeys(defaults)) + [(None, "origin")]:
-                if value in remotes:
+                # git reads a legacy remote file only for a nickname: never for `.` (the repo
+                # itself), `..` or a URL or path holding a `/`, each judged as a path elsewhere.
+                if value in remotes or value in (".", "..") or "/" in value:
                     continue
                 how = (f"{key} names {value!r}" if key else "with none of branch.<b>.remote, "
                        "branch.<b>.pushRemote or remote.pushDefault naming one, git falls back "
@@ -1585,21 +1593,9 @@ GH_GIT_FORMS = {("pr", "checkout"): ("pull", "git fetch and git checkout"),
 GO_FALSE = {"false", "0", "f", "F", "FALSE", "False"}
 
 
-def config_occurrences(env, repo, home):
-    """(key, value, certain, source) for each fetch.recurseSubmodules, push.recurseSubmodules
-    and submodule.recurse git reads (source: the file, or the variable that sets it), in git's
-    order: system, XDG, global, the repo's config, its config.worktree, each include
-    in place, then GIT_CONFIG_COUNT's keys and GIT_CONFIG_PARAMETERS. A value from an includeIf
-    (whose condition the guard doesn't evaluate), or a config.worktree git may not read, is not
-    certain."""
-    files = [(f, True) for f in config_files(env, home)]
-    if repo:
-        gitdir, common, _ = repo
-        files += [(os.path.join(common, "config"), True),
-                  (os.path.join(gitdir, "config.worktree"), reads_worktree_config(common))]
-    out = []
-    for path, certain in files:
-        out += file_occurrences(path, certain, home, 0)
+def env_config_pairs(env):
+    """(key, value, source) for each config entry GIT_CONFIG_COUNT and GIT_CONFIG_PARAMETERS set,
+    in git's order; refuses what the guard can't read."""
     count = env.get("GIT_CONFIG_COUNT")
     pairs = []
     if count:
@@ -1622,6 +1618,38 @@ def config_occurrences(env, repo, home):
         for w in words:
             key, eq, value = w.partition("=")
             pairs.append((key, value if eq else "true", "GIT_CONFIG_PARAMETERS"))
+    return pairs
+
+
+def check_env_config(env):
+    """Rule 1 judges config files, and from the environment only the recursion keys: any other
+    key GIT_CONFIG_COUNT or GIT_CONFIG_PARAMETERS sets (a remote URL, an insteadOf, a branch's
+    remote, an include) would reach every git the call runs unjudged, so it refuses."""
+    for key, _, source in env_config_pairs(env):
+        section, _, rest = key.partition(".")
+        sub, _, name = rest.rpartition(".")
+        if sub or f"{section}.{name}".lower() not in RECURSE_KEYS | PUSH_KEYS:
+            raise Refusal("rule1", source, f"{source} sets the git config key {key!r}, which the "
+                          "guard doesn't judge from the environment. Unset it for excluded "
+                          "commands, or set the key in a config file.")
+
+
+def config_occurrences(env, repo, home):
+    """(key, value, certain, source) for each fetch.recurseSubmodules, push.recurseSubmodules
+    and submodule.recurse git reads (source: the file, or the variable that sets it), in git's
+    order: system, XDG, global, the repo's config, its config.worktree, each include
+    in place, then GIT_CONFIG_COUNT's keys and GIT_CONFIG_PARAMETERS. A value from an includeIf
+    (whose condition the guard doesn't evaluate), or a config.worktree git may not read, is not
+    certain."""
+    files = [(f, True) for f in config_files(env, home)]
+    if repo:
+        gitdir, common, _ = repo
+        files += [(os.path.join(common, "config"), True),
+                  (os.path.join(gitdir, "config.worktree"), reads_worktree_config(common))]
+    out = []
+    for path, certain in files:
+        out += file_occurrences(path, certain, home, 0)
+    pairs = env_config_pairs(env)
     for key, value, source in pairs:
         section, _, rest = key.partition(".")
         sub, _, name = rest.rpartition(".")
@@ -1868,6 +1896,7 @@ def judge(heads, cwd, env, settings, command=""):
     if not project:
         raise Refusal("project", "(unset)", "CLAUDE_PROJECT_DIR is unset, so the guard can't tell "
                       "the project's repository; refusing an excluded command.")
+    check_env_config(env)
     m = Machine(env, settings, cwd)
     remotes, groups, defaults = check_rule1(m, env, cwd, project,
                                             walk=not handed_lane_addr(command))

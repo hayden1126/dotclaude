@@ -643,13 +643,17 @@ class Rule1PathArguments(Guard):
         self.allowed("git fetch https://github.com/x/z")
         self.git("config", "remote.origin.url", "https://github.com/x/y", cwd=self.proj)
         for key in ("branch.x.remote", "branch.x.pushRemote", "remote.pushDefault"):
+            # Not a nickname (a URL, `.` for the repo itself, a path with a `/`): git never
+            # reads a legacy remote file for it, and the URL or path is judged as one.
             for value in ("https://github.com/x/z", "."):
                 with self.subTest(key=key, value=value):
                     self.git("config", key, value, cwd=self.proj)
-                    self.assertIn(key, self.refused("git push", value))
-                    self.refused("git fetch -q", value)
-                    for call in named:
+                    for call in ("git push", "git fetch -q") + named:
                         self.allowed(call)
+            # A nickname no config defines is still refused.
+            self.git("config", key, "upstream", cwd=self.proj)
+            with self.subTest(key=key, value="upstream"):
+                self.assertIn(key, self.refused("git push", "upstream"))
             self.git("config", key, "origin", cwd=self.proj)
             self.allowed("git push")
             # A value naming no remote is a path to git: a missing one a session could create.
@@ -1313,6 +1317,32 @@ class Rule1RemoteUrls(Guard):
 
 
 RECURSE_OFF = "[fetch]\n\trecurseSubmodules = false\n"  # what setup.sh sets
+
+
+class Rule1EnvConfig(Guard):
+    """GIT_CONFIG_COUNT and GIT_CONFIG_PARAMETERS set config for every git an excluded call runs.
+    Rule 1 reads only the recursion keys from them, so any other key there refuses."""
+
+    def test_an_env_config_key_rule_1_does_not_read_is_refused(self):
+        cases = [{"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "remote.origin.url",
+                  "GIT_CONFIG_VALUE_0": "/tmp/x"},
+                 {"GIT_CONFIG_PARAMETERS": "'url./tmp/x.insteadOf=https://h/'"},
+                 {"GIT_CONFIG_PARAMETERS": "'branch.main.remote=/tmp/x'"}]
+        for extra in cases:
+            with self.subTest(extra=extra):
+                self.env.update(extra)
+                for call in ("git push", "gh pr view 5", "lane ls"):
+                    self.denied(call, "rule1", "GIT_CONFIG")
+                for k in extra:
+                    del self.env[k]
+        self.allowed("git push")
+
+    def test_the_recursion_keys_alone_pass(self):
+        self.env.update({"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "fetch.recurseSubmodules",
+                         "GIT_CONFIG_VALUE_0": "false",
+                         "GIT_CONFIG_PARAMETERS": "'submodule.recurse=false'"})
+        self.allowed("git push")
+        self.allowed("git fetch origin")
 
 
 class SubmoduleRecursion(Guard):
