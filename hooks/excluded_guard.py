@@ -1409,15 +1409,7 @@ def check_rule1(m, env, cwd, project, arg=None, url=None, walk=True):
         (trusted if gitdir == proj[0] else files).append(worktree_cfg)
         if not reads_worktree_config(common):
             unsure.add(os.path.abspath(os.path.join(cwd, worktree_cfg)))
-    if env.get("GIT_CONFIG_GLOBAL"):
-        files.append(expand(env["GIT_CONFIG_GLOBAL"], home))
-    else:
-        files.append(os.path.join(home, ".gitconfig"))
-        xdg = env.get("XDG_CONFIG_HOME") or os.path.join(home, ".config")
-        files.append(os.path.join(xdg, "git", "config"))
-    if not env.get("GIT_CONFIG_NOSYSTEM") or env["GIT_CONFIG_NOSYSTEM"].lower() in ("0", "false",
-                                                                                   "no", "off"):
-        files.append(env.get("GIT_CONFIG_SYSTEM") or "/etc/gitconfig")
+    files += config_files(env, home)
     seen, urls, remotes, groups, defaults, rewrites = set(), [], set(), {}, [], []
     queue = [(f, True, 0, True) for f in trusted] + [(f, False, 0, True) for f in files]
     hooks_base = repo[2] if repo else cwd
@@ -1464,6 +1456,25 @@ def check_rule1(m, env, cwd, project, arg=None, url=None, walk=True):
                                  label=f"{key} ({value}, no configured remote)")
     return (remotes, {g: (words, n) for g, (words, [n]) in groups.items()},
             defaults if repo else None)
+
+
+def config_files(env, home):
+    """The system, XDG and global config files git reads, in git's order. A set but empty
+    GIT_CONFIG_SYSTEM or GIT_CONFIG_GLOBAL names no file (git reads none there), and with
+    GIT_CONFIG_GLOBAL set git reads no XDG file either."""
+    files = []
+    nosystem = env.get("GIT_CONFIG_NOSYSTEM")
+    if not nosystem or nosystem.lower() in ("0", "false", "no", "off"):
+        if "GIT_CONFIG_SYSTEM" not in env:
+            files.append("/etc/gitconfig")
+        elif env["GIT_CONFIG_SYSTEM"]:
+            files.append(env["GIT_CONFIG_SYSTEM"])
+    if "GIT_CONFIG_GLOBAL" not in env:
+        xdg = env.get("XDG_CONFIG_HOME") or os.path.join(home, ".config")
+        files += [os.path.join(xdg, "git", "config"), os.path.join(home, ".gitconfig")]
+    elif env["GIT_CONFIG_GLOBAL"]:
+        files.append(expand(env["GIT_CONFIG_GLOBAL"], home))
+    return files
 
 
 def reads_worktree_config(common):
@@ -1551,16 +1562,7 @@ def config_occurrences(env, repo, home):
     in place, then GIT_CONFIG_COUNT's keys and GIT_CONFIG_PARAMETERS. A value from an includeIf
     (whose condition the guard doesn't evaluate), or a config.worktree git may not read, is not
     certain."""
-    files = []
-    if not env.get("GIT_CONFIG_NOSYSTEM") or env["GIT_CONFIG_NOSYSTEM"].lower() in ("0", "false",
-                                                                                   "no", "off"):
-        files.append((env.get("GIT_CONFIG_SYSTEM") or "/etc/gitconfig", True))
-    if env.get("GIT_CONFIG_GLOBAL"):
-        files.append((expand(env["GIT_CONFIG_GLOBAL"], home), True))
-    else:
-        xdg = env.get("XDG_CONFIG_HOME") or os.path.join(home, ".config")
-        files += [(os.path.join(xdg, "git", "config"), True),
-                  (os.path.join(home, ".gitconfig"), True)]
+    files = [(f, True) for f in config_files(env, home)]
     if repo:
         gitdir, common, _ = repo
         files += [(os.path.join(common, "config"), True),

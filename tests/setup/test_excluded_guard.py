@@ -1351,6 +1351,27 @@ class SubmoduleRecursion(Guard):
         self.env["GIT_CONFIG_PARAMETERS"] = "'fetch.recurseSubmodules'='false'"
         self.allowed("git fetch")
 
+    def test_an_empty_global_or_system_variable_names_no_file(self):
+        # git reads no file for a set but empty GIT_CONFIG_GLOBAL (and no XDG file either) or
+        # GIT_CONFIG_SYSTEM, so a switch-off in ~/.gitconfig doesn't count then.
+        self.write(self.gitconfig, RECURSE_OFF)
+        p = subprocess.run(["git", "config", "--get", "fetch.recurseSubmodules"], cwd=self.tmp,
+                           env={"PATH": "/usr/bin:/bin", "HOME": self.home,
+                                "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": ""},
+                           capture_output=True, text=True)
+        self.assertEqual((p.returncode, p.stdout), (1, ""))
+        self.allowed("git fetch")
+        xdg = self.write(os.path.join(self.home, ".config", "git", "config"), "")
+        self.denied("git fetch", "rule1", xdg)
+        self.env["GIT_CONFIG_GLOBAL"] = ""
+        self.denied("git fetch", "rule1", "fetch.recurseSubmodules")
+        self.allowed("git fetch --no-recurse-submodules")
+        files = load_guard().config_files
+        self.assertEqual(files({"GIT_CONFIG_SYSTEM": "", "GIT_CONFIG_GLOBAL": ""}, self.home), [])
+        self.assertEqual(files({"GIT_CONFIG_SYSTEM": "/s"}, self.home), ["/s", xdg, self.gitconfig])
+        self.assertEqual(files({"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/g"}, self.home),
+                         ["/g"])
+
     def test_pull_also_needs_submodule_recurse_off(self):
         # pull updates each submodule after the merge when submodule.recurse is on, whatever
         # fetch.recurseSubmodules says.
