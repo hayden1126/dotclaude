@@ -15,7 +15,11 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      worktrees/<name>/commondir, not the main .git/ dir, so the common dir comes from git's real
      layout: a gitdir with a commondir file must sit at <common>/worktrees/<name> with its
      commondir naming that <common>, and <common> must hold no commondir. Any other layout, in
-     the cwd's repo or the project's, is refused. A repo's own <top>/.git (a gitfile or a
+     the cwd's repo or the project's, is refused. A git dir git might look past refuses
+     (looks_like_gitdir: a .git dir, or a dir with HEAD and refs/, objects/ or a commondir, that
+     fails git's is_git_directory, a HEAD naming refs/... or an object id and objects/ and
+     refs/), at the cwd's walk and each path git's server side tries alike: git would skip it
+     and use the next repository it finds. A repo's own <top>/.git (a gitfile or a
      .git hop) is judged along its symlink chain like any other file, at the cwd, a path
      argument or a server path alike, except at the project's top or a worktree top of its
      common dir (worktree_top): one in a writable dir could be repointed after the check. A
@@ -971,7 +975,8 @@ def check_server_repo(m, env, full, project, arg, url=None, link=None, missing=N
             check_rule1(m, env, found, project, arg=arg, url=url)
     for suffix in SERVER_SUFFIXES:
         tried = full + suffix
-        if os.path.isfile(tried) or os.path.isdir(tried) and looks_like_gitdir(tried):
+        if os.path.isfile(tried) or os.path.isdir(tried) and looks_like_gitdir(
+                tried, env, dotgit=tried.endswith("/.git")):
             return
         bad = None if os.path.lexists(tried) else m.exposed(tried)
         if bad:
@@ -1228,18 +1233,58 @@ def worktree_top(top, proj):
     return os.path.dirname(gitdir) == os.path.join(proj[1], "worktrees") and back == dotgit
 
 
-def looks_like_gitdir(d):
-    """A dir git takes as a repo itself: HEAD, plus objects/ and refs/ here or a commondir (git
-    then looks for them in the dir it names). Broader than git, never narrower: a dir counted
-    here meets gitdir_info's layout check."""
-    if not os.path.lexists(os.path.join(d, "HEAD")):
+def valid_head(path):
+    """Whether git 2.43's validate_headref takes `path`: a symlink whose text starts `refs/`, or
+    a file whose first 255 bytes are `ref:`, optional whitespace and `refs/...`, or start with an
+    object id's 40 hex digits."""
+    try:
+        if os.path.islink(path):
+            return os.readlink(path).startswith("refs/")
+        with open(path, "rb") as f:
+            data = f.read(255)
+    except OSError:
         return False
-    return os.path.lexists(os.path.join(d, "commondir")) or (
-        os.path.isdir(os.path.join(d, "objects")) and os.path.isdir(os.path.join(d, "refs")))
+    if data.startswith(b"ref:") and data[4:].lstrip(b" \t\n\v\f\r").startswith(b"refs/"):
+        return True
+    return re.match(rb"[0-9a-fA-F]{40}", data) is not None
+
+
+def is_git_directory(d, env, start):
+    """git 2.43's is_git_directory: a valid HEAD (valid_head), and objects/ (or
+    GIT_OBJECT_DIRECTORY, relative to the cwd `start`) and refs/ that git can search, in the dir
+    a `commondir` file names or in d itself. A commondir git can't read refuses (git dies)."""
+    if not valid_head(os.path.join(d, "HEAD")):
+        return False
+    common, pointer = d, os.path.join(d, "commondir")
+    if os.path.exists(pointer):
+        with open(pointer) as f:
+            common = os.path.join(d, f.read().strip())
+    objects = env.get("GIT_OBJECT_DIRECTORY")
+    objects = os.path.join(start, objects) if objects else os.path.join(common, "objects")
+    return os.access(objects, os.X_OK) and os.access(os.path.join(common, "refs"), os.X_OK)
+
+
+def looks_like_gitdir(d, env=None, start=None, dotgit=False):
+    """Whether git takes d as a git dir (is_git_directory). A dir it might reject while some of
+    a git dir's parts sit there (any `.git` dir; else HEAD with refs/, objects/ or a commondir)
+    refuses: git would look past it, on up or to the next path its server side tries, and the
+    guard doesn't mimic that skip. Only a dir no git dir check could pass (no HEAD, or HEAD alone)
+    is passed over, as git passes over it."""
+    env = env or {}
+    if is_git_directory(d, env, start or d):
+        return True
+    if not dotgit and not (os.path.lexists(os.path.join(d, "HEAD")) and any(
+            os.path.lexists(os.path.join(d, n)) for n in ("refs", "objects", "commondir"))):
+        return False
+    raise Refusal("rule1", os.path.join(d, "HEAD"), f"the git dir {d} looks broken (git wants a "
+                  "HEAD naming refs/... or an object id, and objects/ and refs/), so git would "
+                  "look past it and use whatever repository it finds next, which the guard "
+                  "doesn't judge. Repair or remove it.")
 
 
 def discover(start, env=None):
-    """(gitdir, common, top) for the repo git would use from `start`, or None."""
+    """(gitdir, common, top) for the repo git would use from `start`, or None. A git dir git
+    might look past refuses (looks_like_gitdir)."""
     env = env or {}
     start = os.path.realpath(start)
     if env.get("GIT_DIR"):
@@ -1251,10 +1296,12 @@ def discover(start, env=None):
     while True:
         dotgit = os.path.join(d, ".git")
         if os.path.isdir(dotgit):
-            return gitdir_info(dotgit, at_root=True) + (d,)
+            info = gitdir_info(dotgit, at_root=True)  # first: its refusal names a planted layout
+            looks_like_gitdir(dotgit, env, start, dotgit=True)
+            return info + (d,)
         if os.path.isfile(dotgit):
             return gitdir_info(read_gitfile(dotgit)) + (d,)
-        if looks_like_gitdir(d):
+        if looks_like_gitdir(d, env, start):
             return gitdir_info(d) + (d,)
         parent = os.path.dirname(d)
         if parent == d or parent in ceilings:

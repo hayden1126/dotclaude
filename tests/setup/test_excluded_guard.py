@@ -2723,6 +2723,55 @@ class DiscoveryMatchesGit(Guard):
                 compared += 1
         self.assertGreaterEqual(compared, 13)  # not vacuous: the two markers refuse, 13 match
 
+    def test_a_git_dir_git_would_look_past_refuses(self):
+        # git's is_git_directory also wants a valid HEAD (`ref: refs/...`, a symlink into refs/
+        # or an object id) and objects/ and refs/, and walks on up past a dir that fails. The
+        # guard refuses there rather than mimic the skip (review round 2).
+        guard = load_guard()
+        head = os.path.join(self.proj, ".git", "HEAD")
+        real = slurp(head)
+        sha = self.git("rev-parse", "HEAD", cwd=self.proj).strip()
+        for text in (real, real.strip(), "ref:\t refs/heads/x\n", sha + "\n", sha.upper()):
+            with self.subTest(head=text):
+                self.write(head, text)
+                self.allowed("git push")
+        os.remove(head)
+        os.symlink("refs/heads/x", head)
+        self.allowed("git push")
+        for text in ("junk\n", "ref: heads/main\n", "", sha[:39], "x" + sha):
+            with self.subTest(head=text):
+                os.remove(head)
+                self.write(head, text)
+                self.assertIn("looks broken", self.denied("git push", "rule1", os.path.dirname(head)))
+                p = subprocess.run(["git", "rev-parse", "--git-dir"], cwd=self.proj,
+                                   capture_output=True, text=True,
+                                   env={"PATH": "/usr/bin:/bin", "HOME": self.home,
+                                        "GIT_CEILING_DIRECTORIES": self.tmp})
+                self.assertNotEqual(p.returncode, 0)  # git looks past it, finding none here
+        self.write(head, real)
+        os.remove(os.path.join(self.proj, ".git", "HEAD"))
+        os.symlink("heads/x", head)
+        self.denied("git push", "rule1", os.path.dirname(head))
+        os.remove(head)
+        self.write(head, real)
+        self.allowed("git push")
+        # A nested .git dir or a bare-looking dir git skips refuses too, at the cwd and as a
+        # server path git's server side would skip.
+        nested = self.mkdir("proj", "nested", ".git", "objects")
+        self.mkdir("proj", "nested", ".git", "refs")
+        self.write(os.path.join(self.proj, "nested", ".git", "HEAD"), "junk\n")
+        bareish = os.path.dirname(self.mkdir("proj", "bareish", "refs"))
+        self.write(os.path.join(bareish, "HEAD"), "junk\n")
+        for cwd in (os.path.dirname(nested), bareish):
+            with self.subTest(cwd=cwd):
+                with self.assertRaises(guard.Refusal) as e:
+                    guard.discover(cwd, {"GIT_CEILING_DIRECTORIES": self.tmp})
+                self.assertIn("looks broken", e.exception.reason)
+        self.write_settings({"excludedCommands": EXCLUDED + ["git push *"]})
+        for call in ("git push nested", "git push bareish"):
+            with self.subTest(call=call):
+                self.assertIn("looks broken", self.denied(call, "rule1"))
+
 
 class ConfigEntries(unittest.TestCase):
     """config_entries reads each entry with its subsection, as git does: a quoted one kept as
