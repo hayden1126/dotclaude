@@ -295,7 +295,7 @@ class OlderInstallCheck(unittest.TestCase):
         return {"sandbox": {"filesystem": {"allowWrite": list(paths)}}}
 
     def test_an_old_cache_entry_marks_an_older_install(self):
-        for entry in ("~/.cache/uv", "~/.cache/ms-playwright/", "~/.local/share/uv/python",
+        for entry in ("~/.npm", "~/.cache/uv", "~/.cache/ms-playwright/", "~/.local/share/uv/python",
                       "~/.local/share/pnpm/store", "~/.cache", "~"):
             self.assertEqual(self.check(self.allow("~/.cache/claude-sandbox", entry)), "1", entry)
 

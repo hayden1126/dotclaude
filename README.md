@@ -58,31 +58,42 @@ alone. A dir it couldn't read makes the report incomplete, never clean. Run it w
 session working in those dirs, since one could swap a dir for an empty one while the walk
 passes. On Windows (git-bash), which has no Bash sandbox, setup skips copy mode.
 
-**Upgrading from an older install.** Before this, the sandbox could write `~/.cache/uv`,
-`~/.cache/pip`, `~/.cache/pnpm`, `~/.cache/node-gyp`, `~/.cache/ms-playwright`,
+**Upgrading from an older install.** Before this, the sandbox could write all of `~/.npm`,
+`~/.cache/uv`, `~/.cache/pip`, `~/.cache/pnpm`, `~/.cache/node-gyp`, `~/.cache/ms-playwright`,
 `~/.local/share/uv/python` and pnpm's store directly, and unsandboxed runs still use what they
 hold, or what was built from it. Setup says so on every run, once the settings it replaced had
-those entries, until you remove the marker it names. In-place reinstalls aren't enough (they
-keep files they don't track, and links they don't reset), so delete and install fresh, from a
-terminal:
+those entries, until you remove the marker it names. The rule: delete each of those dirs, and
+every environment built through one, then install fresh. In-place reinstalls aren't enough:
+they keep files they don't track and links they don't reset, and run the tools already there.
+From a terminal:
 1. Note what to put back: `uv python list --only-installed --python-preference only-managed`
-   (without that flag the list includes system Pythons), `uv tool list`, `pnpm ls -g`, `npm ls
-   -g --depth=0`, `pipx list`. If `readlink -f "$(command -v pnpm)"` or the same for `uv`
-   resolves into a dir below, reinstall that tool from its own installer after step 2.
-2. Delete the dirs the sandbox could write, and everything built from them, by path (not
-   through `uv cache clean`, `pip cache purge` or `pnpm store path`, which clear only the
-   cache now configured, and for pnpm only its current version's folder): `rm -rf ~/.cache/uv
-   ~/.cache/pip ~/.cache/pnpm ~/.cache/node-gyp ~/.cache/ms-playwright ~/.npm/_npx
-   ~/.local/share/uv/python ~/.local/share/uv/tools ~/.local/share/pnpm/store
-   ~/.local/share/pnpm/global ~/.local/share/pnpm/.tools`, plus each project's `.venv` and
-   `node_modules` (leave pipx's venvs: `pipx reinstall-all` reads them, then builds each anew).
-   `~/.cache/pnpm` holds pnpm's metadata and the trees
-   `pnpm dlx` reuses; `~/.npm/_npx` the trees npx reuses; node-gyp's headers reached every
-   native addon npm or pnpm built.
-3. Install fresh: `uv python install <the versions>`, `uv tool install <each tool>`, `pnpm add
-   -g` and `npm install -g` the globals, `pipx reinstall-all`, `pip install --user
-   --force-reinstall --no-cache-dir` any `--user` packages, each project's environment (`uv
-   sync`, `pnpm install`, `npm ci`, a new venv), and Playwright's browsers: `npx
+   (without that flag the list includes system Pythons); `uv tool list --show-with
+   --show-version-specifiers --show-extras --show-python` (for a tool installed from git or a
+   local path, copy its source from `~/.local/share/uv/tools/<tool>/uv-receipt.toml`); `pnpm
+   ls -g`; `npm ls -g --depth=0`; `pip list --user --format=freeze`; `pipx list`. Check where
+   pnpm and uv themselves live: if `head -3 "$(command -v pnpm)"` names a path under
+   `~/.local/share/pnpm` (how `pnpm self-update` and `pnpm add -g pnpm` install it, as a script,
+   not a link), or `readlink -f "$(command -v uv)"` resolves under `~/.local/share/uv`, step 2
+   deletes it: reinstall it from its own installer (corepack or pnpm's, uv's) before step 3.
+2. With no Claude session open (plugin MCP servers run from `~/.npm/_npx`, and deleting a live
+   tree breaks them), delete, by path (not through `uv cache clean`, `pip cache purge` or `pnpm store path`,
+   which clear only the cache now configured, and for pnpm only its current version's folder):
+   `rm -rf ~/.npm ~/.cache/uv ~/.cache/pip ~/.cache/pnpm ~/.cache/node-gyp
+   ~/.cache/ms-playwright ~/.local/share/uv/python ~/.local/share/uv/tools
+   ~/.local/share/pnpm/store ~/.local/share/pnpm/global ~/.local/share/pnpm/.tools
+   ~/.local/share/pipx/shared`. Then uninstall npm's globals (`npm uninstall -g <each>`, with
+   sudo when `npm prefix -g` is system-owned) and pip's `--user` packages (`pip uninstall
+   <each>`), and delete every environment built through those dirs: each project's `.venv`,
+   `venv` and `node_modules`, and tool envs such as `.tox`, `~/.cache/pre-commit`, poetry's
+   and hatch's envs and Jupyter kernels' venvs. Leave pipx's own venvs: `pipx reinstall-all`
+   reads them, then builds each anew, and builds its shared pip fresh once that dir is gone.
+   `~/.npm` holds npm's download cache and the trees npx reuses; `~/.cache/pnpm` pnpm's
+   metadata and the trees `pnpm dlx` reuses; node-gyp's headers reached every native addon
+   npm or pnpm built.
+3. Install fresh: `uv python install <the versions>`, `uv tool install` each tool with what
+   step 1 noted, `pnpm add -g` and `npm install -g` the globals, `pip install --user` the
+   `--user` packages, `pipx reinstall-all`, each project's environment (`uv sync`, `pnpm
+   install`, `npm ci`, a new venv) and each tool env above, and Playwright's browsers: `npx
    playwright@<each project's version> install chromium-headless-shell`.
 
 A project you'd rather not rebuild can be un-linked instead (`cache-unlink --apply <dir>`): that
