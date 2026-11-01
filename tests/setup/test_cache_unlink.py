@@ -111,10 +111,29 @@ class CacheUnlink(Base):
         self.assertEqual(p.returncode, 2)
         self.assertIn("is inside the cache", p.stderr)
 
-    def test_links_between_projects_alone_dont_count(self):
-        a = self.put(os.path.join(self.code, "one", "f"))
-        self.link(a, os.path.join(self.code, "two", "f"))
+    def test_links_across_projects_count(self):
+        # A store kept under the DIRs (a shared ~/code/.pnpm-store): a session in one project
+        # could edit the other's files through it.
+        a = self.put(os.path.join(self.code, ".pnpm-store", "v3", "f"))
+        self.link(a, os.path.join(self.code, "one", "node_modules", "f"))
+        p = self.run_tool(self.code)
+        self.assertEqual(p.returncode, 1, p.stdout)
+        self.assertIn("linked across projects", p.stdout)
+        self.assertEqual(self.run_tool("--apply", self.code).returncode, 0)
         self.assertEqual(self.run_tool(self.code).returncode, 0)
+
+    def test_links_within_one_project_dont_count(self):
+        a = self.put(os.path.join(self.code, "one", "a", "f"))
+        self.link(a, os.path.join(self.code, "one", "b", "f"))
+        self.assertEqual(self.run_tool(self.code).returncode, 0)
+
+    def test_keep_leaves_a_deliberate_link_alone(self):
+        dotfile = self.put(os.path.join(self.home, ".zshrc"))
+        kept = self.link(dotfile, os.path.join(self.code, "dotfiles", "zshrc"))
+        self.assertIn("linked outside", self.run_tool(self.code).stdout)
+        p = self.run_tool("--apply", "--keep", os.path.join(self.code, "dotfiles"), self.code)
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertTrue(os.path.samefile(dotfile, kept))
 
     def test_a_symlink_in_a_project_is_never_walked(self):
         a = self.put(os.path.join(self.uv, "archive-v0", "h1", "m.py"))

@@ -19,12 +19,15 @@ The caches: uv's ($UV_CACHE_DIR, a cache-dir in uv.toml, and the default $XDG_CA
 the .pnpm-store at the root of each DIR's filesystem, where pnpm keeps a store for projects on
 another disk, unless it is a link); bun's ($BUN_INSTALL_CACHE_DIR, $BUN_INSTALL/install/cache,
 ~/.bun/install/cache); plus any --cache DIR. The report names every cache it searched. A
-project file that is the same file as one in a cache counts, and so does one with more links
-than the DIRs hold, none in a searched cache ("linked outside": a cache it didn't find, such as
-a project's own pnpm storeDir), so a missed cache never reads as clean. Links inside a cache (uv
-links its own entries to each other) or only between files under the DIRs never count; a cache
-inside a DIR is skipped, and a DIR inside a cache is refused. Run it with no Claude session
-working in those dirs: a session could swap a dir for an empty one while the walk passes.
+project file that is the same file as one in a cache counts; so does one with more links than
+the DIRs hold, none in a searched cache ("linked outside": a cache it didn't find), and one
+linked across two projects under the DIRs ("linked across projects": a store kept under them,
+such as a shared ~/code/.pnpm-store), so a missed cache never reads as clean. Links inside a
+cache (uv links its own entries to each other) or within one project never count; a cache
+inside a DIR is skipped, and a DIR inside a cache is refused. --keep DIR leaves the links under
+DIR alone, for a hardlink kept on purpose (a dotfile linked into a repo). Run it with no Claude
+session working in those dirs: a session could swap a dir for an empty one while the walk
+passes, and a write it makes between the check and the rename lands in the old copy.
 
 --apply works on dirs the sandbox can write while it runs, so it never trusts a path's text: it
 opens each dir from the DIR down without following a link, and creates, renames and removes
@@ -38,6 +41,7 @@ import stat
 import sys
 
 OUTSIDE = "linked outside"  # the report's name for links to files outside the DIRs
+BETWEEN = "linked across projects"  # and for links between two projects under them
 NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 DIR_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | NOFOLLOW
 
@@ -153,10 +157,11 @@ def project_of(root, rel):
     return os.path.join(root, first[0]) if len(first) > 1 else root
 
 
-def find_shared(roots, caches):
+def find_shared(roots, caches, keep=()):
     """({(project, cache name): [(root, rel, lstat)]} for each project file that is the same
-    file as one in a cache, [(path, error)] for what the walks couldn't read)."""
-    cache_dirs = {d for dirs in caches.values() for d in dirs}
+    file as one in a cache, [(path, error)] for what the walks couldn't read). Dirs in keep
+    (real paths) aren't walked: links kept there on purpose."""
+    cache_dirs = {d for dirs in caches.values() for d in dirs} | set(keep)
     errors = []
     wanted = {}  # project side first: usually far fewer linked files than the caches hold
     for root in roots:
@@ -172,12 +177,19 @@ def find_shared(roots, caches):
                 for root, rel, pst in wanted.pop((st.st_dev, st.st_ino), ()):
                     shared.setdefault((project_of(root, rel), name), []).append((root, rel, pst))
     # A file with more links than the DIRs hold, none of them in a cache searched, is linked to
-    # something outside: maybe a cache this didn't find (a project's own pnpm storeDir). It
-    # counts, so the report is never clean for it; giving it its own copy is safe either way.
+    # something outside: maybe a cache this didn't find. One linked across projects is the same
+    # hole between them (a store under the DIRs, such as a shared ~/code/.pnpm-store: a session
+    # in one project edits the next one's files). Both count, so neither reads as clean; giving
+    # each file its own copy is safe either way. Links within one project don't count.
     for entries in wanted.values():
         if entries[0][2].st_nlink > len(entries):
-            for root, rel, pst in entries:
-                shared.setdefault((project_of(root, rel), OUTSIDE), []).append((root, rel, pst))
+            name = OUTSIDE
+        elif len({project_of(root, rel) for root, rel, _ in entries}) > 1:
+            name = BETWEEN
+        else:
+            continue
+        for root, rel, pst in entries:
+            shared.setdefault((project_of(root, rel), name), []).append((root, rel, pst))
     return shared, errors
 
 
@@ -254,6 +266,8 @@ def main(argv=None):
     ap.add_argument("dirs", nargs="+", metavar="DIR", help="dirs to search (your projects)")
     ap.add_argument("--apply", action="store_true", help="un-link what the report finds")
     ap.add_argument("--files", action="store_true", help="list each shared file, not just counts")
+    ap.add_argument("--keep", action="append", default=[], metavar="DIR",
+                    help="leave the links under DIR alone (a hardlink kept on purpose)")
     ap.add_argument("--cache", action="append", default=[], metavar="DIR",
                     help="another cache dir to count (a store this misses)")
     args = ap.parse_args(argv)
@@ -285,7 +299,7 @@ def main(argv=None):
     print("cache-unlink: searched " + "; ".join(
         f"{name} {', '.join(tilde(d) for d in dirs) or '(none found)'}"
         for name, dirs in caches.items()))
-    shared, errors = find_shared(roots, caches)
+    shared, errors = find_shared(roots, caches, [os.path.realpath(d) for d in args.keep])
     for path, err in errors:
         print(f"cache-unlink: can't read {tilde(path)}: {err}", file=sys.stderr)
     incomplete = (f"cache-unlink: {len(errors)} paths couldn't be read, so the report is "

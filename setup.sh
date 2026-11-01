@@ -171,8 +171,9 @@ copy_managed() {
 # than ~/dotclaude (a lane), that checkout's copies of the write-protected paths join denyWrite.
 # Without an overlay, such a key or another checkout, the baseline is copied byte for byte.
 # Before the copy replaces it: did the installed settings let the sandbox write the package
-# caches, uv's Pythons or Playwright's browsers (an older dotclaude)? Section 6 then points to the
-# rebuild step, since unsandboxed runs still use what the sandbox could write there.
+# caches, uv's Pythons or Playwright's browsers (an older dotclaude)? Then a marker in the state
+# dir has section 6 point to the rebuild step on every run until Hayden removes it: the copy
+# below erases the evidence, so a run stopped before section 6 must not lose the hint.
 old_cache_writes="$(python3 -I - "$CLAUDE_DIR/settings.json" 2>/dev/null <<'PY' || true
 import json, sys
 try:
@@ -188,6 +189,8 @@ for p in (p for p in allow if isinstance(p, str)):
         break
 PY
 )"
+[[ -z $old_cache_writes ]] || { mkdir -p "$STATE_DIR" && : >"$STATE_DIR/rebuild-caches-pending"; } \
+  || warn "can't write $STATE_DIR/rebuild-caches-pending: the older install's caches need a rebuild (README, \"Upgrading from an older install\")"
 MERGED_SETTINGS="$(mktemp)"  # section 1's exit trap removes it
 chmod 644 "$MERGED_SETTINGS"  # mktemp's 0600 would carry over to the installed copy
 python3 -I "$REPO_DIR/merge-settings.py" --checkout "$REPO_DIR" "$REPO_DIR/settings.json" \
@@ -593,9 +596,10 @@ case "$(uname -s)" in
     fi
     [[ -z $copy_mode_new ]] \
       || warn "copy mode is new here: uv and pnpm installs made before it still share files with their caches. List them with \`cache-unlink <your project dirs>\`, then rerun it with --apply"
-    # Set in section 2 from the settings this run replaced.
-    [[ -z ${old_cache_writes:-} ]] \
-      || warn "the settings this run replaced let the sandbox write the package caches, uv's Pythons or Playwright's browsers, and unsandboxed runs still use them: rebuild them once (README, \"Upgrading from an older install\")"
+    # Section 2's marker, from the settings a run replaced.
+    rebuild_marker="${STATE_DIR:-}/rebuild-caches-pending"
+    [[ -z ${STATE_DIR:-} || ! -e $rebuild_marker ]] \
+      || warn "an older install let the sandbox write the package caches, uv's Pythons or Playwright's browsers, and unsandboxed runs still use them: rebuild them once (README, \"Upgrading from an older install\"), then rm $rebuild_marker"
     ;;
 esac
 

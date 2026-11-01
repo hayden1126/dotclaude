@@ -20,11 +20,14 @@ REBUILD = 'README, "Upgrading from an older install"'
 
 
 def old_cache_check():
-    """setup.sh's section 2 check of the settings it is about to replace."""
+    """setup.sh's section 2 check of the settings it is about to replace, and the marker it
+    leaves, after the say and warn helpers."""
     with open(SETUP) as f:
         text = f.read()
+    helpers = text[text.index("say()"):text.index("# ----", text.index("say()"))]
     start = text.index('old_cache_writes="$(')
-    return text[start:text.index('PY\n)"', start) + len('PY\n)"')] + '\nprintf "%s" "$old_cache_writes"'
+    end = text.index('MERGED_SETTINGS="$(mktemp)"', start)
+    return helpers + text[start:end] + 'printf "%s" "$old_cache_writes"'
 
 
 def section():
@@ -114,10 +117,16 @@ class CopyMode(unittest.TestCase):
         # Copy mode set by hand long ago says nothing about what the old sandbox could write.
         self.write(self.uv, 'link-mode = "copy"\n')
         self.write(self.pnpm, "package-import-method=copy\n")
-        err = self.run_section(old_cache_writes="1")
+        state = os.path.join(self.tmp, "state")
+        self.assertNotIn(REBUILD, self.run_section(STATE_DIR=state))
+        self.write(os.path.join(state, "rebuild-caches-pending"), "")
+        err = self.run_section(STATE_DIR=state)
         self.assertIn(REBUILD, err)
         self.assertFalse(self.hinted)
-        self.assertNotIn(REBUILD, self.run_section())
+        # Every run says it until the marker is removed, so a missed run loses nothing.
+        self.assertIn(REBUILD, self.run_section(STATE_DIR=state))
+        os.remove(os.path.join(state, "rebuild-caches-pending"))
+        self.assertNotIn(REBUILD, self.run_section(STATE_DIR=state))
         with open(os.path.join(REPO, "README.md")) as f:
             self.assertIn("**Upgrading from an older install.**", f.read())
 
@@ -267,15 +276,19 @@ class OlderInstallCheck(unittest.TestCase):
     covers a package cache, uv's Pythons or Playwright's browsers marks an older install."""
 
     def check(self, settings):
+        """The check's value; the marker it leaves must match it."""
         tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, tmp)
         if settings is not None:
             with open(os.path.join(tmp, "settings.json"), "w") as f:
                 f.write(settings if isinstance(settings, str) else json.dumps(settings))
+        state = os.path.join(tmp, "state dir")
         p = subprocess.run(["bash", "-euo", "pipefail", "-c", old_cache_check()],
                            capture_output=True, text=True, timeout=10,
-                           env=dict(os.environ, CLAUDE_DIR=tmp))
+                           env=dict(os.environ, CLAUDE_DIR=tmp, STATE_DIR=state))
         self.assertEqual((p.returncode, p.stderr), (0, ""))
+        marker = os.path.exists(os.path.join(state, "rebuild-caches-pending"))
+        self.assertEqual(marker, p.stdout == "1")
         return p.stdout
 
     def allow(self, *paths):

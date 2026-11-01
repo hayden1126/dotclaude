@@ -49,29 +49,38 @@ value the file already sets is kept and named on stderr. bun has no such setting
 mode covers new installs only, so the run that first sets it points to `cache-unlink`: from a
 terminal, `cache-unlink ~/code` counts, per project, the files that are still hardlinks into the
 uv, pnpm or bun cache (`--files` lists them), and `cache-unlink --apply ~/code` gives each a copy
-of its own (same bytes, mode and times; nothing to reinstall). It names every cache it searched;
-a file linked to something outside the dirs you named counts too, as `linked outside`: a cache
-it didn't find, or harmless links such as the git objects a local `git clone` shares with its
-source (un-linking those costs only disk). A dir it couldn't read makes the report incomplete,
-never clean. Run it with no Claude session
-working in those dirs, since one could swap a dir for an empty one while the walk passes. On
-Windows (git-bash), which has no Bash sandbox, setup skips copy mode.
+of its own (same bytes, mode and times; nothing to reinstall). It names every cache it searched.
+A file linked to something outside the dirs you named counts too (`linked outside`: a cache it
+didn't find, or harmless links such as the git objects a local `git clone` shares with its
+source; un-linking those costs only disk), and so does one linked across two projects (`linked
+across projects`: a store kept under them). `--keep DIR` leaves a hardlink you keep on purpose
+alone. A dir it couldn't read makes the report incomplete, never clean. Run it with no Claude
+session working in those dirs, since one could swap a dir for an empty one while the walk
+passes. On Windows (git-bash), which has no Bash sandbox, setup skips copy mode.
 
 **Upgrading from an older install.** Before this, the sandbox could write `~/.cache/uv`,
 `~/.cache/pip`, `~/.cache/pnpm`, `~/.cache/node-gyp`, `~/.cache/ms-playwright`,
 `~/.local/share/uv/python` and pnpm's store directly, and unsandboxed runs still use what they
 hold. `cache-unlink` keeps the bytes it copies, so it can't undo an edit made then. Setup says
-so when the settings it replaces had those entries. Rebuild them from a terminal once, after
-`cache-unlink --apply`: `uv cache clean`; `uv python install --reinstall <each version that
-uv python list --only-installed --python-preference only-managed shows>` (without that flag
-the list includes system Pythons, which this would download as new managed copies); `pip cache
-purge`; `rm -rf "$(pnpm store path)" ~/.cache/pnpm ~/.cache/node-gyp` (`~/.cache/pnpm` holds
-pnpm's metadata and the trees `pnpm dlx` reuses); and for Playwright, `rm -rf
-~/.cache/ms-playwright`, then `npx playwright@<each project's version> install
-chromium-headless-shell`. A project installed in that window can hold a copy of an
-edited file too: reinstall it (`uv sync --reinstall`, `pnpm install --force`). Auditing the
-caches against their own checksums is the alternative; HAYPC's were audited on 2026-10-31 and
-were clean.
+so on every run, once the settings it replaced had those entries, until you remove the marker
+it names. Rebuild from a terminal, in this order:
+1. Un-link first, so clearing a cache can't leave a project sharing a file with nothing:
+   `cache-unlink --apply ~/code ~/.local/share/uv/tools ~/.local/share/pnpm` (your projects,
+   uv's tool envs and pnpm's global packages, which link to the caches too).
+2. Clear the caches: `uv cache clean`; `pip cache purge`; `rm -rf "$(cd / && pnpm store path)"
+   ~/.cache/pnpm ~/.cache/node-gyp`. Run `pnpm store path` from `/`: inside a project it
+   answers with that project's store, which its `.npmrc` (sandbox-writable) can name, and the
+   real store would stay. `~/.cache/pnpm` holds pnpm's metadata and the trees `pnpm dlx` reuses.
+3. Reinstall what was built from them: `uv python install --reinstall <each version uv python
+   list --only-installed --python-preference only-managed shows>` (without that flag the list
+   includes system Pythons, which this would download as new managed copies); `uv tool upgrade
+   --all --reinstall`; your pnpm global packages (`pnpm ls -g`, then `pnpm add -g` them); each
+   project's environment (`uv sync --reinstall`, `pnpm install --force`, or a fresh venv for
+   one pip built from the cache); and Playwright: `rm -rf ~/.cache/ms-playwright`, then `npx
+   playwright@<each project's version> install chromium-headless-shell`.
+
+Auditing the caches against their own checksums is the alternative; HAYPC's were audited on
+2026-10-31 and were clean.
 
 Each run replaces that copy, so a value added to a key the baseline sets is lost. Settings that belong
 to one machine, such as hooks for its own scripts or `sandbox.excludedCommands` for its own tools, go
