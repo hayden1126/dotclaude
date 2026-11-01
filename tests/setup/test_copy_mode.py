@@ -299,6 +299,13 @@ class OlderInstallCheck(unittest.TestCase):
                       "~/.local/share/pnpm/store", "~/.cache", "~"):
             self.assertEqual(self.check(self.allow("~/.cache/claude-sandbox", entry)), "1", entry)
 
+    def test_an_absolute_spelling_counts_too(self):
+        home = os.path.expanduser("~")
+        for entry in (home + "/.npm", home + "/.cache/", home, "$HOME/.cache/pip"):
+            self.assertEqual(self.check(self.allow(entry)), "1", entry)
+        for entry in (home + "/.cache/claude-sandbox", home + "x/.npm", "/opt/.npm"):
+            self.assertEqual(self.check(self.allow(entry)), "", entry)
+
     def test_the_new_settings_or_none_dont(self):
         self.assertEqual(self.check(self.allow("~/.cache/claude-sandbox")), "")
         self.assertEqual(self.check(None), "")

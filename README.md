@@ -63,25 +63,29 @@ passes. On Windows (git-bash), which has no Bash sandbox, setup skips copy mode.
 `~/.local/share/uv/python` and pnpm's store directly, and unsandboxed runs still use what they
 hold, or what was built from them. Setup says so on every run, once the settings it replaced had
 those entries, until you remove the marker it names (an `allowWrite` entry for one of them left in
-`settings.machine.json` keeps the gap open and brings the warning back: remove it there too).
-Checking the caches can't clear them: the sandbox could write their checksum files too, so only a
-rebuild does. The rule, from a terminal with no Claude session open (plugin MCP servers run from
-`~/.npm/_npx`):
+`settings.machine.json` keeps the gap open: remove it there and rerun `./setup.sh` before the
+rebuild). Checking the caches can't clear them: the sandbox could write their checksum files too,
+so only a rebuild does. The rule, from a terminal with no Claude session open (plugin MCP servers
+run from `~/.npm/_npx`):
 - **Note** what you'll put back (your global packages, uv's Pythons and tools, pipx apps, `--user`
-  packages), then **delete those dirs by path** (pnpm's `.tools` holds its own copies, linked from
-  its store):
+  packages, Playwright's browsers) from the files, not by running the tools: a planted npm or pip
+  runs at `npm ls -g` too. Look in the global `node_modules`, `~/.local/share/uv/tools` and
+  `python`, pipx's `venvs/*/pipx_metadata.json`, `~/.local/lib/python3*/site-packages` and
+  `~/.cache/ms-playwright`. Then **delete those dirs by path** (pnpm's `.tools` holds its own
+  copies, linked from its store):
 
   ```bash
   rm -rf ~/.npm ~/.bun/install/cache ~/.cache/uv ~/.cache/pip ~/.cache/pnpm ~/.cache/node-gyp ~/.cache/ms-playwright ~/.local/share/uv/python ~/.local/share/pnpm/store ~/.local/share/pnpm/.tools
   ```
 
-  Not `uv cache clean`, `pip cache purge` or `pnpm store path`: they clear only the cache now
-  configured, and pnpm's only its current version's folder.
-- **Put the installers back from their own sources first** (Node with its npm, uv, pnpm, pip,
-  pipx). Delete by path, never by running it, any copy of one that came through those dirs: an
-  npm upgraded with `npm install -g npm`, a pip or uv installed with `pip install --user`, a pnpm
-  or corepack installed by npm or by itself. A tool built through those dirs runs whatever was
-  planted there, its own uninstall included.
+  Not `uv cache clean`, `pip cache purge` or `rm -rf "$(pnpm store path)"`: they clear only the
+  cache now configured, and pnpm's only its current version's folder.
+- **Delete by path, never by running it, any installer that came through those dirs**: an npm
+  upgraded with `npm install -g npm` (that means the whole Node install it upgraded, such as
+  `rm -rf ~/.nvm/versions/node/<v>`), a pip or uv installed with `pip install --user`, a pnpm or
+  corepack installed by npm or by itself, a bun installed by npm. A tool built through those dirs
+  runs whatever was planted there, its own uninstall included. **Then put the installers back
+  from their own sources** (Node with its npm, uv, pnpm, bun, pip, pipx), before the next step.
 - **Delete, then rebuild, everything built through them**: uv's tool envs, npm's, pnpm's, bun's
   and pip's global and `--user` packages, pipx's shared pip and its apps (`pipx reinstall-all`
   once the shared dir is gone), each project's `.venv`, `venv` and `node_modules`, and tool envs

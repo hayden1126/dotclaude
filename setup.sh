@@ -176,15 +176,20 @@ copy_managed() {
 # below erases the evidence, so a run stopped before section 6 must not lose the hint.
 old_cache_check() {
   python3 -I - "$CLAUDE_DIR/settings.json" 2>/dev/null <<'PY' || true
-import json, sys
+import json, os, sys
 try:
     allow = json.load(open(sys.argv[1]))["sandbox"]["filesystem"]["allowWrite"]
 except Exception:
     sys.exit()
 old = ("~/.npm", "~/.bun/install/cache", "~/.cache/uv", "~/.cache/pip", "~/.cache/pnpm", "~/.cache/node-gyp",
        "~/.cache/ms-playwright", "~/.local/share/uv", "~/.local/share/pnpm")
+home = os.path.expanduser("~").rstrip("/")
 for p in (p for p in allow if isinstance(p, str)):
     p = p.rstrip("/") or "/"
+    for h in (home, "$HOME"):  # an overlay may spell home out
+        if h and (p == h or p.startswith(h + "/")):
+            p = "~" + p[len(h):]
+            break
     if any(p == o or p.startswith(o + "/") or o.startswith(p + "/") for o in old):
         print(1)
         break
