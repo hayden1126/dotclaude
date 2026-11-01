@@ -90,12 +90,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - #144 (exam-prep): rules public, evidence private (Hayden, 2026-10-20).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
-  - **Live lanes** (briefs in each record). Merge order: 1 park (`feat/lane-park`, #153,
-    carries the lead's notes; opened 2026-10-29 on Hayden's "a third lane since lane-fixes almost
-    done": `lane park` below), 2 cache-gaps (`fix/sandbox-cache-gaps`, opened 2026-10-29 on
-    Hayden's pick of N2/N3 over ports: the two sandbox gaps below; its install narrows the sandbox
-    live, so it tells the lead first), 3 guard-gaps (`fix/guard-design-gaps`, opened 2026-10-31 on
-    Hayden's order: the excluded-guard design gaps below), 4 practices
+  - **Live lanes** (briefs in each record). Merge order: 1 cache-gaps (`fix/sandbox-cache-gaps`,
+    carries the lead's notes; opened 2026-10-29 on Hayden's pick of N2/N3 over ports: the two
+    sandbox gaps below; its install narrows the sandbox live and adds an npx shim, so it tells
+    the lead first and running sessions need a `/pass` after it), 2 guard-gaps
+    (`fix/guard-design-gaps`, opened 2026-10-31 on Hayden's order: the excluded-guard design gaps
+    below), 3 ports (opened 2026-10-31 on Hayden's order: ports below), 4 practices
     (`feat/practices-auth-secrets`, its next PR; paused by Hayden since 2026-10-24, last so it
     blocks no install; it conflicts with origin/main on its own, per lane-fixes' trial).
     Merged and installed from main, all closed: chrome-dup (#151, 2026-10-29: one chrome-devtools
@@ -105,13 +105,17 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     no-ids fail, `trial_locks`; docs/lanes.md "Known limits of reading the flag from prose") and
     pass-fixes (#154, 2026-10-31: compact-pass fixes; excluded-guard rule 1 judges path arguments
     where git finds the repo, with a zsh-like lexer and refusals that say what to run instead;
-    handoff-check refuses a repo whose own config sets a filter command or an lfs.extension key).
+    handoff-check refuses a repo whose own config sets a filter command or an lfs.extension key),
+    park (#153, 2026-10-31: `lane park`, a parked state outside the cap; the smoke ran in a
+    throwaway lanes repo, nothing public).
     #154's install made new refusals live in every session: arithmetic like `$((SECONDS+12))` and
     `git -C <dir> fetch` in a command that would leave the sandbox.
   - Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
 
   Backlog:
-  - **Next lane when a slot frees:** ports (Hayden's order, 2026-10-30).
+  - **Next lane when a slot frees:** shared lane locks or structured `Keep open` (both below,
+    both in the lane CLI files ports now holds), the subagent 180 s fix, or the design-decision
+    security re-evaluation; Hayden's pick.
   - G8 open probes (a) and (b) (Hayden's pick, 2026-10-14): Hayden runs
     `~/scratch/sandbox-audit/g8-probe/run.py` by hand with the sandbox off, because the auto-mode
     classifier refused the run. Results go into the private findings file's G8 section.
@@ -169,7 +173,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     stop writer starvation, so the queued-exclusive rule needs a turnstile; and `lane ls` probes a
     lock by taking `LOCK_SH` for an instant (`lock_holder`), which would succeed beside a shared
     holder and read the lock as free. Lane-able (`lane`,
-    `lanelib.py`, `tests/lanes`, `docs/lanes.md`), after ports; overlaps lane park. Tell the
+    `lanelib.py`, `tests/lanes`, `docs/lanes.md`), after ports. Tell the
     capella-studio lead when it lands.
   - **Subagent Bash moves to the background at 180 s** (medium; lane pass-fixes, session
     0eb4c7ff, 2026-10-30; Claude Code 2.1.316). A subagent's foreground `./wait.sh` (timeout
@@ -188,7 +192,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     failed once in a full `tests/lanes` run that crossed local midnight, then passed on rerun.
     Cause: the module's `TODAY` is computed at import, so after midnight it is yesterday while
     handoff-check reads the real date. Fix: compute it per test, or pin the clock in the check's
-    env. Rides with the next lane touching `tests/lanes` (ports).
+    env. Rides with lane ports.
   - **Store `Keep open` as structured state** (Hayden's pick, 2026-10-29, via lane lane-fixes).
     `lane keep "<why>"` / `lane keep --off` write it to lane.json, `lane done` reads the field,
     the record's `Keep open:` line is for people, and handoff-check warns when the two disagree.
@@ -196,21 +200,25 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     spans, fences, a quoted `## Next`); docs/lanes.md "Known limits of reading the flag from
     prose" (branch `fix/lane-small-bugs`) lists what stays open. Lane-able
     (`skills/lanes/scripts/lane`, `lanelib.py`, handoff-check, `tests/lanes`), the same files as
-    lane park, so it opens after park merges.
-  - **`lane park <id>`: a parked state outside the cap** (lane park; feature; capella-studio lead, session
-    6bceec36, on Hayden's pick there, 2026-10-29). Finished lanes wait hours for their merge turn
-    holding a cap slot, a Claude session and dev servers (dotclaude's paused practices holds
-    one now). Park refuses unless `handoff-check` passes, there is no `handoff?` flag, the tree is
-    clean and the branch is pushed or has an open PR; it ends the lane's sessions with `done`'s
-    proof rules and keeps the worktree, branch, record and claims. `ls` shows `parked` and still
-    derives PR, `rebase`, `overlap` and `handoff?`; `open` unparks it (plan mode); `done` works as
-    usual. The cap counts at `new` only, so park is a CLI-written flag under
-    `<common-dir>/lanes/`, skipped by `new`'s count and checked by `open`. Lead's additions: park
-    refuses while the lane holds a lock or the install hold; a parked lane gets no "main moved".
-    Hayden's pick: a parked lane may unpark over a full cap to rebase and merge, at most one lane
-    over at a time. Lane-able (`lane`, `lanelib.py`, `tests/lanes`, `docs/lanes.md`, the lanes
-    skill).
-  - **Ports: blocks per lane, `lane port`, `lane serve`** (feature; capella-studio lane prefs,
+    lane ports, so it opens after ports merges.
+  - **A server jail for `lane serve`** (Hayden, 2026-10-31, via lane ports, session 57b5b44c).
+    `serve` binds the host port itself and forwards into the dev server, which runs in a
+    bubblewrap jail with the sandbox's file rules and no network of its own. Closes a private
+    sandbox-audit FINDINGS row (lane ports, 2026-10-31). Open design question: a server that calls
+    out needs a proxy with an allowlist. Lane-able after ports PR 1 (`lane`, `lanelib.py`,
+    `tests/lanes`). Scope widened (Hayden, 2026-10-31, via lane cache-gaps): the jail also wraps
+    project hooks, and the lane closes the whole family of private rows that share one root
+    (DS1, H1, N1 to N3) in one mechanism rather than per-tool fixes.
+  - **Re-evaluate past design decisions for unflagged exploitability** (Hayden, 2026-10-31, via
+    lane ports, session 57b5b44c). Why: a design fork in lane ports offered a standing sandbox
+    bypass without naming the threat until Hayden asked; earlier forks may have shipped the same
+    way. Sources: lane records' Decisions (`<common-dir>/lanes/_closed/*/`), memory,
+    `docs/lanes.md` and `docs/delegation.md` rationale, PR bodies. For each decision that touches
+    the sandbox, permissions, excluded commands or unsandboxed execution: the threat, whether it
+    was named when chosen, and a fix or an accept. Findings go private (sandbox-audit FINDINGS).
+    Lead's view: a read-only audit lane of its own, not lane practices (paused, and its skills
+    cover app code, not dotclaude's own design).
+  - **Ports: blocks per lane, `lane port`, `lane serve`** (lane ports; feature; capella-studio lane prefs,
     session 78db7f95, 2026-10-29). A lane's run script started a dev server on a port another
     lane's dev held; the start failed and its checks silently tested the other server. Proposed:
     (1) a block of ports per lane, shown in `ls`; (2) `lane port claim [--purpose]`, `port who`,
@@ -218,7 +226,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     its ready line or death, check the listener's pid is in that session; (4) a SessionStart
     "your ports" line. Hayden's scope (2026-10-29): PR 1 is (3) with (1); (2) and (4) a later PR.
     Only (3)'s listener check closes the silent wrong-server run. Lane-able (`lane`,
-    `lanelib.py`, `tests/lanes`, `docs/lanes.md`, the lane-identity hook). Overlaps lane park.
+    `lanelib.py`, `tests/lanes`, `docs/lanes.md`, the lane-identity hook). The midnight test flake below rides along.
   - **Lanes skill: rebase only at your turn** (capella-studio lead, session 80ab3852, 2026-10-25;
     Hayden picked all three in capella's window). (A) The lead, step 7.6: only the lane next in
     merge order merges or rebases origin/main; the others get "main moved", check conflicts, and
@@ -335,7 +343,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 ## Notes for next session
 - **Next (lead, main checkout):**
   0. Four lanes run, cap full (In flight, Live lanes; state in their records, `lane ls`).
-     Next lane when a slot frees: ports. Running
+     Next lane when a slot frees: Hayden's pick (Backlog, first item). Running
      sessions took chrome-dup's allowWrite swap live at its install (2026-10-29): a session
      started before it needs a `/pass` before a sandboxed npm or bun install. Pending with Hayden, outside the lanes: `wsl --shutdown` at a break applies the 18 GB
      WSL cap set in `C:\Users\hayde\.wslconfig` on 2026-10-23 (backup `.wslconfig.bak-20261023`).
