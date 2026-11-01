@@ -64,20 +64,26 @@ passes. On Windows (git-bash), which has no Bash sandbox, setup skips copy mode.
 hold. `cache-unlink` keeps the bytes it copies, so it can't undo an edit made then. Setup says
 so on every run, once the settings it replaced had those entries, until you remove the marker
 it names. Rebuild from a terminal, in this order:
-1. Un-link first, so clearing a cache can't leave a project sharing a file with nothing:
-   `cache-unlink --apply ~/code ~/.local/share/uv/tools ~/.local/share/pnpm` (your projects,
-   uv's tool envs and pnpm's global packages, which link to the caches too).
-2. Clear the caches: `uv cache clean`; `pip cache purge`; `rm -rf "$(cd / && pnpm store path)"
-   ~/.cache/pnpm ~/.cache/node-gyp`. Run `pnpm store path` from `/`: inside a project it
-   answers with that project's store, which its `.npmrc` (sandbox-writable) can name, and the
-   real store would stay. `~/.cache/pnpm` holds pnpm's metadata and the trees `pnpm dlx` reuses.
+1. Un-link: `cache-unlink --apply ~/code ~/.local/share/uv/tools ~/.local/share/pnpm`, leaving
+   out any of those dirs you don't have (it stops on a missing one). That covers what step 3
+   doesn't reinstall: your projects, uv's tool envs and pnpm's global packages link to the
+   caches too.
+2. Remove what the sandbox could write, whole, by path: `rm -rf ~/.cache/uv ~/.cache/pip
+   ~/.cache/pnpm ~/.cache/node-gyp ~/.cache/ms-playwright ~/.local/share/pnpm/store`.
+   By path, not through `uv cache clean`, `pip cache purge` or `pnpm store path`: those clear
+   the cache now configured (a var or a config file can move it) and pnpm's names only its
+   current version's folder (`store/v3`), while the sandbox could write these defaults whole.
+   `~/.cache/pnpm` holds pnpm's metadata and the trees `pnpm dlx` reuses.
 3. Reinstall what was built from them: `uv python install --reinstall <each version uv python
    list --only-installed --python-preference only-managed shows>` (without that flag the list
    includes system Pythons, which this would download as new managed copies); `uv tool upgrade
-   --all --reinstall`; your pnpm global packages (`pnpm ls -g`, then `pnpm add -g` them); each
-   project's environment (`uv sync --reinstall`, `pnpm install --force`, or a fresh venv for
-   one pip built from the cache); and Playwright: `rm -rf ~/.cache/ms-playwright`, then `npx
-   playwright@<each project's version> install chromium-headless-shell`.
+   --all --reinstall`; pnpm's globals and the pnpm versions it installed for projects (note
+   `pnpm ls -g`, `rm -rf ~/.local/share/pnpm/global ~/.local/share/pnpm/.tools`, then `pnpm add
+   -g` them: re-adding over the old dirs keeps their files); pipx's and pip's `--user` installs
+   (`pipx reinstall-all`, `pip install --user --force-reinstall --no-cache-dir <them>`); each
+   project's environment (`uv sync --reinstall`, `pnpm install --force`, or a fresh venv for one
+   pip built); and Playwright's browsers: `npx playwright@<each project's version> install
+   chromium-headless-shell`.
 
 Auditing the caches against their own checksums is the alternative; HAYPC's were audited on
 2026-10-31 and were clean.

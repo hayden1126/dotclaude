@@ -287,6 +287,9 @@ def main(argv=None):
         if not os.path.isdir(real):
             ap.error(f"not a dir: {d}")
         roots.append(real)
+    for d in args.keep:
+        if not os.path.isdir(d):  # a typo there would un-link the very link it meant to keep
+            ap.error(f"--keep: not a dir: {d}")
     roots = disjoint(roots)
     caches = default_caches(roots)
     if args.cache:
