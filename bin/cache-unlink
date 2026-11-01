@@ -1,0 +1,338 @@
+#!/usr/bin/python3 -I
+"""Find, and on request un-link, project files that are hardlinks into a shared package cache.
+
+uv and pnpm (and bun) install a project's packages as hardlinks into their shared cache, so the
+project's file and the cache's file are one file. A sandboxed session can write the project, so
+an in-place edit there would reach the cache and every later install of that package (sandbox
+gap N3). setup.sh puts uv and pnpm in copy mode, which covers new installs only; this finds the
+installs made before it and, with --apply, gives each shared file a copy of its own: the same
+bytes, mode and times, in a new file renamed over the old one, so nothing needs reinstalling.
+
+Run it from a terminal, outside the sandbox: it reads the caches and rewrites the projects.
+
+    cache-unlink ~/code              # report, per project under ~/code; exit 1 if any is shared
+    cache-unlink --apply ~/code      # un-link them; exit 0 once none is left
+
+The caches: uv's ($UV_CACHE_DIR, a cache-dir in uv.toml, and the default $XDG_CACHE_HOME/uv or
+~/.cache/uv); pnpm's store ($PNPM_HOME/store, $XDG_DATA_HOME/pnpm/store,
+~/.local/share/pnpm/store, ~/Library/pnpm/store, a store-dir set in pnpm's rc or ~/.npmrc, and
+the .pnpm-store at the root of each DIR's filesystem, where pnpm keeps a store for projects on
+another disk, unless it is a link); bun's ($BUN_INSTALL_CACHE_DIR, $BUN_INSTALL/install/cache,
+~/.bun/install/cache); plus any --cache DIR. The report names every cache it searched. A
+project file that is the same file as one in a cache counts; so does one with more links than
+the DIRs hold, none in a searched cache ("linked outside": a cache it didn't find), and one
+linked across two projects under the DIRs ("linked across projects": a store kept under them,
+such as a shared ~/code/.pnpm-store), so a missed cache never reads as clean. Links inside a
+cache (uv links its own entries to each other) or within one project never count; a cache
+inside a DIR is skipped, and a DIR inside a cache is refused. --keep DIR leaves the links under
+DIR alone, for a hardlink kept on purpose (a dotfile linked into a repo). Run it with no Claude
+session working in those dirs: a session could swap a dir for an empty one while the walk
+passes, and a write it makes between the check and the rename lands in the old copy.
+
+--apply works on dirs the sandbox can write while it runs, so it never trusts a path's text: it
+opens each dir from the DIR down without following a link, and creates, renames and removes
+only inside the dir it opened. A dir swapped for a link fails that file; nothing lands outside.
+tests/setup/test_cache_unlink.py holds the cases.
+"""
+import argparse
+import os
+import re
+import stat
+import sys
+
+OUTSIDE = "linked outside"  # the report's name for links to files outside the DIRs
+BETWEEN = "linked across projects"  # and for links between two projects under them
+NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+DIR_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | NOFOLLOW
+
+
+def under(path, d):
+    return path == d or path.startswith(d.rstrip(os.sep) + os.sep)
+
+
+def mount_of(path):
+    """The root of the filesystem path is on: the highest dir with path's device."""
+    dev = os.stat(path).st_dev
+    while True:
+        parent = os.path.dirname(path)
+        if parent == path or os.stat(parent).st_dev != dev:
+            return path
+        path = parent
+
+
+def rc_store_dirs(home):
+    """store-dir values set in pnpm's rc files or ~/.npmrc (pnpm reads both)."""
+    config = os.environ.get("XDG_CONFIG_HOME") or os.path.join(home, ".config")
+    found = []
+    for rc in (os.path.join(config, "pnpm", "rc"),
+               os.path.join(home, "Library", "Preferences", "pnpm", "rc"),
+               os.path.join(home, ".npmrc")):
+        try:
+            with open(rc) as f:
+                text = f.read()
+        except OSError:
+            continue
+        for m in re.finditer(r"(?m)^\s*store-dir\s*=\s*(.+?)\s*$", text):
+            found.append(os.path.expanduser(m.group(1).strip("\"'")))
+    return found
+
+
+def uv_cache_dirs(home):
+    """cache-dir values set in uv's user config."""
+    config = os.environ.get("XDG_CONFIG_HOME") or os.path.join(home, ".config")
+    try:
+        with open(os.path.join(config, "uv", "uv.toml")) as f:
+            text = f.read()
+    except OSError:
+        return []
+    return [os.path.expanduser(m.group(1)) for m in
+            re.finditer(r"(?m)^\s*cache-dir\s*=\s*[\"'](.+?)[\"']\s*(?:#.*)?$", text)]
+
+
+def default_caches(roots):
+    home = os.path.expanduser("~")
+    env = os.environ.get
+    xdg_cache = env("XDG_CACHE_HOME") or os.path.join(home, ".cache")
+    xdg_data = env("XDG_DATA_HOME") or os.path.join(home, ".local", "share")
+    pnpm = [os.path.join(xdg_data, "pnpm", "store"),
+            os.path.join(home, ".local", "share", "pnpm", "store"),
+            os.path.join(home, "Library", "pnpm", "store"), *rc_store_dirs(home)]
+    if env("PNPM_HOME"):
+        pnpm.insert(0, os.path.join(env("PNPM_HOME"), "store"))
+    pnpm += [os.path.join(mount_of(r), ".pnpm-store") for r in roots]
+    bun = [os.path.join(home, ".bun", "install", "cache")]
+    if env("BUN_INSTALL"):
+        bun.insert(0, os.path.join(env("BUN_INSTALL"), "install", "cache"))
+    if env("BUN_INSTALL_CACHE_DIR"):
+        bun.insert(0, env("BUN_INSTALL_CACHE_DIR"))
+    # uv's default too when a var or uv.toml moves it: the cache an older sandbox could write is
+    # the default one.
+    uv = [os.path.join(xdg_cache, "uv"), os.path.join(home, ".cache", "uv"), *uv_cache_dirs(home)]
+    if env("UV_CACHE_DIR"):
+        uv.insert(0, env("UV_CACHE_DIR"))
+    caches = {"uv": uv, "pnpm": pnpm, "bun": bun}
+    # A .pnpm-store at a filesystem root a sandboxed session could write might be its link to a
+    # project dir, which would then count as a cache and go unwalked: a link is never a store.
+    planted = {os.path.join(mount_of(r), ".pnpm-store") for r in roots}
+    out = {}
+    for name, dirs in caches.items():
+        real = [os.path.realpath(d) for d in dirs
+                if os.path.isdir(d) and not (d in planted and os.path.islink(d))]
+        out[name] = list(dict.fromkeys(real))
+    return out
+
+
+def disjoint(roots):
+    """roots without one that is another's, or inside another: each file is walked once."""
+    kept = []
+    for r in sorted(set(roots), key=len):
+        if not any(under(r, k) for k in kept):
+            kept.append(r)
+    return kept
+
+
+def linked_files(root, skip, errors):
+    """(path, lstat) for each regular file under root with more than one link; never follows
+    a symlink, and skips the dirs in skip (real paths). A dir it can't read goes in errors: the
+    sandbox can chmod one or nest one past PATH_MAX, and a silent skip would read as clean."""
+    for dirpath, dirnames, filenames in os.walk(
+            root, onerror=lambda e: errors.append((e.filename, e.strerror or str(e)))):
+        dirnames[:] = [d for d in dirnames
+                       if os.path.realpath(os.path.join(dirpath, d)) not in skip]
+        for name in filenames:
+            path = os.path.join(dirpath, name)
+            try:
+                st = os.lstat(path)
+            except OSError as e:
+                errors.append((path, e.strerror or str(e)))
+                continue
+            if stat.S_ISREG(st.st_mode) and st.st_nlink > 1:
+                yield path, st
+
+
+def project_of(root, rel):
+    """The top-level entry under root that holds rel, or root for a file directly in it: the
+    report groups by project when DIR holds several."""
+    first = rel.split(os.sep, 1)
+    return os.path.join(root, first[0]) if len(first) > 1 else root
+
+
+def find_shared(roots, caches, keep=()):
+    """({(project, cache name): [(root, rel, lstat)]} for each project file that is the same
+    file as one in a cache, [(path, error)] for what the walks couldn't read). Dirs in keep
+    (real paths) aren't walked: links kept there on purpose."""
+    cache_dirs = {d for dirs in caches.values() for d in dirs} | set(keep)
+    errors = []
+    wanted = {}  # project side first: usually far fewer linked files than the caches hold
+    for root in roots:
+        for path, st in linked_files(root, cache_dirs, errors):
+            wanted.setdefault((st.st_dev, st.st_ino), []).append(
+                (root, os.path.relpath(path, root), st))
+    shared = {}
+    for name, dirs in caches.items():
+        for d in dirs:
+            if not wanted:
+                break
+            for _, st in linked_files(d, set(), errors):
+                for root, rel, pst in wanted.pop((st.st_dev, st.st_ino), ()):
+                    shared.setdefault((project_of(root, rel), name), []).append((root, rel, pst))
+    # A file with more links than the DIRs hold, none of them in a cache searched, is linked to
+    # something outside: maybe a cache this didn't find. One linked across projects is the same
+    # hole between them (a store under the DIRs, such as a shared ~/code/.pnpm-store: a session
+    # in one project edits the next one's files). Both count, so neither reads as clean; giving
+    # each file its own copy is safe either way. Links within one project don't count.
+    for entries in wanted.values():
+        if entries[0][2].st_nlink > len(entries):
+            name = OUTSIDE
+        elif len({project_of(root, rel) for root, rel, _ in entries}) > 1:
+            name = BETWEEN
+        else:
+            continue
+        for root, rel, pst in entries:
+            shared.setdefault((project_of(root, rel), name), []).append((root, rel, pst))
+    return shared, errors
+
+
+def unlink_in_place(root, rel, st):
+    """Give root/rel a copy of its own: open each dir from root down without following a link,
+    check the file is still the one the walk saw, copy it to a new file in that same dir, and
+    rename that over it. Everything after the descent goes through the dir's fd, so a dir
+    swapped for a link meanwhile can't send the copy or the rename anywhere else."""
+    parts = rel.split(os.sep)
+    dfd = os.open(root, DIR_FLAGS)
+    tmp, made = f".{parts[-1]}.cache-unlink.{os.getpid()}", False
+    try:
+        for part in parts[:-1]:
+            nfd = os.open(part, DIR_FLAGS, dir_fd=dfd)
+            os.close(dfd)
+            dfd = nfd
+        # O_NONBLOCK: a FIFO swapped in for the file would block a plain open forever.
+        src = os.open(parts[-1], os.O_RDONLY | NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
+        try:
+            cur = os.fstat(src)
+            if not stat.S_ISREG(cur.st_mode) or (cur.st_dev, cur.st_ino) != (st.st_dev, st.st_ino):
+                raise OSError("changed since the walk")
+            dst = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW, 0o600, dir_fd=dfd)
+            made = True
+            try:
+                while chunk := os.read(src, 1 << 20):
+                    view = memoryview(chunk)
+                    while view:  # os.write may write less than it was given
+                        n = os.write(dst, view)
+                        if n <= 0:
+                            raise OSError("a write made no progress")
+                        view = view[n:]
+                # A copy shorter than the file (a full disk, a file shrunk mid-copy) never
+                # replaces it.
+                if os.fstat(dst).st_size != os.fstat(src).st_size:
+                    raise OSError("the copy came out a different size")
+                os.fchmod(dst, stat.S_IMODE(cur.st_mode))
+                os.utime(dst, ns=(cur.st_atime_ns, cur.st_mtime_ns))
+                os.fsync(dst)
+            finally:
+                os.close(dst)
+        finally:
+            os.close(src)
+        os.replace(tmp, parts[-1], src_dir_fd=dfd, dst_dir_fd=dfd)
+        made = False
+    finally:
+        if made:
+            try:
+                os.unlink(tmp, dir_fd=dfd)
+            except OSError:
+                pass
+        os.close(dfd)
+
+
+def apply(shared):
+    """(done, [(path, error)]) after un-linking every file in shared."""
+    done, failed = 0, []
+    for files in shared.values():
+        for root, rel, st in files:
+            try:
+                unlink_in_place(root, rel, st)
+                done += 1
+            except OSError as e:
+                failed.append((os.path.join(root, rel), e.strerror or str(e)))
+    return done, failed
+
+
+def tilde(path, home=os.path.expanduser("~")):
+    return "~" + path[len(home):] if under(path, home) and path != home else path
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="cache-unlink", description=__doc__.split("\n\n")[0])
+    ap.add_argument("dirs", nargs="+", metavar="DIR", help="dirs to search (your projects)")
+    ap.add_argument("--apply", action="store_true", help="un-link what the report finds")
+    ap.add_argument("--files", action="store_true", help="list each shared file, not just counts")
+    ap.add_argument("--keep", action="append", default=[], metavar="DIR",
+                    help="leave the links under DIR alone (a hardlink kept on purpose)")
+    ap.add_argument("--cache", action="append", default=[], metavar="DIR",
+                    help="another cache dir to count (a store this misses)")
+    args = ap.parse_args(argv)
+    # A dir the sandbox named can be any bytes; print it escaped rather than crash.
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(errors="backslashreplace")
+    if os.environ.get("SANDBOX_RUNTIME"):
+        # There the cache vars name the sandbox's own caches, so the report would miss yours.
+        ap.error("run it from a terminal, not in Claude Code's sandbox")
+    if os.name == "nt":
+        # No Bash sandbox there to write a project, and --apply needs dir fds Windows lacks.
+        ap.error("not needed on Windows, where Claude Code has no Bash sandbox")
+
+    roots = []
+    for d in args.dirs:
+        real = os.path.realpath(d)
+        if not os.path.isdir(real):
+            ap.error(f"not a dir: {d}")
+        roots.append(real)
+    for d in args.keep:
+        if not os.path.isdir(d):  # a typo there would un-link the very link it meant to keep
+            ap.error(f"--keep: not a dir: {d}")
+    roots = disjoint(roots)
+    for d in args.keep:  # one outside every DIR (a relative path from the wrong cwd) keeps nothing
+        if not any(under(os.path.realpath(d), r) for r in roots):
+            ap.error(f"--keep: {d} is under none of the dirs searched")
+    caches = default_caches(roots)
+    if args.cache:
+        caches["other"] = [os.path.realpath(d) for d in args.cache if os.path.isdir(d)]
+    for r in roots:
+        for d in (d for dirs in caches.values() for d in dirs):
+            if under(r, d):
+                ap.error(f"{tilde(r)} is inside the cache {tilde(d)}: name your project dirs")
+
+    print("cache-unlink: searched " + "; ".join(
+        f"{name} {', '.join(tilde(d) for d in dirs) or '(none found)'}"
+        for name, dirs in caches.items()))
+    shared, errors = find_shared(roots, caches, [os.path.realpath(d) for d in args.keep])
+    for path, err in errors:
+        print(f"cache-unlink: can't read {tilde(path)}: {err}", file=sys.stderr)
+    incomplete = (f"cache-unlink: {len(errors)} paths couldn't be read, so the report is "
+                  "incomplete: fix them and rerun" if errors else "")
+    if not shared:
+        if errors:
+            print(incomplete)
+            return 1
+        print("cache-unlink: no file under " + ", ".join(map(tilde, roots))
+              + " is shared with a cache")
+        return 0
+    for (project, name), files in sorted(shared.items()):
+        print(f"{name:<6}{len(files):>8} files  {tilde(project)}")
+        if args.files:
+            for root, rel, _ in files:
+                print(f"    {tilde(os.path.join(root, rel))}")
+    if incomplete:
+        print(incomplete)
+    if not args.apply:
+        print("cache-unlink: rerun with --apply to give each its own copy")
+        return 1
+    done, failed = apply(shared)
+    for path, err in failed:
+        print(f"cache-unlink: {path}: {err}", file=sys.stderr)
+    print(f"cache-unlink: un-linked {done} files" + (f", {len(failed)} failed" if failed else ""))
+    return 1 if failed or errors else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
