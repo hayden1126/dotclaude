@@ -146,6 +146,15 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     9. Prose only: DA3 (a memory line plus the delegation skill; lane practices to be told when
        it next runs) and DA5 (a global CLAUDE.md line).
     Accepted by Hayden: DA7, DA10, DA11.
+  - **SessionStart hooks skip forked sessions** (bug report from capella-studio lane artexport,
+    session 1f152f3c, 2026-11-02). 2.1.316 fires SessionStart with source `fork` (the binary's
+    enum is startup, resume, clear, compact, fork), and every matcher in `settings.json` lists
+    only the first four, so a fork runs none of blank-display, sandbox-caches, lane-identity,
+    session-registry, excluded-check or practices-check. Seen: the fork's `session-env` dir holds
+    only the Codex plugin's file (its hook has no matcher). A fork also copies the parent's
+    transcript, hook notices included, so it believes it was blanked. Fix: add `fork` to each
+    matcher that should run (check `practices_check.py` and `lane_identity.py`'s source branches,
+    and `tests/delegation/test_settings.py`), plus a fork probe. Files overlap lane practices only.
   - **A systematic sweep of what code outside the sandbox reads or runs that a session can
     write** (Hayden, 2026-11-01, via lane design-audit). The shared git dir, home config,
     interpreter paths and state files: design-audit's review rounds 4 and 5 kept finding highs
