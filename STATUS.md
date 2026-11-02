@@ -95,7 +95,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     the design-decision re-evaluation, findings private; its PR is the public ask-time threat
     rule), 2 subagent-wait (`fix/subagent-moved-command`, opened 2026-11-01 on Hayden's pick: the
     subagent 180 s fix below, plus a one-line hermeticity fix in `test_hook_payloads`), 3 ports
-    (PR 2 next: `lane port claim/who/ls` and the SessionStart "your ports" line; its record says
+    (next PR: the DA15/DA16 fix, on Hayden's pick 2026-11-01, since it changes the same lane CLI
+    files; then `lane port claim/who/ls` and the SessionStart "your ports" line; its record says
     `Keep open`), 4 practices (`feat/practices-auth-secrets`, its next PR; paused by Hayden since
     2026-10-24, last so it blocks no install; it conflicts with origin/main on its own, per
     lane-fixes' trial).
@@ -125,7 +126,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   Backlog:
   - **Fix lanes from lane design-audit** (Hayden's picks, 2026-11-01). Private: sandbox-audit
     FINDINGS, "Design-decision audit, 2026-11", one row per id with the detail. Most severe first:
-    1. DA15 with DA16 (high): next to open. Files: `skills/lanes/scripts/lane`, `lanelib.py`,
+    1. DA15 with DA16 (high): lane ports' next PR (Hayden, 2026-11-01). Files: `skills/lanes/scripts/lane`, `lanelib.py`,
        handoff-check, `setup.sh`, `skills/lanes/SKILL.md` (the post-merge step) and their tests,
        the files ports' PR 2 also changes. Until it lands, the lead runs DA15's pre-check and
        DA16's stopgap before each post-merge chain (both in the private rows).
@@ -149,9 +150,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     write** (Hayden, 2026-11-01, via lane design-audit). The shared git dir, home config,
     interpreter paths and state files: design-audit's review rounds 4 and 5 kept finding highs
     beyond its inventory. Findings private. Read-only, like design-audit.
-  - **Next lane when a slot frees (Hayden's pick):** the DA15/DA16 lane (above), then the serve
-    jail (it closes live private rows), shared lane locks and structured `Keep open`. All four
-    share the lane CLI files with ports' PR 2.
+  - **Next lane when a slot frees (Hayden's pick):** the serve jail (it closes live private
+    rows), shared lane locks or structured `Keep open`, all on the lane CLI files lane ports
+    holds; or DA17, which can open any time.
   - G8 open probes (a) and (b) (Hayden's pick, 2026-10-14): Hayden runs
     `~/scratch/sandbox-audit/g8-probe/run.py` by hand with the sandbox off, because the auto-mode
     classifier refused the run. Results go into the private findings file's G8 section.
@@ -366,7 +367,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 ## Notes for next session
 - **Next (lead, main checkout):**
   0. Four lanes run, cap full (In flight, Live lanes; state in their records, `lane ls`). Next
-     lane when a slot frees: the DA15/DA16 lane (Backlog, first item). Before each post-merge
+     lane when a slot frees: Hayden's pick (Backlog). DA15/DA16 rides in lane ports. Before each post-merge
      chain, run DA15's pre-check and DA16's stopgap from the private FINDINGS rows. Since #156's install, a lone
      excluded call (gh, git push or fetch, lane) runs only from a repo's top. Running sessions took
      #157's cache narrowing live at its install (2026-10-31 14:39 local): a session started
