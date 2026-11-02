@@ -1537,16 +1537,18 @@ A command has ended, as far as the agent is concerned, when:
 - a task notification for it is in the transcript;
 - its output file ends with `[killed]` (a TaskStop, or the kill at a final response, neither of
   which leaves a notice);
-- a later call showed the agent the end (review rounds 3 and 4): a task-output call naming the
-  task whose result shows its status, or a call naming that output file and no other launch's
-  whose result holds the file's own `[exited with code N]` line (a `cat` or `tail` of it). A
-  `cat` of two files, or a command's own "exited with code 0" output, doesn't count;
 - or its launch is older than any background command can run (2 hours, plus 10 minutes of
   slack), which covers a Claude Code process that died first.
 
-An `[exited with code N]` line alone isn't enough (review round 2): a mid-turn notice arrives
-with the agent's next tool result, so an exit line nobody showed the agent came after it last
-looked, and the report it is sending may be the incident's "not written".
+An `[exited with code N]` line alone isn't enough (review round 2): the notice is written right
+after the tool result that shows the end (entries 34 and 35, 33 and 34, 35 and 36 in three live
+runs), so an exit line without one came after the agent last looked, and the report it is sending
+may be the incident's "not written". Rounds 3 and 4 also counted an end shown through a later
+call (a `cat`, a `tail`, a task-output call), and both rounds' mediums were false passes in that
+code. Hayden dropped it (2026-11-01): the notice already covers a `cat` or `tail`, and the one
+case it alone covered, a task-output tool that suppresses the notice, was never seen in a
+subagent. Without it, that case costs two refusals and a note that may be wrong, never a wrong
+report passed silently.
 
 A Bash call in the agent's latest message whose result isn't in the transcript yet counts too,
 named by its command. In the second live `early` run the agent sent the launch and the handback

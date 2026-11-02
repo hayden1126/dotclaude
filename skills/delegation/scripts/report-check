@@ -78,9 +78,6 @@ ASSISTANT_RE = re.compile(rb'"type":\s*"assistant"')
 BASH_USE_RE = re.compile(rb'"name":\s*"Bash"')
 RESULT_ID_RE = re.compile(rb'"tool_use_id":\s*"([^"]+)"')
 KILLED_RE = re.compile(rb"\[killed\]\s*\Z")
-EXITED_RE = re.compile(rb"(\[exited with code -?\d+\])\s*\Z")
-# a task-output call's result that shows its task's end
-STATUS_RE = re.compile(r"<status>(?:completed|failed|killed)</status>|<exit_code>")
 TAIL_BYTES = 256
 # Claude Code stops a background command at its timeout, 2 hours at most: a launch older than
 # this has ended even when no exit line or notice says so (its Claude Code process died).
@@ -228,11 +225,10 @@ def output_killed(path):
 def running_tasks(path):
     """[(name, output file or None)] for the agent's own background commands whose end it
     hasn't seen, or [] on any error (fail open, the schema check still runs). One has ended
-    when its notice is in the transcript, its output file ends with [killed], its launch is
-    older than MAX_BACKGROUND_S, or a later call that names it or its output file got a result
-    showing the end (a cat, a tail, a task-output call). An exit line alone isn't enough: the
-    notice comes with the agent's next tool result, so an exit line without one ended after
-    the agent last looked. A Bash call in the agent's latest message whose result isn't in the
+    when its notice is in the transcript, its output file ends with [killed], or its launch is
+    older than MAX_BACKGROUND_S. An exit line alone isn't enough: the notice is written right
+    after the tool result that shows the end (3 of 3 live runs), so an exit line without one
+    ended after the agent last looked. A Bash call in the agent's latest message whose result isn't in the
     transcript yet counts too, named by its command: sent in one message with the handback,
     its result is written after the handback's hook reads the transcript (2.1.316, the live
     `early` case). In a fork, only what follows its inherited history counts, and a fork with
@@ -245,7 +241,7 @@ def running_tasks(path):
 
 def _running(path, now):
     launched, ended, pending, answered, wait_uses = {}, set(), {}, set(), set()
-    fork, start, last_message = None, 0, None
+    fork, last_message = None, None
     for i, line in enumerate(lines(path) if path else ()):
         if fork is None:   # a fork's transcript has fork-context-ref before any message
             head = parsed(line) or {}
@@ -264,7 +260,7 @@ def _running(path, now):
             continue
         if fork and is_fork_boundary(e):
             launched, ended, pending, answered = {}, set(), {}, set()
-            fork, start = False, i + 1
+            fork = False
             continue
         if e.get("type") == "assistant":
             msg = e.get("message")
@@ -284,65 +280,10 @@ def _running(path, now):
                 launched.setdefault(task, output)
     if fork:
         return []
-    exited = {}
-    for t, o in launched.items():
-        if t not in ended and o:
-            line = exit_line(o)
-            if line:
-                exited[t] = (o, line)
-    seen = seen_ends(path, start, exited, {o for o in launched.values() if o}) if exited else set()
-    running = [(t, o) for t, o in launched.items()
-               if t not in ended and t not in seen and not output_killed(o)]
+    running = [(t, o) for t, o in launched.items() if t not in ended and not output_killed(o)]
     return running + [(f"`{cmd.replace('`', chr(39))}`", None)
                       for tid, (cmd, message) in pending.items()
                       if message == last_message and tid not in answered]
-
-
-def exit_line(path):
-    """The output file's closing [exited with code N] line, or None."""
-    try:
-        with open(path, "rb") as f:
-            f.seek(max(0, os.fstat(f.fileno()).st_size - TAIL_BYTES))
-            m = EXITED_RE.search(f.read())
-    except (OSError, ValueError):
-        return None
-    return m.group(1).decode() if m else None
-
-
-def seen_ends(path, start, exited, outputs):
-    """The tasks among `exited` ({task: (output file, its exit line)}) whose end a later call
-    showed the agent: a task-output call naming the task whose result shows its status, or a
-    call naming that output file and no other launch's whose result holds the file's own
-    exit line (a cat or tail of it)."""
-    marks = {t: (t.encode(), o.encode()) for t, (o, _) in exited.items()}
-    watch, seen = {}, set()
-    for i, line in enumerate(lines(path)):
-        if i < start:
-            continue
-        named = [t for t, bs in marks.items() if any(b in line for b in bs)]
-        result = b'"tool_result"' in line and any(w.encode() in line for w in watch)
-        if not (named or result):
-            continue
-        e = parsed(line)
-        msg = e.get("message") if e else None
-        content = msg.get("content") if isinstance(msg, dict) else None
-        for c in content if isinstance(content, list) else ():
-            if not isinstance(c, dict):
-                continue
-            if c.get("type") == "tool_use" and isinstance(c.get("id"), str):
-                inp = c.get("input") if isinstance(c.get("input"), dict) else {}
-                shown = json.dumps(inp)
-                for t in named:
-                    out = exited[t][0]
-                    if t in inp.values():
-                        watch[c["id"]] = (t, STATUS_RE)
-                    elif out in shown and not any(o in shown for o in outputs - {out}):
-                        watch[c["id"]] = (t, re.compile(re.escape(exited[t][1])))
-            elif c.get("type") == "tool_result" and c.get("tool_use_id") in watch:
-                t, pattern = watch[c["tool_use_id"]]
-                if pattern.search(dc.text_of(c.get("content"))):
-                    seen.add(t)
-    return seen
 
 
 def agent_transcript(data):

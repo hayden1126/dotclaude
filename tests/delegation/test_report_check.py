@@ -319,9 +319,10 @@ class WaitCheck(unittest.TestCase):
         self.transcript([moved_result("b1", path)])
         self.assertIn("b1", self.reason(self.run_hook(self.handback())))
 
-    def test_an_end_seen_through_a_later_call_passes(self):
-        # review round 3: a cat or tail of the output file, or a TaskOutput-style call, whose
-        # result shows the end, is the agent seeing it, notice or not
+    def test_an_end_counts_as_seen_only_with_its_notice(self):
+        # Hayden dropped the seen-through-a-later-call route (2026-11-01): the notice is written
+        # right after the result that shows the end (3 of 3 live runs), so a cat or tail that
+        # showed it already has its notice by the agent's next message; without one, refuse
         def use(tid, mid, **inp):
             return {"type": "assistant", "message": {"id": mid, "role": "assistant", "content": [
                 {"type": "tool_use", "id": tid, "name": inp.pop("name", "Bash"), "input": inp}]}}
@@ -331,38 +332,12 @@ class WaitCheck(unittest.TestCase):
                 {"type": "tool_result", "tool_use_id": tid, "content": text}]}}
         path = self.output("bseen", "waited\n\n[exited with code 0]")
         launch = moved_result("bseen", path)
-        self.transcript([launch, use("t1", "m1", command=f"tail -n 3 \"{path}\""),
-                         result("t1", "waited\n\n[exited with code 0]")], aid="s1")
-        self.assertIsNone(self.run_hook(self.handback(aid="s1")))
-        self.transcript([launch, use("t2", "m2", name="TaskOutput", task_id="bseen", block=True),
-                         result("t2", "<status>completed</status>\n<exit_code>0</exit_code>")],
-                        aid="s2")
+        shown = [launch, use("t1", "m1", command=f"tail -n 3 \"{path}\""),
+                 result("t1", "waited\n\n[exited with code 0]")]
+        self.transcript(shown, aid="s1")
+        self.assertIn("bseen", self.reason(self.run_hook(self.handback(aid="s1"))))
+        self.transcript(shown + [mid_turn_notice("bseen")], aid="s2")
         self.assertIsNone(self.run_hook(self.handback(aid="s2")))
-        # the incident: the agent read the file while it was still empty
-        self.transcript([launch, use("t3", "m3", command=f"cat \"{path}\""), result("t3", "")],
-                        aid="s3")
-        self.assertIn("bseen", self.reason(self.run_hook(self.handback(aid="s3"))))
-
-    def test_a_cat_of_two_files_or_an_early_exit_message_is_not_a_seen_end(self):
-        # review round 4: the seen route needs the use to name that file alone, and its result
-        # to hold the file's own bracketed exit line
-        def use(tid, mid, cmd):
-            return {"type": "assistant", "message": {"id": mid, "role": "assistant", "content": [
-                {"type": "tool_use", "id": tid, "name": "Bash", "input": {"command": cmd}}]}}
-
-        def result(tid, text):
-            return {"type": "user", "message": {"role": "user", "content": [
-                {"type": "tool_result", "tool_use_id": tid, "content": text}]}}
-        a = self.output("ba", "x\n[exited with code 0]")
-        b = self.output("bb", "y\n[exited with code 0]")
-        self.transcript([moved_result("ba", a), mid_turn_notice("ba"), moved_result("bb", b),
-                         use("t1", "m1", f'cat "{a}" "{b}"'),
-                         result("t1", "x\n[exited with code 0]")], aid="c1")
-        self.assertIn("bb", self.reason(self.run_hook(self.handback(aid="c1"))))
-        # the command printed "exited with code 0" itself before its real end
-        self.transcript([moved_result("bb", b), use("t2", "m2", f'tail -n 3 "{b}"'),
-                         result("t2", "child exited with code 0\nstill working")], aid="c2")
-        self.assertIn("bb", self.reason(self.run_hook(self.handback(aid="c2"))))
 
     def test_a_give_up_is_per_activation(self):
         # review round 4: a SendMessage resume is a new activation and gets its two refusals
