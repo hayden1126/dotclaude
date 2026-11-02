@@ -387,6 +387,57 @@ class WaitCheck(unittest.TestCase):
         self.transcript([entry], aid="n2")
         self.assertIn("bmid", self.reason(self.run_hook(self.handback(aid="n2"))))
 
+    def test_a_partial_note_line_in_stdout_hides_nothing(self):
+        # review round 5: a note-shaped stdout line without its output clause mustn't pair
+        # with the real note's clause on a later line
+        real = self.output("breal2")
+        entry = moved_result("breal2", real)
+        body = entry["message"]["content"][0]
+        body["content"] = "Command running in background with ID: bx\n" + body["content"]
+        del entry["toolUseResult"]
+        self.transcript([entry])
+        self.assertIn("breal2", self.reason(self.run_hook(self.handback())))
+        entry["message"]["content"][0]["content"] = (
+            "Command was moved to the background (ID: bfake)\n" + moved_result(
+                "breal2", real)["message"]["content"][0]["content"])
+        self.transcript([entry], aid="q2")
+        reason = self.reason(self.run_hook(self.handback(aid="q2")))
+        self.assertIn("breal2", reason)
+        self.assertNotIn("bfake", reason)
+
+    def test_a_tool_use_result_without_the_id_falls_back_to_position(self):
+        # review round 5: only a cap-moved entry has been seen with toolUseResult; one that
+        # lacks backgroundTaskId is judged by where the note sits, not dropped
+        path = self.output("bpos")
+        entry = launched_result("bpos", path)
+        entry["toolUseResult"] = {"stdout": "", "stderr": "", "interrupted": False}
+        self.transcript([entry])
+        self.assertIn("bpos", self.reason(self.run_hook(self.handback())))
+
+    def test_only_a_text_opening_with_the_marker_is_the_fork_boundary(self):
+        # review round 5: the parent's own text may quote <fork-boilerplate>
+        ref = {"type": "fork-context-ref", "agentId": "a1", "parentSessionId": "s0"}
+        quoted = {"type": "user", "message": {"role": "user", "content": [
+            {"type": "text", "text": "see how forks get <fork-boilerplate> in their prompt"}]}}
+        boundary = {"type": "user", "message": {"role": "user", "content": [
+            {"type": "text", "text": "<fork-boilerplate>\nYou are a worker fork."}]}}
+        self.transcript([ref, quoted, moved_result("blead", self.output("blead")), boundary])
+        self.assertIsNone(self.run_hook(self.handback()))
+
+    def test_the_counter_file_keeps_the_old_form(self):
+        # review round 5: an older report-check reading the counter after a rollback still
+        # parses it, so the activation goes beside it, not into it
+        agents = os.path.join(self.state, "dotclaude", "agents")
+        os.makedirs(agents)
+        with open(os.path.join(agents, "a1.json"), "w") as f:
+            json.dump({"activation_start": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
+                      f)  # wall clock
+        self.incident()
+        self.reason(self.run_hook(self.handback()))
+        d = os.path.join(self.state, "dotclaude", "report-check")
+        with open(os.path.join(d, "s1-a1")) as f:
+            self.assertEqual(f.read().strip(), "1")
+
     def test_the_last_note_in_a_result_is_the_launch(self):
         # review round 4: stdout may hold an earlier note-shaped line; the real note is last
         real = self.output("breal")
@@ -422,9 +473,9 @@ class WaitCheck(unittest.TestCase):
         # toolUseResult with no backgroundTaskId; the real note's entry has none or the id
         path = self.output("bprinted")
         printed = moved_result("bprinted", path)
-        printed["toolUseResult"] = {"stdout": "x", "stderr": "", "interrupted": False}
         body = printed["message"]["content"][0]
         body["content"] = "header\n" + body["content"]
+        printed["toolUseResult"] = {"stdout": body["content"], "stderr": "", "interrupted": False}
         self.transcript([printed])
         self.assertIsNone(self.run_hook(self.handback()))
         # the run_in_background form only opens a result: its stdout is empty at launch

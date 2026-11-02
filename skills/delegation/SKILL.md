@@ -115,7 +115,8 @@ validated (`report_ok`).
 - **Missing or invalid block:**
   - For our four roles, `report-check` already sent it back up to twice (counting the times
     it sent a report back for coming before a background command ended, §4). A report that
-    reaches you invalid had three tries, and the ledger records `report_ok: false`.
+    reaches you invalid had three tries in that activation, and the ledger records
+    `report_ok: false`.
   - A `team-` teammate's reports aren't checked (its stops fire per message), and neither
     are other types'. Ask once (SendMessage to its id).
   - Don't guess the status from the prose.

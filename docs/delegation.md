@@ -1527,10 +1527,12 @@ queued message), `Command did not complete within its Ns timeout and was moved t
 output file. The line counts only where Claude Code puts it: a Bash result is the command's
 stdout, its stderr, then the note, so the note is the result's last line (or is followed only by
 a "Session cwd" hint), `run_in_background`'s opens the result (nothing has printed yet), and the
-last match is the note. When the entry has a `toolUseResult`, it must name that id; it is often
-absent (0 of 8 tool results in probe a, 9 of 9 in the incident, all 2.1.316), so the position is
-what rules out a command that prints note-shaped lines, such as a transcript dump (review rounds
-3 and 4). A `backgroundTaskId` with no note counts too, its output unknown. A wait call that was
+last match is the note, which is one line. When the entry's `toolUseResult` has a
+`backgroundTaskId`, it must name that id. Otherwise the note must end the result and not be in the
+`toolUseResult`'s `stdout`: a real launch's `stdout` is empty (the incident's was `""`), while a
+command that prints note-shaped lines, such as a transcript dump, has them there.
+`toolUseResult` is often absent (0 of 8 tool results in probe a, 9 of 9 in the incident, all
+2.1.316), so the position is what rules most of those out (review rounds 3 to 5). A `backgroundTaskId` with no note counts too, its output unknown. A wait call that was
 itself moved (a message arriving mid-wait moves the running call) isn't a command to wait on.
 
 A command has ended, as far as the agent is concerned, when:
@@ -1601,19 +1603,20 @@ counter's old form, the value alone, reads as the current activation's). A repor
 through while a command still
 runs isn't silent: the hook returns `updatedInput` with a `[report-check] Note for the caller`
 naming the command and its output file. A probe showed the lead receives the edited message. A
-report that is one bare JSON object is fenced first, so `extract_report` still finds it. Past
+report that is one whole-message JSON value is fenced first, so `extract_report` still finds it. Past
 the role's deadline stop the wait refusal is skipped and only the note is added, since the policy
 then denies every tool but the report path and the agent couldn't wait. A SubagentStop can't
 change the message, so there a report past the cap passes as it is.
 
-**What it can't see.** A tool result whose last line is a launch note and that has no
-`toolUseResult`, which only Claude Code's own note should produce, reads as a launch. That costs
-at most the shared refusals, and
-only while the named output file exists and the agent hasn't been shown its end, for at most the
-2-hour bound. A
-harmless Bash call sent in one message with the report (an `ls`) costs one refusal too. A
-transcript or output file it can't read, or any error while reading them, counts as no running
-command (fail open), and the schema check still runs.
+**What it can't see.** It knows only Claude Code's own background tasks: a command an agent
+detaches inside a foreground call (`cmd &`, `nohup`, `setsid`) is invisible to it, as to Claude
+Code, and BRIEF.md's rule is the only guard there. A tool result whose last line is a launch note
+and that has no `toolUseResult`, which only Claude Code's own note should produce, reads as a
+launch. That costs at most the shared refusals, and only while the named output file exists
+without `[killed]` and no notice names it, for at most the 2-hour bound. A harmless Bash call
+sent in one message with the report (an `ls`) costs one refusal too. A transcript or output file
+it can't read, or any error while reading them, counts as no running command (fail open), and the
+schema check still runs.
 
 ## Verified facts the design rests on
 
@@ -1791,7 +1794,8 @@ wins.
     response". The PostToolUse `tool_response` has `backgroundTaskId` and
     `backgroundEndsWithFinalResponse: true`;
   - the output file ends with `[exited with code 0]`, `[exited with code 3]` for a failure, or
-    `[killed]` after TaskStop;
+    `[killed]` after TaskStop, for a timeout-moved command too (probe c, 2026-11-02), whose note
+    adds that it is stopped after 10 minutes in the background;
   - a notice mid-turn is an `attachment` entry (`type: queued_command`, `origin.kind:
     task-notification`, the notice in `prompt`) with `<status>completed</status>` or
     `<status>failed</status>`; a TaskStop leaves no notice;

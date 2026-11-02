@@ -36,7 +36,7 @@ Rejections:
 - The counter is a file per session and agent under $XDG_STATE_HOME/dotclaude/report-check/,
   stored with the activation's start, so a SendMessage resume starts it fresh.
   A report that passes both checks clears it. Once it gives up it stays given up for that
-  agent (files older than a day are pruned), so a hook registered twice (user and project
+  activation (files older than a day are pruned), so a hook registered twice (user and project
   settings), which bumps it twice per stop, can't cycle 1, 2, 1, 2 and block forever.
 - The pattern is from breadcrumb (github.com/oscarthroedsson/breadcrumb, MIT), reimplemented.
 
@@ -66,8 +66,8 @@ GAVE_UP = "gave-up"
 LAUNCH_RE = re.compile(r"^Command (?:running in background with ID: |was moved to the background "
                        r"\(ID: |did not complete within its \d+s timeout and was moved to the "
                        r"background \(ID: |was manually backgrounded by user with ID: )"
-                       r"([A-Za-z0-9]+)\b.*?Output is being written to: (\S+?\.output)",
-                       re.S | re.M)
+                       r"([^\s).]+)[).][^\n]*?Output is being written to: (\S+?\.output)",
+                       re.M)
 LAUNCH_MARKS = (b"Command running in background with ID: ",
                 b"was moved to the background (ID: ",
                 b"Command was manually backgrounded by user with ID: ",
@@ -152,7 +152,7 @@ def is_fork_boundary(e):
     the parent's, not the fork's. Only a fork's first one counts (_running)."""
     msg = e.get("message")
     return (e.get("type") == "user" and isinstance(msg, dict)
-            and "<fork-boilerplate>" in dc.text_of(msg.get("content")))
+            and dc.text_of(msg.get("content")).lstrip().startswith("<fork-boilerplate>"))
 
 
 def note_ends(text, m):
@@ -163,13 +163,20 @@ def note_ends(text, m):
     return not rest or rest.startswith("Session cwd")
 
 
+def printed(result, note):
+    """True when a toolUseResult shows the note as the command's own stdout: a real launch's
+    stdout is empty or doesn't hold Claude Code's note (the incident's was "")."""
+    stdout = result.get("stdout") if isinstance(result, dict) else None
+    return isinstance(stdout, str) and note in stdout
+
+
 def launches(e, wait_uses):
     """(task, output file or None) for each background launch in this entry's tool results.
     The note is where Claude Code puts it, the result's last: run_in_background's opens the
     result (its stdout is empty at launch), a moved command's follows its output. With a
-    toolUseResult, it must name that id; without one (often absent, 2.1.316), the note must
-    end the result, so a command that prints note-shaped lines (a transcript dump) isn't a
-    launch. A backgroundTaskId with no note counts too (output unknown). A moved wait call
+    toolUseResult that has a backgroundTaskId, it must name that id; otherwise (toolUseResult
+    is often absent, 2.1.316) the note must end the result and not be the command's own
+    stdout, so a command that prints note-shaped lines (a transcript dump) isn't a launch. A backgroundTaskId with no note counts too (output unknown). A moved wait call
     (wait_uses) isn't a command to wait on."""
     msg = e.get("message")
     content = msg.get("content") if e.get("type") == "user" and isinstance(msg, dict) else None
@@ -191,7 +198,10 @@ def launches(e, wait_uses):
         m = matches[-1]
         if m.group(0).startswith("Command running") and m.start() != 0:
             continue
-        if named_id != m.group(1) if isinstance(result, dict) else not note_ends(text, m):
+        if isinstance(named_id, str):
+            if named_id != m.group(1):
+                continue
+        elif not note_ends(text, m) or printed(result, m.group(0)):
             continue
         found.add(m.group(1))
         yield m.group(1), m.group(2)
@@ -322,15 +332,20 @@ def activation(data):
 
 
 def read_counter(path, current=""):
-    """The counter for this activation: "1", "2", "gave-up" or "". It is stored as
-    "<value> <activation start>", so a SendMessage resume starts fresh; the old form, the value
-    alone, reads as the current activation's."""
+    """The counter for this activation: "1", "2", "gave-up" or "". The activation it belongs
+    to sits beside it in <path>.act, so a SendMessage resume starts fresh while the counter
+    file keeps the form an older report-check reads; no .act file reads as the current one."""
     try:
         with open(path) as f:
-            value, _, start = f.read().strip().partition(" ")
+            value = f.read().strip()
     except OSError:
         return ""
-    return value if not start or start == current else ""
+    try:
+        with open(path + ".act") as f:
+            start = f.read().strip()
+    except OSError:
+        return value
+    return value if start == current else ""
 
 
 def bump(path, current=""):
@@ -340,15 +355,18 @@ def bump(path, current=""):
         n = 0
     n += 1
     with open(path, "w") as f:
-        f.write(f"{n if n <= MAX_REJECTIONS else GAVE_UP} {current}".strip())
+        f.write(str(n) if n <= MAX_REJECTIONS else GAVE_UP)
+    with open(path + ".act", "w") as f:
+        f.write(current)
     return n
 
 
 def clear(path):
-    try:
-        os.remove(path)
-    except OSError:
-        pass
+    for p in (path, path + ".act"):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
 
 
 def problems(text):

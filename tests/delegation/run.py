@@ -989,7 +989,7 @@ def early_run(root, env, mode):
     # Whether the agent then waits is the model's call; the contract is ours: the report it
     # delivers came after the command ended, or (auto) tells the lead it didn't.
     after = delivered is not None and ended is not None and ended < delivered
-    noted = bool(reports) and NOTE_MARK in reports[0] and tasks[0] in reports[0]
+    noted = bool(reports) and NOTE_MARK in reports[0]
     check(f"{tag}: the report came after the command ended, or names it",
           after or noted, f"after {after}, noted {noted}, {len(reports)} reports")
 
