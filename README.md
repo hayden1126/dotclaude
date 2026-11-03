@@ -860,8 +860,9 @@ checkout: a *lane*. One shared STATUS.md broke this. A line like "another sessio
 and status single-writer:
 
 - `lane new chart-fix --claim 42 --goal "..."` makes the worktree and branch from `origin/main`,
-  copies the files `.worktreeinclude` lists, hands out a block of ports, runs the repo's setup command and
-  seeds the lane's record (`<lane>/.lane/STATUS.md`, from `templates/LANE.md`).
+  checks the checkout byte for byte against the base as fetched into a store no lane can write
+  (docs/lanes.md, LR7), copies the files `.worktreeinclude` lists, hands out a block of ports,
+  runs the repo's setup command and seeds the lane's record (`<lane>/.lane/STATUS.md`, from `templates/LANE.md`).
 - `lane open chart-fix` starts the lane's session in a new tmux window, in plan mode, told to
   read its record; `--focus` switches to a session already running there. `--model` and
   `--effort` (repo defaults from `lane init`) pick its model and effort, and a plain pass, a tab

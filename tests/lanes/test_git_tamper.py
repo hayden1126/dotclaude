@@ -381,6 +381,15 @@ class NewVerifiesWithoutSetup(LanesRepo):
         self.assertFalse(os.path.exists(os.path.join(self.common, "lanes", "chart-fix")))
         self.assertEqual(self.git("branch", "--list", "chart-fix"), "")
 
+    def test_a_sandboxed_new_refuses_with_a_reason_and_creates_nothing(self):
+        self.env["_LANE_TEST_SANDBOXED"] = "1"
+        p = self.run_lane("new", "chart-fix")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("can't run in the Bash sandbox", p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        self.assertFalse(os.path.exists(self.lane_path("chart-fix")))
+        self.assertFalse(os.path.exists(os.path.join(self.common, "lanes", "chart-fix")))
+
 
 class GateBeforeRefs(LanesRepo):
     """LR4: `new`, `done` and `park` move refs sandbox-off (a fetch, `worktree add -b`,

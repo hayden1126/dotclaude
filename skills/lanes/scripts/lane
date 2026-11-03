@@ -859,6 +859,11 @@ def cmd_init(args) -> None:
 
 
 def cmd_new(args) -> None:
+    # Its verification store (LR7) sits where the sandbox can't write, and its fetch needs the
+    # credential the sandbox hides: refuse with that, not a bare PermissionError midway.
+    sandbox_off("lane new", "its verification store sits where the sandbox can't write, and it "
+                "fetches with the credential the sandbox hides. Run it as a bare `lane new ...` "
+                "(excludedCommands runs that outside the sandbox)")
     repo = lanes_repo()
     cfg = repo.config()
     reqs = requests(args.claim)
