@@ -135,8 +135,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
        handoff-check, `setup.sh`, `skills/lanes/SKILL.md` (the post-merge step) and their tests,
        the files ports' PR 2 also changes. Until it lands, the lead runs DA15's pre-check and
        DA16's stopgap before each post-merge chain (both in the private rows).
-    2. DA17 (high, cheap): `hooks/*.sh`, `skills/*/scripts`, `tests/setup`; Hayden also has a
-       step of his own in the row.
+    2. DA17 (high, cheap): `hooks/*.sh`, `skills/*/scripts`, `tests/setup`; Hayden's own step
+       in the row is done (2026-11-02), the two repo-side parts remain.
     3. DA12 (high), then DA13 (medium): `settings.json`, `tests/delegation/test_settings.py`
        (lane practices changes both), a session-start warning.
     4. DA1 (high): needs its own design review rounds first. Files: `setup.sh`,
