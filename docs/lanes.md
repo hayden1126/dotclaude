@@ -821,8 +821,10 @@ explained.
 
 **The main checkout.** There the lead's branch may differ from main only in STATUS.md and
 PLAN.md. sync-main keeps the lead's STATUS.md whole, takes PLAN.md's clean merge (the lead's copy
-on a conflict), and refuses when the merge differs from the proven commit on any other path. It
-points `main` and the remote-tracking ref at the proven commit, for display only. Then it prints
+on a conflict), and refuses when the merge differs from the proven commit on any other path. When
+the lead's branch isn't the base, it points the base branch (`main`) and its remote-tracking ref
+at the proven commit, for display only. When the lead's branch is the base itself, that branch
+moves to the merge commit and only the remote-tracking ref goes to the proven commit. Then it prints
 main's side of STATUS.md, and the lead adds back by hand any line that isn't an older carry (the
 keep-whole rule under "Where each type lives"). Rerun for a PR the branch already holds, it
 still compares the checkout, writes nothing and exits 0. When the branch holds a newer main than

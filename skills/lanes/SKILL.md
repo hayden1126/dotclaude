@@ -279,7 +279,9 @@ inherits the lead from it.
    1. Commit STATUS.md and PLAN.md on the lead's branch, then run a bare `lane sync-main <n>`
       from the main checkout. It proves PR #n merged from GitHub's merge commit (the message
       says when to look, never that it happened), merges that commit into the lead's branch,
-      commits the merge and moves `main` to the proven commit. It keeps the lead's STATUS.md
+      and commits the merge. On a lead's branch other than main, it also points `main` and
+      `origin/main` at the proven commit; when the lead's branch is main, main moves to the merge
+      commit and only `origin/main` goes to the proven commit. It keeps the lead's STATUS.md
       whole: main holds older carries of it, so a clean merge would bring back a line the lead
       deleted since. Then it prints main's side of STATUS.md. "Already up to date" means
       nothing to do. A refusal stops the chain: read its message and fix what it names. One
