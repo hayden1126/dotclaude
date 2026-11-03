@@ -68,9 +68,12 @@ elif ! common="$(git -C "$REPO_DIR" rev-parse --path-format=absolute --git-commo
   warn "git can't name the common dir of $REPO_DIR (see above); setup.sh stopped before changing anything"
   exit 1
 else
-  admin="$(sed -n '1s/^gitdir: //p' "$REPO_DIR/.git" 2>/dev/null || true)"
+  line="" admin=""
+  { IFS= read -r line < "$REPO_DIR/.git"; } 2>/dev/null || true
+  [[ $line == "gitdir: "?* ]] && admin="${line#gitdir: }"
   [[ -z $admin || $admin == /* ]] || admin="$REPO_DIR/$admin"
-  if [[ -z $admin || "$(basename "$(dirname "$admin")")" != worktrees ]] \
+  parent="${admin%/*}"
+  if [[ -z $admin || ${parent##*/} != worktrees ]] \
       || ! want="$(cd -P "$admin/../.." 2>/dev/null && pwd -P)" \
       || [[ "$(cd -P "$common" 2>/dev/null && pwd -P)" != "$want" ]]; then
     warn "git names $common as the common dir of $REPO_DIR, not its admin dir's grandparent (LR2: a planted commondir?); setup.sh stopped before changing anything"
