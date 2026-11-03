@@ -32,6 +32,8 @@
       "Bash(lane open *)",
       "Bash(lane done *)",
       "Bash(lane park *)",
+      "Bash(lane sync-main)",
+      "Bash(lane sync-main *)",
       "Bash(lane addr *)",
       "Bash(lane lead)",
       "Bash(git push origin *)",

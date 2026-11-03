@@ -582,9 +582,9 @@ class Baseline(unittest.TestCase):
         for doc in ("skills/lanes/SKILL.md", "docs/lanes.md"):
             with open(os.path.join(REPO, doc)) as f:
                 text = " ".join(f.read().split())
-            m = re.search(r"((?:`\w+`, )+`\w+` and `\w+`) (?:have|take) allow rules", text)
+            m = re.search(r"((?:`[\w-]+`, )+`[\w-]+` and `[\w-]+`) (?:have|take) allow rules", text)
             self.assertIsNotNone(m, doc)
-            self.assertEqual(set(re.findall(r"`(\w+)`", m.group(1))), allowed, doc)
+            self.assertEqual(set(re.findall(r"`([\w-]+)`", m.group(1))), allowed, doc)
         for sub in sorted(allowed):
             # `ls` and `lead` take no argument: `lane lead x` matches neither of its rules.
             sample = f"lane {sub}" if sub in ("ls", "lead") else f"lane {sub} x"

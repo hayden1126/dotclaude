@@ -267,7 +267,9 @@ inherits the lead from it.
    whose install is live merges main by running a bare `lane sync-main` from its worktree: its
    own hooks, skills and tests are write-protected then (`docs/lanes.md` S3), and sync-main
    builds the merge outside the sandbox from hash-checked objects (`docs/lanes.md`, "Verified
-   merges"). A lane's message before an act past its worktree
+   merges"). When it refuses on a conflict, the lane asks the lead to reinstall from main, which
+   releases its install; it then merges origin/main sandboxed, resolves, and reinstalls from its
+   worktree before ready. A lane's message before an act past its worktree
    (Lifecycle, step 3) gets a reply: ask Hayden first when the act needs his ok, and say so
    when another lane's install or the merge order stands in its way.
 7. **After a merge.** A lane's `merged #N` starts the post-merge chain. A merged PR on `lane ls`
@@ -422,7 +424,7 @@ listener but its own, and runs when you turn the sandbox off, so each start meet
 approval. Every other subcommand runs sandboxed. `lane lock` and `lane trial` must: the commands
 they run inherit their sandbox.
 
-`ls`, `new`, `adopt`, `open`, `done`, `park`, `addr` and `lead` have allow rules, so auto mode's classifier never refuses
+`ls`, `new`, `adopt`, `open`, `done`, `park`, `sync-main`, `addr` and `lead` have allow rules, so auto mode's classifier never refuses
 them. Each call meets the excluded-command guard first (docs/delegation.md), and the asks on
 `init --setup`, `init --root` and `done --abandon` still win over the allow rules.
 

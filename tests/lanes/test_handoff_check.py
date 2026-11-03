@@ -93,7 +93,7 @@ class Templates(unittest.TestCase):
         rules = {("skills", "lanes", "SKILL.md"): (
                      "Lead branch:", "before each push", "the lead's notes through",
                      "git show <sha>:STATUS.md > STATUS.md", "git apply -3 --allow-empty",
-                     "--no-ff --no-commit",
+                     "lane sync-main <n>",
                      "git merge-base --is-ancestor origin/main",
                      "released your install: merge origin/main, then reinstall"),
                  ("docs", "lanes.md"): ("Lead branch:", "before each push",

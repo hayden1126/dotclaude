@@ -819,7 +819,10 @@ keep-whole rule under "Where each type lives").
 
 **Lane mode.** In a lane, sync-main takes the merge as it comes and refuses on any conflict. It
 also refuses where the repo turns on per-worktree config, since git would then read a file the
-lane's sandbox can write.
+lane's sandbox can write. A lane whose live install blocks a conflicted merge asks the lead to
+reinstall from main: that releases the lane's install, so its files are writable again. The lane
+then merges origin/main sandboxed as usual, resolves the conflict, commits, and reinstalls from
+its worktree before ready.
 
 **What it refuses.** It writes nothing when it runs sandboxed, the checkout has uncommitted
 changes or no branch, gh can't prove the merge, the merge conflicts, the checkout doesn't match
@@ -965,7 +968,7 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   asks: `lane init --setup` names the command each new lane runs, `lane init --root` moves where
   lanes live, and `lane done --abandon` closes unmerged work. The rest of `lane` asks nothing.
   The excluded-command guard (docs/delegation.md) then let `ls`, `new`, `adopt`, `open`, `done`,
-  `park`, `addr` and `lead` take allow rules, so the classifier never refuses them: an allow rule skips the
+  `park`, `sync-main`, `addr` and `lead` take allow rules, so the classifier never refuses them: an allow rule skips the
   classifier, and the guard checks each call's git config, PATH and cwd first. The three asks
   still win.
   A lane that installs from its worktree (`lane lock install -- ./setup.sh`) points the installed
