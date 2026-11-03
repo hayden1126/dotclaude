@@ -164,6 +164,40 @@ class NoFetchHead(LanesRepo):
                 os.chdir(here)
 
 
+class NoHooks(LanesRepo):
+    """The lane CLI's own git sandbox-off runs no hook: one in the common dir's hooks/ (no
+    lane's sandbox can write it today, but the CLI doesn't rely on that) fires on a plain
+    `git worktree add` in the control, and never during `lane new` or `lane done`."""
+
+    HOOKS = ("reference-transaction", "post-checkout", "post-merge", "pre-auto-gc")
+
+    def plant(self, common, marker):
+        for name in self.HOOKS:
+            path = os.path.join(common, "hooks", name)
+            self.write(path, f'#!/bin/sh\necho "{name}" >> "{marker}"\n')
+            os.chmod(path, 0o755)
+
+    def test_new_and_done_run_no_hook(self):
+        copy = os.path.join(self.tmp, "control")
+        shutil.copytree(self.main, copy, symlinks=True)
+        control = os.path.join(self.tmp, "control.marker")
+        self.plant(os.path.join(copy, ".git"), control)
+        subprocess.run(["git", "worktree", "add", "-q", "-b", "x", os.path.join(self.tmp, "wt")],
+                       cwd=copy, env=self.env, capture_output=True, timeout=60)
+        self.assertIn("post-checkout", self.read(control))
+        marker = os.path.join(self.tmp, "main.marker")
+        self.plant(self.common, marker)
+        # A commit only origin has, so `done`'s fetch moves a ref.
+        other = os.path.join(self.tmp, "other")
+        self.git("clone", "-q", self.origin, other, cwd=self.tmp)
+        self.commit("more.txt", "more\n", cwd=other)
+        self.git("push", "-q", "origin", "main", cwd=other)
+        self.lane("new", "chart-fix")
+        self.lane("done", "chart-fix", "--abandon")
+        self.assertFalse(os.path.exists(marker), self.read(marker) if os.path.exists(marker)
+                         else "")
+
+
 class GateBeforeRefs(LanesRepo):
     """LR4: `new`, `done` and `park` move refs sandbox-off (a fetch, `worktree add -b`,
     `branch -d`), so each runs the tripwire first and refuses on a finding, here a reflog link

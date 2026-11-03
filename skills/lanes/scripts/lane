@@ -739,7 +739,7 @@ def run_setup(repo: Repo, lane: dict) -> None:
     if not setup:
         return
     block = lanelib.port_block(lane)
-    env = dict(os.environ, LANE_ID=lane["id"], LANE_PORT=str(block[0]) if block else "",
+    env = dict(user_env(), LANE_ID=lane["id"], LANE_PORT=str(block[0]) if block else "",
                LANE_PORTS=f"{block[0]}-{block[-1]}" if block else "")
     say(f"  setup: {setup}")
     if subprocess.run(setup, shell=True, cwd=usable_path(repo, lane), env=env).returncode != 0:
@@ -869,6 +869,7 @@ def cmd_new(args) -> None:
     path = os.path.join(cfg["root"], args.id)
     base = cfg.get("base", "origin/main")
     check_unregistered(repo, args.id)  # again under the lock; first so a rerun says so, not gh
+    harden_git_env(repo)  # no hook fires on its fetch or `worktree add` (post-checkout)
     # Its fetch and `worktree add -b` move refs, and a reflog link takes their log lines (LR4).
     tamper_gate(repo, "Nothing was written: find out who made each, remove it, then rerun")
     base_sha = fetched_base(repo, cfg)
@@ -1120,7 +1121,7 @@ def check_worktree(lane: dict, seed_ask: bool) -> None:
     try:
         if guard is None:
             raise ImportError(f"no excluded_guard in {HOOKS}")
-        refusals, error = guard.project_refusals(dict(os.environ), lane["path"])
+        refusals, error = guard.project_refusals(user_env(), lane["path"])
     except Exception as e:
         refusals, error = [], e
     if error:
@@ -4750,11 +4751,24 @@ def archive_record(repo: Repo, loaded: dict, path: str, lanes_fd: int, dest_fd: 
         os.close(src)
 
 
+USER_ENV: dict[str, str] | None = None  # os.environ as it was before harden_git_env
+
+
+def user_env() -> dict[str, str]:
+    """The environment the CLI was started with, before harden_git_env: what the configured
+    setup command runs in, and what the excluded-command guard sees a lane's session run with."""
+    return dict(os.environ if USER_ENV is None else USER_ENV)
+
+
 def harden_git_env(repo: Repo) -> None:
-    """Every git `done` or `park` runs in the lane (status, handoff-check's) takes its config
-    from this repo's common dir, never the lane-writable commondir file that worktree_problem
-    checks: a lane could repoint it after the check to a config whose core.fsmonitor runs a
-    command sandbox-off."""
+    """Every git `new`, `done` or `park` runs (in the lane: status, handoff-check's) takes its
+    config from this repo's common dir, never the lane-writable commondir file that
+    worktree_problem checks: a lane could repoint it after the check to a config whose
+    core.fsmonitor runs a command sandbox-off. And none runs a hook: core.hooksPath is
+    /dev/null, whatever hooks dir the repo's config or its common dir holds."""
+    global USER_ENV
+    if USER_ENV is None:
+        USER_ENV = dict(os.environ)
     os.environ["GIT_COMMON_DIR"] = repo.common_dir
     # And none of them writes the lane's index: a status that refreshes it fires the
     # post-index-change hook, which a relative core.hooksPath runs from the lane's worktree.
@@ -4770,7 +4784,8 @@ def harden_git_env(repo: Repo) -> None:
     # `worktree prune` deletes through a link a lane plants under <common>/worktrees/.
     os.environ["GIT_CONFIG_PARAMETERS"] = " ".join(filter(None, [
         os.environ.get("GIT_CONFIG_PARAMETERS", "").strip(), "'core.fsmonitor'='false'",
-        "'core.commitGraph'='false'", "'gc.auto'='0'", "'maintenance.auto'='false'"]))
+        "'core.commitGraph'='false'", "'gc.auto'='0'", "'maintenance.auto'='false'",
+        f"'core.hooksPath'='{os.devnull}'"]))
     # Nor reads an object through refs/replace or <common>/info/grafts, which sandboxed Bash can
     # write: a replaced commit, or a grafted parent, could make an unpushed HEAD read as an
     # ancestor of the remote's. GIT_NO_REPLACE_OBJECTS stops only the first.
@@ -5235,7 +5250,8 @@ SYNC_LANES = ("A lane never runs it: a lane whose install is live asks the lead 
 def sync_env(git_dir: str | None = None, **extra: str) -> dict[str, str]:
     """The environment of every git sync-main runs, in place of every inherited GIT_* (sgit): no
     global or system config, no hooks (a fetch or update-ref runs reference-transaction from the
-    common dir's hooks/, which any lane can write), no fsmonitor, no replace objects or grafts,
+    common dir's hooks/; no lane's sandbox can write that dir today, but they stay off
+    regardless), no fsmonitor, no replace objects or grafts,
     no attributes but the tree's own (the global file is read even with GIT_CONFIG_GLOBAL off,
     so core.attributesFile names /dev/null), and only the https, ssh and file transports. No
     filter driver either but the one config left, the git dir's own: with no global or system
