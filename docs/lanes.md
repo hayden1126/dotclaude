@@ -913,6 +913,13 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   the model after `/compact` (`/compact` piped into `claude -p --resume` triggers a real
   compaction). `lane-identity.sh` on `compact` is therefore the safety net for an unplanned
   auto-compact.
+- **S5, fork:** `/branch` and `claude --resume <id> --fork-session` start a new session id from
+  a copy of the parent's transcript and fire SessionStart with source `fork` (probed on 2.1.317,
+  interactive `/branch` and `claude -p`). The hooks run, so `CLAUDE_ENV_FILE` exports apply and
+  `lane-identity.sh` registers the fork in `lane.json` as `source: "fork"`, but none of their
+  `additionalContext` reaches the fork's model: its transcript gains no hook entries after the
+  copy. A fork still knows its lane from the parent's identity line in that copy. The parent's
+  session-registry entry is removed at the `/branch` and the fork's is written.
 - **Session facts** for `handoff-check`: `~/.claude/sessions/<pid>.json` carries `sessionId`,
   `cwd`, `startedAt` (ms), `status`, `tmux` (`session:@window.%pane`) and
   `messagingSocketPath`. A session's own shell also has `$CLAUDE_CODE_SESSION_ID`. A file that
