@@ -254,6 +254,30 @@ class SyncMain(LanesRepo):
         self.assertIn("refs/replace", p.stderr)
         self.assertEqual(self.state(), before)
 
+    def test_attribute_files_outside_the_tree_never_convert_the_checkout(self):
+        # A conversion from <common>/info/attributes (lane-writable) or the global attributes
+        # file (read even with GIT_CONFIG_GLOBAL=/dev/null) would write other bytes than the
+        # store's blob. The tripwire flags the first; with it off, neither reaches a file.
+        config = os.path.join(self.home, ".config")
+        self.env["XDG_CONFIG_HOME"] = config
+        rule = "*.sh text eol=crlf\n"
+        for n, where in enumerate((os.path.join(self.common, "info", "attributes"),
+                                   os.path.join(config, "git", "attributes")), 7):
+            with self.subTest(where=where):
+                os.makedirs(os.path.dirname(where), exist_ok=True)
+                self.write(where, rule)
+                try:
+                    proven = self.land({"hooks/x.sh": f"{REAL}# {n}\n"}, n=n)
+                    blob = self.blob(f"pr{n}", "hooks/x.sh")
+                    rc, out, err = self.sync_in(str(n), patches=lambda mod: [
+                        mock.patch.object(mod.lanelib, "git_tamper", return_value=[])])
+                    self.assertEqual(rc, 0, out + err)
+                    with open(os.path.join(self.main, "hooks", "x.sh"), "rb") as f:
+                        self.assertEqual(f.read(), self.git("cat-file", "blob", blob).encode())
+                    self.assertEqual(self.parents()[1], proven)
+                finally:
+                    os.unlink(where)
+
     def test_a_replace_ref_never_reaches_the_checkout(self):
         proven = self.land({"hooks/x.sh": REAL})
         self.git("replace", self.blob("pr7", "hooks/x.sh"), self.evil_blob())

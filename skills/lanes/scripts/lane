@@ -5215,14 +5215,17 @@ def sync_env(git_dir: str | None = None, **extra: str) -> dict[str, str]:
     """The environment of every git sync-main runs, in place of every inherited GIT_* (sgit): no
     global or system config, no hooks (a fetch or update-ref runs reference-transaction from the
     common dir's hooks/, which any lane can write), no fsmonitor, no replace objects or grafts,
-    and only the https, ssh and file transports."""
+    no attributes but the tree's own (the global file is read even with GIT_CONFIG_GLOBAL off,
+    so core.attributesFile names /dev/null), and only the https, ssh and file transports."""
     env = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
            "GIT_NO_REPLACE_OBJECTS": "1", "GIT_GRAFT_FILE": os.devnull,
            "GIT_ALLOW_PROTOCOL": "https:ssh:file", "GIT_OPTIONAL_LOCKS": "0",
-           "GIT_CONFIG_COUNT": "3",
+           "GIT_ATTR_NOSYSTEM": "1",
+           "GIT_CONFIG_COUNT": "4",
            "GIT_CONFIG_KEY_0": "core.hooksPath", "GIT_CONFIG_VALUE_0": os.devnull,
            "GIT_CONFIG_KEY_1": "core.fsmonitor", "GIT_CONFIG_VALUE_1": "false",
-           "GIT_CONFIG_KEY_2": "core.useReplaceRefs", "GIT_CONFIG_VALUE_2": "false"}
+           "GIT_CONFIG_KEY_2": "core.useReplaceRefs", "GIT_CONFIG_VALUE_2": "false",
+           "GIT_CONFIG_KEY_3": "core.attributesFile", "GIT_CONFIG_VALUE_3": os.devnull}
     if git_dir:
         env["GIT_DIR"] = git_dir
     env.update(extra)
@@ -5605,9 +5608,11 @@ def publish(repo: Repo, store: str, remote: str, base: str, branch: str, proven:
 
 
 def sync_checkout(repo: Repo, store: str, pinned: str, merge: str) -> None:
-    """Move the checkout's index and files from pinned to merge, every object read from the
-    store (GIT_OBJECT_DIRECTORY): what the shared repo holds never reaches a file."""
-    env = checkout_env(repo, GIT_OBJECT_DIRECTORY=os.path.join(store, "objects"))
+    """Move the checkout's index and files from pinned to merge, the store standing in for the
+    common dir: every object, the config and info/attributes come from it, so what the shared
+    repo holds (its info/attributes would convert what is written, and no config turns that
+    file off) never reaches a file. The index stays the checkout's own, in its git dir."""
+    env = sync_env(GIT_COMMON_DIR=store, GIT_WORK_TREE=repo.toplevel)
     sgit(["read-tree", "-m", "-u", pinned, merge], repo.toplevel, env,
          f"checking out {merge[:12]}")
 

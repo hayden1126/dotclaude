@@ -865,6 +865,16 @@ class GitTamper(unittest.TestCase):
         self.write(".git/objects/info/alternates", "/elsewhere/objects\n")
         self.found("objects/info/alternates")
 
+    def test_info_attributes_with_content_is_found(self):
+        # A checkout conversion (eol, working-tree-encoding) any lane can plant for every git
+        # here; empty or blank passes, as for alternates.
+        for text in ("", "\n", " \t\n"):
+            with self.subTest(text=text):
+                self.write(".git/info/attributes", text)
+                self.assertEqual(lanelib.git_tamper(self.common), [])
+        self.write(".git/info/attributes", "*.sh text eol=crlf\n")
+        self.found("info/attributes")
+
     def test_a_loose_replace_ref_is_found(self):
         self.git("replace", self.blob_a, self.blob_b)
         self.found(f"refs/replace/{self.blob_a}")
@@ -896,6 +906,7 @@ class GitTamper(unittest.TestCase):
         cases = {"refs/replace": outside, f"refs/replace/{self.blob_a}": "missing",
                  "packed-refs": self.write("empty", "", root=outside),
                  "objects/info/alternates": self.write("blank", "\n", root=outside),
+                 "info/attributes": self.write("blank2", "\n", root=outside),
                  "info/grafts": "missing", "shallow": "missing"}
         for rel, target in cases.items():
             with self.subTest(rel):

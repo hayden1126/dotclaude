@@ -632,7 +632,8 @@ def git_tamper(common_dir: str) -> list[str]:
     git serve content other than what the remote showed, [] when there is none. Sandboxed Bash
     in any lane can write the common dir. It flags any replace ref (loose under refs/replace/ or
     a packed-refs line), a non-blank objects/info/alternates (the file exists empty in a normal
-    repo), and an info/grafts or shallow file existing at all. Nothing below common_dir is
+    repo) or info/attributes (checkout conversions no config turns off), and an info/grafts or
+    shallow file existing at all. Nothing below common_dir is
     followed: each name opens by fd with O_NOFOLLOW (open_dir), so a symlink is a finding in
     itself. Fails closed: whatever can't be read is a finding, never clean. `lane ls`,
     handoff-check and setup.sh (through this file's `git-tamper` command) call it."""
@@ -642,8 +643,8 @@ def git_tamper(common_dir: str) -> list[str]:
         return [f"the git common dir {common_dir} can't be opened ({e.strerror or e}): "
                 "counted as tampered"]
     checks = (("refs/replace", _replace_refs), ("packed-refs", _packed_replace),
-              ("objects/info/alternates", _alternates), ("info/grafts", _exists),
-              ("shallow", _exists))
+              ("objects/info/alternates", _nonblank), ("info/attributes", _nonblank),
+              ("info/grafts", _exists), ("shallow", _exists))
     reasons = []
     try:
         for rel, check in checks:
@@ -734,10 +735,13 @@ def _packed_replace(root: int, rel: str) -> list[str]:
             for n, line in enumerate((data or b"").splitlines(), 1) if b"refs/replace/" in line]
 
 
-def _alternates(root: int, rel: str) -> list[str]:
+NONBLANK = {"objects/info/alternates": "git also reads objects from the stores it names",
+            "info/attributes": "git converts the files it checks out by its rules"}
+
+
+def _nonblank(root: int, rel: str) -> list[str]:
     data = _read(root, rel)
-    return [f"{rel} is not empty: git also reads objects from the stores it names"] \
-        if data and data.strip() else []
+    return [f"{rel} is not empty: {NONBLANK[rel]}"] if data and data.strip() else []
 
 
 def _exists(root: int, rel: str) -> list[str]:
