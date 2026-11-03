@@ -82,8 +82,8 @@ class SyncMain(LanesRepo):
 
     def sync(self, *args, cwd=None, env=None):
         e = dict(self.env, **(env or {}))
-        return subprocess.run([sys.executable, LANE, "sync-main", *args], cwd=cwd or self.main, env=e,
-                              capture_output=True, text=True, timeout=120)
+        return subprocess.run([sys.executable, LANE, "sync-main", *args], cwd=cwd or self.main,
+                              env=e, capture_output=True, text=True, timeout=120)
 
     def sync_in(self, *args, cwd=None, patches=lambda mod: []):
         """sync-main in this process, so a test can patch the loaded CLI. (rc, out, err)."""

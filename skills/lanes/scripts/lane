@@ -5236,7 +5236,8 @@ def checkout_env(repo: Repo, **extra: str) -> dict[str, str]:
 
 
 def sgit(args: list[str], cwd: str, env: dict[str, str], what: str,
-         wait: float = SYNC_GIT_WAIT, ok: tuple[int, ...] | None = (0,)) -> subprocess.CompletedProcess:
+         wait: float = SYNC_GIT_WAIT,
+         ok: tuple[int, ...] | None = (0,)) -> subprocess.CompletedProcess:
     """git with env in place of every inherited GIT_*; a LaneError naming what on an exit
     outside ok (None takes any) or no answer within wait. Paths come back surrogate-escaped."""
     full = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
@@ -5298,7 +5299,8 @@ def settings_rules_problem(path: str) -> str | None:
         return d if isinstance(d, list) else []
     missing = [f"{rule} in {where}" for rule, where, have in (
         (VERIFIED_EDIT, "permissions.deny", at(data, "permissions", "deny")),
-        (VERIFIED_DENY, "sandbox.filesystem.denyWrite", at(data, "sandbox", "filesystem", "denyWrite")))
+        (VERIFIED_DENY, "sandbox.filesystem.denyWrite",
+         at(data, "sandbox", "filesystem", "denyWrite")))
         if rule not in have]
     return f"it lacks {' and '.join(missing)}" if missing else None
 
@@ -5659,7 +5661,7 @@ def cmd_sync_main(args) -> None:
         proven = proven_sha(repo, args.pr, base) if lead_mode else None
         fresh_store(store)
         proven = fill_store(repo, store, remote, base, branch, pinned, proven)
-        label = f"PR #{args.pr} ({proven[:12]})" if lead_mode else f"{remote}/{base} ({proven[:12]})"
+        label = (f"PR #{args.pr}" if lead_mode else f"{remote}/{base}") + f" ({proven[:12]})"
         env = sync_env(store)
         if sgit(["merge-base", "--is-ancestor", proven, pinned], store, env, "the ancestry check",
                 ok=None).returncode == 0:
