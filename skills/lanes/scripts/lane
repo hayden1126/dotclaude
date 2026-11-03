@@ -1562,6 +1562,9 @@ def cmd_ls(args) -> None:
         n = len(h["links"])
         say(f"install: held by {who} (branch {h['branch']}, {n} link{'' if n == 1 else 's'}): "
             f"the lead's ./setup.sh in {h['main']} releases it")
+    # The DA15/DA16 tripwire: a warning like the lines above, so the exit stays 0.
+    for reason in lanelib.git_tamper(repo.common_dir):
+        say(f"git: {reason}")
 
 
 def cap_line(repo: Repo) -> str | None:
