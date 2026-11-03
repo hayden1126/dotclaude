@@ -2046,12 +2046,12 @@ def cmd_open(args) -> None:
         raise LaneError(f"lane {args.id} is stale: its worktree {path} is gone (`lane done "
                         f"{args.id}` closes it)")
     usable_path(repo, lane)  # the window's cwd, where `claude` loads that dir's .claude/ config
-    # LR7: while a `new` or `adopt` finishes the lane (its finishing lock, whose span holds the
-    # marker's), no session may start there, whatever lane.json says. A lock that can't be
-    # probed refuses too.
+    # LR7: while a `new` or `adopt` finishes the lane, or a `done` closes it (its finishing lock,
+    # whose span holds the marker's), no session may start there, whatever lane.json says. A
+    # lock that can't be probed refuses too.
     if finishing_now(repo, lane["id"]):
-        raise LaneError(f"lane {args.id} is unfinished: {FINISHING.format(args.id)}. Open it "
-                        "once that ends")
+        raise LaneError(f"lane {args.id} is unfinished or closing: {FINISHING.format(args.id)}. "
+                        "Open it once that ends")
     if lane.get("state") == "setup-failed":
         raise LaneError(f"lane {args.id} is setup-failed: {setup_failed_hint(repo, lane)}")
     # LR7: while any marker of `new`'s is there for this id (pending, vouching, or one whose
@@ -5040,7 +5040,20 @@ def worktree_config_refusal(repo: Repo, lane_id: str | None, present: bool,
                         "(`git sparse-checkout` turns it on)")
 
 
+DONE_HELD: list[int] = []  # fds `done` holds (its finishing lock) until the command ends
+
+
 def cmd_done(args) -> None:
+    """`lane done`, with whatever it holds released once it ends, however it ends: the CLI
+    exits then anyway, but the tests call it in process."""
+    try:
+        close_lane(args)
+    finally:
+        while DONE_HELD:
+            os.close(DONE_HELD.pop())
+
+
+def close_lane(args) -> None:
     repo = lanes_repo()
     lane = load_lane(repo, args.id)
     check_data_dir(repo, args.id)
@@ -5052,7 +5065,7 @@ def cmd_done(args) -> None:
     # Its fetch and `branch -d` move refs, and a reflog link takes their log lines (LR4).
     tamper_gate(repo, "Nothing was signalled or removed: find out who made each, remove it, "
                 "then rerun")
-    # Held, not probed, until this process ends with the command (LR7): no `new` or `adopt` of
+    # Held, not probed, until the command ends (LR7; cmd_done releases it): no `new` or `adopt` of
     # this id runs its setup in the tree meanwhile, and the marker dropped below is never one a
     # `new` of the same id wrote after this `done` began. With no stores' dir, no `new` has made
     # one here, and the drop is skipped.
@@ -5065,6 +5078,7 @@ def cmd_done(args) -> None:
     if top is not None:
         try:
             finishing_fd = finishing(top, repo, args.id, "Nothing was signalled or removed.")
+            DONE_HELD.append(finishing_fd)
         finally:
             os.close(top)
     present = os.path.isdir(path)
@@ -5972,14 +5986,15 @@ def lock_name(repo: Repo, lane_id: str) -> str:
     return f"{repo.key}-{lane_id}.lock"
 
 
-FINISHING = "another `lane new` or `lane adopt` is finishing lane {}"
+FINISHING = "another `lane new` or `lane adopt` is finishing lane {0}, or a `lane done` is closing it"
 
 
 def finishing(parent: int, repo: Repo, lane_id: str, left: str) -> int:
     """An fd holding lane_id's finishing lock, a flock on its .lock file in NEW_MARKS under
     parent (the stores' dir, which no lane can write), opened without following a link: `new`
     holds it from before its pending marker, and `adopt` from before its marker check, each
-    through finished_lane, so no two finish one lane at once and `open` refuses meanwhile (LR7).
+    through finished_lane, and `done` from its gate to its end, so no two finish or close one
+    lane at once and `open` refuses meanwhile (LR7).
     Closing the fd releases it. Held, it refuses at once (one retry after a short pause, so
     `open`'s probe of it isn't taken for a finisher); left says what the refusal left undone."""
     try:
@@ -6005,7 +6020,8 @@ def finishing(parent: int, repo: Repo, lane_id: str, left: str) -> int:
 
 
 def finishing_now(repo: Repo, lane_id: str) -> bool:
-    """Whether a `new` or `adopt` holds lane_id's finishing lock, or may (it can't be probed):
+    """Whether a `new`, `adopt` or `done` holds lane_id's finishing lock, or may (it can't be
+    probed):
     `open`'s gate, beside marked."""
     try:
         if (top := stores_fd()) is None:

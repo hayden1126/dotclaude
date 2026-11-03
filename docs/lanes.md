@@ -943,7 +943,9 @@ the check and the setup. A per-lane finishing lock beside the markers, taken by 
 pending marker and by `adopt` before its marker check, each holding it until the lane is marked
 active, makes any other `new` or `adopt` finishing the lane refuse at once, and `open` refuses
 while it is held. `done` takes it too and holds it to its end, so no `new` or `adopt` of that id
-runs while the lane closes, and the marker `done` removes is never one a later `new` wrote. `adopt` finishes a lane with a matching verified marker whatever its
+runs while the lane closes, and the marker `done` removes is never one a later `new` wrote. With
+no stores' dir as `done` starts, no `new` has made a marker there: `done` takes no lock and
+removes no marker. `adopt` finishes a lane with a matching verified marker whatever its
 `lane.json` state, except `closing` (a `lane done` is ending it), which it refuses as
 registered. It refuses while a live session runs in the lane's tree (or while sessions can't be
 read), as does the setup step of `new`: a session found there drops the marker, so the lane is
