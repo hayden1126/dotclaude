@@ -127,7 +127,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   Backlog:
   - **Fix lanes from lane design-audit** (Hayden's picks, 2026-11-01). Private: sandbox-audit
     FINDINGS, "Design-decision audit, 2026-11", one row per id with the detail. Most severe first:
-    1. DA15 with DA16 (high): lane ports' next PR (Hayden, 2026-11-01). Files: `skills/lanes/scripts/lane`, `lanelib.py`,
+    1. DA15 with DA16 (high): lane ports' next PR (Hayden, 2026-11-01), plus private row LR1
+       (medium, found by ports; Hayden folded it in 2026-11-02). Files: `skills/lanes/scripts/lane`, `lanelib.py`,
        handoff-check, `setup.sh`, `skills/lanes/SKILL.md` (the post-merge step) and their tests,
        the files ports' PR 2 also changes. Until it lands, the lead runs DA15's pre-check and
        DA16's stopgap before each post-merge chain (both in the private rows).
