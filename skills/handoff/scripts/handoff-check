@@ -31,10 +31,12 @@ in a plain repo (the root STATUS.md). Checks:
              misreads it, only a warning
   claims     in a lane, every lane.json claim is named in the record
   pushed     in a lane, unpushed commits are noted in the record (a warning: pushes need Hayden)
+  git        in a lanes repo, the common dir every lane shares has none of the tripwire's
+             findings (lanelib.git_tamper, DA15/DA16); each one fails
 The handoff skill runs it last; a handoff is not done until it passes.
 
 --closing is the check `lane done` runs before it ends a lane's sessions. It keeps clean,
-comments, next, absolute, claims and pushed, but fresh compares the status file against HEAD's commit only, not
+comments, next, absolute, claims, pushed and git, but fresh compares the status file against HEAD's commit only, not
 against the session's start (after /pass, the idle new session started after the handoff), and
 approval is skipped (no session resumes from that Next block). It adds:
   kept       a `Keep open: <why>` item in the Next block fails, even one inside a comment:
@@ -217,6 +219,8 @@ def check(cwd: str, closing: bool = False,
         fails.append(why)
     elif dirty := [p for p in leftovers(repo) if not named(p, text)]:
         fails.append("uncommitted and not named in the status file: " + ", ".join(dirty))
+    if repo.has_lanes:
+        fails += [f"git: {reason}" for reason in lanelib.git_tamper(repo.common_dir)]
 
     mtime = os.path.getmtime(status)
     # --no-show-signature: log.showSignature would run gpg.program, which the repo's config names.

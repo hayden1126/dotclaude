@@ -120,6 +120,11 @@ class PlainRepo(Check):
     def test_a_complete_handoff_passes(self):
         self.assertPasses(self.check())
 
+    def test_the_tripwire_runs_only_with_lanes(self):
+        # A plain repo has no lanes sharing its common dir (DA15/DA16).
+        self.write(os.path.join(self.common, "shallow"), "")
+        self.assertPasses(self.check())
+
     def test_leftovers_must_be_named(self):
         self.write(os.path.join(self.main, "scratch.txt"), "x")
         self.assertGap(self.check(), "scratch.txt")
@@ -548,6 +553,16 @@ class Lane(Check):
     def test_a_complete_lane_handoff_passes(self):
         self.finish()
         self.assertPasses(self.check(cwd=self.path))
+
+    def test_each_tripwire_finding_fails(self):
+        # DA15/DA16: the common dir every lane shares.
+        self.finish()
+        self.write(os.path.join(self.common, "shallow"), "")
+        self.write(os.path.join(self.common, "objects", "info", "alternates"), "/x/objects\n")
+        code, out = self.check(cwd=self.path)
+        self.assertEqual(code, 1, out)
+        self.assertIn("FAIL  git: shallow exists", out)
+        self.assertIn("FAIL  git: objects/info/alternates is not empty", out)
 
     def test_an_unreadable_lane_record_fails_in_its_checkout(self):
         # Left out of the lanes, the lane's checkout would read as unregistered and check the
