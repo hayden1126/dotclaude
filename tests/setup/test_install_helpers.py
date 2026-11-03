@@ -1182,6 +1182,29 @@ class TamperRefusal(unittest.TestCase):
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("shallow", p.stderr)
 
+    def test_a_worktree_whose_commondir_names_another_dir_stops_the_run(self):
+        # git's answer for a worktree comes from <common>/worktrees/<id>/commondir, which a lane
+        # can rewrite: it must be the gitfile's admin dir's grandparent, the real common dir.
+        env = dict(self.env, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
+                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
+        subprocess.run(["git", "-C", self.repo, "add", "skills"], env=env, check=True)
+        subprocess.run(["git", "-C", self.repo, "commit", "-q", "-m", "c"], env=env, check=True)
+        wt = os.path.join(self.tmp, "wt")
+        subprocess.run(["git", "-C", self.repo, "worktree", "add", "-q", wt], env=env, check=True)
+        with open(os.path.join(self.repo, ".git", "shallow"), "w"):
+            pass  # a finding in the real common dir, which the redirect hides
+        clean = os.path.join(self.tmp, "clean.git")
+        subprocess.run(["git", "init", "-q", "--bare", clean], env=self.env, check=True)
+        with open(os.path.join(self.repo, ".git", "worktrees", "wt", "commondir"), "w") as f:
+            f.write(clean + "\n")
+        named = subprocess.run(["git", "-C", wt, "rev-parse", "--path-format=absolute",
+                                "--git-common-dir"], env=self.env, capture_output=True, text=True)
+        self.assertEqual(os.path.realpath(named.stdout.strip()), clean)  # git follows it
+        p = self.run_block(repo_dir=wt)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertNotIn("went on", p.stdout)
+        self.assertIn("stopped before changing anything", p.stderr)
+
     def test_a_dir_git_cant_place_stops_the_run(self):
         p = self.run_block(repo_dir=os.path.join(self.tmp, "not-a-repo"))
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)

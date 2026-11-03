@@ -58,13 +58,24 @@ fi
 # path it can't read), or a common dir git can't name, stops the run here, before changing
 # anything. git follows a commondir file in any git dir, a main checkout's .git too, so its
 # answer may name a clean dir of a lane's choosing: a checkout whose .git is a dir is checked
-# there, without asking git. A lane worktree's .git is a gitfile, so git's answer is checked, and
-# a commondir file in that dir is a finding too.
+# there, without asking git. A lane worktree's .git is a gitfile naming its admin dir,
+# <common>/worktrees/<id>, and git takes its answer from that dir's commondir file, which a lane
+# can rewrite (LR2): the answer must be the admin dir's grandparent, or the run stops. A
+# commondir file in the common dir itself is a finding too.
 if [[ -d $REPO_DIR/.git ]]; then
   common="$REPO_DIR/.git"
 elif ! common="$(git -C "$REPO_DIR" rev-parse --path-format=absolute --git-common-dir)"; then
   warn "git can't name the common dir of $REPO_DIR (see above); setup.sh stopped before changing anything"
   exit 1
+else
+  admin="$(sed -n '1s/^gitdir: //p' "$REPO_DIR/.git" 2>/dev/null || true)"
+  [[ -z $admin || $admin == /* ]] || admin="$REPO_DIR/$admin"
+  if [[ -z $admin || "$(basename "$(dirname "$admin")")" != worktrees ]] \
+      || ! want="$(cd -P "$admin/../.." 2>/dev/null && pwd -P)" \
+      || [[ "$(cd -P "$common" 2>/dev/null && pwd -P)" != "$want" ]]; then
+    warn "git names $common as the common dir of $REPO_DIR, not its admin dir's grandparent (LR2: a planted commondir?); setup.sh stopped before changing anything"
+    exit 1
+  fi
 fi
 tamper=0
 python3 -I "$REPO_DIR/skills/lanes/scripts/lanelib.py" git-tamper "$common" >&2 || tamper=$?
