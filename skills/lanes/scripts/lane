@@ -5744,8 +5744,9 @@ def cmd_sync_main(args) -> None:
                     "older carry), in a follow-up commit.")
         changed = [x for x in sgit(["diff-tree", "-r", "-z", "--name-only", pinned, merge], store,
                                    env, "counting the changes").stdout.split("\0") if x]
-        say(f"sync-main: {branch} is at merge {merge[:12]} of {label}, verified; "
-            f"{len(changed)} files changed")
+        if not problems:  # never a "verified" over a checkout that isn't the merge's
+            say(f"sync-main: {branch} is at merge {merge[:12]} of {label}, verified; "
+                f"{len(changed)} files changed")
     if problems:
         raise LaneError(f"after the checkout, {repo.toplevel} doesn't match {merge[:12]}:"
                         f"{named_paths(problems)}\nSomething wrote the checkout meanwhile: "

@@ -363,6 +363,88 @@ class SyncMain(LanesRepo):
         self.assertIn("moved", err)
         self.assertEqual(self.git("rev-parse", "refs/heads/lead").strip(), moved)
 
+    def test_a_lead_ref_moved_before_the_pin_refuses_on_the_disk(self):
+        # A lane points the lead's branch at a commit of its own before sync-main pins HEAD, and
+        # forges the index so status reads clean (dirty_paths mocked). The pin and the file://
+        # fetch agree on that commit; only the checkout's bytes give it away.
+        proven = self.land({"hooks/x.sh": REAL})
+        wt = os.path.join(self.tmp, "evil")
+        self.git("worktree", "add", "-q", "--detach", wt, "HEAD")
+        self.commit("README.md", "planted\n", cwd=wt)
+        moved = self.git("rev-parse", "HEAD", cwd=wt).strip()
+        self.git("update-ref", "refs/heads/lead", moved)
+        self.merged(proven)
+        before = self.state()
+        rc, out, err = self.sync_in("7", patches=lambda mod: [
+            mock.patch.object(mod, "dirty_paths", return_value=[])])
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn(f"commit {moved[:12]}", err)
+        self.assertIn("README.md (index)", err)
+        self.assertIn("README.md (other bytes)", err)
+        self.assertEqual(self.state(), before)
+
+    def race_after_compare(self, change):
+        """sync-main with change() run right after the first compare (of pinned) passes."""
+        self.land({"hooks/x.sh": REAL})
+
+        def patches(mod):
+            real, calls = mod.compare, []
+
+            def racing(*a, **k):
+                out = real(*a, **k)
+                calls.append(1)
+                if len(calls) == 1:
+                    change()
+                return out
+            return [mock.patch.object(mod, "compare", racing)]
+        rc, out, err = self.sync_in("7", patches=patches)
+        self.assertEqual(rc, 1, out + err)
+        self.assertNotIn("verified;", out)  # never a success line over a mix
+        return err
+
+    def test_a_file_changed_after_the_compare_refuses(self):
+        path = os.path.join(self.main, "README.md")
+        err = self.race_after_compare(lambda: self.write(path, "planted\n"))
+        self.assertIn("README.md", err)
+        self.assertIn("meanwhile", err)
+
+    def test_an_index_changed_after_the_compare_refuses(self):
+        # read-tree's two-tree merge keeps an index entry the merge doesn't change, so the
+        # forged entry survives the checkout: the compare after it refuses.
+        err = self.race_after_compare(lambda: self.git(
+            "update-index", "--cacheinfo", f"100644,{self.evil_blob()},README.md"))
+        self.assertIn("README.md (index)", err)
+        self.assertIn("meanwhile", err)
+        self.assertEqual(self.read(os.path.join(self.main, "hooks", "x.sh")), REAL)
+
+    def test_an_overwritten_lead_side_object_fails_the_fetch(self):
+        # STATUS.md's blob is only on the lead's branch, so it reaches the store through the
+        # file:// fetch from the shared repo, where index-pack hashes what arrives.
+        blob = self.blob("lead", "STATUS.md")
+        self.land({"hooks/x.sh": REAL})
+        path = os.path.join(self.common, "objects", blob[:2], blob[2:])
+        os.chmod(path, 0o644)
+        with open(path, "wb") as f:
+            f.write(zlib.compress(b"blob %d\0" % len(EVIL) + EVIL.encode()))
+        before = self.state()
+        rc, out, err = self.sync_in("7", patches=lambda mod: [
+            mock.patch.object(mod.lanelib, "git_tamper", return_value=[])])
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("the fetch of lead", err)
+        self.assertEqual(self.state(), before)
+
+    def test_each_tripwire_finding_refuses(self):
+        self.land({"hooks/x.sh": REAL})
+        for rel, text in (("objects/info/alternates", "/elsewhere/objects\n"),
+                          ("info/grafts", ""), ("shallow", "")):
+            with self.subTest(rel):
+                path = os.path.join(self.common, rel)
+                self.write(path, text)
+                try:
+                    self.refuses_unchanged(rel)
+                finally:
+                    os.unlink(path)
+
     # --- fail-closed inputs ------------------------------------------------------------------
 
     def refuses_unchanged(self, needle, env=None):
@@ -497,6 +579,17 @@ class SyncMain(LanesRepo):
         self.assertEqual(self.read(os.path.join(lane, "hooks", "x.sh")), REAL)
         self.assertEqual(self.read(os.path.join(lane, "chart.txt")), "lane work\n")
         self.assertEqual(self.git("rev-parse", "refs/remotes/origin/main").strip(), proven)
+
+    def test_lane_mode_never_checks_out_a_replace_ref(self):
+        self.lane("new", "chart-fix")
+        lane = self.lane_path("chart-fix")
+        proven = self.land({"hooks/x.sh": REAL})
+        self.git("replace", self.blob("pr7", "hooks/x.sh"), self.evil_blob())
+        rc, out, err = self.sync_in(cwd=lane, patches=lambda mod: [
+            mock.patch.object(mod.lanelib, "git_tamper", return_value=[])])
+        self.assertEqual(rc, 0, out + err)
+        self.assertEqual(self.read(os.path.join(lane, "hooks", "x.sh")), REAL)
+        self.assertEqual(self.parents(cwd=lane)[1], proven)
 
     def test_lane_mode_refuses_a_conflict(self):
         self.lane("new", "chart-fix")
