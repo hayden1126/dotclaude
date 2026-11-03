@@ -647,8 +647,8 @@ def git_tamper(common_dir: str) -> list[str]:
     the common dir (so a caller handed git's answer would check that dir; repo_tamper checks the
     checkout's own .git as well). It also flags a symlink directly under worktrees/ (LR3: gc's
     `worktree prune` deletes through it) and one anywhere under logs/ or a worktree's logs/
-    (LR4: a reflog write follows it), and any entry directly in common_dir that is a symlink or
-    neither a file nor a dir (LR5: a fetch writes FETCH_HEAD through it), and a symlink anywhere
+    (LR4: a reflog write follows it), a symlink directly in common_dir (LR5: a fetch writes
+    FETCH_HEAD through it), and a symlink anywhere
     under refs/ (LR6: update-ref creates a ref file through it). Nothing below
     common_dir is
     followed: each name opens by fd with O_NOFOLLOW (open_dir), so a symlink is a finding in
@@ -738,17 +738,16 @@ def read_nofollow(root: int, rel: str) -> bytes | None:
 
 
 def _top_links(root: int, rel: str) -> list[str]:
-    """LR5: each entry directly in the common dir that is a symlink, or neither a regular file
-    nor a dir. A real common dir holds only those two kinds there, and git, run sandbox-off,
-    writes FETCH_HEAD, ORIG_HEAD, packed-refs, index and the rest through a planted link."""
+    """LR5: each symlink directly in the common dir, which a real one never holds: git, run
+    sandbox-off, writes FETCH_HEAD, ORIG_HEAD, packed-refs, index and the rest through a planted
+    link. Only links: inside a sandboxed run, the sandbox's /dev/null mounts over protected
+    paths (config.lock) read as char devices, and a fifo redirects no write to a file."""
     found = []
     for n in sorted(os.listdir(root)):
         st = _lstat(root, n)
-        if st is None or stat.S_ISDIR(st.st_mode) or stat.S_ISREG(st.st_mode):
-            continue
-        kind = "a symlink" if stat.S_ISLNK(st.st_mode) else "neither a file nor a dir"
-        found.append(f"{n} is {kind}: git writes the files at the common dir's top through a "
-                     "link, sandbox-off")
+        if st is not None and stat.S_ISLNK(st.st_mode):
+            found.append(f"{n} is a symlink: git, run outside the sandbox, writes the files at "
+                         "the common dir's top through a link")
     return found
 
 

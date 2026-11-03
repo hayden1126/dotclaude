@@ -999,9 +999,9 @@ class GitTamper(unittest.TestCase):
                 os.rename(moved, path)
         self.assertEqual(lanelib.git_tamper(self.common), [])
 
-    def test_a_link_or_special_file_at_the_top_is_found(self):
+    def test_a_link_at_the_top_is_found(self):
         # LR5: a fetch writes FETCH_HEAD sandbox-off, through a link planted there; a real
-        # common dir holds no link, and nothing but files and dirs, at its top level.
+        # common dir holds no link at its top level.
         victim = self.write("victim", "mine\n", root=self.tmp)
         self.write(".git/FETCH_HEAD", "")
         self.write(".git/ORIG_HEAD", "")
@@ -1009,11 +1009,17 @@ class GitTamper(unittest.TestCase):
         for name in ("FETCH_HEAD", "ORIG_HEAD", "index", "HEAD", "description", "x"):
             with self.subTest(name=name):
                 self.swap_in_link(name, victim)
-        os.unlink(os.path.join(self.common, "FETCH_HEAD"))
+
+    def test_lock_files_mounts_and_fifos_at_the_top_pass(self):
+        # On the host, config.lock, config.worktree and gc.log.lock sit there as empty files;
+        # inside the sandbox, its /dev/null mounts over protected paths read as char devices
+        # (mknod needs root here, so a fifo stands in for a non-file). Neither is a finding, or
+        # every check would report tampering forever. A fifo is let pass on purpose: git
+        # writing to one redirects nothing to a file of the user's.
+        for name in ("config.lock", "config.worktree", "gc.log.lock"):
+            self.write(f".git/{name}", "")
         os.mkfifo(os.path.join(self.common, "FETCH_HEAD"))
-        self.found("FETCH_HEAD")
-        os.unlink(os.path.join(self.common, "FETCH_HEAD"))
-        os.mkdir(os.path.join(self.common, "a-dir"))  # a dir there is one of git's own kinds
+        os.mkdir(os.path.join(self.common, "a-dir"))
         self.assertEqual(lanelib.git_tamper(self.common), [])
 
     def test_a_symlink_anywhere_under_refs_is_found(self):

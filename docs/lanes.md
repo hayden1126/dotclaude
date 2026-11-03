@@ -860,9 +860,10 @@ each check the shared git dir for signs it may serve content no remote showed (D
 prints a `git:` line per finding, handoff-check fails with one FAIL per finding in a lanes repo,
 and setup.sh refuses to install. It also flags a symlink directly under `worktrees/` (an entry
 there is always a dir, and `git worktree prune` deletes through a link: LR3), one anywhere under
-`logs/` or a worktree's `logs/` (a reflog write outside the sandbox follows it: LR4), a symlink
-or any other entry but a file or dir directly in the shared git dir (a fetch writes
-`FETCH_HEAD` through a link there: LR5), and a symlink anywhere under `refs/` (update-ref
+`logs/` or a worktree's `logs/` (a reflog write outside the sandbox follows it: LR4), one
+directly in the shared git dir (a fetch writes `FETCH_HEAD` through it: LR5; only links count
+there, since the sandbox's own mounts over protected paths read as devices), and one anywhere
+under `refs/` (update-ref
 creates a ref file through it: LR6). The lane CLI's fetches write no `FETCH_HEAD` at all.
 setup.sh also sets
 `core.useReplaceRefs false`, `gc.auto 0` and `maintenance.auto false` in the global git config:
