@@ -48,6 +48,10 @@ Stage 3 checks (probes first: each records a Claude Code fact the later steps re
               is nudged once (in its transcript, never the lead's; `nudged` in its index; one
               `nudge` row), then its next Read is denied (deadline, stop_and_explain) and it
               hands back partial; after a SendMessage resume, a fresh budget lets a Read through
+  early       a haiku agent starts a run_in_background command and reports at once, by
+              handback (auto) and by ending its turn (acceptEdits): report-check refuses it,
+              and the report the lead gets came after the command ended, or (auto) carries
+              report-check's note naming it (about 4 minutes)
 
 Every session runs with --setting-sources project,local, so only the fixture's hooks run. With
 user settings loaded, the installed copy of each hook ran too: that masks a regression in the
@@ -76,7 +80,7 @@ READ_TOOLS = {"Read", "Grep", "Glob", "WebFetch", "WebSearch"}
 UID = os.getuid()
 STAGE1 = ["reader", "researcher", "writer", "guard"]
 STAGE2 = ["policy", "allowlist", "deps", "escape", "report"]
-STAGE3 = ["workflow", "stall", "team", "deadline"]
+STAGE3 = ["workflow", "stall", "team", "deadline", "early"]
 RAW_EVENTS = ("PreToolUse", "PostToolUse", "SubagentStart", "SubagentStop", "Notification")
 
 results = []
@@ -303,6 +307,8 @@ def run_claude(keep, cases):
         team(root, env, state)
     if "deadline" in cases:
         deadline(root, env, state)
+    if "early" in cases:
+        early(root, env)
     ledger(state, cases)
     return root
 
@@ -905,6 +911,99 @@ def run_codex(keep, cases):
     check("codex: unknown model refused before launch", p.returncode == 2 and len(rows) == n,
           p.stderr.strip()[:120])
     return root
+
+
+EARLY_SLEEP_S = 45
+NOTE_MARK = "[report-check] Note for the caller"
+LAUNCH_ID_RE = re.compile(r"Command running in background with ID: ([A-Za-z0-9]+)")
+
+
+def early(root, env):
+    # A foreground call moved to the background at 180 s can't be made here: Claude Code
+    # 2.1.316 caps only an async agent's calls, and never in a single-shot -p session
+    # (docs/delegation.md, verified facts). A run_in_background command is the same case for
+    # report-check, so the agent starts one and reports at once: through SubagentHandback in
+    # auto mode (PreToolUse), and by ending its turn in acceptEdits (SubagentStop).
+    for mode in ("auto", "acceptEdits"):
+        early_run(root, env, mode)
+
+
+def early_run(root, env, mode):
+    tag = f"early ({mode})"
+    print(f"an early report while a background command runs ({EARLY_SLEEP_S}s, haiku agent, "
+          f"{mode})")
+    cmd = f"python3 -c \"import time; time.sleep({EARLY_SLEEP_S}); print('waited')\""
+    out = f"allowed/early-{mode}.txt"
+    report = ("call SubagentHandback with the message started" if mode == "auto" else
+              "end your turn by replying with only the word started")
+    r = claude('Spawn one general-purpose subagent (Agent tool, subagent_type "general-purpose", '
+               'model "haiku", in the foreground, no name) with this prompt: "This is a probe of '
+               'a report hook. Do exactly this, in order. 1. Start this exact Bash command with '
+               f'run_in_background true: {cmd} 2. Right away, before checking on it, {report}. '
+               '3. If that is refused, do what the refusal says. 4. Once the command has printed '
+               f'waited, use the Write tool to write the file {out} with the content ok, then '
+               'report in one line whether the file was written." Then relay its final report '
+               'verbatim.', root, env, disallow=["Edit", "NotebookEdit"], mode=mode,
+               model="haiku", timeout=900)
+    sid = r.get("session_id")
+    _, subs = session_files(sid)
+    gp = of_type(subs, "general-purpose")
+    check(f"{tag}: the agent ran", gp, f"session {sid}")
+    if not gp:
+        return
+    _, tpath = gp[0]
+    aid = os.path.basename(tpath)[len("agent-"):-len(".jsonl")]
+    ents = list(entries(tpath))
+    tasks = [m.group(1) for e in ents if e.get("type") == "user"
+             for m in [LAUNCH_ID_RE.match(text_of_result(e))] if m]
+    check(f"{tag}: the agent started a background command", tasks, f"{len(ents)} entries")
+    if not tasks:
+        return
+    mark = f"<task-id>{tasks[0]}</task-id>"
+    ended = next((i for i, e in enumerate(ents) if mark in json.dumps(e)
+                  and "task-notification" in json.dumps(e.get("origin") or
+                                                        (e.get("attachment") or {}).get("origin"))),
+                 None)
+    if mode == "auto":
+        # the handback's result entry carries no toolUseResult (2.1.316): read its text
+        delivered = next((i for i, e in enumerate(ents) if e.get("type") == "user"
+                          and '"success":true' in text_of_result(e).replace(" ", "")
+                          and "Report delivered" in text_of_result(e)), None)
+        reports = [(e.get("tool_input") or {}).get("message") or ""
+                   for e in raw_events(root, sid, "PostToolUse")
+                   if e.get("agent_id") == aid and e.get("tool_name") == "SubagentHandback"]
+    else:
+        # the report is the agent's last text; a stop can't carry the note
+        delivered = max((i for i, e in enumerate(ents) if e.get("type") == "assistant"
+                         and any(isinstance(c, dict) and c.get("type") == "text"
+                                 for c in (e.get("message") or {}).get("content") or ())),
+                        default=None)
+        reports = []
+    refusals = sum(1 for e in ents if e.get("type") == "user"
+                   and "[report-check] Don't report yet" in json.dumps(e.get("message")))
+    written = os.path.exists(os.path.join(root, out))
+    print(f"  observed: {refusals} wait refusals; file written {written}; "
+          f"notice at entry {ended}, report at entry {delivered}")
+    print(f"  lead relayed: {(r.get('result') or '')[:300]!r}")
+    check(f"{tag}: the report while it ran was refused", refusals >= 1, f"{refusals} refusals")
+    # Whether the agent then waits is the model's call; the contract is ours: the report it
+    # delivers came after the command ended, or (auto) tells the lead it didn't.
+    after = delivered is not None and ended is not None and ended < delivered
+    noted = bool(reports) and NOTE_MARK in reports[0]
+    check(f"{tag}: the report came after the command ended, or names it",
+          after or noted, f"after {after}, noted {noted}, {len(reports)} reports")
+
+
+def text_of_result(e):
+    """The text of a user entry's first tool_result, or ""."""
+    content = (e.get("message") or {}).get("content")
+    for c in content if isinstance(content, list) else ():
+        if isinstance(c, dict) and c.get("type") == "tool_result":
+            body = c.get("content")
+            if isinstance(body, list):
+                body = "".join(b.get("text", "") for b in body if isinstance(b, dict))
+            return body if isinstance(body, str) else ""
+    return ""
 
 
 def main():
