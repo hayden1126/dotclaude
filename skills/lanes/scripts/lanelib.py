@@ -647,7 +647,9 @@ def git_tamper(common_dir: str) -> list[str]:
     the common dir (so a caller handed git's answer would check that dir; repo_tamper checks the
     checkout's own .git as well). It also flags a symlink directly under worktrees/ (LR3: gc's
     `worktree prune` deletes through it) and one anywhere under logs/ or a worktree's logs/
-    (LR4: a reflog write follows it). Nothing below common_dir is
+    (LR4: a reflog write follows it), and any entry directly in common_dir that is a symlink or
+    neither a file nor a dir (LR5: a fetch writes FETCH_HEAD through it). Nothing below
+    common_dir is
     followed: each name opens by fd with O_NOFOLLOW (open_dir), so a symlink is a finding in
     itself. Fails closed: whatever can't be read is a finding, never clean. `lane ls`,
     handoff-check and setup.sh (through this file's `git-tamper` command) call it. Each reason
@@ -678,7 +680,7 @@ def _tamper(common_dir: str) -> list[str]:
     except OSError as e:
         return [f"the git common dir {common_dir} can't be opened ({e.strerror or e}): "
                 "counted as tampered"]
-    checks = (("refs/replace", _replace_refs), ("packed-refs", _packed_replace),
+    checks = (("", _top_links), ("refs/replace", _replace_refs), ("packed-refs", _packed_replace),
               ("objects/info/alternates", _nonblank), ("info/attributes", _nonblank),
               ("info/grafts", _exists), ("shallow", _exists), ("commondir", _exists),
               ("worktrees", _worktree_links), ("logs", _log_links))
@@ -688,7 +690,8 @@ def _tamper(common_dir: str) -> list[str]:
             try:
                 reasons += check(root, rel)
             except OSError as e:
-                reasons.append(f"{rel} can't be checked ({e.strerror or e}): counted as tampered")
+                reasons.append(f"{rel or 'the top level'} can't be checked ({e.strerror or e}): "
+                               "counted as tampered")
     finally:
         os.close(root)
     return reasons
@@ -731,6 +734,21 @@ def read_nofollow(root: int, rel: str) -> bytes | None:
         if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
             raise OSError(errno.EINVAL, "it is not a regular file")
         return fh.read()
+
+
+def _top_links(root: int, rel: str) -> list[str]:
+    """LR5: each entry directly in the common dir that is a symlink, or neither a regular file
+    nor a dir. A real common dir holds only those two kinds there, and git, run sandbox-off,
+    writes FETCH_HEAD, ORIG_HEAD, packed-refs, index and the rest through a planted link."""
+    found = []
+    for n in sorted(os.listdir(root)):
+        st = _lstat(root, n)
+        if st is None or stat.S_ISDIR(st.st_mode) or stat.S_ISREG(st.st_mode):
+            continue
+        kind = "a symlink" if stat.S_ISLNK(st.st_mode) else "neither a file nor a dir"
+        found.append(f"{n} is {kind}: git writes the files at the common dir's top through a "
+                     "link, sandbox-off")
+    return found
 
 
 def _replace_refs(root: int, rel: str) -> list[str]:

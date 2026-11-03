@@ -982,6 +982,40 @@ class GitTamper(unittest.TestCase):
                         os.rename(moved, path)
                 self.assertEqual(lanelib.git_tamper(self.common), [])
 
+    def swap_in_link(self, rel, target):
+        """A symlink to target at rel in the common dir, whatever was there moved aside;
+        cleanup puts it back and checks the repo is clean again."""
+        path = os.path.join(self.common, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        moved = path + ".moved"
+        if os.path.lexists(path):
+            os.rename(path, moved)
+        os.symlink(target, path)
+        try:
+            self.found(rel)
+        finally:
+            os.unlink(path)
+            if os.path.lexists(moved):
+                os.rename(moved, path)
+        self.assertEqual(lanelib.git_tamper(self.common), [])
+
+    def test_a_link_or_special_file_at_the_top_is_found(self):
+        # LR5: a fetch writes FETCH_HEAD sandbox-off, through a link planted there; a real
+        # common dir holds no link, and nothing but files and dirs, at its top level.
+        victim = self.write("victim", "mine\n", root=self.tmp)
+        self.write(".git/FETCH_HEAD", "")
+        self.write(".git/ORIG_HEAD", "")
+        self.assertEqual(lanelib.git_tamper(self.common), [])
+        for name in ("FETCH_HEAD", "ORIG_HEAD", "index", "HEAD", "description", "x"):
+            with self.subTest(name=name):
+                self.swap_in_link(name, victim)
+        os.unlink(os.path.join(self.common, "FETCH_HEAD"))
+        os.mkfifo(os.path.join(self.common, "FETCH_HEAD"))
+        self.found("FETCH_HEAD")
+        os.unlink(os.path.join(self.common, "FETCH_HEAD"))
+        os.mkdir(os.path.join(self.common, "a-dir"))  # a dir there is one of git's own kinds
+        self.assertEqual(lanelib.git_tamper(self.common), [])
+
     @unittest.skipIf(os.geteuid() == 0, "root reads a mode-000 dir")
     def test_an_unreadable_logs_dir_fails_closed(self):
         path = os.path.join(self.common, "logs", "refs")

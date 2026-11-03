@@ -121,5 +121,48 @@ class NoAutoCleanup(LanesRepo):
         self.assertEqual(self.git("rev-parse", "refs/remotes/origin/other").strip(), tip)
 
 
+class NoFetchHead(LanesRepo):
+    """LR5: a lane plants <common>/FETCH_HEAD as a link to a file of the user's. A plain fetch
+    outside the sandbox writes its fetched refs through the link; the lane CLI's fetches (new,
+    done, park) write no FETCH_HEAD at all."""
+
+    def plant(self, common, name):
+        victim = os.path.join(self.tmp, f"victim-{name}")
+        self.write(victim, "mine\n")
+        os.symlink(victim, os.path.join(common, "FETCH_HEAD"))
+        return victim
+
+    def test_the_lane_clis_fetches_write_no_fetch_head(self):
+        copy = os.path.join(self.tmp, "control")
+        shutil.copytree(self.main, copy, symlinks=True)
+        control = self.plant(os.path.join(copy, ".git"), "control")
+        subprocess.run(["git", "fetch", "-q", "origin"], cwd=copy, env=self.env,
+                       capture_output=True, timeout=60)
+        self.assertNotEqual(self.read(control), "mine\n", "the control's fetch left it alone")
+        # A commit only origin has, so park's remote_tip must fetch it.
+        self.commit("more.txt", "more\n")
+        self.git("push", "-q", "origin", "HEAD:refs/heads/other")
+        self.git("update-ref", "-d", "refs/remotes/origin/other")
+        self.git("reset", "-q", "--hard", "HEAD~1")
+        self.git("reflog", "expire", "--expire=now", "--all")
+        self.git("prune", "--expire=now")
+        victim = self.plant(self.common, "main")
+        mod = load_lane_script()
+        here = os.getcwd()
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            os.chdir(self.main)
+            try:
+                repo = mod.lanes_repo()
+                for name, call in (
+                        ("park's remote_tip", lambda: mod.remote_tip(repo, "origin", "other", "x")),
+                        ("done's fetch", lambda: mod.fetch(repo)),
+                        ("new's fetched_base", lambda: mod.fetched_base(repo, repo.config()))):
+                    with self.subTest(name):
+                        self.assertTrue(call())
+                        self.assertEqual(self.read(victim), "mine\n")
+            finally:
+                os.chdir(here)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -170,9 +170,11 @@ OVERLAP_SHOWN = 5  # files each overlap line under the board names
 OVERLAP_ENV = {"GIT_NO_LAZY_FETCH": "1", "GIT_ALLOW_PROTOCOL": "none"}
 # Every fetch the CLI runs, sandbox-off: never `gc --auto` (LR3), whose `worktree prune` deletes
 # through a link any lane can plant under <common>/worktrees/. Keys and flag both, so it holds
-# before setup.sh's global keys are installed.
+# before setup.sh's global keys are installed. No FETCH_HEAD either (LR5): a fetch writes it
+# through a link any lane can plant at <common>/FETCH_HEAD, and nothing here reads it.
 NO_AUTO_GC = ("-c", "gc.auto=0", "-c", "maintenance.auto=false")
-FETCH_FLAGS = ("--no-auto-maintenance", "--quiet", "--no-recurse-submodules")
+FETCH_FLAGS = ("--no-auto-maintenance", "--quiet", "--no-recurse-submodules",
+               "--no-write-fetch-head")
 # init's defaults and open's flags for claude's --model and --effort -> each one's check
 PICKS = {"model": lanelib.model_problem, "effort": lanelib.effort_problem}
 # new's brief flags -> the <placeholder> each fills in templates/LANE.md
@@ -5535,7 +5537,7 @@ def fill_store(repo: Repo, store: str, remote: str, base: str, branch: str, pinn
     must still be the pinned sha."""
     env = sync_env(store)
     url = remote_url(repo, remote)
-    fetch = ["fetch", *FETCH_FLAGS, "--no-tags", "--no-write-fetch-head", "--end-of-options"]
+    fetch = ["fetch", *FETCH_FLAGS, "--no-tags", "--end-of-options"]
     sgit([*fetch, url, f"+refs/heads/{base}:refs/remotes/base"], store, env,
          f"the fetch of {remote}/{base} from {url}", wait=SYNC_FETCH_WAIT)
     on = sgit(["merge-base", "--is-ancestor", proven, "refs/remotes/base"], store, env,
@@ -5729,7 +5731,7 @@ def publish(repo: Repo, store: str, remote: str, base: str, branch: str, proven:
     """Fetch the merge from the store into the shared repo, so later git commands find its
     objects, and point the base's refs at proven, for display only: nothing trusts them."""
     env = sync_env(repo.common_dir)
-    sgit(["fetch", *FETCH_FLAGS, "--no-tags", "--no-write-fetch-head", "--end-of-options",
+    sgit(["fetch", *FETCH_FLAGS, "--no-tags", "--end-of-options",
           f"file://{store}", "refs/heads/merged"], repo.common_dir, env,
          "the fetch of the merge into the shared repo")
     refs = [f"refs/remotes/{remote}/{base}"]
