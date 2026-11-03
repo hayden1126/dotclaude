@@ -226,8 +226,9 @@ class MergeCli(unittest.TestCase):
         # What setup.sh links, copies or runs from the checkout runs outside the sandbox later
         # (a hook, a skill script, the settings), so it must be in denyWrite, and so must a
         # lane's copy of it. templates/ is exempt: its seeds are copied into projects, never run.
+        # So is .git: the tripwire only reads it, and it is lane-writable by design (DA15/DA16).
         with open(os.path.join(REPO, "setup.sh")) as f:
-            sources = set(re.findall(r'"?\$REPO_DIR"?/([\w.-]+)', f.read())) - {"templates"}
+            sources = set(re.findall(r'"?\$REPO_DIR"?/([\w.-]+)', f.read())) - {"templates", ".git"}
         self.assertIn("hooks", sources)
         with open(os.path.join(REPO, "settings.json")) as f:
             base = json.load(f)
