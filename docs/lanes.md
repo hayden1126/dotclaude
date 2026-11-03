@@ -789,10 +789,15 @@ from a store of its own, never from that shared dir.
 
 **What it proves.** The lead runs `lane sync-main <n>` bare from the main checkout
 (`skills/lanes/SKILL.md`, The lead, step 7.1). gh must report PR #n as MERGED into the config's
-base branch, with a full merge commit sha. That sha, GitHub's merge commit, and the lead's
-branch as sync-main pins it at the start are the trust roots. It runs only from the main
-checkout: a call with no number refuses, as does one from a lane or from a main checkout that a
-lane record names as its path (any lane's sandbox can write such a record).
+base branch, with a full merge commit sha. That sha, GitHub's merge commit, is the trust root.
+The lead's branch as sync-main pins it at the start is only where it begins: the branch ref and
+HEAD are lane-writable, and sync-main compares trees, never history, so a lane can give the
+pinned commit other parents. What it verifies is content: the checkout's bytes are the pinned
+commit's tree, the proven commit is on the base as the remote serves it, and the merge's tree is
+the proven commit's outside STATUS.md and PLAN.md. It never vouches for the history of the
+lead's branch. It runs only from the main checkout: a call with no number refuses, as does one
+from a lane. A lane record that names the main checkout as its path is left out when records
+load (LR1), so the main checkout stays main and sync-main runs there as usual.
 
 **Where it builds the merge.** Each run starts a fresh bare store under
 `~/.local/state/dotclaude/verified/`. It fetches the base branch from the remote's URL and the
