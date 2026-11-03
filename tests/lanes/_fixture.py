@@ -28,14 +28,18 @@ HOOKS = os.path.join(REPO, "hooks")
 sys.path.insert(0, os.path.join(REPO, "skills", "lanes", "scripts"))
 import lanelib  # noqa: E402  (on sys.path from the line above)
 
+STORE_RULES = {"permissions": {"deny": ["Edit(~/.local/state/dotclaude/verified/**)"]},
+               "sandbox": {"filesystem": {"denyWrite": ["~/.local/state/dotclaude/verified"]}}}
+
 
 class LanesRepo(unittest.TestCase):
     """self.main is the main checkout of a lanes repo whose lanes live under self.root."""
 
     init_lanes = True
     # True puts the state dir where a real one lives, $HOME/.local/state/dotclaude: `lane
-    # sync-main` refuses any other (its settings rules are spelled for that path).
-    state_in_home = False
+    # sync-main`, and `lane new` with a setup command (its verified store, LR7), refuse any
+    # other (their settings rules are spelled for that path).
+    state_in_home = True
 
     def setUp(self):
         self.tmp = os.path.realpath(tempfile.mkdtemp())
@@ -44,6 +48,10 @@ class LanesRepo(unittest.TestCase):
         fake_bin = os.path.join(self.tmp, "bin")
         os.makedirs(os.path.join(self.home, ".claude", "sessions"))
         os.makedirs(fake_bin)
+        # The two rules that keep lanes out of the verified stores (setup.sh installs both),
+        # without which `lane new` with a setup command and `lane sync-main` refuse.
+        with open(os.path.join(self.home, ".claude", "settings.json"), "w") as f:
+            json.dump(STORE_RULES, f)
         with open(os.path.join(fake_bin, "gh"), "w") as f:
             # `new`'s check (`pr list --head <b> --state all`) gets FAKE_GH_NEW, `[]` when unset
             # (no PR used the name) and a failure when `fail`. A branch's merged PRs

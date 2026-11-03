@@ -8,7 +8,7 @@ import unittest
 import zlib
 from unittest import mock
 
-from _fixture import LanesRepo
+from _fixture import LanesRepo, lanelib
 from test_cli import load_lane_script
 
 
@@ -196,6 +196,45 @@ class NoHooks(LanesRepo):
         self.lane("done", "chart-fix", "--abandon")
         self.assertFalse(os.path.exists(marker), self.read(marker) if os.path.exists(marker)
                          else "")
+
+
+class NewVerifiesTree(LanesRepo):
+    """LR7: `lane new` checks the lane out from the shared object store, which any lane's
+    sandboxed Bash can write, then runs the configured setup command in it sandbox-off. With a
+    setup command configured, it first compares the new worktree with base's tree as fetched
+    into a fresh store no lane can write, and on any difference runs no setup."""
+
+    def setUp(self):
+        super().setUp()
+        self.lane("init", "--setup", "touch SETUP_RAN")
+
+    def test_a_clean_checkout_runs_the_setup(self):
+        out = self.lane("new", "chart-fix")
+        self.assertIn("verified", out)
+        self.assertTrue(os.path.exists(os.path.join(self.lane_path("chart-fix"), "SETUP_RAN")))
+        self.assertEqual(self.lane_json("chart-fix")["state"], "active")
+
+    def test_an_overwritten_object_runs_no_setup(self):
+        sha = self.git("rev-parse", "HEAD:README.md").strip()
+        path = os.path.join(self.common, "objects", sha[:2], sha[2:])
+        self.assertTrue(os.path.exists(path), "README.md's blob is not loose")
+        os.chmod(path, 0o644)
+        body = b"planted\n"
+        with open(path, "wb") as f:
+            f.write(zlib.compress(b"blob %d\0" % len(body) + body))
+        self.assertEqual(lanelib.git_tamper(self.common), [])  # no tripwire for this
+        p = self.run_lane("new", "chart-fix")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("README.md (other bytes)", p.stderr)
+        lane = self.lane_path("chart-fix")
+        self.assertEqual(self.read(os.path.join(lane, "README.md")), "planted\n")  # git's work
+        self.assertFalse(os.path.exists(os.path.join(lane, "SETUP_RAN")))
+        rec = self.lane_json("chart-fix")
+        self.assertEqual((rec["state"], rec["setup_failed"]), ("setup-failed", "verify"))
+        p = self.run_lane("adopt", lane)  # finishing it would run the setup: refused too
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertFalse(os.path.exists(os.path.join(lane, "SETUP_RAN")))
+        self.assertIn("lane done chart-fix --abandon", p.stderr)
 
 
 class GateBeforeRefs(LanesRepo):

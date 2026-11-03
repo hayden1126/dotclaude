@@ -896,6 +896,17 @@ find out who made it before anything else runs git in that repo.
   that span to milliseconds; `new`, `done` and `park` check once, at their start, so their span
   runs from there to the write. Neither closes it.
 
+**`lane new`'s checkout (LR7).** `new` checks the lane out from the shared object store, which
+any lane's sandbox can write, and then runs the config's setup command in it, sandbox-off. With
+a setup command configured, `new` first fetches the base branch from the remote into a fresh
+store (`new.git`, beside sync-main's under the same lock and settings rules), and requires the
+commit ls-remote named to be on it. Right after `git worktree add`, before anything else is
+written there, every tracked file of the new worktree must match that commit's tree in the
+store, byte for byte and type, its index must too, and nothing untracked may sit in it. If
+anything differs, the setup doesn't run: the lane stays registered as setup-failed at `verify`, which
+`lane adopt` refuses to finish, and the message names each path. With no setup command, nothing
+runs in the tree sandbox-off, so `new` skips the check and its full fetch of the base.
+
 ## Layout
 
 Claude Code treats every path under `.git/` as a "sensitive file", so Edit/Write there always

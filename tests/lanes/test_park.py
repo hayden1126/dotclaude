@@ -37,10 +37,10 @@ class ParkBase(test_cli.Fakes):
 
     def flag_glob(self, lane_id="chart-fix"):
         """The glob of a lane's parked flag (Repo.parked_path) in the temp state dir."""
-        return os.path.join(self.tmp, "state", "dotclaude", "lanes", "*.parked", f"{lane_id}.json")
+        return os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "lanes", "*.parked", f"{lane_id}.json")
 
     def proof(self):
-        return os.path.join(self.tmp, "state", "dotclaude", "lanes", "*.closing", "chart-fix.json")
+        return os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "lanes", "*.closing", "chart-fix.json")
 
     def flag(self, lane_id="chart-fix", **over):
         """Write a lane's parked flag as `lane park` does; over replaces its fields."""
@@ -596,7 +596,9 @@ class Round2(ParkBase):
         self.git("replace", pushed, child)
         (claude,) = self.claude()
         p = self.run_lane("park", "chart-fix")
-        self.assertIn("is not on origin/chart-fix", p.stderr)
+        # The tripwire at park's start refuses first now (LR4); the push check behind it reads
+        # no replace ref either.
+        self.assertRegex(p.stderr, r"is not on origin/chart-fix|refs/replace/\w+ exists")
         self.assertRefusedUntouched(p, claude)
 
     def fork_pr(self, oid):
@@ -713,5 +715,7 @@ class Round3(ParkBase):
         self.write(os.path.join(self.common, "info", "grafts"), f"{pushed} {head}\n")
         (claude,) = self.claude()
         p = self.run_lane("park", "chart-fix")
-        self.assertIn("is not on origin/chart-fix", p.stderr)
+        # The tripwire at park's start refuses first now (LR4); the push check behind it reads
+        # no grafts either.
+        self.assertRegex(p.stderr, r"is not on origin/chart-fix|info/grafts exists")
         self.assertRefusedUntouched(p, claude)
