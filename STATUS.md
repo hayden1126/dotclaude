@@ -90,15 +90,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - #144 (exam-prep): rules public, evidence private (Hayden, 2026-10-20).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
-  - **Live lanes** (briefs in each record). Merge order: 1 design-audit
-    (`chore/design-decision-audit`, carries the lead's notes; opened 2026-11-01 on Hayden's pick:
-    the design-decision re-evaluation, findings private; its PR is the public ask-time threat
-    rule), 2 ports (next PR: the DA15/DA16 fix with LR1, on Hayden's pick 2026-11-01, since it
+  - **Live lanes** (briefs in each record). Merge order: 1 ports (`fix/lane-da15-da16`, carries
+    the lead's notes; the DA15/DA16 fix with LR1 to LR7, on Hayden's pick 2026-11-01, since it
     changes the same lane CLI files; then `lane port claim/who/ls` and the SessionStart "your
-    ports" line; its record says `Keep open`), 3 practices
-    (`feat/practices-auth-secrets`, its next PR; paused by Hayden since
-    2026-10-24, last so it blocks no install; it conflicts with origin/main on its own, per
-    lane-fixes' trial).
+    ports" line; its record says `Keep open`), 2 practices (`feat/practices-auth-secrets`, its
+    next PR; paused by Hayden since 2026-10-24, last so it blocks no install; it conflicts with
+    origin/main on its own, per lane-fixes' trial).
     Merged and installed from main, all closed: chrome-dup (#151, 2026-10-29: one chrome-devtools
     server, the plugin's; sandbox gap fixes N1 and N3's bun part, `hooks/sandbox-caches.sh`; its
     install changed running sessions' sandbox live, [[cc-sandbox-config-reloads-live]]),
@@ -122,7 +119,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     fork-start (#160, 2026-11-03: SessionStart hooks run on forked sessions, source `fork`;
     capella-studio lane artexport's report; a fork's hook output never reaches its model, so it
     knows its lane only from the parent's copied line, docs/lanes.md S5; the delegation canary
-    checks the source enum; untried against lane practices' settings.json change).
+    checks the source enum; untried against lane practices' settings.json change),
+    design-audit (#159, 2026-11-03: the ask-check `threat` rule and the CLAUDE.md line on naming what
+    runs outside the sandbox; its findings, DA1 to DA17, are private and backlogged by id).
     Merged and installed, lane kept open for its next PR: ports (#155, 2026-11-01: `lane serve`
     with the listener check, a block of ports per lane in `lane ls`, the midnight test flake).
     #154's install made new refusals live in every session: arithmetic like `$((SECONDS+12))` and
