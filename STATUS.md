@@ -90,15 +90,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - #144 (exam-prep): rules public, evidence private (Hayden, 2026-10-20).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
-  - **Live lanes** (briefs in each record). Merge order (Hayden swapped 1 and 2, 2026-11-02:
-    subagent-wait was review-clean while design-audit had no commits): 1 subagent-wait
-    (`fix/subagent-moved-command`, carries the lead's notes; opened 2026-11-01 on Hayden's pick:
-    the subagent 180 s fix below, plus a one-line hermeticity fix in `test_hook_payloads`), 2
-    design-audit (`chore/design-decision-audit`; opened 2026-11-01 on Hayden's pick: the
-    design-decision re-evaluation, findings private; its PR is the public ask-time threat rule), 3 ports
-    (next PR: the DA15/DA16 fix, on Hayden's pick 2026-11-01, since it changes the same lane CLI
-    files; then `lane port claim/who/ls` and the SessionStart "your ports" line; its record says
-    `Keep open`), 4 practices (`feat/practices-auth-secrets`, its next PR; paused by Hayden since
+  - **Live lanes** (briefs in each record). Merge order: 1 design-audit
+    (`chore/design-decision-audit`, carries the lead's notes; opened 2026-11-01 on Hayden's pick:
+    the design-decision re-evaluation, findings private; its PR is the public ask-time threat
+    rule), 2 ports (next PR: the DA15/DA16 fix with LR1, on Hayden's pick 2026-11-01, since it
+    changes the same lane CLI files; then `lane port claim/who/ls` and the SessionStart "your
+    ports" line; its record says `Keep open`), 3 practices (`feat/practices-auth-secrets`, its next PR; paused by Hayden since
     2026-10-24, last so it blocks no install; it conflicts with origin/main on its own, per
     lane-fixes' trial).
     Merged and installed from main, all closed: chrome-dup (#151, 2026-10-29: one chrome-devtools
@@ -117,7 +114,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     throwaway lanes repo, nothing public), guard-gaps (#156, 2026-11-01: the excluded-guard
     design gaps G-A to G-E; setup sets the global `fetch.recurseSubmodules=false`; a lone
     excluded call from below its repo top, or from no repo under a writable dir, is refused with
-    "run it from the top"; its replay counted 87 new refusals in about 4,360 past calls).
+    "run it from the top"; its replay counted 87 new refusals in about 4,360 past calls),
+    subagent-wait (#158, 2026-11-03: report-check refuses a subagent's handback while its own
+    background command runs, for the 180 s move to the background; `test_hook_payloads` hands
+    hooks an attended env; merged ahead of design-audit on Hayden's swap).
     Merged and installed, lane kept open for its next PR: ports (#155, 2026-11-01: `lane serve`
     with the listener check, a block of ports per lane in `lane ls`, the midnight test flake).
     #154's install made new refusals live in every session: arithmetic like `$((SECONDS+12))` and
@@ -127,7 +127,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   Backlog:
   - **Fix lanes from lane design-audit** (Hayden's picks, 2026-11-01). Private: sandbox-audit
     FINDINGS, "Design-decision audit, 2026-11", one row per id with the detail. Most severe first:
-    1. DA15 with DA16 (high): lane ports' next PR (Hayden, 2026-11-01). Files: `skills/lanes/scripts/lane`, `lanelib.py`,
+    1. DA15 with DA16 (high): lane ports' next PR (Hayden, 2026-11-01), plus private row LR1
+       (medium, found by ports; Hayden folded it in 2026-11-02). Files: `skills/lanes/scripts/lane`, `lanelib.py`,
        handoff-check, `setup.sh`, `skills/lanes/SKILL.md` (the post-merge step) and their tests,
        the files ports' PR 2 also changes. Until it lands, the lead runs DA15's pre-check and
        DA16's stopgap before each post-merge chain (both in the private rows).
@@ -220,18 +221,6 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     holder and read the lock as free. Lane-able (`lane`,
     `lanelib.py`, `tests/lanes`, `docs/lanes.md`), after ports. Tell the
     capella-studio lead when it lands.
-  - **Subagent Bash moves to the background at 180 s** (lane subagent-wait; medium; lane pass-fixes, session
-    0eb4c7ff, 2026-10-30; Claude Code 2.1.316). A subagent's foreground `./wait.sh` (timeout
-    600000) was moved to the background after 180 s; the agent handed back early ("not written"),
-    resumed on the job's notice and did the work, and its second SubagentHandback was refused
-    ("your report was already delivered"), so the parent heard the opposite of what happened.
-    The delegation skill's "a long command runs in the foreground (up to the Bash tool's 10-minute
-    limit)" and BRIEF.md's Budget line no longer hold for subagents past 180 s. Evidence: lane
-    pass-fixes' `.lane/artifacts/pass-compact-smoke.md` (archived with the lane), agent
-    transcript `agent-a6301324f3813f8b5` of probe session 668e9503. Fix: the docs say wait on a
-    moved command's output before reporting, and the report check refuses a handback while one
-    of the agent's own background commands still runs. Lane-able (`skills/delegation/`, its
-    hooks and `tests/delegation`).
   - **Approval-marker tests flake at midnight** (low; lane park, 2026-10-30). Two
     `tests/lanes/test_handoff_check.py` PlainRepo tests (a dated marker passes, a future one fails)
     failed once in a full `tests/lanes` run that crossed local midnight, then passed on rerun.
