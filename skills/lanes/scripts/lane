@@ -390,12 +390,14 @@ def base_ref(cfg: dict) -> str:
     return base if base.startswith("refs/") else f"refs/remotes/{base}"
 
 
-def base_parts(repo: Repo, cfg: dict) -> tuple[str, str]:
+def base_parts(repo: Repo, cfg: dict,
+               env: dict[str, str] | None = None) -> tuple[str, str]:
     """(remote, branch) of the config's base, by the longest remote name that prefixes it: a
-    remote's name may hold a '/' (my/fork)."""
+    remote's name may hold a '/' (my/fork). env, when given, replaces every inherited GIT_*
+    (sync-main passes checkout_env: no global or system config)."""
     ref = base_ref(cfg)
     rest = ref.removeprefix("refs/remotes/")
-    remotes = git(["remote"], repo.toplevel).stdout.split()
+    remotes = git(["remote"], repo.toplevel, env=env).stdout.split()
     remote = max((r for r in remotes if rest.startswith(r + "/")), key=len, default="")
     branch = rest[len(remote) + 1:] if remote else ""
     if not ref.startswith("refs/remotes/") or not branch:
@@ -5603,6 +5605,9 @@ def predict(repo: Repo, store: str, branch: str, pinned: str, proven: str, label
     os.unlink(index)
     drift_refusal(store, tree, proven, branch, label)
     idents = {}
+    # The one git sync-main runs on the user's config (global and the repo's, under
+    # harden_git_env): the identity is theirs. It reads config and runs nothing, and only a
+    # name, email and date that SYNC_IDENT matches leave it.
     for who in ("AUTHOR", "COMMITTER"):
         p = git(["var", f"GIT_{who}_IDENT"], repo.toplevel)
         m = SYNC_IDENT.fullmatch(p.stdout.strip()) if p.returncode == 0 else None
@@ -5847,7 +5852,7 @@ def cmd_sync_main(args) -> None:
     if dirty := dirty_paths(repo):
         raise LaneError(f"{repo.toplevel} has uncommitted changes:{named_paths(dirty)}\nCommit "
                         "them first: nothing was written")
-    remote, base = base_parts(repo, cfg)
+    remote, base = base_parts(repo, cfg, checkout_env(repo))
     with store_guard("main") as held:
         store = held.path
         proven = proven_sha(repo, args.pr, base)

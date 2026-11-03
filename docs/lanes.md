@@ -806,8 +806,11 @@ writes that dir. settings.json denies it to the file tools
 (`Edit(~/.local/state/dotclaude/verified/**)` in `permissions.deny`) and to sandboxed Bash (a
 `sandbox.filesystem.denyWrite` line). sync-main refuses to create a store unless the live
 settings hold both rules and the state dir is the default one. Its git calls read no global or
-system config, run no hooks or fsmonitor, ignore replace objects and grafts, and speak only
-https, ssh and file.
+system config, run no hooks, fsmonitor or automatic gc, ignore replace objects and grafts, and
+speak only https, ssh and file. Two calls run outside that isolation: `git var` for the merge
+commit's author and committer, which reads the user's config (the identity is theirs, and only a
+name, email and date leave it), and a `git config --file` that reads the per-worktree config
+switch from the shared repo's config file and no other.
 
 **What reaches the checkout.** Every byte written to the checkout comes from objects in the
 store, which git hash-checked as they arrived, through the conversions the checkout's

@@ -175,6 +175,25 @@ class SyncMain(LanesRepo):
         for args in fetches:
             self.assertIn("--no-auto-maintenance", args)
 
+    def test_only_identity_reads_the_users_git_config(self):
+        # sync-main's git calls run under sync_env (no global or system config) but for `git
+        # var`, whose identity is the user's own, and a `config --file` that reads one file.
+        self.land({"hooks/x.sh": REAL})
+        plain = []
+
+        def patches(mod):
+            real = mod.git
+
+            def git(args, *a, **k):
+                if k.get("env") is None and len(a) < 4:
+                    plain.append(args[:2])
+                return real(args, *a, **k)
+            return [mock.patch.object(mod, "git", git)]
+        rc, out, err = self.sync_in("7", patches=patches)
+        self.assertEqual(rc, 0, out + err)
+        self.assertEqual(sorted(a[0] if a[0] == "var" else " ".join(a) for a in plain),
+                         ["config --file", "var", "var"])
+
     def test_main_status_diff_comes_out_masked(self):
         # Main's STATUS.md is lane-written text: a terminal escape in it reaches the lead's
         # terminal masked, the diff's lines still one per line.
