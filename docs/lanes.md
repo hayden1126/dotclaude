@@ -810,11 +810,13 @@ system config, run no hooks or fsmonitor, ignore replace objects and grafts, and
 https, ssh and file.
 
 **What reaches the checkout.** Every byte written to the checkout comes from objects in the
-store, which git hash-checked as they arrived. Before it writes, sync-main compares the checkout
-with its branch's commit: the index, every tracked file (its bytes, its type and its exec bit),
-and untracked files inside the dirs that hold tracked files, but for `__pycache__`. It refuses on
-a difference there. Untracked files at the checkout's root are not compared, since `.claude/`,
-`.lane/` and other local files live there. It then moves the files from that commit
+store, which git hash-checked as they arrived, through the conversions the checkout's
+`.gitattributes` files name (git reads one from the work tree where the index has none). Before it writes, sync-main
+compares the checkout with its branch's commit: the index, every tracked file (its bytes, its
+type and its exec bit), and untracked files inside the dirs that hold tracked files, but for
+`__pycache__`. It refuses on a difference there. Untracked files at the checkout's root are not
+compared, since `.claude/`, `.lane/` and other local files live there, but an untracked root
+`.gitattributes` refuses. It then moves the files from that commit
 to the merge, reading objects from the store only, through an index of its own built from that
 commit (the checkout's index sits in the shared dir, and an entry planted there could convert
 what checkout writes). That index then replaces the checkout's, and the branch moves by
@@ -866,7 +868,9 @@ find out who made it before anything else runs git in that repo.
   doesn't cover them (DA1).
 - When no lane holds the install, the checkout is a mix of old and new verified files while the
   files move. Anything that runs from it in that moment sees the mix.
-- `__pycache__` dirs and untracked files at the checkout's root are not compared.
+- `__pycache__` dirs and untracked files at the checkout's root, but for `.gitattributes`, are
+  not compared. An untracked `.gitattributes` in a dir the checkout's commit lacks, where the
+  merge adds files, is caught only by the compare after the move.
 - The store's path (DA12). sync-main opens the stores' dir by fd from the home dir, never through
   a link, holds it open for the run, and before each git step checks that the path still leads
   there. git takes the path, though, so a sandbox that can write the home dir can still rename an

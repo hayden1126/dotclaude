@@ -185,6 +185,18 @@ class SyncMain(LanesRepo):
         self.assertIn("\n+- ?]0;x? line?2J\n", p.stdout)
         self.assertIn("\n-- lead line\n", p.stdout)
 
+    def test_an_untracked_root_gitattributes_refuses(self):
+        # read-tree takes attributes from the work tree's root .gitattributes when its index has
+        # none, so an untracked one would convert what it writes. compare skips the root's other
+        # untracked files, never this one.
+        self.land({"hooks/x.sh": REAL})
+        self.write(os.path.join(self.main, ".gitattributes"), "*.sh text eol=crlf\n")
+        before = self.state()
+        p = self.sync("7")
+        self.assertNotEqual(p.returncode, 0, p.stdout)
+        self.assertIn(".gitattributes (untracked", p.stderr)
+        self.assertEqual(self.state(), before)
+
     def link_reflog(self, rel):
         """A symlink at the reflog path rel under the common dir, to a victim file outside it."""
         victim = os.path.join(self.tmp, "victim")

@@ -5709,6 +5709,14 @@ def compare(repo: Repo, store: str, treeish: str) -> list[str]:
             os.close(fd)
         problems += [f"{d}/{n} (untracked)" for n in sorted(names)
                      if n != "__pycache__" and f"{d}/{n}" not in entries and f"{d}/{n}" not in dirs]
+    # The root's other untracked files are local (.claude/, .lane/), but read-tree takes the
+    # work tree's root .gitattributes when the index has none, and would convert what it writes.
+    # (.gitmodules matters only to a submodule recursion, which sync-main never asks for, and a
+    # tracked submodule refuses above.)
+    if ".gitattributes" not in entries and os.path.lexists(
+            os.path.join(repo.toplevel, ".gitattributes")):
+        problems.append(".gitattributes (untracked, at the root: read-tree would take its "
+                        "conversions)")
     return problems
 
 
