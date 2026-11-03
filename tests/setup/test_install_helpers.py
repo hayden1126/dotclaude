@@ -8,6 +8,7 @@ import json
 import os
 import re
 import resource
+import shutil
 import subprocess
 import stat
 import sys
@@ -1204,6 +1205,43 @@ class TamperRefusal(unittest.TestCase):
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertNotIn("went on", p.stdout)
         self.assertIn("stopped before changing anything", p.stderr)
+
+    def test_a_linked_admin_dir_naming_a_decoy_stops_the_run(self):
+        # A lane swaps <common>/worktrees/wt for a link to a decoy admin dir inside a clean
+        # repo, whose commondir names that repo: git's answer and a resolved `$admin/../..`
+        # agree on the decoy. The grandparent is taken from the gitfile's text instead, and a
+        # link at worktrees/<id> is a git-tamper finding there.
+        env = dict(self.env, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
+                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
+        subprocess.run(["git", "-C", self.repo, "add", "skills"], env=env, check=True)
+        subprocess.run(["git", "-C", self.repo, "commit", "-q", "-m", "c"], env=env, check=True)
+        wt = os.path.join(self.tmp, "wt")
+        subprocess.run(["git", "-C", self.repo, "worktree", "add", "-q", wt], env=env, check=True)
+        with open(os.path.join(self.repo, ".git", "shallow"), "w"):
+            pass  # a finding in the real common dir, which the decoy hides
+        clean = os.path.join(self.tmp, "clean.git")
+        subprocess.run(["git", "init", "-q", "--bare", clean], env=self.env, check=True)
+        admin = os.path.join(self.repo, ".git", "worktrees", "wt")
+        decoy = os.path.join(clean, "worktrees", "wt")
+        shutil.copytree(admin, decoy)
+        with open(os.path.join(decoy, "commondir"), "w") as f:
+            f.write("../..\n")
+        shutil.rmtree(admin)
+        os.symlink(decoy, admin)
+        named = subprocess.run(["git", "-C", wt, "rev-parse", "--path-format=absolute",
+                                "--git-common-dir"], env=self.env, capture_output=True, text=True)
+        self.assertEqual(os.path.realpath(named.stdout.strip()), clean)  # git follows it
+        p = self.run_block(repo_dir=wt)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertNotIn("went on", p.stdout)
+        self.assertIn("stopped before changing anything", p.stderr)
+        # git's answer the real common dir, but the admin dir still a link: a finding.
+        with open(os.path.join(decoy, "commondir"), "w") as f:
+            f.write(os.path.join(self.repo, ".git") + "\n")
+        os.unlink(os.path.join(self.repo, ".git", "shallow"))
+        p = self.run_block(repo_dir=wt)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("worktrees/wt is a symlink", p.stderr)
 
     def test_a_dir_git_cant_place_stops_the_run(self):
         p = self.run_block(repo_dir=os.path.join(self.tmp, "not-a-repo"))

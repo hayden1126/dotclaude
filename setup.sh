@@ -60,8 +60,11 @@ fi
 # answer may name a clean dir of a lane's choosing: a checkout whose .git is a dir is checked
 # there, without asking git. A lane worktree's .git is a gitfile naming its admin dir,
 # <common>/worktrees/<id>, and git takes its answer from that dir's commondir file, which a lane
-# can rewrite (LR2): the answer must be the admin dir's grandparent, or the run stops. A
-# commondir file in the common dir itself is a finding too.
+# can rewrite (LR2): the answer must be the admin dir's grandparent, or the run stops. That
+# grandparent comes from the gitfile's text, never by resolving `$admin/../..`: a lane can swap
+# worktrees/<id> (or worktrees/) for a link into a decoy repo whose commondir names that decoy,
+# and both would agree on it. git-tamper then checks the textual path, where such a link is a
+# finding. A commondir file in the common dir itself is a finding too.
 if [[ -d $REPO_DIR/.git ]]; then
   common="$REPO_DIR/.git"
 elif ! common="$(git -C "$REPO_DIR" rev-parse --path-format=absolute --git-common-dir)"; then
@@ -72,13 +75,16 @@ else
   { IFS= read -r line < "$REPO_DIR/.git"; } 2>/dev/null || true
   [[ $line == "gitdir: "?* ]] && admin="${line#gitdir: }"
   [[ -z $admin || $admin == /* ]] || admin="$REPO_DIR/$admin"
+  admin="${admin%/}"
   parent="${admin%/*}"
-  if [[ -z $admin || ${parent##*/} != worktrees ]] \
-      || ! want="$(cd -P "$admin/../.." 2>/dev/null && pwd -P)" \
+  textual="${admin%/*/*}"
+  if [[ -z $admin || ${parent##*/} != worktrees || -z $textual ]] \
+      || ! want="$(cd -P "$textual" 2>/dev/null && pwd -P)" \
       || [[ "$(cd -P "$common" 2>/dev/null && pwd -P)" != "$want" ]]; then
-    warn "git names $common as the common dir of $REPO_DIR, not its admin dir's grandparent (LR2: a planted commondir?); setup.sh stopped before changing anything"
+    warn "git names $common as the common dir of $REPO_DIR, not its admin dir's grandparent (LR2: a planted commondir or a linked admin dir?); setup.sh stopped before changing anything"
     exit 1
   fi
+  common="$textual"
 fi
 tamper=0
 python3 -I "$REPO_DIR/skills/lanes/scripts/lanelib.py" git-tamper "$common" >&2 || tamper=$?
