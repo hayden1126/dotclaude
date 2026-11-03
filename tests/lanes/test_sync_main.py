@@ -167,6 +167,31 @@ class SyncMain(LanesRepo):
         self.assertIn("up to date", p.stdout)
         self.assertEqual(self.state(), before)
 
+    def test_up_to_date_still_checks_the_checkout_and_the_drift(self):
+        # The pinned sha comes from a lane-writable branch ref. A lane points the lead's branch
+        # at proven plus a change of its own and forges the index so status reads clean
+        # (dirty_paths mocked): "up to date" must not vouch for that checkout.
+        proven = self.land({"hooks/x.sh": REAL})
+        self.git("fetch", "-q", "origin")
+        wt = os.path.join(self.tmp, "evil")
+        self.git("worktree", "add", "-q", "--detach", wt, "HEAD")
+        self.git("merge", "-q", "--no-ff", "-m", "m", proven, cwd=wt)
+        self.commit("README.md", "planted\n", cwd=wt)
+        moved = self.git("rev-parse", "HEAD", cwd=wt).strip()
+        self.git("update-ref", "refs/heads/lead", moved)
+        self.merged(proven)
+        rc, out, err = self.sync_in("7", patches=lambda mod: [
+            mock.patch.object(mod, "dirty_paths", return_value=[])])
+        self.assertEqual(rc, 1, out + err)
+        self.assertNotIn("up to date", out)
+        self.assertIn("README.md", err)
+        # The checkout matches the branch, but it holds a path apart from the PR's merge.
+        self.git("reset", "-q", "--hard", moved)
+        p = self.sync("7")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("other than STATUS.md", p.stderr)
+        self.assertIn("README.md", p.stderr)
+
     def test_plan_md_merges_clean_or_keeps_the_leads(self):
         self.commit("PLAN.md", "a\nb\nc\nd\ne\n")
         self.git("push", "-q", "origin", "lead:refs/heads/plan-base")

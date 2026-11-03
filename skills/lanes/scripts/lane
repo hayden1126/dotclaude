@@ -5443,6 +5443,17 @@ def tree_entries(store: str, treeish: str) -> dict[str, tuple[str, str]]:
     return out
 
 
+def drift_refusal(store: str, treeish: str, proven: str, branch: str, label: str) -> None:
+    """Refuse where treeish (the merge to be, or a pinned HEAD already past proven) differs from
+    proven on any path but the carries: a lead's branch holds nothing else of its own."""
+    diff = sgit(["diff-tree", "-r", "-z", "--name-only", treeish, proven], store, sync_env(store),
+                "comparing with the proven commit").stdout.split("\0")
+    if drift := sorted({d for d in diff if d and d not in SYNC_CARRY}):
+        raise LaneError(f"{branch} differs from {label} on paths other than STATUS.md and "
+                        f"PLAN.md, which a lead's branch may not:{named_paths(drift)}\n"
+                        "Nothing was written: drop or land those changes, then rerun")
+
+
 def predict(repo: Repo, store: str, branch: str, pinned: str, proven: str, label: str,
             lead_mode: bool) -> str:
     """The merge commit M of proven into the pinned HEAD, made in the store and set as its
@@ -5475,12 +5486,7 @@ def predict(repo: Repo, store: str, branch: str, pinned: str, proven: str, label
                      f"carrying the lead's missing {name}")
         tree = sgit(["write-tree"], store, ienv, "writing the merge").stdout.strip()
         os.unlink(index)
-        diff = sgit(["diff-tree", "-r", "-z", "--name-only", tree, proven], store, env,
-                    "comparing the merge with the proven commit").stdout.split("\0")
-        if drift := sorted({d for d in diff if d and d not in SYNC_CARRY}):
-            raise LaneError(f"{branch} differs from {label} on paths other than STATUS.md and "
-                            f"PLAN.md, which a lead's branch may not:{named_paths(drift)}\n"
-                            "Nothing was written: drop or land those changes, then rerun")
+        drift_refusal(store, tree, proven, branch, label)
     idents = {}
     for who in ("AUTHOR", "COMMITTER"):
         p = git(["var", f"GIT_{who}_IDENT"], repo.toplevel)
@@ -5668,15 +5674,20 @@ def cmd_sync_main(args) -> None:
         proven = fill_store(repo, store, remote, base, branch, pinned, proven)
         label = (f"PR #{args.pr}" if lead_mode else f"{remote}/{base}") + f" ({proven[:12]})"
         env = sync_env(store)
-        if sgit(["merge-base", "--is-ancestor", proven, pinned], store, env, "the ancestry check",
-                ok=None).returncode == 0:
-            say(f"{branch} already holds {label}: already up to date, nothing written")
-            return
-        merge = predict(repo, store, branch, pinned, proven, label, lead_mode)
+        # Before any verdict, the no-op's too: pinned comes from a branch ref any lane can move,
+        # and the index status trusts is lane-writable, so only the store's bytes vouch for the
+        # checkout.
         if problems := compare(repo, store, pinned):
             raise LaneError(f"the checkout {repo.toplevel} doesn't match {branch}'s commit "
                             f"{pinned[:12]}:{named_paths(problems)}\nNothing was written: commit "
                             "or remove those, then rerun")
+        if sgit(["merge-base", "--is-ancestor", proven, pinned], store, env, "the ancestry check",
+                ok=None).returncode == 0:
+            if lead_mode:
+                drift_refusal(store, pinned, proven, branch, label)
+            say(f"{branch} already holds {label}: already up to date, nothing written")
+            return
+        merge = predict(repo, store, branch, pinned, proven, label, lead_mode)
         publish(repo, store, remote, base, branch, proven, lead_mode)
         now = sgit(["rev-parse", "--verify", f"refs/heads/{branch}"], repo.common_dir,
                    sync_env(repo.common_dir), f"reading {branch}").stdout.strip()
