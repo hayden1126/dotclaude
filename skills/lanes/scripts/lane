@@ -5600,12 +5600,13 @@ class StoreDir:
         finally:
             os.close(root)
 
-    def intact(self, config: bytes | None) -> None:
+    def intact(self, config: bytes | None,
+               what: str = "Nothing in the checkout was written: rerun") -> None:
         """Refuse unless the store's config is the bytes fresh_store read back after git init
         (a filter.<x>.smudge there would run on checkout) and lanelib.git_tamper finds nothing in
         it: no info/attributes but a blank one, no commondir, alternates, replace refs, grafts or
-        shallow. The checkout reads the store as its common dir."""
-        what = "Nothing in the checkout was written: rerun"
+        shallow. The checkout reads the store as its common dir. what says what the refusal left
+        undone, for the caller (sync-main's default; `new` has made its worktree by then)."""
         self.recheck(what)
         try:
             now = self.read("config")
@@ -5727,7 +5728,7 @@ def verify_new(repo: Repo, lane: dict, held: StoreDir, config: bytes | None,
     lane's marker (write_mark), the one thing `adopt` finishes a setup-failed lane by. The
     caller holds the lanes lock, and has recorded the lane setup-failed at 'verify'."""
     try:
-        held.intact(config)
+        held.intact(config, "Nothing ran in the lane's checkout: close it as said below")
         problems = compare(repo, held.path, base_sha, top=lane["path"], fresh=True)
         why = (f"its checkout doesn't match {label} as fetched into a fresh store:"
                f"{named_paths(problems)}" if problems else None)
