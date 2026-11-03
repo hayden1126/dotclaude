@@ -5756,8 +5756,19 @@ def cmd_sync_main(args) -> None:
             raise LaneError(f"the checkout {repo.toplevel} doesn't match {branch}'s commit "
                             f"{pinned[:12]}:{named_paths(problems)}\nNothing was written: commit "
                             "or remove those, then rerun")
-        if sgit(["merge-base", "--is-ancestor", proven, pinned], store, env, "the ancestry check",
-                ok=None).returncode == 0:
+        def ancestor(a: str, b: str) -> bool:
+            return sgit(["merge-base", "--is-ancestor", a, b], store, env, "the ancestry check",
+                        ok=None).returncode == 0
+        if ancestor(proven, pinned):
+            # An older PR's rerun after a newer one: the branch holds main past proven, so it is
+            # judged against the newest main it holds (on the base as the remote serves it).
+            newest = sgit(["merge-base", pinned, "refs/remotes/base"], store, env,
+                          "the merge base with the base").stdout.strip()
+            if newest != proven and SYNC_SHA.fullmatch(newest) and ancestor(proven, newest):
+                drift_refusal(store, pinned, newest, branch, f"{remote}/{base} ({newest[:12]})")
+                say(f"{branch} already holds {remote}/{base} at {newest[:12]}, newer than "
+                    f"{label}: already up to date, nothing written")
+                return
             drift_refusal(store, pinned, proven, branch, label)
             say(f"{branch} already holds {label}: already up to date, nothing written")
             return

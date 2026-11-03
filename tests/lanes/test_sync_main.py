@@ -164,6 +164,28 @@ class SyncMain(LanesRepo):
         self.assertIn("up to date", p.stdout)
         self.assertEqual(self.state(), before)
 
+    def test_an_older_pr_after_a_newer_one_says_so(self):
+        # PR 7 and then PR 8 are merged in: a rerun for PR 7 finds the newer main's paths apart
+        # from PR 7's merge. That is no drift of the lead's: it says the checkout holds a newer
+        # main and writes nothing, exit 0.
+        older = self.land({"hooks/x.sh": REAL})
+        self.assertEqual(self.sync("7").returncode, 0)
+        self.land({"hooks/y.sh": REAL}, n=8)
+        self.assertEqual(self.sync("8").returncode, 0)
+        before = self.state()
+        self.merged(older)
+        p = self.sync("7")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("newer", p.stdout)
+        self.assertIn("nothing written", p.stdout)
+        self.assertNotIn("other than STATUS.md", p.stdout + p.stderr)
+        self.assertEqual(self.state(), before)
+        # A path of the lead's own apart from that newer main still refuses, naming it.
+        self.commit("README.md", "planted\n")
+        p = self.sync("7")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("README.md", p.stderr)
+
     def test_up_to_date_still_checks_the_checkout_and_the_drift(self):
         # The pinned sha comes from a lane-writable branch ref. A lane points the lead's branch
         # at proven plus a change of its own and forges the index so status reads clean

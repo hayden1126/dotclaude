@@ -819,7 +819,10 @@ PLAN.md. sync-main keeps the lead's STATUS.md whole, takes PLAN.md's clean merge
 on a conflict), and refuses when the merge differs from the proven commit on any other path. It
 points `main` and the remote-tracking ref at the proven commit, for display only. Then it prints
 main's side of STATUS.md, and the lead adds back by hand any line that isn't an older carry (the
-keep-whole rule under "Where each type lives").
+keep-whole rule under "Where each type lives"). Rerun for a PR the branch already holds, it
+still compares the checkout, writes nothing and exits 0. When the branch holds a newer main than
+that PR's merge (a rerun for an older PR), it says so and judges the branch against the newest
+main commit it holds, which must be on the base as the remote serves it.
 
 **Lanes.** A lane never runs sync-main: a lane's branch history is something another lane can
 rewrite, so it can't serve as a trust root. A lane whose live install keeps it from merging main
