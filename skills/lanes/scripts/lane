@@ -5723,14 +5723,6 @@ def cmd_sync_main(args) -> None:
     if not repo.is_main:
         raise LaneError(f"refusing: `lane sync-main` runs only from the main checkout "
                         f"{repo.main}. {SYNC_LANES}")
-    # identity() matches lane records before the main checkout: a record naming this path is
-    # forged (a lane's sandbox can write any lane.json), and nothing here goes by it.
-    kind, lane = repo.identity()
-    if kind != "main":
-        who = f"lane {lane['id']}'s record names" if kind == "lane" else f"{kind} names"
-        raise LaneError(shown(f"refusing: {who} the main checkout {repo.main} as its own: "
-                              "nothing was written. Find out who wrote that record, then remove "
-                              "it"))
     lead_only(repo, str(args.pr), repo.main, "sync-main")
     worktree_config_refusal(repo, None, True, "sync-main")
     harden_git_env(repo)

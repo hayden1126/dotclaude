@@ -645,9 +645,9 @@ class SyncMain(LanesRepo):
         self.assertIn("reinstall from main", p.stderr)
         self.assertEqual(self.state(lane), before)
 
-    def test_a_lane_record_naming_the_main_checkout_refuses(self):
-        # identity() matches lane records before the main checkout, so a record whose path is
-        # the main checkout would make it count as that lane.
+    def test_a_lane_record_naming_the_main_checkout_changes_nothing(self):
+        # LR1: a lane record whose path is the main checkout is left out when records load, so
+        # the main checkout stays main and sync-main runs the lead's checks as usual.
         self.lane("new", "chart-fix")
         rec = os.path.join(self.common, "lanes", "chart-fix", "lane.json")
         data = self.lane_json("chart-fix")
@@ -655,13 +655,14 @@ class SyncMain(LanesRepo):
         self.write(rec, json.dumps(data))
         self.land({"hooks/x.sh": REAL})
         before = self.state()
-        for args in ((), ("7",)):
-            p = self.sync(*args)
-            self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
-            self.assertNotIn("verified;", p.stdout)
-            self.assertEqual(self.state(), before)
-        self.assertIn("chart-fix", p.stderr)
-        self.assertIn("main checkout", p.stderr)
+        p = self.sync()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertEqual(self.state(), before)
+        p = self.sync("7")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("verified;", p.stdout)
+        with open(os.path.join(self.main, "hooks", "x.sh")) as f:
+            self.assertEqual(f.read(), REAL)
 
 
 class CommitGraphOff(unittest.TestCase):
