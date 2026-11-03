@@ -738,6 +738,7 @@ def run_setup(repo: Repo, lane: dict) -> None:
     setup = repo.config().get("setup")
     if not setup:
         return
+    sessionless(repo, lane)  # again, right before the command: a session may start meanwhile
     block = lanelib.port_block(lane)
     env = dict(user_env(), LANE_ID=lane["id"], LANE_PORT=str(block[0]) if block else "",
                LANE_PORTS=f"{block[0]}-{block[-1]}" if block else "")
@@ -747,8 +748,38 @@ def run_setup(repo: Repo, lane: dict) -> None:
             lanelib.update_lane(repo, lane["id"], lambda x: x.update(state="setup-failed",
                                                                      setup_failed="setup"))
         raise LaneError(f"setup failed in {lane['path']}; the lane is registered (setup-failed): "
-                        f"fix it there, then `lane adopt {lane['path']}` re-runs only the setup, "
-                        f"or `lane done {lane['id']} --abandon`")
+                        "fix it there from a terminal, not a claude session (`adopt` finishes no "
+                        f"lane a session ran in), then `lane adopt {lane['path']}` re-runs only "
+                        f"the setup, or `lane done {lane['id']} --abandon`")
+
+
+def sessionless(repo: Repo, lane: dict) -> None:
+    """Refuse while a live session runs in the lane's tree, or while that can't be told: the
+    setup would run sandbox-off over what it wrote, which the marker never vouched for (LR7). A
+    session found there voids the marker, so `adopt` refuses the lane from then on, the session
+    gone or not."""
+    live = lanelib.live_sessions()
+    if live is None:
+        raise LaneError(f"can't tell whether a session runs in lane {lane['id']}'s tree (a session "
+                        "file won't read, or the Bash sandbox hides other processes), so no setup "
+                        f"runs there: once that clears, rerun a bare `lane adopt {lane['path']}` "
+                        "from a terminal")
+    if not (here := sessions_in(live, lane["path"])):
+        return
+    kept = ""
+    try:
+        if (top := stores_fd()) is not None:
+            try:
+                drop_mark(top, repo, lane["id"])
+            finally:
+                os.close(top)
+    except OSError as e:
+        kept = (f" (its marker in ~/{VERIFIED_REL}/{NEW_MARKS} couldn't be removed: "
+                f"{e.strerror or e}, so don't adopt it: `lane done` removes it)")
+    windows = ", ".join(window_label(s) for s in here)
+    raise LaneError(shown(f"lane {lane['id']} has a live session ({windows}), which may have "
+                          "written its tree, so no setup runs there and `adopt` won't finish "
+                          f"it{kept}: {close_unverified(repo, lane)}"))
 
 
 def mark_active(lane: dict) -> None:
@@ -884,6 +915,9 @@ def cmd_new(args) -> None:
     # checkout must match its tree. The store's guard comes first: without the rules that keep
     # lanes out of it, nothing is created.
     with store_guard("new", "lane new", store_wait()) as vstore:
+        # Again, right before the fetch's ref and reflog writes: the guard may have waited
+        # minutes for the store's lock (LR4).
+        tamper_gate(repo, f"{NO_LANE} Find out who made each, remove it, then rerun")
         base_sha = fetched_base(repo, cfg)
         if not args.reuse_branch:
             # `ls` labels a lane by its branch's newest PR, so on a name an old PR used it shows
@@ -902,7 +936,8 @@ def cmd_new(args) -> None:
         config = fresh_store(vstore, NO_LANE)
         vstore.recheck(NO_LANE)
         fill_new_store(repo, vstore.path, *base_parts(repo, cfg), base_sha)
-        with lock(repo):
+        # Bounded: it holds the stores' lock meanwhile, which every other `new` waits on.
+        with lanes_lock(repo, f"{NO_LANE} Rerun once it is released"):
             check_unregistered(repo, args.id)
             sessions = lanelib.live_sessions()
             live = [x for x in held_lanes(repo) if holds_slot(repo, x, sessions)]
@@ -945,8 +980,9 @@ def cmd_new(args) -> None:
             lane = lanelib.update_lane(repo, args.id, lambda x: x.update(setup_failed="copy"))
             copied = lane_files(repo, lane,
                                 {ph: getattr(args, attr) for attr, ph in BRIEF.items()})
-            # Still setup-failed through the setup, which `open` refuses: no session starts in
-            # the tree while its marker vouches for it (finished_lane).
+            # Still setup-failed through the setup. `open` refuses a lane whose marker is there,
+            # whatever its record says: no session starts in the tree while the marker vouches
+            # for it (finished_lane).
             lane = lanelib.update_lane(repo, args.id, lambda x: x.update(setup_failed="setup"))
     say(f"lane {args.id}: branch {branch} from {base} ({base_sha[:12]}), "
         f"{lanelib.ports_text(lane)}")
@@ -971,13 +1007,14 @@ def finish(repo: Repo, lane: dict) -> None:
         raise LaneError(f"lane {lane['id']}'s checkout has no marker of a check by `lane new` "
                         f"against the remote's tree that nothing has run in since ({why}: LR7), "
                         f"so nothing will run in it: {close_unverified(repo, lane)}")
+    sessionless(repo, lane)  # before the copy too, with or without a setup command
     with lock(repo):
         # 'verify' with a marker: interrupted between the marker and the record's move to 'copy'.
         if lane.get("setup_failed", "copy") in ("copy", "verify"):
             lane_files(repo, lane, {})
             lane = lanelib.update_lane(repo, lane["id"], lambda x: x.update(setup_failed="setup"))
     run_setup(repo, lane)
-    check_worktree(lane, seed_ask=True)  # still setup-failed, which `open` refuses: no session
+    check_worktree(lane, seed_ask=True)  # still marked, which `open` refuses: no session
     lane = finished_lane(repo, lane)
     say(f"finished lane {lane['id']}: branch {lane['branch']}, {lanelib.ports_text(lane)}")
     say(f"  record {lanelib.record_path(lane)}")
@@ -1017,9 +1054,10 @@ def setup_failed_hint(repo: Repo, lane: dict) -> str:
 
 def close_unverified(repo: Repo, lane: dict) -> str:
     """How to close a lane with no marker (LR7). `done --abandon` deletes no tree git finds
-    changed, and nothing here does on lane.json's word (any lane's sandbox can write it), so a
-    checkout `new` refused, which nothing ran in, is deleted by hand. The dir is named only where
-    `new` puts a lane (the config's root and the id), never from lane.json alone."""
+    changed, and nothing here does on lane.json's word (any lane's sandbox can write it), so such
+    a tree is deleted by hand, once what it holds is looked at: it may be a checkout `new`
+    refused, or a session's work (an interrupted finish, a lane.json flipped). The dir is named
+    only where `new` puts a lane (the config's root and the id), never from lane.json alone."""
     where = "its worktree dir"
     with contextlib.suppress(Exception):
         made = os.path.realpath(os.path.join(repo.config()["root"], lane["id"]))
@@ -1027,8 +1065,8 @@ def close_unverified(repo: Repo, lane: dict) -> str:
             where = shown(made)
     return (f"close it with `lane done {lane['id']} --abandon`. If that refuses on files in its "
             f"tree, save anything of yours from there, delete {where} by hand from a terminal, "
-            "and rerun it (a checkout `lane new` refused holds nothing of yours: nothing ran in "
-            "it). Then `lane new` makes the lane again")
+            "and rerun it (what git finds changed there may be what `lane new` refused, or a "
+            "session's work: look before you delete). Then `lane new` makes the lane again")
 
 
 def cmd_adopt(args) -> None:
@@ -1053,7 +1091,10 @@ def cmd_adopt(args) -> None:
                         f"Bash can write any lane.json: compare each under {repo.lanes_dir}/ with "
                         "what you made; only one is the CLI's")
     known = held[0] if held else None
-    if known and known.get("state") == "setup-failed":
+    # The marker, not lane.json's state (any lane's sandbox can write it), says the lane is
+    # unfinished: a marked lane whose record reads active is finished too, as `open` says.
+    if known and (known.get("state") == "setup-failed"
+                  or (known.get("state") != "closing" and unverified(repo, known) is None)):
         finish(repo, known)
         return
     if known:
@@ -1918,6 +1959,11 @@ def cmd_open(args) -> None:
     usable_path(repo, lane)  # the window's cwd, where `claude` loads that dir's .claude/ config
     if lane.get("state") == "setup-failed":
         raise LaneError(f"lane {args.id} is setup-failed: {setup_failed_hint(repo, lane)}")
+    # LR7: while `new`'s marker vouches for the tree, no session may start there, whatever
+    # lane.json says (any lane's sandbox can write it). One that can't be read refuses too.
+    if unverified(repo, lane) not in (NO_MARK, OTHER_MARK):
+        raise LaneError(f"lane {args.id} is unfinished (setup-failed, or its `lane new` or "
+                        f"`adopt` still runs): {setup_failed_hint(repo, lane)}")
     parked = parked_stamp(repo, lane)
     if parked and args.print:
         raise LaneError(f"lane {args.id} is parked, and `--print` would start a session its flag "
@@ -4388,7 +4434,8 @@ def install_lock():
 @contextlib.contextmanager
 def lanes_lock(repo: Repo, then: str):
     """lock(repo), given up after LANES_LOCK_WAIT with a LaneError that ends with then: `done`
-    takes it while it holds install.lock, and a sandboxed `lane claim` or `note` can hold it."""
+    takes it while it holds install.lock, `new` while it holds the stores' lock, and a sandboxed
+    `lane claim` or `note` can hold it."""
     with contextlib.ExitStack() as stack:
         try:
             stack.enter_context(lock(repo, timeout=LANES_LOCK_WAIT))
@@ -5572,7 +5619,7 @@ class StoreDir:
     def recheck(self, written: str) -> None:
         """Refuse unless the stores' path still opens, by fd with O_NOFOLLOW from the home dir, to
         the dir held open since the first check, and the store there is a dir of ours. written says
-        what the run wrote so far."""
+        what the run wrote so far: a sentence, or a clause that gets its period here."""
         why = None
         try:
             fd = lanelib.open_dir(self.home, VERIFIED_REL)
@@ -5586,9 +5633,10 @@ class StoreDir:
             finally:
                 os.close(fd)
         if why:
+            said = written if written.endswith(".") else f"{written}."
             raise LaneError(f"{self.verified} no longer leads, through dirs alone, to the stores' "
                             f"dir this run opened ({why}): a link or a moved dir on the way would "
-                            f"hand git another store. {written} Find out what moved it")
+                            f"hand git another store. {said} Find out what moved it")
         self.own_store()
 
     def read(self, rel: str) -> bytes | None:
@@ -5833,19 +5881,18 @@ def stores_fd() -> int | None:
 
 def unverified(repo: Repo, lane: dict) -> str | None:
     """None when the stores' dir holds `new`'s marker for this lane (its id, path, repo and
-    created stamp),
-    else why not. Read by fd from the home dir without following a link; the caller checks the
+    created stamp), else why not (NO_MARK, OTHER_MARK, or why it can't be read). Read by fd from the home dir without following a link; the caller checks the
     rules that keep lanes out of that dir (store_rules) when it acts on the answer."""
     try:
         top = stores_fd()
         if top is None:
-            return "no marker"
+            return NO_MARK
         try:
             fd = marks_fd(top)
         finally:
             os.close(top)
         if fd is None:
-            return "no marker"
+            return NO_MARK
         try:
             raw = lanelib.read_nofollow(fd, mark_name(repo, lane["id"]))
         finally:
@@ -5853,7 +5900,7 @@ def unverified(repo: Repo, lane: dict) -> str | None:
     except OSError as e:
         return f"its marker can't be read ({e.strerror or e})"
     if raw is None:
-        return "no marker"
+        return NO_MARK
     try:
         data = json.loads(raw)
     except (ValueError, RecursionError):
@@ -5862,8 +5909,14 @@ def unverified(repo: Repo, lane: dict) -> str | None:
             and data.get("path") == os.path.realpath(lane["path"])
             and data.get("common") == repo.common_dir
             and data.get("created") == lane.get("created")):
-        return "its marker names another lane"
+        return OTHER_MARK
     return None
+
+
+# unverified's answers that say no marker vouches for the lane; any other answer but None is a
+# marker that can't be read, which `open` refuses on as on one that vouches.
+NO_MARK = "no marker"
+OTHER_MARK = "its marker names another lane"
 
 
 def tree_entries(store: str, treeish: str) -> dict[str, tuple[str, str]]:

@@ -214,7 +214,9 @@ lane stays registered as `setup-failed`, and `lane adopt <path>` finishes it, re
 failed step (copies never overwrite a file the lane already has). That holds only while `new`'s
 marker shows a verified checkout nothing else has run in (docs/lanes.md, LR7), and a finished
 lane has none: any other setup-failed lane is closed with `lane done --abandon` on its id and
-made again, and `adopt`, `open` and `park` say so. A checkout `new` refused, which nothing ran
+made again, and `adopt`, `open` and `park` say so. Fix a failed setup from a terminal, not a
+claude session: `open` refuses a lane while its marker is there, whatever its `lane.json` says,
+and `adopt` finishes no lane a session runs in. A checkout `new` refused, which nothing ran
 in, is deleted by hand from a terminal first, as `done` deletes no tree git finds changed. A
 second `lane new` waits for the first.
 

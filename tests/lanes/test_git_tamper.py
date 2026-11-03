@@ -8,12 +8,13 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 import zlib
 from unittest import mock
 
-from _fixture import LANE, LanesRepo, lanelib
+from _fixture import LANE, LanesRepo, LiveSessions, lanelib
 from test_cli import load_lane_script
 
 
@@ -207,7 +208,7 @@ class NoHooks(LanesRepo):
 # stop or plant midway through a real `lane new`: "interrupt" makes verify_new raise
 # KeyboardInterrupt (Ctrl-C mid-verification); "plant:<victim>:<link>" makes fetched_base plant a
 # symlink at <link> to <victim> once it returns, as a lane's sandbox could while the store's full
-# fetch runs.
+# fetch runs; "lanes-wait:<secs>" sets LANES_LOCK_WAIT, so a held lanes lock refuses soon.
 DRIVER = """
 import importlib.machinery, importlib.util, os, sys
 loader = importlib.machinery.SourceFileLoader("lane_cli", sys.argv[1])
@@ -228,6 +229,8 @@ elif how.startswith("plant:"):
         os.symlink(victim, link)
         return sha
     mod.fetched_base = fetched_base
+elif how.startswith("lanes-wait:"):
+    mod.LANES_LOCK_WAIT = float(how.split(":")[1])
 sys.exit(mod.main(sys.argv[3:]))
 """
 
@@ -245,10 +248,10 @@ def plant_readme(case):
     case.assertEqual(lanelib.git_tamper(case.common), [])  # no tripwire for this
 
 
-def driven(case, how, *args):
+def driven(case, how, *args, timeout=60):
     """`lane <args>` run through DRIVER with how's patch."""
     return subprocess.run([sys.executable, "-c", DRIVER, LANE, how, *args], cwd=case.main,
-                          env=case.env, capture_output=True, text=True, timeout=60)
+                          env=case.env, capture_output=True, text=True, timeout=timeout)
 
 
 def marks(case, lane_id):
@@ -449,6 +452,76 @@ class NewVerifiesTree(LanesRepo):
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertFalse(self.setup_ran())
 
+    def failed_setup(self):
+        """A `new` whose setup fails, which keeps the lane's marker so `adopt` can finish it."""
+        self.lane("init", "--setup", "test -e OK && touch SETUP_RAN")
+        p = self.run_lane("new", "chart-fix")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertEqual(len(marks(self, "chart-fix")), 1)
+        return p
+
+    def test_a_failed_setup_says_to_fix_it_from_a_terminal(self):
+        # A session there would void the marker (finish), so the fix comes from a terminal.
+        self.assertIn("from a terminal, not a claude session", self.failed_setup().stderr)
+
+    def test_open_goes_by_the_marker_not_the_lane_writable_state(self):
+        # M1: while the marker vouches for the tree, no session may start there, whatever the
+        # lane.json any lane's sandbox can write says.
+        self.failed_setup()
+        data = os.path.join(self.common, "lanes", "chart-fix", "lane.json")
+        rec = self.lane_json("chart-fix")
+        rec.pop("setup_failed", None)
+        self.write(data, json.dumps(dict(rec, state="active")))
+        for args in (("--print",), ("--print", "--focus"), ()):
+            with self.subTest(args=args):
+                p = self.run_lane("open", "chart-fix", *args)
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertEqual(p.stdout, "")
+                self.assertIn(f"lane adopt {self.lane_path('chart-fix')}", p.stderr)
+        self.write(os.path.join(self.lane_path("chart-fix"), "OK"), "")
+        self.lane("adopt", self.lane_path("chart-fix"))
+        self.assertTrue(self.setup_ran())
+        p = self.run_lane("open", "chart-fix", "--print")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+
+class FinishWithSession(LiveSessions):
+    """M1: `adopt` runs the setup sandbox-off, so it finishes no lane a session runs in: one
+    started there by any route may have written the tree the marker vouches for."""
+
+    def setUp(self):
+        super().setUp()
+        NewVerifiesTree.failed_setup(self)
+        self.write(os.path.join(self.lane_path("chart-fix"), "OK"), "")
+
+    def setup_ran(self):
+        return os.path.exists(os.path.join(self.lane_path("chart-fix"), "SETUP_RAN"))
+
+    def test_adopt_refuses_while_a_session_runs_in_the_lane(self):
+        # M1: a session started there by any route may write the tree, so adopt runs no setup
+        # over it, and the marker, which no longer tells the truth, goes.
+        self.session(self.lane_path("chart-fix"))
+        p = self.run_lane("adopt", self.lane_path("chart-fix"))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("session", p.stderr)
+        self.assertIn("lane done chart-fix --abandon", p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        self.assertFalse(self.setup_ran())
+        self.assertEqual(marks(self, "chart-fix"), [])
+        for f in glob.glob(os.path.join(self.home, ".claude", "sessions", "*.json")):
+            os.remove(f)  # the session ended: its writes stay in the tree
+        p = self.run_lane("adopt", self.lane_path("chart-fix"))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertFalse(self.setup_ran())
+        steers_to_done(self, "chart-fix")
+
+    def test_adopt_refuses_when_sessions_cant_be_read(self):
+        self.write(os.path.join(self.home, ".claude", "sessions", "stray.json"), "{not json")
+        p = self.run_lane("adopt", self.lane_path("chart-fix"))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("can't tell whether a session runs", p.stderr)
+        self.assertFalse(self.setup_ran())
+        self.assertEqual(len(marks(self, "chart-fix")), 1)  # nothing known ran there
+
 
 class NewVerifiesWithoutSetup(LanesRepo):
     """LR7 with no setup command: the session `lane open` starts in the tree loads its .claude/
@@ -514,6 +587,50 @@ class NewVerifiesWithoutSetup(LanesRepo):
         self.assertIn("waiting", p.stderr)
         self.assertFalse(os.path.exists(self.lane_path("chart-fix")))
 
+    def test_new_checks_again_before_its_fetch_once_the_store_lock_is_free(self):
+        # L1: the store lock's wait comes after `new`'s first check; a reflog link planted
+        # meanwhile would take the base fetch's log line sandbox-off (LR4).
+        other = os.path.join(self.tmp, "other")
+        self.git("clone", "-q", self.origin, other, cwd=self.tmp)
+        self.commit("more.txt", "more\n", cwd=other)
+        self.git("push", "-q", "origin", "main", cwd=other)  # so the fetch would move a ref
+        before = self.git("rev-parse", "refs/remotes/origin/main").strip()
+        fd = self.held_store_lock()
+        self.env["_LANE_TEST_STORE_WAIT"] = "30"
+        proc = subprocess.Popen([sys.executable, LANE, "new", "chart-fix"], cwd=self.main,
+                                env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True)
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        self.assertIn("waiting", proc.stderr.readline())
+        victim = os.path.join(self.tmp, "victim")
+        self.write(victim, "mine\n")
+        link = os.path.join(self.common, "logs", "refs", "remotes", "origin", "main")
+        os.remove(link)
+        os.symlink(victim, link)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        out, err = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 1, out + err)
+        self.assertIn("logs/refs/remotes/origin/main is a symlink", err)
+        self.assertEqual(self.read(victim), "mine\n")
+        self.assertEqual(self.git("rev-parse", "refs/remotes/origin/main").strip(), before)
+        self.assertFalse(os.path.exists(self.lane_path("chart-fix")))
+
+    def test_new_refuses_on_a_held_lanes_lock_instead_of_hanging(self):
+        # L2: `new` takes the lanes lock while it holds the stores' lock, and a sandboxed `lane
+        # claim` or `note` can hold the lanes lock.
+        fd = os.open(os.path.join(self.common, "lanes", ".lock"), os.O_WRONLY | os.O_CREAT, 0o644)
+        self.addCleanup(lambda: fd in held and os.close(fd))
+        held = [fd]
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        p = driven(self, "lanes-wait:0.5", "new", "chart-fix", timeout=30)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("lanes lock", p.stderr)
+        self.assertIn("No lane was made", p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        self.assertFalse(os.path.exists(self.lane_path("chart-fix")))
+        os.close(held.pop())
+        self.lane("new", "chart-fix")  # the stores' lock went with the refusal
+
     def test_without_the_store_rules_nothing_is_created(self):
         self.write(os.path.join(self.home, ".claude", "settings.json"), "{}")
         p = self.run_lane("new", "chart-fix")
@@ -533,6 +650,26 @@ class NewVerifiesWithoutSetup(LanesRepo):
         self.assertNotIn("Traceback", p.stderr)
         self.assertFalse(os.path.exists(self.lane_path("chart-fix")))
         self.assertFalse(os.path.exists(os.path.join(self.common, "lanes", "chart-fix")))
+
+
+class StoreRecheckText(unittest.TestCase):
+    """N1: StoreDir.recheck's refusal reads as sentences whatever text its caller passes."""
+
+    def test_each_callers_text_ends_as_a_sentence(self):
+        mod = load_lane_script()
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = os.path.realpath(tmp)
+            os.makedirs(os.path.join(tmp, mod.VERIFIED_REL))
+            other = os.open(tmp, os.O_RDONLY | os.O_DIRECTORY)  # not the stores' dir
+            self.addCleanup(os.close, other)
+            store = mod.StoreDir(tmp, other, "new")
+            for text in ("No lane was made.", "Nothing was written.",
+                         "Nothing ran in the lane's checkout: close it as said below",
+                         "Nothing in the checkout was written: rerun"):
+                with self.subTest(text=text), self.assertRaises(mod.LaneError) as cm:
+                    store.recheck(text)
+                said = str(cm.exception)
+                self.assertIn(text.rstrip(".") + ". Find out what moved it", said)
 
 
 class GateBeforeRefs(LanesRepo):
