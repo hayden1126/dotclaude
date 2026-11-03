@@ -5603,7 +5603,7 @@ def predict(repo: Repo, store: str, branch: str, pinned: str, proven: str, label
                             "user.name and user.email")
         idents.update({f"GIT_{who}_NAME": m[1], f"GIT_{who}_EMAIL": m[2],
                        f"GIT_{who}_DATE": m[3]})
-    msg = f"Merge {label} into {branch}\n\nlane sync-main: {proven}, verified."
+    msg = f"Merge {label} into {branch}\n\nlane sync-main: {proven}, its tree verified."
     merge = sgit(["commit-tree", tree, "-p", pinned, "-p", proven, "-m", msg], store,
                  dict(env, **idents), "commit-tree").stdout.strip()
     sgit(["update-ref", "refs/heads/merged", merge], store, env, "setting refs/heads/merged")
@@ -5875,7 +5875,9 @@ def cmd_sync_main(args) -> None:
         changed = [x for x in sgit(["diff-tree", "-r", "-z", "--name-only", pinned, merge], store,
                                    env, "counting the changes").stdout.split("\0") if x]
         if not problems:  # never a "verified" over a checkout that isn't the merge's
-            say(f"sync-main: {branch} is at merge {merge[:12]} of {label}, verified; "
+            # Content only: the files are the merge's, whose tree is the proven commit's outside
+            # the carries. The history of the lead's branch is a lane's to write.
+            say(f"sync-main: {branch} is at merge {merge[:12]} of {label}, its files verified; "
                 f"{len(changed)} files changed")
     if problems:
         raise LaneError(f"after the checkout, {repo.toplevel} doesn't match {merge[:12]}:"
