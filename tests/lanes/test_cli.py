@@ -3833,17 +3833,32 @@ class FetchNoRecursion(unittest.TestCase):
     sandboxed session can write) must not get git run in it, so each turns recursion off."""
 
     def test_every_fetch_lane_runs_skips_submodules(self):
+        # And never starts `gc --auto` (LR3): each also takes NO_AUTO_GC's keys and
+        # --no-auto-maintenance. A *NAME in the args list is expanded from the module.
         import ast
+        mod = load_lane_script()
         with open(LANE) as f:
             tree = ast.parse(f.read())
+
+        def words(call):
+            out = []
+            for e in call.elts:
+                if isinstance(e, ast.Starred) and isinstance(e.value, ast.Name):
+                    out += list(getattr(mod, e.value.id))
+                else:
+                    out.append(getattr(e, "value", None))
+            return out
         fetches = [node.args[0] for node in ast.walk(tree)
                    if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "git"
-                   and node.args and isinstance(node.args[0], ast.List) and node.args[0].elts
-                   and getattr(node.args[0].elts[0], "value", None) == "fetch"]
+                   and node.args and isinstance(node.args[0], ast.List)
+                   and "fetch" in words(node.args[0])]
         self.assertEqual(len(fetches), 3)  # fetch(), fetched_base, remote_tip
         for call in fetches:
-            words = [getattr(e, "value", None) for e in call.elts]
-            self.assertIn("--no-recurse-submodules", words, ast.unparse(call))
+            got = words(call)
+            for want in ("--no-recurse-submodules", "--no-auto-maintenance", "gc.auto=0",
+                         "maintenance.auto=false"):
+                self.assertIn(want, got, ast.unparse(call))
+            self.assertLess(got.index("maintenance.auto=false"), got.index("fetch"))
 
 
 class ExcludedGuardRules(LanesRepo):
