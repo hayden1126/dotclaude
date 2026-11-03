@@ -2,7 +2,7 @@
 # Keep a record of which Claude session is open in which tmux tab, so tmux/claude-restore can
 # reopen the tabs after their tmux server dies (a reboot, `wsl --terminate`, `tmux kill-server`).
 # Wired in settings.json:
-#   SessionStart (startup, resume, clear, compact)  write or refresh the session's entry
+#   SessionStart (every source)                     write or refresh the session's entry
 #   SessionEnd                                      delete it, or mark it on reason `other`
 # One file per session: $XDG_STATE_HOME/dotclaude/open-sessions/<session_id>.json, holding
 # {session_id, cwd, transcript_path, pane, window_index, socket, server_start, server_pid, ts},

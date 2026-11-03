@@ -3,7 +3,7 @@
 # (tmux/claude.conf renders ◐ for busy, ✳ for wait, nothing for idle). Wired in settings.json:
 #   busy  <- UserPromptSubmit, PreToolUse, PostToolUse, SubagentStop   (work is happening)
 #   wait  <- PermissionRequest, Notification permission_prompt|elicitation_dialog (a dialog)
-#   idle  <- SessionStart startup|resume|clear                        (a fresh or cleared chat)
+#   idle  <- SessionStart startup|resume|clear|fork          (a fresh, cleared or forked chat)
 # idle acts on SessionStart only: a machine overlay or a session started before the install may
 # still wire it on Stop, where it would empty the wait set under an open subagent dialog.
 # A Stop's state is hooks/stop-ring.sh's (busy while counted background work runs, wait when
