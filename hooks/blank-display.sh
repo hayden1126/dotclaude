@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# SessionStart(startup|resume|clear|compact) hook: keeps Bash off the display in a repo that opts
-# in with `git config dotclaude.blankDisplay true` (read with --local, so every worktree of the
-# repo is covered). Opted in, it appends `export DISPLAY=`, `export WAYLAND_DISPLAY=` and
-# `unset WAYLAND_SOCKET` to $CLAUDE_ENV_FILE and tells the model why; anywhere else it is silent.
+# SessionStart hook, every source (no matcher, so a fork or a new source can't skip it): keeps Bash
+# off the display in a repo that opts in with `git config dotclaude.blankDisplay true` (read with
+# --local, so every worktree of the repo is covered). Opted in, it appends `export DISPLAY=`,
+# `export WAYLAND_DISPLAY=` and `unset WAYLAND_SOCKET` to $CLAUDE_ENV_FILE and tells the model why;
+# anywhere else it is silent.
 # The rules are in hooks/blank_display.py; tests/setup/test_blank_display.py holds the cases.
 #
 # This shim passes the event on stdin to the module beside this script's real path, run by

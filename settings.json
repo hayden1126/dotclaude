@@ -542,7 +542,7 @@
     ],
     "SessionStart": [
       {
-        "matcher": "startup|resume",
+        "matcher": "startup|resume|fork",
         "hooks": [
           {
             "type": "command",
@@ -552,7 +552,6 @@
         ]
       },
       {
-        "matcher": "startup|resume|clear|compact",
         "hooks": [
           {
             "type": "command",
@@ -572,7 +571,6 @@
         ]
       },
       {
-        "matcher": "startup|resume|clear|compact",
         "hooks": [
           {
             "type": "command",
@@ -582,7 +580,6 @@
         ]
       },
       {
-        "matcher": "startup|resume|clear|compact",
         "hooks": [
           {
             "type": "command",
@@ -592,7 +589,6 @@
         ]
       },
       {
-        "matcher": "startup|resume|clear|compact",
         "hooks": [
           {
             "type": "command",
@@ -612,7 +608,7 @@
         ]
       },
       {
-        "matcher": "startup|resume|clear",
+        "matcher": "startup|resume|clear|fork",
         "hooks": [
           {
             "type": "command",
@@ -622,7 +618,7 @@
         ]
       },
       {
-        "matcher": "startup|resume|clear",
+        "matcher": "startup|resume|clear|fork",
         "hooks": [
           {
             "type": "command",
@@ -632,7 +628,7 @@
         ]
       },
       {
-        "matcher": "startup|resume|clear|compact",
+        "matcher": "startup|resume|clear|compact|fork",
         "hooks": [
           {
             "type": "command",

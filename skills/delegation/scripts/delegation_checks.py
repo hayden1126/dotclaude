@@ -63,6 +63,12 @@ FULL_COST = "about 16 sonnet `claude -p` sessions and 6 minutes"  # 65 checks in
 CHILD_ENV = "DELEGATION_CHECKS_CHILD"
 VERSION_RE = re.compile(r"\b(\d+\.\d+\.\d+)\b")
 
+# SessionStart's source enum as the binary lists it (fork is in it by 2.1.314). settings.json's
+# SessionStart matchers are decided against it, source by source (tests/delegation/
+# test_settings.py), so the canary searches for the whole list: a source added or renamed fails it
+# on the first session of that version, before a matcher that lists sources skips it unseen.
+SESSION_START_SOURCES = ("startup", "resume", "clear", "compact", "fork")
+
 # Strings our hooks and scripts depend on, searched in the claude binary. A missing one means
 # an upgrade renamed something we read, and the code that reads it stops working without an
 # error. A present one proves little: the live tier is what checks behavior.
@@ -72,6 +78,8 @@ CANARY_STRINGS = [
     ("SubagentStop", "settings.json: delegation-ledger, report-check"),
     ("PostToolUse", "settings.json: delegation-ledger hook (deadline nudge)"),
     ("SessionStart", "settings.json: delegation-due"),
+    (",".join(f'"{x}"' for x in SESSION_START_SOURCES) + "]",
+     "settings.json SessionStart matchers: SESSION_START_SOURCES, the whole enum"),
     ("SubagentHandback", "report-check; delegation-ledger handback_message"),
     ("agent_id", "the policy hook's filter in settings.json"),
     ("agent_transcript_path", "delegation-ledger stop rows"),

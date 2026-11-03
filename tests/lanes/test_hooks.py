@@ -300,6 +300,17 @@ class IdentityHook(LanesRepo):
         self.assertEqual([(s["session_id"], s["startedAt"]) for s in sessions],
                          [("sess-0001", first)])
 
+    def test_a_fork_is_registered_as_its_own_session(self):
+        # /branch and --fork-session start a new session id from a copy of the parent's
+        # transcript; the parent's identity line in that copy doesn't register the fork.
+        self.start(self.lane_dir)
+        out = self.start(self.lane_dir, source="fork", sid="sess-0002")
+        self.assertIn("`chart-fix`", out["additionalContext"])
+        self.assertNotIn("re-read", out["additionalContext"])
+        sessions = self.lane_json("chart-fix")["sessions"]
+        self.assertEqual([(s["session_id"], s["source"]) for s in sessions],
+                         [("sess-0001", "startup"), ("sess-0002", "fork")])
+
     def test_main_gets_one_board_line(self):
         out = self.start(self.main)
         self.assertEqual(out["additionalContext"].count("\n"), 0)
