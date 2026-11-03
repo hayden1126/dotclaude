@@ -1060,9 +1060,9 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   mid-session `/model`, and the transcript alone loses an alias or a 1M form and would pin a
   session launched without flags to what it last ran. How each case comes out:
   - launched without flags, or an entry from before the fields (a session started before the
-    install keeps one until its next SessionStart: a compact, `/clear` or resume): a bare resume,
-    unless a `/model` in the transcript carries, so the pin and the user's default effort apply, as
-    at a pass;
+    install keeps one until its next SessionStart: a compact, `/clear`, resume or fork): a bare
+    resume, unless a `/model` in the transcript carries, so the pin and the user's default effort
+    apply, as at a pass;
   - a field outside its shape: that flag drops, never the tab;
   - a tab with no transcript yet: `claude` with its launch flags;
   - an attach tab, or Open of a chat running in the background: no flags, since the resume
