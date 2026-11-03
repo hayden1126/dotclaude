@@ -175,6 +175,16 @@ class SyncMain(LanesRepo):
         for args in fetches:
             self.assertIn("--no-auto-maintenance", args)
 
+    def test_main_status_diff_comes_out_masked(self):
+        # Main's STATUS.md is lane-written text: a terminal escape in it reaches the lead's
+        # terminal masked, the diff's lines still one per line.
+        self.land({"hooks/x.sh": REAL, "STATUS.md": "# Status\n- \x1b]0;x\x07 line\x9b2J\n"})
+        p = self.sync("7")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotRegex(p.stdout, r"[\x00-\x09\x0b-\x1f\x7f-\x9f]")
+        self.assertIn("\n+- ?]0;x? line?2J\n", p.stdout)
+        self.assertIn("\n-- lead line\n", p.stdout)
+
     def link_reflog(self, rel):
         """A symlink at the reflog path rel under the common dir, to a victim file outside it."""
         victim = os.path.join(self.tmp, "victim")

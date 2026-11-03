@@ -5889,7 +5889,9 @@ def cmd_sync_main(args) -> None:
         diff = sgit(["diff", f"{merge}^1", f"{merge}^2", "--", "STATUS.md"], store, env,
                     "the STATUS.md diff").stdout
         if diff.strip():
-            say(f"Main's side of STATUS.md (the lead's whole file was kept):\n{diff.rstrip()}")
+            # Lane-written text: masked line by line (shown masks the newlines too).
+            lines = "\n".join(map(shown, diff.rstrip().split("\n")))
+            say(f"Main's side of STATUS.md (the lead's whole file was kept):\n{lines}")
             say("Add back by hand any real line from main's side (a + line that isn't an "
                 "older carry), in a follow-up commit.")
         changed = [x for x in sgit(["diff-tree", "-r", "-z", "--name-only", pinned, merge], store,
