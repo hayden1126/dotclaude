@@ -498,7 +498,7 @@ class SyncMain(LanesRepo):
     def test_each_tripwire_finding_refuses(self):
         self.land({"hooks/x.sh": REAL})
         for rel, text in (("objects/info/alternates", "/elsewhere/objects\n"),
-                          ("info/grafts", ""), ("shallow", "")):
+                          ("info/grafts", ""), ("shallow", ""), ("commondir", ".\n")):
             with self.subTest(rel):
                 path = os.path.join(self.common, rel)
                 self.write(path, text)

@@ -1563,7 +1563,7 @@ def cmd_ls(args) -> None:
         say(f"install: held by {who} (branch {h['branch']}, {n} link{'' if n == 1 else 's'}): "
             f"the lead's ./setup.sh in {h['main']} releases it")
     # The DA15/DA16 tripwire: a warning like the lines above, so the exit stays 0.
-    for reason in lanelib.git_tamper(repo.common_dir):
+    for reason in lanelib.repo_tamper(repo):
         say(f"git: {reason}")
 
 
@@ -5726,7 +5726,9 @@ def cmd_sync_main(args) -> None:
     lead_only(repo, str(args.pr), repo.main, "sync-main")
     worktree_config_refusal(repo, None, True, "sync-main")
     harden_git_env(repo)
-    if found := lanelib.git_tamper(repo.common_dir):
+    # The checkout's own .git too (repo_tamper): a commondir file planted there makes git's
+    # answer, repo.common_dir, a clean dir of the planter's.
+    if found := lanelib.repo_tamper(repo):
         raise LaneError(f"the git common dir {repo.common_dir} may serve content no remote showed "
                         f"(DA15/DA16):" + "".join(f"\n  {shown(f)}" for f in found)
                         + "\nNothing was written: find out who made each, remove it, then rerun")

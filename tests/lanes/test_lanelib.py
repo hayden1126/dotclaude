@@ -919,6 +919,27 @@ class GitTamper(unittest.TestCase):
                     os.unlink(link)
                 self.assertEqual(lanelib.git_tamper(self.common), [])
 
+    def test_a_commondir_file_or_link_is_found(self):
+        # A real common dir never holds one; planted in a main checkout's .git, it makes git name
+        # another dir as the common dir, which every check would then read instead (DA15/DA16).
+        clean = os.path.join(self.tmp, "clean.git")
+        self.git("init", "-q", "--bare", clean, cwd=self.tmp)
+        path = os.path.join(self.common, "commondir")
+        for make in (lambda: self.write(".git/commondir", clean + "\n"),
+                     lambda: self.write(".git/commondir", ""),
+                     lambda: os.symlink(clean, path), lambda: os.symlink("missing", path),
+                     lambda: os.mkdir(path)):
+            with self.subTest(make=make):
+                make()
+                try:
+                    self.found("commondir")
+                finally:
+                    if os.path.isdir(path) and not os.path.islink(path):
+                        os.rmdir(path)
+                    else:
+                        os.unlink(path)
+                self.assertEqual(lanelib.git_tamper(self.common), [])
+
     def test_a_fifo_alternates_is_found_without_blocking(self):
         os.mkfifo(os.path.join(self.common, "objects", "info", "alternates"))
         self.found("objects/info/alternates")

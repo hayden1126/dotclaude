@@ -641,13 +641,33 @@ def git_tamper(common_dir: str) -> list[str]:
     git serve content other than what the remote showed, [] when there is none. Sandboxed Bash
     in any lane can write the common dir. It flags any replace ref (loose under refs/replace/ or
     a packed-refs line), a non-blank objects/info/alternates (the file exists empty in a normal
-    repo) or info/attributes (checkout conversions no config turns off), and an info/grafts or
-    shallow file existing at all. Nothing below common_dir is
+    repo) or info/attributes (checkout conversions no config turns off), an info/grafts or
+    shallow file existing at all, and a commondir of any type: a real common dir never holds
+    one, and git follows one in any git dir, a main checkout's .git too, to name another dir as
+    the common dir (so a caller handed git's answer would check that dir; repo_tamper checks the
+    checkout's own .git as well). Nothing below common_dir is
     followed: each name opens by fd with O_NOFOLLOW (open_dir), so a symlink is a finding in
     itself. Fails closed: whatever can't be read is a finding, never clean. `lane ls`,
     handoff-check and setup.sh (through this file's `git-tamper` command) call it. Each reason
     comes masked (shown): a replace ref's name and a packed-refs line are a lane's to choose."""
     return [shown(r) for r in _tamper(common_dir)]
+
+
+def repo_tamper(repo: "Repo") -> list[str]:
+    """git_tamper for repo's common dir and for the .git dir of its main checkout and of its
+    toplevel where each is a dir: repo.common_dir is git's answer, which a commondir file planted
+    in that .git redirects to a clean dir. A finding outside the common dir names its dir."""
+    seen, reasons = set(), []
+    for d in (repo.common_dir, os.path.join(repo.main, ".git"),
+              os.path.join(repo.toplevel, ".git")):
+        if d != repo.common_dir and not os.path.isdir(d):
+            continue  # a worktree's gitfile, or no checkout there
+        if (key := os.path.realpath(d)) in seen:
+            continue
+        seen.add(key)
+        found = git_tamper(d)
+        reasons += found if d == repo.common_dir else [f"{shown(d)}: {r}" for r in found]
+    return reasons
 
 
 def _tamper(common_dir: str) -> list[str]:
@@ -658,7 +678,7 @@ def _tamper(common_dir: str) -> list[str]:
                 "counted as tampered"]
     checks = (("refs/replace", _replace_refs), ("packed-refs", _packed_replace),
               ("objects/info/alternates", _nonblank), ("info/attributes", _nonblank),
-              ("info/grafts", _exists), ("shallow", _exists))
+              ("info/grafts", _exists), ("shallow", _exists), ("commondir", _exists))
     reasons = []
     try:
         for rel, check in checks:
@@ -769,7 +789,9 @@ def _exists(root: int, rel: str) -> list[str]:
     if st is None:
         return []
     what = {"info/grafts": "git rewrites the parents of the commits it names",
-            "shallow": "git treats the commits it names as having no parents"}[rel]
+            "shallow": "git treats the commits it names as having no parents",
+            "commondir": "git takes the common dir from the path it names, so what git calls "
+                         "the common dir may be another dir than this one"}[rel]
     return [f"{rel} exists{' (a symlink)' if stat.S_ISLNK(st.st_mode) else ''}: {what}"]
 
 

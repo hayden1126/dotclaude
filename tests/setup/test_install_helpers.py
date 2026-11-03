@@ -1103,6 +1103,39 @@ class TamperRefusal(unittest.TestCase):
         self.assertIn("shallow exists", p.stderr)
         self.assertIn("stopped before changing anything", p.stderr)
 
+    def test_a_planted_commondir_naming_a_clean_dir_stops_the_run(self):
+        # git honours a commondir file in any git dir, the main checkout's .git too, so git's own
+        # answer names the clean dir and a check of it passes. A checkout whose .git is a dir is
+        # checked there, where the commondir file is a finding.
+        clean = os.path.join(self.tmp, "clean.git")
+        subprocess.run(["git", "init", "-q", "--bare", clean], env=self.env, check=True)
+        with open(os.path.join(self.repo, ".git", "commondir"), "w") as f:
+            f.write(clean + "\n")
+        named = subprocess.run(["git", "-C", self.repo, "rev-parse", "--path-format=absolute",
+                                "--git-common-dir"], env=self.env, capture_output=True, text=True)
+        self.assertEqual(os.path.realpath(named.stdout.strip()), clean)  # git follows it
+        p = self.run_block()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertNotIn("went on", p.stdout)
+        self.assertIn("commondir", p.stderr)
+        self.assertIn("stopped before changing anything", p.stderr)
+
+    def test_a_worktree_is_checked_where_git_names_its_common_dir(self):
+        # A lane worktree's .git is a gitfile: the common dir git names is checked.
+        env = dict(self.env, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
+                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
+        subprocess.run(["git", "-C", self.repo, "add", "skills"], env=env, check=True)
+        subprocess.run(["git", "-C", self.repo, "commit", "-q", "-m", "c"], env=env, check=True)
+        wt = os.path.join(self.tmp, "wt")
+        subprocess.run(["git", "-C", self.repo, "worktree", "add", "-q", wt], env=env, check=True)
+        p = self.run_block(repo_dir=wt)
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "went on\n", ""))
+        with open(os.path.join(self.repo, ".git", "shallow"), "w"):
+            pass
+        p = self.run_block(repo_dir=wt)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("shallow", p.stderr)
+
     def test_a_dir_git_cant_place_stops_the_run(self):
         p = self.run_block(repo_dir=os.path.join(self.tmp, "not-a-repo"))
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)

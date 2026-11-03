@@ -30,6 +30,23 @@ class LsTripwire(LanesRepo):
         out = self.ls().splitlines()
         self.assertTrue(out[-1].startswith("git: info/grafts"), out)
 
+    def test_a_commondir_in_the_main_checkouts_git_dir_is_a_git_line(self):
+        # git follows a commondir file in the main checkout's .git to another dir, so the common
+        # dir git names may be the planted one: ls checks the checkout's own .git too. One that
+        # names a clean dir loses the lanes config (keyed by the common dir), so ls refuses; it
+        # never shows a clean board.
+        clean = os.path.join(self.tmp, "clean.git")
+        self.git("init", "-q", "--bare", clean, cwd=self.tmp)
+        for text in (".\n", clean + "\n"):
+            with self.subTest(text=text):
+                self.write(os.path.join(self.common, "commondir"), text)
+                p = self.run_lane("ls")
+                lines = [x for x in p.stdout.splitlines() if x.startswith("git: ")]
+                self.assertTrue(p.returncode != 0 or any("commondir" in x for x in lines),
+                                p.stdout + p.stderr)
+                if text == ".\n":
+                    self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

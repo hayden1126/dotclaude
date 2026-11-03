@@ -54,9 +54,15 @@ if command -v flock >/dev/null 2>&1 && mkdir -p "$STATE_DIR" 2>/dev/null; then
 fi
 # The DA15/DA16 tripwire: a sandboxed lane can write the git common dir this checkout shares,
 # and what git reads there decides what this run installs. So any finding of lanelib.py's
-# git-tamper (a replace ref, a non-blank alternates file, grafts, shallow, or a path it can't
-# read), or a common dir git can't name, stops the run here, before changing anything.
-if ! common="$(git -C "$REPO_DIR" rev-parse --path-format=absolute --git-common-dir)"; then
+# git-tamper (a replace ref, a non-blank alternates file, grafts, shallow, a commondir file, or a
+# path it can't read), or a common dir git can't name, stops the run here, before changing
+# anything. git follows a commondir file in any git dir, a main checkout's .git too, so its
+# answer may name a clean dir of a lane's choosing: a checkout whose .git is a dir is checked
+# there, without asking git. A lane worktree's .git is a gitfile, so git's answer is checked, and
+# a commondir file in that dir is a finding too.
+if [[ -d $REPO_DIR/.git ]]; then
+  common="$REPO_DIR/.git"
+elif ! common="$(git -C "$REPO_DIR" rev-parse --path-format=absolute --git-common-dir)"; then
   warn "git can't name the common dir of $REPO_DIR (see above); setup.sh stopped before changing anything"
   exit 1
 fi
