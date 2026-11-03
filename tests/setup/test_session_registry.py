@@ -503,7 +503,7 @@ class Wiring(unittest.TestCase):
 
         start = matchers("SessionStart")
         self.assertEqual(len(start), 1)
-        for source in ("startup", "resume", "clear", "compact"):
+        for source in ("startup", "resume", "clear", "compact", "fork"):
             with self.subTest(source=source):
                 self.assertTrue(start[0] is None or re.fullmatch(start[0], source) or
                                 source in start[0].split("|"))

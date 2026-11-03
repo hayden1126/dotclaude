@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SessionStart(startup|resume|clear|compact), Stop and SessionEnd hook for lanes (skills/lanes).
+# SessionStart (every source), Stop and SessionEnd hook for lanes (skills/lanes).
 # In a lane it tells the session its absolute identity (lane id, the branch or commit its
 # worktree has checked out, claims, port, record) and registers the session in lane.json; on
 # Stop and SessionEnd it mirrors <lane>/.lane/ into the common dir. In the main checkout of a

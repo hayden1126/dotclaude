@@ -20,6 +20,7 @@ from _paths import REPO, load_script
 with open(os.path.join(REPO, "settings.json")) as f:
     S = json.load(f)
 POLICY = load_script("subagent-policy").load_policy()
+SOURCES = load_script("delegation_checks.py").SESSION_START_SOURCES
 
 
 def load_hook(name):
@@ -137,7 +138,7 @@ class Baseline(unittest.TestCase):
                           if "tmux-state.sh" in h["command"]])
         (start,) = [e for e in S["hooks"]["SessionStart"]
                     if any("tmux-state.sh" in h["command"] for h in e["hooks"])]
-        self.assertEqual(start.get("matcher"), "startup|resume|clear")
+        self.assertEqual(start.get("matcher"), "startup|resume|clear|fork")
         every = [c for entries in S["hooks"].values() for e in entries for c in
                  (h["command"] for h in e["hooks"])]
         self.assertFalse([c for c in every if "SoundPlayer" in c])
@@ -201,8 +202,9 @@ class Baseline(unittest.TestCase):
     def test_due_checks_run_at_session_start_and_fail_open(self):
         (entry,) = [e for e in S["hooks"]["SessionStart"]
                     if any("delegation-due.sh" in h["command"] for h in e["hooks"])]
-        # Not on clear or compact: one nudge per session, not one per context reset.
-        self.assertEqual(entry["matcher"], "startup|resume")
+        # Not on clear or compact: one nudge per session, not one per context reset. A fork
+        # (/branch, --fork-session) is a new session.
+        self.assertEqual(entry["matcher"], "startup|resume|fork")
         (h,) = entry["hooks"]
         self.assertNotIn("exit 2", h["command"])
         self.assertLessEqual(h["timeout"], 10)  # the first reply waits for SessionStart hooks
@@ -213,7 +215,7 @@ class Baseline(unittest.TestCase):
         # on compact: nothing it reads changes there. The first reply waits for it.
         (entry,) = [e for e in S["hooks"]["SessionStart"]
                     if any("excluded-check.sh" in h["command"] for h in e["hooks"])]
-        self.assertEqual(entry["matcher"], "startup|resume|clear")
+        self.assertEqual(entry["matcher"], "startup|resume|clear|fork")
         (h,) = entry["hooks"]
         self.assertEqual(h["command"], 'bash "$HOME/.claude/hooks/excluded-check.sh"')
         self.assertLessEqual(h["timeout"], 5)
@@ -222,14 +224,16 @@ class Baseline(unittest.TestCase):
                          [h["command"]])
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "excluded-check.sh"), os.X_OK))
 
-    def test_the_display_blanker_runs_on_every_context_reset_and_fails_open(self):
+    def test_the_display_blanker_runs_on_every_session_start_and_fails_open(self):
         # A repo opts in by git config dotclaude.blankDisplay; the hook writes CLAUDE_ENV_FILE,
         # never a settings env entry (Claude Code's own image paste calls xclip and wl-paste).
-        # The first reply waits for SessionStart hooks.
+        # No matcher: CLAUDE_ENV_FILE is per session id, so a source it skipped (a fork, while
+        # the matcher listed the other four) left that session's Bash on the display. The first reply waits
+        # for SessionStart hooks.
         blank = 'bash "$HOME/.claude/hooks/blank-display.sh"'
         (entry,) = [e for e in S["hooks"]["SessionStart"]
                     if any("blank-display" in h["command"] for h in e["hooks"])]
-        self.assertEqual(entry["matcher"], "startup|resume|clear|compact")
+        self.assertNotIn("matcher", entry)
         (h,) = entry["hooks"]
         self.assertEqual(h["command"], blank)
         self.assertLessEqual(h["timeout"], 5)
@@ -274,7 +278,7 @@ class Baseline(unittest.TestCase):
         hook = 'bash "$HOME/.claude/hooks/sandbox-caches.sh"'
         (entry,) = [e for e in S["hooks"]["SessionStart"]
                     if any("sandbox-caches" in h["command"] for h in e["hooks"])]
-        self.assertEqual(entry["matcher"], "startup|resume|clear|compact")
+        self.assertNotIn("matcher", entry)  # every source, as for blank-display
         (h,) = entry["hooks"]
         self.assertEqual(h["command"], hook)
         self.assertLessEqual(h["timeout"], 5)
@@ -316,7 +320,8 @@ class Baseline(unittest.TestCase):
         check = 'bash "$HOME/.claude/hooks/practices-check.sh"'
         self.assertEqual(commands("PreToolUse", "Edit|Write|MultiEdit").count(check), 1)
         self.assertNotIn(check, commands("PreToolUse", "Bash"))
-        self.assertEqual(commands("SessionStart", "startup|resume|clear|compact").count(check), 1)
+        self.assertEqual(
+            commands("SessionStart", "startup|resume|clear|compact|fork").count(check), 1)
         hooks = [h for entries in S["hooks"].values() for e in entries for h in e["hooks"]
                  if "practices-check" in h["command"]]
         self.assertEqual(len(hooks), 2)
@@ -324,6 +329,31 @@ class Baseline(unittest.TestCase):
             self.assertEqual(h["command"], check)
             self.assertEqual(h["timeout"], 5)
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "practices-check.sh"), os.X_OK))
+
+    def test_every_session_start_hook_decides_every_source(self):
+        # SessionStart has a fork source (/branch, --fork-session; seen firing on 2.1.316), and
+        # every matcher listed only the other four, so a fork ran none of these hooks: its Bash kept the display and the shared caches.
+        # Each hook either has no matcher (it acts the same on any source, so a new one can't
+        # skip it) or lists exactly the sources not skipped below. A new source in the canary's
+        # SESSION_START_SOURCES fails here until each listing hook is decided.
+        skips = {
+            "pass-banner.sh": set(SOURCES) - {"startup"},  # a /pass respawn starts as startup
+            "context-watch.sh": set(SOURCES) - {"compact"},  # only a compact has a stale count
+            "delegation-due.sh": {"clear", "compact"},  # one nudge per session
+            "excluded-check.sh": {"compact"},  # nothing it reads changes there
+            "tmux-state.sh": {"compact"},  # an auto-compact fires mid-turn
+        }
+        for entry in S["hooks"]["SessionStart"]:
+            (h,) = entry["hooks"]
+            script = re.search(r"hooks/([\w.-]+\.sh)", h["command"]).group(1)
+            with self.subTest(script=script):
+                want = set(SOURCES) - skips.get(script, set())
+                if "matcher" not in entry:
+                    self.assertEqual(want, set(SOURCES))
+                    continue
+                listed = entry["matcher"].split("|")
+                self.assertLessEqual(set(listed), set(SOURCES))  # no typo'd source
+                self.assertEqual(set(listed), want)
 
     def test_the_pass_banner_is_wired_on_startup_only(self):
         # A /pass respawn starts as `startup`; the banner shows what the old session said in its
@@ -414,13 +444,16 @@ class Baseline(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(REPO, "hooks", "autopass_toggle.py")))
 
     def test_the_lane_hooks_are_wired_and_fail_open(self):
-        # docs/lanes.md: the guard on every file-tool write; identity on every context reset (a
-        # compact is the net for an unplanned auto-compact), and the mirror on Stop and
-        # SessionEnd. Both deny or speak by JSON, never by exit code.
+        # docs/lanes.md: the guard on every file-tool write; identity on every session start (a
+        # compact is the net for an unplanned auto-compact, a fork is a new session in the lane),
+        # and the mirror on Stop and SessionEnd. Both deny or speak by JSON, never by exit code.
         guard = 'bash "$HOME/.claude/hooks/lane-guard.sh"'
         ident = 'bash "$HOME/.claude/hooks/lane-identity.sh"'
         self.assertEqual(commands("PreToolUse", "Edit|Write|MultiEdit").count(guard), 1)
-        self.assertEqual(commands("SessionStart", "startup|resume|clear|compact").count(ident), 1)
+        self.assertEqual(commands("SessionStart").count(ident), 1)
+        (entry,) = [e for e in S["hooks"]["SessionStart"]
+                    if any(h["command"] == ident for h in e["hooks"])]
+        self.assertNotIn("matcher", entry)
         for event in ("Stop", "SessionEnd"):
             self.assertEqual(commands(event).count(ident), 1, event)
         lane_hooks = [h for entries in S["hooks"].values() for e in entries for h in e["hooks"]

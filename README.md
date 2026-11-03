@@ -351,7 +351,7 @@ need nothing extra.
   `nudge_min` (`skills/delegation/policy.toml` `[deadline]`), its next successful call gets one
   reminder to report, as `additionalContext`. Fails open, so a broken install only loses the
   nudge; `subagent-policy` enforces the stop.
-- **SessionStart (`startup|resume`): `delegation-due.sh`** (in this repo). Runs
+- **SessionStart (`startup|resume|fork`): `delegation-due.sh`** (in this repo). Runs
   `delegation-ledger due --hook`: on the first session of a new Claude Code version it starts the
   quick canary in the background (unit tests, sandbox posture, strings in the binary, and a check
   that the installed watch-guard shim runs clean; no model calls), and once a day it starts
@@ -775,20 +775,19 @@ need nothing extra.
   - **Keyed by session id.** A session that restore resumed after tmux died still gets it.
   - It exits before Python starts when no notice exists, skips a subagent's calls, and fails
     open.
-- **SessionStart (`startup|resume|clear|compact`) / Stop / SessionEnd: `lane-identity.sh`** (in this
-  repo). In a lane it tells the session its lane id, what its worktree has checked out (a branch, or
-  a detached HEAD's commit), claims, ports and record, and registers it in `lane.json`; after a
-  compact it adds "re-read your record". In the main checkout of a lanes repo it prints one board
-  line, and on SessionStart and Stop it runs `lane lead` when the session proves it continues the
-  recorded lead (a resume, a /clear or a /pass successor). On Stop and SessionEnd it mirrors the
-  lane's `.lane/` into the common dir. Silent in a repo with no lanes; fails open (see Lanes,
-  below).
+- **SessionStart (every source) / Stop / SessionEnd: `lane-identity.sh`** (in this repo). In a lane
+  it tells the session its lane id, what its worktree has checked out (a branch, or a detached
+  HEAD's commit), claims, ports and record, and registers it in `lane.json`; after a compact it adds
+  "re-read your record". In the main checkout of a lanes repo it prints one board line, and on
+  SessionStart and Stop it runs `lane lead` when the session proves it continues the recorded lead
+  (a resume, a /clear or a /pass successor). On Stop and SessionEnd it mirrors the lane's `.lane/`
+  into the common dir. Silent in a repo with no lanes; fails open (see Lanes, below).
 - **PreToolUse(`Edit|Write|MultiEdit`): `lane-guard.sh`** (in this repo). In a lanes repo it
   denies a write to another lane's record or to the CLI's data under `<common-dir>/lanes/`, and
   relative identity ("another session", "this session") in a lane record or the root STATUS.md.
   A repo with no lanes is untouched. Fails open; denies go to
   `$XDG_STATE_HOME/dotclaude/lane-guard.log`.
-- **SessionStart (`startup|resume|clear|compact`): `blank-display.sh`** (in this repo). In a repo
+- **SessionStart (every source): `blank-display.sh`** (in this repo). In a repo
   that opts in with `git config dotclaude.blankDisplay true`, read with `--local` so every
   worktree of the repo is covered, it sets `DISPLAY` and `WAYLAND_DISPLAY` empty for Bash through
   `CLAUDE_ENV_FILE`. A headed browser started from Bash then can't open a window in front of you,
@@ -797,7 +796,7 @@ need nothing extra.
   go to `$XDG_STATE_HOME/dotclaude/blank-display.log`. docs/chrome-devtools-wsl.md "Background
   Windows Chrome for probes" has why the vars are empty, not unset, and why it is never a
   settings `env` entry.
-- **SessionStart (`startup|resume|clear|compact`): `sandbox-caches.sh`** (in this repo). It
+- **SessionStart (every source): `sandbox-caches.sh`** (in this repo). It
   gives sandboxed Bash's package managers caches of their own: it creates a dir per tool under
   `~/.cache/claude-sandbox` (the sandbox skips a missing `allowWrite` path) and appends to
   `CLAUDE_ENV_FILE` a line that exports, only when `SANDBOX_RUNTIME` is set (which the sandbox

@@ -1,6 +1,6 @@
 """SessionStart/Stop/SessionEnd hook for lanes; hooks/lane-identity.sh runs it.
 
-SessionStart (startup, resume, clear, compact):
+SessionStart (every source: startup, resume, clear, compact, fork):
   in a lane     tells the model its absolute identity (lane id, what its worktree has checked
                 out: a branch, or a detached HEAD's commit; lane.json's branch, labeled, when
                 HEAD can't be read; claims, ports, record path)
