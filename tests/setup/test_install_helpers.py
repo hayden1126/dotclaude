@@ -1058,6 +1058,51 @@ class ReplaceRefsOff(RecurseSubmodulesOff):
         pass  # G-B's own test; this block has no warning
 
 
+class AutoMaintenanceOff(RecurseSubmodulesOff):
+    """setup.sh sets gc.auto 0 and maintenance.auto false in the global git config on every run
+    (LR3): a fetch, pull or commit outside the sandbox would otherwise run `gc --auto`, whose
+    `git worktree prune` deletes through whatever a lane planted under <common>/worktrees/."""
+
+    MARK = "# git: no automatic maintenance"
+    KEYS = {"gc.auto": "0", "maintenance.auto": "false"}
+
+    def values(self):
+        return {k: subprocess.run(["git", "config", "--file", self.gitconfig, "--get-all", k],
+                                  capture_output=True, text=True).stdout.split()
+                for k in self.KEYS}
+
+    def want(self):
+        return {k: [v] for k, v in self.KEYS.items()}
+
+    def test_it_sets_it_on_every_run(self):
+        for _ in range(2):
+            out = self.run_block()
+            for k, v in self.KEYS.items():
+                self.assertIn(f"set {k} {v} globally", out)
+            self.assertEqual(self.values(), self.want())
+
+    def test_another_value_is_replaced(self):
+        with open(self.gitconfig, "w") as f:
+            f.write("[gc]\n\tauto = 6700\n[gc]\n\tauto = 1\n[maintenance]\n\tauto = true\n"
+                    "[user]\n\tname = me\n")
+        self.run_block()
+        self.assertEqual(self.values(), self.want())
+        with open(self.gitconfig) as f:
+            self.assertIn("name = me", f.read())
+
+    def test_a_false_value_from_an_include_is_written_directly(self):
+        inc = os.path.join(self.home, "off")
+        with open(inc, "w") as f:
+            f.write("[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n")
+        with open(self.gitconfig, "w") as f:
+            f.write(f'[includeIf "gitdir:/"]\n\tpath = {inc}\n')
+        self.run_block()
+        self.assertEqual(self.values(), self.want())
+
+    def test_it_warns_when_submodule_recurse_is_on(self):
+        pass  # G-B's own test; this block has no warning
+
+
 class TamperRefusal(unittest.TestCase):
     """setup.sh's section 0 stops the run before changing anything when lanelib.git_tamper finds
     anything in the common dir of the checkout it installs from, or git can't name that dir

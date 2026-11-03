@@ -645,7 +645,9 @@ def git_tamper(common_dir: str) -> list[str]:
     shallow file existing at all, and a commondir of any type: a real common dir never holds
     one, and git follows one in any git dir, a main checkout's .git too, to name another dir as
     the common dir (so a caller handed git's answer would check that dir; repo_tamper checks the
-    checkout's own .git as well). Nothing below common_dir is
+    checkout's own .git as well). It also flags a symlink directly under worktrees/ (LR3: gc's
+    `worktree prune` deletes through it) and one anywhere under logs/ or a worktree's logs/
+    (LR4: a reflog write follows it). Nothing below common_dir is
     followed: each name opens by fd with O_NOFOLLOW (open_dir), so a symlink is a finding in
     itself. Fails closed: whatever can't be read is a finding, never clean. `lane ls`,
     handoff-check and setup.sh (through this file's `git-tamper` command) call it. Each reason
@@ -678,7 +680,8 @@ def _tamper(common_dir: str) -> list[str]:
                 "counted as tampered"]
     checks = (("refs/replace", _replace_refs), ("packed-refs", _packed_replace),
               ("objects/info/alternates", _nonblank), ("info/attributes", _nonblank),
-              ("info/grafts", _exists), ("shallow", _exists), ("commondir", _exists))
+              ("info/grafts", _exists), ("shallow", _exists), ("commondir", _exists),
+              ("worktrees", _worktree_links), ("logs", _log_links))
     reasons = []
     try:
         for rel, check in checks:
@@ -761,6 +764,79 @@ def _replace_walk(dir_fd: int, name: str, path: str, found: list[str], depth: in
                 _replace_walk(sub, n, f"{path}/{n}", found, depth + 1)
         finally:
             os.close(sub)
+
+
+def _worktree_links(root: int, rel: str) -> list[str]:
+    """LR3: each entry under worktrees/ that is a symlink (a real one is always a dir), and the
+    links under each entry's logs/ (_link_walk). `git worktree prune`, which `gc --auto` runs,
+    deletes the contents of what such a link points at."""
+    if (at := _parent(root, rel)) is None:
+        return []
+    fd, name = at
+    try:
+        st = _lstat(fd, name)
+        if st is None:
+            return []
+        if not stat.S_ISDIR(st.st_mode):
+            kind = "a symlink" if stat.S_ISLNK(st.st_mode) else "not a dir"
+            return [f"{rel} is {kind}: git worktree prune would delete through it"]
+        sub = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+    finally:
+        os.close(fd)
+    found = []
+    try:
+        for n in sorted(os.listdir(sub)):
+            st = _lstat(sub, n)
+            if st is not None and stat.S_ISLNK(st.st_mode):
+                found.append(f"{rel}/{n} is a symlink: an entry there is always a dir, and git "
+                             "worktree prune deletes through a link")
+            elif st is not None and stat.S_ISDIR(st.st_mode):
+                entry = os.open(n, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=sub)
+                try:
+                    _link_walk(entry, "logs", f"{rel}/{n}/logs", found)
+                finally:
+                    os.close(entry)
+    finally:
+        os.close(sub)
+    return found
+
+
+def _log_links(root: int, rel: str) -> list[str]:
+    """LR4: each symlink anywhere under logs/, through which git, run sandbox-off, would append
+    a reflog line to whatever it points at."""
+    if (at := _parent(root, rel)) is None:
+        return []
+    fd, name = at
+    found = []
+    try:
+        _link_walk(fd, name, rel, found)
+    finally:
+        os.close(fd)
+    return found
+
+
+def _link_walk(dir_fd: int, name: str, path: str, found: list[str], depth: int = 0) -> None:
+    """Each symlink at or below name is a finding; a dir that can't be listed is one too."""
+    try:
+        st = _lstat(dir_fd, name)
+        if st is None:
+            return
+        if stat.S_ISLNK(st.st_mode):
+            found.append(f"{path} is a symlink: a reflog write outside the sandbox would follow it")
+            return
+        if not stat.S_ISDIR(st.st_mode):
+            return
+        if depth > 32:
+            raise OSError(errno.ELOOP, "nested too deep")
+        sub = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dir_fd)
+    except OSError as e:
+        found.append(f"{path} can't be checked ({e.strerror or e}): counted as tampered")
+        return
+    try:
+        for n in sorted(os.listdir(sub)):
+            _link_walk(sub, n, f"{path}/{n}", found, depth + 1)
+    finally:
+        os.close(sub)
 
 
 def _packed_replace(root: int, rel: str) -> list[str]:

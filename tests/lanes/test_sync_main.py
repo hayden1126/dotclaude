@@ -155,6 +155,26 @@ class SyncMain(LanesRepo):
         self.assertEqual(self.git("rev-parse", "refs/remotes/origin/main").strip(), proven)
         self.assertTrue(os.path.isdir(os.path.join(self.verified, "main.git")))
 
+    def test_every_fetch_skips_auto_maintenance(self):
+        # LR3: a fetch's own `gc --auto` would run `worktree prune` sandbox-off; sync_env turns
+        # it off by config and each fetch by its flag too.
+        self.land({"hooks/x.sh": REAL})
+        fetches = []
+
+        def patches(mod):
+            real = mod.sgit
+
+            def sgit(args, *a, **k):
+                if args[0] == "fetch":
+                    fetches.append(args)
+                return real(args, *a, **k)
+            return [mock.patch.object(mod, "sgit", sgit)]
+        rc, out, err = self.sync_in("7", patches=patches)
+        self.assertEqual(rc, 0, out + err)
+        self.assertEqual(len(fetches), 3, fetches)
+        for args in fetches:
+            self.assertIn("--no-auto-maintenance", args)
+
     def test_already_up_to_date_is_a_clean_no_op(self):
         proven = self.land({"hooks/x.sh": REAL})
         self.assertEqual(self.sync("7").returncode, 0)
@@ -858,6 +878,35 @@ class CommitGraphOff(unittest.TestCase):
             env = dict(os.environ)
         self.assertIn("'core.commitGraph'='false'", env["GIT_CONFIG_PARAMETERS"])
         self.assertEqual(self.ancestor(env), 1)
+
+
+class NoAutoMaintenance(CommitGraphOff):
+    """LR3: no git sync-main or `done`/`park` runs may start `gc --auto`, whose `worktree prune`
+    deletes through a link planted under <common>/worktrees/. sync_env and harden_git_env turn
+    gc.auto and maintenance.auto off, whatever the user's config holds."""
+
+    def read(self, key, env):
+        return subprocess.run(["git", "config", "--get", key], cwd=self.work,
+                              env=dict(self.env, **env), capture_output=True,
+                              text=True).stdout.strip()
+
+    def test_sync_env_turns_auto_maintenance_off(self):
+        self.git("config", "gc.auto", "1")
+        self.git("config", "maintenance.auto", "true")
+        env = load_lane_script().sync_env(self.common)
+        self.assertEqual(int(env["GIT_CONFIG_COUNT"]),
+                         sum(k.startswith("GIT_CONFIG_KEY_") for k in env))
+        self.assertEqual(self.read("gc.auto", env), "0")
+        self.assertEqual(self.read("maintenance.auto", env), "false")
+
+    def test_harden_git_env_turns_auto_maintenance_off(self):
+        self.git("config", "gc.auto", "1")
+        mod = load_lane_script()
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            mod.harden_git_env(mock.Mock(common_dir=self.common))
+            env = dict(os.environ)
+        self.assertEqual(self.read("gc.auto", env), "0")
+        self.assertEqual(self.read("maintenance.auto", env), "false")
 
 
 if __name__ == "__main__":

@@ -851,8 +851,14 @@ finding.
 **The tripwire.** sync-main, `lane ls`, handoff-check and setup.sh each check the shared git dir
 for signs it may serve content no remote showed (DA15/DA16). `lane ls` prints a `git:` line per
 finding, handoff-check fails with one FAIL per finding in a lanes repo, and setup.sh refuses to
-install. setup.sh also sets `core.useReplaceRefs false` in the global git config. A finding goes
-to Hayden: find out who made it before anything else runs git in that repo.
+install. It also flags a symlink directly under `worktrees/` (an entry there is always a dir, and
+`git worktree prune` deletes through a link: LR3) and one anywhere under `logs/` or a worktree's
+`logs/` (a reflog write outside the sandbox follows it: LR4). setup.sh also sets
+`core.useReplaceRefs false`, `gc.auto 0` and `maintenance.auto false` in the global git config:
+`gc --auto`, which a fetch, pull, merge or commit otherwise starts, runs that prune (LR3). The
+lane CLI's own fetches (`new`, `done`, `park`, sync-main) set both keys and pass
+`--no-auto-maintenance` themselves, so they hold before setup has run. A finding goes to Hayden:
+find out who made it before anything else runs git in that repo.
 
 **Residuals (accepted).**
 

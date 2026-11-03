@@ -415,6 +415,15 @@ fi
 # global file itself, like G-B's key above.
 git config --global --replace-all core.useReplaceRefs false
 say "git: set core.useReplaceRefs false globally (DA15/DA16)"
+# git: no automatic maintenance (LR3). A fetch, pull, merge or commit runs `gc --auto` once
+# enough loose objects pile up, and gc runs `git worktree prune`, which deletes the contents of
+# whatever an entry under <common>/worktrees/ points at. Any lane can plant both, and git run
+# outside the sandbox would then delete with no sandbox. Set on every run, in the global file
+# itself, like the keys above; `git gc` and `git maintenance run` by hand still work.
+git config --global --replace-all gc.auto 0
+say "git: set gc.auto 0 globally (LR3)"
+git config --global --replace-all maintenance.auto false
+say "git: set maintenance.auto false globally (LR3)"
 
 # ---------------------------------------------------------------------------
 # 5. Status line widget (~/.config/ccstatusline)

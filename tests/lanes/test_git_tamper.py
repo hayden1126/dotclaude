@@ -1,9 +1,15 @@
 """`lane ls` shows the DA15/DA16 tripwire (lanelib.git_tamper) for the repo's common dir: a
 `git: <reason>` line per finding, after the install line. It warns: the exit stays 0."""
+import hashlib
 import os
+import shutil
+import subprocess
 import unittest
+import zlib
+from unittest import mock
 
 from _fixture import LanesRepo
+from test_cli import load_lane_script
 
 
 class LsTripwire(LanesRepo):
@@ -46,6 +52,73 @@ class LsTripwire(LanesRepo):
                                 p.stdout + p.stderr)
                 if text == ".\n":
                     self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+
+
+class NoAutoCleanup(LanesRepo):
+    """LR3: a lane plants enough loose objects for `gc --auto` plus a symlink under
+    <common>/worktrees/. The next fetch outside the sandbox runs gc, whose `git worktree prune`
+    deletes what the link points at. The lane CLI's fetches (new, done, park) never run it: the
+    control, a plain fetch in a copy of the checkout, empties its victim; the CLI's leaves
+    its own whole. gc.autoDetach false keeps gc in the foreground, so the result is final when
+    the fetch returns."""
+
+    def plant(self, checkout):
+        """A victim dir with a file, a worktrees/ link to it and 30 loose objects in objects/17/
+        (gc --auto counts that one dir: more than 27 there reads as over its 6700 default)."""
+        common = os.path.join(checkout, ".git")
+        victim = os.path.join(self.tmp, f"victim-{os.path.basename(checkout)}")
+        os.makedirs(victim)
+        self.write(os.path.join(victim, "keep.txt"), "mine\n")
+        os.makedirs(os.path.join(common, "worktrees"), exist_ok=True)
+        os.symlink(victim, os.path.join(common, "worktrees", "x"))
+        self.git("config", "gc.autoDetach", "false", cwd=checkout)
+        n = made = 0
+        while made < 30:
+            n += 1
+            body = f"loose {n}\n".encode()
+            raw = b"blob %d\0" % len(body) + body
+            sha = hashlib.sha1(raw).hexdigest()
+            if sha.startswith("17"):
+                path = os.path.join(common, "objects", "17", sha[2:])
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "wb") as f:
+                    f.write(zlib.compress(raw))
+                made += 1
+        return victim
+
+    def test_the_lane_clis_fetches_leave_a_planted_worktrees_link_alone(self):
+        copy = os.path.join(self.tmp, "control")
+        shutil.copytree(self.main, copy, symlinks=True)
+        control = self.plant(copy)
+        subprocess.run(["git", "fetch", "-q", "origin"], cwd=copy, env=self.env,
+                       capture_output=True, timeout=60)
+        self.assertEqual(os.listdir(control), [], "the control's fetch didn't prune")
+        # A commit only origin has, so park's remote_tip must fetch it; made before the plant,
+        # since this commit's own gc would prune too.
+        self.commit("more.txt", "more\n")
+        self.git("push", "-q", "origin", "HEAD:refs/heads/other")
+        self.git("update-ref", "-d", "refs/remotes/origin/other")
+        tip = self.git("rev-parse", "HEAD").strip()
+        self.git("reset", "-q", "--hard", "HEAD~1")
+        self.git("reflog", "expire", "--expire=now", "--all")
+        self.git("prune", "--expire=now")
+        victim = self.plant(self.main)
+        mod = load_lane_script()
+        here = os.getcwd()
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            os.chdir(self.main)
+            try:
+                repo = mod.lanes_repo()
+                for name, call in (
+                        ("park's remote_tip", lambda: mod.remote_tip(repo, "origin", "other", "x")),
+                        ("done's fetch", lambda: mod.fetch(repo)),
+                        ("new's fetched_base", lambda: mod.fetched_base(repo, repo.config()))):
+                    with self.subTest(name):
+                        self.assertTrue(call())
+                        self.assertEqual(os.listdir(victim), ["keep.txt"])
+            finally:
+                os.chdir(here)
+        self.assertEqual(self.git("rev-parse", "refs/remotes/origin/other").strip(), tip)
 
 
 if __name__ == "__main__":

@@ -940,6 +940,57 @@ class GitTamper(unittest.TestCase):
                         os.unlink(path)
                 self.assertEqual(lanelib.git_tamper(self.common), [])
 
+    def test_a_symlink_under_worktrees_is_found(self):
+        # LR3: an entry there is always a real dir; gc's `worktree prune` deletes through a link.
+        outside = os.path.join(self.tmp, "outside")
+        os.makedirs(outside)
+        self.git("worktree", "add", "-q", "-b", "wt", os.path.join(self.tmp, "wt"))
+        self.assertEqual(lanelib.git_tamper(self.common), [])
+        link = os.path.join(self.common, "worktrees", "x")
+        for target in (outside, "missing"):
+            with self.subTest(target=target):
+                os.symlink(target, link)
+                try:
+                    self.found("worktrees/x")
+                finally:
+                    os.unlink(link)
+                self.assertEqual(lanelib.git_tamper(self.common), [])
+        os.rename(os.path.join(self.common, "worktrees"), os.path.join(self.tmp, "wts"))
+        os.symlink(os.path.join(self.tmp, "wts"), os.path.join(self.common, "worktrees"))
+        self.found("worktrees")
+
+    def test_a_symlink_anywhere_under_logs_is_found(self):
+        # LR4: git appends a reflog line through a link planted at a reflog's path, sandbox-off.
+        self.git("worktree", "add", "-q", "-b", "wt", os.path.join(self.tmp, "wt"))
+        self.git("commit", "-q", "--allow-empty", "-m", "wt", cwd=os.path.join(self.tmp, "wt"))
+        self.assertEqual(lanelib.git_tamper(self.common), [])
+        victim = self.write("victim", "", root=self.tmp)
+        for rel in ("logs/HEAD", "logs/refs/heads/main", "logs/refs/remotes/o/deep/x",
+                    "logs/refs", "worktrees/wt/logs/HEAD", "worktrees/wt/logs"):
+            with self.subTest(rel=rel):
+                path = os.path.join(self.common, rel)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                moved = path + ".moved"
+                if os.path.lexists(path):
+                    os.rename(path, moved)
+                os.symlink(victim, path)
+                try:
+                    self.found(rel)
+                finally:
+                    os.unlink(path)
+                    if os.path.lexists(moved):
+                        os.rename(moved, path)
+                self.assertEqual(lanelib.git_tamper(self.common), [])
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads a mode-000 dir")
+    def test_an_unreadable_logs_dir_fails_closed(self):
+        path = os.path.join(self.common, "logs", "refs")
+        os.chmod(path, 0)
+        try:
+            self.found("logs/refs")
+        finally:
+            os.chmod(path, 0o755)
+
     def test_a_fifo_alternates_is_found_without_blocking(self):
         os.mkfifo(os.path.join(self.common, "objects", "info", "alternates"))
         self.found("objects/info/alternates")

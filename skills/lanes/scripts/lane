@@ -168,6 +168,11 @@ OVERLAP_SHOWN = 5  # files each overlap line under the board names
 # Every git behind the overlap flag: no transport at all, so not even a partial clone's lazy
 # fetch runs a program its config names (install-state.py commits_past's set)
 OVERLAP_ENV = {"GIT_NO_LAZY_FETCH": "1", "GIT_ALLOW_PROTOCOL": "none"}
+# Every fetch the CLI runs, sandbox-off: never `gc --auto` (LR3), whose `worktree prune` deletes
+# through a link any lane can plant under <common>/worktrees/. Keys and flag both, so it holds
+# before setup.sh's global keys are installed.
+NO_AUTO_GC = ("-c", "gc.auto=0", "-c", "maintenance.auto=false")
+FETCH_FLAGS = ("--no-auto-maintenance", "--quiet", "--no-recurse-submodules")
 # init's defaults and open's flags for claude's --model and --effort -> each one's check
 PICKS = {"model": lanelib.model_problem, "effort": lanelib.effort_problem}
 # new's brief flags -> the <placeholder> each fills in templates/LANE.md
@@ -364,7 +369,7 @@ def stopped_note(who: str, session: dict) -> str:
 
 
 def fetch(repo: Repo) -> bool:
-    p = git(["fetch", "--quiet", "--no-recurse-submodules", "origin"], repo.toplevel)
+    p = git([*NO_AUTO_GC, "fetch", *FETCH_FLAGS, "origin"], repo.toplevel)
     if p.returncode != 0:
         line = (p.stderr.strip().splitlines() or ["unknown error"])[-1]
         warn(f"fetch skipped ({line}); using the local remote-tracking refs")
@@ -424,7 +429,7 @@ def fetched_base(repo: Repo, cfg: dict) -> str:
     shas = [f[0] for f in map(str.split, p.stdout.splitlines()) if len(f) == 2 and f[1] == head]
     if len(shas) != 1 or not lanelib.SHA_RE.fullmatch(shas[0]):
         raise LaneError(f"the remote has no {head} for base {remote}/{branch}")
-    p = git(["fetch", "--quiet", "--no-recurse-submodules", remote], repo.toplevel)
+    p = git([*NO_AUTO_GC, "fetch", *FETCH_FLAGS, remote], repo.toplevel)
     if p.returncode != 0:
         raise failed("fetch", p)
     if rev(repo, shas[0]) != shas[0]:
@@ -4755,10 +4760,11 @@ def harden_git_env(repo: Repo) -> None:
     # and the inherited ones before it, so nothing inherited turns it back on. Nor takes a
     # commit's parents from objects/info/commit-graph, which sandboxed Bash can write too and
     # which exists legitimately, so the tripwire can't flag it: a planted parent could make an
-    # unpushed HEAD read as an ancestor of the remote's.
+    # unpushed HEAD read as an ancestor of the remote's. Nor runs `gc --auto` (LR3): its
+    # `worktree prune` deletes through a link a lane plants under <common>/worktrees/.
     os.environ["GIT_CONFIG_PARAMETERS"] = " ".join(filter(None, [
         os.environ.get("GIT_CONFIG_PARAMETERS", "").strip(), "'core.fsmonitor'='false'",
-        "'core.commitGraph'='false'"]))
+        "'core.commitGraph'='false'", "'gc.auto'='0'", "'maintenance.auto'='false'"]))
     # Nor reads an object through refs/replace or <common>/info/grafts, which sandboxed Bash can
     # write: a replaced commit, or a grafted parent, could make an unpushed HEAD read as an
     # ancestor of the remote's. GIT_NO_REPLACE_OBJECTS stops only the first.
@@ -5020,7 +5026,7 @@ def remote_tip(repo: Repo, remote: str, branch: str, lane_id: str) -> str | None
         raise LaneError(f"{remote}'s answer for {head} is no single commit, so lane {lane_id}'s "
                         "push can't be checked")
     if rev(repo, shas[0]) != shas[0]:
-        p = git(["fetch", "--quiet", "--no-recurse-submodules", remote], repo.toplevel)
+        p = git([*NO_AUTO_GC, "fetch", *FETCH_FLAGS, remote], repo.toplevel)
         if p.returncode != 0:
             line = (p.stderr.strip().splitlines() or ["unknown error"])[-1]
             raise LaneError(shown(f"can't fetch {remote} ({line}), so lane {lane_id}'s push "
@@ -5228,13 +5234,16 @@ def sync_env(git_dir: str | None = None, **extra: str) -> dict[str, str]:
            "GIT_NO_REPLACE_OBJECTS": "1", "GIT_GRAFT_FILE": os.devnull,
            "GIT_ALLOW_PROTOCOL": "https:ssh:file", "GIT_OPTIONAL_LOCKS": "0",
            "GIT_ATTR_NOSYSTEM": "1",
-           "GIT_CONFIG_COUNT": "5",
+           "GIT_CONFIG_COUNT": "7",
            "GIT_CONFIG_KEY_0": "core.hooksPath", "GIT_CONFIG_VALUE_0": os.devnull,
            "GIT_CONFIG_KEY_1": "core.fsmonitor", "GIT_CONFIG_VALUE_1": "false",
            "GIT_CONFIG_KEY_2": "core.useReplaceRefs", "GIT_CONFIG_VALUE_2": "false",
            "GIT_CONFIG_KEY_3": "core.attributesFile", "GIT_CONFIG_VALUE_3": os.devnull,
            # parents from the commits themselves, never a lane-writable commit-graph
-           "GIT_CONFIG_KEY_4": "core.commitGraph", "GIT_CONFIG_VALUE_4": "false"}
+           "GIT_CONFIG_KEY_4": "core.commitGraph", "GIT_CONFIG_VALUE_4": "false",
+           # no `gc --auto` (LR3): its `worktree prune` deletes through a planted link
+           "GIT_CONFIG_KEY_5": "gc.auto", "GIT_CONFIG_VALUE_5": "0",
+           "GIT_CONFIG_KEY_6": "maintenance.auto", "GIT_CONFIG_VALUE_6": "false"}
     if git_dir:
         env["GIT_DIR"] = git_dir
     env.update(extra)
@@ -5524,8 +5533,7 @@ def fill_store(repo: Repo, store: str, remote: str, base: str, branch: str, pinn
     must still be the pinned sha."""
     env = sync_env(store)
     url = remote_url(repo, remote)
-    fetch = ["fetch", "--quiet", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head",
-             "--end-of-options"]
+    fetch = ["fetch", *FETCH_FLAGS, "--no-tags", "--no-write-fetch-head", "--end-of-options"]
     sgit([*fetch, url, f"+refs/heads/{base}:refs/remotes/base"], store, env,
          f"the fetch of {remote}/{base} from {url}", wait=SYNC_FETCH_WAIT)
     on = sgit(["merge-base", "--is-ancestor", proven, "refs/remotes/base"], store, env,
@@ -5708,8 +5716,8 @@ def publish(repo: Repo, store: str, remote: str, base: str, branch: str, proven:
     """Fetch the merge from the store into the shared repo, so later git commands find its
     objects, and point the base's refs at proven, for display only: nothing trusts them."""
     env = sync_env(repo.common_dir)
-    sgit(["fetch", "--quiet", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head",
-          "--end-of-options", f"file://{store}", "refs/heads/merged"], repo.common_dir, env,
+    sgit(["fetch", *FETCH_FLAGS, "--no-tags", "--no-write-fetch-head", "--end-of-options",
+          f"file://{store}", "refs/heads/merged"], repo.common_dir, env,
          "the fetch of the merge into the shared repo")
     refs = [f"refs/remotes/{remote}/{base}"]
     if branch != base:
