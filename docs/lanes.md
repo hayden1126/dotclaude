@@ -854,6 +854,13 @@ to Hayden: find out who made it before anything else runs git in that repo.
 - When no lane holds the install, the checkout is a mix of old and new verified files while the
   files move. Anything that runs from it in that moment sees the mix.
 - `__pycache__` dirs and untracked files at the checkout's root are not compared.
+- The store's path (DA12). sync-main opens the stores' dir by fd from the home dir, never through
+  a link, holds it open for the run, and before each git step checks that the path still leads
+  there. git takes the path, though, so a sandbox that can write the home dir can still rename an
+  ancestor aside in the span between that check and git's own lookups, or keep a writer into the
+  dir it recreates. Before the checkout, sync-main also holds the store's config to the bytes
+  `git init` wrote and runs the tripwire on the store, so a filter or attributes planted there
+  refuse.
 - A corrupt object in the shared repo is reported by `git fsck`, not repaired. The checkout is
   still built from the store.
 - A shallow clone fails the tripwire, so sync-main, handoff-check and setup.sh refuse in one.

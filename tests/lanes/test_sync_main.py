@@ -620,6 +620,68 @@ class SyncMain(LanesRepo):
         self.assertIn("main.git", self.guard())
         self.assertEqual(os.listdir(outside), [])
 
+    def test_a_store_changed_before_the_checkout_refuses(self):
+        # The checkout reads the store as its common dir: a filter's smudge in its config runs on
+        # what is checked out, and its info/attributes picks the files. A writer into the stores'
+        # dir (DA12) changes either after the store is made: the checkout must refuse untouched.
+        self.land({"hooks/x.sh": REAL})
+        planted = os.path.join(self.tmp, "planted")
+        store = os.path.join(self.verified, "main.git")
+        smudge = f'[filter "x"]\n\tsmudge = "touch {planted}; cat"\n'
+        for name, files in (("config", {"config": smudge}),
+                            ("attributes", {"info/attributes": "* filter=x\n"}),
+                            ("both", {"config": smudge, "info/attributes": "* filter=x\n"})):
+            with self.subTest(name):
+                def patches(mod):
+                    real = mod.publish
+
+                    def tamper(*a, **k):
+                        out = real(*a, **k)
+                        for rel, text in files.items():
+                            os.makedirs(os.path.dirname(os.path.join(store, rel)), exist_ok=True)
+                            with open(os.path.join(store, rel), "a") as f:
+                                f.write(text)
+                        return out
+                    return [mock.patch.object(mod, "publish", tamper)]
+                head = self.git("rev-parse", "refs/heads/lead").strip()
+                files_before = self.state()[2]
+                rc, out, err = self.sync_in("7", patches=patches)
+                self.assertEqual(rc, 1, out + err)
+                self.assertIn("changed since this run made it", err)
+                self.assertNotIn("verified;", out)
+                self.assertFalse(os.path.exists(planted))
+                self.assertEqual(self.git("rev-parse", "refs/heads/lead").strip(), head)
+                self.assertEqual(self.state()[2], files_before)
+
+    def test_a_link_swapped_in_at_an_ancestor_is_never_followed(self):
+        # After the stores' dir is opened, ~/.local/state becomes a link to a copy elsewhere (a
+        # sandbox that can write the home dir, DA12): no later step may write the store there.
+        self.land({"hooks/x.sh": REAL})
+        state = os.path.join(self.home, ".local", "state")
+        elsewhere = os.path.join(self.tmp, "elsewhere")
+        copied = os.path.join(elsewhere, "dotclaude", "verified", "main.git")
+
+        def patches(mod):
+            real = mod.fresh_store
+
+            def swap(*a, **k):
+                out = real(*a, **k)
+                shutil.copytree(state, elsewhere, symlinks=True)
+                os.rename(state, state + ".aside")
+                os.symlink(elsewhere, state)
+                return out
+            return [mock.patch.object(mod, "fresh_store", swap)]
+        before = self.state()
+        rc, out, err = self.sync_in("7", patches=patches)
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("no longer leads", err)
+        self.assertNotIn("verified;", out)
+        self.assertEqual(os.listdir(os.path.join(copied, "refs", "heads")), [])
+        self.assertFalse(any(os.scandir(os.path.join(copied, "objects", "pack"))))
+        os.unlink(state)
+        os.rename(state + ".aside", state)
+        self.assertEqual(self.state(), before)
+
     # --- only the main checkout, only with a PR number ----------------------------------------
 
     def test_a_bare_sync_main_refuses_everywhere(self):

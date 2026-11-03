@@ -708,7 +708,7 @@ def _lstat(dir_fd: int, name: str) -> os.stat_result | None:
         return None
 
 
-def _read(root: int, rel: str) -> bytes | None:
+def read_nofollow(root: int, rel: str) -> bytes | None:
     """rel's bytes, None when it is missing. A symlink or anything but a regular file raises."""
     if (at := _parent(root, rel)) is None:
         return None
@@ -764,7 +764,7 @@ def _replace_walk(dir_fd: int, name: str, path: str, found: list[str], depth: in
 
 
 def _packed_replace(root: int, rel: str) -> list[str]:
-    data = _read(root, rel)
+    data = read_nofollow(root, rel)
     return [f"{rel} line {n} names a replace ref: {line.decode(errors='replace')[:120]}"
             for n, line in enumerate((data or b"").splitlines(), 1) if b"refs/replace/" in line]
 
@@ -774,7 +774,7 @@ NONBLANK = {"objects/info/alternates": "git also reads objects from the stores i
 
 
 def _nonblank(root: int, rel: str) -> list[str]:
-    data = _read(root, rel)
+    data = read_nofollow(root, rel)
     return [f"{rel} is not empty: {NONBLANK[rel]}"] if data and data.strip() else []
 
 

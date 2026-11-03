@@ -5220,7 +5220,10 @@ def sync_env(git_dir: str | None = None, **extra: str) -> dict[str, str]:
     global or system config, no hooks (a fetch or update-ref runs reference-transaction from the
     common dir's hooks/, which any lane can write), no fsmonitor, no replace objects or grafts,
     no attributes but the tree's own (the global file is read even with GIT_CONFIG_GLOBAL off,
-    so core.attributesFile names /dev/null), and only the https, ssh and file transports."""
+    so core.attributesFile names /dev/null), and only the https, ssh and file transports. No
+    filter driver either but the one config left, the git dir's own: with no global or system
+    config, a filter.<x>.smudge can come only from there, and StoreDir.intact holds the store's
+    config, the checkout's common dir, to the bytes git init wrote."""
     env = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
            "GIT_NO_REPLACE_OBJECTS": "1", "GIT_GRAFT_FILE": os.devnull,
            "GIT_ALLOW_PROTOCOL": "https:ssh:file", "GIT_OPTIONAL_LOCKS": "0",
@@ -5337,49 +5340,122 @@ def store_guard(name: str):
                               f"\"{VERIFIED_EDIT}\" to permissions.deny and \"{VERIFIED_DENY}\" "
                               "to sandbox.filesystem.denyWrite (dotclaude's setup.sh installs "
                               "both): nothing was created"))
-    verified = os.path.join(state, "verified")
-    os.makedirs(state, mode=0o700, exist_ok=True)  # its realpath is checked above
-    dfd = verified_dir(state, verified)
+    verified = os.path.join(home, VERIFIED_REL)
+    dfd = verified_dir(home, verified)
     try:
-        try:
-            st = os.stat(f"{name}.git", dir_fd=dfd, follow_symlinks=False)
-        except FileNotFoundError:
-            st = None
-        if st is not None and not (stat.S_ISDIR(st.st_mode) and st.st_uid == os.geteuid()):
-            raise LaneError(f"{verified}/{name}.git is not a dir of yours (a link, a file or "
-                            "another owner's): nothing was written. Find out who made it")
+        StoreDir(home, dfd, name).own_store()
         fd = os.open(".lock", os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
                      0o600, dir_fd=dfd)
-    finally:
+    except BaseException:
         os.close(dfd)
+        raise
     try:
         if not try_lock(fd):
             raise LaneError(f"another lane sync-main holds {verified}/.lock: rerun once it ends")
-        yield os.path.join(verified, f"{name}.git")
+        yield StoreDir(home, dfd, name)
     finally:
         os.close(fd)
-
-
-def verified_dir(state: str, verified: str) -> int:
-    """fd of the stores' dir, made (0700) if missing, never through a link: a link, a file or a
-    dir another user owns at that name refuses."""
-    sfd = os.open(state, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
-    try:
-        with contextlib.suppress(FileExistsError):
-            os.mkdir("verified", 0o700, dir_fd=sfd)
-        try:
-            dfd = os.open("verified", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
-                          dir_fd=sfd)
-        except OSError as e:
-            raise LaneError(f"{verified} is not a dir ({e.strerror or e}): a link or a file there "
-                            "could lead the store elsewhere: nothing was written. Find out who "
-                            "made it")
-    finally:
-        os.close(sfd)
-    if os.fstat(dfd).st_uid != os.geteuid():
         os.close(dfd)
+
+
+def verified_dir(home: str, verified: str) -> int:
+    """fd of the stores' dir. Each of its names below the real home dir (VERIFIED_REL) opens by fd
+    with O_NOFOLLOW and is made (0700) if missing, so a link at any of them, even one swapped in
+    mid-walk, refuses instead of leading the stores elsewhere. A dir another user owns refuses."""
+    fd = os.open(home, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        for d in VERIFIED_REL.split("/"):
+            with contextlib.suppress(FileExistsError):
+                os.mkdir(d, 0o700, dir_fd=fd)
+            try:
+                nxt = os.open(d, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                              dir_fd=fd)
+            except OSError as e:
+                raise LaneError(f"{verified} is not reached through dirs alone ({d}: "
+                                f"{e.strerror or e}): a link or a file there could lead the store "
+                                "elsewhere: nothing was written. Find out who made it")
+            os.close(fd)
+            fd = nxt
+    except BaseException:
+        os.close(fd)
+        raise
+    if os.fstat(fd).st_uid != os.geteuid():
+        os.close(fd)
         raise LaneError(f"{verified} belongs to another user: nothing was written")
-    return dfd
+    return fd
+
+
+class StoreDir:
+    """A sync-main store: the stores' dir held open by fd (dfd) for the whole run, and the store's
+    name in it. git takes paths, so each git step goes by `path`; recheck() before a step refuses
+    unless that path still leads, through dirs alone, to the dir held open. What stays open is the
+    span between a recheck and git's own lookups, and an ancestor renamed aside by a sandbox that
+    can write the home dir (DA12): docs/lanes.md's Residuals name both."""
+
+    def __init__(self, home: str, dfd: int, name: str):
+        self.home, self.dfd, self.name = home, dfd, f"{name}.git"
+        self.verified = os.path.join(home, VERIFIED_REL)
+        self.path = os.path.join(self.verified, self.name)
+
+    def own_store(self) -> None:
+        """Refuse a link, a file or another owner's dir at the store's name."""
+        try:
+            st = os.stat(self.name, dir_fd=self.dfd, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        if not (stat.S_ISDIR(st.st_mode) and st.st_uid == os.geteuid()):
+            raise LaneError(f"{self.path} is not a dir of yours (a link, a file or another "
+                            "owner's): nothing was written. Find out who made it")
+
+    def recheck(self, written: str) -> None:
+        """Refuse unless the stores' path still opens, by fd with O_NOFOLLOW from the home dir, to
+        the dir held open since the first check, and the store there is a dir of ours. written says
+        what the run wrote so far."""
+        why = None
+        try:
+            fd = lanelib.open_dir(self.home, VERIFIED_REL)
+        except OSError as e:
+            why = e.strerror or str(e)
+        else:
+            try:
+                a, b = os.fstat(fd), os.fstat(self.dfd)
+                if (a.st_dev, a.st_ino) != (b.st_dev, b.st_ino):
+                    why = "another dir is there now"
+            finally:
+                os.close(fd)
+        if why:
+            raise LaneError(f"{self.verified} no longer leads, through dirs alone, to the stores' "
+                            f"dir this run opened ({why}): a link or a moved dir on the way would "
+                            f"hand git another store. {written} Find out what moved it")
+        self.own_store()
+
+    def read(self, rel: str) -> bytes | None:
+        """rel's bytes in the store, opened by fd from the held dir without following a link; None
+        when it is missing."""
+        root = lanelib.open_dir(self.dfd, self.name)
+        try:
+            return lanelib.read_nofollow(root, rel)
+        finally:
+            os.close(root)
+
+    def intact(self, config: bytes | None) -> None:
+        """Refuse unless the store's config is the bytes fresh_store read back after git init
+        (a filter.<x>.smudge there would run on checkout) and lanelib.git_tamper finds nothing in
+        it: no info/attributes but a blank one, no commondir, alternates, replace refs, grafts or
+        shallow. The checkout reads the store as its common dir."""
+        what = "Nothing in the checkout was written: rerun"
+        self.recheck(what)
+        try:
+            now = self.read("config")
+        except OSError as e:
+            now = f"unreadable ({e.strerror or e})".encode()
+        found = ([] if now == config and config is not None
+                 else ["config is not what git init wrote"])
+        found += lanelib.git_tamper(self.path)
+        if found:
+            raise LaneError(f"the store {self.path} changed since this run made it:"
+                            + "".join(f"\n  {shown(f)}" for f in found)
+                            + f"\n{what} once you find out who wrote it")
 
 
 def proven_sha(repo: Repo, n: int, base: str) -> str:
@@ -5413,20 +5489,19 @@ def proven_sha(repo: Repo, n: int, base: str) -> str:
     return oid
 
 
-def fresh_store(store: str) -> None:
-    """An empty bare repo at store: the old one removed by name under its parent's fd, never
-    followed (remove_tree's pattern), and no template copied in."""
-    parent, name = os.path.split(store)
-    fd = lanelib.open_dir(parent, "")
-    try:
-        if lanelib.real_dir_at(fd, name):
-            shutil.rmtree(name, dir_fd=fd)
-        elif lexists_at(fd, name):
-            os.unlink(name, dir_fd=fd)
-    finally:
-        os.close(fd)
-    sgit(["init", "--quiet", "--bare", "--template=", store], parent, sync_env(),
-         f"creating the store {store}")
+def fresh_store(store: StoreDir) -> bytes | None:
+    """An empty bare repo at store: the old one removed by name under the held dir's fd, never
+    followed (remove_tree's pattern), and no template copied in. Returns its config's bytes as
+    git init wrote them, for StoreDir.intact to hold the store to before the checkout."""
+    fd, name = store.dfd, store.name
+    if lanelib.real_dir_at(fd, name):
+        shutil.rmtree(name, dir_fd=fd)
+    elif lexists_at(fd, name):
+        os.unlink(name, dir_fd=fd)
+    store.recheck("Nothing was written.")
+    sgit(["init", "--quiet", "--bare", "--template=", store.path], store.verified, sync_env(),
+         f"creating the store {store.path}")
+    return store.read("config")
 
 
 def remote_url(repo: Repo, remote: str) -> str:
@@ -5737,9 +5812,11 @@ def cmd_sync_main(args) -> None:
         raise LaneError(f"{repo.toplevel} has uncommitted changes:{named_paths(dirty)}\nCommit "
                         "them first: nothing was written")
     remote, base = base_parts(repo, cfg)
-    with store_guard("main") as store:
+    with store_guard("main") as held:
+        store = held.path
         proven = proven_sha(repo, args.pr, base)
-        fresh_store(store)
+        config = fresh_store(held)
+        held.recheck("Nothing was written.")
         fill_store(repo, store, remote, base, branch, pinned, proven)
         label = f"PR #{args.pr} ({proven[:12]})"
         env = sync_env(store)
@@ -5767,12 +5844,16 @@ def cmd_sync_main(args) -> None:
             say(f"{branch} already holds {label}: already up to date, nothing written")
             return
         merge = predict(repo, store, branch, pinned, proven, label)
+        held.recheck("Nothing was written.")
         publish(repo, store, remote, base, branch, proven)
         now = sgit(["rev-parse", "--verify", f"refs/heads/{branch}"], repo.common_dir,
                    sync_env(repo.common_dir), f"reading {branch}").stdout.strip()
         if now != pinned:
             raise LaneError(f"{branch} moved from {pinned[:12]} to {now[:12]} meanwhile: the "
                             "checkout was not touched, rerun")
+        # The checkout reads the store as its common dir: its config (a filter's smudge) and
+        # info/attributes would drive read-tree, so the store must be as this run made it.
+        held.intact(config)
         sync_checkout(repo, store, pinned, merge)
         move_branch(repo, store, branch, pinned, merge)
         problems = compare(repo, store, merge)

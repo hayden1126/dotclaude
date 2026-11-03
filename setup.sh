@@ -90,9 +90,10 @@ fi
 
 # lane sync-main's stores' dir (DA15/DA16). settings.json denies it to every lane's Edit tool and
 # sandboxed Bash, but sync-main writes what it checks the checkout out from there, so this run
-# makes it (0700) first of all it changes, before anything else could put a link or a file at
-# that name. It sits where the rules name it, below HOME whatever XDG_STATE_HOME says. A link, a
-# non-dir or another user's dir there stops the run.
+# makes it (0700) before the install changes anything else. That doesn't keep out a link or a
+# file put there earlier, so it is checked after: a link, a non-dir or another user's dir there
+# stops the run (sync-main checks it again itself, every name on the way, by fd). It sits where
+# the rules name it, below HOME whatever XDG_STATE_HOME says.
 verified_dir="$HOME/.local/state/dotclaude/verified"
 mkdir -p "$HOME/.local/state/dotclaude"
 [[ -L $verified_dir || -e $verified_dir ]] || mkdir -m 700 "$verified_dir" 2>/dev/null || true
