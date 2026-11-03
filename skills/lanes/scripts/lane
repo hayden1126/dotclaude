@@ -733,20 +733,22 @@ def lane_files(repo: Repo, lane: dict, brief: dict) -> list[str]:
 
 def run_setup(repo: Repo, lane: dict) -> None:
     """The 'setup' step: the configured command in the lane, with LANE_ID, LANE_PORT (the first
-    port) and LANE_PORTS (the block, A-B) set. A
-    failure marks the lane setup-failed at this step and raises."""
+    port) and LANE_PORTS (the block, A-B) set. lane is the pinned record (pinned_update): its
+    path and ports are what `new` made, never lane.json's word. A failure marks the lane
+    setup-failed at this step and raises."""
     setup = repo.config().get("setup")
     if not setup:
         return
     sessionless(repo, lane)  # again, right before the command: a session may start meanwhile
+    still_pinned(repo, lane)  # and lane.json still names the lane `new` made (LR7)
     block = lanelib.port_block(lane)
     env = dict(user_env(), LANE_ID=lane["id"], LANE_PORT=str(block[0]) if block else "",
                LANE_PORTS=f"{block[0]}-{block[-1]}" if block else "")
     say(f"  setup: {setup}")
     if subprocess.run(setup, shell=True, cwd=usable_path(repo, lane), env=env).returncode != 0:
         with lock(repo):
-            lanelib.update_lane(repo, lane["id"], lambda x: x.update(state="setup-failed",
-                                                                     setup_failed="setup"))
+            pinned_update(repo, lane, lambda x: x.update(state="setup-failed",
+                                                          setup_failed="setup"))
         raise LaneError(f"setup failed in {lane['path']}; the lane is registered (setup-failed): "
                         "fix it there from a terminal, not a claude session (`adopt` finishes no "
                         f"lane a session ran in), then `lane adopt {lane['path']}` re-runs only "
@@ -785,6 +787,54 @@ def sessionless(repo: Repo, lane: dict) -> None:
 def mark_active(lane: dict) -> None:
     lane["state"] = "active"
     lane.pop("setup_failed", None)
+
+
+# The fields of a lane `new` makes that its copy, setup and finish act on (the path is their cwd
+# and destination, the branch goes into the record, the ports into the setup's env), and its
+# marker holds: once `new` has made the lane, or `adopt` has checked the marker, these come from
+# what `new` made, never from a lane.json re-read since, which any lane's sandbox can rewrite
+# (LR7). The claims go into the record's text only, checked by record_problem; a legitimate
+# `lane claim` may change them meanwhile.
+PINNED = ("id", "path", "branch", "base_sha", "created", "port", "block")
+
+
+def drift(record: dict, pin: dict) -> str | None:
+    """Which PINNED fields of record (lane.json, re-read) differ from pin's, or None."""
+    changed = [k for k in PINNED if record.get(k) != pin.get(k)]
+    return f"its {', '.join(changed)} changed" if changed else None
+
+
+def drifted(repo: Repo, pin: dict, why: str) -> LaneError:
+    return LaneError(f"lane {pin['id']}'s lane.json no longer names the lane `lane new` made "
+                     f"({why}), so nothing more runs in that lane (LR7): "
+                     f"{close_unverified(repo, pin)}")
+
+
+def still_pinned(repo: Repo, pin: dict) -> None:
+    """Refuse unless lane.json still names the lane pin is (PINNED)."""
+    try:
+        record = lanelib.read_record(repo, pin["id"])
+    except FileNotFoundError:
+        raise drifted(repo, pin, "it is gone")
+    if why := drift(record, pin):
+        raise drifted(repo, pin, why)
+
+
+def pinned_update(repo: Repo, pin: dict, change) -> dict:
+    """update_lane for a lane `new` made or `adopt` finishes, refused with nothing written unless
+    lane.json still names the lane pin is (PINNED). Returns pin with change applied, never the
+    record re-read, so every later step acts on what `new` made. Call under lock."""
+    def checked(record: dict) -> None:
+        if why := drift(record, pin):
+            raise drifted(repo, pin, why)
+        change(record)
+    try:
+        lanelib.update_lane(repo, pin["id"], checked)
+    except FileNotFoundError:
+        raise drifted(repo, pin, "it is gone")
+    pin = dict(pin)
+    change(pin)
+    return pin
 
 
 def seed_record(lane: dict, brief: dict) -> None:
@@ -958,32 +1008,42 @@ def cmd_new(args) -> None:
             # Again, right before the first ref this run writes: the store's full fetch above
             # takes a while, and `worktree add -b` writes a ref and its reflog (LR4).
             tamper_gate(repo, "No lane was made: find out who made each, remove it, then rerun")
-            # A marker an older lane of this id left (a `done` that couldn't remove it) must not
-            # vouch for this one.
-            drop_mark(vstore.dfd, repo, args.id)
-            # From the commit, not the ref name: no upstream is set, and no ref rewritten since
-            # the fetch can choose the tree.
-            p = git(["worktree", "add", "-b", branch, path, base_sha], repo.toplevel)
-            if p.returncode != 0:
-                raise LaneError("git worktree add failed: " + p.stderr.strip())
-            # Registered the moment the worktree exists, so a failure below leaves a lane that
-            # `adopt` finishes or `done --abandon` removes, never an orphan worktree. At 'verify'
-            # until it passes, so an interrupt mid-check leaves a lane no `adopt` finishes.
+            # The lane as `new` makes it, at the path it makes: every step below acts on this
+            # record (PINNED), never on lane.json re-read. At 'verify' until the check passes,
+            # so an interrupt mid-check leaves a lane no `adopt` finishes.
             lane = new_record(args.id, branch, os.path.realpath(path), base_sha, block, reqs)
             lane.update(state="setup-failed", setup_failed="verify")
             if args.reuse_branch:  # its branch may hold a PR older than the lane (merges_of)
                 lane["reused"] = True
+            # A pending marker before the tree or lane.json exists, replacing any an older lane
+            # of this id left (a `done` that couldn't remove it): `open` refuses while any marker
+            # is there, so no moment has a lane.json and no marker, and `adopt` finishes no lane
+            # by a pending one.
+            try:
+                write_mark(vstore, repo, lane, verified=False)
+            except OSError as e:
+                raise LaneError(f"lane {args.id}'s marker in {vstore.verified}/{NEW_MARKS} "
+                                f"couldn't be written ({e.strerror or e}). {NO_LANE}")
+            # From the commit, not the ref name: no upstream is set, and no ref rewritten since
+            # the fetch can choose the tree.
+            p = git(["worktree", "add", "-b", branch, path, base_sha], repo.toplevel)
+            if p.returncode != 0:
+                with contextlib.suppress(OSError):  # no lane: a kept one only stalls `open`
+                    drop_mark(vstore.dfd, repo, args.id)
+                raise LaneError("git worktree add failed: " + p.stderr.strip())
+            # Registered the moment the worktree exists, so a failure below leaves a lane that
+            # `adopt` finishes or `done --abandon` removes, never an orphan worktree.
             lanelib.write_lane_json(repo, args.id, lane)
             # Before anything else is written in the tree. .worktreeinclude's copies come after,
             # from the main checkout, which no lane's sandbox can write.
             verify_new(repo, lane, vstore, config, base_sha, f"{base} ({base_sha[:12]})")
-            lane = lanelib.update_lane(repo, args.id, lambda x: x.update(setup_failed="copy"))
+            lane = pinned_update(repo, lane, lambda x: x.update(setup_failed="copy"))
             copied = lane_files(repo, lane,
                                 {ph: getattr(args, attr) for attr, ph in BRIEF.items()})
             # Still setup-failed through the setup. `open` refuses a lane whose marker is there,
             # whatever its record says: no session starts in the tree while the marker vouches
             # for it (finished_lane).
-            lane = lanelib.update_lane(repo, args.id, lambda x: x.update(setup_failed="setup"))
+            lane = pinned_update(repo, lane, lambda x: x.update(setup_failed="setup"))
     say(f"lane {args.id}: branch {branch} from {base} ({base_sha[:12]}), "
         f"{lanelib.ports_text(lane)}")
     say(f"  checkout verified against {base_sha[:12]} as fetched into {vstore.path}")
@@ -1007,12 +1067,15 @@ def finish(repo: Repo, lane: dict) -> None:
         raise LaneError(f"lane {lane['id']}'s checkout has no marker of a check by `lane new` "
                         f"against the remote's tree that nothing has run in since ({why}: LR7), "
                         f"so nothing will run in it: {close_unverified(repo, lane)}")
+    # From here lane is the pin: its PINNED fields are the marker's (unverified compared them),
+    # and every step refuses once lane.json names another lane (pinned_update, still_pinned).
     sessionless(repo, lane)  # before the copy too, with or without a setup command
     with lock(repo):
         # 'verify' with a marker: interrupted between the marker and the record's move to 'copy'.
         if lane.get("setup_failed", "copy") in ("copy", "verify"):
+            still_pinned(repo, lane)
             lane_files(repo, lane, {})
-            lane = lanelib.update_lane(repo, lane["id"], lambda x: x.update(setup_failed="setup"))
+            lane = pinned_update(repo, lane, lambda x: x.update(setup_failed="setup"))
     run_setup(repo, lane)
     check_worktree(lane, seed_ask=True)  # still marked, which `open` refuses: no session
     lane = finished_lane(repo, lane)
@@ -1025,7 +1088,10 @@ def finished_lane(repo: Repo, lane: dict) -> dict:
     vouches only for a tree nothing but `new`'s copy and the setup has run in, and a session
     `open` starts there may write anything, lane.json among it (LR7). A marker that can't be
     dropped refuses, leaving the lane setup-failed at 'setup' (which `open` refuses): the kept
-    marker then still tells the truth, so `adopt` may finish it once the drop works."""
+    marker then still tells the truth, so `adopt` may finish it once the drop works. lane is the
+    pin (pinned_update): a lane.json that names another lane refuses before the drop."""
+    with lock(repo):
+        still_pinned(repo, lane)
     try:
         if (top := stores_fd()) is not None:
             try:
@@ -1039,7 +1105,7 @@ def finished_lane(repo: Repo, lane: dict) -> dict:
                         f"{lane['path']}` re-runs the setup and finishes it, or `lane done "
                         f"{lane['id']} --abandon`")
     with lock(repo):
-        return lanelib.update_lane(repo, lane["id"], mark_active)
+        return pinned_update(repo, lane, mark_active)
 
 
 def setup_failed_hint(repo: Repo, lane: dict) -> str:
@@ -1959,9 +2025,10 @@ def cmd_open(args) -> None:
     usable_path(repo, lane)  # the window's cwd, where `claude` loads that dir's .claude/ config
     if lane.get("state") == "setup-failed":
         raise LaneError(f"lane {args.id} is setup-failed: {setup_failed_hint(repo, lane)}")
-    # LR7: while `new`'s marker vouches for the tree, no session may start there, whatever
-    # lane.json says (any lane's sandbox can write it). One that can't be read refuses too.
-    if unverified(repo, lane) not in (NO_MARK, OTHER_MARK):
+    # LR7: while any marker of `new`'s is there for this id (pending, vouching, or one whose
+    # fields lane.json no longer matches), no session may start there, whatever lane.json says
+    # (any lane's sandbox can write it). One that can't be read refuses too.
+    if marked(repo, lane["id"]):
         raise LaneError(f"lane {args.id} is unfinished (setup-failed, or its `lane new` or "
                         f"`adopt` still runs): {setup_failed_hint(repo, lane)}")
     parked = parked_stamp(repo, lane)
@@ -5772,9 +5839,11 @@ def verify_new(repo: Repo, lane: dict, held: StoreDir, config: bytes | None,
     """Refuse unless the lane `new` just checked out matches base_sha's tree in the store,
     every tracked file byte for byte and type, with nothing untracked (LR7): git wrote it from
     the shared object store, which any lane's sandbox can write, and both the setup command and
-    the hooks of the session `lane open` starts there run sandbox-off. On a pass, writes the
-    lane's marker (write_mark), the one thing `adopt` finishes a setup-failed lane by. The
-    caller holds the lanes lock, and has recorded the lane setup-failed at 'verify'."""
+    the hooks of the session `lane open` starts there run sandbox-off. On a pass, turns the
+    lane's pending marker into the verified one (write_mark), the one thing `adopt` finishes a
+    setup-failed lane by; a refusal leaves the pending one, which `done` removes. The caller
+    holds the lanes lock, has written the pending marker and recorded the lane setup-failed at
+    'verify'."""
     try:
         held.intact(config, "Nothing ran in the lane's checkout: close it as said below")
         problems = compare(repo, held.path, base_sha, top=lane["path"], fresh=True)
@@ -5829,15 +5898,16 @@ def marks_fd(parent: int, create: bool = False) -> int | None:
     return fd
 
 
-def write_mark(held: StoreDir, repo: Repo, lane: dict) -> None:
-    """Record, in the stores' dir held open by fd (no lane's sandbox can write it), that `new`
-    verified lane's checkout: its id, path, repo and base sha, under one rename."""
+def write_mark(held: StoreDir, repo: Repo, lane: dict, verified: bool = True) -> None:
+    """Record, in the stores' dir held open by fd (no lane's sandbox can write it), the lane `new`
+    makes: its PINNED fields and repo, under one rename. verified says its checkout passed
+    `new`'s check; a pending marker (False), written before the lane exists, vouches for
+    nothing, but `open` refuses while it is there (marked)."""
     fd = marks_fd(held.dfd, create=True)
     try:
         name, tmp = mark_name(repo, lane["id"]), f".tmp-{os.getpid()}-{time.monotonic_ns()}"
-        data = json.dumps({"id": lane["id"], "path": os.path.realpath(lane["path"]),
-                           "common": repo.common_dir, "base_sha": lane["base_sha"],
-                           "created": lane["created"]}).encode()
+        data = json.dumps({**{k: lane.get(k) for k in PINNED}, "common": repo.common_dir,
+                           "verified": verified}).encode()
         out = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
                       0o600, dir_fd=fd)
         try:
@@ -5879,24 +5949,40 @@ def stores_fd() -> int | None:
     return fd
 
 
-def unverified(repo: Repo, lane: dict) -> str | None:
-    """None when the stores' dir holds `new`'s marker for this lane (its id, path, repo and
-    created stamp), else why not (NO_MARK, OTHER_MARK, or why it can't be read). Read by fd from the home dir without following a link; the caller checks the
-    rules that keep lanes out of that dir (store_rules) when it acts on the answer."""
+def read_mark(repo: Repo, lane_id: str) -> bytes | None:
+    """lane_id's marker's bytes, None when there is none. Read by fd from the home dir without
+    following a link; OSError when it can't be read (a link, a non-file, another user's dir)."""
+    top = stores_fd()
+    if top is None:
+        return None
     try:
-        top = stores_fd()
-        if top is None:
-            return NO_MARK
-        try:
-            fd = marks_fd(top)
-        finally:
-            os.close(top)
-        if fd is None:
-            return NO_MARK
-        try:
-            raw = lanelib.read_nofollow(fd, mark_name(repo, lane["id"]))
-        finally:
-            os.close(fd)
+        fd = marks_fd(top)
+    finally:
+        os.close(top)
+    if fd is None:
+        return None
+    try:
+        return lanelib.read_nofollow(fd, mark_name(repo, lane_id))
+    finally:
+        os.close(fd)
+
+
+def marked(repo: Repo, lane_id: str) -> bool:
+    """Whether a marker is there for lane_id, whatever it holds, or may be (it can't be read):
+    `open`'s gate (LR7)."""
+    try:
+        return read_mark(repo, lane_id) is not None
+    except OSError:
+        return True
+
+
+def unverified(repo: Repo, lane: dict) -> str | None:
+    """None when the stores' dir holds `new`'s verified marker for this lane (its PINNED fields
+    and repo), else why not (NO_MARK, OTHER_MARK, PENDING_MARK, or why it can't be read). The
+    caller checks the rules that keep lanes out of that dir (store_rules) when it acts on the
+    answer."""
+    try:
+        raw = read_mark(repo, lane["id"])
     except OSError as e:
         return f"its marker can't be read ({e.strerror or e})"
     if raw is None:
@@ -5905,18 +5991,18 @@ def unverified(repo: Repo, lane: dict) -> str | None:
         data = json.loads(raw)
     except (ValueError, RecursionError):
         data = None
-    if not (isinstance(data, dict) and data.get("id") == lane["id"]
-            and data.get("path") == os.path.realpath(lane["path"])
-            and data.get("common") == repo.common_dir
-            and data.get("created") == lane.get("created")):
+    if not (isinstance(data, dict) and data.get("common") == repo.common_dir
+            and drift(lane, data) is None):
         return OTHER_MARK
+    if data.get("verified") is not True:
+        return PENDING_MARK
     return None
 
 
-# unverified's answers that say no marker vouches for the lane; any other answer but None is a
-# marker that can't be read, which `open` refuses on as on one that vouches.
+# unverified's answers that say no marker vouches for the lane.
 NO_MARK = "no marker"
 OTHER_MARK = "its marker names another lane"
+PENDING_MARK = "its marker is the pending one `lane new` writes before its check passes"
 
 
 def tree_entries(store: str, treeish: str) -> dict[str, tuple[str, str]]:

@@ -208,9 +208,13 @@ class NoHooks(LanesRepo):
 # stop or plant midway through a real `lane new`: "interrupt" makes verify_new raise
 # KeyboardInterrupt (Ctrl-C mid-verification); "plant:<victim>:<link>" makes fetched_base plant a
 # symlink at <link> to <victim> once it returns, as a lane's sandbox could while the store's full
-# fetch runs; "lanes-wait:<secs>" sets LANES_LOCK_WAIT, so a held lanes lock refuses soon.
+# fetch runs; "lanes-wait:<secs>" sets LANES_LOCK_WAIT, so a held lanes lock refuses soon;
+# "forge:<func>[@<n>]:<dir>" makes <func> (one taking repo and lane first) rewrite the lane's
+# lane.json path to <dir> once its first (or nth) call returns, as any lane's sandbox could; "open-midway:<out>" makes verify_new
+# flip lane.json to active, run `lane open <id> --print` and write its exit code to <out>, then
+# put lane.json back and verify.
 DRIVER = """
-import importlib.machinery, importlib.util, os, sys
+import importlib.machinery, importlib.util, json, os, subprocess, sys
 loader = importlib.machinery.SourceFileLoader("lane_cli", sys.argv[1])
 spec = importlib.util.spec_from_loader("lane_cli", loader)
 mod = importlib.util.module_from_spec(spec)
@@ -231,6 +235,32 @@ elif how.startswith("plant:"):
     mod.fetched_base = fetched_base
 elif how.startswith("lanes-wait:"):
     mod.LANES_LOCK_WAIT = float(how.split(":")[1])
+elif how.startswith("forge:"):
+    _, name, forged = how.split(":")
+    name, _, nth = name.partition("@")
+    real, calls = getattr(mod, name), []
+    def forging(repo, lane, *a, **k):
+        out = real(repo, lane, *a, **k)
+        calls.append(1)
+        if len(calls) == int(nth or 1):
+            rec = mod.lanelib.read_record(repo, lane["id"])
+            mod.lanelib.write_lane_json(repo, lane["id"], dict(rec, path=forged))
+        return out
+    setattr(mod, name, forging)
+elif how.startswith("open-midway:"):
+    out = how.split(":", 1)[1]
+    real = mod.verify_new
+    def verify_new(repo, lane, *a, **k):
+        rec = mod.lanelib.read_record(repo, lane["id"])
+        flipped = {k: v for k, v in rec.items() if k != "setup_failed"}
+        mod.lanelib.write_lane_json(repo, lane["id"], dict(flipped, state="active"))
+        p = subprocess.run([sys.executable, sys.argv[1], "open", lane["id"], "--print"],
+                           cwd=repo.main, capture_output=True, text=True)
+        with open(out, "w") as f:
+            json.dump({"rc": p.returncode, "out": p.stdout, "err": p.stderr}, f)
+        mod.lanelib.write_lane_json(repo, lane["id"], rec)
+        return real(repo, lane, *a, **k)
+    mod.verify_new = verify_new
 sys.exit(mod.main(sys.argv[3:]))
 """
 
@@ -258,6 +288,23 @@ def marks(case, lane_id):
     """The verification markers for lane_id in the verified dir, which no lane can write."""
     return glob.glob(os.path.join(case.home, ".local", "state", "dotclaude", "verified",
                                   "new-lanes", f"*-{lane_id}.json"))
+
+
+def forged_worktree(case, name="forged"):
+    """A dir outside every lane that passes for a worktree of the repo: a .git file naming an
+    admin dir under <common>/worktrees/ that names it back, as any lane's sandbox can write both.
+    Its OK file lets the failed_setup fixture's setup command pass there."""
+    forged = os.path.join(case.tmp, name)
+    admin = os.path.join(case.common, "worktrees", name)
+    os.makedirs(forged)
+    os.makedirs(admin)
+    case.write(os.path.join(forged, ".git"), f"gitdir: {admin}\n")
+    case.write(os.path.join(admin, "gitdir"), os.path.join(forged, ".git") + "\n")
+    case.write(os.path.join(admin, "commondir"), "../..\n")
+    case.write(os.path.join(forged, "OK"), "")
+    repo = lanelib.Repo(case.main, case.common)
+    case.assertIsNone(lanelib.worktree_problem(repo, forged, repo.lanes(shared=True)))
+    return forged
 
 
 def flip(case, lane_id, step="setup"):
@@ -308,7 +355,8 @@ class NewVerifiesTree(LanesRepo):
         self.assertFalse(self.setup_ran())
         rec = self.lane_json("chart-fix")
         self.assertEqual((rec["state"], rec["setup_failed"]), ("setup-failed", "verify"))
-        self.assertEqual(marks(self, "chart-fix"), [])
+        (mark,) = marks(self, "chart-fix")  # the pending one, which vouches for nothing
+        self.assertIs(json.loads(self.read(mark))["verified"], False)
         p = self.run_lane("adopt", lane)  # finishing it would run the setup: refused too
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertFalse(self.setup_ran())
@@ -467,22 +515,88 @@ class NewVerifiesTree(LanesRepo):
     def test_open_goes_by_the_marker_not_the_lane_writable_state(self):
         # M1: while the marker vouches for the tree, no session may start there, whatever the
         # lane.json any lane's sandbox can write says.
+        # A marker that no longer matches lane.json (its created stamp edited) still refuses:
+        # open passes only where no marker is there at all.
         self.failed_setup()
         data = os.path.join(self.common, "lanes", "chart-fix", "lane.json")
         rec = self.lane_json("chart-fix")
         rec.pop("setup_failed", None)
+        for change in ({}, {"created": "2001-01-01T00:00:00Z"}):
+            self.write(data, json.dumps(dict(rec, state="active", **change)))
+            for args in (("--print",), ("--print", "--focus"), ()):
+                with self.subTest(change=change, args=args):
+                    p = self.run_lane("open", "chart-fix", *args)
+                    self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                    self.assertEqual(p.stdout, "")
+                    if not change:
+                        self.assertIn(f"lane adopt {self.lane_path('chart-fix')}", p.stderr)
         self.write(data, json.dumps(dict(rec, state="active")))
-        for args in (("--print",), ("--print", "--focus"), ()):
-            with self.subTest(args=args):
-                p = self.run_lane("open", "chart-fix", *args)
-                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
-                self.assertEqual(p.stdout, "")
-                self.assertIn(f"lane adopt {self.lane_path('chart-fix')}", p.stderr)
         self.write(os.path.join(self.lane_path("chart-fix"), "OK"), "")
         self.lane("adopt", self.lane_path("chart-fix"))
         self.assertTrue(self.setup_ran())
         p = self.run_lane("open", "chart-fix", "--print")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+
+    def test_new_runs_nothing_where_a_rewritten_lane_json_points(self):
+        # H1: once `new` has checked its checkout, the copy, the setup and the finish act on the
+        # path `new` made, never on one re-read from lane.json, and refuse when it moved.
+        forged = forged_worktree(self)
+        p = driven(self, f"forge:verify_new:{forged}", "new", "chart-fix")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("lane.json", p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        self.assertFalse(os.path.exists(os.path.join(forged, "SETUP_RAN")))
+        self.assertFalse(os.path.exists(os.path.join(forged, ".lane")))
+        self.assertFalse(self.setup_ran())
+
+    def forged_adopt(self, name):
+        """`adopt` of a lane whose setup failed, its lane.json set to redo the copy, with name
+        (a step after the marker check) rewriting lane.json's path to a forged worktree."""
+        self.failed_setup()
+        flip(self, "chart-fix", "copy")
+        self.write(os.path.join(self.lane_path("chart-fix"), "OK"), "")
+        forged = forged_worktree(self)
+        p = driven(self, f"forge:{name}:{forged}", "adopt", self.lane_path("chart-fix"))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("lane.json", p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        self.assertFalse(os.path.exists(os.path.join(forged, "SETUP_RAN")))
+        self.assertFalse(self.setup_ran())
+
+    def test_adopt_runs_nothing_where_lane_json_points_after_the_copy(self):
+        # H1: `adopt` takes the path from the marker it checked, and refuses once lane.json's
+        # moves.
+        self.forged_adopt("lane_files")
+
+    def test_adopt_runs_no_setup_where_lane_json_points_after_the_session_check(self):
+        # H1: checked again right before the setup command starts (the second session check is
+        # the setup's own).
+        self.forged_adopt("sessionless@2")
+
+    def test_open_refuses_while_new_checks_the_checkout(self):
+        # L1: from before lane.json is written to the verified marker, a pending marker is
+        # there, so `open` refuses whatever lane.json says; `adopt` won't finish a pending one.
+        out = os.path.join(self.tmp, "open-midway.json")
+        p = driven(self, f"open-midway:{out}", "new", "chart-fix")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        seen = json.loads(self.read(out))
+        self.assertEqual(seen["rc"], 1, seen)
+        self.assertEqual(seen["out"], "")
+        self.assertEqual(self.lane_json("chart-fix")["state"], "active")
+
+    def test_a_pending_marker_stays_after_a_refusal_and_done_removes_it(self):
+        plant_readme(self)
+        self.assertEqual(self.run_lane("new", "chart-fix").returncode, 1)
+        (mark,) = marks(self, "chart-fix")
+        self.assertIs(json.loads(self.read(mark))["verified"], False)
+        flip(self, "chart-fix", "copy")
+        p = self.run_lane("adopt", self.lane_path("chart-fix"))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertFalse(self.setup_ran())
+        shutil.rmtree(self.lane_path("chart-fix"))
+        self.lane("done", "chart-fix", "--abandon")
+        self.assertEqual(marks(self, "chart-fix"), [])
+
 
 class FinishWithSession(LiveSessions):
     """M1: `adopt` runs the setup sandbox-off, so it finishes no lane a session runs in: one

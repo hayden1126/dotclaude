@@ -919,24 +919,33 @@ store, byte for byte and type, its index must too, and nothing untracked may sit
 `.worktreeinclude`'s copies come after the check, from the main checkout, which no lane's
 sandbox can write (the lead's own sandbox can: that is the main checkout's existing trust, not a
 new route). The lane is recorded setup-failed at `verify` before the check starts and moves on
-only once it passes, so an interrupted check leaves it at `verify`. A pass also writes a marker
-for the lane (its id, path and base commit) under `~/.local/state/dotclaude/verified/new-lanes/`,
-which no lane can write. If anything differs, nothing runs in the tree and the message names each
-path. `lane adopt` finishes a setup-failed lane only when its marker is there and names that
-lane's id and path, whatever its `lane.json` (which any lane can write) says; otherwise it
-refuses and names `lane done <id> --abandon` and `lane new` again, as do `open` and `park` for
-such a lane. The marker vouches only for a tree nothing but `new`'s copies and the setup has
-run in, so it lasts only while the lane is unfinished. `open` (every form, `--print` and
-`--focus` too) refuses a lane while its marker is there, or can't be read, whatever its
-`lane.json` says, so no session starts in the tree through the setup. `adopt` finishes a marked
-lane whatever its `lane.json` state, and refuses while a live session runs in its tree (or
-while sessions can't be read), as does the setup step of `new`: a session found there drops the
-marker, so the lane is closed with `lane done <id> --abandon` from then on. A failed setup is
-fixed from a terminal, not a claude session. Once the setup succeeds, or there is none, `new`
-(or `adopt`, finishing one) removes the marker and only then marks the lane active. A marker that can't be
-removed refuses there, leaving the lane setup-failed with a marker that is still true. A lane
-whose copy or setup failed keeps its marker, so `adopt` can finish it. `lane done` removes the
-marker too, and `new` removes any old one for its id before it checks.
+only once it passes, so an interrupted check leaves it at `verify`. Before the worktree exists,
+`new` writes a pending marker for the lane under `~/.local/state/dotclaude/verified/new-lanes/`,
+which no lane can write, in place of any an older lane of its id left; a pass turns it into the
+verified marker. Both hold the lane's id, path, branch, base commit, created stamp and ports as
+`new` made them. If anything differs, nothing runs in the tree and the message names each path.
+From the check on, `new`'s copy, setup and finish act on the lane as `new` made it, and
+`adopt`'s on the lane as its marker names it, never on those fields read again from `lane.json`
+(which any lane can write): each step that writes `lane.json`, and the setup right before its
+command starts, refuses once `lane.json` names other values for them. `lane adopt` finishes a
+lane only when its verified marker is there and matches its `lane.json` on every one of those
+fields; otherwise it refuses and names `lane done <id> --abandon` and `lane new` again, as do
+`open` and `park` for such a lane. The marker vouches only for a tree nothing but `new`'s copies
+and the setup has run in, so it lasts only while the lane is unfinished. `open` (every form,
+`--print` and `--focus` too) refuses a lane while any marker for its id is there (pending,
+verified, or one its `lane.json` no longer matches) or one can't be read, whatever its
+`lane.json` says, and passes only when none is there, so no session starts in the tree through
+the check and the setup. `adopt` finishes a lane with a matching verified marker whatever its
+`lane.json` state, except `closing` (a `lane done` is ending it), which it refuses as
+registered. It refuses while a live session runs in the lane's tree (or while sessions can't be
+read), as does the setup step of `new`: a session found there drops the marker, so the lane is
+closed with `lane done <id> --abandon` from then on. A failed setup is fixed from a terminal,
+not a claude session. Once the setup succeeds, or there is none, `new` (or `adopt`, finishing
+one) removes the marker and only then marks the lane active. A marker that can't be removed
+refuses there, leaving the lane setup-failed with a marker that is still true. A lane whose copy
+or setup failed keeps its verified marker, so `adopt` can finish it; one whose check failed or
+never finished keeps its pending one, which `adopt` never finishes by. `lane done` removes
+either.
 
 A lane `new` refused holds a tree git may find changed, and `done --abandon` deletes no such
 tree, nor skips that check on `lane.json`'s word. Nothing ran in that tree, so the refusal says
