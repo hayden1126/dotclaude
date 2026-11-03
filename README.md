@@ -177,7 +177,7 @@ force-push and a `reset --hard` on a dirty tree when the prompt named them.
 must cover, and `test_settings.py` ties it to `settings.json` in both directions. It holds the
 credential barrier (`git push` to `origin`, `fetch`, `pull`, `ls-remote`, and `gh`'s `pr`, `run`,
 `issue`, `api` and `search` with its read-only `repo`, `release` and `auth status` forms), our
-wrappers (`lane init`, `new`, `adopt`, `ls`, `open`, `done`, `addr`, `lead`, `pass-respawn`, `delegation-ledger`,
+wrappers (`lane init`, `new`, `adopt`, `ls`, `open`, `done`, `park`, `sync-main`, `addr`, `lead`, `pass-respawn`, `delegation-ledger`,
 `codex-delegate`, `ed-pull`), `claude`, the read-only tmux verbs (`ls`, `list-sessions`, `list-windows`,
 `list-panes`, `list-clients`, `list-keys`, `list-commands`, `capture-pane`, `display`, `show`,
 `show-options`, `show-environment`, `show-messages`, `show-hooks`), read-only codex (`login status`,
