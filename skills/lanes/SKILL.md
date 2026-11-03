@@ -211,9 +211,12 @@ digits, `.`, `_` and `-`, starts with a letter or digit, runs at most 64 chars a
 takes `--id <slug>`, the one case where the id
 differs from the dir name; `git worktree move` is the other fix. If `lane new` fails partway, the
 lane stays registered as `setup-failed`, and `lane adopt <path>` finishes it, redoing only the
-failed step (copies never overwrite a file the lane already has). That holds only once `new` has
-verified the checkout (docs/lanes.md, LR7): a lane that failed or never finished the check is
-removed with `lane done --abandon` and made again, and `adopt`, `open` and `park` say so.
+failed step (copies never overwrite a file the lane already has). That holds only while `new`'s
+marker shows a verified checkout nothing else has run in (docs/lanes.md, LR7), and a finished
+lane has none: any other setup-failed lane is closed with `lane done --abandon` on its id and
+made again, and `adopt`, `open` and `park` say so. A checkout `new` refused, which nothing ran
+in, is deleted by hand from a terminal first, as `done` deletes no tree git finds changed. A
+second `lane new` waits for the first.
 
 ## The lead
 
@@ -413,8 +416,8 @@ there is stopped with Ctrl+Z: `fg` it in its window; it still holds the lane), `
 record may be behind, as The lead step 5 spells out: a PR merged after its last write, a commit
 is newer, or a session that started after it has ended; on whenever one of those can't be read),
 `setup-failed` (half made: it still holds its ports, claims and a cap slot; finish it with
-`lane adopt <path>`, or, when its checkout never passed `new`'s verification, `lane done
---abandon` and a new lane), `closing` (a `lane done` stopped partway; rerun it), `parked` (`lane
+`lane adopt <path>`, or, when it has no marker of `new`'s verification, `lane done --abandon`
+and a new lane), `closing` (a `lane done` stopped partway; rerun it), `parked` (`lane
 park` ended its sessions and freed its slot; it never shows `orphan`). With a lane parked or
 the cap passed, a `cap: N of M slots held (K parked)` line follows the board.
 

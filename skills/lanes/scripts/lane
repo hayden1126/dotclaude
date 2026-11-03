@@ -883,7 +883,7 @@ def cmd_new(args) -> None:
     # answer, the trust root) is first fetched into a fresh store no lane can write, and the new
     # checkout must match its tree. The store's guard comes first: without the rules that keep
     # lanes out of it, nothing is created.
-    with store_guard("new", "lane new") as vstore:
+    with store_guard("new", "lane new", store_wait()) as vstore:
         base_sha = fetched_base(repo, cfg)
         if not args.reuse_branch:
             # `ls` labels a lane by its branch's newest PR, so on a name an old PR used it shows
@@ -899,8 +899,8 @@ def cmd_new(args) -> None:
                 raise LaneError(f"branch {branch} was the head of {prs}: `lane ls` would show "
                                 "that PR as this lane's. Name another with --branch, or pass "
                                 "--reuse-branch")
-        config = fresh_store(vstore)
-        vstore.recheck("Nothing was written.")
+        config = fresh_store(vstore, NO_LANE)
+        vstore.recheck(NO_LANE)
         fill_new_store(repo, vstore.path, *base_parts(repo, cfg), base_sha)
         with lock(repo):
             check_unregistered(repo, args.id)
@@ -922,8 +922,7 @@ def cmd_new(args) -> None:
             os.makedirs(cfg["root"], exist_ok=True)
             # Again, right before the first ref this run writes: the store's full fetch above
             # takes a while, and `worktree add -b` writes a ref and its reflog (LR4).
-            tamper_gate(repo, "Nothing in the repo was written: find out who made each, remove "
-                        "it, then rerun")
+            tamper_gate(repo, "No lane was made: find out who made each, remove it, then rerun")
             # A marker an older lane of this id left (a `done` that couldn't remove it) must not
             # vouch for this one.
             drop_mark(vstore.dfd, repo, args.id)
@@ -946,7 +945,9 @@ def cmd_new(args) -> None:
             lane = lanelib.update_lane(repo, args.id, lambda x: x.update(setup_failed="copy"))
             copied = lane_files(repo, lane,
                                 {ph: getattr(args, attr) for attr, ph in BRIEF.items()})
-            lane = lanelib.update_lane(repo, args.id, mark_active)
+            # Still setup-failed through the setup, which `open` refuses: no session starts in
+            # the tree while its marker vouches for it (finished_lane).
+            lane = lanelib.update_lane(repo, args.id, lambda x: x.update(setup_failed="setup"))
     say(f"lane {args.id}: branch {branch} from {base} ({base_sha[:12]}), "
         f"{lanelib.ports_text(lane)}")
     say(f"  checkout verified against {base_sha[:12]} as fetched into {vstore.path}")
@@ -955,6 +956,7 @@ def cmd_new(args) -> None:
     say(f"  record {lanelib.record_path(lane)}")
     run_setup(repo, lane)
     check_worktree(lane, seed_ask=True)  # after the setup, which may set core.hooksPath
+    lane = finished_lane(repo, lane)
     say(f"cd {lane['path']} && claude")
 
 
@@ -966,9 +968,9 @@ def finish(repo: Repo, lane: dict) -> None:
     write that, and one that failed or never finished the check may hold what no remote showed."""
     store_rules("lane adopt")  # without them, a lane could have written the marker
     if why := unverified(repo, lane):
-        raise LaneError(f"lane {lane['id']}'s checkout never passed `lane new`'s verification "
-                        f"against the remote's tree ({why}: LR7), so nothing will run in it: "
-                        f"{REDO_NEW.format(id=lane['id'])}")
+        raise LaneError(f"lane {lane['id']}'s checkout has no marker of a check by `lane new` "
+                        f"against the remote's tree that nothing has run in since ({why}: LR7), "
+                        f"so nothing will run in it: {close_unverified(repo, lane)}")
     with lock(repo):
         # 'verify' with a marker: interrupted between the marker and the record's move to 'copy'.
         if lane.get("setup_failed", "copy") in ("copy", "verify"):
@@ -976,20 +978,57 @@ def finish(repo: Repo, lane: dict) -> None:
             lane = lanelib.update_lane(repo, lane["id"], lambda x: x.update(setup_failed="setup"))
     run_setup(repo, lane)
     check_worktree(lane, seed_ask=True)  # still setup-failed, which `open` refuses: no session
-    with lock(repo):
-        lane = lanelib.update_lane(repo, lane["id"], mark_active)
+    lane = finished_lane(repo, lane)
     say(f"finished lane {lane['id']}: branch {lane['branch']}, {lanelib.ports_text(lane)}")
     say(f"  record {lanelib.record_path(lane)}")
 
 
+def finished_lane(repo: Repo, lane: dict) -> dict:
+    """Mark a lane `new` or `adopt` just finished active, once its marker is dropped: the marker
+    vouches only for a tree nothing but `new`'s copy and the setup has run in, and a session
+    `open` starts there may write anything, lane.json among it (LR7). A marker that can't be
+    dropped refuses, leaving the lane setup-failed at 'setup' (which `open` refuses): the kept
+    marker then still tells the truth, so `adopt` may finish it once the drop works."""
+    try:
+        if (top := stores_fd()) is not None:
+            try:
+                drop_mark(top, repo, lane["id"])
+            finally:
+                os.close(top)
+    except OSError as e:
+        raise LaneError(f"lane {lane['id']}'s verification marker in ~/{VERIFIED_REL}/"
+                        f"{NEW_MARKS} couldn't be removed ({e.strerror or e}), so the lane stays "
+                        "setup-failed, and no session has run in it: fix that, then `lane adopt "
+                        f"{lane['path']}` re-runs the setup and finishes it, or `lane done "
+                        f"{lane['id']} --abandon`")
+    with lock(repo):
+        return lanelib.update_lane(repo, lane["id"], mark_active)
+
+
 def setup_failed_hint(repo: Repo, lane: dict) -> str:
     """What to do with a setup-failed lane: `adopt` only for one whose marker shows its checkout
-    passed `new`'s verification (finish refuses any other)."""
+    passed `new`'s verification and nothing has run in it since (finish refuses any other)."""
     if why := unverified(repo, lane):
-        return (f"its checkout never passed `lane new`'s verification ({why}: LR7), so "
-                f"{REDO_NEW.format(id=lane['id'])}")
+        return (f"its checkout has no marker of a check by `lane new` that nothing has run in "
+                f"since ({why}: LR7), so nothing will run in it: {close_unverified(repo, lane)}")
     return (f"finish it with `lane adopt {lane['path']}`, or close it with `lane done "
             f"{lane['id']} --abandon`")
+
+
+def close_unverified(repo: Repo, lane: dict) -> str:
+    """How to close a lane with no marker (LR7). `done --abandon` deletes no tree git finds
+    changed, and nothing here does on lane.json's word (any lane's sandbox can write it), so a
+    checkout `new` refused, which nothing ran in, is deleted by hand. The dir is named only where
+    `new` puts a lane (the config's root and the id), never from lane.json alone."""
+    where = "its worktree dir"
+    with contextlib.suppress(Exception):
+        made = os.path.realpath(os.path.join(repo.config()["root"], lane["id"]))
+        if made == os.path.realpath(lane["path"]):
+            where = shown(made)
+    return (f"close it with `lane done {lane['id']} --abandon`. If that refuses on files in its "
+            f"tree, save anything of yours from there, delete {where} by hand from a terminal, "
+            "and rerun it (a checkout `lane new` refused holds nothing of yours: nothing ran in "
+            "it). Then `lane new` makes the lane again")
 
 
 def cmd_adopt(args) -> None:
@@ -5434,11 +5473,26 @@ def store_rules(who: str) -> str:
     return home
 
 
+STORE_LOCK_WAIT = 300.0  # secs `lane new` waits for the stores' .lock another run holds
+
+
+def store_wait() -> float:
+    """STORE_LOCK_WAIT, or _LANE_TEST_STORE_WAIT's seconds (tests/lanes only, like
+    _LANE_TEST_GRACE)."""
+    try:
+        secs = float(os.environ.get("_LANE_TEST_STORE_WAIT", ""))
+    except ValueError:
+        return STORE_LOCK_WAIT
+    return secs if 0 <= secs <= STORE_LOCK_WAIT else STORE_LOCK_WAIT
+
+
 @contextlib.contextmanager
-def store_guard(name: str, who: str = "lane sync-main"):
+def store_guard(name: str, who: str = "lane sync-main", wait: float = 0.0):
     """The path of store <name>.git in the stores' dir, held under the flock on its .lock, once
     store_rules passes and before anything is created. Anything a lane could write there would
-    be what sync-main, or `lane new`'s verification (LR7), checks a checkout against."""
+    be what sync-main, or `lane new`'s verification (LR7), checks a checkout against. A held
+    .lock refuses at once, or after wait seconds of waiting for it (`lane new`, whose runs each
+    hold it across a full fetch)."""
     home = store_rules(who)
     verified = os.path.join(home, VERIFIED_REL)
     dfd = verified_dir(home, verified)
@@ -5451,8 +5505,15 @@ def store_guard(name: str, who: str = "lane sync-main"):
         raise
     try:
         if not try_lock(fd):
-            raise LaneError(f"another lane sync-main or lane new holds {verified}/.lock: rerun "
-                            "once it ends")
+            if wait > 0:
+                warn(f"waiting up to {wait:g} s for {verified}/.lock, which another lane new or "
+                     "lane sync-main holds")
+            deadline = time.monotonic() + wait
+            while not try_lock(fd):
+                if time.monotonic() >= deadline:
+                    raise LaneError(f"another lane sync-main or lane new holds {verified}/.lock: "
+                                    "rerun once it ends")
+                time.sleep(0.2)
         yield StoreDir(home, dfd, name)
     finally:
         os.close(fd)
@@ -5590,16 +5651,17 @@ def proven_sha(repo: Repo, n: int, base: str) -> str:
     return oid
 
 
-def fresh_store(store: StoreDir) -> bytes | None:
+def fresh_store(store: StoreDir, written: str = "Nothing was written.") -> bytes | None:
     """An empty bare repo at store: the old one removed by name under the held dir's fd, never
     followed (remove_tree's pattern), and no template copied in. Returns its config's bytes as
-    git init wrote them, for StoreDir.intact to hold the store to before the checkout."""
+    git init wrote them, for StoreDir.intact to hold the store to before the checkout. written
+    says what the run wrote so far (StoreDir.recheck)."""
     fd, name = store.dfd, store.name
     if lanelib.real_dir_at(fd, name):
         shutil.rmtree(name, dir_fd=fd)
     elif lexists_at(fd, name):
         os.unlink(name, dir_fd=fd)
-    store.recheck("Nothing was written.")
+    store.recheck(written)
     sgit(["init", "--quiet", "--bare", "--template=", store.path], store.verified, sync_env(),
          f"creating the store {store.path}")
     return store.read("config")
@@ -5674,18 +5736,24 @@ def verify_new(repo: Repo, lane: dict, held: StoreDir, config: bytes | None,
     if why:
         raise LaneError(f"lane {lane['id']} is registered (setup-failed) but nothing ran in it: "
                         f"{why}\nThe shared object store may serve what no remote showed "
-                        f"(LR7): find out what wrote it, then {REDO_NEW.format(id=lane['id'])}")
+                        f"(LR7): find out what wrote it, then {redo_new(lane)}")
     try:
         write_mark(held, repo, lane)
     except OSError as e:
         raise LaneError(f"lane {lane['id']}'s checkout matches {label}, but its marker in "
                         f"{held.verified}/{NEW_MARKS} couldn't be written ({e.strerror or e}), "
-                        f"and nothing ran in it: {REDO_NEW.format(id=lane['id'])}")
+                        f"and nothing ran in it: {redo_new(lane)}")
 
 
-# What every refusal of an unverified lane says to do (LR7).
-REDO_NEW = ("remove the lane with `lane done {id} --abandon` (it names any planted file it won't "
-            "delete) and run `lane new` again")
+def redo_new(lane: dict) -> str:
+    """What a refusal by `new` itself says to do with the lane it just made and checked: nothing
+    ran in it, and `done --abandon` deletes no tree git finds changed (LR7)."""
+    return (f"delete {shown(lane['path'])} by hand from a terminal (`lane done` deletes no tree "
+            f"git finds changed), then run `lane done {lane['id']} --abandon` and `lane new` "
+            "again")
+
+
+NO_LANE = "No lane was made."  # what `new`'s refusals before `worktree add` say was left
 NEW_MARKS = "new-lanes"  # in the stores' dir: one marker per lane whose checkout `new` verified
 
 

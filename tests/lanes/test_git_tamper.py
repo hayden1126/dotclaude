@@ -1,5 +1,6 @@
 """`lane ls` shows the DA15/DA16 tripwire (lanelib.git_tamper) for the repo's common dir: a
 `git: <reason>` line per finding, after the install line. It warns: the exit stays 0."""
+import fcntl
 import glob
 import hashlib
 import json
@@ -7,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import unittest
 import zlib
 from unittest import mock
@@ -255,6 +257,23 @@ def marks(case, lane_id):
                                   "new-lanes", f"*-{lane_id}.json"))
 
 
+def flip(case, lane_id, step="setup"):
+    """Set lane_id's lane.json to setup-failed at step, as any lane's sandbox can."""
+    data = os.path.join(case.common, "lanes", lane_id, "lane.json")
+    case.write(data, json.dumps(dict(case.lane_json(lane_id), state="setup-failed",
+                                     setup_failed=step)))
+
+
+def steers_to_done(case, lane_id):
+    """`open` and `park` refuse the setup-failed lane and point to `done --abandon`, not adopt."""
+    for args in (("open", lane_id, "--print"), ("park", lane_id)):
+        with case.subTest(args=args):
+            p = case.run_lane(*args)
+            case.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+            case.assertIn(f"lane done {lane_id} --abandon", p.stderr)
+            case.assertNotIn("lane adopt", p.stderr)
+
+
 class NewVerifiesTree(LanesRepo):
     """LR7: `lane new` checks the lane out from the shared object store, which any lane's
     sandboxed Bash can write, then runs the configured setup command in it sandbox-off, and the
@@ -326,23 +345,101 @@ class NewVerifiesTree(LanesRepo):
                 self.assertIn("lane done chart-fix --abandon", p.stderr)
                 self.assertNotIn("lane adopt", p.stderr)
 
-    def test_the_marker_holds_the_lane_and_done_removes_it(self):
+    def test_a_finished_lane_keeps_no_marker_adopt_would_trust(self):
+        # M1: the marker vouches only for a tree nothing has run in, so a lane `new` finished
+        # has none, and a lane.json flipped back to setup-failed gets no setup run.
         self.lane("new", "chart-fix")
+        self.assertEqual(marks(self, "chart-fix"), [])
+        os.remove(os.path.join(self.lane_path("chart-fix"), "SETUP_RAN"))
+        for step in ("setup", "copy"):
+            with self.subTest(step=step):
+                flip(self, "chart-fix", step)
+                p = self.run_lane("adopt", self.lane_path("chart-fix"))
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertIn("lane done chart-fix --abandon", p.stderr)
+                self.assertFalse(self.setup_ran())
+        steers_to_done(self, "chart-fix")
+
+    def test_a_lane_adopt_finished_keeps_no_marker(self):
+        # A failed setup keeps the marker, so adopt finishes the lane; once it has, the marker
+        # is gone, as for a lane `new` finished.
+        self.lane("init", "--setup", "test -e OK && touch SETUP_RAN")
+        p = self.run_lane("new", "chart-fix")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertEqual(len(marks(self, "chart-fix")), 1)
+        self.write(os.path.join(self.lane_path("chart-fix"), "OK"), "")
+        self.lane("adopt", self.lane_path("chart-fix"))
+        self.assertTrue(self.setup_ran())
+        self.assertEqual(self.lane_json("chart-fix")["state"], "active")
+        self.assertEqual(marks(self, "chart-fix"), [])
+        os.remove(os.path.join(self.lane_path("chart-fix"), "SETUP_RAN"))
+        flip(self, "chart-fix")
+        p = self.run_lane("adopt", self.lane_path("chart-fix"))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertFalse(self.setup_ran())
+        steers_to_done(self, "chart-fix")
+
+    def test_a_marker_new_cannot_drop_refuses_and_leaves_the_lane_setup_failed(self):
+        # The setup makes the markers' dir read-only, so the drop fails: `new` refuses and
+        # leaves the lane setup-failed at 'setup', where only the setup has run, so the kept
+        # marker vouches for nothing a session wrote.
+        marks_dir = os.path.join(self.home, ".local", "state", "dotclaude", "verified",
+                                 "new-lanes")
+        self.addCleanup(lambda: os.path.isdir(marks_dir) and os.chmod(marks_dir, 0o700))
+        self.lane("init", "--setup", f"chmod 500 '{marks_dir}' && touch SETUP_RAN")
+        p = self.run_lane("new", "chart-fix")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("marker", p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        rec = self.lane_json("chart-fix")
+        self.assertEqual((rec["state"], rec["setup_failed"]), ("setup-failed", "setup"))
+        self.assertIn("setup-failed", self.run_lane("open", "chart-fix", "--print").stderr)
+        os.chmod(marks_dir, 0o700)
+        self.lane("init", "--setup", "touch SETUP_RAN")
+        self.lane("adopt", self.lane_path("chart-fix"))
+        self.assertEqual(self.lane_json("chart-fix")["state"], "active")
+        self.assertEqual(marks(self, "chart-fix"), [])
+
+    def test_a_lane_new_refused_is_closed_once_its_dir_is_deleted_by_hand(self):
+        # L1: `done --abandon` keeps a tree git finds changed, so the refusal says to delete
+        # the dir by hand first, since nothing ran there.
+        plant_readme(self)
+        p = self.run_lane("new", "chart-fix")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        lane = self.lane_path("chart-fix")
+        self.assertIn(f"delete {lane} by hand", p.stderr)
+        self.assertIn("lane done chart-fix --abandon", p.stderr)
+        for args in (("open", "chart-fix", "--print"), ("park", "chart-fix")):
+            with self.subTest(args=args):
+                self.assertIn(f"delete {lane} by hand", self.run_lane(*args).stderr)
+        shutil.rmtree(lane)
+        self.lane("done", "chart-fix", "--abandon")
+        self.assertFalse(os.path.exists(os.path.join(self.common, "lanes", "chart-fix")))
+        self.assertEqual(self.git("branch", "--list", "chart-fix"), "")
+        self.assertNotIn("chart-fix", self.git("worktree", "list"))
+        sha = self.git("rev-parse", "HEAD:README.md").strip()
+        with open(os.path.join(self.common, "objects", sha[:2], sha[2:]), "wb") as f:
+            f.write(zlib.compress(b"blob 6\0hello\n"))  # the blob's own bytes again
+        self.lane("new", "chart-fix")  # the id, its path and its branch are free again
+
+    def test_done_removes_the_marker_of_a_lane_new_left_setup_failed(self):
+        self.lane("init", "--setup", "false")
+        self.assertEqual(self.run_lane("new", "chart-fix").returncode, 1)
         (mark,) = marks(self, "chart-fix")
         data = json.loads(self.read(mark))
         self.assertEqual(data["id"], "chart-fix")
         self.assertEqual(data["path"], self.lane_path("chart-fix"))
         self.assertEqual(data["base_sha"], self.lane_json("chart-fix")["base_sha"])
-        os.remove(os.path.join(self.lane_path("chart-fix"), "SETUP_RAN"))  # `done` keeps it
         self.lane("done", "chart-fix", "--abandon")
         self.assertEqual(marks(self, "chart-fix"), [])
 
     def test_a_marker_left_from_an_older_lane_vouches_for_no_new_one(self):
-        self.lane("new", "chart-fix")
+        self.lane("init", "--setup", "false")
+        self.assertEqual(self.run_lane("new", "chart-fix").returncode, 1)
         (mark,) = marks(self, "chart-fix")
         kept = self.read(mark)
-        os.remove(os.path.join(self.lane_path("chart-fix"), "SETUP_RAN"))
         self.lane("done", "chart-fix", "--abandon")
+        self.lane("init", "--setup", "touch SETUP_RAN")
         self.write(mark, kept)  # as if that `done` couldn't remove it
         plant_readme(self)
         self.assertEqual(self.run_lane("new", "chart-fix").returncode, 1)
@@ -368,7 +465,54 @@ class NewVerifiesWithoutSetup(LanesRepo):
 
     def test_a_clean_checkout_is_verified(self):
         self.assertIn("verified", self.lane("new", "chart-fix"))
-        self.assertEqual(len(marks(self, "chart-fix")), 1)
+
+    def test_a_finished_lane_keeps_no_marker_a_later_setup_would_trust(self):
+        # M1 with no setup: the lane is finished once `new` marks it active, so its marker goes
+        # then, and a setup command added later never runs over a flipped lane.json.
+        self.lane("new", "chart-fix")
+        self.assertEqual(marks(self, "chart-fix"), [])
+        self.lane("init", "--setup", "touch SETUP_RAN")
+        flip(self, "chart-fix")
+        p = self.run_lane("adopt", self.lane_path("chart-fix"))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("lane done chart-fix --abandon", p.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.lane_path("chart-fix"), "SETUP_RAN")))
+        steers_to_done(self, "chart-fix")
+
+    def held_store_lock(self):
+        """Hold the stores' dir's .lock, as a running `lane new` or sync-main does."""
+        verified = os.path.join(self.home, ".local", "state", "dotclaude", "verified")
+        os.makedirs(verified, 0o700, exist_ok=True)
+        fd = os.open(os.path.join(verified, ".lock"), os.O_WRONLY | os.O_CREAT, 0o600)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return fd
+
+    def test_new_waits_for_a_held_store_lock(self):
+        # L2: two `lane new` runs at once: the second waits for the first's store lock.
+        fd = self.held_store_lock()
+        self.env["_LANE_TEST_STORE_WAIT"] = "30"
+        proc = subprocess.Popen([sys.executable, LANE, "new", "chart-fix"], cwd=self.main,
+                                env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True)
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        time.sleep(1.5)
+        self.assertIsNone(proc.poll(), proc.stderr.read() if proc.poll() is not None else "")
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        out, err = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 0, out + err)
+        self.assertEqual(err.count("waiting"), 1, err)
+        self.assertIn("verified/.lock", err)
+        self.assertEqual(self.lane_json("chart-fix")["state"], "active")
+
+    def test_new_refuses_once_the_store_lock_wait_runs_out(self):
+        self.held_store_lock()
+        self.env["_LANE_TEST_STORE_WAIT"] = "0.5"
+        p = self.run_lane("new", "chart-fix")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("another lane sync-main or lane new holds", p.stderr)
+        self.assertIn("waiting", p.stderr)
+        self.assertFalse(os.path.exists(self.lane_path("chart-fix")))
 
     def test_without_the_store_rules_nothing_is_created(self):
         self.write(os.path.join(self.home, ".claude", "settings.json"), "{}")
