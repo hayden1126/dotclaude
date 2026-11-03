@@ -4752,9 +4752,13 @@ def harden_git_env(repo: Repo) -> None:
     # from the lane's worktree, and a child git (a hook's, handoff-check's) runs past any -c
     # on our command line. Config from the environment reaches it, and submodules: the
     # last entry of GIT_CONFIG_PARAMETERS, which git reads after any GIT_CONFIG_COUNT entries
-    # and the inherited ones before it, so nothing inherited turns it back on.
+    # and the inherited ones before it, so nothing inherited turns it back on. Nor takes a
+    # commit's parents from objects/info/commit-graph, which sandboxed Bash can write too and
+    # which exists legitimately, so the tripwire can't flag it: a planted parent could make an
+    # unpushed HEAD read as an ancestor of the remote's.
     os.environ["GIT_CONFIG_PARAMETERS"] = " ".join(filter(None, [
-        os.environ.get("GIT_CONFIG_PARAMETERS", "").strip(), "'core.fsmonitor'='false'"]))
+        os.environ.get("GIT_CONFIG_PARAMETERS", "").strip(), "'core.fsmonitor'='false'",
+        "'core.commitGraph'='false'"]))
     # Nor reads an object through refs/replace or <common>/info/grafts, which sandboxed Bash can
     # write: a replaced commit, or a grafted parent, could make an unpushed HEAD read as an
     # ancestor of the remote's. GIT_NO_REPLACE_OBJECTS stops only the first.
@@ -5219,11 +5223,13 @@ def sync_env(git_dir: str | None = None, **extra: str) -> dict[str, str]:
            "GIT_NO_REPLACE_OBJECTS": "1", "GIT_GRAFT_FILE": os.devnull,
            "GIT_ALLOW_PROTOCOL": "https:ssh:file", "GIT_OPTIONAL_LOCKS": "0",
            "GIT_ATTR_NOSYSTEM": "1",
-           "GIT_CONFIG_COUNT": "4",
+           "GIT_CONFIG_COUNT": "5",
            "GIT_CONFIG_KEY_0": "core.hooksPath", "GIT_CONFIG_VALUE_0": os.devnull,
            "GIT_CONFIG_KEY_1": "core.fsmonitor", "GIT_CONFIG_VALUE_1": "false",
            "GIT_CONFIG_KEY_2": "core.useReplaceRefs", "GIT_CONFIG_VALUE_2": "false",
-           "GIT_CONFIG_KEY_3": "core.attributesFile", "GIT_CONFIG_VALUE_3": os.devnull}
+           "GIT_CONFIG_KEY_3": "core.attributesFile", "GIT_CONFIG_VALUE_3": os.devnull,
+           # parents from the commits themselves, never a lane-writable commit-graph
+           "GIT_CONFIG_KEY_4": "core.commitGraph", "GIT_CONFIG_VALUE_4": "false"}
     if git_dir:
         env["GIT_DIR"] = git_dir
     env.update(extra)

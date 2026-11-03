@@ -510,5 +510,82 @@ class SyncMain(LanesRepo):
         self.assertEqual(self.state(lane), before)
 
 
+class CommitGraphOff(unittest.TestCase):
+    """git takes a commit's parents from objects/info/commit-graph when there is one, and any
+    lane can write that file (it exists legitimately, so the tripwire can't flag it). sync_env
+    and harden_git_env turn the graph off: a planted parent never answers an ancestry check."""
+
+    def setUp(self):
+        self.tmp = os.path.realpath(__import__("tempfile").mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.env = {"HOME": self.tmp, "PATH": os.environ["PATH"], "GIT_CONFIG_NOSYSTEM": "1",
+                    "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+                    "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"}
+        self.work = os.path.join(self.tmp, "repo")
+        self.git("init", "-q", "-b", "main", self.work, cwd=self.tmp)
+        self.common = os.path.join(self.work, ".git")
+        # Dated in order, so the side commit's generation never rules it out as an ancestor.
+        self.commit("a", 1000)
+        self.git("branch", "side")
+        self.git("checkout", "-q", "side")
+        self.side = self.commit("s", 2000)
+        self.git("checkout", "-q", "main")
+        mid = self.commit("b", 3000)
+        self.tip = self.commit("c", 4000)
+        # The tip named on the command line parses from its object; its parent from the graph.
+        self.plant_parent(mid, self.side)
+
+    def git(self, *args, cwd=None, env=None):
+        return subprocess.run(["git", *args], cwd=cwd or self.work, env=env or self.env,
+                              check=True, capture_output=True, text=True).stdout
+
+    def commit(self, msg, when):
+        date = f"{1_600_000_000 + when} +0000"
+        self.git("commit", "-q", "--allow-empty", "-m", msg,
+                 env=dict(self.env, GIT_AUTHOR_DATE=date, GIT_COMMITTER_DATE=date))
+        return self.git("rev-parse", "HEAD").strip()
+
+    def plant_parent(self, child, parent):
+        """A commit-graph in which child's first parent is parent."""
+        self.git("commit-graph", "write", "--reachable")
+        path = os.path.join(self.common, "objects", "info", "commit-graph")
+        with open(path, "rb") as f:
+            data = bytearray(f.read())
+        chunks = {bytes(data[8 + 12 * i:12 + 12 * i]):
+                  int.from_bytes(data[12 + 12 * i:20 + 12 * i], "big") for i in range(data[6])}
+        n = int.from_bytes(data[chunks[b"OIDF"] + 255 * 4:chunks[b"OIDF"] + 256 * 4], "big")
+        oids = [bytes(data[chunks[b"OIDL"] + 20 * i:chunks[b"OIDL"] + 20 * i + 20]).hex()
+                for i in range(n)]
+        at = chunks[b"CDAT"] + 36 * oids.index(child) + 20
+        data[at:at + 4] = oids.index(parent).to_bytes(4, "big")
+        os.chmod(path, 0o644)
+        with open(path, "wb") as f:
+            f.write(data)
+
+    def ancestor(self, env):
+        full = dict(self.env, **env)
+        return subprocess.run(["git", "merge-base", "--is-ancestor", self.side, self.tip],
+                              cwd=self.work, env=full, capture_output=True).returncode
+
+    def test_a_planted_parent_fools_plain_git(self):
+        self.assertEqual(self.ancestor({}), 0)  # the control: the graph is read
+
+    def test_sync_env_never_reads_the_graph(self):
+        mod = load_lane_script()
+        env = mod.sync_env(self.common)
+        keys = {env[k]: env[k.replace("KEY", "VALUE")] for k in env
+                if k.startswith("GIT_CONFIG_KEY_")}
+        self.assertEqual(keys.get("core.commitGraph"), "false")
+        self.assertEqual(self.ancestor(env), 1)
+
+    def test_harden_git_env_never_reads_the_graph(self):
+        mod = load_lane_script()
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            mod.harden_git_env(mock.Mock(common_dir=self.common))
+            env = dict(os.environ)
+        self.assertIn("'core.commitGraph'='false'", env["GIT_CONFIG_PARAMETERS"])
+        self.assertEqual(self.ancestor(env), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
