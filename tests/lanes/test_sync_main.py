@@ -13,6 +13,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -652,6 +653,42 @@ class SyncMain(LanesRepo):
                 self.assertFalse(os.path.exists(planted))
                 self.assertEqual(self.git("rev-parse", "refs/heads/lead").strip(), head)
                 self.assertEqual(self.state()[2], files_before)
+
+    def test_an_index_that_cant_be_replaced_says_where_the_checkout_stands(self):
+        # A dir at <common>/index: the files have moved to the merge, but the rename over the
+        # index fails before the branch moves. The refusal says so and what to do.
+        self.land({"hooks/x.sh": REAL})
+        head = self.git("rev-parse", "refs/heads/lead").strip()
+        index = os.path.join(self.common, "index")
+
+        def patches(mod):
+            real = mod.publish
+
+            def block(*a, **k):
+                out = real(*a, **k)
+                os.unlink(index)
+                os.mkdir(index)
+                os.mkdir(os.path.join(index, "x"))
+                return out
+            return [mock.patch.object(mod, "publish", block)]
+        try:
+            rc, out, err = self.sync_in("7", patches=patches)
+        finally:
+            shutil.rmtree(index, ignore_errors=True)
+        self.assertEqual(rc, 1, out + err)
+        self.assertNotIn("verified;", out)
+        self.assertIn(f"still at {head[:12]}", err)
+        self.assertIn(f"{self.common}/index", err)
+        self.assertEqual(self.git("rev-parse", "refs/heads/lead").strip(), head)
+        with open(os.path.join(self.main, "hooks", "x.sh")) as f:
+            self.assertEqual(f.read(), REAL)
+        # The step it names puts the branch and the index at the merge, the files untouched.
+        merge = re.search(r"`git reset ([0-9a-f]{40})`", err)
+        self.assertTrue(merge, err)
+        self.git("reset", "-q", merge[1])
+        self.assertEqual(self.parents("lead"), [head, self.git("rev-parse", "main").strip()])
+        self.assert_checkout_is("lead")
+        self.assertEqual(self.git("status", "--porcelain", "--untracked-files=no"), "")
 
     def test_a_link_swapped_in_at_an_ancestor_is_never_followed(self):
         # After the stores' dir is opened, ~/.local/state becomes a link to a copy elsewhere (a

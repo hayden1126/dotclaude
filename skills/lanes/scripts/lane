@@ -5740,7 +5740,15 @@ def sync_checkout(repo: Repo, store: str, pinned: str, merge: str) -> None:
                         "find out what wrote it, then rerun")
     sgit(["read-tree", "-m", "-u", pinned, merge], repo.toplevel, env,
          f"checking out {merge[:12]}")
-    install_index(repo, index)
+    try:
+        install_index(repo, index)
+    except OSError as e:  # a dir or another non-file at <common>/index, a full disk
+        raise LaneError(f"the checkout {repo.toplevel} now holds {merge[:12]}'s files, but its "
+                        f"index couldn't be replaced ({type(e).__name__}: {e.strerror or e}), so "
+                        f"its branch is still at {pinned[:12]} and its index is not the merge's. "
+                        f"Find out what put that at {repo.common_dir}/index and remove it, then "
+                        f"run `git reset {merge}` in the checkout: it points the branch at the "
+                        "merge and rebuilds the index from it, leaving the files as they are")
 
 
 def install_index(repo: Repo, index: str) -> None:
