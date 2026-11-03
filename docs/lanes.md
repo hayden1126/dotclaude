@@ -846,7 +846,7 @@ commits, and reinstalls from its worktree before ready.
 changes or no branch, gh can't prove the merge, the merge conflicts, the checkout doesn't match
 its commit, the repo turns on per-worktree config (git would then read a file a lane's sandbox
 can write), or another sync-main holds the store's lock. It also refuses on any tripwire
-finding.
+finding, checked at the start and again right before each ref it moves in the shared repo.
 
 **The tripwire.** sync-main, `lane ls`, handoff-check and setup.sh each check the shared git dir
 for signs it may serve content no remote showed (DA15/DA16). `lane ls` prints a `git:` line per
@@ -877,6 +877,9 @@ find out who made it before anything else runs git in that repo.
 - A corrupt object in the shared repo is reported by `git fsck`, not repaired. The checkout is
   still built from the store.
 - A shallow clone fails the tripwire, so sync-main, handoff-check and setup.sh refuse in one.
+- A reflog link planted between sync-main's last tripwire check and git's own update-ref still
+  takes that ref's log line (LR4). The re-check right before each update-ref narrows that span to
+  milliseconds; it doesn't close it.
 
 ## Layout
 

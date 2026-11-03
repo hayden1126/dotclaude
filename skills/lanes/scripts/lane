@@ -5722,6 +5722,8 @@ def publish(repo: Repo, store: str, remote: str, base: str, branch: str, proven:
     refs = [f"refs/remotes/{remote}/{base}"]
     if branch != base:
         refs.append(f"refs/heads/{base}")
+    tamper_gate(repo, "No ref moved and the checkout was not touched: find out who made each, "
+                "remove it, then rerun")
     for ref in refs:
         sgit(["update-ref", "-m", "lane sync-main", ref, proven], repo.common_dir, env,
              f"pointing {ref} at {proven[:12]}")
@@ -5785,12 +5787,25 @@ def move_branch(repo: Repo, store: str, branch: str, pinned: str, merge: str) ->
     """refs/heads/<branch> from pinned to merge, compare-and-swap: a branch moved since the pin
     refuses."""
     env = checkout_env(repo, GIT_OBJECT_DIRECTORY=os.path.join(store, "objects"))
+    tamper_gate(repo, f"So {branch} was left at {pinned[:12]}, though the checkout's files and "
+                f"index are now {merge[:12]}'s. Find out who made each and remove it, then run "
+                f"`git reset --soft {merge}` in the checkout")
     p = sgit(["update-ref", "-m", "lane sync-main", f"refs/heads/{branch}", merge, pinned],
              repo.toplevel, env, f"moving {branch}", ok=None)
     if p.returncode != 0:
         raise LaneError(f"{branch} moved from {pinned[:12]} while lane sync-main ran, so it was "
                         f"left there: the checkout's files and index are now {merge[:12]}'s. "
                         f"Look at what moved it, then `git reset --soft` to the commit you want")
+
+
+def tamper_gate(repo: Repo, then: str) -> None:
+    """Refuse on any tripwire finding (lanelib.repo_tamper), then saying what was written. Run
+    at the start and again right before each update-ref in the shared repo: a reflog link
+    planted meanwhile would take that ref's log line sandbox-off (LR4)."""
+    if found := lanelib.repo_tamper(repo):
+        raise LaneError(f"the git common dir {repo.common_dir} holds what a lane may have planted "
+                        f"(DA15/DA16, LR3, LR4):" + "".join(f"\n  {shown(f)}" for f in found)
+                        + f"\n{then}")
 
 
 def fsck_damage(repo: Repo) -> list[str]:
@@ -5819,10 +5834,7 @@ def cmd_sync_main(args) -> None:
     harden_git_env(repo)
     # The checkout's own .git too (repo_tamper): a commondir file planted there makes git's
     # answer, repo.common_dir, a clean dir of the planter's.
-    if found := lanelib.repo_tamper(repo):
-        raise LaneError(f"the git common dir {repo.common_dir} may serve content no remote showed "
-                        f"(DA15/DA16):" + "".join(f"\n  {shown(f)}" for f in found)
-                        + "\nNothing was written: find out who made each, remove it, then rerun")
+    tamper_gate(repo, "Nothing was written: find out who made each, remove it, then rerun")
     branch, pinned = pin_head(repo)
     if dirty := dirty_paths(repo):
         raise LaneError(f"{repo.toplevel} has uncommitted changes:{named_paths(dirty)}\nCommit "

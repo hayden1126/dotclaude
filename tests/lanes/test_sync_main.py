@@ -175,6 +175,52 @@ class SyncMain(LanesRepo):
         for args in fetches:
             self.assertIn("--no-auto-maintenance", args)
 
+    def link_reflog(self, rel):
+        """A symlink at the reflog path rel under the common dir, to a victim file outside it."""
+        victim = os.path.join(self.tmp, "victim")
+        self.write(victim, "mine\n")
+        path = os.path.join(self.common, "logs", rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(path)
+        os.symlink(victim, path)
+        return victim
+
+    def test_a_reflog_symlink_refuses(self):
+        # LR4: an update-ref sandbox-off appends its reflog line through the link.
+        self.land({"hooks/x.sh": REAL})
+        victim = self.link_reflog("refs/heads/lead")
+        before = self.state()
+        p = self.sync("7")
+        self.assertNotEqual(p.returncode, 0, p.stdout)
+        self.assertIn("logs/refs/heads/lead", p.stderr)
+        self.assertEqual(self.state(), before)
+        self.assertEqual(self.read(victim), "mine\n")
+
+    def test_a_reflog_symlink_planted_after_the_gate_refuses(self):
+        # LR4: the tripwire runs again right before each update-ref in the shared repo.
+        for n, step, rel in ((7, "predict", "refs/remotes/origin/main"),
+                             (8, "sync_checkout", "refs/heads/lead")):
+            with self.subTest(step=step):
+                self.land({f"hooks/x{n}.sh": REAL}, n=n)
+                pinned = self.git("rev-parse", "HEAD").strip()
+                victims = []
+
+                def patches(mod, step=step, rel=rel):
+                    real = getattr(mod, step)
+
+                    def planted(*a, **k):
+                        out = real(*a, **k)
+                        victims.append(self.link_reflog(rel))
+                        return out
+                    return [mock.patch.object(mod, step, planted)]
+                rc, out, err = self.sync_in(str(n), patches=patches)
+                self.assertNotEqual(rc, 0, out)
+                self.assertIn(f"logs/{rel}", err)
+                self.assertEqual(self.read(victims[0]), "mine\n")
+                self.assertEqual(self.git("rev-parse", "refs/heads/lead").strip(), pinned)
+                os.unlink(os.path.join(self.common, "logs", rel))
+
     def test_already_up_to_date_is_a_clean_no_op(self):
         proven = self.land({"hooks/x.sh": REAL})
         self.assertEqual(self.sync("7").returncode, 0)
