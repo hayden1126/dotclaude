@@ -33,6 +33,9 @@ class LanesRepo(unittest.TestCase):
     """self.main is the main checkout of a lanes repo whose lanes live under self.root."""
 
     init_lanes = True
+    # True puts the state dir where a real one lives, $HOME/.local/state/dotclaude: `lane
+    # sync-main` refuses any other (its settings rules are spelled for that path).
+    state_in_home = False
 
     def setUp(self):
         self.tmp = os.path.realpath(tempfile.mkdtemp())
@@ -66,7 +69,9 @@ class LanesRepo(unittest.TestCase):
         self.env = {k: v for k, v in os.environ.items()
                     if not k.startswith(("CLAUDE", "GIT_DIR", "GIT_WORK_TREE", "SANDBOX_RUNTIME",
                                              "TMUX"))}
-        self.env.update(HOME=self.home, XDG_STATE_HOME=os.path.join(self.tmp, "state"),
+        state = (os.path.join(self.home, ".local", "state") if self.state_in_home
+                 else os.path.join(self.tmp, "state"))
+        self.env.update(HOME=self.home, XDG_STATE_HOME=state,
                         TMUX_TMPDIR=self.tmp,  # a tmux a test starts never finds the real server
                         PATH=fake_bin + os.pathsep + os.environ["PATH"],
                         GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
@@ -128,7 +133,7 @@ class LanesRepo(unittest.TestCase):
     def config_files(self):
         """The lanes configs `lane init` wrote: they live in the state dir, out of the repo,
         beside the lead records (<repo>-<hash>.lead.json), which this leaves out."""
-        d = os.path.join(self.tmp, "state", "dotclaude", "lanes")
+        d = os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "lanes")
         return sorted(glob.glob(os.path.join(d, "*.toml")))
 
     @property
