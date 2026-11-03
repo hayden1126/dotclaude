@@ -1,10 +1,12 @@
 """skills/lanes/scripts/lanelib.py: the shared lint, the sandbox detection and session liveness,
 in-process."""
+import contextlib
 import json
 import os
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -802,6 +804,152 @@ class UnreadSessions(unittest.TestCase):
         with open(path, "w") as f:  # a junk line with no cwd in it can't hide one
             f.write('{"type": "summ\n' + later)
         self.assertEqual(lanelib.transcript_cwd(path), "/later")
+
+
+class GitTamper(unittest.TestCase):
+    """lanelib.git_tamper, the DA15/DA16 tripwire: each planted condition in a throwaway repo's
+    common dir is a reason; a clean repo, and an empty or blank alternates file, give none.
+    What can't be read counts as a finding, never as clean."""
+
+    def setUp(self):
+        self.tmp = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.addCleanup(self.unlock)
+        self.env = {"HOME": self.tmp, "PATH": os.environ["PATH"], "GIT_CONFIG_NOSYSTEM": "1",
+                    "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+                    "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"}
+        self.work = os.path.join(self.tmp, "repo")
+        self.git("init", "-q", "-b", "main", self.work, cwd=self.tmp)
+        self.common = os.path.join(self.work, ".git")
+        self.write("a.txt", "a\n")
+        self.write("b.txt", "b\n")
+        self.git("add", "a.txt", "b.txt")
+        self.git("commit", "-q", "-m", "two blobs")
+        self.blob_a = self.git("rev-parse", "HEAD:a.txt").strip()
+        self.blob_b = self.git("rev-parse", "HEAD:b.txt").strip()
+
+    def unlock(self):
+        for root, dirs, _ in os.walk(self.tmp):
+            for d in dirs:
+                with contextlib.suppress(OSError):
+                    os.chmod(os.path.join(root, d), 0o755)
+
+    def git(self, *args, cwd=None):
+        return subprocess.run(["git", *args], cwd=cwd or self.work, env=self.env, check=True,
+                              capture_output=True, text=True).stdout
+
+    def write(self, rel, text, root=None):
+        path = os.path.join(root or self.work, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(text)
+        return path
+
+    def found(self, *words):
+        reasons = lanelib.git_tamper(self.common)
+        self.assertTrue(reasons, "no finding")
+        for w in words:
+            self.assertTrue(any(w in r for r in reasons), (w, reasons))
+        return reasons
+
+    def test_a_clean_repo_has_no_finding(self):
+        self.assertEqual(lanelib.git_tamper(self.common), [])
+
+    def test_an_empty_or_blank_alternates_passes(self):
+        for text in ("", "\n", "  \n\t\n"):
+            with self.subTest(text=text):
+                self.write(".git/objects/info/alternates", text)
+                self.assertEqual(lanelib.git_tamper(self.common), [])
+
+    def test_alternates_with_content_is_found(self):
+        self.write(".git/objects/info/alternates", "/elsewhere/objects\n")
+        self.found("objects/info/alternates")
+
+    def test_a_loose_replace_ref_is_found(self):
+        self.git("replace", self.blob_a, self.blob_b)
+        self.found(f"refs/replace/{self.blob_a}")
+
+    def test_a_packed_replace_ref_is_found(self):
+        self.git("replace", self.blob_a, self.blob_b)
+        self.git("pack-refs", "--all", "--prune")
+        self.assertFalse(os.path.exists(os.path.join(self.common, "refs", "replace",
+                                                     self.blob_a)))
+        self.found("packed-refs")
+
+    def test_an_empty_dir_under_replace_passes(self):
+        os.makedirs(os.path.join(self.common, "refs", "replace", "sub"))
+        self.assertEqual(lanelib.git_tamper(self.common), [])
+
+    def test_grafts_and_shallow_are_found(self):
+        for rel in ("info/grafts", "shallow"):
+            with self.subTest(rel):
+                path = self.write(f".git/{rel}", "")  # existing at all counts
+                self.found(rel)
+                os.unlink(path)
+                self.assertEqual(lanelib.git_tamper(self.common), [])
+
+    def test_symlinks_are_found_and_never_followed(self):
+        outside = os.path.join(self.tmp, "outside")
+        os.makedirs(outside)
+        # A link is a finding in itself, whatever it points at: an empty dir, an empty or blank
+        # file, or nothing.
+        cases = {"refs/replace": outside, f"refs/replace/{self.blob_a}": "missing",
+                 "packed-refs": self.write("empty", "", root=outside),
+                 "objects/info/alternates": self.write("blank", "\n", root=outside),
+                 "info/grafts": "missing", "shallow": "missing"}
+        for rel, target in cases.items():
+            with self.subTest(rel):
+                link = os.path.join(self.common, rel)
+                os.makedirs(os.path.dirname(link), exist_ok=True)
+                os.symlink(target, link)
+                try:
+                    self.found(rel)
+                finally:
+                    os.unlink(link)
+                self.assertEqual(lanelib.git_tamper(self.common), [])
+
+    def test_a_fifo_alternates_is_found_without_blocking(self):
+        os.mkfifo(os.path.join(self.common, "objects", "info", "alternates"))
+        self.found("objects/info/alternates")
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads a mode-000 dir")
+    def test_an_unreadable_path_fails_closed(self):
+        for rel in ("refs/replace", "refs", "objects/info", "info"):
+            with self.subTest(rel):
+                path = os.path.join(self.common, rel)
+                os.makedirs(path, exist_ok=True)
+                os.chmod(path, 0)
+                try:
+                    self.found(rel)
+                finally:
+                    os.chmod(path, 0o755)
+
+    def test_a_missing_common_dir_fails_closed(self):
+        self.assertEqual(len(lanelib.git_tamper(os.path.join(self.tmp, "nope"))), 1)
+
+    def cli(self, *args):
+        return subprocess.run([sys.executable, "-I", lanelib.__file__, *args], env=self.env,
+                              capture_output=True, text=True, timeout=60)
+
+    def test_the_cli_exits_by_finding(self):
+        p = self.cli("git-tamper", self.common)
+        self.assertEqual((p.returncode, p.stdout), (0, ""), p.stderr)
+        self.write(".git/shallow", "")
+        self.git("replace", self.blob_a, self.blob_b)
+        p = self.cli("git-tamper", self.common)
+        self.assertEqual(p.returncode, 1, p.stderr)
+        lines = p.stdout.splitlines()
+        self.assertEqual(len(lines), 2, lines)
+        self.assertTrue(any("shallow" in x for x in lines), lines)
+        self.assertTrue(any("refs/replace/" in x for x in lines), lines)
+
+    def test_the_cli_refuses_bad_usage(self):
+        for args in ((), ("git-tamper",), ("git-tamper", self.common, "x"),
+                     ("other", self.common)):
+            with self.subTest(args=args):
+                p = self.cli(*args)
+                self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+                self.assertIn("usage", p.stderr)
 
 
 if __name__ == "__main__":

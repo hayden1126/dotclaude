@@ -40,6 +40,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import tomllib
@@ -624,6 +625,134 @@ def real_dir_at(dir_fd: int, name: str) -> bool:
         return stat.S_ISDIR(os.stat(name, dir_fd=dir_fd, follow_symlinks=False).st_mode)
     except FileNotFoundError:
         return False
+
+
+def git_tamper(common_dir: str) -> list[str]:
+    """The tripwire for DA15/DA16: one plain reason per sign that the git common dir may make
+    git serve content other than what the remote showed, [] when there is none. Sandboxed Bash
+    in any lane can write the common dir. It flags any replace ref (loose under refs/replace/ or
+    a packed-refs line), a non-blank objects/info/alternates (the file exists empty in a normal
+    repo), and an info/grafts or shallow file existing at all. Nothing below common_dir is
+    followed: each name opens by fd with O_NOFOLLOW (open_dir), so a symlink is a finding in
+    itself. Fails closed: whatever can't be read is a finding, never clean. `lane ls`,
+    handoff-check and setup.sh (through this file's `git-tamper` command) call it."""
+    try:
+        root = os.open(common_dir, os.O_RDONLY | os.O_DIRECTORY)
+    except OSError as e:
+        return [f"the git common dir {common_dir} can't be opened ({e.strerror or e}): "
+                "counted as tampered"]
+    checks = (("refs/replace", _replace_refs), ("packed-refs", _packed_replace),
+              ("objects/info/alternates", _alternates), ("info/grafts", _exists),
+              ("shallow", _exists))
+    reasons = []
+    try:
+        for rel, check in checks:
+            try:
+                reasons += check(root, rel)
+            except OSError as e:
+                reasons.append(f"{rel} can't be checked ({e.strerror or e}): counted as tampered")
+    finally:
+        os.close(root)
+    return reasons
+
+
+def _parent(root: int, rel: str) -> tuple[int, str] | None:
+    """(fd of rel's dir, rel's last name), the dir opened from root without following; None when
+    a dir on the way is missing. The caller closes the fd."""
+    head, name = os.path.split(rel)
+    try:
+        return open_dir(root, head), name
+    except FileNotFoundError:
+        return None
+
+
+def _lstat(dir_fd: int, name: str) -> os.stat_result | None:
+    try:
+        return os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+
+
+def _read(root: int, rel: str) -> bytes | None:
+    """rel's bytes, None when it is missing. A symlink or anything but a regular file raises."""
+    if (at := _parent(root, rel)) is None:
+        return None
+    fd, name = at
+    try:
+        st = _lstat(fd, name)
+        if st is None:
+            return None
+        if not stat.S_ISREG(st.st_mode):
+            kind = "a symlink" if stat.S_ISLNK(st.st_mode) else "not a regular file"
+            raise OSError(errno.EINVAL, f"it is {kind}")
+        # O_NOFOLLOW: a link swapped in after the lstat fails; O_NONBLOCK: a fifo never hangs.
+        f = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+    finally:
+        os.close(fd)
+    with open(f, "rb") as fh:
+        if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+            raise OSError(errno.EINVAL, "it is not a regular file")
+        return fh.read()
+
+
+def _replace_refs(root: int, rel: str) -> list[str]:
+    if (at := _parent(root, rel)) is None:
+        return []
+    fd, name = at
+    found = []
+    try:
+        _replace_walk(fd, name, rel, found)
+    finally:
+        os.close(fd)
+    return found
+
+
+def _replace_walk(dir_fd: int, name: str, path: str, found: list[str], depth: int = 0) -> None:
+    """Each entry under refs/replace/ but an empty dir is a finding."""
+    st = _lstat(dir_fd, name)
+    if st is None:
+        return
+    if stat.S_ISLNK(st.st_mode):
+        found.append(f"{path} is a symlink")
+    elif not stat.S_ISDIR(st.st_mode):
+        found.append(f"{path} exists: a replace ref makes git serve another object in place of "
+                     "the one it names")
+    elif depth > 32:
+        raise OSError(errno.ELOOP, f"{path} is nested too deep")
+    else:
+        sub = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dir_fd)
+        try:
+            for n in sorted(os.listdir(sub)):
+                _replace_walk(sub, n, f"{path}/{n}", found, depth + 1)
+        finally:
+            os.close(sub)
+
+
+def _packed_replace(root: int, rel: str) -> list[str]:
+    data = _read(root, rel)
+    return [f"{rel} line {n} names a replace ref: {line.decode(errors='replace')[:120]}"
+            for n, line in enumerate((data or b"").splitlines(), 1) if b"refs/replace/" in line]
+
+
+def _alternates(root: int, rel: str) -> list[str]:
+    data = _read(root, rel)
+    return [f"{rel} is not empty: git also reads objects from the stores it names"] \
+        if data and data.strip() else []
+
+
+def _exists(root: int, rel: str) -> list[str]:
+    if (at := _parent(root, rel)) is None:
+        return []
+    fd, name = at
+    try:
+        st = _lstat(fd, name)
+    finally:
+        os.close(fd)
+    if st is None:
+        return []
+    what = {"info/grafts": "git rewrites the parents of the commits it names",
+            "shallow": "git treats the commits it names as having no parents"}[rel]
+    return [f"{rel} exists{' (a symlink)' if stat.S_ISLNK(st.st_mode) else ''}: {what}"]
 
 
 def copy_fd(src: int, out: int) -> None:
@@ -2149,3 +2278,19 @@ def lead_relink(repo: Repo, sid: str, pid: int | None = None, proc: str = PROC) 
     others = [s for s in continuations(repo, rec, main_sessions(repo))
               if (s["pid"], proc_start_of(s)) != nearest]
     return None if others or lead_unknown(repo, proc) else why
+
+
+def main(argv: list[str]) -> int:
+    """`lanelib.py git-tamper <common_dir>`: git_tamper's reasons, one a line; exit 1 on any,
+    0 on none, 2 on bad usage. setup.sh runs it (python3 -I) to refuse an install."""
+    if len(argv) != 2 or argv[0] != "git-tamper":
+        print("usage: lanelib.py git-tamper <common_dir>", file=sys.stderr)
+        return 2
+    reasons = git_tamper(argv[1])
+    for r in reasons:
+        print(r)
+    return 1 if reasons else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
