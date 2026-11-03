@@ -42,7 +42,8 @@ Each layer covers what the others can't.
      it ("Deadline (A2)").
    - It catches the obvious forms; layer 1 catches the rest.
 3. **The report check** covers acceptance. It sends a malformed report from one of our roles back
-   to the agent at most twice.
+   to the agent, and any subagent's report that comes while one of its own background commands
+   still runs, at most twice between them ("Early reports (the wait check)").
 4. **Observation.**
    - The ledger records every start, stop, denial and deadline nudge, and the exclusions that
      keep probes out of `audit --monthly`.
@@ -64,7 +65,7 @@ Each layer covers what the others can't.
 | Explore, reviewer | n/a (no Bash) | credential-read and MCP rules | yes |
 | researcher | on, no escape | Bash **allowlist**; credential and MCP rules | yes |
 | writer | on, no escape | default rules; root = `worktreePath` | yes |
-| general-purpose, forks, Plan, plugin and Workflow agents | on, no escape | default rules; root = the project directory | no (their reports aren't JSON-bound) |
+| general-purpose, forks, Plan, plugin and Workflow agents | on, no escape | default rules; root = the project directory | the wait check only (their reports aren't JSON-bound) |
 | in-process teammates | on, no escape | their role's rules (meta.json `customAgentType`), else the default rules | no (their stops fire per message) |
 
 ## What ships
@@ -80,7 +81,7 @@ Each layer covers what the others can't.
 | Excluded-command guard | `hooks/excluded-guard.sh`, `hooks/excluded_guard.py`, a `Bash` entry in `settings.json` (timeout 5) | Enforces on every thread: an excluded command runs only when its cwd resolves to the project's own repository, the other git config it reads and every PATH dir and file its head resolves through are write-protected, and `claude` or `codex` runs from the project root. See "The excluded-command guard" below. Fails closed for excluded heads |
 | Excluded-command check | `hooks/excluded-check.sh` (`excluded_guard.py --session`), a SessionStart entry in `settings.json` (timeout 5) | Observes: what the guard would refuse from the session's project and PATH, shown once per change in its findings. Fails open |
 | Subagent policy | `hooks/subagent-policy.sh`, `skills/delegation/scripts/subagent-policy`, `skills/delegation/policy.toml` | Enforces: see "Subagent policy" below. Fails closed for the tools it polices |
-| Report check | `hooks/report-check.sh`, `skills/delegation/scripts/report-check` | Enforces acceptance: a schema-invalid report is sent back twice at most. Fails open |
+| Report check | `hooks/report-check.sh`, `skills/delegation/scripts/report-check` | Enforces acceptance: a schema-invalid report from one of our roles, or any subagent's report while one of its own background commands runs, is sent back twice at most between them; a handback (auto mode) let through while a command runs carries a note naming it. Fails open |
 | Ledger | `hooks/delegation-ledger.sh`, `skills/delegation/scripts/delegation-ledger`, `skills/delegation/liveness.toml` | Observes: start and stop rows (`agent_type` is the resolved role; a teammate adds `name` and `teammate`), `report_ok`, denial rows, the main-checkout hash for a worktree agent (and the lane's, when the parent session runs in one); the per-agent liveness index (`agents/<id>.json`); `open` (the tool in flight and since when, thresholds in `liveness.toml`); `watch` (one line per live delegation, and a token like `2▶ 1⚠` for the tmux bar); `audit` (`--monthly` adds a month of usage for retuning, and `exclude` keeps probes out of it); `sandbox-denials`. Persuades: the deadline nudge, one PostToolUse `additionalContext` per activation past the role's `nudge_min`, and a `nudge` row. Fails open |
 | Canary and due checks | `hooks/delegation-due.sh`, `skills/delegation/scripts/delegation_checks.py`, `skills/delegation/due.toml` | Observes: `delegation-ledger canary` re-verifies enforcement on this Claude Code version; `due` runs the cheap checks at session start (the quick tier includes a run of the installed watch-guard shim) and shows Hayden what needs their attention, including the watch nudges: unresolved watches whose waiter's exit reaches nobody, and watches that ended while no Claude process listened. Fails open |
 | Public GitHub client | `skills/delegation/scripts/gh-public` | GET-only access to api.github.com for delegated agents, optionally with a public-read token |
@@ -1507,6 +1508,116 @@ running, and its re-arm must finalize it with a report (`due.toml` has the steps
 fires by date only, so the session-start line that says the full canary is due after an upgrade
 names both checks too.
 
+### Early reports (the wait check)
+
+**The gap.** On 2026-10-31 (2.1.316) a subagent ran `./wait.sh` in the foreground with a
+10-minute `timeout`. At 180 s Claude Code moved it to the background. The agent read the still
+empty output file, handed back "not written", then was woken by the completion notice 97 s later
+and did the work. Its corrected handback was refused ("your report was already delivered"), so the
+lead heard the opposite of what happened (probe session 668e9503, agent a6301324f3813f8b5). The
+brief's old advice ("run it in the foreground, up to the Bash tool's 10-minute limit") doesn't
+hold: a foreground call that outlives its `timeout` is moved to the background, and a background
+agent's timeout can be cut to 3 minutes (see the verified facts).
+
+**The check.** `report-check` reads the agent's own transcript. A command is the agent's when one
+of its tool results holds one of Claude Code's background lines: `Command running in background
+with ID: X` (`run_in_background`), `Command was moved to the background (ID: X)` (the cap, or a
+queued message), `Command did not complete within its Ns timeout and was moved to the background
+(ID: X)`, or `Command was manually backgrounded by user with ID: X` (Ctrl+B). Each names the
+output file. The line counts only where Claude Code puts it: a Bash result is the command's
+stdout, its stderr, then the note, so the note is the result's last line (or is followed only by
+a "Session cwd" hint), `run_in_background`'s opens the result (nothing has printed yet), and the
+last match is the note, which is one line. When the entry's `toolUseResult` has a
+`backgroundTaskId`, it must name that id. Otherwise the note must end the result and not be in the
+`toolUseResult`'s `stdout`: a real launch's `stdout` is empty (the incident's was `""`), while a
+command that prints note-shaped lines, such as a transcript dump, has them there.
+`toolUseResult` is often absent (0 of 8 tool results in probe a, 9 of 9 in the incident, all
+2.1.316), so the position is what rules most of those out (review rounds 3 to 5). A `backgroundTaskId` with no note counts too, its output unknown. A wait call that was
+itself moved (a message arriving mid-wait moves the running call) isn't a command to wait on.
+
+A command has ended, as far as the agent is concerned, when:
+- a task notification for it is in the transcript;
+- its output file ends with `[killed]` (a TaskStop, or the kill at a final response, neither of
+  which leaves a notice);
+- or its launch is older than any background command can run (2 hours, plus 10 minutes of
+  slack), which covers a Claude Code process that died first.
+
+An `[exited with code N]` line alone isn't enough (review round 2): the notice is written right
+after the tool result that shows the end (entries 34 and 35, 33 and 34, 35 and 36 in three live
+runs), so an exit line without one came after the agent last looked, and the report it is sending
+may be the incident's "not written". Rounds 3 and 4 also counted an end shown through a later
+call (a `cat`, a `tail`, a task-output call), and both rounds' mediums were false passes in that
+code. Hayden dropped it (2026-11-01): the notice already covers a `cat` or `tail`, and the one
+case it alone covered, a task-output tool that suppresses the notice, was never seen in a
+subagent. Without it, that case costs two refusals and a note that may be wrong, never a wrong
+report passed silently.
+
+A Bash call in the agent's latest message whose result isn't in the transcript yet counts too,
+named by its command. In the second live `early` run the agent sent the launch and the handback
+in one message, and the launch's result was written after the handback's hook read the
+transcript (the calls themselves ran in order). That holds for a foreground call in the same
+message, which may have been moved, and whose result the report hasn't seen either way. Only the
+latest message counts, so a call that never got a result (an interrupted stream) can't pin the
+agent. In a fork (a transcript with a `fork-context-ref` entry before any message), only what
+follows its first `<fork-boilerplate>` entry counts, and a fork transcript with no such entry
+counts nothing (fail open). A SubagentStop with no meta.json isn't wait-checked: a plain
+subagent's exists by then, and the stop may be a teammate's per-message one. A report while one
+hasn't ended is sent back, at the handback (auto mode) or at SubagentStop (other modes), naming
+the command and its output file and saying how to wait. An auto-mode stop with text (the agent
+ended its turn instead of handing back, as in the first live run's Monitor turn) is checked too:
+its block keeps the agent going in place of the hand-back nudge, and spends one of the shared
+refusals. The live `early` case runs both paths: in `acceptEdits` the stop was refused in 3 of
+3 runs, so the final-response kill hadn't reached the command's file when the hook read it.
+That order is observed, not documented: if a later version kills first, the file reads
+`[killed]` and the early report passes unrefused (fail open).
+
+**How the agent waits.** The live `early` case found the first advice (`sleep 120; tail -n 2
+<file>`) refused by Claude Code itself: it blocks a Bash call whose first part is a bare `sleep`
+of 25 s or more ("Do not chain shorter sleeps"). The agent then started a Monitor and ended its
+turn, which only drew the hand-back nudge, and it judged the command dead from a sandboxed `ps`
+that can't see it. So the refusal now gives one bounded foreground call to repeat until the file
+ends:
+
+```
+timeout 110 sh -c 'until tail -n 2 "<file>" | grep -qE "^\[(exited with code|killed)"; do sleep 2; done'; tail -n 3 "<file>"
+```
+
+It also says to judge by the file, not `ps`, and not to end the turn on a Monitor. The bound
+stays under the Bash tool's 2-minute default timeout, so the wait isn't moved to the background
+itself (review round 1). Claude Code's own background note says the same ("wait with one
+foreground shell command that blocks until the output file shows what you need"). The policy
+allows the call for researcher, general-purpose and writer, and BRIEF.md and this page quote it as
+the hook gives it (tests in `test_report_check.py`).
+
+**Why every subagent.** The schema check covers our four roles because only they end with the
+JSON contract. A report that misses a running command's result misleads the lead whatever the
+role, and the incident's agent was a custom one. So the wait check covers every subagent but an
+agent-team teammate (Hayden, 2026-11-01).
+
+**Why the cap is shared.** A subagent that ends without a delivered report gets 3 nudges, then the
+report is lost. Two refusals from each check could exceed that, so the wait and schema refusals
+share one counter of 2 (Hayden, 2026-11-01). The counter is per activation: it is stored with
+the activation's start from the ledger's index, so a SendMessage resume gets its two refusals
+again, while a hook registered twice still converges within one activation (review round 4; the
+counter's old form, the value alone, reads as the current activation's). A report the cap lets
+through while a command still
+runs isn't silent: the hook returns `updatedInput` with a `[report-check] Note for the caller`
+naming the command and its output file. A probe showed the lead receives the edited message. A
+report that is one whole-message JSON value is fenced first, so `extract_report` still finds it. Past
+the role's deadline stop the wait refusal is skipped and only the note is added, since the policy
+then denies every tool but the report path and the agent couldn't wait. A SubagentStop can't
+change the message, so there a report past the cap passes as it is.
+
+**What it can't see.** It knows only Claude Code's own background tasks: a command an agent
+detaches inside a foreground call (`cmd &`, `nohup`, `setsid`) is invisible to it, as to Claude
+Code, and BRIEF.md's rule is the only guard there. A tool result whose last line is a launch note
+and that has no `toolUseResult`, which only Claude Code's own note should produce, reads as a
+launch. That costs at most the shared refusals, and only while the named output file exists
+without `[killed]` and no notice names it, for at most the 2-hour bound. A harmless Bash call
+sent in one message with the report (an `ls`) costs one refusal too. A transcript or output file
+it can't read, or any error while reading them, counts as no running command (fail open), and the
+schema check still runs.
+
 ## Verified facts the design rests on
 
 First checked against Claude Code 2.1.285 and Codex CLI 0.154 on 2026-09-30, then re-run on each
@@ -1654,7 +1765,42 @@ wins.
   field names an owner.
 - **A subagent isn't woken by its background task** (same probe): no second SubagentStart fired
   when the agent's task finished. A subagent that backgrounds a command and ends its turn never
-  sees the result.
+  sees the result. Still so on 2.1.316 (probe b, 2026-11-01): an agent that ended its turn with
+  "waiting" was nudged at once (`[handback-send-enforce] Your report has not been delivered`)
+  and handed back without the result. The second SubagentStop's `background_tasks` now carries
+  each task's `id` and `status` (`running`).
+- **A background agent's foreground Bash can move to the background at 180 s** (2.1.316,
+  2026-10-31). The tool result says `Command was moved to the background (ID: <id>) after running
+  for 180s. Output is being written to: <file>`, and its `toolUseResult` carries
+  `backgroundTaskId`, `timedOutAfterMs: 180000` and `subagentCapApplied: true`. The command keeps
+  running past the handback, and its completion notice still reaches the agent ("Early reports
+  (the wait check)"). When it applies (the binary, 2026-11-01): any Bash call that outlives its
+  `timeout` is moved to the background rather than killed (`Command did not complete within its
+  Ns timeout and was moved to the background`), and the cap only shortens that timeout. It
+  applies to an async agent's own calls, in a session that isn't single-shot `-p`
+  (`singleShotPrintSession` or `printInputClosed`), and only when the server flag
+  `tengu_maple_ferry` is nonzero (its value is the cap). So `claude -p` can't reproduce it: the
+  `moved` attempts in `run.py` ran a 200 s call to its end, under a foreground and a background
+  agent alike, and the live case became `early`.
+- **Claude Code blocks a long bare `sleep`** (the binary and the live `early` case, 2.1.316): a
+  Bash call whose first part is `sleep N` with N of 25 or more is refused (`Blocked: sleep 60
+  followed by: ...`, "Do not chain shorter sleeps"). An `until <check>; do sleep 2; done` loop
+  isn't.
+- **Background command facts** (probe a, 2.1.316, 2026-11-01; evidence in lane subagent-wait's
+  `.lane/artifacts/probes/`):
+  - a `run_in_background` launch's transcript entry has no `toolUseResult`; the id and output
+    file are only in the text (`Command running in background with ID: <id>. Output is being
+    written to: <file>`), which adds that the command "is terminated when you give your final
+    response". The PostToolUse `tool_response` has `backgroundTaskId` and
+    `backgroundEndsWithFinalResponse: true`;
+  - the output file ends with `[exited with code 0]`, `[exited with code 3]` for a failure, or
+    `[killed]` after TaskStop, for a timeout-moved command too (probe c, 2026-11-02), whose note
+    adds that it is stopped after 10 minutes in the background;
+  - a notice mid-turn is an `attachment` entry (`type: queued_command`, `origin.kind:
+    task-notification`, the notice in `prompt`) with `<status>completed</status>` or
+    `<status>failed</status>`; a TaskStop leaves no notice;
+  - a PreToolUse `allow` with `updatedInput.message` on SubagentHandback replaces the report the
+    lead receives.
 - **`CLAUDE_PID` and the sandbox's PID namespace** (2.1.286, 2026-10-01): Claude Code sets
   `CLAUDE_PID` in the lead's Bash env, inside the sandbox and outside it, and it names the
   session's Claude process. Each sandboxed command gets its own PID namespace, so

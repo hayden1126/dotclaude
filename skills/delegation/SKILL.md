@@ -113,8 +113,10 @@ Every role ends its reply with a fenced JSON block matching `report.schema.json`
 validated (`report_ok`).
 
 - **Missing or invalid block:**
-  - For our four roles, `report-check` already sent it back up to twice. A report that
-    reaches you invalid had three tries, and the ledger records `report_ok: false`.
+  - For our four roles, `report-check` already sent it back up to twice (counting the times
+    it sent a report back for coming before a background command ended, §4). A report that
+    reaches you invalid had three tries in that activation, and the ledger records
+    `report_ok: false`.
   - A `team-` teammate's reports aren't checked (its stops fire per message), and neither
     are other types'. Ask once (SendMessage to its id).
   - Don't guess the status from the prose.
@@ -195,11 +197,19 @@ validated (`report_ok`).
   messages, and any agent can sit in one long tool call, which the stall timer doesn't
   abort. A `⚠` is a reason to look, not a verdict: ask it for status before you assume
   otherwise.
-- **No delegated agent ends its turn while a background command runs.** Claude Code never
-  wakes it when the command finishes, so it loses the result, and `open` can't flag it. A
-  long command runs in the foreground (up to the Bash tool's 10-minute limit). A longer one
-  runs in the background, and the agent waits on its output before reporting. `BRIEF.md`'s
-  Budget section says so; keep that line.
+- **No delegated agent reports while a background command runs.** Claude Code never wakes it
+  when the command finishes, and a `run_in_background` command is stopped with its report, so
+  the result is lost and `open` can't flag it. A foreground Bash call that outlives its
+  `timeout` is moved to the background, not killed, and for a background agent Claude Code
+  may cut that timeout to 3 minutes (2.1.316, behind a server flag). So the agent waits on
+  its output in one foreground call under the default 2-minute timeout at a time (an `until`
+  loop on the output file: Claude Code blocks a bare `sleep` of 25 s or more), until the file
+  ends with `[exited with code N]` or its completion notice arrives, and only then reports.
+  `report-check` enforces it: a report while one of the agent's own background commands
+  still runs, or sent in one message with a Bash call, is sent back, sharing the schema
+  check's two refusals. A handback (auto mode) that gets through anyway ends with a
+  `[report-check] Note for the caller` naming the command and its output file; read that file
+  before you rely on the report. `BRIEF.md`'s Budget section says so; keep that line.
 - **Your own wait that may outlast 30 minutes goes through `delegation-ledger wait`.** A
   background Bash command stops at its timeout (30 minutes by default, 2 hours at most), and the
   wake-up note then says not to restart it. Launch the waiter as a bare command with
