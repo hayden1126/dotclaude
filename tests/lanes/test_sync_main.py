@@ -76,8 +76,9 @@ class SyncMain(LanesRepo):
         self.merged(sha)
         return sha
 
-    def blob(self, sha, path):
-        return self.git("rev-parse", f"{sha}:{path}").strip()
+    def blob(self, ref, path):
+        """path's blob in ref, a branch of the shared repo (a PR's, as a lane made it)."""
+        return self.git("rev-parse", f"{ref}:{path}").strip()
 
     def sync(self, *args, cwd=None, env=None):
         e = dict(self.env, **(env or {}))
@@ -246,7 +247,7 @@ class SyncMain(LanesRepo):
 
     def test_a_replace_ref_is_refused_by_the_tripwire(self):
         proven = self.land({"hooks/x.sh": REAL})
-        self.git("replace", self.blob(proven, "hooks/x.sh"), self.evil_blob())
+        self.git("replace", self.blob("pr7", "hooks/x.sh"), self.evil_blob())
         before = self.state()
         p = self.sync("7")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
@@ -255,7 +256,7 @@ class SyncMain(LanesRepo):
 
     def test_a_replace_ref_never_reaches_the_checkout(self):
         proven = self.land({"hooks/x.sh": REAL})
-        self.git("replace", self.blob(proven, "hooks/x.sh"), self.evil_blob())
+        self.git("replace", self.blob("pr7", "hooks/x.sh"), self.evil_blob())
         self.assertEqual(self.control(), EVIL)  # the plain chain checks the planted blob out
         rc, out, err = self.sync_in("7", patches=lambda mod: [
             mock.patch.object(mod.lanelib, "git_tamper", return_value=[])])
@@ -265,7 +266,7 @@ class SyncMain(LanesRepo):
 
     def test_an_overwritten_object_is_never_checked_out_and_fsck_refuses(self):
         proven = self.land({"hooks/x.sh": REAL})
-        blob = self.blob(proven, "hooks/x.sh")
+        blob = self.blob("pr7", "hooks/x.sh")
         path = os.path.join(self.common, "objects", blob[:2], blob[2:])
         os.chmod(path, 0o644)
         with open(path, "wb") as f:
@@ -354,7 +355,9 @@ class SyncMain(LanesRepo):
 
     def test_an_oid_not_on_the_base_refuses(self):
         self.land({"hooks/x.sh": REAL})
-        side = self.git("rev-parse", "pr7").strip()  # pushed, but never on main itself
+        # A commit pushed to the remote, and in the shared repo, but never merged to main.
+        side = self.git("commit-tree", "-m", "side", "pr7^{tree}", "-p", "pr7").strip()
+        self.git("push", "-q", "origin", f"{side}:refs/heads/side")
         self.merged(side)
         self.refuses_unchanged("not on")
         self.merged("0" * 40)

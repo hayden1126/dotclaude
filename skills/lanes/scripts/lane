@@ -2255,13 +2255,17 @@ SERVE_READ = 1 << 20  # bytes of the log --ready searches
 SERVE_ENV = "LANE_SERVE"  # a serve's token, in the environment of all it starts
 
 
-def sandbox_off(what: str) -> None:
-    """Refuse in the Bash sandbox, whose own network and pid namespace hide every listener but
-    its own and keep a server there out of everyone else's reach."""
+SERVE_SANDBOXED = ("its own network and pids hide who listens on a port, and a server there is "
+                   "out of the browser's and other commands' reach. Rerun it with the sandbox off "
+                   "(each start asks)")
+
+
+def sandbox_off(what: str, why: str = SERVE_SANDBOXED) -> None:
+    """Refuse in the Bash sandbox (lanelib.pids_visible), saying why what can't run there: by
+    default `serve`'s reason, whose own network and pid namespace hide every listener but its
+    own and keep a server there out of everyone else's reach."""
     if not lanelib.pids_visible():
-        raise LaneError(f"{what} can't run in the Bash sandbox: its own network and pids hide "
-                        "who listens on a port, and a server there is out of the browser's and "
-                        "other commands' reach. Rerun it with the sandbox off (each start asks)")
+        raise LaneError(f"{what} can't run in the Bash sandbox: {why}")
 
 
 def serving_lane(repo: Repo) -> dict:
@@ -4441,8 +4445,9 @@ def lead_only(repo: Repo, lane_id: str, path: str, verb: str = "done") -> None:
     and when a Claude session above it (a session file's own process, by pid and procStart) is
     a lane's: lane_above. Sandboxed, the processes above it can't be seen, so that refuses
     too."""
-    acts = {"done": "closes", "park": "parks"}[verb]
-    lead = (f"only the lead (the main checkout) {acts} lanes: run `lane {verb} {lane_id}` from "
+    acts = {"done": "closes lanes", "park": "parks lanes",
+            "sync-main": "merges a PR into its checkout"}[verb]
+    lead = (f"only the lead (the main checkout) {acts}: run `lane {verb} {lane_id}` from "
             f"{repo.main}")
     if not repo.is_main:
         raise LaneError(f"refusing: {lead}")
@@ -5189,6 +5194,514 @@ def cmd_park(args) -> None:
         "unparks it")
 
 
+# --- sync-main: the verified post-merge merge (DA15/DA16) -----------------------------------------
+
+SYNC_CARRY = ("STATUS.md", "PLAN.md")  # the paths the lead's branch may hold apart from main
+VERIFIED_REL = ".local/state/dotclaude/verified"  # the stores' dir, below the home dir
+VERIFIED_EDIT = f"Edit(~/{VERIFIED_REL}/**)"  # the two settings rules that keep lanes out of it
+VERIFIED_DENY = f"~/{VERIFIED_REL}"
+SETTINGS_MAX = 1 << 20  # bytes of settings.json store_guard reads
+SYNC_GIT_WAIT = 120  # secs each local git call of sync-main may take
+SYNC_FETCH_WAIT = 600  # secs its fetch from the remote may take
+SYNC_SHA = re.compile(r"[0-9a-f]{40}")
+SYNC_IDENT = re.compile(r"(.*) <([^<>\n]*)> (\d+ [+-]\d{4})")
+SYNC_SHOWN = 10  # paths or fsck lines a refusal names
+SYNC_SANDBOXED = ("its store sits where the sandbox can't write, it moves the shared repo's refs, "
+                  "and the lead's checks must see the processes above it. Run it as a bare `lane "
+                  "sync-main` (excludedCommands runs that outside the sandbox)")
+
+
+def sync_env(git_dir: str | None = None, **extra: str) -> dict[str, str]:
+    """The environment of every git sync-main runs, in place of every inherited GIT_* (sgit): no
+    global or system config, no hooks (a fetch or update-ref runs reference-transaction from the
+    common dir's hooks/, which any lane can write), no fsmonitor, no replace objects or grafts,
+    and only the https, ssh and file transports."""
+    env = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+           "GIT_NO_REPLACE_OBJECTS": "1", "GIT_GRAFT_FILE": os.devnull,
+           "GIT_ALLOW_PROTOCOL": "https:ssh:file", "GIT_OPTIONAL_LOCKS": "0",
+           "GIT_CONFIG_COUNT": "3",
+           "GIT_CONFIG_KEY_0": "core.hooksPath", "GIT_CONFIG_VALUE_0": os.devnull,
+           "GIT_CONFIG_KEY_1": "core.fsmonitor", "GIT_CONFIG_VALUE_1": "false",
+           "GIT_CONFIG_KEY_2": "core.useReplaceRefs", "GIT_CONFIG_VALUE_2": "false"}
+    if git_dir:
+        env["GIT_DIR"] = git_dir
+    env.update(extra)
+    return env
+
+
+def checkout_env(repo: Repo, **extra: str) -> dict[str, str]:
+    """sync_env for git in the checkout: its config from the common dir, never a lane's
+    commondir file (harden_git_env)."""
+    return sync_env(GIT_COMMON_DIR=repo.common_dir, **extra)
+
+
+def sgit(args: list[str], cwd: str, env: dict[str, str], what: str,
+         wait: float = SYNC_GIT_WAIT, ok: tuple[int, ...] | None = (0,)) -> subprocess.CompletedProcess:
+    """git with env in place of every inherited GIT_*; a LaneError naming what on an exit
+    outside ok (None takes any) or no answer within wait. Paths come back surrogate-escaped."""
+    full = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    full.update(LC_ALL="C", GIT_TERMINAL_PROMPT="0", **env)
+    try:
+        p = subprocess.run(["git", *args], cwd=cwd, env=full, capture_output=True, text=True,
+                           errors="surrogateescape", timeout=wait)
+    except subprocess.TimeoutExpired:
+        raise LaneError(f"{what}: git {args[0]} gave no answer within {wait:g} s")
+    if ok is not None and p.returncode not in ok:
+        line = (p.stderr.strip().splitlines() or ["unknown error"])[-1]
+        raise LaneError(shown(f"{what} failed ({line})"))
+    return p
+
+
+def named_paths(paths: list[str]) -> str:
+    more = f"\n  and {len(paths) - SYNC_SHOWN} more" if len(paths) > SYNC_SHOWN else ""
+    return "".join(f"\n  {shown(p)}" for p in paths[:SYNC_SHOWN]) + more
+
+
+def pin_head(repo: Repo) -> tuple[str, str]:
+    """(branch, sha) of the checkout's HEAD, read once: every later step goes by this sha."""
+    env = checkout_env(repo)
+    p = sgit(["symbolic-ref", "-q", "HEAD"], repo.toplevel, env, "reading HEAD", ok=(0, 1))
+    ref = p.stdout.strip()
+    branch = ref.removeprefix("refs/heads/")
+    if p.returncode or not ref.startswith("refs/heads/") or not lanelib.valid_branch(branch):
+        raise LaneError(f"HEAD in {repo.toplevel} is not on a branch: check out the branch to "
+                        "merge into, then rerun")
+    sha = sgit(["rev-parse", "--verify", "--quiet", "--end-of-options", ref], repo.toplevel, env,
+               f"reading {ref}").stdout.strip()
+    if not SYNC_SHA.fullmatch(sha):
+        raise LaneError(f"{ref} reads as {shown(sha)!r}, no full sha")
+    return branch, sha
+
+
+def dirty_paths(repo: Repo) -> list[str]:
+    p = sgit(["status", "--porcelain=v1", "-z", "--untracked-files=no", "--no-renames"],
+             repo.toplevel, checkout_env(repo), "git status")
+    return sorted({e[3:] for e in p.stdout.split("\0") if len(e) > 3})
+
+
+def settings_rules_problem(path: str) -> str | None:
+    """None when the settings file at path holds both rules that keep every lane out of the
+    stores' dir (VERIFIED_EDIT in permissions.deny, VERIFIED_DENY in sandbox.filesystem.denyWrite),
+    else what is missing. Fails closed: a file that can't be read or parsed holds neither."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+        try:
+            data = json.loads(os.read(fd, SETTINGS_MAX + 1)[:SETTINGS_MAX + 1])
+        finally:
+            os.close(fd)
+    except (OSError, ValueError, RecursionError) as e:
+        return f"it can't be read as JSON ({type(e).__name__})"
+
+    def at(d, *keys):
+        for k in keys:
+            d = d.get(k) if isinstance(d, dict) else None
+        return d if isinstance(d, list) else []
+    missing = [f"{rule} in {where}" for rule, where, have in (
+        (VERIFIED_EDIT, "permissions.deny", at(data, "permissions", "deny")),
+        (VERIFIED_DENY, "sandbox.filesystem.denyWrite", at(data, "sandbox", "filesystem", "denyWrite")))
+        if rule not in have]
+    return f"it lacks {' and '.join(missing)}" if missing else None
+
+
+@contextlib.contextmanager
+def store_guard(name: str):
+    """The path of store <name>.git in the stores' dir, held under the flock on its .lock. Before
+    anything is created: the state dir must be ~/.local/state/dotclaude (an XDG_STATE_HOME
+    elsewhere is out of the rules' reach), and the live user settings.json must hold both rules
+    that keep every lane's Edit tool and sandboxed Bash out of the stores (settings_rules_problem).
+    Anything a lane could write there would be what sync-main checks the checkout out from."""
+    home = os.path.realpath(os.path.expanduser("~"))
+    state = lanelib.state_dir()
+    if os.path.realpath(state) != os.path.join(home, ".local", "state", "dotclaude"):
+        raise LaneError(f"lane sync-main keeps its stores only in ~/{VERIFIED_REL}, the dir its "
+                        f"settings rules name, but the state dir is {shown(state)} "
+                        "(XDG_STATE_HOME?): nothing was created")
+    try:
+        settings = os.path.join(install_state().places().claude, "settings.json")
+    except Exception as e:
+        raise LaneError(f"can't find the user settings.json ({type(e).__name__}: {e})")
+    if why := settings_rules_problem(settings):
+        raise LaneError(shown(f"{settings} must keep every lane out of ~/{VERIFIED_REL} before "
+                              f"lane sync-main builds a store there, and {why}. Add "
+                              f"\"{VERIFIED_EDIT}\" to permissions.deny and \"{VERIFIED_DENY}\" "
+                              "to sandbox.filesystem.denyWrite (dotclaude's setup.sh installs "
+                              "both): nothing was created"))
+    verified = os.path.join(state, "verified")
+    os.makedirs(verified, mode=0o700, exist_ok=True)
+    fd = os.open(os.path.join(verified, ".lock"),
+                 os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        if not try_lock(fd):
+            raise LaneError(f"another lane sync-main holds {verified}/.lock: rerun once it ends")
+        yield os.path.join(verified, f"{name}.git")
+    finally:
+        os.close(fd)
+
+
+def proven_sha(repo: Repo, n: int, base: str) -> str:
+    """PR n's merge commit as gh reports it: the one trust root of lead mode. Its state must be
+    MERGED, its base `base`, its mergeCommit.oid a full sha; anything else fails closed."""
+    view = f"gh pr view {n}"
+    try:
+        p = subprocess.run(["gh", "pr", "view", str(n), "--json", "state,mergeCommit,baseRefName"],
+                           cwd=repo.main, capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        raise LaneError(f"{view} failed ({type(e).__name__}: {e}): nothing was written")
+    if p.returncode != 0:
+        line = (p.stderr.strip().splitlines() or ["unknown error"])[-1]
+        raise LaneError(shown(f"{view} failed ({line}): nothing was written"))
+    try:
+        data = json.loads(p.stdout)
+    except (ValueError, RecursionError):
+        data = None
+    state = data.get("state") if isinstance(data, dict) else None
+    commit = data.get("mergeCommit") if isinstance(data, dict) else None
+    oid = commit.get("oid") if isinstance(commit, dict) else None
+    into = data.get("baseRefName") if isinstance(data, dict) else None
+    if not (isinstance(state, str) and isinstance(into, str) and isinstance(oid, str)
+            and SYNC_SHA.fullmatch(oid)):
+        raise LaneError(shown(f"{view} gave no state, base and full merge commit sha "
+                              f"({p.stdout[:200]!r}): nothing was written"))
+    if state != "MERGED":
+        raise LaneError(shown(f"PR #{n} is {state}, not MERGED: nothing was written"))
+    if into != base:
+        raise LaneError(shown(f"PR #{n} merged into {into}, not {base}: nothing was written"))
+    return oid
+
+
+def fresh_store(store: str) -> None:
+    """An empty bare repo at store: the old one removed by name under its parent's fd, never
+    followed (remove_tree's pattern), and no template copied in."""
+    parent, name = os.path.split(store)
+    fd = lanelib.open_dir(parent, "")
+    try:
+        if lanelib.real_dir_at(fd, name):
+            shutil.rmtree(name, dir_fd=fd)
+        elif lexists_at(fd, name):
+            os.unlink(name, dir_fd=fd)
+    finally:
+        os.close(fd)
+    sgit(["init", "--quiet", "--bare", "--template=", store], parent, sync_env(),
+         f"creating the store {store}")
+
+
+def remote_url(repo: Repo, remote: str) -> str:
+    """remote's url from the common dir's config, which no lane's sandbox can write. Not a trust
+    root either way: what it serves is checked against the proven sha by git's hashes."""
+    p = sgit(["config", "--file", os.path.join(repo.common_dir, "config"), "--get",
+              f"remote.{remote}.url"], repo.main, sync_env(), f"reading remote.{remote}.url",
+             ok=(0, 1))
+    url = p.stdout.strip()
+    if p.returncode or not url or url.startswith("-"):
+        raise LaneError(shown(f"remote {remote} has no usable url in "
+                              f"{repo.common_dir}/config ({url!r})"))
+    return url
+
+
+def fill_store(repo: Repo, store: str, remote: str, base: str, branch: str, pinned: str,
+               proven: str | None) -> str:
+    """Fetch the base branch in full and the checkout's branch into the store, each through
+    index-pack's hash checks. The proven sha (in lane mode the base's tip just fetched) must be
+    on the base, and the checkout's branch must still be the pinned sha. Returns proven."""
+    env = sync_env(store)
+    url = remote_url(repo, remote)
+    fetch = ["fetch", "--quiet", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head",
+             "--end-of-options"]
+    sgit([*fetch, url, f"+refs/heads/{base}:refs/remotes/base"], store, env,
+         f"the fetch of {remote}/{base} from {url}", wait=SYNC_FETCH_WAIT)
+    if proven is None:
+        proven = sgit(["rev-parse", "--verify", "refs/remotes/base"], store, env,
+                      f"reading the fetched {remote}/{base}").stdout.strip()
+    on = sgit(["merge-base", "--is-ancestor", proven, "refs/remotes/base"], store, env,
+              "the ancestry check", ok=None)
+    if on.returncode != 0:
+        raise LaneError(f"{proven} is not on {remote}/{base} as the remote serves it: nothing "
+                        "was written")
+    # file://, so git takes no local-clone shortcut: the objects come through index-pack.
+    sgit([*fetch, f"file://{repo.common_dir}", f"+refs/heads/{branch}:refs/lead"], store, env,
+         f"the fetch of {branch} from {repo.common_dir}")
+    lead = sgit(["rev-parse", "--verify", "refs/lead"], store, env, "reading the fetched branch")
+    if lead.stdout.strip() != pinned:
+        raise LaneError(f"{branch} moved from {pinned[:12]} meanwhile: nothing was written, rerun")
+    return proven
+
+
+def tree_entries(store: str, treeish: str) -> dict[str, tuple[str, str]]:
+    """path -> (mode, sha) of every entry of treeish, read in the store."""
+    p = sgit(["ls-tree", "-r", "-z", "--full-tree", treeish], store, sync_env(store),
+             f"listing {treeish[:12]}")
+    out = {}
+    for e in filter(None, p.stdout.split("\0")):
+        meta, _, path = e.partition("\t")
+        mode, _, sha = meta.split(" ")
+        out[path] = (mode, sha)
+    return out
+
+
+def predict(repo: Repo, store: str, branch: str, pinned: str, proven: str, label: str,
+            lead_mode: bool) -> str:
+    """The merge commit M of proven into the pinned HEAD, made in the store and set as its
+    refs/heads/merged. Lead mode: STATUS.md is the lead's whole file, PLAN.md the clean merge
+    (else the lead's), and M's tree must be proven's outside those two. Lane mode takes the
+    merge as it comes. Any other conflict refuses, naming the paths."""
+    env = sync_env(store)
+    p = sgit(["merge-tree", "--write-tree", "-z", "--name-only", "--no-messages", pinned, proven],
+             store, env, "merge-tree", ok=(0, 1))
+    tree, *names = p.stdout.split("\0")
+    conflicted = sorted(set(filter(None, names)))
+    carries = SYNC_CARRY if lead_mode else ()
+    if bad := [c for c in conflicted if c not in carries]:
+        raise LaneError(f"merging {label} into {branch} conflicts on:{named_paths(bad)}\nNothing "
+                        "was written: resolve it on the branch, commit, then rerun")
+    if lead_mode:
+        index = os.path.join(store, "sync-index")
+        ienv = dict(env, GIT_INDEX_FILE=index)
+        sgit(["read-tree", tree], store, ienv, "reading the merge")
+        lead = tree_entries(store, pinned)
+        for name in SYNC_CARRY:
+            if name == "PLAN.md" and name not in conflicted:
+                continue  # a clean merge stands
+            if name in lead:
+                mode, sha = lead[name]
+                sgit(["update-index", "--add", "--cacheinfo", f"{mode},{sha},{name}"], store,
+                     ienv, f"carrying the lead's {name}")
+            else:
+                sgit(["update-index", "--force-remove", "--", name], store, ienv,
+                     f"carrying the lead's missing {name}")
+        tree = sgit(["write-tree"], store, ienv, "writing the merge").stdout.strip()
+        os.unlink(index)
+        diff = sgit(["diff-tree", "-r", "-z", "--name-only", tree, proven], store, env,
+                    "comparing the merge with the proven commit").stdout.split("\0")
+        if drift := sorted({d for d in diff if d and d not in SYNC_CARRY}):
+            raise LaneError(f"{branch} differs from {label} on paths other than STATUS.md and "
+                            f"PLAN.md, which a lead's branch may not:{named_paths(drift)}\n"
+                            "Nothing was written: drop or land those changes, then rerun")
+    idents = {}
+    for who in ("AUTHOR", "COMMITTER"):
+        p = git(["var", f"GIT_{who}_IDENT"], repo.toplevel)
+        m = SYNC_IDENT.fullmatch(p.stdout.strip()) if p.returncode == 0 else None
+        if not m:
+            raise LaneError(f"git var GIT_{who}_IDENT gives no identity in {repo.toplevel}: set "
+                            "user.name and user.email")
+        idents.update({f"GIT_{who}_NAME": m[1], f"GIT_{who}_EMAIL": m[2],
+                       f"GIT_{who}_DATE": m[3]})
+    msg = f"Merge {label} into {branch}\n\nlane sync-main: {proven}, verified."
+    merge = sgit(["commit-tree", tree, "-p", pinned, "-p", proven, "-m", msg], store,
+                 dict(env, **idents), "commit-tree").stdout.strip()
+    sgit(["update-ref", "refs/heads/merged", merge], store, env, "setting refs/heads/merged")
+    return merge
+
+
+def store_blobs(store: str, shas: list[str]) -> dict[str, bytes]:
+    """Each blob's bytes, streamed from the store by one `cat-file --batch`."""
+    want = sorted(set(shas))
+    full = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    full.update(LC_ALL="C", **sync_env(store))
+    try:
+        p = subprocess.run(["git", "cat-file", "--batch"], cwd=store, env=full,
+                           input="".join(s + "\n" for s in want).encode(), capture_output=True,
+                           timeout=SYNC_GIT_WAIT)
+    except subprocess.TimeoutExpired:
+        raise LaneError(f"git cat-file gave no answer within {SYNC_GIT_WAIT} s")
+    out, pos, blobs = p.stdout, 0, {}
+    for sha in want:
+        nl = out.find(b"\n", pos)
+        head = out[pos:nl].split() if nl >= 0 else []
+        if len(head) != 3 or head[0] != sha.encode() or head[1] != b"blob":
+            raise LaneError(f"the store has no blob {sha}")
+        size = int(head[2])
+        blobs[sha] = out[nl + 1:nl + 1 + size]
+        pos = nl + 1 + size + 1
+    return blobs
+
+
+def disk_differs(top: str, path: str, mode: str, data: bytes) -> str | None:
+    """How the checkout's path differs from a tree entry of mode with bytes data (for a
+    symlink, its link text), or None. Every dir on the way opens without following a link."""
+    d, name = os.path.split(path)
+    try:
+        fd = lanelib.open_dir(top, d)
+    except FileNotFoundError:
+        return "missing"
+    except OSError as e:
+        return f"its dir opens only through a link or not at all ({e.strerror or e})"
+    try:
+        try:
+            st = os.stat(name, dir_fd=fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return "missing"
+        if mode == "120000":
+            if not stat.S_ISLNK(st.st_mode):
+                return "not a symlink"
+            return None if os.fsencode(os.readlink(name, dir_fd=fd)) == data else "other link text"
+        if not stat.S_ISREG(st.st_mode):
+            return "not a regular file"
+        if (mode == "100755") != bool(st.st_mode & 0o100):
+            return "other exec bit"
+        f = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=fd)
+        try:
+            chunks = []
+            while chunk := os.read(f, 1 << 20):
+                chunks.append(chunk)
+        finally:
+            os.close(f)
+        return None if b"".join(chunks) == data else "other bytes"
+    finally:
+        os.close(fd)
+
+
+def compare(repo: Repo, store: str, treeish: str) -> list[str]:
+    """Where the checkout (its index's entries, its tracked files on disk, and anything
+    untracked in a dir below the root that holds tracked files, but for __pycache__) differs
+    from treeish in the store, one 'path (how)' each."""
+    entries = tree_entries(store, treeish)
+    p = sgit(["ls-files", "-s", "-z"], repo.toplevel, checkout_env(repo), "reading the index")
+    index = {}
+    for e in filter(None, p.stdout.split("\0")):
+        meta, _, path = e.partition("\t")
+        mode, sha, stage = meta.split(" ")
+        index[path] = (mode, sha) if stage == "0" else ("conflict", stage)
+    problems = [f"{p} (index)" for p in sorted(set(index) | set(entries))
+                if index.get(p) != entries.get(p)]
+    blobs = store_blobs(store, [sha for mode, sha in entries.values() if mode != "160000"])
+    dirs = set()
+    for path, (mode, sha) in sorted(entries.items()):
+        parts = path.split("/")
+        dirs.update("/".join(parts[:i]) for i in range(1, len(parts)))
+        if mode == "160000":
+            problems.append(f"{path} (a submodule, which lane sync-main can't check)")
+        elif how := disk_differs(repo.toplevel, path, mode, blobs[sha]):
+            problems.append(f"{path} ({how})")
+    for d in sorted(dirs):
+        try:
+            fd = lanelib.open_dir(repo.toplevel, d)
+        except OSError:
+            continue  # its files are named above
+        try:
+            names = os.listdir(fd)
+        finally:
+            os.close(fd)
+        problems += [f"{d}/{n} (untracked)" for n in sorted(names)
+                     if n != "__pycache__" and f"{d}/{n}" not in entries and f"{d}/{n}" not in dirs]
+    return problems
+
+
+def publish(repo: Repo, store: str, remote: str, base: str, branch: str, proven: str,
+            lead_mode: bool) -> None:
+    """Fetch the merge from the store into the shared repo, so later git commands find its
+    objects, and point the base's refs at proven, for display only: nothing trusts them."""
+    env = sync_env(repo.common_dir)
+    sgit(["fetch", "--quiet", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head",
+          "--end-of-options", f"file://{store}", "refs/heads/merged"], repo.common_dir, env,
+         "the fetch of the merge into the shared repo")
+    refs = [f"refs/remotes/{remote}/{base}"]
+    if lead_mode and branch != base:
+        refs.append(f"refs/heads/{base}")
+    for ref in refs:
+        sgit(["update-ref", "-m", "lane sync-main", ref, proven], repo.common_dir, env,
+             f"pointing {ref} at {proven[:12]}")
+
+
+def sync_checkout(repo: Repo, store: str, pinned: str, merge: str) -> None:
+    """Move the checkout's index and files from pinned to merge, every object read from the
+    store (GIT_OBJECT_DIRECTORY): what the shared repo holds never reaches a file."""
+    env = checkout_env(repo, GIT_OBJECT_DIRECTORY=os.path.join(store, "objects"))
+    sgit(["read-tree", "-m", "-u", pinned, merge], repo.toplevel, env,
+         f"checking out {merge[:12]}")
+
+
+def move_branch(repo: Repo, store: str, branch: str, pinned: str, merge: str) -> None:
+    """refs/heads/<branch> from pinned to merge, compare-and-swap: a branch moved since the pin
+    refuses."""
+    env = checkout_env(repo, GIT_OBJECT_DIRECTORY=os.path.join(store, "objects"))
+    p = sgit(["update-ref", "-m", "lane sync-main", f"refs/heads/{branch}", merge, pinned],
+             repo.toplevel, env, f"moving {branch}", ok=None)
+    if p.returncode != 0:
+        raise LaneError(f"{branch} moved from {pinned[:12]} while lane sync-main ran, so it was "
+                        f"left there: the checkout's files and index are now {merge[:12]}'s. "
+                        f"Look at what moved it, then `git reset --soft` to the commit you want")
+
+
+def fsck_damage(repo: Repo) -> list[str]:
+    """What `git fsck` finds wrong in the shared repo's objects: an object whose bytes don't
+    hash to its name, or a corrupt one, among them. [] when it passes."""
+    p = sgit(["fsck", "--no-dangling", "--no-progress"], repo.common_dir,
+             sync_env(repo.common_dir), "git fsck", wait=SYNC_FETCH_WAIT, ok=None)
+    if p.returncode == 0:
+        return []
+    lines = [x for x in (p.stderr + p.stdout).splitlines() if x.strip()]
+    return lines or [f"git fsck exited {p.returncode}"]
+
+
+def cmd_sync_main(args) -> None:
+    sandbox_off("lane sync-main", SYNC_SANDBOXED)
+    repo = lanes_repo()
+    cfg = repo.config()
+    lead_mode = args.pr is not None
+    if lead_mode:
+        lead_only(repo, str(args.pr), repo.main, "sync-main")
+        name = "main"
+    else:
+        lane = own_lane(repo)
+        name = lane["id"]
+        worktree_config_refusal(repo, name, True, "sync-main")
+    harden_git_env(repo)
+    if found := lanelib.git_tamper(repo.common_dir):
+        raise LaneError(f"the git common dir {repo.common_dir} may serve content no remote showed "
+                        f"(DA15/DA16):" + "".join(f"\n  {shown(f)}" for f in found)
+                        + "\nNothing was written: find out who made each, remove it, then rerun")
+    branch, pinned = pin_head(repo)
+    if dirty := dirty_paths(repo):
+        raise LaneError(f"{repo.toplevel} has uncommitted changes:{named_paths(dirty)}\nCommit "
+                        "them first: nothing was written")
+    remote, base = base_parts(repo, cfg)
+    with store_guard(name) as store:
+        proven = proven_sha(repo, args.pr, base) if lead_mode else None
+        fresh_store(store)
+        proven = fill_store(repo, store, remote, base, branch, pinned, proven)
+        label = f"PR #{args.pr} ({proven[:12]})" if lead_mode else f"{remote}/{base} ({proven[:12]})"
+        env = sync_env(store)
+        if sgit(["merge-base", "--is-ancestor", proven, pinned], store, env, "the ancestry check",
+                ok=None).returncode == 0:
+            say(f"{branch} already holds {label}: already up to date, nothing written")
+            return
+        merge = predict(repo, store, branch, pinned, proven, label, lead_mode)
+        if problems := compare(repo, store, pinned):
+            raise LaneError(f"the checkout {repo.toplevel} doesn't match {branch}'s commit "
+                            f"{pinned[:12]}:{named_paths(problems)}\nNothing was written: commit "
+                            "or remove those, then rerun")
+        publish(repo, store, remote, base, branch, proven, lead_mode)
+        now = sgit(["rev-parse", "--verify", f"refs/heads/{branch}"], repo.common_dir,
+                   sync_env(repo.common_dir), f"reading {branch}").stdout.strip()
+        if now != pinned:
+            raise LaneError(f"{branch} moved from {pinned[:12]} to {now[:12]} meanwhile: the "
+                            "checkout was not touched, rerun")
+        sync_checkout(repo, store, pinned, merge)
+        move_branch(repo, store, branch, pinned, merge)
+        problems = compare(repo, store, merge)
+        damage = fsck_damage(repo)
+        if lead_mode:
+            diff = sgit(["diff", f"{merge}^1", f"{merge}^2", "--", "STATUS.md"], store, env,
+                        "the STATUS.md diff").stdout
+            if diff.strip():
+                say(f"Main's side of STATUS.md (the lead's whole file was kept):\n{diff.rstrip()}")
+                say("Add back by hand any real line from main's side (a + line that isn't an "
+                    "older carry), in a follow-up commit.")
+        changed = [x for x in sgit(["diff-tree", "-r", "-z", "--name-only", pinned, merge], store,
+                                   env, "counting the changes").stdout.split("\0") if x]
+        say(f"sync-main: {branch} is at merge {merge[:12]} of {label}, verified; "
+            f"{len(changed)} files changed")
+    if problems:
+        raise LaneError(f"after the checkout, {repo.toplevel} doesn't match {merge[:12]}:"
+                        f"{named_paths(problems)}\nSomething wrote the checkout meanwhile: "
+                        "don't install from it until that is explained")
+    if damage:
+        raise LaneError(f"git fsck finds damage in the shared repo {repo.common_dir} (DA15/DA16):"
+                        + named_paths(damage) + f"\nThe checkout is {merge[:12]}, every byte from "
+                        "the verified store, but other git commands in this repo may read those "
+                        "objects: find out who wrote them before anything else runs git here")
+
+
 def parser() -> argparse.ArgumentParser:
     # No abbreviated flags: the asks on --setup, --root and --abandon must see the full spelling.
     strict = functools.partial(argparse.ArgumentParser, allow_abbrev=False)
@@ -5324,6 +5837,18 @@ def parser() -> argparse.ArgumentParser:
                        "a busy session or one waiting on Hayden, or anything in the lane "
                        "nothing proves its own. `lane open <id>` unparks it, at most one lane over the cap.")
     p.add_argument("id")
+    p = sub.add_parser("sync-main", help="merge a PR's proven merge commit (or, in a lane, the "
+                                         "fetched base) into this checkout, verified",
+                       description="Merge into this checkout's branch, writing every byte from a "
+                       "fresh store no lane can write, checked by git's hashes (DA15/DA16). "
+                       "With a PR number, from the main checkout only: the commit gh reports as "
+                       "the PR's merge, which must be on the base; STATUS.md stays the lead's "
+                       "whole file (main's side is printed), PLAN.md merges or stays the lead's, "
+                       "and any other path the lead's branch holds apart from the PR's merge "
+                       "refuses. Without one, inside a lane: the base branch's tip, fetched "
+                       "fresh; any conflict refuses. Runs only outside the sandbox, and only "
+                       "once settings.json keeps every lane out of the store.")
+    p.add_argument("pr", nargs="?", type=int, help="the merged PR's number (lead mode)")
     return ap
 
 
@@ -5351,7 +5876,7 @@ def main(argv=None) -> int:
     if args.cmd == "serve":
         args.command = command
     try:
-        rc = globals()["cmd_" + args.cmd](args)
+        rc = globals()["cmd_" + args.cmd.replace("-", "_")](args)
     except (LaneError, lanelib.Untrusted) as e:
         warn(str(e))
         return 1
