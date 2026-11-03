@@ -170,9 +170,11 @@ OVERLAP_SHOWN = 5  # files each overlap line under the board names
 OVERLAP_ENV = {"GIT_NO_LAZY_FETCH": "1", "GIT_ALLOW_PROTOCOL": "none"}
 # Every fetch the CLI runs, sandbox-off: never `gc --auto` (LR3), whose `worktree prune` deletes
 # through a link any lane can plant under <common>/worktrees/. Keys and flag both, so it holds
-# before setup.sh's global keys are installed.
+# before setup.sh's global keys are installed. No FETCH_HEAD either (LR5): a fetch writes it
+# through a link any lane can plant at <common>/FETCH_HEAD, and nothing here reads it.
 NO_AUTO_GC = ("-c", "gc.auto=0", "-c", "maintenance.auto=false")
-FETCH_FLAGS = ("--no-auto-maintenance", "--quiet", "--no-recurse-submodules")
+FETCH_FLAGS = ("--no-auto-maintenance", "--quiet", "--no-recurse-submodules",
+               "--no-write-fetch-head")
 # init's defaults and open's flags for claude's --model and --effort -> each one's check
 PICKS = {"model": lanelib.model_problem, "effort": lanelib.effort_problem}
 # new's brief flags -> the <placeholder> each fills in templates/LANE.md
@@ -737,7 +739,7 @@ def run_setup(repo: Repo, lane: dict) -> None:
     if not setup:
         return
     block = lanelib.port_block(lane)
-    env = dict(os.environ, LANE_ID=lane["id"], LANE_PORT=str(block[0]) if block else "",
+    env = dict(user_env(), LANE_ID=lane["id"], LANE_PORT=str(block[0]) if block else "",
                LANE_PORTS=f"{block[0]}-{block[-1]}" if block else "")
     say(f"  setup: {setup}")
     if subprocess.run(setup, shell=True, cwd=usable_path(repo, lane), env=env).returncode != 0:
@@ -867,6 +869,9 @@ def cmd_new(args) -> None:
     path = os.path.join(cfg["root"], args.id)
     base = cfg.get("base", "origin/main")
     check_unregistered(repo, args.id)  # again under the lock; first so a rerun says so, not gh
+    harden_git_env(repo)  # no hook fires on its fetch or `worktree add` (post-checkout)
+    # Its fetch and `worktree add -b` move refs, and a reflog link takes their log lines (LR4).
+    tamper_gate(repo, "Nothing was written: find out who made each, remove it, then rerun")
     base_sha = fetched_base(repo, cfg)
     if not args.reuse_branch:
         # `ls` labels a lane by its branch's newest PR, so on a name an old PR used it shows that
@@ -881,40 +886,57 @@ def cmd_new(args) -> None:
             raise LaneError(f"branch {branch} was the head of {prs}: `lane ls` would show that "
                             "PR as this lane's. Name another with --branch, or pass "
                             "--reuse-branch")
-    with lock(repo):
-        check_unregistered(repo, args.id)
-        sessions = lanelib.live_sessions()
-        live = [x for x in held_lanes(repo) if holds_slot(repo, x, sessions)]
-        cap = int(cfg.get("cap", DEFAULT_CAP))
-        if len(live) >= cap:
-            raise LaneError(f"{len(live)} lanes hold a slot, at the cap of {cap}: close one with "
-                            "`lane done`, park a finished one with `lane park`, or raise the cap "
-                            "with `lane init --cap`")
-        if os.path.exists(path):
-            raise LaneError(f"{path} already exists")
-        if held := holders(repo, path):  # a stale record would make the new lane its twin
-            raise LaneError(f"lane {', '.join(x['id'] for x in held)} still holds {path}: close "
-                            "it with `lane done` first")
-        if conflicts := claim_conflicts(repo, args.id, reqs):
-            raise LaneError("already claimed: " + ", ".join(conflicts))
-        block = free_block(repo, cfg)
-        os.makedirs(cfg["root"], exist_ok=True)
-        # From the commit, not the ref name: no upstream is set, and no ref rewritten since the
-        # fetch can choose the tree.
-        p = git(["worktree", "add", "-b", branch, path, base_sha], repo.toplevel)
-        if p.returncode != 0:
-            raise LaneError("git worktree add failed: " + p.stderr.strip())
-        # Registered the moment the worktree exists, so a failure below leaves a lane that
-        # `adopt` finishes or `done --abandon` removes, never an orphan worktree.
-        lane = new_record(args.id, branch, os.path.realpath(path), base_sha, block, reqs)
-        lane.update(state="setup-failed", setup_failed="copy")
-        if args.reuse_branch:  # its branch may hold a PR older than the lane (merges_of)
-            lane["reused"] = True
-        lanelib.write_lane_json(repo, args.id, lane)
-        copied = lane_files(repo, lane, {ph: getattr(args, attr) for attr, ph in BRIEF.items()})
-        lane = lanelib.update_lane(repo, args.id, mark_active)
+    # LR7: git checks the lane out from the shared object store, which any lane's sandbox can
+    # write, and the setup command then runs in it sandbox-off. So with a setup command, base_sha
+    # (ls-remote's answer, the trust root) is first fetched into a fresh store no lane can write,
+    # and the new checkout must match its tree. With none, nothing runs there sandbox-off, and
+    # the fetch of the whole base branch is skipped.
+    with contextlib.ExitStack() as stack:
+        vstore = config = None
+        if cfg.get("setup"):
+            vstore = stack.enter_context(store_guard("new"))
+            config = fresh_store(vstore)
+            vstore.recheck("Nothing was written.")
+            fill_new_store(repo, vstore.path, *base_parts(repo, cfg), base_sha)
+        with lock(repo):
+            check_unregistered(repo, args.id)
+            sessions = lanelib.live_sessions()
+            live = [x for x in held_lanes(repo) if holds_slot(repo, x, sessions)]
+            cap = int(cfg.get("cap", DEFAULT_CAP))
+            if len(live) >= cap:
+                raise LaneError(f"{len(live)} lanes hold a slot, at the cap of {cap}: close one "
+                                "with `lane done`, park a finished one with `lane park`, or raise "
+                                "the cap with `lane init --cap`")
+            if os.path.exists(path):
+                raise LaneError(f"{path} already exists")
+            if held := holders(repo, path):  # a stale record would make the new lane its twin
+                raise LaneError(f"lane {', '.join(x['id'] for x in held)} still holds {path}: "
+                                "close it with `lane done` first")
+            if conflicts := claim_conflicts(repo, args.id, reqs):
+                raise LaneError("already claimed: " + ", ".join(conflicts))
+            block = free_block(repo, cfg)
+            os.makedirs(cfg["root"], exist_ok=True)
+            # From the commit, not the ref name: no upstream is set, and no ref rewritten since
+            # the fetch can choose the tree.
+            p = git(["worktree", "add", "-b", branch, path, base_sha], repo.toplevel)
+            if p.returncode != 0:
+                raise LaneError("git worktree add failed: " + p.stderr.strip())
+            # Registered the moment the worktree exists, so a failure below leaves a lane that
+            # `adopt` finishes or `done --abandon` removes, never an orphan worktree.
+            lane = new_record(args.id, branch, os.path.realpath(path), base_sha, block, reqs)
+            lane.update(state="setup-failed", setup_failed="copy")
+            if args.reuse_branch:  # its branch may hold a PR older than the lane (merges_of)
+                lane["reused"] = True
+            lanelib.write_lane_json(repo, args.id, lane)
+            if vstore:  # before anything else is written in the tree
+                verify_new(repo, lane, vstore, config, base_sha, f"{base} ({base_sha[:12]})")
+            copied = lane_files(repo, lane,
+                                {ph: getattr(args, attr) for attr, ph in BRIEF.items()})
+            lane = lanelib.update_lane(repo, args.id, mark_active)
     say(f"lane {args.id}: branch {branch} from {base} ({base_sha[:12]}), "
         f"{lanelib.ports_text(lane)}")
+    if vstore:
+        say(f"  checkout verified against {base_sha[:12]} as fetched into {vstore.path}")
     if copied:
         say(f"  copied {len(copied)} file(s) from .worktreeinclude")
     say(f"  record {lanelib.record_path(lane)}")
@@ -926,7 +948,14 @@ def cmd_new(args) -> None:
 def finish(repo: Repo, lane: dict) -> None:
     """Finish a lane `new` left setup-failed, redoing only the failed step onward: a failed copy
     redoes the copy (never over a file the lane already has) and then the setup; a failed setup
-    redoes the setup alone."""
+    redoes the setup alone. One whose checkout failed `new`'s verification (LR7) refuses: its
+    files came from a store that served what no remote showed."""
+    if lane.get("setup_failed") == "verify":
+        raise LaneError(f"lane {lane['id']}'s checkout failed `lane new`'s verification against "
+                        "the remote's tree (LR7), so its setup won't run there: find out what "
+                        "wrote the shared object store, then remove the lane with `lane done "
+                        f"{lane['id']} --abandon` (it names any planted file it won't delete) "
+                        "and run `lane new` again")
     with lock(repo):
         if lane.get("setup_failed", "copy") == "copy":
             lane_files(repo, lane, {})
@@ -1116,7 +1145,7 @@ def check_worktree(lane: dict, seed_ask: bool) -> None:
     try:
         if guard is None:
             raise ImportError(f"no excluded_guard in {HOOKS}")
-        refusals, error = guard.project_refusals(dict(os.environ), lane["path"])
+        refusals, error = guard.project_refusals(user_env(), lane["path"])
     except Exception as e:
         refusals, error = [], e
     if error:
@@ -4746,11 +4775,24 @@ def archive_record(repo: Repo, loaded: dict, path: str, lanes_fd: int, dest_fd: 
         os.close(src)
 
 
+USER_ENV: dict[str, str] | None = None  # os.environ as it was before harden_git_env
+
+
+def user_env() -> dict[str, str]:
+    """The environment the CLI was started with, before harden_git_env: what the configured
+    setup command runs in, and what the excluded-command guard sees a lane's session run with."""
+    return dict(os.environ if USER_ENV is None else USER_ENV)
+
+
 def harden_git_env(repo: Repo) -> None:
-    """Every git `done` or `park` runs in the lane (status, handoff-check's) takes its config
-    from this repo's common dir, never the lane-writable commondir file that worktree_problem
-    checks: a lane could repoint it after the check to a config whose core.fsmonitor runs a
-    command sandbox-off."""
+    """Every git `new`, `done` or `park` runs (in the lane: status, handoff-check's) takes its
+    config from this repo's common dir, never the lane-writable commondir file that
+    worktree_problem checks: a lane could repoint it after the check to a config whose
+    core.fsmonitor runs a command sandbox-off. And none runs a hook: core.hooksPath is
+    /dev/null, whatever hooks dir the repo's config or its common dir holds."""
+    global USER_ENV
+    if USER_ENV is None:
+        USER_ENV = dict(os.environ)
     os.environ["GIT_COMMON_DIR"] = repo.common_dir
     # And none of them writes the lane's index: a status that refreshes it fires the
     # post-index-change hook, which a relative core.hooksPath runs from the lane's worktree.
@@ -4766,7 +4808,8 @@ def harden_git_env(repo: Repo) -> None:
     # `worktree prune` deletes through a link a lane plants under <common>/worktrees/.
     os.environ["GIT_CONFIG_PARAMETERS"] = " ".join(filter(None, [
         os.environ.get("GIT_CONFIG_PARAMETERS", "").strip(), "'core.fsmonitor'='false'",
-        "'core.commitGraph'='false'", "'gc.auto'='0'", "'maintenance.auto'='false'"]))
+        "'core.commitGraph'='false'", "'gc.auto'='0'", "'maintenance.auto'='false'",
+        f"'core.hooksPath'='{os.devnull}'"]))
     # Nor reads an object through refs/replace or <common>/info/grafts, which sandboxed Bash can
     # write: a replaced commit, or a grafted parent, could make an unpushed HEAD read as an
     # ancestor of the remote's. GIT_NO_REPLACE_OBJECTS stops only the first.
@@ -4800,6 +4843,9 @@ def cmd_done(args) -> None:
         raise LaneError(f"refusing: lane {args.id}'s path is the main checkout")
     lead_only(repo, args.id, path)
     harden_git_env(repo)
+    # Its fetch and `branch -d` move refs, and a reflog link takes their log lines (LR4).
+    tamper_gate(repo, "Nothing was signalled or removed: find out who made each, remove it, "
+                "then rerun")
     present = os.path.isdir(path)
     worktree_config_refusal(repo, args.id, present)
     if present:  # its record is archived and its worktree removed, sandbox-off
@@ -5149,6 +5195,8 @@ def cmd_park(args) -> None:
         raise LaneError(f"lane {args.id} is already parked (since {parked}): `lane open "
                         f"{args.id}` unparks it")
     harden_git_env(repo)
+    # Its fetch of the remote moves refs, and a reflog link takes their log lines (LR4).
+    tamper_gate(repo, "Nothing was signalled: find out who made each, remove it, then rerun")
     worktree_config_refusal(repo, args.id, True, "park")
     usable_path(repo, lane)
     if path not in worktree_heads(repo):
@@ -5226,7 +5274,8 @@ SYNC_LANES = ("A lane never runs it: a lane whose install is live asks the lead 
 def sync_env(git_dir: str | None = None, **extra: str) -> dict[str, str]:
     """The environment of every git sync-main runs, in place of every inherited GIT_* (sgit): no
     global or system config, no hooks (a fetch or update-ref runs reference-transaction from the
-    common dir's hooks/, which any lane can write), no fsmonitor, no replace objects or grafts,
+    common dir's hooks/; no lane's sandbox can write that dir today, but they stay off
+    regardless), no fsmonitor, no replace objects or grafts,
     no attributes but the tree's own (the global file is read even with GIT_CONFIG_GLOBAL off,
     so core.attributesFile names /dev/null), and only the https, ssh and file transports. No
     filter driver either but the one config left, the git dir's own: with no global or system
@@ -5362,7 +5411,8 @@ def store_guard(name: str):
         raise
     try:
         if not try_lock(fd):
-            raise LaneError(f"another lane sync-main holds {verified}/.lock: rerun once it ends")
+            raise LaneError(f"another lane sync-main, or a lane new with a setup command, holds "
+                            f"{verified}/.lock: rerun once it ends")
         yield StoreDir(home, dfd, name)
     finally:
         os.close(fd)
@@ -5535,7 +5585,7 @@ def fill_store(repo: Repo, store: str, remote: str, base: str, branch: str, pinn
     must still be the pinned sha."""
     env = sync_env(store)
     url = remote_url(repo, remote)
-    fetch = ["fetch", *FETCH_FLAGS, "--no-tags", "--no-write-fetch-head", "--end-of-options"]
+    fetch = ["fetch", *FETCH_FLAGS, "--no-tags", "--end-of-options"]
     sgit([*fetch, url, f"+refs/heads/{base}:refs/remotes/base"], store, env,
          f"the fetch of {remote}/{base} from {url}", wait=SYNC_FETCH_WAIT)
     on = sgit(["merge-base", "--is-ancestor", proven, "refs/remotes/base"], store, env,
@@ -5549,6 +5599,45 @@ def fill_store(repo: Repo, store: str, remote: str, base: str, branch: str, pinn
     lead = sgit(["rev-parse", "--verify", "refs/lead"], store, env, "reading the fetched branch")
     if lead.stdout.strip() != pinned:
         raise LaneError(f"{branch} moved from {pinned[:12]} meanwhile: nothing was written, rerun")
+
+
+def fill_new_store(repo: Repo, store: str, remote: str, branch: str, base_sha: str) -> None:
+    """For `lane new` (LR7): fetch the base branch in full from the remote into the store,
+    through index-pack's hash checks. base_sha, from ls-remote, must be on it as fetched."""
+    env = sync_env(store)
+    url = remote_url(repo, remote)
+    sgit(["fetch", *FETCH_FLAGS, "--no-tags", "--end-of-options", url,
+          f"+refs/heads/{branch}:refs/remotes/base"], store, env,
+         f"the fetch of {remote}/{branch} from {url}", wait=SYNC_FETCH_WAIT)
+    on = sgit(["merge-base", "--is-ancestor", base_sha, "refs/remotes/base"], store, env,
+              "the ancestry check", ok=None)
+    if on.returncode != 0:
+        raise LaneError(f"{base_sha[:12]} is not on {remote}/{branch} as the remote serves it "
+                        "now (force-pushed meanwhile?): rerun")
+
+
+def verify_new(repo: Repo, lane: dict, held: StoreDir, config: bytes | None,
+               base_sha: str, label: str) -> None:
+    """Refuse unless the lane `new` just checked out matches base_sha's tree in the store,
+    every tracked file byte for byte and type, with nothing untracked (LR7): git wrote it from
+    the shared object store, which any lane's sandbox can write, and the setup command runs in
+    it sandbox-off. Any refusal leaves the lane setup-failed at 'verify', which `adopt` won't
+    finish. The caller holds the lanes lock."""
+    try:
+        held.intact(config)
+        problems = compare(repo, held.path, base_sha, top=lane["path"], fresh=True)
+        why = (f"its checkout doesn't match {label} as fetched into a fresh store:"
+               f"{named_paths(problems)}" if problems else None)
+    except LaneError as e:
+        why = f"its checkout couldn't be verified ({e})"
+    if why:
+        lanelib.update_lane(repo, lane["id"], lambda x: x.update(state="setup-failed",
+                                                                 setup_failed="verify"))
+        raise LaneError(f"lane {lane['id']} is registered (setup-failed) but its setup did not "
+                        f"run: {why}\nThe shared object store may serve what no remote showed "
+                        f"(LR7): find out what wrote it, then remove the lane with `lane done "
+                        f"{lane['id']} --abandon` (it names any planted file it won't delete) "
+                        "and run `lane new` again")
 
 
 def tree_entries(store: str, treeish: str) -> dict[str, tuple[str, str]]:
@@ -5681,12 +5770,16 @@ def disk_differs(top: str, path: str, mode: str, data: bytes) -> str | None:
         os.close(fd)
 
 
-def compare(repo: Repo, store: str, treeish: str) -> list[str]:
-    """Where the checkout (its index's entries, its tracked files on disk, and anything
-    untracked in a dir below the root that holds tracked files, but for __pycache__) differs
-    from treeish in the store, one 'path (how)' each."""
+def compare(repo: Repo, store: str, treeish: str, top: str | None = None,
+            fresh: bool = False) -> list[str]:
+    """Where the checkout at top (the main checkout by default: its index's entries, its
+    tracked files on disk, and anything untracked in a dir below the root that holds tracked
+    files, but for __pycache__) differs from treeish in the store, one 'path (how)' each. fresh,
+    for a worktree git has only just checked out, counts anything untracked, at the root and
+    __pycache__ too, but for the root's .git file."""
+    top = top or repo.toplevel
     entries = tree_entries(store, treeish)
-    p = sgit(["ls-files", "-s", "-z"], repo.toplevel, checkout_env(repo), "reading the index")
+    p = sgit(["ls-files", "-s", "-z"], top, checkout_env(repo), "reading the index")
     index = {}
     for e in filter(None, p.stdout.split("\0")):
         meta, _, path = e.partition("\t")
@@ -5700,26 +5793,32 @@ def compare(repo: Repo, store: str, treeish: str) -> list[str]:
         parts = path.split("/")
         dirs.update("/".join(parts[:i]) for i in range(1, len(parts)))
         if mode == "160000":
-            problems.append(f"{path} (a submodule, which lane sync-main can't check)")
-        elif how := disk_differs(repo.toplevel, path, mode, blobs[sha]):
+            problems.append(f"{path} (a submodule, which can't be checked)")
+        elif how := disk_differs(top, path, mode, blobs[sha]):
             problems.append(f"{path} ({how})")
-    for d in sorted(dirs):
+    for d in sorted(dirs | ({""} if fresh else set())):
         try:
-            fd = lanelib.open_dir(repo.toplevel, d)
+            fd = lanelib.open_dir(top, d)
         except OSError:
             continue  # its files are named above
         try:
             names = os.listdir(fd)
         finally:
             os.close(fd)
-        problems += [f"{d}/{n} (untracked)" for n in sorted(names)
-                     if n != "__pycache__" and f"{d}/{n}" not in entries and f"{d}/{n}" not in dirs]
+        for n in sorted(names):
+            rel = f"{d}/{n}" if d else n
+            if rel in entries or rel in dirs or (fresh and rel == ".git"):
+                continue
+            if fresh or n != "__pycache__":
+                problems.append(f"{rel} (untracked)")
+    if fresh:
+        return problems
     # The root's other untracked files are local (.claude/, .lane/), but read-tree takes the
     # work tree's root .gitattributes when the index has none, and would convert what it writes.
     # (.gitmodules matters only to a submodule recursion, which sync-main never asks for, and a
     # tracked submodule refuses above.)
     if ".gitattributes" not in entries and os.path.lexists(
-            os.path.join(repo.toplevel, ".gitattributes")):
+            os.path.join(top, ".gitattributes")):
         problems.append(".gitattributes (untracked, at the root: read-tree would take its "
                         "conversions)")
     return problems
@@ -5729,7 +5828,7 @@ def publish(repo: Repo, store: str, remote: str, base: str, branch: str, proven:
     """Fetch the merge from the store into the shared repo, so later git commands find its
     objects, and point the base's refs at proven, for display only: nothing trusts them."""
     env = sync_env(repo.common_dir)
-    sgit(["fetch", *FETCH_FLAGS, "--no-tags", "--no-write-fetch-head", "--end-of-options",
+    sgit(["fetch", *FETCH_FLAGS, "--no-tags", "--end-of-options",
           f"file://{store}", "refs/heads/merged"], repo.common_dir, env,
          "the fetch of the merge into the shared repo")
     refs = [f"refs/remotes/{remote}/{base}"]
@@ -5814,12 +5913,13 @@ def move_branch(repo: Repo, store: str, branch: str, pinned: str, merge: str) ->
 
 
 def tamper_gate(repo: Repo, then: str) -> None:
-    """Refuse on any tripwire finding (lanelib.repo_tamper), then saying what was written. Run
-    at the start and again right before each update-ref in the shared repo: a reflog link
-    planted meanwhile would take that ref's log line sandbox-off (LR4)."""
+    """Refuse on any tripwire finding (lanelib.repo_tamper), then saying what was written.
+    sync-main runs it at the start and again right before each update-ref in the shared repo (a
+    reflog link planted meanwhile would take that ref's log line sandbox-off: LR4); `new`,
+    `done` and `park` at their start, before any git of theirs that moves a ref."""
     if found := lanelib.repo_tamper(repo):
         raise LaneError(f"the git common dir {repo.common_dir} holds what a lane may have planted "
-                        f"(DA15/DA16, LR3, LR4):" + "".join(f"\n  {shown(f)}" for f in found)
+                        f"(DA15/DA16, LR3 to LR6):" + "".join(f"\n  {shown(f)}" for f in found)
                         + f"\n{then}")
 
 

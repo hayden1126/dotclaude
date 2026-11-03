@@ -8,7 +8,7 @@ import unittest
 import zlib
 from unittest import mock
 
-from _fixture import LanesRepo
+from _fixture import LanesRepo, lanelib
 from test_cli import load_lane_script
 
 
@@ -119,6 +119,147 @@ class NoAutoCleanup(LanesRepo):
             finally:
                 os.chdir(here)
         self.assertEqual(self.git("rev-parse", "refs/remotes/origin/other").strip(), tip)
+
+
+class NoFetchHead(LanesRepo):
+    """LR5: a lane plants <common>/FETCH_HEAD as a link to a file of the user's. A plain fetch
+    outside the sandbox writes its fetched refs through the link; the lane CLI's fetches (new,
+    done, park) write no FETCH_HEAD at all."""
+
+    def plant(self, common, name):
+        victim = os.path.join(self.tmp, f"victim-{name}")
+        self.write(victim, "mine\n")
+        os.symlink(victim, os.path.join(common, "FETCH_HEAD"))
+        return victim
+
+    def test_the_lane_clis_fetches_write_no_fetch_head(self):
+        copy = os.path.join(self.tmp, "control")
+        shutil.copytree(self.main, copy, symlinks=True)
+        control = self.plant(os.path.join(copy, ".git"), "control")
+        subprocess.run(["git", "fetch", "-q", "origin"], cwd=copy, env=self.env,
+                       capture_output=True, timeout=60)
+        self.assertNotEqual(self.read(control), "mine\n", "the control's fetch left it alone")
+        # A commit only origin has, so park's remote_tip must fetch it.
+        self.commit("more.txt", "more\n")
+        self.git("push", "-q", "origin", "HEAD:refs/heads/other")
+        self.git("update-ref", "-d", "refs/remotes/origin/other")
+        self.git("reset", "-q", "--hard", "HEAD~1")
+        self.git("reflog", "expire", "--expire=now", "--all")
+        self.git("prune", "--expire=now")
+        victim = self.plant(self.common, "main")
+        mod = load_lane_script()
+        here = os.getcwd()
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            os.chdir(self.main)
+            try:
+                repo = mod.lanes_repo()
+                for name, call in (
+                        ("park's remote_tip", lambda: mod.remote_tip(repo, "origin", "other", "x")),
+                        ("done's fetch", lambda: mod.fetch(repo)),
+                        ("new's fetched_base", lambda: mod.fetched_base(repo, repo.config()))):
+                    with self.subTest(name):
+                        self.assertTrue(call())
+                        self.assertEqual(self.read(victim), "mine\n")
+            finally:
+                os.chdir(here)
+
+
+class NoHooks(LanesRepo):
+    """The lane CLI's own git sandbox-off runs no hook: one in the common dir's hooks/ (no
+    lane's sandbox can write it today, but the CLI doesn't rely on that) fires on a plain
+    `git worktree add` in the control, and never during `lane new` or `lane done`."""
+
+    HOOKS = ("reference-transaction", "post-checkout", "post-merge", "pre-auto-gc")
+
+    def plant(self, common, marker):
+        for name in self.HOOKS:
+            path = os.path.join(common, "hooks", name)
+            self.write(path, f'#!/bin/sh\necho "{name}" >> "{marker}"\n')
+            os.chmod(path, 0o755)
+
+    def test_new_and_done_run_no_hook(self):
+        copy = os.path.join(self.tmp, "control")
+        shutil.copytree(self.main, copy, symlinks=True)
+        control = os.path.join(self.tmp, "control.marker")
+        self.plant(os.path.join(copy, ".git"), control)
+        subprocess.run(["git", "worktree", "add", "-q", "-b", "x", os.path.join(self.tmp, "wt")],
+                       cwd=copy, env=self.env, capture_output=True, timeout=60)
+        self.assertIn("post-checkout", self.read(control))
+        marker = os.path.join(self.tmp, "main.marker")
+        self.plant(self.common, marker)
+        # A commit only origin has, so `done`'s fetch moves a ref.
+        other = os.path.join(self.tmp, "other")
+        self.git("clone", "-q", self.origin, other, cwd=self.tmp)
+        self.commit("more.txt", "more\n", cwd=other)
+        self.git("push", "-q", "origin", "main", cwd=other)
+        self.lane("new", "chart-fix")
+        self.lane("done", "chart-fix", "--abandon")
+        self.assertFalse(os.path.exists(marker), self.read(marker) if os.path.exists(marker)
+                         else "")
+
+
+class NewVerifiesTree(LanesRepo):
+    """LR7: `lane new` checks the lane out from the shared object store, which any lane's
+    sandboxed Bash can write, then runs the configured setup command in it sandbox-off. With a
+    setup command configured, it first compares the new worktree with base's tree as fetched
+    into a fresh store no lane can write, and on any difference runs no setup."""
+
+    def setUp(self):
+        super().setUp()
+        self.lane("init", "--setup", "touch SETUP_RAN")
+
+    def test_a_clean_checkout_runs_the_setup(self):
+        out = self.lane("new", "chart-fix")
+        self.assertIn("verified", out)
+        self.assertTrue(os.path.exists(os.path.join(self.lane_path("chart-fix"), "SETUP_RAN")))
+        self.assertEqual(self.lane_json("chart-fix")["state"], "active")
+
+    def test_an_overwritten_object_runs_no_setup(self):
+        sha = self.git("rev-parse", "HEAD:README.md").strip()
+        path = os.path.join(self.common, "objects", sha[:2], sha[2:])
+        self.assertTrue(os.path.exists(path), "README.md's blob is not loose")
+        os.chmod(path, 0o644)
+        body = b"planted\n"
+        with open(path, "wb") as f:
+            f.write(zlib.compress(b"blob %d\0" % len(body) + body))
+        self.assertEqual(lanelib.git_tamper(self.common), [])  # no tripwire for this
+        p = self.run_lane("new", "chart-fix")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("README.md (other bytes)", p.stderr)
+        lane = self.lane_path("chart-fix")
+        self.assertEqual(self.read(os.path.join(lane, "README.md")), "planted\n")  # git's work
+        self.assertFalse(os.path.exists(os.path.join(lane, "SETUP_RAN")))
+        rec = self.lane_json("chart-fix")
+        self.assertEqual((rec["state"], rec["setup_failed"]), ("setup-failed", "verify"))
+        p = self.run_lane("adopt", lane)  # finishing it would run the setup: refused too
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertFalse(os.path.exists(os.path.join(lane, "SETUP_RAN")))
+        self.assertIn("lane done chart-fix --abandon", p.stderr)
+
+
+class GateBeforeRefs(LanesRepo):
+    """LR4: `new`, `done` and `park` move refs sandbox-off (a fetch, `worktree add -b`,
+    `branch -d`), so each runs the tripwire first and refuses on a finding, here a reflog link
+    planted at the path of a ref the command would write, before any of its git runs."""
+
+    def test_new_done_and_park_refuse_on_a_finding(self):
+        self.lane("new", "chart-fix")
+        victim = os.path.join(self.tmp, "victim")
+        self.write(victim, "mine\n")
+        link = os.path.join(self.common, "logs", "refs", "remotes", "origin", "other")
+        os.makedirs(os.path.dirname(link), exist_ok=True)
+        os.symlink(victim, link)
+        for args in (("new", "api-docs"), ("park", "chart-fix"), ("done", "chart-fix")):
+            with self.subTest(args=args):
+                p = self.run_lane(*args)
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertIn("logs/refs/remotes/origin/other is a symlink", p.stderr)
+                self.assertEqual(self.read(victim), "mine\n")
+        self.assertFalse(os.path.exists(self.lane_path("api-docs")))
+        self.assertTrue(os.path.isdir(self.lane_path("chart-fix")))
+        self.assertEqual(self.lane_json("chart-fix")["state"], "active")
+        os.unlink(link)
+        self.lane("new", "api-docs")
 
 
 if __name__ == "__main__":

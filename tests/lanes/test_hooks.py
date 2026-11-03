@@ -65,7 +65,7 @@ class Guard(LanesRepo):
                     self.assertIsNone(out)
                 else:
                     self.assertDenied(out, rule)
-        with open(os.path.join(self.tmp, "state", "dotclaude", "lane-guard.log")) as f:
+        with open(os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "lane-guard.log")) as f:
             log = f.read()
         for kind in ("deny relative", "deny other-record", "deny cli-data"):
             self.assertIn(kind, log)
@@ -234,7 +234,7 @@ class IdentityHook(LanesRepo):
         # must not reach the context: a backtick ends the code span, a tag is no branch, and a
         # name that isn't UTF-8 fails the decode.
         admin = self.git("rev-parse", "--absolute-git-dir", cwd=self.lane_dir).strip()
-        log = os.path.join(self.tmp, "state", "dotclaude", "lane-identity.log")
+        log = os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "lane-identity.log")
         # The hook decodes git's output in the locale's encoding; a single-byte one reads \xff
         # cleanly (valid_branch still refuses it), so the decode reason needs a UTF-8 locale.
         self.env["LC_ALL"] = "C.UTF-8"
@@ -398,7 +398,7 @@ class IdentityHook(LanesRepo):
                                        "hook_event_name": "SessionEnd", "reason": "other"})
         self.assertFalse(os.path.exists(self.mirror()))
         self.assertIn("endedAt", self.lane_json("chart-fix")["sessions"][0])
-        with open(os.path.join(self.tmp, "state", "dotclaude", "lane-identity.log")) as f:
+        with open(os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "lane-identity.log")) as f:
             self.assertIn("symlink", f.read())
 
     def test_the_end_is_stamped_before_the_mirror_runs(self):
@@ -489,7 +489,7 @@ class LeadHeal(test_cli.LeadChain):
 
     def setUp(self):
         super().setUp()
-        self.log_path = os.path.join(self.tmp, "state", "dotclaude", "lane-identity.log")
+        self.log_path = os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "lane-identity.log")
 
     def write_record(self, pid, start, sid=OLD, pane="%3"):
         """A lead record as `lane lead` writes one, on this test's server (the runner)."""
@@ -510,7 +510,7 @@ class LeadHeal(test_cli.LeadChain):
         passed (OLD by default) and the tab it passed in (pane on this test's server)."""
         tab = {"socket": self.tmux_sock, "server_start": int(time.time()) - 600,  # wall clock
                "server_pid": os.getpid(), "pane": tab_pane or pane}
-        self.write(os.path.join(self.tmp, "state", "dotclaude", "pass-last", pane[1:] + ".json"),
+        self.write(os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "pass-last", pane[1:] + ".json"),
                    json.dumps({"tab": tab, "from_session": self.OLD,
                                "written_at": time.time() - 1, "shown": False,  # wall clock
                                "replies": [{"prompt_id": "p1", "text": "done", "time": 1.0}],
@@ -672,7 +672,7 @@ class LeadHeal(test_cli.LeadChain):
         }
         for why, kw in cases.items():
             with self.subTest(why):
-                shutil.rmtree(os.path.join(self.tmp, "state", "dotclaude", "pass-last"), True)
+                shutil.rmtree(os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "pass-last"), True)
                 at = kw.pop("at", "%3")
                 if why != "no marker":
                     self.marker(**kw)

@@ -854,12 +854,18 @@ its commit, the repo turns on per-worktree config (git would then read a file a 
 can write), or another sync-main holds the store's lock. It also refuses on any tripwire
 finding, checked at the start and again right before each ref it moves in the shared repo.
 
-**The tripwire.** sync-main, `lane ls`, handoff-check and setup.sh each check the shared git dir
-for signs it may serve content no remote showed (DA15/DA16). `lane ls` prints a `git:` line per
-finding, handoff-check fails with one FAIL per finding in a lanes repo, and setup.sh refuses to
-install. It also flags a symlink directly under `worktrees/` (an entry there is always a dir, and
-`git worktree prune` deletes through a link: LR3) and one anywhere under `logs/` or a worktree's
-`logs/` (a reflog write outside the sandbox follows it: LR4). setup.sh also sets
+**The tripwire.** sync-main, `lane new`, `done` and `park`, `lane ls`, handoff-check and setup.sh
+each check the shared git dir for signs it may serve content no remote showed (DA15/DA16).
+`new`, `done` and `park` refuse on a finding before any git of theirs moves a ref, `lane ls`
+prints a `git:` line per finding, handoff-check fails with one FAIL per finding in a lanes repo,
+and setup.sh refuses to install. It also flags a symlink directly under `worktrees/` (an entry
+there is always a dir, and `git worktree prune` deletes through a link: LR3), one anywhere under
+`logs/` or a worktree's `logs/` (a reflog write outside the sandbox follows it: LR4), one
+directly in the shared git dir (a fetch writes `FETCH_HEAD` through it: LR5; only links count
+there, since the sandbox's own mounts over protected paths read as devices), and one anywhere
+under `refs/` (update-ref
+creates a ref file through it: LR6). The lane CLI's fetches write no `FETCH_HEAD` at all.
+setup.sh also sets
 `core.useReplaceRefs false`, `gc.auto 0` and `maintenance.auto false` in the global git config:
 `gc --auto`, which a fetch, pull, merge or commit otherwise starts, runs that prune (LR3). The
 lane CLI's own fetches (`new`, `done`, `park`, sync-main) set both keys and pass
@@ -885,9 +891,21 @@ find out who made it before anything else runs git in that repo.
 - A corrupt object in the shared repo is reported by `git fsck`, not repaired. The checkout is
   still built from the store.
 - A shallow clone fails the tripwire, so sync-main, handoff-check and setup.sh refuse in one.
-- A reflog link planted between sync-main's last tripwire check and git's own update-ref still
-  takes that ref's log line (LR4). The re-check right before each update-ref narrows that span to
-  milliseconds; it doesn't close it.
+- A reflog or ref link planted between a command's last tripwire check and git's own write still
+  takes that write (LR4, LR6). sync-main checks again right before each update-ref, which narrows
+  that span to milliseconds; `new`, `done` and `park` check once, at their start, so their span
+  runs from there to the write. Neither closes it.
+
+**`lane new`'s checkout (LR7).** `new` checks the lane out from the shared object store, which
+any lane's sandbox can write, and then runs the config's setup command in it, sandbox-off. With
+a setup command configured, `new` first fetches the base branch from the remote into a fresh
+store (`new.git`, beside sync-main's under the same lock and settings rules), and requires the
+commit ls-remote named to be on it. Right after `git worktree add`, before anything else is
+written there, every tracked file of the new worktree must match that commit's tree in the
+store, byte for byte and type, its index must too, and nothing untracked may sit in it. If
+anything differs, the setup doesn't run: the lane stays registered as setup-failed at `verify`, which
+`lane adopt` refuses to finish, and the message names each path. With no setup command, nothing
+runs in the tree sandbox-off, so `new` skips the check and its full fetch of the base.
 
 ## Layout
 

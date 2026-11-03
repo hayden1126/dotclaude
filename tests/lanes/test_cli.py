@@ -667,6 +667,14 @@ class RoundTrip(LanesRepo):
         self.write(os.path.join(decoy, "gitdir"), os.path.join(
             path, ".lane-trial", f"lane-trial-{key}-spike-efgh5678", "tree", ".git") + "\n")
         os.symlink(decoy, os.path.join(self.common, "worktrees", "decoy"))
+        # The tripwire at done's start refuses on that link first (LR3, LR4), touching nothing.
+        p = self.run_lane("done", "spike", "--abandon")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("worktrees/decoy is a symlink", p.stderr)
+        self.assertTrue(os.path.isdir(path))
+        # With the link gone, done runs, and its cleanup still never follows the tree swapped
+        # for a link.
+        os.unlink(os.path.join(self.common, "worktrees", "decoy"))
         p = self.run_lane("done", "spike", "--abandon")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertFalse(os.path.exists(path))
@@ -1729,7 +1737,7 @@ class Fakes(LanesRepo):
             "## Next\n", "## Next\n- Nothing left: the lane is done.\n"))
 
     def open_session_entry(self, sid, cwd):
-        path = os.path.join(self.tmp, "state", "dotclaude", "open-sessions", f"{sid}.json")
+        path = os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "open-sessions", f"{sid}.json")
         self.write(path, json.dumps({"session_id": sid, "cwd": cwd, "pane": "%1"}))
         return path
 
@@ -2087,7 +2095,7 @@ class Close(Fakes):
 
     def proof(self):
         """The glob of lane chart-fix's recorded proof (Repo.closing_path) in the temp state."""
-        return os.path.join(self.tmp, "state", "dotclaude", "lanes", "*.closing", "chart-fix.json")
+        return os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "lanes", "*.closing", "chart-fix.json")
 
     def refused_mid_close(self):
         """The 2026-10-15 shape (lane two-sessions), first run: as its session ends, the pane
@@ -2269,7 +2277,7 @@ class Close(Fakes):
         # The lane is marked closing by then, and a rerun once the record can be written closes.
         self.hand_off()
         (claude,) = self.claude()
-        (config,) = glob.glob(os.path.join(self.tmp, "state", "dotclaude", "lanes", "*.toml"))
+        (config,) = glob.glob(os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "lanes", "*.toml"))
         blocker = config.removesuffix(".toml") + ".closing"
         self.write(blocker, "")  # a file where its dir goes
         p = self.run_lane("done", "chart-fix", "--abandon")
@@ -2754,7 +2762,7 @@ class Close(Fakes):
 
     def test_done_waits_for_a_running_install_then_refuses(self):
         lane_mod = load_lane_script()
-        state = os.path.join(self.tmp, "state", "dotclaude")
+        state = os.path.join(self.env["XDG_STATE_HOME"], "dotclaude")
         os.makedirs(state, exist_ok=True)
         fd = os.open(os.path.join(state, "install.lock"), os.O_WRONLY | os.O_CREAT, 0o644)
         self.addCleanup(os.close, fd)
@@ -2773,7 +2781,7 @@ class Close(Fakes):
     def test_done_waits_for_an_install_without_holding_the_lanes_lock(self):
         # Every lane's hooks take the lanes lock with a 2 s timeout, so done waits for setup.sh's
         # install.lock first and takes the lanes lock only once it holds that.
-        state = os.path.join(self.tmp, "state", "dotclaude")
+        state = os.path.join(self.env["XDG_STATE_HOME"], "dotclaude")
         os.makedirs(state, exist_ok=True)
         fd = os.open(os.path.join(state, "install.lock"), os.O_WRONLY | os.O_CREAT, 0o644)
         self.addCleanup(os.close, fd)

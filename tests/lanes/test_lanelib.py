@@ -982,6 +982,69 @@ class GitTamper(unittest.TestCase):
                         os.rename(moved, path)
                 self.assertEqual(lanelib.git_tamper(self.common), [])
 
+    def swap_in_link(self, rel, target):
+        """A symlink to target at rel in the common dir, whatever was there moved aside;
+        cleanup puts it back and checks the repo is clean again."""
+        path = os.path.join(self.common, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        moved = path + ".moved"
+        if os.path.lexists(path):
+            os.rename(path, moved)
+        os.symlink(target, path)
+        try:
+            self.found(rel)
+        finally:
+            os.unlink(path)
+            if os.path.lexists(moved):
+                os.rename(moved, path)
+        self.assertEqual(lanelib.git_tamper(self.common), [])
+
+    def test_a_link_at_the_top_is_found(self):
+        # LR5: a fetch writes FETCH_HEAD sandbox-off, through a link planted there; a real
+        # common dir holds no link at its top level.
+        victim = self.write("victim", "mine\n", root=self.tmp)
+        self.write(".git/FETCH_HEAD", "")
+        self.write(".git/ORIG_HEAD", "")
+        self.assertEqual(lanelib.git_tamper(self.common), [])
+        for name in ("FETCH_HEAD", "ORIG_HEAD", "index", "HEAD", "description", "x"):
+            with self.subTest(name=name):
+                self.swap_in_link(name, victim)
+
+    def test_lock_files_mounts_and_fifos_at_the_top_pass(self):
+        # On the host, config.lock, config.worktree and gc.log.lock sit there as empty files;
+        # inside the sandbox, its /dev/null mounts over protected paths read as char devices
+        # (mknod needs root here, so a fifo stands in for a non-file). Neither is a finding, or
+        # every check would report tampering forever. A fifo is let pass on purpose: git
+        # writing to one redirects nothing to a file of the user's.
+        for name in ("config.lock", "config.worktree", "gc.log.lock"):
+            self.write(f".git/{name}", "")
+        os.mkfifo(os.path.join(self.common, "FETCH_HEAD"))
+        os.mkdir(os.path.join(self.common, "a-dir"))
+        self.assertEqual(lanelib.git_tamper(self.common), [])
+
+    def test_a_symlink_anywhere_under_refs_is_found(self):
+        # LR6: update-ref, sandbox-off, creates a ref file through a linked dir under refs/.
+        outside = os.path.join(self.tmp, "outside")
+        os.makedirs(outside)
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.assertEqual(lanelib.git_tamper(self.common), [])
+        for rel in ("refs/remotes/origin", "refs/remotes/origin/main", "refs/heads/deep/x",
+                    "refs/tags", "refs/remotes"):
+            with self.subTest(rel=rel):
+                self.swap_in_link(rel, outside)
+        os.rename(os.path.join(self.common, "refs"), os.path.join(self.tmp, "refs"))
+        os.symlink(os.path.join(self.tmp, "refs"), os.path.join(self.common, "refs"))
+        self.found("refs")
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads a mode-000 dir")
+    def test_an_unreadable_refs_subdir_fails_closed(self):
+        path = os.path.join(self.common, "refs", "heads")
+        os.chmod(path, 0)
+        try:
+            self.found("refs/heads")
+        finally:
+            os.chmod(path, 0o755)
+
     @unittest.skipIf(os.geteuid() == 0, "root reads a mode-000 dir")
     def test_an_unreadable_logs_dir_fails_closed(self):
         path = os.path.join(self.common, "logs", "refs")
