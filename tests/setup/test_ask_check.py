@@ -291,6 +291,116 @@ class Check(Harness, unittest.TestCase):
         self.assertIn("subagent report", reason)
         self.assertIn("backticked", reason)
 
+    def test_security_wording_with_no_threat_wording_is_denied(self):
+        self.entries([typed()])
+        out = self.fire(question("Run the build sandbox-off, or add an allow rule?"))
+        reason = self.assertDenied(out, "threat")
+        self.assertIn("names sandbox-off, allow rule but not who can write", reason)
+
+    def test_saying_who_can_write_lets_it_through(self):
+        self.entries([typed()])
+        # One form per case, so each part of THREAT is tested on its own.
+        for phrase in ("Who can write it", "who could edit the script", "anyone can change it",
+                       "any lane could plant one", "every session can modify it",
+                       "only Hayden can reach it", "nobody else can swap it",
+                       "no one could replace it", "who may tamper with it",
+                       "who might write the cache"):
+            with self.subTest(phrase=phrase):
+                self.assertIsNone(self.fire(question(f"Run it sandbox-off? {phrase}.")))
+
+    def test_security_wording_in_an_option_counts_and_so_does_a_threat_there(self):
+        self.entries([typed()])
+        self.assertDenied(self.fire(question("Which way?", "Excluded command", "Plain")),
+                          "threat")
+        self.assertIsNone(self.fire(question("Which way?", "Excluded command",
+                                             "Plain: only Hayden can edit it")))
+
+    def test_every_form_counts_and_longer_or_outside_words_do_not(self):
+        self.entries([typed()])
+        for text in ("Sandbox-off?", "Unsandboxed?", "Two sandboxes?", "Sandboxing?", "dangerouslyDisableSandbox?",
+                     "Add it to excludedCommands?", "A deny-rule?", "An Ask rule?",
+                     "Permission rules?", "The classifier?", "Classifiers?", "Auto mode?",
+                     "auto-mode?"):
+            with self.subTest(text=text):
+                self.assertDenied(self.fire(question(text)), "threat")
+                os.remove(os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "ask-check.log"))
+        for text in ("Add ~/.cache to allowWrite?", "A denyWrite line?", "denyRead?",
+                     "Widen allowedDomains?", "Run it in bypassPermissions?",
+                     "Add it to permissions.allow?", "Permissions rules?",
+                     "Run in bypass permissions mode?", "Use --dangerously-skip-permissions?",
+                     "Set allowUnsandboxedCommands?", "Switch to acceptEdits?",
+                     "Use dontAsk mode?", "Add it to the allow list?", "The allowlist?",
+                     "Launch with --allowedTools?", "Pass --add-dir ~/x?",
+                     "Add it to additionalDirectories?"):
+            with self.subTest(text=text):
+                self.assertDenied(self.fire(question(text)), "threat")
+                os.remove(os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "ask-check.log"))
+        for text in ("Add a hook?", "Install now?", "A permission prompt?", "Sandboxie?",
+                     "Subclassifier?", "rules for allowing?"):
+            with self.subTest(text=text):
+                self.assertIsNone(self.fire(question(text)))
+
+    def test_threat_keywords_and_dismissals_still_deny(self):
+        self.entries([typed()])
+        for text in ("Run the build sandbox-off, or forget the cache?",
+                     "Auto mode or bypassPermissions?",
+                     "Should the hook that injects the env run in the sandbox?",
+                     "Escaping the quotes breaks the excludedCommands match?",
+                     "Make ~/.cache writable in the sandbox?",
+                     "Plant the fixture before the sandboxed run?",
+                     "Add git push to excludedCommands so it bypasses the sandbox?",
+                     "Option B is a compromise: sandbox-off for the build only.",
+                     "The SessionStart context injection, inside the sandbox?",
+                     "The test planted a fixture; run it unsandboxed?",
+                     "Two commits are unreviewed; run them sandboxed?",
+                     "Make ~/.cache writable by sandboxed builds?",
+                     "Push to the forge from the sandbox?",
+                     "Use the sandbox escape hatch for the push?",
+                     "Add git push to excludedCommands so it escapes the sandbox?",
+                     "Low risk, no real threat: run the build unsandboxed?",
+                     "Nothing untrusted runs there; add it to excludedCommands?",
+                     "Run /codex:adversarial-review on the allowWrite change?",
+                     "Who reviews the deny rule?", "Anyone can run it sandboxed?"):
+            with self.subTest(text=text):
+                self.assertDenied(self.fire(question(text)), "threat")
+                os.remove(os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "ask-check.log"))
+
+    def test_the_reason_shows_each_word_as_first_spelled(self):
+        self.entries([typed()])
+        reason = self.assertDenied(self.fire(question(
+            "Set dangerouslyDisableSandbox, or add it to excludedCommands and EXCLUDEDCOMMANDS?")),
+            "threat")
+        self.assertIn("names dangerouslyDisableSandbox, excludedCommands but", reason)
+
+    def test_a_null_option_label_keeps_every_rule(self):
+        self.entries([typed(), *report_rows()])
+        ask = {"question": "Which?", "header": "x", "multiSelect": False,
+               "options": [{"label": None, "description": None}, {"label": "Sandbox-off"}]}
+        self.assertDenied(self.fire(ask), "report", "threat")
+
+    def test_the_resend_after_a_threat_deny_passes(self):
+        rows = [typed()]
+        self.entries(rows)
+        reason = self.assertDenied(self.fire(question("Sandbox-off?")), "threat")
+        text = "PreToolUse:AskUserQuestion hook error: " + reason
+        self.entries(rows + [use("q1", "AskUserQuestion"),
+                             result("q1", text, error=True, tur="Error: " + text)])
+        self.assertIsNone(self.fire(question("Sandbox-off?")))
+
+    def test_threat_and_ticks_are_named_in_one_reason(self):
+        self.entries([typed()])
+        reason = self.assertDenied(self.fire(question("`a1` `b2` `c3` `d4` in the sandbox?")),
+                                   "ticks", "threat")
+        self.assertIn("backticked", reason)
+        self.assertIn("names sandbox but", reason)
+
+    def test_the_reason_names_three_words_at_most(self):
+        self.entries([typed()])
+        reason = self.assertDenied(self.fire(question(
+            "Sandbox-off, the classifier, an ask rule, auto mode, or the sandbox again?")),
+            "threat")
+        self.assertIn("names Sandbox-off, classifier, ask rule but", reason)
+
     def test_a_subagent_payload_is_skipped(self):
         self.entries([typed(), *report_rows()])
         self.assertIsNone(self.fire(agent_id="a123", agent_type="Explore"))
