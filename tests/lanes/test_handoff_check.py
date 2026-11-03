@@ -564,6 +564,18 @@ class Lane(Check):
         self.assertIn("FAIL  git: shallow exists", out)
         self.assertIn("FAIL  git: objects/info/alternates is not empty", out)
 
+    def test_a_commondir_in_the_main_checkouts_git_dir_fails(self):
+        # DA15/DA16: git takes a commondir file in the main checkout's own .git too, and then
+        # answers with that dir, where no lanes config lives. The check still runs, on .git.
+        self.finish()
+        clean = os.path.join(self.tmp, "clean.git")
+        subprocess.run(["git", "init", "-q", "--bare", clean], check=True)
+        self.write(os.path.join(self.main, ".git", "commondir"), clean + "\n")
+        code, out = self.check(cwd=self.main)
+        self.assertEqual(code, 1, out)
+        self.assertIn("commondir", out)
+        self.assertIn("FAIL  git:", out)
+
     def test_an_unreadable_lane_record_fails_in_its_checkout(self):
         # Left out of the lanes, the lane's checkout would read as unregistered and check the
         # root STATUS.md instead of the lane record.
