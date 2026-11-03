@@ -903,6 +903,10 @@ find out who made it before anything else runs git in that repo.
   through the lane's admin dir pointer under the shared git dir, which a lane can rewrite while
   the setup runs (residual of LR7). Pinning git's common dir for the setup would aim any git it
   runs in another repo (an npm git dependency, say) at the lane repo's git dir, so it stays open.
+- The stores' dir is out of every lane's write reach but not its read reach, so a lane's sandbox
+  can take a lane's finishing lock and hold it. While it does, `new` (of that id), `adopt`,
+  `open` and `done` of that lane refuse. That denies service and runs nothing, like a held lanes
+  or stores lock (LR7).
 
 **`lane new`'s checkout (LR7).** `new` checks the lane out from the shared object store, which
 any lane's sandbox can write. Then the config's setup command runs in it sandbox-off, and the
@@ -937,8 +941,9 @@ verified, or one its `lane.json` no longer matches) or one can't be read, whatev
 `lane.json` says, and passes only when none is there, so no session starts in the tree through
 the check and the setup. A per-lane finishing lock beside the markers, taken by `new` before its
 pending marker and by `adopt` before its marker check, each holding it until the lane is marked
-active, makes any other `new` or `adopt` finishing the lane refuse at once, and `open` and
-`done` refuse while it is held. `adopt` finishes a lane with a matching verified marker whatever its
+active, makes any other `new` or `adopt` finishing the lane refuse at once, and `open` refuses
+while it is held. `done` takes it too and holds it to its end, so no `new` or `adopt` of that id
+runs while the lane closes, and the marker `done` removes is never one a later `new` wrote. `adopt` finishes a lane with a matching verified marker whatever its
 `lane.json` state, except `closing` (a `lane done` is ending it), which it refuses as
 registered. It refuses while a live session runs in the lane's tree (or while sessions can't be
 read), as does the setup step of `new`: a session found there drops the marker, so the lane is

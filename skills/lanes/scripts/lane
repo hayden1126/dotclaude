@@ -5052,10 +5052,21 @@ def cmd_done(args) -> None:
     # Its fetch and `branch -d` move refs, and a reflog link takes their log lines (LR4).
     tamper_gate(repo, "Nothing was signalled or removed: find out who made each, remove it, "
                 "then rerun")
-    if finishing_now(repo, args.id):  # its setup may be running in the tree, sandbox-off (LR7)
-        raise LaneError(f"another `lane new` or `lane adopt` is finishing lane {args.id}, or its "
-                        "finishing lock can't be probed: nothing was signalled or removed, rerun "
-                        "once it ends")
+    # Held, not probed, until this process ends with the command (LR7): no `new` or `adopt` of
+    # this id runs its setup in the tree meanwhile, and the marker dropped below is never one a
+    # `new` of the same id wrote after this `done` began. With no stores' dir, no `new` has made
+    # one here, and the drop is skipped.
+    try:
+        top = stores_fd()
+    except OSError as e:
+        raise LaneError(f"~/{VERIFIED_REL} can't be opened ({e.strerror or e}): nothing was "
+                        "signalled or removed")
+    finishing_fd = None
+    if top is not None:
+        try:
+            finishing_fd = finishing(top, repo, args.id, "Nothing was signalled or removed.")
+        finally:
+            os.close(top)
     present = os.path.isdir(path)
     worktree_config_refusal(repo, args.id, present)
     if present:  # its record is archived and its worktree removed, sandbox-off
@@ -5147,7 +5158,7 @@ def cmd_done(args) -> None:
              f"harmless, since no later lane {args.id} takes it (it names this one's created "
              "stamp)")
     try:
-        if (top := stores_fd()) is not None:
+        if finishing_fd is not None and (top := stores_fd()) is not None:
             try:
                 drop_mark(top, repo, args.id)
             finally:

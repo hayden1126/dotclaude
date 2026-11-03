@@ -213,7 +213,8 @@ class NoHooks(LanesRepo):
 # lane.json path to <dir> once its first (or nth) call returns, as any lane's sandbox could; "open-midway:<out>" makes verify_new
 # flip lane.json to active, run `lane open <id> --print` and write its exit code to <out>, then
 # put lane.json back and verify; "hold-setup:<began>:<release>" makes run_setup create <began>,
-# then wait (up to a minute) for <release> to exist before the setup runs.
+# then wait (up to a minute) for <release> to exist before the setup runs; "hold-done:<began>:
+# <release>" does the same right after `done`'s remove_worktree returns.
 DRIVER = """
 import importlib.machinery, importlib.util, json, os, subprocess, sys, time
 loader = importlib.machinery.SourceFileLoader("lane_cli", sys.argv[1])
@@ -262,6 +263,18 @@ elif how.startswith("open-midway:"):
         mod.lanelib.write_lane_json(repo, lane["id"], rec)
         return real(repo, lane, *a, **k)
     mod.verify_new = verify_new
+elif how.startswith("hold-done:"):
+    _, began, release = how.split(":")
+    real = mod.remove_worktree
+    def remove_worktree(*a, **k):
+        out = real(*a, **k)
+        open(began, "w").close()
+        for _ in range(600):
+            if os.path.exists(release):
+                break
+            time.sleep(0.1)
+        return out
+    mod.remove_worktree = remove_worktree
 elif how.startswith("hold-setup:"):
     _, began, release = how.split(":")
     real = mod.run_setup
@@ -687,6 +700,29 @@ class NewVerifiesTree(LanesRepo):
         os.remove(os.path.join(self.lane_path("chart-fix"), "SETUP_RAN"))  # the fixture's setup
         p = self.run_lane("done", "chart-fix", "--abandon")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+
+    def test_a_new_of_the_same_id_refuses_while_done_runs(self):
+        # `done` holds the finishing lock to its end: a `new` of its id, let in by a lane that
+        # cleared the record once the tree was gone, can't write a marker `done` then drops.
+        self.lane("new", "chart-fix")
+        os.remove(os.path.join(self.lane_path("chart-fix"), "SETUP_RAN"))  # the fixture's setup
+        began, release = os.path.join(self.tmp, "began"), os.path.join(self.tmp, "release")
+        done = subprocess.Popen([sys.executable, "-c", DRIVER, LANE, f"hold-done:{began}:{release}",
+                                 "done", "chart-fix", "--abandon"], cwd=self.main, env=self.env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: done.poll() is None and done.kill())
+        for _ in range(600):
+            if os.path.exists(began) or done.poll() is not None:
+                break
+            time.sleep(0.1)
+        self.assertTrue(os.path.exists(began), done.communicate()[1] if done.poll() else "")
+        shutil.rmtree(os.path.join(self.common, "lanes", "chart-fix"))
+        p = self.run_lane("new", "chart-fix", "--reuse-branch")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("is finishing lane chart-fix", p.stderr)
+        self.assertEqual(marks(self, "chart-fix"), [])
+        open(release, "w").close()
+        done.communicate(timeout=60)
 
     def test_new_keeps_the_marker_when_lane_json_drifts_before_the_drop(self):
         # finished_lane checks lane.json still names the lane `new` made before it drops the
