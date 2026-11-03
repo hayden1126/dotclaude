@@ -5210,7 +5210,9 @@ SYNC_IDENT = re.compile(r"(.*) <([^<>\n]*)> (\d+ [+-]\d{4})")
 SYNC_SHOWN = 10  # paths or fsck lines a refusal names
 SYNC_SANDBOXED = ("its store sits where the sandbox can't write, it moves the shared repo's refs, "
                   "and the lead's checks must see the processes above it. Run it as a bare `lane "
-                  "sync-main` (excludedCommands runs that outside the sandbox)")
+                  "sync-main <PR>` (excludedCommands runs that outside the sandbox)")
+SYNC_LANES = ("A lane never runs it: a lane whose install is live asks the lead to reinstall from "
+              "main, then merges main sandboxed (`git merge`) and reinstalls from its worktree")
 
 
 def sync_env(git_dir: str | None = None, **extra: str) -> dict[str, str]:
@@ -5381,7 +5383,7 @@ def verified_dir(state: str, verified: str) -> int:
 
 
 def proven_sha(repo: Repo, n: int, base: str) -> str:
-    """PR n's merge commit as gh reports it: the one trust root of lead mode. Its state must be
+    """PR n's merge commit as gh reports it: sync-main's one trust root. Its state must be
     MERGED, its base `base`, its mergeCommit.oid a full sha; anything else fails closed."""
     view = f"gh pr view {n}"
     try:
@@ -5441,19 +5443,16 @@ def remote_url(repo: Repo, remote: str) -> str:
 
 
 def fill_store(repo: Repo, store: str, remote: str, base: str, branch: str, pinned: str,
-               proven: str | None) -> str:
+               proven: str) -> None:
     """Fetch the base branch in full and the checkout's branch into the store, each through
-    index-pack's hash checks. The proven sha (in lane mode the base's tip just fetched) must be
-    on the base, and the checkout's branch must still be the pinned sha. Returns proven."""
+    index-pack's hash checks. The proven sha must be on the base, and the checkout's branch
+    must still be the pinned sha."""
     env = sync_env(store)
     url = remote_url(repo, remote)
     fetch = ["fetch", "--quiet", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head",
              "--end-of-options"]
     sgit([*fetch, url, f"+refs/heads/{base}:refs/remotes/base"], store, env,
          f"the fetch of {remote}/{base} from {url}", wait=SYNC_FETCH_WAIT)
-    if proven is None:
-        proven = sgit(["rev-parse", "--verify", "refs/remotes/base"], store, env,
-                      f"reading the fetched {remote}/{base}").stdout.strip()
     on = sgit(["merge-base", "--is-ancestor", proven, "refs/remotes/base"], store, env,
               "the ancestry check", ok=None)
     if on.returncode != 0:
@@ -5465,7 +5464,6 @@ def fill_store(repo: Repo, store: str, remote: str, base: str, branch: str, pinn
     lead = sgit(["rev-parse", "--verify", "refs/lead"], store, env, "reading the fetched branch")
     if lead.stdout.strip() != pinned:
         raise LaneError(f"{branch} moved from {pinned[:12]} meanwhile: nothing was written, rerun")
-    return proven
 
 
 def tree_entries(store: str, treeish: str) -> dict[str, tuple[str, str]]:
@@ -5491,39 +5489,36 @@ def drift_refusal(store: str, treeish: str, proven: str, branch: str, label: str
                         "Nothing was written: drop or land those changes, then rerun")
 
 
-def predict(repo: Repo, store: str, branch: str, pinned: str, proven: str, label: str,
-            lead_mode: bool) -> str:
+def predict(repo: Repo, store: str, branch: str, pinned: str, proven: str, label: str) -> str:
     """The merge commit M of proven into the pinned HEAD, made in the store and set as its
-    refs/heads/merged. Lead mode: STATUS.md is the lead's whole file, PLAN.md the clean merge
-    (else the lead's), and M's tree must be proven's outside those two. Lane mode takes the
-    merge as it comes. Any other conflict refuses, naming the paths."""
+    refs/heads/merged. STATUS.md is the lead's whole file, PLAN.md the clean merge (else the
+    lead's), and M's tree must be proven's outside those two. Any other conflict refuses,
+    naming the paths."""
     env = sync_env(store)
     p = sgit(["merge-tree", "--write-tree", "-z", "--name-only", "--no-messages", pinned, proven],
              store, env, "merge-tree", ok=(0, 1))
     tree, *names = p.stdout.split("\0")
     conflicted = sorted(set(filter(None, names)))
-    carries = SYNC_CARRY if lead_mode else ()
-    if bad := [c for c in conflicted if c not in carries]:
+    if bad := [c for c in conflicted if c not in SYNC_CARRY]:
         raise LaneError(f"merging {label} into {branch} conflicts on:{named_paths(bad)}\nNothing "
                         "was written: resolve it on the branch, commit, then rerun")
-    if lead_mode:
-        index = os.path.join(store, "sync-index")
-        ienv = dict(env, GIT_INDEX_FILE=index)
-        sgit(["read-tree", tree], store, ienv, "reading the merge")
-        lead = tree_entries(store, pinned)
-        for name in SYNC_CARRY:
-            if name == "PLAN.md" and name not in conflicted:
-                continue  # a clean merge stands
-            if name in lead:
-                mode, sha = lead[name]
-                sgit(["update-index", "--add", "--cacheinfo", f"{mode},{sha},{name}"], store,
-                     ienv, f"carrying the lead's {name}")
-            else:
-                sgit(["update-index", "--force-remove", "--", name], store, ienv,
-                     f"carrying the lead's missing {name}")
-        tree = sgit(["write-tree"], store, ienv, "writing the merge").stdout.strip()
-        os.unlink(index)
-        drift_refusal(store, tree, proven, branch, label)
+    index = os.path.join(store, "sync-index")
+    ienv = dict(env, GIT_INDEX_FILE=index)
+    sgit(["read-tree", tree], store, ienv, "reading the merge")
+    lead = tree_entries(store, pinned)
+    for name in SYNC_CARRY:
+        if name == "PLAN.md" and name not in conflicted:
+            continue  # a clean merge stands
+        if name in lead:
+            mode, sha = lead[name]
+            sgit(["update-index", "--add", "--cacheinfo", f"{mode},{sha},{name}"], store,
+                 ienv, f"carrying the lead's {name}")
+        else:
+            sgit(["update-index", "--force-remove", "--", name], store, ienv,
+                 f"carrying the lead's missing {name}")
+    tree = sgit(["write-tree"], store, ienv, "writing the merge").stdout.strip()
+    os.unlink(index)
+    drift_refusal(store, tree, proven, branch, label)
     idents = {}
     for who in ("AUTHOR", "COMMITTER"):
         p = git(["var", f"GIT_{who}_IDENT"], repo.toplevel)
@@ -5634,8 +5629,7 @@ def compare(repo: Repo, store: str, treeish: str) -> list[str]:
     return problems
 
 
-def publish(repo: Repo, store: str, remote: str, base: str, branch: str, proven: str,
-            lead_mode: bool) -> None:
+def publish(repo: Repo, store: str, remote: str, base: str, branch: str, proven: str) -> None:
     """Fetch the merge from the store into the shared repo, so later git commands find its
     objects, and point the base's refs at proven, for display only: nothing trusts them."""
     env = sync_env(repo.common_dir)
@@ -5643,7 +5637,7 @@ def publish(repo: Repo, store: str, remote: str, base: str, branch: str, proven:
           "--end-of-options", f"file://{store}", "refs/heads/merged"], repo.common_dir, env,
          "the fetch of the merge into the shared repo")
     refs = [f"refs/remotes/{remote}/{base}"]
-    if lead_mode and branch != base:
+    if branch != base:
         refs.append(f"refs/heads/{base}")
     for ref in refs:
         sgit(["update-ref", "-m", "lane sync-main", ref, proven], repo.common_dir, env,
@@ -5684,17 +5678,25 @@ def fsck_damage(repo: Repo) -> list[str]:
 
 
 def cmd_sync_main(args) -> None:
+    if args.pr is None:
+        raise LaneError("`lane sync-main <PR>` merges a merged PR into the main checkout, and "
+                        f"needs the PR's number. {SYNC_LANES}")
     sandbox_off("lane sync-main", SYNC_SANDBOXED)
     repo = lanes_repo()
     cfg = repo.config()
-    lead_mode = args.pr is not None
-    if lead_mode:
-        lead_only(repo, str(args.pr), repo.main, "sync-main")
-        name = "main"
-    else:
-        lane = own_lane(repo)
-        name = lane["id"]
-    worktree_config_refusal(repo, None if lead_mode else name, True, "sync-main")
+    if not repo.is_main:
+        raise LaneError(f"refusing: `lane sync-main` runs only from the main checkout "
+                        f"{repo.main}. {SYNC_LANES}")
+    # identity() matches lane records before the main checkout: a record naming this path is
+    # forged (a lane's sandbox can write any lane.json), and nothing here goes by it.
+    kind, lane = repo.identity()
+    if kind != "main":
+        who = f"lane {lane['id']}'s record names" if kind == "lane" else f"{kind} names"
+        raise LaneError(shown(f"refusing: {who} the main checkout {repo.main} as its own: "
+                              "nothing was written. Find out who wrote that record, then remove "
+                              "it"))
+    lead_only(repo, str(args.pr), repo.main, "sync-main")
+    worktree_config_refusal(repo, None, True, "sync-main")
     harden_git_env(repo)
     if found := lanelib.git_tamper(repo.common_dir):
         raise LaneError(f"the git common dir {repo.common_dir} may serve content no remote showed "
@@ -5705,11 +5707,11 @@ def cmd_sync_main(args) -> None:
         raise LaneError(f"{repo.toplevel} has uncommitted changes:{named_paths(dirty)}\nCommit "
                         "them first: nothing was written")
     remote, base = base_parts(repo, cfg)
-    with store_guard(name) as store:
-        proven = proven_sha(repo, args.pr, base) if lead_mode else None
+    with store_guard("main") as store:
+        proven = proven_sha(repo, args.pr, base)
         fresh_store(store)
-        proven = fill_store(repo, store, remote, base, branch, pinned, proven)
-        label = (f"PR #{args.pr}" if lead_mode else f"{remote}/{base}") + f" ({proven[:12]})"
+        fill_store(repo, store, remote, base, branch, pinned, proven)
+        label = f"PR #{args.pr} ({proven[:12]})"
         env = sync_env(store)
         # Before any verdict, the no-op's too: pinned comes from a branch ref any lane can move,
         # and the index status trusts is lane-writable, so only the store's bytes vouch for the
@@ -5720,12 +5722,11 @@ def cmd_sync_main(args) -> None:
                             "or remove those, then rerun")
         if sgit(["merge-base", "--is-ancestor", proven, pinned], store, env, "the ancestry check",
                 ok=None).returncode == 0:
-            if lead_mode:
-                drift_refusal(store, pinned, proven, branch, label)
+            drift_refusal(store, pinned, proven, branch, label)
             say(f"{branch} already holds {label}: already up to date, nothing written")
             return
-        merge = predict(repo, store, branch, pinned, proven, label, lead_mode)
-        publish(repo, store, remote, base, branch, proven, lead_mode)
+        merge = predict(repo, store, branch, pinned, proven, label)
+        publish(repo, store, remote, base, branch, proven)
         now = sgit(["rev-parse", "--verify", f"refs/heads/{branch}"], repo.common_dir,
                    sync_env(repo.common_dir), f"reading {branch}").stdout.strip()
         if now != pinned:
@@ -5735,13 +5736,12 @@ def cmd_sync_main(args) -> None:
         move_branch(repo, store, branch, pinned, merge)
         problems = compare(repo, store, merge)
         damage = fsck_damage(repo)
-        if lead_mode:
-            diff = sgit(["diff", f"{merge}^1", f"{merge}^2", "--", "STATUS.md"], store, env,
-                        "the STATUS.md diff").stdout
-            if diff.strip():
-                say(f"Main's side of STATUS.md (the lead's whole file was kept):\n{diff.rstrip()}")
-                say("Add back by hand any real line from main's side (a + line that isn't an "
-                    "older carry), in a follow-up commit.")
+        diff = sgit(["diff", f"{merge}^1", f"{merge}^2", "--", "STATUS.md"], store, env,
+                    "the STATUS.md diff").stdout
+        if diff.strip():
+            say(f"Main's side of STATUS.md (the lead's whole file was kept):\n{diff.rstrip()}")
+            say("Add back by hand any real line from main's side (a + line that isn't an "
+                "older carry), in a follow-up commit.")
         changed = [x for x in sgit(["diff-tree", "-r", "-z", "--name-only", pinned, merge], store,
                                    env, "counting the changes").stdout.split("\0") if x]
         if not problems:  # never a "verified" over a checkout that isn't the merge's
@@ -5893,18 +5893,20 @@ def parser() -> argparse.ArgumentParser:
                        "a busy session or one waiting on Hayden, or anything in the lane "
                        "nothing proves its own. `lane open <id>` unparks it, at most one lane over the cap.")
     p.add_argument("id")
-    p = sub.add_parser("sync-main", help="merge a PR's proven merge commit (or, in a lane, the "
-                                         "fetched base) into this checkout, verified",
-                       description="Merge into this checkout's branch, writing every byte from a "
-                       "fresh store no lane can write, checked by git's hashes (DA15/DA16). "
-                       "With a PR number, from the main checkout only: the commit gh reports as "
-                       "the PR's merge, which must be on the base; STATUS.md stays the lead's "
-                       "whole file (main's side is printed), PLAN.md merges or stays the lead's, "
-                       "and any other path the lead's branch holds apart from the PR's merge "
-                       "refuses. Without one, inside a lane: the base branch's tip, fetched "
-                       "fresh; any conflict refuses. Runs only outside the sandbox, and only "
-                       "once settings.json keeps every lane out of the store.")
-    p.add_argument("pr", nargs="?", type=int, help="the merged PR's number (lead mode)")
+    p = sub.add_parser("sync-main", help="merge a PR's proven merge commit into the main "
+                                         "checkout, verified",
+                       description="Merge into the main checkout's branch, writing every byte "
+                       "from a fresh store no lane can write, checked by git's hashes "
+                       "(DA15/DA16). From the main checkout only: the commit gh reports as the "
+                       "PR's merge, which must be on the base; STATUS.md stays the lead's whole "
+                       "file (main's side is printed), PLAN.md merges or stays the lead's, and "
+                       "any other path the lead's branch holds apart from the PR's merge refuses. "
+                       "A lane never runs it: a lane whose install is live asks the lead to "
+                       "reinstall from main, then merges main sandboxed and reinstalls from its "
+                       "worktree. Runs only outside the sandbox, and only once settings.json "
+                       "keeps every lane out of the store.")
+    # Optional to argparse, so a bare call gets sync-main's own refusal, not a usage error.
+    p.add_argument("pr", nargs="?", type=int, help="the merged PR's number")
     return ap
 
 

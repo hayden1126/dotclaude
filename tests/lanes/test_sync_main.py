@@ -1,9 +1,8 @@
-"""`lane sync-main [<PR>]`, the verified post-merge merge (DA15/DA16).
+"""`lane sync-main <PR>`, the verified post-merge merge (DA15/DA16).
 
-Lead mode (`lane sync-main <n>` from the main checkout) merges the commit gh names as PR n's
-merge into the lead's branch; lane mode (no PR, inside a lane) merges the base branch's tip,
-fetched fresh. Either way the merge is built in a fresh store under the state dir and the
-checkout is written only from it, so the bytes come from git's hash checks, never from what
+From the main checkout only, it merges the commit gh names as PR n's merge into the lead's
+branch. The merge is built in a fresh store under the state dir and the checkout is written
+only from it, so the bytes come from git's hash checks, never from what
 the shared common dir (which any lane's sandboxed Bash can write) says.
 
 Each attack test first runs the plain chain this replaces (`git fetch origin main:main`, then
@@ -135,8 +134,6 @@ class SyncMain(LanesRepo):
 
     def parents(self, ref="HEAD", cwd=None):
         return self.git("rev-list", "--parents", "-n1", ref, cwd=cwd).split()[1:]
-
-    # --- lead mode ---------------------------------------------------------------------------
 
     def test_merges_the_proven_commit(self):
         proven = self.land({"hooks/x.sh": REAL, "STATUS.md": "# Status\n- main carry line\n"})
@@ -558,49 +555,48 @@ class SyncMain(LanesRepo):
         self.assertIn("main.git", self.guard())
         self.assertEqual(os.listdir(outside), [])
 
-    def test_only_the_main_checkout_runs_lead_mode(self):
-        self.lane("new", "chart-fix")
-        p = self.sync("7", cwd=self.lane_path("chart-fix"))
-        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
-        self.assertIn("lead", p.stderr)
+    # --- only the main checkout, only with a PR number ----------------------------------------
 
-    # --- lane mode ---------------------------------------------------------------------------
-
-    def test_lane_mode_merges_the_fetched_base(self):
+    def test_a_bare_sync_main_refuses_everywhere(self):
         self.lane("new", "chart-fix")
         lane = self.lane_path("chart-fix")
-        self.commit("chart.txt", "lane work\n", cwd=lane)
-        pinned = self.git("rev-parse", "HEAD", cwd=lane).strip()
-        proven = self.land({"hooks/x.sh": REAL})
-        self.git("update-ref", "refs/remotes/origin/main", pinned)  # a stale or planted ref
-        p = self.sync(cwd=lane)
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertEqual(self.parents(cwd=lane), [pinned, proven])
-        self.assertEqual(self.read(os.path.join(lane, "hooks", "x.sh")), REAL)
-        self.assertEqual(self.read(os.path.join(lane, "chart.txt")), "lane work\n")
-        self.assertEqual(self.git("rev-parse", "refs/remotes/origin/main").strip(), proven)
+        self.land({"hooks/x.sh": REAL})
+        for cwd in (self.main, lane):
+            before = self.state(cwd)
+            p = self.sync(cwd=cwd)
+            self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+            self.assertIn("reinstall from main", p.stderr)
+            self.assertEqual(self.state(cwd), before)
+        self.assertFalse(os.path.exists(self.verified))
 
-    def test_lane_mode_never_checks_out_a_replace_ref(self):
+    def test_a_lane_worktree_refuses_a_pr_number(self):
         self.lane("new", "chart-fix")
         lane = self.lane_path("chart-fix")
-        proven = self.land({"hooks/x.sh": REAL})
-        self.git("replace", self.blob("pr7", "hooks/x.sh"), self.evil_blob())
-        rc, out, err = self.sync_in(cwd=lane, patches=lambda mod: [
-            mock.patch.object(mod.lanelib, "git_tamper", return_value=[])])
-        self.assertEqual(rc, 0, out + err)
-        self.assertEqual(self.read(os.path.join(lane, "hooks", "x.sh")), REAL)
-        self.assertEqual(self.parents(cwd=lane)[1], proven)
-
-    def test_lane_mode_refuses_a_conflict(self):
-        self.lane("new", "chart-fix")
-        lane = self.lane_path("chart-fix")
-        self.commit("README.md", "lane readme\n", cwd=lane)
-        self.land({"README.md": "main readme\n"})
+        self.land({"hooks/x.sh": REAL})
         before = self.state(lane)
-        p = self.sync(cwd=lane)
+        p = self.sync("7", cwd=lane)
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
-        self.assertIn("README.md", p.stderr)
+        self.assertIn("main checkout", p.stderr)
+        self.assertIn("reinstall from main", p.stderr)
         self.assertEqual(self.state(lane), before)
+
+    def test_a_lane_record_naming_the_main_checkout_refuses(self):
+        # identity() matches lane records before the main checkout, so a record whose path is
+        # the main checkout would make it count as that lane.
+        self.lane("new", "chart-fix")
+        rec = os.path.join(self.common, "lanes", "chart-fix", "lane.json")
+        data = self.lane_json("chart-fix")
+        data["path"] = self.main
+        self.write(rec, json.dumps(data))
+        self.land({"hooks/x.sh": REAL})
+        before = self.state()
+        for args in ((), ("7",)):
+            p = self.sync(*args)
+            self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+            self.assertNotIn("verified;", p.stdout)
+            self.assertEqual(self.state(), before)
+        self.assertIn("chart-fix", p.stderr)
+        self.assertIn("main checkout", p.stderr)
 
 
 class CommitGraphOff(unittest.TestCase):

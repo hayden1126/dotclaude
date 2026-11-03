@@ -781,21 +781,22 @@ but it can't aim a signal.
 
 ## Verified merges (`lane sync-main`)
 
-`lane sync-main` merges main into a checkout's branch and writes only what git has hash-checked
-against a proven commit. It closes DA15/DA16. The post-merge chain used to fetch and merge main
+`lane sync-main <n>` merges a merged PR into the main checkout's branch and writes only what git
+has hash-checked against a proven commit. It closes DA15/DA16. The post-merge chain used to fetch and merge main
 with the sandbox off, in a repo whose shared git dir every lane's sandboxed Bash can write, and
 the lead then installed from that checkout. Now nothing that shared dir holds reaches a file.
 
 **What it proves.** The lead runs `lane sync-main <n>` bare from the main checkout
 (`skills/lanes/SKILL.md`, The lead, step 7.1). gh must report PR #n as MERGED into the config's
-base branch, with a full merge commit sha. That sha, GitHub's merge commit, is the one trust
-root. A lane runs a bare `lane sync-main` with no number from its worktree, when its install is
-live (step 6). Its trust root is the base branch's tip as the remote serves it in that run.
+base branch, with a full merge commit sha. That sha, GitHub's merge commit, and the lead's
+branch as sync-main pins it at the start are the trust roots. It runs only from the main
+checkout: a call with no number refuses, as does one from a lane or from a main checkout that a
+lane record names as its path (any lane's sandbox can write such a record).
 
 **Where it builds the merge.** Each run starts a fresh bare store under
 `~/.local/state/dotclaude/verified/`. It fetches the base branch from the remote's URL and the
-checkout's branch into it, and makes the merge commit there. Only the lead's (or the lane's)
-unsandboxed command writes that dir. settings.json denies it to the file tools
+checkout's branch into it, and makes the merge commit there. Only the lead's unsandboxed command
+writes that dir. settings.json denies it to the file tools
 (`Edit(~/.local/state/dotclaude/verified/**)` in `permissions.deny`) and to sandboxed Bash (a
 `sandbox.filesystem.denyWrite` line). sync-main refuses to create a store unless the live
 settings hold both rules and the state dir is the default one. Its git calls read no global or
@@ -817,16 +818,16 @@ points `main` and the remote-tracking ref at the proven commit, for display only
 main's side of STATUS.md, and the lead adds back by hand any line that isn't an older carry (the
 keep-whole rule under "Where each type lives").
 
-**Lane mode.** In a lane, sync-main takes the merge as it comes and refuses on any conflict. It
-also refuses where the repo turns on per-worktree config, since git would then read a file the
-lane's sandbox can write. A lane whose live install blocks a conflicted merge asks the lead to
-reinstall from main: that releases the lane's install, so its files are writable again. The lane
-then merges origin/main sandboxed as usual, resolves the conflict, commits, and reinstalls from
-its worktree before ready.
+**Lanes.** A lane never runs sync-main: a lane's branch history is something another lane can
+rewrite, so it can't serve as a trust root. A lane whose live install keeps it from merging main
+sandboxed asks the lead to reinstall from main: that releases the lane's install, so its files
+are writable again. The lane then merges origin/main sandboxed as usual, resolves any conflict,
+commits, and reinstalls from its worktree before ready.
 
 **What it refuses.** It writes nothing when it runs sandboxed, the checkout has uncommitted
 changes or no branch, gh can't prove the merge, the merge conflicts, the checkout doesn't match
-its commit, or another sync-main holds the store's lock. It also refuses on any tripwire
+its commit, the repo turns on per-worktree config (git would then read a file a lane's sandbox
+can write), or another sync-main holds the store's lock. It also refuses on any tripwire
 finding.
 
 **The tripwire.** sync-main, `lane ls`, handoff-check and setup.sh each check the shared git dir
@@ -914,7 +915,7 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
 - **S3, `excludedCommands`:** `lane new` fetches and `lane ls` asks gh for PR state, and both
   need the credential the sandbox hides; `ls`, `open`, `done`, `addr` and `lead` also need to
   see other processes. PR 1 excluded `lane *`. PR 2 narrowed it to `lane init`, `new`, `adopt`, `ls`,
-  `open` and `done` (lane-addr added `addr`, two-sessions `lead`, park `park`, and DA15/DA16 `sync-main` and its bare form), each by name, because `lane lock -- <cmd>` must stay sandboxed: under
+  `open` and `done` (lane-addr added `addr`, two-sessions `lead`, park `park`, and DA15/DA16 `sync-main` with a PR number), each by name, because `lane lock -- <cmd>` must stay sandboxed: under
   `lane *`, any command wrapped in it ran sandbox-off without the `dangerouslyDisableSandbox`
   flag the delete guard checks. `whoami`, `claim`, `release`, `who`, `note`, `asks` and `lock`
   touch only `<common-dir>/lanes/` and the lane's `.lane/`, which a lane-rooted sandbox can

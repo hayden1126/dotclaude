@@ -264,12 +264,11 @@ inherits the lead from it.
    its session is gone, add it to Hayden's asks. Never order a merge or close a lane before the
    gate passes.
 6. **Watch and order.** Watch `lane ls`. Keep the merge order in the project STATUS. A lane
-   whose install is live merges main by running a bare `lane sync-main` from its worktree: its
-   own hooks, skills and tests are write-protected then (`docs/lanes.md` S3), and sync-main
-   builds the merge outside the sandbox from hash-checked objects (`docs/lanes.md`, "Verified
-   merges"). When it refuses on a conflict, the lane asks the lead to reinstall from main, which
+   whose install is live can't merge main sandboxed: its own hooks, skills and tests are
+   write-protected then (`docs/lanes.md` S3). It asks the lead to reinstall from main, which
    releases its install; it then merges origin/main sandboxed, resolves, and reinstalls from its
-   worktree before ready. A lane's message before an act past its worktree
+   worktree before ready. A lane never runs `lane sync-main`: only the lead does, with a merged
+   PR's number (step 7.1). A lane's message before an act past its worktree
    (Lifecycle, step 3) gets a reply: ask Hayden first when the act needs his ok, and say so
    when another lane's install or the merge order stands in its way.
 7. **After a merge.** A lane's `merged #N` starts the post-merge chain. A merged PR on `lane ls`
@@ -399,7 +398,7 @@ resend passes.
 | `lane trial --run "<suite>" ...` | from a lane: merge origin/main and every other live lane's commits (or only the ids given) onto its HEAD in a scratch tree, run each suite there under the `suite` lock (and init's `--trial-locks`), and rerun a failed one on HEAD plus origin/main alone to tell the merge's failures from the location's; with nothing merged, run them once on HEAD plus origin/main; exit 0 clean, 1 on a conflict, a failure of the merge's own or one with no test id to compare (a lane that conflicts with origin/main alone is untried, not a failure), 75 on `--wait`; `--keep` keeps the tree; `--link PATH` symlinks a lane dir into it |
 | `lane new` / `adopt` / `done` | lifecycle, above |
 | `lane park <id>` | the lead ends a finished lane's sessions and frees its cap slot, keeping its worktree, branch, record and claims; `lane open <id>` unparks it (Lifecycle, step 6). Bare |
-| `lane sync-main [<n>]` | merge main into the checkout's branch from hash-checked objects and commit it. The lead passes the merged PR's number (The lead, step 7.1); a lane whose install is live runs it with none (step 6). Refuses on uncommitted changes, a conflict, or a tripwire finding (`git:` lines on `lane ls`). Bare |
+| `lane sync-main <n>` | merge merged PR #n into the main checkout's branch from hash-checked objects and commit it (The lead, step 7.1). Lead only: a call with no number, or from a lane, refuses (a lane whose install is live follows step 6). Refuses on uncommitted changes, a conflict, or a tripwire finding (`git:` lines on `lane ls`). Bare |
 
 Board flags: `stale` (worktree gone; its claims are void), `rebase` (behind the base),
 `conflict` (two live lanes claim one request), `overlap` (two live lanes change one file,

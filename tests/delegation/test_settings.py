@@ -435,22 +435,23 @@ class Baseline(unittest.TestCase):
         # `ls`, `open`, `done`, `park` and `addr` need to see other processes, and `park` writes
         # its flag in the state dir. `sync-main` asks gh for the merge commit, fetches, and
         # builds the merge in a store under the state dir that sandboxed Bash can't write
-        # (DA15/DA16); it runs bare, with no PR in a lane. Only those run sandbox-off: `lane lock
+        # (DA15/DA16); only the lead runs it, with a PR number, so a bare `lane sync-main`
+        # stays sandboxed, where it refuses. Only those run sandbox-off: `lane lock
         # -- <cmd>` must stay sandboxed, or the command it wraps would run outside the sandbox
         # without the dangerouslyDisableSandbox flag the delete guard checks. `new` and `adopt`
         # run the config's `setup` through a shell, so the config lives in the state dir, which
         # sandboxed Bash can't write (docs/lanes.md S3; tests/lanes ConfigTrust).
         excluded = S["sandbox"]["excludedCommands"]
         bare = ["lane init", "lane init *", "lane new *", "lane adopt *", "lane ls", "lane ls *",
-                "lane open *", "lane done *", "lane park *", "lane sync-main",
+                "lane open *", "lane done *", "lane park *",
                 "lane sync-main *", "lane addr *", "lane lead"]
         self.assertEqual([p for p in excluded if p.split()[0] == "lane"], bare)
         self.assertNotIn("lane *", excluded)
         for cmd in ("lane lock gate -- true", "lane lock gate -- rm -rf build", "lane whoami",
-                    "lane claim 42", "lane note x"):
+                    "lane claim 42", "lane note x", "lane sync-main"):
             self.assertEqual([p for p in excluded if glob_match(p, cmd)], [], cmd)
         for cmd in ("lane ls", "lane ls --json", "lane open chart-fix", "lane done chart-fix",
-                    "lane park chart-fix", "lane sync-main", "lane sync-main 42",
+                    "lane park chart-fix", "lane sync-main 42",
                     "lane addr lead", "lane lead"):
             self.assertTrue(any(glob_match(p, cmd) for p in excluded), cmd)
 

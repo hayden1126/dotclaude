@@ -72,8 +72,6 @@ EXCLUDED = [
              ["lane done chart-fix"]),
     Excluded("lane park *", "checks the push with gh, sees and signals the lane's sessions, "
              "writes its flag in the state dir", ["lane park chart-fix"]),
-    Excluded("lane sync-main", "fetches, builds the merge in a store under the state dir and "
-             "checks it out (DA15/DA16)", ["lane sync-main"]),
     Excluded("lane sync-main *", "proves the merge with gh, fetches, builds the merge in a "
              "store under the state dir and checks it out (DA15/DA16)", ["lane sync-main 42"]),
     Excluded("lane addr *", "sees other sessions' processes to tell a live one from a stale file",
@@ -395,7 +393,7 @@ DENIES = CLAUDE_DENY
 # no ask or deny.
 NO_ASK = ["lane ls", "lane ls --json", "lane open chart-fix", "lane open chart-fix --print",
           "lane new chart-fix --claim 42 --goal x", "lane done chart-fix", "lane park chart-fix",
-          "lane sync-main", "lane sync-main 42",
+          "lane sync-main 42",
           "lane init --cap 4",
           "lane adopt ../x", "lane lead", "lane addr lead", "lane addr --repo ~/dotclaude lead",
           "pass-respawn -C /x --compact", "pass-respawn -C /x --print",
