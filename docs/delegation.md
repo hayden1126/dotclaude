@@ -823,7 +823,7 @@ sonnet sessions a day. The checks therefore split by cost (Hayden's call, 2026-0
 | Dated items (`skills/delegation/due.toml`) | whatever the item says | a reminder from its date on, until the item is removed |
 
 **How it runs.** `hooks/delegation-due.sh` runs `delegation-ledger due --hook` at SessionStart
-(`startup` and `resume`) in about 50 ms, and fails open:
+(`startup`, `resume` and `fork`) in about 50 ms, and fails open:
 - It reads `canary.json`, `audit.json`, `due.toml` and the ledger's first row.
 - It starts the cheap checks as a detached job, so the session doesn't wait for them.
 - It prints a line only when something needs Hayden: a failed check, a due full run, unseen audit

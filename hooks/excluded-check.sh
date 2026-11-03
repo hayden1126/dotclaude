@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SessionStart(startup|resume|clear) hook: the excluded-command guard's check of this session's
+# SessionStart(startup|resume|clear|fork) hook: the excluded-command guard's check of this session's
 # project and PATH, so a missing Edit deny rule shows when the session starts, not when a push
 # gets refused. It shows once per change in its findings, on screen and in the model's context.
 # The rules are in hooks/excluded_guard.py (--session); tests/setup/test_excluded_guard.py holds
