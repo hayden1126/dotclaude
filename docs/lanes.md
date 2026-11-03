@@ -806,7 +806,10 @@ https, ssh and file.
 **What reaches the checkout.** Every byte written to the checkout comes from objects in the
 store, which git hash-checked as they arrived. Before it writes, sync-main compares the checkout
 with its branch's commit and refuses on any difference. It then moves the files from that commit
-to the merge, reading objects from the store only, and moves the branch by compare-and-swap.
+to the merge, reading objects from the store only, through an index of its own built from that
+commit (the checkout's index sits in the shared dir, and an entry planted there could convert
+what checkout writes). That index then replaces the checkout's, and the branch moves by
+compare-and-swap.
 Afterwards it compares the checkout with the merge again and runs `git fsck` on the shared repo.
 A difference or a fsck finding is reported: don't install from that checkout until it is
 explained.

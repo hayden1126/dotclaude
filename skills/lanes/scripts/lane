@@ -5648,10 +5648,46 @@ def sync_checkout(repo: Repo, store: str, pinned: str, merge: str) -> None:
     """Move the checkout's index and files from pinned to merge, the store standing in for the
     common dir: every object, the config and info/attributes come from it, so what the shared
     repo holds (its info/attributes would convert what is written, and no config turns that
-    file off) never reaches a file. The index stays the checkout's own, in its git dir."""
-    env = sync_env(GIT_COMMON_DIR=store, GIT_WORK_TREE=repo.toplevel)
+    file off) never reaches a file. The move runs in an index of the store's own, built from
+    pinned and refreshed against the disk: the checkout's index sits in the lane-writable common
+    dir, and an entry planted there in neither tree (a .gitattributes, which checkout reads from
+    the index) would survive a two-tree read-tree and convert what it writes. That index then
+    replaces the checkout's in one rename."""
+    index = os.path.join(store, "checkout-index")
+    env = sync_env(GIT_COMMON_DIR=store, GIT_WORK_TREE=repo.toplevel, GIT_INDEX_FILE=index)
+    sgit(["read-tree", pinned], repo.toplevel, env, f"reading {pinned[:12]} into the store")
+    p = sgit(["update-index", "--refresh"], repo.toplevel, env, "refreshing the store's index",
+             ok=(0, 1))
+    if p.returncode:
+        stale = sorted({x.rsplit(": ", 1)[0] for x in p.stdout.splitlines() if ": " in x})
+        raise LaneError(f"the checkout {repo.toplevel} changed meanwhile, no longer "
+                        f"{pinned[:12]}'s:{named_paths(stale or ['?'])}\nNothing was written: "
+                        "find out what wrote it, then rerun")
     sgit(["read-tree", "-m", "-u", pinned, merge], repo.toplevel, env,
          f"checking out {merge[:12]}")
+    install_index(repo, index)
+
+
+def install_index(repo: Repo, index: str) -> None:
+    """index's bytes as the main checkout's index: a new file of a random name beside it (never
+    one a lane could have placed there first), renamed over it."""
+    with open(index, "rb") as f:
+        data = f.read()
+    gitdir = lanelib.open_dir(repo.common_dir, "")
+    tmp = f"index.sync-main-{secrets.token_hex(8)}"
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                     0o644, dir_fd=gitdir)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            os.replace(tmp, "index", src_dir_fd=gitdir, dst_dir_fd=gitdir)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp, dir_fd=gitdir)
+            raise
+    finally:
+        os.close(gitdir)
 
 
 def move_branch(repo: Repo, store: str, branch: str, pinned: str, merge: str) -> None:

@@ -380,7 +380,7 @@ class SyncMain(LanesRepo):
         self.assertIn("README.md (other bytes)", err)
         self.assertEqual(self.state(), before)
 
-    def race_after_compare(self, change):
+    def race_after_compare(self, change, refuses=True):
         """sync-main with change() run right after the first compare (of pinned) passes."""
         self.land({"hooks/x.sh": REAL})
 
@@ -395,9 +395,22 @@ class SyncMain(LanesRepo):
                 return out
             return [mock.patch.object(mod, "compare", racing)]
         rc, out, err = self.sync_in("7", patches=patches)
-        self.assertEqual(rc, 1, out + err)
-        self.assertNotIn("verified;", out)  # never a success line over a mix
+        if refuses:
+            self.assertEqual(rc, 1, out + err)
+            self.assertNotIn("verified;", out)  # never a success line over a mix
         return err
+
+    def assert_checkout_is(self, ref):
+        """Every file of ref's tree on disk holds its blob's bytes, and the index is ref's."""
+        names = self.git("ls-tree", "-r", "-z", "--name-only", ref).split("\0")
+        for name in filter(None, names):
+            want = subprocess.run(["git", "cat-file", "blob", f"{ref}:{name}"], cwd=self.main,
+                                  env=self.env, check=True, capture_output=True).stdout
+            with open(os.path.join(self.main, name), "rb") as f:
+                self.assertEqual(f.read(), want, name)
+        self.assertEqual(self.git("ls-files", "-s"),
+                         self.git("ls-tree", "-r", "--full-tree", ref).replace(" blob ", " ")
+                         .replace("\t", " 0\t"))
 
     def test_a_file_changed_after_the_compare_refuses(self):
         path = os.path.join(self.main, "README.md")
@@ -405,14 +418,26 @@ class SyncMain(LanesRepo):
         self.assertIn("README.md", err)
         self.assertIn("meanwhile", err)
 
-    def test_an_index_changed_after_the_compare_refuses(self):
-        # read-tree's two-tree merge keeps an index entry the merge doesn't change, so the
-        # forged entry survives the checkout: the compare after it refuses.
-        err = self.race_after_compare(lambda: self.git(
-            "update-index", "--cacheinfo", f"100644,{self.evil_blob()},README.md"))
-        self.assertIn("README.md (index)", err)
-        self.assertIn("meanwhile", err)
-        self.assertEqual(self.read(os.path.join(self.main, "hooks", "x.sh")), REAL)
+    def test_an_index_changed_after_the_compare_never_reaches_the_checkout(self):
+        # The checkout's index lives in the lane-writable common dir. sync-main checks out
+        # through an index of its own and installs that one, so a forged entry is dropped.
+        self.race_after_compare(lambda: self.git(
+            "update-index", "--cacheinfo", f"100644,{self.evil_blob()},README.md"),
+            refuses=False)
+        self.assert_checkout_is("lead")
+
+    def test_an_index_only_attributes_file_never_converts_the_checkout(self):
+        # Checkout reads .gitattributes from the index too, and a two-tree read-tree keeps an
+        # entry in neither tree: one planted in the checkout's index after the compare (its blob
+        # in the store through the lead branch's history) would turn every LF into CRLF.
+        self.commit(".gitattributes", "* text eol=crlf\n")
+        attrs = self.blob("lead", ".gitattributes")
+        self.git("rm", "-q", ".gitattributes")
+        self.git("commit", "-q", "-m", "drop .gitattributes")
+        self.race_after_compare(lambda: self.git(
+            "update-index", "--add", "--cacheinfo", f"100644,{attrs},.gitattributes"),
+            refuses=False)
+        self.assert_checkout_is("lead")
 
     def test_an_overwritten_lead_side_object_fails_the_fetch(self):
         # STATUS.md's blob is only on the lead's branch, so it reaches the store through the
