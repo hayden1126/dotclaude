@@ -132,7 +132,7 @@ from typing import NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import lanelib  # noqa: E402  (beside this script's real path)
-from lanelib import Repo, git, lock, now_iso, write_json  # noqa: E402
+from lanelib import Repo, git, lock, now_iso, shown, write_json  # noqa: E402
 
 TEMPLATE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "..",
                         "templates", "LANE.md")
@@ -3667,7 +3667,6 @@ LANES_LOCK_WAIT = 30.0  # secs `done` waits for the lanes lock while it holds in
 # Each verb that ends a lane's sessions -> how end_lane's refusals name the act under way
 ACTING = {"done": ("closing", "the close"), "park": ("parking", "the park")}
 LEFT = ", so it was left running"  # the end of each reason `guarded` holds a signal for
-SHOWN = re.compile(r"[\x00-\x1f\x7f-\x9f]")  # C0, DEL and C1: masked in what `done` prints
 HANDOFF_CHECK = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "handoff",
                              "scripts", "handoff-check")
 
@@ -3687,11 +3686,6 @@ def grace() -> float:
     except ValueError:
         return GRACE
     return secs if 0 <= secs <= GRACE else GRACE
-
-
-def shown(text: str) -> str:
-    """text with its control characters (SHOWN) masked, fit for a terminal."""
-    return SHOWN.sub("?", text)
 
 
 def described(p: lanelib.Proc, why: str) -> str:

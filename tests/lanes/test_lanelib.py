@@ -954,6 +954,21 @@ class GitTamper(unittest.TestCase):
         self.assertTrue(any("shallow" in x for x in lines), lines)
         self.assertTrue(any("refs/replace/" in x for x in lines), lines)
 
+    def test_control_bytes_in_a_reason_come_out_masked(self):
+        # A refs/replace name and a packed-refs line are the lane's to choose: a terminal
+        # escape in either must not reach `lane ls`, handoff-check or setup.sh as one.
+        evil = "\x1b]0;x\x07\x9b2J"
+        self.write(f".git/refs/replace/{evil}", "")
+        self.write(".git/packed-refs", f"{self.blob_a} refs/replace/{evil}\n")
+        reasons = self.found("refs/replace/", "packed-refs")
+        self.assertEqual(len(reasons), 2, reasons)
+        p = self.cli("git-tamper", self.common)
+        self.assertEqual(p.returncode, 1, p.stderr)
+        for text in (*reasons, p.stdout.replace("\n", "")):
+            with self.subTest(text=text):
+                self.assertNotRegex(text, r"[\x00-\x1f\x7f-\x9f]")
+                self.assertIn("?]0;x??2J", text)
+
     def test_the_cli_refuses_bad_usage(self):
         for args in ((), ("git-tamper",), ("git-tamper", self.common, "x"),
                      ("other", self.common)):

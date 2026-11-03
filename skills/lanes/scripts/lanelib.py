@@ -627,6 +627,14 @@ def real_dir_at(dir_fd: int, name: str) -> bool:
         return False
 
 
+SHOWN = re.compile(r"[\x00-\x1f\x7f-\x9f]")  # C0, DEL and C1: masked in what lane tools print
+
+
+def shown(text: str) -> str:
+    """text with its control characters (SHOWN) masked, fit for a terminal."""
+    return SHOWN.sub("?", text)
+
+
 def git_tamper(common_dir: str) -> list[str]:
     """The tripwire for DA15/DA16: one plain reason per sign that the git common dir may make
     git serve content other than what the remote showed, [] when there is none. Sandboxed Bash
@@ -636,7 +644,12 @@ def git_tamper(common_dir: str) -> list[str]:
     shallow file existing at all. Nothing below common_dir is
     followed: each name opens by fd with O_NOFOLLOW (open_dir), so a symlink is a finding in
     itself. Fails closed: whatever can't be read is a finding, never clean. `lane ls`,
-    handoff-check and setup.sh (through this file's `git-tamper` command) call it."""
+    handoff-check and setup.sh (through this file's `git-tamper` command) call it. Each reason
+    comes masked (shown): a replace ref's name and a packed-refs line are a lane's to choose."""
+    return [shown(r) for r in _tamper(common_dir)]
+
+
+def _tamper(common_dir: str) -> list[str]:
     try:
         root = os.open(common_dir, os.O_RDONLY | os.O_DIRECTORY)
     except OSError as e:
