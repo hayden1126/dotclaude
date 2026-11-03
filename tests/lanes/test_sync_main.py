@@ -187,6 +187,25 @@ class SyncMain(LanesRepo):
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("README.md", p.stderr)
 
+    def test_a_forged_parent_on_a_newer_main_never_passes_as_up_to_date(self):
+        # The lead's branch ref is lane-writable and only trees are compared. A lane points it at
+        # a commit whose tree is the disk's (without PR 7's change) and whose parent is a genuine
+        # newer main: the ancestry says PR 7 is held, but the tree must still prove it.
+        older = self.land({"hooks/x.sh": REAL})
+        newer = self.land({"hooks/y.sh": REAL}, n=8)
+        self.git("fetch", "-q", "origin")
+        tree = self.git("rev-parse", "lead^{tree}").strip()
+        forged = self.git("commit-tree", tree, "-p", newer, "-m", "forged").strip()
+        self.git("update-ref", "refs/heads/lead", forged)
+        self.merged(older)
+        before = self.state()
+        p = self.sync("7")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertNotIn("up to date", p.stdout)
+        self.assertNotIn("already holds", p.stdout)
+        self.assertIn("hooks/x.sh", p.stderr)
+        self.assertEqual(self.state(), before)
+
     def test_up_to_date_still_checks_the_checkout_and_the_drift(self):
         # The pinned sha comes from a lane-writable branch ref. A lane points the lead's branch
         # at proven plus a change of its own and forges the index so status reads clean
