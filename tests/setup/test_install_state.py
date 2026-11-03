@@ -1187,7 +1187,7 @@ class SetupHold(Machine):
         self.env["XDG_STATE_HOME"] = self.state
         bins = os.path.join(self.tmp, "noflock")  # what setup.sh's top runs, less flock
         os.makedirs(bins)
-        for tool in ("bash", "python3", "dirname", "date", "mkdir", "git"):
+        for tool in ("bash", "python3", "dirname", "date", "mkdir", "chmod", "git"):
             os.symlink(shutil.which(tool), os.path.join(bins, tool))
         self.env["PATH"] = bins
         r = self.head(self.b, helper=self.LOCK_RAN)

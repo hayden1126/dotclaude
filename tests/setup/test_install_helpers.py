@@ -9,6 +9,7 @@ import os
 import re
 import resource
 import subprocess
+import stat
 import sys
 import tempfile
 import unittest
@@ -885,6 +886,64 @@ class SetupWiring(unittest.TestCase):
                                   "research-discipline", "ui-alignment", "vetting-sources"])
         for s in skills:
             self.assertTrue(os.path.isfile(os.path.join(REPO, "skills", s, "SKILL.md")), s)
+
+
+class VerifiedStoreDir(unittest.TestCase):
+    """setup.sh makes ~/.local/state/dotclaude/verified (0700), the stores' dir settings.json
+    denies to every lane, before anything else could (DA15/DA16): a link or a non-dir there
+    stops the run. HOME points at a temp dir."""
+
+    MARK = "# lane sync-main's stores' dir"
+    END = '\nmkdir -p "$CLAUDE_DIR"'
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.home = tmp.name
+        self.verified = os.path.join(self.home, ".local", "state", "dotclaude", "verified")
+
+    def run_block(self):
+        with open(os.path.join(REPO, "setup.sh")) as f:
+            src = f.read()
+        self.assertIn(self.MARK, src)
+        block = self.MARK + src.split(self.MARK, 1)[1].split(self.END, 1)[0]
+        # XDG_STATE_HOME elsewhere: the dir goes where the settings rules name it, below HOME.
+        env = {"HOME": self.home, "PATH": "/usr/bin:/bin",
+               "XDG_STATE_HOME": os.path.join(self.home, "xdg")}
+        return subprocess.run(["bash", "-c", 'set -euo pipefail; say() { echo "$*"; }\n'
+                               'warn() { echo "!! $*" >&2; }\n' + block],
+                              env=env, capture_output=True, text=True, timeout=30)
+
+    def test_it_makes_the_dir_0700(self):
+        for _ in range(2):
+            p = self.run_block()
+            self.assertEqual(p.returncode, 0, p.stderr)
+            st = os.lstat(self.verified)
+            self.assertTrue(stat.S_ISDIR(st.st_mode))
+            self.assertEqual(stat.S_IMODE(st.st_mode), 0o700)
+
+    def test_a_looser_dir_is_tightened(self):
+        os.makedirs(self.verified, mode=0o755)
+        os.chmod(self.verified, 0o755)
+        self.assertEqual(self.run_block().returncode, 0)
+        self.assertEqual(stat.S_IMODE(os.lstat(self.verified).st_mode), 0o700)
+
+    def test_a_link_or_a_file_there_refuses(self):
+        outside = os.path.join(self.home, "outside")
+        os.makedirs(outside, mode=0o755)
+        os.makedirs(os.path.dirname(self.verified))
+        for plant in (lambda: os.symlink(outside, self.verified),
+                      lambda: os.symlink(os.path.join(self.home, "nowhere"), self.verified),
+                      lambda: open(self.verified, "w").close()):
+            plant()
+            with self.subTest(plant=os.readlink(self.verified)
+                              if os.path.islink(self.verified) else "file"):
+                p = self.run_block()
+                self.assertNotEqual(p.returncode, 0, p.stdout)
+                self.assertIn("verified", p.stderr)
+                self.assertFalse(os.path.isdir(os.path.join(self.home, "nowhere")))
+                self.assertEqual(stat.S_IMODE(os.stat(outside).st_mode), 0o755)
+            os.unlink(self.verified)
 
 
 class RecurseSubmodulesOff(unittest.TestCase):
