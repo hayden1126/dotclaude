@@ -37,8 +37,8 @@ class LanesRepo(unittest.TestCase):
 
     init_lanes = True
     # True puts the state dir where a real one lives, $HOME/.local/state/dotclaude: `lane
-    # sync-main`, and `lane new` with a setup command (its verified store, LR7), refuse any
-    # other (their settings rules are spelled for that path).
+    # sync-main` and `lane new` (its verified store, LR7) refuse any other (their settings rules
+    # are spelled for that path).
     state_in_home = True
 
     def setUp(self):
@@ -49,7 +49,7 @@ class LanesRepo(unittest.TestCase):
         os.makedirs(os.path.join(self.home, ".claude", "sessions"))
         os.makedirs(fake_bin)
         # The two rules that keep lanes out of the verified stores (setup.sh installs both),
-        # without which `lane new` with a setup command and `lane sync-main` refuse.
+        # without which `lane new`, `lane adopt` and `lane sync-main` refuse.
         with open(os.path.join(self.home, ".claude", "settings.json"), "w") as f:
             json.dump(STORE_RULES, f)
         with open(os.path.join(fake_bin, "gh"), "w") as f:

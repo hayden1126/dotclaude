@@ -1,14 +1,17 @@
 """`lane ls` shows the DA15/DA16 tripwire (lanelib.git_tamper) for the repo's common dir: a
 `git: <reason>` line per finding, after the install line. It warns: the exit stays 0."""
+import glob
 import hashlib
+import json
 import os
 import shutil
 import subprocess
+import sys
 import unittest
 import zlib
 from unittest import mock
 
-from _fixture import LanesRepo, lanelib
+from _fixture import LANE, LanesRepo, lanelib
 from test_cli import load_lane_script
 
 
@@ -198,43 +201,185 @@ class NoHooks(LanesRepo):
                          else "")
 
 
+# Runs the lane CLI in a child with one function patched (argv[2] names which), so a test can
+# stop or plant midway through a real `lane new`: "interrupt" makes verify_new raise
+# KeyboardInterrupt (Ctrl-C mid-verification); "plant:<victim>:<link>" makes fetched_base plant a
+# symlink at <link> to <victim> once it returns, as a lane's sandbox could while the store's full
+# fetch runs.
+DRIVER = """
+import importlib.machinery, importlib.util, os, sys
+loader = importlib.machinery.SourceFileLoader("lane_cli", sys.argv[1])
+spec = importlib.util.spec_from_loader("lane_cli", loader)
+mod = importlib.util.module_from_spec(spec)
+loader.exec_module(mod)
+how = sys.argv[2]
+if how == "interrupt":
+    def verify_new(*a, **k):
+        raise KeyboardInterrupt
+    mod.verify_new = verify_new
+elif how.startswith("plant:"):
+    _, victim, link = how.split(":")
+    real = mod.fetched_base
+    def fetched_base(*a, **k):
+        sha = real(*a, **k)
+        os.makedirs(os.path.dirname(link), exist_ok=True)
+        os.symlink(victim, link)
+        return sha
+    mod.fetched_base = fetched_base
+sys.exit(mod.main(sys.argv[3:]))
+"""
+
+
+def plant_readme(case):
+    """Overwrite README.md's loose blob in the shared object store with other bytes, which no
+    tripwire sees: git then checks out what no remote showed."""
+    sha = case.git("rev-parse", "HEAD:README.md").strip()
+    path = os.path.join(case.common, "objects", sha[:2], sha[2:])
+    case.assertTrue(os.path.exists(path), "README.md's blob is not loose")
+    os.chmod(path, 0o644)
+    body = b"planted\n"
+    with open(path, "wb") as f:
+        f.write(zlib.compress(b"blob %d\0" % len(body) + body))
+    case.assertEqual(lanelib.git_tamper(case.common), [])  # no tripwire for this
+
+
+def driven(case, how, *args):
+    """`lane <args>` run through DRIVER with how's patch."""
+    return subprocess.run([sys.executable, "-c", DRIVER, LANE, how, *args], cwd=case.main,
+                          env=case.env, capture_output=True, text=True, timeout=60)
+
+
+def marks(case, lane_id):
+    """The verification markers for lane_id in the verified dir, which no lane can write."""
+    return glob.glob(os.path.join(case.home, ".local", "state", "dotclaude", "verified",
+                                  "new-lanes", f"*-{lane_id}.json"))
+
+
 class NewVerifiesTree(LanesRepo):
     """LR7: `lane new` checks the lane out from the shared object store, which any lane's
-    sandboxed Bash can write, then runs the configured setup command in it sandbox-off. With a
-    setup command configured, it first compares the new worktree with base's tree as fetched
-    into a fresh store no lane can write, and on any difference runs no setup."""
+    sandboxed Bash can write, then runs the configured setup command in it sandbox-off, and the
+    session `lane open` starts there loads its .claude/ config. So every `new` first compares the
+    new worktree with base's tree as fetched into a fresh store no lane can write, and on any
+    difference runs no setup. Only a marker in the verified dir, which no lane can write, lets
+    `adopt` finish a lane `new` left setup-failed."""
 
     def setUp(self):
         super().setUp()
         self.lane("init", "--setup", "touch SETUP_RAN")
 
+    def setup_ran(self, lane_id="chart-fix"):
+        return os.path.exists(os.path.join(self.lane_path(lane_id), "SETUP_RAN"))
+
     def test_a_clean_checkout_runs_the_setup(self):
         out = self.lane("new", "chart-fix")
         self.assertIn("verified", out)
-        self.assertTrue(os.path.exists(os.path.join(self.lane_path("chart-fix"), "SETUP_RAN")))
+        self.assertTrue(self.setup_ran())
         self.assertEqual(self.lane_json("chart-fix")["state"], "active")
 
     def test_an_overwritten_object_runs_no_setup(self):
-        sha = self.git("rev-parse", "HEAD:README.md").strip()
-        path = os.path.join(self.common, "objects", sha[:2], sha[2:])
-        self.assertTrue(os.path.exists(path), "README.md's blob is not loose")
-        os.chmod(path, 0o644)
-        body = b"planted\n"
-        with open(path, "wb") as f:
-            f.write(zlib.compress(b"blob %d\0" % len(body) + body))
-        self.assertEqual(lanelib.git_tamper(self.common), [])  # no tripwire for this
+        plant_readme(self)
         p = self.run_lane("new", "chart-fix")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("README.md (other bytes)", p.stderr)
         lane = self.lane_path("chart-fix")
         self.assertEqual(self.read(os.path.join(lane, "README.md")), "planted\n")  # git's work
-        self.assertFalse(os.path.exists(os.path.join(lane, "SETUP_RAN")))
+        self.assertFalse(self.setup_ran())
         rec = self.lane_json("chart-fix")
         self.assertEqual((rec["state"], rec["setup_failed"]), ("setup-failed", "verify"))
+        self.assertEqual(marks(self, "chart-fix"), [])
         p = self.run_lane("adopt", lane)  # finishing it would run the setup: refused too
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
-        self.assertFalse(os.path.exists(os.path.join(lane, "SETUP_RAN")))
+        self.assertFalse(self.setup_ran())
         self.assertIn("lane done chart-fix --abandon", p.stderr)
+
+    def test_adopt_goes_by_the_marker_not_the_lane_writable_record(self):
+        plant_readme(self)
+        self.assertEqual(self.run_lane("new", "chart-fix").returncode, 1)
+        data = os.path.join(self.common, "lanes", "chart-fix", "lane.json")
+        rec = self.lane_json("chart-fix")
+        for step in ("setup", "copy"):
+            with self.subTest(step=step):
+                self.write(data, json.dumps(dict(rec, setup_failed=step)))
+                p = self.run_lane("adopt", self.lane_path("chart-fix"))
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertIn("lane done chart-fix --abandon", p.stderr)
+                self.assertFalse(self.setup_ran())
+
+    def test_an_interrupted_verification_leaves_a_lane_adopt_wont_finish(self):
+        p = driven(self, "interrupt", "new", "chart-fix")
+        self.assertNotEqual(p.returncode, 0, p.stdout + p.stderr)
+        rec = self.lane_json("chart-fix")
+        self.assertEqual((rec["state"], rec["setup_failed"]), ("setup-failed", "verify"))
+        p = self.run_lane("adopt", self.lane_path("chart-fix"))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("lane done chart-fix --abandon", p.stderr)
+        self.assertFalse(self.setup_ran())
+
+    def test_open_and_park_steer_an_unverified_lane_to_done_not_adopt(self):
+        plant_readme(self)
+        self.assertEqual(self.run_lane("new", "chart-fix").returncode, 1)
+        for args in (("open", "chart-fix", "--print"), ("park", "chart-fix")):
+            with self.subTest(args=args):
+                p = self.run_lane(*args)
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertIn("setup-failed", p.stderr)
+                self.assertIn("lane done chart-fix --abandon", p.stderr)
+                self.assertNotIn("lane adopt", p.stderr)
+
+    def test_the_marker_holds_the_lane_and_done_removes_it(self):
+        self.lane("new", "chart-fix")
+        (mark,) = marks(self, "chart-fix")
+        data = json.loads(self.read(mark))
+        self.assertEqual(data["id"], "chart-fix")
+        self.assertEqual(data["path"], self.lane_path("chart-fix"))
+        self.assertEqual(data["base_sha"], self.lane_json("chart-fix")["base_sha"])
+        os.remove(os.path.join(self.lane_path("chart-fix"), "SETUP_RAN"))  # `done` keeps it
+        self.lane("done", "chart-fix", "--abandon")
+        self.assertEqual(marks(self, "chart-fix"), [])
+
+    def test_a_marker_left_from_an_older_lane_vouches_for_no_new_one(self):
+        self.lane("new", "chart-fix")
+        (mark,) = marks(self, "chart-fix")
+        kept = self.read(mark)
+        os.remove(os.path.join(self.lane_path("chart-fix"), "SETUP_RAN"))
+        self.lane("done", "chart-fix", "--abandon")
+        self.write(mark, kept)  # as if that `done` couldn't remove it
+        plant_readme(self)
+        self.assertEqual(self.run_lane("new", "chart-fix").returncode, 1)
+        data = os.path.join(self.common, "lanes", "chart-fix", "lane.json")
+        self.write(data, json.dumps(dict(self.lane_json("chart-fix"), setup_failed="setup")))
+        p = self.run_lane("adopt", self.lane_path("chart-fix"))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertFalse(self.setup_ran())
+
+
+class NewVerifiesWithoutSetup(LanesRepo):
+    """LR7 with no setup command: the session `lane open` starts in the tree loads its .claude/
+    config, whose hooks run outside the sandbox, so `new` verifies the checkout all the same."""
+
+    def test_an_overwritten_object_is_refused(self):
+        plant_readme(self)
+        p = self.run_lane("new", "chart-fix")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("README.md (other bytes)", p.stderr)
+        rec = self.lane_json("chart-fix")
+        self.assertEqual((rec["state"], rec["setup_failed"]), ("setup-failed", "verify"))
+        self.assertIn("setup-failed", self.run_lane("open", "chart-fix", "--print").stderr)
+
+    def test_a_clean_checkout_is_verified(self):
+        self.assertIn("verified", self.lane("new", "chart-fix"))
+        self.assertEqual(len(marks(self, "chart-fix")), 1)
+
+    def test_without_the_store_rules_nothing_is_created(self):
+        self.write(os.path.join(self.home, ".claude", "settings.json"), "{}")
+        p = self.run_lane("new", "chart-fix")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("Edit(~/.local/state/dotclaude/verified/**)", p.stderr)
+        self.assertIn("sandbox.filesystem.denyWrite", p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        self.assertFalse(os.path.exists(self.lane_path("chart-fix")))
+        self.assertFalse(os.path.exists(os.path.join(self.common, "lanes", "chart-fix")))
+        self.assertEqual(self.git("branch", "--list", "chart-fix"), "")
 
 
 class GateBeforeRefs(LanesRepo):
@@ -260,6 +405,19 @@ class GateBeforeRefs(LanesRepo):
         self.assertEqual(self.lane_json("chart-fix")["state"], "active")
         os.unlink(link)
         self.lane("new", "api-docs")
+
+    def test_new_checks_again_under_the_lock_before_worktree_add(self):
+        # The store's full fetch of the base takes a while; a reflog link planted meanwhile at
+        # the branch `worktree add -b` creates would take its log line sandbox-off (L2).
+        victim = os.path.join(self.tmp, "victim")
+        self.write(victim, "mine\n")
+        link = os.path.join(self.common, "logs", "refs", "heads", "chart-fix")
+        p = driven(self, f"plant:{victim}:{link}", "new", "chart-fix")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("logs/refs/heads/chart-fix is a symlink", p.stderr)
+        self.assertEqual(self.read(victim), "mine\n")
+        self.assertFalse(os.path.exists(self.lane_path("chart-fix")))
+        self.assertEqual(self.git("branch", "--list", "chart-fix"), "")
 
 
 if __name__ == "__main__":

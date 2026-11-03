@@ -892,20 +892,40 @@ find out who made it before anything else runs git in that repo.
   still built from the store.
 - A shallow clone fails the tripwire, so sync-main, handoff-check and setup.sh refuse in one.
 - A reflog or ref link planted between a command's last tripwire check and git's own write still
-  takes that write (LR4, LR6). sync-main checks again right before each update-ref, which narrows
-  that span to milliseconds; `new`, `done` and `park` check once, at their start, so their span
-  runs from there to the write. Neither closes it.
+  takes that write (LR4, LR6). sync-main checks again right before each update-ref, and `new`
+  again under the lanes lock right before `git worktree add`, which narrows that span to
+  milliseconds; `done` and `park` check once, at their start, so their span runs from there to
+  the write. Neither closes it.
+- The setup command runs with the user's environment, and any git it runs finds its config
+  through the lane's admin dir pointer under the shared git dir, which a lane can rewrite while
+  the setup runs (residual of LR7). Pinning git's common dir for the setup would aim any git it
+  runs in another repo (an npm git dependency, say) at the lane repo's git dir, so it stays open.
 
 **`lane new`'s checkout (LR7).** `new` checks the lane out from the shared object store, which
-any lane's sandbox can write, and then runs the config's setup command in it, sandbox-off. With
-a setup command configured, `new` first fetches the base branch from the remote into a fresh
-store (`new.git`, beside sync-main's under the same lock and settings rules), and requires the
-commit ls-remote named to be on it. Right after `git worktree add`, before anything else is
+any lane's sandbox can write. Then the config's setup command runs in it sandbox-off, and the
+session `lane open` starts there loads the tree's `.claude/` config, whose hooks run outside the
+sandbox too. So every `new`, with a setup command or none, first fetches the base branch from
+the remote into a fresh store (`new.git`, beside sync-main's under the same lock and settings
+rules), and requires the commit ls-remote named to be on it. Without both settings rules it
+refuses before it creates anything. Right after `git worktree add`, before anything else is
 written there, every tracked file of the new worktree must match that commit's tree in the
-store, byte for byte and type, its index must too, and nothing untracked may sit in it. If
-anything differs, the setup doesn't run: the lane stays registered as setup-failed at `verify`, which
-`lane adopt` refuses to finish, and the message names each path. With no setup command, nothing
-runs in the tree sandbox-off, so `new` skips the check and its full fetch of the base.
+store, byte for byte and type, its index must too, and nothing untracked may sit in it.
+`.worktreeinclude`'s copies come after the check, from the main checkout, which no lane's
+sandbox can write (the lead's own sandbox can: that is the main checkout's existing trust, not a
+new route). The lane is recorded setup-failed at `verify` before the check starts and moves on
+only once it passes, so an interrupted check leaves it at `verify`. A pass also writes a marker
+for the lane (its id, path and base commit) under `~/.local/state/dotclaude/verified/new-lanes/`,
+which no lane can write. If anything differs, nothing runs in the tree and the message names each
+path. `lane adopt` finishes a setup-failed lane only when its marker is there and names that
+lane's id and path, whatever its `lane.json` (which any lane can write) says; otherwise it
+refuses and names `lane done <id> --abandon` and `lane new` again, as do `open` and `park` for
+such a lane. `lane done` removes the marker, and `new` removes any old one for its id before it
+checks.
+
+**Limits.** The compare is byte for byte against the blobs, so a checkout that converts bytes
+(`core.autocrlf`, `eol` or `ident` attributes, a filter such as LFS) fails `new`'s verification,
+as it fails sync-main's compare. Both stores fetch with no global or system config, so a remote
+that needs a credential helper set there can't be fetched by `new` or sync-main.
 
 ## Layout
 

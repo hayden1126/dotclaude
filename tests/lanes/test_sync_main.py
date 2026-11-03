@@ -866,7 +866,8 @@ class SyncMain(LanesRepo):
             self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
             self.assertIn("reinstall from main", p.stderr)
             self.assertEqual(self.state(cwd), before)
-        self.assertFalse(os.path.exists(self.verified))
+        # `lane new` made the stores' dir (its own store, LR7); sync-main made no store there.
+        self.assertFalse(os.path.exists(os.path.join(self.verified, "main.git")))
 
     def test_a_lane_worktree_refuses_a_pr_number(self):
         self.lane("new", "chart-fix")
