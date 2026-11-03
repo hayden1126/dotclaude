@@ -277,6 +277,62 @@ class MergeCli(unittest.TestCase):
                 self.assertEqual((r.returncode, r.stdout), (1, ""))
 
 
+class VerifiedStoreRules(unittest.TestCase):
+    """lane sync-main builds a store only when the live settings.json keep every lane out of it
+    (DA15/DA16): its own settings_rules_problem must pass on what setup.sh installs."""
+
+    @staticmethod
+    def rules_problem():
+        scripts = os.path.join(REPO, "skills", "lanes", "scripts")
+        if scripts not in sys.path:
+            sys.path.insert(0, scripts)  # the CLI imports lanelib beside it
+        return load(os.path.join(scripts, "lane")).settings_rules_problem
+
+    def merged(self, d, *args):
+        r = run(MERGE, *args)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        path = os.path.join(d, "out.json")
+        with open(path, "w") as f:
+            f.write(r.stdout)
+        return path
+
+    def test_every_install_shape_carries_both_rules(self):
+        check = self.rules_problem()
+        base = os.path.join(REPO, "settings.json")
+        with tempfile.TemporaryDirectory() as d:
+            overlay, live = os.path.join(d, "overlay.json"), os.path.join(d, "live.json")
+            with open(overlay, "w") as f:  # an overlay with lists of its own at both keys
+                json.dump({"permissions": {"deny": ["Edit(~/x/**)"]},
+                           "sandbox": {"filesystem": {"denyWrite": ["~/x"]}}}, f)
+            with open(live, "w") as f:  # a live file from before the rules
+                json.dump({"permissions": {"deny": []}, "model": "opus"}, f)
+            lane = os.path.join(d, "lane")
+            os.makedirs(lane)
+            for args in ([base], [base, overlay], [base, overlay, live],
+                         ["--checkout", lane, base, overlay, live]):
+                with self.subTest(args=args[:-1]):
+                    self.assertIsNone(check(self.merged(d, *args)))
+
+    def test_the_check_fails_without_either_rule(self):
+        # The control: the check reads the merged output, not something that always passes.
+        check = self.rules_problem()
+        with open(os.path.join(REPO, "settings.json")) as f:
+            settings = json.load(f)
+        with tempfile.TemporaryDirectory() as d:
+            for keys, rule in ((("permissions", "deny"), "Edit("),
+                               (("sandbox", "filesystem", "denyWrite"), "~/.local/state")):
+                s = json.loads(json.dumps(settings))
+                at = s
+                for k in keys:
+                    at = at[k]
+                at[:] = [p for p in at if not p.startswith(rule) or "verified" not in p]
+                path = os.path.join(d, "s.json")
+                with open(path, "w") as f:
+                    json.dump(s, f)
+                with self.subTest(keys=keys):
+                    self.assertIn(keys[-1], check(path))
+
+
 class BaselinePlugins(unittest.TestCase):
     def test_the_baseline_enables_exactly_what_setup_installs(self):
         # setup.sh installs plugins/enabled.json; a plugin missing from the baseline's

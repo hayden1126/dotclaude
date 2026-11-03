@@ -246,7 +246,8 @@
       "Edit(~/.local/lib/node_modules/**)",
       "Edit(~/.config/cd4a/**)",
       "Edit(~/chrome/**)",
-      "Edit(~/.cache/chrome-devtools-mcp/**)"
+      "Edit(~/.cache/chrome-devtools-mcp/**)",
+      "Edit(~/.local/state/dotclaude/verified/**)"
     ]
   },
   "sandbox": {
@@ -290,6 +291,8 @@
       "lane open *",
       "lane done *",
       "lane park *",
+      "lane sync-main",
+      "lane sync-main *",
       "lane addr *",
       "lane lead",
       "pass-respawn",
@@ -371,7 +374,8 @@
         "~/.claude/settings.json",
         "~/.claude/hooks",
         "~/.claude/skills",
-        "~/.claude/agents"
+        "~/.claude/agents",
+        "~/.local/state/dotclaude/verified"
       ],
       "allowWrite": [
         "~/.cache/claude-sandbox"
