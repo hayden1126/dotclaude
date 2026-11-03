@@ -1016,6 +1016,29 @@ class GitTamper(unittest.TestCase):
         os.mkdir(os.path.join(self.common, "a-dir"))  # a dir there is one of git's own kinds
         self.assertEqual(lanelib.git_tamper(self.common), [])
 
+    def test_a_symlink_anywhere_under_refs_is_found(self):
+        # LR6: update-ref, sandbox-off, creates a ref file through a linked dir under refs/.
+        outside = os.path.join(self.tmp, "outside")
+        os.makedirs(outside)
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.assertEqual(lanelib.git_tamper(self.common), [])
+        for rel in ("refs/remotes/origin", "refs/remotes/origin/main", "refs/heads/deep/x",
+                    "refs/tags", "refs/remotes"):
+            with self.subTest(rel=rel):
+                self.swap_in_link(rel, outside)
+        os.rename(os.path.join(self.common, "refs"), os.path.join(self.tmp, "refs"))
+        os.symlink(os.path.join(self.tmp, "refs"), os.path.join(self.common, "refs"))
+        self.found("refs")
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads a mode-000 dir")
+    def test_an_unreadable_refs_subdir_fails_closed(self):
+        path = os.path.join(self.common, "refs", "heads")
+        os.chmod(path, 0)
+        try:
+            self.found("refs/heads")
+        finally:
+            os.chmod(path, 0o755)
+
     @unittest.skipIf(os.geteuid() == 0, "root reads a mode-000 dir")
     def test_an_unreadable_logs_dir_fails_closed(self):
         path = os.path.join(self.common, "logs", "refs")

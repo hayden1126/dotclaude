@@ -648,7 +648,8 @@ def git_tamper(common_dir: str) -> list[str]:
     checkout's own .git as well). It also flags a symlink directly under worktrees/ (LR3: gc's
     `worktree prune` deletes through it) and one anywhere under logs/ or a worktree's logs/
     (LR4: a reflog write follows it), and any entry directly in common_dir that is a symlink or
-    neither a file nor a dir (LR5: a fetch writes FETCH_HEAD through it). Nothing below
+    neither a file nor a dir (LR5: a fetch writes FETCH_HEAD through it), and a symlink anywhere
+    under refs/ (LR6: update-ref creates a ref file through it). Nothing below
     common_dir is
     followed: each name opens by fd with O_NOFOLLOW (open_dir), so a symlink is a finding in
     itself. Fails closed: whatever can't be read is a finding, never clean. `lane ls`,
@@ -683,7 +684,7 @@ def _tamper(common_dir: str) -> list[str]:
     checks = (("", _top_links), ("refs/replace", _replace_refs), ("packed-refs", _packed_replace),
               ("objects/info/alternates", _nonblank), ("info/attributes", _nonblank),
               ("info/grafts", _exists), ("shallow", _exists), ("commondir", _exists),
-              ("worktrees", _worktree_links), ("logs", _log_links))
+              ("worktrees", _worktree_links), ("logs", _log_links), ("refs", _ref_links))
     reasons = []
     try:
         for rel, check in checks:
@@ -833,14 +834,34 @@ def _log_links(root: int, rel: str) -> list[str]:
     return found
 
 
-def _link_walk(dir_fd: int, name: str, path: str, found: list[str], depth: int = 0) -> None:
-    """Each symlink at or below name is a finding; a dir that can't be listed is one too."""
+def _ref_links(root: int, rel: str) -> list[str]:
+    """LR6: each symlink anywhere under refs/, through which update-ref or a fetch, run
+    sandbox-off, would create or rewrite a ref file in whatever dir it points at (refs/replace/
+    has its own check, which flags every entry)."""
+    if (at := _parent(root, rel)) is None:
+        return []
+    fd, name = at
+    found = []
+    try:
+        _link_walk(fd, name, rel, found, why="a ref write outside the sandbox would follow it")
+    finally:
+        os.close(fd)
+    return found
+
+
+REFLOG_WHY = "a reflog write outside the sandbox would follow it"
+
+
+def _link_walk(dir_fd: int, name: str, path: str, found: list[str], depth: int = 0,
+               why: str = REFLOG_WHY) -> None:
+    """Each symlink at or below name is a finding (why says what follows it); a dir that can't
+    be listed is one too."""
     try:
         st = _lstat(dir_fd, name)
         if st is None:
             return
         if stat.S_ISLNK(st.st_mode):
-            found.append(f"{path} is a symlink: a reflog write outside the sandbox would follow it")
+            found.append(f"{path} is a symlink: {why}")
             return
         if not stat.S_ISDIR(st.st_mode):
             return
@@ -852,7 +873,7 @@ def _link_walk(dir_fd: int, name: str, path: str, found: list[str], depth: int =
         return
     try:
         for n in sorted(os.listdir(sub)):
-            _link_walk(sub, n, f"{path}/{n}", found, depth + 1)
+            _link_walk(sub, n, f"{path}/{n}", found, depth + 1, why)
     finally:
         os.close(sub)
 
