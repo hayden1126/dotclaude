@@ -434,11 +434,13 @@ class Rule1PathArguments(Guard):
         self.refused(f'pass-respawn -C "{self.other};x"')
 
     def test_lanes_own_fetch_needs_origin_configured(self):
-        # lane new, done and park run their own `git fetch ... origin` (review round 2): as for
+        # lane new, done, park and sync-main run their own `git fetch` (review round 2): as for
         # a git call naming no repository, origin must name a remote the config surely defines.
         self.write_settings({"excludedCommands": EXCLUDED + self.PATH_HEADS + [
-            "lane new *", "lane done", "lane done *", "lane park *"]})
-        calls = ("lane new x", "lane done", "lane done x", "lane park x")
+            "lane new *", "lane done", "lane done *", "lane park *", "lane sync-main",
+            "lane sync-main *"]})
+        calls = ("lane new x", "lane done", "lane done x", "lane park x", "lane sync-main",
+                 "lane sync-main 42")
         for call in calls:
             with self.subTest(call=call):
                 self.allowed(call)

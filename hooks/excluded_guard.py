@@ -59,7 +59,7 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      surely defines, since git reads any other name from a legacy remote file planted after the
      check; only a nickname needs that, since git reads no legacy file for `.`, `..` or a value
      holding a `/`, and each value naming no such remote is judged as a path, as a remote URL
-     is. lane new, done and park (LANE_FETCHES) run their own fetch of origin, so they are
+     is. lane new, done, park and sync-main (LANE_FETCHES) run their own fetch, so they are
      refused unless origin names such a remote too. A file:// URL must have no host and no %-escape, and a git option before those
      subcommands is refused. GIT_CONFIG_COUNT and GIT_CONFIG_PARAMETERS may set only the
      recursion keys below: any other key refuses, since rule 1 judges config files only.
@@ -355,7 +355,7 @@ def candidates(command, patterns):
 PATH_HEADS = {"pass-respawn", "lane", "git", "delegation-ledger"}
 GIT_PATH_SUBS = {"push", "fetch", "pull", "ls-remote"}
 # lane commands that run their own `git fetch ... origin` in the cwd's repo.
-LANE_FETCHES = {"new", "done", "park"}
+LANE_FETCHES = {"new", "done", "park", "sync-main"}
 # Long options of those whose value is a program git runs (git takes any unique prefix), and
 # ls-remote's short -u for --upload-pack; an `ext::` remote runs a command too.
 GIT_PROGRAM_OPTIONS = ("receive-pack", "upload-pack", "exec")
