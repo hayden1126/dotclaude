@@ -963,97 +963,104 @@ def cmd_new(args) -> None:
     # there loads its .claude/ config, whose hooks run sandbox-off too. So base_sha (ls-remote's
     # answer, the trust root) is first fetched into a fresh store no lane can write, and the new
     # checkout must match its tree. The store's guard comes first: without the rules that keep
-    # lanes out of it, nothing is created.
-    with store_guard("new", "lane new", store_wait()) as vstore:
-        # Again, right before the fetch's ref and reflog writes: the guard may have waited
-        # minutes for the store's lock (LR4).
-        tamper_gate(repo, f"{NO_LANE} Find out who made each, remove it, then rerun")
-        base_sha = fetched_base(repo, cfg)
-        if not args.reuse_branch:
-            # `ls` labels a lane by its branch's newest PR, so on a name an old PR used it shows
-            # that PR, and a merged one reads as this lane's merge. Asked after the fetch proved
-            # the network up; a gh that still can't answer refuses too, as the fetch does.
-            rows, why = branch_prs(repo, branch, "all")
-            if rows is None:
-                raise LaneError(f"can't ask GitHub which PRs used branch {branch} ({why}): fix "
-                                "gh, or pass --reuse-branch to skip the check")
-            if rows:
-                prs = ", ".join(f"#{r.get('number')} ({str(r.get('state')).lower()})"
-                                for r in rows)
-                raise LaneError(f"branch {branch} was the head of {prs}: `lane ls` would show "
-                                "that PR as this lane's. Name another with --branch, or pass "
-                                "--reuse-branch")
-        config = fresh_store(vstore, NO_LANE)
-        vstore.recheck(NO_LANE)
-        fill_new_store(repo, vstore.path, *base_parts(repo, cfg), base_sha)
-        # Bounded: it holds the stores' lock meanwhile, which every other `new` waits on.
-        with lanes_lock(repo, f"{NO_LANE} Rerun once it is released"):
-            check_unregistered(repo, args.id)
-            sessions = lanelib.live_sessions()
-            live = [x for x in held_lanes(repo) if holds_slot(repo, x, sessions)]
-            cap = int(cfg.get("cap", DEFAULT_CAP))
-            if len(live) >= cap:
-                raise LaneError(f"{len(live)} lanes hold a slot, at the cap of {cap}: close one "
-                                "with `lane done`, park a finished one with `lane park`, or raise "
-                                "the cap with `lane init --cap`")
-            if os.path.exists(path):
-                raise LaneError(f"{path} already exists")
-            if held := holders(repo, path):  # a stale record would make the new lane its twin
-                raise LaneError(f"lane {', '.join(x['id'] for x in held)} still holds {path}: "
-                                "close it with `lane done` first")
-            if conflicts := claim_conflicts(repo, args.id, reqs):
-                raise LaneError("already claimed: " + ", ".join(conflicts))
-            block = free_block(repo, cfg)
-            os.makedirs(cfg["root"], exist_ok=True)
-            # Again, right before the first ref this run writes: the store's full fetch above
-            # takes a while, and `worktree add -b` writes a ref and its reflog (LR4).
-            tamper_gate(repo, "No lane was made: find out who made each, remove it, then rerun")
-            # The lane as `new` makes it, at the path it makes: every step below acts on this
-            # record (PINNED), never on lane.json re-read. At 'verify' until the check passes,
-            # so an interrupt mid-check leaves a lane no `adopt` finishes.
-            lane = new_record(args.id, branch, os.path.realpath(path), base_sha, block, reqs)
-            lane.update(state="setup-failed", setup_failed="verify")
-            if args.reuse_branch:  # its branch may hold a PR older than the lane (merges_of)
-                lane["reused"] = True
-            # A pending marker before the tree or lane.json exists, replacing any an older lane
-            # of this id left (a `done` that couldn't remove it): `open` refuses while any marker
-            # is there, so no moment has a lane.json and no marker, and `adopt` finishes no lane
-            # by a pending one.
-            try:
-                write_mark(vstore, repo, lane, verified=False)
-            except OSError as e:
-                raise LaneError(f"lane {args.id}'s marker in {vstore.verified}/{NEW_MARKS} "
-                                f"couldn't be written ({e.strerror or e}). {NO_LANE}")
-            # From the commit, not the ref name: no upstream is set, and no ref rewritten since
-            # the fetch can choose the tree.
-            p = git(["worktree", "add", "-b", branch, path, base_sha], repo.toplevel)
-            if p.returncode != 0:
-                with contextlib.suppress(OSError):  # no lane: a kept one only stalls `open`
-                    drop_mark(vstore.dfd, repo, args.id)
-                raise LaneError("git worktree add failed: " + p.stderr.strip())
-            # Registered the moment the worktree exists, so a failure below leaves a lane that
-            # `adopt` finishes or `done --abandon` removes, never an orphan worktree.
-            lanelib.write_lane_json(repo, args.id, lane)
-            # Before anything else is written in the tree. .worktreeinclude's copies come after,
-            # from the main checkout, which no lane's sandbox can write.
-            verify_new(repo, lane, vstore, config, base_sha, f"{base} ({base_sha[:12]})")
-            lane = pinned_update(repo, lane, lambda x: x.update(setup_failed="copy"))
-            copied = lane_files(repo, lane,
-                                {ph: getattr(args, attr) for attr, ph in BRIEF.items()})
-            # Still setup-failed through the setup. `open` refuses a lane whose marker is there,
-            # whatever its record says: no session starts in the tree while the marker vouches
-            # for it (finished_lane).
-            lane = pinned_update(repo, lane, lambda x: x.update(setup_failed="setup"))
-    say(f"lane {args.id}: branch {branch} from {base} ({base_sha[:12]}), "
-        f"{lanelib.ports_text(lane)}")
-    say(f"  checkout verified against {base_sha[:12]} as fetched into {vstore.path}")
-    if copied:
-        say(f"  copied {len(copied)} file(s) from .worktreeinclude")
-    say(f"  record {lanelib.record_path(lane)}")
-    run_setup(repo, lane)
-    check_worktree(lane, seed_ask=True)  # after the setup, which may set core.hooksPath
-    lane = finished_lane(repo, lane)
-    say(f"cd {lane['path']} && claude")
+    # lanes out of it, nothing is created. The lane's finishing lock (finishing), taken before
+    # its pending marker, is held to the end, so no `adopt` finishes the lane meanwhile.
+    with contextlib.ExitStack() as finishing_hold:
+        with store_guard("new", "lane new", store_wait()) as vstore:
+            # Again, right before the fetch's ref and reflog writes: the guard may have waited
+            # minutes for the store's lock (LR4).
+            tamper_gate(repo, f"{NO_LANE} Find out who made each, remove it, then rerun")
+            base_sha = fetched_base(repo, cfg)
+            if not args.reuse_branch:
+                # `ls` labels a lane by its branch's newest PR, so on a name an old PR used it shows
+                # that PR, and a merged one reads as this lane's merge. Asked after the fetch proved
+                # the network up; a gh that still can't answer refuses too, as the fetch does.
+                rows, why = branch_prs(repo, branch, "all")
+                if rows is None:
+                    raise LaneError(f"can't ask GitHub which PRs used branch {branch} ({why}): fix "
+                                    "gh, or pass --reuse-branch to skip the check")
+                if rows:
+                    prs = ", ".join(f"#{r.get('number')} ({str(r.get('state')).lower()})"
+                                    for r in rows)
+                    raise LaneError(f"branch {branch} was the head of {prs}: `lane ls` would show "
+                                    "that PR as this lane's. Name another with --branch, or pass "
+                                    "--reuse-branch")
+            config = fresh_store(vstore, NO_LANE)
+            vstore.recheck(NO_LANE)
+            fill_new_store(repo, vstore.path, *base_parts(repo, cfg), base_sha)
+            # Bounded: it holds the stores' lock meanwhile, which every other `new` waits on.
+            with lanes_lock(repo, f"{NO_LANE} Rerun once it is released"):
+                check_unregistered(repo, args.id)
+                sessions = lanelib.live_sessions()
+                live = [x for x in held_lanes(repo) if holds_slot(repo, x, sessions)]
+                cap = int(cfg.get("cap", DEFAULT_CAP))
+                if len(live) >= cap:
+                    raise LaneError(f"{len(live)} lanes hold a slot, at the cap of {cap}: close "
+                                    "one with `lane done`, park a finished one with `lane park`, "
+                                    "or raise the cap with `lane init --cap`")
+                if os.path.exists(path):
+                    raise LaneError(f"{path} already exists")
+                if held := holders(repo, path):  # a stale record: the new lane would be its twin
+                    raise LaneError(f"lane {', '.join(x['id'] for x in held)} still holds "
+                                    f"{path}: close it with `lane done` first")
+                if conflicts := claim_conflicts(repo, args.id, reqs):
+                    raise LaneError("already claimed: " + ", ".join(conflicts))
+                block = free_block(repo, cfg)
+                os.makedirs(cfg["root"], exist_ok=True)
+                # Again, right before the first ref this run writes: the store's full fetch
+                # above takes a while, and `worktree add -b` writes a ref and its reflog (LR4).
+                tamper_gate(repo, "No lane was made: find out who made each, remove it, then "
+                            "rerun")
+                # The lane as `new` makes it, at the path it makes: every step below acts on
+                # this record (PINNED), never on lane.json re-read. At 'verify' until the check
+                # passes, so an interrupt mid-check leaves a lane no `adopt` finishes.
+                lane = new_record(args.id, branch, os.path.realpath(path), base_sha, block,
+                                  reqs)
+                lane.update(state="setup-failed", setup_failed="verify")
+                if args.reuse_branch:  # its branch may hold a PR older than the lane (merges_of)
+                    lane["reused"] = True
+                # The lane's finishing lock first, held to the end: from here until `new` has
+                # finished the lane, an `adopt` of it refuses, and so does `open`.
+                finishing_hold.callback(os.close, finishing(vstore.dfd, repo, args.id, NO_LANE))
+                # A pending marker before the tree or lane.json exists, replacing any an older
+                # lane of this id left (a `done` that couldn't remove it): `open` refuses while
+                # any marker is there, so no moment has a lane.json and no marker, and `adopt`
+                # finishes no lane by a pending one.
+                try:
+                    write_mark(vstore, repo, lane, verified=False)
+                except OSError as e:
+                    raise LaneError(f"lane {args.id}'s marker in {vstore.verified}/{NEW_MARKS} "
+                                    f"couldn't be written ({e.strerror or e}). {NO_LANE}")
+                # From the commit, not the ref name: no upstream is set, and no ref rewritten
+                # since the fetch can choose the tree.
+                p = git(["worktree", "add", "-b", branch, path, base_sha], repo.toplevel)
+                if p.returncode != 0:
+                    with contextlib.suppress(OSError):  # no lane: a kept one only stalls `open`
+                        drop_mark(vstore.dfd, repo, args.id)
+                    raise LaneError("git worktree add failed: " + p.stderr.strip())
+                # Registered the moment the worktree exists, so a failure below leaves a lane
+                # that `adopt` finishes or `done --abandon` removes, never an orphan worktree.
+                lanelib.write_lane_json(repo, args.id, lane)
+                # Before anything else is written in the tree. .worktreeinclude's copies come
+                # after, from the main checkout, which no lane's sandbox can write.
+                verify_new(repo, lane, vstore, config, base_sha, f"{base} ({base_sha[:12]})")
+                lane = pinned_update(repo, lane, lambda x: x.update(setup_failed="copy"))
+                copied = lane_files(repo, lane,
+                                    {ph: getattr(args, attr) for attr, ph in BRIEF.items()})
+                # Still setup-failed through the setup. `open` refuses a lane whose marker is there,
+                # whatever its record says: no session starts in the tree while the marker vouches
+                # for it (finished_lane).
+                lane = pinned_update(repo, lane, lambda x: x.update(setup_failed="setup"))
+        say(f"lane {args.id}: branch {branch} from {base} ({base_sha[:12]}), "
+            f"{lanelib.ports_text(lane)}")
+        say(f"  checkout verified against {base_sha[:12]} as fetched into {vstore.path}")
+        if copied:
+            say(f"  copied {len(copied)} file(s) from .worktreeinclude")
+        say(f"  record {lanelib.record_path(lane)}")
+        run_setup(repo, lane)
+        check_worktree(lane, seed_ask=True)  # after the setup, which may set core.hooksPath
+        lane = finished_lane(repo, lane)
+        say(f"cd {lane['path']} && claude")
 
 
 def finish(repo: Repo, lane: dict) -> None:
@@ -1062,23 +1069,39 @@ def finish(repo: Repo, lane: dict) -> None:
     redoes the setup alone. Only a lane whose marker (write_mark) shows its checkout passed
     `new`'s verification (LR7) is finished, whatever its lane.json says: any lane's sandbox can
     write that, and one that failed or never finished the check may hold what no remote showed."""
-    store_rules("lane adopt")  # without them, a lane could have written the marker
-    if why := unverified(repo, lane):
-        raise LaneError(f"lane {lane['id']}'s checkout has no marker of a check by `lane new` "
-                        f"against the remote's tree that nothing has run in since ({why}: LR7), "
-                        f"so nothing will run in it: {close_unverified(repo, lane)}")
-    # From here lane is the pin: its PINNED fields are the marker's (unverified compared them),
-    # and every step refuses once lane.json names another lane (pinned_update, still_pinned).
-    sessionless(repo, lane)  # before the copy too, with or without a setup command
-    with lock(repo):
-        # 'verify' with a marker: interrupted between the marker and the record's move to 'copy'.
-        if lane.get("setup_failed", "copy") in ("copy", "verify"):
-            still_pinned(repo, lane)
-            lane_files(repo, lane, {})
-            lane = pinned_update(repo, lane, lambda x: x.update(setup_failed="setup"))
-    run_setup(repo, lane)
-    check_worktree(lane, seed_ask=True)  # still marked, which `open` refuses: no session
-    lane = finished_lane(repo, lane)
+    home = store_rules("lane adopt")  # without them, a lane could have written the marker
+    # The lane's finishing lock before the marker check, held to the end: while a `new` or
+    # another `adopt` finishes the lane, this one refuses at once.
+    try:
+        top = verified_dir(home, os.path.join(home, VERIFIED_REL))
+    except OSError as e:
+        raise LaneError(f"~/{VERIFIED_REL}, where lane {lane['id']}'s finishing lock is, can't be "
+                        f"opened ({e.strerror or e}). Nothing ran in it from this run.")
+    try:
+        held = finishing(top, repo, lane["id"], "Nothing ran in it from this run.")
+    finally:
+        os.close(top)
+    try:
+        if why := unverified(repo, lane):
+            raise LaneError(f"lane {lane['id']}'s checkout has no marker of a check by `lane new` "
+                            f"against the remote's tree that nothing has run in since ({why}: "
+                            f"LR7), so nothing will run in it: {close_unverified(repo, lane)}")
+        # From here lane is the pin: its PINNED fields are the marker's (unverified compared
+        # them), and every step refuses once lane.json names another lane (pinned_update,
+        # still_pinned).
+        sessionless(repo, lane)  # before the copy too, with or without a setup command
+        with lock(repo):
+            # 'verify' with a marker: interrupted between the marker and the record's move to
+            # 'copy'.
+            if lane.get("setup_failed", "copy") in ("copy", "verify"):
+                still_pinned(repo, lane)
+                lane_files(repo, lane, {})
+                lane = pinned_update(repo, lane, lambda x: x.update(setup_failed="setup"))
+        run_setup(repo, lane)
+        check_worktree(lane, seed_ask=True)  # still marked, which `open` refuses: no session
+        lane = finished_lane(repo, lane)
+    finally:
+        os.close(held)
     say(f"finished lane {lane['id']}: branch {lane['branch']}, {lanelib.ports_text(lane)}")
     say(f"  record {lanelib.record_path(lane)}")
 
@@ -2023,6 +2046,12 @@ def cmd_open(args) -> None:
         raise LaneError(f"lane {args.id} is stale: its worktree {path} is gone (`lane done "
                         f"{args.id}` closes it)")
     usable_path(repo, lane)  # the window's cwd, where `claude` loads that dir's .claude/ config
+    # LR7: while a `new` or `adopt` finishes the lane (its finishing lock, whose span holds the
+    # marker's), no session may start there, whatever lane.json says. A lock that can't be
+    # probed refuses too.
+    if finishing_now(repo, lane["id"]):
+        raise LaneError(f"lane {args.id} is unfinished: {FINISHING.format(args.id)}. Open it "
+                        "once that ends")
     if lane.get("state") == "setup-failed":
         raise LaneError(f"lane {args.id} is setup-failed: {setup_failed_hint(repo, lane)}")
     # LR7: while any marker of `new`'s is there for this id (pending, vouching, or one whose
@@ -5922,6 +5951,73 @@ def write_mark(held: StoreDir, repo: Repo, lane: dict, verified: bool = True) ->
             raise
     finally:
         os.close(fd)
+
+
+def lock_name(repo: Repo, lane_id: str) -> str:
+    return f"{repo.key}-{lane_id}.lock"
+
+
+FINISHING = "another `lane new` or `lane adopt` is finishing lane {}"
+
+
+def finishing(parent: int, repo: Repo, lane_id: str, left: str) -> int:
+    """An fd holding lane_id's finishing lock, a flock on its .lock file in NEW_MARKS under
+    parent (the stores' dir, which no lane can write), opened without following a link: `new`
+    holds it from before its pending marker, and `adopt` from before its marker check, each
+    through finished_lane, so no two finish one lane at once and `open` refuses meanwhile (LR7).
+    Closing the fd releases it. Held, it refuses at once (one retry after a short pause, so
+    `open`'s probe of it isn't taken for a finisher); left says what the refusal left undone."""
+    try:
+        fd = marks_fd(parent, create=True)
+        try:
+            held = os.open(lock_name(repo, lane_id), os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW
+                           | os.O_NONBLOCK | os.O_CLOEXEC, 0o600, dir_fd=fd)
+        finally:
+            os.close(fd)
+    except OSError as e:
+        raise LaneError(f"lane {lane_id}'s finishing lock in ~/{VERIFIED_REL}/{NEW_MARKS} can't "
+                        f"be taken ({e.strerror or e}). {left}")
+    try:
+        if not stat.S_ISREG(os.fstat(held).st_mode):
+            raise LaneError(f"lane {lane_id}'s finishing lock in ~/{VERIFIED_REL}/{NEW_MARKS} is "
+                            f"no regular file. {left}")
+        if not (try_lock(held) or (time.sleep(0.2) or try_lock(held))):
+            raise LaneError(f"{FINISHING.format(lane_id)}: rerun once it ends. {left}")
+    except BaseException:
+        os.close(held)
+        raise
+    return held
+
+
+def finishing_now(repo: Repo, lane_id: str) -> bool:
+    """Whether a `new` or `adopt` holds lane_id's finishing lock, or may (it can't be probed):
+    `open`'s gate, beside marked."""
+    try:
+        if (top := stores_fd()) is None:
+            return False
+        try:
+            fd = marks_fd(top)
+        finally:
+            os.close(top)
+        if fd is None:
+            return False
+        try:
+            held = os.open(lock_name(repo, lane_id),
+                           os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=fd)
+        except FileNotFoundError:
+            return False
+        finally:
+            os.close(fd)
+        try:
+            if not stat.S_ISREG(os.fstat(held).st_mode):
+                return True
+            fcntl.flock(held, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            fcntl.flock(held, fcntl.LOCK_UN)
+            return False
+        finally:
+            os.close(held)
+    except OSError:  # BlockingIOError among them: a finisher holds it
+        return True
 
 
 def drop_mark(parent: int, repo: Repo, lane_id: str) -> None:

@@ -212,9 +212,10 @@ class NoHooks(LanesRepo):
 # "forge:<func>[@<n>]:<dir>" makes <func> (one taking repo and lane first) rewrite the lane's
 # lane.json path to <dir> once its first (or nth) call returns, as any lane's sandbox could; "open-midway:<out>" makes verify_new
 # flip lane.json to active, run `lane open <id> --print` and write its exit code to <out>, then
-# put lane.json back and verify.
+# put lane.json back and verify; "hold-setup:<began>:<release>" makes run_setup create <began>,
+# then wait (up to a minute) for <release> to exist before the setup runs.
 DRIVER = """
-import importlib.machinery, importlib.util, json, os, subprocess, sys
+import importlib.machinery, importlib.util, json, os, subprocess, sys, time
 loader = importlib.machinery.SourceFileLoader("lane_cli", sys.argv[1])
 spec = importlib.util.spec_from_loader("lane_cli", loader)
 mod = importlib.util.module_from_spec(spec)
@@ -261,6 +262,17 @@ elif how.startswith("open-midway:"):
         mod.lanelib.write_lane_json(repo, lane["id"], rec)
         return real(repo, lane, *a, **k)
     mod.verify_new = verify_new
+elif how.startswith("hold-setup:"):
+    _, began, release = how.split(":")
+    real = mod.run_setup
+    def run_setup(*a, **k):
+        open(began, "w").close()
+        for _ in range(600):
+            if os.path.exists(release):
+                break
+            time.sleep(0.1)
+        return real(*a, **k)
+    mod.run_setup = run_setup
 sys.exit(mod.main(sys.argv[3:]))
 """
 
@@ -582,7 +594,118 @@ class NewVerifiesTree(LanesRepo):
         seen = json.loads(self.read(out))
         self.assertEqual(seen["rc"], 1, seen)
         self.assertEqual(seen["out"], "")
+        self.assertIn("lane chart-fix is unfinished", seen["err"])
+        self.assertNotIn("Traceback", seen["err"])
         self.assertEqual(self.lane_json("chart-fix")["state"], "active")
+
+    def held_finish(self, *args):
+        """`lane <args>` started through DRIVER and held at its setup step until the returned
+        release file exists: (process, release)."""
+        began, release = (os.path.join(self.tmp, n) for n in ("began", "release"))
+        proc = subprocess.Popen([sys.executable, "-c", DRIVER, LANE,
+                                 f"hold-setup:{began}:{release}", *args], cwd=self.main,
+                                env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True)
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        deadline = time.monotonic() + 60
+        while not os.path.exists(began):
+            if proc.poll() is not None:
+                self.fail("".join(proc.communicate()))
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(0.1)
+        return proc, release
+
+    def setup_runs(self):
+        count = os.path.join(self.lane_path("chart-fix"), "SETUP_COUNT")
+        return len(self.read(count).splitlines()) if os.path.exists(count) else 0
+
+    def refused_as_finishing(self, p):
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertEqual(p.stdout, "")
+        self.assertIn("another `lane new` or `lane adopt` is finishing lane chart-fix", p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+
+    def released(self, proc, release):
+        self.write(release, "")
+        out, err = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 0, out + err)
+        self.assertEqual(self.setup_runs(), 1)
+        self.assertEqual(self.lane_json("chart-fix")["state"], "active")
+        self.assertEqual(marks(self, "chart-fix"), [])
+        p = self.run_lane("open", "chart-fix", "--print")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+
+    def test_adopt_refuses_while_new_finishes_the_lane(self):
+        # While `new`'s setup runs, its verified marker is there and no session is: an `adopt`
+        # of the lane would run a second setup, then drop the marker, so `open` would pass
+        # while `new`'s setup still runs. The finishing lock refuses it, and `open` too.
+        self.lane("init", "--setup", "echo ran >> SETUP_COUNT")
+        proc, release = self.held_finish("new", "chart-fix")
+        self.refused_as_finishing(self.run_lane("adopt", self.lane_path("chart-fix")))
+        self.assertEqual(self.setup_runs(), 0)
+        self.assertEqual(len(marks(self, "chart-fix")), 1)
+        p = self.run_lane("open", "chart-fix", "--print")
+        self.refused_as_finishing(p)
+        self.assertIn("lane chart-fix is unfinished", p.stderr)
+        self.released(proc, release)
+
+    def test_a_second_adopt_refuses_while_one_finishes_the_lane(self):
+        self.failed_setup()
+        self.lane("init", "--setup", "echo ran >> SETUP_COUNT")
+        proc, release = self.held_finish("adopt", self.lane_path("chart-fix"))
+        self.refused_as_finishing(self.run_lane("adopt", self.lane_path("chart-fix")))
+        self.assertEqual(self.setup_runs(), 0)
+        self.refused_as_finishing(self.run_lane("open", "chart-fix", "--print"))
+        self.released(proc, release)
+
+    def test_open_refuses_while_the_finishing_lock_is_held(self):
+        # Belt and braces: the lock's span holds the marker's, so `open` refuses on it alone.
+        self.lane("new", "chart-fix")
+        (lock,) = glob.glob(os.path.join(self.home, ".local", "state", "dotclaude", "verified",
+                                         "new-lanes", "*-chart-fix.lock"))
+        fd = os.open(lock, os.O_RDONLY)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        self.refused_as_finishing(self.run_lane("open", "chart-fix", "--print"))
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        p = self.run_lane("open", "chart-fix", "--print")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+
+    def test_new_keeps_the_marker_when_lane_json_drifts_before_the_drop(self):
+        # finished_lane checks lane.json still names the lane `new` made before it drops the
+        # marker: a drift after the setup refuses with the marker kept and the lane unfinished.
+        forged = forged_worktree(self)
+        p = driven(self, f"forge:run_setup:{forged}", "new", "chart-fix")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("lane.json no longer names the lane", p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        self.assertTrue(self.setup_ran())
+        self.assertEqual(len(marks(self, "chart-fix")), 1)
+        rec = self.lane_json("chart-fix")
+        self.assertEqual((rec["state"], rec["path"]), ("setup-failed", forged))
+
+    def test_a_failed_setup_records_nothing_once_lane_json_drifted(self):
+        # run_setup's failure path writes the record only while lane.json still names the
+        # lane `new` made (pinned_update): a setup that rewrote it and failed is refused as such.
+        data = os.path.join(self.common, "lanes", "chart-fix", "lane.json")
+        script = os.path.join(self.tmp, "drift.py")
+        self.write(script, f"import json\nr = json.load(open({data!r}))\nr['path'] = '/elsewhere'"
+                           f"\njson.dump(r, open({data!r}, 'w'))\n")
+        self.lane("init", "--setup", f"{sys.executable} {script}; exit 1")
+        p = self.run_lane("new", "chart-fix")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("lane.json no longer names the lane", p.stderr)
+        self.assertNotIn("setup failed in", p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        self.assertEqual(self.lane_json("chart-fix")["path"], "/elsewhere")
+
+    def test_a_failed_worktree_add_drops_the_pending_marker(self):
+        self.git("branch", "chart-fix")  # `worktree add -b chart-fix` fails on it
+        p = self.run_lane("new", "chart-fix")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("git worktree add failed", p.stderr)
+        self.assertEqual(marks(self, "chart-fix"), [])
+        self.assertFalse(os.path.exists(os.path.join(self.common, "lanes", "chart-fix")))
 
     def test_a_pending_marker_stays_after_a_refusal_and_done_removes_it(self):
         plant_readme(self)
