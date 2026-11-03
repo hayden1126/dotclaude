@@ -95,9 +95,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     the design-decision re-evaluation, findings private; its PR is the public ask-time threat
     rule), 2 ports (next PR: the DA15/DA16 fix with LR1, on Hayden's pick 2026-11-01, since it
     changes the same lane CLI files; then `lane port claim/who/ls` and the SessionStart "your
-    ports" line; its record says `Keep open`), 3 fork-start (`fix/sessionstart-fork`, opened 2026-11-03 on Hayden's pick:
-    SessionStart hooks skip forked sessions, since 2.1.316 fires source `fork` and our matchers list
-    only four sources; capella-studio lane artexport's report, session 1f152f3c), 4 practices
+    ports" line; its record says `Keep open`), 3 practices
     (`feat/practices-auth-secrets`, its next PR; paused by Hayden since
     2026-10-24, last so it blocks no install; it conflicts with origin/main on its own, per
     lane-fixes' trial).
@@ -120,7 +118,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     "run it from the top"; its replay counted 87 new refusals in about 4,360 past calls),
     subagent-wait (#158, 2026-11-03: report-check refuses a subagent's handback while its own
     background command runs, for the 180 s move to the background; `test_hook_payloads` hands
-    hooks an attended env; merged ahead of design-audit on Hayden's swap).
+    hooks an attended env; merged ahead of design-audit on Hayden's swap),
+    fork-start (#160, 2026-11-03: SessionStart hooks run on forked sessions, source `fork`;
+    capella-studio lane artexport's report; a fork's hook output never reaches its model, so it
+    knows its lane only from the parent's copied line, docs/lanes.md S5; the delegation canary
+    checks the source enum; untried against lane practices' settings.json change).
     Merged and installed, lane kept open for its next PR: ports (#155, 2026-11-01: `lane serve`
     with the listener check, a block of ports per lane in `lane ls`, the midnight test flake).
     #154's install made new refusals live in every session: arithmetic like `$((SECONDS+12))` and
