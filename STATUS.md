@@ -95,9 +95,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     the design-decision re-evaluation, findings private; its PR is the public ask-time threat
     rule), 2 ports (next PR: the DA15/DA16 fix with LR1, on Hayden's pick 2026-11-01, since it
     changes the same lane CLI files; then `lane port claim/who/ls` and the SessionStart "your
-    ports" line; its record says `Keep open`), 3 fork-start (`fix/sessionstart-fork`, opened 2026-11-03 on Hayden's pick:
-    SessionStart hooks skip forked sessions, since 2.1.316 fires source `fork` and our matchers list
-    only four sources; capella-studio lane artexport's report, session 1f152f3c), 4 practices
+    ports" line; its record says `Keep open`), 3 practices
     (`feat/practices-auth-secrets`, its next PR; paused by Hayden since
     2026-10-24, last so it blocks no install; it conflicts with origin/main on its own, per
     lane-fixes' trial).
@@ -120,7 +118,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     "run it from the top"; its replay counted 87 new refusals in about 4,360 past calls),
     subagent-wait (#158, 2026-11-03: report-check refuses a subagent's handback while its own
     background command runs, for the 180 s move to the background; `test_hook_payloads` hands
-    hooks an attended env; merged ahead of design-audit on Hayden's swap).
+    hooks an attended env; merged ahead of design-audit on Hayden's swap),
+    fork-start (#160, 2026-11-03: SessionStart hooks run on forked sessions, source `fork`;
+    capella-studio lane artexport's report; a fork's hook output never reaches its model, so it
+    knows its lane only from the parent's copied line, docs/lanes.md S5; the delegation canary
+    checks the source enum; untried against lane practices' settings.json change).
     Merged and installed, lane kept open for its next PR: ports (#155, 2026-11-01: `lane serve`
     with the listener check, a block of ports per lane in `lane ls`, the midnight test flake).
     #154's install made new refusals live in every session: arithmetic like `$((SECONDS+12))` and
@@ -130,8 +132,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   Backlog:
   - **Fix lanes from lane design-audit** (Hayden's picks, 2026-11-01). Private: sandbox-audit
     FINDINGS, "Design-decision audit, 2026-11", one row per id with the detail. Most severe first:
-    1. DA15 with DA16 (high): lane ports' next PR (Hayden, 2026-11-01), plus private row LR1
-       (medium, found by ports; Hayden folded it in 2026-11-02). Files: `skills/lanes/scripts/lane`, `lanelib.py`,
+    1. DA15 with DA16 (high): lane ports' next PR (Hayden, 2026-11-01), plus private rows LR1 to
+       LR7 (found by ports; LR1 folded in 2026-11-02, the rest's fixes picked 2026-11-03). Files: `skills/lanes/scripts/lane`, `lanelib.py`,
        handoff-check, `setup.sh`, `skills/lanes/SKILL.md` (the post-merge step) and their tests,
        the files ports' PR 2 also changes. Until it lands, the lead runs DA15's pre-check and
        DA16's stopgap before each post-merge chain (both in the private rows).
@@ -361,7 +363,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 - **Next (lead, main checkout):**
   0. Four lanes run, cap full (In flight, Live lanes; state in their records, `lane ls`). Next
      lane when a slot frees: Hayden's pick (Backlog). DA15/DA16 rides in lane ports. Before each post-merge
-     chain, run DA15's pre-check and DA16's stopgap from the private FINDINGS rows. Since #156's install, a lone
+     chain, run DA15's pre-check and DA16's stopgap from the private FINDINGS rows, and DA15's
+     added checks before any sandbox-off fetch in this repo (lead's, `lane new`, `done`, `park`). Since #156's install, a lone
      excluded call (gh, git push or fetch, lane) runs only from a repo's top. Running sessions took
      #157's cache narrowing live at its install (2026-10-31 14:39 local): a session started
      before it needs a `/pass` before a sandboxed uv, pip, pnpm, node-gyp, bun or Playwright run. Pending with Hayden, outside the lanes: `wsl --shutdown` at a break applies the 18 GB
