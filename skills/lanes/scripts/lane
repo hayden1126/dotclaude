@@ -132,7 +132,7 @@ from typing import NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import lanelib  # noqa: E402  (beside this script's real path)
-from lanelib import Repo, git, lock, now_iso, write_json  # noqa: E402
+from lanelib import Repo, git, lock, now_iso, shown, write_json  # noqa: E402
 
 TEMPLATE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "..",
                         "templates", "LANE.md")
@@ -3667,7 +3667,6 @@ LANES_LOCK_WAIT = 30.0  # secs `done` waits for the lanes lock while it holds in
 # Each verb that ends a lane's sessions -> how end_lane's refusals name the act under way
 ACTING = {"done": ("closing", "the close"), "park": ("parking", "the park")}
 LEFT = ", so it was left running"  # the end of each reason `guarded` holds a signal for
-SHOWN = re.compile(r"[\x00-\x1f\x7f-\x9f]")  # C0, DEL and C1: masked in what `done` prints
 HANDOFF_CHECK = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "handoff",
                              "scripts", "handoff-check")
 
@@ -3687,11 +3686,6 @@ def grace() -> float:
     except ValueError:
         return GRACE
     return secs if 0 <= secs <= GRACE else GRACE
-
-
-def shown(text: str) -> str:
-    """text with its control characters (SHOWN) masked, fit for a terminal."""
-    return SHOWN.sub("?", text)
 
 
 def described(p: lanelib.Proc, why: str) -> str:
@@ -4758,9 +4752,13 @@ def harden_git_env(repo: Repo) -> None:
     # from the lane's worktree, and a child git (a hook's, handoff-check's) runs past any -c
     # on our command line. Config from the environment reaches it, and submodules: the
     # last entry of GIT_CONFIG_PARAMETERS, which git reads after any GIT_CONFIG_COUNT entries
-    # and the inherited ones before it, so nothing inherited turns it back on.
+    # and the inherited ones before it, so nothing inherited turns it back on. Nor takes a
+    # commit's parents from objects/info/commit-graph, which sandboxed Bash can write too and
+    # which exists legitimately, so the tripwire can't flag it: a planted parent could make an
+    # unpushed HEAD read as an ancestor of the remote's.
     os.environ["GIT_CONFIG_PARAMETERS"] = " ".join(filter(None, [
-        os.environ.get("GIT_CONFIG_PARAMETERS", "").strip(), "'core.fsmonitor'='false'"]))
+        os.environ.get("GIT_CONFIG_PARAMETERS", "").strip(), "'core.fsmonitor'='false'",
+        "'core.commitGraph'='false'"]))
     # Nor reads an object through refs/replace or <common>/info/grafts, which sandboxed Bash can
     # write: a replaced commit, or a grafted parent, could make an unpushed HEAD read as an
     # ancestor of the remote's. GIT_NO_REPLACE_OBJECTS stops only the first.
@@ -4768,15 +4766,19 @@ def harden_git_env(repo: Repo) -> None:
     os.environ["GIT_GRAFT_FILE"] = os.devnull
 
 
-def worktree_config_refusal(repo: Repo, lane_id: str, present: bool, verb: str = "done") -> None:
+def worktree_config_refusal(repo: Repo, lane_id: str | None, present: bool,
+                            verb: str = "done") -> None:
     """Refuse where the repo turns on per-worktree config, harden_git_env or not: git would read
-    the lane's <admin>/config.worktree too, which its sandbox can write and no variable
-    overrides. Nothing to check once the lane's worktree is gone (present False)."""
+    the worktree's config.worktree too (a lane's in its admin dir, the main checkout's in the
+    common dir), which a lane's sandbox may write and no variable overrides. lane_id None is
+    the main checkout. Nothing to check once the lane's worktree is gone (present False)."""
     wtc = git(["config", "--file", os.path.join(repo.common_dir, "config"), "--type=bool",
                "--get", "extensions.worktreeConfig"], repo.main) if present else None
     if wtc and wtc.stdout.strip() == "true":
-        raise LaneError(f"this repo sets extensions.worktreeConfig, so git in lane {lane_id} reads "
-                        f"its config.worktree, which the lane's sandbox can write: `{verb}` won't "
+        where, whose = ((f"lane {lane_id}", "the lane's sandbox") if lane_id is not None
+                        else ("the main checkout", "any lane's sandbox"))
+        raise LaneError(f"this repo sets extensions.worktreeConfig, so git in {where} reads "
+                        f"its config.worktree, which {whose} may write: `{verb}` won't "
                         "run git there sandbox-off. Turn the extension off if nothing needs it "
                         "(`git sparse-checkout` turns it on)")
 
@@ -5215,14 +5217,19 @@ def sync_env(git_dir: str | None = None, **extra: str) -> dict[str, str]:
     """The environment of every git sync-main runs, in place of every inherited GIT_* (sgit): no
     global or system config, no hooks (a fetch or update-ref runs reference-transaction from the
     common dir's hooks/, which any lane can write), no fsmonitor, no replace objects or grafts,
-    and only the https, ssh and file transports."""
+    no attributes but the tree's own (the global file is read even with GIT_CONFIG_GLOBAL off,
+    so core.attributesFile names /dev/null), and only the https, ssh and file transports."""
     env = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
            "GIT_NO_REPLACE_OBJECTS": "1", "GIT_GRAFT_FILE": os.devnull,
            "GIT_ALLOW_PROTOCOL": "https:ssh:file", "GIT_OPTIONAL_LOCKS": "0",
-           "GIT_CONFIG_COUNT": "3",
+           "GIT_ATTR_NOSYSTEM": "1",
+           "GIT_CONFIG_COUNT": "5",
            "GIT_CONFIG_KEY_0": "core.hooksPath", "GIT_CONFIG_VALUE_0": os.devnull,
            "GIT_CONFIG_KEY_1": "core.fsmonitor", "GIT_CONFIG_VALUE_1": "false",
-           "GIT_CONFIG_KEY_2": "core.useReplaceRefs", "GIT_CONFIG_VALUE_2": "false"}
+           "GIT_CONFIG_KEY_2": "core.useReplaceRefs", "GIT_CONFIG_VALUE_2": "false",
+           "GIT_CONFIG_KEY_3": "core.attributesFile", "GIT_CONFIG_VALUE_3": os.devnull,
+           # parents from the commits themselves, never a lane-writable commit-graph
+           "GIT_CONFIG_KEY_4": "core.commitGraph", "GIT_CONFIG_VALUE_4": "false"}
     if git_dir:
         env["GIT_DIR"] = git_dir
     env.update(extra)
@@ -5329,15 +5336,48 @@ def store_guard(name: str):
                               "to sandbox.filesystem.denyWrite (dotclaude's setup.sh installs "
                               "both): nothing was created"))
     verified = os.path.join(state, "verified")
-    os.makedirs(verified, mode=0o700, exist_ok=True)
-    fd = os.open(os.path.join(verified, ".lock"),
-                 os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    os.makedirs(state, mode=0o700, exist_ok=True)  # its realpath is checked above
+    dfd = verified_dir(state, verified)
+    try:
+        try:
+            st = os.stat(f"{name}.git", dir_fd=dfd, follow_symlinks=False)
+        except FileNotFoundError:
+            st = None
+        if st is not None and not (stat.S_ISDIR(st.st_mode) and st.st_uid == os.geteuid()):
+            raise LaneError(f"{verified}/{name}.git is not a dir of yours (a link, a file or "
+                            "another owner's): nothing was written. Find out who made it")
+        fd = os.open(".lock", os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
+                     0o600, dir_fd=dfd)
+    finally:
+        os.close(dfd)
     try:
         if not try_lock(fd):
             raise LaneError(f"another lane sync-main holds {verified}/.lock: rerun once it ends")
         yield os.path.join(verified, f"{name}.git")
     finally:
         os.close(fd)
+
+
+def verified_dir(state: str, verified: str) -> int:
+    """fd of the stores' dir, made (0700) if missing, never through a link: a link, a file or a
+    dir another user owns at that name refuses."""
+    sfd = os.open(state, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        with contextlib.suppress(FileExistsError):
+            os.mkdir("verified", 0o700, dir_fd=sfd)
+        try:
+            dfd = os.open("verified", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                          dir_fd=sfd)
+        except OSError as e:
+            raise LaneError(f"{verified} is not a dir ({e.strerror or e}): a link or a file there "
+                            "could lead the store elsewhere: nothing was written. Find out who "
+                            "made it")
+    finally:
+        os.close(sfd)
+    if os.fstat(dfd).st_uid != os.geteuid():
+        os.close(dfd)
+        raise LaneError(f"{verified} belongs to another user: nothing was written")
+    return dfd
 
 
 def proven_sha(repo: Repo, n: int, base: str) -> str:
@@ -5440,6 +5480,17 @@ def tree_entries(store: str, treeish: str) -> dict[str, tuple[str, str]]:
     return out
 
 
+def drift_refusal(store: str, treeish: str, proven: str, branch: str, label: str) -> None:
+    """Refuse where treeish (the merge to be, or a pinned HEAD already past proven) differs from
+    proven on any path but the carries: a lead's branch holds nothing else of its own."""
+    diff = sgit(["diff-tree", "-r", "-z", "--name-only", treeish, proven], store, sync_env(store),
+                "comparing with the proven commit").stdout.split("\0")
+    if drift := sorted({d for d in diff if d and d not in SYNC_CARRY}):
+        raise LaneError(f"{branch} differs from {label} on paths other than STATUS.md and "
+                        f"PLAN.md, which a lead's branch may not:{named_paths(drift)}\n"
+                        "Nothing was written: drop or land those changes, then rerun")
+
+
 def predict(repo: Repo, store: str, branch: str, pinned: str, proven: str, label: str,
             lead_mode: bool) -> str:
     """The merge commit M of proven into the pinned HEAD, made in the store and set as its
@@ -5472,12 +5523,7 @@ def predict(repo: Repo, store: str, branch: str, pinned: str, proven: str, label
                      f"carrying the lead's missing {name}")
         tree = sgit(["write-tree"], store, ienv, "writing the merge").stdout.strip()
         os.unlink(index)
-        diff = sgit(["diff-tree", "-r", "-z", "--name-only", tree, proven], store, env,
-                    "comparing the merge with the proven commit").stdout.split("\0")
-        if drift := sorted({d for d in diff if d and d not in SYNC_CARRY}):
-            raise LaneError(f"{branch} differs from {label} on paths other than STATUS.md and "
-                            f"PLAN.md, which a lead's branch may not:{named_paths(drift)}\n"
-                            "Nothing was written: drop or land those changes, then rerun")
+        drift_refusal(store, tree, proven, branch, label)
     idents = {}
     for who in ("AUTHOR", "COMMITTER"):
         p = git(["var", f"GIT_{who}_IDENT"], repo.toplevel)
@@ -5605,9 +5651,11 @@ def publish(repo: Repo, store: str, remote: str, base: str, branch: str, proven:
 
 
 def sync_checkout(repo: Repo, store: str, pinned: str, merge: str) -> None:
-    """Move the checkout's index and files from pinned to merge, every object read from the
-    store (GIT_OBJECT_DIRECTORY): what the shared repo holds never reaches a file."""
-    env = checkout_env(repo, GIT_OBJECT_DIRECTORY=os.path.join(store, "objects"))
+    """Move the checkout's index and files from pinned to merge, the store standing in for the
+    common dir: every object, the config and info/attributes come from it, so what the shared
+    repo holds (its info/attributes would convert what is written, and no config turns that
+    file off) never reaches a file. The index stays the checkout's own, in its git dir."""
+    env = sync_env(GIT_COMMON_DIR=store, GIT_WORK_TREE=repo.toplevel)
     sgit(["read-tree", "-m", "-u", pinned, merge], repo.toplevel, env,
          f"checking out {merge[:12]}")
 
@@ -5646,7 +5694,7 @@ def cmd_sync_main(args) -> None:
     else:
         lane = own_lane(repo)
         name = lane["id"]
-        worktree_config_refusal(repo, name, True, "sync-main")
+    worktree_config_refusal(repo, None if lead_mode else name, True, "sync-main")
     harden_git_env(repo)
     if found := lanelib.git_tamper(repo.common_dir):
         raise LaneError(f"the git common dir {repo.common_dir} may serve content no remote showed "
@@ -5663,15 +5711,20 @@ def cmd_sync_main(args) -> None:
         proven = fill_store(repo, store, remote, base, branch, pinned, proven)
         label = (f"PR #{args.pr}" if lead_mode else f"{remote}/{base}") + f" ({proven[:12]})"
         env = sync_env(store)
-        if sgit(["merge-base", "--is-ancestor", proven, pinned], store, env, "the ancestry check",
-                ok=None).returncode == 0:
-            say(f"{branch} already holds {label}: already up to date, nothing written")
-            return
-        merge = predict(repo, store, branch, pinned, proven, label, lead_mode)
+        # Before any verdict, the no-op's too: pinned comes from a branch ref any lane can move,
+        # and the index status trusts is lane-writable, so only the store's bytes vouch for the
+        # checkout.
         if problems := compare(repo, store, pinned):
             raise LaneError(f"the checkout {repo.toplevel} doesn't match {branch}'s commit "
                             f"{pinned[:12]}:{named_paths(problems)}\nNothing was written: commit "
                             "or remove those, then rerun")
+        if sgit(["merge-base", "--is-ancestor", proven, pinned], store, env, "the ancestry check",
+                ok=None).returncode == 0:
+            if lead_mode:
+                drift_refusal(store, pinned, proven, branch, label)
+            say(f"{branch} already holds {label}: already up to date, nothing written")
+            return
+        merge = predict(repo, store, branch, pinned, proven, label, lead_mode)
         publish(repo, store, remote, base, branch, proven, lead_mode)
         now = sgit(["rev-parse", "--verify", f"refs/heads/{branch}"], repo.common_dir,
                    sync_env(repo.common_dir), f"reading {branch}").stdout.strip()
@@ -5691,8 +5744,9 @@ def cmd_sync_main(args) -> None:
                     "older carry), in a follow-up commit.")
         changed = [x for x in sgit(["diff-tree", "-r", "-z", "--name-only", pinned, merge], store,
                                    env, "counting the changes").stdout.split("\0") if x]
-        say(f"sync-main: {branch} is at merge {merge[:12]} of {label}, verified; "
-            f"{len(changed)} files changed")
+        if not problems:  # never a "verified" over a checkout that isn't the merge's
+            say(f"sync-main: {branch} is at merge {merge[:12]} of {label}, verified; "
+                f"{len(changed)} files changed")
     if problems:
         raise LaneError(f"after the checkout, {repo.toplevel} doesn't match {merge[:12]}:"
                         f"{named_paths(problems)}\nSomething wrote the checkout meanwhile: "

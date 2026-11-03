@@ -865,6 +865,16 @@ class GitTamper(unittest.TestCase):
         self.write(".git/objects/info/alternates", "/elsewhere/objects\n")
         self.found("objects/info/alternates")
 
+    def test_info_attributes_with_content_is_found(self):
+        # A checkout conversion (eol, working-tree-encoding) any lane can plant for every git
+        # here; empty or blank passes, as for alternates.
+        for text in ("", "\n", " \t\n"):
+            with self.subTest(text=text):
+                self.write(".git/info/attributes", text)
+                self.assertEqual(lanelib.git_tamper(self.common), [])
+        self.write(".git/info/attributes", "*.sh text eol=crlf\n")
+        self.found("info/attributes")
+
     def test_a_loose_replace_ref_is_found(self):
         self.git("replace", self.blob_a, self.blob_b)
         self.found(f"refs/replace/{self.blob_a}")
@@ -896,6 +906,7 @@ class GitTamper(unittest.TestCase):
         cases = {"refs/replace": outside, f"refs/replace/{self.blob_a}": "missing",
                  "packed-refs": self.write("empty", "", root=outside),
                  "objects/info/alternates": self.write("blank", "\n", root=outside),
+                 "info/attributes": self.write("blank2", "\n", root=outside),
                  "info/grafts": "missing", "shallow": "missing"}
         for rel, target in cases.items():
             with self.subTest(rel):
@@ -942,6 +953,21 @@ class GitTamper(unittest.TestCase):
         self.assertEqual(len(lines), 2, lines)
         self.assertTrue(any("shallow" in x for x in lines), lines)
         self.assertTrue(any("refs/replace/" in x for x in lines), lines)
+
+    def test_control_bytes_in_a_reason_come_out_masked(self):
+        # A refs/replace name and a packed-refs line are the lane's to choose: a terminal
+        # escape in either must not reach `lane ls`, handoff-check or setup.sh as one.
+        evil = "\x1b]0;x\x07\x9b2J"
+        self.write(f".git/refs/replace/{evil}", "")
+        self.write(".git/packed-refs", f"{self.blob_a} refs/replace/{evil}\n")
+        reasons = self.found("refs/replace/", "packed-refs")
+        self.assertEqual(len(reasons), 2, reasons)
+        p = self.cli("git-tamper", self.common)
+        self.assertEqual(p.returncode, 1, p.stderr)
+        for text in (*reasons, p.stdout.replace("\n", "")):
+            with self.subTest(text=text):
+                self.assertNotRegex(text, r"[\x00-\x1f\x7f-\x9f]")
+                self.assertIn("?]0;x??2J", text)
 
     def test_the_cli_refuses_bad_usage(self):
         for args in ((), ("git-tamper",), ("git-tamper", self.common, "x"),

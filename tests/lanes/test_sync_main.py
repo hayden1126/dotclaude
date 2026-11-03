@@ -167,6 +167,31 @@ class SyncMain(LanesRepo):
         self.assertIn("up to date", p.stdout)
         self.assertEqual(self.state(), before)
 
+    def test_up_to_date_still_checks_the_checkout_and_the_drift(self):
+        # The pinned sha comes from a lane-writable branch ref. A lane points the lead's branch
+        # at proven plus a change of its own and forges the index so status reads clean
+        # (dirty_paths mocked): "up to date" must not vouch for that checkout.
+        proven = self.land({"hooks/x.sh": REAL})
+        self.git("fetch", "-q", "origin")
+        wt = os.path.join(self.tmp, "evil")
+        self.git("worktree", "add", "-q", "--detach", wt, "HEAD")
+        self.git("merge", "-q", "--no-ff", "-m", "m", proven, cwd=wt)
+        self.commit("README.md", "planted\n", cwd=wt)
+        moved = self.git("rev-parse", "HEAD", cwd=wt).strip()
+        self.git("update-ref", "refs/heads/lead", moved)
+        self.merged(proven)
+        rc, out, err = self.sync_in("7", patches=lambda mod: [
+            mock.patch.object(mod, "dirty_paths", return_value=[])])
+        self.assertEqual(rc, 1, out + err)
+        self.assertNotIn("up to date", out)
+        self.assertIn("README.md", err)
+        # The checkout matches the branch, but it holds a path apart from the PR's merge.
+        self.git("reset", "-q", "--hard", moved)
+        p = self.sync("7")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("other than STATUS.md", p.stderr)
+        self.assertIn("README.md", p.stderr)
+
     def test_plan_md_merges_clean_or_keeps_the_leads(self):
         self.commit("PLAN.md", "a\nb\nc\nd\ne\n")
         self.git("push", "-q", "origin", "lead:refs/heads/plan-base")
@@ -254,6 +279,30 @@ class SyncMain(LanesRepo):
         self.assertIn("refs/replace", p.stderr)
         self.assertEqual(self.state(), before)
 
+    def test_attribute_files_outside_the_tree_never_convert_the_checkout(self):
+        # A conversion from <common>/info/attributes (lane-writable) or the global attributes
+        # file (read even with GIT_CONFIG_GLOBAL=/dev/null) would write other bytes than the
+        # store's blob. The tripwire flags the first; with it off, neither reaches a file.
+        config = os.path.join(self.home, ".config")
+        self.env["XDG_CONFIG_HOME"] = config
+        rule = "*.sh text eol=crlf\n"
+        for n, where in enumerate((os.path.join(self.common, "info", "attributes"),
+                                   os.path.join(config, "git", "attributes")), 7):
+            with self.subTest(where=where):
+                os.makedirs(os.path.dirname(where), exist_ok=True)
+                self.write(where, rule)
+                try:
+                    proven = self.land({"hooks/x.sh": f"{REAL}# {n}\n"}, n=n)
+                    blob = self.blob(f"pr{n}", "hooks/x.sh")
+                    rc, out, err = self.sync_in(str(n), patches=lambda mod: [
+                        mock.patch.object(mod.lanelib, "git_tamper", return_value=[])])
+                    self.assertEqual(rc, 0, out + err)
+                    with open(os.path.join(self.main, "hooks", "x.sh"), "rb") as f:
+                        self.assertEqual(f.read(), self.git("cat-file", "blob", blob).encode())
+                    self.assertEqual(self.parents()[1], proven)
+                finally:
+                    os.unlink(where)
+
     def test_a_replace_ref_never_reaches_the_checkout(self):
         proven = self.land({"hooks/x.sh": REAL})
         self.git("replace", self.blob("pr7", "hooks/x.sh"), self.evil_blob())
@@ -313,6 +362,88 @@ class SyncMain(LanesRepo):
         self.assertEqual(rc, 1, out + err)
         self.assertIn("moved", err)
         self.assertEqual(self.git("rev-parse", "refs/heads/lead").strip(), moved)
+
+    def test_a_lead_ref_moved_before_the_pin_refuses_on_the_disk(self):
+        # A lane points the lead's branch at a commit of its own before sync-main pins HEAD, and
+        # forges the index so status reads clean (dirty_paths mocked). The pin and the file://
+        # fetch agree on that commit; only the checkout's bytes give it away.
+        proven = self.land({"hooks/x.sh": REAL})
+        wt = os.path.join(self.tmp, "evil")
+        self.git("worktree", "add", "-q", "--detach", wt, "HEAD")
+        self.commit("README.md", "planted\n", cwd=wt)
+        moved = self.git("rev-parse", "HEAD", cwd=wt).strip()
+        self.git("update-ref", "refs/heads/lead", moved)
+        self.merged(proven)
+        before = self.state()
+        rc, out, err = self.sync_in("7", patches=lambda mod: [
+            mock.patch.object(mod, "dirty_paths", return_value=[])])
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn(f"commit {moved[:12]}", err)
+        self.assertIn("README.md (index)", err)
+        self.assertIn("README.md (other bytes)", err)
+        self.assertEqual(self.state(), before)
+
+    def race_after_compare(self, change):
+        """sync-main with change() run right after the first compare (of pinned) passes."""
+        self.land({"hooks/x.sh": REAL})
+
+        def patches(mod):
+            real, calls = mod.compare, []
+
+            def racing(*a, **k):
+                out = real(*a, **k)
+                calls.append(1)
+                if len(calls) == 1:
+                    change()
+                return out
+            return [mock.patch.object(mod, "compare", racing)]
+        rc, out, err = self.sync_in("7", patches=patches)
+        self.assertEqual(rc, 1, out + err)
+        self.assertNotIn("verified;", out)  # never a success line over a mix
+        return err
+
+    def test_a_file_changed_after_the_compare_refuses(self):
+        path = os.path.join(self.main, "README.md")
+        err = self.race_after_compare(lambda: self.write(path, "planted\n"))
+        self.assertIn("README.md", err)
+        self.assertIn("meanwhile", err)
+
+    def test_an_index_changed_after_the_compare_refuses(self):
+        # read-tree's two-tree merge keeps an index entry the merge doesn't change, so the
+        # forged entry survives the checkout: the compare after it refuses.
+        err = self.race_after_compare(lambda: self.git(
+            "update-index", "--cacheinfo", f"100644,{self.evil_blob()},README.md"))
+        self.assertIn("README.md (index)", err)
+        self.assertIn("meanwhile", err)
+        self.assertEqual(self.read(os.path.join(self.main, "hooks", "x.sh")), REAL)
+
+    def test_an_overwritten_lead_side_object_fails_the_fetch(self):
+        # STATUS.md's blob is only on the lead's branch, so it reaches the store through the
+        # file:// fetch from the shared repo, where index-pack hashes what arrives.
+        blob = self.blob("lead", "STATUS.md")
+        self.land({"hooks/x.sh": REAL})
+        path = os.path.join(self.common, "objects", blob[:2], blob[2:])
+        os.chmod(path, 0o644)
+        with open(path, "wb") as f:
+            f.write(zlib.compress(b"blob %d\0" % len(EVIL) + EVIL.encode()))
+        before = self.state()
+        rc, out, err = self.sync_in("7", patches=lambda mod: [
+            mock.patch.object(mod.lanelib, "git_tamper", return_value=[])])
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("the fetch of lead", err)
+        self.assertEqual(self.state(), before)
+
+    def test_each_tripwire_finding_refuses(self):
+        self.land({"hooks/x.sh": REAL})
+        for rel, text in (("objects/info/alternates", "/elsewhere/objects\n"),
+                          ("info/grafts", ""), ("shallow", "")):
+            with self.subTest(rel):
+                path = os.path.join(self.common, rel)
+                self.write(path, text)
+                try:
+                    self.refuses_unchanged(rel)
+                finally:
+                    os.unlink(path)
 
     # --- fail-closed inputs ------------------------------------------------------------------
 
@@ -395,6 +526,38 @@ class SyncMain(LanesRepo):
         self.assertIn(".local/state/dotclaude", str(cm.exception))
         self.assertFalse(os.path.exists(elsewhere))
 
+    def test_per_worktree_config_refuses_in_lead_mode(self):
+        self.land({"hooks/x.sh": REAL})
+        self.git("config", "extensions.worktreeConfig", "true")
+        self.git("config", "--worktree", "filter.x.smudge", "touch planted")
+        self.refuses_unchanged("extensions.worktreeConfig")
+        self.assertFalse(os.path.exists(os.path.join(self.main, "planted")))
+        self.assertFalse(os.path.exists(self.verified))
+
+    def guard(self, name="main"):
+        mod = load_lane_script()
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            with self.assertRaises(mod.LaneError) as cm:
+                with mod.store_guard(name):
+                    pass
+        return str(cm.exception)
+
+    def test_a_link_or_file_at_the_stores_dir_refuses(self):
+        os.makedirs(os.path.dirname(self.verified), exist_ok=True)
+        outside = os.path.join(self.tmp, "outside")
+        os.makedirs(outside)
+        os.symlink(outside, self.verified)
+        self.assertIn(self.verified, self.guard())
+        self.assertEqual(os.listdir(outside), [])  # no .lock, no store through the link
+        os.unlink(self.verified)
+        self.write(self.verified, "")
+        self.assertIn(self.verified, self.guard())
+        os.unlink(self.verified)
+        os.makedirs(self.verified)
+        os.symlink(outside, os.path.join(self.verified, "main.git"))
+        self.assertIn("main.git", self.guard())
+        self.assertEqual(os.listdir(outside), [])
+
     def test_only_the_main_checkout_runs_lead_mode(self):
         self.lane("new", "chart-fix")
         p = self.sync("7", cwd=self.lane_path("chart-fix"))
@@ -417,6 +580,17 @@ class SyncMain(LanesRepo):
         self.assertEqual(self.read(os.path.join(lane, "chart.txt")), "lane work\n")
         self.assertEqual(self.git("rev-parse", "refs/remotes/origin/main").strip(), proven)
 
+    def test_lane_mode_never_checks_out_a_replace_ref(self):
+        self.lane("new", "chart-fix")
+        lane = self.lane_path("chart-fix")
+        proven = self.land({"hooks/x.sh": REAL})
+        self.git("replace", self.blob("pr7", "hooks/x.sh"), self.evil_blob())
+        rc, out, err = self.sync_in(cwd=lane, patches=lambda mod: [
+            mock.patch.object(mod.lanelib, "git_tamper", return_value=[])])
+        self.assertEqual(rc, 0, out + err)
+        self.assertEqual(self.read(os.path.join(lane, "hooks", "x.sh")), REAL)
+        self.assertEqual(self.parents(cwd=lane)[1], proven)
+
     def test_lane_mode_refuses_a_conflict(self):
         self.lane("new", "chart-fix")
         lane = self.lane_path("chart-fix")
@@ -427,6 +601,83 @@ class SyncMain(LanesRepo):
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("README.md", p.stderr)
         self.assertEqual(self.state(lane), before)
+
+
+class CommitGraphOff(unittest.TestCase):
+    """git takes a commit's parents from objects/info/commit-graph when there is one, and any
+    lane can write that file (it exists legitimately, so the tripwire can't flag it). sync_env
+    and harden_git_env turn the graph off: a planted parent never answers an ancestry check."""
+
+    def setUp(self):
+        self.tmp = os.path.realpath(__import__("tempfile").mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.env = {"HOME": self.tmp, "PATH": os.environ["PATH"], "GIT_CONFIG_NOSYSTEM": "1",
+                    "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+                    "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"}
+        self.work = os.path.join(self.tmp, "repo")
+        self.git("init", "-q", "-b", "main", self.work, cwd=self.tmp)
+        self.common = os.path.join(self.work, ".git")
+        # Dated in order, so the side commit's generation never rules it out as an ancestor.
+        self.commit("a", 1000)
+        self.git("branch", "side")
+        self.git("checkout", "-q", "side")
+        self.side = self.commit("s", 2000)
+        self.git("checkout", "-q", "main")
+        mid = self.commit("b", 3000)
+        self.tip = self.commit("c", 4000)
+        # The tip named on the command line parses from its object; its parent from the graph.
+        self.plant_parent(mid, self.side)
+
+    def git(self, *args, cwd=None, env=None):
+        return subprocess.run(["git", *args], cwd=cwd or self.work, env=env or self.env,
+                              check=True, capture_output=True, text=True).stdout
+
+    def commit(self, msg, when):
+        date = f"{1_600_000_000 + when} +0000"
+        self.git("commit", "-q", "--allow-empty", "-m", msg,
+                 env=dict(self.env, GIT_AUTHOR_DATE=date, GIT_COMMITTER_DATE=date))
+        return self.git("rev-parse", "HEAD").strip()
+
+    def plant_parent(self, child, parent):
+        """A commit-graph in which child's first parent is parent."""
+        self.git("commit-graph", "write", "--reachable")
+        path = os.path.join(self.common, "objects", "info", "commit-graph")
+        with open(path, "rb") as f:
+            data = bytearray(f.read())
+        chunks = {bytes(data[8 + 12 * i:12 + 12 * i]):
+                  int.from_bytes(data[12 + 12 * i:20 + 12 * i], "big") for i in range(data[6])}
+        n = int.from_bytes(data[chunks[b"OIDF"] + 255 * 4:chunks[b"OIDF"] + 256 * 4], "big")
+        oids = [bytes(data[chunks[b"OIDL"] + 20 * i:chunks[b"OIDL"] + 20 * i + 20]).hex()
+                for i in range(n)]
+        at = chunks[b"CDAT"] + 36 * oids.index(child) + 20
+        data[at:at + 4] = oids.index(parent).to_bytes(4, "big")
+        os.chmod(path, 0o644)
+        with open(path, "wb") as f:
+            f.write(data)
+
+    def ancestor(self, env):
+        full = dict(self.env, **env)
+        return subprocess.run(["git", "merge-base", "--is-ancestor", self.side, self.tip],
+                              cwd=self.work, env=full, capture_output=True).returncode
+
+    def test_a_planted_parent_fools_plain_git(self):
+        self.assertEqual(self.ancestor({}), 0)  # the control: the graph is read
+
+    def test_sync_env_never_reads_the_graph(self):
+        mod = load_lane_script()
+        env = mod.sync_env(self.common)
+        keys = {env[k]: env[k.replace("KEY", "VALUE")] for k in env
+                if k.startswith("GIT_CONFIG_KEY_")}
+        self.assertEqual(keys.get("core.commitGraph"), "false")
+        self.assertEqual(self.ancestor(env), 1)
+
+    def test_harden_git_env_never_reads_the_graph(self):
+        mod = load_lane_script()
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            mod.harden_git_env(mock.Mock(common_dir=self.common))
+            env = dict(os.environ)
+        self.assertIn("'core.commitGraph'='false'", env["GIT_CONFIG_PARAMETERS"])
+        self.assertEqual(self.ancestor(env), 1)
 
 
 if __name__ == "__main__":
