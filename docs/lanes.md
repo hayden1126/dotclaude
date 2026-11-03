@@ -937,8 +937,8 @@ verified, or one its `lane.json` no longer matches) or one can't be read, whatev
 `lane.json` says, and passes only when none is there, so no session starts in the tree through
 the check and the setup. A per-lane finishing lock beside the markers, taken by `new` before its
 pending marker and by `adopt` before its marker check, each holding it until the lane is marked
-active, makes any other `new` or `adopt` finishing the lane refuse at once, and `open` refuses
-while it is held. `adopt` finishes a lane with a matching verified marker whatever its
+active, makes any other `new` or `adopt` finishing the lane refuse at once, and `open` and
+`done` refuse while it is held. `adopt` finishes a lane with a matching verified marker whatever its
 `lane.json` state, except `closing` (a `lane done` is ending it), which it refuses as
 registered. It refuses while a live session runs in the lane's tree (or while sessions can't be
 read), as does the setup step of `new`: a session found there drops the marker, so the lane is

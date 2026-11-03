@@ -671,6 +671,23 @@ class NewVerifiesTree(LanesRepo):
         p = self.run_lane("open", "chart-fix", "--print")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
 
+    def test_done_refuses_while_the_finishing_lock_is_held(self):
+        # A `done` mid-finish would remove the tree a sandbox-off setup is running in.
+        self.lane("new", "chart-fix")
+        (lock,) = glob.glob(os.path.join(self.home, ".local", "state", "dotclaude", "verified",
+                                         "new-lanes", "*-chart-fix.lock"))
+        fd = os.open(lock, os.O_RDONLY)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        p = self.run_lane("done", "chart-fix", "--abandon")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("is finishing lane chart-fix", p.stderr)
+        self.assertTrue(os.path.isdir(self.lane_path("chart-fix")))
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.remove(os.path.join(self.lane_path("chart-fix"), "SETUP_RAN"))  # the fixture's setup
+        p = self.run_lane("done", "chart-fix", "--abandon")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+
     def test_new_keeps_the_marker_when_lane_json_drifts_before_the_drop(self):
         # finished_lane checks lane.json still names the lane `new` made before it drops the
         # marker: a drift after the setup refuses with the marker kept and the lane unfinished.

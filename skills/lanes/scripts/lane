@@ -5052,6 +5052,10 @@ def cmd_done(args) -> None:
     # Its fetch and `branch -d` move refs, and a reflog link takes their log lines (LR4).
     tamper_gate(repo, "Nothing was signalled or removed: find out who made each, remove it, "
                 "then rerun")
+    if finishing_now(repo, args.id):  # its setup may be running in the tree, sandbox-off (LR7)
+        raise LaneError(f"another `lane new` or `lane adopt` is finishing lane {args.id}, or its "
+                        "finishing lock can't be probed: nothing was signalled or removed, rerun "
+                        "once it ends")
     present = os.path.isdir(path)
     worktree_config_refusal(repo, args.id, present)
     if present:  # its record is archived and its worktree removed, sandbox-off
