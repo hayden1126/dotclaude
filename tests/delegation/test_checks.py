@@ -70,6 +70,12 @@ class Strings(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("customAgentType", detail)
 
+    def test_the_session_start_source_enum_is_checked_whole(self):
+        # The closing bracket makes an appended source fail too, not only a renamed one.
+        enum = ",".join(f'"{x}"' for x in checks.SESSION_START_SOURCES) + "]"
+        self.assertIn(enum, {s for s, _ in checks.CANARY_STRINGS})
+        self.assertTrue(enum.endswith('"fork"]'))
+
     def test_every_string_names_its_consumer(self):
         for s, who in checks.CANARY_STRINGS:
             self.assertTrue(s and who, s)
