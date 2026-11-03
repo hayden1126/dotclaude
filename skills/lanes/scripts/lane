@@ -4768,15 +4768,19 @@ def harden_git_env(repo: Repo) -> None:
     os.environ["GIT_GRAFT_FILE"] = os.devnull
 
 
-def worktree_config_refusal(repo: Repo, lane_id: str, present: bool, verb: str = "done") -> None:
+def worktree_config_refusal(repo: Repo, lane_id: str | None, present: bool,
+                            verb: str = "done") -> None:
     """Refuse where the repo turns on per-worktree config, harden_git_env or not: git would read
-    the lane's <admin>/config.worktree too, which its sandbox can write and no variable
-    overrides. Nothing to check once the lane's worktree is gone (present False)."""
+    the worktree's config.worktree too (a lane's in its admin dir, the main checkout's in the
+    common dir), which a lane's sandbox may write and no variable overrides. lane_id None is
+    the main checkout. Nothing to check once the lane's worktree is gone (present False)."""
     wtc = git(["config", "--file", os.path.join(repo.common_dir, "config"), "--type=bool",
                "--get", "extensions.worktreeConfig"], repo.main) if present else None
     if wtc and wtc.stdout.strip() == "true":
-        raise LaneError(f"this repo sets extensions.worktreeConfig, so git in lane {lane_id} reads "
-                        f"its config.worktree, which the lane's sandbox can write: `{verb}` won't "
+        where, whose = ((f"lane {lane_id}", "the lane's sandbox") if lane_id is not None
+                        else ("the main checkout", "any lane's sandbox"))
+        raise LaneError(f"this repo sets extensions.worktreeConfig, so git in {where} reads "
+                        f"its config.worktree, which {whose} may write: `{verb}` won't "
                         "run git there sandbox-off. Turn the extension off if nothing needs it "
                         "(`git sparse-checkout` turns it on)")
 
@@ -5657,7 +5661,7 @@ def cmd_sync_main(args) -> None:
     else:
         lane = own_lane(repo)
         name = lane["id"]
-        worktree_config_refusal(repo, name, True, "sync-main")
+    worktree_config_refusal(repo, None if lead_mode else name, True, "sync-main")
     harden_git_env(repo)
     if found := lanelib.git_tamper(repo.common_dir):
         raise LaneError(f"the git common dir {repo.common_dir} may serve content no remote showed "

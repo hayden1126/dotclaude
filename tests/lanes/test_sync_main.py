@@ -444,6 +444,14 @@ class SyncMain(LanesRepo):
         self.assertIn(".local/state/dotclaude", str(cm.exception))
         self.assertFalse(os.path.exists(elsewhere))
 
+    def test_per_worktree_config_refuses_in_lead_mode(self):
+        self.land({"hooks/x.sh": REAL})
+        self.git("config", "extensions.worktreeConfig", "true")
+        self.git("config", "--worktree", "filter.x.smudge", "touch planted")
+        self.refuses_unchanged("extensions.worktreeConfig")
+        self.assertFalse(os.path.exists(os.path.join(self.main, "planted")))
+        self.assertFalse(os.path.exists(self.verified))
+
     def test_only_the_main_checkout_runs_lead_mode(self):
         self.lane("new", "chart-fix")
         p = self.sync("7", cwd=self.lane_path("chart-fix"))
