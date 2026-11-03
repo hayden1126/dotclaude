@@ -151,8 +151,9 @@ an unregistered worktree: `lane whoami` tells you which.
    lead runs `lane park <id>` on that without asking Hayden, since `lane open <id>` undoes it:
    the park ends the lane's sessions and frees its cap slot, and keeps its worktree, branch,
    record and claims. It refuses a dirty tree, a HEAD that is neither pushed nor an open PR's
-   head, a failing `handoff-check`, the `handoff?` flag, a lock the lane holds, the install hold
-   and a session that is busy or waiting on Hayden, checked again just before the signals.
+   head, a failing `handoff-check`, the `handoff?` flag, a lock the lane holds, the install hold,
+   a tripwire finding in the shared git dir (the `git:` lines on `lane ls`) and a session that
+   is busy or waiting on Hayden, checked again just before the signals.
    So send `park me` as the turn's last act, with no question open. When its turn comes, `lane open <id>` unparks it to rebase and merge,
    even at the cap: one lane may go over by one.
 
@@ -184,6 +185,8 @@ an unregistered worktree: `lane whoami` tells you which.
    comes from /proc and Claude Code's own session files and transcripts, never from
    `lane.json`, and on a rerun from the pane shells an earlier run recorded in the state dir.
    Before any signal, it refuses, by name:
+   - a tripwire finding in the shared git dir (the `git:` lines on `lane ls`);
+   - a `new` or `adopt` finishing the lane (its finishing lock; docs/lanes.md, LR7);
    - anything else with its cwd in the lane;
    - a background session (`claude stop <jobId>` ends it);
    - a dirty, locked or submodule worktree, or one git doesn't list at the lane's path;

@@ -618,8 +618,8 @@ lane that isn't parked has no cap check, as before.
 **The gates.** Every one runs before any signal, in this order: the record (not stale,
 `setup-failed` or `closing`), `lead_only` (a lane can't park itself: the command would end the
 session that runs it), already parked with no session (which needs the session files, so it
-comes after `lead_only`'s sandbox check), `done`'s git hardening and its
-`extensions.worktreeConfig` refusal, a clean tree, HEAD pushed (an ancestor of the commit the
+comes after `lead_only`'s sandbox check), `done`'s git hardening, the tripwire check (LR4) and
+its `extensions.worktreeConfig` refusal, a clean tree, HEAD pushed (an ancestor of the commit the
 remote's own `refs/heads/<branch>` is at, asked with `ls-remote` and fetched, never the
 remote-tracking ref a lane can plant, and with replace refs and grafts off; or of the base's
 commit, the same way, for a lane whose PR merged with nothing new since), or an open PR whose head is
@@ -1168,8 +1168,9 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   to read the record and plan its brief. The window stops at Claude Code's "trust this
   folder?" dialog unless the lanes root (or a parent) is trusted; a trusted parent covers every
   lane under it (probed 2026-10-11, 2.1.296), so `lane init` prints the one-time line that
-  trusts the root. It refuses a stale or `setup-failed` lane, and a
-  lane with a live session (naming its tmux target, a stopped one marked `(stopped: fg it
+  trusts the root. It refuses a stale or `setup-failed` lane, one a `new` or `adopt` is
+  finishing or a `done` is closing, one that still has a marker of `new`'s, whatever its
+  `lane.json` says (LR7), and a lane with a live session (naming its tmux target, a stopped one marked `(stopped: fg it
   there)`; `--focus` selects that window instead).
   Sandboxed, it can't see other sessions, so it refuses and asks for a bare run; `--print` still
   prints, warning that the command may duplicate a live session. It stamps only
@@ -1483,7 +1484,8 @@ copied as the link), and skips
   Every git `done` runs in the lane takes its config from the repo's common dir
   (`GIT_COMMON_DIR`), and the lane's path must be a worktree whose admin dir's `commondir` names
   that dir: the admin dir is sandbox-writable, and a config `core.fsmonitor` would run a command
-  sandbox-off. While the lane's worktree exists, a repo that sets `extensions.worktreeConfig` refuses
+  sandbox-off. And none runs a hook: `core.hooksPath` is `/dev/null` for every git `new`, `done`
+  and `park` run (the configured setup command keeps the user's environment). While the lane's worktree exists, a repo that sets `extensions.worktreeConfig` refuses
   `done`, since git then also reads the lane's `config.worktree`, which nothing overrides; a
   worktree that was gone at the checks and reappears before the remove refuses too.
 
