@@ -164,5 +164,30 @@ class NoFetchHead(LanesRepo):
                 os.chdir(here)
 
 
+class GateBeforeRefs(LanesRepo):
+    """LR4: `new`, `done` and `park` move refs sandbox-off (a fetch, `worktree add -b`,
+    `branch -d`), so each runs the tripwire first and refuses on a finding, here a reflog link
+    planted at the path of a ref the command would write, before any of its git runs."""
+
+    def test_new_done_and_park_refuse_on_a_finding(self):
+        self.lane("new", "chart-fix")
+        victim = os.path.join(self.tmp, "victim")
+        self.write(victim, "mine\n")
+        link = os.path.join(self.common, "logs", "refs", "remotes", "origin", "other")
+        os.makedirs(os.path.dirname(link), exist_ok=True)
+        os.symlink(victim, link)
+        for args in (("new", "api-docs"), ("park", "chart-fix"), ("done", "chart-fix")):
+            with self.subTest(args=args):
+                p = self.run_lane(*args)
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertIn("logs/refs/remotes/origin/other is a symlink", p.stderr)
+                self.assertEqual(self.read(victim), "mine\n")
+        self.assertFalse(os.path.exists(self.lane_path("api-docs")))
+        self.assertTrue(os.path.isdir(self.lane_path("chart-fix")))
+        self.assertEqual(self.lane_json("chart-fix")["state"], "active")
+        os.unlink(link)
+        self.lane("new", "api-docs")
+
+
 if __name__ == "__main__":
     unittest.main()

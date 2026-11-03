@@ -854,12 +854,17 @@ its commit, the repo turns on per-worktree config (git would then read a file a 
 can write), or another sync-main holds the store's lock. It also refuses on any tripwire
 finding, checked at the start and again right before each ref it moves in the shared repo.
 
-**The tripwire.** sync-main, `lane ls`, handoff-check and setup.sh each check the shared git dir
-for signs it may serve content no remote showed (DA15/DA16). `lane ls` prints a `git:` line per
-finding, handoff-check fails with one FAIL per finding in a lanes repo, and setup.sh refuses to
-install. It also flags a symlink directly under `worktrees/` (an entry there is always a dir, and
-`git worktree prune` deletes through a link: LR3) and one anywhere under `logs/` or a worktree's
-`logs/` (a reflog write outside the sandbox follows it: LR4). setup.sh also sets
+**The tripwire.** sync-main, `lane new`, `done` and `park`, `lane ls`, handoff-check and setup.sh
+each check the shared git dir for signs it may serve content no remote showed (DA15/DA16).
+`new`, `done` and `park` refuse on a finding before any git of theirs moves a ref, `lane ls`
+prints a `git:` line per finding, handoff-check fails with one FAIL per finding in a lanes repo,
+and setup.sh refuses to install. It also flags a symlink directly under `worktrees/` (an entry
+there is always a dir, and `git worktree prune` deletes through a link: LR3), one anywhere under
+`logs/` or a worktree's `logs/` (a reflog write outside the sandbox follows it: LR4), a symlink
+or any other entry but a file or dir directly in the shared git dir (a fetch writes
+`FETCH_HEAD` through a link there: LR5), and a symlink anywhere under `refs/` (update-ref
+creates a ref file through it: LR6). The lane CLI's fetches write no `FETCH_HEAD` at all.
+setup.sh also sets
 `core.useReplaceRefs false`, `gc.auto 0` and `maintenance.auto false` in the global git config:
 `gc --auto`, which a fetch, pull, merge or commit otherwise starts, runs that prune (LR3). The
 lane CLI's own fetches (`new`, `done`, `park`, sync-main) set both keys and pass
@@ -885,9 +890,10 @@ find out who made it before anything else runs git in that repo.
 - A corrupt object in the shared repo is reported by `git fsck`, not repaired. The checkout is
   still built from the store.
 - A shallow clone fails the tripwire, so sync-main, handoff-check and setup.sh refuse in one.
-- A reflog link planted between sync-main's last tripwire check and git's own update-ref still
-  takes that ref's log line (LR4). The re-check right before each update-ref narrows that span to
-  milliseconds; it doesn't close it.
+- A reflog or ref link planted between a command's last tripwire check and git's own write still
+  takes that write (LR4, LR6). sync-main checks again right before each update-ref, which narrows
+  that span to milliseconds; `new`, `done` and `park` check once, at their start, so their span
+  runs from there to the write. Neither closes it.
 
 ## Layout
 

@@ -869,6 +869,8 @@ def cmd_new(args) -> None:
     path = os.path.join(cfg["root"], args.id)
     base = cfg.get("base", "origin/main")
     check_unregistered(repo, args.id)  # again under the lock; first so a rerun says so, not gh
+    # Its fetch and `worktree add -b` move refs, and a reflog link takes their log lines (LR4).
+    tamper_gate(repo, "Nothing was written: find out who made each, remove it, then rerun")
     base_sha = fetched_base(repo, cfg)
     if not args.reuse_branch:
         # `ls` labels a lane by its branch's newest PR, so on a name an old PR used it shows that
@@ -4802,6 +4804,9 @@ def cmd_done(args) -> None:
         raise LaneError(f"refusing: lane {args.id}'s path is the main checkout")
     lead_only(repo, args.id, path)
     harden_git_env(repo)
+    # Its fetch and `branch -d` move refs, and a reflog link takes their log lines (LR4).
+    tamper_gate(repo, "Nothing was signalled or removed: find out who made each, remove it, "
+                "then rerun")
     present = os.path.isdir(path)
     worktree_config_refusal(repo, args.id, present)
     if present:  # its record is archived and its worktree removed, sandbox-off
@@ -5151,6 +5156,8 @@ def cmd_park(args) -> None:
         raise LaneError(f"lane {args.id} is already parked (since {parked}): `lane open "
                         f"{args.id}` unparks it")
     harden_git_env(repo)
+    # Its fetch of the remote moves refs, and a reflog link takes their log lines (LR4).
+    tamper_gate(repo, "Nothing was signalled: find out who made each, remove it, then rerun")
     worktree_config_refusal(repo, args.id, True, "park")
     usable_path(repo, lane)
     if path not in worktree_heads(repo):
@@ -5816,12 +5823,13 @@ def move_branch(repo: Repo, store: str, branch: str, pinned: str, merge: str) ->
 
 
 def tamper_gate(repo: Repo, then: str) -> None:
-    """Refuse on any tripwire finding (lanelib.repo_tamper), then saying what was written. Run
-    at the start and again right before each update-ref in the shared repo: a reflog link
-    planted meanwhile would take that ref's log line sandbox-off (LR4)."""
+    """Refuse on any tripwire finding (lanelib.repo_tamper), then saying what was written.
+    sync-main runs it at the start and again right before each update-ref in the shared repo (a
+    reflog link planted meanwhile would take that ref's log line sandbox-off: LR4); `new`,
+    `done` and `park` at their start, before any git of theirs that moves a ref."""
     if found := lanelib.repo_tamper(repo):
         raise LaneError(f"the git common dir {repo.common_dir} holds what a lane may have planted "
-                        f"(DA15/DA16, LR3, LR4):" + "".join(f"\n  {shown(f)}" for f in found)
+                        f"(DA15/DA16, LR3 to LR6):" + "".join(f"\n  {shown(f)}" for f in found)
                         + f"\n{then}")
 
 
