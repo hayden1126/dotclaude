@@ -1,29 +1,49 @@
 #!/usr/bin/env python3
-"""report-check: send a delegated role's malformed report back, at most twice.
+"""report-check: send a subagent's report back, at most twice, when it comes too early or
+doesn't match the report contract.
 
   PreToolUse(SubagentHandback)  auto mode: the report is tool_input.message
   SubagentStop                  other modes: the report is last_assistant_message
 
+Two checks share one counter:
+- Wait (every subagent): a report while one of the agent's own background commands still
+  runs. A foreground Bash call that outlives its timeout is moved to the background (Claude
+  Code 2.1.316 can cut a background agent's to 180 s), nothing wakes an agent whose turn ended,
+  and a run_in_background command is stopped with the report. So the report would miss the
+  result. A command is the agent's when a tool result in its own transcript holds one of
+  Claude Code's background lines (LAUNCH_RE), after a fork's inherited history. Its end is
+  seen when a task notification for it is in that transcript, its output file ends with
+  "[killed]" (a TaskStop leaves no notice), or its launch is older than MAX_BACKGROUND_S; an
+  exit line without a notice ended after the agent last looked. A Bash call sent with the
+  report whose result isn't written yet counts too (running_tasks).
+- Schema: the roles in policy.toml [roles].report_checked, whose agent files end with the
+  report.schema.json contract.
+
 Scope:
-- It applies only to the roles in policy.toml [roles].report_checked, whose agent files end
-  with the report.schema.json contract.
-- Agent-team teammates are skipped: their stops fire per message, and a reader's
-  per-section reply isn't a report.
+- Agent-team teammates are skipped: their stops fire per message, and a reader's per-section
+  reply isn't a report.
 - An empty SubagentStop message is skipped. That's auto mode, and the handback path already
-  checked it.
+  checked it. An auto-mode stop with text (the agent ended its turn without a handback) is
+  wait-checked: its block keeps the agent going. A SubagentStop with no meta.json isn't
+  (decide).
 
 Rejections:
-- A rejection names the schema errors and says "attempt N of 3".
-- The third attempt passes whatever it is, and the ledger then records report_ok: false.
-- The counter is a file per session and agent under $XDG_STATE_HOME/dotclaude/report-check/.
-  A valid report clears it. Once it gives up it stays given up for that agent (files older
-  than a day are pruned), so a hook registered twice (user and project settings), which bumps
-  it twice per stop, can't cycle 1, 2, 1, 2 and block forever.
+- A rejection says why and "attempt N of 3".
+- The third attempt passes whatever it is, and the ledger then records report_ok: false. A
+  handback that passes while a command still runs carries a note for the caller naming it
+  (updatedInput). So does one past the role's deadline stop, which isn't refused for waiting:
+  the policy then denies every tool but the handback, so the agent can't wait.
+- The counter is a file per session and agent under $XDG_STATE_HOME/dotclaude/report-check/,
+  stored with the activation's start, so a SendMessage resume starts it fresh.
+  A report that passes both checks clears it. Once it gives up it stays given up for that
+  activation (files older than a day are pruned), so a hook registered twice (user and project
+  settings), which bumps it twice per stop, can't cycle 1, 2, 1, 2 and block forever.
 - The pattern is from breadcrumb (github.com/oscarthroedsson/breadcrumb, MIT), reimplemented.
 
 FAILS OPEN on purpose. It checks acceptance, not authority, and a denied handback gets only 3
 nudges before Claude Code drops the report. So any error here allows the report, and a cap of
-2 rejections stays inside those 3 nudges.
+2 rejections stays inside those 3 nudges. A transcript or output file it can't read counts as
+no running command.
 """
 import glob
 import json
@@ -40,11 +60,244 @@ import delegation_common as dc  # noqa: E402
 MAX_REJECTIONS = 2
 PRUNE_SECONDS = 86400
 GAVE_UP = "gave-up"
+# Every form 2.1.316's background note takes (RWr in the binary): run_in_background, the
+# subagent cap and a message moving it, a timeout moving it, and Ctrl+B. The note starts a line:
+# a result is the command's stdout, its stderr, then the note, joined by newlines.
+LAUNCH_RE = re.compile(r"^Command (?:running in background with ID: |was moved to the background "
+                       r"\(ID: |did not complete within its \d+s timeout and was moved to the "
+                       r"background \(ID: |was manually backgrounded by user with ID: )"
+                       r"([^\s).]+)[).][^\n]*?Output is being written to: (\S+?\.output)",
+                       re.M)
+LAUNCH_MARKS = (b"Command running in background with ID: ",
+                b"was moved to the background (ID: ",
+                b"Command was manually backgrounded by user with ID: ",
+                b'"backgroundTaskId"')
+NOTICE_MARK = b"task-notification"
+FORK_MARK = b"<fork-boilerplate>"
+ASSISTANT_RE = re.compile(rb'"type":\s*"assistant"')
+BASH_USE_RE = re.compile(rb'"name":\s*"Bash"')
+RESULT_ID_RE = re.compile(rb'"tool_use_id":\s*"([^"]+)"')
+KILLED_RE = re.compile(rb"\[killed\]\s*\Z")
+TAIL_BYTES = 256
+# Claude Code stops a background command at its timeout, 2 hours at most: a launch older than
+# this has ended even when no exit line or notice says so (its Claude Code process died).
+MAX_BACKGROUND_S = 2 * 3600 + 600
+WAIT_S = 110  # under the Bash tool's 120 s default timeout, past which a call is moved too
 
 
-def checked_roles():
-    with open(dc.policy_path(), "rb") as f:
-        return set(tomllib.load(f)["roles"]["report_checked"])
+def is_wait_command(command):
+    return command.startswith(f"timeout {WAIT_S} sh -c 'until tail -n 2 ")
+
+
+def wait_command(file):
+    """The one bounded foreground call an agent waits with (BRIEF.md and docs/delegation.md
+    quote it with <file>; a test keeps the copies equal)."""
+    return (f"timeout {WAIT_S} sh -c 'until tail -n 2 {file} | grep -qE "
+            f"\"^\\[(exited with code|killed)\"; do sleep 2; done'; tail -n 3 {file}")
+
+
+def load_policy():
+    """policy.toml, or {} when it won't load: then no role is schema-checked and no deadline
+    applies, while the wait check still runs."""
+    try:
+        with open(dc.policy_path(), "rb") as f:
+            return tomllib.load(f)
+    except (OSError, ValueError):   # TOMLDecodeError and UnicodeDecodeError are ValueErrors
+        return {}
+
+
+def checked_roles(policy):
+    try:
+        return set(policy["roles"]["report_checked"])
+    except (KeyError, TypeError):
+        return set()
+
+
+def past_stop(data, role, policy):
+    """True when the agent's activation is past its role's deadline stop (subagent-policy's
+    rule, read from the same index)."""
+    try:
+        age = dc.activation_age(dc.read_agent_state(dc.norm_id(data.get("agent_id"))),
+                                time.time())  # wall clock: activation_start is a stamp
+        _, stop_s = dc.deadline_for(policy, role)
+    except Exception:  # noqa: BLE001  no clock, no deadline
+        return False
+    return age is not None and age >= stop_s
+
+
+def lines(path):
+    try:
+        with open(path, "rb") as f:
+            yield from f
+    except OSError:
+        return
+
+
+def parsed(line):
+    try:
+        e = json.loads(line)
+    except (ValueError, RecursionError):   # json recurses on nesting
+        return None
+    return e if isinstance(e, dict) else None
+
+
+def stale(e, now):
+    """True when the entry is older than any background command can run."""
+    t = dc.entry_time(e)
+    return t is not None and now - t > MAX_BACKGROUND_S
+
+
+def is_fork_boundary(e):
+    """The user entry that ends a fork's inherited history (2.1.316): what comes before it is
+    the parent's, not the fork's. Only a fork's first one counts (_running)."""
+    msg = e.get("message")
+    return (e.get("type") == "user" and isinstance(msg, dict)
+            and dc.text_of(msg.get("content")).lstrip().startswith("<fork-boilerplate>"))
+
+
+def note_ends(text, m):
+    """True when the note matched by m is the result's last line, or is followed only by
+    Claude Code's cwd hint: nothing comes after its note."""
+    end = text.find("\n", m.end())
+    rest = "" if end < 0 else text[end + 1:].strip()
+    return not rest or rest.startswith("Session cwd")
+
+
+def printed(result, note):
+    """True when a toolUseResult shows the note as the command's own stdout: a real launch's
+    stdout is empty or doesn't hold Claude Code's note (the incident's was "")."""
+    stdout = result.get("stdout") if isinstance(result, dict) else None
+    return isinstance(stdout, str) and note in stdout
+
+
+def launches(e, wait_uses):
+    """(task, output file or None) for each background launch in this entry's tool results.
+    The note is where Claude Code puts it, the result's last: run_in_background's opens the
+    result (its stdout is empty at launch), a moved command's follows its output. With a
+    toolUseResult that has a backgroundTaskId, it must name that id; otherwise (toolUseResult
+    is often absent, 2.1.316) the note must end the result and not be the command's own
+    stdout, so a command that prints note-shaped lines (a transcript dump) isn't a launch. A backgroundTaskId with no note counts too (output unknown). A moved wait call
+    (wait_uses) isn't a command to wait on."""
+    msg = e.get("message")
+    content = msg.get("content") if e.get("type") == "user" and isinstance(msg, dict) else None
+    if not isinstance(content, list):
+        return
+    result = e.get("toolUseResult")
+    named_id = result.get("backgroundTaskId") if isinstance(result, dict) else None
+    found, use_id = set(), None
+    for c in content:
+        if not (isinstance(c, dict) and c.get("type") == "tool_result"):
+            continue
+        use_id = use_id or c.get("tool_use_id")
+        if c.get("tool_use_id") in wait_uses:
+            return
+        text = dc.text_of(c.get("content"))
+        matches = list(LAUNCH_RE.finditer(text))
+        if not matches:
+            continue
+        m = matches[-1]
+        if m.group(0).startswith("Command running") and m.start() != 0:
+            continue
+        if isinstance(named_id, str):
+            if named_id != m.group(1):
+                continue
+        elif not note_ends(text, m) or printed(result, m.group(0)):
+            continue
+        found.add(m.group(1))
+        yield m.group(1), m.group(2)
+    if isinstance(named_id, str) and named_id not in found and use_id not in wait_uses:
+        yield named_id, None
+
+
+def bash_uses(e):
+    """(tool_use id, command) for each Bash call in this assistant entry."""
+    msg = e.get("message")
+    content = msg.get("content") if e.get("type") == "assistant" and isinstance(msg, dict) else None
+    for c in content if isinstance(content, list) else ():
+        if (isinstance(c, dict) and c.get("type") == "tool_use" and c.get("name") == "Bash"
+                and isinstance(c.get("id"), str) and isinstance(c.get("input"), dict)):
+            yield c["id"], str(c["input"].get("command") or "")[:120]
+
+
+def output_killed(path):
+    """True when the output file ends with [killed] (a TaskStop, or the kill at a final
+    response, neither of which leaves a notice), or can't be read (fail open)."""
+    if path is None:
+        return False
+    try:
+        with open(path, "rb") as f:
+            f.seek(max(0, os.fstat(f.fileno()).st_size - TAIL_BYTES))
+            return bool(KILLED_RE.search(f.read()))
+    except (OSError, ValueError):   # ValueError: a NUL in a scraped path
+        return True
+
+
+def running_tasks(path):
+    """[(name, output file or None)] for the agent's own background commands whose end it
+    hasn't seen, or [] on any error (fail open, the schema check still runs). One has ended
+    when its notice is in the transcript, its output file ends with [killed], or its launch is
+    older than MAX_BACKGROUND_S. An exit line alone isn't enough: the notice is written right
+    after the tool result that shows the end (3 of 3 live runs), so an exit line without one
+    ended after the agent last looked. A Bash call in the agent's latest message whose result isn't in the
+    transcript yet counts too, named by its command: sent in one message with the handback,
+    its result is written after the handback's hook reads the transcript (2.1.316, the live
+    `early` case). In a fork, only what follows its inherited history counts, and a fork with
+    no boundary counts nothing."""
+    try:
+        return _running(path, time.time())  # wall clock: transcript stamps
+    except Exception:  # noqa: BLE001  fail open
+        return []
+
+
+def _running(path, now):
+    launched, ended, pending, answered, wait_uses = {}, set(), {}, set(), set()
+    fork, last_message = None, None
+    for i, line in enumerate(lines(path) if path else ()):
+        if fork is None:   # a fork's transcript has fork-context-ref before any message
+            head = parsed(line) or {}
+            if head.get("type") == "fork-context-ref":
+                fork = True
+            elif head.get("type") in ("user", "assistant"):
+                fork = False
+        if b'"tool_result"' in line:
+            answered.update(r.decode("utf-8", "replace") for r in RESULT_ID_RE.findall(line))
+        assistant = ASSISTANT_RE.search(line)
+        if not (assistant or NOTICE_MARK in line or FORK_MARK in line
+                or any(m in line for m in LAUNCH_MARKS)):
+            continue
+        e = parsed(line)
+        if e is None:
+            continue
+        if fork and is_fork_boundary(e):
+            launched, ended, pending, answered = {}, set(), {}, set()
+            fork = False
+            continue
+        if e.get("type") == "assistant":
+            msg = e.get("message")
+            last_message = (msg.get("id") if isinstance(msg, dict) else None) or f"#{i}"
+            if BASH_USE_RE.search(line):
+                for tid, cmd in bash_uses(e):
+                    if is_wait_command(cmd):
+                        wait_uses.add(tid)
+                    elif not stale(e, now):
+                        pending[tid] = (cmd, last_message)
+            continue
+        text = dc.notice_text(e)
+        if text is not None:
+            ended.update(dc.TASK_RE.findall(text))
+        if not stale(e, now):
+            for task, output in launches(e, wait_uses):
+                launched.setdefault(task, output)
+    if fork:
+        return []
+    running = [(t, o) for t, o in launched.items() if t not in ended and not output_killed(o)]
+    return running + [(f"`{cmd.replace('`', chr(39))}`", None)
+                      for tid, (cmd, message) in pending.items()
+                      if message == last_message and tid not in answered]
+
+
+def agent_transcript(data):
+    return data.get("agent_transcript_path") or dc.agent_file(data, ".jsonl")
 
 
 def counter_dir():
@@ -69,30 +322,51 @@ def prune():
             pass
 
 
-def read_counter(path):
+def activation(data):
+    """The agent's current activation start (the ledger's index), or "" without one."""
     try:
-        with open(path) as f:
-            return f.read().strip()
-    except OSError:
+        return str(dc.read_agent_state(dc.norm_id(data.get("agent_id"))).get("activation_start")
+                   or "")
+    except Exception:  # noqa: BLE001  no index, one activation
         return ""
 
 
-def bump(path):
+def read_counter(path, current=""):
+    """The counter for this activation: "1", "2", "gave-up" or "". The activation it belongs
+    to sits beside it in <path>.act, so a SendMessage resume starts fresh while the counter
+    file keeps the form an older report-check reads; no .act file reads as the current one."""
     try:
-        n = int(read_counter(path) or 0)
+        with open(path) as f:
+            value = f.read().strip()
+    except OSError:
+        return ""
+    try:
+        with open(path + ".act") as f:
+            start = f.read().strip()
+    except OSError:
+        return value
+    return value if start == current else ""
+
+
+def bump(path, current=""):
+    try:
+        n = int(read_counter(path, current) or 0)
     except ValueError:
         n = 0
     n += 1
     with open(path, "w") as f:
         f.write(str(n) if n <= MAX_REJECTIONS else GAVE_UP)
+    with open(path + ".act", "w") as f:
+        f.write(current)
     return n
 
 
 def clear(path):
-    try:
-        os.remove(path)
-    except OSError:
-        pass
+    for p in (path, path + ".act"):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
 
 
 def problems(text):
@@ -100,6 +374,18 @@ def problems(text):
     if obj is None:
         return [why]
     return dc.validate_report(obj)
+
+
+def named(running, lead=False):
+    """The commands, for the agent or (lead) for the caller's note, which doesn't repeat a
+    command line the agent sent: the lead may relay the report further."""
+    def one(t, o):
+        if o:
+            return f"{t} (output {o})"
+        return "a Bash call sent with the report (its result wasn't seen)" if lead else (
+            f"{t} (sent with your report: its result names its output file if it went to the "
+            "background)")
+    return ", ".join(one(t, o) for t, o in running)
 
 
 def rejection(errs, attempt):
@@ -111,13 +397,53 @@ def rejection(errs, attempt):
             "above the block.")
 
 
-def decide(data, roles=None):
+def wait_reason(running, errs, attempt):
+    files = [o for _, o in running if o]
+    file = f'"{files[0]}"' if files else '"<file>"'
+    where = "" if files else " (<file> is the output file its result names)"
+    each = " Wait on each of their output files the same way." if len(files) > 1 else ""
+    reason = (f"[report-check] Don't report yet (attempt {attempt} of {MAX_REJECTIONS + 1}): "
+              f"your command {named(running)} hasn't finished, or you haven't seen its result, "
+              "so your report would miss it. If its output file already ends, read it: that is "
+              "the result your report must reflect. Nothing wakes you when a background "
+              "command ends: don't end your turn (not even to wait on a Monitor), and a "
+              "run_in_background command is stopped with your report. Wait with one foreground "
+              "Bash call under 2 minutes (leave its timeout at the default), since a call past "
+              f"its timeout is moved to the background too: `{wait_command(file)}`{where}. "
+              "Repeat it until the file ends with [exited with code N] or [killed], or until "
+              f"its completion notice arrives.{each} Judge only by that file or notice: a "
+              "sandboxed ps can't see the command. Then finish the task and report, in a "
+              "message of its own. If you no longer need the command, stop it with TaskStop.")
+    if errs:
+        reason += (" Your report also misses the report contract (" + "; ".join(errs[:4])
+                   + "): end it with one ```json block of status, summary, artifacts and "
+                   "blocked_actions.")
+    return reason
+
+
+def refuse(event, reason):
+    if event == "PreToolUse":
+        return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                       "permissionDecision": "deny",
+                                       "permissionDecisionReason": reason}}
+    return {"decision": "block", "reason": reason}
+
+
+def annotated(text, running):
+    note = (f"\n\n[report-check] Note for the caller: this agent handed back before it saw its "
+            f"command {named(running, lead=True)} end, so this report may not include its "
+            "result. Check its output before relying on the report.")
+    if not dc.FENCE_RE.search(text) and dc.extract_report(text)[0] is not None:
+        # a whole-message JSON report: fence it, so extract_report still finds it
+        text = "```json\n" + text.strip() + "\n```"
+    return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
+                                   "updatedInput": {"message": text + note}}}
+
+
+def decide(data, policy=None):
     """None to accept, else the hook output dict."""
     event = data.get("hook_event_name")
     if not data.get("agent_id"):
-        return None
-    meta = dc.agent_meta(data)
-    if dc.agent_role(data, meta) not in (roles or checked_roles()) or meta.get("teamName"):
         return None
     if event == "PreToolUse":
         if data.get("tool_name") != "SubagentHandback":
@@ -129,23 +455,31 @@ def decide(data, roles=None):
             return None
     else:
         return None
+    meta = dc.agent_meta(data)
+    if meta.get("teamName"):
+        return None
+    policy = load_policy() if policy is None else policy
+    role = dc.agent_role(data, meta)
+    # a plain subagent's meta.json exists by SubagentStop; without one, the stop may be a
+    # teammate's per-message stop whose meta is missing or torn, so it isn't wait-checked
+    waitable = event == "PreToolUse" or bool(meta)
+    running = running_tasks(agent_transcript(data)) if waitable else []
+    errs = problems(text) if role in checked_roles(policy) else []
     prune()
     path = counter_path(data)
-    errs = problems(text)
-    if not errs:
+    if not running and not errs:
         clear(path)
         return None
-    if read_counter(path) == GAVE_UP:
-        return None
-    attempt = bump(path)
-    if attempt > MAX_REJECTIONS:
-        return None
-    reason = rejection(errs, attempt)
-    if event == "PreToolUse":
-        return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
-                                       "permissionDecision": "deny",
-                                       "permissionDecisionReason": reason}}
-    return {"decision": "block", "reason": reason}
+    waits = bool(running) and not past_stop(data, role, policy)
+    current = activation(data)
+    if (waits or errs) and read_counter(path, current) != GAVE_UP:
+        attempt = bump(path, current)
+        if attempt <= MAX_REJECTIONS:
+            return refuse(event, wait_reason(running, errs, attempt) if waits
+                          else rejection(errs, attempt))
+    if running and event == "PreToolUse":
+        return annotated(text, running)
+    return None
 
 
 def main():
