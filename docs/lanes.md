@@ -784,7 +784,8 @@ but it can't aim a signal.
 `lane sync-main <n>` merges a merged PR into the main checkout's branch and writes only what git
 has hash-checked against a proven commit. It closes DA15/DA16. The post-merge chain used to fetch and merge main
 with the sandbox off, in a repo whose shared git dir every lane's sandboxed Bash can write, and
-the lead then installed from that checkout. Now nothing that shared dir holds reaches a file.
+the lead then installed from that checkout. Now every byte sync-main writes to the checkout comes
+from a store of its own, never from that shared dir.
 
 **What it proves.** The lead runs `lane sync-main <n>` bare from the main checkout
 (`skills/lanes/SKILL.md`, The lead, step 7.1). gh must report PR #n as MERGED into the config's
@@ -805,12 +806,16 @@ https, ssh and file.
 
 **What reaches the checkout.** Every byte written to the checkout comes from objects in the
 store, which git hash-checked as they arrived. Before it writes, sync-main compares the checkout
-with its branch's commit and refuses on any difference. It then moves the files from that commit
+with its branch's commit: the index, every tracked file (its bytes, its type and its exec bit),
+and untracked files inside the dirs that hold tracked files, but for `__pycache__`. It refuses on
+a difference there. Untracked files at the checkout's root are not compared, since `.claude/`,
+`.lane/` and other local files live there. It then moves the files from that commit
 to the merge, reading objects from the store only, through an index of its own built from that
 commit (the checkout's index sits in the shared dir, and an entry planted there could convert
 what checkout writes). That index then replaces the checkout's, and the branch moves by
 compare-and-swap.
-Afterwards it compares the checkout with the merge again and runs `git fsck` on the shared repo.
+Afterwards it compares the checkout with the merge again, the same way, and runs `git fsck` on
+the shared repo.
 A difference or a fsck finding is reported: don't install from that checkout until it is
 explained.
 
@@ -848,7 +853,7 @@ to Hayden: find out who made it before anything else runs git in that repo.
   doesn't cover them (DA1).
 - When no lane holds the install, the checkout is a mix of old and new verified files while the
   files move. Anything that runs from it in that moment sees the mix.
-- `__pycache__` dirs are not compared.
+- `__pycache__` dirs and untracked files at the checkout's root are not compared.
 - A corrupt object in the shared repo is reported by `git fsck`, not repaired. The checkout is
   still built from the store.
 - A shallow clone fails the tripwire, so sync-main, handoff-check and setup.sh refuse in one.

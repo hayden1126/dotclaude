@@ -289,6 +289,24 @@ class SyncMain(LanesRepo):
 
     # --- attacks -----------------------------------------------------------------------------
 
+    def test_untracked_files_at_the_root_are_not_compared_and_the_docs_say_so(self):
+        # By design: .claude/ and .lane/ live at the checkout's root. The docs must claim no
+        # more than compare() checks.
+        self.write(os.path.join(self.main, "notes.txt"), "mine\n")
+        self.land({"hooks/x.sh": REAL})
+        p = self.sync("7")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(self.read(os.path.join(self.main, "notes.txt")), "mine\n")
+        docs = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__)))), "docs", "lanes.md")
+        with open(docs) as f:
+            text = " ".join(f.read().split("## Verified merges", 1)[1].split("\n## ", 1)[0]
+                            .split())
+        self.assertNotIn("any difference", text)
+        self.assertNotIn("nothing that shared dir holds reaches a file", text)
+        self.assertIn("untracked files at the checkout's root", text)
+        self.assertIn("__pycache__", text)
+
     def test_a_replace_ref_is_refused_by_the_tripwire(self):
         proven = self.land({"hooks/x.sh": REAL})
         self.git("replace", self.blob("pr7", "hooks/x.sh"), self.evil_blob())
