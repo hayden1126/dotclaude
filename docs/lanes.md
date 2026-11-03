@@ -948,7 +948,8 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
     `adopt` and `claim` refuse to hand out a claim, port or cap slot, and a checkout outside
     the main one that matches no record can't take itself for unregistered (`handoff-check`
     fails, `pass-respawn` refuses). Two records sharing a path only count there when the
-    path is that checkout's.
+    path is that checkout's. The main checkout is always `main`, checked before any record,
+    and a record whose path is the main checkout, holds it or sits inside it is left out.
   - A lane's path must be a real worktree of this repo, outside the main checkout and any other
     lane, before `open` starts `claude` there, the setup runs there, files are copied there, or
     `done` archives and removes it.

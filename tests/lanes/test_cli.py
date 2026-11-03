@@ -1509,12 +1509,16 @@ class RecordTrust(LanesRepo):
         os.makedirs(os.path.join(decoy, ".claude"))
         nested = os.path.join(self.lane_path("chart-fix"), "nested")
         os.makedirs(nested)
-        for path in (decoy, nested, self.tmp):
+        # A path in or holding the main checkout is left out at load (record_problem, LR1); one
+        # inside another lane passes the load and is refused before anything acts in it.
+        for path, why in ((decoy, "lanes/chart-fix/lane.json: its path"),
+                          (nested, "refusing lane chart-fix"),
+                          (self.tmp, "lanes/chart-fix/lane.json: its path")):
             with self.subTest(path=path):
                 self.plant("chart-fix", path=path)
                 p = self.run_lane("open", "chart-fix", "--print")
                 self.assertEqual(p.returncode, 1)
-                self.assertIn("refusing lane chart-fix", p.stderr)
+                self.assertIn(why, p.stderr)
                 self.assertEqual(self.run_lane("done", "chart-fix", "--abandon").returncode, 1)
 
     def test_new_branches_from_the_remote_not_a_planted_ref(self):

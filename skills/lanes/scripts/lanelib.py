@@ -451,11 +451,12 @@ class Repo:
         name their own path, so they leave this checkout unregistered."""
         if not self.has_lanes:
             return "plain", None
+        # Main first: sandboxed Bash can write any lane.json, so no record may name main (LR1).
+        if self.is_main:
+            return "main", None
         lane = self.lane_at(self.toplevel, lanes)
         if lane:
             return "lane", lane
-        if self.is_main:
-            return "main", None
         # self.rejected is the lanes() call's that lane_at matched against. A rejected record
         # may be this checkout's, so outside main it isn't told from one: Untrusted.
         top = os.path.realpath(self.toplevel)
@@ -1201,11 +1202,13 @@ class Untrusted(ValueError):
     on it."""
 
 
-def record_problem(lane, lane_id: str) -> str | None:
+def record_problem(lane, lane_id: str, main: str) -> str | None:
     """Why a lane.json can't be trusted, or None. Sandboxed Bash can write every lane.json (the
     sandboxed `claim` and `note` do), and sandbox-off code (the hooks, `ls`, `open`, `done`,
     `new`, `adopt`, `addr`) acts on its fields: the id becomes a path, the branch a git argument, the
-    path a cwd. So each field is checked at load, and a record that fails is never used."""
+    path a cwd. So each field is checked at load, and a record that fails is never used. main is
+    the main checkout: a path that is it, holds it or sits in it names no lane (worktree_problem
+    refuses one there), and would make main, or an agent worktree in it, count as that lane."""
     if not isinstance(lane, dict):
         return "not a JSON object"
     if lane.get("id") != lane_id or not valid_id(lane_id):
@@ -1213,8 +1216,11 @@ def record_problem(lane, lane_id: str) -> str | None:
     if not valid_branch(lane.get("branch")):
         return f"bad branch {lane.get('branch')!r}"
     path = lane.get("path")
-    if not isinstance(path, str) or not os.path.isabs(path) or os.path.normpath(path) != path:
+    if (not isinstance(path, str) or "\0" in path or not os.path.isabs(path)
+            or os.path.normpath(path) != path):
         return f"bad path {path!r}"
+    if inside(path, main) or inside(main, path):
+        return f"its path {path} is, holds or sits in the main checkout {main}"
     sha = lane.get("base_sha")
     if sha is not None and not (isinstance(sha, str) and SHA_RE.fullmatch(sha)):
         return f"bad base_sha {sha!r}"
@@ -1255,7 +1261,7 @@ def read_record(repo: "Repo", lane_id: str) -> dict:
             lane = json.load(f)
         except (ValueError, RecursionError):  # json recurses on nesting
             raise Untrusted(f"lanes/{lane_id}/lane.json is not JSON")
-    if why := record_problem(lane, lane_id):
+    if why := record_problem(lane, lane_id, repo.main):
         raise Untrusted(f"lanes/{lane_id}/lane.json: {why}")
     return lane
 
