@@ -1488,6 +1488,13 @@ class RecordTrust(LanesRepo):
         self.assertEqual(self.read(victim), "keep\n")
         self.assertIn("bad branch", p.stderr)
 
+    def test_a_record_naming_the_main_checkout_never_makes_it_that_lane(self):
+        # LR1: from main, whoami says main, and `ls` names the record it left out.
+        self.plant("forged", id="forged", path=self.main)
+        info = json.loads(self.lane("whoami", "--json"))
+        self.assertEqual((info["identity"], info["kind"]), ("main", "main"))
+        self.assertIn("left out lanes/forged", self.run_lane("ls").stderr)
+
     def test_a_record_of_the_wrong_shape_is_left_out(self):
         for field, value in (("base_sha", "HEAD"), ("port", "80; x"), ("claims", ["#1 x"]),
                              ("path", "rel/path"), ("sessions", ["x"])):

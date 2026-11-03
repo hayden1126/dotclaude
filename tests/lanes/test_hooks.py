@@ -205,6 +205,16 @@ class IdentityHook(LanesRepo):
         self.assertEqual((s["session_id"], s["source"]), ("sess-0001", "startup"))
         self.assertIn("startedAt", s)
 
+    def test_main_stays_main_beside_a_record_naming_it(self):
+        # LR1: a record naming the main checkout neither tells main's session it is that lane
+        # nor gets the session registered in it.
+        rec = dict(self.lane_json("chart-fix"), id="forged", path=self.main)
+        self.write(os.path.join(self.common, "lanes", "forged", "lane.json"), json.dumps(rec))
+        ctx = self.start(self.main)["additionalContext"]
+        self.assertTrue(ctx.startswith("Main checkout of a lanes repo"), ctx)
+        self.assertNotIn("forged", ctx)
+        self.assertEqual(self.lane_json("forged")["sessions"], [])
+
     def test_a_switched_lane_is_told_its_checked_out_branch(self):
         # A `git switch` for a follow-up PR leaves lane.json's branch behind.
         self.git("switch", "-q", "-c", "chart-more", cwd=self.lane_dir)

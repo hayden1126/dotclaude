@@ -978,5 +978,54 @@ class GitTamper(unittest.TestCase):
                 self.assertIn("usage", p.stderr)
 
 
+class MainFirst(_fixture.LanesRepo):
+    """LR1: the main checkout is "main" whatever a lane record names, and a record naming the
+    main checkout, a dir holding it, or a dir inside it is left out: no lane lives there
+    (worktree_problem refuses one), and sandboxed Bash can write any lane.json."""
+
+    def setUp(self):
+        super().setUp()
+        self.lane("new", "chart-fix")
+        self.repo = lanelib.Repo(self.main, self.common)
+
+    def forged(self, path, lane_id="forged"):
+        """chart-fix's record, renamed lane_id, naming path, as sandboxed Bash could write it."""
+        rec = dict(self.lane_json("chart-fix"), id=lane_id, path=path)
+        self.write(os.path.join(self.common, "lanes", lane_id, "lane.json"), json.dumps(rec))
+        return rec
+
+    def test_identity_says_main_before_matching_any_record(self):
+        rec = self.forged(self.main)
+        # Handed the record directly, past record_problem: the order alone must say main.
+        self.assertEqual(self.repo.identity([rec]), ("main", None))
+        self.assertEqual(self.repo.identity(), ("main", None))
+
+    def test_a_record_naming_main_or_a_dir_holding_or_inside_it_is_left_out(self):
+        link = os.path.join(self.tmp, "main-link")
+        os.symlink(self.main, link)
+        agent = os.path.join(self.main, ".claude", "worktrees", "agent-a1")
+        for path in (self.main, os.path.dirname(self.main), "/", link, agent):
+            with self.subTest(path=path):
+                rec = self.forged(path)
+                ids = [lane["id"] for lane in self.repo.lanes()]
+                self.assertEqual(ids, ["chart-fix"])
+                self.assertIn("forged", [i for i, _ in self.repo.rejected])
+                self.assertEqual(self.repo.identity(), ("main", None))
+                self.assertIsNotNone(lanelib.record_problem(rec, "forged", self.repo.main))
+
+    def test_a_lane_beside_main_sharing_its_name_s_prefix_is_kept(self):
+        # The lanes root is <tmp>/proj-lanes, beside <tmp>/proj: no prefix match may reject it.
+        rec = self.lane_json("chart-fix")
+        self.assertTrue(rec["path"].startswith(self.main))
+        self.assertIsNone(lanelib.record_problem(rec, "chart-fix", self.repo.main))
+        self.assertEqual([lane["id"] for lane in self.repo.lanes()], ["chart-fix"])
+        self.assertEqual(self.repo.rejected, [])
+
+    def test_a_nul_in_a_record_s_path_is_left_out_not_raised(self):
+        rec = self.forged(self.lane_path("chart-fix") + "\0x")
+        self.assertEqual([lane["id"] for lane in self.repo.lanes()], ["chart-fix"])
+        self.assertIsNotNone(lanelib.record_problem(rec, "forged", self.repo.main))
+
+
 if __name__ == "__main__":
     unittest.main()
