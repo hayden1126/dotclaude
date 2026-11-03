@@ -267,7 +267,7 @@ sees it.
 | `hooks/session-registry.sh` | SessionStart/SessionEnd hook: records which session is open in which tmux tab (`$XDG_STATE_HOME/dotclaude/open-sessions/`), with the window's tab bar placement (`@tab_place`, as `place`) and the `--model` and `--effort` its claude launched with (as `model` and `effort`), for `claude-restore`; deletes the entry on `/exit` or `/clear`, marks it when the window or claude is killed; then hands each payload to `claude-saved` (Star and Shelve; the star follows `/clear`); does nothing outside tmux | symlink `~/.claude/hooks/session-registry.sh` |
 | `hooks/session-summary.sh` | Stop hook: regenerates the session's short (`<=32`-char) tab label via a direct Haiku Messages-API call (`hooks/haiku.py`: Claude subscription OAuth token, stdlib urllib, no API key/jq), detached so it never blocks; caches it to `<config-dir>/session-summaries/<session_id>.title.txt` for `session-title.sh` | symlink `~/.claude/hooks/session-summary.sh` |
 | `hooks/overwrite-guard.sh` | PreToolUse(Write) hook: denies a Write over a file this session hasn't read, or one that cuts a file of 1 KB or more to under a fifth; a shim over `hooks/overwrite_guard.py`; fails open | symlink `~/.claude/hooks/overwrite-guard.sh` and `overwrite_guard.py` |
-| `hooks/ask-check.sh` | PreToolUse(AskUserQuestion) hook: denies a risky ask once, before the dialog, with a 5-point checklist as the reason, and lets the resend through; a shim over `hooks/ask_check.py`; fails open | symlink `~/.claude/hooks/ask-check.sh` and `ask_check.py` |
+| `hooks/ask-check.sh` | PreToolUse(AskUserQuestion) hook: denies a risky ask once, before the dialog, with a 6-point checklist as the reason, and lets the resend through; a shim over `hooks/ask_check.py`; fails open | symlink `~/.claude/hooks/ask-check.sh` and `ask_check.py` |
 | `hooks/practices-check.sh` | PreToolUse(Edit, Write, MultiEdit) and SessionStart hook: the engine for the practices skills' `events.toml` files. It denies an edit once until its skill is loaded, denies once on a bad pattern, and re-injects the skills' must-hold lines after compaction; a shim over `hooks/practices_check.py`; fails open but reports errors at session start | symlink `~/.claude/hooks/practices-check.sh` and `practices_check.py` |
 | `hooks/lane-identity.sh` | SessionStart/Stop/SessionEnd hook: tells a lane session its identity and registers it, prints one board line in a lanes repo's main checkout and relinks the lead record on a proven resume, /clear or /pass of the lead, mirrors a lane's record; a shim over `hooks/lane_identity.py`; fails open | symlink `~/.claude/hooks/lane-identity.sh` and `lane_identity.py` |
 | `hooks/lane-guard.sh` | PreToolUse(Edit/Write/MultiEdit) hook: denies writes to another lane's record or the lanes CLI's data, and relative identity in status files; a shim over `hooks/lane_guard.py`; fails open | symlink `~/.claude/hooks/lane-guard.sh` and `lane_guard.py` |
@@ -660,16 +660,31 @@ need nothing extra.
   from an agent's report, named another live lane's file without the lane, and leaned on code
   names the user had never seen. A transcript search of 1,472 asks found these in plain sessions
   as often as in lanes, about twice as often in plan mode. A checklist sent at the moment of the
-  ask fixed them; a memory line didn't. So the hook denies a risky ask once with this checklist
+  ask fixed them; a memory line didn't. A later audit of past design decisions (lane
+  design-audit) found a fourth miss: forks that offered a sandbox or permission option without
+  saying who could write what runs there. So the hook denies a risky ask once with this checklist
   as the reason (the list is also in `skills/lanes/SKILL.md`, "Who asks Hayden what"):
   1. check each claim against the code yourself; 2. name every other live lane whose file the
   ask mentions; 3. restate the scope against the brief; 4. say so when the user skipped a
-  question; 5. explain each code name in plain words. An ask is risky when:
+  question; 5. explain each code name in plain words; 6. when an option runs anything outside
+  the sandbox or skips a prompt, name what runs there, who can write it, and by which route. An
+  ask is risky when:
   - a subagent report came in since the user's last answer (a typed prompt, an answered ask or
     an approved plan) and at most one Read, Grep, Glob or Bash call followed it;
   - its questions hold 4 or more backticked names;
   - it names a file another live lane of the repo is changing (its branch's diff from the base,
-    or its brief's Expected files line) without naming that lane.
+    or its brief's Expected files line) without naming that lane;
+  - its questions or options name the sandbox (sandbox-off, unsandboxed), an excluded command,
+    an allow, deny, ask or permission rule, a sandbox or permission setting or mode
+    (`dangerouslyDisableSandbox`, `allowWrite`, `bypassPermissions` and the like), the
+    classifier or auto mode, and don't say who can write what runs there ("who can write it",
+    "any lane could edit it", "only the owner can change it"). Only that statement counts, never
+    a threat keyword: in this repo each keyword also names the option itself ("the sandbox
+    escape") or turns up in a dismissal ("no real threat"), and a match would turn the rule off,
+    while a false deny costs one resend. Replayed over 2,516 past asks, the rule held back
+    10.0% of them; 6 of the 258 that used this wording (2.3%) had said who could write. Hook and
+    install are left out of the list on purpose: with them it held back 19.6%, mostly routine
+    asks.
 
   A deny is the only hook output the model sees before the dialog. It resends in the same turn
   (probed on 2.1.304), and the resend passes: a deny of this hook's already in the window lets

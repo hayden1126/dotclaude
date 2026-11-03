@@ -12,7 +12,11 @@ the last approved plan. An ask is risky when any of these holds:
           call after the newest one: its claims would reach the user unchecked;
   ticks   the question texts hold 4 or more backticked names, which the user may not know;
   lane    the ask names a file another live lane of this repo is changing (its branch's diff
-          from the base, or its brief's Expected files) without naming that lane.
+          from the base, or its brief's Expected files) without naming that lane;
+  threat  the questions or options name the sandbox, an excluded command, a permission rule, a
+          sandbox or permission setting (dangerouslyDisableSandbox, allowWrite, bypassPermissions
+          and the like), the classifier or auto mode (SECURITY) and doesn't say who can write
+          what runs there (THREAT), which checklist item 6 asks for.
 Once per window: a deny of this hook's already in the window lets the ask through, so the
 resend always passes. Without a transcript that can't be seen, so the ask passes.
 
@@ -49,12 +53,33 @@ CHECKLIST = (
     "Restate the scope against the brief, and say so if this grows it.",
     "If the user skipped a question, say so before asking its parts again.",
     "Explain each code name in plain words, or drop it.",
+    "If an option runs anything outside the sandbox or skips a prompt, name what runs there, "
+    "who can write it, and by which route.",
 )
 CHECKS = {"Read", "Grep", "Glob", "Bash"}
 REPORTERS = {"Agent", "Task"}
 ANSWERS = {"AskUserQuestion", "ExitPlanMode"}  # a result that isn't an error is the user's
 TICK = re.compile(r"`([^`\n]{2,60})`")
 TICKS_MAX = 3
+# Narrow on purpose: replayed over 2,516 past asks this list held back 10.0% of them, mostly real
+# security forks; adding hook and install made it 19.6%, mostly routine asks. A payment
+# sandbox or an ML classifier in another repo trips it too, at the cost of one resend.
+SECURITY = re.compile(
+    r"\b(?:un)?sandbox(?:es|ed|ing|-off)?\b|\bdangerouslyDisableSandbox\b|\bexcluded[ -]?commands?\b"
+    r"|\b(?:allow|deny|ask|permissions?)[ -]rules?\b|\bclassifiers?\b|\bauto[ -]mode\b"
+    r"|\b(?:allowWrite|denyWrite|denyRead|allowedDomains|allowUnsandboxedCommands)\b"
+    r"|\bpermissions\.(?:allow|deny|ask)\b|\bbypass[ -]?permissions\b|\bacceptEdits\b"
+    r"|\bdontAsk\b|\ballow[ -]?list\b|\badditionalDirectories\b"
+    r"|--(?:dangerously-skip-permissions|allowedTools|add-dir)\b", re.I)
+# What answers item 6: who can write what runs there. Only that statement counts, never a threat
+# keyword, since every keyword also names the option itself in this repo ("the sandbox escape",
+# "bypasses the sandbox") or appears in a dismissal ("no real threat"), and a match turns the
+# rule off while a false deny costs one resend. Replayed, 6 of 258 past security-worded asks
+# (2.3%) said who could write.
+THREAT = re.compile(
+    r"\b(?:who|anyone|any \w+|every \w+|only \w+|nobody|no one)(?: else)? (?:can|could|may|might)"
+    r" (?:write|edit|change|modify|plant|reach|swap|replace|tamper with)\b", re.I)
+SECURITY_SHOWN = 3
 CHUNK = 1 << 18
 # Bytes of user and assistant entries read back from the transcript's end at most. Other rows
 # don't count (an api-request-blob runs to 2.4 MB, and one follows each deny), but the whole
@@ -329,7 +354,19 @@ def lane_hits(text: str, cwd: str) -> list[tuple[str, str]]:
     return hits
 
 
-def reason(fired: list[str], state: dict, ticks: int, hits: list[tuple[str, str]]) -> str:
+def security_words(text: str) -> list[str]:
+    """The SECURITY words the ask uses, as first spelled, unique by case, in first-seen order,
+    when it doesn't say who can write what runs there (THREAT); else none."""
+    if THREAT.search(text):
+        return []
+    seen = {}
+    for m in SECURITY.finditer(text):
+        seen.setdefault(m.group(0).lower(), m.group(0))
+    return list(seen.values())
+
+
+def reason(fired: list[str], state: dict, ticks: int, hits: list[tuple[str, str]],
+           words: list[str]) -> str:
     why = []
     if "report" in fired:
         n = state["checks"]
@@ -339,6 +376,9 @@ def reason(fired: list[str], state: dict, ticks: int, hits: list[tuple[str, str]
         why.append(f"the questions use {ticks} backticked names")
     for lane_id, path in hits:
         why.append(f"lane {lane_id} is changing {path}, and the ask doesn't name the lane")
+    if "threat" in fired:
+        why.append(f"the ask names {', '.join(words[:SECURITY_SHOWN])} but not who can write "
+                   "what runs there")
     items = "\n".join(f"{i}. {item}" for i, item in enumerate(CHECKLIST, 1))
     return (f"{MARKER}, since "
             + "; ".join(why) + f".\nBefore you resend:\n{items}\n"
@@ -360,7 +400,7 @@ def main():
         return
     questions = (event.get("tool_input") or {}).get("questions")
     texts = [q.get("question") or "" for q in questions]
-    options = [o.get("label", "") + " " + o.get("description", "")
+    options = [str(o.get("label") or "") + " " + str(o.get("description") or "")
                for q in questions for o in q.get("options") or []]
     ticks = sum(len(TICK.findall(t)) for t in texts)
     fired = []
@@ -376,13 +416,16 @@ def main():
         hits = []
     if hits:
         fired.append("lane")
+    words = security_words("\n".join(texts + options))
+    if words:
+        fired.append("threat")
     if not fired:
         return
     log(f"deny {','.join(fired)} sid={event.get('session_id')} "
         + " ".join(f"{lane_id}:{path}" for lane_id, path in hits))
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PreToolUse", "permissionDecision": "deny",
-        "permissionDecisionReason": reason(fired, state, ticks, hits)}}))
+        "permissionDecisionReason": reason(fired, state, ticks, hits, words)}}))
 
 
 if __name__ == "__main__":

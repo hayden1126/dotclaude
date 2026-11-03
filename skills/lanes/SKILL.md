@@ -376,6 +376,7 @@ Before any AskUserQuestion, in a lane or the lead:
 3. Restate the scope against the brief, and say so if this grows it.
 4. If the user skipped a question, say so before asking its parts again.
 5. Explain each code name in plain words, or drop it.
+6. If an option runs anything outside the sandbox or skips a prompt, name what runs there, who can write it, and by which route.
 
 The ask-check hook (`hooks/ask_check.py`) denies a risky ask once with this list as the reason
 (README's `ask-check.sh` entry says which asks are risky). Fix what applies and resend; the
