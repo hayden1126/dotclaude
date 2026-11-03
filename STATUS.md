@@ -130,8 +130,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   Backlog:
   - **Fix lanes from lane design-audit** (Hayden's picks, 2026-11-01). Private: sandbox-audit
     FINDINGS, "Design-decision audit, 2026-11", one row per id with the detail. Most severe first:
-    1. DA15 with DA16 (high): lane ports' next PR (Hayden, 2026-11-01), plus private row LR1
-       (medium, found by ports; Hayden folded it in 2026-11-02). Files: `skills/lanes/scripts/lane`, `lanelib.py`,
+    1. DA15 with DA16 (high): lane ports' next PR (Hayden, 2026-11-01), plus private rows LR1 to
+       LR4 (found by ports; LR1 folded in 2026-11-02, LR3's fix picked 2026-11-03). Files: `skills/lanes/scripts/lane`, `lanelib.py`,
        handoff-check, `setup.sh`, `skills/lanes/SKILL.md` (the post-merge step) and their tests,
        the files ports' PR 2 also changes. Until it lands, the lead runs DA15's pre-check and
        DA16's stopgap before each post-merge chain (both in the private rows).
@@ -361,7 +361,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 - **Next (lead, main checkout):**
   0. Four lanes run, cap full (In flight, Live lanes; state in their records, `lane ls`). Next
      lane when a slot frees: Hayden's pick (Backlog). DA15/DA16 rides in lane ports. Before each post-merge
-     chain, run DA15's pre-check and DA16's stopgap from the private FINDINGS rows. Since #156's install, a lone
+     chain, run DA15's pre-check and DA16's stopgap from the private FINDINGS rows, and DA15's
+     added checks before any sandbox-off fetch in this repo (lead's, `lane new`, `done`, `park`). Since #156's install, a lone
      excluded call (gh, git push or fetch, lane) runs only from a repo's top. Running sessions took
      #157's cache narrowing live at its install (2026-10-31 14:39 local): a session started
      before it needs a `/pass` before a sandboxed uv, pip, pnpm, node-gyp, bun or Playwright run. Pending with Hayden, outside the lanes: `wsl --shutdown` at a break applies the 18 GB
