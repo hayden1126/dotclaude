@@ -95,7 +95,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     the design-decision re-evaluation, findings private; its PR is the public ask-time threat
     rule), 2 ports (next PR: the DA15/DA16 fix with LR1, on Hayden's pick 2026-11-01, since it
     changes the same lane CLI files; then `lane port claim/who/ls` and the SessionStart "your
-    ports" line; its record says `Keep open`), 3 practices (`feat/practices-auth-secrets`, its next PR; paused by Hayden since
+    ports" line; its record says `Keep open`), 3 fork-start (`fix/sessionstart-fork`, opened 2026-11-03 on Hayden's pick:
+    SessionStart hooks skip forked sessions, since 2.1.316 fires source `fork` and our matchers list
+    only four sources; capella-studio lane artexport's report, session 1f152f3c), 4 practices
+    (`feat/practices-auth-secrets`, its next PR; paused by Hayden since
     2026-10-24, last so it blocks no install; it conflicts with origin/main on its own, per
     lane-fixes' trial).
     Merged and installed from main, all closed: chrome-dup (#151, 2026-10-29: one chrome-devtools
@@ -132,8 +135,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
        handoff-check, `setup.sh`, `skills/lanes/SKILL.md` (the post-merge step) and their tests,
        the files ports' PR 2 also changes. Until it lands, the lead runs DA15's pre-check and
        DA16's stopgap before each post-merge chain (both in the private rows).
-    2. DA17 (high, cheap): `hooks/*.sh`, `skills/*/scripts`, `tests/setup`; Hayden also has a
-       step of his own in the row.
+    2. DA17 (high, cheap): `hooks/*.sh`, `skills/*/scripts`, `tests/setup`; Hayden's own step
+       in the row is done (2026-11-02), the two repo-side parts remain.
     3. DA12 (high), then DA13 (medium): `settings.json`, `tests/delegation/test_settings.py`
        (lane practices changes both), a session-start warning.
     4. DA1 (high): needs its own design review rounds first. Files: `setup.sh`,
@@ -148,17 +151,6 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     9. Prose only: DA3 (a memory line plus the delegation skill; lane practices to be told when
        it next runs) and DA5 (a global CLAUDE.md line).
     Accepted by Hayden: DA7, DA10, DA11.
-  - **SessionStart hooks skip forked sessions** (bug report from capella-studio lane artexport,
-    session 1f152f3c, 2026-11-02). 2.1.316 fires SessionStart with source `fork` (the binary's
-    enum is startup, resume, clear, compact, fork), and every matcher in `settings.json` lists
-    only the first four, so a fork runs none of blank-display, sandbox-caches, lane-identity,
-    session-registry, excluded-check or practices-check. Seen: the fork's `session-env` dir holds
-    only the Codex plugin's file (its hook has no matcher). A fork also copies the parent's
-    transcript, hook notices included, so it believes it was blanked. Fix: add `fork` to each
-    matcher that should run (check `practices_check.py` and `lane_identity.py`'s source branches,
-    and `tests/delegation/test_settings.py`), plus a fork probe. Files overlap lane practices only.
-    Opens in the next free slot, ahead of the other picks (Hayden, 2026-11-02; parking practices
-    was refused, since its branch has never been pushed).
   - **A systematic sweep of what code outside the sandbox reads or runs that a session can
     write** (Hayden, 2026-11-01, via lane design-audit). The shared git dir, home config,
     interpreter paths and state files: design-audit's review rounds 4 and 5 kept finding highs
