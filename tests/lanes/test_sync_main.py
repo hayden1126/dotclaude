@@ -216,6 +216,15 @@ class SyncMain(LanesRepo):
         self.assertIn(".gitattributes (untracked", p.stderr)
         self.assertEqual(self.state(), before)
 
+    def test_an_untracked_gitattributes_in_a_dir_the_merge_adds_converts_nothing(self):
+        # compare can't see into a dir the pinned commit lacks, so read-tree takes its
+        # attributes from the merge's tree alone: the bytes written are the blob's.
+        self.land({"fresh/x.sh": REAL})
+        self.write(os.path.join(self.main, "fresh", ".gitattributes"), "* text eol=crlf\n")
+        self.sync("7")
+        with open(os.path.join(self.main, "fresh", "x.sh"), "rb") as f:
+            self.assertEqual(f.read(), REAL.encode())
+
     def link_reflog(self, rel):
         """A symlink at the reflog path rel under the common dir, to a victim file outside it."""
         victim = os.path.join(self.tmp, "victim")

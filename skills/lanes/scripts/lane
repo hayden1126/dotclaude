@@ -5750,19 +5750,21 @@ def sync_checkout(repo: Repo, store: str, pinned: str, merge: str) -> None:
     pinned and refreshed against the disk: the checkout's index sits in the lane-writable common
     dir, and an entry planted there in neither tree (a .gitattributes, which checkout reads from
     the index) would survive a two-tree read-tree and convert what it writes. That index then
-    replaces the checkout's in one rename."""
+    replaces the checkout's in one rename. Attributes come from the verified trees alone
+    (GIT_ATTR_SOURCE: pinned's for the refresh, the merge's for the move), so an untracked
+    .gitattributes in the work tree, even in a dir the merge adds, steers nothing."""
     index = os.path.join(store, "checkout-index")
     env = sync_env(GIT_COMMON_DIR=store, GIT_WORK_TREE=repo.toplevel, GIT_INDEX_FILE=index)
     sgit(["read-tree", pinned], repo.toplevel, env, f"reading {pinned[:12]} into the store")
-    p = sgit(["update-index", "--refresh"], repo.toplevel, env, "refreshing the store's index",
-             ok=(0, 1))
+    p = sgit(["update-index", "--refresh"], repo.toplevel, dict(env, GIT_ATTR_SOURCE=pinned),
+             "refreshing the store's index", ok=(0, 1))
     if p.returncode:
         stale = sorted({x.rsplit(": ", 1)[0] for x in p.stdout.splitlines() if ": " in x})
         raise LaneError(f"the checkout {repo.toplevel} changed meanwhile, no longer "
                         f"{pinned[:12]}'s:{named_paths(stale or ['?'])}\nNothing was written: "
                         "find out what wrote it, then rerun")
-    sgit(["read-tree", "-m", "-u", pinned, merge], repo.toplevel, env,
-         f"checking out {merge[:12]}")
+    sgit(["read-tree", "-m", "-u", pinned, merge], repo.toplevel,
+         dict(env, GIT_ATTR_SOURCE=merge), f"checking out {merge[:12]}")
     try:
         install_index(repo, index)
     except OSError as e:  # a dir or another non-file at <common>/index, a full disk
