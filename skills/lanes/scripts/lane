@@ -5336,15 +5336,48 @@ def store_guard(name: str):
                               "to sandbox.filesystem.denyWrite (dotclaude's setup.sh installs "
                               "both): nothing was created"))
     verified = os.path.join(state, "verified")
-    os.makedirs(verified, mode=0o700, exist_ok=True)
-    fd = os.open(os.path.join(verified, ".lock"),
-                 os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    os.makedirs(state, mode=0o700, exist_ok=True)  # its realpath is checked above
+    dfd = verified_dir(state, verified)
+    try:
+        try:
+            st = os.stat(f"{name}.git", dir_fd=dfd, follow_symlinks=False)
+        except FileNotFoundError:
+            st = None
+        if st is not None and not (stat.S_ISDIR(st.st_mode) and st.st_uid == os.geteuid()):
+            raise LaneError(f"{verified}/{name}.git is not a dir of yours (a link, a file or "
+                            "another owner's): remove it by hand once you know who made it")
+        fd = os.open(".lock", os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
+                     0o600, dir_fd=dfd)
+    finally:
+        os.close(dfd)
     try:
         if not try_lock(fd):
             raise LaneError(f"another lane sync-main holds {verified}/.lock: rerun once it ends")
         yield os.path.join(verified, f"{name}.git")
     finally:
         os.close(fd)
+
+
+def verified_dir(state: str, verified: str) -> int:
+    """fd of the stores' dir, made (0700) if missing, never through a link: a link, a file or a
+    dir another user owns at that name refuses."""
+    sfd = os.open(state, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        with contextlib.suppress(FileExistsError):
+            os.mkdir("verified", 0o700, dir_fd=sfd)
+        try:
+            dfd = os.open("verified", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                          dir_fd=sfd)
+        except OSError as e:
+            raise LaneError(f"{verified} is not a dir ({e.strerror or e}): a link or a file there "
+                            "could lead the store elsewhere. Remove it by hand once you know who "
+                            "made it")
+    finally:
+        os.close(sfd)
+    if os.fstat(dfd).st_uid != os.geteuid():
+        os.close(dfd)
+        raise LaneError(f"{verified} belongs to another user: remove it by hand")
+    return dfd
 
 
 def proven_sha(repo: Repo, n: int, base: str) -> str:

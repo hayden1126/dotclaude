@@ -452,6 +452,30 @@ class SyncMain(LanesRepo):
         self.assertFalse(os.path.exists(os.path.join(self.main, "planted")))
         self.assertFalse(os.path.exists(self.verified))
 
+    def guard(self, name="main"):
+        mod = load_lane_script()
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            with self.assertRaises(mod.LaneError) as cm:
+                with mod.store_guard(name):
+                    pass
+        return str(cm.exception)
+
+    def test_a_link_or_file_at_the_stores_dir_refuses(self):
+        os.makedirs(os.path.dirname(self.verified), exist_ok=True)
+        outside = os.path.join(self.tmp, "outside")
+        os.makedirs(outside)
+        os.symlink(outside, self.verified)
+        self.assertIn(self.verified, self.guard())
+        self.assertEqual(os.listdir(outside), [])  # no .lock, no store through the link
+        os.unlink(self.verified)
+        self.write(self.verified, "")
+        self.assertIn(self.verified, self.guard())
+        os.unlink(self.verified)
+        os.makedirs(self.verified)
+        os.symlink(outside, os.path.join(self.verified, "main.git"))
+        self.assertIn("main.git", self.guard())
+        self.assertEqual(os.listdir(outside), [])
+
     def test_only_the_main_checkout_runs_lead_mode(self):
         self.lane("new", "chart-fix")
         p = self.sync("7", cwd=self.lane_path("chart-fix"))
