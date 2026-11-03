@@ -749,7 +749,9 @@ class SetupWiring(unittest.TestCase):
                       '|| warn "the plugin change check failed (see above)"', calls["setup.sh"])
         self.assertIn('python3 -I - "$CLAUDE_DIR/settings.json" 2>/dev/null <<\'PY\' || true',
                       calls["setup.sh"])  # section 2's check of the settings it replaces
-        self.assertEqual(len(calls["setup.sh"]), 13)
+        self.assertIn('python3 -I "$REPO_DIR/skills/lanes/scripts/lanelib.py" git-tamper '
+                      '"$common" >&2 || tamper=$?', calls["setup.sh"])
+        self.assertEqual(len(calls["setup.sh"]), 14)
         self.assertEqual(len(calls["sync.sh"]), 2)
         self.assertEqual(len(calls["setup-tmux.sh"]), 2)  # swap_in's os.replace and the .tmux.conf write
         self.assertEqual(len(calls["setup-chrome-wsl.sh"]), 2)  # the plugin version and the config merge
@@ -899,6 +901,98 @@ class RecurseSubmodulesOff(unittest.TestCase):
         with open(self.gitconfig, "w") as f:
             f.write("[submodule]\n\trecurse = false\n")
         self.assertNotIn("submodule.recurse", self.run_block())
+
+
+class ReplaceRefsOff(RecurseSubmodulesOff):
+    """setup.sh sets core.useReplaceRefs false in the global git config on every run, beside
+    G-B's key (DA15/DA16). The base class's tests run this block too, since G-B's block reaches
+    the end of section 4."""
+
+    MARK = "# git: no replace refs"
+
+    def values(self):
+        p = subprocess.run(["git", "config", "--file", self.gitconfig, "--get-all",
+                            "core.useReplaceRefs"], capture_output=True, text=True)
+        return p.stdout.split()
+
+    def test_it_sets_it_on_every_run(self):
+        for _ in range(2):
+            self.assertIn("set core.useReplaceRefs false", self.run_block())
+            self.assertEqual(self.values(), ["false"])
+
+    def test_another_value_is_replaced(self):
+        with open(self.gitconfig, "w") as f:
+            f.write("[core]\n\tuseReplaceRefs = true\n[core]\n\tuseReplaceRefs = yes\n"
+                    "[user]\n\tname = me\n")
+        self.assertIn("set core.useReplaceRefs false", self.run_block())
+        self.assertEqual(self.values(), ["false"])
+        with open(self.gitconfig) as f:
+            self.assertIn("name = me", f.read())
+
+    def test_a_false_value_from_an_include_is_written_directly(self):
+        inc = os.path.join(self.home, "off")
+        with open(inc, "w") as f:
+            f.write("[core]\n\tuseReplaceRefs = false\n")
+        with open(self.gitconfig, "w") as f:
+            f.write(f'[includeIf "gitdir:/"]\n\tpath = {inc}\n')
+        self.assertIn("set core.useReplaceRefs false", self.run_block())
+        self.assertEqual(self.values(), ["false"])
+
+    def test_it_warns_when_submodule_recurse_is_on(self):
+        pass  # G-B's own test; this block has no warning
+
+
+class TamperRefusal(unittest.TestCase):
+    """setup.sh's section 0 stops the run before changing anything when lanelib.git_tamper finds
+    anything in the common dir of the checkout it installs from, or git can't name that dir
+    (DA15/DA16). REPO_DIR is a throwaway repo holding a copy of lanelib.py."""
+
+    MARK = "# The DA15/DA16 tripwire"
+    END = "# A lane installs from its own worktree"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = os.path.realpath(tmp.name)
+        self.repo = os.path.join(self.tmp, "repo")
+        self.env = {"HOME": self.tmp, "GIT_CONFIG_NOSYSTEM": "1",
+                    "PATH": os.path.dirname(sys.executable) + ":/usr/bin:/bin"}
+        subprocess.run(["git", "init", "-q", self.repo], env=self.env, check=True)
+        scripts = os.path.join(self.repo, "skills", "lanes", "scripts")
+        os.makedirs(scripts)
+        with open(os.path.join(REPO, "skills", "lanes", "scripts", "lanelib.py")) as src, \
+                open(os.path.join(scripts, "lanelib.py"), "w") as dest:
+            dest.write(src.read())
+
+    def run_block(self, repo_dir=None):
+        with open(os.path.join(REPO, "setup.sh")) as f:
+            src = f.read()
+        section0 = src.split("\n# 0. ", 1)[1].split("\n# 1. ", 1)[0]
+        self.assertIn(self.MARK, section0)
+        block = self.MARK + section0.split(self.MARK, 1)[1].split(self.END, 1)[0]
+        return subprocess.run(["bash", "-c", 'set -euo pipefail; say() { echo "$*"; }\n'
+                               'warn() { echo "!! $*" >&2; }\n' + block + "\necho went on\n"],
+                              env=dict(self.env, REPO_DIR=repo_dir or self.repo),
+                              capture_output=True, text=True, timeout=60)
+
+    def test_a_clean_common_dir_goes_on(self):
+        p = self.run_block()
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "went on\n", ""))
+
+    def test_a_finding_stops_the_run(self):
+        with open(os.path.join(self.repo, ".git", "shallow"), "w"):
+            pass
+        p = self.run_block()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertNotIn("went on", p.stdout)
+        self.assertIn("shallow exists", p.stderr)
+        self.assertIn("stopped before changing anything", p.stderr)
+
+    def test_a_dir_git_cant_place_stops_the_run(self):
+        p = self.run_block(repo_dir=os.path.join(self.tmp, "not-a-repo"))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertNotIn("went on", p.stdout)
+        self.assertIn("stopped before changing anything", p.stderr)
 
 
 if __name__ == "__main__":

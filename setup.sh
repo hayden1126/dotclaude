@@ -52,6 +52,20 @@ if command -v flock >/dev/null 2>&1 && mkdir -p "$STATE_DIR" 2>/dev/null; then
     exit 1
   fi
 fi
+# The DA15/DA16 tripwire: a sandboxed lane can write the git common dir this checkout shares,
+# and what git reads there decides what this run installs. So any finding of lanelib.py's
+# git-tamper (a replace ref, a non-blank alternates file, grafts, shallow, or a path it can't
+# read), or a common dir git can't name, stops the run here, before changing anything.
+if ! common="$(git -C "$REPO_DIR" rev-parse --path-format=absolute --git-common-dir)"; then
+  warn "git can't name the common dir of $REPO_DIR (see above); setup.sh stopped before changing anything"
+  exit 1
+fi
+tamper=0
+python3 -I "$REPO_DIR/skills/lanes/scripts/lanelib.py" git-tamper "$common" >&2 || tamper=$?
+if [[ $tamper -ne 0 ]]; then
+  warn "the git common dir $common may be tampered with (DA15/DA16: the lines above, exit $tamper); setup.sh stopped before changing anything"
+  exit 1
+fi
 # A lane installs from its own worktree to test a change, and an install from anywhere else
 # would replace those links mid-test. So links into a live lane worktree hold the install: the
 # run stops here, before changing anything, unless this checkout is that lane or its main
@@ -375,6 +389,11 @@ say "git: set fetch.recurseSubmodules false globally (excluded-guard G-B)"
 if [ "$(git config --global --type=bool --get submodule.recurse 2>/dev/null)" = true ]; then
     warn "git: submodule.recurse is true globally, so excluded-guard refuses git pull, gh pr checkout and git push (G-B): run \`git config --global submodule.recurse false\`"
 fi
+# git: no replace refs (DA15/DA16). A sandboxed session can write a repo's common dir, and git
+# would read a replace ref planted there as the object it replaces. Set on every run, in the
+# global file itself, like G-B's key above.
+git config --global --replace-all core.useReplaceRefs false
+say "git: set core.useReplaceRefs false globally (DA15/DA16)"
 
 # ---------------------------------------------------------------------------
 # 5. Status line widget (~/.config/ccstatusline)
