@@ -810,7 +810,7 @@ class SetupWiring(unittest.TestCase):
                       calls["setup.sh"])  # section 2's check of the settings it replaces
         self.assertIn('python3 -I "$REPO_DIR/skills/lanes/scripts/lanelib.py" git-tamper '
                       '"$common" >&2 || tamper=$?', calls["setup.sh"])
-        self.assertIn('python3 -I - "$lane_cli" "$CLAUDE_DIR/settings.json" "$verified_dir" '
+        self.assertIn('python3 -I - "$lane_cli" "$CLAUDE_DIR/settings.json" "$HOME" '
                       '<<\'PY\' || verified_window=1', calls["setup.sh"])  # the window's check
         self.assertIn('python3 -I - "$lane_cli" "$HOME" <<\'PY\' || demoted=$?',
                       calls["setup.sh"])  # its demotion
@@ -1050,6 +1050,34 @@ class VerifiedWindow(unittest.TestCase):
             self.assertEqual(f.read(), "mine\n")
         self.assertIs(self.verified_field(path), False)
         self.assertFalse(os.path.lexists(self.flag))
+
+    def test_a_dir_at_the_flag_never_stops_the_install(self):
+        # Review round 14: `rm -f` on a dir a lane made there failed under set -e, every run.
+        os.makedirs(os.path.join(self.flag, "sub"))
+        path = self.mark()
+        self.live({})
+        p = self.run_setup()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIs(self.verified_field(path), False)
+        self.assertFalse(os.path.lexists(self.flag))
+        os.makedirs(self.flag)  # and one made after an earlier window, with the rules in
+        self.live(self.RULES)
+        p = self.run_setup()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.lexists(self.flag))
+
+    def test_a_failed_demotion_warns_and_keeps_the_flag(self):
+        locked = os.path.join(self.marks, "k-a.json", "locked")
+        os.makedirs(os.path.join(locked, "x"))
+        os.chmod(locked, 0)
+        self.addCleanup(os.chmod, locked, 0o700)
+        path = self.mark("k-z.json")
+        self.live({})
+        p = self.run_setup()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("refuse until a rerun of setup.sh", p.stderr)
+        self.assertIs(self.verified_field(path), False)
+        self.assertTrue(os.path.isfile(self.flag))
 
     def test_a_window_with_no_markers_says_nothing(self):
         self.live({})

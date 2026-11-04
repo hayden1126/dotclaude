@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -1171,6 +1172,68 @@ class WindowDemotion(LanesRepo):
     def test_no_dir_no_work(self):
         self.assertEqual(self.demote(), [])
 
+    def test_an_unreadable_marker_goes_pending_and_stops_nothing(self):
+        # Review round 14: a mode-000 marker sorted first used to raise and leave the rest.
+        os.makedirs(self.marks_dir)
+        first = os.path.join(self.marks_dir, "k-0.json")
+        self.write(first, '{"verified": true}')
+        os.chmod(first, 0)
+        self.write(os.path.join(self.marks_dir, "k-z.json"), '{"verified": true}')
+        self.assertEqual(len(self.demote()), 2)
+        os.chmod(first, 0o600)
+        for name in ("k-0.json", "k-z.json"):
+            self.assertIs(json.loads(self.read(os.path.join(self.marks_dir, name)))["verified"],
+                          False)
+
+    def test_a_failed_entry_keeps_the_flag_and_lane_refusing(self):
+        # One entry that can't be removed (a dir holding a mode-000 dir) still lets every
+        # marker go pending; the flag stays, so new, adopt and sync-main refuse meanwhile.
+        os.makedirs(os.path.join(self.marks_dir, "k-a.json", "locked", "x"))
+        locked = os.path.join(self.marks_dir, "k-a.json", "locked")
+        os.chmod(locked, 0)
+        self.addCleanup(lambda: os.path.isdir(locked) and os.chmod(locked, 0o700))
+        self.write(os.path.join(self.marks_dir, "k-z.json"), '{"verified": true}')
+        self.mod.open_window(self.home)
+        with self.assertRaises(self.mod.LaneError) as e:
+            self.demote()
+        self.assertIn("k-a.json", str(e.exception))
+        self.assertIs(json.loads(self.read(os.path.join(self.marks_dir, "k-z.json")))["verified"],
+                      False)
+        flag = os.path.join(self.verified, ".demote-pending")
+        self.assertTrue(os.path.isfile(flag))
+        p = self.run_lane("new", "chart-fix")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn(".demote-pending", p.stderr)
+        os.chmod(locked, 0o700)
+        self.demote()
+        self.assertFalse(os.path.lexists(flag))
+        self.lane("new", "chart-fix")
+
+    def test_the_flag_refuses_adopt_until_the_demotion(self):
+        # Between setup.sh's settings copy and its demotion, a planted verified marker would
+        # pass store_rules: the flag open_window left before the copy refuses meanwhile.
+        NewVerifiesTree.failed_setup(self)
+        self.write(os.path.join(self.lane_path("chart-fix"), "OK"), "")
+        self.mod.open_window(self.home)
+        p = self.run_lane("adopt", self.lane_path("chart-fix"))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn(".demote-pending", p.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.lane_path("chart-fix"), "SETUP_RAN")))
+
+    def test_open_window_replaces_what_is_no_file_never_following_it(self):
+        os.makedirs(self.verified)
+        flag = os.path.join(self.verified, ".demote-pending")
+        victim = os.path.join(self.tmp, "victim")
+        self.write(victim, "mine\n")
+        for plant in (lambda: os.symlink(victim, flag), lambda: os.makedirs(flag + "/sub"),
+                      lambda: os.mkfifo(flag)):
+            plant()
+            self.mod.open_window(self.home)
+            st = os.lstat(flag)
+            self.assertTrue(stat.S_ISREG(st.st_mode))
+            self.assertEqual(self.read(victim), "mine\n")
+            os.unlink(flag)
+
 
 class FifoStoreLock(LanesRepo):
     """A FIFO planted at the stores' .lock (in a window, as WindowDemotion's) refuses at once:
@@ -1227,17 +1290,28 @@ class CredentialConfig(unittest.TestCase):
             ("credential.https://x.example/a=b.helper", "!f() { echo a=b; }; f"),
         ])
 
-    def test_a_repo_at_the_cwd_adds_nothing(self):
-        self.write(".gitconfig", "[credential]\n\thelper = mine\n")
-        repo = os.path.join(self.tmp, "repo")
-        subprocess.run(["git", "init", "-q", repo], check=True)
-        subprocess.run(["git", "config", "credential.helper", "lane"], cwd=repo, check=True)
-        here = os.getcwd()
-        os.chdir(repo)
-        try:
-            self.assertEqual(self.mod.credential_config(), [("credential.helper", "mine")])
-        finally:
-            os.chdir(here)
+    def test_only_system_and_global_scopes_count(self):
+        # git runs from / with no GIT_*, so no repo scope shows up there today; the filter
+        # holds should one ever reach the output (a /.git, say).
+        out = b"".join(b"%s\0credential.helper\n%s\0" % (scope, scope) for scope in
+                       (b"system", b"global", b"local", b"worktree", b"command"))
+        seen = {}
+
+        def run(args, **k):
+            seen.update(k)
+            return subprocess.CompletedProcess(args, 0, out, b"")
+        with mock.patch.object(self.mod.subprocess, "run", run):
+            self.assertEqual(self.mod.credential_config(),
+                             [("credential.helper", "system"), ("credential.helper", "global")])
+        self.assertEqual(seen["cwd"], "/")
+
+    def test_a_git_without_show_scope_says_so(self):
+        def run(args, **k):
+            return subprocess.CompletedProcess(args, 129, b"", b"error: unknown option\n")
+        with mock.patch.object(self.mod.subprocess, "run", run):
+            with self.assertRaises(self.mod.LaneError) as e:
+                self.mod.credential_config()
+        self.assertIn("git 2.26", str(e.exception))
 
     def test_no_config_gives_no_keys(self):
         self.assertEqual(self.mod.credential_config(), [])

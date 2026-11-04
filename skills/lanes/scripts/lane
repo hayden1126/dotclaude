@@ -5579,8 +5579,9 @@ def credential_config() -> list[tuple[str, str]]:
         return []
     if p.returncode:
         line = (p.stderr.decode(errors="replace").strip().splitlines() or ["unknown error"])[-1]
-        raise LaneError(shown(f"reading the credential keys of your git config failed ({line}): "
-                              "nothing was fetched"))
+        old = " (--show-scope needs git 2.26 or later)" if p.returncode == 129 else ""
+        raise LaneError(shown(f"reading the credential keys of your git config failed ({line})"
+                              f"{old}: nothing was fetched"))
     fields = p.stdout.decode(errors="surrogateescape").split("\0")
     pairs = []
     for scope, entry in zip(fields[0::2], fields[1::2]):
@@ -5687,6 +5688,11 @@ def store_rules(who: str) -> str:
                               f"\"{VERIFIED_EDIT}\" to permissions.deny and \"{VERIFIED_DENY}\" "
                               "to sandbox.filesystem.denyWrite (dotclaude's setup.sh installs "
                               "both): nothing was created"))
+    if os.path.lexists(os.path.join(home, VERIFIED_REL, WINDOW_FLAG)):
+        raise LaneError(f"~/{VERIFIED_REL}/{WINDOW_FLAG} is there: an install found the stores' "
+                        "dir open to every lane and hasn't finished turning its markers pending "
+                        f"yet, so {who} trusts nothing there. Rerun dotclaude's setup.sh, which "
+                        "names what stops it: nothing was created")
     return home
 
 
@@ -6039,6 +6045,34 @@ def write_mark(held: StoreDir, repo: Repo, lane: dict, verified: bool = True) ->
         os.close(fd)
 
 
+WINDOW_FLAG = ".demote-pending"  # in the stores' dir: an install's demotion isn't done yet
+
+
+def remove_entry(parent: int, name: str) -> None:
+    """name under parent, whatever it is, never followed."""
+    if lanelib.real_dir_at(parent, name):
+        shutil.rmtree(name, dir_fd=parent)
+    else:
+        os.unlink(name, dir_fd=parent)
+
+
+def open_window(home: str) -> None:
+    """setup.sh's mark, before its settings copy, of a window (demote_marks): WINDOW_FLAG in the
+    stores' dir, made by fd and never through a link. Whatever else sits at that name (a link,
+    a dir or a FIFO a lane made in the window) is removed first. While it is there, store_rules
+    refuses, so no `adopt` acts on a marker between the copy and the demotion, and a run that
+    stops in between leaves the demotion for the next one."""
+    top = verified_dir(home, os.path.join(home, VERIFIED_REL))
+    try:
+        with contextlib.suppress(FileNotFoundError):
+            if not stat.S_ISREG(os.stat(WINDOW_FLAG, dir_fd=top, follow_symlinks=False).st_mode):
+                remove_entry(top, WINDOW_FLAG)
+        os.close(os.open(WINDOW_FLAG, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
+                         | os.O_CLOEXEC, 0o600, dir_fd=top))
+    finally:
+        os.close(top)
+
+
 def demote_marks(home: str) -> list[str]:
     """setup.sh's step after a window, an install whose live settings.json lacked either rule
     that keeps lanes out of the stores' dir (Hayden's pick, 2026-11-03): any lane's sandbox
@@ -6046,18 +6080,51 @@ def demote_marks(home: str) -> list[str]:
     `adopt` run the setup sandbox-off in a tree nobody verified. So every marker in NEW_MARKS
     becomes pending (adopt and open refuse it, `done --abandon` clears it), and whatever there,
     or at the stores' .lock, is no regular file goes. Regular .lock files stay: a held one only
-    refuses. Returns one masked line per change. A process the sandbox started while the rules
-    were off keeps its write access until it exits: docs/lanes.md's Residuals."""
+    refuses. A marker that can't be read is overwritten all the same (the rename needs only the
+    dir). One entry that fails never stops the rest: once all are tried, any failure raises,
+    naming each, and WINDOW_FLAG stays, so store_rules keeps refusing; with none, the flag goes.
+    Returns one masked line per change. A process the sandbox started while the rules were off
+    keeps its write access until it exits: docs/lanes.md's Residuals."""
     verified = os.path.join(home, VERIFIED_REL)
     top = verified_dir(home, verified)
-    said = []
+    said, failed = [], []
 
     def drop(parent: int, name: str, where: str) -> None:
-        if lanelib.real_dir_at(parent, name):
-            shutil.rmtree(name, dir_fd=parent)
+        try:
+            remove_entry(parent, name)
+        except OSError as e:
+            failed.append(shown(f"{where}/{name} (no regular file) couldn't be removed: "
+                                f"{e.strerror or e}"))
         else:
-            os.unlink(name, dir_fd=parent)
-        said.append(shown(f"removed {where}/{name}: no regular file"))
+            said.append(shown(f"removed {where}/{name}: no regular file"))
+
+    def demote(fd: int, name: str, where: str, st: os.stat_result) -> None:
+        try:  # a real marker is a few hundred bytes
+            data = (json.loads(lanelib.read_nofollow(fd, name) or b"")
+                    if st.st_size <= SETTINGS_MAX else None)
+        except (OSError, ValueError, RecursionError):
+            data = None
+        if isinstance(data, dict) and data.get("verified") is False:
+            return
+        body = json.dumps(dict(data if isinstance(data, dict) else {}, verified=False)).encode()
+        tmp = f".tmp-{os.getpid()}-{time.monotonic_ns()}"
+        try:
+            out = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+                          | os.O_CLOEXEC, 0o600, dir_fd=fd)
+            try:
+                try:
+                    os.write(out, body)
+                finally:
+                    os.close(out)
+                os.rename(tmp, name, src_dir_fd=fd, dst_dir_fd=fd)
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp, dir_fd=fd)
+                raise
+        except OSError as e:
+            failed.append(shown(f"{where}/{name} couldn't be made pending: {e.strerror or e}"))
+        else:
+            said.append(shown(f"demoted {where}/{name} to pending"))
     try:
         with contextlib.suppress(FileNotFoundError):
             if not stat.S_ISREG(os.stat(".lock", dir_fd=top, follow_symlinks=False).st_mode):
@@ -6068,43 +6135,28 @@ def demote_marks(home: str) -> list[str]:
             if e.errno == errno.EPERM:
                 raise
             drop(top, NEW_MARKS, verified)
-            return said
-        if fd is None:
-            return said
-        where = os.path.join(verified, NEW_MARKS)
-        try:
-            for name in sorted(os.listdir(fd)):
-                st = os.stat(name, dir_fd=fd, follow_symlinks=False)
-                if not stat.S_ISREG(st.st_mode):
-                    drop(fd, name, where)
-                    continue
-                if not name.endswith(".json"):
-                    continue
-                try:  # a real marker is a few hundred bytes
-                    data = (json.loads(lanelib.read_nofollow(fd, name) or b"")
-                            if st.st_size <= SETTINGS_MAX else None)
-                except (ValueError, RecursionError):
-                    data = None
-                if isinstance(data, dict) and data.get("verified") is False:
-                    continue
-                body = json.dumps(dict(data if isinstance(data, dict) else {},
-                                       verified=False)).encode()
-                tmp = f".tmp-{os.getpid()}-{time.monotonic_ns()}"
-                out = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
-                              | os.O_CLOEXEC, 0o600, dir_fd=fd)
-                try:
+            fd = None
+        if fd is not None:
+            where = os.path.join(verified, NEW_MARKS)
+            try:
+                for name in sorted(os.listdir(fd)):
                     try:
-                        os.write(out, body)
-                    finally:
-                        os.close(out)
-                    os.rename(tmp, name, src_dir_fd=fd, dst_dir_fd=fd)
-                except BaseException:
-                    with contextlib.suppress(OSError):
-                        os.unlink(tmp, dir_fd=fd)
-                    raise
-                said.append(shown(f"demoted {where}/{name} to pending"))
-        finally:
-            os.close(fd)
+                        st = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                    except FileNotFoundError:
+                        continue
+                    if not stat.S_ISREG(st.st_mode):
+                        drop(fd, name, where)
+                    elif name.endswith(".json"):
+                        demote(fd, name, where, st)
+            finally:
+                os.close(fd)
+        if failed:
+            raise LaneError(f"{len(failed)} entries in {verified} couldn't be fixed after the "
+                            "window, so lane new, adopt and sync-main keep refusing while "
+                            f"{WINDOW_FLAG} is there:" + "".join(f"\n  {f}" for f in failed)
+                            + "\nFix each by hand, then rerun setup.sh")
+        with contextlib.suppress(FileNotFoundError):
+            remove_entry(top, WINDOW_FLAG)
     finally:
         os.close(top)
     return said

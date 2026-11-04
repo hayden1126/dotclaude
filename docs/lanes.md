@@ -909,10 +909,12 @@ find out who made it before anything else runs git in that repo.
   when the settings it replaces lack a rule, turns every marker pending once the new settings
   are in, and removes whatever there, or at the stores' `.lock`, is no regular file (a FIFO at a
   lock would hang a run). Each lane it names must be redone (`lane done <id> --abandon`, then
-  `lane new`). A flag in the stores' dir carries the demotion to the next run if one stops
-  between its settings copy and the demotion. Still open: a command the sandbox started during
-  the window keeps its write access there until it exits, since its mounts were set at its
-  start.
+  `lane new`). A flag setup.sh leaves in the stores' dir before its settings copy makes `new`,
+  `adopt` and sync-main refuse until the demotion is done, and carries it to the next run if one
+  stops in between; an entry the demotion can't fix keeps the flag and is named. Still open: a
+  command the sandbox started during the window keeps its write access there until it exits,
+  since its mounts were set at its start; and a pending marker deleted during the window can't
+  be brought back, so `open` no longer refuses that lane on the marker's word.
 - The stores' dir is out of every lane's write reach but not its read reach, so a lane's sandbox
   can take a lane's finishing lock and hold it. While it does, `new` (of that id), `adopt`,
   `open` and `done` of that lane refuse. That denies service and runs nothing, like a held lanes
@@ -983,7 +985,8 @@ as it fails sync-main's compare. Both stores fetch with no global or system conf
 there (`gh auth setup-git`'s, for one). Nothing else from those files reaches the fetch (no
 `url.<base>.insteadOf` or `http.*` key), no include is followed, and a credential key
 in the repo's or a worktree's config never counts: no lane's sandbox can write the global or
-system config, and any lane can write a worktree's.
+system config, and any lane can write a worktree's. Reading those keys takes git 2.26 or later
+(`git config --show-scope`); an older git refuses the fetch and says so.
 
 ## Layout
 
