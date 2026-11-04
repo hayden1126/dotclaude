@@ -172,7 +172,13 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     `--match-head-commit`. coding-practices: reproduce first and commit the failing repro, a
     characterization test before a refactor, verify-this verdicts, deslop checks. writing-voice:
     the PR body template. Open for the lane's plan: a manual quality-lens skill from the Cursor
-    rubric, capped at medium. The report: `~/scratch/external-skills/review-2026-11-04.md`.
+    rubric, capped at medium; ponytail's `shortcut:` marker (Hayden unsure, 2026-11-04; the
+    lead's lean: keep the no-"for now" ban, add only an assumption-comment line). Also in scope
+    (Hayden, 2026-11-04): the reels of instagram.com/youraveragetechbro, first the "How to become
+    a 10x AI-Native Developer" series that named ponytail; transcripts through getthescript.app
+    ([[instagram-reel-transcripts]]); the profile's reel list may need a login, so ask Hayden
+    for the URLs if WebFetch can't list them. Fold any further tools they name into the same
+    adopt / take ideas / skip review. The report: `~/scratch/external-skills/review-2026-11-04.md`.
   - **Next lane when a slot frees (Hayden's pick):** the serve jail (it closes live private
     rows), shared lane locks or structured `Keep open`, all on the lane CLI files lane ports'
     PR 2 also changes (`lane trial` early); or DA17, which can open any time.
