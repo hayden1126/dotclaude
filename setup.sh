@@ -310,7 +310,7 @@ if said:
           file=sys.stderr)
 PY
   [[ $demoted -eq 0 ]] \
-    || warn "demoting the markers in $verified_dir failed (see above): lane new, adopt and sync-main refuse until a rerun of setup.sh finishes it"
+    || warn "demoting the markers in $verified_dir failed: see the lines above for what still refuses"
 fi
 link "$REPO_DIR/CLAUDE.md"       "$CLAUDE_DIR/CLAUDE.md"
 link "$REPO_DIR/notify-toast.ps1" "$CLAUDE_DIR/notify-toast.ps1"

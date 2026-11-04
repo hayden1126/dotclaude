@@ -911,7 +911,9 @@ find out who made it before anything else runs git in that repo.
   lock would hang a run). Each lane it names must be redone (`lane done <id> --abandon`, then
   `lane new`). A flag setup.sh leaves in the stores' dir before its settings copy makes `new`,
   `adopt` and sync-main refuse until the demotion is done, and carries it to the next run if one
-  stops in between; an entry the demotion can't fix keeps the flag and is named. Still open: a
+  stops in between; the demotion makes the flag too, before it starts, and an entry it
+  can't fix keeps the flag and is named (with no flag at all, say on a full disk, it says
+  nothing refuses). Still open: a
   command the sandbox started during the window keeps its write access there until it exits,
   since its mounts were set at its start; and a pending marker deleted during the window can't
   be brought back, so `open` no longer refuses that lane on the marker's word.

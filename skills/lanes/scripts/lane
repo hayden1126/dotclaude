@@ -6064,13 +6064,18 @@ def open_window(home: str) -> None:
     stops in between leaves the demotion for the next one."""
     top = verified_dir(home, os.path.join(home, VERIFIED_REL))
     try:
-        with contextlib.suppress(FileNotFoundError):
-            if not stat.S_ISREG(os.stat(WINDOW_FLAG, dir_fd=top, follow_symlinks=False).st_mode):
-                remove_entry(top, WINDOW_FLAG)
-        os.close(os.open(WINDOW_FLAG, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
-                         | os.O_CLOEXEC, 0o600, dir_fd=top))
+        mark_window(top)
     finally:
         os.close(top)
+
+
+def mark_window(top: int) -> None:
+    """WINDOW_FLAG in the stores' dir open at top, a regular file made by fd (open_window)."""
+    with contextlib.suppress(FileNotFoundError):
+        if not stat.S_ISREG(os.stat(WINDOW_FLAG, dir_fd=top, follow_symlinks=False).st_mode):
+            remove_entry(top, WINDOW_FLAG)
+    os.close(os.open(WINDOW_FLAG, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
+                     | os.O_CLOEXEC, 0o600, dir_fd=top))
 
 
 def demote_marks(home: str) -> list[str]:
@@ -6081,13 +6086,21 @@ def demote_marks(home: str) -> list[str]:
     becomes pending (adopt and open refuse it, `done --abandon` clears it), and whatever there,
     or at the stores' .lock, is no regular file goes. Regular .lock files stay: a held one only
     refuses. A marker that can't be read is overwritten all the same (the rename needs only the
-    dir). One entry that fails never stops the rest: once all are tried, any failure raises,
-    naming each, and WINDOW_FLAG stays, so store_rules keeps refusing; with none, the flag goes.
+    dir). WINDOW_FLAG is made first (open_window may have failed), so a run that fails partway
+    leaves it. One entry that fails never stops the rest: once all are tried, any failure
+    raises, naming each, and the flag stays, so store_rules keeps refusing and the next install
+    tries again; with none, the flag goes.
     Returns one masked line per change. A process the sandbox started while the rules were off
     keeps its write access until it exits: docs/lanes.md's Residuals."""
     verified = os.path.join(home, VERIFIED_REL)
     top = verified_dir(home, verified)
     said, failed = [], []
+    try:
+        mark_window(top)
+        flagged = True
+    except OSError as e:
+        flagged = False
+        failed.append(shown(f"{verified}/{WINDOW_FLAG} couldn't be made ({e.strerror or e})"))
 
     def drop(parent: int, name: str, where: str) -> None:
         try:
@@ -6151,9 +6164,12 @@ def demote_marks(home: str) -> list[str]:
             finally:
                 os.close(fd)
         if failed:
+            then = (f"lane new, adopt and sync-main keep refusing while {WINDOW_FLAG} is there, "
+                    "and the next setup.sh tries again" if flagged else
+                    "and with no flag, nothing refuses and no later install retries: fix "
+                    f"these and make {WINDOW_FLAG} there by hand before any lane adopt")
             raise LaneError(f"{len(failed)} entries in {verified} couldn't be fixed after the "
-                            "window, so lane new, adopt and sync-main keep refusing while "
-                            f"{WINDOW_FLAG} is there:" + "".join(f"\n  {f}" for f in failed)
+                            f"window, {then}:" + "".join(f"\n  {f}" for f in failed)
                             + "\nFix each by hand, then rerun setup.sh")
         with contextlib.suppress(FileNotFoundError):
             remove_entry(top, WINDOW_FLAG)

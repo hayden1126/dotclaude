@@ -1075,9 +1075,17 @@ class VerifiedWindow(unittest.TestCase):
         self.live({})
         p = self.run_setup()
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn("refuse until a rerun of setup.sh", p.stderr)
+        self.assertIn("keep refusing while .demote-pending is there", p.stderr)
         self.assertIs(self.verified_field(path), False)
         self.assertTrue(os.path.isfile(self.flag))
+
+    def test_detection_comes_before_the_settings_copy_and_demotion_after(self):
+        # The blocks run here in the test's own order: this pins setup.sh's.
+        with open(os.path.join(REPO, "setup.sh")) as f:
+            src = f.read()
+        copy = src.index('copy_managed "$MERGED_SETTINGS" "$CLAUDE_DIR/settings.json"')
+        self.assertLess(src.index(self.DETECT), copy)
+        self.assertLess(copy, src.index(self.DEMOTE))
 
     def test_a_window_with_no_markers_says_nothing(self):
         self.live({})

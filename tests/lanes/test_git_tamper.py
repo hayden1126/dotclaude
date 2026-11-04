@@ -1209,6 +1209,36 @@ class WindowDemotion(LanesRepo):
         self.assertFalse(os.path.lexists(flag))
         self.lane("new", "chart-fix")
 
+    def test_a_failed_demotion_leaves_the_flag_even_with_none_before(self):
+        # Round 15: open_window failed (a full disk, say) and the demotion failed too; the
+        # demotion makes the flag itself first, so the next install still retries.
+        os.makedirs(os.path.join(self.marks_dir, "k-a.json", "locked", "x"))
+        locked = os.path.join(self.marks_dir, "k-a.json", "locked")
+        os.chmod(locked, 0)
+        self.addCleanup(lambda: os.path.isdir(locked) and os.chmod(locked, 0o700))
+        flag = os.path.join(self.verified, ".demote-pending")
+        self.assertFalse(os.path.lexists(flag))
+        with self.assertRaises(self.mod.LaneError) as e:
+            self.demote()
+        self.assertIn("keep refusing", str(e.exception))
+        self.assertTrue(os.path.isfile(flag))
+
+    def test_no_flag_at_all_says_nothing_refuses(self):
+        os.makedirs(self.marks_dir)
+        real = os.open
+
+        def no_flag(path, *a, **k):
+            if path == ".demote-pending":
+                raise OSError(28, "No space left on device")
+            return real(path, *a, **k)
+        self.write(os.path.join(self.marks_dir, "k-z.json"), '{"verified": true}')
+        with mock.patch.object(self.mod.os, "open", no_flag):
+            with self.assertRaises(self.mod.LaneError) as e:
+                self.demote()
+        self.assertIn("nothing refuses", str(e.exception))
+        self.assertIs(json.loads(self.read(os.path.join(self.marks_dir, "k-z.json")))["verified"],
+                      False)
+
     def test_the_flag_refuses_adopt_until_the_demotion(self):
         # Between setup.sh's settings copy and its demotion, a planted verified marker would
         # pass store_rules: the flag open_window left before the copy refuses meanwhile.
