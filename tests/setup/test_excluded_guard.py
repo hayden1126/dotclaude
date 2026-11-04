@@ -10,6 +10,7 @@ protected by location.
 import concurrent.futures
 import contextlib
 import glob
+import hashlib
 import importlib.util
 import io
 import json
@@ -434,11 +435,13 @@ class Rule1PathArguments(Guard):
         self.refused(f'pass-respawn -C "{self.other};x"')
 
     def test_lanes_own_fetch_needs_origin_configured(self):
-        # lane new, done and park run their own `git fetch ... origin` (review round 2): as for
+        # lane new, done, park and sync-main run their own `git fetch` (review round 2): as for
         # a git call naming no repository, origin must name a remote the config surely defines.
         self.write_settings({"excludedCommands": EXCLUDED + self.PATH_HEADS + [
-            "lane new *", "lane done", "lane done *", "lane park *"]})
-        calls = ("lane new x", "lane done", "lane done x", "lane park x")
+            "lane new *", "lane done", "lane done *", "lane park *", "lane sync-main",
+            "lane sync-main *"]})
+        calls = ("lane new x", "lane done", "lane done x", "lane park x", "lane sync-main",
+                 "lane sync-main 42")
         for call in calls:
             with self.subTest(call=call):
                 self.allowed(call)
@@ -1754,6 +1757,94 @@ def parse_git_help(text):
         if m["s"]:
             short[m["s"]] = (kind, m["l"])
     return long, short
+
+
+class LanesTamper(Guard):
+    """In a lanes repo any lane's sandboxed Bash can write the shared git common dir, and the
+    next unsandboxed git that writes there follows what it planted (DA15/DA16, LR3, LR4, LR5).
+    git fetch, pull and push, and the gh forms that run them, are refused while
+    lanelib.repo_tamper reports anything; a plain repo is left as it was."""
+
+    FORMS = ["git fetch", "git fetch *", "git pull", "git pull *", "git push *", "gh issue *",
+             "git ls-remote *"]
+    WRITERS = ("git fetch", "git fetch origin", "git fetch -q origin main", "git pull",
+               "git pull --ff-only", "git push", "git push origin lane", "gh pr checkout 5",
+               "gh pr co 5", "gh pr merge 5 --squash", "gh issue develop 3 --checkout",
+               "gh pr create --fill", "gh pr view 5; git fetch origin")
+    READERS = ("git ls-remote origin", "gh pr view 5", "gh pr list")
+
+    def setUp(self):
+        super().setUp()
+        self.write_settings({"excludedCommands": EXCLUDED + self.FORMS})
+        common = os.path.realpath(os.path.join(self.proj, ".git"))
+        key = hashlib.sha256(common.encode()).hexdigest()[:12]
+        self.lanes_config = os.path.join(self.tmp, "state", "dotclaude", "lanes",
+                                         f"proj-{key}.toml")
+
+    def make_lanes_repo(self):
+        self.write(self.lanes_config, "")
+
+    def plant_replace_ref(self):
+        head = self.git("rev-parse", "HEAD", cwd=self.proj).strip()
+        ref = f"refs/replace/{head}"
+        self.write(os.path.join(self.proj, ".git", ref), head + "\n")
+        return ref
+
+    def test_a_planted_replace_ref_refuses_the_writers_in_a_lanes_repo(self):
+        self.make_lanes_repo()
+        ref = self.plant_replace_ref()
+        for cwd in (self.proj, self.lane):
+            for call in self.WRITERS:
+                with self.subTest(call=call, cwd=cwd):
+                    self.env["CLAUDE_PROJECT_DIR"] = cwd
+                    reason = self.denied(call, "tamper", ref, cwd=cwd)
+                    self.assertIn("finds out who planted", reason)
+                    self.assertIn("LR5", reason)
+        self.assertIn("deny tamper", self.log())
+
+    def test_every_finding_is_named_masked(self):
+        self.make_lanes_repo()
+        ref = self.plant_replace_ref()
+        os.symlink(self.tmp, os.path.join(self.proj, ".git", "worktrees", "evil\x1bx"))
+        reason = self.denied("git fetch origin", "tamper", ref)
+        self.assertIn("worktrees/evil?x", reason)
+        self.assertNotIn("\x1b", reason)
+
+    def test_readers_stay_allowed_in_a_tampered_lanes_repo(self):
+        # git ls-remote writes nothing into the git dir; gh's other forms run git only to read.
+        self.make_lanes_repo()
+        self.plant_replace_ref()
+        for call in self.READERS:
+            with self.subTest(call=call):
+                self.allowed(call)
+
+    def test_a_plain_repo_with_the_same_plant_is_untouched(self):
+        self.plant_replace_ref()
+        for call in self.WRITERS + self.READERS:
+            with self.subTest(call=call):
+                self.allowed(call)
+
+    def test_a_clean_lanes_repo_passes(self):
+        self.make_lanes_repo()
+        for call in self.WRITERS + self.READERS:
+            with self.subTest(call=call):
+                self.allowed(call)
+
+    def test_a_tamper_check_that_raises_refuses(self):
+        self.make_lanes_repo()
+        guard = load_guard()
+        lib = guard.lanelib()
+        event = {"session_id": "s1", "tool_name": "Bash", "cwd": self.proj,
+                 "tool_input": {"command": "git fetch origin"}}
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(lib, "repo_tamper", side_effect=OSError("boom")), \
+                mock.patch("sys.stdin", io.StringIO(json.dumps(event))), \
+                contextlib.redirect_stdout(out):
+            guard.main()
+        reason = json.loads(out.getvalue())["hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertIn("(tamper)", reason)
+        self.assertIn("boom", reason)
 
 
 class GitOptionTables(unittest.TestCase):

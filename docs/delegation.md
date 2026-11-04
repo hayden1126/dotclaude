@@ -325,7 +325,7 @@ For a match it refuses, naming the path, when:
    it is refused unless each such value in the config chain and `origin` name a remote the
    config surely defines, since git reads any other name from a legacy remote file planted
    after the check. Name the remote on the command line or configure it. `lane new`, `lane
-   done` and `lane park` run their own fetch of `origin`, so they are refused unless `origin`
+   done`, `lane park` and `lane sync-main` run their own fetch of `origin`, so they are refused unless `origin`
    names such a remote too. Each such value that
    names no remote is also judged as a path, as a remote URL is. A `file://` URL with a host part or a
    `%`-escape is refused. An option of those git calls that names a program for git to run, an
@@ -358,7 +358,16 @@ For a match it refuses, naming the path, when:
    `includeIf` file), which doesn't count. `gh pr checkout --recurse-submodules` is refused in
    every spelling gh takes but a false `=` value. `./setup.sh` sets
    `fetch.recurseSubmodules false` in the global config on every run and warns when
-   `submodule.recurse` is true there, and `lane`'s own fetches pass the flag. The
+   `submodule.recurse` is true there, and `lane`'s own fetches pass the flag. In a lanes repo,
+   those same calls (`git fetch`, `pull` and `push`, and the `gh` forms that run them) are
+   refused while `lanelib.repo_tamper` finds anything in the shared git common dir, naming each
+   finding: any lane's sandboxed Bash can write that dir, and git run outside the sandbox writes
+   through what it planted (a reflog or `worktrees/` symlink, a `FETCH_HEAD` symlink, which no
+   git setting stops it writing, a link under `refs/`) or serves a replace ref's content
+   (DA15/DA16, LR3, LR4, LR5, LR6).
+   They stay refused until someone finds out who planted it and removes it; an error in the
+   check refuses too. `git ls-remote` and gh's other forms write nothing there, and a repo
+   without lanes is left alone. The
    other config git reads must be write-protected: the global and XDG files (or
    `GIT_CONFIG_GLOBAL`), `/etc/gitconfig` (or `GIT_CONFIG_SYSTEM`, skipped under
    `GIT_CONFIG_NOSYSTEM`; either variable set but empty names no file, as git reads it), every `include.path` and `includeIf` target (a relative one from the

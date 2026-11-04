@@ -308,7 +308,7 @@ class Ctx(Lead):
         rec = {"tokens": tokens, "time": time.time()}  # wall clock
         if window is not None:
             rec["window"] = window
-        self.write(os.path.join(self.tmp, "state", "dotclaude", "ctx", sid + ".json"),
+        self.write(os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "ctx", sid + ".json"),
                    json.dumps(rec))
 
     def board(self):
@@ -369,7 +369,7 @@ class Ctx(Lead):
         self.assertEqual(self.board()[0], "160k")  # lane's own config dir: 600k
         cfg = os.path.join(self.tmp, "other-config")
         self.write(os.path.join(cfg, "settings.json"), json.dumps({"autoCompactWindow": 200000}))
-        self.write(os.path.join(self.tmp, "state", "dotclaude", "stops", "s-1.json"),
+        self.write(os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "stops", "s-1.json"),
                    json.dumps({"session_id": "s-1", "time": time.time(),  # wall clock
                                "transcript_path": os.path.join(cfg, "projects", "p", "s-1.jsonl")}))
         self.assertEqual(self.board()[0], "160k!")  # its stop record's config dir: 200k
@@ -397,7 +397,7 @@ class Ctx(Lead):
     def test_a_bad_count_or_session_id_is_skipped(self):
         self.session(os.getpid(), "../s-1")
         self.session(os.getppid(), "s-2")
-        self.write(os.path.join(self.tmp, "state", "dotclaude", "s-1.json"),
+        self.write(os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "s-1.json"),
                    json.dumps({"tokens": 999999}))
         self.ctx("s-2", "lots")
         self.assertEqual(self.board(), ("-", None))

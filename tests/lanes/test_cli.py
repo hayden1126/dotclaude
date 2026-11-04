@@ -667,6 +667,14 @@ class RoundTrip(LanesRepo):
         self.write(os.path.join(decoy, "gitdir"), os.path.join(
             path, ".lane-trial", f"lane-trial-{key}-spike-efgh5678", "tree", ".git") + "\n")
         os.symlink(decoy, os.path.join(self.common, "worktrees", "decoy"))
+        # The tripwire at done's start refuses on that link first (LR3, LR4), touching nothing.
+        p = self.run_lane("done", "spike", "--abandon")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("worktrees/decoy is a symlink", p.stderr)
+        self.assertTrue(os.path.isdir(path))
+        # With the link gone, done runs, and its cleanup still never follows the tree swapped
+        # for a link.
+        os.unlink(os.path.join(self.common, "worktrees", "decoy"))
         p = self.run_lane("done", "spike", "--abandon")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertFalse(os.path.exists(path))
@@ -1488,6 +1496,13 @@ class RecordTrust(LanesRepo):
         self.assertEqual(self.read(victim), "keep\n")
         self.assertIn("bad branch", p.stderr)
 
+    def test_a_record_naming_the_main_checkout_never_makes_it_that_lane(self):
+        # LR1: from main, whoami says main, and `ls` names the record it left out.
+        self.plant("forged", id="forged", path=self.main)
+        info = json.loads(self.lane("whoami", "--json"))
+        self.assertEqual((info["identity"], info["kind"]), ("main", "main"))
+        self.assertIn("left out lanes/forged", self.run_lane("ls").stderr)
+
     def test_a_record_of_the_wrong_shape_is_left_out(self):
         for field, value in (("base_sha", "HEAD"), ("port", "80; x"), ("claims", ["#1 x"]),
                              ("path", "rel/path"), ("sessions", ["x"])):
@@ -1502,12 +1517,16 @@ class RecordTrust(LanesRepo):
         os.makedirs(os.path.join(decoy, ".claude"))
         nested = os.path.join(self.lane_path("chart-fix"), "nested")
         os.makedirs(nested)
-        for path in (decoy, nested, self.tmp):
+        # A path in or holding the main checkout is left out at load (record_problem, LR1); one
+        # inside another lane passes the load and is refused before anything acts in it.
+        for path, why in ((decoy, "lanes/chart-fix/lane.json: its path"),
+                          (nested, "refusing lane chart-fix"),
+                          (self.tmp, "lanes/chart-fix/lane.json: its path")):
             with self.subTest(path=path):
                 self.plant("chart-fix", path=path)
                 p = self.run_lane("open", "chart-fix", "--print")
                 self.assertEqual(p.returncode, 1)
-                self.assertIn("refusing lane chart-fix", p.stderr)
+                self.assertIn(why, p.stderr)
                 self.assertEqual(self.run_lane("done", "chart-fix", "--abandon").returncode, 1)
 
     def test_new_branches_from_the_remote_not_a_planted_ref(self):
@@ -1718,7 +1737,7 @@ class Fakes(LanesRepo):
             "## Next\n", "## Next\n- Nothing left: the lane is done.\n"))
 
     def open_session_entry(self, sid, cwd):
-        path = os.path.join(self.tmp, "state", "dotclaude", "open-sessions", f"{sid}.json")
+        path = os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "open-sessions", f"{sid}.json")
         self.write(path, json.dumps({"session_id": sid, "cwd": cwd, "pane": "%1"}))
         return path
 
@@ -2076,7 +2095,7 @@ class Close(Fakes):
 
     def proof(self):
         """The glob of lane chart-fix's recorded proof (Repo.closing_path) in the temp state."""
-        return os.path.join(self.tmp, "state", "dotclaude", "lanes", "*.closing", "chart-fix.json")
+        return os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "lanes", "*.closing", "chart-fix.json")
 
     def refused_mid_close(self):
         """The 2026-10-15 shape (lane two-sessions), first run: as its session ends, the pane
@@ -2258,7 +2277,7 @@ class Close(Fakes):
         # The lane is marked closing by then, and a rerun once the record can be written closes.
         self.hand_off()
         (claude,) = self.claude()
-        (config,) = glob.glob(os.path.join(self.tmp, "state", "dotclaude", "lanes", "*.toml"))
+        (config,) = glob.glob(os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "lanes", "*.toml"))
         blocker = config.removesuffix(".toml") + ".closing"
         self.write(blocker, "")  # a file where its dir goes
         p = self.run_lane("done", "chart-fix", "--abandon")
@@ -2743,7 +2762,7 @@ class Close(Fakes):
 
     def test_done_waits_for_a_running_install_then_refuses(self):
         lane_mod = load_lane_script()
-        state = os.path.join(self.tmp, "state", "dotclaude")
+        state = os.path.join(self.env["XDG_STATE_HOME"], "dotclaude")
         os.makedirs(state, exist_ok=True)
         fd = os.open(os.path.join(state, "install.lock"), os.O_WRONLY | os.O_CREAT, 0o644)
         self.addCleanup(os.close, fd)
@@ -2762,7 +2781,7 @@ class Close(Fakes):
     def test_done_waits_for_an_install_without_holding_the_lanes_lock(self):
         # Every lane's hooks take the lanes lock with a 2 s timeout, so done waits for setup.sh's
         # install.lock first and takes the lanes lock only once it holds that.
-        state = os.path.join(self.tmp, "state", "dotclaude")
+        state = os.path.join(self.env["XDG_STATE_HOME"], "dotclaude")
         os.makedirs(state, exist_ok=True)
         fd = os.open(os.path.join(state, "install.lock"), os.O_WRONLY | os.O_CREAT, 0o644)
         self.addCleanup(os.close, fd)
@@ -3822,17 +3841,32 @@ class FetchNoRecursion(unittest.TestCase):
     sandboxed session can write) must not get git run in it, so each turns recursion off."""
 
     def test_every_fetch_lane_runs_skips_submodules(self):
+        # And never starts `gc --auto` (LR3): each also takes NO_AUTO_GC's keys and
+        # --no-auto-maintenance. A *NAME in the args list is expanded from the module.
         import ast
+        mod = load_lane_script()
         with open(LANE) as f:
             tree = ast.parse(f.read())
+
+        def words(call):
+            out = []
+            for e in call.elts:
+                if isinstance(e, ast.Starred) and isinstance(e.value, ast.Name):
+                    out += list(getattr(mod, e.value.id))
+                else:
+                    out.append(getattr(e, "value", None))
+            return out
         fetches = [node.args[0] for node in ast.walk(tree)
                    if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "git"
-                   and node.args and isinstance(node.args[0], ast.List) and node.args[0].elts
-                   and getattr(node.args[0].elts[0], "value", None) == "fetch"]
+                   and node.args and isinstance(node.args[0], ast.List)
+                   and "fetch" in words(node.args[0])]
         self.assertEqual(len(fetches), 3)  # fetch(), fetched_base, remote_tip
         for call in fetches:
-            words = [getattr(e, "value", None) for e in call.elts]
-            self.assertIn("--no-recurse-submodules", words, ast.unparse(call))
+            got = words(call)
+            for want in ("--no-recurse-submodules", "--no-auto-maintenance", "gc.auto=0",
+                         "maintenance.auto=false"):
+                self.assertIn(want, got, ast.unparse(call))
+            self.assertLess(got.index("maintenance.auto=false"), got.index("fetch"))
 
 
 class ExcludedGuardRules(LanesRepo):

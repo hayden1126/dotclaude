@@ -251,7 +251,7 @@ class Base(LanesRepo):
         patch = mock.patch.dict(os.environ, self.env, clear=True)
         patch.start()
         self.addCleanup(patch.stop)
-        self.state = os.path.join(self.tmp, "state", "dotclaude")
+        self.state = os.path.join(self.env["XDG_STATE_HOME"], "dotclaude")  # the fixture's pick
         self.sessions = os.path.join(self.home, ".claude", "sessions")
         self.started = time.time() - 60  # wall clock
         self.session_cwd = self.main

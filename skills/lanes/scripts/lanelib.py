@@ -40,6 +40,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import tomllib
@@ -450,11 +451,12 @@ class Repo:
         name their own path, so they leave this checkout unregistered."""
         if not self.has_lanes:
             return "plain", None
+        # Main first: sandboxed Bash can write any lane.json, so no record may name main (LR1).
+        if self.is_main:
+            return "main", None
         lane = self.lane_at(self.toplevel, lanes)
         if lane:
             return "lane", lane
-        if self.is_main:
-            return "main", None
         # self.rejected is the lanes() call's that lane_at matched against. A rejected record
         # may be this checkout's, so outside main it isn't told from one: Untrusted.
         top = os.path.realpath(self.toplevel)
@@ -624,6 +626,287 @@ def real_dir_at(dir_fd: int, name: str) -> bool:
         return stat.S_ISDIR(os.stat(name, dir_fd=dir_fd, follow_symlinks=False).st_mode)
     except FileNotFoundError:
         return False
+
+
+SHOWN = re.compile(r"[\x00-\x1f\x7f-\x9f]")  # C0, DEL and C1: masked in what lane tools print
+
+
+def shown(text: str) -> str:
+    """text with its control characters (SHOWN) masked, fit for a terminal."""
+    return SHOWN.sub("?", text)
+
+
+def git_tamper(common_dir: str) -> list[str]:
+    """The tripwire for DA15/DA16: one plain reason per sign that the git common dir may make
+    git serve content other than what the remote showed, [] when there is none. Sandboxed Bash
+    in any lane can write the common dir. It flags any replace ref (loose under refs/replace/ or
+    a packed-refs line), a non-blank objects/info/alternates (the file exists empty in a normal
+    repo) or info/attributes (checkout conversions no config turns off), an info/grafts or
+    shallow file existing at all, and a commondir of any type: a real common dir never holds
+    one, and git follows one in any git dir, a main checkout's .git too, to name another dir as
+    the common dir (so a caller handed git's answer would check that dir; repo_tamper checks the
+    checkout's own .git as well). It also flags a symlink directly under worktrees/ (LR3: gc's
+    `worktree prune` deletes through it) and one anywhere under logs/ or a worktree's logs/
+    (LR4: a reflog write follows it), a symlink directly in common_dir (LR5: a fetch writes
+    FETCH_HEAD through it), and a symlink anywhere
+    under refs/ (LR6: update-ref creates a ref file through it). Nothing below
+    common_dir is
+    followed: each name opens by fd with O_NOFOLLOW (open_dir), so a symlink is a finding in
+    itself. Fails closed: whatever can't be read is a finding, never clean. `lane ls`,
+    handoff-check and setup.sh (through this file's `git-tamper` command) call it. Each reason
+    comes masked (shown): a replace ref's name and a packed-refs line are a lane's to choose."""
+    return [shown(r) for r in _tamper(common_dir)]
+
+
+def repo_tamper(repo: "Repo") -> list[str]:
+    """git_tamper for repo's common dir and for the .git dir of its main checkout and of its
+    toplevel where each is a dir: repo.common_dir is git's answer, which a commondir file planted
+    in that .git redirects to a clean dir. A finding outside the common dir names its dir."""
+    seen, reasons = set(), []
+    for d in (repo.common_dir, os.path.join(repo.main, ".git"),
+              os.path.join(repo.toplevel, ".git")):
+        if d != repo.common_dir and not os.path.isdir(d):
+            continue  # a worktree's gitfile, or no checkout there
+        if (key := os.path.realpath(d)) in seen:
+            continue
+        seen.add(key)
+        found = git_tamper(d)
+        reasons += found if d == repo.common_dir else [f"{shown(d)}: {r}" for r in found]
+    return reasons
+
+
+def _tamper(common_dir: str) -> list[str]:
+    try:
+        root = os.open(common_dir, os.O_RDONLY | os.O_DIRECTORY)
+    except OSError as e:
+        return [f"the git common dir {common_dir} can't be opened ({e.strerror or e}): "
+                "counted as tampered"]
+    checks = (("", _top_links), ("refs/replace", _replace_refs), ("packed-refs", _packed_replace),
+              ("objects/info/alternates", _nonblank), ("info/attributes", _nonblank),
+              ("info/grafts", _exists), ("shallow", _exists), ("commondir", _exists),
+              ("worktrees", _worktree_links), ("logs", _log_links), ("refs", _ref_links))
+    reasons = []
+    try:
+        for rel, check in checks:
+            try:
+                reasons += check(root, rel)
+            except OSError as e:
+                reasons.append(f"{rel or 'the top level'} can't be checked ({e.strerror or e}): "
+                               "counted as tampered")
+    finally:
+        os.close(root)
+    return reasons
+
+
+def _parent(root: int, rel: str) -> tuple[int, str] | None:
+    """(fd of rel's dir, rel's last name), the dir opened from root without following; None when
+    a dir on the way is missing. The caller closes the fd."""
+    head, name = os.path.split(rel)
+    try:
+        return open_dir(root, head), name
+    except FileNotFoundError:
+        return None
+
+
+def _lstat(dir_fd: int, name: str) -> os.stat_result | None:
+    try:
+        return os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+
+
+def read_nofollow(root: int, rel: str) -> bytes | None:
+    """rel's bytes, None when it is missing. A symlink or anything but a regular file raises."""
+    if (at := _parent(root, rel)) is None:
+        return None
+    fd, name = at
+    try:
+        st = _lstat(fd, name)
+        if st is None:
+            return None
+        if not stat.S_ISREG(st.st_mode):
+            kind = "a symlink" if stat.S_ISLNK(st.st_mode) else "not a regular file"
+            raise OSError(errno.EINVAL, f"it is {kind}")
+        # O_NOFOLLOW: a link swapped in after the lstat fails; O_NONBLOCK: a fifo never hangs.
+        f = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+    finally:
+        os.close(fd)
+    with open(f, "rb") as fh:
+        if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+            raise OSError(errno.EINVAL, "it is not a regular file")
+        return fh.read()
+
+
+def _top_links(root: int, rel: str) -> list[str]:
+    """LR5: each symlink directly in the common dir, which a real one never holds: git, run
+    sandbox-off, writes FETCH_HEAD, ORIG_HEAD, packed-refs, index and the rest through a planted
+    link. Only links: inside a sandboxed run, the sandbox's /dev/null mounts over protected
+    paths (config.lock) read as char devices, and a fifo redirects no write to a file."""
+    found = []
+    for n in sorted(os.listdir(root)):
+        st = _lstat(root, n)
+        if st is not None and stat.S_ISLNK(st.st_mode):
+            found.append(f"{n} is a symlink: git, run outside the sandbox, writes the files at "
+                         "the common dir's top through a link")
+    return found
+
+
+def _replace_refs(root: int, rel: str) -> list[str]:
+    if (at := _parent(root, rel)) is None:
+        return []
+    fd, name = at
+    found = []
+    try:
+        _replace_walk(fd, name, rel, found)
+    finally:
+        os.close(fd)
+    return found
+
+
+def _replace_walk(dir_fd: int, name: str, path: str, found: list[str], depth: int = 0) -> None:
+    """Each entry under refs/replace/ but an empty dir is a finding."""
+    st = _lstat(dir_fd, name)
+    if st is None:
+        return
+    if stat.S_ISLNK(st.st_mode):
+        found.append(f"{path} is a symlink")
+    elif not stat.S_ISDIR(st.st_mode):
+        found.append(f"{path} exists: a replace ref makes git serve another object in place of "
+                     "the one it names")
+    elif depth > 32:
+        raise OSError(errno.ELOOP, f"{path} is nested too deep")
+    else:
+        sub = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dir_fd)
+        try:
+            for n in sorted(os.listdir(sub)):
+                _replace_walk(sub, n, f"{path}/{n}", found, depth + 1)
+        finally:
+            os.close(sub)
+
+
+def _worktree_links(root: int, rel: str) -> list[str]:
+    """LR3: each entry under worktrees/ that is a symlink (a real one is always a dir), and the
+    links under each entry's logs/ (_link_walk). `git worktree prune`, which `gc --auto` runs,
+    deletes the contents of what such a link points at."""
+    if (at := _parent(root, rel)) is None:
+        return []
+    fd, name = at
+    try:
+        st = _lstat(fd, name)
+        if st is None:
+            return []
+        if not stat.S_ISDIR(st.st_mode):
+            kind = "a symlink" if stat.S_ISLNK(st.st_mode) else "not a dir"
+            return [f"{rel} is {kind}: git worktree prune would delete through it"]
+        sub = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+    finally:
+        os.close(fd)
+    found = []
+    try:
+        for n in sorted(os.listdir(sub)):
+            st = _lstat(sub, n)
+            if st is not None and stat.S_ISLNK(st.st_mode):
+                found.append(f"{rel}/{n} is a symlink: an entry there is always a dir, and git "
+                             "worktree prune deletes through a link")
+            elif st is not None and stat.S_ISDIR(st.st_mode):
+                entry = os.open(n, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=sub)
+                try:
+                    _link_walk(entry, "logs", f"{rel}/{n}/logs", found)
+                finally:
+                    os.close(entry)
+    finally:
+        os.close(sub)
+    return found
+
+
+def _log_links(root: int, rel: str) -> list[str]:
+    """LR4: each symlink anywhere under logs/, through which git, run sandbox-off, would append
+    a reflog line to whatever it points at."""
+    if (at := _parent(root, rel)) is None:
+        return []
+    fd, name = at
+    found = []
+    try:
+        _link_walk(fd, name, rel, found)
+    finally:
+        os.close(fd)
+    return found
+
+
+def _ref_links(root: int, rel: str) -> list[str]:
+    """LR6: each symlink anywhere under refs/, through which update-ref or a fetch, run
+    sandbox-off, would create or rewrite a ref file in whatever dir it points at (refs/replace/
+    has its own check, which flags every entry)."""
+    if (at := _parent(root, rel)) is None:
+        return []
+    fd, name = at
+    found = []
+    try:
+        _link_walk(fd, name, rel, found, why="a ref write outside the sandbox would follow it")
+    finally:
+        os.close(fd)
+    return found
+
+
+REFLOG_WHY = "a reflog write outside the sandbox would follow it"
+
+
+def _link_walk(dir_fd: int, name: str, path: str, found: list[str], depth: int = 0,
+               why: str = REFLOG_WHY) -> None:
+    """Each symlink at or below name is a finding (why says what follows it); a dir that can't
+    be listed is one too."""
+    try:
+        st = _lstat(dir_fd, name)
+        if st is None:
+            return
+        if stat.S_ISLNK(st.st_mode):
+            found.append(f"{path} is a symlink: {why}")
+            return
+        if not stat.S_ISDIR(st.st_mode):
+            return
+        if depth > 32:
+            raise OSError(errno.ELOOP, "nested too deep")
+        sub = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dir_fd)
+    except OSError as e:
+        found.append(f"{path} can't be checked ({e.strerror or e}): counted as tampered")
+        return
+    try:
+        for n in sorted(os.listdir(sub)):
+            _link_walk(sub, n, f"{path}/{n}", found, depth + 1, why)
+    finally:
+        os.close(sub)
+
+
+def _packed_replace(root: int, rel: str) -> list[str]:
+    data = read_nofollow(root, rel)
+    return [f"{rel} line {n} names a replace ref: {line.decode(errors='replace')[:120]}"
+            for n, line in enumerate((data or b"").splitlines(), 1) if b"refs/replace/" in line]
+
+
+NONBLANK = {"objects/info/alternates": "git also reads objects from the stores it names",
+            "info/attributes": "git converts the files it checks out by its rules"}
+
+
+def _nonblank(root: int, rel: str) -> list[str]:
+    data = read_nofollow(root, rel)
+    return [f"{rel} is not empty: {NONBLANK[rel]}"] if data and data.strip() else []
+
+
+def _exists(root: int, rel: str) -> list[str]:
+    if (at := _parent(root, rel)) is None:
+        return []
+    fd, name = at
+    try:
+        st = _lstat(fd, name)
+    finally:
+        os.close(fd)
+    if st is None:
+        return []
+    what = {"info/grafts": "git rewrites the parents of the commits it names",
+            "shallow": "git treats the commits it names as having no parents",
+            "commondir": "git takes the common dir from the path it names, so what git calls "
+                         "the common dir may be another dir than this one"}[rel]
+    return [f"{rel} exists{' (a symlink)' if stat.S_ISLNK(st.st_mode) else ''}: {what}"]
 
 
 def copy_fd(src: int, out: int) -> None:
@@ -1055,11 +1338,13 @@ class Untrusted(ValueError):
     on it."""
 
 
-def record_problem(lane, lane_id: str) -> str | None:
+def record_problem(lane, lane_id: str, main: str) -> str | None:
     """Why a lane.json can't be trusted, or None. Sandboxed Bash can write every lane.json (the
     sandboxed `claim` and `note` do), and sandbox-off code (the hooks, `ls`, `open`, `done`,
     `new`, `adopt`, `addr`) acts on its fields: the id becomes a path, the branch a git argument, the
-    path a cwd. So each field is checked at load, and a record that fails is never used."""
+    path a cwd. So each field is checked at load, and a record that fails is never used. main is
+    the main checkout: a path that is it, holds it or sits in it names no lane (worktree_problem
+    refuses one there), and would make main, or an agent worktree in it, count as that lane."""
     if not isinstance(lane, dict):
         return "not a JSON object"
     if lane.get("id") != lane_id or not valid_id(lane_id):
@@ -1067,8 +1352,11 @@ def record_problem(lane, lane_id: str) -> str | None:
     if not valid_branch(lane.get("branch")):
         return f"bad branch {lane.get('branch')!r}"
     path = lane.get("path")
-    if not isinstance(path, str) or not os.path.isabs(path) or os.path.normpath(path) != path:
+    if (not isinstance(path, str) or "\0" in path or not os.path.isabs(path)
+            or os.path.normpath(path) != path):
         return f"bad path {path!r}"
+    if inside(path, main) or inside(main, path):
+        return f"its path {path} is, holds or sits in the main checkout {main}"
     sha = lane.get("base_sha")
     if sha is not None and not (isinstance(sha, str) and SHA_RE.fullmatch(sha)):
         return f"bad base_sha {sha!r}"
@@ -1109,7 +1397,7 @@ def read_record(repo: "Repo", lane_id: str) -> dict:
             lane = json.load(f)
         except (ValueError, RecursionError):  # json recurses on nesting
             raise Untrusted(f"lanes/{lane_id}/lane.json is not JSON")
-    if why := record_problem(lane, lane_id):
+    if why := record_problem(lane, lane_id, repo.main):
         raise Untrusted(f"lanes/{lane_id}/lane.json: {why}")
     return lane
 
@@ -2149,3 +2437,19 @@ def lead_relink(repo: Repo, sid: str, pid: int | None = None, proc: str = PROC) 
     others = [s for s in continuations(repo, rec, main_sessions(repo))
               if (s["pid"], proc_start_of(s)) != nearest]
     return None if others or lead_unknown(repo, proc) else why
+
+
+def main(argv: list[str]) -> int:
+    """`lanelib.py git-tamper <common_dir>`: git_tamper's reasons, one a line; exit 1 on any,
+    0 on none, 2 on bad usage. setup.sh runs it (python3 -I) to refuse an install."""
+    if len(argv) != 2 or argv[0] != "git-tamper":
+        print("usage: lanelib.py git-tamper <common_dir>", file=sys.stderr)
+        return 2
+    reasons = git_tamper(argv[1])
+    for r in reasons:
+        print(r)
+    return 1 if reasons else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
