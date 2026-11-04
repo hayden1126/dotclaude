@@ -92,8 +92,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
       device-wide mute").
   - **Live lanes** (briefs in each record). Merge order: 1 hook-isolate (`fix/hook-python-isolated`,
     carries the lead's notes; DA17 parts (a) and (b), Hayden's pick 2026-11-04; small, and it
-    overlaps ports and practices), 2 ports (its PR 2, not yet planned: `lane port claim/who/ls`
-    and the SessionStart "your ports" line, on a fresh branch; its record says `Keep open`),
+    overlaps ports and practices), 2 ports (its PR 2: `lane port ls` and `lane port who`,
+    and the lane's serves in the session-start line, on `feat/lane-port-who`; its last PR),
     3 practices (`feat/practices-auth-secrets`, its next PR; paused 2026-10-24, resumed by
     Hayden 2026-11-04; it conflicts with
     origin/main on its own, per lane-fixes' and ports' trials: README.md and
@@ -248,6 +248,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     `port ls`; (3) `lane serve [--port N] -- <cmd>`: claim, start it in its own session, wait for
     its ready line or death, check the listener's pid is in that session; (4) a SessionStart
     "your ports" line. Hayden's scope (2026-10-29): PR 1 is (3) with (1); (2) and (4) a later PR.
+    PR 1 merged as #155. PR 2 (`feat/lane-port-who`, planned 2026-11-04, Hayden's picks): `lane
+    port ls`, `lane port who <port>`, and the lane's live serves in the session-start line; no
+    `claim` (a claim is advisory: a process that never claims still binds). It also touches
+    settings.json and its test (lane practices changes both). The lane's last PR.
     Only (3)'s listener check closes the silent wrong-server run. Lane-able (`lane`,
     `lanelib.py`, `tests/lanes`, `docs/lanes.md`, the lane-identity hook). The midnight test flake below rides along.
   - **Lanes skill: rebase only at your turn** (capella-studio lead, session 80ab3852, 2026-10-25;
