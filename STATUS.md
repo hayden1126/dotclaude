@@ -161,6 +161,18 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     interpreter paths and state files: design-audit's review rounds 4 and 5 kept finding highs
     beyond its inventory. Findings private. Read-only, like design-audit. In lane sweep
     (2026-11-04).
+  - **Dev-cycle rules from three external skill sets** (Hayden, 2026-11-04: a lane at the next
+    free slot). A researcher read pstack-claude, ponytail and Cursor's
+    thermo-nuclear-code-quality-review (all MIT): install none (pstack's session-start mandate
+    and autonomy rules, and ponytail's always-on hooks and telemetry, contradict CLAUDE.md), port
+    these as text edits. Reviewer agent and delegation brief: a finding survives only with the
+    command that proves it; "no concrete case, no finding"; numbered findings with `Verdict:` and
+    `Not checked:` lines; grep every caller. docs/delegation.md: no independent reviewer, the
+    gate stays closed. docs/lanes.md: a verdict is tied to a head SHA, merge with
+    `--match-head-commit`. coding-practices: reproduce first and commit the failing repro, a
+    characterization test before a refactor, verify-this verdicts, deslop checks. writing-voice:
+    the PR body template. Open for the lane's plan: a manual quality-lens skill from the Cursor
+    rubric, capped at medium. The report: `~/scratch/external-skills/review-2026-11-04.md`.
   - **Next lane when a slot frees (Hayden's pick):** the serve jail (it closes live private
     rows), shared lane locks or structured `Keep open`, all on the lane CLI files lane ports'
     PR 2 also changes (`lane trial` early); or DA17, which can open any time.
@@ -268,7 +280,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     lane practices at resume). SEC-60 covers only adding a dependency. Proposed: a
     per-dependency ledger kept in step by a test, an admission checklist, a production audit in
     PR checks with a triage file, and an update bot with a cooldown. capella's lane `deps` is the
-    pilot. Scope is Hayden's call at resume.
+    pilot. Scope is Hayden's call at resume. Also: ponytail's reuse ladder (codebase, then
+    stdlib or platform, then an installed dependency, then new code; never a dependency for a
+    few lines), from the 2026-11-04 external-skills review below.
   - **Practices suite input: cloudflare/security-audit-skill** (Hayden, 2026-10-27; for lane
     practices at resume). https://github.com/cloudflare/security-audit-skill (MIT): a six-phase
     audit skill (recon, coverage-led hunting, a fresh verifier per candidate, schema-checked
