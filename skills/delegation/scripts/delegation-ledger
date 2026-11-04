@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """delegation-ledger: record delegated agents, and list the ones that never finished.
 
   delegation-ledger hook            SubagentStart/SubagentStop/PostToolUse hook body (stdin:

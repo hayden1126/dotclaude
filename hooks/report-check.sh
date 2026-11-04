@@ -5,5 +5,5 @@
 # FAILS OPEN on purpose: it is an acceptance check,
 # and a broken checker must never swallow a report, so this always exits 0; a rejection is the
 # JSON it prints.
-python3 "$HOME/.claude/skills/delegation/scripts/report-check" 2>/dev/null
+python3 -I "$HOME/.claude/skills/delegation/scripts/report-check" 2>/dev/null
 exit 0

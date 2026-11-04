@@ -414,7 +414,8 @@ home PATH dir needs an Edit deny rule. The baseline names the stock ones; a mach
 (Hayden's `~/hq/bin`, `~/sdk/...`) go in its `settings.machine.json` (Hayden, 2026-10-13:
 machine-wide over this session's roots; 2026-10-14: Edit deny rules over `denyWrite`). A
 sandboxed install into one of them (`bun add -g`, `cargo install`) fails and needs the sandbox
-off.
+off, as does one into `~/.local/lib` (`npm i -g` with prefix `~/.local`, `pip install --user`),
+which is denied because unsandboxed code loads from it.
 
 The cost: no Claude session can edit a protected dir, that repo's own included. Edit one by
 hand, or lift the rule: remove it from `settings.machine.json`, run `./setup.sh`, make the edit,
@@ -469,7 +470,8 @@ Three checks bring a missing rule up before a call hits it:
 Not covered:
 - a session rooted at an ancestor of a repo (at `$HOME`, say) can write that repo's config; the
   guard trusts Claude Code's protection, which covers only the session's own repo;
-- interpreter module paths (user site-packages, `NODE_PATH`), and config keys that name
+- interpreter module paths (user site-packages, `NODE_PATH`; the Python user site is Edit-denied
+  and every Python this repo starts runs `-I`, DA17), and config keys that name
   programs (`core.sshCommand`, `credential.helper`) in a file that is itself protected;
 - a user-owned dir outside every root (under `/mnt/c`, say) counts as protected, so a session
   rooted there isn't seen;

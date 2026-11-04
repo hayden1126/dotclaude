@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """ccstatusline custom-command widget: context breakdown by category.
 
 Reads the Claude Code statusline JSON on stdin. Parses the most recent

@@ -3,5 +3,5 @@
 # background (the quick canary on a new Claude Code version, the daily audit). The logic lives
 # in skills/delegation/scripts/delegation_checks.py. Fails open: it always exits 0, and it
 # prints nothing unless something needs Hayden.
-python3 "$HOME/.claude/skills/delegation/scripts/delegation-ledger" due --hook 2>/dev/null
+python3 -I "$HOME/.claude/skills/delegation/scripts/delegation-ledger" due --hook 2>/dev/null
 exit 0

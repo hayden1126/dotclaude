@@ -6,7 +6,7 @@
 # the delegated call instead of letting it through. FAILS CLOSED: fix the install; do not
 # delete the hook.
 policy="$HOME/.claude/skills/delegation/scripts/subagent-policy"
-python3 "$policy" || {
+python3 -I "$policy" || {
   echo "subagent-policy could not run ($policy): delegated tool calls are blocked until it is fixed" >&2
   exit 2
 }
