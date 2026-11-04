@@ -54,6 +54,14 @@ export function safeRedirect(raw: unknown, fallback = "/"): string {
 
 Call `safeRedirectPath` wherever the value arrives or is stored (the sign-in page that puts `next` into a form field or a cookie, an OAuth `state` record), and `safeRedirect` only where the server redirects. Store the path, never the absolute URL: step 3 refuses an absolute URL, so a stored one would send every sign-in to the fallback on its second check. Read the param once: the framework has already decoded it, and a second `decodeURIComponent` after the check turns `%2F%2F` into `//`.
 
+A validator that also runs in the browser can't read a server env var, so it needs another origin source. Keep the signature the task or the code already names, and resolve the origin inside the validator instead of adding a required argument that breaks its other callers:
+
+```ts
+// In a browser, the page's own origin is the app's origin. On the server, use config.
+const appOrigin = () =>
+  typeof window !== "undefined" ? window.location.origin : new URL(requiredEnv("APP_ORIGIN")).origin;
+```
+
 ## The traps, and why each check exists
 
 | input | the check it beats | what happens |
