@@ -498,7 +498,8 @@ say "git: set maintenance.auto false globally (LR3)"
 # The custom-command widget ctx-breakdown.py (per-category context chips, line 1)
 # lives in ccstatusline's own config dir, so it survives ccstatusline reinstalls.
 # The settings baseline carries a placeholder commandPath; we patch it here with this
-# machine's absolute python and script paths, because ccstatusline runs widget
+# machine's absolute python and script paths (with -I for a script this repo ships;
+# a user's own widget keeps the plain interpreter), because ccstatusline runs widget
 # commands through the platform shell where $HOME/%USERPROFILE% expansion is not
 # portable. An existing file loses the retired session-summary rows (lines 2-3).
 CC_CFG_DIR="$HOME/.config/ccstatusline"

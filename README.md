@@ -193,8 +193,8 @@ dir or the cwd first on its import path, honours `PYTHON*` variables and loads t
 site-packages, where a planted `usercustomize.py` or `.pth` file would run unsandboxed.
 `settings.json` also denies `Edit(~/.local/lib/**)` and `Edit(~/Library/Python/**)`, so the Edit
 and Write tools can't plant one (sandboxed Bash already can't). `tests/setup/test_install_helpers.py`
-enforces all of this over hooks/, bin/, tmux/, statusline/, the skills' scripts and the top-level
-scripts. The deck-production scripts are the one exception: they run only in sandboxed Bash and
+enforces all of this over hooks/, bin/, tmux/, statusline/, git/, codex/, the skills' scripts and the
+top-level scripts. The deck-production scripts are the one exception: they run only in sandboxed Bash and
 import their siblings.
 
 Asks cover what an excluded command could still be made to run or read:
@@ -298,7 +298,7 @@ sees it.
 | `plugins/marketplaces.json` | Marketplaces to register | consumed by `setup.sh` |
 | `plugins/enabled.json` | Plugins to install and enable (must equal the baseline `settings.json`'s `enabledPlugins`; a test pins it) | consumed by `setup.sh` |
 | `statusline/ctx-breakdown.py` | ccstatusline widget: colored per-category context chips (system prompt, tools, agents, memory, skills, MCP, messages); the total chip colors by the auto-pass tiers, ends in `A` when auto-pass is on, and the widget writes the model's window for the watcher (imports `hooks/autopass_state.py` through its real path) | symlink `~/.config/ccstatusline/ctx-breakdown.py` |
-| `statusline/ccstatusline-settings.json` | ccstatusline layout baseline that wires the ctx-breakdown widget in | installed by `setup.sh` to `~/.config/ccstatusline/settings.json` (paths patched per machine); an existing file that isn't a readable JSON object, has a malformed `lines` list, nests too deep to write back or lacks the ctx widget is backed up to `settings.json.pre-dotclaude-<ts>` first, and one an earlier install gave the retired session-summary rows loses them; the write goes through a copy renamed into place, and a destination that isn't a regular file (a directory, a dangling link) or can't be backed up or written is left alone with a warning |
+| `statusline/ccstatusline-settings.json` | ccstatusline layout baseline that wires the ctx-breakdown widget in | installed by `setup.sh` to `~/.config/ccstatusline/settings.json` (paths patched per machine, and the widget runs as `"<python3>" -I "<script>"`); an existing file that isn't a readable JSON object, has a malformed `lines` list, nests too deep to write back or lacks the ctx widget is backed up to `settings.json.pre-dotclaude-<ts>` first, and one an earlier install gave the retired session-summary rows loses them; the write goes through a copy renamed into place, and a destination that isn't a regular file (a directory, a dangling link) or can't be backed up or written is left alone with a warning |
 | `tools.json` | Standalone CLI tools (ccstatusline via bun) | consumed by `setup.sh` |
 | `docs/PLUGINS.md` | One-line description of each plugin | reference |
 | `docs/delegation.md` | Delegation hardening: design, verified facts, known gaps, install order, next stages | reference |
