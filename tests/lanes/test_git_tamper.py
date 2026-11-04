@@ -15,6 +15,7 @@ import zlib
 from unittest import mock
 
 from _fixture import LANE, LanesRepo, LiveSessions, lanelib
+from _http_remote import Remote, helper_script
 from test_cli import load_lane_script
 
 
@@ -286,6 +287,13 @@ elif how.startswith("hold-setup:"):
             time.sleep(0.1)
         return real(*a, **k)
     mod.run_setup = run_setup
+elif how == "http":  # the test remote is plain http (_http_remote): allow it, nothing else
+    real = mod.sync_env
+    def sync_env(*a, **k):
+        env = real(*a, **k)
+        env["GIT_ALLOW_PROTOCOL"] += ":http"
+        return env
+    mod.sync_env = sync_env
 sys.exit(mod.main(sys.argv[3:]))
 """
 
@@ -998,6 +1006,167 @@ class GateBeforeRefs(LanesRepo):
         self.assertEqual(self.read(victim), "mine\n")
         self.assertFalse(os.path.exists(self.lane_path("chart-fix")))
         self.assertEqual(self.git("branch", "--list", "chart-fix"), "")
+
+
+class CredentialRemote(LanesRepo):
+    """origin served over http with a Basic credential only a helper gives (_http_remote): the
+    store fetches run under sync_env, with no global or system config, so they get the
+    credential.* keys of those two scopes alone, read fresh each run (Hayden's pick,
+    2026-11-03). The rest of the global config stays off, and no repo or worktree config feeds
+    a credential key."""
+
+    def setUp(self):
+        super().setUp()
+        self.remote = Remote(self.tmp)
+        self.addCleanup(self.remote.close)
+        self.env.update(no_proxy="127.0.0.1", NO_PROXY="127.0.0.1")
+        self.helper_log = os.path.join(self.tmp, "helper.log")
+        self.git("remote", "set-url", "origin", f"{self.remote.url}/origin.git")
+        self.global_config = os.path.join(self.home, ".gitconfig")
+
+    def credential(self, section, path=None):
+        """The fake helper under [section] in path's config (the global one by default)."""
+        self.write(path or self.global_config,
+                   f"[{section}]\n\thelper = \"{helper_script(self.helper_log)}\"\n")
+
+    def test_the_url_form_helper_reaches_the_store_fetch(self):
+        self.credential(f'credential "{self.remote.url}"')
+        p = driven(self, "http", "new", "chart-fix")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("verified", p.stdout + p.stderr)
+        self.assertGreater(self.remote.authorized, 0)
+        self.assertEqual(self.lane_json("chart-fix")["state"], "active")
+
+    def test_the_plain_helper_reaches_the_store_fetch(self):
+        self.credential("credential")
+        p = driven(self, "http", "new", "chart-fix")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(self.lane_json("chart-fix")["state"], "active")
+
+    def test_without_a_helper_the_store_fetch_fails(self):
+        # The control: the remote does refuse a fetch with no credential.
+        os.makedirs(os.path.join(self.tmp, "anon"))
+        p = subprocess.run(["git", "ls-remote", f"{self.remote.url}/origin.git"],
+                           cwd=os.path.join(self.tmp, "anon"),
+                           env=dict(self.env, GIT_TERMINAL_PROMPT="0"),
+                           capture_output=True, text=True, timeout=60)
+        self.assertNotEqual(p.returncode, 0, p.stdout)
+        self.assertGreater(self.remote.refused, 0)
+
+    def test_repo_and_worktree_config_feed_no_credential(self):
+        # Each lane's sandbox can write a worktree's config.worktree, and the common dir's config
+        # is the repo's own: only the global and system scopes, which no lane can write, count.
+        # The user's own git (ls-remote, the fetch into the shared repo) reads the repo config
+        # and passes; the store fetch must not.
+        url = f'credential "{self.remote.url}"'
+        self.git("config", "extensions.worktreeConfig", "true")
+        for where in ("config", "config.worktree"):
+            with self.subTest(where=where):
+                path = os.path.join(self.common, where)
+                old = self.read(path) if os.path.exists(path) else ""
+                self.write(path, old + f"[{url}]\n\thelper = \"{helper_script(self.helper_log)}\"\n")
+                try:
+                    p = driven(self, "http", "new", "chart-fix")
+                    self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                    self.assertIn("the fetch of origin/main", p.stderr)
+                    self.assertFalse(os.path.exists(self.lane_path("chart-fix")))
+                finally:
+                    self.write(path, old)
+
+    def test_the_rest_of_the_global_config_stays_off(self):
+        # A url.<base>.insteadOf in the global config would aim the store fetch elsewhere: only
+        # credential.* keys come through.
+        other = os.path.join(self.tmp, "other.git")
+        self.git("clone", "-q", "--bare", self.origin, other, cwd=self.tmp)
+        self.write(self.global_config,
+                   f"[credential]\n\thelper = \"{helper_script(self.helper_log)}\"\n"
+                   f"[url \"{other}\"]\n\tinsteadOf = {self.remote.url}/origin.git\n")
+        # The user's own git follows insteadOf (to a local path, no credential); the store
+        # fetch must still go to the http remote.
+        authorized = self.remote.authorized
+        p = driven(self, "http", "new", "chart-fix")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertGreater(self.remote.authorized, authorized)
+
+
+class CredentialConfig(unittest.TestCase):
+    """credential_config: the credential.* keys of the system and global config, both global
+    files, in git's own order, each value as the file has it; no include is followed."""
+
+    def setUp(self):
+        self.mod = load_lane_script()
+        self.tmp = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        env.update(HOME=self.tmp, XDG_CONFIG_HOME=os.path.join(self.tmp, ".config"))
+        patch = mock.patch.dict(os.environ, env, clear=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def write(self, rel, text):
+        path = os.path.join(self.tmp, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(text)
+        return path
+
+    def test_keys_values_and_order(self):
+        inc = self.write("inc", "[credential]\n\thelper = included\n")
+        self.write(".gitconfig",
+                   "[credential]\n\tuseHttpPath\n\thelper =\n"
+                   "[credential \"https://x.example/a=b\"]\n"
+                   "\thelper = \"!f() { echo a=b; }; f\"\n"
+                   "[user]\n\tname = me\n"
+                   f"[include]\n\tpath = {inc}\n")
+        self.write(".config/git/config", "[credential]\n\tusername = xdg\n")
+        self.assertEqual(self.mod.credential_config(), [
+            ("credential.username", "xdg"),  # git reads the XDG file first
+            ("credential.usehttppath", "true"),
+            ("credential.helper", ""),
+            ("credential.https://x.example/a=b.helper", "!f() { echo a=b; }; f"),
+        ])
+
+    def test_a_repo_at_the_cwd_adds_nothing(self):
+        self.write(".gitconfig", "[credential]\n\thelper = mine\n")
+        repo = os.path.join(self.tmp, "repo")
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        subprocess.run(["git", "config", "credential.helper", "lane"], cwd=repo, check=True)
+        here = os.getcwd()
+        os.chdir(repo)
+        try:
+            self.assertEqual(self.mod.credential_config(), [("credential.helper", "mine")])
+        finally:
+            os.chdir(here)
+
+    def test_no_config_gives_no_keys(self):
+        self.assertEqual(self.mod.credential_config(), [])
+
+    def test_an_inherited_git_env_changes_nothing(self):
+        # Every inherited GIT_* is dropped, as sgit drops it: GIT_CONFIG_GLOBAL can't swap the
+        # file, and GIT_CONFIG_PARAMETERS or GIT_CONFIG_COUNT can't add a key.
+        self.write(".gitconfig", "[credential]\n\thelper = mine\n")
+        other = self.write("other", "[credential]\n\thelper = other\n")
+        with mock.patch.dict(os.environ, GIT_CONFIG_GLOBAL=other,
+                             GIT_CONFIG_PARAMETERS="'credential.username=p'",
+                             GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="credential.username",
+                             GIT_CONFIG_VALUE_0="c"):
+            self.assertEqual(self.mod.credential_config(), [("credential.helper", "mine")])
+
+    def test_a_broken_global_config_refuses(self):
+        self.write(".gitconfig", "[credential\n")
+        with self.assertRaises(self.mod.LaneError) as e:
+            self.mod.credential_config()
+        self.assertIn("bad config line 1", str(e.exception))
+
+    def test_sync_env_carries_them_after_its_own(self):
+        env = self.mod.sync_env("/store", config=[("credential.helper", ""),
+                                                  ("credential.helper", "x=y")])
+        n = int(env["GIT_CONFIG_COUNT"])
+        pairs = [(env[f"GIT_CONFIG_KEY_{i}"], env[f"GIT_CONFIG_VALUE_{i}"]) for i in range(n)]
+        self.assertEqual(pairs[-2:], [("credential.helper", ""), ("credential.helper", "x=y")])
+        self.assertIn(("gc.auto", "0"), pairs)
+        with self.assertRaises(ValueError):
+            self.mod.sync_env("/store", config=[("gc.auto", "1")])
 
 
 if __name__ == "__main__":

@@ -5515,7 +5515,8 @@ SYNC_LANES = ("A lane never runs it: a lane whose install is live asks the lead 
               "main, then merges main sandboxed (`git merge`) and reinstalls from its worktree")
 
 
-def sync_env(git_dir: str | None = None, **extra: str) -> dict[str, str]:
+def sync_env(git_dir: str | None = None, config: list[tuple[str, str]] = (),
+             **extra: str) -> dict[str, str]:
     """The environment of every git sync-main runs, in place of every inherited GIT_* (sgit): no
     global or system config, no hooks (a fetch or update-ref runs reference-transaction from the
     common dir's hooks/; no lane's sandbox can write that dir today, but they stay off
@@ -5524,7 +5525,8 @@ def sync_env(git_dir: str | None = None, **extra: str) -> dict[str, str]:
     so core.attributesFile names /dev/null), and only the https, ssh and file transports. No
     filter driver either but the one config left, the git dir's own: with no global or system
     config, a filter.<x>.smudge can come only from there, and StoreDir.intact holds the store's
-    config, the checkout's common dir, to the bytes git init wrote."""
+    config, the checkout's common dir, to the bytes git init wrote. config adds credential.*
+    pairs after those keys (credential_config, for the store fetches); any other key raises."""
     env = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
            "GIT_NO_REPLACE_OBJECTS": "1", "GIT_GRAFT_FILE": os.devnull,
            "GIT_ALLOW_PROTOCOL": "https:ssh:file", "GIT_OPTIONAL_LOCKS": "0",
@@ -5539,10 +5541,53 @@ def sync_env(git_dir: str | None = None, **extra: str) -> dict[str, str]:
            # no `gc --auto` (LR3): its `worktree prune` deletes through a planted link
            "GIT_CONFIG_KEY_5": "gc.auto", "GIT_CONFIG_VALUE_5": "0",
            "GIT_CONFIG_KEY_6": "maintenance.auto", "GIT_CONFIG_VALUE_6": "false"}
+    n = int(env["GIT_CONFIG_COUNT"])
+    for key, value in config:
+        if not key.startswith("credential."):
+            raise ValueError(f"sync_env adds credential.* keys only, not {key!r}")
+        env[f"GIT_CONFIG_KEY_{n}"], env[f"GIT_CONFIG_VALUE_{n}"] = key, value
+        n += 1
+    env["GIT_CONFIG_COUNT"] = str(n)
     if git_dir:
         env["GIT_DIR"] = git_dir
     env.update(extra)
     return env
+
+
+CREDENTIAL_SCOPES = ("system", "global")  # the config scopes no lane's sandbox can write
+
+
+def credential_config() -> list[tuple[str, str]]:
+    """The credential.* keys of the system and the global git config (~/.gitconfig and
+    ~/.config/git/config both, as any git reads them), in git's own order, read fresh each run,
+    for the store fetches (fill_store, fill_new_store) to reach a private https remote (Hayden's
+    pick, 2026-11-03). Only those scopes, which no lane's sandbox can write: never the repo's or
+    a worktree's config (git runs from /, and a key from another scope is dropped), no include
+    followed (an included file may be anyone's), and every inherited GIT_* dropped, so no
+    GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM or GIT_CONFIG_PARAMETERS swaps a file or adds a key.
+    The rest of both files stays off (sync_env). A key with no value is git's boolean true. A
+    config git can't parse refuses, as the fetch would."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env["LC_ALL"] = "C"
+    args = ["git", "config", "--no-includes", "--show-scope", "-z", "--get-regexp",
+            r"^credential\."]
+    try:
+        p = subprocess.run(args, cwd="/", env=env, capture_output=True, timeout=SYNC_GIT_WAIT)
+    except subprocess.TimeoutExpired:
+        raise LaneError(f"git config gave no answer within {SYNC_GIT_WAIT:g} s")
+    if p.returncode == 1:  # no such key
+        return []
+    if p.returncode:
+        line = (p.stderr.decode(errors="replace").strip().splitlines() or ["unknown error"])[-1]
+        raise LaneError(shown(f"reading the credential keys of your git config failed ({line}): "
+                              "nothing was fetched"))
+    fields = p.stdout.decode(errors="surrogateescape").split("\0")
+    pairs = []
+    for scope, entry in zip(fields[0::2], fields[1::2]):
+        key, nl, value = entry.partition("\n")
+        if scope in CREDENTIAL_SCOPES and key.startswith("credential."):
+            pairs.append((key, value if nl else "true"))
+    return pairs
 
 
 def checkout_env(repo: Repo, **extra: str) -> dict[str, str]:
@@ -5858,11 +5903,12 @@ def fill_store(repo: Repo, store: str, remote: str, base: str, branch: str, pinn
                proven: str) -> None:
     """Fetch the base branch in full and the checkout's branch into the store, each through
     index-pack's hash checks. The proven sha must be on the base, and the checkout's branch
-    must still be the pinned sha."""
+    must still be the pinned sha. Only the remote's fetch gets the credential keys."""
     env = sync_env(store)
     url = remote_url(repo, remote)
     fetch = ["fetch", *FETCH_FLAGS, "--no-tags", "--end-of-options"]
-    sgit([*fetch, url, f"+refs/heads/{base}:refs/remotes/base"], store, env,
+    sgit([*fetch, url, f"+refs/heads/{base}:refs/remotes/base"], store,
+         sync_env(store, config=credential_config()),
          f"the fetch of {remote}/{base} from {url}", wait=SYNC_FETCH_WAIT)
     on = sgit(["merge-base", "--is-ancestor", proven, "refs/remotes/base"], store, env,
               "the ancestry check", ok=None)
@@ -5879,11 +5925,13 @@ def fill_store(repo: Repo, store: str, remote: str, base: str, branch: str, pinn
 
 def fill_new_store(repo: Repo, store: str, remote: str, branch: str, base_sha: str) -> None:
     """For `lane new` (LR7): fetch the base branch in full from the remote into the store,
-    through index-pack's hash checks. base_sha, from ls-remote, must be on it as fetched."""
+    through index-pack's hash checks, with the credential keys (credential_config). base_sha,
+    from ls-remote, must be on it as fetched."""
     env = sync_env(store)
     url = remote_url(repo, remote)
     sgit(["fetch", *FETCH_FLAGS, "--no-tags", "--end-of-options", url,
-          f"+refs/heads/{branch}:refs/remotes/base"], store, env,
+          f"+refs/heads/{branch}:refs/remotes/base"], store,
+         sync_env(store, config=credential_config()),
          f"the fetch of {remote}/{branch} from {url}", wait=SYNC_FETCH_WAIT)
     on = sgit(["merge-base", "--is-ancestor", base_sha, "refs/remotes/base"], store, env,
               "the ancestry check", ok=None)

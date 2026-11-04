@@ -968,8 +968,12 @@ root and the id), never from `lane.json` alone.
 
 **Limits.** The compare is byte for byte against the blobs, so a checkout that converts bytes
 (`core.autocrlf`, `eol` or `ident` attributes, a filter such as LFS) fails `new`'s verification,
-as it fails sync-main's compare. Both stores fetch with no global or system config, so a remote
-that needs a credential helper set there can't be fetched by `new` or sync-main.
+as it fails sync-main's compare. Both stores fetch with no global or system config but its
+`credential.*` keys, read fresh each run, so a private https remote works through the helper set
+there (`gh auth setup-git`'s, for one). Nothing else from those files reaches the fetch (no
+`url.<base>.insteadOf` or `http.*` key), no include is followed, and a credential key
+in the repo's or a worktree's config never counts: no lane's sandbox can write the global or
+system config, and any lane can write a worktree's.
 
 ## Layout
 

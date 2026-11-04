@@ -22,6 +22,7 @@ import zlib
 from unittest import mock
 
 from _fixture import LANE, LanesRepo
+from _http_remote import Remote, helper_script
 from test_cli import load_lane_script
 
 REAL = "#!/bin/sh\necho real\n"
@@ -175,24 +176,31 @@ class SyncMain(LanesRepo):
         for args in fetches:
             self.assertIn("--no-auto-maintenance", args)
 
-    def test_only_identity_reads_the_users_git_config(self):
+    def test_only_identity_and_credentials_read_the_users_git_config(self):
         # sync-main's git calls run under sync_env (no global or system config) but for `git
-        # var`, whose identity is the user's own, and a `config --file` that reads one file.
+        # var`, whose identity is the user's own, a `config --file` that reads one file, and the
+        # credential.* keys of the system and global scopes, read once for the remote's fetch.
         self.land({"hooks/x.sh": REAL})
-        plain = []
+        plain, reads = [], []  # reads: credential_config's calls
 
         def patches(mod):
-            real = mod.git
+            real, real_creds = mod.git, mod.credential_config
 
             def git(args, *a, **k):
                 if k.get("env") is None and len(a) < 4:
                     plain.append(args[:2])
                 return real(args, *a, **k)
-            return [mock.patch.object(mod, "git", git)]
+
+            def credential_config():
+                reads.append(1)
+                return real_creds()
+            return [mock.patch.object(mod, "git", git),
+                    mock.patch.object(mod, "credential_config", credential_config)]
         rc, out, err = self.sync_in("7", patches=patches)
         self.assertEqual(rc, 0, out + err)
         self.assertEqual(sorted(a[0] if a[0] == "var" else " ".join(a) for a in plain),
                          ["config --file", "var", "var"])
+        self.assertEqual(reads, [1])
 
     def test_main_status_diff_comes_out_masked(self):
         # Main's STATUS.md is lane-written text: a terminal escape in it reaches the lead's
@@ -696,6 +704,33 @@ class SyncMain(LanesRepo):
         self.land({"hooks/x.sh": REAL})
         self.git("remote", "set-url", "origin", os.path.join(self.tmp, "gone.git"))
         self.refuses_unchanged("fetch")
+
+    def test_the_global_credential_helper_reaches_the_store_fetch(self):
+        # A private https remote: the store's fetch runs with no global config but its
+        # credential.* keys (Hayden's pick, 2026-11-03). The remote here is http with a Basic
+        # credential only the helper gives (_http_remote; git's GnuTLS reads no planted CA).
+        remote = Remote(self.tmp)
+        self.addCleanup(remote.close)
+        self.env.update(no_proxy="127.0.0.1", NO_PROXY="127.0.0.1")
+        log = os.path.join(self.tmp, "helper.log")
+        self.write(os.path.join(self.home, ".gitconfig"),
+                   f"[credential \"{remote.url}\"]\n\thelper = \"{helper_script(log)}\"\n")
+        proven = self.land({"hooks/x.sh": REAL})
+        self.git("remote", "set-url", "origin", f"{remote.url}/origin.git")
+        authorized = remote.authorized
+
+        def patches(mod):
+            real = mod.sync_env
+
+            def sync_env(*a, **k):
+                env = real(*a, **k)
+                env["GIT_ALLOW_PROTOCOL"] += ":http"
+                return env
+            return [mock.patch.object(mod, "sync_env", sync_env)]
+        rc, out, err = self.sync_in("7", patches=patches)
+        self.assertEqual(rc, 0, out + err)
+        self.assertGreater(remote.authorized, authorized)
+        self.assertEqual(self.parents()[1], proven)
 
     def test_a_sandboxed_run_refuses(self):
         self.land({"hooks/x.sh": REAL})
