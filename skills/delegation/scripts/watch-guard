@@ -76,7 +76,6 @@ error allows the stop.
 """
 import collections
 import contextlib
-import datetime
 import glob
 import hashlib
 import json
@@ -166,7 +165,6 @@ DETACHED_ACK = ("Watch {id} ({desc}) still has no waiter of the lead's; it's ack
                 "the guard started a detached waiter on it, whose end a later stop says (it "
                 "logs a refusal or an error to delegation-ledger.err). To be woken when it ends "
                 "instead, re-arm with delegation-ledger wait --resume {id}, or drop it.")
-TASK_RE = re.compile(r"<task-id>([^<]+)</task-id>")
 TOOL_USE_RE = re.compile(r"<tool-use-id>([^<]+)</tool-use-id>")
 OUTPUT_RE = re.compile(r"<output-file>([^<]+)</output-file>")
 LAUNCH_RE = re.compile(r"codex-delegate: run (\S+), watch (\S+)\. ")
@@ -441,47 +439,20 @@ def exec_detached(argv, report):
 
 # ---- gather: kills ----
 
-def entry_time(e):
-    """An entry's timestamp in epoch seconds, or None (it carries milliseconds)."""
-    try:
-        return datetime.datetime.fromisoformat(e["timestamp"].replace("Z", "+00:00")).timestamp()
-    except (KeyError, AttributeError, TypeError, ValueError):
-        return None
-
-
-def text_of(content):
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "".join(c["text"] for c in content
-                       if isinstance(c, dict) and isinstance(c.get("text"), str))
-    return ""
-
-
-def is_task(origin):
-    return isinstance(origin, dict) and origin.get("kind") == "task-notification"
-
-
 def parse_notice(line, pos):
     """A Notice when this transcript line is a kill at the background time limit, else None.
-    Two shapes count: a user entry with a task-notification origin (between turns) and an
-    attachment entry whose attachment has one (mid-turn). Its rendered copies, and the
-    queue-operation entry, don't."""
+    dc.notice_text says which entry shapes hold a notice."""
     try:
         e = json.loads(line)
     except (ValueError, RecursionError):   # json recurses on nesting
         return None
     if not isinstance(e, dict):
         return None
-    attachment = e.get("attachment") if isinstance(e.get("attachment"), dict) else {}
-    if e.get("type") == "user" and is_task(e.get("origin")):
-        msg = e.get("message")
-        text = text_of(msg.get("content") if isinstance(msg, dict) else None)
-    elif e.get("type") == "attachment" and is_task(attachment.get("origin")):
-        text = attachment.get("prompt") if isinstance(attachment.get("prompt"), str) else ""
-    else:
+    text = dc.notice_text(e)
+    if text is None:
         return None
-    task, ts = TASK_RE.search(text), entry_time(e) or entry_time(attachment)
+    attachment = e.get("attachment") if isinstance(e.get("attachment"), dict) else {}
+    task, ts = dc.TASK_RE.search(text), dc.entry_time(e) or dc.entry_time(attachment)
     if ("<status>killed</status>" not in text or "background time limit" not in text
             or task is None or ts is None):
         return None
@@ -584,7 +555,7 @@ def launched(path, tool_use, spent):
             for c in (msg.get("content") if isinstance(msg, dict) else None) or []:
                 if isinstance(c, dict) and c.get("type") == "tool_use" and c.get("id") == tool_use:
                     cmd = (c.get("input") or {}).get("command")
-                    return (cmd, entry_time(e)) if isinstance(cmd, str) else None
+                    return (cmd, dc.entry_time(e)) if isinstance(cmd, str) else None
     return None
 
 

@@ -70,12 +70,18 @@ EXCLUDED = [
              ["lane open chart-fix", "lane open chart-fix --print"]),
     Excluded("lane done *", "checks the merge with gh, sees and signals the lane's sessions",
              ["lane done chart-fix"]),
+    Excluded("lane park *", "checks the push with gh, sees and signals the lane's sessions, "
+             "writes its flag in the state dir", ["lane park chart-fix"]),
+    Excluded("lane sync-main *", "proves the merge with gh, fetches, builds the merge in a "
+             "store under the state dir and checks it out (DA15/DA16)", ["lane sync-main 42"]),
     Excluded("lane addr *", "sees other sessions' processes to tell a live one from a stale file",
              ["lane addr chart-fix", "lane addr lead", "lane addr --repo ~/dotclaude lead"]),
     Excluded("lane lead", "sees the session above it and writes the lead record in the state dir",
              ["lane lead"]),
     Excluded("pass-respawn","respawns its tmux pane", ["pass-respawn"]),
     Excluded("pass-respawn *", "respawns its tmux pane", ["pass-respawn -C /x --compact"]),
+    Excluded("ed-pull *", "reads the Ed API token in ~/.secrets.env, which the sandbox hides; GETs "
+             "only, writes only ./sources/ed", ["ed-pull pull --course \"ABC W1234\"", "ed-pull list"]),
 ] + [
     # Read-only tmux, anchored on the verb, in the spellings real use shows. A global flag
     # (-L, -S, -f, -c) or any other verb or alias matches nothing here, so it runs sandboxed,
@@ -289,7 +295,8 @@ CLAUDE_COMMANDS = {
                   "eval": "ask", "help": "ok", "init|new": "ask", "install|i": "ask",
                   "list": "ok", "marketplace": "ask", "prune|autoremove": "ask", "tag": "ask",
                   "test": "ask", "uninstall|remove": "ask", "update": "ask", "validate": "ok"},
-    ("sandbox",): {"help": "ok", "install": "ask", "status": "ok"},  # a hidden group
+    ("sandbox",): {"help": "ok", "install": "ask", "status": "ok",  # a hidden group
+                   "uninstall": "ask"},
 }
 
 CLAUDE_RULES = [
@@ -312,7 +319,7 @@ CLAUDE_RULES = [
     for sub in ("gateway", "import", "install", "purge", "respawn", "rm", "setup-token", "stop",
                 "kill", "update", "upgrade", "auth login", "auth logout", "auto-mode reset",
                 "mcp add", "mcp login", "mcp logout", "mcp remove", "mcp reset-project-choices",
-                "mcp serve", "sandbox install")
+                "mcp serve", "sandbox install", "sandbox uninstall")
 ] + [
     # "i " is install's alias; its space keeps it off words that start with i.
     Rule(f"Bash(claude plugin* {sub}*)", "installs, removes or changes plugins",
@@ -385,9 +392,12 @@ DENIES = CLAUDE_DENY
 # The hot path (rule D): calls skills and real use make, which must match an excluded entry and
 # no ask or deny.
 NO_ASK = ["lane ls", "lane ls --json", "lane open chart-fix", "lane open chart-fix --print",
-          "lane new chart-fix --claim 42 --goal x", "lane done chart-fix", "lane init --cap 4",
+          "lane new chart-fix --claim 42 --goal x", "lane done chart-fix", "lane park chart-fix",
+          "lane sync-main 42",
+          "lane init --cap 4",
           "lane adopt ../x", "lane lead", "lane addr lead", "lane addr --repo ~/dotclaude lead",
           "pass-respawn -C /x --compact", "pass-respawn -C /x --print",
+          "ed-pull list", "ed-pull pull", "ed-pull pull --full", "ed-pull rebuild",
           "delegation-ledger wait --pid 1 --max 30", "delegation-ledger canary --quick",
           "codex-delegate run --model sol --dir /x --brief b.md", "tmux ls",
           "tmux list-panes -a -F '#{pane_id} #{pane_current_path}'",

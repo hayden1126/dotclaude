@@ -41,7 +41,67 @@ ones into a lane worktree (Lanes, below). When a mod or plugin changed since the
 it says so in one line. A session that started before the install loads those only at its start,
 so it needs `/pass`.
 
-Each run replaces that copy, so a value added to a key the baseline sets is lost. Settings that belong
+It also sets copy mode for uv and pnpm in their user configs (`link-mode = "copy"` in
+`~/.config/uv/uv.toml`, `package-import-method=copy` in `~/.config/pnpm/rc`), so a project's
+installed packages are its own files, not hardlinks into the shared cache (sandbox gap N3). A
+value the file already sets is kept and named on stderr. bun has no such setting. pnpm's file is
+`~/Library/Preferences/pnpm/rc` on macOS, and setup then asks pnpm which value it reads. Copy
+mode covers new installs only, so the run that first sets it points to `cache-unlink` (unless a
+rebuild is pending, below: that replaces those installs). From a terminal, `cache-unlink ~/code`
+counts, per project, the files that are still hardlinks into the uv, pnpm or bun cache (`--files`
+lists them), and `cache-unlink --apply ~/code` gives each a copy of its own (same bytes, mode and
+times; nothing to reinstall). It names every cache it searched. It runs `/usr/bin/python3 -I`;
+where that path is missing, run `python3 -I "$(command -v cache-unlink)"`.
+A file linked to something outside the dirs you named counts too (`linked outside`: a cache it
+didn't find, or harmless links such as the git objects a local `git clone` shares with its
+source; un-linking those costs only disk), and so does one linked across two projects (`linked
+across projects`: a store kept under them). `--keep DIR` leaves a hardlink you keep on purpose
+alone. A dir it couldn't read makes the report incomplete, never clean. Run it with no Claude
+session working in those dirs, since one could swap a dir for an empty one while the walk
+passes. On Windows (git-bash), which has no Bash sandbox, setup skips copy mode.
+
+**Upgrading from an older install.** Before this, the sandbox could write all of `~/.npm`,
+`~/.bun/install/cache`, `~/.cache/uv`, `~/.cache/pip`, `~/.cache/pnpm`, `~/.cache/node-gyp`, `~/.cache/ms-playwright`,
+`~/.local/share/uv/python` and pnpm's store directly, and unsandboxed runs still use what they
+hold, or what was built from them. Setup says so on every run, once the settings it replaced had
+those entries, until you remove the marker it names. An `allowWrite` entry for one of them left in
+`settings.machine.json` keeps the gap open: remove it there now. After the rebuild, rerun
+`./setup.sh` before the next Claude session (not before the rebuild: setup runs `claude`, bun and
+pnpm), then remove the marker. Checking the caches can't clear them: the sandbox could write
+their checksum files too, so only a rebuild does. A rebuild stops what runs from them; it can't
+undo what a planted file already did elsewhere, so a sign of tampering means treating the machine
+as compromised. The rule, from a terminal with no Claude session open (plugin MCP servers run
+from `~/.npm/_npx`):
+- **Note** what you'll put back (your global packages, uv's Pythons and tools, pipx apps, `--user`
+  packages, Playwright's browsers) from the files, not by running the tools: a planted npm or pip
+  runs at `npm ls -g` too. Look in the global `node_modules`, `~/.local/share/uv/tools` and
+  `python`, pipx's `venvs/*/pipx_metadata.json`, `~/.local/lib/python3*/site-packages` and
+  `~/.cache/ms-playwright`. Then **delete those dirs by path** (pnpm's `.tools` holds its own
+  copies, linked from its store):
+
+  ```bash
+  rm -rf ~/.npm ~/.bun/install/cache ~/.cache/uv ~/.cache/pip ~/.cache/pnpm ~/.cache/node-gyp ~/.cache/ms-playwright ~/.local/share/uv/python ~/.local/share/pnpm/store ~/.local/share/pnpm/.tools
+  ```
+
+  Not `uv cache clean`, `pip cache purge` or `rm -rf "$(pnpm store path)"`: they clear only the
+  cache now configured, and pnpm's only its current version's folder.
+- **Delete by path, never by running it, any installer that came through those dirs**: an npm
+  upgraded with `npm install -g npm` (that means the whole Node install it upgraded, such as
+  `rm -rf ~/.nvm/versions/node/<v>`), a pip or uv installed with `pip install --user`, a pnpm or
+  corepack installed by npm or by itself, a bun installed by npm. A tool built through those dirs
+  runs whatever was planted there, its own uninstall included. **Then put the installers back
+  from their own sources** (Node with its npm, uv, pnpm, bun, pip, pipx), before the next step.
+- **Delete, then rebuild, everything built through them**: uv's tool envs, npm's, pnpm's, bun's
+  and pip's global and `--user` packages, pipx's shared pip and its apps (delete its shared dir,
+  then run `pipx reinstall-all`, which removes and recreates each app's venv), each project's
+  `.venv`, `venv` and `node_modules`, and tool envs such as `.tox`, pre-commit's, poetry's and
+  Jupyter kernels'. A reinstall over an old one isn't enough: it keeps files it doesn't track.
+
+This can't list every tool on every machine; the rule covers the rest. Skipping the rebuild for a
+project keeps whatever was planted in it: `cache-unlink --apply <dir>` only ends its links into
+the caches, and npm and pip projects never had any.
+
+Each run replaces the `settings.json` copy, so a value added to a key the baseline sets is lost. Settings that belong
 to one machine, such as hooks for its own scripts or `sandbox.excludedCommands` for its own tools, go
 in `~/.claude/settings.machine.json` instead. It isn't in this repo; `setup.sh` installs the baseline
 with it merged in. Objects merge key by key, lists append (skipping items already there), and any
@@ -76,6 +136,12 @@ guard's scan: it lists each dir it would refuse with what the dir holds, then pr
 where the scan's last line says. Rerun the scan (`python3 -I hooks/excluded_guard.py --scan`) after adding a
 PATH dir or cloning a repo whose install step sets in-repo git hooks.
 
+The baseline's `env` pins new sessions to Opus with `ANTHROPIC_MODEL=opus`. Without it, `/model`
+saves its pick as the machine-wide default, so a `/model sonnet` in one session moves every later
+session to Sonnet; with it, `/model` changes only its own session. To pin another model, set
+`env.ANTHROPIC_MODEL` in the overlay. What `/model` prints under the pin, and how a `/pass`, tab
+restore or shelf Open keeps a session's pick: docs/lanes.md, "Model and effort".
+
 The baseline's `permissions` deny destructive git and ask before anything that can reach `main`,
 in auto mode too. Denied: force-push, `reset --hard`, `reset --merge` and `git clean -f`, plain or
 through `git -C`, plus a `bash -c` whose text has `git push` then `--force`, or `git reset` then
@@ -89,7 +155,7 @@ handoff skill's own `gh pr ready` as an unrequested commit, so `test_settings.py
 that every `gh pr` or `gh run` step CLAUDE.md, a skill or an agent names has a rule. Also
 allowed, because the classifier once refused a CI watch with no reason given: the read-only
 `gh pr checks`, `view`, `list`, `status` and `diff`, and `gh run list`, `view` and `watch`.
-`lane ls`, `new`, `adopt`, `open`, `done`, `addr` and `lead` are allowed too, behind the excluded-command guard
+`lane ls`, `new`, `adopt`, `open`, `done`, `park`, `addr` and `lead` are allowed too, behind the excluded-command guard
 (docs/lanes.md S3).
 Read-only git (`status`, `log`, `diff`, `show`, `rev-parse`; the classifier once refused one as an
 "unrequested commit") is allowed too, with the pipe filters `head`, `tail`, `wc` and `grep`, since
@@ -111,8 +177,8 @@ force-push and a `reset --hard` on a dirty tree when the prompt named them.
 must cover, and `test_settings.py` ties it to `settings.json` in both directions. It holds the
 credential barrier (`git push` to `origin`, `fetch`, `pull`, `ls-remote`, and `gh`'s `pr`, `run`,
 `issue`, `api` and `search` with its read-only `repo`, `release` and `auth status` forms), our
-wrappers (`lane init`, `new`, `adopt`, `ls`, `open`, `done`, `addr`, `lead`, `pass-respawn`, `delegation-ledger`,
-`codex-delegate`), `claude`, the read-only tmux verbs (`ls`, `list-sessions`, `list-windows`,
+wrappers (`lane init`, `new`, `adopt`, `ls`, `open`, `done`, `park`, `sync-main`, `addr`, `lead`, `pass-respawn`, `delegation-ledger`,
+`codex-delegate`, `ed-pull`), `claude`, the read-only tmux verbs (`ls`, `list-sessions`, `list-windows`,
 `list-panes`, `list-clients`, `list-keys`, `list-commands`, `capture-pane`, `display`, `show`,
 `show-options`, `show-environment`, `show-messages`, `show-hooks`), read-only codex (`login status`,
 `doctor` and a few lists) and the Windows shells. Each one meets `hooks/excluded-guard.sh` first
@@ -176,7 +242,7 @@ sees it.
 | `settings.json` | Hooks, status line, env vars, enabled plugins, permission rules, and the Bash sandbox (curated baseline; see docs/delegation.md for the sandbox) | **copy** to `~/.claude/settings.json` (runtime-managed, not symlinked), merged with `~/.claude/settings.machine.json` when present |
 | `merge-settings.py` | Merges the machine overlay into the baseline and keeps the live file's own top-level keys, for `setup.sh` | run by `setup.sh` |
 | `git/sandbox-stubs.ignore` | Git ignore patterns for the `/dev/null` mounts the Bash sandbox puts over protected dotfiles a repo lacks (they break `git add -A`) | upserted by `git/install-ignore.py` between markers in the global git excludes file (`core.excludesFile`, else `~/.config/git/ignore`); Linux only |
-| `skills/` | The skills I authored: `coding-practices`, `research-discipline`, `research-sourcing`, `writing-voice`, `staged-reader-review`, `ebook-extract`, `deck-production`, `vetting-sources`, `handoff`, `frontend-ui-discipline`, `ui-alignment`, `delegation`, `lanes`, `pass`, `server-code` and `auth-secrets` (the practices skills: safe defaults for server handlers, and for auth, sessions and secrets, enforced by `hooks/practices-check.sh`); and `autopass`, a mod (a folder with `.claude-plugin/`, which Claude Code loads from `~/.claude/skills` as `autopass@skills-dir`), not a skill | symlink per dir into `~/.claude/skills/`; a skill's `scripts/` CLI also symlinks into `~/.local/bin` when that dir exists (`deck-production` ships `deckkit`; `delegation` ships `codex-delegate`, `delegation-ledger` and `gh-public`; `lanes` ships `lane`; `handoff` ships `handoff-check`; `pass` ships `pass-respawn`); the portable ones (`CODEX_SKILLS` in `setup.sh`) also link into `~/.codex/skills/` |
+| `skills/` | The skills I authored: `coding-practices`, `research-discipline`, `research-sourcing`, `writing-voice`, `staged-reader-review`, `ebook-extract`, `deck-production`, `vetting-sources`, `handoff`, `frontend-ui-discipline`, `ui-alignment`, `delegation`, `lanes`, `pass`, `server-code` and `auth-secrets` (the practices skills: safe defaults for server handlers, and for auth, sessions and secrets, enforced by `hooks/practices-check.sh`), `exam-prep` (study notes, cheat sheets, mock exams and tutoring for a course exam, staged from intake to a retro); and `autopass`, a mod (a folder with `.claude-plugin/`, which Claude Code loads from `~/.claude/skills` as `autopass@skills-dir`), not a skill | symlink per dir into `~/.claude/skills/`; a skill's `scripts/` CLI also symlinks into `~/.local/bin` when that dir exists (`deck-production` ships `deckkit`; `delegation` ships `codex-delegate`, `delegation-ledger` and `gh-public`; `lanes` ships `lane`; `handoff` ships `handoff-check`; `pass` ships `pass-respawn`; `exam-prep` ships `ed-pull`, which reads Ed Discussion, GET only); the portable ones (`CODEX_SKILLS` in `setup.sh`) also link into `~/.codex/skills/` |
 | `agents/` | Delegation roles: `Explore` (overrides the built-in with a no-shell reader), `researcher`, `reviewer`, `writer`; see docs/delegation.md | symlink per file into `~/.claude/agents/` |
 | `hooks/agent-spawn-guard.sh` | PreToolUse(Agent) guard: denies a `writer` spawn that doesn't pass `isolation` on the call, and a named spawn without the `team-` prefix; fails closed | symlink `~/.claude/hooks/agent-spawn-guard.sh` |
 | `hooks/delegation-ledger.sh` | SubagentStart/SubagentStop hook: appends a pointer row per delegated agent to the delegation ledger; as a PostToolUse hook, sends a delegated agent its deadline nudge; never blocks | symlink `~/.claude/hooks/delegation-ledger.sh` |
@@ -193,7 +259,7 @@ sees it.
 | `hooks/wants_input.py` | Not a hook: `stop-ring.sh` runs it, detached, on a main session's Stop; asks Haiku whether the reply's last 2,000 characters want the person (a question, an approval, a step only they can do) and prints `yes`, `no` or `error` with the reason and the time taken | symlink `~/.claude/hooks/wants_input.py` |
 | `hooks/mute_state.py` | Not a hook: the device-wide mute's flag (`$XDG_STATE_HOME/dotclaude/mute.json`), its reader and its locked writer; `read_mute` runs `mute_state.py check` only when a flag is there, and `tmux/claude-mute` and `pass-respawn` load it; a flag it can't read mutes nothing (see Hooks, "The device-wide mute") | symlink `~/.claude/hooks/mute_state.py` |
 | `hooks/haiku.py` | Not a hook: the direct Haiku Messages-API call (Claude subscription OAuth token, stdlib urllib, no API key) that `session-summary.sh` and `wants_input.py` share | symlink `~/.claude/hooks/haiku.py` |
-| `hooks/context-watch.sh` | Stop and PostToolUse hook: the auto-pass watcher; writes the context size to `ctx/<session>.json` and, at 300k, 480k and 520k (derived from `autoCompactWindow`), tells the session to run the pass skill, or with autopass off shows you one line at 520k; a shim over `hooks/context_watch.py`, which shares `hooks/autopass_state.py` (tiers, the tab flag, on or off); fails open, with errors in `context-watch.err` in the state dir | symlink `~/.claude/hooks/context-watch.sh`, `context_watch.py` and `autopass_state.py` |
+| `hooks/context-watch.sh` | Stop, PostToolUse and SessionStart(`compact`) hook: the auto-pass watcher; writes the context size to `ctx/<session>.json` (blank after a compact until a real count lands) and, at 300k, 480k and 520k (derived from `autoCompactWindow`), tells the session to run the pass skill, or with autopass off shows you one line at 520k; a shim over `hooks/context_watch.py`, which shares `hooks/autopass_state.py` (tiers, the tab flag, on or off); fails open, with errors in `context-watch.err` in the state dir | symlink `~/.claude/hooks/context-watch.sh`, `context_watch.py` and `autopass_state.py` |
 | `hooks/autopass_toggle.py` | Not a hook: the `skills/autopass` mod runs it for `/autopass on\|off\|status` (`autopass_toggle.py SESSION_ID CWD ARGS`), and it prints the one reply | symlink `~/.claude/hooks/autopass_toggle.py` |
 | `hooks/pass-banner.sh` | SessionStart (`startup`) hook: after a plain `/pass` respawned the tab, shows what the old session said in its last turn, once, as a banner you see and the model doesn't (its format and caps: the shim's header); a shim over `hooks/pass_banner.py`; fails open | symlink `~/.claude/hooks/pass-banner.sh` and `pass_banner.py` |
 | `hooks/pass-notice.sh` | UserPromptSubmit and PostToolUse (main thread) hook: when `pass-respawn`'s waiter dropped a `/pass`, adds its notice (`pass-notice/<session>.json` in the state dir) once as context to the session's next prompt or tool call, so the session stops waiting and says why; exits before Python when no notice is there; a shim over `hooks/pass_notice.py`; fails open, with errors in `pass-notice.err` in the state dir | symlink `~/.claude/hooks/pass-notice.sh` and `pass_notice.py` |
@@ -201,16 +267,19 @@ sees it.
 | `hooks/session-registry.sh` | SessionStart/SessionEnd hook: records which session is open in which tmux tab (`$XDG_STATE_HOME/dotclaude/open-sessions/`), with the window's tab bar placement (`@tab_place`, as `place`) and the `--model` and `--effort` its claude launched with (as `model` and `effort`), for `claude-restore`; deletes the entry on `/exit` or `/clear`, marks it when the window or claude is killed; then hands each payload to `claude-saved` (Star and Shelve; the star follows `/clear`); does nothing outside tmux | symlink `~/.claude/hooks/session-registry.sh` |
 | `hooks/session-summary.sh` | Stop hook: regenerates the session's short (`<=32`-char) tab label via a direct Haiku Messages-API call (`hooks/haiku.py`: Claude subscription OAuth token, stdlib urllib, no API key/jq), detached so it never blocks; caches it to `<config-dir>/session-summaries/<session_id>.title.txt` for `session-title.sh` | symlink `~/.claude/hooks/session-summary.sh` |
 | `hooks/overwrite-guard.sh` | PreToolUse(Write) hook: denies a Write over a file this session hasn't read, or one that cuts a file of 1 KB or more to under a fifth; a shim over `hooks/overwrite_guard.py`; fails open | symlink `~/.claude/hooks/overwrite-guard.sh` and `overwrite_guard.py` |
-| `hooks/ask-check.sh` | PreToolUse(AskUserQuestion) hook: denies a risky ask once, before the dialog, with a 5-point checklist as the reason, and lets the resend through; a shim over `hooks/ask_check.py`; fails open | symlink `~/.claude/hooks/ask-check.sh` and `ask_check.py` |
+| `hooks/ask-check.sh` | PreToolUse(AskUserQuestion) hook: denies a risky ask once, before the dialog, with a 6-point checklist as the reason, and lets the resend through; a shim over `hooks/ask_check.py`; fails open | symlink `~/.claude/hooks/ask-check.sh` and `ask_check.py` |
 | `hooks/practices-check.sh` | PreToolUse(Edit, Write, MultiEdit, Bash), PostToolUse(Bash) and SessionStart hook: the engine for the practices skills' `events.toml` files. It denies an edit once until its skill is loaded, denies once on a bad pattern, and re-injects the skills' must-hold lines after compaction. At a commit it reports what the new commits add that a rule flags, it denies a `git push` once while unpushed commits hold findings, and it denies `gh pr ready` once until a reviewer ran with the touched skills' lines. A shim over `hooks/practices_check.py`; the Bash entries sit behind a shell prefilter; fails open but reports errors at session start | symlink `~/.claude/hooks/practices-check.sh`, `practices_check.py` and `bash_words.py` |
 | `hooks/lane-identity.sh` | SessionStart/Stop/SessionEnd hook: tells a lane session its identity and registers it, prints one board line in a lanes repo's main checkout and relinks the lead record on a proven resume, /clear or /pass of the lead, mirrors a lane's record; a shim over `hooks/lane_identity.py`; fails open | symlink `~/.claude/hooks/lane-identity.sh` and `lane_identity.py` |
 | `hooks/lane-guard.sh` | PreToolUse(Edit/Write/MultiEdit) hook: denies writes to another lane's record or the lanes CLI's data, and relative identity in status files; a shim over `hooks/lane_guard.py`; fails open | symlink `~/.claude/hooks/lane-guard.sh` and `lane_guard.py` |
 | `hooks/delete-guard.sh` | PreToolUse(Bash) hook, sandbox-off commands only: denies a delete whose path uses a variable the command didn't set, a command substitution that would widen it if empty, or a top-level or home tree; a shim over `hooks/delete_guard.py`, which reads commands with `hooks/bash_words.py`; fails open | symlink `~/.claude/hooks/delete-guard.sh`, `delete_guard.py` and `bash_words.py` |
-| `hooks/excluded-guard.sh` | PreToolUse(Bash) hook, excluded commands only: refuses one whose cwd resolves to another repo, whose git config or PATH a sandboxed session could write, or a `claude` or `codex` call outside the project root; a shim over `hooks/excluded_guard.py`; fails closed for excluded heads | symlink `~/.claude/hooks/excluded-guard.sh` and `excluded_guard.py` |
+| `hooks/excluded-guard.sh` | PreToolUse(Bash) hook, excluded commands only: refuses one whose cwd resolves to another repo or to a broken git dir git would look past, or sits below its repo top, whose git config, legacy remote files, local remote URLs, local repository words (a remote group's members too) or PATH a sandboxed session could write, a default remote (or `lane`'s own `origin`) the config doesn't define, a `url.<base>` rewrite base that isn't a network URL with a host, a fetch, pull or push with submodule recursion on, a `gh` flag before a `pr` or `issue` subcommand, git's dir location variables set, or a `claude` or `codex` call outside the project root; a shim over `hooks/excluded_guard.py`; fails closed for excluded heads | symlink `~/.claude/hooks/excluded-guard.sh` and `excluded_guard.py` |
 | `hooks/excluded-check.sh` | SessionStart hook: shows what the excluded-command guard would refuse from the session's project and PATH, with the Edit deny rule for each dir, once per change in those findings; runs `excluded_guard.py --session`; fails open | symlink `~/.claude/hooks/excluded-check.sh` |
 | `hooks/memory-git.sh` | SessionStart/Stop hook: commits every project's auto-memory to a local-only git repo (`$XDG_STATE_HOME/dotclaude/memory.git`); never blocks | symlink `~/.claude/hooks/memory-git.sh` |
 | `hooks/blank-display.sh` | SessionStart hook: in a repo that opts in with `git config dotclaude.blankDisplay true` (every worktree of it), sets `DISPLAY` and `WAYLAND_DISPLAY` empty for Bash through `CLAUDE_ENV_FILE`, so a headed browser can't open in front of you; silent elsewhere; a shim over `hooks/blank_display.py`; fails open; see docs/chrome-devtools-wsl.md "Background Windows Chrome for probes" | symlink `~/.claude/hooks/blank-display.sh` and `blank_display.py` |
+| `hooks/sandbox-caches.sh` | SessionStart hook: creates `~/.cache/claude-sandbox/<tool>` dirs and, through `CLAUDE_ENV_FILE`, exports the cache vars of npm, bun, uv, pip, pnpm, node-gyp and Playwright to them for sandboxed Bash only, so the sandbox keeps the default caches (where plugin MCP servers and unsandboxed installs run from) read-only; silent; fails open, and a sandboxed install then gets a write error | symlink `~/.claude/hooks/sandbox-caches.sh` |
+| `bin/cache-unlink` | Counts, per project, the files under the dirs you name that are hardlinks into the uv, pnpm or bun cache (installs made before copy mode, sandbox gap N3; `--files` lists them); `--apply` gives each a copy of its own, writing only through dirs it opened without following a link. Links inside a cache never count; an unreadable dir makes the report incomplete. Run it from a terminal: it refuses inside the sandbox | symlink `~/.local/bin/cache-unlink` when that dir exists |
 | `bin/claude-file-history` | Lists and restores Claude Code's own backups of a file (`~/.claude/file-history`), found through the transcripts | symlink `~/.local/bin/claude-file-history` when that dir exists |
+| `bin/npx` | Shim ahead of the real npx: for a launch by Claude Code (an MCP server, which starts in the project dir) or an exact-version spec (`pkg@1.2.3`), it puts `--prefix=/` first, so npx ignores the project dir's `node_modules` and `.npmrc` (sandbox gap N2); anything else, such as your own `npx tsc`, reaches the real npx untouched. A hook's npx runs under `/bin/sh -c`: where that shell forks it (dash, on Debian and Ubuntu) it reaches npx untouched; where it hands a lone command over (bash, on macOS) it gets the prefix. What a project hook runs is sandbox gap H1, not the shim's. It also makes `/` npm's global prefix for that run (`npm_config_prefix=/` reaches the package). So a project's own MCP server that needs the project's registry or local install should start with `node <path>`, not npx: under the shim, `npx -y @corp/mcp` would resolve on the public registry | symlink `~/.local/bin/npx` when that dir exists (ahead of `/usr/bin` on PATH); an npx already there that isn't dotclaude's (npm's own, with npm's prefix at `~/.local`) is left alone and named |
 | `bin/chrome-bg` | WSL2 only, run sandbox-off: runs Windows Chrome behind all your windows for headed puppeteer probes; `run -- CMD` hands CMD the browserURL in `$CHROME_BG_URL` and stops Chrome when CMD ends, `start`, `stop` and `ls` manage detached runs, `check` is the live self-test; see docs/chrome-devtools-wsl.md "Background Windows Chrome for probes" | symlink `~/.local/bin/chrome-bg` when that dir exists |
 | `templates/` | `SPEC.md`, `PLAN.md`, `STATUS.md` scaffolds for full-track work that survive `/clear`, and `LANE.md`, a lane's record | symlink per file into `~/.claude/templates/` |
 | `codex/` | Codex CLI config (config.toml baseline + AGENTS.md + merge-config.py); see docs/codex.md | symlink `AGENTS.md` into `~/.codex/`; merge `config.toml`'s keys into the local `~/.codex/config.toml` (Codex writes to it, so it is never linked; `auth.json` stays local) |
@@ -226,9 +295,10 @@ sees it.
 | `docs/images/` | The post's diagram: `delegation-layers.svg` (source) and `delegation-layers.png` (2x render) | reference |
 | `tests/delegation/` | Unit tests for the delegation pieces (no model calls) and `run.py`, a live harness that spends model calls | run from the repo root |
 | `tests/practices/` | The practices skills' eval (`server-code` and `auth-secrets`; each case names its owner): `run.py` runs live `claude -p` sessions on planted-bug tasks in a small Next-shaped app and grades each with a hidden oracle under bwrap (spends model calls, runs sandbox-off), and `test_oracles.py` proves each oracle offline against good and bad overlays (no model calls) | `python3 -m unittest discover -s tests/practices -t tests/practices`; `run.py` by hand from the repo root |
-| `tests/setup/` | Unit tests for `merge-settings.py`, `git/install-ignore.py`, and the prompt and session hooks (`handoff_reminder.py`, `session-title.sh`, `session-summary.sh`), the tmux and sound hooks (`test_tmux_hooks.py`), the device-wide mute's flag (`test_mute_state.py`), its CLI, bar mark and menu (`test_claude_mute.py`) and the toast's `-Silent` (`test_notify_toast_ps1.py`, reading `notify-toast.ps1` statically), `tmux/tmux-claude-status` (`test_tmux_claude_status.py`), the restore after tmux dies (`test_session_registry.py`, `test_claude_restore.py`), Star and Shelve (`test_claude_saved.py`), the grouped tab bar (`test_tmux_tab_bar.py`), the replies across a pass (`test_pass_banner.py`, `test_pass_last.py`, `test_md_render.py`), the drop notice (`test_pass_notice.py`), the auto-pass watcher and `/autopass` (`test_context_watch.py`), the ctx widget's tiers, cue and window write (`test_ctx_breakdown.py`), `setup-tmux.sh` (`test_setup_tmux.py`; its one-rename links and `~/.tmux.conf` write in `test_setup_tmux_link.py`), the overwrite and delete guards, the ask check (`test_ask_check.py`), the practices check (`test_practices_check.py`, which also runs every `practices_samples/*.toml` sample against its skill's `events.toml`), `memory-git.sh`, `claude-file-history`, Alt+V's inbox and the laptop scripts (`test_paste_inbox.py`; its real tmux and Windows PowerShell cases run only outside the sandbox), the display hook (`test_blank_display.py`), `chrome-bg` with its supervisor (`test_chrome_bg.py` on a fake supervisor and CDP server, `test_chrome_bg_ps1.py` reading `chrome-bg.ps1` statically; nothing launches Chrome; see docs/chrome-devtools-wsl.md), and the clock guard (`test_clock_use.py`: tests time durations with `time.monotonic()`, and a real epoch stamp keeps `time.time()` with `# wall clock` ending its line); `replay_history.py` is a local-only replay tool, not a unit test | `python3 -m unittest discover -s tests/setup -t tests/setup` |
+| `tests/setup/` | Unit tests for `merge-settings.py`, `git/install-ignore.py`, and the prompt and session hooks (`handoff_reminder.py`, `session-title.sh`, `session-summary.sh`), the tmux and sound hooks (`test_tmux_hooks.py`), the device-wide mute's flag (`test_mute_state.py`), its CLI, bar mark and menu (`test_claude_mute.py`) and the toast's `-Silent` (`test_notify_toast_ps1.py`, reading `notify-toast.ps1` statically), `tmux/tmux-claude-status` (`test_tmux_claude_status.py`), the restore after tmux dies (`test_session_registry.py`, `test_claude_restore.py`), Star and Shelve (`test_claude_saved.py`), the grouped tab bar (`test_tmux_tab_bar.py`), the replies across a pass (`test_pass_banner.py`, `test_pass_last.py`, `test_md_render.py`), the drop notice (`test_pass_notice.py`), the auto-pass watcher and `/autopass` (`test_context_watch.py`), the ctx widget's tiers, cue and window write (`test_ctx_breakdown.py`), `setup-tmux.sh` (`test_setup_tmux.py`; its one-rename links and `~/.tmux.conf` write in `test_setup_tmux_link.py`), the overwrite and delete guards, the ask check (`test_ask_check.py`), the practices check (`test_practices_check.py`, which also runs every `practices_samples/*.toml` sample against its skill's `events.toml`), `memory-git.sh`, `claude-file-history`, Alt+V's inbox and the laptop scripts (`test_paste_inbox.py`; its real tmux and Windows PowerShell cases run only outside the sandbox), the display hook (`test_blank_display.py`), the sandbox caches hook (`test_sandbox_caches.py`), `chrome-bg` with its supervisor (`test_chrome_bg.py` on a fake supervisor and CDP server, `test_chrome_bg_ps1.py` reading `chrome-bg.ps1` statically; nothing launches Chrome; see docs/chrome-devtools-wsl.md), and the clock guard (`test_clock_use.py`: tests time durations with `time.monotonic()`, and a real epoch stamp keeps `time.time()` with `# wall clock` ending its line); `replay_history.py` is a local-only replay tool, not a unit test | `python3 -m unittest discover -s tests/setup -t tests/setup` |
 | `tests/deck_production/` | Unit tests for `deck-production`'s `deckkit geometry` gate (rule matrix on canned probe output, plus an end-to-end run over the synthetic `fixtures/geodeck` that skips without a headless Chrome) `deckkit regress`'s geometry facts, and `deckkit doctor`'s exit codes | `python3 -m unittest discover -s tests/deck_production -t tests/deck_production` |
 | `tests/lanes/` | Unit tests for the `lane` CLI, the lane hooks and `handoff-check`, on a throwaway bare origin plus clone (no network) | `python3 -m unittest discover -s tests/lanes -t tests/lanes` |
+| `tests/exam_prep/` | Unit tests for `exam-prep`'s scripts (the notes build, page and print checks, the mock key and leak checks, coverage and extract checks, `ed-pull` on a fake Ed API) on synthetic fixtures, plus checks on the skill's own files (`test_skill_files.py`: no em dashes, cited ids defined, and no string from the private denylist `~/scratch/exam-prep/denylist.txt` when that file exists); no model calls, no network; the headless-browser cases run only with `EXAM_PREP_PLAYWRIGHT` set | `python3 -m unittest discover -s tests/exam_prep -t tests/exam_prep` |
 | `tests/pass/` | Unit tests for `pass-respawn` on fakes for tmux, the session file and the transcript (`test_pass_respawn.py`), plus its guards and checks on the pass docs (`test_pass_guards.py`); nothing reaches the live tmux server | `python3 -m unittest discover -s tests/pass -t tests/pass` |
 | `skills/autopass/tests/` | The `/autopass` mod's tests: registration, the args reaching the script, the reply as a notice mid-turn (from Enter) and as output when idle, a prompt that starts no turn (dropped, failed or a built-in), a subagent's or an interrupted turn's end, unreadable state, and a failing script (the test stands for the engine; nothing runs on the host) | `claude plugin test skills/autopass` |
 | `docs/lanes.md` | Lanes: the incident, the five invariants, the communication model, the layout and the spike results | reference |
@@ -239,7 +309,7 @@ sees it.
 | `tmux/` | The tmux side of the indicator: `claude.conf` (titles, status bar, the ◐ busy and ✳ waiting glyphs), the optional `base.conf` (mouse, splits, the Ctrl-b Enter menu), `cheatsheet.txt`, `tmux-claude-status`, the backstop the status bar runs (it also maps background sessions to their tab and has `claude-saved track` record attach tabs for `claude-restore`), `claude-restore`, which reopens `main`'s Claude tabs after the tmux server dies, `claude-saved`, which stars and shelves a tab's chat (the tab's right-click menu, Ctrl-b S, or Ctrl-b Enter), `pass-last`, which shows what Claude said before a `/pass` (Ctrl-b Up, or either menu), `paste-inbox`, which pastes a screenshot or file sent from another device (Alt+V; see Hooks, "Paste a screenshot or file from another device"), `tmux-tab-bar`, which lays out the status bar in up to 5 rows grouped by project and moves tabs you arrange by hand, and `claude-mute`, which mutes the ring and the toasts for every Claude session on the machine (Ctrl-b Enter, Mute…; a mark on the bar; see Hooks, "The device-wide mute") | sourced and linked by `setup-tmux.sh` |
 | `setup-tmux.sh` | Opt-in tmux installer: links `tmux-claude-status`, `claude-restore`, `claude-saved`, `pass-last`, `paste-inbox`, `tmux-tab-bar` and `claude-mute` into `~/.local/bin` and keeps a marked `source-file` block in `~/.tmux.conf` (`--base` adds `base.conf` and the cheatsheet, `--no-base` drops them, and a run with neither keeps what the block has); each link and the new `~/.tmux.conf` land with one rename, as `setup.sh`'s do (Quickstart), so an installed path doesn't go missing mid-run (a symlinked `~/.tmux.conf` is written through to its target) | run once per machine that uses tmux; not called by `setup.sh` |
 | `laptop/` | The Windows laptop side of Alt+V: `remote-paste.ahk` (AutoHotkey v2) turns Ctrl+V of a screenshot, or of one copied file, in a tab showing the PC's tmux into an upload plus Alt+V, `remote-paste.ps1` uploads, `install-remote-paste.ps1` installs both (see Hooks, "Paste a screenshot or file from another device") | run once on the laptop; nothing on the PC installs it |
-| `setup-chrome-wsl.sh` | Opt-in WSL2 installer: installs Chrome for Testing and registers the user-scoped `chrome-devtools` override | run once on WSL2; not called by `setup.sh` |
+| `setup-chrome-wsl.sh` | Opt-in WSL2 installer: installs Chrome for Testing, points the plugin's server at it through `~/.config/cd4a/config.json`, and removes the old user-scoped `chrome-devtools` override | run once on WSL2; not called by `setup.sh` |
 | `setup.sh` | The installer | run once per machine |
 | `sync.sh` | Regenerates the derived plugin lists from live `~/.claude/` | run after plugin changes |
 
@@ -281,7 +351,7 @@ need nothing extra.
   `nudge_min` (`skills/delegation/policy.toml` `[deadline]`), its next successful call gets one
   reminder to report, as `additionalContext`. Fails open, so a broken install only loses the
   nudge; `subagent-policy` enforces the stop.
-- **SessionStart (`startup|resume`): `delegation-due.sh`** (in this repo). Runs
+- **SessionStart (`startup|resume|fork`): `delegation-due.sh`** (in this repo). Runs
   `delegation-ledger due --hook`: on the first session of a new Claude Code version it starts the
   quick canary in the background (unit tests, sandbox posture, strings in the binary, and a check
   that the installed watch-guard shim runs clean; no model calls), and once a day it starts
@@ -493,7 +563,7 @@ need nothing extra.
   `session-created` hook runs `claude-restore --auto main`. It takes the files from the same
   socket but an earlier server (other sockets, like a `tmux -L` test server, are left alone) and opens one window per tab, in the old order, running `claude --resume <id>` in its
   directory with the session's `--model` and `--effort`, or what a later `/model` or `/effort`
-  picked (a bare resume keeps the model but drops the effort; docs/lanes.md, "Model and
+  picked (a bare resume takes the pinned model and the default effort; docs/lanes.md, "Model and
   effort"). It sets each window's tab bar placement before claude starts, then lays out the
   bar once, so the tabs come back where you put them. A marked tab comes back only if it ended within 120 s of its own server's
   last activity (the shutdown itself); one closed earlier stays closed. It skips a session
@@ -590,16 +660,31 @@ need nothing extra.
   from an agent's report, named another live lane's file without the lane, and leaned on code
   names the user had never seen. A transcript search of 1,472 asks found these in plain sessions
   as often as in lanes, about twice as often in plan mode. A checklist sent at the moment of the
-  ask fixed them; a memory line didn't. So the hook denies a risky ask once with this checklist
+  ask fixed them; a memory line didn't. A later audit of past design decisions (lane
+  design-audit) found a fourth miss: forks that offered a sandbox or permission option without
+  saying who could write what runs there. So the hook denies a risky ask once with this checklist
   as the reason (the list is also in `skills/lanes/SKILL.md`, "Who asks Hayden what"):
   1. check each claim against the code yourself; 2. name every other live lane whose file the
   ask mentions; 3. restate the scope against the brief; 4. say so when the user skipped a
-  question; 5. explain each code name in plain words. An ask is risky when:
+  question; 5. explain each code name in plain words; 6. when an option runs anything outside
+  the sandbox or skips a prompt, name what runs there, who can write it, and by which route. An
+  ask is risky when:
   - a subagent report came in since the user's last answer (a typed prompt, an answered ask or
     an approved plan) and at most one Read, Grep, Glob or Bash call followed it;
   - its questions hold 4 or more backticked names;
   - it names a file another live lane of the repo is changing (its branch's diff from the base,
-    or its brief's Expected files line) without naming that lane.
+    or its brief's Expected files line) without naming that lane;
+  - its questions or options name the sandbox (sandbox-off, unsandboxed), an excluded command,
+    an allow, deny, ask or permission rule, a sandbox or permission setting or mode
+    (`dangerouslyDisableSandbox`, `allowWrite`, `bypassPermissions` and the like), the
+    classifier or auto mode, and don't say who can write what runs there ("who can write it",
+    "any lane could edit it", "only the owner can change it"). Only that statement counts, never
+    a threat keyword: in this repo each keyword also names the option itself ("the sandbox
+    escape") or turns up in a dismissal ("no real threat"), and a match would turn the rule off,
+    while a false deny costs one resend. Replayed over 2,516 past asks, the rule held back
+    10.0% of them; 6 of the 258 that used this wording (2.3%) had said who could write. Hook and
+    install are left out of the list on purpose: with them it held back 19.6%, mostly routine
+    asks.
 
   A deny is the only hook output the model sees before the dialog. It resends in the same turn
   (probed on 2.1.304), and the resend passes: a deny of this hook's already in the window lets
@@ -680,8 +765,14 @@ need nothing extra.
 - **PreToolUse(`Bash`): `excluded-guard.sh`** (in this repo), for commands that match
   `sandbox.excludedCommands` and so run outside the sandbox. Rule: such a command must not act on
   anything a sandboxed session can write. It refuses a call whose cwd resolves to a git repo
-  other than the project's, whose other git config or PATH dirs a sandboxed session could write,
-  or a `claude` or `codex` call outside the project root. Fails closed for excluded heads; denies go to `$XDG_STATE_HOME/dotclaude/excluded-guard.log`.
+  other than the project's or sits below its repo top (run it from the top), whose other git config or PATH dirs a sandboxed session could write,
+  whose local repository (a path or local remote URL, wherever git's server side looks for it,
+  or a fetch group's members) a sandboxed session could write or create, a call naming no
+  repository whose default remote the config doesn't surely define, a fetch, pull or push with
+  submodule recursion on, a `gh` flag other than `-R`/`--repo` before a `pr` or `issue`
+  subcommand (put flags after it), a call while `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY` or
+  `GIT_ALTERNATE_OBJECT_DIRECTORIES` is set, a word the shell would rewrite (a git refspec may use git's revision
+  spellings zsh leaves alone), or a `claude` or `codex` call outside the project root. Fails closed for excluded heads; denies go to `$XDG_STATE_HOME/dotclaude/excluded-guard.log`.
   docs/delegation.md "The excluded-command guard" has the checks and what they don't cover.
 - **SessionStart: `excluded-check.sh`** (in this repo). The same guard's view of the session's
   project and PATH, so a missing Edit deny rule shows when a session starts, not when a push gets
@@ -696,9 +787,10 @@ need nothing extra.
   the tab, it shows what the old session said in its last turn, once, as a banner the model
   doesn't see (see Pass, below). It acts only in the same tab on the same tmux server, within
   120 s of the pass, and never in a `claude -p` run or a subagent. Fails open.
-- **Stop / PostToolUse: `context-watch.sh`** (in this repo). The auto-pass watcher (see
-  Auto-pass, below); its `/autopass` toggle is the `skills/autopass` mod, not a settings hook.
-  The PostToolUse entry skips a subagent's calls before any Python starts. Fails open.
+- **Stop / PostToolUse / SessionStart(`compact`): `context-watch.sh`** (in this repo). The
+  auto-pass watcher (see Auto-pass, below); its `/autopass` toggle is the `skills/autopass` mod,
+  not a settings hook. The PostToolUse entry skips a subagent's calls before any Python starts.
+  The SessionStart entry only blanks the count after a compact. Fails open.
 - **UserPromptSubmit / PostToolUse: `pass-notice.sh`** (in this repo).
   - **What it does.** When a `/pass` drops (see Pass, below), the waiter leaves the session
     a notice at `pass-notice/<session>.json` in the state dir. This hook adds it once, as
@@ -708,20 +800,19 @@ need nothing extra.
   - **Keyed by session id.** A session that restore resumed after tmux died still gets it.
   - It exits before Python starts when no notice exists, skips a subagent's calls, and fails
     open.
-- **SessionStart (`startup|resume|clear|compact`) / Stop / SessionEnd: `lane-identity.sh`** (in this
-  repo). In a lane it tells the session its lane id, what its worktree has checked out (a branch, or
-  a detached HEAD's commit), claims, port and record, and registers it in `lane.json`; after a
-  compact it adds "re-read your record". In the main checkout of a lanes repo it prints one board
-  line, and on SessionStart and Stop it runs `lane lead` when the session proves it continues the
-  recorded lead (a resume, a /clear or a /pass successor). On Stop and SessionEnd it mirrors the
-  lane's `.lane/` into the common dir. Silent in a repo with no lanes; fails open (see Lanes,
-  below).
+- **SessionStart (every source) / Stop / SessionEnd: `lane-identity.sh`** (in this repo). In a lane
+  it tells the session its lane id, what its worktree has checked out (a branch, or a detached
+  HEAD's commit), claims, ports and record, and registers it in `lane.json`; after a compact it adds
+  "re-read your record". In the main checkout of a lanes repo it prints one board line, and on
+  SessionStart and Stop it runs `lane lead` when the session proves it continues the recorded lead
+  (a resume, a /clear or a /pass successor). On Stop and SessionEnd it mirrors the lane's `.lane/`
+  into the common dir. Silent in a repo with no lanes; fails open (see Lanes, below).
 - **PreToolUse(`Edit|Write|MultiEdit`): `lane-guard.sh`** (in this repo). In a lanes repo it
   denies a write to another lane's record or to the CLI's data under `<common-dir>/lanes/`, and
   relative identity ("another session", "this session") in a lane record or the root STATUS.md.
   A repo with no lanes is untouched. Fails open; denies go to
   `$XDG_STATE_HOME/dotclaude/lane-guard.log`.
-- **SessionStart (`startup|resume|clear|compact`): `blank-display.sh`** (in this repo). In a repo
+- **SessionStart (every source): `blank-display.sh`** (in this repo). In a repo
   that opts in with `git config dotclaude.blankDisplay true`, read with `--local` so every
   worktree of the repo is covered, it sets `DISPLAY` and `WAYLAND_DISPLAY` empty for Bash through
   `CLAUDE_ENV_FILE`. A headed browser started from Bash then can't open a window in front of you,
@@ -730,6 +821,53 @@ need nothing extra.
   go to `$XDG_STATE_HOME/dotclaude/blank-display.log`. docs/chrome-devtools-wsl.md "Background
   Windows Chrome for probes" has why the vars are empty, not unset, and why it is never a
   settings `env` entry.
+- **SessionStart (every source): `sandbox-caches.sh`** (in this repo). It
+  gives sandboxed Bash's package managers caches of their own: it creates a dir per tool under
+  `~/.cache/claude-sandbox` (the sandbox skips a missing `allowWrite` path) and appends to
+  `CLAUDE_ENV_FILE` a line that exports, only when `SANDBOX_RUNTIME` is set (which the sandbox
+  runtime does inside the sandbox), `npm_config_cache`, `BUN_INSTALL_CACHE_DIR`,
+  `UV_CACHE_DIR`, `PIP_CACHE_DIR`, `PNPM_HOME` (pnpm's store), `npm_config_devdir` (node-gyp's
+  headers), plus `UV_PYTHON_DOWNLOADS=never`. pnpm's metadata
+  cache needs no var: it stays read-only and pnpm skips writing it. The default caches feed code
+  that runs outside the sandbox.
+  Plugin MCP servers start as `npx <pkg>@<version>` and run from `~/.npm/_npx/<hash>/`, which
+  npx reuses without rechecking: with `~/.npm` writable, an edit from sandboxed Bash ran at the
+  next launch (sandbox gap N1, 2026-10-25). Bun's global installs are hardlinks into
+  `~/.bun/install/cache`, so the status line's `ccstatusline` script was the same file as one
+  sandboxed Bash could write (N3). uv, pip, pnpm, node-gyp and Playwright are the same class
+  (N3): unsandboxed installs and runs reuse what their caches hold. So every default is out of
+  `allowWrite`, and `~/.cache/claude-sandbox` is the only entry. Unsandboxed commands keep the
+  defaults: an excluded `claude -p` would otherwise pass the vars to its MCP servers, as a
+  settings `env` entry would. The first sandboxed install of a package downloads it again;
+  `allowedDomains` lists the download hosts (`nodejs.org` for node-gyp's headers). Two things
+  stay your own, read-only, and come from a terminal:
+  - **Pythons.** Sandboxed uv runs the ones uv installed for you, read-only, and never
+    downloads one, so no session can rewrite an interpreter another project's venv points at.
+    A version you lack fails with uv's own hint; run `uv python install <version>` in a
+    terminal.
+  - **Playwright's browsers.** Sandboxed Playwright launches the ones in its default dir
+    (`~/.cache/ms-playwright`), read-only: a launch writes nothing there it needs (its
+    dependency marker write fails quietly, and it rechecks the host instead). A sandboxed
+    `playwright install` fails with a write error; run `npx playwright@<the project's version>
+    install chromium-headless-shell` (or `chromium`) in a terminal. The exact version picks the
+    revision the project's Playwright wants, and makes `bin/npx` run it outside the project
+    dir, so a project's own `node_modules/playwright` never runs there. Only the headless shell
+    runs in the sandbox: full Chromium dies on its single-instance socket, which the sandbox
+    refuses.
+
+  The shelf itself is shared: every sandboxed session can write `~/.cache/claude-sandbox`, so a
+  session in one project can tamper with a package another project's next sandboxed install
+  takes from it. npm checks the hash of what it reads from its cache, but npx reuses a package
+  tree it already unpacked there without a check, so an edit to it runs in the next sandboxed
+  `npx pkg@<that version>` anywhere. pnpm rehashes a store file only when its mtime moved, which
+  the writer can set back; uv, pip and bun don't check. Under copy mode a uv or pnpm install, once
+  made, holds files of its own, so a later edit to the shelf can't reach it; bun's installs still
+  hardlink. Treat what a sandboxed install built as sandbox-made,
+  whichever session built it, before running it from a terminal. Every sandboxed npm or npx run prints one
+  `npm warn Unknown env config "devdir"` line: node-gyp reads its dir only from that
+  npm-style var. Silent; fails open (errors go to
+  `$XDG_STATE_HOME/dotclaude/sandbox-caches.log`), and a sandboxed install then gets a write
+  error on the default cache.
 
 **A file got overwritten?** Claude Code backs up a file before each tool write, outside the
 working directory too, for as long as the session's transcript is kept (about 30 days). Bash
@@ -747,8 +885,9 @@ checkout: a *lane*. One shared STATUS.md broke this. A line like "another sessio
 and status single-writer:
 
 - `lane new chart-fix --claim 42 --goal "..."` makes the worktree and branch from `origin/main`,
-  copies the files `.worktreeinclude` lists, hands out a port, runs the repo's setup command and
-  seeds the lane's record (`<lane>/.lane/STATUS.md`, from `templates/LANE.md`).
+  checks the checkout byte for byte against the base as fetched into a store no lane can write
+  (docs/lanes.md, LR7), copies the files `.worktreeinclude` lists, hands out a block of ports,
+  runs the repo's setup command and seeds the lane's record (`<lane>/.lane/STATUS.md`, from `templates/LANE.md`).
 - `lane open chart-fix` starts the lane's session in a new tmux window, in plan mode, told to
   read its record; `--focus` switches to a session already running there. `--model` and
   `--effort` (repo defaults from `lane init`) pick its model and effort, and a plain pass, a tab
@@ -763,7 +902,7 @@ and status single-writer:
   that lane's live session. A session's ListAgents name is its tab title, which changes most
   turns, and a pass gives it a new socket, so resolve the address just before each send.
   With two live sessions in the main checkout, `lane addr lead` prints the lead's: the last one
-  to run a bare `lane init`, `new`, `adopt`, `open` (not `--print`) or `done` that succeeds,
+  to run a bare `lane init`, `new`, `adopt`, `open` (not `--print`), `done` or `park` that succeeds,
   or `lane lead` to take it on
   purpose (`! lane lead` at its prompt). `lane ls` names both, with their windows.
   `--repo PATH` looks in the lanes repo whose main checkout holds PATH instead of the cwd's,
@@ -771,11 +910,18 @@ and status single-writer:
   `lane addr --repo ~/dotclaude lead` prints.
 - `lane lock gate -- npm run e2e` runs a shared gate under a named lock, so a second lane's run
   waits instead of colliding.
+- `lane serve -- npm run dev -- --port {port}` starts a lane's dev server on a port of its
+  block (`lane init --block N` gives each lane N ports) and fails unless the port's listener is
+  that server. A server that failed to bind a port another lane holds can't leave checks
+  testing the other lane's. It runs only with the sandbox off; `--stop PORT` ends it
+  (docs/lanes.md, "Ports and `lane serve`").
 - `lane trial --run "<suite>" ...`, before a lane asks for ready, merges origin/main and every
   other live lane's commits onto it in a scratch tree and runs each suite there under the
-  `suite` lock. A failed suite reruns without the other lanes, so only the merge's own failures
-  count, and a conflict names the lanes it is between. With nothing to merge, no suite runs
-  (docs/lanes.md, "Cross-lane checks").
+  `suite` lock (after any the config's `trial-locks` names, such as a repo's own quiet-machine
+  lock). A failed suite reruns without the other lanes, so only the merge's own failures
+  count, and a conflict names the lanes it is between. A lane that conflicts with origin/main
+  alone is untried, not a failure. With nothing to merge, the suites still run once on the lane
+  plus origin/main (docs/lanes.md, "Cross-lane checks").
 - A lane tests its change by installing from its own worktree (`lane lock install --
   ./setup.sh`), and that install holds. setup.sh refuses to run from any other lane or clone
   until the main checkout's own run relinks everything. It also refuses a lane with no commit
@@ -783,8 +929,14 @@ and status single-writer:
 - `lane done chart-fix` closes a merged lane in one run. It ends the lane's own sessions and
   what runs under them, proven from /proc and Claude Code's session files and never chosen by
   name or tmux window, and it refuses anything else by name. Then it archives the record and
-  removes the worktree. While the worktree exists, it refuses a lane whose record's Next has a
-  `Keep open:` line (more PRs to come) unless given `--abandon`.
+  removes the worktree, with the registration of any tree a killed `lane trial` left in it.
+  While the worktree exists, it refuses a lane whose record's Next has a
+  `Keep open:` line (more PRs to come; one inside a comment counts too), or whose record has an
+  unclosed `<!--` or a stray `-->`, unless given `--abandon`.
+- `lane park chart-fix` frees a finished lane's cap slot while it waits its merge turn. It ends
+  the lane's sessions the way `done` does and keeps the worktree, branch, record and claims. It
+  refuses unless the work is pushed and handed off. `lane open chart-fix` unparks it, at most
+  one lane over the cap, for its rebase and merge.
 - An optional lead session triages requests into lanes, opens them on Hayden's approval and sets
   the merge order (the skill's "The lead"). After a lane's PR merges, the lane sends it
   `merged #N`, and the lead reinstalls and runs `lane done` on Hayden's standing approval. Each
@@ -888,8 +1040,10 @@ rechecks the handoff and respawns the pane with a fresh `claude`.
 ### Auto-pass
 
 A session can hand off on its own before auto-compact (about 567k tokens with
-`autoCompactWindow` at 600k). `hooks/context-watch.sh` runs on Stop and on every main-thread
-tool call. It reads the context size from the transcript's last assistant `usage`, writes it to
+`autoCompactWindow` at 600k). `hooks/context-watch.sh` runs on Stop, on every main-thread
+tool call and when a compact ends. It reads the context size from the transcript's last assistant `usage` (none when a
+compact boundary comes first: the first reply after a compact can land after its tool call's
+hook, and a compact blanks the count until then), writes it to
 `~/.local/state/dotclaude/ctx/<session>.json` (for every session, `claude -p` and `--bg` ones
 included), and acts at three tiers. They come from `autoCompactWindow`, or from the model's
 window when the ctx file says it is smaller: compact at window - 33k, hard 8% of the window
@@ -916,8 +1070,8 @@ before that (at most 47k), wrap-up 7% before hard (at most 40k), soft at half th
   minutes, it says compact mode too, as safe whether or not anything runs.
 - With autopass off, you alone see one line at the hard tier, once: "Context 521k, auto-compact
   near 567k: hand off now (/pass)."
-- `/autopass on|off|status` sets it for this tmux tab, or shows the count, the next tier, on or
-  off and what set it. The `skills/autopass` mod answers it with no model turn, at once even
+- `/autopass on|off|status` sets it for this tmux tab, or shows the count ("unknown yet" before
+  the first one, and after a compact until the next), the next tier, on or off and what set it. The `skills/autopass` mod answers it with no model turn, at once even
   when typed mid-turn: while a turn runs the reply is a dim notice, otherwise the command's
   output. Without a tab's setting,
   a lane and the lanes repo's main checkout (the lead) are on (`autopass` in the repo's lanes

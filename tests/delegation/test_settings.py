@@ -21,6 +21,7 @@ from _paths import REPO, load_script
 with open(os.path.join(REPO, "settings.json")) as f:
     S = json.load(f)
 POLICY = load_script("subagent-policy").load_policy()
+SOURCES = load_script("delegation_checks.py").SESSION_START_SOURCES
 
 
 def load_hook(name):
@@ -138,7 +139,7 @@ class Baseline(unittest.TestCase):
                           if "tmux-state.sh" in h["command"]])
         (start,) = [e for e in S["hooks"]["SessionStart"]
                     if any("tmux-state.sh" in h["command"] for h in e["hooks"])]
-        self.assertEqual(start.get("matcher"), "startup|resume|clear")
+        self.assertEqual(start.get("matcher"), "startup|resume|clear|fork")
         every = [c for entries in S["hooks"].values() for e in entries for c in
                  (h["command"] for h in e["hooks"])]
         self.assertFalse([c for c in every if "SoundPlayer" in c])
@@ -202,8 +203,9 @@ class Baseline(unittest.TestCase):
     def test_due_checks_run_at_session_start_and_fail_open(self):
         (entry,) = [e for e in S["hooks"]["SessionStart"]
                     if any("delegation-due.sh" in h["command"] for h in e["hooks"])]
-        # Not on clear or compact: one nudge per session, not one per context reset.
-        self.assertEqual(entry["matcher"], "startup|resume")
+        # Not on clear or compact: one nudge per session, not one per context reset. A fork
+        # (/branch, --fork-session) is a new session.
+        self.assertEqual(entry["matcher"], "startup|resume|fork")
         (h,) = entry["hooks"]
         self.assertNotIn("exit 2", h["command"])
         self.assertLessEqual(h["timeout"], 10)  # the first reply waits for SessionStart hooks
@@ -214,7 +216,7 @@ class Baseline(unittest.TestCase):
         # on compact: nothing it reads changes there. The first reply waits for it.
         (entry,) = [e for e in S["hooks"]["SessionStart"]
                     if any("excluded-check.sh" in h["command"] for h in e["hooks"])]
-        self.assertEqual(entry["matcher"], "startup|resume|clear")
+        self.assertEqual(entry["matcher"], "startup|resume|clear|fork")
         (h,) = entry["hooks"]
         self.assertEqual(h["command"], 'bash "$HOME/.claude/hooks/excluded-check.sh"')
         self.assertLessEqual(h["timeout"], 5)
@@ -223,14 +225,16 @@ class Baseline(unittest.TestCase):
                          [h["command"]])
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "excluded-check.sh"), os.X_OK))
 
-    def test_the_display_blanker_runs_on_every_context_reset_and_fails_open(self):
+    def test_the_display_blanker_runs_on_every_session_start_and_fails_open(self):
         # A repo opts in by git config dotclaude.blankDisplay; the hook writes CLAUDE_ENV_FILE,
         # never a settings env entry (Claude Code's own image paste calls xclip and wl-paste).
-        # The first reply waits for SessionStart hooks.
+        # No matcher: CLAUDE_ENV_FILE is per session id, so a source it skipped (a fork, while
+        # the matcher listed the other four) left that session's Bash on the display. The first reply waits
+        # for SessionStart hooks.
         blank = 'bash "$HOME/.claude/hooks/blank-display.sh"'
         (entry,) = [e for e in S["hooks"]["SessionStart"]
                     if any("blank-display" in h["command"] for h in e["hooks"])]
-        self.assertEqual(entry["matcher"], "startup|resume|clear|compact")
+        self.assertNotIn("matcher", entry)
         (h,) = entry["hooks"]
         self.assertEqual(h["command"], blank)
         self.assertLessEqual(h["timeout"], 5)
@@ -239,6 +243,47 @@ class Baseline(unittest.TestCase):
                          [blank])
         self.assertFalse({"DISPLAY", "WAYLAND_DISPLAY"} & set(S.get("env", {})))
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "blank-display.sh"), os.X_OK))
+
+    def test_sandboxed_package_managers_write_their_own_caches(self):
+        # Sandbox gaps N1 and N3 (2026-10-25): plugin MCP servers run unsandboxed from
+        # ~/.npm/_npx, which npx reuses without rechecking, and bun's global installs (the status
+        # line's ccstatusline) are hardlinks into ~/.bun/install/cache; uv, pip, pnpm, node-gyp
+        # and Playwright reuse their caches the same way. All leave allowWrite; the hook points
+        # sandboxed Bash at ~/.cache/claude-sandbox through CLAUDE_ENV_FILE, except Playwright,
+        # which launches Hayden's browsers read-only. A settings env entry would reach the MCP
+        # servers and the status line.
+        allow = S["sandbox"]["filesystem"]["allowWrite"]
+        for default in ("~/.npm", "~/.bun/install/cache", "~/.cache/uv", "~/.cache/pip",
+                        "~/.cache/pnpm", "~/.cache/node-gyp", "~/.cache/ms-playwright",
+                        "~/.local/share/uv", "~/.local/share/pnpm"):
+            # Neither the dir, anything under it, nor a parent of it (a "~" entry reopens both).
+            self.assertFalse([p for p in allow if p == default or p.startswith(default + "/")
+                              or default.startswith(p.rstrip("/") + "/")], allow)
+        self.assertIn("~/.cache/claude-sandbox", allow)
+        with open(os.path.join(REPO, "hooks", "sandbox-caches.sh")) as f:
+            self.assertIn('root="$HOME/.cache/claude-sandbox"', f.read())
+        cache_vars = ("npm_config_cache", "bun_install_cache_dir", "uv_cache_dir",
+                      "uv_python_downloads", "pip_cache_dir", "pnpm_home", "npm_config_devdir",
+                      "playwright_browsers_path")
+        self.assertFalse([k for k in S.get("env", {}) if k.lower() in cache_vars])
+        # Sandboxed installs fetch into their own dirs: gyp headers. Not Pythons or Playwright's
+        # browsers: sandboxed uv and Playwright run Hayden's own, read-only, so neither downloads
+        # one (Chromium's builds would redirect to storage.googleapis.com, where any
+        # public-write bucket takes uploads).
+        hosts = S["sandbox"]["network"]["allowedDomains"]
+        self.assertIn("nodejs.org", hosts)
+        for host in ("releases.astral.sh", "storage.googleapis.com", "cdn.playwright.dev",
+                     "playwright.download.prss.microsoft.com"):
+            self.assertNotIn(host, hosts)
+        self.assertNotIn("~/.local/share/uv", allow)
+        hook = 'bash "$HOME/.claude/hooks/sandbox-caches.sh"'
+        (entry,) = [e for e in S["hooks"]["SessionStart"]
+                    if any("sandbox-caches" in h["command"] for h in e["hooks"])]
+        self.assertNotIn("matcher", entry)  # every source, as for blank-display
+        (h,) = entry["hooks"]
+        self.assertEqual(h["command"], hook)
+        self.assertLessEqual(h["timeout"], 5)
+        self.assertTrue(os.access(os.path.join(REPO, "hooks", "sandbox-caches.sh"), os.X_OK))
 
     def test_the_watch_guard_is_wired_on_stop_and_fails_open(self):
         (entry,) = [e for e in S["hooks"]["Stop"]
@@ -278,8 +323,7 @@ class Baseline(unittest.TestCase):
         check = 'bash "$HOME/.claude/hooks/practices-check.sh"'
         guarded = '[ -f "$HOME/.claude/hooks/practices-check.sh" ] && ' + check + "; exit 0"
         self.assertEqual(commands("PreToolUse", "Edit|Write|MultiEdit").count(guarded), 1)
-        self.assertEqual(commands("SessionStart", "startup|resume|clear|compact").count(guarded),
-                         1)
+        self.assertEqual(commands("SessionStart", "startup|resume|clear|compact|fork").count(guarded), 1)
         self.assertEqual(len(self.practices_bash("PreToolUse")), 1)
         self.assertEqual(len(self.practices_bash("PostToolUse")), 1)
         hooks = [h for entries in S["hooks"].values() for e in entries for h in e["hooks"]
@@ -395,6 +439,31 @@ class Baseline(unittest.TestCase):
                 self.assertEqual(p.returncode, 0, p.stderr)
                 self.assertIn("practices hooks are down", p.stdout)
 
+    def test_every_session_start_hook_decides_every_source(self):
+        # SessionStart has a fork source (/branch, --fork-session; seen firing on 2.1.316), and
+        # every matcher listed only the other four, so a fork ran none of these hooks: its Bash kept the display and the shared caches.
+        # Each hook either has no matcher (it acts the same on any source, so a new one can't
+        # skip it) or lists exactly the sources not skipped below. A new source in the canary's
+        # SESSION_START_SOURCES fails here until each listing hook is decided.
+        skips = {
+            "pass-banner.sh": set(SOURCES) - {"startup"},  # a /pass respawn starts as startup
+            "context-watch.sh": set(SOURCES) - {"compact"},  # only a compact has a stale count
+            "delegation-due.sh": {"clear", "compact"},  # one nudge per session
+            "excluded-check.sh": {"compact"},  # nothing it reads changes there
+            "tmux-state.sh": {"compact"},  # an auto-compact fires mid-turn
+        }
+        for entry in S["hooks"]["SessionStart"]:
+            (h,) = entry["hooks"]
+            script = re.search(r"hooks/([\w.-]+\.sh)", h["command"]).group(1)
+            with self.subTest(script=script):
+                want = set(SOURCES) - skips.get(script, set())
+                if "matcher" not in entry:
+                    self.assertEqual(want, set(SOURCES))
+                    continue
+                listed = entry["matcher"].split("|")
+                self.assertLessEqual(set(listed), set(SOURCES))  # no typo'd source
+                self.assertEqual(set(listed), want)
+
     def test_the_pass_banner_is_wired_on_startup_only(self):
         # A /pass respawn starts as `startup`; the banner shows what the old session said in its
         # last turn, once. The first reply waits for SessionStart hooks, so the timeout stays
@@ -423,12 +492,15 @@ class Baseline(unittest.TestCase):
         (h,) = entry["hooks"]
         self.assertEqual(h["command"], "i=$(cat); case \"$i\" in *'\"agent_id\"'*) ;; *) "
                          "printf '%s' \"$i\" | " + watch + " ;; esac")
-        hooks = [(event, h) for event in ("Stop", "PostToolUse") for e in S["hooks"][event]
-                 for h in e["hooks"] if "context-watch" in h["command"]]
-        self.assertEqual(len(hooks), 2)
+        # SessionStart(compact) blanks the count, so `lane ls` shows none until a real one lands.
+        self.assertEqual(commands("SessionStart", "compact"), [watch])
+        hooks = [(event, h) for event in ("Stop", "PostToolUse", "SessionStart")
+                 for e in S["hooks"][event] for h in e["hooks"] if "context-watch" in h["command"]]
+        self.assertEqual(len(hooks), 3)
         for event, h in hooks:
             # A Stop waits up to 1.5 s for the turn's final reply (spike A8), then may run tmux
-            # and git, so it gets more room than a tool call.
+            # and git, so it gets more room than a tool call; the first reply waits for
+            # SessionStart hooks.
             self.assertEqual(h["timeout"], 10 if event == "Stop" else 5)
             self.assertNotIn("exit 2", h["command"])
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "context-watch.sh"), os.X_OK))
@@ -481,13 +553,16 @@ class Baseline(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(REPO, "hooks", "autopass_toggle.py")))
 
     def test_the_lane_hooks_are_wired_and_fail_open(self):
-        # docs/lanes.md: the guard on every file-tool write; identity on every context reset (a
-        # compact is the net for an unplanned auto-compact), and the mirror on Stop and
-        # SessionEnd. Both deny or speak by JSON, never by exit code.
+        # docs/lanes.md: the guard on every file-tool write; identity on every session start (a
+        # compact is the net for an unplanned auto-compact, a fork is a new session in the lane),
+        # and the mirror on Stop and SessionEnd. Both deny or speak by JSON, never by exit code.
         guard = 'bash "$HOME/.claude/hooks/lane-guard.sh"'
         ident = 'bash "$HOME/.claude/hooks/lane-identity.sh"'
         self.assertEqual(commands("PreToolUse", "Edit|Write|MultiEdit").count(guard), 1)
-        self.assertEqual(commands("SessionStart", "startup|resume|clear|compact").count(ident), 1)
+        self.assertEqual(commands("SessionStart").count(ident), 1)
+        (entry,) = [e for e in S["hooks"]["SessionStart"]
+                    if any(h["command"] == ident for h in e["hooks"])]
+        self.assertNotIn("matcher", entry)
         for event in ("Stop", "SessionEnd"):
             self.assertEqual(commands(event).count(ident), 1, event)
         lane_hooks = [h for entries in S["hooks"].values() for e in entries for h in e["hooks"]
@@ -498,21 +573,27 @@ class Baseline(unittest.TestCase):
             self.assertLessEqual(h["timeout"], 5)
         for script in ("lane-guard.sh", "lane-identity.sh"):
             self.assertTrue(os.access(os.path.join(REPO, "hooks", script), os.X_OK), script)
-        # `lane new`, `ls` and `done` need the network and gh's credential (spike S3); `ls`,
-        # `open`, `done` and `addr` need to see other processes. Only those run sandbox-off: `lane lock
+        # `lane new`, `ls`, `done` and `park` need the network and gh's credential (spike S3);
+        # `ls`, `open`, `done`, `park` and `addr` need to see other processes, and `park` writes
+        # its flag in the state dir. `sync-main` asks gh for the merge commit, fetches, and
+        # builds the merge in a store under the state dir that sandboxed Bash can't write
+        # (DA15/DA16); only the lead runs it, with a PR number, so a bare `lane sync-main`
+        # stays sandboxed, where it refuses. Only those run sandbox-off: `lane lock
         # -- <cmd>` must stay sandboxed, or the command it wraps would run outside the sandbox
         # without the dangerouslyDisableSandbox flag the delete guard checks. `new` and `adopt`
         # run the config's `setup` through a shell, so the config lives in the state dir, which
         # sandboxed Bash can't write (docs/lanes.md S3; tests/lanes ConfigTrust).
         excluded = S["sandbox"]["excludedCommands"]
         bare = ["lane init", "lane init *", "lane new *", "lane adopt *", "lane ls", "lane ls *",
-                "lane open *", "lane done *", "lane addr *", "lane lead"]
+                "lane open *", "lane done *", "lane park *",
+                "lane sync-main *", "lane addr *", "lane lead"]
         self.assertEqual([p for p in excluded if p.split()[0] == "lane"], bare)
         self.assertNotIn("lane *", excluded)
         for cmd in ("lane lock gate -- true", "lane lock gate -- rm -rf build", "lane whoami",
-                    "lane claim 42", "lane note x"):
+                    "lane claim 42", "lane note x", "lane sync-main"):
             self.assertEqual([p for p in excluded if glob_match(p, cmd)], [], cmd)
         for cmd in ("lane ls", "lane ls --json", "lane open chart-fix", "lane done chart-fix",
+                    "lane park chart-fix", "lane sync-main 42",
                     "lane addr lead", "lane lead"):
             self.assertTrue(any(glob_match(p, cmd) for p in excluded), cmd)
 
@@ -607,6 +688,24 @@ class Baseline(unittest.TestCase):
             self.assertNotIn(p, sandbox_deny)
             self.assertIn(p, POLICY["protect"]["write_denied"])
 
+    def test_the_chrome_devtools_config_chrome_and_profile_are_write_protected(self):
+        # chrome-devtools-mcp reads ~/.config/cd4a/config.json at every session start and runs
+        # its executablePath, ~/chrome/current, on its profile, outside the sandbox
+        # (setup-chrome-wsl.sh writes the first two). An Edit deny binds sandboxed Bash and the
+        # file tools alike, so these are not denyWrite lines.
+        for p in ("~/.config/cd4a", "~/chrome", "~/.cache/chrome-devtools-mcp"):
+            self.assertIn(f"Edit({p}/**)", S["permissions"]["deny"])
+            self.assertNotIn(p, S["sandbox"]["filesystem"]["denyWrite"])
+            self.assertIn(p, POLICY["protect"]["write_denied"])
+
+    def test_lane_sync_main_s_store_is_write_protected_both_ways(self):
+        # lane sync-main checks a merge out from its store (DA15/DA16) and refuses to build one
+        # unless the live settings hold both rules (store_guard), so this is the one path that
+        # is an Edit deny and a denyWrite line at once.
+        self.assertIn("Edit(~/.local/state/dotclaude/verified/**)", S["permissions"]["deny"])
+        self.assertIn("~/.local/state/dotclaude/verified",
+                      S["sandbox"]["filesystem"]["denyWrite"])
+
     def test_every_allow_rule_on_an_excluded_command_sits_behind_the_guard(self):
         # An allow rule skips the classifier, so an excluded command it covers must meet the
         # guard first.
@@ -626,9 +725,9 @@ class Baseline(unittest.TestCase):
         for doc in ("skills/lanes/SKILL.md", "docs/lanes.md"):
             with open(os.path.join(REPO, doc)) as f:
                 text = " ".join(f.read().split())
-            m = re.search(r"((?:`\w+`, )+`\w+` and `\w+`) (?:have|take) allow rules", text)
+            m = re.search(r"((?:`[\w-]+`, )+`[\w-]+` and `[\w-]+`) (?:have|take) allow rules", text)
             self.assertIsNotNone(m, doc)
-            self.assertEqual(set(re.findall(r"`(\w+)`", m.group(1))), allowed, doc)
+            self.assertEqual(set(re.findall(r"`([\w-]+)`", m.group(1))), allowed, doc)
         for sub in sorted(allowed):
             # `ls` and `lead` take no argument: `lane lead x` matches neither of its rules.
             sample = f"lane {sub}" if sub in ("ls", "lead") else f"lane {sub} x"

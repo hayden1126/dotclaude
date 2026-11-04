@@ -42,7 +42,8 @@ Each layer covers what the others can't.
      it ("Deadline (A2)").
    - It catches the obvious forms; layer 1 catches the rest.
 3. **The report check** covers acceptance. It sends a malformed report from one of our roles back
-   to the agent at most twice.
+   to the agent, and any subagent's report that comes while one of its own background commands
+   still runs, at most twice between them ("Early reports (the wait check)").
 4. **Observation.**
    - The ledger records every start, stop, denial and deadline nudge, and the exclusions that
      keep probes out of `audit --monthly`.
@@ -64,7 +65,7 @@ Each layer covers what the others can't.
 | Explore, reviewer | n/a (no Bash) | credential-read and MCP rules | yes |
 | researcher | on, no escape | Bash **allowlist**; credential and MCP rules | yes |
 | writer | on, no escape | default rules; root = `worktreePath` | yes |
-| general-purpose, forks, Plan, plugin and Workflow agents | on, no escape | default rules; root = the project directory | no (their reports aren't JSON-bound) |
+| general-purpose, forks, Plan, plugin and Workflow agents | on, no escape | default rules; root = the project directory | the wait check only (their reports aren't JSON-bound) |
 | in-process teammates | on, no escape | their role's rules (meta.json `customAgentType`), else the default rules | no (their stops fire per message) |
 
 ## What ships
@@ -80,7 +81,7 @@ Each layer covers what the others can't.
 | Excluded-command guard | `hooks/excluded-guard.sh`, `hooks/excluded_guard.py`, a `Bash` entry in `settings.json` (timeout 5) | Enforces on every thread: an excluded command runs only when its cwd resolves to the project's own repository, the other git config it reads and every PATH dir and file its head resolves through are write-protected, and `claude` or `codex` runs from the project root. See "The excluded-command guard" below. Fails closed for excluded heads |
 | Excluded-command check | `hooks/excluded-check.sh` (`excluded_guard.py --session`), a SessionStart entry in `settings.json` (timeout 5) | Observes: what the guard would refuse from the session's project and PATH, shown once per change in its findings. Fails open |
 | Subagent policy | `hooks/subagent-policy.sh`, `skills/delegation/scripts/subagent-policy`, `skills/delegation/policy.toml` | Enforces: see "Subagent policy" below. Fails closed for the tools it polices |
-| Report check | `hooks/report-check.sh`, `skills/delegation/scripts/report-check` | Enforces acceptance: a schema-invalid report is sent back twice at most. Fails open |
+| Report check | `hooks/report-check.sh`, `skills/delegation/scripts/report-check` | Enforces acceptance: a schema-invalid report from one of our roles, or any subagent's report while one of its own background commands runs, is sent back twice at most between them; a handback (auto mode) let through while a command runs carries a note naming it. Fails open |
 | Ledger | `hooks/delegation-ledger.sh`, `skills/delegation/scripts/delegation-ledger`, `skills/delegation/liveness.toml` | Observes: start and stop rows (`agent_type` is the resolved role; a teammate adds `name` and `teammate`), `report_ok`, denial rows, the main-checkout hash for a worktree agent (and the lane's, when the parent session runs in one); the per-agent liveness index (`agents/<id>.json`); `open` (the tool in flight and since when, thresholds in `liveness.toml`); `watch` (one line per live delegation, and a token like `2▶ 1⚠` for the tmux bar); `audit` (`--monthly` adds a month of usage for retuning, and `exclude` keeps probes out of it); `sandbox-denials`. Persuades: the deadline nudge, one PostToolUse `additionalContext` per activation past the role's `nudge_min`, and a `nudge` row. Fails open |
 | Canary and due checks | `hooks/delegation-due.sh`, `skills/delegation/scripts/delegation_checks.py`, `skills/delegation/due.toml` | Observes: `delegation-ledger canary` re-verifies enforcement on this Claude Code version; `due` runs the cheap checks at session start (the quick tier includes a run of the installed watch-guard shim) and shows Hayden what needs their attention, including the watch nudges: unresolved watches whose waiter's exit reaches nobody, and watches that ended while no Claude process listened. Fails open |
 | Public GitHub client | `skills/delegation/scripts/gh-public` | GET-only access to api.github.com for delegated agents, optionally with a public-read token |
@@ -137,22 +138,44 @@ repo that turns the sandbox off loses subagent Bash; the policy still applies.
     dynamic word be a quoted `-e` value or a file after `--`; a glob or an unquoted expansion before
     `--` is refused, since it could expand to an option the policy can't check. A `~` in a `w` name
     or `-i` suffix is literal, the way sed reads it, not `$HOME`.
-  - Wrappers are peeled: `env`, `command`, `exec`, `timeout`, `nice`, `nohup`, `xargs`, `find -exec`,
-    `bash`/`sh`/`zsh -c` (recursively), and `eval` with a static argument.
+  - Wrappers are peeled: `env`, `command`, `exec`, `time`, `timeout`, `nice`, `nohup`, `stdbuf`,
+    `ionice`, `xargs`, `watch`, `flock`, `find -exec`, `bash`/`sh`/`zsh -c` (recursively), and `eval`
+    with a static argument. Each wrapper's options are read from its own table, the way the
+    wrapper reads them, and an option outside it is refused, so a value can't be mistaken for
+    the command. `time` keeps only the shell keyword's `-p` (GNU time's `-o` writes a file).
+    `watch` (without `-x`) and `flock -c` run their words through `sh -c`, so that text is
+    checked like `eval`'s. `xargs -I` makes every word holding its replace string dynamic, and
+    `flock`'s lock file is a write target. `env -C` moves the directory its command's checks
+    resolve against, under `cd`'s rules (the last `-C` wins, from where env starts).
+  - A shell's options are read the way bash and zsh read them: `-o`/`-O` take the next word,
+    `-c` makes the first word after the options the script, and a long option outside a short
+    list (`--norc`, `--noprofile`, `--login`, `--posix` and similar) is refused.
+  - Text a shell parses again (`eval`, `sh -c`, `watch`, `flock -c`, a `trap` handler) must be
+    literal: a brace or glob word there is refused like a variable, since it expands before the
+    text is parsed again.
+  - `~user`, `~+` and `~-` are dynamic (zsh reads `~name` from a variable holding a path before
+    it looks up the user), and so are `$HOME:h` and `$HOME[1]`. Once a command sets or unsets
+    HOME anywhere (`env -i` and `env -u HOME` included), `~` and `$HOME` are dynamic throughout it.
+  - A shell's `-s` (commands from stdin), or `-o stdin`/`-o shin_stdin`, is refused like `… | sh`.
+    `-oNAME` takes the rest of its word and a bare `-o` the next one; bash's `-O` takes the next
+    word, and zsh's is a flag. `zsh5`, `ksh93`, `mksh` and `rbash` are read as shells too.
   - A shell reading stdin (`… | sh`) and `source` (except `*/bin/activate`) are denied.
 - **Command words** must resolve on PATH, be a path to an executable, or be a builtin. That denies
   oh-my-zsh aliases (`gp` = `git push`) and shell functions, and zsh `=git`.
 - **Environment:** `GIT_*`, `LD_*`, `BASH_ENV`, `PAGER` and similar prefixes are denied (except
-  `GIT_PAGER=cat`), and so is `git -c`.
+  `GIT_PAGER=cat`), and so is `git -c`. `WGETRC`, `CURL_HOME`, `WGET_ASKPASS` and `SSH_ASKPASS`
+  are refused anywhere in a command, not only where they are assigned.
 - **git:**
   - reset, rebase, revert and clean are denied;
   - so are a checkout or switch that discards, restore without `--staged`, and branch or tag
     deletion;
   - so are stash drop/clear/pop, worktree changes, remote and config writes, and reflog or
     update-ref deletion;
-  - so are `--no-verify`, `--output`, `--ext-diff` and the `ext::` transport;
+  - so are `--no-verify`, `--output`, `--ext-diff` and `--upload-pack` (also as any unique
+    prefix, the way git reads them) and the `ext::` transport;
   - an unknown subcommand is denied, which catches git aliases.
-- **HTTP:** curl and wget are GET or HEAD only, and send no data.
+- **HTTP:** curl and wget are GET or HEAD only, and send no data. wget also refuses `-e`,
+  `--config` and `--use-askpass`, since a wgetrc command can set a method or run a program.
 - **rm:** `-r` outside the root, allowWrite and temp is denied; so are a dynamic or glob target of
   `-r`, git metadata, and `/` or home.
 - **MCP:** only the read tools listed in `[mcp]`. A new MCP tool fails closed until it is listed.
@@ -193,12 +216,17 @@ repo that turns the sandbox off loses subagent Bash; the policy still applies.
   - grep, rg and find without their exec, write or filter flags;
   - jq, sed without `-i`, `e` or `w` (and not with a glob or brace word, which could hide them);
     sort, uniq, diff;
+  - a program with a write or run rule (grep, rg, find, fd, sort, tree, file, yq, date, xxd, uniq,
+    curl, wget and git) takes literal words only: a glob, brace, variable or substitution, or
+    words xargs adds, could expand to an option or output file the rules never read, so each is
+    refused, even after `--`. sed keeps its own reader, described above;
   - read-only git and its list forms;
-  - curl GET and `wget -O-` to stdout;
+  - curl GET, and `wget -O-` to stdout without `-o`, `-a`, `-r`, `-m`, `-P`, `-b` or another
+    file-writing flag;
   - `gh-public`;
   - `git clone` of an https URL into the Claude temp dir;
   - `<program> --version|--help`.
-- **Redirects** go only to `/dev/null`.
+- **Redirects** go only to `/dev/null`, `/dev/stdout` or `/dev/stderr`.
 - **No interpreters.**
 
 ### Public GitHub for delegated agents (the credential barrier)
@@ -210,8 +238,8 @@ authenticate to GitHub, whatever form the command takes: an alias, a Makefile or
 The main thread's git network commands and `gh`'s allowed families (README, permissions) are in
 `excludedCommands`. They run unsandboxed
 through the normal permission flow, as they did before. Delegated agents are denied every excluded
-command: the same holds for `delegation-ledger`, the excluded `lane` subcommands and
-`pass-respawn`, so an agent lists such a step in `blocked_actions`.
+command: the same holds for `delegation-ledger`, the excluded `lane` subcommands,
+`pass-respawn` and `ed-pull`, so an agent lists such a step in `blocked_actions`.
 
 For public data:
 - `gh-public` (GET only, api.github.com, REST and search);
@@ -237,21 +265,120 @@ settings.
 For a match it refuses, naming the path, when:
 1. **The git repo is not the project's.** The cwd must resolve to the same common git dir as
    `CLAUDE_PROJECT_DIR`, or to no repo. A nested repo, a planted gitfile or a repo in a temp dir
-   has a config the session can write. The project's own `config` and `hooks/` are trusted, and
+   has a config the session can write. The cwd must also be its repo's top: from below it, or
+   from no repo, the call is refused when a dir git looks in on its way up (to the top, or to
+   `/` or a `GIT_CEILING_DIRECTORIES` entry) is writable, since a repo planted there after the
+   check would be the one git uses (G-E). The refusal names the top to run from. Path arguments
+   and local remote URLs are held to the same rule. A command that is one `lane addr --repo X`
+   call alone (no other call, wrapper or substitution) skips the cwd's walk, since with `--repo`
+   lane resolves only X's lanes repo and runs no git in the cwd; it still has the rest of rule 1
+   judged. The project's own `config` and `hooks/` are trusted, and
    so is `config.worktree` when the cwd's gitdir is the project's own, since Claude Code keeps
-   them read-only for the session; another worktree's `config.worktree` is judged. That trust
+   them read-only for the session; another worktree's `config.worktree` is judged when git reads it
+   (`extensions.worktreeConfig` on in the common config). That trust
    rests on Claude Code protecting the session's gitfile and its `worktrees/<name>/commondir`,
    not the main `.git/` dir, so the common dir comes from git's real layout: a gitdir with a
    `commondir` file must sit at `<common>/worktrees/<name>` and name that `<common>`, which holds
-   no `commondir` itself. Any other layout, in the cwd's repo or the project's, is refused. A
-   dir counts as a repo as soon as git would take it as one: a `.git` entry, or `HEAD` with
-   `objects/` and `refs/` or with a `commondir`. The
+   no `commondir` itself. Any other layout, in the cwd's repo or the project's, is refused.
+   Pointer files (`commondir`, a gitfile, which must start exactly `gitdir: `, and a worktree's
+   `gitdir`) are read as git reads them, with only trailing LFs and CRs trimmed. A
+   dir counts as a repo when git's `is_git_directory` takes it: a `HEAD` naming `refs/...`
+   (after `ref:` and git's own whitespace, which is only space, tab, CR and LF) or an object
+   id, and `objects/` and `refs/` (in the dir a `commondir` names, if any). A git
+   dir git might look past (a `.git` dir, or a dir with `HEAD` and `refs/`, `objects/` or a
+   `commondir`, that fails that check) is refused, at the cwd's walk and at each path git's
+   server side tries: git would skip it and use the next repository it finds. A repo's own `<top>/.git` (a gitfile or a
+   `.git` hop) is judged along its symlinks like any other file, except at the project's top or
+   a worktree top of its common dir (a lane, whose gitfile names `<common>/worktrees/<name>`
+   and is named back there): one in a writable dir could be repointed after the check. Rule 1
+   judges path arguments too, resolved from the cwd: `pass-respawn -C` (its `-C=<path>`
+   spelling, which argparse reads two ways, is refused: use `-C <path>`), `lane adopt PATH`
+   (each word after `--` too), and
+   a local repository given to `git push`, `fetch`, `pull` or `ls-remote`, a relative one from
+   the repo top too, where git opens it. Such a call must spell each word plainly (no
+   expansion, glob, quote or space), its redirection targets too, since the guard reads the
+   text before the shell rewrites it. A git refspec or option value may also use the revision
+   spellings zsh hands on unchanged with the options Claude Code's shell snapshot sets
+   (item 10, tested against zsh): `~` and `^` anywhere but a leading `~`, `@{...}` or `^{...}`
+   with no `,`, `..` or brace inside, and `%`. A spelling zsh rewrites (`@{a,b}`, `@{1..3}`,
+   `~1`) stays refused. The guard finds these calls as zsh splits the command,
+   anywhere in it (a later piece, a subshell, a substitution), and refuses a command it can't
+   read and a git option before those subcommands. git's words are read as its own option
+   parser reads them, from tables of git 2.43's options (`git <sub> -h`, captured in
+   `tests/setup/data/git-help/` and tied to the tables by a test that also fails on another git
+   version; the tables also hold the options `-h` hides but git parses, fetch's
+   `--recurse-submodules-default`, which makes `git fetch --no-rec` ambiguous): the repository is the first positional or `--repo`'s value (every positional with
+   `fetch --multiple`), later positionals are refspecs and never paths, and an option the
+   tables don't list, or an ambiguous prefix, is refused by name (item 7). A repository word
+   that names a remote the config surely defines is judged by its URL (G-D). For `fetch` and
+   `pull`, one that names a `remotes.<group>` value is judged by each member in turn, as git
+   fetches them, and a member git would read as an option is refused. Any other repository
+   word is a local path to git, judged whether it exists or not (G-E, item 8), where git's
+   server side looks for it: `<p>/.git`, `<p>`, `<p>.git/.git` and `<p>.git` in that order, the
+   first that is a file or a git dir winning. Each is taken as the OS opens it: a `..` after a
+   symlink lands beside its target (a relative word's `..` past the repo top or cwd it starts
+   from follows git's own cwd). Each that exists is judged along its symlinks and
+   as the cwd's repo is (a gitfile's relative gitdir read from the dir of the path git opened,
+   not a symlink target's); one that is missing, tried before the first git would take, is
+   refused when a sandboxed session could create it. A call naming no repository takes the
+   default remote (`branch.<b>.pushRemote` or `remote`, `remote.pushDefault`, else `origin`):
+   it is refused unless each such value in the config chain and `origin` name a remote the
+   config surely defines, since git reads any other name from a legacy remote file planted
+   after the check. Name the remote on the command line or configure it. `lane new`, `lane
+   done`, `lane park` and `lane sync-main` run their own fetch of `origin`, so they are refused unless `origin`
+   names such a remote too. Each such value that
+   names no remote is also judged as a path, as a remote URL is. A `file://` URL with a host part or a
+   `%`-escape is refused. An option of those git calls that names a program for git to run, an
+   `ext::` remote, a recursion flag that turns recursion on and a `%` in a repository word are
+   refused, and
+   `delegation-ledger hook` runs only as a hook, never through Bash. A repo whose common git
+   dir holds any entry in `remotes/` or `branches/` (legacy remote files, outside the judged
+   config) is refused for every excluded call (G-C). Each local-path remote URL in the cwd's
+   config, the repo's own trusted config included (`remote.<n>.url` and `pushurl`), is judged
+   as a local repository word is, each path git's server side tries included (G-D). A
+   `url.<base>.insteadOf` or `pushInsteadOf` whose base is not a network URL with a host is
+   refused: git appends the rest of the original URL to the base, so use a network base. Only
+   `<scheme>://<host>...` with a scheme other than `file`, or scp-like `[user@]<host>:`, passes;
+   an empty base, any `file:` one, an empty host and `ext:` are refused. `git fetch`, `pull` and
+   `push`, and `gh pr checkout`, `gh pr merge`, `gh issue develop` and `gh pr create` (which run
+   them; gh's built-in aliases `gh pr co` and `gh pr new` too), run git in each submodule's own git dir (G-B). A `gh` call with a
+   flag before its first word, or before the subcommand of `gh pr` or `gh issue`, is refused
+   unless the flag is `-R` or `--repo` in one of its spellings: gh's parser takes an unknown
+   flag's next word as its value (`gh pr -b x checkout` runs `pr checkout`), so put flags
+   after the subcommand. A git call whose last
+   `--[no-]recurse-submodules` flag (any prefix git takes: pull reads `--rec` as
+   `--recurse-submodules`) turns recursion on is refused, one whose last flag turns it off
+   passes, and with no flag it is refused unless the effective config has recursion off. For
+   fetch the last `fetch.recurseSubmodules` or
+   `submodule.recurse` git reads must be false; for pull and `gh pr checkout` (whose
+   `git checkout` honours it) `submodule.recurse` too; for push the last
+   `push.recurseSubmodules` or `submodule.recurse` (probed with git 2.43: `check`, `on-demand`
+   and `only` all run git in the submodule), unset counting as off. The refusal names the key
+   and file that turn it on, and says when a switch-off sits in a file git may not read (an
+   `includeIf` file), which doesn't count. `gh pr checkout --recurse-submodules` is refused in
+   every spelling gh takes but a false `=` value. `./setup.sh` sets
+   `fetch.recurseSubmodules false` in the global config on every run and warns when
+   `submodule.recurse` is true there, and `lane`'s own fetches pass the flag. In a lanes repo,
+   those same calls (`git fetch`, `pull` and `push`, and the `gh` forms that run them) are
+   refused while `lanelib.repo_tamper` finds anything in the shared git common dir, naming each
+   finding: any lane's sandboxed Bash can write that dir, and git run outside the sandbox writes
+   through what it planted (a reflog or `worktrees/` symlink, a `FETCH_HEAD` symlink, which no
+   git setting stops it writing, a link under `refs/`) or serves a replace ref's content
+   (DA15/DA16, LR3, LR4, LR5, LR6).
+   They stay refused until someone finds out who planted it and removes it; an error in the
+   check refuses too. `git ls-remote` and gh's other forms write nothing there, and a repo
+   without lanes is left alone. The
    other config git reads must be write-protected: the global and XDG files (or
    `GIT_CONFIG_GLOBAL`), `/etc/gitconfig` (or `GIT_CONFIG_SYSTEM`, skipped under
-   `GIT_CONFIG_NOSYSTEM`), every `include.path` and `includeIf` target, and a `core.hooksPath`
+   `GIT_CONFIG_NOSYSTEM`; either variable set but empty names no file, as git reads it), every `include.path` and `includeIf` target (a relative one from the
+   dir of the config path git opened, not a symlink target's, and a `..` taken after the
+   symlinks before it, as the OS opens the path: `a/link/../x` is beside link's target, not
+   `a/x`), and a `core.hooksPath`
    dir and each file in it. Each is followed through its symlinks (each hop and the dir of each
    must be write-protected), and anything that exists there is judged, not only a regular file.
-   A repo whose install step points `core.hooksPath` into the repo (husky and similar) is
+   `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY` and `GIT_ALTERNATE_OBJECT_DIRECTORIES` are refused
+   while set, even empty: they move where git takes config or objects from, which the guard
+   doesn't model, so unset them for excluded commands. A repo whose install step points `core.hooksPath` into the repo (husky and similar) is
    refused on its first excluded call, `gh` included (it runs git, and `gh pr checkout` runs
    hooks), until an Edit deny rule for that dir is in `settings.machine.json` and `./setup.sh`
    reruns. The refusal names the dir and the rule.
@@ -355,9 +482,10 @@ Not covered:
   call's starting cwd, and such a call either matches no pattern or runs sandboxed (a compound
   command stays in the sandbox). The guard doesn't read `dangerouslyDisableSandbox`: a sandbox-off
   call is judged like any other, by its text;
-- a repo an excluded command is handed as an argument (`lane addr --repo PATH`): the guard never
-  judges PATH's git config, so the CLI hardens the one git it runs there itself (docs/lanes.md,
-  "Bug reports from other repos").
+- two path arguments, by design: `lane addr --repo PATH`, whose one git lookup there the CLI
+  hardens itself and which starts no repo-local program (probed 2026-10-29; docs/lanes.md, "Bug
+  reports from other repos"), so a session in another repo can still reach dotclaude's lead;
+  and `codex-delegate run --dir`, which the delegation skill sends to any repo.
 
 Allow rules on excluded commands sit behind it: an allow rule skips the classifier, and
 `test_settings.py` fails if one covers an excluded command while the guard isn't wired.
@@ -697,14 +825,14 @@ sonnet sessions a day. The checks therefore split by cost (Hayden's call, 2026-0
 
 | Check | What it runs | When |
 |---|---|---|
-| Quick canary (`canary --quick`, about 20 s, no model calls) | the unit suites; `claude sandbox status` (the sandbox on, Bash auto-allow off); the strings our hooks read (`CANARY_STRINGS`), searched in the `claude` binary; the installed `watch-guard.sh`, run with a no-op main-thread payload and a throwaway state dir, which must exit 0 and log nothing (proving the link and the import) | by itself, in the background, on the first session of a new version |
+| Quick canary (`canary --quick`, about 20 s, no model calls) | the unit suites; `claude sandbox status` (the sandbox on, Bash auto-allow off); the strings our hooks read (`CANARY_STRINGS`, the whole SessionStart source list among them, so a new or renamed source fails it), searched in the `claude` binary; the installed `watch-guard.sh`, run with a no-op main-thread payload and a throwaway state dir, which must exit 0 and log nothing (proving the link and the import) | by itself, in the background, on the first session of a new version |
 | Audit (`audit`) | the enforcement audit above, over the window since the last one | by itself, once a day |
 | Full canary (`canary`) | the quick tier, then the whole live harness (`run.py --runner claude`, all stages) | a reminder, when no green run is on record or the version has moved and the last green run is 7 or more days old, and after a failed run until one passes |
 | Monthly audit (`audit --monthly`) | the audit over 30 days, plus the usage sections (A6) | a reminder, once the ledger and the last monthly run are both a month old |
 | Dated items (`skills/delegation/due.toml`) | whatever the item says | a reminder from its date on, until the item is removed |
 
 **How it runs.** `hooks/delegation-due.sh` runs `delegation-ledger due --hook` at SessionStart
-(`startup` and `resume`) in about 50 ms, and fails open:
+(`startup`, `resume` and `fork`) in about 50 ms, and fails open:
 - It reads `canary.json`, `audit.json`, `due.toml` and the ledger's first row.
 - It starts the cheap checks as a detached job, so the session doesn't wait for them.
 - It prints a line only when something needs Hayden: a failed check, a due full run, unseen audit
@@ -1361,8 +1489,8 @@ Its once-per-item rules:
 the model or Hayden at least once, and a duplicate notice is cheap. The model hears a waiter's
 exit notice (a background command that ends starts a turn) and the guard's blocks. Hayden hears
 the guard's ack (its Stop `systemMessage`) and the session-start nudge (`due --hook`'s
-`systemMessage`, at `startup` and `resume`). Hayden also sees every block the guard makes, so
-a block in "The model hears" reaches both (the verified facts, "Stop output"). "Its Claude
+`systemMessage`, at `startup`, `resume` and `fork`). Hayden also sees every block the guard makes,
+so a block in "The model hears" reaches both (the verified facts, "Stop output"). "Its Claude
 process" is the one the watch was recorded under (`claude_pid`).
 
 | Situation | The model hears | Hayden hears | Code path |
@@ -1371,7 +1499,7 @@ process" is the one the watch was recorded under (`claude_pid`).
 | A lapse at `--max` | The exit-75 notice with the re-arm line. If the lead stops without re-arming, one block with the re-arm and drop commands | The ack at the next stop after that block, then the nudge at every session start once its Claude process has ended | `watch_pending` (a lapse), `commit`'s `record` (`blocked_at`, then `later_stop` and `ACK_MESSAGE`); `left_watches` (`watch_orphaned`) |
 | A lapse already acknowledged | If the stop that acknowledged it started the guard's detached waiter: nothing while the job runs; once it ends, the waiter (which reads the whole condition, the whole log too) records the end unreported, and the session's next stop blocks once to say it ("The waiter the guard left watching it ... recorded that"). If no detached waiter runs (its start failed, or the lapse was acknowledged before it existed): nothing until a stop finds the condition ended from the guard's own read, however it ended (met, failed, stale, its codex run stopped, ended or never started, or an outcome a line further back than the log's last 1 MB could change); that blocks once more. A detached waiter at its day's max lapses, and the lapse blocks again. One that stops early reopens the watch: the next stop blocks once to say the error it recorded ("the guard's detached waiter failed: <why>"), also on a codex run that has left the ledger, or, after a SIGKILL, which records nothing, the plain lapse, in one block with that block's own message (a codex run that ended unfinalized, a log's uncertain or partial outcome); a recorded end replaces the error and says the outcome; the stop after that acknowledges it with the plain ack and starts no other. A codex run that ends after that block blocks once more, saying it ended, not the error again. A `--log` verdict, ended or unmet, that the log's last line, with no newline yet, could change if it is finished as it stands blocks once too, even acknowledged ("its last line has no newline yet ..."). A `/clear`, or a crash and `--continue`, gives the new conversation one block again (rows 5 and 6). Known gaps: "An acknowledged lapse is heard at a stop, not at the moment", "A log condition is judged on the log's last 1 MB, by the guard" | The ack, which says a detached waiter started; the nudge at every session start once its Claude process has ended; a detached waiter's end, at the next start of another session, again at each start until its process's guard says it | `commit`'s `record` (the ack), `respawn_refused`, `spawn_waiter` (`DETACHED_ACK`, or `ACK_MESSAGE` when none started), `wait --detached` (`Waiter.take`, `refuse_unless_left_to_the_guard`, `waiter_detached`, `Waiter.end`), `dc.ended_unheard`, `decide` (`DETACHED_ENDED`); `watch_pending` (an end: `MET_REASON`, `JOB_ENDED`; one left open and said once by `end_blocked_at`: `CODEX_ENDED`, `unseen` and `UNCERTAIN`, `unfinished` and `PARTIAL`; a detached waiter that stopped early: `detached_failure` and `DETACHED_FAILED`, then `respawn_refused` and `ACK_MESSAGE`); `commit`'s `record` (`due_text`: every message due, from the watch re-read under the lock); `Waiter.fail` (reopens the watch); `left_watches`, `mark_reported` |
 | A kill at the time limit (a waiter or `codex-delegate` launched with a shorter `timeout`) | Claude Code's kill notice, then one block at that turn's stop: the kill folded into the watch's lapse item, or the kill alone when the watch blocked before | As for a lapse: the ack, then the nudge once its Claude process has ended | `kill_pending`, `map_kill` (the fold, by the launch line), `commit_kills`; `watch_pending`, `record` |
-| `/clear` (or an in-process `/resume`), then a stop | A live waiter's exit notice, to the same Claude process (assumed across the switch; see the known gaps). A live detached waiter's watch is only moved into the new session: nothing blocks while it runs, no exit notice comes, and its end is said at a stop (`DETACHED_ENDED`), also when it ends before that first stop. A dead waiter's watch is adopted into the new session at the first stop and blocks once as a lapse, even if it was blocked or acknowledged before: adoption clears that record | Nothing: the nudge runs at `startup` and `resume`, not at `clear`, and a running Claude process orphans none of its watches | `left_by_clear` (in `decide` and `adoption`), `dc.unblock`, `watch_pending`, `record`; `watch_orphaned` |
+| `/clear` (or an in-process `/resume`), then a stop | A live waiter's exit notice, to the same Claude process (assumed across the switch; see the known gaps). A live detached waiter's watch is only moved into the new session: nothing blocks while it runs, no exit notice comes, and its end is said at a stop (`DETACHED_ENDED`), also when it ends before that first stop. A dead waiter's watch is adopted into the new session at the first stop and blocks once as a lapse, even if it was blocked or acknowledged before: adoption clears that record | Nothing: the nudge runs at `startup`, `resume` and `fork`, not at `clear`, and a running Claude process orphans none of its watches | `left_by_clear` (in `decide` and `adoption`), `dc.unblock`, `watch_pending`, `record`; `watch_orphaned` |
 | A crash, then `claude --continue` | At the first stop, the new process adopts the session's watches and clears their lapse records. A waiter whose process still runs is marked `waiter_unheard` and blocks once (re-arm it), unless the same stop records the watch's end, which it says instead; a dead waiter blocks once as a lapse, even one acknowledged before the crash; a watch that ended meanwhile blocks once (check the result). Known gap: this rests on `--continue` keeping the session id | The nudge at the new process's start names the session's unresolved watches, even those the guard will adopt, and keeps naming one whose waiter is `waiter_unheard` at every start until it is re-armed, dropped or ended. It leaves the session's unreported ends to the guard | `crashed`, `adoption` (`dc.unblock`; `UNHEARD_REASON` unless the commit records the end), `watch_pending`, the guard's `ended_unheard` (`ENDED_UNHEARD`); `left_watches` (`watch_orphaned`, which counts `waiter_unheard`) |
 | A crash with nobody continuing | Nothing | The nudge at the next start of any session: the unresolved watches at every start until each is re-armed or dropped, and, once, each end a waiter recorded after the crash, if that start comes within 7 days of the end (known gap: "An end nobody heard is said for 7 days") | `Waiter.end` (`reported` false: its Claude process is gone), `left_watches` (`watch_orphaned`, `dc.ended_unheard`), `mark_reported` |
 | A crash, then `--continue`, then `/clear` before the first stop | Nothing: the new process's guard runs in the new session, where it adopts neither the crashed process's watch (`left_by_clear` needs its own process) nor the old session's (`crashed` needs its own session) | The nudge names the unresolved watches at the continued start and at every start after. An end in the crashed session waits for a later start: another session's nudge names it, or, if Hayden resumes that session, its guard says it to the model. Delayed, not silent | `left_by_clear`, `crashed`; `left_watches` (it skips the starting session's ends) |
@@ -1388,6 +1516,116 @@ the Codex kill probe: a `codex-delegate run` killed at a 60 s `timeout` must lea
 running, and its re-arm must finalize it with a report (`due.toml` has the steps). A dated item
 fires by date only, so the session-start line that says the full canary is due after an upgrade
 names both checks too.
+
+### Early reports (the wait check)
+
+**The gap.** On 2026-10-31 (2.1.316) a subagent ran `./wait.sh` in the foreground with a
+10-minute `timeout`. At 180 s Claude Code moved it to the background. The agent read the still
+empty output file, handed back "not written", then was woken by the completion notice 97 s later
+and did the work. Its corrected handback was refused ("your report was already delivered"), so the
+lead heard the opposite of what happened (probe session 668e9503, agent a6301324f3813f8b5). The
+brief's old advice ("run it in the foreground, up to the Bash tool's 10-minute limit") doesn't
+hold: a foreground call that outlives its `timeout` is moved to the background, and a background
+agent's timeout can be cut to 3 minutes (see the verified facts).
+
+**The check.** `report-check` reads the agent's own transcript. A command is the agent's when one
+of its tool results holds one of Claude Code's background lines: `Command running in background
+with ID: X` (`run_in_background`), `Command was moved to the background (ID: X)` (the cap, or a
+queued message), `Command did not complete within its Ns timeout and was moved to the background
+(ID: X)`, or `Command was manually backgrounded by user with ID: X` (Ctrl+B). Each names the
+output file. The line counts only where Claude Code puts it: a Bash result is the command's
+stdout, its stderr, then the note, so the note is the result's last line (or is followed only by
+a "Session cwd" hint), `run_in_background`'s opens the result (nothing has printed yet), and the
+last match is the note, which is one line. When the entry's `toolUseResult` has a
+`backgroundTaskId`, it must name that id. Otherwise the note must end the result and not be in the
+`toolUseResult`'s `stdout`: a real launch's `stdout` is empty (the incident's was `""`), while a
+command that prints note-shaped lines, such as a transcript dump, has them there.
+`toolUseResult` is often absent (0 of 8 tool results in probe a, 9 of 9 in the incident, all
+2.1.316), so the position is what rules most of those out (review rounds 3 to 5). A `backgroundTaskId` with no note counts too, its output unknown. A wait call that was
+itself moved (a message arriving mid-wait moves the running call) isn't a command to wait on.
+
+A command has ended, as far as the agent is concerned, when:
+- a task notification for it is in the transcript;
+- its output file ends with `[killed]` (a TaskStop, or the kill at a final response, neither of
+  which leaves a notice);
+- or its launch is older than any background command can run (2 hours, plus 10 minutes of
+  slack), which covers a Claude Code process that died first.
+
+An `[exited with code N]` line alone isn't enough (review round 2): the notice is written right
+after the tool result that shows the end (entries 34 and 35, 33 and 34, 35 and 36 in three live
+runs), so an exit line without one came after the agent last looked, and the report it is sending
+may be the incident's "not written". Rounds 3 and 4 also counted an end shown through a later
+call (a `cat`, a `tail`, a task-output call), and both rounds' mediums were false passes in that
+code. Hayden dropped it (2026-11-01): the notice already covers a `cat` or `tail`, and the one
+case it alone covered, a task-output tool that suppresses the notice, was never seen in a
+subagent. Without it, that case costs two refusals and a note that may be wrong, never a wrong
+report passed silently.
+
+A Bash call in the agent's latest message whose result isn't in the transcript yet counts too,
+named by its command. In the second live `early` run the agent sent the launch and the handback
+in one message, and the launch's result was written after the handback's hook read the
+transcript (the calls themselves ran in order). That holds for a foreground call in the same
+message, which may have been moved, and whose result the report hasn't seen either way. Only the
+latest message counts, so a call that never got a result (an interrupted stream) can't pin the
+agent. In a fork (a transcript with a `fork-context-ref` entry before any message), only what
+follows its first `<fork-boilerplate>` entry counts, and a fork transcript with no such entry
+counts nothing (fail open). A SubagentStop with no meta.json isn't wait-checked: a plain
+subagent's exists by then, and the stop may be a teammate's per-message one. A report while one
+hasn't ended is sent back, at the handback (auto mode) or at SubagentStop (other modes), naming
+the command and its output file and saying how to wait. An auto-mode stop with text (the agent
+ended its turn instead of handing back, as in the first live run's Monitor turn) is checked too:
+its block keeps the agent going in place of the hand-back nudge, and spends one of the shared
+refusals. The live `early` case runs both paths: in `acceptEdits` the stop was refused in 3 of
+3 runs, so the final-response kill hadn't reached the command's file when the hook read it.
+That order is observed, not documented: if a later version kills first, the file reads
+`[killed]` and the early report passes unrefused (fail open).
+
+**How the agent waits.** The live `early` case found the first advice (`sleep 120; tail -n 2
+<file>`) refused by Claude Code itself: it blocks a Bash call whose first part is a bare `sleep`
+of 25 s or more ("Do not chain shorter sleeps"). The agent then started a Monitor and ended its
+turn, which only drew the hand-back nudge, and it judged the command dead from a sandboxed `ps`
+that can't see it. So the refusal now gives one bounded foreground call to repeat until the file
+ends:
+
+```
+timeout 110 sh -c 'until tail -n 2 "<file>" | grep -qE "^\[(exited with code|killed)"; do sleep 2; done'; tail -n 3 "<file>"
+```
+
+It also says to judge by the file, not `ps`, and not to end the turn on a Monitor. The bound
+stays under the Bash tool's 2-minute default timeout, so the wait isn't moved to the background
+itself (review round 1). Claude Code's own background note says the same ("wait with one
+foreground shell command that blocks until the output file shows what you need"). The policy
+allows the call for researcher, general-purpose and writer, and BRIEF.md and this page quote it as
+the hook gives it (tests in `test_report_check.py`).
+
+**Why every subagent.** The schema check covers our four roles because only they end with the
+JSON contract. A report that misses a running command's result misleads the lead whatever the
+role, and the incident's agent was a custom one. So the wait check covers every subagent but an
+agent-team teammate (Hayden, 2026-11-01).
+
+**Why the cap is shared.** A subagent that ends without a delivered report gets 3 nudges, then the
+report is lost. Two refusals from each check could exceed that, so the wait and schema refusals
+share one counter of 2 (Hayden, 2026-11-01). The counter is per activation: it is stored with
+the activation's start from the ledger's index, so a SendMessage resume gets its two refusals
+again, while a hook registered twice still converges within one activation (review round 4; the
+counter's old form, the value alone, reads as the current activation's). A report the cap lets
+through while a command still
+runs isn't silent: the hook returns `updatedInput` with a `[report-check] Note for the caller`
+naming the command and its output file. A probe showed the lead receives the edited message. A
+report that is one whole-message JSON value is fenced first, so `extract_report` still finds it. Past
+the role's deadline stop the wait refusal is skipped and only the note is added, since the policy
+then denies every tool but the report path and the agent couldn't wait. A SubagentStop can't
+change the message, so there a report past the cap passes as it is.
+
+**What it can't see.** It knows only Claude Code's own background tasks: a command an agent
+detaches inside a foreground call (`cmd &`, `nohup`, `setsid`) is invisible to it, as to Claude
+Code, and BRIEF.md's rule is the only guard there. A tool result whose last line is a launch note
+and that has no `toolUseResult`, which only Claude Code's own note should produce, reads as a
+launch. That costs at most the shared refusals, and only while the named output file exists
+without `[killed]` and no notice names it, for at most the 2-hour bound. A harmless Bash call
+sent in one message with the report (an `ls`) costs one refusal too. A transcript or output file
+it can't read, or any error while reading them, counts as no running command (fail open), and the
+schema check still runs.
 
 ## Verified facts the design rests on
 
@@ -1465,6 +1703,18 @@ wins.
     `/tmp/claude-<uid>`;
   - a `denyRead` directory reads as empty, and a `denyRead` file as permission denied;
   - `~` expands in `denyRead` and `allowWrite`, and a missing path is skipped harmlessly;
+  - npx reuses an `~/.npm/_npx/<hash>/` tree for an exact-version spec without an integrity
+    recheck (npm 11.11.1, `libnpmexec`), and plugin MCP servers run from those trees outside
+    the sandbox. A sandboxed edit to one ran at the next npx (gap N1, 2026-10-25), so `~/.npm`
+    is not in `allowWrite`; sandboxed Bash's npm uses `~/.cache/claude-sandbox/npm` (README,
+    `sandbox-caches.sh`). Bun's global installs are hardlinks into `~/.bun/install/cache`
+    (the status line's `ccstatusline`, gap N3), so that cache is out too, for
+    `~/.cache/claude-sandbox/bun`. uv, pip, pnpm, node-gyp and Playwright are the same class
+    (N3), so `~/.cache/claude-sandbox` is the only `allowWrite` entry and the hook exports each
+    tool's var. The sandbox runtime sets `SANDBOX_RUNTIME=1` inside the
+    sandbox, and Claude Code inlines `CLAUDE_ENV_FILE` into the command it runs there (2.1.310).
+    Every npx run writes into its tree (a lock and `package.json`), so a `denyWrite` on `_npx`
+    alone would break sandboxed npx;
   - an unlisted domain is refused and reported as `<sandbox_violations>` in the tool result.
 - **`excludedCommands` matching** (probe):
   - `"cp *"` matched `cp a b` (the command left the sandbox and hit the permission gate);
@@ -1524,7 +1774,42 @@ wins.
   field names an owner.
 - **A subagent isn't woken by its background task** (same probe): no second SubagentStart fired
   when the agent's task finished. A subagent that backgrounds a command and ends its turn never
-  sees the result.
+  sees the result. Still so on 2.1.316 (probe b, 2026-11-01): an agent that ended its turn with
+  "waiting" was nudged at once (`[handback-send-enforce] Your report has not been delivered`)
+  and handed back without the result. The second SubagentStop's `background_tasks` now carries
+  each task's `id` and `status` (`running`).
+- **A background agent's foreground Bash can move to the background at 180 s** (2.1.316,
+  2026-10-31). The tool result says `Command was moved to the background (ID: <id>) after running
+  for 180s. Output is being written to: <file>`, and its `toolUseResult` carries
+  `backgroundTaskId`, `timedOutAfterMs: 180000` and `subagentCapApplied: true`. The command keeps
+  running past the handback, and its completion notice still reaches the agent ("Early reports
+  (the wait check)"). When it applies (the binary, 2026-11-01): any Bash call that outlives its
+  `timeout` is moved to the background rather than killed (`Command did not complete within its
+  Ns timeout and was moved to the background`), and the cap only shortens that timeout. It
+  applies to an async agent's own calls, in a session that isn't single-shot `-p`
+  (`singleShotPrintSession` or `printInputClosed`), and only when the server flag
+  `tengu_maple_ferry` is nonzero (its value is the cap). So `claude -p` can't reproduce it: the
+  `moved` attempts in `run.py` ran a 200 s call to its end, under a foreground and a background
+  agent alike, and the live case became `early`.
+- **Claude Code blocks a long bare `sleep`** (the binary and the live `early` case, 2.1.316): a
+  Bash call whose first part is `sleep N` with N of 25 or more is refused (`Blocked: sleep 60
+  followed by: ...`, "Do not chain shorter sleeps"). An `until <check>; do sleep 2; done` loop
+  isn't.
+- **Background command facts** (probe a, 2.1.316, 2026-11-01; evidence in lane subagent-wait's
+  `.lane/artifacts/probes/`):
+  - a `run_in_background` launch's transcript entry has no `toolUseResult`; the id and output
+    file are only in the text (`Command running in background with ID: <id>. Output is being
+    written to: <file>`), which adds that the command "is terminated when you give your final
+    response". The PostToolUse `tool_response` has `backgroundTaskId` and
+    `backgroundEndsWithFinalResponse: true`;
+  - the output file ends with `[exited with code 0]`, `[exited with code 3]` for a failure, or
+    `[killed]` after TaskStop, for a timeout-moved command too (probe c, 2026-11-02), whose note
+    adds that it is stopped after 10 minutes in the background;
+  - a notice mid-turn is an `attachment` entry (`type: queued_command`, `origin.kind:
+    task-notification`, the notice in `prompt`) with `<status>completed</status>` or
+    `<status>failed</status>`; a TaskStop leaves no notice;
+  - a PreToolUse `allow` with `updatedInput.message` on SubagentHandback replaces the report the
+    lead receives.
 - **`CLAUDE_PID` and the sandbox's PID namespace** (2.1.286, 2026-10-01): Claude Code sets
   `CLAUDE_PID` in the lead's Bash env, inside the sandbox and outside it, and it names the
   session's Claude process. Each sandboxed command gets its own PID namespace, so

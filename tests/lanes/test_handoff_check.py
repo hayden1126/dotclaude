@@ -20,7 +20,6 @@ GOOD = """# STATUS: chart work
 ## Notes for next session
 - Run the chart tests, then open the PR for #42.
 """
-TODAY = datetime.date.today()
 FIRST = "- Run the chart tests, then open the PR for #42."
 
 
@@ -94,7 +93,7 @@ class Templates(unittest.TestCase):
         rules = {("skills", "lanes", "SKILL.md"): (
                      "Lead branch:", "before each push", "the lead's notes through",
                      "git show <sha>:STATUS.md > STATUS.md", "git apply -3 --allow-empty",
-                     "--no-ff --no-commit",
+                     "lane sync-main <n>",
                      "git merge-base --is-ancestor origin/main",
                      "released your install: merge origin/main, then reinstall"),
                  ("docs", "lanes.md"): ("Lead branch:", "before each push",
@@ -110,11 +109,20 @@ class PlainRepo(Check):
 
     def setUp(self):
         super().setUp()
-        self.session(self.main, time.time() - 60)  # wall clock
+        self.started = time.time() - 60  # wall clock
+        self.session(self.main, self.started)
+        # Marker dates count from the session's start date, as handoff-check's do: never from
+        # a date the module or test read, which is yesterday's once a run crosses midnight.
+        self.day = datetime.date.fromtimestamp(self.started)
         self.status = os.path.join(self.main, "STATUS.md")
         self.commit("STATUS.md", GOOD, msg="Handoff")
 
     def test_a_complete_handoff_passes(self):
+        self.assertPasses(self.check())
+
+    def test_the_tripwire_runs_only_with_lanes(self):
+        # A plain repo has no lanes sharing its common dir (DA15/DA16).
+        self.write(os.path.join(self.common, "shallow"), "")
         self.assertPasses(self.check())
 
     def test_leftovers_must_be_named(self):
@@ -163,6 +171,83 @@ class PlainRepo(Check):
         self.write(os.path.join(agent, "notes.txt"), "x")
         subprocess.run(["git", "init", "-q", agent], check=True, env=self.env)
         self.write(os.path.join(self.main, ".claude", "worktrees", "loose.txt"), "x")
+        self.assertPasses(self.check())
+
+    def plant_filter(self, *scope):
+        """A clean and a process filter that would mark a file when run, routed to a tracked file
+        made stat-dirty at its size (so `git status` would re-hash it); the marker's path."""
+        marker = os.path.join(self.tmp, "filter-ran")
+        prog = os.path.join(self.tmp, "filter.sh")
+        self.write(prog, f"#!/bin/sh\ntouch {marker}\ncat\n")
+        os.chmod(prog, 0o755)
+        for key in ("clean", "process"):
+            subprocess.run(["git", "config", *scope, f"filter.probe.{key}", prog], cwd=self.main,
+                           env=self.env, check=True)
+        self.commit("data.txt", "data\n")
+        self.write(os.path.join(self.main, ".git", "info", "attributes"), "data.txt filter=probe\n")
+        self.commit("STATUS.md", GOOD + "- data.txt holds the fixture.\n")
+        os.remove(marker)  # the fixture's own git add ran the filter
+        # Last, since a commit refreshes the index and would record the new stat.
+        past = time.time() - 7200  # wall clock
+        os.utime(os.path.join(self.main, "data.txt"), (past, past))
+        return marker
+
+    def test_a_filter_in_the_repos_own_config_fails_and_never_runs(self):
+        marker = self.plant_filter()
+        result = self.check()
+        self.assertFalse(os.path.exists(marker), "the check ran the repo's filter")
+        self.assertGap(result, "filter")
+
+    def test_a_repo_local_lfs_extension_fails(self):
+        # git-lfs, a filter installed globally, runs an lfs.extension's clean command, so the
+        # repo's own one counts as the repo's filter (not probed: no git-lfs on HAYPC).
+        subprocess.run(["git", "config", "lfs.extension.x.clean", "prog %f"], cwd=self.main,
+                       env=self.env, check=True)
+        self.assertGap(self.check(), "sets lfs.extension.x.clean,")
+        subprocess.run(["git", "config", "--unset", "lfs.extension.x.clean"], cwd=self.main,
+                       env=self.env, check=True)
+        subprocess.run(["git", "config", "--global", "lfs.extension.x.clean", "prog %f"],
+                       cwd=self.main, env=self.env, check=True)
+        self.assertPasses(self.check())
+
+    def test_a_filter_value_holding_a_newline_reads_whole(self):
+        # git prints values raw, so a newline in one would split a line-based read.
+        subprocess.run(["git", "config", "--global", "filter.x.clean", "a\nb"], cwd=self.main,
+                       env=self.env, check=True)
+        self.assertPasses(self.check())
+        subprocess.run(["git", "config", "filter.y.clean", "c\nd"], cwd=self.main, env=self.env,
+                       check=True)
+        self.assertGap(self.check(), "sets filter.y.clean,")
+
+    def test_a_signed_head_never_runs_the_repos_gpg_program(self):
+        # log.showSignature makes `git log` verify HEAD's signature with gpg.program, which the
+        # repo's own config names (review round 1).
+        marker = os.path.join(self.tmp, "gpg-ran")
+        prog = os.path.join(self.tmp, "gpg.sh")
+        self.write(prog, f"#!/bin/sh\ntouch {marker}\nexit 1\n")
+        os.chmod(prog, 0o755)
+        git = lambda *a: subprocess.run(["git", *a], cwd=self.main, env=self.env, check=True,
+                                        capture_output=True, text=True).stdout.strip()
+        body = (f"tree {git('rev-parse', 'HEAD^{tree}')}\nparent {git('rev-parse', 'HEAD')}\n"
+                "author t <t@t> 1700000000 +0000\ncommitter t <t@t> 1700000000 +0000\n"
+                "gpgsig -----BEGIN PGP SIGNATURE-----\n \n abc\n -----END PGP SIGNATURE-----\n"
+                "\nsigned\n")
+        raw = os.path.join(self.tmp, "commit")
+        self.write(raw, body)
+        git("update-ref", "HEAD", git("hash-object", "-t", "commit", "-w", raw))
+        git("config", "log.showSignature", "true")
+        git("config", "gpg.program", prog)
+        # Control: a plain git log does run it, so the check's own run proves something.
+        subprocess.run(["git", "log", "-1", "--format=%ct"], cwd=self.main, env=self.env,
+                       capture_output=True)
+        self.assertTrue(os.path.exists(marker), "the fixture's gpg.program never ran")
+        os.remove(marker)
+        self.check()
+        self.assertFalse(os.path.exists(marker), "the check ran the repo's gpg.program")
+
+    def test_a_filter_from_global_config_passes(self):
+        # git lfs install writes its filter to the global config, which the session can't write.
+        self.plant_filter("--global")
         self.assertPasses(self.check())
 
     def test_sandbox_stubs_are_never_leftovers(self):
@@ -221,17 +306,17 @@ class PlainRepo(Check):
         self.assertGap(self.check(), "no status file")
 
     def test_a_dated_approval_marker_passes(self):
-        self.commit("STATUS.md", marked(f"(approved by Hayden {TODAY})"))
+        self.commit("STATUS.md", marked(f"(approved by Hayden {self.day})"))
         self.assertPasses(self.check())
 
     def test_an_approval_marker_from_before_the_session_fails(self):
-        old = TODAY - datetime.timedelta(days=1)
+        old = self.day - datetime.timedelta(days=1)
         self.commit("STATUS.md", marked(f"(approved by Hayden {old})"))
         self.assertGap(self.check(), "approval marker predates this session: remove it or get a "
                        "fresh approval")
 
     def test_an_old_marker_on_a_later_item_is_ignored(self):
-        old = TODAY - datetime.timedelta(days=3)
+        old = self.day - datetime.timedelta(days=3)
         self.commit("STATUS.md", GOOD + f"- Then merge it (approved by Hayden {old}).\n")
         self.assertPasses(self.check())
 
@@ -242,17 +327,18 @@ class PlainRepo(Check):
             self.assertGap(self.check(), "approval marker")
 
     def test_an_approval_marker_dated_in_the_future_fails(self):
-        later = TODAY + datetime.timedelta(days=1)
+        # Two days on: past handoff-check's today on either side of a midnight the run crosses.
+        later = self.day + datetime.timedelta(days=2)
         self.commit("STATUS.md", marked(f"(approved by Hayden {later})"))
         self.assertGap(self.check(), "approval marker is dated in the future")
 
     def test_a_first_item_marker_with_an_unknown_session_start_fails(self):
         os.remove(os.path.join(self.home, ".claude", "sessions", "1.json"))
-        self.commit("STATUS.md", marked(f"(approved by Hayden {TODAY})"))
+        self.commit("STATUS.md", marked(f"(approved by Hayden {self.day})"))
         self.assertGap(self.check(), "can't confirm this session's start: remove the marker or "
                        "run inside the session")
         # a marker on a later item is still ignored
-        self.commit("STATUS.md", GOOD + f"- Then merge it (approved by Hayden {TODAY}).\n")
+        self.commit("STATUS.md", GOOD + f"- Then merge it (approved by Hayden {self.day}).\n")
         self.assertPasses(self.check())
 
     def test_an_approval_marker_outside_next_is_not_checked(self):
@@ -402,6 +488,54 @@ class KeepOpen(unittest.TestCase):
         self.assertIsNone(lanelib.kept_open(None))
 
 
+class KeptFlag(unittest.TestCase):
+    """lanelib.kept_flag: no comment hides `Keep open:`, whatever a renderer takes for one."""
+
+    def test_a_flag_inside_a_comment_still_holds(self):
+        for body in ("<!-- Keep open: PR 2 follows. -->\n- Step.\n",
+                     "- Step.\n<!--\nKeep open: PR 2 follows.\n-->\n",
+                     # Opened in a list item: markdown ends the comment with the item.
+                     "-   <!--\nKeep open: PR 2\nx-->\n",
+                     # `--` inside: CommonMark 0.30 and GitHub read no comment here at all.
+                     "x <!--\nKeep open: PR 2\ny <!--->\n"):
+            text = f"# LANE: x\n\n## Next\n{body}"
+            self.assertIsNone(lanelib.kept_open(lanelib.next_block(text)), body)
+            self.assertIsNotNone(lanelib.kept_flag(text), body)
+
+    def test_a_flag_behind_a_comment_or_commented_under_a_bullet_holds(self):
+        # A line-start comment with text in it: the marker-deleting read kept its text in front.
+        text = "## Next\nx <!--\n<!-- c -->Keep open: PR 2\n"
+        self.assertIsNone(lanelib.comment_flaw(text))
+        self.assertEqual(lanelib.kept_flag(text), "Keep open: PR 2")
+        # Indented under a bullet, a commented flag still holds, as the docs say.
+        self.assertEqual(lanelib.kept_flag("## Next\n- Step.\n  <!-- Keep open: PR 2 -->\n"),
+                         "Keep open: PR 2")
+        # A whole-line comment once read as a template placeholder (`<...>`) and was dropped.
+        self.assertEqual(lanelib.kept_flag("## Next\n- Step.\n<!-- Keep open: PR 2 -->\n"),
+                         "Keep open: PR 2")
+
+    def test_a_commented_fence_never_upsets_where_next_ends(self):
+        # The commented-out fence's closer has `-->` after it, so it never closes, and the real
+        # fence's opener read as its closer: the shell comment then ended Next.
+        text = ("## Next\n<!-- old:\n```sh\nmake\n``` -->\n```\n# install first\n```\n"
+                "Keep open: PR 2\n")
+        self.assertEqual(lanelib.kept_flag(text), "Keep open: PR 2")
+
+    def test_a_heading_in_a_fence_never_ends_next_for_it(self):
+        # section() ends Next at the shell comment, so the flag after the fence was lost.
+        text = "## Next\n- Run:\n```sh\n# install first\nmake\n```\nKeep open: PR 2.\n"
+        self.assertIsNone(lanelib.kept_open(lanelib.next_block(text)))
+        self.assertEqual(lanelib.kept_flag(text), "Keep open: PR 2.")
+
+    def test_mentions_and_other_sections_still_dont(self):
+        for text in ("## Next\n<!-- start with `Keep open: <why>` while more PRs follow -->\n"
+                     "- Step.\n",
+                     "## State\n<!-- Keep open: PR 2. -->\n## Next\n- Step.\n",
+                     "## Next\n- Step.\n```\n## Other\n```\n## State\nKeep open: PR 2.\n"):
+            self.assertIsNone(lanelib.kept_flag(text), text)
+        self.assertIsNone(lanelib.kept_flag(None))
+
+
 class Lane(Check):
     def setUp(self):
         super().setUp()
@@ -419,6 +553,28 @@ class Lane(Check):
     def test_a_complete_lane_handoff_passes(self):
         self.finish()
         self.assertPasses(self.check(cwd=self.path))
+
+    def test_each_tripwire_finding_fails(self):
+        # DA15/DA16: the common dir every lane shares.
+        self.finish()
+        self.write(os.path.join(self.common, "shallow"), "")
+        self.write(os.path.join(self.common, "objects", "info", "alternates"), "/x/objects\n")
+        code, out = self.check(cwd=self.path)
+        self.assertEqual(code, 1, out)
+        self.assertIn("FAIL  git: shallow exists", out)
+        self.assertIn("FAIL  git: objects/info/alternates is not empty", out)
+
+    def test_a_commondir_in_the_main_checkouts_git_dir_fails(self):
+        # DA15/DA16: git takes a commondir file in the main checkout's own .git too, and then
+        # answers with that dir, where no lanes config lives. The check still runs, on .git.
+        self.finish()
+        clean = os.path.join(self.tmp, "clean.git")
+        subprocess.run(["git", "init", "-q", "--bare", clean], check=True)
+        self.write(os.path.join(self.main, ".git", "commondir"), clean + "\n")
+        code, out = self.check(cwd=self.main)
+        self.assertEqual(code, 1, out)
+        self.assertIn("commondir", out)
+        self.assertIn("FAIL  git:", out)
 
     def test_an_unreadable_lane_record_fails_in_its_checkout(self):
         # Left out of the lanes, the lane's checkout would read as unregistered and check the
@@ -546,7 +702,8 @@ class Lane(Check):
         self.assertGap(self.check(self.path, "--closing"), "older than HEAD")
 
     def test_closing_skips_approval(self):
-        old = TODAY - datetime.timedelta(days=1)
+        (start,) = [s["startedAt"] for s in self.lane_json("chart-fix")["sessions"]]
+        old = datetime.date.fromtimestamp(lanelib.parse_iso(start)) - datetime.timedelta(days=1)
         self.body = self.body.replace("then run it.", f"then run it (approved by Hayden {old}).")
         self.finish()
         self.assertGap(self.check(self.path), "predates this session")
@@ -559,6 +716,26 @@ class Lane(Check):
         self.assertPasses(self.check(self.path))
         self.assertGap(self.check(self.path, "--closing"), "Keep open: PR 2 follows for #42.")
         # `lane done --abandon` passes --abandon on, since it closes a kept lane anyway.
+        self.assertPasses(self.check(self.path, "--closing", "--abandon"))
+
+    def test_an_unclosed_comment_fails_naming_its_line(self):
+        # The comment's text would read as the record's, hiding a `Keep open:` from --closing.
+        # At the end: the template's own comment comes first in Next, and its `-->` would close it.
+        self.finish("<!-- Keep open: PR 2 follows.\n")
+        line = len(self.body.splitlines()) + 1
+        self.assertGap(self.check(self.path), f"an unclosed `<!--` at line {line}")
+        self.assertGap(self.check(self.path, "--closing"), f"an unclosed `<!--` at line {line}")
+        # `lane done --abandon` closes the lane anyway, as it does a kept one.
+        self.assertPasses(self.check(self.path, "--closing", "--abandon"))
+
+    def test_an_opener_quoted_in_code_passes(self):
+        self.finish("\n## Backlog\n- An unclosed `<!--` hides `Keep open:`.\n")
+        self.assertPasses(self.check(self.path))
+
+    def test_closing_refuses_a_flag_inside_a_comment(self):
+        # Whether a renderer shows it depends on the dialect: it holds either way.
+        self.finish("<!-- Keep open: PR 2 follows. -->\n")
+        self.assertGap(self.check(self.path, "--closing"), "Keep open: PR 2 follows.")
         self.assertPasses(self.check(self.path, "--closing", "--abandon"))
 
     def test_a_next_with_only_keep_open_has_no_step(self):

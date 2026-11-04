@@ -32,7 +32,7 @@ what. `docs/lanes.md` holds the design and why; this is the operating guide.
 ## At session start
 
 The `lane-identity` hook names your lane, the branch (or detached commit) your worktree has checked
-out, claims, port and record. Then read, in order:
+out, claims, ports and record. Then read, in order:
 
 1. your record, `<lane>/.lane/STATUS.md` (Brief, Asks for Hayden, Next);
 2. the project STATUS.md (direction, backlog);
@@ -45,16 +45,19 @@ an unregistered worktree: `lane whoami` tells you which.
 ## Lifecycle
 
 1. **Init, once per repo**, from the main checkout:
-   `lane init --root ~/code/<repo>-lanes --setup "npm ci" --ports 5191-5199 --cap 4`. It asks
-   for Hayden's click: `--setup` names the command each new lane runs, and `--root` moves where
-   lanes live. `--model` and `--effort` set the claude model and effort each `lane open`
-   launches with (an empty value: the user's default).
+   `lane init --root ~/code/<repo>-lanes --setup "npm ci" --ports 5191-5199 --block 3 --cap 4`.
+   It asks for Hayden's click: `--setup` names the command each new lane runs, and `--root`
+   moves where lanes live. `--block` hands each new lane that many ports in a row (default 1).
+   `--model` and `--effort` set the claude model and effort each `lane open` launches with (an empty value: the `ANTHROPIC_MODEL` pin, or the user's default effort).
+   In a repo whose suites need built dirs the setup made (a Node repo's `node_modules`),
+   `lane init --trial-link node_modules` has each `lane trial` symlink the lane's into its
+   scratch tree (comma-separated for more; an empty value removes it).
 2. **New lane:** `lane new chart-fix --claim 42 --goal "fix the axis labels" --files src/chart/
    --overlaps api-docs --done-when "axis test green"`. It fetches (and refuses if the fetch
    fails: a lane branches only from the commit the remote reports), branches from `origin/main`
    with no upstream, copies the gitignored files `.worktreeinclude` lists, seeds the record with
-   the brief, hands out a port and runs the setup command. Then it checks the worktree as the
-   excluded-command guard will, and seeds any Edit deny rule a dir needs (a `core.hooksPath` the
+   the brief, hands out a block of ports and runs the setup command. Then it checks the
+   worktree as the excluded-command guard will, and seeds any Edit deny rule a dir needs (a `core.hooksPath` the
    setup set, say) into the record's Asks for Hayden. Start the lane's session with
    `lane open chart-fix` (bare, from inside tmux): a new tmux window in the lane, in plan mode,
    told to read its record and plan the brief. `lane open chart-fix --model sonnet --effort low`
@@ -71,6 +74,16 @@ an unregistered worktree: `lane whoami` tells you which.
    `overlap`, the lines under the board name the other lane and the files you both change:
    tell that lane (`lane addr <id>`, a nudge), note it in your record, and run
    `lane trial <id> --run "<suite>" ...` early instead of finding out at ready.
+
+   **Start a dev server with `lane serve -- <cmd>`**, never bare: `{port}` in the command (or
+   `$PORT`) is the block's first free port, or `--port N`. serve proves the port's listener is
+   the server it started, so a server that failed to bind a port another lane holds fails
+   here, instead of your checks testing that lane's server. It refuses in the sandbox, so run
+   it with the sandbox off (each start asks). It waits up to 60 s (`--timeout`), for a
+   `--ready RE` match in its log too; the log is `.lane-serve/<port>.log`. `lane serve --stop
+   <port>` ends it; `done` and `park` end it too. Nothing outside the lane's dir is signalled
+   (a shared daemon such as Gradle's may carry the token), so run the server in the
+   foreground, from the lane.
 
    **Tell the lead before you reach past your worktree.** Before an act whose effect leaves the
    lane's worktree (an install from the lane, anything that takes a cap slot), and whenever the
@@ -103,7 +116,7 @@ an unregistered worktree: `lane whoami` tells you which.
    staged:
    1. Read `<sha>` with `git rev-parse --short <lead-branch>`. Until
       `git merge-base --is-ancestor origin/main <sha>` passes, the lead hasn't merged main (The
-      lead, step 7.2), and its files would undo what main gained: message the lead (Hayden, when
+      lead, step 7.1), and its files would undo what main gained: message the lead (Hayden, when
       `lane addr lead` refuses), wait, and start again at 1.
    2. STATUS.md is the lead's alone, so take its copy: `git show <sha>:STATUS.md > STATUS.md`.
    3. PLAN.md has other writers, so apply only the lead's change:
@@ -117,7 +130,7 @@ an unregistered worktree: `lane whoami` tells you which.
    Before the ask for ready, run `lane trial --run "<suite>" ...` from the lane, one `--run` per
    suite your Done when names, in the background (it takes as long as the suites, longer when
    one fails). It merges origin/main and every other live lane's commits onto your HEAD in a
-   scratch tree and runs the suites there under the `suite` lock, so it finds what a merge
+   scratch tree and runs the suites there under the `suite` lock (and init's `--trial-locks`), so it finds what a merge
    breaks without a textual conflict. Pass each suite bare, with no fail-fast flag (`-x`, `-f`:
    it hides failures behind a shared one), not wrapped in `lane lock suite`
    (the trial holds it already), and never start a trial under that lock. Quote its last lines
@@ -126,7 +139,23 @@ an unregistered worktree: `lane whoami` tells you which.
    the merge order) have settled it. A conflict the trial says is between two other lanes is
    theirs: rerun with the `lane trial <id> ...` it names to try that lane with yours alone. One
    it says is between another lane and origin/main ("it needs to merge origin/main") is that
-   lane's: tell it, and ask for ready anyway, quoting the line.
+   lane's: the trial calls that lane untried, not FAILED, and exits 0 when nothing else fails.
+   Tell that lane, and ask for ready anyway, quoting the line. A failure that printed no test id
+   ("compare the two runs above by hand") fails the trial even when the baseline fails alike:
+   read both runs, and say in the ask why it isn't the merge's. The tree lives in your lane's
+   `.lane-trial/` (gitignored) and gets your `.worktreeinclude` files; `--link PATH` symlinks
+   one more of your dirs into it, beside init's `--trial-link` ones (a link your lane lacks is
+   refused: run its setup first). It runs only sandboxed, never from a plain shell.
+
+   A lane that is pushed, handed off and only waits its merge turn sends the lead `park me`. The
+   lead runs `lane park <id>` on that without asking Hayden, since `lane open <id>` undoes it:
+   the park ends the lane's sessions and frees its cap slot, and keeps its worktree, branch,
+   record and claims. It refuses a dirty tree, a HEAD that is neither pushed nor an open PR's
+   head, a failing `handoff-check`, the `handoff?` flag, a lock the lane holds, the install hold,
+   a tripwire finding in the shared git dir (the `git:` lines on `lane ls`) and a session that
+   is busy or waiting on Hayden, checked again just before the signals.
+   So send `park me` as the turn's last act, with no question open. When its turn comes, `lane open <id>` unparks it to rebase and merge,
+   even at the cap: one lane may go over by one.
 
    The lane that learns of the merge
    (it ran `gh pr merge`, or Hayden said "merged" in its window) writes the outcome into its
@@ -139,7 +168,7 @@ an unregistered worktree: `lane whoami` tells you which.
    or the stopped lead's window if it gives one.
 7. **Close:** `lane done <id>` refuses an unmerged branch, a lane made by `lane new` with no
    commits past its base, and, while its worktree exists, a lane whose record's Next has a
-   `Keep open:` line, live session or not (pass `--abandon` to close any of them anyway; it
+   `Keep open:` line (one inside a comment counts too) or whose record has an unclosed `<!--` or a stray `-->` (it names the line), live session or not (pass `--abandon` to close any of them anyway; it
    asks). It ends what provably
    belongs to the lane, so its open tab needs no closing by hand:
    - its Claude sessions get SIGTERM (a `lane open` tab closes with its claude), and a stopped
@@ -156,9 +185,11 @@ an unregistered worktree: `lane whoami` tells you which.
    comes from /proc and Claude Code's own session files and transcripts, never from
    `lane.json`, and on a rerun from the pane shells an earlier run recorded in the state dir.
    Before any signal, it refuses, by name:
+   - a tripwire finding in the shared git dir (the `git:` lines on `lane ls`);
+   - a `new` or `adopt` finishing the lane (its finishing lock; docs/lanes.md, LR7);
    - anything else with its cwd in the lane;
    - a background session (`claude stop <jobId>` ends it);
-   - a dirty, locked or submodule worktree;
+   - a dirty, locked or submodule worktree, or one git doesn't list at the lane's path;
    - a repo that sets `extensions.worktreeConfig` (git in the lane would read its
      lane-writable `config.worktree`);
    - a run from anywhere but the main checkout, or under a lane's session (only the lead
@@ -171,8 +202,9 @@ an unregistered worktree: `lane whoami` tells you which.
    first run proved (a restored tab's shell, whose session that run ended). Give its Bash call
    `timeout: 600000`: it can wait minutes (the fetch, handoff-check, up to five 10 s grace
    periods, the locks), and one cut off by a timeout needs a rerun.
-   It archives `lane.json` and `.lane/` to `<common-dir>/lanes/_closed/<id>-<date>/`, runs
-   `git worktree remove` (never `--force`) and `git branch -d` (never `-D`). It judges and
+   It archives `lane.json` and `.lane/` to `<common-dir>/lanes/_closed/<id>-<date>/`, removes
+   the worktree as a plain `git worktree remove` would (never forced), but by directory fd so a
+   symlink swapped in can't redirect it, and runs `git branch -d` (never `-D`). It judges and
    deletes the branch the worktree has checked out, and `lane.json`'s when that differs (a lane
    that switched for a follow-up PR); a detached worktree needs `--abandon`. Last, it names any
    Edit deny rule left naming the removed worktree: drop those from the file it names.
@@ -182,7 +214,14 @@ digits, `.`, `_` and `-`, starts with a letter or digit, runs at most 64 chars a
 takes `--id <slug>`, the one case where the id
 differs from the dir name; `git worktree move` is the other fix. If `lane new` fails partway, the
 lane stays registered as `setup-failed`, and `lane adopt <path>` finishes it, redoing only the
-failed step (copies never overwrite a file the lane already has).
+failed step (copies never overwrite a file the lane already has). That holds only while `new`'s
+marker shows a verified checkout nothing else has run in (docs/lanes.md, LR7), and a finished
+lane has none: any other setup-failed lane is closed with `lane done --abandon` on its id and
+made again, and `adopt`, `open` and `park` say so. Fix a failed setup from a terminal, not a
+claude session: `open` refuses a lane while any marker of `new`'s for it is there, whatever
+its `lane.json` says, and `adopt` finishes no lane a session runs in. A checkout `new` refused,
+which nothing ran in, is deleted by hand from a terminal first, as `done` deletes no tree git
+finds changed. A second `lane new` waits for the first.
 
 ## The lead
 
@@ -195,7 +234,7 @@ rebases: a carry names the lead's head, and the next carry diffs from it.
 
 **Which session leads.** A main checkout can hold two live sessions: a stray resumed there, or a
 side chat. The lead is the last one to act as lead. A bare `lane init`, `new`, `adopt`, `open` (not
-`--print`) or `done` that succeeds from an interactive session in the main checkout records it in the state
+`--print`), `done` or `park` that succeeds from an interactive session in the main checkout records it in the state
 dir, where no lane can write, and `lane lead` takes it on purpose (Hayden: `! lane lead` at its
 prompt). A /clear, a /pass in its pane, or a resume of its session (in another tab, or the tab a
 tmux restart restores) keeps it: the lane-identity hook relinks the record on proof, so a restart
@@ -218,8 +257,11 @@ inherits the lead from it.
    `lane open <id>` starts its session. A lane still `orphan` a minute later is usually stuck at
    the trust dialog: `tmux capture-pane -p -t <window>` shows it. Tell Hayden; don't open it
    again, which would start a second session.
-4. **Cap.** The lanes config's `cap` (default 4, `lane init --cap`) limits live lanes. Requests beyond it wait in the
-   project STATUS backlog.
+4. **Cap.** The lanes config's `cap` (default 4, `lane init --cap`) limits the lanes that hold a
+   slot: a live lane holds one unless it is parked with no session in it (a session started in
+   a parked lane by hand holds it again). `lane new` refuses at the cap; `lane open` of a parked
+   lane goes over by one at most, for its rebase and merge, and the board's `cap:` line says
+   so. Requests beyond it wait in the project STATUS backlog.
 5. **Hand-back gate.** A lane is handed back only when `handoff-check -C <lane path>` passes and
    a bare `lane ls` shows no `handoff?` flag. The flag lights when the record may be behind the
    lane's work: a PR from the lane's branches merged after the record's last write, a commit is
@@ -232,8 +274,11 @@ inherits the lead from it.
    its session is gone, add it to Hayden's asks. Never order a merge or close a lane before the
    gate passes.
 6. **Watch and order.** Watch `lane ls`. Keep the merge order in the project STATUS. A lane
-   whose install is live merges main with the sandbox off: its own hooks, skills and tests are
-   write-protected then (`docs/lanes.md` S3). A lane's message before an act past its worktree
+   whose install is live can't merge main sandboxed: its own hooks, skills and tests are
+   write-protected then (`docs/lanes.md` S3). It asks the lead to reinstall from main, which
+   releases its install; it then merges origin/main sandboxed, resolves, and reinstalls from its
+   worktree before ready. A lane never runs `lane sync-main`: only the lead does, with a merged
+   PR's number (step 7.1). A lane's message before an act past its worktree
    (Lifecycle, step 3) gets a reply: ask Hayden first when the act needs his ok, and say so
    when another lane's install or the merge order stands in its way.
 7. **After a merge.** A lane's `merged #N` starts the post-merge chain. A merged PR on `lane ls`
@@ -241,17 +286,19 @@ inherits the lead from it.
    the lane "#N merged: run your after-merge handoff, then send `merged #N`" and wait: it may be
    writing `Keep open:` just then. Hayden approved the chain once for every merge (2026-10-14),
    so run it without asking, in order:
-   1. Prove the merge: `gh pr view <n> --json state,mergedAt`. The message says when to look,
-      never that it happened.
-   2. `git fetch`, then bring the main checkout to the merge (dotclaude: `git fetch origin
-      main:main`, then merge `main` into the lead's branch, sandbox off). On the lead's branch,
-      commit STATUS.md first and merge with `--no-ff --no-commit` (nothing to do when git says
-      Already up to date). Main holds older carries of the lead's STATUS.md, so a clean merge
-      would bring back a line the lead deleted since. Read main's side
-      (`git diff HEAD...MERGE_HEAD -- STATUS.md`), keep the lead's file whole
-      (`git show HEAD:STATUS.md > STATUS.md`), add back by hand any line from main that isn't
-      an older carry, then `git add STATUS.md` and commit. PLAN.md merges as usual: delete
-      again any line the lead removed since its last carry.
+   1. Commit STATUS.md and PLAN.md on the lead's branch, then run a bare `lane sync-main <n>`
+      from the main checkout. It proves PR #n merged from GitHub's merge commit (the message
+      says when to look, never that it happened), merges that commit into the lead's branch,
+      and commits the merge. On a lead's branch other than main, it also points `main` and
+      `origin/main` at the proven commit; when the lead's branch is main, main moves to the merge
+      commit and only `origin/main` goes to the proven commit. It keeps the lead's STATUS.md
+      whole: main holds older carries of it, so a clean merge would bring back a line the lead
+      deleted since. Then it prints main's side of STATUS.md. "Already up to date" means
+      nothing to do. A refusal stops the chain: read its message and fix what it names. One
+      that cites DA15/DA16 (a tripwire or `git fsck` finding) goes to Hayden as it stands.
+   2. Read the printed diff, add back by hand any `+` line that isn't an older carry, and
+      commit. PLAN.md takes the clean merge (the lead's copy on a conflict): delete again any
+      line the lead removed since its last carry.
    3. Where the repo installs from its checkout: first note any `install: held by lane <id>` line
       on `lane ls`. Copy settings.json and `~/.tmux.conf` aside, run `./setup.sh` (dotclaude:
       then `./setup-tmux.sh`) from the main checkout under `lane lock install`, sandbox off,
@@ -268,7 +315,9 @@ inherits the lead from it.
       from your worktree before ready; renumber the version if taken". To the lane next in
       merge order, add "carry the lead's notes from `<lead-branch>` before your next push"
       (Lifecycle, step 6). A pushed branch merges main rather than rebasing, which would need a
-      force push. The board's `rebase` flag is the truth; the message is only a nudge.
+      force push. The board's `rebase` flag is the truth; the message is only a nudge. A parked
+      lane gets no message: no session reads it, and its `rebase` flag carries it to its
+      unpark.
    7. `lane done <id>` once the hand-back gate (step 5) passes, unless the lane's Next has a
       `Keep open:` line: then leave it open. A merged lane with no live session passes when its
       record was written after the merge (its after-merge handoff), so it closes without an
@@ -283,6 +332,9 @@ inherits the lead from it.
    e2e suite on a fixed port) in `lane lock <name> -- <cmd>`. List the names once with
    `lane init --locks gate,e2e` (it takes the full list and replaces the old one); an unlisted name is refused, since a typo would split the mutual
    exclusion. A second run waits and names the holder; `--wait SECS` gives up with exit 75.
+   A gate that needs a quiet machine also keeps trials out with `lane init --trial-locks
+   <name>`: every `lane trial` then takes that lock before `suite`. Take your own locks before
+   `suite` wherever you take both, as a trial does, or the two can deadlock.
 9. **Bug reports from other repos.** A session outside the repo that hits a bug in its tooling
    sends the report to what `lane addr --repo <main checkout> lead` prints (dotclaude's CLAUDE.md
    says so). Log each as one backlog line in the project STATUS on the lead's branch, naming the
@@ -315,6 +367,7 @@ what").
 | The post-merge chain (The lead, step 7) | the lead | standing approval: no ask, one line or the failed step |
 | `lane done` after a merge | the lead | standing approval once the hand-back gate passes, unless the lane's Next has `Keep open:` |
 | `lane done --abandon` | the lead | asks Hayden every time (an ask rule) |
+| `lane park` of a lane waiting its merge turn | the lead | on the lane's `park me`, no ask: `lane open` undoes it |
 | More PRs to come on the lane | the lane | `Keep open: <why>` at the top of its Next |
 | An act past the lane's worktree (an install from it, a cap slot), or a step the lead must run | the lead | the lane messages the lead first (Lifecycle, step 3); the lead asks Hayden only when it needs his ok |
 
@@ -333,6 +386,7 @@ Before any AskUserQuestion, in a lane or the lead:
 3. Restate the scope against the brief, and say so if this grows it.
 4. If the user skipped a question, say so before asking its parts again.
 5. Explain each code name in plain words, or drop it.
+6. If an option runs anything outside the sandbox or skips a prompt, name what runs there, who can write it, and by which route.
 
 The ask-check hook (`hooks/ask_check.py`) denies a risky ask once with this list as the reason
 (README's `ask-check.sh` entry says which asks are risky). Fix what applies and resend; the
@@ -343,7 +397,7 @@ resend passes.
 | Command | What it does |
 |---|---|
 | `lane whoami` | your lane id, `main`, `unregistered` or `plain` (`--json` for scripts) |
-| `lane ls` | the board: branch, ahead/behind, PR, port, claims, live sessions, context (CTX: `312k*` past the auto-pass soft tier, `523k!` past hard), state (STATE: busy, idle, waiting, shell; message a lane idle past soft to run /pass), tmux window, flags; then any held locks, each pair of lanes whose changed files overlap (with the files), a main checkout with two or more live sessions (each one's window, the lead first) or a stopped lead (its window to `fg` it in), and the install hold |
+| `lane ls` | the board: branch, ahead/behind, PR, port block, claims, live sessions, context (CTX: `312k*` past the auto-pass soft tier, `523k!` past hard), state (STATE: busy, idle, waiting, shell; message a lane idle past soft to run /pass), tmux window, flags; then any held locks, each pair of lanes whose changed files overlap (with the files), a main checkout with two or more live sessions (each one's window, the lead first) or a stopped lead (its window to `fg` it in), and the install hold |
 | `lane ls --requests` | request to lane, from claims only |
 | `lane who 42` | the lane that claims #42, or "unclaimed" (with a warning while a left-out record may hold it) |
 | `lane claim 42` / `lane release 42` | claim or drop a request for your lane |
@@ -352,9 +406,12 @@ resend passes.
 | `lane open <id>` | the lane's session in a new tmux window, in plan mode; `--model`/`--effort` override init's defaults for the launch; `--focus` switches to it, or to the live session's window; `--print` shows the tmux command |
 | `lane addr <id>` / `lane addr lead` | `uds:<socket>`, the SendMessage address of the lane's (or the lead's) one live session; refuses on none or several, except that `lead` picks the recorded lead or its resume among several (and refuses with the way to pick when none is). A stopped session (Ctrl+Z) is never an address: the refusal names its window to `fg` it in. `--repo PATH` looks in the lanes repo whose main checkout holds PATH instead of the cwd's, from any dir: a session in another repo reports a dotclaude bug to what `lane addr --repo ~/dotclaude lead` prints. Bare: it must see other processes |
 | `lane lead` | makes the session that runs it the lead (from the main checkout only; Hayden: `! lane lead` at its prompt). Bare |
+| `lane serve -- <cmd>` | from a lane, sandbox off: start `<cmd>` on a port of the lane's block (`{port}` or `$PORT`; `--port N` picks one) in a session of its own, wait for its listener (after `--ready RE`, if given), and fail unless every listener on the port is the serve's; `--stop PORT` ends what a serve started there |
 | `lane lock gate -- <cmd>` | run `<cmd>` under the named lock, waiting while another run holds it; `--wait SECS` gives up with exit 75 (docs/lanes.md: telling it from the command's own 75) |
-| `lane trial --run "<suite>" ...` | from a lane: merge origin/main and every other live lane's commits (or only the ids given) onto its HEAD in a scratch tree, run each suite there under the `suite` lock, and rerun a failed one on HEAD plus origin/main alone to tell the merge's failures from the location's; exit 0 clean, 1 on a conflict or a failure of the merge's own, 75 on `--wait`; `--keep` keeps the tree |
+| `lane trial --run "<suite>" ...` | from a lane: merge origin/main and every other live lane's commits (or only the ids given) onto its HEAD in a scratch tree, run each suite there under the `suite` lock (and init's `--trial-locks`), and rerun a failed one on HEAD plus origin/main alone to tell the merge's failures from the location's; with nothing merged, run them once on HEAD plus origin/main; exit 0 clean, 1 on a conflict, a failure of the merge's own or one with no test id to compare (a lane that conflicts with origin/main alone is untried, not a failure), 75 on `--wait`; `--keep` keeps the tree; `--link PATH` symlinks a lane dir into it |
 | `lane new` / `adopt` / `done` | lifecycle, above |
+| `lane park <id>` | the lead ends a finished lane's sessions and frees its cap slot, keeping its worktree, branch, record and claims; `lane open <id>` unparks it (Lifecycle, step 6). Bare |
+| `lane sync-main <n>` | merge merged PR #n into the main checkout's branch from hash-checked objects and commit it (The lead, step 7.1). Lead only: a call with no number, or from a lane, refuses (a lane whose install is live follows step 6). Refuses on uncommitted changes, a conflict, or a tripwire finding (`git:` lines on `lane ls`); it, `new` and `adopt` also refuse while an install's `.demote-pending` flag is in the verified dir (rerun the lead's `./setup.sh`; docs/lanes.md, Residuals). Bare |
 
 Board flags: `stale` (worktree gone; its claims are void), `rebase` (behind the base),
 `conflict` (two live lanes claim one request), `overlap` (two live lanes change one file,
@@ -363,18 +420,24 @@ live session), `stopped` (a session
 there is stopped with Ctrl+Z: `fg` it in its window; it still holds the lane), `handoff?` (the
 record may be behind, as The lead step 5 spells out: a PR merged after its last write, a commit
 is newer, or a session that started after it has ended; on whenever one of those can't be read),
-`setup-failed` (half made: it still holds its port, claims and a cap slot; finish it with
-`lane adopt <path>`), `closing` (a `lane done` stopped partway; rerun it).
+`setup-failed` (half made: it still holds its ports, claims and a cap slot; finish it with
+`lane adopt <path>`, or, when it has no marker of `new`'s verification, `lane done --abandon`
+and a new lane), `closing` (a `lane done` stopped partway; rerun it), `parked` (`lane
+park` ended its sessions and freed its slot; it never shows `orphan`). With a lane parked or
+the cap passed, a `cap: N of M slots held (K parked)` line follows the board.
 
-Run `lane init`, `new`, `adopt`, `ls`, `open`, `done`, `addr` and `lead` as bare commands: those are in
+Run `lane init`, `new`, `adopt`, `ls`, `open`, `done`, `park`, `sync-main`, `addr` and `lead` as bare commands: those are in
 `excludedCommands`, so they run outside the sandbox with the network, gh's credential and a view
 of other processes. Piped or sandboxed, `ls` says what it skipped (PR state, sessions and window
-show `?`), and `new`, `open`, `done`, `addr` and `lead` refuse. `lane ls` also names any record it left out (a
+show `?`), and `new`, `open`, `done`, `park`, `sync-main`, `addr` and `lead` refuse. `lane ls` also names any record it left out (a
 `lane.json` the CLI didn't write, or two claiming one path): look at it before removing it. While one is left out, `new`, `adopt` and `claim` refuse to hand out claims, ports or cap slots. A session file that won't read as JSON makes `open` refuse, naming it: one named `<pid>.json` stops counting once that process ends, any other must be removed. `addr lead` refuses beside one whose process runs in the main checkout (or whose cwd can't be read) or is the recorded lead's. `open --print` still prints, but warns that it
-can't see a live session, so its command may start a second one. Every other subcommand runs
-sandboxed. `lane lock` and `lane trial` must: the commands they run inherit their sandbox.
+can't see a live session, so its command may start a second one. `lane serve` has no
+excludedCommands entry: it refuses in the sandbox, whose own network and pids hide every
+listener but its own, and runs when you turn the sandbox off, so each start meets the usual
+approval. Every other subcommand runs sandboxed. `lane lock` and `lane trial` must: the commands
+they run inherit their sandbox.
 
-`ls`, `new`, `adopt`, `open`, `done`, `addr` and `lead` have allow rules, so auto mode's classifier never refuses
+`ls`, `new`, `adopt`, `open`, `done`, `park`, `sync-main`, `addr` and `lead` have allow rules, so auto mode's classifier never refuses
 them. Each call meets the excluded-command guard first (docs/delegation.md), and the asks on
 `init --setup`, `init --root` and `done --abandon` still win over the allow rules.
 

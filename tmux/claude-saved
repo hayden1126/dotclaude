@@ -48,9 +48,9 @@
 #     client's session in its directory (the directory must exist and hold no # or control
 #     character, as in claude-restore, and the transcript must still be there), running
 #     `claude --resume <id>` with the --model and --effort lanelib.carried_pick makes of its saved
-#     launch flags and its transcript (docs/lanes.md, "Model and effort"): a bare resume keeps
-#     the model but drops the effort. lanelib is found through this script's link, by absolute
-#     path only, and any failure there costs the flags, never the chat. Open never deletes the
+#     launch flags and its transcript (docs/lanes.md, "Model and effort"): a bare resume takes
+#     the ANTHROPIC_MODEL pin and the default effort. lanelib is found through this script's
+#     link, by absolute path only, and any failure there costs the flags, never the chat. Open never deletes the
 #     entry: the resumed session's SessionStart takes it off the shelf, and a starred one stays
 #     starred. Until that SessionStart, the entry's `opening` names the new window for 60 s, so a
 #     second open goes there. A chat running in the background goes to an attach tab showing it,
@@ -463,7 +463,7 @@ def resume_pick(e, tpath):
     flags and its transcript, each value in its shape. {} on any failure, which costs the flags,
     never the chat."""
     try:
-        out = lanelib.carried_pick(lanelib.stored_pick(e), tpath or None, resume=True)
+        out = lanelib.carried_pick(lanelib.stored_pick(e), tpath or None)
         return {f: v for f, v in zip(out[::2], out[1::2]) if lanelib.pick_ok(f, v)}
     except Exception:
         return {}

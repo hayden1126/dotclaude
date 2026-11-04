@@ -4,9 +4,9 @@ The `chrome-devtools-mcp` plugin ships a server that launches its own Chrome
 through Puppeteer. On WSL2 that default fails (`Protocol error ... Target
 closed`): there is no Linux Chrome for it to launch, the bundled one will not
 start without `--no-sandbox`, and reaching across to Windows Chrome needs
-network plumbing. The fix is a machine-local, user-scoped override. It is
-opt-in: `setup.sh` does not apply it, and users who are not on WSL2 need none of
-this.
+network plumbing. The fix is a machine-local config file that points the
+plugin's own server at a Chrome that works. It is opt-in: `setup.sh` does not
+apply it, and users who are not on WSL2 need none of this.
 
 Two strategies. **A is the recommended default.** B is a switch for when you
 need your real, logged-in Windows browser. Separately, `chrome-bg` runs Windows
@@ -26,39 +26,69 @@ the opt-in installer at the repo root:
 ./setup-chrome-wsl.sh
 ```
 
-It is idempotent, refuses to run off WSL, and performs the three steps below,
-then prints how to verify. Restart Claude Code afterward so the session loads
-the override. The rest of this section explains what it does.
+It is idempotent, refuses to run off WSL or with a plugin older than 1.11.0,
+and performs the steps below. Restart Claude Code afterward so new sessions
+start the server with the new config. The rest of this section explains what it
+does.
 
 **Install a Linux Chrome:** Chrome for Testing under `~/chrome`, via
 `npx @puppeteer/browsers install chrome@stable --path ~/chrome` (no sudo). Add a
 stable symlink `~/chrome/current` pointing at the versioned binary so the config
 survives version bumps.
 
-**Register the override:** a user-scoped MCP server named `chrome-devtools` in
-`~/.claude.json`, which outranks the plugin's server (user scope beats plugin
-scope) while leaving the plugin's skills intact:
+**Configure the plugin's server:** from 1.11.0 the server reads a JSON config
+file whose keys are its CLI options in camelCase. The plugin starts it with no
+flags, so the file is the only way to pass any. The script writes
+`~/.config/cd4a/config.json`:
 
-```bash
-claude mcp add chrome-devtools --scope user -- \
-  npx chrome-devtools-mcp@1.9.0 \
-  --executablePath=/home/$USER/chrome/current \
-  --headless \
-  --chromeArg=--no-sandbox \
-  --chromeArg=--disable-dev-shm-usage
+```json
+{
+  "executablePath": "/home/<you>/chrome/current",
+  "headless": true,
+  "chromeArg": ["--no-sandbox", "--disable-dev-shm-usage"]
+}
 ```
 
-`~/.claude.json` is runtime-owned machine state and is not tracked in this repo
-(same as `known_marketplaces.json`). This doc is the reproducible record: run
-the command above once per machine.
+It merges these keys into an existing file and keeps the others, though it
+resets `headless` and replaces the whole `chromeArg` list, so a Chrome flag you
+added by hand goes on a re-run. It drops `channel`, `browserUrl`, `wsEndpoint`
+and `autoConnect`, which the server refuses beside `executablePath`, and
+`wsHeaders`, which needs `wsEndpoint`. It drops the short aliases too: `u` and
+`w`, and `e`, which would override the new `executablePath`.
 
-**Verify:** `claude mcp get chrome-devtools` should report `Status: ✔ Connected`.
-In a session, `/mcp` lists it and a `navigate_page` + `take_screenshot` should
-work with no manual setup.
+The server takes the environment Claude Code starts with. When that holds
+an absolute `XDG_CONFIG_HOME`, the server reads `$XDG_CONFIG_HOME/cd4a/config.json`
+and never `~/.config/cd4a`, the path the agents' write deny (below) covers. So keep
+`XDG_CONFIG_HOME` unset where you start Claude Code; the script refuses a custom
+one in its own shell, but can't see Claude Code's. A session started with its
+own `XDG_CONFIG_HOME` (the autopass test sessions) finds no config and has no
+working chrome-devtools tools. The server also checks
+`$PLUGIN_DATA/cd4a.config.json` first. Claude Code sets `CLAUDE_PLUGIN_DATA`,
+not `PLUGIN_DATA`, so that path applies only if your own environment sets
+`PLUGIN_DATA`.
+
+**Keep agents out of it:** the server runs outside the sandbox, so whoever
+writes `executablePath`, or the Chrome it names, picks a binary that runs
+unsandboxed at every session start, and Chrome's profile shapes what that
+binary loads. `settings.json` denies `Edit(~/.config/cd4a/**)`,
+`Edit(~/chrome/**)` and `Edit(~/.cache/chrome-devtools-mcp/**)`, which binds
+sandboxed Bash and the file tools alike (live once `./setup.sh` installs it;
+the script warns otherwise). Edit the file from your own terminal.
+
+**The old override goes:** the script used to register a user-scoped MCP server
+named `chrome-devtools` in `~/.claude.json`, on the belief that user scope
+outranks the plugin. It doesn't: the plugin namespaces its server, so every
+session ran both (about 150 MB each). The script now runs
+`claude mcp remove chrome-devtools -s user` to clear it.
+
+**Verify:** in a new session, `/mcp` lists one chrome-devtools server, the
+plugin's, and `claude mcp get chrome-devtools` finds no user entry. A
+`navigate_page` plus `take_screenshot` should work with no manual setup.
 
 **Logins:** the profile is persistent (`~/.cache/chrome-devtools-mcp/...`), so a
-site you log into once stays logged in. To log in visibly, drop `--headless`
-temporarily (WSLg renders the window). This browser is separate from your
+site you log into once stays logged in. To log in visibly, set `"headless":
+false` in the config file for a session (WSLg renders the window); the script
+sets it back. This browser is separate from your
 Windows Chrome; none of your Windows logins or extensions carry over.
 
 **Updating Chrome:** re-run the puppeteer install, then re-point the symlink:
@@ -70,14 +100,16 @@ ln -sfn "$(ls -d ~/chrome/chrome/linux-*/chrome-linux64/chrome | sort -V | tail 
 
 Prefer an auto-updating system Chrome instead? Install it once with sudo
 (`google-chrome-stable`, path `/usr/bin/google-chrome`) and change
-`--executablePath` to that path.
+`executablePath` in the config file to that path. Re-running the script sets it
+back to `~/chrome/current`.
 
-**Bumping the MCP version:** the override pins `chrome-devtools-mcp@1.9.0` for
-reproducible startup. To move up, re-run `claude mcp add` (it overwrites) with a
-newer version or `@latest`.
+**The MCP version** follows the plugin: updating the plugin updates the server.
+The config file survives updates, but a release could rename its keys. If tools
+break after an update, compare the file with the plugin's
+`docs/configuration.md`.
 
 **Restored tabs:** the persistent profile reopens its last session on launch and
-gains a tab each time Chrome exits uncleanly. 1.9.0 enables Network on every tab
+gains a tab each time Chrome exits uncleanly. The server enables Network on every tab
 for `list_pages`, so a few dozen dead tabs time it out (`Network.enable timed
 out`). `setup-chrome-wsl.sh` clears `Default/Sessions` in the profile, which
 drops the tabs and keeps logins; re-run it if the error comes back.
@@ -103,18 +135,18 @@ profile (real logins) instead of the debug one, fully quit Chrome first, then
 pass `-UserDataDir "$env:LocalAppData\Google\Chrome\User Data"`. Chrome refuses
 a debug port on a profile that is already running.
 
-**Step 2: point the MCP at it.** Swap the server over to `--browserUrl`:
+**Step 2: point the MCP at it.** From your own terminal, replace the config file
+(`browserUrl` and `executablePath` can't be set together):
 
 ```bash
-claude mcp remove chrome-devtools -s user
-claude mcp add chrome-devtools --scope user -- \
-  npx chrome-devtools-mcp@1.9.0 --browserUrl=http://localhost:9222
+mkdir -p ~/.config/cd4a
+printf '{"browserUrl": "http://localhost:9222"}\n' > ~/.config/cd4a/config.json
 ```
 
-Restart Claude Code. The MCP now attaches to the running Windows Chrome; it will
-fail if that Chrome is not up (it attaches, it cannot spawn the browser).
+Restart Claude Code. The MCP now attaches to the running Windows Chrome. It
+fails if that Chrome is not up, since it attaches and cannot start the browser.
 
-**Revert to A:** re-run the Strategy A `claude mcp add` command above.
+**Revert to A:** re-run `./setup-chrome-wsl.sh`.
 
 ## Background Windows Chrome for probes (chrome-bg)
 
@@ -305,11 +337,17 @@ go to `$XDG_STATE_HOME/dotclaude/blank-display.log`, and the hook fails open.
 
 ## Troubleshooting
 
-- `Target closed` / browser dies immediately: the `--chromeArg=--no-sandbox`
-  flag is missing, or `--executablePath` points at a stale version path (check
+- `Target closed` / browser dies immediately: the config file is missing or
+  unread (the plugin is older than 1.11.0), `--no-sandbox` is missing from
+  `chromeArg`, or `executablePath` points at a stale version path (check
   `ls -l ~/chrome/current`).
-- `Status: ✗ Failed to connect` under Strategy B: the Windows Chrome is not
-  running with `--remote-debugging-port=9222`, or `curl localhost:9222/json/version`
-  from WSL returns nothing (mirrored networking not active).
-- Confirm which server is winning: `claude mcp get chrome-devtools` shows the
-  active scope and args.
+- The tools fail under Strategy B: the Windows Chrome is not running with
+  `--remote-debugging-port=9222`, or `curl localhost:9222/json/version` from
+  WSL returns nothing (mirrored networking not active).
+- Two chrome-devtools servers in `/mcp`: the old user-scoped override is still
+  there. Re-run the script, or `claude mcp remove chrome-devtools -s user`.
+- No chrome-devtools tools at all, or `/mcp` shows the server failed: the config
+  file is invalid JSON or sets two options the server refuses together
+  (`mutually exclusive`, `Implications failed`), and the server exits at start.
+  Fix the file or re-run the script.
+- What the server reads: `cat ~/.config/cd4a/config.json`.

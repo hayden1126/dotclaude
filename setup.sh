@@ -52,6 +52,46 @@ if command -v flock >/dev/null 2>&1 && mkdir -p "$STATE_DIR" 2>/dev/null; then
     exit 1
   fi
 fi
+# The DA15/DA16 tripwire: a sandboxed lane can write the git common dir this checkout shares,
+# and what git reads there decides what this run installs. So any finding of lanelib.py's
+# git-tamper (a replace ref, a non-blank alternates file, grafts, shallow, a commondir file, or a
+# path it can't read), or a common dir git can't name, stops the run here, before changing
+# anything. git follows a commondir file in any git dir, a main checkout's .git too, so its
+# answer may name a clean dir of a lane's choosing: a checkout whose .git is a dir is checked
+# there, without asking git. A lane worktree's .git is a gitfile naming its admin dir,
+# <common>/worktrees/<id>, and git takes its answer from that dir's commondir file, which a lane
+# can rewrite (LR2): the answer must be the admin dir's grandparent, or the run stops. That
+# grandparent comes from the gitfile's text, never by resolving `$admin/../..`: a lane can swap
+# worktrees/<id> (or worktrees/) for a link into a decoy repo whose commondir names that decoy,
+# and both would agree on it. git-tamper then checks the textual path, where such a link is a
+# finding. A commondir file in the common dir itself is a finding too.
+if [[ -d $REPO_DIR/.git ]]; then
+  common="$REPO_DIR/.git"
+elif ! common="$(git -C "$REPO_DIR" rev-parse --path-format=absolute --git-common-dir)"; then
+  warn "git can't name the common dir of $REPO_DIR (see above); setup.sh stopped before changing anything"
+  exit 1
+else
+  line="" admin=""
+  { IFS= read -r line < "$REPO_DIR/.git"; } 2>/dev/null || true
+  [[ $line == "gitdir: "?* ]] && admin="${line#gitdir: }"
+  [[ -z $admin || $admin == /* ]] || admin="$REPO_DIR/$admin"
+  admin="${admin%/}"
+  parent="${admin%/*}"
+  textual="${admin%/*/*}"
+  if [[ -z $admin || ${parent##*/} != worktrees || -z $textual ]] \
+      || ! want="$(cd -P "$textual" 2>/dev/null && pwd -P)" \
+      || [[ "$(cd -P "$common" 2>/dev/null && pwd -P)" != "$want" ]]; then
+    warn "git names $common as the common dir of $REPO_DIR, not its admin dir's grandparent (LR2: a planted commondir or a linked admin dir?); setup.sh stopped before changing anything"
+    exit 1
+  fi
+  common="$textual"
+fi
+tamper=0
+python3 -I "$REPO_DIR/skills/lanes/scripts/lanelib.py" git-tamper "$common" >&2 || tamper=$?
+if [[ $tamper -ne 0 ]]; then
+  warn "the git common dir $common may be tampered with (DA15/DA16: the lines above, exit $tamper); setup.sh stopped before changing anything"
+  exit 1
+fi
 # A lane installs from its own worktree to test a change, and an install from anywhere else
 # would replace those links mid-test. So links into a live lane worktree hold the install: the
 # run stops here, before changing anything, unless this checkout is that lane or its main
@@ -67,6 +107,46 @@ if [[ $hold -eq 3 ]]; then
 elif [[ $hold -ne 0 ]]; then
   warn "the install hold check failed (exit $hold, see above); installing anyway"
 fi
+
+# lane sync-main's stores' dir (DA15/DA16). settings.json denies it to every lane's Edit tool and
+# sandboxed Bash, but sync-main writes what it checks the checkout out from there, so this run
+# makes it (0700) before the install changes anything else. That doesn't keep out a link or a
+# file put there earlier, so it is checked after: a link, a non-dir or another user's dir there
+# stops the run (sync-main checks it again itself, every name on the way, by fd). It sits where
+# the rules name it, below HOME whatever XDG_STATE_HOME says.
+verified_dir="$HOME/.local/state/dotclaude/verified"
+mkdir -p "$HOME/.local/state/dotclaude"
+[[ -L $verified_dir || -e $verified_dir ]] || mkdir -m 700 "$verified_dir" 2>/dev/null || true
+if [[ -L $verified_dir || ! -d $verified_dir || ! -O $verified_dir ]]; then
+  warn "$verified_dir is not a dir of yours (a link, a file or another owner's): lane sync-main's stores would go wherever it leads. Find out who made it and remove it; setup.sh stopped before changing anything"
+  exit 1
+fi
+chmod 700 "$verified_dir"
+
+# The window (Hayden's pick, 2026-11-03): while the live settings.json lacks either rule that
+# keeps lanes out of the stores' dir (an install from an older dotclaude), any lane's sandbox can
+# write there, and a planted marker would let `lane adopt` run a setup sandbox-off in a tree
+# nobody verified. So when the settings this run replaces lack a rule, every marker there is
+# demoted to pending once the new settings are in place (lane's demote_marks, below). The flag
+# open_window leaves in the stores' dir carries that to the next run if this one stops in
+# between, and lane new, adopt and sync-main refuse while it is there.
+lane_cli="$REPO_DIR/skills/lanes/scripts/lane"
+verified_window=0
+python3 -I - "$lane_cli" "$CLAUDE_DIR/settings.json" "$HOME" <<'PY' || verified_window=1
+import importlib.machinery, importlib.util, os, sys
+loader = importlib.machinery.SourceFileLoader("lane_cli", sys.argv[1])
+mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("lane_cli", loader))
+loader.exec_module(mod)
+if not mod.settings_rules_problem(sys.argv[2]):
+    sys.exit(0)
+try:
+    mod.open_window(sys.argv[3])
+except (OSError, mod.LaneError) as e:
+    print(f"!! can't mark the window in the stores' dir ({e}): this run still demotes the "
+          "markers after its settings copy, but a run stopped between the two leaves them for "
+          "a hand check", file=sys.stderr)
+sys.exit(1)
+PY
 
 mkdir -p "$CLAUDE_DIR"
 
@@ -170,12 +250,68 @@ copy_managed() {
 # kept; a live value the baseline overrides is named on stderr. Installed from a checkout other
 # than ~/dotclaude (a lane), that checkout's copies of the write-protected paths join denyWrite.
 # Without an overlay, such a key or another checkout, the baseline is copied byte for byte.
+# Before the copy replaces it: did the installed settings let the sandbox write the package
+# caches, uv's Pythons or Playwright's browsers (an older dotclaude)? Then a marker in the state
+# dir has section 6 point to the rebuild step on every run until Hayden removes it: the copy
+# below erases the evidence, so a run stopped before section 6 must not lose the hint.
+old_cache_check() {
+  python3 -I - "$CLAUDE_DIR/settings.json" 2>/dev/null <<'PY' || true
+import json, os, sys
+try:
+    allow = json.load(open(sys.argv[1]))["sandbox"]["filesystem"]["allowWrite"]
+except Exception:
+    sys.exit()
+old = ("~/.npm", "~/.bun/install/cache", "~/.cache/uv", "~/.cache/pip", "~/.cache/pnpm", "~/.cache/node-gyp",
+       "~/.cache/ms-playwright", "~/.local/share/uv", "~/.local/share/pnpm")
+home = os.path.expanduser("~").rstrip("/")
+for entry in (e for e in allow if isinstance(e, str) and e):
+    p = entry[1:] if entry.startswith("//") else entry  # `//abs` is an absolute spelling
+    p = p.rstrip("/") or "/"
+    if p.startswith("/") and home.startswith(p.rstrip("/") + "/"):
+        p = "~"  # a parent of home reopens every cache
+    for h in (home, "$HOME"):  # an overlay may spell home out
+        if h and (p == h or p.startswith(h + "/")):
+            p = "~" + p[len(h):]
+            break
+    if any(p == o or p.startswith(o + "/") or o.startswith(p + "/") for o in old):
+        # The entry itself, on one line of printable ASCII (any locale can print it, and the
+        # warning's byte-wise filter keeps it whole), so the warning can name it.
+        print("".join(c if " " <= c <= "~" else "?" for c in entry), end="")
+        break
+PY
+}
+old_cache_writes="$(old_cache_check)"
+[[ -z $old_cache_writes ]] \
+  || { mkdir -p "$STATE_DIR" && printf '%s\n' "$old_cache_writes" >"$STATE_DIR/rebuild-caches-pending"; } \
+  || warn "can't write $STATE_DIR/rebuild-caches-pending: the older install's caches need a rebuild (README, \"Upgrading from an older install\")"
 MERGED_SETTINGS="$(mktemp)"  # section 1's exit trap removes it
 chmod 644 "$MERGED_SETTINGS"  # mktemp's 0600 would carry over to the installed copy
 python3 -I "$REPO_DIR/merge-settings.py" --checkout "$REPO_DIR" "$REPO_DIR/settings.json" \
   "$CLAUDE_DIR/settings.machine.json" "$CLAUDE_DIR/settings.json" > "$MERGED_SETTINGS" \
   || { warn "settings.machine.json or the live settings.json is not valid JSON; settings.json left unchanged"; exit 1; }
 copy_managed "$MERGED_SETTINGS" "$CLAUDE_DIR/settings.json"
+if [[ $verified_window -eq 1 || -e $verified_dir/.demote-pending || -L $verified_dir/.demote-pending ]]; then
+  demoted=0
+  python3 -I - "$lane_cli" "$HOME" <<'PY' || demoted=$?
+import importlib.machinery, importlib.util, sys
+loader = importlib.machinery.SourceFileLoader("lane_cli", sys.argv[1])
+mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("lane_cli", loader))
+loader.exec_module(mod)
+try:
+    said = mod.demote_marks(sys.argv[2])
+except (OSError, mod.LaneError) as e:
+    print(f"!! {e}", file=sys.stderr)
+    sys.exit(1)
+for line in said:
+    print(f"!! {line}", file=sys.stderr)
+if said:
+    print("!! the settings this install replaced let every lane write the stores' dir: redo "
+          "each lane named above as demoted (`lane done <id> --abandon`, then `lane new`)",
+          file=sys.stderr)
+PY
+  [[ $demoted -eq 0 ]] \
+    || warn "demoting the markers in $verified_dir failed: see the lines above for what still refuses"
+fi
 link "$REPO_DIR/CLAUDE.md"       "$CLAUDE_DIR/CLAUDE.md"
 link "$REPO_DIR/notify-toast.ps1" "$CLAUDE_DIR/notify-toast.ps1"
 
@@ -209,14 +345,42 @@ done
 # bin/ (claude-file-history). Opt-in by directory: if ~/.local/bin does not exist,
 # each still works via its absolute path.
 if [[ -d "$HOME/.local/bin" ]]; then
+  # With npm's prefix at ~/.local, ~/.local/bin/npx is npm's own: the shim would take its place
+  # and find no npx behind it. So npx goes in only where nothing is, or where the shim already
+  # is: a link into a checkout (bin/npx beside hooks/sandbox-caches.sh), a dangling link (a
+  # closed lane's, which section 7 would prune, leaving no shim), or a copy (git-bash, where
+  # ln -s copies), known by its marker line.
+  npx_slot_is_ours() {
+    [[ -e $1 || -L $1 ]] || return 0
+    [[ -L $1 && ! -e $1 ]] && return 0
+    [[ -f "$(dirname "$(readlink -f "$1")")/../hooks/sandbox-caches.sh" ]] && return 0
+    grep -qF dotclaude-npx-shim "$1" 2>/dev/null
+  }
   chmod +x "$REPO_DIR"/bin/* 2>/dev/null || true
   for exe in "$REPO_DIR"/bin/* "$REPO_DIR"/skills/*/scripts/deckkit \
              "$REPO_DIR"/skills/delegation/scripts/{codex-delegate,delegation-ledger,gh-public} \
              "$REPO_DIR"/skills/lanes/scripts/lane "$REPO_DIR"/skills/handoff/scripts/handoff-check \
-             "$REPO_DIR"/skills/pass/scripts/pass-respawn; do
-    [[ -x "$exe" ]] || continue
-    link "$exe" "$HOME/.local/bin/$(basename "$exe")"
+             "$REPO_DIR"/skills/pass/scripts/pass-respawn \
+             "$REPO_DIR"/skills/exam-prep/scripts/ed-pull; do
+    [[ -f "$exe" && -x "$exe" ]] || continue  # a dir (bin/__pycache__) is -x too
+    # Any other npx there is left alone and named; MCP launches then keep npx's project-dir
+    # lookup (gap N2) until it moves.
+    dst="$HOME/.local/bin/$(basename "$exe")"
+    if [[ $(basename "$exe") == npx ]] && ! npx_slot_is_ours "$dst"; then
+      warn "$dst isn't dotclaude's (npm's own, with npm's prefix at ~/.local?): left alone, so MCP servers still start with npx's project-dir lookup. Set npm's prefix elsewhere, then rerun setup"
+      continue
+    fi
+    link "$exe" "$dst"
   done
+  # The shim works only ahead of the real npx on PATH; a version manager (nvm, fnm, volta) or
+  # Homebrew listed before ~/.local/bin wins, and MCP servers then start with npx's project-dir
+  # lookup (gap N2). This run's PATH stands in for the one Claude Code inherits.
+  npx_dst="$HOME/.local/bin/npx"
+  if [[ -L $npx_dst && $(readlink "$npx_dst") == "$REPO_DIR/bin/npx" ]]; then
+    npx_first="$(command -v npx 2>/dev/null || true)"
+    [[ $npx_first -ef $npx_dst ]] \
+      || warn "npx on PATH is ${npx_first:-none}, not the shim at $npx_dst: MCP servers still start with npx's project-dir lookup. Put ~/.local/bin ahead of it on PATH"
+  fi
 fi
 
 # templates/ — per-file (SPEC/PLAN/STATUS/LANE scaffolds for full-track work)
@@ -302,6 +466,31 @@ for name, spec in tools.items():
     print(f"==> {name}: {cmd_str}")
     subprocess.run(cmd_str, shell=True, check=False)
 PY
+
+# git: no submodule recursion on fetch or pull (excluded-guard G-B). A fetch outside the
+# sandbox would run git in each submodule's own git dir, which a sandboxed session can write;
+# the guard refuses fetch and pull until this is off. Set on every run, in the global file
+# itself: a value from an includeIf file doesn't count for the guard. submodule.recurse on
+# turns recursion back on for pull, gh pr checkout and push, so warn about it.
+git config --global --replace-all fetch.recurseSubmodules false
+say "git: set fetch.recurseSubmodules false globally (excluded-guard G-B)"
+if [ "$(git config --global --type=bool --get submodule.recurse 2>/dev/null)" = true ]; then
+    warn "git: submodule.recurse is true globally, so excluded-guard refuses git pull, gh pr checkout and git push (G-B): run \`git config --global submodule.recurse false\`"
+fi
+# git: no replace refs (DA15/DA16). A sandboxed session can write a repo's common dir, and git
+# would read a replace ref planted there as the object it replaces. Set on every run, in the
+# global file itself, like G-B's key above.
+git config --global --replace-all core.useReplaceRefs false
+say "git: set core.useReplaceRefs false globally (DA15/DA16)"
+# git: no automatic maintenance (LR3). A fetch, pull, merge or commit runs `gc --auto` once
+# enough loose objects pile up, and gc runs `git worktree prune`, which deletes the contents of
+# whatever an entry under <common>/worktrees/ points at. Any lane can plant both, and git run
+# outside the sandbox would then delete with no sandbox. Set on every run, in the global file
+# itself, like the keys above; `git gc` and `git maintenance run` by hand still work.
+git config --global --replace-all gc.auto 0
+say "git: set gc.auto 0 globally (LR3)"
+git config --global --replace-all maintenance.auto false
+say "git: set maintenance.auto false globally (LR3)"
 
 # ---------------------------------------------------------------------------
 # 5. Status line widget (~/.config/ccstatusline)
@@ -453,7 +642,114 @@ if [[ "$(uname -s)" == "Linux" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 6. Stale links and plugin changes
+# 6. Copy mode for uv and pnpm installs (~/.config/uv/uv.toml, ~/.config/pnpm/rc)
+# ---------------------------------------------------------------------------
+# uv and pnpm hardlink a project's packages to their shared cache, so a sandboxed session working
+# in a project installed outside the sandbox could edit a cache file in place through the
+# project's copy, and later installs of that package anywhere would get the edit (sandbox gap
+# N3). Copy mode gives each project files of its own. A project's own setting beats the user
+# file, but a project that sets it controls its install anyway (its scripts, its build backend).
+# A value the file already sets stays, named on stderr. bun has no such setting, only
+# `bun install --backend=copyfile`. Copy mode covers new installs only: the run that first sets
+# it points to bin/cache-unlink, which finds and un-links the installs made before, unless a
+# rebuild is pending (the rebuild replaces those installs).
+
+# Put LINE at the top of FILE (above any [table], where a TOML key would belong to the table)
+# unless the top level already sets KEY. Written in place, so a linked file stays a link. A
+# table that sets KEY to another value (uv's [pip]) is named, and kept. A file it can't read or
+# write is named and skipped, so the rest of setup still runs. Sets copy_mode_new on a write.
+copy_mode_new=""
+set_top_key() {
+  local file="$1" key="$2" line="$3" want="$4" sets top="" t rest target
+  if [[ ! -e $file && ! -L $file ]]; then
+    if mkdir -p "$(dirname "$file")" && printf '%s\n' "$line" > "$file"; then
+      say "set $key in $file"
+      copy_mode_new=1
+    else
+      warn "can't create $file: $key not set"
+    fi
+    return
+  fi
+  [[ -f $file && -r $file && -w $file ]] || { warn "can't read or write $file: $key not set"; return; }
+  # One line per place that sets KEY: "=value" at the top level, "table=value" in a table. A
+  # quoted key counts, and a trailing comment is not part of the value.
+  sets="$(awk -v k="$key" '
+    /^[[:space:]]*\[/ { t = $0; sub(/^[[:space:]]*\[+[[:space:]]*/, "", t); sub(/[[:space:]]*\].*$/, "", t); next }
+    {
+      l = $0; sub(/^[[:space:]]+/, "", l); q = substr(l, 1, 1)
+      if (q == "\"" || q == "'\''") {
+        if (substr(l, length(k) + 2, 1) != q) next
+        l = substr(l, 2, length(k)) substr(l, length(k) + 3)
+      }
+      if (index(l, k) != 1 || substr(l, length(k) + 1) !~ /^[[:space:]]*=/) next
+      v = substr(l, length(k) + 1); sub(/^[[:space:]]*=[[:space:]]*/, "", v)
+      sub(/[[:space:]]*[#;].*$/, "", v); gsub(/["'\''[:space:]]/, "", v)
+      print t "=" v
+    }' "$file")"
+  while IFS= read -r t; do
+    if [[ $t == =* ]]; then
+      [[ -n $top ]] || top="${t#=}"
+    elif [[ -n $t && ${t#*=} != "$want" ]]; then
+      warn "$file sets $key to ${t#*=} in [${t%%=*}], kept: those installs can hardlink to the shared cache"
+    fi
+  done <<<"$sets"
+  if [[ -n $top ]]; then
+    [[ $top == "$want" ]] \
+      || warn "$file sets $key to $top, kept: installs there can hardlink to the shared cache"
+    return
+  fi
+  # Written to a copy beside the real file (cp -p keeps its mode), then renamed over it: a
+  # failed write (disk full) leaves the old file whole, and a link stays a link.
+  # The newline goes on in its own step: bash versions differ on $'\n' inside "${v:+...}".
+  rest="$(cat "$file")"
+  [[ -z $rest ]] || rest+=$'\n'
+  target="$(readlink -f "$file")"
+  if cp -p "$target" "$target.setup.$$" \
+     && printf '%s\n%s' "$line" "$rest" > "$target.setup.$$" \
+     && mv -f "$target.setup.$$" "$target"; then
+    say "set $key in $file"
+    copy_mode_new=1
+  else
+    rm -f "$target.setup.$$"
+    warn "can't write $file: $key not set"
+  fi
+}
+
+# Windows (git-bash) has no Bash sandbox to write a project, so copy mode buys nothing there (and
+# its config dirs are APPDATA's, not these).
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) say "copy mode skipped: no Bash sandbox on Windows" ;;
+  *)
+    config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+    set_top_key "$config_home/uv/uv.toml" link-mode 'link-mode = "copy"' copy
+    # pnpm's global rc is in XDG_CONFIG_HOME when that is set, else ~/Library/Preferences on
+    # macOS and ~/.config elsewhere.
+    pnpm_dir="$config_home/pnpm"
+    [[ -z ${XDG_CONFIG_HOME:-} && $(uname -s) == Darwin ]] && pnpm_dir="$HOME/Library/Preferences/pnpm"
+    set_top_key "$pnpm_dir/rc" package-import-method package-import-method=copy copy
+    # Then ask pnpm itself, from /, so no project's .npmrc counts: a ~/.npmrc or an OS path this
+    # missed would show here. COREPACK_ENABLE_NETWORK=0 stops a corepack pnpm downloading one.
+    if command -v pnpm >/dev/null 2>&1; then
+      pnpm_import="$(cd / && COREPACK_ENABLE_NETWORK=0 pnpm config get package-import-method \
+        </dev/null 2>/dev/null)" || pnpm_import=""
+      [[ -z $pnpm_import || $pnpm_import == copy ]] \
+        || warn "pnpm reads package-import-method as $pnpm_import, not copy (set in ~/.npmrc, or a config dir this missed): its installs can hardlink to the shared cache"
+    fi
+    # Section 2's marker, from the settings a run replaced. While it stands, the rebuild replaces
+    # every project env (fresh installs, in copy mode), so the cache-unlink hint would only
+    # send the user to a tool first.
+    rebuild_marker="${STATE_DIR:-}/rebuild-caches-pending"
+    if [[ -n ${STATE_DIR:-} && -e $rebuild_marker ]]; then
+      rebuild_entry="$(head -c 300 "$rebuild_marker" | head -n 1 | tr -cd '[:print:]')" || rebuild_entry=""
+      warn "an older install let the sandbox write the package caches, uv's Pythons or Playwright's browsers${rebuild_entry:+ (allowWrite entry $rebuild_entry; if settings.machine.json has it, remove it there)}, and unsandboxed runs still use them: rebuild them once (README, \"Upgrading from an older install\"), rerun ./setup.sh, then rm $rebuild_marker"
+    elif [[ -n $copy_mode_new ]]; then
+      warn "copy mode is new here: uv and pnpm installs made before it still share files with their caches. List them with \`cache-unlink <your project dirs>\`, then rerun it with --apply"
+    fi
+    ;;
+esac
+
+# ---------------------------------------------------------------------------
+# 7. Stale links and plugin changes
 # ---------------------------------------------------------------------------
 # After the last link: remove the managed links this run didn't replace that point into another
 # live lane worktree (a file only that lane has), and the dangling ones into this checkout or
@@ -473,7 +769,7 @@ python3 -I "$REPO_DIR/hooks/excluded_guard.py" --scan \
   || warn "the excluded-command guard would refuse the calls above: look at each dir, fix each as the scan says (most by pasting the settings.machine.json it printed), and rerun setup where its last line says"
 
 # ---------------------------------------------------------------------------
-# 7. Final checklist
+# 8. Final checklist
 # ---------------------------------------------------------------------------
 cat <<'EOF'
 

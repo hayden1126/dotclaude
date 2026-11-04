@@ -1,10 +1,12 @@
 """skills/lanes/scripts/lanelib.py: the shared lint, the sandbox detection and session liveness,
 in-process."""
+import contextlib
 import json
 import os
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -34,8 +36,112 @@ class ProseOnly(unittest.TestCase):
                 self.assertEqual(self.phrases(text), ["this session"])
         self.assertEqual(self.phrases("```\nx\n`````  \nthis session\n"), ["this session"])
 
+    def test_a_backtick_in_the_info_string_makes_no_fence(self):
+        # CommonMark: ```x``` is inline code, not a fence.
+        self.assertEqual(lanelib.fenced(["```x```", "this session", "```"]), [False, False, True])
+
+    def test_a_tab_indented_fence_under_a_list_item_quotes(self):
+        # A fence there in CommonMark: linting its example would deny quoted text.
+        self.assertEqual(self.phrases("- Run:\n\t```sh\n\techo this session\n\t```\n"), [])
+
     def test_an_unclosed_fence_runs_to_the_end(self):
         self.assertEqual(self.phrases("this session\n```\nmy lane\n"), ["this session"])
+
+
+class UnclosedComment(unittest.TestCase):
+    """lanelib.comment_flaw and the scan it shares with section(): a flaw the check misses is
+    comment text the tools read as the record's."""
+
+    def flaw(self, text):
+        line, what = lanelib.comment_flaw(text)
+        self.assertEqual(what, lanelib.UNCLOSED)
+        return line
+
+    def test_closed_comments_pass(self):
+        for text in ("## Next\n<!-- one line -->\n- Step.\n",
+                     "## Next\n<!-- a comment\nover lines, quoting `Keep open: <why>` -->\n",
+                     "## State\n<!-- a --> x <!-- b -->\n## Next\n<!---->\n- Step.\n",
+                     "", None):
+            self.assertIsNone(lanelib.comment_flaw(text), text)
+
+    def test_an_unclosed_opener_gives_its_line(self):
+        self.assertEqual(self.flaw("# LANE: x\n\n## Next\n- Step.\n<!-- note\n"), 5)
+        # A form feed is no line break to an editor, though splitlines() makes it one.
+        self.assertEqual(self.flaw("## Next\n\x0c\n<!-- x\n"), 3)
+        # The first unclosed one, after a closed one on the same line.
+        self.assertEqual(self.flaw("## A\nok\n<!-- a --> <!-- b\n"), 3)
+
+    def test_a_comment_closed_only_in_a_later_section_is_unclosed(self):
+        # section() reads each section alone, so the opener's own section keeps it open.
+        text = "## State\n<!-- note\n## Next\n- Step. -->\n"
+        self.assertEqual(self.flaw(text), 2)
+
+    def test_an_opener_in_code_is_quoted_not_opened(self):
+        for text in ("## Backlog\n- An unclosed `<!--` hides `Keep open:`.\n",
+                     "## Backlog\n```\n<!-- an example\n```\n",
+                     "## Backlog\nquoted `-->`, and `<!--` too\n"):
+            self.assertIsNone(lanelib.comment_flaw(text), text)
+        # Inside a comment, backticks quote nothing: its first `-->` ends it.
+        self.assertIsNone(lanelib.comment_flaw("## Next\n<!-- start with `Keep open: <why>` -->\n"))
+
+    def test_short_comments_close_themselves(self):
+        # `<!-->` and `<!--->` are whole comments (CommonMark 0.31, HTML): read as openers, they
+        # ran to a later `-->` and hid the flag between.
+        for opener in ("<!-->", "<!--->"):
+            text = f"## Next\n- Use {opener} here\nKeep open: PR 2\n- and <!-- x -->\n"
+            self.assertIsNone(lanelib.comment_flaw(text), opener)
+            self.assertEqual(lanelib.kept_open(lanelib.next_block(text)), "Keep open: PR 2")
+
+    def test_a_comment_starting_its_line_leaves_the_flag_at_the_start(self):
+        # The blank after `-->` once indented the flag into a wrap of the step before it.
+        for comment in ("<!-- docs -->", "<!-- docs\nfollow -->", "  <!-- docs -->"):
+            text = f"## Next\n- Ship PR 1.\n{comment} Keep open: PR 2\n"
+            self.assertEqual(lanelib.kept_open(lanelib.next_block(text)), "Keep open: PR 2",
+                             comment)
+        # Mid-line, after text, it stays a mention, as it always was.
+        text = "## Next\n- Ship. <!-- docs --> Keep open: PR 2\n"
+        self.assertIsNone(lanelib.kept_open(lanelib.next_block(text)))
+
+    def test_quoted_markers_never_hide_keep_open(self):
+        # The raw strip ran from a quoted `<!--` to a quoted `-->`, the flag between them gone.
+        text = ("## Next\n<!-- template -->\n- Document the `<!--` rule.\nKeep open: docs PR "
+                "follows\n- Then fix the `-->` parsing.\n")
+        self.assertIsNone(lanelib.comment_flaw(text))
+        self.assertEqual(lanelib.kept_open(lanelib.next_block(text)), "Keep open: docs PR follows")
+        # A double-backtick span quotes too: read as an empty span and a marker, it didn't.
+        text = "## Next\n- Doc the ``<!--`` rule\nKeep open: docs PR\n- And ``-->``\n"
+        self.assertIsNone(lanelib.comment_flaw(text))
+        self.assertEqual(lanelib.kept_open(lanelib.next_block(text)), "Keep open: docs PR")
+
+    def test_a_fence_never_closed_in_its_section_is_plain_text(self):
+        # A mistyped closer (here ```bash) once left every later line looking like code, so the
+        # unclosed comment in Next passed while section() leaked it. A fence ends at its section.
+        text = ("## State\n```\ncode\n```bash\n## Next\n<!-- start with Keep open: PR 2.\n"
+                "- Write the docs test.\n")
+        self.assertEqual(self.flaw(text), 6)
+        self.assertEqual(self.flaw("## Backlog\n~~~html\n<!--\n"), 3)
+        # Its lines read as text in the section too, a closed comment in them stripped.
+        self.assertEqual(lanelib.section("## Next\n```\n<!-- x -->- Step.\n", "Next"),
+                         "```\n- Step.")
+
+    def test_a_stray_closer_is_a_flaw(self):
+        # A comment that quoted `-->` ended there: its tail became the first Next item, where
+        # /pass reads the approval marker.
+        text = "## Next\n<!-- never `-->` here -->\n- Step.\n"
+        self.assertEqual(lanelib.comment_flaw(text), (2, lanelib.STRAY))
+        self.assertEqual(lanelib.first_item(lanelib.next_block(text)), "` here -->")
+        self.assertEqual(lanelib.comment_flaw("## A\nx --> y\n## B\n<!-- z\n"), (2, lanelib.STRAY))
+        self.assertEqual(lanelib.comment_flaw("## A\n<!-- z\nx --> y -->\n"), (3, lanelib.STRAY))
+
+    def test_the_template_splice_that_hid_keep_open(self):
+        # An edit at the template comment's own mention of the flag dropped its `-->`: the
+        # comment's text became the first step, and kept_open found no line starting with it.
+        text = ("# LANE: x\n\n## Next\n"
+                "<!-- The exact next concrete step and what to verify. handoff-check fails while "
+                "this is empty.\nWhile more PRs will follow this one, start with Keep open: PR 2 "
+                "follows for the docs.\n- Write the docs test.\n")
+        self.assertIsNone(lanelib.kept_open(lanelib.next_block(text)))
+        self.assertEqual(self.flaw(text), 4)
 
 
 class Sandbox(unittest.TestCase):
@@ -157,6 +263,116 @@ class Walk(unittest.TestCase):
         before = lanelib.newest_mtime(rec)
         os.utime(os.path.join(outside, "key"), (before + 100, before + 100))
         self.assertEqual(lanelib.newest_mtime(rec), before)  # a target's change is not ours
+
+
+class ByFd(unittest.TestCase):
+    """open_dir and copy_record: sandbox-off walks through dirs a lane's sandbox can write, so a
+    name may be a link by the time it is used."""
+
+    def setUp(self):
+        self.root = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root)
+
+    def write(self, path, text):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(text)
+
+    def opened(self, path):
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        self.addCleanup(os.close, fd)
+        return fd
+
+    def test_open_dir_refuses_a_link_anywhere_below_root(self):
+        os.makedirs(os.path.join(self.root, "a", "real"))
+        os.symlink(os.path.join(self.root, "a"), os.path.join(self.root, "link"))
+        os.close(lanelib.open_dir(self.root, "a/real"))
+        for rel in ("link/real", "a/../link", "link"):
+            with self.subTest(rel=rel), self.assertRaises(OSError):
+                os.close(lanelib.open_dir(self.root, rel))
+        fd = lanelib.open_dir(self.root, "a/new/deeper", create=True)
+        os.close(fd)
+        self.assertTrue(os.path.isdir(os.path.join(self.root, "a", "new", "deeper")))
+        with self.assertRaises(OSError):  # O_NOFOLLOW never stops `..`: refused by name
+            os.close(lanelib.open_dir(self.root, "a/../.."))
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads an execute-only dir")
+    def test_open_dir_passes_an_execute_only_dir_on_the_way(self):
+        os.makedirs(os.path.join(self.root, "x", "lane"))
+        os.chmod(os.path.join(self.root, "x"), 0o111)
+        self.addCleanup(os.chmod, os.path.join(self.root, "x"), 0o755)
+        os.close(lanelib.open_dir(self.root, "x/lane"))
+
+    def test_copy_record_copies_links_as_links_and_files_with_their_mode(self):
+        src = os.path.join(self.root, "rec")
+        self.write(os.path.join(src, "STATUS.md"), "# LANE\n")
+        os.chmod(os.path.join(src, "STATUS.md"), 0o640)
+        self.write(os.path.join(src, "artifacts", "a.png"), "png")
+        os.symlink("../..", os.path.join(src, "artifacts", "up"))
+        os.mkfifo(os.path.join(src, "fifo"))
+        dest = os.path.join(self.root, "dest")
+        os.mkdir(dest)
+        lanelib.copy_record(self.opened(src), self.opened(dest))
+        self.assertEqual(sorted(os.listdir(dest)), ["STATUS.md", "artifacts"])  # no FIFO
+        self.assertEqual(os.stat(os.path.join(dest, "STATUS.md")).st_mode & 0o777, 0o640)
+        self.assertEqual(os.readlink(os.path.join(dest, "artifacts", "up")), "../..")
+        with open(os.path.join(dest, "artifacts", "a.png")) as f:
+            self.assertEqual(f.read(), "png")
+
+    def test_copy_record_never_reads_through_a_file_swapped_for_a_link(self):
+        # The lane swaps a record file for a link to a read-denied file between the scan and
+        # the copy: by path, its content landed in the mirror, which the sandbox can read.
+        src = os.path.join(self.root, "rec")
+        secret = os.path.join(self.root, "key")
+        self.write(secret, "secret")
+        self.write(os.path.join(src, "plain"), "x")
+        os.makedirs(os.path.join(src, "sub"))
+        os.symlink(secret, os.path.join(src, "STATUS.md"))
+        os.symlink(self.root, os.path.join(src, "dir"))
+        real = os.stat
+
+        def stat(name, *args, **kw):  # the stat sees each before its swap: a file, a dir
+            st = real(name, *args, **kw)
+            if name == "STATUS.md":
+                return real(os.path.join(src, "plain"))
+            if name == "dir":
+                return real(os.path.join(src, "sub"))
+            return st
+
+        dest = os.path.join(self.root, "dest")
+        os.mkdir(dest)
+        with mock.patch.object(lanelib.os, "stat", side_effect=stat):
+            lanelib.copy_record(self.opened(src), self.opened(dest))
+        self.assertEqual(os.readlink(os.path.join(dest, "STATUS.md")), secret)
+        self.assertEqual(os.readlink(os.path.join(dest, "dir")), self.root)
+
+    def test_copy_record_writes_under_the_dest_it_opened_even_once_its_path_is_a_link(self):
+        src = os.path.join(self.root, "rec")
+        self.write(os.path.join(src, "STATUS.md"), "# LANE\n")
+        self.write(os.path.join(src, "artifacts", "a.png"), "png")
+        dest = os.path.join(self.root, "dest")
+        os.mkdir(dest)
+        dest_fd = self.opened(dest)
+        elsewhere = os.path.join(self.root, "elsewhere")
+        os.mkdir(elsewhere)
+        os.rename(dest, dest + ".old")
+        os.symlink(elsewhere, dest)
+        lanelib.copy_record(self.opened(src), dest_fd)
+        self.assertEqual(os.listdir(elsewhere), [])
+        self.assertEqual(sorted(os.listdir(dest + ".old")), ["STATUS.md", "artifacts"])
+
+    def test_copy_record_never_writes_through_a_link_planted_in_dest(self):
+        src = os.path.join(self.root, "rec")
+        self.write(os.path.join(src, "STATUS.md"), "# LANE\n")
+        dest = os.path.join(self.root, "dest")
+        os.mkdir(dest)
+        target = os.path.join(self.root, "target")
+        self.write(target, "keep")
+        os.symlink(target, os.path.join(dest, "STATUS.md"))
+        with self.assertRaises(FileExistsError):
+            lanelib.copy_record(self.opened(src), self.opened(dest))
+        with open(target) as f:
+            self.assertEqual(f.read(), "keep")
 
 
 class LeadRelink(_fixture.LiveSessions):
@@ -417,7 +633,8 @@ def reply(model, effort="medium"):
 
 class CarriedPick(unittest.TestCase):
     """carried_pick in-process: tests/pass covers the plain pass through pass-respawn's CLI; this
-    covers what only a resume (tab restore, the shelf's Open) does differently."""
+    covers a /model no reply followed, which a pass and a resume (tab restore, the shelf's Open)
+    carry alike, and a session launched with no --model, which ANTHROPIC_MODEL pins."""
 
     LAUNCHED = {"--model": "sonnet", "--effort": "low"}
 
@@ -428,39 +645,70 @@ class CarriedPick(unittest.TestCase):
             f.writelines(json.dumps(e) + "\n" for e in entries)
         return path
 
-    def test_a_resume_carries_a_model_argument_no_reply_followed(self):
-        # The server died between the /model and its first reply. A pass drops the flag (the
-        # default the command saved applies to a new session); a resume would keep the model the
-        # session ran before it, so it carries the argument.
+    def test_a_model_argument_no_reply_followed_carries(self):
+        # The server died, or the pass came, between the /model and its first reply. The fresh
+        # claude would take the pin, not the pick, so the argument carries; the effort the
+        # /model moved has no entry to say what, so it drops to the saved default.
         for after in ([], [reply("<synthetic>", None)]):
             with self.subTest(after=after):
                 path = self.transcript(reply("claude-sonnet-5-5", "low"),
                                        command("/model", "opus[1m]"), *after)
-                self.assertEqual(lanelib.carried_pick(self.LAUNCHED, path), [])
-                self.assertEqual(lanelib.carried_pick(self.LAUNCHED, path, resume=True),
+                self.assertEqual(lanelib.carried_pick(self.LAUNCHED, path),
                                  ["--model", "opus[1m]"])
+                self.assertEqual(lanelib.carried_pick({}, path), ["--model", "opus[1m]"])
 
-    def test_a_resume_still_drops_a_menu_pick_or_a_bad_argument_with_no_reply(self):
+    def test_a_menu_pick_or_a_bad_argument_with_no_reply_drops_the_model(self):
         for args in ("", "sonet", "-x"):
             with self.subTest(args=args):
                 path = self.transcript(reply("claude-sonnet-5-5", "low"), command("/model", args))
-                self.assertEqual(lanelib.carried_pick(self.LAUNCHED, path, resume=True), [])
+                self.assertEqual(lanelib.carried_pick(self.LAUNCHED, path), [])
+                self.assertEqual(lanelib.carried_pick({}, path), [])
 
-    def test_a_resume_after_a_reply_carries_what_a_pass_does(self):
-        path = self.transcript(command("/model", "sonnet"), reply("claude-opus-5-5", "high"),
-                               command("/effort", "max"), reply("claude-opus-5-5", "max"))
-        self.assertEqual(lanelib.carried_pick(self.LAUNCHED, path, resume=True),
-                         ["--model", "claude-opus-5-5", "--effort", "max"])
-        self.assertEqual(lanelib.carried_pick(self.LAUNCHED, path, resume=True),
-                         lanelib.carried_pick(self.LAUNCHED, path))
+    def test_a_model_pick_carries_with_no_launch_flag(self):
+        # Launched bare, the fresh claude would take the pin: the /model carries as it would
+        # over a launch --model.
+        for args, ran, model in (("sonnet", "claude-sonnet-5-5", "sonnet"),
+                                 ("", "claude-haiku-5-5", "claude-haiku-5-5"),
+                                 ("sonnet", "claude-opus-5-5", "claude-opus-5-5")):
+            with self.subTest(args=args, ran=ran):
+                path = self.transcript(reply("claude-opus-5-5", "high"), command("/model", args),
+                                       reply(ran, "high"))
+                self.assertEqual(lanelib.carried_pick({}, path), ["--model", model])
+                self.assertEqual(lanelib.carried_pick({"--effort": "low"}, path),
+                                 ["--model", model, "--effort", "high"])
+
+    def test_a_model_default_argument_carries_with_no_launch_flag(self):
+        # --model default is the account's default, not the pin (probed 2026-10-23 on 2.1.309):
+        # what the /model picked, so it carries like any other argument.
+        path = self.transcript(command("/model", "default"), reply("claude-opus-5-5", "high"))
+        self.assertEqual(lanelib.carried_pick({}, path), ["--model", "default"])
+
+    def test_with_no_launch_model_the_replies_before_a_command_go_unparsed(self):
+        path = self.transcript(*[reply("claude-opus-5-5", "high")] * 5, command("/model", "sonnet"),
+                               reply("claude-sonnet-5-5", "low"))
+        with mock.patch.object(lanelib, "ran", wraps=lanelib.ran) as ran:
+            self.assertEqual(lanelib.carried_pick({"--effort": "low"}, path),
+                             ["--model", "sonnet", "--effort", "low"])
+        self.assertEqual(ran.call_count, 1)
+        with mock.patch.object(lanelib, "ran", wraps=lanelib.ran) as ran:
+            lanelib.carried_pick(self.LAUNCHED, path)
+        self.assertEqual(ran.call_count, 6)
+
+    def test_with_no_launch_flag_no_model_command_carries_nothing(self):
+        # What ran says nothing without a launch value to hold it against (a /model before a
+        # /clear reverts to the pin), and an /effort carries only over a launch --effort: the
+        # saved default it wrote applies.
+        path = self.transcript(reply("claude-sonnet-5-5", "low"), command("/effort", "max"),
+                               reply("claude-sonnet-5-5", "max"))
+        self.assertEqual(lanelib.carried_pick({}, path), [])
 
     def test_no_transcript_carries_the_launch_flags(self):
         # A tab with no input yet: nothing to read, so what it launched with.
         for path in (None, "/nonexistent/x.jsonl"):
             with self.subTest(path=path):
-                self.assertEqual(lanelib.carried_pick(self.LAUNCHED, path, resume=True),
+                self.assertEqual(lanelib.carried_pick(self.LAUNCHED, path),
                                  ["--model", "sonnet", "--effort", "low"])
-        self.assertEqual(lanelib.carried_pick({}, None, resume=True), [])
+        self.assertEqual(lanelib.carried_pick({}, None), [])
 
 
 class UnreadSessions(unittest.TestCase):
@@ -556,6 +804,362 @@ class UnreadSessions(unittest.TestCase):
         with open(path, "w") as f:  # a junk line with no cwd in it can't hide one
             f.write('{"type": "summ\n' + later)
         self.assertEqual(lanelib.transcript_cwd(path), "/later")
+
+
+class GitTamper(unittest.TestCase):
+    """lanelib.git_tamper, the DA15/DA16 tripwire: each planted condition in a throwaway repo's
+    common dir is a reason; a clean repo, and an empty or blank alternates file, give none.
+    What can't be read counts as a finding, never as clean."""
+
+    def setUp(self):
+        self.tmp = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.addCleanup(self.unlock)
+        self.env = {"HOME": self.tmp, "PATH": os.environ["PATH"], "GIT_CONFIG_NOSYSTEM": "1",
+                    "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+                    "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"}
+        self.work = os.path.join(self.tmp, "repo")
+        self.git("init", "-q", "-b", "main", self.work, cwd=self.tmp)
+        self.common = os.path.join(self.work, ".git")
+        self.write("a.txt", "a\n")
+        self.write("b.txt", "b\n")
+        self.git("add", "a.txt", "b.txt")
+        self.git("commit", "-q", "-m", "two blobs")
+        self.blob_a = self.git("rev-parse", "HEAD:a.txt").strip()
+        self.blob_b = self.git("rev-parse", "HEAD:b.txt").strip()
+
+    def unlock(self):
+        for root, dirs, _ in os.walk(self.tmp):
+            for d in dirs:
+                with contextlib.suppress(OSError):
+                    os.chmod(os.path.join(root, d), 0o755)
+
+    def git(self, *args, cwd=None):
+        return subprocess.run(["git", *args], cwd=cwd or self.work, env=self.env, check=True,
+                              capture_output=True, text=True).stdout
+
+    def write(self, rel, text, root=None):
+        path = os.path.join(root or self.work, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(text)
+        return path
+
+    def found(self, *words):
+        reasons = lanelib.git_tamper(self.common)
+        self.assertTrue(reasons, "no finding")
+        for w in words:
+            self.assertTrue(any(w in r for r in reasons), (w, reasons))
+        return reasons
+
+    def test_a_clean_repo_has_no_finding(self):
+        self.assertEqual(lanelib.git_tamper(self.common), [])
+
+    def test_an_empty_or_blank_alternates_passes(self):
+        for text in ("", "\n", "  \n\t\n"):
+            with self.subTest(text=text):
+                self.write(".git/objects/info/alternates", text)
+                self.assertEqual(lanelib.git_tamper(self.common), [])
+
+    def test_alternates_with_content_is_found(self):
+        self.write(".git/objects/info/alternates", "/elsewhere/objects\n")
+        self.found("objects/info/alternates")
+
+    def test_info_attributes_with_content_is_found(self):
+        # A checkout conversion (eol, working-tree-encoding) any lane can plant for every git
+        # here; empty or blank passes, as for alternates.
+        for text in ("", "\n", " \t\n"):
+            with self.subTest(text=text):
+                self.write(".git/info/attributes", text)
+                self.assertEqual(lanelib.git_tamper(self.common), [])
+        self.write(".git/info/attributes", "*.sh text eol=crlf\n")
+        self.found("info/attributes")
+
+    def test_a_loose_replace_ref_is_found(self):
+        self.git("replace", self.blob_a, self.blob_b)
+        self.found(f"refs/replace/{self.blob_a}")
+
+    def test_a_packed_replace_ref_is_found(self):
+        self.git("replace", self.blob_a, self.blob_b)
+        self.git("pack-refs", "--all", "--prune")
+        self.assertFalse(os.path.exists(os.path.join(self.common, "refs", "replace",
+                                                     self.blob_a)))
+        self.found("packed-refs")
+
+    def test_an_empty_dir_under_replace_passes(self):
+        os.makedirs(os.path.join(self.common, "refs", "replace", "sub"))
+        self.assertEqual(lanelib.git_tamper(self.common), [])
+
+    def test_grafts_and_shallow_are_found(self):
+        for rel in ("info/grafts", "shallow"):
+            with self.subTest(rel):
+                path = self.write(f".git/{rel}", "")  # existing at all counts
+                self.found(rel)
+                os.unlink(path)
+                self.assertEqual(lanelib.git_tamper(self.common), [])
+
+    def test_symlinks_are_found_and_never_followed(self):
+        outside = os.path.join(self.tmp, "outside")
+        os.makedirs(outside)
+        # A link is a finding in itself, whatever it points at: an empty dir, an empty or blank
+        # file, or nothing.
+        cases = {"refs/replace": outside, f"refs/replace/{self.blob_a}": "missing",
+                 "packed-refs": self.write("empty", "", root=outside),
+                 "objects/info/alternates": self.write("blank", "\n", root=outside),
+                 "info/attributes": self.write("blank2", "\n", root=outside),
+                 "info/grafts": "missing", "shallow": "missing"}
+        for rel, target in cases.items():
+            with self.subTest(rel):
+                link = os.path.join(self.common, rel)
+                os.makedirs(os.path.dirname(link), exist_ok=True)
+                os.symlink(target, link)
+                try:
+                    self.found(rel)
+                finally:
+                    os.unlink(link)
+                self.assertEqual(lanelib.git_tamper(self.common), [])
+
+    def test_a_commondir_file_or_link_is_found(self):
+        # A real common dir never holds one; planted in a main checkout's .git, it makes git name
+        # another dir as the common dir, which every check would then read instead (DA15/DA16).
+        clean = os.path.join(self.tmp, "clean.git")
+        self.git("init", "-q", "--bare", clean, cwd=self.tmp)
+        path = os.path.join(self.common, "commondir")
+        for make in (lambda: self.write(".git/commondir", clean + "\n"),
+                     lambda: self.write(".git/commondir", ""),
+                     lambda: os.symlink(clean, path), lambda: os.symlink("missing", path),
+                     lambda: os.mkdir(path)):
+            with self.subTest(make=make):
+                make()
+                try:
+                    self.found("commondir")
+                finally:
+                    if os.path.isdir(path) and not os.path.islink(path):
+                        os.rmdir(path)
+                    else:
+                        os.unlink(path)
+                self.assertEqual(lanelib.git_tamper(self.common), [])
+
+    def test_a_symlink_under_worktrees_is_found(self):
+        # LR3: an entry there is always a real dir; gc's `worktree prune` deletes through a link.
+        outside = os.path.join(self.tmp, "outside")
+        os.makedirs(outside)
+        self.git("worktree", "add", "-q", "-b", "wt", os.path.join(self.tmp, "wt"))
+        self.assertEqual(lanelib.git_tamper(self.common), [])
+        link = os.path.join(self.common, "worktrees", "x")
+        for target in (outside, "missing"):
+            with self.subTest(target=target):
+                os.symlink(target, link)
+                try:
+                    self.found("worktrees/x")
+                finally:
+                    os.unlink(link)
+                self.assertEqual(lanelib.git_tamper(self.common), [])
+        os.rename(os.path.join(self.common, "worktrees"), os.path.join(self.tmp, "wts"))
+        os.symlink(os.path.join(self.tmp, "wts"), os.path.join(self.common, "worktrees"))
+        self.found("worktrees")
+
+    def test_a_symlink_anywhere_under_logs_is_found(self):
+        # LR4: git appends a reflog line through a link planted at a reflog's path, sandbox-off.
+        self.git("worktree", "add", "-q", "-b", "wt", os.path.join(self.tmp, "wt"))
+        self.git("commit", "-q", "--allow-empty", "-m", "wt", cwd=os.path.join(self.tmp, "wt"))
+        self.assertEqual(lanelib.git_tamper(self.common), [])
+        victim = self.write("victim", "", root=self.tmp)
+        for rel in ("logs/HEAD", "logs/refs/heads/main", "logs/refs/remotes/o/deep/x",
+                    "logs/refs", "worktrees/wt/logs/HEAD", "worktrees/wt/logs"):
+            with self.subTest(rel=rel):
+                path = os.path.join(self.common, rel)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                moved = path + ".moved"
+                if os.path.lexists(path):
+                    os.rename(path, moved)
+                os.symlink(victim, path)
+                try:
+                    self.found(rel)
+                finally:
+                    os.unlink(path)
+                    if os.path.lexists(moved):
+                        os.rename(moved, path)
+                self.assertEqual(lanelib.git_tamper(self.common), [])
+
+    def swap_in_link(self, rel, target):
+        """A symlink to target at rel in the common dir, whatever was there moved aside;
+        cleanup puts it back and checks the repo is clean again."""
+        path = os.path.join(self.common, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        moved = path + ".moved"
+        if os.path.lexists(path):
+            os.rename(path, moved)
+        os.symlink(target, path)
+        try:
+            self.found(rel)
+        finally:
+            os.unlink(path)
+            if os.path.lexists(moved):
+                os.rename(moved, path)
+        self.assertEqual(lanelib.git_tamper(self.common), [])
+
+    def test_a_link_at_the_top_is_found(self):
+        # LR5: a fetch writes FETCH_HEAD sandbox-off, through a link planted there; a real
+        # common dir holds no link at its top level.
+        victim = self.write("victim", "mine\n", root=self.tmp)
+        self.write(".git/FETCH_HEAD", "")
+        self.write(".git/ORIG_HEAD", "")
+        self.assertEqual(lanelib.git_tamper(self.common), [])
+        for name in ("FETCH_HEAD", "ORIG_HEAD", "index", "HEAD", "description", "x"):
+            with self.subTest(name=name):
+                self.swap_in_link(name, victim)
+
+    def test_lock_files_mounts_and_fifos_at_the_top_pass(self):
+        # On the host, config.lock, config.worktree and gc.log.lock sit there as empty files;
+        # inside the sandbox, its /dev/null mounts over protected paths read as char devices
+        # (mknod needs root here, so a fifo stands in for a non-file). Neither is a finding, or
+        # every check would report tampering forever. A fifo is let pass on purpose: git
+        # writing to one redirects nothing to a file of the user's.
+        for name in ("config.lock", "config.worktree", "gc.log.lock"):
+            self.write(f".git/{name}", "")
+        os.mkfifo(os.path.join(self.common, "FETCH_HEAD"))
+        os.mkdir(os.path.join(self.common, "a-dir"))
+        self.assertEqual(lanelib.git_tamper(self.common), [])
+
+    def test_a_symlink_anywhere_under_refs_is_found(self):
+        # LR6: update-ref, sandbox-off, creates a ref file through a linked dir under refs/.
+        outside = os.path.join(self.tmp, "outside")
+        os.makedirs(outside)
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.assertEqual(lanelib.git_tamper(self.common), [])
+        for rel in ("refs/remotes/origin", "refs/remotes/origin/main", "refs/heads/deep/x",
+                    "refs/tags", "refs/remotes"):
+            with self.subTest(rel=rel):
+                self.swap_in_link(rel, outside)
+        os.rename(os.path.join(self.common, "refs"), os.path.join(self.tmp, "refs"))
+        os.symlink(os.path.join(self.tmp, "refs"), os.path.join(self.common, "refs"))
+        self.found("refs")
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads a mode-000 dir")
+    def test_an_unreadable_refs_subdir_fails_closed(self):
+        path = os.path.join(self.common, "refs", "heads")
+        os.chmod(path, 0)
+        try:
+            self.found("refs/heads")
+        finally:
+            os.chmod(path, 0o755)
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads a mode-000 dir")
+    def test_an_unreadable_logs_dir_fails_closed(self):
+        path = os.path.join(self.common, "logs", "refs")
+        os.chmod(path, 0)
+        try:
+            self.found("logs/refs")
+        finally:
+            os.chmod(path, 0o755)
+
+    def test_a_fifo_alternates_is_found_without_blocking(self):
+        os.mkfifo(os.path.join(self.common, "objects", "info", "alternates"))
+        self.found("objects/info/alternates")
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads a mode-000 dir")
+    def test_an_unreadable_path_fails_closed(self):
+        for rel in ("refs/replace", "refs", "objects/info", "info"):
+            with self.subTest(rel):
+                path = os.path.join(self.common, rel)
+                os.makedirs(path, exist_ok=True)
+                os.chmod(path, 0)
+                try:
+                    self.found(rel)
+                finally:
+                    os.chmod(path, 0o755)
+
+    def test_a_missing_common_dir_fails_closed(self):
+        self.assertEqual(len(lanelib.git_tamper(os.path.join(self.tmp, "nope"))), 1)
+
+    def cli(self, *args):
+        return subprocess.run([sys.executable, "-I", lanelib.__file__, *args], env=self.env,
+                              capture_output=True, text=True, timeout=60)
+
+    def test_the_cli_exits_by_finding(self):
+        p = self.cli("git-tamper", self.common)
+        self.assertEqual((p.returncode, p.stdout), (0, ""), p.stderr)
+        self.write(".git/shallow", "")
+        self.git("replace", self.blob_a, self.blob_b)
+        p = self.cli("git-tamper", self.common)
+        self.assertEqual(p.returncode, 1, p.stderr)
+        lines = p.stdout.splitlines()
+        self.assertEqual(len(lines), 2, lines)
+        self.assertTrue(any("shallow" in x for x in lines), lines)
+        self.assertTrue(any("refs/replace/" in x for x in lines), lines)
+
+    def test_control_bytes_in_a_reason_come_out_masked(self):
+        # A refs/replace name and a packed-refs line are the lane's to choose: a terminal
+        # escape in either must not reach `lane ls`, handoff-check or setup.sh as one.
+        evil = "\x1b]0;x\x07\x9b2J"
+        self.write(f".git/refs/replace/{evil}", "")
+        self.write(".git/packed-refs", f"{self.blob_a} refs/replace/{evil}\n")
+        reasons = self.found("refs/replace/", "packed-refs")
+        self.assertEqual(len(reasons), 2, reasons)
+        p = self.cli("git-tamper", self.common)
+        self.assertEqual(p.returncode, 1, p.stderr)
+        for text in (*reasons, p.stdout.replace("\n", "")):
+            with self.subTest(text=text):
+                self.assertNotRegex(text, r"[\x00-\x1f\x7f-\x9f]")
+                self.assertIn("?]0;x??2J", text)
+
+    def test_the_cli_refuses_bad_usage(self):
+        for args in ((), ("git-tamper",), ("git-tamper", self.common, "x"),
+                     ("other", self.common)):
+            with self.subTest(args=args):
+                p = self.cli(*args)
+                self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+                self.assertIn("usage", p.stderr)
+
+
+class MainFirst(_fixture.LanesRepo):
+    """LR1: the main checkout is "main" whatever a lane record names, and a record naming the
+    main checkout, a dir holding it, or a dir inside it is left out: no lane lives there
+    (worktree_problem refuses one), and sandboxed Bash can write any lane.json."""
+
+    def setUp(self):
+        super().setUp()
+        self.lane("new", "chart-fix")
+        self.repo = lanelib.Repo(self.main, self.common)
+
+    def forged(self, path, lane_id="forged"):
+        """chart-fix's record, renamed lane_id, naming path, as sandboxed Bash could write it."""
+        rec = dict(self.lane_json("chart-fix"), id=lane_id, path=path)
+        self.write(os.path.join(self.common, "lanes", lane_id, "lane.json"), json.dumps(rec))
+        return rec
+
+    def test_identity_says_main_before_matching_any_record(self):
+        rec = self.forged(self.main)
+        # Handed the record directly, past record_problem: the order alone must say main.
+        self.assertEqual(self.repo.identity([rec]), ("main", None))
+        self.assertEqual(self.repo.identity(), ("main", None))
+
+    def test_a_record_naming_main_or_a_dir_holding_or_inside_it_is_left_out(self):
+        link = os.path.join(self.tmp, "main-link")
+        os.symlink(self.main, link)
+        agent = os.path.join(self.main, ".claude", "worktrees", "agent-a1")
+        for path in (self.main, os.path.dirname(self.main), "/", link, agent):
+            with self.subTest(path=path):
+                rec = self.forged(path)
+                ids = [lane["id"] for lane in self.repo.lanes()]
+                self.assertEqual(ids, ["chart-fix"])
+                self.assertIn("forged", [i for i, _ in self.repo.rejected])
+                self.assertEqual(self.repo.identity(), ("main", None))
+                self.assertIsNotNone(lanelib.record_problem(rec, "forged", self.repo.main))
+
+    def test_a_lane_beside_main_sharing_its_name_s_prefix_is_kept(self):
+        # The lanes root is <tmp>/proj-lanes, beside <tmp>/proj: no prefix match may reject it.
+        rec = self.lane_json("chart-fix")
+        self.assertTrue(rec["path"].startswith(self.main))
+        self.assertIsNone(lanelib.record_problem(rec, "chart-fix", self.repo.main))
+        self.assertEqual([lane["id"] for lane in self.repo.lanes()], ["chart-fix"])
+        self.assertEqual(self.repo.rejected, [])
+
+    def test_a_nul_in_a_record_s_path_is_left_out_not_raised(self):
+        rec = self.forged(self.lane_path("chart-fix") + "\0x")
+        self.assertEqual([lane["id"] for lane in self.repo.lanes()], ["chart-fix"])
+        self.assertIsNotNone(lanelib.record_problem(rec, "forged", self.repo.main))
 
 
 if __name__ == "__main__":

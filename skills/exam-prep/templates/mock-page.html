@@ -1,0 +1,171 @@
+<!-- exam-prep template mock-page.html. Baseline as of 2026-10-20; changes only via `12-retro`.
+     mockpage.py fills it from a mock in MOCK.md's format: the title, the header at MOCK HEADER and
+     the three views at MOCK VIEWS (by paper, by question type, by topic; FB-153). The notes
+     chassis's palette and fonts, so the two pages read as one set. A fragment, as the artifact host
+     wraps it in a document; verify_page.mjs wraps it the same way. It holds no key (FB-154). -->
+<title>{{TITLE}}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,500;0,7..72,600;1,7..72,400&display=swap">
+<style>
+  :root{
+    --bg:#f4f6f8; --surface:#ffffff; --surface-2:#eef1f4;
+    --ink:#17242c; --ink-soft:#4a5b66; --ink-faint:#7f909b;
+    --hair:#dde3e8; --hair-strong:#c6ced5;
+    --accent:#0b6e8f; --accent-soft:#e3f1f5;
+    --type:#6d46c2; --type-wash:#efeafb; --topic:#2f8f5b; --topic-wash:#e8f6ee;
+    --focus:#0b6e8f;
+    color-scheme:light;
+    --maxw:72ch;
+    --f-display:"IBM Plex Sans",system-ui,sans-serif;
+    --f-body:"Literata",Georgia,serif;
+    --f-mono:"IBM Plex Mono",ui-monospace,monospace;
+  }
+  @media (prefers-color-scheme:dark){ :root:not([data-theme="light"]){
+    --bg:#0f1519; --surface:#151d23; --surface-2:#1b252c;
+    --ink:#e6edf2; --ink-soft:#a9b7c0; --ink-faint:#74848f;
+    --hair:#28333b; --hair-strong:#37454e;
+    --accent:#49b6d6; --accent-soft:#12303a;
+    --type:#a98ee6; --type-wash:#201635; --topic:#5fc088; --topic-wash:#10261a;
+    --focus:#49b6d6;
+    color-scheme:dark;
+  }}
+  :root[data-theme="dark"]{
+    --bg:#0f1519; --surface:#151d23; --surface-2:#1b252c;
+    --ink:#e6edf2; --ink-soft:#a9b7c0; --ink-faint:#74848f;
+    --hair:#28333b; --hair-strong:#37454e;
+    --accent:#49b6d6; --accent-soft:#12303a;
+    --type:#a98ee6; --type-wash:#201635; --topic:#5fc088; --topic-wash:#10261a;
+    --focus:#49b6d6;
+    color-scheme:dark;
+  }
+
+  *{box-sizing:border-box}
+  body{background:var(--bg);color:var(--ink);font-family:var(--f-body);
+    font-size:17px;line-height:1.62;margin:0;-webkit-text-size-adjust:100%}
+  h1,h2,h3{font-family:var(--f-display);line-height:1.2;text-wrap:balance;color:var(--ink)}
+  button:focus-visible,summary:focus-visible{outline:2px solid var(--focus);outline-offset:2px;border-radius:3px}
+  code{font-family:var(--f-mono);font-size:.92em}
+  :not(pre)>code{background:var(--surface-2);padding:.08em .35em;border-radius:4px}
+  pre{font-family:var(--f-mono);font-size:.88rem;background:var(--surface-2);border:1px solid var(--hair);
+    border-radius:8px;padding:.7rem .9rem;overflow-x:auto;line-height:1.45}
+
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:1.5rem clamp(1rem,5vw,2.5rem) 4rem}
+  .mockhead h1{font-size:clamp(1.6rem,4vw,2.2rem);margin:.4rem 0 .6rem}
+  .mockhead p{margin:.4rem 0}
+  .writein{font-family:var(--f-display);font-weight:600}
+
+  nav.views{position:sticky;top:0;z-index:20;background:var(--bg);border-bottom:1px solid var(--hair);
+    display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;padding:.6rem 0;margin:1.2rem 0 1rem}
+  nav.views button,.themebtn{font-family:var(--f-display);font-size:.85rem;padding:.4rem .75rem;border-radius:8px;
+    border:1px solid var(--hair-strong);background:var(--surface-2);color:var(--ink);cursor:pointer;min-height:40px}
+  nav.views button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff}
+  .themebtn{margin-left:auto}
+
+  section.q,section.grp{background:var(--surface);border:1px solid var(--hair);border-radius:12px;
+    padding:1rem clamp(.9rem,3vw,1.4rem);margin:0 0 1.2rem}
+  section.q>h2,section.grp>h2{font-size:1.2rem;margin:.1rem 0 .5rem;display:flex;flex-wrap:wrap;gap:.3rem .6rem;align-items:baseline}
+  .pts{font-family:var(--f-display);font-size:.85rem;font-weight:500;color:var(--ink-soft)}
+  .chips{display:inline-flex;flex-wrap:wrap;gap:.3rem;vertical-align:middle}
+  .chip{font-family:var(--f-display);font-size:.72rem;font-weight:600;letter-spacing:.02em;border-radius:999px;padding:.12rem .55rem}
+  .chip.type{color:var(--type);background:var(--type-wash)}
+  .chip.topic{color:var(--topic);background:var(--topic-wash)}
+  article.part{border-top:1px solid var(--hair);padding-top:.7rem;margin-top:.7rem}
+  article.part>header{display:flex;flex-wrap:wrap;gap:.3rem .6rem;align-items:baseline;font-family:var(--f-display)}
+  .pid{font-weight:700}
+  details.ctx{margin:.4rem 0;color:var(--ink-soft)}
+  details.ctx>summary{font-family:var(--f-display);font-size:.85rem;cursor:pointer}
+  .answer{border:1.5px dashed var(--hair-strong);border-radius:8px;min-height:5.5rem;margin:.6rem 0;
+    background:repeating-linear-gradient(transparent 0 1.55rem,var(--hair) 1.55rem calc(1.55rem + 1px))}
+  .tbl-wrap{overflow-x:auto;margin:.6rem 0}
+  table{border-collapse:collapse;font-size:.92rem}
+  th,td{border:1px solid var(--hair-strong);padding:.3rem .6rem;text-align:left;vertical-align:top}
+  th{background:var(--surface-2);font-family:var(--f-display)}
+  /* figures: the notes chassis's classes (CHASSIS.md), with the page accent; an unstyled shape,
+     a marker's arrowhead among them, takes the ink color, never black */
+  figure{margin:.8rem 0}
+  .figbox{overflow-x:auto;overflow-y:hidden}
+  @media (max-width:560px){ .figbox svg{min-width:460px} }
+  figure svg{display:block;max-width:100%;height:auto;margin:0 auto;color:var(--ink);fill:currentColor}
+  figure svg text{font-family:var(--f-display);fill:currentColor;font-size:13px}
+  figure svg .mono{font-family:var(--f-mono)}
+  figure svg .mut{fill:var(--ink-soft)}
+  figure svg .sm{font-size:11px}
+  figure svg .acc{fill:var(--accent)}
+  figure svg .bx{fill:none;stroke:currentColor;stroke-width:1.5}
+  figure svg .accbx{fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.75}
+  figure svg .fill-surf{fill:var(--surface-2)}
+  figure svg .dash{stroke-dasharray:4 3}
+
+  /* MathJax sizing */
+  mjx-container{display:inline-block;overflow-x:auto!important;overflow-y:hidden;max-width:100%!important;vertical-align:-0.25em}
+  mjx-container:not([display="true"]){scrollbar-width:none;-ms-overflow-style:none}
+  mjx-container:not([display="true"])::-webkit-scrollbar{display:none;width:0;height:0}
+  mjx-container[display="true"]{display:block!important;vertical-align:baseline;margin:.8rem 0!important}
+
+  @media print{
+    nav.views,#view-type,#view-topic{display:none!important}
+    #view-paper{display:block!important}
+    body{background:#fff}
+    section.q{break-inside:avoid-page}
+  }
+</style>
+
+<main class="wrap" id="main">
+<!-- MOCK HEADER -->
+  <nav class="views" aria-label="Arrange the questions">
+    <button type="button" data-view="paper" aria-pressed="true">By paper</button>
+    <button type="button" data-view="type" aria-pressed="false">By question type</button>
+    <button type="button" data-view="topic" aria-pressed="false">By topic</button>
+    <button class="themebtn" id="themeBtn" type="button" aria-label="Toggle light or dark theme">◐</button>
+  </nav>
+<!-- MOCK VIEWS -->
+</main>
+
+<script>
+  window.MathJax = {
+    loader:{
+      load:['ui/safe'],  // MathJax's own filter on what \href, \class, \style and the like add
+      // Unset, MathJax takes the host its components load from off document.currentScript,
+      // which an element named currentScript on the page would replace.
+      paths:{mathjax:'https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.2/es5'}
+    },
+    tex:{inlineMath:[['\\(','\\)']],displayMath:[['\\[','\\]']]},
+    svg:{fontCache:'none'},
+    options:{renderActions:{addMenu:[]}}
+  };
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.2/es5/tex-svg.js" id="MathJax-script"></script>
+
+<script>
+(function(){
+  "use strict";
+  var root=document.documentElement;
+  function apply(t){ if(t==='dark'||t==='light') root.setAttribute('data-theme',t); else root.removeAttribute('data-theme'); }
+  try{ var saved=localStorage.getItem('mock-theme'); if(saved) apply(saved); }catch(e){}
+  document.getElementById('themeBtn').addEventListener('click',function(){
+    var cur=root.getAttribute('data-theme');
+    var sysDark=window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches;
+    var next=cur? (cur==='dark'?'light':'dark') : (sysDark?'light':'dark');
+    apply(next); try{localStorage.setItem('mock-theme',next);}catch(e){}
+  });
+
+  var buttons=[].slice.call(document.querySelectorAll('nav.views button[data-view]'));
+  function show(view){
+    buttons.forEach(function(b){
+      var on=b.getAttribute('data-view')===view;
+      b.setAttribute('aria-pressed',on?'true':'false');
+      var pane=document.getElementById('view-'+b.getAttribute('data-view'));
+      if(pane) pane.hidden=!on;
+    });
+    try{localStorage.setItem('mock-view',view);}catch(e){}
+  }
+  buttons.forEach(function(b){ b.addEventListener('click',function(){ show(b.getAttribute('data-view')); }); });
+  try{ var v=localStorage.getItem('mock-view'); if(v&&document.getElementById('view-'+v)) show(v); }catch(e){}
+
+  document.querySelectorAll('figure > svg').forEach(function(svg){
+    var box=document.createElement('div'); box.className='figbox';
+    svg.parentNode.insertBefore(box,svg); box.appendChild(svg);
+  });
+})();
+</script>

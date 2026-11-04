@@ -29,16 +29,15 @@
 #
 # A tab comes back with the --model and --effort its claude launched with (the entry's model and
 # effort, which session-registry.sh reads from /proc), or what it ran after a /model or /effort
-# since: lanelib.carried_pick, the plain pass's rule (docs/lanes.md, "Model and effort"), with the
-# one difference a resume makes (a /model no reply followed carries its argument). A bare
-# `--resume` keeps the model but drops the effort to the default, so this is what keeps a lane's
-# pick across a tmux restart. A fresh tab gets its launch flags; an attach tab that attaches to
-# its running session gets none (the session keeps its own), nor does one resumed while
-# `claude agents` fails or answers no list. A transcript is read only as a regular file. An
-# entry with neither field (one from before them, or a claude launched with none) comes back
-# bare, and a field outside its shape costs its flag, never the tab. lanelib is found through
-# this script's link, by absolute path only; a missing or broken one, or a carried_pick that
-# raises, costs the flags alone.
+# since: lanelib.carried_pick, the plain pass's rule (docs/lanes.md, "Model and effort"). A bare
+# `--resume` takes the ANTHROPIC_MODEL pin and the default effort, so this is what keeps a
+# lane's pick across a tmux restart. A fresh tab gets its launch flags; an attach tab that
+# attaches to its running session gets none (the session keeps its own), nor does one resumed
+# while `claude agents` fails or answers no list. A transcript is read only as a regular file.
+# An entry with neither field (one from before them, or a claude launched with none) comes back
+# bare unless a /model since carries, and a field outside its shape costs its flag, never the
+# tab. lanelib is found through this script's link, by absolute path only; a missing or broken
+# one, or a carried_pick that raises, costs the flags alone.
 #
 # An attach tab (a `claude attach <job>` client showing a background session) has an entry
 # from `claude-saved track` instead, marked `attach`. Its session outlives a `tmux kill-server`
@@ -290,7 +289,7 @@ def pick(e, decision, bare):
     try:
         tpath = e.get("transcript_path") if decision == "restore" else None
         tpath = tpath if tpath and os.path.isfile(tpath) else None
-        out = lanelib.carried_pick(lanelib.stored_pick(e), tpath, resume=True)
+        out = lanelib.carried_pick(lanelib.stored_pick(e), tpath)
         return {f: v for f, v in zip(out[::2], out[1::2]) if lanelib.pick_ok(f, v)}
     except Exception:
         return {}

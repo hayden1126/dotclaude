@@ -17,10 +17,19 @@ Layout (PLAN.md "Layout"):
                                 acted as lead, written only by bare commands
   <state-dir>/lanes/<repo>-<hash>.closing/<id>.json
                                 the pane shells a `lane done` of lane <id> proved the lane's,
-                                kept for a rerun until the close completes (Repo.closing_path)
+                                kept for a rerun until the close completes (Repo.closing_path);
+                                `lane park` keeps its own there the same way
+  <state-dir>/lanes/<repo>-<hash>.parked/<id>.json
+                                lane <id>'s parked flag (Repo.parked_path): written by `lane park`,
+                                removed by `lane open` and `lane done`
+  <state-dir>/lanes/<repo>-<hash>.served/<id>/<port>.json
+                                what `lane serve` started on a port (Repo.served_path), which
+                                `serve --stop` ends by; `lane done` removes the dir once
+                                nothing the records name still runs
 """
 import contextlib
 import datetime
+import errno
 import fcntl
 import glob
 import hashlib
@@ -31,6 +40,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import tomllib
@@ -61,29 +71,154 @@ def relative_phrases(text: str) -> list[str]:
     return [" ".join(m.group(0).lower().split()) for m in RELATIVE.finditer(text or "")]
 
 
-FENCE = re.compile(r"\s{0,3}(`{3,}|~{3,})")
+# A backtick fence's info string holds no backtick (```x``` is inline code, CommonMark). The
+# indent stays loose (a tab too): under a list item a tab-indented fence is one, and the lint
+# errs toward quoting.
+FENCE = re.compile(r"\s{0,3}(`{3,}(?=[^`]*$)|~{3,})")
+INLINE_CODE = re.compile(r"`[^`\n]*`")
 
 
-def prose_only(text: str) -> str:
-    """text without HTML comments, fenced code blocks and inline code: what quotes an example
-    rather than claiming anything. The one lint the guard and handoff-check share.
+def fenced(lines: list[str]) -> list[bool]:
+    """Whether each line belongs to a fenced code block, its fence lines included.
 
     A fence opens with 3+ backticks or tildes and closes on a line of the same char, at least as
     long, with nothing after but whitespace. An unclosed fence runs to the end of the text, which
     errs toward passing quoted text, never toward denying prose."""
-    text = re.sub(r"<!--.*?-->", " ", text or "", flags=re.DOTALL)
-    kept, fence = [], None
-    for line in text.splitlines():
+    out, fence = [], None
+    for line in lines:
         m = FENCE.match(line)
+        out.append(fence is not None or bool(m))
         if fence is None:
             if m:
                 fence = m.group(1)
-            else:
-                kept.append(line)
         elif m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) \
                 and not line[m.end():].strip():
             fence = None
-    return re.sub(r"`[^`\n]*`", " ", "\n".join(kept))
+    return out
+
+
+def prose_only(text: str) -> str:
+    """text without HTML comments, fenced code blocks (fenced) and inline code: what quotes an
+    example rather than claiming anything. The one lint the guard and handoff-check share."""
+    lines = re.sub(r"<!--.*?-->", " ", text or "", flags=re.DOTALL).splitlines()
+    kept = [line for line, code in zip(lines, fenced(lines)) if not code]
+    return INLINE_CODE.sub(" ", "\n".join(kept))
+
+
+SECTION_BREAK = re.compile(r"#{1,2}\s")
+# A code span as CommonMark reads one: a backtick run, closed by a run of the same length.
+CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)")
+
+
+UNCLOSED, STRAY = "an unclosed `<!--`", "a stray `-->` (a comment ended before it)"
+
+
+def strip_comments(lines: list[str]) -> tuple[str, tuple[int, str] | None]:
+    """One section's lines joined, each HTML comment cut out as markdown renders it, and its
+    first flaw, (line index, UNCLOSED or STRAY), None without one. The one
+    comment scan section() and comment_flaw share, so what the check passes is what the
+    tools read: two scans that disagreed let a quoted `<!--` ... `-->` pair hide a `Keep open:`.
+
+    Outside a comment, a fenced block or a code span (CODE_SPAN: ``<!--`` too) quotes a
+    marker: it opens nothing. Inside one, the first `-->` ends it, backticks or not, and
+    `<!-->` and `<!--->` are whole comments (CommonMark 0.31, HTML). A comment that starts its
+    line takes the blanks around it along, so a `Keep open:` behind it still starts the line,
+    not a wrap of the item before. A fence the section never closes
+    counts as plain text, so a mistyped closer can't hide an opener after it. An unclosed
+    comment's text is kept from its opener on: a `Keep open:` line in it still counts, and the
+    check fails the record anyway. A `-->` outside code and comments is stray: a comment that
+    quoted one ended there, and its tail reads as the record's."""
+    plain: set[int] = set()  # fence lines read as plain text: fences the section never closed
+    while True:
+        out: list[str] = []
+        opened = mark = stray = None
+        fence = fence_at = None
+        blank = True  # nothing but blanks kept since the last newline
+
+        def keep(piece: str) -> None:
+            nonlocal blank
+            out.append(piece)
+            tail = piece.rpartition("\n")
+            blank = not tail[2].strip() if tail[1] else blank and not piece.strip()
+
+        for i, line in enumerate(lines):
+            m = FENCE.match(line) if opened is None else None
+            if fence is not None:
+                if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) \
+                        and not line[m.end():].strip():
+                    fence = None
+                keep(line + "\n")
+                continue
+            if m and i not in plain:
+                fence, fence_at = m.group(1), i
+                keep(line + "\n")
+                continue
+            pos = 0
+            while True:
+                if opened is not None:
+                    end = line.find("-->", pos)
+                    if end < 0:
+                        break  # the comment runs on, newline and all
+                    opened, pos = None, end + 3
+                    if blank:  # it started its line: so does what follows it, unindented
+                        pos = len(line) - len(line[pos:].lstrip())
+                        kept = "".join(out)
+                        out[:] = [kept[:kept.rfind("\n") + 1]]
+                    continue
+                start = line.find("<!--", pos)
+                close = line.find("-->", pos)
+                code = CODE_SPAN.search(line, pos)
+                first = min((x for x in (start, close, code.start() if code else -1) if x >= 0),
+                            default=-1)
+                if code and code.start() == first:
+                    keep(line[pos:code.end()])
+                    pos = code.end()
+                elif close == first >= 0:
+                    stray = i if stray is None else stray
+                    keep(line[pos:close + 3])
+                    pos = close + 3
+                elif start >= 0:
+                    keep(line[pos:start])
+                    opened, mark, pos = (i, start), len(out), start + 2  # `<!-->` closes itself
+                else:
+                    keep(line[pos:] + "\n")
+                    break
+        if fence is not None:
+            plain.add(fence_at)
+            continue
+        if opened is not None:
+            i, col = opened
+            out[mark:] = ["\n".join([lines[i][col:], *lines[i + 1:]])]
+            if stray is None or i < stray:
+                return "".join(out), (i, UNCLOSED)
+        return "".join(out), None if stray is None else (stray, STRAY)
+
+
+def sections(text: str | None) -> list[tuple[int, list[str]]]:
+    """(index of its first body line, body lines) for each section: split at every line
+    section() ends a section at, the text before the first heading counting as one."""
+    out: list[tuple[int, list[str]]] = [(0, [])]
+    for i, line in enumerate((text or "").splitlines()):
+        if SECTION_BREAK.match(line):
+            out.append((i + 1, []))
+        else:
+            out[-1][1].append(line)
+    return out
+
+
+def comment_flaw(text: str | None) -> tuple[int, str] | None:
+    """(1-based line, UNCLOSED or STRAY) for the first section whose comments don't parse
+    cleanly, None when every one does: a `<!--` its own section never closes, or a stray `-->`.
+    Either leaks a comment's text into what the tools read, where a `Keep open:` inside or
+    after it can be missed. The same scan as section()'s (strip_comments)."""
+    text = text or ""
+    for first, body in sections(text):
+        if (flaw := strip_comments(body)[1]) is not None:
+            # splitlines also breaks at a form feed and the like, where an editor doesn't:
+            # count the newlines before the flawed line instead.
+            at = sum(len(x) for x in text.splitlines(keepends=True)[:first + flaw[0]])
+            return text.count("\n", 0, at) + 1, flaw[1]
+    return None
 
 
 def added_phrases(old: str, new: str) -> list[str]:
@@ -222,7 +357,8 @@ class Repo:
     @property
     def key(self) -> str:
         """This repo's name in places other repos share: its config's in the state dir, its
-        `lane trial` scratch dirs' in the temp dir. 12 hex of the common dir's sha256."""
+        `lane trial` scratch dirs' names (in the lane's .lane-trial/, and the lead notes' index
+        in the temp dir). 12 hex of the common dir's sha256."""
         return hashlib.sha256(self.common_dir.encode()).hexdigest()[:12]
 
     @property
@@ -242,6 +378,23 @@ class Repo:
         CLI's save_proof), beside the config: `done` signals by it, so only a bare command may
         write it, never lane.json's sandbox-writable dir."""
         return os.path.join(self.config_path.removesuffix(".toml") + ".closing", lane_id + ".json")
+
+    def parked_path(self, lane_id: str) -> str:
+        """Lane lane_id's parked flag (`lane park`), beside the config: a parked lane gives up its
+        cap slot, so only a bare command may write it. A lane.json field would let any lane's
+        sandboxed Bash park itself out of the cap, or unpark another."""
+        return os.path.join(self.config_path.removesuffix(".toml") + ".parked", lane_id + ".json")
+
+    def served_dir(self, lane_id: str) -> str:
+        """Lane lane_id's serve records, beside the config: `serve --stop` signals by them, so
+        only a sandbox-off `lane serve` may write them, never a lane's sandboxed Bash. `lane
+        done` removes the dir once nothing the records name still runs."""
+        return os.path.join(self.config_path.removesuffix(".toml") + ".served", lane_id)
+
+    def served_path(self, lane_id: str, port: int) -> str:
+        """What `lane serve` started on port: its leader's pid, start and boot, and the token
+        in the environment of everything it started."""
+        return os.path.join(self.served_dir(lane_id), f"{port}.json")
 
     @property
     def has_lanes(self) -> bool:
@@ -298,11 +451,12 @@ class Repo:
         name their own path, so they leave this checkout unregistered."""
         if not self.has_lanes:
             return "plain", None
+        # Main first: sandboxed Bash can write any lane.json, so no record may name main (LR1).
+        if self.is_main:
+            return "main", None
         lane = self.lane_at(self.toplevel, lanes)
         if lane:
             return "lane", lane
-        if self.is_main:
-            return "main", None
         # self.rejected is the lanes() call's that lane_at matched against. A rejected record
         # may be this checkout's, so outside main it isn't told from one: Untrusted.
         top = os.path.realpath(self.toplevel)
@@ -393,6 +547,27 @@ def record_path(lane: dict) -> str:
     return os.path.join(record_dir(lane), "STATUS.md")
 
 
+def port_block(lane: dict) -> range | None:
+    """The ports a lane holds: `block` ports from `port` (a lane.json without `block`, as the
+    CLI wrote it before blocks, holds its one port), or None with no port."""
+    port = lane.get("port")
+    return None if port is None else range(port, port + lane.get("block", 1))
+
+
+def block_text(lane: dict) -> str | None:
+    """'5191' or '5191-5193', or None with no port."""
+    block = port_block(lane)
+    if block is None:
+        return None
+    return str(block[0]) if len(block) == 1 else f"{block[0]}-{block[-1]}"
+
+
+def ports_text(lane: dict) -> str:
+    """'port 5191', 'ports 5191-5193' or 'port none', for the CLI's lines and the hook's."""
+    text = block_text(lane)
+    return f"port{'s' if text and '-' in text else ''} {text or 'none'}"
+
+
 def walk_record(src: str, rel: str = ""):
     """Yield (path, relative path, kind) under src, kind 'dir', 'file' or 'link'. A symlink is
     never followed, to a file or a dir, dangling or not: following one copied whatever it reached
@@ -408,17 +583,414 @@ def walk_record(src: str, rel: str = ""):
             yield path, sub, "file"
 
 
-def copy_record(src: str, dest: str) -> None:
-    """Copy a record dir (a lane's .lane/) to dest, which must not exist; links stay links."""
-    os.makedirs(dest)
-    for path, rel, kind in walk_record(src):
-        target = os.path.join(dest, rel)
-        if kind == "dir":
-            os.makedirs(target, exist_ok=True)
-        elif kind == "link":
-            os.symlink(os.readlink(path), target)
-        else:
-            shutil.copy2(path, target)
+def open_dir(root: str | int, rel: str, create: bool = False) -> int:
+    """fd of the dir root/rel, opening each name below root by fd with O_NOFOLLOW: a symlink
+    anywhere on the way, even one swapped in mid-walk, fails the open (ELOOP or ENOTDIR)
+    instead of leading out of root. root, a path or a dir fd, is trusted as it stands: its
+    parent must be one no sandbox can write. create makes missing dirs."""
+    names = [d for d in rel.split("/") if d]
+    if any(d in (".", "..") for d in names):  # O_NOFOLLOW stops links, never `..`
+        raise OSError(errno.EINVAL, f"{rel!r} has a '.' or '..' in it")
+    # O_PATH on the way down (an execute-only dir above a lane still opens), O_RDONLY at the end,
+    # where callers list or read.
+    way = os.O_PATH | os.O_DIRECTORY
+    fd = (os.open(root, way if names else os.O_RDONLY | os.O_DIRECTORY) if isinstance(root, str)
+          else os.dup(root) if not names else os.open(".", way, dir_fd=root))
+    try:
+        for i, d in enumerate(names):
+            if create:
+                with contextlib.suppress(FileExistsError):
+                    os.mkdir(d, dir_fd=fd)
+            last = os.O_RDONLY | os.O_DIRECTORY if i == len(names) - 1 else way
+            nxt = os.open(d, last | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def common_fd(repo: "Repo", rel: str = "", create: bool = False) -> int:
+    """fd of <common>/rel, walked from the common dir's parent, the main checkout, which no
+    lane's sandbox can write. Sandboxed Bash can write the common dir, so worktrees/, lanes/
+    or anything under them may be a symlink by now; a removal or write sandbox-off goes by name
+    under this fd, never by a path through them."""
+    parent, name = os.path.split(repo.common_dir)
+    return open_dir(parent, f"{name}/{rel}" if rel else name, create)
+
+
+def real_dir_at(dir_fd: int, name: str) -> bool:
+    """name under dir_fd is a dir and not a link to one."""
+    try:
+        return stat.S_ISDIR(os.stat(name, dir_fd=dir_fd, follow_symlinks=False).st_mode)
+    except FileNotFoundError:
+        return False
+
+
+SHOWN = re.compile(r"[\x00-\x1f\x7f-\x9f]")  # C0, DEL and C1: masked in what lane tools print
+
+
+def shown(text: str) -> str:
+    """text with its control characters (SHOWN) masked, fit for a terminal."""
+    return SHOWN.sub("?", text)
+
+
+def git_tamper(common_dir: str) -> list[str]:
+    """The tripwire for DA15/DA16: one plain reason per sign that the git common dir may make
+    git serve content other than what the remote showed, [] when there is none. Sandboxed Bash
+    in any lane can write the common dir. It flags any replace ref (loose under refs/replace/ or
+    a packed-refs line), a non-blank objects/info/alternates (the file exists empty in a normal
+    repo) or info/attributes (checkout conversions no config turns off), an info/grafts or
+    shallow file existing at all, and a commondir of any type: a real common dir never holds
+    one, and git follows one in any git dir, a main checkout's .git too, to name another dir as
+    the common dir (so a caller handed git's answer would check that dir; repo_tamper checks the
+    checkout's own .git as well). It also flags a symlink directly under worktrees/ (LR3: gc's
+    `worktree prune` deletes through it) and one anywhere under logs/ or a worktree's logs/
+    (LR4: a reflog write follows it), a symlink directly in common_dir (LR5: a fetch writes
+    FETCH_HEAD through it), and a symlink anywhere
+    under refs/ (LR6: update-ref creates a ref file through it). Nothing below
+    common_dir is
+    followed: each name opens by fd with O_NOFOLLOW (open_dir), so a symlink is a finding in
+    itself. Fails closed: whatever can't be read is a finding, never clean. `lane ls`,
+    handoff-check and setup.sh (through this file's `git-tamper` command) call it. Each reason
+    comes masked (shown): a replace ref's name and a packed-refs line are a lane's to choose."""
+    return [shown(r) for r in _tamper(common_dir)]
+
+
+def repo_tamper(repo: "Repo") -> list[str]:
+    """git_tamper for repo's common dir and for the .git dir of its main checkout and of its
+    toplevel where each is a dir: repo.common_dir is git's answer, which a commondir file planted
+    in that .git redirects to a clean dir. A finding outside the common dir names its dir."""
+    seen, reasons = set(), []
+    for d in (repo.common_dir, os.path.join(repo.main, ".git"),
+              os.path.join(repo.toplevel, ".git")):
+        if d != repo.common_dir and not os.path.isdir(d):
+            continue  # a worktree's gitfile, or no checkout there
+        if (key := os.path.realpath(d)) in seen:
+            continue
+        seen.add(key)
+        found = git_tamper(d)
+        reasons += found if d == repo.common_dir else [f"{shown(d)}: {r}" for r in found]
+    return reasons
+
+
+def _tamper(common_dir: str) -> list[str]:
+    try:
+        root = os.open(common_dir, os.O_RDONLY | os.O_DIRECTORY)
+    except OSError as e:
+        return [f"the git common dir {common_dir} can't be opened ({e.strerror or e}): "
+                "counted as tampered"]
+    checks = (("", _top_links), ("refs/replace", _replace_refs), ("packed-refs", _packed_replace),
+              ("objects/info/alternates", _nonblank), ("info/attributes", _nonblank),
+              ("info/grafts", _exists), ("shallow", _exists), ("commondir", _exists),
+              ("worktrees", _worktree_links), ("logs", _log_links), ("refs", _ref_links))
+    reasons = []
+    try:
+        for rel, check in checks:
+            try:
+                reasons += check(root, rel)
+            except OSError as e:
+                reasons.append(f"{rel or 'the top level'} can't be checked ({e.strerror or e}): "
+                               "counted as tampered")
+    finally:
+        os.close(root)
+    return reasons
+
+
+def _parent(root: int, rel: str) -> tuple[int, str] | None:
+    """(fd of rel's dir, rel's last name), the dir opened from root without following; None when
+    a dir on the way is missing. The caller closes the fd."""
+    head, name = os.path.split(rel)
+    try:
+        return open_dir(root, head), name
+    except FileNotFoundError:
+        return None
+
+
+def _lstat(dir_fd: int, name: str) -> os.stat_result | None:
+    try:
+        return os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+
+
+def read_nofollow(root: int, rel: str) -> bytes | None:
+    """rel's bytes, None when it is missing. A symlink or anything but a regular file raises."""
+    if (at := _parent(root, rel)) is None:
+        return None
+    fd, name = at
+    try:
+        st = _lstat(fd, name)
+        if st is None:
+            return None
+        if not stat.S_ISREG(st.st_mode):
+            kind = "a symlink" if stat.S_ISLNK(st.st_mode) else "not a regular file"
+            raise OSError(errno.EINVAL, f"it is {kind}")
+        # O_NOFOLLOW: a link swapped in after the lstat fails; O_NONBLOCK: a fifo never hangs.
+        f = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+    finally:
+        os.close(fd)
+    with open(f, "rb") as fh:
+        if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+            raise OSError(errno.EINVAL, "it is not a regular file")
+        return fh.read()
+
+
+def _top_links(root: int, rel: str) -> list[str]:
+    """LR5: each symlink directly in the common dir, which a real one never holds: git, run
+    sandbox-off, writes FETCH_HEAD, ORIG_HEAD, packed-refs, index and the rest through a planted
+    link. Only links: inside a sandboxed run, the sandbox's /dev/null mounts over protected
+    paths (config.lock) read as char devices, and a fifo redirects no write to a file."""
+    found = []
+    for n in sorted(os.listdir(root)):
+        st = _lstat(root, n)
+        if st is not None and stat.S_ISLNK(st.st_mode):
+            found.append(f"{n} is a symlink: git, run outside the sandbox, writes the files at "
+                         "the common dir's top through a link")
+    return found
+
+
+def _replace_refs(root: int, rel: str) -> list[str]:
+    if (at := _parent(root, rel)) is None:
+        return []
+    fd, name = at
+    found = []
+    try:
+        _replace_walk(fd, name, rel, found)
+    finally:
+        os.close(fd)
+    return found
+
+
+def _replace_walk(dir_fd: int, name: str, path: str, found: list[str], depth: int = 0) -> None:
+    """Each entry under refs/replace/ but an empty dir is a finding."""
+    st = _lstat(dir_fd, name)
+    if st is None:
+        return
+    if stat.S_ISLNK(st.st_mode):
+        found.append(f"{path} is a symlink")
+    elif not stat.S_ISDIR(st.st_mode):
+        found.append(f"{path} exists: a replace ref makes git serve another object in place of "
+                     "the one it names")
+    elif depth > 32:
+        raise OSError(errno.ELOOP, f"{path} is nested too deep")
+    else:
+        sub = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dir_fd)
+        try:
+            for n in sorted(os.listdir(sub)):
+                _replace_walk(sub, n, f"{path}/{n}", found, depth + 1)
+        finally:
+            os.close(sub)
+
+
+def _worktree_links(root: int, rel: str) -> list[str]:
+    """LR3: each entry under worktrees/ that is a symlink (a real one is always a dir), and the
+    links under each entry's logs/ (_link_walk). `git worktree prune`, which `gc --auto` runs,
+    deletes the contents of what such a link points at."""
+    if (at := _parent(root, rel)) is None:
+        return []
+    fd, name = at
+    try:
+        st = _lstat(fd, name)
+        if st is None:
+            return []
+        if not stat.S_ISDIR(st.st_mode):
+            kind = "a symlink" if stat.S_ISLNK(st.st_mode) else "not a dir"
+            return [f"{rel} is {kind}: git worktree prune would delete through it"]
+        sub = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+    finally:
+        os.close(fd)
+    found = []
+    try:
+        for n in sorted(os.listdir(sub)):
+            st = _lstat(sub, n)
+            if st is not None and stat.S_ISLNK(st.st_mode):
+                found.append(f"{rel}/{n} is a symlink: an entry there is always a dir, and git "
+                             "worktree prune deletes through a link")
+            elif st is not None and stat.S_ISDIR(st.st_mode):
+                entry = os.open(n, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=sub)
+                try:
+                    _link_walk(entry, "logs", f"{rel}/{n}/logs", found)
+                finally:
+                    os.close(entry)
+    finally:
+        os.close(sub)
+    return found
+
+
+def _log_links(root: int, rel: str) -> list[str]:
+    """LR4: each symlink anywhere under logs/, through which git, run sandbox-off, would append
+    a reflog line to whatever it points at."""
+    if (at := _parent(root, rel)) is None:
+        return []
+    fd, name = at
+    found = []
+    try:
+        _link_walk(fd, name, rel, found)
+    finally:
+        os.close(fd)
+    return found
+
+
+def _ref_links(root: int, rel: str) -> list[str]:
+    """LR6: each symlink anywhere under refs/, through which update-ref or a fetch, run
+    sandbox-off, would create or rewrite a ref file in whatever dir it points at (refs/replace/
+    has its own check, which flags every entry)."""
+    if (at := _parent(root, rel)) is None:
+        return []
+    fd, name = at
+    found = []
+    try:
+        _link_walk(fd, name, rel, found, why="a ref write outside the sandbox would follow it")
+    finally:
+        os.close(fd)
+    return found
+
+
+REFLOG_WHY = "a reflog write outside the sandbox would follow it"
+
+
+def _link_walk(dir_fd: int, name: str, path: str, found: list[str], depth: int = 0,
+               why: str = REFLOG_WHY) -> None:
+    """Each symlink at or below name is a finding (why says what follows it); a dir that can't
+    be listed is one too."""
+    try:
+        st = _lstat(dir_fd, name)
+        if st is None:
+            return
+        if stat.S_ISLNK(st.st_mode):
+            found.append(f"{path} is a symlink: {why}")
+            return
+        if not stat.S_ISDIR(st.st_mode):
+            return
+        if depth > 32:
+            raise OSError(errno.ELOOP, "nested too deep")
+        sub = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dir_fd)
+    except OSError as e:
+        found.append(f"{path} can't be checked ({e.strerror or e}): counted as tampered")
+        return
+    try:
+        for n in sorted(os.listdir(sub)):
+            _link_walk(sub, n, f"{path}/{n}", found, depth + 1, why)
+    finally:
+        os.close(sub)
+
+
+def _packed_replace(root: int, rel: str) -> list[str]:
+    data = read_nofollow(root, rel)
+    return [f"{rel} line {n} names a replace ref: {line.decode(errors='replace')[:120]}"
+            for n, line in enumerate((data or b"").splitlines(), 1) if b"refs/replace/" in line]
+
+
+NONBLANK = {"objects/info/alternates": "git also reads objects from the stores it names",
+            "info/attributes": "git converts the files it checks out by its rules"}
+
+
+def _nonblank(root: int, rel: str) -> list[str]:
+    data = read_nofollow(root, rel)
+    return [f"{rel} is not empty: {NONBLANK[rel]}"] if data and data.strip() else []
+
+
+def _exists(root: int, rel: str) -> list[str]:
+    if (at := _parent(root, rel)) is None:
+        return []
+    fd, name = at
+    try:
+        st = _lstat(fd, name)
+    finally:
+        os.close(fd)
+    if st is None:
+        return []
+    what = {"info/grafts": "git rewrites the parents of the commits it names",
+            "shallow": "git treats the commits it names as having no parents",
+            "commondir": "git takes the common dir from the path it names, so what git calls "
+                         "the common dir may be another dir than this one"}[rel]
+    return [f"{rel} exists{' (a symlink)' if stat.S_ISLNK(st.st_mode) else ''}: {what}"]
+
+
+def copy_fd(src: int, out: int) -> None:
+    os.lseek(src, 0, os.SEEK_SET)
+    while chunk := os.read(src, 1 << 20):
+        view = memoryview(chunk)
+        while view:
+            view = view[os.write(out, view):]
+
+
+def copy_record(src: int, dest: int) -> None:
+    """Copy the record dir open at fd src (a lane's .lane/, or its mirror) into the empty dir
+    open at fd dest, by fd at every level. Both sides run sandbox-off and a lane's sandbox can
+    write both (its record, and <common>/lanes): each name is opened under its parent's fd with
+    O_NOFOLLOW and checked by fstat, so a file or dir swapped for a symlink mid-copy is copied
+    as the link it became, never read through (a read-denied key landing where the sandbox can
+    read it) or written through (a file outside the sandbox). Links stay links, dangling or
+    not; regular files keep their mode and times; anything else (a FIFO, a socket) is left."""
+    for name in sorted(os.listdir(src)):
+        _copy_entry(src, dest, name)
+
+
+def _copy_entry(src: int, dest: int, name: str) -> None:
+    try:
+        mode = os.stat(name, dir_fd=src, follow_symlinks=False).st_mode
+    except FileNotFoundError:  # gone since the listing: nothing to copy
+        return
+    if stat.S_ISDIR(mode) or stat.S_ISREG(mode):
+        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK  # a FIFO swapped in never blocks
+        try:
+            fd = os.open(name, flags | (os.O_DIRECTORY if stat.S_ISDIR(mode) else 0), dir_fd=src)
+        except OSError as e:  # swapped for a link since the stat: copied as one, below
+            if e.errno == errno.ENOENT:
+                return
+            if e.errno not in (errno.ELOOP, errno.ENOTDIR):
+                raise
+        else:  # fstat, not the stat: a swap between the two copies what the fd holds
+            try:
+                st = os.fstat(fd)
+                if stat.S_ISDIR(st.st_mode):
+                    os.mkdir(name, dir_fd=dest)
+                    sub = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dest)
+                    try:
+                        copy_record(fd, sub)
+                    finally:
+                        os.close(sub)
+                elif stat.S_ISREG(st.st_mode):
+                    out = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                  0o600, dir_fd=dest)
+                    try:
+                        copy_fd(fd, out)
+                        os.fchmod(out, stat.S_IMODE(st.st_mode))
+                        os.utime(out, ns=(st.st_atime_ns, st.st_mtime_ns))
+                    finally:
+                        os.close(out)
+            finally:
+                os.close(fd)
+            return
+    try:  # a link from the start, or one swapped in since the stat
+        target = os.readlink(name, dir_fd=src)
+    except OSError as e:
+        if e.errno in (errno.EINVAL, errno.ENOENT):  # not a link (a FIFO, a socket), or gone
+            return
+        raise
+    os.symlink(target, name, dir_fd=dest)
+
+
+def write_at(dir_fd: int, name: str, text: str) -> None:
+    """write_text by fd: a fresh temp under dir_fd (O_EXCL, O_NOFOLLOW), fsynced, then renamed
+    over name, so neither a link planted at name nor one swapped in for dir_fd's path is
+    written through."""
+    tmp = f".tmp-{os.getpid()}-{time.monotonic_ns()}"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600,
+                 dir_fd=dir_fd)  # 0600, as write_json's mkstemp
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp, dir_fd=dir_fd)
+        raise
 
 
 def newest_mtime(src: str) -> float:
@@ -445,14 +1017,21 @@ def mirror_dir(repo: "Repo",
     def real_dir(p):  # a planted link here would have `done` archive whatever it points at
         return os.path.isdir(p) and not os.path.islink(p)
 
-    if real_dir(dest):
-        return dest
-    if not real_dir(old):
+    if not restore:
+        return dest if real_dir(dest) else old if real_dir(old) else None
+    try:  # the rename goes by name under lanes/<id>, which a lane may have swapped for a link
+        fd = common_fd(repo, f"{LANES}/{lane_id}")
+    except OSError:
         return None
-    if restore:
-        os.rename(old, dest)
+    try:
+        if real_dir_at(fd, "mirror"):
+            return dest
+        if not real_dir_at(fd, "mirror.old"):
+            return None
+        os.rename("mirror.old", "mirror", src_dir_fd=fd, dst_dir_fd=fd)
         return dest
-    return old
+    finally:
+        os.close(fd)
 
 
 def write_json(path: str, data) -> None:
@@ -491,8 +1070,15 @@ def lock(repo: Repo, timeout: float | None = None):
     """flock on <common-dir>/lanes/.lock: every write to lanes data happens under it. timeout None
     blocks; a number raises LockTimeout after that many seconds (hooks use one)."""
     repo.check_lanes_dir()
-    os.makedirs(repo.lanes_dir, exist_ok=True)
-    with open(os.path.join(repo.lanes_dir, ".lock"), "a") as f:
+    # By name under lanes/ opened with O_NOFOLLOW: a .lock planted as a link would have O_CREAT
+    # make a file wherever it points.
+    lanes = common_fd(repo, LANES, create=True)
+    try:  # O_NONBLOCK: a FIFO planted there refuses (ENXIO) instead of hanging every command
+        fd = os.open(".lock", os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW
+                     | os.O_NONBLOCK, 0o644, dir_fd=lanes)
+    finally:
+        os.close(lanes)
+    with os.fdopen(fd, "a") as f:
         if timeout is None:
             fcntl.flock(f, fcntl.LOCK_EX)
         else:
@@ -514,12 +1100,23 @@ def lock(repo: Repo, timeout: float | None = None):
 def update_lane(repo: Repo, lane_id: str, change) -> dict:
     """Read lane.json (checked: read_record), apply change(lane) in place, stamp updated, write
     it back. Call under lock."""
-    path = repo.lane_json(lane_id)
     lane = read_record(repo, lane_id)
     change(lane)
     lane["updated"] = now_iso()
-    write_json(path, lane)
+    write_lane_json(repo, lane_id, lane)
     return lane
+
+
+def write_lane_json(repo: Repo, lane_id: str, lane: dict) -> None:
+    """lanes/<id>/lane.json, written by name under lanes/<id> opened from the main checkout with
+    O_NOFOLLOW (common_fd): sandboxed Bash can swap lanes/<id> for a link between the read and
+    the write, and a write by path would land a lane.json, whose path field the lane chose,
+    wherever it points (another repo's lanes dir, say)."""
+    fd = common_fd(repo, f"{LANES}/{lane_id}", create=True)
+    try:
+        write_at(fd, "lane.json", json.dumps(lane, indent=2) + "\n")
+    finally:
+        os.close(fd)
 
 
 def valid_id(lane_id: str) -> bool:
@@ -608,7 +1205,7 @@ def stored_pick(entry: dict) -> dict[str, str]:
 # The launch flags a plain pass carries to the respawned claude, and a tab restore or the shelf's
 # Open to the resumed one (carried_pick), and the slash commands that change each mid-session:
 # /model can move the effort too (each model keeps its own), and both save their pick as the
-# default for new sessions.
+# default for new sessions, though the ANTHROPIC_MODEL pin overrides /model's.
 PICK_FLAGS = ("--model", "--effort")
 CHANGED_BY = {"/model": ("--model", "--effort"), "/effort": ("--effort",)}
 COMMAND = re.compile(r"\s*<command-name>(/model|/effort)</command-name>")
@@ -676,12 +1273,14 @@ def ran(line: bytes) -> dict[str, str | None] | None:
             else None, "--effort": effort if effort in EFFORTS else None}
 
 
-def picks_since(path: str | None) -> tuple[dict, dict, str | None] | None:
+def picks_since(path: str | None, need_last: bool = True) -> tuple[dict, dict, str | None] | None:
     """What the transcript says of the session's model and effort, as (since, last, chosen):
     since maps each pick flag a /model or /effort changed to what the last main-chain assistant
     entry after its last such command ran with (None: no usable entry since); last is what the
     transcript's last such entry ran with ({}: none); chosen is the last /model's argument (""
-    for a pick from its menu; None: no /model). None when the transcript can't be read."""
+    for a pick from its menu; None: no /model). None when the transcript can't be read.
+    need_last False skips parsing the replies before the first command, so last is then only
+    what ran since it: a session with no launch --model has no use for it."""
     since, last, chosen = {}, {}, None
     try:
         with open(path, "rb") as f:
@@ -691,7 +1290,7 @@ def picks_since(path: str | None) -> tuple[dict, dict, str | None] | None:
                     since.update(dict.fromkeys(CHANGED_BY[name]))
                     if name == "/model":
                         chosen = args
-                elif values := ran(line):
+                elif (since or need_last) and (values := ran(line)):
                     last = values
                     since.update({flag: values[flag] for flag in since})
     except (OSError, TypeError, ValueError):
@@ -699,33 +1298,33 @@ def picks_since(path: str | None) -> tuple[dict, dict, str | None] | None:
     return since, last, chosen
 
 
-def carried_pick(launched: dict[str, str], transcript: str | None,
-                 resume: bool = False) -> list[str]:
+def carried_pick(launched: dict[str, str], transcript: str | None) -> list[str]:
     """The --model and --effort a plain pass gives the respawned claude, or a tab restore or the
     shelf's Open the resumed one (docs/lanes.md, "Model and effort"), for each flag the session
-    launched with (launched, as pick_flags reads them):
+    launched with (launched, as pick_flags reads them), and the model after a /model even with no
+    launch --model: a fresh claude takes the ANTHROPIC_MODEL pin, not the default a /model saved.
     - after a /model (for the effort, a /model or /effort) in the transcript, what the last entry
-      since ran with, or nothing when none did, since the command saved its pick as the default
-      for new sessions. For the model, the /model's own argument when it is a name model_problem
+      since ran with. For the model, the /model's own argument when it is a name model_problem
       accepts and could have run as that entry's id (an id loses what an alias or a 1M form
-      means); a pick from the menu has none, so it carries the id;
+      means), or when no usable entry followed; a pick from the menu has none, so it carries the
+      id, or nothing. An effort with no usable entry since carries nothing: the default the
+      command saved applies;
     - with no such command, the launch value, except a model the transcript's last entry can't
       have run as (could_run): a change the transcript can't show, such as one before a /clear,
       which starts a new transcript in the same process. Then the id that ran. An effort has no
       such check: it moves without a command (a level per model, a one-turn bump).
-    resume: for a `claude --resume`, which keeps the session's own model rather than taking the
-    default a /model saved, so a /model with no usable entry since carries its argument when
-    model_problem accepts it. A pass reads the transcript at act time, so a /model during the
-    passing turn counts. The transcript is read only when a flag is there to carry; None (no
-    transcript yet) carries the launch flags."""
-    since, last, chosen = (picks_since(transcript) if launched else None) or ({}, {}, None)
+    A pass reads the transcript at act time, so a /model during the passing turn counts. None
+    (no transcript yet) carries the launch flags."""
+    since, last, chosen = picks_since(transcript, "--model" in launched) or ({}, {}, None)
     out = []
-    for flag in (f for f in PICK_FLAGS if f in launched):  # a flag it didn't launch with: none
-        value = launched[flag]
+    for flag in PICK_FLAGS:
+        if flag not in launched and not (flag == "--model" and flag in since):
+            continue  # an effort it didn't launch with: the saved default applies
+        value = launched.get(flag)
         if flag in since:
             value = since[flag]
             if (flag == "--model" and not model_problem(chosen)
-                    and (could_run(chosen, value) if value else resume)):
+                    and (not value or could_run(chosen, value))):
                 value = chosen
         elif flag == "--model" and last.get(flag) and not could_run(value, last[flag]):
             value = last[flag]
@@ -739,11 +1338,13 @@ class Untrusted(ValueError):
     on it."""
 
 
-def record_problem(lane, lane_id: str) -> str | None:
+def record_problem(lane, lane_id: str, main: str) -> str | None:
     """Why a lane.json can't be trusted, or None. Sandboxed Bash can write every lane.json (the
     sandboxed `claim` and `note` do), and sandbox-off code (the hooks, `ls`, `open`, `done`,
     `new`, `adopt`, `addr`) acts on its fields: the id becomes a path, the branch a git argument, the
-    path a cwd. So each field is checked at load, and a record that fails is never used."""
+    path a cwd. So each field is checked at load, and a record that fails is never used. main is
+    the main checkout: a path that is it, holds it or sits in it names no lane (worktree_problem
+    refuses one there), and would make main, or an agent worktree in it, count as that lane."""
     if not isinstance(lane, dict):
         return "not a JSON object"
     if lane.get("id") != lane_id or not valid_id(lane_id):
@@ -751,14 +1352,21 @@ def record_problem(lane, lane_id: str) -> str | None:
     if not valid_branch(lane.get("branch")):
         return f"bad branch {lane.get('branch')!r}"
     path = lane.get("path")
-    if not isinstance(path, str) or not os.path.isabs(path) or os.path.normpath(path) != path:
+    if (not isinstance(path, str) or "\0" in path or not os.path.isabs(path)
+            or os.path.normpath(path) != path):
         return f"bad path {path!r}"
+    if inside(path, main) or inside(main, path):
+        return f"its path {path} is, holds or sits in the main checkout {main}"
     sha = lane.get("base_sha")
     if sha is not None and not (isinstance(sha, str) and SHA_RE.fullmatch(sha)):
         return f"bad base_sha {sha!r}"
     port = lane.get("port")
     if port is not None and (type(port) is not int or not 0 < port < 65536):
         return f"bad port {port!r}"
+    block = lane.get("block")
+    if block is not None and (type(block) is not int or block < 1 or port is None
+                              or port + block > 65536):
+        return f"bad block {block!r} for port {port!r}"
     claims = lane.get("claims", [])
     if not isinstance(claims, list) or not all(isinstance(c, str) and CLAIM_RE.fullmatch(c)
                                                for c in claims):
@@ -775,12 +1383,21 @@ def read_record(repo: "Repo", lane_id: str) -> dict:
     repo.check_lanes_dir()
     if not valid_id(lane_id) or os.path.islink(repo.lane_dir(lane_id)):
         raise Untrusted(f"lanes/{lane_id} is not a lane dir")
-    with open(repo.lane_json(lane_id)) as f:
+    # O_NONBLOCK: a FIFO planted there would hang every command that lists lanes
+    try:
+        fd = os.open(repo.lane_json(lane_id), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as e:
+        if e.errno == errno.ELOOP:
+            raise Untrusted(f"lanes/{lane_id}/lane.json is a symlink")
+        raise
+    with open(fd) as f:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise Untrusted(f"lanes/{lane_id}/lane.json is not a file")
         try:
             lane = json.load(f)
         except (ValueError, RecursionError):  # json recurses on nesting
             raise Untrusted(f"lanes/{lane_id}/lane.json is not JSON")
-    if why := record_problem(lane, lane_id):
+    if why := record_problem(lane, lane_id, repo.main):
         raise Untrusted(f"lanes/{lane_id}/lane.json: {why}")
     return lane
 
@@ -811,8 +1428,9 @@ def worktree_problem(repo: "Repo", path: str, lanes: list[dict]) -> str | None:
     back = read_head(os.path.join(admin, "gitdir"), GITDIR_MAX) if admin else None
     if back is None:
         return f"{path} is not a worktree (its admin dir's gitdir file can't be read)"
-    back = back.decode(errors="replace").strip()
-    back = os.path.realpath(back) if back and "\0" not in back else ""
+    back = back.decode(errors="replace").rstrip(" \t\n\r")  # git's strbuf_rtrim; and remove_worktree
+    # git 2.48's worktree.useRelativePaths writes it relative to the admin dir
+    back = os.path.realpath(os.path.join(admin, back)) if back and "\0" not in back else ""
     if os.path.dirname(admin) != os.path.join(repo.common_dir, "worktrees") or back != dotgit:
         return f"{path} is not a worktree of this repo"
     # git takes the config (core.fsmonitor runs a command on `git status`) from the dir commondir
@@ -867,13 +1485,38 @@ def norm_request(req: str) -> str:
     return "#" + req if req.isdigit() else req
 
 
+COMMENT_MARKER = re.compile(r"<!--->|<!-->|<!--|-->")
+
+
+LEADING_MARKER = re.compile(r"(?:<!--->|<!-->|<!--|-->)\s*")
+LEADING_COMMENT = re.compile(r"(?:<!--->|<!-->|<!--.*?-->|<!--|-->)\s*")
+
+
+def unmarked(line: str, drop: bool = False) -> str:
+    """line with its comment markers deleted and the comments' text kept, or with drop, the
+    whole comments that start it dropped, text and all (`<!-- c -->Keep open:`), and the other
+    markers deleted. Markers that start the line go with the blanks around them, so the text
+    behind them starts the line, unindented: a commented flag under a bullet is a flag."""
+    rest = line.lstrip()
+    if not (m := (LEADING_COMMENT if drop else LEADING_MARKER).match(rest)):
+        return line[:len(line) - len(rest)] + COMMENT_MARKER.sub(" ", rest).rstrip()
+    while m:
+        rest = rest[m.end():]
+        m = (LEADING_COMMENT if drop else LEADING_MARKER).match(rest)
+    return COMMENT_MARKER.sub(" ", rest).rstrip()
+
+
 def section(text: str,
     *names: str,
     prefixes: tuple[str, ...] = (),
+    raw: bool = False,
 ) -> str | None:
     """The body of the first `## <heading>` section whose heading equals one of names or starts
-    with one of prefixes (case-insensitive), with HTML comments and template placeholder lines
-    (`- <...>`) removed. None when no such heading exists."""
+    with one of prefixes (case-insensitive), with HTML comments (strip_comments: a marker quoted
+    in code is no comment) and template placeholder lines (`- <...>`) removed. None when no such
+    heading exists. raw: the lines as written, comments and all (kept_flag reads them), ended
+    only by a `## ` heading outside a fence: a `# ` line is likelier a shell comment in a fence
+    whose parity a comment or a malformed fence line upset than a section."""
     lines = (text or "").splitlines()
     wanted = {n.lower() for n in names}
     starts = tuple(p.lower() for p in prefixes)
@@ -883,21 +1526,25 @@ def section(text: str,
         if not m or not (heading in wanted or (starts and heading.startswith(starts))):
             continue
         body = []
-        for nxt in lines[i + 1:]:
-            if re.match(r"#{1,2}\s", nxt):
+        rest = lines[i + 1:]
+        # raw ends late, never early: a fence never closed runs on, which only lengthens it.
+        quoted = fenced(rest) if raw else [False] * len(rest)
+        for nxt, code in zip(rest, quoted):
+            if re.match(r"##\s", nxt) and not code if raw else SECTION_BREAK.match(nxt):
                 break
             body.append(nxt)
-        cleaned = re.sub(r"<!--.*?-->", "", "\n".join(body), flags=re.DOTALL)
+        cleaned = "\n".join(body) if raw else strip_comments(body)[0]
+        # Not in raw: `<!-- Keep open: x -->` would read as a placeholder.
         kept = [ln for ln in cleaned.splitlines()
-                if ln.strip() and not re.fullmatch(r"\s*(?:[-*]\s*)?<[^<>]*>\s*", ln)]
+                if ln.strip() and (raw or not re.fullmatch(r"\s*(?:[-*]\s*)?<[^<>]*>\s*", ln))]
         return "\n".join(kept)
     return None
 
 
-def next_block(text: str) -> str | None:
+def next_block(text: str, raw: bool = False) -> str | None:
     """The status file's Next block: the first `## Next...` (or `## Notes for next session`)
-    section, as section() cleans it."""
-    return section(text, "Notes for next session", prefixes=("next",))
+    section, as section() cleans it (raw: as written, comments and all)."""
+    return section(text, "Notes for next session", prefixes=("next",), raw=raw)
 
 
 def status_path(repo: Repo, lane: dict | None) -> str:
@@ -947,6 +1594,21 @@ def kept_open(block: str | None) -> str | None:
     the lane while it stands. Any item counts, not only the first: a false hit only holds a
     close, while a miss would end a lane that has work left."""
     return next((item for item in next_items(block) if KEEP_OPEN.match(item)), None)
+
+
+def kept_flag(text: str | None) -> str | None:
+    """The status file's `Keep open:` item (kept_open), in its Next block as the tools read it,
+    else as written (next_block raw) with each line's comment markers deleted, else with the
+    comments that start a line dropped (unmarked): no comment hides the flag. Markdown dialects
+    and browsers disagree on what is a comment (`<!--->`, a `--` inside one, one opened in a
+    list item ends with the item), so a flag one renderer shows could sit inside what the scan
+    takes for a comment, or behind one (`<!-- c -->Keep open:`). A flag commented out on
+    purpose still holds: delete it, or close with --abandon. Each read only adds holds."""
+    raw = next_block(text or "", raw=True) or ""
+    lines = raw.splitlines()
+    return (kept_open(next_block(text or ""))
+            or kept_open("\n".join(unmarked(ln) for ln in lines))
+            or kept_open("\n".join(unmarked(ln, drop=True) for ln in lines)))
 
 
 def first_item(block: str | None) -> str:
@@ -1163,6 +1825,58 @@ def scan(proc: str = PROC, full: bool = True) -> dict[int, Proc]:
         except OSError:
             argv = ()
         out[pid] = Proc(pid, st[2], st[3], st[1], st[0], cwd, argv)
+    return out
+
+
+TCP_LISTEN = "0A"  # /proc/net/tcp{,6} `st` of a listening socket
+
+
+def listeners(port: int, proc: str = PROC) -> set[int]:
+    """The inodes of the TCP sockets listening on port, IPv4 and IPv6, in this network
+    namespace (the Bash sandbox has its own, so inside it these are only its own)."""
+    out = set()
+    for name in ("tcp", "tcp6"):
+        try:
+            with open(os.path.join(proc, "net", name)) as f:
+                lines = f.read().splitlines()[1:]
+        except OSError:
+            continue
+        for line in lines:
+            fields = line.split()
+            if len(fields) < 10 or fields[3] != TCP_LISTEN:
+                continue
+            local = fields[1].rpartition(":")[2]
+            with contextlib.suppress(ValueError):
+                if int(local, 16) == port and int(fields[9]) > 0:
+                    out.add(int(fields[9]))
+    return out
+
+
+def socket_pids(inodes: set[int], proc: str = PROC) -> dict[int, set[int]]:
+    """inode -> the pids with an fd on that socket, for each of inodes; a socket whose holders'
+    fds can't be read (another user's process) maps to no pid."""
+    out = {i: set() for i in inodes}
+    if not inodes:
+        return out
+    try:
+        names = os.listdir(proc)
+    except OSError:
+        return out
+    for name in names:
+        if not (name.isascii() and name.isdigit()):
+            continue
+        fd_dir = os.path.join(proc, name, "fd")
+        try:
+            fds = os.listdir(fd_dir)
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                target = os.readlink(os.path.join(fd_dir, fd))
+            except OSError:
+                continue
+            if target.startswith("socket:[") and (i := int(target[8:-1])) in out:
+                out[i].add(int(name))
     return out
 
 
@@ -1455,6 +2169,17 @@ PANE = re.compile(r"%[0-9]{1,9}")
 NUMBER = re.compile(r"[0-9]{1,20}")
 
 
+def proc_env(pid: int, key: str, proc: str = PROC) -> str | None:
+    """The value of key in the environment pid started with, or None: unset, or unreadable
+    (gone, another user's). Read bounded, never through a link or waiting on a FIFO."""
+    raw = read_head(os.path.join(proc, str(pid), "environ"), ENVIRON_MAX)
+    want = key.encode() + b"="
+    for entry in (raw or b"").split(b"\0"):
+        if entry.startswith(want):
+            return entry[len(want):].decode(errors="replace")
+    return None
+
+
 def proc_tmux(pid: int, proc: str = PROC) -> tuple[str, int, int, str] | None:
     """(socket, serverPid, serverStart, pane) from the TMUX and TMUX_PANE pid was started with,
     or None outside tmux or when a part is missing or malformed. TMUX is `socket,pid,session`,
@@ -1712,3 +2437,19 @@ def lead_relink(repo: Repo, sid: str, pid: int | None = None, proc: str = PROC) 
     others = [s for s in continuations(repo, rec, main_sessions(repo))
               if (s["pid"], proc_start_of(s)) != nearest]
     return None if others or lead_unknown(repo, proc) else why
+
+
+def main(argv: list[str]) -> int:
+    """`lanelib.py git-tamper <common_dir>`: git_tamper's reasons, one a line; exit 1 on any,
+    0 on none, 2 on bad usage. setup.sh runs it (python3 -I) to refuse an install."""
+    if len(argv) != 2 or argv[0] != "git-tamper":
+        print("usage: lanelib.py git-tamper <common_dir>", file=sys.stderr)
+        return 2
+    reasons = git_tamper(argv[1])
+    for r in reasons:
+        print(r)
+    return 1 if reasons else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

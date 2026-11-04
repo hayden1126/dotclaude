@@ -51,8 +51,11 @@ class Workspace(unittest.TestCase):
         os.makedirs(os.path.join(self.cwd, ".git"))
         self.transcript = os.path.join(self.tmp.name, "cfg", "projects", "slug", "sid.jsonl")
         open(self.transcript, "w").close()
-        self.env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
-        self.env["HOME"] = self.tmp.name
+        # an attended session's env: run from a background session (ATTENDED=0, CLAUDE_JOB_DIR),
+        # excluded-check.sh stays silent and the payload tests failed
+        self.env = {k: v for k, v in os.environ.items()
+                    if k not in ("CLAUDE_PROJECT_DIR", "CLAUDE_JOB_DIR")}
+        self.env.update(HOME=self.tmp.name, CLAUDE_CODE_SESSION_ATTENDED="1")
 
 
 class SessionTitle(Workspace):
@@ -439,7 +442,7 @@ class PracticesEntries(Workspace):
         self.cmd = {event: next(h["command"] for e in hooks[event] if e.get("matcher") == m
                                 for h in e["hooks"] if "practices-check" in h["command"])
                     for event, m in (("PreToolUse", "Edit|Write|MultiEdit"),
-                                     ("SessionStart", "startup|resume|clear|compact"))}
+                                     ("SessionStart", "startup|resume|clear|compact|fork"))}
         self.shim = os.path.join(self.tmp.name, ".claude", "hooks", "practices-check.sh")
         os.makedirs(os.path.dirname(self.shim))
         os.symlink(os.path.join(HOOKS, "practices-check.sh"), self.shim)

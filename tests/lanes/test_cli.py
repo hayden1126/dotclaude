@@ -8,8 +8,10 @@ import fcntl
 import glob
 import importlib.machinery
 import importlib.util
+import io
 import json
 import multiprocessing
+import re
 import os
 import shlex
 import shutil
@@ -17,6 +19,7 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import types
@@ -180,6 +183,30 @@ class RoundTrip(LanesRepo):
         # `git branch -d` (never -D) deleted it: it is fully in origin/main.
         self.assertEqual(self.git("branch", "--list", "chart-fix"), "")
         self.assertEqual(json.loads(self.lane("ls", "--json")), [])
+
+    def test_done_refuses_an_unclosed_comment_until_abandon(self):
+        # An unclosed `<!--` leaks its text into the Next block, so a `Keep open:` can be missed:
+        # done refuses, naming the line, before it reads the flag.
+        self.lane("new", "chart-fix")
+        path = self.lane_path("chart-fix")
+        self.commit("chart.txt", "axis\n", cwd=path)
+        self.git("push", "-q", "origin", "chart-fix:main", cwd=path)
+        rec = self.record("chart-fix")
+        text = self.read(rec)  # at the end, past the template comment's `-->`
+        line = len(text.splitlines()) + 1
+        self.write(rec, text + "<!-- More PRs follow, so start with Keep open: PR 2.\n")
+        p = self.run_lane("done", "chart-fix")
+        self.assertEqual(p.returncode, 1, p.stderr)
+        self.assertIn(f"an unclosed `<!--` at line {line}", p.stderr)
+        self.assertTrue(os.path.isdir(path))
+        # Closed, the comment still holds the lane: no comment hides the flag.
+        self.write(rec, text + "<!-- More PRs follow, so:\nKeep open: PR 2. -->\n")
+        p = self.run_lane("done", "chart-fix")
+        self.assertEqual(p.returncode, 1, p.stderr)
+        self.assertIn("Keep open: PR 2.", p.stderr)
+        self.assertTrue(os.path.isdir(path))
+        self.assertIn("closed", self.lane("done", "chart-fix", "--abandon"))
+        self.assertFalse(os.path.exists(path))
 
     def test_done_refuses_a_kept_lane_until_abandon(self):
         # `Keep open:` in Next keeps a merged lane open even with no session to end, where
@@ -415,7 +442,7 @@ class RoundTrip(LanesRepo):
         self.assertEqual(self.read(os.path.join(dest, "big.cfg.part")), "keep\n")
         self.assertEqual(sorted(os.listdir(dest)), ["big.cfg", "big.cfg.part"])
         os.remove(os.path.join(dest, "big.cfg"))
-        with mock.patch.object(lane_mod, "copy_fd", side_effect=OSError("disk full")):
+        with mock.patch.object(lane_mod.lanelib, "copy_fd", side_effect=OSError("disk full")):
             with self.assertRaises(OSError):
                 lane_mod.copy_includes(repo, dest)
         self.assertEqual(os.listdir(dest), ["big.cfg.part"])
@@ -480,7 +507,7 @@ class RoundTrip(LanesRepo):
             os.write(out, b"ha")
             raise OSError("disk full")
 
-        with mock.patch.object(lane_mod, "copy_fd", side_effect=half):
+        with mock.patch.object(lane_mod.lanelib, "copy_fd", side_effect=half):
             with self.assertRaises(OSError):
                 lane_mod.copy_includes(repo, dest)
         self.assertEqual(os.listdir(dest), [])
@@ -552,6 +579,261 @@ class RoundTrip(LanesRepo):
         self.assertIn("kept", p.stderr)  # -d refuses an unmerged branch, and that is the point
         self.assertIn("spike", self.git("branch", "--list", "spike"))
         self.assertFalse(os.path.exists(self.lane_path("spike")))
+
+    def test_new_copies_an_included_file_whose_name_git_would_quote(self):
+        # core.quotePath quotes a non-ASCII name in plain output: -z keeps it as it is.
+        self.commit(".gitignore", "*.env\n")
+        self.git("push", "-q", "origin", "main")
+        self.write(os.path.join(self.main, ".worktreeinclude"), "*.env\n")
+        self.write(os.path.join(self.main, "café.env"), "local\n")
+        out = self.lane("new", "spike")
+        self.assertIn("copied 1 file(s) from .worktreeinclude", out)
+        self.assertEqual(self.read(os.path.join(self.lane_path("spike"), "café.env")), "local\n")
+
+    def test_new_copies_nothing_when_no_include_is_ignored(self):
+        # check-ignore exits 1 when no name it gets is ignored: nothing to copy, no error.
+        self.commit("tracked.env", "in git\n")
+        self.git("push", "-q", "origin", "main")
+        self.write(os.path.join(self.main, ".worktreeinclude"), "*.env\n")
+        p = self.run_lane("new", "spike")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("copied", p.stdout)
+
+    def test_an_include_it_cant_copy_is_named_with_its_control_chars_masked(self):
+        # -z hands names over as they are, so a name with an escape sequence must be masked
+        # before it reaches a terminal.
+        mod = load_lane_script()
+        src, dest = os.path.join(self.tmp, "src"), os.path.join(self.tmp, "dest")
+        self.git("init", "-q", src, cwd=self.tmp)
+        self.write(os.path.join(src, ".gitignore"), "*.env\n")
+        self.write(os.path.join(src, ".worktreeinclude"), "*.env\n")
+        self.write(os.path.join(src, "d", "\x1b[31mx.env"), "local\n")
+        os.makedirs(os.path.join(self.tmp, "away"))
+        os.makedirs(dest)
+        os.symlink(os.path.join(self.tmp, "away"), os.path.join(dest, "d"))
+        repo = types.SimpleNamespace(main=src)
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(mod.copy_includes(repo, dest), [])
+        self.assertIn("not copied from .worktreeinclude: d/?[31mx.env", err.getvalue())
+        self.assertNotIn("\x1b", err.getvalue())
+
+    def test_done_clears_a_registration_an_older_lanes_trial_left_in_the_temp_dir(self):
+        # An older `lane` built trial trees in the temp dir; one killed partway left its
+        # registration there, which `done` clears by its gitdir text as it does .lane-trial's.
+        self.lane("new", "spike")
+        path = self.lane_path("spike")
+        key = lanelib.Repo(self.main, self.common).key
+        tmp = os.path.realpath(tempfile.gettempdir())
+        old = tempfile.mkdtemp(prefix=f"lane-trial-{key}-spike-", dir=tmp)
+        self.addCleanup(shutil.rmtree, old, True)
+        tree = os.path.join(old, "tree")
+        self.git("worktree", "add", "--detach", "--quiet", tree, "HEAD", cwd=path)
+        p = self.run_lane("done", "spike", "--abandon")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn(tree, self.git("worktree", "list", "--porcelain"))
+        self.assertIn(tree, p.stderr)
+
+    def test_done_clears_a_tree_a_trial_left_in_the_lane(self):
+        # A trial killed past its cleanup leaves its tree registered in the lane's .lane-trial/:
+        # the close unregisters it, so removing the lane leaves no stale entry behind.
+        self.lane("new", "spike")
+        path = self.lane_path("spike")
+        key = lanelib.Repo(self.main, self.common).key
+        tree = os.path.join(path, ".lane-trial", f"lane-trial-{key}-spike-abcd1234", "tree")
+        self.git("worktree", "add", "--detach", "--quiet", tree, "HEAD", cwd=path)
+        self.write(os.path.join(path, ".lane-trial", ".gitignore"), "*\n")
+        p = self.run_lane("done", "spike", "--abandon")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertFalse(os.path.exists(path))
+        self.assertNotIn(".lane-trial", self.git("worktree", "list", "--porcelain"))
+        self.assertIn(tree, p.stderr)
+
+    def test_dones_trial_cleanup_never_follows_a_tree_swapped_for_a_link(self):
+        # A process the lane left can swap the leftover tree for a symlink to another lane:
+        # `done` (sandbox-off) never removes a tree by its path, only the admin dir whose gitdir
+        # names it, as text, and only once the lane's own remove succeeded.
+        self.lane("new", "spike")
+        self.lane("new", "other")
+        path, other = self.lane_path("spike"), self.lane_path("other")
+        self.write(os.path.join(other, "keep.txt"), "the other lane's\n")
+        key = lanelib.Repo(self.main, self.common).key
+        tree = os.path.join(path, ".lane-trial", f"lane-trial-{key}-spike-abcd1234", "tree")
+        self.git("worktree", "add", "--detach", "--quiet", tree, "HEAD", cwd=path)
+        self.write(os.path.join(path, ".lane-trial", ".gitignore"), "*\n")
+        shutil.rmtree(tree)
+        os.symlink(other, tree)
+        # An admin dir that is a symlink is never removed, even when its gitdir names the lane.
+        decoy = os.path.join(self.tmp, "decoy")
+        self.write(os.path.join(decoy, "gitdir"), os.path.join(
+            path, ".lane-trial", f"lane-trial-{key}-spike-efgh5678", "tree", ".git") + "\n")
+        os.symlink(decoy, os.path.join(self.common, "worktrees", "decoy"))
+        # The tripwire at done's start refuses on that link first (LR3, LR4), touching nothing.
+        p = self.run_lane("done", "spike", "--abandon")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("worktrees/decoy is a symlink", p.stderr)
+        self.assertTrue(os.path.isdir(path))
+        # With the link gone, done runs, and its cleanup still never follows the tree swapped
+        # for a link.
+        os.unlink(os.path.join(self.common, "worktrees", "decoy"))
+        p = self.run_lane("done", "spike", "--abandon")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertFalse(os.path.exists(path))
+        listing = self.git("worktree", "list", "--porcelain")
+        self.assertNotIn("spike-abcd1234", listing)  # the decoy's, git lists through its link
+        self.assertIn(f"worktree {other}\n", listing)
+        self.assertEqual(self.read(os.path.join(other, "keep.txt")), "the other lane's\n")
+        self.assertTrue(os.path.isfile(os.path.join(decoy, "gitdir")))
+        self.assertIn(tree, p.stderr)
+
+    def test_dones_admin_dir_removal_never_follows_a_worktrees_dir_swapped_for_a_link(self):
+        # Sandboxed Bash can write the common dir, so <common>/worktrees itself can become a
+        # symlink between the listing and the removal: the removal goes under the dir opened
+        # before, and a name that is itself a link is refused, never followed.
+        mod = load_lane_script()
+        base = os.path.join(self.tmp, "common", "worktrees")
+        os.makedirs(os.path.join(base, "tree"))
+        target = os.path.join(self.tmp, "elsewhere")
+        self.write(os.path.join(target, "tree", "keep.txt"), "not git's\n")
+        self.write(os.path.join(target, "linked", "keep.txt"), "not git's either\n")
+        os.symlink(os.path.join(target, "linked"), os.path.join(base, "linked"))
+        wt_fd = os.open(base, os.O_RDONLY | os.O_DIRECTORY)
+        self.addCleanup(os.close, wt_fd)
+        os.rename(base, base + ".old")
+        os.symlink(target, base)
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            mod.drop_admin_dirs("spike", wt_fd, [("tree", "/x/tree"), ("linked", "/x/linked")])
+        self.assertEqual(self.read(os.path.join(target, "tree", "keep.txt")), "not git's\n")
+        self.assertEqual(self.read(os.path.join(target, "linked", "keep.txt")),
+                         "not git's either\n")
+        self.assertFalse(os.path.exists(os.path.join(base + ".old", "tree")))
+        self.assertIn("left in place", err.getvalue())
+        # No hint to remove it by hand: a by-path rm run sandbox-off would follow the same link.
+        self.assertNotRegex(err.getvalue(), r"remove that|rm -|remove --force")
+
+    def test_no_message_offers_a_removal_by_path(self):
+        # A path a sandboxed process can write may be a swapped-in symlink by the time the user
+        # runs a pasted `rm -rf` or `git worktree remove --force` sandbox-off: git and rm both
+        # follow it and delete what it names. Leftovers go through a `lane` command instead.
+        with open(LANE, encoding="utf-8") as f:
+            text = [line for line in f if not line.lstrip().startswith("#")]
+        bad = [line.strip() for line in text
+               if re.search(r"[\"'][^\"']*(?:rm -r|rm -f|worktree remove --force|remove that"
+                            r"|or remove them|remove it by hand|close the lane by hand"
+                            r"|remove the ones? the CLI)", line,
+                            re.IGNORECASE)]
+        self.assertEqual(bad, [])
+
+    def test_done_clears_a_trials_registration_when_the_lanes_worktree_is_gone_already(self):
+        # A lane removed by hand with `git worktree remove` takes its trial trees' files and its
+        # own registration, but not theirs: `done` drops those, as it does on the normal path.
+        self.lane("new", "spike")
+        path = self.lane_path("spike")
+        key = lanelib.Repo(self.main, self.common).key
+        tree = os.path.join(path, ".lane-trial", f"lane-trial-{key}-spike-abcd1234", "tree")
+        self.git("worktree", "add", "--detach", "--quiet", tree, "HEAD", cwd=path)
+        self.git("worktree", "remove", "--force", path)
+        self.assertIn("spike-abcd1234", self.git("worktree", "list", "--porcelain"))
+        p = self.run_lane("done", "spike", "--abandon")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("spike-abcd1234", self.git("worktree", "list", "--porcelain"))
+
+    def test_done_drops_the_registration_of_a_worktree_deleted_by_hand(self):
+        # Deleted with rm, not git: git still lists it (prunable), and only its admin dir is left.
+        self.lane("new", "spike")
+        path = self.lane_path("spike")
+        shutil.rmtree(path)
+        self.assertIn(f"worktree {path}\n", self.git("worktree", "list", "--porcelain"))
+        p = self.run_lane("done", "spike", "--abandon")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn(path, self.git("worktree", "list", "--porcelain"))
+
+    def test_done_of_a_tree_gone_by_hand_closes_though_the_way_to_it_no_longer_opens(self):
+        # The tree is gone and git no longer registers it: only an aside a stopped removal left
+        # is at stake, so a dir above it that can't be walked doesn't refuse the close.
+        self.lane("new", "spike")
+        path = self.lane_path("spike")
+        shutil.rmtree(path)
+        self.git("worktree", "prune")
+        plain = os.path.join(self.tmp, "plain-file")
+        self.write(plain, "")
+        with lanelib.lock(lanelib.resolve(self.main)):
+            lanelib.update_lane(lanelib.resolve(self.main), "spike",
+                                lambda lane: lane.update(path=os.path.join(plain, "spike")))
+        p = self.run_lane("done", "spike", "--abandon")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertFalse(os.path.lexists(os.path.join(self.common, "lanes", "spike")))
+
+    def test_a_relative_gitdir_passes_the_gates_and_done_never_leaves_its_tree_behind(self):
+        # git 2.48's worktree.useRelativePaths writes gitdir relative to the admin dir; the gates
+        # read it against the cwd once, so they refused every such lane. A git that reads it
+        # otherwise (before 2.48) lists no worktree there: `done` then archived the record and
+        # left the tree, exit 0.
+        self.lane("new", "spike")
+        path = self.lane_path("spike")
+        admin = os.path.join(self.common, "worktrees", "spike")
+        self.write(os.path.join(admin, "gitdir"),
+                   os.path.relpath(os.path.join(path, ".git"), admin) + "\n")
+        repo = lanelib.resolve(self.main)
+        self.assertIsNone(lanelib.worktree_problem(repo, path, repo.lanes()))
+        p = self.run_lane("done", "spike", "--abandon")
+        if path in self.git("worktree", "list", "--porcelain"):
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            self.assertFalse(os.path.lexists(path))
+            self.assertFalse(os.path.lexists(admin))
+        else:
+            self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+            self.assertIn("git lists no worktree at lane spike's path", p.stderr)
+            self.assertTrue(os.path.isdir(os.path.join(path, ".lane")))
+            self.assertTrue(os.path.lexists(os.path.join(self.common, "lanes", "spike",
+                                                         "lane.json")))
+
+    def test_a_fifo_or_a_link_at_lane_json_is_left_out_and_never_hangs_a_listing(self):
+        # A plain open() of a FIFO blocks until a writer comes: every command that lists lanes hung.
+        self.lane("new", "spike")
+        self.lane("new", "api-docs")
+        outside = os.path.join(self.tmp, "outside.json")
+        self.write(outside, self.read(os.path.join(self.common, "lanes", "api-docs", "lane.json")))
+        for name, plant in (("fifo", os.mkfifo), ("link", lambda p: os.symlink(outside, p))):
+            with self.subTest(name):
+                record = os.path.join(self.common, "lanes", "spike", "lane.json")
+                os.remove(record)
+                plant(record)
+                p = subprocess.run([sys.executable, LANE, "ls"], cwd=self.main, env=self.env,
+                                   capture_output=True, text=True, timeout=15)
+                self.assertIn(f"lanes/spike/lane.json is not a file" if name == "fifo"
+                              else "lanes/spike/lane.json is a symlink", p.stdout + p.stderr)
+
+    def test_the_lanes_lock_never_follows_a_lock_file_planted_as_a_link(self):
+        # O_CREAT through a planted .lock link would make a file wherever it points.
+        target = os.path.join(self.tmp, "made-elsewhere")
+        lock = os.path.join(self.common, "lanes", ".lock")
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(lock)
+        os.symlink(target, lock)
+        with self.assertRaises(OSError):
+            with lanelib.lock(lanelib.resolve(self.main)):
+                pass
+        self.assertFalse(os.path.lexists(target))
+
+    def test_a_lane_json_write_never_follows_a_lane_dir_swapped_after_the_read(self):
+        # Sandboxed Bash can swap lanes/<id> for a link between update_lane's read and write:
+        # by path, the lane's lane.json (its path field the lane's choice) landed there.
+        self.lane("new", "spike")
+        data = os.path.join(self.common, "lanes", "spike")
+        victim = os.path.join(self.tmp, "victim")
+        os.makedirs(victim)
+        real = lanelib.read_record
+
+        def read(repo, lane_id):
+            lane = real(repo, lane_id)
+            os.rename(data, os.path.join(self.tmp, "moved"))
+            os.symlink(victim, data)
+            return lane
+
+        with mock.patch.object(lanelib, "read_record", side_effect=read):
+            with self.assertRaises(OSError):
+                lanelib.update_lane(lanelib.resolve(self.main), "spike", lambda lane: None)
+        self.assertEqual(os.listdir(victim), [])
 
     def test_done_refuses_while_a_process_lives_in_the_lane(self):
         self.lane("new", "busy")
@@ -896,7 +1178,14 @@ class Identity(LanesRepo):
         self.lane("new", "chart-fix")
         lane = self.lane_path("chart-fix")
         self.lane("note", "tests green at", "abc123", cwd=lane)
+        # `new` seeds an ask for the fixture's local bare origin, which the excluded-command
+        # guard refuses by design (G-D; ExcludedGuardRules covers it): start with none.
         text = self.read(self.record("chart-fix"))
+        head, rest = text.split("## Asks for Hayden\n", 1)
+        asks, tail = rest.split("## Not mine", 1)
+        asks = "".join(line for line in asks.splitlines(True) if not line.startswith(("-", " ")))
+        text = f"{head}## Asks for Hayden\n{asks}## Not mine{tail}"
+        self.write(self.record("chart-fix"), text)
         state = text.split("## State", 1)[1].split("## Decisions", 1)[0]
         self.assertIn("tests green at abc123", state)
         p = self.run_lane("note", "another session owns #42", cwd=lane)
@@ -1169,7 +1458,7 @@ class RecordTrust(LanesRepo):
             with self.subTest(args=args):
                 p = self.run_lane(*args)
                 self.assertEqual(p.returncode, 1)
-                self.assertIn("didn't write", p.stderr)
+                self.assertIn("only one is the CLI's", p.stderr)
         self.assertTrue(os.path.isdir(self.lane_path("chart-fix")))
 
     def test_new_refuses_a_path_a_stale_record_still_holds(self):
@@ -1207,6 +1496,13 @@ class RecordTrust(LanesRepo):
         self.assertEqual(self.read(victim), "keep\n")
         self.assertIn("bad branch", p.stderr)
 
+    def test_a_record_naming_the_main_checkout_never_makes_it_that_lane(self):
+        # LR1: from main, whoami says main, and `ls` names the record it left out.
+        self.plant("forged", id="forged", path=self.main)
+        info = json.loads(self.lane("whoami", "--json"))
+        self.assertEqual((info["identity"], info["kind"]), ("main", "main"))
+        self.assertIn("left out lanes/forged", self.run_lane("ls").stderr)
+
     def test_a_record_of_the_wrong_shape_is_left_out(self):
         for field, value in (("base_sha", "HEAD"), ("port", "80; x"), ("claims", ["#1 x"]),
                              ("path", "rel/path"), ("sessions", ["x"])):
@@ -1221,12 +1517,16 @@ class RecordTrust(LanesRepo):
         os.makedirs(os.path.join(decoy, ".claude"))
         nested = os.path.join(self.lane_path("chart-fix"), "nested")
         os.makedirs(nested)
-        for path in (decoy, nested, self.tmp):
+        # A path in or holding the main checkout is left out at load (record_problem, LR1); one
+        # inside another lane passes the load and is refused before anything acts in it.
+        for path, why in ((decoy, "lanes/chart-fix/lane.json: its path"),
+                          (nested, "refusing lane chart-fix"),
+                          (self.tmp, "lanes/chart-fix/lane.json: its path")):
             with self.subTest(path=path):
                 self.plant("chart-fix", path=path)
                 p = self.run_lane("open", "chart-fix", "--print")
                 self.assertEqual(p.returncode, 1)
-                self.assertIn("refusing lane chart-fix", p.stderr)
+                self.assertIn(why, p.stderr)
                 self.assertEqual(self.run_lane("done", "chart-fix", "--abandon").returncode, 1)
 
     def test_new_branches_from_the_remote_not_a_planted_ref(self):
@@ -1437,7 +1737,7 @@ class Fakes(LanesRepo):
             "## Next\n", "## Next\n- Nothing left: the lane is done.\n"))
 
     def open_session_entry(self, sid, cwd):
-        path = os.path.join(self.tmp, "state", "dotclaude", "open-sessions", f"{sid}.json")
+        path = os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "open-sessions", f"{sid}.json")
         self.write(path, json.dumps({"session_id": sid, "cwd": cwd, "pane": "%1"}))
         return path
 
@@ -1795,7 +2095,7 @@ class Close(Fakes):
 
     def proof(self):
         """The glob of lane chart-fix's recorded proof (Repo.closing_path) in the temp state."""
-        return os.path.join(self.tmp, "state", "dotclaude", "lanes", "*.closing", "chart-fix.json")
+        return os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "lanes", "*.closing", "chart-fix.json")
 
     def refused_mid_close(self):
         """The 2026-10-15 shape (lane two-sessions), first run: as its session ends, the pane
@@ -1977,7 +2277,7 @@ class Close(Fakes):
         # The lane is marked closing by then, and a rerun once the record can be written closes.
         self.hand_off()
         (claude,) = self.claude()
-        (config,) = glob.glob(os.path.join(self.tmp, "state", "dotclaude", "lanes", "*.toml"))
+        (config,) = glob.glob(os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "lanes", "*.toml"))
         blocker = config.removesuffix(".toml") + ".closing"
         self.write(blocker, "")  # a file where its dir goes
         p = self.run_lane("done", "chart-fix", "--abandon")
@@ -2385,11 +2685,24 @@ class Close(Fakes):
         self.write(os.path.join(self.path, "notes.txt"), "draft\n")
         p = self.run_lane("done", "chart-fix", "--abandon")
         self.assertIn("uncommitted or untracked files (notes.txt)", p.stderr)
+        self.assertNotRegex(p.stderr, r"(?i)\bremove\b.*notes|rm -")  # no removal offered
         self.assertRefusedUntouched(p, claude)
         os.remove(os.path.join(self.path, "notes.txt"))
         self.git("worktree", "lock", self.path)
         p = self.run_lane("done", "chart-fix", "--abandon")
         self.assertIn("worktree is locked", p.stderr)
+        self.assertRefusedUntouched(p, claude)
+
+    def test_a_worktree_git_lists_elsewhere_refuses_before_any_signal(self):
+        # A gitdir of <path>/.git/ resolves to the lane for the gates, but git lists the
+        # worktree as <path>/.git/: the refusal that `done` can't tell its registration came
+        # only after the signals, and every rerun refused the same way.
+        self.hand_off()
+        (claude,) = self.claude()
+        admin = os.path.join(self.common, "worktrees", "chart-fix")
+        self.write(os.path.join(admin, "gitdir"), os.path.join(self.path, ".git") + "/\n")
+        p = self.run_lane("done", "chart-fix", "--abandon")
+        self.assertIn("git lists no worktree at lane chart-fix's path", p.stderr)
         self.assertRefusedUntouched(p, claude)
 
     def test_a_failing_closing_check_refuses_before_any_signal(self):
@@ -2449,7 +2762,7 @@ class Close(Fakes):
 
     def test_done_waits_for_a_running_install_then_refuses(self):
         lane_mod = load_lane_script()
-        state = os.path.join(self.tmp, "state", "dotclaude")
+        state = os.path.join(self.env["XDG_STATE_HOME"], "dotclaude")
         os.makedirs(state, exist_ok=True)
         fd = os.open(os.path.join(state, "install.lock"), os.O_WRONLY | os.O_CREAT, 0o644)
         self.addCleanup(os.close, fd)
@@ -2468,7 +2781,7 @@ class Close(Fakes):
     def test_done_waits_for_an_install_without_holding_the_lanes_lock(self):
         # Every lane's hooks take the lanes lock with a 2 s timeout, so done waits for setup.sh's
         # install.lock first and takes the lanes lock only once it holds that.
-        state = os.path.join(self.tmp, "state", "dotclaude")
+        state = os.path.join(self.env["XDG_STATE_HOME"], "dotclaude")
         os.makedirs(state, exist_ok=True)
         fd = os.open(os.path.join(state, "install.lock"), os.O_WRONLY | os.O_CREAT, 0o644)
         self.addCleanup(os.close, fd)
@@ -2505,16 +2818,35 @@ class Close(Fakes):
         return os.listdir(closed) if os.path.isdir(closed) else []
 
     def git_after_remove(self, lane_mod, then):
-        """lane_mod.git patched to call then() right after a `git worktree remove`."""
-        real = lane_mod.git
+        """lane_mod.remove_worktree patched to call then() right after it."""
+        real = lane_mod.remove_worktree
 
-        def git(args, cwd, **kw):
-            p = real(args, cwd, **kw)
-            if args[:2] == ["worktree", "remove"]:
-                then()
-            return p
+        def remove(*args):
+            real(*args)
+            then()
 
-        return mock.patch.object(lane_mod, "git", side_effect=git)
+        return mock.patch.object(lane_mod, "remove_worktree", side_effect=remove)
+
+    def test_a_worktree_git_stops_listing_during_the_close_is_kept_whole(self):
+        # cmd_done's gate saw it listed; a prune or a rewritten gitdir before close_record's
+        # look made the tree look removed by hand, so it archived the lane and left the tree.
+        lane_mod = load_lane_script()
+        self.hand_off()
+        real, calls = lane_mod.worktree_heads, []
+
+        def heads(repo):
+            calls.append(1)
+            out = real(repo)
+            return out if len(calls) == 1 else {k: v for k, v in out.items() if k != self.path}
+
+        with mock.patch.object(lane_mod, "worktree_heads", side_effect=heads):
+            with self.assertRaisesRegex(lane_mod.LaneError, "git lists no worktree at lane "
+                                        "chart-fix's path.*so nothing was removed"):
+                self.done_in_process(lane_mod)
+        self.assertTrue(os.path.isfile(os.path.join(self.path, ".git")))
+        self.assertTrue(os.path.isdir(os.path.join(self.path, ".lane")))
+        self.assertEqual(self.archives(), [])
+        self.assertIn(self.lane_json("chart-fix")["state"], ("active", "closing"))
 
     def test_a_held_lanes_lock_never_blocks_done_while_it_holds_install_lock(self):
         # setup.sh waits on install.lock meanwhile: done gives the lanes lock LANES_LOCK_WAIT,
@@ -2551,7 +2883,7 @@ class Close(Fakes):
         self.assertEqual(glob.glob(self.proof()), [])  # no record outlives a run that stopped
 
     def test_the_remove_runs_without_the_lanes_lock_and_a_timeout_after_it_is_clean(self):
-        # `git worktree remove` can take seconds, and every lane's hooks give up on the lanes
+        # The remove can take seconds, and every lane's hooks give up on the lanes
         # lock after 2 s: done holds only install.lock across it. A lanes lock held past
         # LANES_LOCK_WAIT once the remove is done refuses cleanly, with no partial archive, and
         # a rerun archives the record.
@@ -2779,6 +3111,183 @@ class Close(Fakes):
         self.assertEqual(self.archives(), [])
         self.assertTrue(os.path.isdir(self.path))
 
+    def test_dones_admin_dir_removal_never_follows_a_worktrees_dir_swapped_after_the_files(self):
+        # git removed <common>/worktrees/<id> by path once the lane's files were gone, so a
+        # process the lane left could swap worktrees/ for a link by then and have that name
+        # deleted wherever the link led (another repo's lane of the same id). `done` removes the
+        # files and the admin dir itself, under dir fds opened before either.
+        lane_mod = load_lane_script()
+        worktrees = os.path.join(self.common, "worktrees")
+        victim = os.path.join(self.tmp, "victim")
+        self.write(os.path.join(victim, "chart-fix", "keep.txt"), "another repo's\n")
+        real = shutil.rmtree
+
+        def rmtree(name, *args, **kw):
+            real(name, *args, **kw)
+            if not os.path.lexists(self.path) and not os.path.islink(worktrees):
+                os.rename(worktrees, worktrees + ".old")
+                os.symlink(victim, worktrees)
+
+        with mock.patch.object(lane_mod.shutil, "rmtree", side_effect=rmtree):
+            self.done_in_process(lane_mod)
+        self.assertEqual(self.read(os.path.join(victim, "chart-fix", "keep.txt")),
+                         "another repo's\n")
+        self.assertFalse(os.path.exists(self.path))
+        self.assertEqual(os.listdir(worktrees + ".old"), [])  # the lane's own admin dir went
+        self.assertEqual(len(self.archives()), 1)
+
+    def test_dones_data_dir_removal_never_follows_a_lanes_dir_swapped_after_the_rename(self):
+        # The data dir went by a path through <common>/lanes, which a process the lane left can
+        # swap for a link once the lanes lock's own check has passed: rmtree checks only the
+        # last name, so it deleted the victim's <id>. Planted there, a copy of the lane's data
+        # passes the re-read.
+        lane_mod = load_lane_script()
+        lanes = os.path.join(self.common, "lanes")
+        victim = os.path.join(self.tmp, "victim")
+        real = os.rename
+
+        def rename(src, dst, *args, **kw):
+            real(src, dst, *args, **kw)
+            if re.fullmatch(r"chart-fix-[0-9-]+", os.path.basename(dst)) \
+                    and not os.path.islink(lanes):
+                real(lanes, lanes + ".old")
+                shutil.copytree(lanes + ".old", victim, symlinks=True)
+                self.write(os.path.join(victim, "chart-fix", "keep.txt"), "not the lane's\n")
+                os.symlink(victim, lanes)
+
+        with mock.patch.object(lane_mod.os, "rename", side_effect=rename):
+            self.done_in_process(lane_mod)
+        self.assertEqual(self.read(os.path.join(victim, "chart-fix", "keep.txt")),
+                         "not the lane's\n")
+        self.assertFalse(os.path.exists(os.path.join(lanes + ".old", "chart-fix")))
+        archived = os.listdir(os.path.join(lanes + ".old", "_closed"))
+        self.assertEqual(len(archived), 1)
+        self.assertTrue(os.path.isfile(os.path.join(lanes + ".old", "_closed", archived[0],
+                                                    "lane.json")))
+
+    def test_a_failed_closes_temp_archive_removal_never_follows_a_swapped_closed_dir(self):
+        # A failure after the archive build removes its .tmp: by a path through lanes/_closed,
+        # that followed a link swapped in for it, onto the victim's same-named dir.
+        lane_mod = load_lane_script()
+        closed = os.path.join(self.common, "lanes", "_closed")
+        victim = os.path.join(self.tmp, "victim")
+        tmp = f"chart-fix-{datetime.date.today().isoformat()}.tmp"
+        self.write(os.path.join(victim, tmp, "keep.txt"), "not the lane's\n")
+
+        real = lane_mod.install_hold
+
+        def hold(*args):
+            real(*args)
+            if args[-1] == "its worktree was not removed":  # the check after the build
+                os.rename(closed, closed + ".old")
+                os.symlink(victim, closed)
+                raise lane_mod.LaneError("stopped after the build")
+
+        with mock.patch.object(lane_mod, "install_hold", side_effect=hold):
+            with self.assertRaisesRegex(lane_mod.LaneError, "stopped after the build"):
+                self.done_in_process(lane_mod)
+        self.assertEqual(self.read(os.path.join(victim, tmp, "keep.txt")), "not the lane's\n")
+        self.assertEqual(os.listdir(closed + ".old"), [])  # its own .tmp went
+        self.assertTrue(os.path.isdir(self.path))
+
+    def test_dones_removal_never_follows_a_link_swapped_in_above_a_forged_path(self):
+        # lane.json is the lane's to write and nothing ties its path to the lanes root: a path
+        # under a dir absent at the gates (so no worktree check ran), with a planted admin dir
+        # naming it, and that dir swapped for a link once the admin dir matched. The way down is
+        # walked from / with O_NOFOLLOW, so the removal refuses.
+        lane_mod = load_lane_script()
+        victim = os.path.join(self.tmp, "home")
+        self.write(os.path.join(victim, "important", "keep.txt"), "the user's\n")
+        forged = os.path.join(self.path, "a", "important")
+        rec = os.path.join(self.common, "lanes", "chart-fix", "lane.json")
+        self.write(rec, json.dumps(dict(self.lane_json("chart-fix"), path=forged)))
+        admin = os.path.join(self.common, "worktrees", "evil")
+        self.write(os.path.join(admin, "gitdir"), os.path.join(forged, ".git") + "\n")
+        self.write(os.path.join(admin, "HEAD"), self.git("rev-parse", "HEAD"))
+        real = lane_mod.trial_admin_dirs
+
+        def trials(*args):  # called once the lane's own admin dir matched
+            os.symlink(victim, os.path.join(self.path, "a"))
+            return real(*args)
+
+        with mock.patch.object(lane_mod, "trial_admin_dirs", side_effect=trials):
+            with self.assertRaisesRegex(lane_mod.LaneError, "leads through a symlink"):
+                self.done_in_process(lane_mod)
+        self.assertEqual(self.read(os.path.join(victim, "important", "keep.txt")), "the user's\n")
+        self.assertTrue(os.path.isdir(admin))
+
+    @unittest.skipIf(os.geteuid() == 0, "root deletes in a read-only dir")
+    def test_a_removal_stopped_partway_is_finished_by_a_rerun(self):
+        # A dir the user can't write stops rmtree partway. The tree was renamed aside first, so
+        # the rerun's gates find nothing at the lane's path, and it finishes the removal, even
+        # once a prune dropped the registration meanwhile. .lane/ goes last, so the record is
+        # archived whole from the tree aside.
+        self.write(os.path.join(self.path, ".lane-trial", ".gitignore"), "*\n")
+        self.write(self.record("chart-fix"), "# LANE: chart-fix\n## Next\n- the newest line\n")
+        stuck = os.path.join(self.path, ".lane-trial", "stuck")
+        self.write(os.path.join(stuck, "file"), "x")
+        os.chmod(stuck, 0o555)
+        aside = os.path.join(self.root, ".chart-fix.lane-removing")
+        self.addCleanup(lambda: os.path.isdir(aside) and os.chmod(
+            os.path.join(aside, ".lane-trial", "stuck"), 0o755))
+        p = self.run_lane("done", "chart-fix", "--abandon")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("only partly removed", p.stderr)
+        self.assertNotRegex(p.stderr, r"rm -|remove it by hand")
+        self.assertFalse(os.path.lexists(self.path))
+        os.chmod(os.path.join(aside, ".lane-trial", "stuck"), 0o755)
+        self.git("worktree", "prune")
+        self.assertNotIn(self.path, self.git("worktree", "list", "--porcelain"))
+        self.lane("done", "chart-fix", "--abandon")
+        self.assertFalse(os.path.lexists(aside))
+        (archive,) = self.archives()
+        # Archived from the tree aside (its .lane/ went last), not from a mirror: none ran here.
+        self.assertIn("the newest line", self.read(os.path.join(
+            self.common, "lanes", "_closed", archive, ".lane", "STATUS.md")))
+
+    def test_a_dir_planted_as_an_admin_dirs_gitdir_never_breaks_done(self):
+        os.makedirs(os.path.join(self.common, "worktrees", "odd", "gitdir"))
+        p = self.run_lane("done", "chart-fix", "--abandon")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        self.assertFalse(os.path.exists(self.path))
+
+    def test_a_locked_registration_whose_tree_is_gone_is_kept(self):
+        # git refuses to remove a locked worktree even when its tree is missing (a drive not
+        # mounted), and prune keeps it: so does `done`.
+        self.git("worktree", "lock", self.path)
+        shutil.rmtree(self.path)
+        p = self.run_lane("done", "chart-fix", "--abandon")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("worktree is locked", p.stderr)
+        self.assertIn(f"worktree {self.path}\n", self.git("worktree", "list", "--porcelain"))
+
+    def test_a_planted_gitdir_with_a_nul_never_breaks_done(self):
+        self.write(os.path.join(self.common, "worktrees", "odd", "gitdir"), "/x\0y\n")
+        p = self.run_lane("done", "chart-fix", "--abandon")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.exists(self.path))
+
+    def test_untracked_files_hidden_by_config_still_refuse(self):
+        self.git("config", "status.showUntrackedFiles", "no")
+        self.write(os.path.join(self.path, "notes.txt"), "draft\n")
+        p = self.run_lane("done", "chart-fix", "--abandon")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("uncommitted or untracked files (notes.txt)", p.stderr)
+        self.assertTrue(os.path.isfile(os.path.join(self.path, "notes.txt")))
+
+    def test_dones_worktree_removal_never_follows_a_link_in_the_lane(self):
+        # A link in the lane to another lane (ignored, so the tree is clean) goes as a link.
+        self.lane("new", "api-docs")
+        other = self.lane_path("api-docs")
+        self.write(os.path.join(other, "keep.txt"), "the other lane's\n")
+        os.makedirs(os.path.join(self.path, ".lane", "artifacts"), exist_ok=True)
+        os.symlink(other, os.path.join(self.path, ".lane", "artifacts", "other"))
+        os.symlink(os.path.join(other, "keep.txt"), os.path.join(self.path, ".lane", "keep"))
+        self.lane("done", "chart-fix", "--abandon")
+        self.assertFalse(os.path.exists(self.path))
+        self.assertEqual(self.read(os.path.join(other, "keep.txt")), "the other lane's\n")
+
     def test_a_process_started_after_the_final_look_keeps_the_worktree(self):
         # With nothing to end the lane is never closing, so `open` could start a session
         # during the lock waits: the remove looks once more.
@@ -2802,7 +3311,8 @@ class Close(Fakes):
 
     def test_a_refusal_with_nothing_to_end_leaves_the_lane_as_it_was(self):
         # Never `closing` (which `open` refuses) unless something got signalled: the final look
-        # finding a process that started after the survey, then a refused worktree remove.
+        # finding a process that started after the survey, then a refused worktree remove (the
+        # dirt check again just before it: a file written since the gates).
         lane_mod = load_lane_script()
         (late,) = self.start(self.fake(self.path))
         with mock.patch.object(lane_mod, "survey", return_value=({}, {})):
@@ -2813,8 +3323,16 @@ class Close(Fakes):
         self.kill_ours([late])
         self.assertTrue(self.gone(late))
         self.write(os.path.join(self.path, "notes.txt"), "draft\n")
-        with mock.patch.object(lane_mod, "removable"):
-            with self.assertRaisesRegex(lane_mod.LaneError, "git worktree remove refused"):
+        real, calls = lane_mod.removable, []
+
+        def removable(*args):  # the gates' check passes; the one before the remove is real
+            calls.append(args)
+            if len(calls) > 1:
+                real(*args)
+
+        with mock.patch.object(lane_mod, "removable", side_effect=removable):
+            with self.assertRaisesRegex(lane_mod.LaneError,
+                                        r"uncommitted or untracked files \(notes"):
                 self.done_in_process(lane_mod)
         self.assertEqual(self.lane_json("chart-fix")["state"], "active")
         self.assertTrue(os.path.isdir(self.path))
@@ -3318,6 +3836,39 @@ class SwitchedBranch(LanesRepo):
         self.assertEqual(self.lane_json("chart-fix")["state"], "active")
 
 
+class FetchNoRecursion(unittest.TestCase):
+    """G-B: lane runs its own fetches outside the sandbox, where a submodule's git dir (which a
+    sandboxed session can write) must not get git run in it, so each turns recursion off."""
+
+    def test_every_fetch_lane_runs_skips_submodules(self):
+        # And never starts `gc --auto` (LR3): each also takes NO_AUTO_GC's keys and
+        # --no-auto-maintenance. A *NAME in the args list is expanded from the module.
+        import ast
+        mod = load_lane_script()
+        with open(LANE) as f:
+            tree = ast.parse(f.read())
+
+        def words(call):
+            out = []
+            for e in call.elts:
+                if isinstance(e, ast.Starred) and isinstance(e.value, ast.Name):
+                    out += list(getattr(mod, e.value.id))
+                else:
+                    out.append(getattr(e, "value", None))
+            return out
+        fetches = [node.args[0] for node in ast.walk(tree)
+                   if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "git"
+                   and node.args and isinstance(node.args[0], ast.List)
+                   and "fetch" in words(node.args[0])]
+        self.assertEqual(len(fetches), 3)  # fetch(), fetched_base, remote_tip
+        for call in fetches:
+            got = words(call)
+            for want in ("--no-recurse-submodules", "--no-auto-maintenance", "gc.auto=0",
+                         "maintenance.auto=false"):
+                self.assertIn(want, got, ast.unparse(call))
+            self.assertLess(got.index("maintenance.auto=false"), got.index("fetch"))
+
+
 class ExcludedGuardRules(LanesRepo):
     """`new` names the Edit deny rule a lane's worktree needs before the excluded-command guard
     passes its excluded calls; `done` names the ones its removed worktree leaves behind."""
@@ -3339,9 +3890,13 @@ class ExcludedGuardRules(LanesRepo):
         self.assertEqual(self.lane_json("chart-fix")["state"], "active")
 
     def test_a_clean_worktree_says_nothing(self):
+        # Nothing but the fixture's origin: a local bare repo outside the project, whose remote
+        # URL the guard refuses by design (G-D: git runs that repo's side outside the sandbox).
         p = self.run_lane("new", "chart-fix")
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertNotIn("excluded-guard", p.stderr)
+        found = [line for line in p.stderr.splitlines() if line.startswith("lane:   ")]
+        self.assertEqual(len(found), 1, p.stderr)
+        self.assertIn(f"the remote URL {self.origin} is in the repository", found[0])
         self.assertNotIn("Edit(", self.asks("chart-fix"))
 
     def test_finishing_a_failed_setup_seeds_the_ask_too(self):

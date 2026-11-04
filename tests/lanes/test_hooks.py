@@ -65,7 +65,7 @@ class Guard(LanesRepo):
                     self.assertIsNone(out)
                 else:
                     self.assertDenied(out, rule)
-        with open(os.path.join(self.tmp, "state", "dotclaude", "lane-guard.log")) as f:
+        with open(os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "lane-guard.log")) as f:
             log = f.read()
         for kind in ("deny relative", "deny other-record", "deny cli-data"):
             self.assertIn(kind, log)
@@ -205,6 +205,16 @@ class IdentityHook(LanesRepo):
         self.assertEqual((s["session_id"], s["source"]), ("sess-0001", "startup"))
         self.assertIn("startedAt", s)
 
+    def test_main_stays_main_beside_a_record_naming_it(self):
+        # LR1: a record naming the main checkout neither tells main's session it is that lane
+        # nor gets the session registered in it.
+        rec = dict(self.lane_json("chart-fix"), id="forged", path=self.main)
+        self.write(os.path.join(self.common, "lanes", "forged", "lane.json"), json.dumps(rec))
+        ctx = self.start(self.main)["additionalContext"]
+        self.assertTrue(ctx.startswith("Main checkout of a lanes repo"), ctx)
+        self.assertNotIn("forged", ctx)
+        self.assertEqual(self.lane_json("forged")["sessions"], [])
+
     def test_a_switched_lane_is_told_its_checked_out_branch(self):
         # A `git switch` for a follow-up PR leaves lane.json's branch behind.
         self.git("switch", "-q", "-c", "chart-more", cwd=self.lane_dir)
@@ -224,7 +234,7 @@ class IdentityHook(LanesRepo):
         # must not reach the context: a backtick ends the code span, a tag is no branch, and a
         # name that isn't UTF-8 fails the decode.
         admin = self.git("rev-parse", "--absolute-git-dir", cwd=self.lane_dir).strip()
-        log = os.path.join(self.tmp, "state", "dotclaude", "lane-identity.log")
+        log = os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "lane-identity.log")
         # The hook decodes git's output in the locale's encoding; a single-byte one reads \xff
         # cleanly (valid_branch still refuses it), so the decode reason needs a UTF-8 locale.
         self.env["LC_ALL"] = "C.UTF-8"
@@ -290,6 +300,17 @@ class IdentityHook(LanesRepo):
         self.assertEqual([(s["session_id"], s["startedAt"]) for s in sessions],
                          [("sess-0001", first)])
 
+    def test_a_fork_is_registered_as_its_own_session(self):
+        # /branch and --fork-session start a new session id from a copy of the parent's
+        # transcript; the parent's identity line in that copy doesn't register the fork.
+        self.start(self.lane_dir)
+        out = self.start(self.lane_dir, source="fork", sid="sess-0002")
+        self.assertIn("`chart-fix`", out["additionalContext"])
+        self.assertNotIn("re-read", out["additionalContext"])
+        sessions = self.lane_json("chart-fix")["sessions"]
+        self.assertEqual([(s["session_id"], s["source"]) for s in sessions],
+                         [("sess-0001", "startup"), ("sess-0002", "fork")])
+
     def test_main_gets_one_board_line(self):
         out = self.start(self.main)
         self.assertEqual(out["additionalContext"].count("\n"), 0)
@@ -322,6 +343,36 @@ class IdentityHook(LanesRepo):
         self.assertEqual(self.read(self.mirror("STATUS.md")), "the only copy\n")
         self.assertFalse(os.path.exists(old))
 
+    def test_the_mirror_never_follows_a_lane_dir_swapped_for_a_link_mid_copy(self):
+        # The hook runs unsandboxed after every turn, and the lane's sandbox can write the common
+        # dir: lanes/<id> swapped for a link once the lane's record was read had mirror.old
+        # removed, and mirror and mirror.new renamed, by paths through it, wherever it led.
+        mod = self.identity_module()
+        repo = mod.lanelib.resolve(self.lane_dir)
+        lane = repo.lane_at(self.lane_dir)
+        data = os.path.join(self.common, "lanes", "chart-fix")
+        moved = os.path.join(self.tmp, "moved")
+        victim = os.path.join(self.tmp, "victim")
+        self.write(os.path.join(data, "mirror", "STATUS.md"), "the last mirror\n")
+        for name in ("mirror", "mirror.old"):
+            self.write(os.path.join(victim, name, "keep.txt"), "not the lane's\n")
+        real = mod.lanelib.copy_record
+
+        def copy(*args):
+            os.rename(data, moved)
+            os.symlink(victim, data)
+            real(*args)
+
+        with mock.patch.object(mod.lanelib, "copy_record", side_effect=copy):
+            mod.mirror(repo, lane)
+        for name in ("mirror", "mirror.old"):
+            with self.subTest(name=name):
+                self.assertEqual(self.read(os.path.join(victim, name, "keep.txt")),
+                                 "not the lane's\n")
+        self.assertEqual(sorted(os.listdir(victim)), ["mirror", "mirror.old"])
+        self.assertEqual(self.read(os.path.join(moved, "mirror", "STATUS.md")),
+                         self.read(self.record("chart-fix")))
+
     def test_links_are_mirrored_as_links_and_never_followed(self):
         # Following them copied whatever they reached (`../..`, a home dir, keys) into the
         # mirror and every archive. Evidence must be real files in .lane/artifacts/.
@@ -347,7 +398,7 @@ class IdentityHook(LanesRepo):
                                        "hook_event_name": "SessionEnd", "reason": "other"})
         self.assertFalse(os.path.exists(self.mirror()))
         self.assertIn("endedAt", self.lane_json("chart-fix")["sessions"][0])
-        with open(os.path.join(self.tmp, "state", "dotclaude", "lane-identity.log")) as f:
+        with open(os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "lane-identity.log")) as f:
             self.assertIn("symlink", f.read())
 
     def test_the_end_is_stamped_before_the_mirror_runs(self):
@@ -438,7 +489,7 @@ class LeadHeal(test_cli.LeadChain):
 
     def setUp(self):
         super().setUp()
-        self.log_path = os.path.join(self.tmp, "state", "dotclaude", "lane-identity.log")
+        self.log_path = os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "lane-identity.log")
 
     def write_record(self, pid, start, sid=OLD, pane="%3"):
         """A lead record as `lane lead` writes one, on this test's server (the runner)."""
@@ -459,7 +510,7 @@ class LeadHeal(test_cli.LeadChain):
         passed (OLD by default) and the tab it passed in (pane on this test's server)."""
         tab = {"socket": self.tmux_sock, "server_start": int(time.time()) - 600,  # wall clock
                "server_pid": os.getpid(), "pane": tab_pane or pane}
-        self.write(os.path.join(self.tmp, "state", "dotclaude", "pass-last", pane[1:] + ".json"),
+        self.write(os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "pass-last", pane[1:] + ".json"),
                    json.dumps({"tab": tab, "from_session": self.OLD,
                                "written_at": time.time() - 1, "shown": False,  # wall clock
                                "replies": [{"prompt_id": "p1", "text": "done", "time": 1.0}],
@@ -621,7 +672,7 @@ class LeadHeal(test_cli.LeadChain):
         }
         for why, kw in cases.items():
             with self.subTest(why):
-                shutil.rmtree(os.path.join(self.tmp, "state", "dotclaude", "pass-last"), True)
+                shutil.rmtree(os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "pass-last"), True)
                 at = kw.pop("at", "%3")
                 if why != "no marker":
                     self.marker(**kw)

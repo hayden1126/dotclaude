@@ -1,7 +1,8 @@
 {
   "theme": "dark",
   "env": {
-    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "ANTHROPIC_MODEL": "opus"
   },
   "effortLevel": "medium",
   "autoCompactWindow": 600000,
@@ -30,6 +31,8 @@
       "Bash(lane adopt *)",
       "Bash(lane open *)",
       "Bash(lane done *)",
+      "Bash(lane park *)",
+      "Bash(lane sync-main *)",
       "Bash(lane addr *)",
       "Bash(lane lead)",
       "Bash(git push origin *)",
@@ -174,6 +177,7 @@
       "Bash(claude mcp reset-project-choices*)",
       "Bash(claude mcp serve*)",
       "Bash(claude sandbox install*)",
+      "Bash(claude sandbox uninstall*)",
       "Bash(claude plugin* disable*)",
       "Bash(claude plugin* enable*)",
       "Bash(claude plugin* init*)",
@@ -240,7 +244,11 @@
       "Edit(~/.bun/bin/**)",
       "Edit(~/.cargo/bin/**)",
       "Edit(~/.local/share/claude/**)",
-      "Edit(~/.local/lib/node_modules/**)"
+      "Edit(~/.local/lib/node_modules/**)",
+      "Edit(~/.config/cd4a/**)",
+      "Edit(~/chrome/**)",
+      "Edit(~/.cache/chrome-devtools-mcp/**)",
+      "Edit(~/.local/state/dotclaude/verified/**)"
     ]
   },
   "sandbox": {
@@ -283,10 +291,13 @@
       "lane ls *",
       "lane open *",
       "lane done *",
+      "lane park *",
+      "lane sync-main *",
       "lane addr *",
       "lane lead",
       "pass-respawn",
       "pass-respawn *",
+      "ed-pull *",
       "tmux ls",
       "tmux ls *",
       "tmux list-sessions",
@@ -363,18 +374,11 @@
         "~/.claude/settings.json",
         "~/.claude/hooks",
         "~/.claude/skills",
-        "~/.claude/agents"
+        "~/.claude/agents",
+        "~/.local/state/dotclaude/verified"
       ],
       "allowWrite": [
-        "~/.cache/uv",
-        "~/.cache/pip",
-        "~/.cache/pnpm",
-        "~/.cache/node-gyp",
-        "~/.cache/ms-playwright",
-        "~/.local/share/uv/python",
-        "~/.local/share/pnpm/store",
-        "~/.npm",
-        "~/.bun/install/cache"
+        "~/.cache/claude-sandbox"
       ]
     },
     "network": {
@@ -387,6 +391,7 @@
         "registry.npmjs.org",
         "pypi.org",
         "files.pythonhosted.org",
+        "nodejs.org",
         "relay.fullyjustified.net",
         "data1b.fullyjustified.net"
       ]
@@ -489,7 +494,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "i=$(cat); printf '%s' \"$i\" | timeout 4 bash \"$HOME/.claude/hooks/excluded-guard.sh\" || { printf '%s' \"$i\" | grep -Eq '\"command\": ?\"[[:space:]]*(git|gh|lane|claude|codex|codex-delegate|delegation-ledger|pass-respawn|tmux|powershell[.]exe|cmd[.]exe)[ \"]' && { echo \"excluded-guard missing, failed or timed out: this excluded command is blocked\" >&2; exit 2; }; exit 0; }",
+            "command": "i=$(cat); printf '%s' \"$i\" | timeout 4 bash \"$HOME/.claude/hooks/excluded-guard.sh\" || { printf '%s' \"$i\" | grep -Eq '\"command\": ?\"[[:space:]]*(git|gh|lane|claude|codex|codex-delegate|delegation-ledger|pass-respawn|ed-pull|tmux|powershell[.]exe|cmd[.]exe)[ \"]' && { echo \"excluded-guard missing, failed or timed out: this excluded command is blocked\" >&2; exit 2; }; exit 0; }",
             "timeout": 5
           }
         ]
@@ -557,7 +562,7 @@
     ],
     "SessionStart": [
       {
-        "matcher": "startup|resume",
+        "matcher": "startup|resume|fork",
         "hooks": [
           {
             "type": "command",
@@ -567,7 +572,6 @@
         ]
       },
       {
-        "matcher": "startup|resume|clear|compact",
         "hooks": [
           {
             "type": "command",
@@ -587,7 +591,6 @@
         ]
       },
       {
-        "matcher": "startup|resume|clear|compact",
         "hooks": [
           {
             "type": "command",
@@ -597,7 +600,6 @@
         ]
       },
       {
-        "matcher": "startup|resume|clear|compact",
         "hooks": [
           {
             "type": "command",
@@ -607,7 +609,26 @@
         ]
       },
       {
-        "matcher": "startup|resume|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/sandbox-caches.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/context-watch.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "startup|resume|clear|fork",
         "hooks": [
           {
             "type": "command",
@@ -617,7 +638,7 @@
         ]
       },
       {
-        "matcher": "startup|resume|clear",
+        "matcher": "startup|resume|clear|fork",
         "hooks": [
           {
             "type": "command",
@@ -627,7 +648,7 @@
         ]
       },
       {
-        "matcher": "startup|resume|clear|compact",
+        "matcher": "startup|resume|clear|compact|fork",
         "hooks": [
           {
             "type": "command",

@@ -1,9 +1,9 @@
 """SessionStart/Stop/SessionEnd hook for lanes; hooks/lane-identity.sh runs it.
 
-SessionStart (startup, resume, clear, compact):
+SessionStart (every source: startup, resume, clear, compact, fork):
   in a lane     tells the model its absolute identity (lane id, what its worktree has checked
                 out: a branch, or a detached HEAD's commit; lane.json's branch, labeled, when
-                HEAD can't be read; claims, port, record path)
+                HEAD can't be read; claims, ports, record path)
                 and the rules that keep it absolute, and appends {session_id, startedAt} to
                 lane.json sessions[] (not again for a session already listed and not ended, so a
                 compact keeps its start). On compact it adds "re-read your record": the summary
@@ -28,6 +28,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -93,7 +94,7 @@ def lane_context(lane: dict, source: str, where: str) -> str:
     claims = ", ".join(lane.get("claims", [])) or "none"
     lines = [
         f"You are lane `{lane['id']}`: {where}, claims {claims}, "
-        f"port {lane.get('port') or 'none'}. Your record is {lanelib.record_path(lane)} "
+        f"{lanelib.ports_text(lane)}. Your record is {lanelib.record_path(lane)} "
         "(Brief, State, Decisions, Asks for Hayden, Not mine, Next): read it before acting.",
         "Other lanes' records are read-only. Ownership comes only from `lane who #<n>` (claims), "
         "never from prose, agent lists or tab titles. Never write relative identity ('another "
@@ -142,11 +143,13 @@ def mirror(repo: lanelib.Repo, lane: dict) -> None:
     """Copy <lane>/.lane/ to lanes/<id>/mirror/, crash-safe: build mirror.new, move mirror aside
     to mirror.old, move mirror.new in, then drop mirror.old. A run killed between the moves
     leaves mirror.old as the only copy; lanelib.mirror_dir restores it before anything else.
-    The caller holds the lanes lock. Links are copied as links and never followed
-    (lanelib.walk_record). Nothing changed since the last copy (the stamp) means no copy, so a
-    Stop on every turn stays cheap."""
-    dest = os.path.join(repo.lane_dir(lane["id"]), "mirror")
-    new, old, stamp = dest + ".new", dest + ".old", dest + ".stamp"
+    The caller holds the lanes lock. Nothing changed since the last copy (the stamp) means no
+    copy, so a Stop on every turn stays cheap.
+
+    This runs unsandboxed after every turn, and the lane's sandbox can write both sides (its
+    record, and the common dir): every removal, rename and write goes by name under lanes/<id>,
+    opened from the main checkout with O_NOFOLLOW (lanelib.common_fd), and lanelib.copy_record
+    opens each name by fd, so a link swapped in anywhere is never followed."""
     lanelib.mirror_dir(repo, lane["id"], restore=True)
     src = lanelib.record_dir(lane)
     if lanelib.record_is_link(lane):
@@ -155,20 +158,47 @@ def mirror(repo: lanelib.Repo, lane: dict) -> None:
     if not os.path.isdir(src):
         return
     changed = lanelib.newest_mtime(src)
+    fd = lanelib.common_fd(repo, f"{lanelib.LANES}/{lane['id']}")
     try:
-        with open(stamp) as f:
-            if os.path.isdir(dest) and changed <= float(f.read()):
-                return
-    except (OSError, ValueError):
-        pass
-    shutil.rmtree(new, ignore_errors=True)
-    lanelib.copy_record(src, new)
-    shutil.rmtree(old, ignore_errors=True)
-    if os.path.isdir(dest):
-        os.rename(dest, old)
-    os.rename(new, dest)
-    shutil.rmtree(old, ignore_errors=True)
-    lanelib.write_text(stamp, repr(changed))
+        try:
+            stamp = os.open("mirror.stamp", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+            try:
+                if (stat.S_ISREG(os.fstat(stamp).st_mode) and lanelib.real_dir_at(fd, "mirror")
+                        and changed <= float(os.read(stamp, 64))):
+                    return
+            finally:
+                os.close(stamp)
+        except (OSError, ValueError):
+            pass
+        shutil.rmtree("mirror.new", dir_fd=fd, ignore_errors=True)
+        try:
+            os.mkdir("mirror.new", dir_fd=fd)
+            new = os.open("mirror.new", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            try:
+                # Walked from / at the lane's real path: lane.json's is the lane's to write.
+                real = os.path.realpath(lane["path"])
+                rec = lanelib.open_dir("/", f"{real}/{lanelib.RECORD_DIR}")
+                try:
+                    lanelib.copy_record(rec, new)
+                finally:
+                    os.close(rec)
+            finally:
+                os.close(new)
+        except BaseException:
+            shutil.rmtree("mirror.new", dir_fd=fd, ignore_errors=True)
+            raise
+        shutil.rmtree("mirror.old", dir_fd=fd, ignore_errors=True)
+        try:
+            if lanelib.real_dir_at(fd, "mirror"):
+                os.rename("mirror", "mirror.old", src_dir_fd=fd, dst_dir_fd=fd)
+            os.rename("mirror.new", "mirror", src_dir_fd=fd, dst_dir_fd=fd)
+        except BaseException:  # a mirror planted as a link, say: mirror.old stays to restore
+            shutil.rmtree("mirror.new", dir_fd=fd, ignore_errors=True)
+            raise
+        shutil.rmtree("mirror.old", dir_fd=fd, ignore_errors=True)
+        lanelib.write_at(fd, "mirror.stamp", repr(changed))
+    finally:
+        os.close(fd)
 
 
 def end(repo: lanelib.Repo, lane: dict, event: dict) -> None:
@@ -187,9 +217,8 @@ def end(repo: lanelib.Repo, lane: dict, event: dict) -> None:
             lanelib.update_lane(repo, lane["id"], stamp)
         try:
             mirror(repo, lane)
-        except OSError as e:  # shutil.Error is one
+        except OSError as e:  # mirror removed its own mirror.new
             log(f"mirror skipped lane={lane['id']} {type(e).__name__}: {e}")
-            shutil.rmtree(os.path.join(repo.lane_dir(lane["id"]), "mirror.new"), ignore_errors=True)
 
 
 def relink(repo: lanelib.Repo, event: dict) -> None:

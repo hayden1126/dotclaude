@@ -98,7 +98,7 @@ writer, and every other place links to it.
 | 9 | What is this lane blocked on Hayden for? | Asks | the record's "Asks for Hayden" (a design pick, push or merge approval), shown by `lane asks` across lanes. Each ask has one owner, and the lead's stay in its window ("Who asks what") | the lane; cleared after Hayden answers | living |
 | 10 | What did a delegate produce? | Report (up) | a subagent's report JSON (the delegation contract); a lane's hand-back is a passing `handoff-check` plus a State summary; the PR body to outsiders | the delegate | ephemeral, then PR |
 | 11 | Proof behind a claim | Evidence | `.lane/artifacts/` (mocks, shots, gate logs), mirrored so it survives `worktree remove`; rulings point here | the lane | archived with the record |
-| 12 | Shared machine resources | Env state | `lane.json` port, live sessions and `lane lock` holders (derived; a hand-kept "machine state" list drifts) | the CLI | live |
+| 12 | Shared machine resources | Env state | `lane.json` port block, `lane serve`'s listener check, live sessions and `lane lock` holders (derived; a hand-kept "machine state" list drifts) | the CLI | live |
 | 13 | Heads-up between peers | Message | SendMessage to the `uds:` address `lane addr <id>` prints, resolved before each send. A nudge only: anything that matters lands in a doc first, and a message never carries state or consent. A lane's `merged #N` to the lead is one: the lead proves the merge itself and acts on Hayden's standing approval | anyone | ephemeral |
 | 14 | What did we learn? | Lessons | memory (Hayden's preferences, traps), `docs/` | any session | durable |
 | 15 | What happened? | History | git, PRs, transcripts. Never copied into a doc; docs point to them by SHA, PR # or session id | n/a | durable |
@@ -163,7 +163,8 @@ higher levels link to lower ones through a derived view, not through copied pros
 - **The lead keeps its STATUS.md whole when it merges main**, conflict or not. Main holds
   older carries of it. If the lead deletes a line after a carry, the lead's side shows no change
   against the merge base while main's shows the line added, so a clean merge brings the line
-  back. The lead still reads main's side first and adds back by hand any line that isn't a
+  back. `lane sync-main <n>` keeps the file whole and prints main's side ("Verified merges").
+  The lead still reads main's side and adds back by hand any line that isn't a
   carry (a lane's backlog line from before the `Lead branch:` line existed). From then on a
   lane sends such items to the lead instead of editing STATUS.md: the next carry's copy would
   erase them. PLAN.md, with other writers, merges as usual, and the lead deletes again a line
@@ -193,7 +194,8 @@ it too. No doc said which window owns which ask.
   link points into a lane, add the backlog line, nudge the other lanes (an unmerged lane whose
   install the reinstall released hears so), and `lane done` once the hand-back gate passes. It reports one line, or the failed step.
 - A lane with more PRs to come starts its Next with `Keep open: <why>`, and `lane done` refuses
-  it. `--abandon` closes it anyway and stays an ask rule (Hayden, 2026-10-14).
+  it (a commented-out flag too), as it does a record with an unclosed `<!--`. `--abandon` closes
+  it anyway and stays an ask rule (Hayden, 2026-10-14).
 - Lanes report their own state and asks, never the lead's messages.
 - Before an act whose effect leaves its worktree (an install from the lane, a cap slot), and
   with anything the lead must run, a lane messages the lead, never Hayden (Hayden, 2026-10-19).
@@ -246,8 +248,10 @@ Why it works this way:
   standing approval written here; the lead proves the merge with `gh pr view` before it acts,
   and `lane done` checks it again (a merged PR whose head is the tip, or the tip in the base).
 - **A scoped exception to "confirm before deleting"**, which CLAUDE.md names. `lane done`
-  refuses an unmerged branch, a dirty worktree, links into the lane and a `Keep open:` lane,
-  archives the record before the remove, and never passes `--force` or `-D`. The approval
+  refuses an unmerged branch, a dirty worktree, links into the lane, a `Keep open:` lane and a
+  record whose comments don't parse,
+  archives the record before the remove, and never passes `--force` or `-D` (a killed trial's
+  leftover registration goes by its gitdir text, never by path: the `lane trial` section). The approval
   covers `lane done` after a merge only; `--abandon` still asks.
 - **`lane done` reads `Keep open:` itself.** `handoff-check --closing` fails on the line too,
   but `done` runs it only when there is something to end, so a kept lane whose session had
@@ -256,6 +260,44 @@ Why it works this way:
   Next that starts with `Keep open:` counts, not only the first: a false hit holds a close,
   while a miss ends a lane with work left. `lanelib.first_item` skips the line, so the step
   `/pass` resumes with (and reads the approval marker from) is the one after it.
+- **An unclosed `<!--` refuses the close too.** The tools strip only closed comments, so an
+  edit that drops a template comment's `-->` turns the comment's text into the record's: a
+  `Keep open:` inside or after it no longer starts a line of Next, and `done` would close the
+  lane (capella-studio lane kindtheme, 2026-10-28). Requiring the flag can't fix it (no tool
+  knows more PRs follow), so the rule is closed instead: every `<!--` outside code is closed in
+  its own section (split at `#` and `##` headings), and no `-->` stands outside code and
+  comments (a comment that quoted one ended there), or `done` and `handoff-check` fail, naming
+  the line (`lanelib.comment_flaw`). `--abandon` skips it, as it skips the flag. The check and
+  `section()`, which every reader of a record goes through, share one scan
+  (`lanelib.strip_comments`), as markdown renders: a marker in inline code or a fence is
+  quoted, a comment's first `-->` ends it, and a fence its section never closes is plain text.
+  Two scans once disagreed: `section()` stripped from a quoted `<!--` to a quoted `-->`, a
+  `Keep open:` line between them, while the check skipped both (lane-fixes' reviewer,
+  2026-10-29).
+- **No comment hides `Keep open:`.** `done` and `handoff-check --closing` read the flag three
+  ways (`lanelib.kept_flag`): in Next as the tools read it; as written, each line's comment
+  markers deleted; and as written, the comments that start a line dropped
+  (`<!-- c -->Keep open:`). The two as-written reads end Next only at a `## ` heading outside a
+  fence, so a shell comment in a code block ends nothing, and a marker that starts a line takes
+  the indent along, so a flag commented out under a bullet counts. Any read holds the lane, so a
+  flag commented out on purpose holds too: delete it, or close with `--abandon`. Why: what is a
+  comment depends on the renderer. CommonMark 0.30 and GitHub read no comment where one holds
+  `--`, 0.31 and browsers read `<!--->` as one, and a comment opened in a list item ends with the
+  item. A comparison against markdown-it (CommonMark) on random Next sections, the flag placed
+  only where the layout rules call it one, counts a miss where the page shows it and no read
+  finds it with no comment flaw: 257 in 30,000 with the one scan alone, 0 in 180,000 with the
+  three reads (lane lane-fixes, 2026-10-29). A first version of that comparison skipped every
+  input whose Next held the flag's text anywhere, and so missed the line-start comment and the
+  bullet cases. None of 104 real records changed its verdict.
+- **Known limits of reading the flag from prose.** Review round 4 (lane lane-fixes, 2026-10-29)
+  found records where every read still misses a flag the page shows: a `## Next` quoted in a
+  code block before the real one is taken for it (so is an earlier heading that only starts
+  with "Next", like `## Next.js upgrade`), and a commented-out code block can upset the fence
+  tracking so that a `## ` line inside a later code block ends Next. Each review round found
+  holes in the newest boundary rule, so the fix is structural, not another rule: the flag
+  belongs in `lane.json`, set by a command (`lane keep "<why>"`), with the record's line for
+  people and `handoff-check` warning when the two disagree. A lane can only hold itself that
+  way, the safe direction. Until then, keep `Keep open:` at the top of Next, in plain text.
 - **The backlog line moved to the lead.** The lead owns the project STATUS, so the one line at
   merge is a step of its chain, not the lane's.
 
@@ -285,7 +327,7 @@ sessions in the main checkout"), so no lane could send `merged #N`. The tab bar 
 lane was told to pick `main:@3` from the refusal.
 
 Hayden's rule: **the lead is the last main-checkout session to act as lead.** A bare `lane init`,
-`new`, `adopt`, `open` (not `--print`) or `done` that succeeds records the Claude session above
+`new`, `adopt`, `open` (not `--print`), `done` or `park` that succeeds records the Claude session above
 it, and `lane lead` does so on purpose. The other two candidates lose on the one real case:
 
 | Situation | Last to act | Oldest | None until Hayden picks |
@@ -404,7 +446,7 @@ So every sandbox-off status in a checkout now skips submodule contents: `lane do
 `removable()` (`=all`, its submodule refusal stays), `handoff-check` and `delegation-ledger`'s
 hook (`=dirty`, which still reports a moved gitlink), each with optional locks off and
 `core.fsmonitor=false` (a relative fsmonitor command resolves inside the checkout; `done` sets
-it for every git it runs, `git worktree remove`'s own status included), and the ledger's hook,
+it for every git it runs), and the ledger's hook,
 like `ls` and `done`, runs no status in a repo whose own config sets `extensions.worktreeConfig`
 (`audit` names those runs unchecked). A configured filter driver (a program the user
 installed, such as git-lfs) still runs on the files a checkout routes to it: turning it off
@@ -412,9 +454,21 @@ would make every file it tracks read as modified, so `done` would refuse every L
 alone skips the uncommitted read then, since it can afford to.
 
 **`lane trial`.** Before a lane asks Hayden for ready, it runs
-`lane trial --run "<suite>" --run "<suite>" ...`, sandboxed:
+`lane trial --run "<suite>" --run "<suite>" ...`, sandboxed. It refuses to run anywhere else
+(a plain shell): it removes its scratch trees by path, which is safe only where the sandbox
+bounds what a symlink swapped in for a tree could make git delete, and its suites inherit the
+sandbox. Before it waits for the lock, it also refuses a bad link path, a link under another one,
+and a link the lane lacks (step 3), and a config `trial-locks` entry its `locks` don't list or
+that names `suite`.
 
-1. It takes the `suite` lock for the whole run. One name for every trial: a trial clears its
+1. It takes the `suite` lock for the whole run, after any locks the config's `trial-locks`
+   names (`lane init --trial-locks quiet`), in order, under the one `--wait` (a lock taken
+   late waits only for what is left, and the give-up says so). A repo whose gate
+   holds a lock of its own for a quiet machine names it there, so the gate never runs beside a
+   trial (capella-studio's `quiet` gate ran beside one at load 45.6 on 12 cores, 2026-10-26).
+   Take a repo's own locks before `suite` wherever both are taken, as a trial does, or the two
+   can deadlock. A trial run under an outer hold of one (`lane lock quiet -- lane trial ...`)
+   runs under that hold. One name for every trial: a trial clears its
    lane's leftover trees under that lock, so a second trial under another lock could remove a
    live tree. Locks are re-entrant for descendants (`LANE_LOCKS_HELD`, keyed by repo), so a
    `--run` that wraps its suite in `lane lock suite` runs under the trial's hold instead of
@@ -429,10 +483,12 @@ alone skips the uncommitted read then, since it can afford to.
    STATUS.md, as a carry would make it, and the report says so: after the merge order changes,
    lanes carry the lead's notes from different lead heads, and those carries always conflict. A
    conflict with the base aborts ("merge origin/main into the lane first"), except such a clash
-   of carries in STATUS.md. A lane that conflicts is skipped and the trial fails, and the report
-   says whose conflict it is. Merges decide, in order. When the other lane conflicts with the
-   base alone, it needs to merge the base before a trial can tell whether it conflicts with this
-   lane, and this lane's ask for ready goes ahead. Else, with no lane merged before it, or when
+   of carries in STATUS.md. A lane that conflicts is skipped, and the report says whose conflict
+   it is. Merges decide, in order. When the other lane conflicts with the base alone, it needs to
+   merge the base before a trial can tell whether it conflicts with this lane: it is untried, not
+   a failure, so it never fails the trial, and the report's last line names it (`lane trial: lane
+   X untried (it conflicts with origin/main)`). This lane's ask for ready goes ahead. Every other
+   conflict fails the trial. Else, with no lane merged before it, or when
    it conflicts with the baseline (this lane's HEAD plus the base, which merges cleanly with
    it), it is this lane's. Else it is between that lane and lanes merged before it: the report
    names each of them it conflicts with by itself, or the merge of them all when none does
@@ -442,40 +498,159 @@ alone skips the uncommitted read then, since it can afford to.
    A lane behind the base that also conflicts with this lane gets the base's verdict only; its
    own trial, once it merges the base, finds the rest. Other lanes' uncommitted work isn't in
    the merge.
-3. It checks the merge out in a fresh `mkdtemp` tree under the temp dir, named by repo key and
-   lane id, and runs each `--run` there as `sh -c`, streaming its output. One `--run` per
-   suite: a chained `a && b` stops at the first failure, and `a; b` reports only the last exit.
+3. It checks the merge out in a fresh `mkdtemp` tree in the lane's `.lane-trial/`, named by
+   repo key and lane id (`<lane>/.lane-trial/lane-trial-<key>-<id>-XXXXXXXX/tree`), never under
+   the temp dir: the sandbox's temp root is a policy root, where some suites fail on any tree
+   (SandboxReality, the subagent-policy cases). The first trial makes `.lane-trial/` with a
+   `.gitignore` of `*` in it, so neither it nor the trees show in the lane's git status; a
+   symlink there is refused. The lead notes' scratch index stays in the temp dir, since no suite
+   runs there. The tree then gets set up as the lane's own tests ran: the lane's gitignored files
+   that its `.worktreeinclude` matches are copied in (from the lane, not main, so the suites see
+   the lane's copies; git's names are read with `-z`, so a non-ASCII name is never quoted), and
+   each path the config's `trial-link` (`lane init --trial-link node_modules,.venv`) or a
+   `--link PATH` names is symlinked to the lane's own, by absolute path, unless the tree tracks
+   that path. The links go in first, and no included file under a link is copied (the link
+   brings it): a copy would make the link's dir and block it. Link paths are checked like
+   `.worktreeinclude` entries (relative, no `..`). One under another is refused (the tree would
+   make the outer path a dir for the inner link). One the lane lacks is refused too: unlinked, a
+   suite that can't load fails alike on both runs, which says nothing of the merge (step 5
+   sends it to be compared by hand). A conflict line's "try it with this lane alone"
+   command carries the run's `--link`s for the same reason. A link is
+   no copy: a suite that writes through it writes the lane's files. Then each `--run` runs there
+   as `sh -c`,
+   streaming its output. One `--run` per suite: a chained `a && b` stops at the first failure,
+   and `a; b` reports only the last exit.
 4. A suite fails when it exits non-zero or prints a failing test id (unittest's `FAIL:` and
    `ERROR:` lines, pytest's `FAILED` and `ERROR`, never unittest's `FAILED (failures=N)`
-   summary), whatever its exit code.
-5. A failed suite reruns on the baseline (HEAD plus the base alone), in a tree at the same path,
-   so ids that embed the path match. It passes only when every id it failed on the merge also
-   fails there and its exit is no worse (non-zero on the merge but zero on the baseline, or a
-   signal on the merge only, is the merge's). A failure with no id to compare, or a run whose
-   output was cut (a process it started kept the pipe 10 s past its exit), fails, to be
-   judged by hand.
-6. It exits 0 with no conflict and no failure of the merge's own, 1 otherwise, and 75 when
-   `--wait` runs out. A conflicted file whose name isn't UTF-8 stops the trial at once, naming
-   the lane (or the base) it was merging: `lane trial <id> ...` with the other lanes' ids tries
-   the rest.
+   summary, and TAP's `not ok <n> - <name>` at any indent, which `node --test` prints into a
+   pipe, as `not ok - <parent> > <name>`: no number, since a lane that adds a test shifts the
+   numbers, and the names of the subtests that enclose it (node's `# Subtest:` lines at smaller
+   indents), so two tests of one name under different parents stay apart; plain TAP with no
+   Subtest lines gives `not ok - <name>`; a `# TODO` or `# SKIP` directive is no failure),
+   whatever its exit code.
+5. A failed suite reruns on the baseline (HEAD plus the base alone), in a tree at the same path
+   set up the same way, so ids that embed the path match. It passes only when every id it
+   failed on the merge also fails there and its exit is no worse (non-zero on the merge but zero
+   on the baseline, or a signal on the merge only, is the merge's). A failure with no id to
+   compare fails, to be judged by hand, even one that printed no id on either run and exits
+   alike on both: a suite that never ran (a directory as the `--run`, exit 126 on both; a
+   runner missing a required flag, exit 2 on both) fails alike too, and a gate that can't vouch
+   for a suite mustn't pass it (lane sp-gaps, 2026-10-25). So does a run whose output was cut
+   (a process it started kept the pipe 10 s past its exit).
+6. It exits 0 with no failing conflict and no failure of the merge's own, 1 otherwise, and 75
+   when `--wait` runs out. When no other lane's work merges (none live, all already in, or all
+   conflicting), the suites still run once, on this lane's HEAD plus the base; that tree is the
+   baseline, so nothing reruns, and any failing suite exits 1 (`FAILED: N suite(s) fail on lane
+   <id> plus origin/main`). A conflicted file whose name isn't UTF-8 stops the trial at once,
+   naming the lane (or the base) it was merging: `lane trial <id> ...` with the other lanes'
+   ids tries the rest.
 
-Why the baseline: some tests fail on location alone. In a scratch tree of origin/main
-(2026-10-18) tests/lanes and tests/pass passed. tests/setup failed three SandboxReality
-subtests, since the sandbox never protects a tree under the temp dir; that test now skips
-there. tests/delegation failed 12 subagent-policy cases, since the policy allows temp paths
-before it checks protected roots. Skipping those would drop cases that do run correctly under
-temp, so they stay on the baseline path, about 2 minutes per trial. The baseline also keeps
-working when a future test turns out to depend on its location.
+Why the baseline: some tests fail on location alone. In a scratch tree of origin/main under the
+temp dir (2026-10-18) tests/lanes and tests/pass passed. tests/setup failed three SandboxReality
+subtests, since the sandbox protects only the checkouts it was started for; that test now skips
+a checkout under the temp dir or a `.lane-trial/` dir. tests/delegation failed 12
+subagent-policy cases, since the policy allows temp paths before it checks protected roots; the
+tree left the temp dir (2026-10-24, lane trial-fix) so those no longer fail. The baseline stays
+for the rest: it keeps working when a future test turns out to depend on its location, and it
+tells a failure the base already has from the merge's.
 
-Its limits: a test failing in both runs for different reasons hides a real break; a runner with
-another output format can only be compared by hand; a flaky test failing only on the merge reads
-as the merge's. The number of tests run is never compared, so a fail-fast flag (pytest `-x`,
-unittest `-f`) can stop both runs at a shared failure before the test the merge broke, and a
-merge that drops a test package from discovery passes unseen. And a trial killed partway (the
-Bash cap, a respawn) leaves its tree registered. The sandbox mounts each registered worktree's
-admin dir in every command started after the tree exists, so a later sandboxed run can't delete
-it. The next trial removes the files it can, and names the sandbox-off
-`git worktree remove --force <path>` for the rest, never a blanket `git worktree prune`.
+Its limits: a test failing in both runs for different reasons hides a real break; a runner
+with another output format is compared by hand whenever it fails, so a suite already broken
+on the base fails every trial until it is fixed or left out of the `--run`s; a flaky test failing only on the merge reads as the
+merge's. The number of tests run is never compared, so a fail-fast flag (pytest `-x`, unittest
+`-f`) can stop both runs at a shared failure before the test the merge broke, and a merge that
+drops a test package from discovery passes unseen. Node resolves a bare `require` up the parent
+dirs, so a tree in `.lane-trial/` without the link still finds the lane's `node_modules`; the
+link makes it the tree's own path, which tools that read `./node_modules` (its `.bin`) need. And
+a trial killed partway (the Bash cap, a respawn) leaves its tree registered. The sandbox mounts
+each registered worktree's admin dir in every command started after the tree exists, so a later
+sandboxed run can't delete it. The next trial removes the files it can (in `.lane-trial/`, and
+in the temp dir an older `lane` used) and names each registration it can't, which stays,
+harmless, until `lane done` clears it; never a blanket `git worktree prune`. Neither that
+message nor `--keep`'s offers a by-path `git worktree remove --force`: git resolves the path,
+so a symlink swapped in for the tree points it at whatever worktree the link names, and it
+deletes that worktree whole (probed on git 2.43, 2026-10-24). `lane done` clears such a
+registration, which removing the lane would otherwise leave stale. It runs sandbox-off, and a
+process the lane left could swap the tree for a symlink to another lane, so it never removes a
+tree by its path: it finds the admin dirs under `<common>/worktrees/` (real dirs, not links)
+whose `gitdir` file reads, as text, a tree with this lane's trial name in the lane's
+`.lane-trial/` or in a temp dir an older `lane` used, and removes just those dirs, each by name
+under its parent opened with `O_NOFOLLOW` (sandboxed Bash can write the common dir), once the
+lane's files are gone (`done` removes them itself, below), or at once when the lane was removed
+by hand. One it can't remove it names as left in place, with no path to remove by hand: run
+sandbox-off, that would follow whatever link made the removal fail. No message of `lane` ever
+offers a by-path removal that can recurse or follow a link (a test pins it); the one removal
+it names, `unlink` for a `.lane-trial` that is a symlink, does neither. The trial adds its trees with `worktree.useRelativePaths=false`, so that text is
+always an absolute path.
+
+## Parked lanes (lane park, 2026-10-29)
+
+Finished lanes waited hours for their merge turn (5.4 h and 5.6 h on 2026-10-28) while each held
+a cap slot, a Claude session and its dev servers. `lane park <id>` ends the lane's sessions and
+frees its cap slot, keeping its worktree, branch, record and claims. `lane open <id>` unparks
+it. A lane that only waits its turn sends the lead `park me`, and the lead parks it without
+asking Hayden, since `open` undoes it.
+
+**Where the flag lives.** In the state dir, beside `done`'s proof:
+`<repo>-<hash>.parked/<id>.json`, holding the lane's id, created stamp, path and when it was
+parked. Hayden picked the state dir over a lane.json field (2026-10-29): only bare commands
+write the state dir, so no lane's sandboxed Bash can park itself out of the cap or unpark
+another lane. A flag whose id, created stamp or path doesn't match the record, or that won't
+read, counts as not parked, so a bad flag fails toward the lane holding its slot. `done`
+removes it with the proof.
+
+**Who holds a slot.** A live lane (its worktree exists) holds one unless it is parked with no
+session in it. A session someone starts in a parked lane by hand (`cd <lane> && claude`) holds
+the slot again, so the count never trusts the flag alone; with session liveness unknown, a
+parked lane holds its slot too. `lane new` refuses at the cap, counted this way.
+
+**The over-cap rule.** `lane open` of a parked lane refuses while the other slot holders already
+pass the cap, and at the cap it opens and says `lane X is over the cap of N by one: for its
+rebase and merge` (Hayden's pick: a parked lane may unpark over a full cap to merge, at most one
+lane over at a time). It clears the flag only once `tmux new-window` succeeds. `open --print`
+refuses a parked lane, since it would start a session the flag doesn't know of. One hold of
+the lanes lock spans the cap check, `tmux new-window` and the flag's removal, so a second
+`open` of a parked lane waits and then counts the first as holding its slot; a second
+`open` of the same lane finds its flag gone under the lock and refuses (the first one's claude
+may not have written its session file yet). `open` of a
+lane that isn't parked has no cap check, as before.
+
+**The gates.** Every one runs before any signal, in this order: the record (not stale,
+`setup-failed` or `closing`), `lead_only` (a lane can't park itself: the command would end the
+session that runs it), already parked with no session (which needs the session files, so it
+comes after `lead_only`'s sandbox check), `done`'s git hardening, the tripwire check (LR4) and
+its `extensions.worktreeConfig` refusal, a clean tree, HEAD pushed (an ancestor of the commit the
+remote's own `refs/heads/<branch>` is at, asked with `ls-remote` and fetched, never the
+remote-tracking ref a lane can plant, and with replace refs and grafts off; or of the base's
+commit, the same way, for a lane whose PR merged with nothing new since), or an open PR whose head is
+HEAD or a local commit HEAD is an ancestor of (a PR at any other commit refuses: HEAD's work
+would sit outside it), the plain `handoff-check` (not `--closing`, so a
+`Keep open:` lane parks), no `handoff?` (gh unavailable fails closed), no lock the lane holds
+(each config lock and `suite`), no install hold, no busy session, then `done`'s survey and
+self-guard. The gates take a while (a fetch, gh, handoff-check), so the session statuses are
+read again from the session files the survey reads: a session that went busy, or one waiting on
+a permission dialog or a question, refuses (every other gate can pass mid-turn, and the SIGTERM
+would cut the turn off or lose the question). A parked lane with a session in it reruns them
+all. The pushed, lock and busy gates guard a cooperative lane against mistakes: the lane's own
+sandbox can still defeat the pushed gate (move its work to another branch and reset), which is
+acceptable, since the worktree and branch are kept, so nothing is lost, and the flag itself
+can't be forged.
+
+**Ending.** The same `save_proof`, `end_lane` and open-sessions sweep as `done`, with the verb
+passed in so a refusal says `rerun lane park X`. There is no `closing` state. A session that
+`open` starts between the survey and `end_lane`'s final look shows up there, which refuses the
+park and leaves the lane unparked. One that starts after the final look runs in a lane that
+ends up parked; it holds the slot all the same (a parked lane with a session holds one), and
+the board shows it `parked` with a live session. The open-sessions sweep runs once something
+was ended, or once the final look passed with nothing to end: a refused park that ended nothing
+keeps every restore entry. On success, under the lanes lock, the flag is written and the proof
+removed.
+
+**The board.** A parked lane shows `parked` and never `orphan`; `--json` rows carry `parked`
+(the stamp, or null). With a lane parked or the cap passed, a `cap: N of M slots held (K
+parked)` line follows, with `, X over` past the cap. It counts the same records as `new`, twins included, by the same rule. The lead sends a parked lane no "main
+moved" message: its `rebase` flag carries that to its unpark. `lane trial` keeps merging parked
+lanes, which are live and will merge.
 
 ## Bug reports from other repos (lane bug-route, 2026-10-18)
 
@@ -513,6 +688,311 @@ checkout). Past that, nothing needs a new check. A repo counts only when its con
 state dir, which only a bare `lane init` writes, and its lead comes from the lead record beside
 that config.
 
+## Ports and `lane serve` (lane ports, 2026-10-31)
+
+A lane's run script in capella-studio (lane prefs, session 78db7f95) started a dev server on a
+port another lane's server held. The start failed, nothing said so, and the checks that followed
+tested the other lane's server. Two pieces close that.
+
+**A block of ports per lane.** `lane init --ports 5191-5199 --block 3` hands each new lane three
+ports in a row, the first run in the range that no held lane's block touches. `lane.json` keeps
+`port` (the first) and `block` (the count); a record from before blocks has no `block` and holds
+its one port, so old and new lanes share a range. `ls`, `whoami` and the lane-identity hook show
+the block (`5191-5193`), and the setup command gets `LANE_PORTS=5191-5193` beside `LANE_PORT`.
+
+**`lane serve [--port N] [--ready RE] -- <cmd>`.** From inside a lane:
+1. It takes `--port`, which must be in the lane's block, or else the first port of the block
+   with no listener and no live serve. It refuses a port that already has a listener and names
+   the holder (pid, command, the lane its cwd is in), since a server started there would fail
+   to bind, and one where an earlier serve still runs without listening (`--stop` it first).
+2. It starts the command in a session of its own, with `PORT` and `LANE_PORT` set, `{port}` in
+   the command replaced, a per-serve token in `LANE_SERVE`, and its output in the lane's
+   `.lane-serve/<port>.log` (gitignored by a `*` inside).
+3. It waits (60 s, `--timeout`) for a match of `--ready`, if given (searched in the log's first
+   1 MiB, with `^` and `$` marking a line's ends), and then for a listener on the port. Every
+   listener there, IPv4 and IPv6, must carry the serve's token and run in the lane's dir.
+   Anything else fails the serve, names the holder and ends what the serve started. This is the
+   check that closes the bug. A
+   server that dies first (with nothing of it left running) fails the serve with its exit status
+   and the log's tail.
+
+**One proof: the token.** A wrapper (`sh -c 'node srv.js &'`) exits after starting the server,
+and a daemon leaves the session with `setsid`. Both keep the token their environment inherited,
+while another lane's server has none. `--stop`, `done` and `park` go by the token, and the
+listener check does too, so a serve never succeeds on a server they couldn't reach: a listener
+in the serve's session that cleared its environment (`env -i`) fails it, saying so.
+
+**Only in the lane.** A served command can start a per-user daemon on first use (Gradle's,
+watchman, sccache) that inherits the token and then works for other lanes too. So nothing
+outside the lane's dir is ever signalled for a token: `--stop` and a failed serve name such a
+process and leave it, `done` refuses by name before any signal while one runs (its record kept;
+`--stop` in the lane drops the record), and the listener check fails a server that daemonizes
+out of the lane (`chdir("/")`): run it in the foreground. Hayden picked this over killing every
+carrier (2026-10-31, round 5). Rounds 2 to
+4 of the review each found a process orphaned by a session-based proof, which dies with the
+session's leader; Hayden picked the token as the one proof (2026-10-31). The session still
+serves one job: while serve waits it never reaps its leader (it looks with `WNOWAIT`), so the
+leader's pid can't be handed on, and a failed serve ends the session's members, those that
+cleared their environment included, before it reaps.
+
+**`lane serve --stop PORT`** ends what a serve of this lane started there: every process carrying
+its token in the lane's dir. Each signal goes through the pidfd check `done` uses, so a reused
+pid is never hit. It runs in a closing lane too (where a new serve is refused), since
+`done` may say to drop a record with it, and like every serve path it takes the lane's path
+through the same checks `done` uses (no symlink on the way).
+The record lives in the state dir (`<repo>-<hash>.served/<id>/<port>.json`: pid, start, boot,
+token), which only a sandbox-off command can write, so no lane's sandboxed Bash can point
+`--stop` at another process.
+
+**`done` and `park`.** Their survey of what runs in the lane counts a process carrying one of the
+lane's serve tokens as the lane's, a class of its own (SERVED), whatever session id it carries:
+a server started from a plain terminal has none. Its children must be the lane's too: one
+outside the lane's dir refuses the close by name, before any signal. So `park` ends a served
+server in the lane and keeps its record for a `--stop` after the unpark. `done` also refuses,
+before any signal, while any of the lane's token carriers runs outside the lane, and looks again
+after its signals; only then does it remove the records, and it keeps any whose processes still
+run (a serve started after its last look).
+
+**Known limits.** The check runs once, when the first listener appears: a listener that binds
+the port after that goes unseen. A listener another user owns (its fds can't be read) always
+fails the serve, since nothing proves it the serve's. A server that rewrites its environment
+area (setproctitle, as gunicorn does) may lose the token: serve then fails on it, as on any
+listener that cleared its environment. A process that cleared it and isn't listening is left by
+`--stop`, and `done` and `park` refuse it by name while it runs in the lane or under a lane
+process. serve sets SIGCHLD back to the default (an ignored one survives exec and would reap
+its leader) and only notes SIGINT and SIGTERM, acting on them at its next look, so neither an
+interrupt mid-start nor a second signal mid-cleanup leaves what it started running. The token is readable to any lane's sandboxed Bash (the state
+dir is), so a lane that keeps starting processes with another lane's token can stall that
+lane's `done` (it refuses while they run) and hold its port; it can't aim a signal at anything
+it doesn't own.
+
+**Why serve runs sandbox-off, and asks each time.** The Bash sandbox gives each command its own
+network and pid namespace: inside it, `/proc/net/tcp` lists only the command's own sockets, and a
+server started there is out of reach of the browser and of later commands. So `serve` refuses in
+the sandbox and runs when its caller turns the sandbox off. Hayden picked this over an
+`excludedCommands` entry (2026-10-31): an exempt `serve` would run any command outside the
+sandbox with no prompt. A private sandbox-audit row (lane ports, 2026-10-31) has the rest, and a
+backlog item tracks the fix.
+
+`lane.json` is sandbox-writable, so `serve` checks a lane's block against the config's range and
+every other lane's block before it uses it. A planted `lane.json` can still claim free ports, so
+`new` runs out sooner, or overlap another lane, so that lane's serve refuses; it can block work,
+but it can't aim a signal.
+
+## Verified merges (`lane sync-main`)
+
+`lane sync-main <n>` merges a merged PR into the main checkout's branch and writes only what git
+has hash-checked against a proven commit. It closes DA15/DA16. The post-merge chain used to fetch and merge main
+with the sandbox off, in a repo whose shared git dir every lane's sandboxed Bash can write, and
+the lead then installed from that checkout. Now every byte sync-main writes to the checkout comes
+from a store of its own, never from that shared dir.
+
+**What it proves.** The lead runs `lane sync-main <n>` bare from the main checkout
+(`skills/lanes/SKILL.md`, The lead, step 7.1). gh must report PR #n as MERGED into the config's
+base branch, with a full merge commit sha. That sha, GitHub's merge commit, is the trust root.
+The lead's branch as sync-main pins it at the start is only where it begins: the branch ref and
+HEAD are lane-writable, and sync-main compares trees, never history, so a lane can give the
+pinned commit other parents. What it verifies is content: the checkout's bytes are the pinned
+commit's tree, the proven commit is on the base as the remote serves it, and the merge's tree is
+the proven commit's outside STATUS.md and PLAN.md. It never vouches for the history of the
+lead's branch. It runs only from the main checkout: a call with no number refuses, as does one
+from a lane. A lane record that names the main checkout as its path is left out when records
+load (LR1), so the main checkout stays main and sync-main runs there as usual.
+
+**Where it builds the merge.** Each run starts a fresh bare store under
+`~/.local/state/dotclaude/verified/`. It fetches the base branch from the remote's URL and the
+checkout's branch into it, and makes the merge commit there. Only the lead's unsandboxed command
+writes that dir. settings.json denies it to the file tools
+(`Edit(~/.local/state/dotclaude/verified/**)` in `permissions.deny`) and to sandboxed Bash (a
+`sandbox.filesystem.denyWrite` line). sync-main refuses to create a store unless the live
+settings hold both rules and the state dir is the default one (and while an install's window
+flag is there: the window bullet under Residuals). Its git calls read no global or system config
+but the `credential.*` keys the remote's fetch takes (LR7's Limits), run no hooks, fsmonitor or
+automatic gc, ignore replace objects and grafts, and speak only https, ssh and file. Three calls
+run outside that isolation: `git var` for the merge commit's author and committer, which reads
+the user's config (the identity is theirs, and only a name, email and date leave it), a `git
+config --file` that reads the per-worktree config switch from the shared repo's config file and
+no other, and the `git config --show-scope` that reads those credential keys.
+
+**What reaches the checkout.** Every byte written to the checkout comes from objects in the
+store, which git hash-checked as they arrived, through the conversions the verified trees'
+own `.gitattributes` files name: git takes attributes from those trees alone, never from the
+work tree or the shared dir. Before it writes, sync-main
+compares the checkout with its branch's commit: the index, every tracked file (its bytes, its
+type and its exec bit), and untracked files inside the dirs that hold tracked files, but for
+`__pycache__`. It refuses on a difference there. Untracked files at the checkout's root are not
+compared, since `.claude/`, `.lane/` and other local files live there, but an untracked root
+`.gitattributes` refuses. It then moves the files from that commit
+to the merge, reading objects from the store only, through an index of its own built from that
+commit (the checkout's index sits in the shared dir, and an entry planted there could convert
+what checkout writes). That index then replaces the checkout's, and the branch moves by
+compare-and-swap.
+Afterwards it compares the checkout with the merge again, the same way, and runs `git fsck` on
+the shared repo.
+A difference or a fsck finding is reported: don't install from that checkout until it is
+explained.
+
+**The main checkout.** There the lead's branch may differ from main only in STATUS.md and
+PLAN.md. sync-main keeps the lead's STATUS.md whole, takes PLAN.md's clean merge (the lead's copy
+on a conflict), and refuses when the merge differs from the proven commit on any other path. When
+the lead's branch isn't the base, it points the base branch (`main`) and its remote-tracking ref
+at the proven commit, for display only. When the lead's branch is the base itself, that branch
+moves to the merge commit and only the remote-tracking ref goes to the proven commit. Then it prints
+main's side of STATUS.md, and the lead adds back by hand any line that isn't an older carry (the
+keep-whole rule under "Where each type lives"). Rerun for a PR the branch already holds, it
+still compares the checkout, writes nothing and exits 0. When the branch holds a newer main than
+that PR's merge (a rerun for an older PR), it says so and judges the branch against the newest
+main commit it holds, which must be on the base as the remote serves it.
+
+**Lanes.** A lane never runs sync-main: a lane's branch history is something another lane can
+rewrite, so it can't serve as a trust root. A lane whose live install keeps it from merging main
+sandboxed asks the lead to reinstall from main: that releases the lane's install, so its files
+are writable again. The lane then merges origin/main sandboxed as usual, resolves any conflict,
+commits, and reinstalls from its worktree before ready.
+
+**What it refuses.** It writes nothing when it runs sandboxed, the checkout has uncommitted
+changes or no branch, gh can't prove the merge, the merge conflicts, the checkout doesn't match
+its commit, the repo turns on per-worktree config (git would then read a file a lane's sandbox
+can write), or another sync-main holds the store's lock. It also refuses on any tripwire
+finding, checked at the start and again right before each ref it moves in the shared repo.
+
+**The tripwire.** sync-main, `lane new`, `done` and `park`, `lane ls`, handoff-check and setup.sh
+each check the shared git dir for signs it may serve content no remote showed (DA15/DA16).
+`new`, `done` and `park` refuse on a finding before any git of theirs moves a ref, `lane ls`
+prints a `git:` line per finding, handoff-check fails with one FAIL per finding in a lanes repo,
+and setup.sh refuses to install. It also flags a symlink directly under `worktrees/` (an entry
+there is always a dir, and `git worktree prune` deletes through a link: LR3), one anywhere under
+`logs/` or a worktree's `logs/` (a reflog write outside the sandbox follows it: LR4), one
+directly in the shared git dir (a fetch writes `FETCH_HEAD` through it: LR5; only links count
+there, since the sandbox's own mounts over protected paths read as devices), and one anywhere
+under `refs/` (update-ref
+creates a ref file through it: LR6). The lane CLI's fetches write no `FETCH_HEAD` at all.
+setup.sh also sets
+`core.useReplaceRefs false`, `gc.auto 0` and `maintenance.auto false` in the global git config:
+`gc --auto`, which a fetch, pull, merge or commit otherwise starts, runs that prune (LR3). The
+lane CLI's own fetches (`new`, `done`, `park`, sync-main) set both keys and pass
+`--no-auto-maintenance` themselves, so they hold before setup has run. A finding goes to Hayden:
+find out who made it before anything else runs git in that repo.
+
+**Residuals (accepted).**
+
+- The lane that holds the install runs its own edits outside the sandbox by design; sync-main
+  doesn't cover them (DA1).
+- When no lane holds the install, the checkout is a mix of old and new verified files while the
+  files move. Anything that runs from it in that moment sees the mix.
+- `__pycache__` dirs and untracked files at the checkout's root, but for `.gitattributes`, are
+  not compared. An untracked `.gitattributes` anywhere steers no conversion, since attributes
+  come from the verified trees alone.
+- The store's path (DA12). sync-main opens the stores' dir by fd from the home dir, never through
+  a link, holds it open for the run, and before each git step checks that the path still leads
+  there. git takes the path, though, so a sandbox that can write the home dir can still rename an
+  ancestor aside in the span between that check and git's own lookups, or keep a writer into the
+  dir it recreates. Before the checkout, sync-main also holds the store's config to the bytes
+  `git init` wrote and runs the tripwire on the store, so a filter or attributes planted there
+  refuse.
+- A corrupt object in the shared repo is reported by `git fsck`, not repaired. The checkout is
+  still built from the store.
+- A shallow clone fails the tripwire, so sync-main, handoff-check and setup.sh refuse in one.
+- A reflog or ref link planted between a command's last tripwire check and git's own write still
+  takes that write (LR4, LR6). sync-main checks again right before each update-ref, which
+  narrows its span to milliseconds. `new` checks three times: at its start, again once it holds
+  the store's lock (which it may wait minutes for), right before its base fetch's ref and
+  reflog writes, which then sit behind that check across the network round trip, and again
+  under the lanes lock right before `git worktree add -b`. `done`
+  and `park` check once, at their start, so their span runs from there to the write. None of
+  this closes it.
+- The setup command runs with the user's environment, and any git it runs finds its config
+  through the lane's admin dir pointer under the shared git dir, which a lane can rewrite while
+  the setup runs (residual of LR7). Pinning git's common dir for the setup would aim any git it
+  runs in another repo (an npm git dependency, say) at the lane repo's git dir, so it stays open.
+- An install whose live settings.json lacked either stores' rule (one from an older dotclaude)
+  left the stores' dir open to every lane until the next install restored them: the window. A
+  marker planted then would let `adopt` run the setup in a tree nobody verified, so setup.sh,
+  when the settings it replaces lack a rule, turns every marker pending once the new settings
+  are in, and removes whatever there, or at the stores' `.lock`, is no regular file (a FIFO at a
+  lock would hang a run; outside a window, `new` and sync-main refuse a `.lock` that is no
+  regular file). Each lane it names must be redone (`lane done <id> --abandon`, then
+  `lane new`). A flag setup.sh leaves in the stores' dir before its settings copy makes `new`,
+  `adopt` and sync-main refuse until the demotion is done, and carries it to the next run if one
+  stops in between; the demotion makes the flag too, before it starts, and an entry it
+  can't fix keeps the flag and is named (with no flag at all, say on a full disk, it says
+  nothing refuses). Still open: a
+  command the sandbox started during the window keeps its write access there until it exits,
+  since its mounts were set at its start; and a pending marker deleted during the window can't
+  be brought back, so `open` no longer refuses that lane on the marker's word.
+- The stores' dir is out of every lane's write reach but not its read reach, so a lane's sandbox
+  can take a lane's finishing lock and hold it. While it does, `new` (of that id), `adopt`,
+  `open` and `done` of that lane refuse. That denies service and runs nothing, like a held lanes
+  or stores lock (LR7).
+
+**`lane new`'s checkout (LR7).** `new` checks the lane out from the shared object store, which
+any lane's sandbox can write. Then the config's setup command runs in it sandbox-off, and the
+session `lane open` starts there loads the tree's `.claude/` config, whose hooks run outside the
+sandbox too. So every `new`, with a setup command or none, first fetches the base branch from
+the remote into a fresh store (`new.git`, beside sync-main's under the same lock and settings
+rules), and requires the commit ls-remote named to be on it. A `new` that finds the lock held
+waits for it, up to five minutes, and says so; sync-main still refuses at once. Holding it,
+`new` gives the lanes lock 30 s, then refuses, so a stuck sandboxed `lane claim` can't hang
+every `new`. Without both settings rules, or while an install's window flag is there (the
+window bullet under Residuals), it refuses before it creates anything, as `adopt` does. Right after `git worktree add`, before anything else is
+written there, every tracked file of the new worktree must match that commit's tree in the
+store, byte for byte and type, its index must too, and nothing untracked may sit in it.
+`.worktreeinclude`'s copies come after the check, from the main checkout, which no lane's
+sandbox can write (the lead's own sandbox can: that is the main checkout's existing trust, not a
+new route). The lane is recorded setup-failed at `verify` before the check starts and moves on
+only once it passes, so an interrupted check leaves it at `verify`. Before the worktree exists,
+`new` writes a pending marker for the lane under `~/.local/state/dotclaude/verified/new-lanes/`,
+which no lane can write, in place of any an older lane of its id left; a pass turns it into the
+verified marker. Both hold the lane's id, path, branch, base commit, created stamp and ports as
+`new` made them. If anything differs, nothing runs in the tree and the message names each path.
+From the check on, `new`'s copy, setup and finish act on the lane as `new` made it, and
+`adopt`'s on the lane as its marker names it, never on those fields read again from `lane.json`
+(which any lane can write): each step that writes `lane.json`, and the setup right before its
+command starts, refuses once `lane.json` names other values for them. `lane adopt` finishes a
+lane only when its verified marker is there and matches its `lane.json` on every one of those
+fields; otherwise it refuses and names `lane done <id> --abandon` and `lane new` again, as do
+`open` and `park` for such a lane. The marker vouches only for a tree nothing but `new`'s copies
+and the setup has run in, so it lasts only while the lane is unfinished. `open` (every form,
+`--print` and `--focus` too) refuses a lane while any marker for its id is there (pending,
+verified, or one its `lane.json` no longer matches) or one can't be read, whatever its
+`lane.json` says, and passes only when none is there, so no session starts in the tree through
+the check and the setup. A per-lane finishing lock beside the markers, taken by `new` before its
+pending marker and by `adopt` before its marker check, each holding it until the lane is marked
+active, makes any other `new` or `adopt` finishing the lane refuse at once, and `open` refuses
+while it is held. When the stores' dir exists as `done` starts, `done` takes the lock too and
+holds it to its end, so no `new` or `adopt` of that id runs while the lane closes, and the marker
+`done` removes is never one a later `new` wrote. With no stores' dir then, no `new` has made a
+marker there: `done` takes no lock and removes no marker, and a `new` of the same id run while it
+closes may lose its record to the close (it then refuses, and nothing runs). `adopt` finishes a lane with a matching verified marker whatever its
+`lane.json` state, except `closing` (a `lane done` is ending it), which it refuses as
+registered. It refuses while a live session runs in the lane's tree (or while sessions can't be
+read), as does the setup step of `new`: a session found there drops the marker, so the lane is
+closed with `lane done <id> --abandon` from then on. A failed setup is fixed from a terminal,
+not a claude session. Once the setup succeeds, or there is none, `new` (or `adopt`, finishing
+one) removes the marker and only then marks the lane active. A marker that can't be removed
+refuses there, leaving the lane setup-failed with a marker that is still true. A lane whose copy
+or setup failed keeps its verified marker, so `adopt` can finish it; one whose check failed or
+never finished keeps its pending one, which `adopt` never finishes by. `lane done` removes
+either.
+
+A lane `new` refused holds a tree git may find changed, and `done --abandon` deletes no such
+tree, nor skips that check on `lane.json`'s word. Nothing ran in that tree, so the refusal says
+to delete the lane's dir by hand from a terminal and then run `lane done <id> --abandon`, which
+closes a lane whose dir is gone. `open` and `park` say the same for any lane without a marker,
+with a warning to save what is yours first, since they can't tell a lane `new` refused from one
+whose `lane.json` was rewritten. The dir is named only where `new` puts a lane (the config's
+root and the id), never from `lane.json` alone.
+
+**Limits.** The compare is byte for byte against the blobs, so a checkout that converts bytes
+(`core.autocrlf`, `eol` or `ident` attributes, a filter such as LFS) fails `new`'s verification,
+as it fails sync-main's compare. Both stores fetch with no global or system config but its
+`credential.*` keys, read fresh each run, so a private https remote works through the helper set
+there (`gh auth setup-git`'s, for one). Nothing else from those files reaches the fetch (no
+`url.<base>.insteadOf` or `http.*` key), no include is followed, and a credential key
+in the repo's or a worktree's config never counts: no lane's sandbox can write the global or
+system config, and any lane can write a worktree's. Reading those keys takes git 2.26 or later
+(`git config --show-scope`); an older git refuses the fetch and says so.
+
 ## Layout
 
 Claude Code treats every path under `.git/` as a "sensitive file", so Edit/Write there always
@@ -525,23 +1005,33 @@ stays in the common dir, which sandboxed Bash can write (S1).
   STATUS.md                     the lane's prose (templates/LANE.md): Brief, State, Decisions, Asks for Hayden, Not mine, Next
   PLAN.md                       the lane's working design (optional)
   artifacts/                    evidence that rulings point at (mocks, shots, gate logs)
+<lane worktree>/.lane-serve/    `lane serve` logs, <port>.log, gitignored by a `*` inside
 
 $XDG_STATE_HOME/dotclaude/lanes/<repo>-<hash>.toml
-                                the config: root, setup cmd, port range, live-lane cap, base
+                                the config: root, setup cmd, port range, block, live-lane cap, base
                                 (<remote>/<branch>, default origin/main), locks, autopass,
-                                model, effort; written only by a bare `lane init`
+                                model, effort, trial-link, trial-locks; written only
+                                by a bare `lane init`
 $XDG_STATE_HOME/dotclaude/lanes/<repo>-<hash>.lead.json
                                 the lead record: the main-checkout session that last acted as
                                 lead, written only by bare `lane` commands ("One lead per main
                                 checkout")
 $XDG_STATE_HOME/dotclaude/lanes/<repo>-<hash>.closing/<id>.json
                                 the pane shells a `lane done` of lane <id> proved the lane's,
-                                kept for a rerun until the close completes
+                                kept for a rerun until the close completes (a `lane park` keeps
+                                its own there the same way)
+$XDG_STATE_HOME/dotclaude/lanes/<repo>-<hash>.parked/<id>.json
+                                lane <id>'s parked flag ("Parked lanes"), written only by a
+                                bare `lane park`, removed by `lane open` and `lane done`
+$XDG_STATE_HOME/dotclaude/lanes/<repo>-<hash>.served/<id>/<port>.json
+                                what `lane serve` started on a port ("Ports and `lane serve`"),
+                                written only by a sandbox-off serve, removed by `serve --stop`
+                                and `lane done`
 
 <common-dir>/lanes/             CLI-owned; written by `lane` and by hooks, never by the Edit tool
   .lock                         flock for every CLI write (claims are atomic)
   _locks/<name>                 one flock per shared gate (`lane lock`), holding the holder line
-  <id>/lane.json                id, branch, path, base_sha, port, claims[], state, sessions[], created/updated, opened
+  <id>/lane.json                id, branch, path, base_sha, port, block, claims[], state, sessions[], created/updated, opened
   <id>/mirror/                  copy of <lane>/.lane/, refreshed by a Stop and SessionEnd hook, so a raw
                                 `git worktree remove` (which deletes ignored files) loses nothing
   _closed/<id>-<date>/          lane.json + .lane/ archived on `lane done`
@@ -571,11 +1061,16 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
 - **S3, `excludedCommands`:** `lane new` fetches and `lane ls` asks gh for PR state, and both
   need the credential the sandbox hides; `ls`, `open`, `done`, `addr` and `lead` also need to
   see other processes. PR 1 excluded `lane *`. PR 2 narrowed it to `lane init`, `new`, `adopt`, `ls`,
-  `open` and `done` (lane-addr added `addr`, and two-sessions `lead`), each by name, because `lane lock -- <cmd>` must stay sandboxed: under
+  `open` and `done` (lane-addr added `addr`, two-sessions `lead`, park `park`, and DA15/DA16 `sync-main` with a PR number), each by name, because `lane lock -- <cmd>` must stay sandboxed: under
   `lane *`, any command wrapped in it ran sandbox-off without the `dangerouslyDisableSandbox`
   flag the delete guard checks. `whoami`, `claim`, `release`, `who`, `note`, `asks` and `lock`
   touch only `<common-dir>/lanes/` and the lane's `.lane/`, which a lane-rooted sandbox can
-  write (S1). A sandboxed (piped) `ls` says what it skipped; `new`, `open`, `done`, `addr` and `lead` refuse.
+  write (S1). A sandboxed (piped) `ls` says what it skipped; `new`, `open`, `done`, `park`, `sync-main`, `addr` and `lead` refuse.
+  `serve` has no entry: it refuses in the sandbox and runs only when its caller turns the
+  sandbox off, so each start meets the usual approval ("Ports and `lane serve`").
+  `park` fetches, asks gh, sees and signals the lane's sessions and writes its flag in the
+  state dir, so it needs all three.
+  `trial` must stay sandboxed too, and refuses to run anywhere else (the `lane trial` section).
   `new` and `adopt` also run the config's `setup` command through a shell, sandbox-off, and
   `new` makes its worktree under the config's `root`. So the config lives in the state dir, not
   the common dir: sandboxed Bash can read it but not write it, and only a bare `lane init`
@@ -588,7 +1083,8 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
     `adopt` and `claim` refuse to hand out a claim, port or cap slot, and a checkout outside
     the main one that matches no record can't take itself for unregistered (`handoff-check`
     fails, `pass-respawn` refuses). Two records sharing a path only count there when the
-    path is that checkout's.
+    path is that checkout's. The main checkout is always `main`, checked before any record,
+    and a record whose path is the main checkout, holds it or sits inside it is left out.
   - A lane's path must be a real worktree of this repo, outside the main checkout and any other
     lane, before `open` starts `claude` there, the setup runs there, files are copied there, or
     `done` archives and removes it.
@@ -602,15 +1098,25 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
     sides. A symlink is copied as a link (a relative one made absolute), never read through, so
     the sandbox's read deny still holds at its target; anything not a regular file is skipped.
   - A symlinked `lanes/`, `lanes/<id>`, mirror or `info/exclude` is refused.
+  - Sandbox-off, whatever `done` and the mirror hook remove, rename or write in the lane's
+    worktree, `<common-dir>/worktrees/` or `<common-dir>/lanes/`, and every write of
+    `lane.json` or open of the lock file by any `lane` command, goes by name under a directory
+    fd, reached from `/` or the main checkout with `O_NOFOLLOW` at each step (and no `..`); a
+    record is copied by fd at every level. A lane's sandbox can
+    write all three, so a check of a path there can't hold until its use. No message of `done`
+    or the mirror offers a removal by path (a test scans the CLI's messages).
   - `done` signals a process only on kernel facts (`/proc`) and Claude Code's own files (session
     files, transcripts), never on `lane.json` (the pieces, `lane done`).
+  - An accepted limit: `is_live` trusts `lane.json`'s path, so a lane that points its own path
+    at a missing dir drops out of `new`'s cap count. Counting by `git worktree list` wouldn't
+    close it, since git's worktree admin dir is sandbox-writable too.
   PR 3 adds `pass-respawn` to `excludedCommands` (bare and with arguments): it needs the tmux socket and
   the session's processes, and its docstring lists what it reads and why each input is safe.
   The excluded-command inventory (2026-10-13, `tests/delegation/command_inventory.py`) adds three
   asks: `lane init --setup` names the command each new lane runs, `lane init --root` moves where
   lanes live, and `lane done --abandon` closes unmerged work. The rest of `lane` asks nothing.
   The excluded-command guard (docs/delegation.md) then let `ls`, `new`, `adopt`, `open`, `done`,
-  `addr` and `lead` take allow rules, so the classifier never refuses them: an allow rule skips the
+  `park`, `sync-main`, `addr` and `lead` take allow rules, so the classifier never refuses them: an allow rule skips the
   classifier, and the guard checks each call's git config, PATH and cwd first. The three asks
   still win.
   A lane that installs from its worktree (`lane lock install -- ./setup.sh`) points the installed
@@ -623,6 +1129,13 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   the model after `/compact` (`/compact` piped into `claude -p --resume` triggers a real
   compaction). `lane-identity.sh` on `compact` is therefore the safety net for an unplanned
   auto-compact.
+- **S5, fork:** `/branch` and `claude --resume <id> --fork-session` start a new session id from
+  a copy of the parent's transcript and fire SessionStart with source `fork` (probed on 2.1.317,
+  interactive `/branch` and `claude -p`). The hooks run, so `CLAUDE_ENV_FILE` exports apply and
+  `lane-identity.sh` registers the fork in `lane.json` as `source: "fork"`, but none of their
+  `additionalContext` reaches the fork's model: its transcript gains no hook entries after the
+  copy. A fork still knows its lane from the parent's identity line in that copy. The parent's
+  session-registry entry is removed at the `/branch` and the fork's is written.
 - **Session facts** for `handoff-check`: `~/.claude/sessions/<pid>.json` carries `sessionId`,
   `cwd`, `startedAt` (ms), `status`, `tmux` (`session:@window.%pane`) and
   `messagingSocketPath`. A session's own shell also has `$CLAUDE_CODE_SESSION_ID`. A file that
@@ -653,7 +1166,7 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
 ## The pieces
 
 - **`lane` CLI** (`skills/lanes/scripts/lane`, shared core in `lanelib.py` beside it). Every write
-  takes the flock, so two `lane claim 42` calls can't both win. `lane new` reserves the port and
+  takes the flock, so two `lane claim 42` calls can't both win. `lane new` reserves the ports and
   writes `lane.json` under the lock, then runs the setup command outside it, so a slow
   `npm ci` never blocks a claim; a failed setup leaves the lane registered for a retry or
   `lane done --abandon`. Before any of that, `new` refuses a branch name any PR has used
@@ -677,8 +1190,9 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   to read the record and plan its brief. The window stops at Claude Code's "trust this
   folder?" dialog unless the lanes root (or a parent) is trusted; a trusted parent covers every
   lane under it (probed 2026-10-11, 2.1.296), so `lane init` prints the one-time line that
-  trusts the root. It refuses a stale or `setup-failed` lane, and a
-  lane with a live session (naming its tmux target, a stopped one marked `(stopped: fg it
+  trusts the root. It refuses a stale or `setup-failed` lane, one a `new` or `adopt` is
+  finishing or a `done` is closing, one that still has a marker of `new`'s, whatever its
+  `lane.json` says (LR7), and a lane with a live session (naming its tmux target, a stopped one marked `(stopped: fg it
   there)`; `--focus` selects that window instead).
   Sandboxed, it can't see other sessions, so it refuses and asks for a bare run; `--print` still
   prints, warning that the command may duplicate a live session. It stamps only
@@ -698,9 +1212,18 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   refuses a pick for a lane with a live session, since `/model` or `/effort` in its window is what
   changes a live one.
 
+  The baseline `settings.json` pins the model with env `ANTHROPIC_MODEL=opus` (lane model-pin,
+  2026-10-23). Claude Code reads it at startup ahead of the `model` key that `/model` saves (probed
+  on 2.1.309), so a `/model` moves only its own session. `/model` still says the pick is "saved as
+  your default for new sessions" and writes the key, then adds that `ANTHROPIC_MODEL` is set and new
+  sessions use it (checked live on 2.1.310): nothing reads the key while the pin stands. A `--model`
+  flag beats the pin, so `lane open --model ''` starts a lane on Opus. The effort has no pin:
+  `/effort` still sets the default for new sessions.
+
   A plain pass keeps the pick (`carried_pick` in lanelib, which pass-respawn, `claude-restore` and
   `claude-saved` share), for each flag the old claude launched with, read from its `/proc` command
-  line:
+  line, and for the model after a `/model` even when it launched without one, since the fresh
+  claude would otherwise take the pin (Hayden's pick, 2026-10-23):
   - After a `/model` (for the effort, a `/model` or `/effort`) in the transcript, it carries what
     the last main-chain assistant entry since ran with (`message.model`, `effort`). That id loses
     what an alias or a 1M form means (`opusplan`'s switch per mode, `sonnet[1m]`), so the model is
@@ -709,7 +1232,9 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
     `opusplan` or 1M form picked there loses its meaning. The user's saved default is never read: it
     is machine-wide, so another session's later pick of the same family would pass for this
     session's. When no usable entry follows (a `<synthetic>` one, a model that takes no effort, an
-    id that isn't `claude-`), the flag drops, and the default the command saved applies.
+    id that isn't `claude-`), the effort drops to the default the command saved, and the model
+    carries the `/model`'s argument if `lane open` would accept it (the pin would undo the pick),
+    else it drops to the pin.
   - With no such command, it carries the launch value, except a model the last entry can't have run
     as (an alias of another family, another full name; a dated id such as
     `claude-haiku-4-5-20251001` fits `claude-haiku-4-5`). That is a change the transcript can't
@@ -717,26 +1242,29 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
     carries the id that ran. A change there within the launch alias's family (`opus` to
     `claude-opus-4-8`) can't be told from none, so it reverts. The effort has no such check: Claude
     Code moves it without a command (a level per model, a one-turn bump), so an `/effort` before a
-    `/clear` reverts too.
+    `/clear` reverts too. A session launched without `--model` has no launch value to check, so a
+    `/model` before a `/clear` reverts to the pin.
 
   Only an accepted `/model` reaches the transcript (a refused one leaves no entry), and only Claude
   Code's own command entry counts, never a prompt or a tool result that quotes its tag. The
   transcript is read just before the respawn, as the resume mode is, so a `/model` during the
   passing turn counts; a launch value that can't be passed on refuses at the call. A session
-  launched without the flags respawns as before. Hayden picked this over a plain copy of the flags
-  (which undoes a mid-session `/model` at the next pass) and a stored per-lane pick (the same flaw,
-  plus new state). How each case comes out:
+  launched without the flags respawns bare unless a `/model` carries. Hayden picked this over a
+  plain copy of the flags (which undoes a mid-session `/model` at the next pass) and a stored
+  per-lane pick (the same flaw, plus new state). How each case comes out:
   - a plain pass or an auto-pass: the pick holds; a compact pass keeps the same process;
   - a `/model` or `/effort` mid-session: the new pick holds at the next pass; across a `/clear`,
-    only a model the launch value can't have run as does;
+    only a model the launch value can't have run as does (with no launch `--model`, none does);
   - a default changed after a lane opened: that lane keeps its launch pick until `/model` or
     `/effort` in its window moves it;
-  - the lead's main checkout: no repo default reaches it, and it carries what it launched with;
+  - the lead's main checkout: no repo default reaches it, and it carries what it launched with
+    or a `/model` since;
   - a tmux restart, or a reopen from the shelf: the pick holds, as below.
 
   A tab restore (`tmux/claude-restore`) and the shelf's Open (`tmux/claude-saved`) keep the pick
-  the same way (lane restore-effort, 2026-10-17). A bare `claude --resume <id>` keeps the model but
-  drops the effort to the default (spike S3, again on 2.1.302), and the resumed claude would have no
+  the same way (lane restore-effort, 2026-10-17). A bare `claude --resume <id>` drops the effort to
+  the default (spike S3, again on 2.1.302) and, under the pin, the model to the pin (probed
+  2026-10-23 on 2.1.309; before the pin it kept the model), and the resumed claude would have no
   flags for its next plain pass to carry, so each types the flags instead (`--resume` honors both,
   probed 2026-10-17 on 2.1.302). `hooks/session-registry.sh` saves the flags the session's claude launched with, as
   `model` and `effort` in its open-sessions entry, at each SessionStart: the hook's nearest
@@ -744,16 +1272,14 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   claude run by its versioned path, whose comm is the version; else its name is `claude`), its
   `/proc` command line, each value only in the shape a pass would pass on. `claude-saved` copies
   them into a starred or shelved chat's entry at Star, Shelve and each SessionStart. At relaunch,
-  `carried_pick` reads them with the transcript, which by then is complete, with one difference
-  for a resume: when no usable entry follows a `/model` (the server died before the reply), it
-  carries the `/model`'s argument if `lane open` would accept it, since a resume keeps the
-  session's own model where a new session takes the default the command saved.
+  `carried_pick` reads them with the transcript, which by then is complete, by the pass's rule.
   Hayden approved launch flags plus the transcript over either alone: the flags alone undo a
   mid-session `/model`, and the transcript alone loses an alias or a 1M form and would pin a
   session launched without flags to what it last ran. How each case comes out:
   - launched without flags, or an entry from before the fields (a session started before the
-    install keeps one until its next SessionStart: a compact, `/clear` or resume): a bare resume,
-    as before, so the user's default effort applies, as at a pass;
+    install keeps one until its next SessionStart: a compact, `/clear`, resume or fork): a bare
+    resume, unless a `/model` in the transcript carries, so the pin and the user's default effort
+    apply, as at a pass;
   - a field outside its shape: that flag drops, never the tab;
   - a tab with no transcript yet: `claude` with its launch flags;
   - an attach tab, or Open of a chat running in the background: no flags, since the resume
@@ -775,7 +1301,8 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   live sessions, the most urgent one when there are two, marked `*` past the soft tier and `!`
   past hard on that session's own window (`312k*`, `523k!`; the window comes from the config
   dir of the transcript its stop record names, as the watcher's does). It is `-` with no count
-  and `?` when sandboxed; `--json` has it as `ctx` (`session`, `tokens`, `tier`, `status`). The
+  (a compact blanks it until the first reply after it is counted) and `?` when sandboxed;
+  `--json` has it as `ctx` (`session`, `tokens`, `tier`, `status`). The
   STATE column after it lists each live session's `status` from its session file (`busy`,
   `idle`, `waiting`, or `shell` while a background shell runs at the prompt), as `states` in
   `--json`. A stopped session (Ctrl+Z) drives none of these columns: its lane gets the `stopped`
@@ -814,7 +1341,10 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   compact keeps its session's entry, so the session's start (which `handoff-check` uses) doesn't
   move. The mirror is crash-safe: it builds `mirror.new`, swaps, then deletes. A `mirror.old` left
   by a killed run is restored under the lock by the hook or `done`, and read in place by lock-free
-  readers such as `lane asks`. It copies every symlink as a link and never follows one, and skips
+  readers such as `lane asks`. Every step goes by name under `lanes/<id>/` opened by fd, so a
+link swapped in for it mid-run leads nowhere. It copies every symlink as a link and never
+follows one, opening each name by fd with `O_NOFOLLOW` (a file swapped for a link mid-copy is
+copied as the link), and skips
   the copy when nothing in `.lane/` changed. Following links once copied whatever they reached
   (`../..`, a home dir) into every archive, so evidence must be real files. A `.lane` that is itself
   a symlink (a repo can commit `.lane -> ..`) is never mirrored or archived, and `lane new` and
@@ -839,7 +1369,8 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   code fails in a lanes repo and only warns in a plain one, where long-lived text has no peer
   to mislead. `--closing`, which `lane done` runs, judges freshness against HEAD's commit only
   and skips approval: after a `/pass`, the idle new session started after the handoff. It also
-  fails on a `Keep open:` item in Next. Its unpushed-commit warning follows the checked-out
+  fails on a `Keep open:` item in Next. Every mode fails an unclosed `<!--` or a stray `-->`
+  outside code, naming its line (`--closing --abandon` skips it). Its unpushed-commit warning follows the checked-out
   branch or detached HEAD (why: the branch switch paragraph under `lane done`), falling back to
   `lane.json`'s branch only when HEAD can't be read or names an invalid branch. It counts the
   commits that neither the base nor any of origin's refs hold, never against one pushed copy:
@@ -853,7 +1384,7 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   `--abandon`. It can't tell "no work" from "fast-forwarded in before adoption", so its state is
   `closed`, "closed (nothing past origin/main)", unless a merged PR names that tip; `abandoned`
   means `--abandon`. While the worktree exists it refuses a lane whose record's Next has a
-  `Keep open:` item, live session or not ("Who asks what"); `--abandon` closes it anyway, and a
+  `Keep open:` item, or whose record has an unclosed `<!--` or a stray `-->`, live session or not ("Who asks what"); `--abandon` closes it anyway, and a
   merged lane keeps the state `merged`. The archive is built under a `.tmp` name and renamed into place only when
   complete. Sandboxed, `done` can't see
   other processes, so it refuses and asks for a bare `lane done <id>`. It detects the sandbox by
@@ -879,8 +1410,11 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   Before any signal, `done` refuses anything else by name (pid, comm and program name, never an
   argument: one can hold a secret). The same goes for each of these:
   - a background session: `claude stop <jobId>` ends it;
-  - a dirty, locked or submodule worktree, which `git worktree remove` would refuse after the
-    kill;
+  - a dirty, locked or submodule worktree, which a plain `git worktree remove` would refuse
+    after the kill (the dirt check runs again just before the worktree goes, as git's does);
+  - a worktree git doesn't list at the lane's path though the gates find one there (its admin
+    dir's `gitdir` read one way by `done` and another by git), since `done` couldn't then find
+    the registration it removes;
   - a run from anywhere but the main checkout, or under a Claude session whose cwd is in a
     linked worktree of this repo or under the lanes root (outside the main checkout): only the
     lead closes lanes. Both come from git's own worktree links and the lanes config, never
@@ -929,10 +1463,30 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   setup.sh's `install.lock` (waited for up to 30 s), `done` builds the archive under a temporary
   name from `lane.json` re-read under the lanes lock (so it keeps the `endedAt` SessionEnd
   stamped), checks the install and the lane's processes once more and removes the worktree with
-  the lanes lock released
-  (`git worktree remove` can outlast the hooks' 2 s), then re-reads the record under it and
-  moves the archive into place. No install relinks into the lane in between, and a failure
-  leaves no partial archive.
+  the lanes lock released (it can outlast the hooks' 2 s), then re-reads the record under it,
+  moves the archive into place and removes `lanes/<id>/`. No install relinks into the lane in
+  between, and a failure leaves no partial archive.
+
+  `done` removes the worktree itself, never through `git worktree remove`: git deletes by path,
+  and a process the lane left can still write the lane and the common dir, so a path checked
+  at the gates may lead elsewhere by its use. The admin dir is the one real dir under
+  `<common-dir>/worktrees/` whose `gitdir` resolves to the lane's `.git` path, as the gates
+  resolve it (the lane's own `.git` file, which it can write, is never asked; the removal never
+  goes by that resolved path). A locked one is refused, as git refuses it, even with its tree
+  gone. `lane.json`'s path is sandbox-writable and
+  nothing ties it to the lanes root (`adopt` takes a worktree anywhere), so the dir above the
+  tree is reached by a walk from `/` with `O_NOFOLLOW` at every name, and a link swapped in on
+  the way refuses the removal. The tree is renamed aside to a fixed hidden name there, then
+  removed by Python's fd-based `rmtree`, which never follows a link; then the admin dir and any
+  tree a trial left, by name under `worktrees/` as it was opened before the files went. The
+  archive's temp dir, its rename and `lanes/<id>/` likewise go under `lanes/` and `_closed/`
+  opened at the start. With no admin dir or several naming the
+  lane, it removes nothing. A file it can't delete (a dir with no write permission) stops it
+  partway with `lane.json` and the registration kept; the tree is already aside, so a rerun's
+  gates find nothing at the lane's path, and the rerun finishes the removal, even once git
+  dropped the registration meanwhile (a prune). The tree's `.lane/` goes last, so unless the
+  failure was inside it, the rerun archives the whole record from the tree aside, not the
+  older mirror.
 
   A rerun keeps what the first run proved. A pane shell's only proof is the session it ran,
   which the close itself ends, so on 2026-10-15 each rerun refused the two-sessions tab's shell
@@ -952,7 +1506,8 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   Every git `done` runs in the lane takes its config from the repo's common dir
   (`GIT_COMMON_DIR`), and the lane's path must be a worktree whose admin dir's `commondir` names
   that dir: the admin dir is sandbox-writable, and a config `core.fsmonitor` would run a command
-  sandbox-off. While the lane's worktree exists, a repo that sets `extensions.worktreeConfig` refuses
+  sandbox-off. And none runs a hook: `core.hooksPath` is `/dev/null` for every git `new`, `done`
+  and `park` run (the configured setup command keeps the user's environment). While the lane's worktree exists, a repo that sets `extensions.worktreeConfig` refuses
   `done`, since git then also reads the lane's `config.worktree`, which nothing overrides; a
   worktree that was gone at the checks and reappears before the remove refuses too.
 

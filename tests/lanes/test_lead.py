@@ -308,7 +308,7 @@ class Ctx(Lead):
         rec = {"tokens": tokens, "time": time.time()}  # wall clock
         if window is not None:
             rec["window"] = window
-        self.write(os.path.join(self.tmp, "state", "dotclaude", "ctx", sid + ".json"),
+        self.write(os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "ctx", sid + ".json"),
                    json.dumps(rec))
 
     def board(self):
@@ -322,6 +322,13 @@ class Ctx(Lead):
         self.assertEqual(self.board(), ("-", None))
         self.session(os.getpid(), "s-1")  # live, but the watcher hasn't counted it yet
         self.assertEqual(self.board(), ("-", None))
+        self.ctx("s-1", None)  # a compact blanked the count (SessionStart(compact))
+        self.assertEqual(self.board(), ("-", None))
+        self.session(os.getppid(), "s-2")
+        self.ctx("s-2", 120000)  # the lane's other session still counts
+        self.assertEqual(self.board(),
+                         ("120k", {"session": "s-2", "tokens": 120000, "tier": None,
+                                   "status": "idle"}))
 
     def test_one_session(self):
         self.session(os.getpid(), "s-1")
@@ -362,7 +369,7 @@ class Ctx(Lead):
         self.assertEqual(self.board()[0], "160k")  # lane's own config dir: 600k
         cfg = os.path.join(self.tmp, "other-config")
         self.write(os.path.join(cfg, "settings.json"), json.dumps({"autoCompactWindow": 200000}))
-        self.write(os.path.join(self.tmp, "state", "dotclaude", "stops", "s-1.json"),
+        self.write(os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "stops", "s-1.json"),
                    json.dumps({"session_id": "s-1", "time": time.time(),  # wall clock
                                "transcript_path": os.path.join(cfg, "projects", "p", "s-1.jsonl")}))
         self.assertEqual(self.board()[0], "160k!")  # its stop record's config dir: 200k
@@ -390,7 +397,7 @@ class Ctx(Lead):
     def test_a_bad_count_or_session_id_is_skipped(self):
         self.session(os.getpid(), "../s-1")
         self.session(os.getppid(), "s-2")
-        self.write(os.path.join(self.tmp, "state", "dotclaude", "s-1.json"),
+        self.write(os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "s-1.json"),
                    json.dumps({"tokens": 999999}))
         self.ctx("s-2", "lots")
         self.assertEqual(self.board(), ("-", None))
@@ -412,6 +419,27 @@ class Lock(Lead):
         p = self.run_lane("init", "--locks", "gate,../x")
         self.assertEqual(p.returncode, 1)
         self.assertIn("../x", p.stderr)
+
+    def test_init_checks_the_trial_locks_against_the_locks(self):
+        # Every trial also takes them, before `suite`: each must be a lock `lane lock` accepts.
+        out = self.lane("init", "--trial-locks", "e2e")
+        self.assertIn("trial-locks = e2e", out)
+        for spec, why in (("suite", "`suite`, which every trial takes already"),
+                          ("nope", "nope, which the config's locks don't list"),
+                          ("../x", "bad lock name(s) ../x")):
+            with self.subTest(spec=spec):
+                p = self.run_lane("init", "--trial-locks", spec)
+                self.assertEqual(p.returncode, 1, p.stderr)
+                self.assertIn(why, p.stderr)
+        # A --locks that drops one is refused too: every trial would then fail on it.
+        p = self.run_lane("init", "--locks", "gate")
+        self.assertEqual(p.returncode, 1, p.stderr)
+        self.assertIn("e2e, which the config's locks don't list", p.stderr)
+        (cfg,) = self.config_files()
+        self.assertIn('locks = "gate,e2e"', self.read(cfg))
+        self.assertIn('trial-locks = "e2e"', self.read(cfg))
+        self.assertNotIn("trial-locks", self.lane("init", "--trial-locks", ""))
+        self.lane("init", "--locks", "gate")
 
     def test_the_command_exit_code_passes_through(self):
         self.assertEqual(self.run_lane("lock", "gate", "--", "sh", "-c", "exit 3").returncode, 3)

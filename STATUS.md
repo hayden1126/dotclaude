@@ -6,7 +6,7 @@
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design lives in the repo's `PLAN.md` or its doc,
 > not only under `~/.claude/plans/`, which the next plan overwrites ([[plan-file-not-durable]]).
 
-Last updated: 2026-10-19
+Last updated: 2026-10-29
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 Lead branch: `chore/after-pr4` (the lead's STATUS commits; the lane next in merge order carries
@@ -73,57 +73,92 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 ## In flight
 - **dotclaude runs in lanes (since 2026-10-12).** The lead is the main checkout. Lanes live in
   `~/dotclaude-lanes/`, and each lane's state is in its record (`lane ls`, `lane asks`), not
-  here. The config caps live lanes at 3, with locks `install` and `suite`.
-  - Merged through lanes, installed from main and closed: #90 to #129 (2026-10-12 to
-    2026-10-19), with lead PR #117 among them (its check passed: session 3a153a27's auto-pass
-    loaded the handoff skill before pass-respawn's `handoff-check`). Last: bug-route, #125
-    (`lane addr --repo <path> lead`, and a CLAUDE.md line sending a dotclaude bug met in another
-    repo to this lead; the lead logs each report in the backlog. A durable inbox was rejected:
-    revisit only if a report gets lost). Before it: launch-path, #124 (a claude run under its
-    versioned path), and cross-lane, #123 (`lane ls` flags `overlap`, and `lane trial` runs
-    before ready; `skills/lanes/SKILL.md`, Lifecycle).
-    `gh pr list --state merged --limit 30` names each, and the closed records under `.git/lanes/_closed/<id>-<date>/` hold the detail (#116's
-    post-merge smoke is in restore-effort's artifacts); tab-bar's design is in
-    [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
-    tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
-    miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lanes** (briefs in each record). Merge order (Hayden, 2026-10-21, by readiness, since
-    exam-prep had stages left while mute and policy-fp were nearly done): 1 policy-fp
-    (`fix/policy-false-denials`, #143, carries the lead's notes: the three subagent-policy
-    false denials below, plus gap SP3 on Hayden's pick, plus a copy of exam-prep's `--profile`
-    line so main's delegation tests go green at its merge). 2 exam-prep
-    (`feat/exam-prep-skill`: the exam-prep skill suite below, plus classifying Claude Code
-    2.1.305's `--profile`; its dry run passed without an install, and it needs its install turn
-    before round 1's go/no-go, Thu 10/22). 3 practices (its next PR, auth-secrets; the skill
-    suite below). Each opened on Hayden's ok. practices merged #142 the same day (Hayden moved it first since it was
-    finished) and stays open for more PRs. Merged 2026-10-21 and installed from main: mute
-    (#141). Merged and closed 2026-10-20, installed from main:
-    summary-retire (#139), link-atomic (#140, which Hayden ordered first so no later install ran
-    the old `link()`), pr-horizon (#135), config-dir (#133). Hayden raised the cap
-    from 3 to 4 on 2026-10-20 for exam-prep; one slot is free since mute's merge.
-  - **Lane ask quality: done** (2026-10-19 to 2026-10-20). ask-check merged as #131 and was
-    installed from main 2026-10-20: a PreToolUse hook on AskUserQuestion (`hooks/ask_check.py`)
-    denies risky asks with a checklist in the reason. branch-reuse merged as #130: `lane new`
-    refuses a branch name any PR used (or when gh can't answer; `--reuse-branch` overrides),
-    and handoff-check counts the checked-out branch. Lead PRs #132 and #134: CLAUDE.md's
-    Waiting-on-you rule (an inline mark per item, then one plain-bullet list at the end); smoke
-    passed 2026-10-20. Causes, rates and Hayden's picks: `~/scratch/lane-ask-quality/`
-    (private: it quotes transcripts). **Watch:** asks the hook denies wrongly, and replies that
-    skip the label (then the Stop-hook check is the follow-up).
-  - The three lanes opened earlier on 2026-10-19
-    merged, were installed from main and closed: chrome-ttl as #126 (chrome-bg's TTL on a
-    monotonic deadline, plus coding-practices rule 8), tab-cmd as #127 (a claude run under its
-    versioned path counts as claude in the tab scripts: Hayden's "trigger + confirm" design, the
-    command looks like N.N.N and the pane tty's foreground group runs from `/claude/versions/`),
-    json-depth as #128 (deep JSON reads as malformed wherever that is equal or stricter) and #129
-    (malformed JSON fails closed at the trust sites, plus chrome-bg; Hayden's per-site picks are
-    in its closed record's Decisions). `fix/json-depth-sweep` is deleted (Hayden's ok).
-  - `lane new` with `|`, `<`, `>` or `;` inside its quoted `--goal` runs sandboxed and fails
-    ("Read-only file system"), leaving a stray branch. The matcher likely reads them as compound
-    syntax (inferred). Keep briefs free of them.
+  here. The config caps live lanes at 4 (Hayden kept 4 on 2026-10-25, for RAM), with locks
+  `install` and `suite`.
+  - **Merged through lanes or lead PRs, installed from main and closed:** #90 to #150
+    (2026-10-12 to 2026-10-29). `gh pr list --state merged --limit 60` names each; the closed
+    records under `.git/lanes/_closed/<id>-<date>/` hold the detail, and older STATUS text is in
+    `git log -p -- STATUS.md`. Kept from them, since code alone doesn't say why:
+    - #115 left the tab glyph's prompt at v4: an ask a reply only announces for later stays a
+      documented known miss (`hooks/wants_input.py`'s docstring).
+    - #145 (model-pin): `ANTHROPIC_MODEL` pins new sessions to Opus, so `/model` switches only
+      the current session; effort stays unpinned (`CLAUDE_CODE_EFFORT_LEVEL` would lock
+      `/effort` everywhere).
+    - #148 (SP1 to SP13): sp-gaps' private replay (`~/scratch/sandbox-audit/sp-replay/replay.py`)
+      is the regression check for the next policy-table change. Each review round found new
+      bypasses in the option tables, so a later finding gets its own lane, not a reopened PR.
+    - #144 (exam-prep): rules public, evidence private (Hayden, 2026-10-20).
+    - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
+      device-wide mute").
+  - **Live lanes** (briefs in each record). Merge order: 1 ports (`fix/lane-da15-da16`, carries
+    the lead's notes; the DA15/DA16 fix with LR1 to LR7, on Hayden's pick 2026-11-01, since it
+    changes the same lane CLI files; then `lane port claim/who/ls` and the SessionStart "your
+    ports" line; its record says `Keep open`), 2 practices (`feat/practices-auth-secrets`, its
+    next PR; paused by Hayden since 2026-10-24, last so it blocks no install; it conflicts with
+    origin/main on its own, per lane-fixes' trial).
+    Merged and installed from main, all closed: chrome-dup (#151, 2026-10-29: one chrome-devtools
+    server, the plugin's; sandbox gap fixes N1 and N3's bun part, `hooks/sandbox-caches.sh`; its
+    install changed running sessions' sandbox live, [[cc-sandbox-config-reloads-live]]),
+    lane-fixes (#152, 2026-10-30: an unclosed `<!--` fails handoff-check and `lane done`, trial
+    no-ids fail, `trial_locks`; docs/lanes.md "Known limits of reading the flag from prose") and
+    pass-fixes (#154, 2026-10-31: compact-pass fixes; excluded-guard rule 1 judges path arguments
+    where git finds the repo, with a zsh-like lexer and refusals that say what to run instead;
+    handoff-check refuses a repo whose own config sets a filter command or an lfs.extension key),
+    cache-gaps (#157, 2026-11-01: sandbox gaps N2 and N3; sandboxed Bash writes only
+    `~/.cache/claude-sandbox` among the caches, an npx shim in `bin/npx`, uv and pnpm in copy
+    mode, `bin/cache-unlink`; a session started before its install needs a `/pass` for the new
+    cache env, and its plugin MCP servers pick up the shim only on restart),
+    park (#153, 2026-10-31: `lane park`, a parked state outside the cap; the smoke ran in a
+    throwaway lanes repo, nothing public), guard-gaps (#156, 2026-11-01: the excluded-guard
+    design gaps G-A to G-E; setup sets the global `fetch.recurseSubmodules=false`; a lone
+    excluded call from below its repo top, or from no repo under a writable dir, is refused with
+    "run it from the top"; its replay counted 87 new refusals in about 4,360 past calls),
+    subagent-wait (#158, 2026-11-03: report-check refuses a subagent's handback while its own
+    background command runs, for the 180 s move to the background; `test_hook_payloads` hands
+    hooks an attended env; merged ahead of design-audit on Hayden's swap),
+    fork-start (#160, 2026-11-03: SessionStart hooks run on forked sessions, source `fork`;
+    capella-studio lane artexport's report; a fork's hook output never reaches its model, so it
+    knows its lane only from the parent's copied line, docs/lanes.md S5; the delegation canary
+    checks the source enum; untried against lane practices' settings.json change),
+    design-audit (#159, 2026-11-03: the ask-check `threat` rule and the CLAUDE.md line on naming what
+    runs outside the sandbox; its findings, DA1 to DA17, are private and backlogged by id).
+    Merged and installed, lane kept open for its next PR: ports (#155, 2026-11-01: `lane serve`
+    with the listener check, a block of ports per lane in `lane ls`, the midnight test flake).
+    #154's install made new refusals live in every session: arithmetic like `$((SECONDS+12))` and
+    `git -C <dir> fetch` in a command that would leave the sandbox.
   - Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
 
   Backlog:
+  - **Fix lanes from lane design-audit** (Hayden's picks, 2026-11-01). Private: sandbox-audit
+    FINDINGS, "Design-decision audit, 2026-11", one row per id with the detail. Most severe first:
+    1. DA15 with DA16 (high): lane ports' next PR (Hayden, 2026-11-01), plus private rows LR1 to
+       LR7 (found by ports; LR1 folded in 2026-11-02, the rest's fixes picked 2026-11-03). Files: `skills/lanes/scripts/lane`, `lanelib.py`,
+       handoff-check, `setup.sh`, `skills/lanes/SKILL.md` (the post-merge step) and their tests,
+       the files ports' PR 2 also changes. Until it lands, the lead runs DA15's pre-check and
+       DA16's stopgap before each post-merge chain (both in the private rows).
+    2. DA17 (high, cheap): `hooks/*.sh`, `skills/*/scripts`, `tests/setup`; Hayden's own step
+       in the row is done (2026-11-02), the two repo-side parts remain.
+    3. DA12 (high), then DA13 (medium): `settings.json`, `tests/delegation/test_settings.py`
+       (lane practices changes both), a session-start warning.
+    4. DA1 (high): needs its own design review rounds first. Files: `setup.sh`,
+       `setup-tmux.sh`, `install-state.py`, `merge-settings.py`, `hooks/excluded_guard.py`, the
+       lane CLI, README, `docs/lanes.md` and the lanes skill.
+    5. DA4 (medium): `hooks/delete_guard.py` (lane practices changes it) and a global CLAUDE.md
+       line.
+    6. DA2 (medium): the lead's incoming-message path.
+    7. DA14 (medium): a probe, then ask rules as a labelled tripwire.
+    8. Low: DA8 (probe, then trim), DA9 (pin from a repo file, with a test), DA6 (a setup.sh
+       warning).
+    9. Prose only: DA3 (a memory line plus the delegation skill; lane practices to be told when
+       it next runs) and DA5 (a global CLAUDE.md line).
+    Accepted by Hayden: DA7, DA10, DA11.
+  - **A systematic sweep of what code outside the sandbox reads or runs that a session can
+    write** (Hayden, 2026-11-01, via lane design-audit). The shared git dir, home config,
+    interpreter paths and state files: design-audit's review rounds 4 and 5 kept finding highs
+    beyond its inventory. Findings private. Read-only, like design-audit.
+  - **Next lane when a slot frees (Hayden's pick):** the serve jail (it closes live private
+    rows), shared lane locks or structured `Keep open`, all on the lane CLI files lane ports
+    holds; or DA17, which can open any time.
   - G8 open probes (a) and (b) (Hayden's pick, 2026-10-14): Hayden runs
     `~/scratch/sandbox-audit/g8-probe/run.py` by hand with the sandbox off, because the auto-mode
     classifier refused the run. Results go into the private findings file's G8 section.
@@ -132,194 +167,123 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     moment (a server restart; claude-restore reopens the tabs) and drop the row-0 menu rule.
     Until then, 3.7c's default menus that dotclaude doesn't own still clip under a top bar.
   - **A development-practices skill suite (security, ux, then others)** (Hayden, 2026-10-19;
-    context handed over by capella-studio's lead, session 5788b9fb; Hayden takes it up with the
-    lead directly). Accepted so far: placement only. The suite lives in dotclaude; repo rules sit
-    in a per-repo layer the skill reads if present (e.g. `.claude/practices/<skill>.md`, since a
-    repo's `.claude/skills/` is write-denied in the sandbox); checks stay in each repo's tests.
-    The capella lead suggests: triggers on concrete events (a migration, an `/api` route, an
-    iframe, a loading state), checklist lines that name their proof, release skills call the
-    checklists rather than copying them, a planted-bug eval per skill, and a security pilot first
-    (mined read-only from capella). Hayden's scope (2026-10-19): security covers everything (SQL
-    injection and the rest; Hayden sends the list), not only agents; ux is the whole user
-    experience (lag and loading, which features serve users most, convenience), with UI a small
-    part, so it links `frontend-ui-discipline` for that part. Open for Hayden: the list and
-    names. In lane practices since 2026-10-19 (its record holds the state). First PR merged as
-    #142 (2026-10-20, installed from main): the `server-code` skill, its `practices-check` gate
-    hook (PreToolUse on Edit/Write/MultiEdit plus SessionStart) and a planted-bug eval. More PRs
-    follow from the same lane (auth-secrets next). Lead's flags: the
-    name `security-review` collides with a built-in skill; dotclaude is public, so no capella
-    code or unfixed gaps go in ([[dotclaude-public-repo]]); checklists in context get skipped, so
-    a pilot should say what enforces it (a hook at the event, as ask-check does). Pairs with the
-    AWS gap check below.
-    Sources so far: six Instagram reels Hayden sent (2026-10-19; transcripts via getthescript.app),
-    vibe-coding listicles. They fall into security (keys in the bundle, ids from the request, RLS,
-    server-side sign-out, user enumeration, hashing, injection, rate limits), reliability (tests,
-    retries with idempotency, circuit breakers, races, DR), legal (age checks, Google Fonts and
-    GDPR, session replay, CAN-SPAM, renewal terms, DMCA agent, privacy policy) and launch (store
-    metadata, Open Graph, Search Console, IndexNow). Lead's pick: OWASP ASVS as the security
-    backbone, the reels' concrete failures as planted-bug evals.
+    context handed over by capella-studio's lead, session 5788b9fb). In lane practices; the
+    first PR merged as #142 (the `server-code` skill, its `practices-check` gate hook and a
+    planted-bug eval), auth-secrets next. Repo rules sit in a per-repo layer the skill reads if
+    present (`.claude/practices/<skill>.md`); checks stay in each repo's tests. Hayden's scope:
+    security covers everything (OWASP ASVS as the backbone, the reels' concrete failures as
+    planted-bug evals), ux is the whole user experience and links `frontend-ui-discipline` for
+    the UI part. Open for Hayden: the list and names. Lead's flags: `security-review` collides
+    with a built-in skill; no capella code or unfixed gaps go in ([[dotclaude-public-repo]]); a
+    skill says what enforces it (a hook at the event). Pairs with the AWS gap check below.
   - **Fixes from the AWS agentic-security gap check** (backlog, Hayden 2026-10-20: "not
-    today"). The check ran 2026-10-20 from the lead: ten gaps (ids A1 to A10, each re-checked
-    against the code) with a proposed fix per gap, in the private findings file's "Gap check
-    2026-10-20" section. The lead suggests one lane for A1, A8 and A9 (rules, a test and docs;
-    no design fork) when a slot frees; the rest need Hayden's pick first. Details stay there
-    ([[dotclaude-public-repo]]).
-  - **Lanes tell the lead before an act past their worktree: merged as #136** (lead PR,
-    2026-10-20, installed from main). New briefs drop the hand-written "Message the lead before
-    any act..." Constraints line: the skill carries it (Lifecycle step 3).
-  - **Retire the status-line summary rows: merged as #139** (lane summary-retire, 2026-10-20,
-    installed from main and the lane closed; Hayden: "I don't read it anymore"). The Stop hook
-    `hooks/session-summary.sh` asks Haiku for the tab label only; the rows and
-    `statusline/session-summary.py` are gone, and `setup.sh` strips the two retired widgets from
-    an existing ccstatusline layout (the live file is one row). It also took the ccstatusline
-    crash fix: a wrongly shaped `lines` re-seeds with a backup, and a dir, FIFO or bad link at
-    the destination warns and skips. The briefing-before-push rule merged as #137; a check
-    follows only if asks skip it.
-  - **The exam-prep skill suite** (Hayden's brief, `~/.claude/plans/exam-prep-skill-brief.md`,
-    approved 2026-10-06, revised 2026-10-20; copied into lane exam-prep's artifacts): one
-    umbrella skill, intake through tutor and retro, built from the Security I and AI 4701 runs.
-    Round 1 (two midterms Tue 10/27) needs it loadable by Thu 10/22, else round 1 runs by hand.
-    Hayden's pick (2026-10-20): rules public, evidence private (his quoted corrections, case
-    notes, course and Ed ids stay in a private dir, [[dotclaude-public-repo]]). In lane exam-prep
-    since 2026-10-20.
-  - **A device-wide toggle for the toast and the sound** (Hayden, 2026-10-20): one switch that
-    mutes the Windows toast and the notify ring for every session on the machine (no toggle
-    exists today). Design settled 2026-10-20 (Hayden picked the lead's pick on all four forks:
-    `PLAN.md`, "Next: a device-wide mute"). Merged as #141 (lane mute, 2026-10-21; installed
-    from main, `~/.claude/CLAUDE.md` and `~/.tmux.conf` back on the main checkout): the
-    `claude-mute` CLI and the Mute… menu.
-  - **`setup-tmux.sh`'s own `link()` has #140's gap class** (lane link-atomic's report,
-    2026-10-20). `setup-tmux.sh:62-71` moves a real file aside, then runs `ln -sfn`. GNU ln
-    9.4 replaces a link with no missing window (the lead's race test: 0 misses in about 600k
-    checks over 6000 swaps), but BSD/macOS `ln -sf` unlinks first, and the move-aside leaves a
-    window on every platform on a first install. Fix: reuse #140's temp-name and `os.replace`
-    swap (merged). Merged as #141 with the mute (lane mute, 2026-10-21): `setup-tmux.sh` now
-    links with one rename.
-  - **Stale worktree admin dirs break sandboxed commands now and then** (lane mute's report,
-    2026-10-20; the lead checked). `.git/worktrees/` holds 45 entries `git worktree prune
-    --dry-run` would remove ("gitdir file does not exist": closed lanes, old agent worktrees,
-    test names like `tree1`), each holding only a 0-byte `config.worktree` the sandbox planted as
-    a mount point (created about 5 s after each worktree). Claude Code's sandbox protects each
-    entry's `commondir` and `config.worktree`, so every sandboxed command mounts over paths that
-    don't exist; mute twice got bwrap's "Can't get type of source
-    .git/worktrees/excluded-guard/commondir" (and once `.git/config.lock`), and the retry ran
-    clean. Hayden ran `git worktree prune` on 2026-10-20 (50 entries by then; the lead checked
-    first that none was a live worktree's). After it, the dry run was empty, all 14 live
-    worktrees stayed, and a sandboxed command planted nothing. Still to watch: whether running
-    sessions plant the dirs again, and whether the bwrap error recurs. Same family as config-dir's bwrap error in the
-    Watch item below.
-  - **Three false denials in the subagent policy** (lane exam-prep's dry run, 2026-10-20; the
-    lead reproduced each with the code's own regexes). In `skills/delegation/scripts/subagent-policy`:
-    (1) sed-exec: `SED_CMD`'s `/[A-Za-z0-9]*` branch (`:806`), meant for flags after the closing
-    delimiter, also matches inside the pattern, so `sed -i 's/the same .../x/'` is refused as an
-    `e` command (`:820`); (2) the same branch makes the w-flag finder read `s/show me/x/p` as a
-    write to `me/x/p` (`:823`), which a read-only role is refused; (3) zsh-expansion
-    (`:456`) searches the raw string for `=\(` before parsing, so a quoted heredoc line like
-    `ux,uy=(x2-x1)/d` is refused. Delegated agents fall back to Edit or rewrite by hand. Fix:
-    parse the s-command (skip pattern and replacement, then read flags) and judge `=(` only at
-    a word start outside quotes, keeping `1e date`, `s/a/b/e`, `s/a/b/w f`, `cat =(ls)` and
-    `${(f)x}` refused. In lane policy-fp since 2026-10-20.
-  - **context-watch reads the pre-compact count right after a compact** (lane exam-prep's
-    report, 2026-10-20, session 89ae7cc8; the lead checked the code, not probed live).
-    `scan()` (`hooks/context_watch.py:170-200`) walks back to the last main-chain assistant
-    usage and never stops at a compact boundary: `main_chain` skips the `compact_boundary`
-    system line, and the compact-summary user entry has no usage. At the first PostToolUse after
-    a compact, that call's assistant entry wasn't on disk yet, so the nudge said "521k ... hand
-    off now" where the real count was 107k. Obeying it loops compact after compact. Fix: a
-    compact boundary met before any post-compact usage means no count yet (say nothing, write
-    nothing), with a test on a transcript fixture that ends at a boundary. Lane-able
-    (`hooks/context_watch.py`, `tests/`); no live lane owns it.
-  - **Subagent policy gaps SP1 to SP3** (from lane policy-fp, 2026-10-20, routed to the lead
-    on Hayden's pick; the lead re-checked each). Details and proposed fixes are in the private
-    findings file's "Subagent policy gaps 2026-10-20" section ([[dotclaude-public-repo]]). SP3
-    joined lane policy-fp on Hayden's pick, with the fix he chose (in that section). SP1 and SP2 edit the same files, so their lane opens after
-    policy-fp merges.
-  - **Claude Code 2.1.305 turned `tests/delegation` red everywhere** (lane practices' report,
-    2026-10-20; the lead reproduced it on the lead branch). The update added `--profile` to
-    `claude plugin validate`, and `test_settings.Inventory.test_installed_claude_flags_and_subcommands_are_classified`
-    fails until the inventory classifies it. It's a local strictness switch like `--strict`, so
-    it goes in `CLAUDE_FLAG_OK` (`tests/delegation/command_inventory.py`). In lane exam-prep on
-    Hayden's pick, since it already edits that file and merges first.
-  - **`lane trial` fails test_subagent_policy on the merge alone** (lane policy-fp's report,
-    2026-10-20; the lead checked the code). Sandboxed, `trial` builds its scratch tree in the
-    system temp dir (`skills/lanes/scripts/lane:2341`), which is `/tmp/claude-<uid>`, one of
-    the policy's temp roots (`skills/delegation/policy.toml:145`). `_test_tmp_dir`
-    (`tests/delegation/test_subagent_policy.py:29-49`) then puts its fake homes in the tree's
-    `.tmp/`, so every fixture path reads as a temp write and about 13 deny cases pass. A real
-    checkout passes, so a trial failure confined to those cases is this artifact. Fix: the test
-    refuses a `.tmp/` under a temp root, as it already does for `.claude/worktrees/`, or `trial`
-    builds its tree outside the temp root. Lane-able; no live lane owns it.
-  - **A compact pass puts live background writers into plan mode** (a session in another repo
-    reported it, 2026-10-20; the lead checked the code and the writer's transcript). Compact
-    mode is the pass picked when background tasks run (`skills/pass/SKILL.md:23,80,103`), yet
-    its resume prompt adds "Call EnterPlanMode first" to every unapproved pass
-    (`resume_prompt`, `skills/pass/scripts/pass-respawn:1218-1222`). Subagents follow the
-    parent's permission mode, so a running writer got the plan-mode notice mid-run
-    (21:10:37Z, in a 21:02-21:11Z run), was refused its write, and handed back partial with 4
-    of 6 parts unstarted. Fix: when `--tasks` shows a live agent, the compact resume prompt
-    says to plan in chat and enter plan mode only after it hands back. Also test whether a
-    `permissionMode` in `agents/writer.md` holds against a parent's mid-run plan mode; if it
-    does, it also covers plan mode entered by hand. Lane-able (`skills/pass/`, `tests/`); no
-    live lane owns it.
+    today"). Ten gaps (A1 to A10) with a proposed fix each, in the private findings file's "Gap
+    check 2026-10-20" section. The lead suggests one lane for A1, A8 and A9 (rules, a test and
+    docs; no design fork); the rest need Hayden's pick first.
+  - **Stale worktree admin dirs** (lane mute's report, 2026-10-20). Closed lanes'
+    `.git/worktrees/<id>/` come back holding only an empty `config.worktree`: sandbox mount
+    points planted by long-running sessions whose sandbox path list predates the close. A
+    prune is only temporary, and a sandboxed `prune` half-deletes live entries
+    ([[sandbox-recreates-closed-worktree-dirs]], [[git-worktree-prune-shared]]). Leave them.
+    Related: a read-only 0-byte `.git/config.lock` while a lane's sandboxed command runs (Notes).
+  - **Another `lane done` close-path gap** (lane done-safe's reviewer round 1, 2026-10-24).
+    Details and the proposed fix are in the same private file, rows "cmd_done path trust" and
+    "same, widened". The fix is a design change to `new`/`adopt`/`done` with a migration for
+    existing lanes, so it needs Hayden's design call. Two low gaps ride with it (rows
+    "seed_record from cmd_adopt" and "add_exclude"); their fix reuses #150's fd helpers.
+    A third rides with it from lane pass-fixes (2026-10-29): sandbox-audit FINDINGS, G5b section,
+    "NEW 3". Lane-able (`skills/lanes/scripts/lane`, `lanelib.py`, `tests/lanes`).
+  - **A probe of one command lane pass-fixes leaves exempt** (2026-10-29; private: sandbox-audit
+    FINDINGS, G5b section, "Fix 4 scope", exemption (b)). It is a paid Codex run. Deferred by
+    Hayden (2026-10-29): no Codex subscription now. Reopen when he has one.
+  - **Excluded-guard follow-ups from #156** (low; lane guard-gaps, 2026-11-01; listed in #156's
+    body): `config_entries` whitespace and line breaks differ from git's; `Machine._chain` and
+    `check_hooks_dir` fold `..` lexically; gh user aliases aren't modelled; LANE_FETCHES doesn't
+    expand a `remotes.origin` group; candidacy could narrow to the lines Claude Code really
+    exempts. Lane-able (`hooks/excluded_guard.py`, `tests/setup/test_excluded_guard.py`).
+  - **`lane lock <name> --shared -- <cmd>`** (feature; capella-studio lead, session 6bceec36,
+    on Hayden's pick in capella lane checkfix's window, 2026-10-30). Shared holders coexist; an
+    exclusive holder waits for all of them, and a queued exclusive waiter blocks new shared ones
+    (no starvation). A per-lock cap on shared holders in the lanes config (capella starts at 2;
+    its 17 GB machine hit low memory on 2026-10-30). Nesting must hold: a shared outer lock around
+    exclusive inner ones. `lane ls` shows each holder and its mode. Why: capella's 2-minute gates
+    waited 30+ minutes behind a 50-minute browser sweep; measured side by side, the gate passed
+    4/4 (median 259 s vs 219 s alone). Note for the lane: `flock`'s shared mode alone doesn't
+    stop writer starvation, so the queued-exclusive rule needs a turnstile; and `lane ls` probes a
+    lock by taking `LOCK_SH` for an instant (`lock_holder`), which would succeed beside a shared
+    holder and read the lock as free. Lane-able (`lane`,
+    `lanelib.py`, `tests/lanes`, `docs/lanes.md`), after ports. Tell the
+    capella-studio lead when it lands.
+  - **Approval-marker tests flake at midnight** (low; lane park, 2026-10-30). Two
+    `tests/lanes/test_handoff_check.py` PlainRepo tests (a dated marker passes, a future one fails)
+    failed once in a full `tests/lanes` run that crossed local midnight, then passed on rerun.
+    Cause: the module's `TODAY` is computed at import, so after midnight it is yesterday while
+    handoff-check reads the real date. Fix: compute it per test, or pin the clock in the check's
+    env. Rides with lane ports.
+  - **Store `Keep open` as structured state** (Hayden's pick, 2026-10-29, via lane lane-fixes).
+    `lane keep "<why>"` / `lane keep --off` write it to lane.json, `lane done` reads the field,
+    the record's `Keep open:` line is for people, and handoff-check warns when the two disagree.
+    Why: four review rounds on reading the flag from markdown kept finding misses (comments, code
+    spans, fences, a quoted `## Next`); docs/lanes.md "Known limits of reading the flag from
+    prose" (branch `fix/lane-small-bugs`) lists what stays open. Lane-able
+    (`skills/lanes/scripts/lane`, `lanelib.py`, handoff-check, `tests/lanes`), the same files as
+    lane ports, so it opens after ports merges.
+  - **A server jail for `lane serve`** (Hayden, 2026-10-31, via lane ports, session 57b5b44c).
+    `serve` binds the host port itself and forwards into the dev server, which runs in a
+    bubblewrap jail with the sandbox's file rules and no network of its own. Closes a private
+    sandbox-audit FINDINGS row (lane ports, 2026-10-31). Open design question: a server that calls
+    out needs a proxy with an allowlist. Lane-able after ports PR 1 (`lane`, `lanelib.py`,
+    `tests/lanes`). Scope widened (Hayden, 2026-10-31, via lane cache-gaps): the jail also wraps
+    project hooks, and the lane closes the whole family of private rows that share one root
+    (DS1, H1, N1 to N3) in one mechanism rather than per-tool fixes.
+  - **Ports: blocks per lane, `lane port`, `lane serve`** (lane ports; feature; capella-studio lane prefs,
+    session 78db7f95, 2026-10-29). A lane's run script started a dev server on a port another
+    lane's dev held; the start failed and its checks silently tested the other server. Proposed:
+    (1) a block of ports per lane, shown in `ls`; (2) `lane port claim [--purpose]`, `port who`,
+    `port ls`; (3) `lane serve [--port N] -- <cmd>`: claim, start it in its own session, wait for
+    its ready line or death, check the listener's pid is in that session; (4) a SessionStart
+    "your ports" line. Hayden's scope (2026-10-29): PR 1 is (3) with (1); (2) and (4) a later PR.
+    Only (3)'s listener check closes the silent wrong-server run. Lane-able (`lane`,
+    `lanelib.py`, `tests/lanes`, `docs/lanes.md`, the lane-identity hook). The midnight test flake below rides along.
+  - **Lanes skill: rebase only at your turn** (capella-studio lead, session 80ab3852, 2026-10-25;
+    Hayden picked all three in capella's window). (A) The lead, step 7.6: only the lane next in
+    merge order merges or rebases origin/main; the others get "main moved", check conflicts, and
+    update at their turn. (B) After a conflict-free update, CI on the pushed head is the gate
+    (dotclaude has no CI, so here that's the full local suites). (C) Optional train note: the
+    second ready PR rebases onto the first's pushed head. Correction to (A): `git merge-tree`
+    honours `.gitattributes` merge drivers and GitHub doesn't; ask the forge
+    (`gh pr view N --json mergeable`) or use `git --attr-source=<empty tree> merge-tree
+    --write-tree --name-only` (git 2.40+). `lane trial`'s `merge_tree` shares the blind spot.
+    Lane-able (`skills/lanes/SKILL.md`, `docs/lanes.md`, `lane trial`).
+  - **Practices suite input: dependency lifecycle** (capella-studio's lead, 2026-10-25; for
+    lane practices at resume). SEC-60 covers only adding a dependency. Proposed: a
+    per-dependency ledger kept in step by a test, an admission checklist, a production audit in
+    PR checks with a triage file, and an update bot with a cooldown. capella's lane `deps` is the
+    pilot. Scope is Hayden's call at resume.
+  - **Practices suite input: cloudflare/security-audit-skill** (Hayden, 2026-10-27; for lane
+    practices at resume). https://github.com/cloudflare/security-audit-skill (MIT): a six-phase
+    audit skill (recon, coverage-led hunting, a fresh verifier per candidate, schema-checked
+    findings). Compare with the suite's audit path: what to adopt, and whether to install it
+    beside the suite or take its ideas only. Scope is Hayden's call at resume.
   - **excluded-guard refuses an over-matched command in an agent worktree** (lane mute's report,
-    2026-10-20; checked in code, not reproduced). Candidacy splits on `|`, `;` and `&&` without
-    quotes, so a plain `grep` whose quoted pattern holds an excluded head becomes a candidate
-    (`hooks/excluded_guard.py` docstring: "an over-match only adds checks"). In an agent
-    worktree the gitdir isn't the project's, so rule 1 judges its `config.worktree`
-    (`hooks/excluded_guard.py:522-525`), finds it writable and refuses. Only delegated writers
-    hit it, and they report the denial. Fix if it recurs: a quote-aware split for candidacy.
-  - **paste-inbox's sandbox skip: merged as #138** (lead PR, 2026-10-20, from lane
-    summary-retire's report): sandboxed WSL interop now fails with `UtilBindVsockAnyPort`, not
-    `UtilConnectUnix`, so 9 Laptop and LaptopPowerShell cases failed instead of skipping; one
-    helper matches both. Tests only, so no reinstall (none held, and it skipped running the old
-    `link()` again).
-  - **Atomic install links: merged as #140** (lane link-atomic, 2026-10-20, installed from main
-    and the lane closed). `setup.sh` builds each link under a per-pid temp name beside the target
-    and swaps it in with one `os.replace`, so an installed path never goes missing.
-    `~/.claude/CLAUDE.md` survived the lane's install (checked 77 s after) and the lead's
-    reinstall from main. Keep the after-reinstall check below until a few clean installs pass.
-  - **Watch: `~/.claude/CLAUDE.md` vanished after a lane install** (2026-10-20 00:53Z). Lane
-    config-dir's `setup.sh` (00:52:28 to 00:52:38, sandbox off) linked it, then it was gone by
-    00:53:02, with no backup (a symlink is removed, not backed up). Hayden relinked it by hand
-    to `~/dotclaude-lanes/config-dir/CLAUDE.md` (the lead's own `ln -s` was refused as
-    self-modification), and the #136 reinstall put it back on main, where it survived the
-    sandboxed commands right after. config-dir's reinstall at 21:02 kept it too, across the same
-    sandboxed `sandbox-denials` run; that session's sandbox config listed the resolved target,
-    where after the loss it listed the literal path. So the loss points at `setup.sh`'s
-    `link()` gap (`rm`, then `ln -s`) meeting some session's sandboxed command. Fix (merged as
-    #140, above): make `link()` atomic, `ln -s` to a temp name beside the target, then `mv -T` over
-    it, so the path never goes missing; lane-able (`setup.sh`, `tests/setup`). config-dir's timeline (its session 1f1393e7) rules out its code, its
-    tests and install-state's prune; `~/.claude`'s mtime moved 190 ms after a sandboxed
-    `delegation-ledger sandbox-denials` started. Its guess, unproven: the Bash sandbox. A
-    sandbox config built while `link()` sat between `rm` and `ln -s` lists the literal path in
-    denyWrite, and bwrap may plant and then clean up a mount point there. Check after each
-    reinstall (`ls -la ~/.claude/CLAUDE.md`); a repro is a `setup.sh` run beside a loop of
-    sandboxed commands. Related: the bwrap "Can't get type of source ... config.worktree" error
-    config-dir hit while ask-check's worktree was being removed.
-  - **A custom CLAUDE_CONFIG_DIR breaks the hook layer** (from lane config-dir, 2026-10-19;
-    checked: 39 hook commands in `settings.json` run `$HOME/.claude/hooks/...`, while `setup.sh`
-    installs to `${CLAUDE_CONFIG_DIR:-$HOME/.claude}`, and 16 files under `hooks/` hard-code
-    `~/.claude`). Under a custom config dir every hook fails, and the `|| exit 2` ones block.
-    Matters for a new device ([[hayden-new-device-goal]]); unreachable on HAYPC (unset).
-    config-dir's PR covers only the delegation Python readers.
-  - **`handoff?` past 200 PRs: fixed in #135** (lane pr-horizon, merged 2026-10-20, installed
-    from main): `merges_of` asks gh per branch for a lane that switched, was adopted or predates
-    the horizon. Tell capella-studio's lead (the reporter) once its lanes pick it up.
-  - **`lane ls`'s PR column reads `none` for a lane whose newest PR sits past the 200-PR
-    horizon** (cosmetic, from lane pr-horizon, 2026-10-19): a per-branch `--state all` call
-    would fix it.
-  - **An untitled versioned claude's tab reads `2.1.303`** (cosmetic, from lane tab-cmd,
-    2026-10-19): `tmux/claude.conf:55-56` and `tmux/tmux-tab-bar:201` fall back to
-    `pane_current_command` for a pane with no title.
-  - **A background session passes on its own (log only: Hayden kept the bg pass manual,
-    2026-10-18; don't build it without his ask)** (from lane pass-bg). After the turn ends, the
-    waiter finds the pane running `claude attach <jobId>` (`tmux/claude-saved` already maps
-    it), runs `claude stop <job>` and respawns that pane with a fresh claude. Unknowns: a pane
-    in agent view leaves no link on disk, two clients can attach to one job, and the order of
-    the stop and the respawn.
-  - **chrome-bg's gc still judges `expires` by wall clock** (log only, from #126's PR body): a
-    gc inside a clock step can stop a run up to 0.6 s early, and after a Windows sleep the holder
-    outlives `expires` until the next gc. The holder's own loop is monotonic since #126.
+    2026-10-20; not reproduced). Candidacy splits on `|`, `;` and `&&` without quotes, so a
+    quoted excluded head in a `grep` pattern becomes a candidate, and in an agent worktree rule
+    1 finds its `config.worktree` writable and refuses. Fix if it recurs: a quote-aware split.
+  - **A custom CLAUDE_CONFIG_DIR breaks the hook layer** (lane config-dir, 2026-10-19): hook
+    commands run `$HOME/.claude/hooks/...` and 16 hook files hard-code `~/.claude`, while
+    `setup.sh` installs to `${CLAUDE_CONFIG_DIR:-$HOME/.claude}`. Matters for a new device
+    ([[hayden-new-device-goal]]); unreachable on HAYPC.
+  - Cosmetic: `lane ls`'s PR column reads `none` for a lane whose newest PR sits past the
+    200-PR horizon (a per-branch `--state all` call fixes it); an untitled versioned claude's
+    tab reads `2.1.303` (`tmux/claude.conf` and `tmux/tmux-tab-bar` fall back to
+    `pane_current_command`).
+  - Log only: a background session passing on its own (Hayden kept the bg pass manual,
+    2026-10-18; don't build it without his ask); chrome-bg's gc judges `expires` by wall clock
+    (a run can stop up to 0.6 s early; the holder's loop is monotonic since #126).
+  - **Watch:** `~/.claude/CLAUDE.md` vanished once after a lane install (2026-10-20, before
+    #140 made `setup.sh`'s links atomic); check `ls -la ~/.claude/CLAUDE.md` after each
+    reinstall. Also asks the ask-check hook (#131) denies wrongly, and replies that skip the
+    Waiting-on-you label (then a Stop-hook check is the follow-up).
 
   **The post-merge chain** (Hayden's design B, standing approval 2026-10-14): `skills/lanes/SKILL.md`,
   The lead, step 7. Lead commits on the lead branch ride the PR of the lane next in merge order,
@@ -356,10 +320,13 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   override pins `chrome-devtools-mcp@1.9.0` (`setup-chrome-wsl.sh`'s header has why it also clears
   the profile's restored tabs). A drift check would fit the `setup.sh` doctor idea in
   [[deepseek-harness-eval]].
-  - **Unchecked:** sessions load the plugin's own `chrome-devtools` server (no WSL flags) beside the
-    user-scoped override: both tool namespaces show up, and a flagless `npm exec
-    chrome-devtools-mcp@1.9.0` runs. `docs/chrome-devtools-wsl.md` and the memory say user scope
-    wins. Check whether the plugin's copy works on WSL and whether to disable it; then fix the doc.
+  - **Duplicate chrome-devtools servers (confirmed 2026-10-23):** every session runs both the
+    user-scoped override (`chrome-devtools-mcp@1.9.0`, headless WSL flags) and the plugin's own
+    (`@1.11.0`), about 150 MB per server with its npm wrapper, so about 1.7 GB across 11 sessions.
+    `docs/chrome-devtools-wsl.md` still says user scope wins. Fix: keep one (drop the user-scoped
+    entry or disable the plugin, whose skills use its namespace), then fix the doc. In lane
+    chrome-dup since 2026-10-25: it first checks whether the plugin's 1.11.0 works on WSL, then
+    asks Hayden which server to keep.
 - **The delegation post: on `main`, revised in PR #60, not yet on Medium.** Files:
   `docs/prose-is-not-a-permission.md`, `docs/images/delegation-layers.*` (code links pin `7ed72e9`).
   Before Medium: Hayden reads it and decides whether to cut toward 2,500 words (it's about 3,750);
@@ -393,8 +360,16 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lanes policy-fp (merge order 1, carries the lead branch), exam-prep (2) and practices (3,
-     its next PR) run; their state is in their records (`lane ls`). After each reinstall,
+  0. Four lanes run, cap full (In flight, Live lanes; state in their records, `lane ls`). Next
+     lane when a slot frees: Hayden's pick (Backlog). DA15/DA16 rides in lane ports. Before each post-merge
+     chain, run DA15's pre-check and DA16's stopgap from the private FINDINGS rows, and DA15's
+     added checks before any sandbox-off fetch in this repo (lead's, `lane new`, `done`, `park`). Since #156's install, a lone
+     excluded call (gh, git push or fetch, lane) runs only from a repo's top. Running sessions took
+     #157's cache narrowing live at its install (2026-10-31 14:39 local): a session started
+     before it needs a `/pass` before a sandboxed uv, pip, pnpm, node-gyp, bun or Playwright run. Pending with Hayden, outside the lanes: `wsl --shutdown` at a break applies the 18 GB
+     WSL cap set in `C:\Users\hayde\.wslconfig` on 2026-10-23 (backup `.wslconfig.bak-20261023`).
+     Before each lead STATUS commit, grep it against the exam-prep denylist
+     ([[lead-status-denylist-check]]). After each reinstall,
      check `ls -la ~/.claude/CLAUDE.md` (the Watch item). Watch that push asks open with the
      briefing (#137); if they skip it, the Stop-hook check is the follow-up (Hayden's pick).
   1. Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
@@ -403,7 +378,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
      branch). `lane new` refuses a branch name any PR used, and refuses when gh can't answer
      (lane branch-reuse); `--reuse-branch` overrides.
   - The lead's commits: `git log --first-parent main..chore/after-pr4` (STATUS only, plus merges
-    of main). Session 45664d28 (2026-10-20) ran `2c28e7e..HEAD` on the lead branch: the #135
+    of main). Session ab816898 (2026-10-20 to 25) ran `26b58ac..HEAD`: the #141, #143, #144,
+    #145, #146 and #147 chains, lanes opened and closed, SP3 to SP7. Session 45664d28 (2026-10-20) ran `2c28e7e..26b58ac` on the lead branch: the #135
     chain (pr-horizon closed), the #133 chain (config-dir closed), lead PRs #136 and #137
     (merged, installed), lanes practices, summary-retire and link-atomic,
     and the CLAUDE.md watch item.
