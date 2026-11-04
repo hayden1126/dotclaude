@@ -1116,6 +1116,11 @@ class SetupHold(Machine):
             shutil.copy(INSTALL_STATE, os.path.join(checkout, "install-state.py"))
         else:
             write(os.path.join(checkout, "install-state.py"), helper)
+        # The DA15/DA16 tripwire before the hold runs the checkout's lanelib.py.
+        scripts = os.path.join(checkout, "skills", "lanes", "scripts")
+        os.makedirs(scripts, exist_ok=True)
+        shutil.copy(os.path.join(os.path.dirname(SETUP), "skills", "lanes", "scripts",
+                                 "lanelib.py"), scripts)
         return subprocess.run(["bash", os.path.join(checkout, "setup-head.sh")], env=self.env,
                               capture_output=True, text=True, timeout=30)
 
@@ -1182,7 +1187,7 @@ class SetupHold(Machine):
         self.env["XDG_STATE_HOME"] = self.state
         bins = os.path.join(self.tmp, "noflock")  # what setup.sh's top runs, less flock
         os.makedirs(bins)
-        for tool in ("bash", "python3", "dirname", "date", "mkdir"):
+        for tool in ("bash", "python3", "dirname", "date", "mkdir", "chmod", "git"):
             os.symlink(shutil.which(tool), os.path.join(bins, tool))
         self.env["PATH"] = bins
         r = self.head(self.b, helper=self.LOCK_RAN)

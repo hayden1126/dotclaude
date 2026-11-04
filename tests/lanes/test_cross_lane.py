@@ -36,7 +36,17 @@ class LaneWork(LanesRepo):
     """Helpers for lanes with work in them, and for scripts that leave a marker when they run."""
 
     def new(self, lane_id):
-        self.lane("new", lane_id)
+        # `new` runs outside the sandbox (an excluded command) and refuses inside it, even in a
+        # test that has turned sandboxed mode on for `trial`.
+        was = self.env.get("_LANE_TEST_SANDBOXED")
+        self.env["_LANE_TEST_SANDBOXED"] = "0"
+        try:
+            self.lane("new", lane_id)
+        finally:
+            if was is None:
+                self.env.pop("_LANE_TEST_SANDBOXED", None)
+            else:
+                self.env["_LANE_TEST_SANDBOXED"] = was
         return self.lane_path(lane_id)
 
     def commit_files(self, cwd, names, msg="work"):

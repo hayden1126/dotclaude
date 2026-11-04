@@ -52,6 +52,46 @@ if command -v flock >/dev/null 2>&1 && mkdir -p "$STATE_DIR" 2>/dev/null; then
     exit 1
   fi
 fi
+# The DA15/DA16 tripwire: a sandboxed lane can write the git common dir this checkout shares,
+# and what git reads there decides what this run installs. So any finding of lanelib.py's
+# git-tamper (a replace ref, a non-blank alternates file, grafts, shallow, a commondir file, or a
+# path it can't read), or a common dir git can't name, stops the run here, before changing
+# anything. git follows a commondir file in any git dir, a main checkout's .git too, so its
+# answer may name a clean dir of a lane's choosing: a checkout whose .git is a dir is checked
+# there, without asking git. A lane worktree's .git is a gitfile naming its admin dir,
+# <common>/worktrees/<id>, and git takes its answer from that dir's commondir file, which a lane
+# can rewrite (LR2): the answer must be the admin dir's grandparent, or the run stops. That
+# grandparent comes from the gitfile's text, never by resolving `$admin/../..`: a lane can swap
+# worktrees/<id> (or worktrees/) for a link into a decoy repo whose commondir names that decoy,
+# and both would agree on it. git-tamper then checks the textual path, where such a link is a
+# finding. A commondir file in the common dir itself is a finding too.
+if [[ -d $REPO_DIR/.git ]]; then
+  common="$REPO_DIR/.git"
+elif ! common="$(git -C "$REPO_DIR" rev-parse --path-format=absolute --git-common-dir)"; then
+  warn "git can't name the common dir of $REPO_DIR (see above); setup.sh stopped before changing anything"
+  exit 1
+else
+  line="" admin=""
+  { IFS= read -r line < "$REPO_DIR/.git"; } 2>/dev/null || true
+  [[ $line == "gitdir: "?* ]] && admin="${line#gitdir: }"
+  [[ -z $admin || $admin == /* ]] || admin="$REPO_DIR/$admin"
+  admin="${admin%/}"
+  parent="${admin%/*}"
+  textual="${admin%/*/*}"
+  if [[ -z $admin || ${parent##*/} != worktrees || -z $textual ]] \
+      || ! want="$(cd -P "$textual" 2>/dev/null && pwd -P)" \
+      || [[ "$(cd -P "$common" 2>/dev/null && pwd -P)" != "$want" ]]; then
+    warn "git names $common as the common dir of $REPO_DIR, not its admin dir's grandparent (LR2: a planted commondir or a linked admin dir?); setup.sh stopped before changing anything"
+    exit 1
+  fi
+  common="$textual"
+fi
+tamper=0
+python3 -I "$REPO_DIR/skills/lanes/scripts/lanelib.py" git-tamper "$common" >&2 || tamper=$?
+if [[ $tamper -ne 0 ]]; then
+  warn "the git common dir $common may be tampered with (DA15/DA16: the lines above, exit $tamper); setup.sh stopped before changing anything"
+  exit 1
+fi
 # A lane installs from its own worktree to test a change, and an install from anywhere else
 # would replace those links mid-test. So links into a live lane worktree hold the install: the
 # run stops here, before changing anything, unless this checkout is that lane or its main
@@ -67,6 +107,46 @@ if [[ $hold -eq 3 ]]; then
 elif [[ $hold -ne 0 ]]; then
   warn "the install hold check failed (exit $hold, see above); installing anyway"
 fi
+
+# lane sync-main's stores' dir (DA15/DA16). settings.json denies it to every lane's Edit tool and
+# sandboxed Bash, but sync-main writes what it checks the checkout out from there, so this run
+# makes it (0700) before the install changes anything else. That doesn't keep out a link or a
+# file put there earlier, so it is checked after: a link, a non-dir or another user's dir there
+# stops the run (sync-main checks it again itself, every name on the way, by fd). It sits where
+# the rules name it, below HOME whatever XDG_STATE_HOME says.
+verified_dir="$HOME/.local/state/dotclaude/verified"
+mkdir -p "$HOME/.local/state/dotclaude"
+[[ -L $verified_dir || -e $verified_dir ]] || mkdir -m 700 "$verified_dir" 2>/dev/null || true
+if [[ -L $verified_dir || ! -d $verified_dir || ! -O $verified_dir ]]; then
+  warn "$verified_dir is not a dir of yours (a link, a file or another owner's): lane sync-main's stores would go wherever it leads. Find out who made it and remove it; setup.sh stopped before changing anything"
+  exit 1
+fi
+chmod 700 "$verified_dir"
+
+# The window (Hayden's pick, 2026-11-03): while the live settings.json lacks either rule that
+# keeps lanes out of the stores' dir (an install from an older dotclaude), any lane's sandbox can
+# write there, and a planted marker would let `lane adopt` run a setup sandbox-off in a tree
+# nobody verified. So when the settings this run replaces lack a rule, every marker there is
+# demoted to pending once the new settings are in place (lane's demote_marks, below). The flag
+# open_window leaves in the stores' dir carries that to the next run if this one stops in
+# between, and lane new, adopt and sync-main refuse while it is there.
+lane_cli="$REPO_DIR/skills/lanes/scripts/lane"
+verified_window=0
+python3 -I - "$lane_cli" "$CLAUDE_DIR/settings.json" "$HOME" <<'PY' || verified_window=1
+import importlib.machinery, importlib.util, os, sys
+loader = importlib.machinery.SourceFileLoader("lane_cli", sys.argv[1])
+mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("lane_cli", loader))
+loader.exec_module(mod)
+if not mod.settings_rules_problem(sys.argv[2]):
+    sys.exit(0)
+try:
+    mod.open_window(sys.argv[3])
+except (OSError, mod.LaneError) as e:
+    print(f"!! can't mark the window in the stores' dir ({e}): this run still demotes the "
+          "markers after its settings copy, but a run stopped between the two leaves them for "
+          "a hand check", file=sys.stderr)
+sys.exit(1)
+PY
 
 mkdir -p "$CLAUDE_DIR"
 
@@ -210,6 +290,28 @@ python3 -I "$REPO_DIR/merge-settings.py" --checkout "$REPO_DIR" "$REPO_DIR/setti
   "$CLAUDE_DIR/settings.machine.json" "$CLAUDE_DIR/settings.json" > "$MERGED_SETTINGS" \
   || { warn "settings.machine.json or the live settings.json is not valid JSON; settings.json left unchanged"; exit 1; }
 copy_managed "$MERGED_SETTINGS" "$CLAUDE_DIR/settings.json"
+if [[ $verified_window -eq 1 || -e $verified_dir/.demote-pending || -L $verified_dir/.demote-pending ]]; then
+  demoted=0
+  python3 -I - "$lane_cli" "$HOME" <<'PY' || demoted=$?
+import importlib.machinery, importlib.util, sys
+loader = importlib.machinery.SourceFileLoader("lane_cli", sys.argv[1])
+mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("lane_cli", loader))
+loader.exec_module(mod)
+try:
+    said = mod.demote_marks(sys.argv[2])
+except (OSError, mod.LaneError) as e:
+    print(f"!! {e}", file=sys.stderr)
+    sys.exit(1)
+for line in said:
+    print(f"!! {line}", file=sys.stderr)
+if said:
+    print("!! the settings this install replaced let every lane write the stores' dir: redo "
+          "each lane named above as demoted (`lane done <id> --abandon`, then `lane new`)",
+          file=sys.stderr)
+PY
+  [[ $demoted -eq 0 ]] \
+    || warn "demoting the markers in $verified_dir failed: see the lines above for what still refuses"
+fi
 link "$REPO_DIR/CLAUDE.md"       "$CLAUDE_DIR/CLAUDE.md"
 link "$REPO_DIR/notify-toast.ps1" "$CLAUDE_DIR/notify-toast.ps1"
 
@@ -375,6 +477,20 @@ say "git: set fetch.recurseSubmodules false globally (excluded-guard G-B)"
 if [ "$(git config --global --type=bool --get submodule.recurse 2>/dev/null)" = true ]; then
     warn "git: submodule.recurse is true globally, so excluded-guard refuses git pull, gh pr checkout and git push (G-B): run \`git config --global submodule.recurse false\`"
 fi
+# git: no replace refs (DA15/DA16). A sandboxed session can write a repo's common dir, and git
+# would read a replace ref planted there as the object it replaces. Set on every run, in the
+# global file itself, like G-B's key above.
+git config --global --replace-all core.useReplaceRefs false
+say "git: set core.useReplaceRefs false globally (DA15/DA16)"
+# git: no automatic maintenance (LR3). A fetch, pull, merge or commit runs `gc --auto` once
+# enough loose objects pile up, and gc runs `git worktree prune`, which deletes the contents of
+# whatever an entry under <common>/worktrees/ points at. Any lane can plant both, and git run
+# outside the sandbox would then delete with no sandbox. Set on every run, in the global file
+# itself, like the keys above; `git gc` and `git maintenance run` by hand still work.
+git config --global --replace-all gc.auto 0
+say "git: set gc.auto 0 globally (LR3)"
+git config --global --replace-all maintenance.auto false
+say "git: set maintenance.auto false globally (LR3)"
 
 # ---------------------------------------------------------------------------
 # 5. Status line widget (~/.config/ccstatusline)

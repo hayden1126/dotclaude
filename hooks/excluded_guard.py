@@ -59,7 +59,7 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      surely defines, since git reads any other name from a legacy remote file planted after the
      check; only a nickname needs that, since git reads no legacy file for `.`, `..` or a value
      holding a `/`, and each value naming no such remote is judged as a path, as a remote URL
-     is. lane new, done and park (LANE_FETCHES) run their own fetch of origin, so they are
+     is. lane new, done, park and sync-main (LANE_FETCHES) run their own fetch, so they are
      refused unless origin names such a remote too. A file:// URL must have no host and no %-escape, and a git option before those
      subcommands is refused. GIT_CONFIG_COUNT and GIT_CONFIG_PARAMETERS may set only the
      recursion keys below: any other key refuses, since rule 1 judges config files only.
@@ -101,6 +101,12 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      there after the check would be the one git uses. The refusal names the top to run from.
      A command that is one `lane addr --repo X` call alone skips the cwd's walk: lane then
      resolves only X's lanes repo and runs no git in the cwd (handed_lane_addr).
+     In a lanes repo (lanelib's has_lanes), git fetch, pull and push, and the gh forms that run
+     them (git_writer), are refused while lanelib.repo_tamper finds anything in the shared git
+     dir any lane's sandboxed Bash can write (check_tamper: DA15/DA16, LR3, LR4, LR5): git
+     writes there outside the sandbox, through a planted FETCH_HEAD, reflog or worktrees/
+     symlink, and serves a replace ref's content. git ls-remote and gh's other forms write
+     nothing there. An error in that check refuses.
   2. The PATH the head resolves through. Every PATH entry must be protected, not only those
      before the head: its children (git, gh, tmux, the tools claude spawns) search PATH too. An
      empty or relative entry is the cwd: refused. Then the resolved file's symlink chain (each
@@ -140,6 +146,7 @@ import contextlib
 import fcntl
 import glob
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -355,7 +362,7 @@ def candidates(command, patterns):
 PATH_HEADS = {"pass-respawn", "lane", "git", "delegation-ledger"}
 GIT_PATH_SUBS = {"push", "fetch", "pull", "ls-remote"}
 # lane commands that run their own `git fetch ... origin` in the cwd's repo.
-LANE_FETCHES = {"new", "done", "park"}
+LANE_FETCHES = {"new", "done", "park", "sync-main"}
 # Long options of those whose value is a program git runs (git takes any unique prefix), and
 # ls-remote's short -u for --upload-pack; an `ext::` remote runs a command too.
 GIT_PROGRAM_OPTIONS = ("receive-pack", "upload-pack", "exec")
@@ -837,8 +844,8 @@ def handed_lane_addr(command):
 
 def check_calls(m, env, cwd, project, command, remotes=frozenset(), groups=None,
                 defaults=None):
-    """Rule 1 for the path arguments of every PATH_HEADS call in the command, and G-B for every
-    git and gh call (check_recursion). remotes, groups and defaults: the remotes, remote groups
+    """Rule 1 for the path arguments of every PATH_HEADS call in the command, and G-B and the
+    lanes tamper check for every git and gh call (check_recursion, check_tamper). remotes, groups and defaults: the remotes, remote groups
     and default-remote keys the cwd's config defines (check_rule1)."""
     try:
         calls = list(path_calls(command, PATH_HEADS | {"gh"}))
@@ -851,6 +858,7 @@ def check_calls(m, env, cwd, project, command, remotes=frozenset(), groups=None,
             check_path_arguments(m, env, cwd, project, words, targets, remotes, groups,
                                  defaults)
         check_recursion(m, env, cwd, words)
+        check_tamper(env, cwd, words)
 
 
 def check_path_arguments(m, env, cwd, project, words, targets, remotes=frozenset(),
@@ -1923,16 +1931,49 @@ def recursion_on(env, repo, home, sub="fetch"):
     return [v for v in verdicts if v]
 
 
-def check_recursion(m, env, cwd, words):
-    """G-B for one call: git fetch, pull or push, or a gh form that runs one, recurses into each
-    submodule's own git dir, which a sandboxed session can write. Refuse when the git call's
-    last recursion flag turns it on (recursion_cli, any prefix git takes), and pass when it turns
-    it off; with no flag, refuse unless the effective config has recursion off. Args git_argv
-    can't read refuse."""
+def git_writer(words):
+    """(sub, name, what git runs) for a call that runs git fetch, pull or push in the cwd's repo:
+    git's own (an option before the subcommand refuses in check_path_arguments), or a gh form of
+    GH_GIT_FORMS, sub naming the rule that judges it; None for any other call. A gh call with a
+    flag before its first word, or before the subcommand of a GH_GROUPS group, other than -R or
+    --repo's spellings, refuses: cobra takes an unknown flag's next word as its value."""
     head = os.path.basename(words[0])
     if head == "git" and words[1:2] in (["fetch"], ["pull"], ["push"]):
-        sub, name = words[1], f"git {words[1]}"
-        runs = f"git {sub}"
+        return words[1], f"git {words[1]}", f"git {words[1]}"
+    if head != "gh":
+        return None
+    positional, skip = [], False
+    for w in words[1:]:
+        if skip:
+            skip = False
+        elif w in ("-R", "--repo"):
+            skip = True
+        elif not w.startswith("-"):
+            positional.append(w)
+        elif (len(positional) < 2 and not re.match(r"-R.|--repo=", w)
+              and (not positional or positional[0] in GH_GROUPS)):
+            # cobra takes an unknown flag's next word as its value, so a flag here could make gh
+            # run another form than the positionals read.
+            raise Refusal("rule1", w, f"`{' '.join(words)}` puts {w!r} before its gh "
+                          "subcommand, where gh may take the next word as its value and run "
+                          "another form than the guard reads. Put flags after the subcommand "
+                          "(only -R or --repo may come before it).")
+    form = GH_ALIASES.get(tuple(positional[:2]), tuple(positional[:2]))
+    sub, runs = GH_GIT_FORMS.get(form, (None, None))
+    return (sub, f"gh {' '.join(form)}", runs) if sub else None
+
+
+def check_recursion(m, env, cwd, words):
+    """G-B for one call: git fetch, pull or push, or a gh form that runs one (git_writer),
+    recurses into each submodule's own git dir, which a sandboxed session can write. Refuse when
+    the git call's last recursion flag turns it on (recursion_cli, any prefix git takes), and
+    pass when it turns it off; with no flag, refuse unless the effective config has recursion
+    off. Args git_argv can't read refuse."""
+    found = git_writer(words)
+    if found is None:
+        return
+    sub, name, runs = found
+    if name.startswith("git "):
         flag = recursion_cli(git_argv(sub, words[2:])[0])
         if flag == "on":
             raise Refusal("rule1", sub, f"`{name}` turns submodule recursion on on the command "
@@ -1943,28 +1984,7 @@ def check_recursion(m, env, cwd, words):
         fix = (f"{PUSH_FIX if sub == 'push' else RECURSE_FIX}, or add `--no-recurse-submodules` "
                f"right after `{sub}`"
                + (" (that also skips the submodule update)" if sub == "pull" else ""))
-    elif head == "gh":
-        positional, skip = [], False
-        for w in words[1:]:
-            if skip:
-                skip = False
-            elif w in ("-R", "--repo"):
-                skip = True
-            elif not w.startswith("-"):
-                positional.append(w)
-            elif (len(positional) < 2 and not re.match(r"-R.|--repo=", w)
-                  and (not positional or positional[0] in GH_GROUPS)):
-                # cobra takes an unknown flag's next word as its value, so a flag here could
-                # make gh run another form than the positionals read.
-                raise Refusal("rule1", w, f"`{' '.join(words)}` puts {w!r} before its gh "
-                              "subcommand, where gh may take the next word as its value and run "
-                              "another form than the guard reads. Put flags after the "
-                              "subcommand (only -R or --repo may come before it).")
-        form = GH_ALIASES.get(tuple(positional[:2]), tuple(positional[:2]))
-        sub, runs = GH_GIT_FORMS.get(form, (None, None))
-        if not sub:
-            return
-        name = f"gh {' '.join(form)}"
+    else:
         recurse = [w for w in words if w.startswith("--recurse-submodules")
                    and w.partition("=")[2] not in GO_FALSE]
         if name == "gh pr checkout" and recurse:
@@ -1972,8 +1992,6 @@ def check_recursion(m, env, cwd, words):
                           "submodule, running git in its own git dir, which a sandboxed session "
                           "can write. Run it without --recurse-submodules.")
         fix = f"{PUSH_FIX if sub == 'push' else RECURSE_FIX}; gh passes git no flag to turn it off"
-    else:
-        return
     on = recursion_on(env, discover(cwd, env), m.home, sub)
     if on:
         keys = [k for k, _ in on]
@@ -1982,6 +2000,57 @@ def check_recursion(m, env, cwd, words):
                       "git in each submodule's own git dir, where a sandboxed session can write. "
                       + fix + (". For pull, also set submodule.recurse false"
                                if sub == "pull" and "submodule.recurse" in keys else "") + ".")
+
+
+# lanelib.py, beside the lane CLI: found from this file's real path, never from the cwd.
+LANELIB = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "skills",
+                       "lanes", "scripts", "lanelib.py")
+_lanelib = None
+
+
+def lanelib():
+    """skills/lanes/scripts/lanelib.py, loaded by its file alone (LANELIB): the guard runs
+    `python3 -I`, and no dir joins sys.path, so nothing in the cwd or beside lanelib shadows a
+    module. Loaded once, on the first call that needs it."""
+    global _lanelib
+    if _lanelib is None:
+        spec = importlib.util.spec_from_file_location("_excluded_guard_lanelib", LANELIB)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = mod
+        spec.loader.exec_module(mod)
+        _lanelib = mod
+    return _lanelib
+
+
+def check_tamper(env, cwd, words):
+    """DA15/DA16, LR3, LR4, LR5 for one call: in a lanes repo every lane's sandboxed Bash can
+    write the shared git common dir, and a git fetch, pull or push run outside the sandbox (or a
+    gh form running one: git_writer) writes there, following what was planted (a FETCH_HEAD or
+    reflog symlink, a worktrees/ link gc prunes through) or serving other content (a replace
+    ref). No git setting turns FETCH_HEAD writes off, so such a call is refused while
+    lanelib.repo_tamper reports anything, naming each finding (masked there). The repo is the
+    one rule 1 judged at the cwd (discover). A plain repo is left alone; any error checking
+    refuses."""
+    found = git_writer(words)
+    repo = discover(cwd, env) if found else None
+    if repo is None:
+        return
+    name = found[1]
+    try:
+        lib = lanelib()
+        lanes = lib.Repo(repo[2], repo[1])
+        reasons = lib.repo_tamper(lanes) if lanes.has_lanes else []
+    except Exception as e:
+        raise Refusal("tamper", repo[1], f"`{name}` writes into the git dir {repo[1]}, and the "
+                      "guard couldn't check it for what a lane may have planted (DA15/DA16, LR3, "
+                      f"LR4, LR5): {type(e).__name__}: {e}. Refusing until the check runs.")
+    if reasons:
+        raise Refusal("tamper", repo[1], f"`{name}` writes into the git dir {repo[1]}, which "
+                      "every lane's sandboxed Bash can write, and it holds what a lane may have "
+                      "planted (DA15/DA16, LR3, LR4, LR5): " + "; ".join(reasons) + ". git would "
+                      "follow it outside the sandbox. git fetch, pull and push, and the gh forms "
+                      "that run them, stay refused here until someone finds out who planted it "
+                      "and removes it (`lane ls` lists the same findings).")
 
 
 def check_hooks_dir(m, hdir):

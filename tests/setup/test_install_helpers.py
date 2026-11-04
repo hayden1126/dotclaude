@@ -8,7 +8,9 @@ import json
 import os
 import re
 import resource
+import shutil
 import subprocess
+import stat
 import sys
 import tempfile
 import unittest
@@ -225,8 +227,9 @@ class MergeCli(unittest.TestCase):
         # What setup.sh links, copies or runs from the checkout runs outside the sandbox later
         # (a hook, a skill script, the settings), so it must be in denyWrite, and so must a
         # lane's copy of it. templates/ is exempt: its seeds are copied into projects, never run.
+        # So is .git: the tripwire only reads it, and it is lane-writable by design (DA15/DA16).
         with open(os.path.join(REPO, "setup.sh")) as f:
-            sources = set(re.findall(r'"?\$REPO_DIR"?/([\w.-]+)', f.read())) - {"templates"}
+            sources = set(re.findall(r'"?\$REPO_DIR"?/([\w.-]+)', f.read())) - {"templates", ".git"}
         self.assertIn("hooks", sources)
         with open(os.path.join(REPO, "settings.json")) as f:
             base = json.load(f)
@@ -275,6 +278,62 @@ class MergeCli(unittest.TestCase):
             with self.subTest(text):
                 r = run(MERGE, self.base, self.overlay("{}"), self.live(text))
                 self.assertEqual((r.returncode, r.stdout), (1, ""))
+
+
+class VerifiedStoreRules(unittest.TestCase):
+    """lane sync-main builds a store only when the live settings.json keep every lane out of it
+    (DA15/DA16): its own settings_rules_problem must pass on what setup.sh installs."""
+
+    @staticmethod
+    def rules_problem():
+        scripts = os.path.join(REPO, "skills", "lanes", "scripts")
+        if scripts not in sys.path:
+            sys.path.insert(0, scripts)  # the CLI imports lanelib beside it
+        return load(os.path.join(scripts, "lane")).settings_rules_problem
+
+    def merged(self, d, *args):
+        r = run(MERGE, *args)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        path = os.path.join(d, "out.json")
+        with open(path, "w") as f:
+            f.write(r.stdout)
+        return path
+
+    def test_every_install_shape_carries_both_rules(self):
+        check = self.rules_problem()
+        base = os.path.join(REPO, "settings.json")
+        with tempfile.TemporaryDirectory() as d:
+            overlay, live = os.path.join(d, "overlay.json"), os.path.join(d, "live.json")
+            with open(overlay, "w") as f:  # an overlay with lists of its own at both keys
+                json.dump({"permissions": {"deny": ["Edit(~/x/**)"]},
+                           "sandbox": {"filesystem": {"denyWrite": ["~/x"]}}}, f)
+            with open(live, "w") as f:  # a live file from before the rules
+                json.dump({"permissions": {"deny": []}, "model": "opus"}, f)
+            lane = os.path.join(d, "lane")
+            os.makedirs(lane)
+            for args in ([base], [base, overlay], [base, overlay, live],
+                         ["--checkout", lane, base, overlay, live]):
+                with self.subTest(args=args[:-1]):
+                    self.assertIsNone(check(self.merged(d, *args)))
+
+    def test_the_check_fails_without_either_rule(self):
+        # The control: the check reads the merged output, not something that always passes.
+        check = self.rules_problem()
+        with open(os.path.join(REPO, "settings.json")) as f:
+            settings = json.load(f)
+        with tempfile.TemporaryDirectory() as d:
+            for keys, rule in ((("permissions", "deny"), "Edit("),
+                               (("sandbox", "filesystem", "denyWrite"), "~/.local/state")):
+                s = json.loads(json.dumps(settings))
+                at = s
+                for k in keys:
+                    at = at[k]
+                at[:] = [p for p in at if not p.startswith(rule) or "verified" not in p]
+                path = os.path.join(d, "s.json")
+                with open(path, "w") as f:
+                    json.dump(s, f)
+                with self.subTest(keys=keys):
+                    self.assertIn(keys[-1], check(path))
 
 
 class BaselinePlugins(unittest.TestCase):
@@ -749,7 +808,13 @@ class SetupWiring(unittest.TestCase):
                       '|| warn "the plugin change check failed (see above)"', calls["setup.sh"])
         self.assertIn('python3 -I - "$CLAUDE_DIR/settings.json" 2>/dev/null <<\'PY\' || true',
                       calls["setup.sh"])  # section 2's check of the settings it replaces
-        self.assertEqual(len(calls["setup.sh"]), 13)
+        self.assertIn('python3 -I "$REPO_DIR/skills/lanes/scripts/lanelib.py" git-tamper '
+                      '"$common" >&2 || tamper=$?', calls["setup.sh"])
+        self.assertIn('python3 -I - "$lane_cli" "$CLAUDE_DIR/settings.json" "$HOME" '
+                      '<<\'PY\' || verified_window=1', calls["setup.sh"])  # the window's check
+        self.assertIn('python3 -I - "$lane_cli" "$HOME" <<\'PY\' || demoted=$?',
+                      calls["setup.sh"])  # its demotion
+        self.assertEqual(len(calls["setup.sh"]), 16)
         self.assertEqual(len(calls["sync.sh"]), 2)
         self.assertEqual(len(calls["setup-tmux.sh"]), 2)  # swap_in's os.replace and the .tmux.conf write
         self.assertEqual(len(calls["setup-chrome-wsl.sh"]), 2)  # the plugin version and the config merge
@@ -829,6 +894,206 @@ class SetupWiring(unittest.TestCase):
             self.assertTrue(os.path.isfile(os.path.join(REPO, "skills", s, "SKILL.md")), s)
 
 
+class VerifiedStoreDir(unittest.TestCase):
+    """setup.sh makes ~/.local/state/dotclaude/verified (0700), the stores' dir settings.json
+    denies to every lane, before anything else could (DA15/DA16): a link or a non-dir there
+    stops the run. HOME points at a temp dir."""
+
+    MARK = "# lane sync-main's stores' dir"
+    END = "\n# The window (Hayden's pick"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.home = tmp.name
+        self.verified = os.path.join(self.home, ".local", "state", "dotclaude", "verified")
+
+    def run_block(self):
+        with open(os.path.join(REPO, "setup.sh")) as f:
+            src = f.read()
+        self.assertIn(self.MARK, src)
+        block = self.MARK + src.split(self.MARK, 1)[1].split(self.END, 1)[0]
+        # XDG_STATE_HOME elsewhere: the dir goes where the settings rules name it, below HOME.
+        env = {"HOME": self.home, "PATH": "/usr/bin:/bin",
+               "XDG_STATE_HOME": os.path.join(self.home, "xdg")}
+        return subprocess.run(["bash", "-c", 'set -euo pipefail; say() { echo "$*"; }\n'
+                               'warn() { echo "!! $*" >&2; }\n' + block],
+                              env=env, capture_output=True, text=True, timeout=30)
+
+    def test_it_makes_the_dir_0700(self):
+        for _ in range(2):
+            p = self.run_block()
+            self.assertEqual(p.returncode, 0, p.stderr)
+            st = os.lstat(self.verified)
+            self.assertTrue(stat.S_ISDIR(st.st_mode))
+            self.assertEqual(stat.S_IMODE(st.st_mode), 0o700)
+
+    def test_a_looser_dir_is_tightened(self):
+        os.makedirs(self.verified, mode=0o755)
+        os.chmod(self.verified, 0o755)
+        self.assertEqual(self.run_block().returncode, 0)
+        self.assertEqual(stat.S_IMODE(os.lstat(self.verified).st_mode), 0o700)
+
+    def test_a_link_or_a_file_there_refuses(self):
+        outside = os.path.join(self.home, "outside")
+        os.makedirs(outside, mode=0o755)
+        os.makedirs(os.path.dirname(self.verified))
+        for plant in (lambda: os.symlink(outside, self.verified),
+                      lambda: os.symlink(os.path.join(self.home, "nowhere"), self.verified),
+                      lambda: open(self.verified, "w").close()):
+            plant()
+            with self.subTest(plant=os.readlink(self.verified)
+                              if os.path.islink(self.verified) else "file"):
+                p = self.run_block()
+                self.assertNotEqual(p.returncode, 0, p.stdout)
+                self.assertIn("verified", p.stderr)
+                self.assertFalse(os.path.isdir(os.path.join(self.home, "nowhere")))
+                self.assertEqual(stat.S_IMODE(os.stat(outside).st_mode), 0o755)
+            os.unlink(self.verified)
+
+
+class VerifiedWindow(unittest.TestCase):
+    """The window (Hayden's pick, 2026-11-03): when the live settings.json this install replaces
+    lacks either stores' rule, any lane could write the stores' dir, so once the new settings are
+    in, every marker there goes pending (lane's demote_marks, tested in tests/lanes). Here: the
+    detection before the settings copy, the demotion after it, and the flag between the two.
+    HOME points at a temp dir; the copy is a stand-in that writes settings with the rules."""
+
+    DETECT = "# The window (Hayden's pick"
+    DETECT_END = '\nmkdir -p "$CLAUDE_DIR"'
+    DEMOTE = "if [[ $verified_window -eq 1"
+    DEMOTE_END = '\nlink "$REPO_DIR/CLAUDE.md"'
+    RULES = {"permissions": {"deny": ["Edit(~/.local/state/dotclaude/verified/**)"]},
+             "sandbox": {"filesystem": {"denyWrite": ["~/.local/state/dotclaude/verified"]}}}
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.home = os.path.realpath(tmp.name)
+        self.claude = os.path.join(self.home, ".claude")
+        os.makedirs(self.claude)
+        self.verified = os.path.join(self.home, ".local", "state", "dotclaude", "verified")
+        self.marks = os.path.join(self.verified, "new-lanes")
+        os.makedirs(self.marks, mode=0o700)
+        self.flag = os.path.join(self.verified, ".demote-pending")
+        with open(os.path.join(REPO, "setup.sh")) as f:
+            src = f.read()
+        self.detect = self.DETECT + src.split(self.DETECT, 1)[1].split(self.DETECT_END, 1)[0]
+        self.demote = self.DEMOTE + src.split(self.DEMOTE, 1)[1].split(self.DEMOTE_END, 1)[0]
+
+    def live(self, data):
+        with open(os.path.join(self.claude, "settings.json"), "w") as f:
+            json.dump(data, f)
+
+    def mark(self, name="k-chart-fix.json", verified=True):
+        path = os.path.join(self.marks, name)
+        with open(path, "w") as f:
+            json.dump({"id": "chart-fix", "common": "/x", "verified": verified}, f)
+        return path
+
+    def run_setup(self, stop_after_detect=False):
+        copy = f"cat > \"$CLAUDE_DIR/settings.json\" <<'J'\n{json.dumps(self.RULES)}\nJ\n"
+        script = ('set -euo pipefail; say() { echo "$*"; }\nwarn() { echo "!! $*" >&2; }\n'
+                  f'verified_dir="{self.verified}"\n' + self.detect + "\n"
+                  + ("exit 0\n" if stop_after_detect else copy + self.demote))
+        env = {"HOME": self.home, "PATH": "/usr/bin:/bin", "REPO_DIR": REPO,
+               "CLAUDE_DIR": self.claude}
+        return subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True,
+                              timeout=60)
+
+    def verified_field(self, path):
+        with open(path) as f:
+            return json.load(f)["verified"]
+
+    def test_settings_without_a_rule_demote_every_marker(self):
+        for live in ({}, {"permissions": self.RULES["permissions"]},
+                     {"sandbox": self.RULES["sandbox"]}):
+            with self.subTest(live=live):
+                path = self.mark()
+                self.live(live)
+                p = self.run_setup()
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertIs(self.verified_field(path), False)
+                self.assertIn("k-chart-fix.json", p.stderr)
+                self.assertIn("lane done <id> --abandon", p.stderr)
+                self.assertFalse(os.path.lexists(self.flag))
+
+    def test_settings_with_both_rules_touch_nothing(self):
+        path = self.mark()
+        self.live(self.RULES)
+        p = self.run_setup()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIs(self.verified_field(path), True)
+        self.assertEqual(p.stderr, "")
+
+    def test_a_run_stopped_after_detection_demotes_on_the_next(self):
+        path = self.mark()
+        self.live({})
+        self.assertEqual(self.run_setup(stop_after_detect=True).returncode, 0)
+        self.assertTrue(os.path.isfile(self.flag))
+        self.live(self.RULES)  # the stopped run's copy landed, say, but not its demotion
+        p = self.run_setup()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIs(self.verified_field(path), False)
+        self.assertFalse(os.path.lexists(self.flag))
+
+    def test_a_link_at_the_flag_is_never_written_through(self):
+        victim = os.path.join(self.home, "victim")
+        with open(victim, "w") as f:
+            f.write("mine\n")
+        os.symlink(victim, self.flag)
+        path = self.mark()
+        self.live({})
+        p = self.run_setup()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        with open(victim) as f:
+            self.assertEqual(f.read(), "mine\n")
+        self.assertIs(self.verified_field(path), False)
+        self.assertFalse(os.path.lexists(self.flag))
+
+    def test_a_dir_at_the_flag_never_stops_the_install(self):
+        # Review round 14: `rm -f` on a dir a lane made there failed under set -e, every run.
+        os.makedirs(os.path.join(self.flag, "sub"))
+        path = self.mark()
+        self.live({})
+        p = self.run_setup()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIs(self.verified_field(path), False)
+        self.assertFalse(os.path.lexists(self.flag))
+        os.makedirs(self.flag)  # and one made after an earlier window, with the rules in
+        self.live(self.RULES)
+        p = self.run_setup()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.lexists(self.flag))
+
+    def test_a_failed_demotion_warns_and_keeps_the_flag(self):
+        locked = os.path.join(self.marks, "k-a.json", "locked")
+        os.makedirs(os.path.join(locked, "x"))
+        os.chmod(locked, 0)
+        self.addCleanup(os.chmod, locked, 0o700)
+        path = self.mark("k-z.json")
+        self.live({})
+        p = self.run_setup()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("keep refusing while .demote-pending is there", p.stderr)
+        self.assertIs(self.verified_field(path), False)
+        self.assertTrue(os.path.isfile(self.flag))
+
+    def test_detection_comes_before_the_settings_copy_and_demotion_after(self):
+        # The blocks run here in the test's own order: this pins setup.sh's.
+        with open(os.path.join(REPO, "setup.sh")) as f:
+            src = f.read()
+        copy = src.index('copy_managed "$MERGED_SETTINGS" "$CLAUDE_DIR/settings.json"')
+        self.assertLess(src.index(self.DETECT), copy)
+        self.assertLess(copy, src.index(self.DEMOTE))
+
+    def test_a_window_with_no_markers_says_nothing(self):
+        self.live({})
+        p = self.run_setup()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stderr, "")
+
+
 class RecurseSubmodulesOff(unittest.TestCase):
     """setup.sh's block at the end of section 4 sets fetch.recurseSubmodules false in the global
     git config (excluded-guard G-B) on every run, and warns when submodule.recurse is on there.
@@ -899,6 +1164,236 @@ class RecurseSubmodulesOff(unittest.TestCase):
         with open(self.gitconfig, "w") as f:
             f.write("[submodule]\n\trecurse = false\n")
         self.assertNotIn("submodule.recurse", self.run_block())
+
+
+class ReplaceRefsOff(RecurseSubmodulesOff):
+    """setup.sh sets core.useReplaceRefs false in the global git config on every run, beside
+    G-B's key (DA15/DA16). The base class's tests run this block too, since G-B's block reaches
+    the end of section 4."""
+
+    MARK = "# git: no replace refs"
+
+    def values(self):
+        p = subprocess.run(["git", "config", "--file", self.gitconfig, "--get-all",
+                            "core.useReplaceRefs"], capture_output=True, text=True)
+        return p.stdout.split()
+
+    def test_it_sets_it_on_every_run(self):
+        for _ in range(2):
+            self.assertIn("set core.useReplaceRefs false", self.run_block())
+            self.assertEqual(self.values(), ["false"])
+
+    def test_another_value_is_replaced(self):
+        with open(self.gitconfig, "w") as f:
+            f.write("[core]\n\tuseReplaceRefs = true\n[core]\n\tuseReplaceRefs = yes\n"
+                    "[user]\n\tname = me\n")
+        self.assertIn("set core.useReplaceRefs false", self.run_block())
+        self.assertEqual(self.values(), ["false"])
+        with open(self.gitconfig) as f:
+            self.assertIn("name = me", f.read())
+
+    def test_a_false_value_from_an_include_is_written_directly(self):
+        inc = os.path.join(self.home, "off")
+        with open(inc, "w") as f:
+            f.write("[core]\n\tuseReplaceRefs = false\n")
+        with open(self.gitconfig, "w") as f:
+            f.write(f'[includeIf "gitdir:/"]\n\tpath = {inc}\n')
+        self.assertIn("set core.useReplaceRefs false", self.run_block())
+        self.assertEqual(self.values(), ["false"])
+
+    def test_it_warns_when_submodule_recurse_is_on(self):
+        pass  # G-B's own test; this block has no warning
+
+
+class AutoMaintenanceOff(RecurseSubmodulesOff):
+    """setup.sh sets gc.auto 0 and maintenance.auto false in the global git config on every run
+    (LR3): a fetch, pull or commit outside the sandbox would otherwise run `gc --auto`, whose
+    `git worktree prune` deletes through whatever a lane planted under <common>/worktrees/."""
+
+    MARK = "# git: no automatic maintenance"
+    KEYS = {"gc.auto": "0", "maintenance.auto": "false"}
+
+    def values(self):
+        return {k: subprocess.run(["git", "config", "--file", self.gitconfig, "--get-all", k],
+                                  capture_output=True, text=True).stdout.split()
+                for k in self.KEYS}
+
+    def want(self):
+        return {k: [v] for k, v in self.KEYS.items()}
+
+    def test_it_sets_it_on_every_run(self):
+        for _ in range(2):
+            out = self.run_block()
+            for k, v in self.KEYS.items():
+                self.assertIn(f"set {k} {v} globally", out)
+            self.assertEqual(self.values(), self.want())
+
+    def test_another_value_is_replaced(self):
+        with open(self.gitconfig, "w") as f:
+            f.write("[gc]\n\tauto = 6700\n[gc]\n\tauto = 1\n[maintenance]\n\tauto = true\n"
+                    "[user]\n\tname = me\n")
+        self.run_block()
+        self.assertEqual(self.values(), self.want())
+        with open(self.gitconfig) as f:
+            self.assertIn("name = me", f.read())
+
+    def test_a_false_value_from_an_include_is_written_directly(self):
+        inc = os.path.join(self.home, "off")
+        with open(inc, "w") as f:
+            f.write("[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n")
+        with open(self.gitconfig, "w") as f:
+            f.write(f'[includeIf "gitdir:/"]\n\tpath = {inc}\n')
+        self.run_block()
+        self.assertEqual(self.values(), self.want())
+
+    def test_it_warns_when_submodule_recurse_is_on(self):
+        pass  # G-B's own test; this block has no warning
+
+
+class TamperRefusal(unittest.TestCase):
+    """setup.sh's section 0 stops the run before changing anything when lanelib.git_tamper finds
+    anything in the common dir of the checkout it installs from, or git can't name that dir
+    (DA15/DA16). REPO_DIR is a throwaway repo holding a copy of lanelib.py."""
+
+    MARK = "# The DA15/DA16 tripwire"
+    END = "# A lane installs from its own worktree"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = os.path.realpath(tmp.name)
+        self.repo = os.path.join(self.tmp, "repo")
+        self.env = {"HOME": self.tmp, "GIT_CONFIG_NOSYSTEM": "1",
+                    "PATH": os.path.dirname(sys.executable) + ":/usr/bin:/bin"}
+        subprocess.run(["git", "init", "-q", self.repo], env=self.env, check=True)
+        scripts = os.path.join(self.repo, "skills", "lanes", "scripts")
+        os.makedirs(scripts)
+        with open(os.path.join(REPO, "skills", "lanes", "scripts", "lanelib.py")) as src, \
+                open(os.path.join(scripts, "lanelib.py"), "w") as dest:
+            dest.write(src.read())
+
+    def run_block(self, repo_dir=None):
+        with open(os.path.join(REPO, "setup.sh")) as f:
+            src = f.read()
+        section0 = src.split("\n# 0. ", 1)[1].split("\n# 1. ", 1)[0]
+        self.assertIn(self.MARK, section0)
+        block = self.MARK + section0.split(self.MARK, 1)[1].split(self.END, 1)[0]
+        return subprocess.run(["bash", "-c", 'set -euo pipefail; say() { echo "$*"; }\n'
+                               'warn() { echo "!! $*" >&2; }\n' + block + "\necho went on\n"],
+                              env=dict(self.env, REPO_DIR=repo_dir or self.repo),
+                              capture_output=True, text=True, timeout=60)
+
+    def test_a_clean_common_dir_goes_on(self):
+        p = self.run_block()
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "went on\n", ""))
+
+    def test_a_finding_stops_the_run(self):
+        with open(os.path.join(self.repo, ".git", "shallow"), "w"):
+            pass
+        p = self.run_block()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertNotIn("went on", p.stdout)
+        self.assertIn("shallow exists", p.stderr)
+        self.assertIn("stopped before changing anything", p.stderr)
+
+    def test_a_planted_commondir_naming_a_clean_dir_stops_the_run(self):
+        # git honours a commondir file in any git dir, the main checkout's .git too, so git's own
+        # answer names the clean dir and a check of it passes. A checkout whose .git is a dir is
+        # checked there, where the commondir file is a finding.
+        clean = os.path.join(self.tmp, "clean.git")
+        subprocess.run(["git", "init", "-q", "--bare", clean], env=self.env, check=True)
+        with open(os.path.join(self.repo, ".git", "commondir"), "w") as f:
+            f.write(clean + "\n")
+        named = subprocess.run(["git", "-C", self.repo, "rev-parse", "--path-format=absolute",
+                                "--git-common-dir"], env=self.env, capture_output=True, text=True)
+        self.assertEqual(os.path.realpath(named.stdout.strip()), clean)  # git follows it
+        p = self.run_block()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertNotIn("went on", p.stdout)
+        self.assertIn("commondir", p.stderr)
+        self.assertIn("stopped before changing anything", p.stderr)
+
+    def test_a_worktree_is_checked_where_git_names_its_common_dir(self):
+        # A lane worktree's .git is a gitfile: the common dir git names is checked.
+        env = dict(self.env, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
+                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
+        subprocess.run(["git", "-C", self.repo, "add", "skills"], env=env, check=True)
+        subprocess.run(["git", "-C", self.repo, "commit", "-q", "-m", "c"], env=env, check=True)
+        wt = os.path.join(self.tmp, "wt")
+        subprocess.run(["git", "-C", self.repo, "worktree", "add", "-q", wt], env=env, check=True)
+        p = self.run_block(repo_dir=wt)
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "went on\n", ""))
+        with open(os.path.join(self.repo, ".git", "shallow"), "w"):
+            pass
+        p = self.run_block(repo_dir=wt)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("shallow", p.stderr)
+
+    def test_a_worktree_whose_commondir_names_another_dir_stops_the_run(self):
+        # git's answer for a worktree comes from <common>/worktrees/<id>/commondir, which a lane
+        # can rewrite: it must be the gitfile's admin dir's grandparent, the real common dir.
+        env = dict(self.env, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
+                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
+        subprocess.run(["git", "-C", self.repo, "add", "skills"], env=env, check=True)
+        subprocess.run(["git", "-C", self.repo, "commit", "-q", "-m", "c"], env=env, check=True)
+        wt = os.path.join(self.tmp, "wt")
+        subprocess.run(["git", "-C", self.repo, "worktree", "add", "-q", wt], env=env, check=True)
+        with open(os.path.join(self.repo, ".git", "shallow"), "w"):
+            pass  # a finding in the real common dir, which the redirect hides
+        clean = os.path.join(self.tmp, "clean.git")
+        subprocess.run(["git", "init", "-q", "--bare", clean], env=self.env, check=True)
+        with open(os.path.join(self.repo, ".git", "worktrees", "wt", "commondir"), "w") as f:
+            f.write(clean + "\n")
+        named = subprocess.run(["git", "-C", wt, "rev-parse", "--path-format=absolute",
+                                "--git-common-dir"], env=self.env, capture_output=True, text=True)
+        self.assertEqual(os.path.realpath(named.stdout.strip()), clean)  # git follows it
+        p = self.run_block(repo_dir=wt)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertNotIn("went on", p.stdout)
+        self.assertIn("stopped before changing anything", p.stderr)
+
+    def test_a_linked_admin_dir_naming_a_decoy_stops_the_run(self):
+        # A lane swaps <common>/worktrees/wt for a link to a decoy admin dir inside a clean
+        # repo, whose commondir names that repo: git's answer and a resolved `$admin/../..`
+        # agree on the decoy. The grandparent is taken from the gitfile's text instead, and a
+        # link at worktrees/<id> is a git-tamper finding there.
+        env = dict(self.env, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
+                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
+        subprocess.run(["git", "-C", self.repo, "add", "skills"], env=env, check=True)
+        subprocess.run(["git", "-C", self.repo, "commit", "-q", "-m", "c"], env=env, check=True)
+        wt = os.path.join(self.tmp, "wt")
+        subprocess.run(["git", "-C", self.repo, "worktree", "add", "-q", wt], env=env, check=True)
+        with open(os.path.join(self.repo, ".git", "shallow"), "w"):
+            pass  # a finding in the real common dir, which the decoy hides
+        clean = os.path.join(self.tmp, "clean.git")
+        subprocess.run(["git", "init", "-q", "--bare", clean], env=self.env, check=True)
+        admin = os.path.join(self.repo, ".git", "worktrees", "wt")
+        decoy = os.path.join(clean, "worktrees", "wt")
+        shutil.copytree(admin, decoy)
+        with open(os.path.join(decoy, "commondir"), "w") as f:
+            f.write("../..\n")
+        shutil.rmtree(admin)
+        os.symlink(decoy, admin)
+        named = subprocess.run(["git", "-C", wt, "rev-parse", "--path-format=absolute",
+                                "--git-common-dir"], env=self.env, capture_output=True, text=True)
+        self.assertEqual(os.path.realpath(named.stdout.strip()), clean)  # git follows it
+        p = self.run_block(repo_dir=wt)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertNotIn("went on", p.stdout)
+        self.assertIn("stopped before changing anything", p.stderr)
+        # git's answer the real common dir, but the admin dir still a link: a finding.
+        with open(os.path.join(decoy, "commondir"), "w") as f:
+            f.write(os.path.join(self.repo, ".git") + "\n")
+        os.unlink(os.path.join(self.repo, ".git", "shallow"))
+        p = self.run_block(repo_dir=wt)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("worktrees/wt is a symlink", p.stderr)
+
+    def test_a_dir_git_cant_place_stops_the_run(self):
+        p = self.run_block(repo_dir=os.path.join(self.tmp, "not-a-repo"))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertNotIn("went on", p.stdout)
+        self.assertIn("stopped before changing anything", p.stderr)
 
 
 if __name__ == "__main__":

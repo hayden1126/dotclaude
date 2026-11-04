@@ -93,7 +93,7 @@ class Templates(unittest.TestCase):
         rules = {("skills", "lanes", "SKILL.md"): (
                      "Lead branch:", "before each push", "the lead's notes through",
                      "git show <sha>:STATUS.md > STATUS.md", "git apply -3 --allow-empty",
-                     "--no-ff --no-commit",
+                     "lane sync-main <n>",
                      "git merge-base --is-ancestor origin/main",
                      "released your install: merge origin/main, then reinstall"),
                  ("docs", "lanes.md"): ("Lead branch:", "before each push",
@@ -118,6 +118,11 @@ class PlainRepo(Check):
         self.commit("STATUS.md", GOOD, msg="Handoff")
 
     def test_a_complete_handoff_passes(self):
+        self.assertPasses(self.check())
+
+    def test_the_tripwire_runs_only_with_lanes(self):
+        # A plain repo has no lanes sharing its common dir (DA15/DA16).
+        self.write(os.path.join(self.common, "shallow"), "")
         self.assertPasses(self.check())
 
     def test_leftovers_must_be_named(self):
@@ -548,6 +553,28 @@ class Lane(Check):
     def test_a_complete_lane_handoff_passes(self):
         self.finish()
         self.assertPasses(self.check(cwd=self.path))
+
+    def test_each_tripwire_finding_fails(self):
+        # DA15/DA16: the common dir every lane shares.
+        self.finish()
+        self.write(os.path.join(self.common, "shallow"), "")
+        self.write(os.path.join(self.common, "objects", "info", "alternates"), "/x/objects\n")
+        code, out = self.check(cwd=self.path)
+        self.assertEqual(code, 1, out)
+        self.assertIn("FAIL  git: shallow exists", out)
+        self.assertIn("FAIL  git: objects/info/alternates is not empty", out)
+
+    def test_a_commondir_in_the_main_checkouts_git_dir_fails(self):
+        # DA15/DA16: git takes a commondir file in the main checkout's own .git too, and then
+        # answers with that dir, where no lanes config lives. The check still runs, on .git.
+        self.finish()
+        clean = os.path.join(self.tmp, "clean.git")
+        subprocess.run(["git", "init", "-q", "--bare", clean], check=True)
+        self.write(os.path.join(self.main, ".git", "commondir"), clean + "\n")
+        code, out = self.check(cwd=self.main)
+        self.assertEqual(code, 1, out)
+        self.assertIn("commondir", out)
+        self.assertIn("FAIL  git:", out)
 
     def test_an_unreadable_lane_record_fails_in_its_checkout(self):
         # Left out of the lanes, the lane's checkout would read as unregistered and check the
