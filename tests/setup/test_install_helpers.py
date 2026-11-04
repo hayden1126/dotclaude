@@ -660,17 +660,19 @@ def first(lines, pattern):
     return next(i for i, l in enumerate(lines) if re.match(pattern, l))
 
 
-# Lines that name Python without starting it, per script (its path in the repo). Anything else
-# that names a Python interpreter or a .py file outside a heredoc body must be a call in the
-# strict form.
+# Lines that name Python without starting it, per script (its path in the repo): the exact
+# whitespace-normalized line, or a compiled pattern it must match whole. Anything else that names
+# a Python interpreter or a .py file outside a heredoc body must be a call in the strict form.
 PYTHON_NON_CALLS = {
     "setup.sh": ('for f in "$REPO_DIR"/hooks/*.sh "$REPO_DIR"/hooks/*.py; do',
                  'for pyf in "$REPO_DIR"/statusline/*.py; do'),
     "setup-tmux.sh": ('command -v python3 >/dev/null || die "python3 not found."',),
     "setup-chrome-wsl.sh": ('command -v python3 >/dev/null || die "python3 not found."',),
-    "hooks/practices-check.sh": (  # the message when practices_check.py can't run
-        'printf \'{"systemMessage":"practices hooks are down: python3 exited %s running '
-        'practices_check.py; edits are not checked"}\\n\' "$rc"',),
+    "hooks/practices-check.sh": (  # the message when practices_check.py can't run (lane
+        # practices rewords its tail, so it is matched whole with the tail free of quotes, $
+        # and backticks: no substitution can ride in it)
+        re.compile(r"""printf '\{"systemMessage":"practices hooks are down: python3 exited %s """
+                   r"""running practices_check\.py; [^"'$`\\]*"\}\\n' """ r'"\$rc"'),),
     "tmux/pass-last": (  # the reader's paths, run later by a strict call
         'render="${self:+${self%/*}/../hooks/md_render.py}"$\'\\n\'"$HOME/.claude/hooks/md_render.py"',),
 }
@@ -725,7 +727,7 @@ def python_lines(text, non_calls):
         m = re.search(r"(?<!<)<<(?!<)-?\s*(['\"]?)(\w+)\1", line)  # a <<< here-string isn't one
         if m:
             delim = m.group(2)
-        if line in non_calls:
+        if any(line == n if isinstance(n, str) else n.fullmatch(line) for n in non_calls):
             continue
         named = [c for c in commands(line) if re.search(PYTHON_WORD + r"|\.py\b", c)]
         if not named:
