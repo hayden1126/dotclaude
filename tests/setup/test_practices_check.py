@@ -805,6 +805,23 @@ class Discovery(Base):
         self.assertIn("[practices:L2:demo:SEC-17:lib/a.ts]",
                       self.fire("lib/a.ts", "x({ ...body })\n", cwd=sub))
 
+    def test_a_fork_start_records_the_cwd_and_says_nothing(self):
+        # #160 runs SessionStart hooks on forks (/branch, --fork-session) too. A fork's hook
+        # output never reaches its model, so a fork records its cwd and prints nothing; the
+        # health report it would carry waits for the next startup.
+        del self.env["CLAUDE_PROJECT_DIR"]
+        sub = os.path.join(self.proj, "sub")
+        os.makedirs(sub)
+        d = os.path.join(self.state, "dotclaude", "practices")
+        os.makedirs(d)
+        crumb = os.path.join(d, "breadcrumb-4244")
+        with open(crumb, "w") as f:
+            json.dump({"file": "app/x.ts", "level": "L2", "pattern": "SEC-17"}, f)
+        os.utime(crumb, (0, 0))
+        self.assertIsNone(self.start("fork"))
+        self.assertIn("[practices:L1:demo:route-handler]", self.fire(cwd=sub))
+        self.assertIn("killed mid-scan", self.start("startup")["systemMessage"])
+
 
 class Config(Base):
     def test_enabled_false_turns_the_engine_off(self):
