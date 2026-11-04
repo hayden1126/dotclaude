@@ -500,6 +500,28 @@ class CcstatuslineSettings(unittest.TestCase):
         self.assertEqual([w["id"] for w in lines[3]], ["41", "42"])
         self.assertTrue(lines[3][1]["commandPath"].endswith('/my-session-summary.py"'), lines[3])
 
+    def test_the_shipped_widget_runs_isolated_and_a_user_s_own_keeps_its_python(self):
+        # ccstatusline runs widgets outside the sandbox, so ctx-breakdown.py gets -I (no user
+        # site, no PYTHON* env), on a new install and on an earlier one that lacked it, and a
+        # rerun leaves it as it is. A user's own widget may need their site-packages.
+        exe = re.escape(f'"{sys.executable}"')
+        isolated = exe + r' -I "/[^"]+/ccstatusline/ctx-breakdown\.py"'
+        dst = self.fresh()
+        self.install(dst)
+        with open(dst) as f:
+            ctx = [w["commandPath"] for line in json.load(f)["lines"] for w in line
+                   if "ctx-breakdown" in (w.get("commandPath") or "")]
+        self.assertEqual(len(ctx), 1, ctx)
+        self.assertRegex(ctx[0], f"^{isolated}$")
+        mine = {"id": "42", "type": "custom-command", "commandPath": "python my-widget.py --x"}
+        old = dict(self.LINE_1[1], commandPath='"/usr/bin/python3" "/c/ctx-breakdown.py"')
+        for _ in range(2):   # an install without -I, then a rerun over this one's output
+            lines = self.installed([[self.LINE_1[0], old, self.LINE_1[2]], [mine]])
+            self.assertRegex(lines[0][1]["commandPath"], f"^{isolated}$")
+            self.assertRegex(lines[1][0]["commandPath"],
+                             exe + r' "/[^"]+/ccstatusline/my-widget\.py" --x$')
+            old, mine = lines[0][1], lines[1][0]
+
     def test_a_file_that_does_not_parse_is_backed_up(self):
         # "[" * 100000: RecursionError in json, not ValueError.
         for junk in ("{", "[" * 100000):
@@ -638,20 +660,43 @@ def first(lines, pattern):
     return next(i for i, l in enumerate(lines) if re.match(pattern, l))
 
 
-# Lines that name Python without starting it, per script. Anything else that names a Python
-# interpreter or a .py file outside a heredoc body must be a call in the strict form.
+# Lines that name Python without starting it, per script (its path in the repo). Anything else
+# that names a Python interpreter or a .py file outside a heredoc body must be a call in the
+# strict form.
 PYTHON_NON_CALLS = {
     "setup.sh": ('for f in "$REPO_DIR"/hooks/*.sh "$REPO_DIR"/hooks/*.py; do',
                  'for pyf in "$REPO_DIR"/statusline/*.py; do'),
     "setup-tmux.sh": ('command -v python3 >/dev/null || die "python3 not found."',),
     "setup-chrome-wsl.sh": ('command -v python3 >/dev/null || die "python3 not found."',),
+    "hooks/practices-check.sh": (  # the message when practices_check.py can't run
+        'printf \'{"systemMessage":"practices hooks are down: python3 exited %s running '
+        'practices_check.py; edits are not checked"}\\n\' "$rc"',),
+    "tmux/pass-last": (  # the reader's paths, run later by a strict call
+        'render="${self:+${self%/*}/../hooks/md_render.py}"$\'\\n\'"$HOME/.claude/hooks/md_render.py"',),
 }
+
+PYTHON_WORD = r"\bpython[0-9.]*\b"
+# What may come before `python3 -I` in its own command: env assignments (-I ignores PYTHON*
+# vars), a timeout, exec, if or !.
+CALL_PREFIX = r"(?:\w+=(?:\"[^\"]*\"|'[^']*'|\S*)\s+|timeout\s+\d+\s+|exec\s+|if\s+|!\s+)*"
+
+
+def commands(line):
+    """line's commands: each innermost $(...) and <(...) body is taken out as its own command
+    line (a placeholder stands in its place), then every line is split at &&, ||, ;, |, & and
+    backticks, and at any $( or <( still left (one the regex couldn't pair, like an arithmetic
+    $(( or a paren inside quotes)."""
+    lines, sub = [], re.compile(r"[$<]\(([^()]*)\)")
+    while m := sub.search(line):
+        lines.append(m.group(1))
+        line = line[:m.start()] + "_SUB_" + line[m.end():]
+    return [c for l in [line, *lines] for c in re.split(r"&&|\|\||[;|&`]|\$\(|<\(", l)]
 
 
 def python_lines(text, non_calls):
-    """A shell script's lines that name Python: (bad, ok, unclosed). ok holds the calls in the
-    strict form: the line's first command is `python3 -I` then a quoted arg or `-`, and nothing
-    after it (past &&, ||, ;, |, & or a command substitution) names Python. bad holds every
+    """A shell script's lines that name Python: (bad, ok, unclosed). ok holds the lines whose
+    every command naming Python is a call in the strict form: `python3 -I` then a quoted arg or
+    `-`, after at most CALL_PREFIX, and Python named once in that command. bad holds every
     other line naming a Python interpreter (python, python3, python3.12) or a .py file, so a
     bare python3, an interpreter in a variable (its assignment names it) and a direct run of a
     .py all land there. Full-line comments are dropped before continuations join (bash doesn't
@@ -659,11 +704,12 @@ def python_lines(text, non_calls):
     and unclosed is the delimiter of a heredoc still open at the end. Lines are
     whitespace-normalized.
 
-    Known limits (no top-level script does any of these today): a `<<WORD` inside a string or
+    Known limits (no scanned script does any of these today): a `<<WORD` inside a string or
     an arithmetic `$((x << 2))` opens a heredoc that isn't there (the unclosed check catches one
-    that never ends); a trailing `cmd # note \\` reads as a continuation; and an extensionless
+    that never ends); a trailing `cmd # note \\` reads as a continuation; the lines of a
+    multi-line `-c '...'` body are read as shell (a false alarm at worst); and an extensionless
     script run through its shebang, or an interpreter in a variable whose assignment names no
-    Python (`"$PYTHON"` from the environment), isn't seen."""
+    Python (`"$PYTHON"` from the environment), isn't seen. The shebang test covers the first."""
     bad, ok, delim, buf = [], [], None, ""
     for raw in text.splitlines():
         if delim is not None:
@@ -681,32 +727,81 @@ def python_lines(text, non_calls):
             delim = m.group(2)
         if line in non_calls:
             continue
-        first, *rest = re.split(r"&&|\|\||[;|&`]|\$\(", line)
-        if (re.match(r"python3 -I [\"'-]", first)
-                and len(re.findall(r"\bpython[0-9.]*\b", first)) == 1
-                and not any(re.search(r"\bpython[0-9.]*\b|\.py\b", s) for s in rest)):
+        named = [c for c in commands(line) if re.search(PYTHON_WORD + r"|\.py\b", c)]
+        if not named:
+            continue
+        if all(re.match(r"\s*" + CALL_PREFIX + r"python3 -I [\"'-]", c)
+               and len(re.findall(PYTHON_WORD, c)) == 1 for c in named):
             ok.append(line)
-        elif re.search(r"\bpython[0-9.]*\b|\.py\b", line):
+        else:
             bad.append(line)
     return bad, ok, delim
 
 
-# Python a script starts through sys.executable runs isolated (-I), like the shell scripts'
-# Python: the cwd or a writable dir never comes first on its import path. Each exception is a
-# path and why.
+def sandbox_off_shell_scripts():
+    """Every shell script that runs outside the sandbox, by repo path: the top-level *.sh
+    (setup, sync), the hooks, and what tmux, the statusline and excluded commands run (tmux/,
+    statusline/, bin/), plus the skills' scripts. A file counts by a .sh name or a sh, bash or
+    zsh shebang."""
+    out = []
+    for pat in ("*.sh", "hooks/*", "bin/*", "tmux/*", "statusline/*", "skills/*/scripts/*"):
+        for path in glob.glob(os.path.join(REPO, pat)):
+            if not os.path.isfile(path):
+                continue
+            with open(path, "rb") as f:
+                first = f.readline()
+            if path.endswith(".sh") or re.match(rb"#!\S*(?:/|\s)(?:ba|z)?sh\b", first):
+                out.append(os.path.relpath(path, REPO))
+    return sorted(out)
+
+
+# Every Python script starts through `#!/usr/bin/python3 -I` (env can't pass -I on Linux without
+# -S, and a fixed path isn't looked up on a PATH). Many run outside the sandbox: excluded
+# commands (lane, delegation-ledger, codex-delegate, pass-respawn), what hooks, tmux and the
+# statusline run, and setup's helpers; a new script is covered by default. Each exception is a
+# dir or file prefix and why.
+ISOLATED_SHEBANG = "#!/usr/bin/python3 -I"
+SHEBANG_EXCEPTIONS = {
+    "skills/deck-production/scripts/":
+        "runs only in sandboxed Bash; its scripts import their siblings through the script's "
+        "own dir, which -I drops, and the build may need the user's site-packages",
+}
+
+
+def python_scripts():
+    """{repo path: first line} for every file with a Python shebang in the dirs that hold run
+    code: the top level, hooks/, bin/, tmux/, statusline/, git/, codex/ and skills/*/scripts/."""
+    out = {}
+    for pat in ("*", "hooks/*", "bin/*", "tmux/*", "statusline/*", "git/*", "codex/*",
+                "skills/*/scripts/*"):
+        for path in glob.glob(os.path.join(REPO, pat)):
+            if not os.path.isfile(path):
+                continue
+            with open(path, "rb") as f:
+                first = f.readline().decode("utf-8", "replace").rstrip("\n")
+            if first.startswith("#!") and re.search(PYTHON_WORD, first):
+                out[os.path.relpath(path, REPO)] = first
+    return out
+
+
+# Python a script starts through sys.executable (or a literal "python3") runs isolated (-I),
+# like the shell scripts' Python: the cwd or a writable dir never comes first on its import
+# path. Each exception is a path and why.
 EXECUTABLE_EXCEPTIONS = {
     "skills/deck-production/scripts/parity_check.py":
         "runs the deck build scripts in the sandbox, and they may need the user's "
         "site-packages, which -I drops",
 }
+EXECUTABLE_HEAD = r"(?:sys\.executable|[\"'](?:/usr/bin/)?python[0-9.]*[\"'])"
 
 
 def unisolated_executable_calls(text):
-    """The lines that start sys.executable without -I as the first argument: a list or tuple
-    that begins with sys.executable and whose next item isn't "-I"."""
-    return [m.group(0) for m in re.finditer(r"(?:\[\s*sys\.executable\s*[,\]]|"
-                                            r"\(\s*sys\.executable\s*,)[^\n]*", text)
-            if not re.match(r"[\[(]\s*sys\.executable\s*,\s*[\"']-I[\"']", m.group(0))]
+    """The lines that start Python without -I as the first argument: a list or tuple that
+    begins with sys.executable or a literal python3 (or python, /usr/bin/python3) and whose
+    next item isn't "-I"."""
+    return [m.group(0) for m in re.finditer(rf"(?:\[\s*{EXECUTABLE_HEAD}\s*[,\]]|"
+                                            rf"\(\s*{EXECUTABLE_HEAD}\s*,)[^\n]*", text)
+            if not re.match(rf"[\[(]\s*{EXECUTABLE_HEAD}\s*,\s*[\"']-I[\"']", m.group(0))]
 
 
 def setup_link_sources():
@@ -846,27 +941,94 @@ class SetupWiring(unittest.TestCase):
         self.assertEqual(python_lines("python3 -I - <<'PY'\nimport os\n", ())[2], "PY")
         self.assertEqual(python_lines("sed -n '/<<< x <<</p' f\npython3 y.py\n", ()),
                          (["python3 y.py"], [], None))
+        # A call later in a pipe, inside a substitution or after a prefix is held to the same
+        # form, and so is every other command on the line.
+        for line in ('python3 "$policy" || {', "timeout 8 python3 x.py", 'printf x | python3 "$a"',
+                     'A="$(f)" python3 x', 'out=$(printf x | python3 "$a")',
+                     'out=$(python3 -I "$(python3 -c 1)")', 'exec {fd}< <(python3 "$a")',
+                     'A="$(python3 y)" python3 -I "$a"', 'sudo python3 -I "$a"'):
+            with self.subTest(line):
+                self.assertEqual(python_lines(line + "\n", ())[0], [line])
+        for line in ('printf \'%s\' "$i" | python3 -I "$a"', 'out=$(printf x | timeout 12 python3 -I "$a")',
+                     'A="$(age "$t")" B=1 python3 -I -c "$x" 2>/dev/null',
+                     'if out=$(python3 -I "$(dirname "$(readlink -f "$0")")/m.py" check) && [[ y ]]; then',
+                     'exec {fd}< <(printf \'%s\' "$i" | timeout 12 python3 -I "$here/w.py" 2>/dev/null)'):
+            with self.subTest(line):
+                self.assertEqual(python_lines(line + "\n", ()), ([], [line], None))
+
+    def test_every_sandbox_off_shell_script_runs_its_python_isolated(self):
+        # Hooks, tmux scripts and the statusline run outside the sandbox, so does every Python
+        # they start, and a bare python3 loads the user site and PYTHON* env (DA17).
+        scripts = sandbox_off_shell_scripts()
+        calls = {}
+        for rel in scripts:
+            with open(os.path.join(REPO, rel)) as f:
+                bad, ok, unclosed = python_lines(f.read(), PYTHON_NON_CALLS.get(rel, ()))
+            with self.subTest(rel):
+                self.assertEqual(bad, [])
+                self.assertIsNone(unclosed)
+            calls[rel] = ok
+        # The scan reached each kind of script and call, and every non-call names a file.
+        for rel in ("hooks/subagent-policy.sh", "hooks/agent-spawn-guard.sh", "hooks/report-check.sh",
+                    "hooks/watch-guard.sh", "hooks/delegation-due.sh", "hooks/delegation-ledger.sh",
+                    "hooks/notify.sh", "hooks/session-pane.sh", "hooks/tmux-state.sh",
+                    "hooks/stop-ring.sh", "tmux/tmux-claude-status", "tmux/claude-restore"):
+            with self.subTest(rel):
+                self.assertTrue(calls.get(rel), rel)
+        self.assertIn("bin/npx", scripts)
+        for rel in PYTHON_NON_CALLS:
+            self.assertIn(rel, scripts)
+
+    def test_every_python_script_starts_isolated(self):
+        scripts = python_scripts()
+        for rel, first in sorted(scripts.items()):
+            with self.subTest(rel):
+                if any(rel.startswith(p) for p in SHEBANG_EXCEPTIONS):
+                    continue
+                self.assertEqual(first, ISOLATED_SHEBANG)
+        # The scan reached each kind of script, and every exception still holds one.
+        for rel in ("skills/lanes/scripts/lane", "skills/delegation/scripts/delegation-ledger",
+                    "skills/delegation/scripts/codex-delegate", "skills/handoff/scripts/handoff-check",
+                    "skills/delegation/scripts/subagent-policy", "skills/pass/scripts/pass-respawn",
+                    "statusline/ctx-breakdown.py", "tmux/tmux-tab-bar", "bin/claude-file-history",
+                    "merge-settings.py", "git/install-ignore.py", "codex/merge-config.py"):
+            self.assertIn(rel, scripts)
+        for prefix in SHEBANG_EXCEPTIONS:
+            self.assertTrue(any(r.startswith(prefix) and f != ISOLATED_SHEBANG
+                                for r, f in scripts.items()), f"{prefix}: drop its exception")
+
+    def test_the_settings_hook_commands_run_python_isolated(self):
+        # Claude Code runs every hook command and the status line outside the sandbox.
+        with open(os.path.join(REPO, "settings.json")) as f:
+            settings = json.load(f)
+        cmds = [h["command"] for groups in settings["hooks"].values() for g in groups
+                for h in g["hooks"] if h.get("type") == "command"]
+        cmds.append(settings["statusLine"]["command"])
+        self.assertGreater(len(cmds), 20)
+        for cmd in cmds:
+            with self.subTest(cmd):
+                self.assertEqual(python_lines(cmd + "\n", ())[0], [])
 
     def test_python_started_through_sys_executable_runs_isolated(self):
-        roots = [os.path.join(REPO, "hooks"), os.path.join(REPO, "bin")]
+        roots = [os.path.join(REPO, d) for d in ("hooks", "bin", "tmux", "statusline", "git", "codex")]
         roots += glob.glob(os.path.join(REPO, "skills", "*", "scripts"))
+        paths = [os.path.join(d, n) for root in roots for d, _, names in os.walk(root)
+                 for n in names]
+        paths += glob.glob(os.path.join(REPO, "*.py"))
         seen = set()
-        for root in roots:
-            for dirpath, _, files in os.walk(root):
-                for name in files:
-                    path = os.path.join(dirpath, name)
-                    rel = os.path.relpath(path, REPO)
-                    with open(path, "rb") as f:
-                        text = f.read().decode("utf-8", "replace")
-                    if "sys.executable" not in text:
-                        continue
-                    seen.add(rel)
-                    calls = unisolated_executable_calls(text)
-                    with self.subTest(rel):
-                        if rel in EXECUTABLE_EXCEPTIONS:
-                            self.assertTrue(calls, f"{rel} is isolated now: drop its exception")
-                        else:
-                            self.assertEqual(calls, [])
+        for path in paths:
+            rel = os.path.relpath(path, REPO)
+            with open(path, "rb") as f:
+                text = f.read().decode("utf-8", "replace")
+            if not re.search(EXECUTABLE_HEAD, text):
+                continue
+            seen.add(rel)
+            calls = unisolated_executable_calls(text)
+            with self.subTest(rel):
+                if rel in EXECUTABLE_EXCEPTIONS:
+                    self.assertTrue(calls, f"{rel} is isolated now: drop its exception")
+                else:
+                    self.assertEqual(calls, [])
         # The walk reached each kind of caller, and every exception still names a file.
         for rel in ("skills/delegation/scripts/delegation_checks.py",
                     "skills/delegation/scripts/watch-guard", "skills/lanes/scripts/lane",
@@ -876,11 +1038,14 @@ class SetupWiring(unittest.TestCase):
     def test_the_executable_scan_flags_a_call_without_isolation(self):
         for text in ("subprocess.run([sys.executable, x])", "run([sys.executable, '-m', 'y'])",
                      "Popen((sys.executable, LEDGER))", "argv = [sys.executable]",
-                     "run([\n    sys.executable, '-u', x])", "run([sys.executable, \"-u\", \"-I\"])"):
+                     "run([\n    sys.executable, '-u', x])", "run([sys.executable, \"-u\", \"-I\"])",
+                     "run([\"python3\", x])", "Popen(('python3', '-c', s))",
+                     "run([\"/usr/bin/python3\", x])", "argv = ['python']"):
             with self.subTest(text):
                 self.assertEqual(len(unisolated_executable_calls(text)), 1)
         for text in ("run([sys.executable, \"-I\", x])", "run([ sys.executable , '-I', '-m', y])",
-                     "return sys.executable", "print(sys.executable)"):
+                     "return sys.executable", "print(sys.executable)", "run([\"python3\", \"-I\", x])",
+                     "names = (\"python3\")", "which(\"python3\")"):
             with self.subTest(text):
                 self.assertEqual(unisolated_executable_calls(text), [])
 

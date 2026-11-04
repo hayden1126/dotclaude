@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Assemble the notes page, _build/notes.html, from the hub root.
 
   assemble.py [--root DIR]

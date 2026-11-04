@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Map and slice a reveal.js deck saved as raw HTML (fetched with curl, never WebFetch).
 
   reveal_slice.py map <deck.html>

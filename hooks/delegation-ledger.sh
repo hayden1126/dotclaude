@@ -3,5 +3,5 @@
 # (skills/delegation/scripts/delegation-ledger). PostToolUse: the deadline nudge, the only
 # output it ever prints. Always exits 0, so it can never block an agent. Errors land in
 # ${XDG_STATE_HOME:-~/.local/state}/dotclaude/delegation-ledger.err.
-python3 "$HOME/.claude/skills/delegation/scripts/delegation-ledger" hook 2>/dev/null
+python3 -I "$HOME/.claude/skills/delegation/scripts/delegation-ledger" hook 2>/dev/null
 exit 0

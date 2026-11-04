@@ -43,13 +43,10 @@ if . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/session-pane.sh" 2>/dev/nu
 fi
 [ "$mute_toast" = 1 ] && exit 0
 
-# Message: prefer python3, fall back to python. Either way, default if absent.
-py=$(command -v python3 || command -v python || true)
-msg=""
-if [[ -n "$py" ]]; then
-  msg=$(printf '%s' "$input" | "$py" -I -c \
-    'import sys,json; print(json.load(sys.stdin).get("message","Input needed"))' 2>/dev/null)
-fi
+# Message from the payload, by python3 -I (no user site or PYTHON* env: this runs unsandboxed);
+# the default when python3 is missing or the payload has none.
+msg=$(printf '%s' "$input" | python3 -I -c \
+  'import sys,json; print(json.load(sys.stdin).get("message","Input needed"))' 2>/dev/null)
 [[ -z "$msg" ]] && msg="Input needed"
 
 # Resolve notify-toast.ps1 to a Windows path powershell.exe understands.

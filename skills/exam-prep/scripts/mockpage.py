@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Build the mock page from a mock exam in MOCK.md's format (08-practice), from the hub root.
 
   mockpage.py <mock.md> [--out _build/mock.html] [--backbone _build/backbone.md]

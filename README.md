@@ -186,6 +186,17 @@ wrappers (`lane init`, `new`, `adopt`, `ls`, `open`, `done`, `park`, `sync-main`
 no socket, codex and any other `gh` form no credential, and a push to a local path no other repo's
 hooks, so it fails closed.
 
+Every Python this repo starts runs isolated (`-I`): hooks call `python3 -I`, scripts start with
+`#!/usr/bin/python3 -I`, and `sys.executable` calls pass `-I`. Much of it runs outside the sandbox
+(hooks, excluded commands, tmux, the status line, setup). Without `-I`, Python puts the script's
+dir or the cwd first on its import path, honours `PYTHON*` variables and loads the user
+site-packages, where a planted `usercustomize.py` or `.pth` file would run unsandboxed.
+`settings.json` also denies `Edit(~/.local/lib/**)` and `Edit(~/Library/Python/**)`, so the Edit
+and Write tools can't plant one (sandboxed Bash already can't). `tests/setup/test_install_helpers.py`
+enforces all of this over hooks/, bin/, tmux/, statusline/, the skills' scripts and the top-level
+scripts. The deck-production scripts are the one exception: they run only in sandboxed Bash and
+import their siblings.
+
 Asks cover what an excluded command could still be made to run or read:
 - tmux: every other verb, alias and prefix, a bare `tmux`, a global flag, a `;` chain, a `#(`
   job, the `E:` and `T:` format modifiers (they expand a value as a format) and `display -I`;

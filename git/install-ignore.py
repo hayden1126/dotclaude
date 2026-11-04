@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """install-ignore.py: keep git/sandbox-stubs.ignore current in the global git excludes file.
 
 The excludes file isn't ours alone: Claude Code appends its own lines to it, and so may you.

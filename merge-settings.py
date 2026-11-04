@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """merge-settings.py: print the baseline settings.json with a machine overlay merged in.
 
 setup.sh copies settings.json into ~/.claude/ (see the note there), so a value added by hand to

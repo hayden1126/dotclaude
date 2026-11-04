@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """gh-public: read-only access to public GitHub data, for delegated agents.
 
   gh-public /repos/OWNER/REPO                 any GET path on api.github.com

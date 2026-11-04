@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Check a printed cheat sheet before the student prints it (07-cheatsheet).
 
   check_pdf.py <sheet.pdf> --floor PT --forbid TEXT [--forbid TEXT]... [--pages N]
