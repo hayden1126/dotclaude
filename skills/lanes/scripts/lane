@@ -13,6 +13,7 @@
   lane lead
   lane lock <name> [--wait SECS] -- <cmd...>
   lane serve [--port N] [--ready RE] [--timeout SECS] -- <cmd...> | lane serve --stop PORT
+  lane port ls [<id>] | lane port who <port>
   lane trial [<id> ...] [--wait SECS] [--keep] [--link PATH ...] --run CMD [--run CMD ...]
   lane whoami [--json]
   lane claim <req> ... | lane release <req> ... | lane who <req>
@@ -25,10 +26,10 @@ Records: CLI data in <common-dir>/lanes/<id>/lane.json, the lane's prose in <lan
 the config in $XDG_STATE_HOME/dotclaude/lanes/ (why, and what is checked before sandbox-off code
 acts on a sandbox-writable file: docs/lanes.md S3). Every write takes the flock on <common-dir>/lanes/.lock. Board fields (ahead/behind, PR state,
 liveness, flags) are derived on each `ls`, never stored. skills/lanes/SKILL.md is the guide and
-docs/lanes.md the design. Run `init`, `new`, `adopt`, `ls`, `open`, `done`, `park`, `addr` and `lead` bare,
+docs/lanes.md the design. Run `init`, `new`, `adopt`, `ls`, `port ls`, `port who`, `open`, `done`, `park`, `sync-main`, `addr` and `lead` bare,
 so their excludedCommands entries take them out of the sandbox: `new`, `ls`, `done` and `park` need the
 network and the GitHub credential (`new` refuses without them; `ls` and `done` say what they
-skipped; `park` refuses), `ls`, `open`, `done`, `park`, `addr` and `lead` need to see other
+skipped; `park` refuses), `ls`, `port`, `open`, `done`, `park`, `addr` and `lead` need to see other
 processes, and `lead` writes the lead record in the state dir, as `park` does its flag. Every other subcommand runs sandboxed; `lock` and `trial`
 must, so the commands they run stay sandboxed too. `serve` is the one exception with no
 excludedCommands entry: it refuses in the sandbox (whose own network and pids hide listeners)
@@ -2493,7 +2494,7 @@ SERVE_TIMEOUT = 60.0  # seconds a server gets to listen (--timeout)
 SERVE_POLL = 0.1
 SERVE_TAIL = 2000  # bytes of the log a failure shows
 SERVE_READ = 1 << 20  # bytes of the log --ready searches
-SERVE_ENV = "LANE_SERVE"  # a serve's token, in the environment of all it starts
+SERVE_ENV = lanelib.SERVE_ENV  # a serve's token, in the environment of all it starts
 
 
 SERVE_SANDBOXED = ("its own network and pids hide who listens on a port, and a server there is "
@@ -2527,8 +2528,16 @@ def holder_text(pids: set[int], lanes: list[dict]) -> str:
             cwd = os.readlink(f"{lanelib.PROC}/{pid}/cwd")
         except OSError:
             cwd = None
-        owner = next((x["id"] for x in lanes if lanelib.cwd_inside(cwd, x["path"])), None)
-        out.append(f"pid {pid} ({comm}{f', lane {owner}' if owner else ''})")
+        # Every lane whose path holds the cwd (the kernel's, compared as read). Real lanes never
+        # nest, so more than one means a lane.json was rewritten (sandbox-writable): above
+        # another lane, inside it or onto it. Then none is picked; all are named, deepest real
+        # path first, so a rewritten path can't take over another lane's listeners.
+        holders = sorted((x for x in lanes if lanelib.kernel_cwd_inside(cwd, x["path"])),
+                         key=lambda x: (-len(os.path.realpath(x["path"])), x["id"]))
+        label = (f", lane {holders[0]['id']}" if len(holders) == 1 else
+                 f", lanes {', '.join(x['id'] for x in holders)} (their lane.json paths overlap)"
+                 if holders else "")
+        out.append(f"pid {pid} ({comm}{label})")
     return ", ".join(out)
 
 
@@ -2557,7 +2566,7 @@ def served_by(pid: int, token: str, sid: int | None = None) -> bool:
 
 
 def in_dir(p: lanelib.Proc, root: str) -> bool:
-    return p.cwd is not None and lanelib.inside(p.cwd, root)
+    return lanelib.kernel_cwd_inside(p.cwd, root)
 
 
 def served_procs(token: str, root: str, sid: int | None = None,
@@ -2603,45 +2612,16 @@ def end_serve(token: str, root: str, sid: int | None = None, send=None) -> tuple
     return [f"{p.pid} {p.comm}" for p in ours], named(outside)
 
 
-def load_served(repo: Repo, lane_id: str, port: int) -> dict | None:
-    """The record `serve` wrote for port, or None: gone, or no record of the right shape."""
-    try:
-        rec = json.loads(lanelib.read_head(repo.served_path(lane_id, port), PROOF_MAX) or b"null")
-    except (ValueError, RecursionError):
-        return None
-    ok = (isinstance(rec, dict) and rec.get("lane") == lane_id and rec.get("port") == port
-          and all(type(rec.get(k)) is int and rec[k] > 0 for k in ("pid", "start"))
-          and all(isinstance(rec.get(k), str) and rec[k] for k in ("boot", "token")))
-    return rec if ok else None
-
-
-def this_boot(rec: dict) -> bool:
-    """Whether rec's serve ran in this boot; a record from an earlier one names nothing alive."""
-    try:
-        return rec["boot"] == lanelib.boot_id()
-    except OSError:
-        return False
-
-
 def served_live(rec: dict, root: str) -> tuple[list[lanelib.Proc], list[lanelib.Proc]]:
     """What still runs of the serve rec names, (ours, outside) as served_procs sorts them."""
-    return served_procs(rec["token"], root) if this_boot(rec) else ([], [])
-
-
-def served_records(repo: Repo, lane_id: str) -> list[dict]:
-    """Every record of lane lane_id's serves that reads."""
-    try:
-        names = os.listdir(repo.served_dir(lane_id))
-    except FileNotFoundError:
-        return []
-    ports = [int(n[:-5]) for n in names if n.endswith(".json") and n[:-5].isdigit()]
-    return [rec for port in sorted(ports) if (rec := load_served(repo, lane_id, port))]
+    return served_procs(rec["token"], root) if lanelib.this_boot(rec) else ([], [])
 
 
 def serve_proofs(repo: Repo, lane_id: str) -> list[tuple[str, int]]:
     """(token, port) for each of the lane's serve records from this boot: survey counts a
     process in the lane carrying one as the lane's, SERVED."""
-    return [(rec["token"], rec["port"]) for rec in served_records(repo, lane_id) if this_boot(rec)]
+    return [(rec["token"], rec["port"]) for rec in lanelib.served_records(repo, lane_id)
+            if lanelib.this_boot(rec)]
 
 
 def outside_serves(repo: Repo, lane_id: str, path: str) -> None:
@@ -2649,7 +2629,7 @@ def outside_serves(repo: Repo, lane_id: str, path: str) -> None:
     a shared daemon working for other lanes too, so `done` names it and never signals it, and
     its record stays until it is gone."""
     lines = []
-    for rec in served_records(repo, lane_id):
+    for rec in lanelib.served_records(repo, lane_id):
         if outside := served_live(rec, path)[1]:
             lines.append(f"port {rec['port']}: {named(outside)}")
     if lines:
@@ -2663,7 +2643,7 @@ def outside_serves(repo: Repo, lane_id: str, path: str) -> None:
 def remove_served(repo: Repo, lane_id: str, port: int, token: str) -> None:
     """Remove port's record while it is still token's serve's: a later serve may own it."""
     with lock(repo):
-        rec = load_served(repo, lane_id, port)
+        rec = lanelib.load_served(repo, lane_id, port)
         if rec is None or rec["token"] == token:
             with contextlib.suppress(FileNotFoundError):
                 os.remove(repo.served_path(lane_id, port))
@@ -2759,7 +2739,7 @@ def serve_port(repo: Repo,
         raise LaneError(f"port {want} is not in lane {lane['id']}'s ports {span}")
     for port in [want] if want is not None else block:
         holders = port_holders(port, lanes)
-        if not holders and (rec := load_served(repo, lane["id"], port)) \
+        if not holders and (rec := lanelib.load_served(repo, lane["id"], port)) \
                 and served_live(rec, top)[0]:
             holders = ["a server lane serve started there still runs but isn't listening: "
                        f"`lane serve --stop {port}`"]
@@ -2771,6 +2751,136 @@ def serve_port(repo: Repo,
                                   "test that one"))
     raise LaneError(f"every port of lane {lane['id']}'s ports {span} has a listener: stop one "
                     "with `lane serve --stop <port>`, or name one with --port")
+
+
+# ---- port: what holds a lane's ports, read sandbox-off ------------------------------------
+PORT_SANDBOXED = ("its own network and pid namespaces hide every other process's sockets, so a "
+                  "held port would read free")
+PORT_SHOWN = 200  # characters of a serve's command `lane port` prints
+
+
+def port_number(text: str) -> int:
+    """`port who`'s port: a whole number 1-65535."""
+    if not (text.isascii() and text.isdigit() and 1 <= int(text) <= 65535):
+        raise argparse.ArgumentTypeError(f"wants a port 1-65535, got {text!r}")
+    return int(text)
+
+
+def serve_sockets(rec: dict | None, lane: dict, port: int) -> list[tuple[set[int], set[int]]]:
+    """(pids, the serve's pids among them) per socket listening on port. A pid is the serve's
+    only as serve's own proof has it: it carries rec's token and its cwd is in the lane's dir,
+    so one another lane starts elsewhere with the readable token is never passed off as the
+    serve. Read-only: the lane's path from lane.json only sorts processes for the telling."""
+    out = []
+    for pids in lanelib.socket_pids(lanelib.listeners(port)).values():
+        mine = {pid for pid in pids if rec and served_by(pid, rec["token"])
+                and lanelib.proc_cwd_inside(pid, lane["path"])}
+        out.append((pids, mine))
+    return out
+
+
+def serve_line(rec: dict | None, lane: dict, sockets: list[tuple[set[int], set[int]]],
+) -> str | None:
+    """'lane serve: <cmd>' with ', not listening' while none of its processes listens, or None
+    with no live serve of the lane on the port."""
+    listening = any(mine for _, mine in sockets)
+    if not (listening or rec and served_live(rec, lane["path"])[0]):
+        return None
+    return (f"lane serve: {lanelib.serve_text(rec, PORT_SHOWN)}"
+            f"{'' if listening else ', not listening'}")
+
+
+def port_rows(repo: Repo, lane: dict, lanes: list[dict]) -> list[str]:
+    """One line per port of the lane's block (checked: lane_block): free, the lane's serve (and
+    whether it listens, or shares its socket with a process of no token), and every other
+    listener, named."""
+    rows = []
+    for port in lane_block(repo, lane):
+        rec = lanelib.load_served(repo, lane["id"], port)
+        sockets = serve_sockets(rec, lane, port)
+        parts = []
+        if text := serve_line(rec, lane, sockets):
+            shared = set().union(*(pids - mine for pids, mine in sockets if mine))
+            parts.append(text + (f", its socket shared with {holder_text(shared, lanes)}"
+                                 if shared else ""))
+        if others := [pids for pids, mine in sockets if not mine]:
+            parts.append("held by " + "; ".join(holder_text(pids, lanes) for pids in others))
+        rows.append(shown(f"  {port}  {'; '.join(parts) or 'free'}"))
+    return rows
+
+
+def port_ls(repo: Repo, lanes: list[dict], lane_id: str | None) -> int:
+    if lane_id is not None:
+        targets = [x for x in lanes if x["id"] == lane_id]
+        if not targets:
+            raise LaneError(shown(f"no lane {lane_id}: `lane ls` lists them"))
+    else:
+        kind, here = repo.identity()
+        if kind == "lane":
+            targets = [x for x in lanes if x["id"] == here["id"]]
+        elif kind == "main":
+            targets = lanes
+        else:
+            raise LaneError(f"this checkout is {kind}: run `lane port ls` in a lane or the main "
+                            "checkout, or name a lane (`lane port ls <id>`)")
+    rc = 0
+    for lane in targets:
+        try:
+            rows = [] if lanelib.port_block(lane) is None else port_rows(repo, lane, lanes)
+        except LaneError as e:
+            if len(targets) == 1:
+                raise
+            warn(str(e))
+            rc = 1
+            continue
+        print(f"lane {lane['id']}: {lanelib.ports_text(lane)}")
+        for row in rows:
+            print(row)
+    return rc
+
+
+def port_who(repo: Repo, lanes: list[dict], port: int) -> int:
+    """The lane whose block holds port, its live serve there (and whether it listens), and every
+    listener, the serve's own marked. A lane.json whose block names the port but doesn't check
+    out (lane_block) is named, rc 1: a lane widening its block into another's makes both
+    refuse, and the port must not then read as no lane's."""
+    owner, bad = None, []
+    for lane in lanes:
+        if port in (lanelib.port_block(lane) or ()):
+            try:
+                lane_block(repo, lane)
+                owner = lane
+            except LaneError as e:
+                bad.append(str(e))
+    print(f"port {port}: in "
+          + (f"lane {owner['id']}'s {lanelib.ports_text(owner)}" if owner else "no lane's ports"))
+    for why in bad:
+        print(shown(f"  but {why}"))
+    rec = lanelib.load_served(repo, owner["id"], port) if owner else None
+    sockets = serve_sockets(rec, owner, port) if owner else [
+        (pids, set()) for pids in lanelib.socket_pids(lanelib.listeners(port)).values()]
+    if owner and (text := serve_line(rec, owner, sockets)):
+        print(f"  lane {owner['id']}'s {text.removeprefix('lane ')}")
+    for pids, mine in sockets:
+        tag = "" if not mine else (f", lane {owner['id']}'s serve" if mine == pids
+                                   else f", lane {owner['id']}'s serve shares it")
+        print(shown(f"  listener: {holder_text(pids, lanes)}{tag}"))
+    if not sockets:
+        print("  nothing listens on it")
+    return 1 if bad else 0
+
+
+def cmd_port(args) -> int:
+    said = "ls" + (f" {args.id}" if args.id is not None else "") if args.verb == "ls" \
+        else f"who {args.port}"
+    sandbox_off(f"lane port {args.verb}",
+                shown(f"{PORT_SANDBOXED}. Run it as a bare `lane port {said}` (excludedCommands "
+                      "runs that outside the sandbox)"))
+    repo = lanes_repo()
+    lanes = held_lanes(repo)
+    if args.verb == "ls":
+        return port_ls(repo, lanes, args.id)
+    return port_who(repo, lanes, args.port)
 
 
 def cmd_serve(args) -> int:
@@ -2954,7 +3064,7 @@ def serve_stop(repo: Repo, lane: dict, top: str, port: int) -> int:
     """End what a serve of this lane started on port, proved by the record serve wrote in the
     state dir (no lane's sandboxed Bash can write it): the processes carrying its token in the
     lane's dir. One outside the lane is named, never signalled (it may be a shared daemon)."""
-    rec = load_served(repo, lane["id"], port)
+    rec = lanelib.load_served(repo, lane["id"], port)
     if rec is None:
         holders = port_holders(port, repo.lanes(shared=True))
         raise LaneError(shown(f"lane {lane['id']}'s serve started nothing on port {port}"
@@ -3942,7 +4052,7 @@ def in_lane(procs: dict[int, lanelib.Proc], path: str) -> dict[int, lanelib.Proc
     """The running processes whose real cwd is the lane at path or under it, this one aside."""
     me = os.getpid()
     return {pid: p for pid, p in procs.items() if pid != me and p.state not in lanelib.EXITED
-            and p.cwd is not None and lanelib.inside(p.cwd, path)}
+            and lanelib.kernel_cwd_inside(p.cwd, path)}
 
 
 def other_jobs(pid: int, kids: dict[int, list[int]], targets) -> list[int]:
@@ -5184,7 +5294,7 @@ def close_lane(args) -> None:
     # A serve started after the last look (a lane with nothing running is never marked
     # closing) keeps its record: one is removed only while nothing carrying its token runs.
     if live := [f"port {rec['port']}: {named(sum(served_live(rec, path), []))}"
-                for rec in served_records(repo, args.id) if any(served_live(rec, path))]:
+                for rec in lanelib.served_records(repo, args.id) if any(served_live(rec, path))]:
         warn(f"lane {args.id}'s serve records are kept at {repo.served_dir(args.id)}, since "
              f"what they name still runs: {'; '.join(live)}")
     else:
@@ -6798,6 +6908,14 @@ def parser() -> argparse.ArgumentParser:
                    help=f"give up after SECS (default {SERVE_TIMEOUT:g})")
     p.add_argument("--stop", type=int, metavar="PORT",
                    help="end the server a serve of this lane started on PORT")
+    p = sub.add_parser("port", help="what holds a lane's ports, or any port; read-only, sandbox "
+                                    "off")
+    verbs = p.add_subparsers(dest="verb", required=True, parser_class=strict)
+    q = verbs.add_parser("ls", help="each port of the lane's block (from the main checkout: every "
+                                    "lane's): free, its serve, or who else listens")
+    q.add_argument("id", nargs="?", help="that lane's ports")
+    q = verbs.add_parser("who", help="the lane whose block holds PORT, its serve, every listener")
+    q.add_argument("port", type=port_number, metavar="PORT")
     p = sub.add_parser("trial", help="run the suites on a merge of this lane with every other "
                                      "live lane, in a scratch tree, under the suite lock",
                        usage="lane trial [<id> ...] [--wait SECS] [--keep] [--link PATH ...] "

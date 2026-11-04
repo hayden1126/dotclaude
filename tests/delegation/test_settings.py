@@ -476,14 +476,16 @@ class Baseline(unittest.TestCase):
         # sandboxed Bash can't write (docs/lanes.md S3; tests/lanes ConfigTrust).
         excluded = S["sandbox"]["excludedCommands"]
         bare = ["lane init", "lane init *", "lane new *", "lane adopt *", "lane ls", "lane ls *",
+                "lane port ls", "lane port ls *", "lane port who *",
                 "lane open *", "lane done *", "lane park *",
                 "lane sync-main *", "lane addr *", "lane lead"]
         self.assertEqual([p for p in excluded if p.split()[0] == "lane"], bare)
         self.assertNotIn("lane *", excluded)
         for cmd in ("lane lock gate -- true", "lane lock gate -- rm -rf build", "lane whoami",
-                    "lane claim 42", "lane note x", "lane sync-main"):
+                    "lane claim 42", "lane note x", "lane sync-main", "lane port claim 1"):
             self.assertEqual([p for p in excluded if glob_match(p, cmd)], [], cmd)
-        for cmd in ("lane ls", "lane ls --json", "lane open chart-fix", "lane done chart-fix",
+        for cmd in ("lane ls", "lane ls --json", "lane port ls", "lane port ls web",
+                    "lane port who 5191", "lane open chart-fix", "lane done chart-fix",
                     "lane park chart-fix", "lane sync-main 42",
                     "lane addr lead", "lane lead"):
             self.assertTrue(any(glob_match(p, cmd) for p in excluded), cmd)
@@ -621,9 +623,15 @@ class Baseline(unittest.TestCase):
             self.assertEqual(set(re.findall(r"`([\w-]+)`", m.group(1))), allowed, doc)
         for sub in sorted(allowed):
             # `ls` and `lead` take no argument: `lane lead x` matches neither of its rules.
-            sample = f"lane {sub}" if sub in ("ls", "lead") else f"lane {sub} x"
-            self.assertTrue(matching("allow", sample), sample)
-            self.assertTrue(excluded_by(sample), sample)
+            # `port` has its verbs, each read-only: `ls` and `who`.
+            samples = {"ls": ["lane ls"], "lead": ["lane lead"],
+                       "port": ["lane port ls", "lane port ls x", "lane port who 5191"]}
+            for sample in samples.get(sub, [f"lane {sub} x"]):
+                self.assertTrue(matching("allow", sample), sample)
+                self.assertTrue(excluded_by(sample), sample)
+        for verb in ("lane port claim 5191", "lane port x"):  # only the read-only verbs
+            self.assertFalse(matching("allow", verb), verb)
+            self.assertFalse(excluded_by(verb), verb)
         for raw in ("lane done x --abandon", "lane init --setup y", "lane init --root y"):
             self.assertTrue(matching("ask", raw), raw)
 

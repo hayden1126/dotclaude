@@ -155,7 +155,7 @@ handoff skill's own `gh pr ready` as an unrequested commit, so `test_settings.py
 that every `gh pr` or `gh run` step CLAUDE.md, a skill or an agent names has a rule. Also
 allowed, because the classifier once refused a CI watch with no reason given: the read-only
 `gh pr checks`, `view`, `list`, `status` and `diff`, and `gh run list`, `view` and `watch`.
-`lane ls`, `new`, `adopt`, `open`, `done`, `park`, `addr` and `lead` are allowed too, behind the excluded-command guard
+`lane ls`, `port ls`, `port who`, `new`, `adopt`, `open`, `done`, `park`, `sync-main`, `addr` and `lead` are allowed too, behind the excluded-command guard
 (docs/lanes.md S3).
 Read-only git (`status`, `log`, `diff`, `show`, `rev-parse`; the classifier once refused one as an
 "unrequested commit") is allowed too, with the pipe filters `head`, `tail`, `wc` and `grep`, since
@@ -177,7 +177,7 @@ force-push and a `reset --hard` on a dirty tree when the prompt named them.
 must cover, and `test_settings.py` ties it to `settings.json` in both directions. It holds the
 credential barrier (`git push` to `origin`, `fetch`, `pull`, `ls-remote`, and `gh`'s `pr`, `run`,
 `issue`, `api` and `search` with its read-only `repo`, `release` and `auth status` forms), our
-wrappers (`lane init`, `new`, `adopt`, `ls`, `open`, `done`, `park`, `sync-main`, `addr`, `lead`, `pass-respawn`, `delegation-ledger`,
+wrappers (`lane init`, `new`, `adopt`, `ls`, `port ls`, `port who`, `open`, `done`, `park`, `sync-main`, `addr`, `lead`, `pass-respawn`, `delegation-ledger`,
 `codex-delegate`, `ed-pull`), `claude`, the read-only tmux verbs (`ls`, `list-sessions`, `list-windows`,
 `list-panes`, `list-clients`, `list-keys`, `list-commands`, `capture-pane`, `display`, `show`,
 `show-options`, `show-environment`, `show-messages`, `show-hooks`), read-only codex (`login status`,
@@ -777,7 +777,7 @@ need nothing extra.
     open.
 - **SessionStart (every source) / Stop / SessionEnd: `lane-identity.sh`** (in this repo). In a lane
   it tells the session its lane id, what its worktree has checked out (a branch, or a detached
-  HEAD's commit), claims, ports and record, and registers it in `lane.json`; after a compact it adds
+  HEAD's commit), claims, ports (with the lane's live `lane serve`s) and record, and registers it in `lane.json`; after a compact it adds
   "re-read your record". In the main checkout of a lanes repo it prints one board line, and on
   SessionStart and Stop it runs `lane lead` when the session proves it continues the recorded lead
   (a resume, a /clear or a /pass successor). On Stop and SessionEnd it mirrors the lane's `.lane/`
