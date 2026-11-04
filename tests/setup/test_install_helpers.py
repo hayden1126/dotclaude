@@ -810,7 +810,11 @@ class SetupWiring(unittest.TestCase):
                       calls["setup.sh"])  # section 2's check of the settings it replaces
         self.assertIn('python3 -I "$REPO_DIR/skills/lanes/scripts/lanelib.py" git-tamper '
                       '"$common" >&2 || tamper=$?', calls["setup.sh"])
-        self.assertEqual(len(calls["setup.sh"]), 14)
+        self.assertIn('python3 -I - "$lane_cli" "$CLAUDE_DIR/settings.json" "$verified_dir" '
+                      '<<\'PY\' || verified_window=1', calls["setup.sh"])  # the window's check
+        self.assertIn('python3 -I - "$lane_cli" "$HOME" <<\'PY\' || demoted=$?',
+                      calls["setup.sh"])  # its demotion
+        self.assertEqual(len(calls["setup.sh"]), 16)
         self.assertEqual(len(calls["sync.sh"]), 2)
         self.assertEqual(len(calls["setup-tmux.sh"]), 2)  # swap_in's os.replace and the .tmux.conf write
         self.assertEqual(len(calls["setup-chrome-wsl.sh"]), 2)  # the plugin version and the config merge
@@ -896,7 +900,7 @@ class VerifiedStoreDir(unittest.TestCase):
     stops the run. HOME points at a temp dir."""
 
     MARK = "# lane sync-main's stores' dir"
-    END = '\nmkdir -p "$CLAUDE_DIR"'
+    END = "\n# The window (Hayden's pick"
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -946,6 +950,112 @@ class VerifiedStoreDir(unittest.TestCase):
                 self.assertFalse(os.path.isdir(os.path.join(self.home, "nowhere")))
                 self.assertEqual(stat.S_IMODE(os.stat(outside).st_mode), 0o755)
             os.unlink(self.verified)
+
+
+class VerifiedWindow(unittest.TestCase):
+    """The window (Hayden's pick, 2026-11-03): when the live settings.json this install replaces
+    lacks either stores' rule, any lane could write the stores' dir, so once the new settings are
+    in, every marker there goes pending (lane's demote_marks, tested in tests/lanes). Here: the
+    detection before the settings copy, the demotion after it, and the flag between the two.
+    HOME points at a temp dir; the copy is a stand-in that writes settings with the rules."""
+
+    DETECT = "# The window (Hayden's pick"
+    DETECT_END = '\nmkdir -p "$CLAUDE_DIR"'
+    DEMOTE = "if [[ $verified_window -eq 1"
+    DEMOTE_END = '\nlink "$REPO_DIR/CLAUDE.md"'
+    RULES = {"permissions": {"deny": ["Edit(~/.local/state/dotclaude/verified/**)"]},
+             "sandbox": {"filesystem": {"denyWrite": ["~/.local/state/dotclaude/verified"]}}}
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.home = os.path.realpath(tmp.name)
+        self.claude = os.path.join(self.home, ".claude")
+        os.makedirs(self.claude)
+        self.verified = os.path.join(self.home, ".local", "state", "dotclaude", "verified")
+        self.marks = os.path.join(self.verified, "new-lanes")
+        os.makedirs(self.marks, mode=0o700)
+        self.flag = os.path.join(self.verified, ".demote-pending")
+        with open(os.path.join(REPO, "setup.sh")) as f:
+            src = f.read()
+        self.detect = self.DETECT + src.split(self.DETECT, 1)[1].split(self.DETECT_END, 1)[0]
+        self.demote = self.DEMOTE + src.split(self.DEMOTE, 1)[1].split(self.DEMOTE_END, 1)[0]
+
+    def live(self, data):
+        with open(os.path.join(self.claude, "settings.json"), "w") as f:
+            json.dump(data, f)
+
+    def mark(self, name="k-chart-fix.json", verified=True):
+        path = os.path.join(self.marks, name)
+        with open(path, "w") as f:
+            json.dump({"id": "chart-fix", "common": "/x", "verified": verified}, f)
+        return path
+
+    def run_setup(self, stop_after_detect=False):
+        copy = f"cat > \"$CLAUDE_DIR/settings.json\" <<'J'\n{json.dumps(self.RULES)}\nJ\n"
+        script = ('set -euo pipefail; say() { echo "$*"; }\nwarn() { echo "!! $*" >&2; }\n'
+                  f'verified_dir="{self.verified}"\n' + self.detect + "\n"
+                  + ("exit 0\n" if stop_after_detect else copy + self.demote))
+        env = {"HOME": self.home, "PATH": "/usr/bin:/bin", "REPO_DIR": REPO,
+               "CLAUDE_DIR": self.claude}
+        return subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True,
+                              timeout=60)
+
+    def verified_field(self, path):
+        with open(path) as f:
+            return json.load(f)["verified"]
+
+    def test_settings_without_a_rule_demote_every_marker(self):
+        for live in ({}, {"permissions": self.RULES["permissions"]},
+                     {"sandbox": self.RULES["sandbox"]}):
+            with self.subTest(live=live):
+                path = self.mark()
+                self.live(live)
+                p = self.run_setup()
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertIs(self.verified_field(path), False)
+                self.assertIn("k-chart-fix.json", p.stderr)
+                self.assertIn("lane done <id> --abandon", p.stderr)
+                self.assertFalse(os.path.lexists(self.flag))
+
+    def test_settings_with_both_rules_touch_nothing(self):
+        path = self.mark()
+        self.live(self.RULES)
+        p = self.run_setup()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIs(self.verified_field(path), True)
+        self.assertEqual(p.stderr, "")
+
+    def test_a_run_stopped_after_detection_demotes_on_the_next(self):
+        path = self.mark()
+        self.live({})
+        self.assertEqual(self.run_setup(stop_after_detect=True).returncode, 0)
+        self.assertTrue(os.path.isfile(self.flag))
+        self.live(self.RULES)  # the stopped run's copy landed, say, but not its demotion
+        p = self.run_setup()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIs(self.verified_field(path), False)
+        self.assertFalse(os.path.lexists(self.flag))
+
+    def test_a_link_at_the_flag_is_never_written_through(self):
+        victim = os.path.join(self.home, "victim")
+        with open(victim, "w") as f:
+            f.write("mine\n")
+        os.symlink(victim, self.flag)
+        path = self.mark()
+        self.live({})
+        p = self.run_setup()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        with open(victim) as f:
+            self.assertEqual(f.read(), "mine\n")
+        self.assertIs(self.verified_field(path), False)
+        self.assertFalse(os.path.lexists(self.flag))
+
+    def test_a_window_with_no_markers_says_nothing(self):
+        self.live({})
+        p = self.run_setup()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stderr, "")
 
 
 class RecurseSubmodulesOff(unittest.TestCase):

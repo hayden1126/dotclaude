@@ -5715,8 +5715,17 @@ def store_guard(name: str, who: str = "lane sync-main", wait: float = 0.0):
     dfd = verified_dir(home, verified)
     try:
         StoreDir(home, dfd, name).own_store()
-        fd = os.open(".lock", os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
-                     0o600, dir_fd=dfd)
+        # O_NONBLOCK: a FIFO there (planted while the rules were off) refuses, never waits
+        try:
+            fd = os.open(".lock", os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW
+                         | os.O_NONBLOCK | os.O_CLOEXEC, 0o600, dir_fd=dfd)
+        except OSError as e:
+            raise LaneError(f"{verified}/.lock can't be opened ({e.strerror or e}): nothing was "
+                            "written. Find out who made it")
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            os.close(fd)
+            raise LaneError(f"{verified}/.lock is no regular file: nothing was written. Find "
+                            "out who made it")
     except BaseException:
         os.close(dfd)
         raise
@@ -6028,6 +6037,77 @@ def write_mark(held: StoreDir, repo: Repo, lane: dict, verified: bool = True) ->
             raise
     finally:
         os.close(fd)
+
+
+def demote_marks(home: str) -> list[str]:
+    """setup.sh's step after a window, an install whose live settings.json lacked either rule
+    that keeps lanes out of the stores' dir (Hayden's pick, 2026-11-03): any lane's sandbox
+    could write there then, and a marker claiming a checkout passed `new`'s check would let
+    `adopt` run the setup sandbox-off in a tree nobody verified. So every marker in NEW_MARKS
+    becomes pending (adopt and open refuse it, `done --abandon` clears it), and whatever there,
+    or at the stores' .lock, is no regular file goes. Regular .lock files stay: a held one only
+    refuses. Returns one masked line per change. A process the sandbox started while the rules
+    were off keeps its write access until it exits: docs/lanes.md's Residuals."""
+    verified = os.path.join(home, VERIFIED_REL)
+    top = verified_dir(home, verified)
+    said = []
+
+    def drop(parent: int, name: str, where: str) -> None:
+        if lanelib.real_dir_at(parent, name):
+            shutil.rmtree(name, dir_fd=parent)
+        else:
+            os.unlink(name, dir_fd=parent)
+        said.append(shown(f"removed {where}/{name}: no regular file"))
+    try:
+        with contextlib.suppress(FileNotFoundError):
+            if not stat.S_ISREG(os.stat(".lock", dir_fd=top, follow_symlinks=False).st_mode):
+                drop(top, ".lock", verified)
+        try:
+            fd = marks_fd(top)
+        except OSError as e:
+            if e.errno == errno.EPERM:
+                raise
+            drop(top, NEW_MARKS, verified)
+            return said
+        if fd is None:
+            return said
+        where = os.path.join(verified, NEW_MARKS)
+        try:
+            for name in sorted(os.listdir(fd)):
+                st = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                if not stat.S_ISREG(st.st_mode):
+                    drop(fd, name, where)
+                    continue
+                if not name.endswith(".json"):
+                    continue
+                try:  # a real marker is a few hundred bytes
+                    data = (json.loads(lanelib.read_nofollow(fd, name) or b"")
+                            if st.st_size <= SETTINGS_MAX else None)
+                except (ValueError, RecursionError):
+                    data = None
+                if isinstance(data, dict) and data.get("verified") is False:
+                    continue
+                body = json.dumps(dict(data if isinstance(data, dict) else {},
+                                       verified=False)).encode()
+                tmp = f".tmp-{os.getpid()}-{time.monotonic_ns()}"
+                out = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+                              | os.O_CLOEXEC, 0o600, dir_fd=fd)
+                try:
+                    try:
+                        os.write(out, body)
+                    finally:
+                        os.close(out)
+                    os.rename(tmp, name, src_dir_fd=fd, dst_dir_fd=fd)
+                except BaseException:
+                    with contextlib.suppress(OSError):
+                        os.unlink(tmp, dir_fd=fd)
+                    raise
+                said.append(shown(f"demoted {where}/{name} to pending"))
+        finally:
+            os.close(fd)
+    finally:
+        os.close(top)
+    return said
 
 
 def lock_name(repo: Repo, lane_id: str) -> str:

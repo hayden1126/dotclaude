@@ -1089,6 +1089,107 @@ class CredentialRemote(LanesRepo):
         self.assertGreater(self.remote.authorized, authorized)
 
 
+class WindowDemotion(LanesRepo):
+    """An install whose live settings.json lacked either rule that keeps lanes out of the
+    verified dir (a reinstall from an older dotclaude) left a window in which any lane's sandbox
+    could write there: a marker claiming a checkout passed `new`'s check would then let `adopt`
+    run the setup sandbox-off in an unverified tree. setup.sh then runs demote_marks (Hayden's
+    pick, 2026-11-03): every marker becomes pending, and what is no regular file there goes."""
+
+    def setUp(self):
+        super().setUp()
+        self.mod = load_lane_script()
+        self.verified = os.path.join(self.home, ".local", "state", "dotclaude", "verified")
+        self.marks_dir = os.path.join(self.verified, "new-lanes")
+
+    def demote(self):
+        return self.mod.demote_marks(self.home)
+
+    def test_a_verified_marker_no_longer_lets_adopt_finish(self):
+        NewVerifiesTree.failed_setup(self)
+        (mark,) = marks(self, "chart-fix")
+        before = json.loads(self.read(mark))
+        self.assertIs(before["verified"], True)  # the control: adopt would finish on this
+        said = self.demote()
+        self.assertEqual(json.loads(self.read(mark)), dict(before, verified=False))
+        self.assertTrue(any("chart-fix" in s for s in said), said)
+        self.write(os.path.join(self.lane_path("chart-fix"), "OK"), "")
+        p = self.run_lane("adopt", self.lane_path("chart-fix"))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("lane done chart-fix --abandon", p.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.lane_path("chart-fix"), "SETUP_RAN")))
+        p = self.run_lane("open", "chart-fix", "--print")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertEqual(self.demote(), [])  # a pending marker stays as it is
+
+    def test_a_planted_marker_of_any_shape_goes_pending(self):
+        os.makedirs(self.marks_dir)
+        for name, body in (("k-a.json", "not json"), ("k-b.json", "[1]"),
+                           ("k-c.json", '{"verified": true, "common": "/x"}')):
+            self.write(os.path.join(self.marks_dir, name), body)
+        said = self.demote()
+        for name in ("k-a.json", "k-b.json", "k-c.json"):
+            data = json.loads(self.read(os.path.join(self.marks_dir, name)))
+            self.assertIs(data["verified"], False)
+        self.assertEqual(json.loads(self.read(os.path.join(self.marks_dir, "k-c.json")))["common"],
+                         "/x")
+        self.assertEqual(len(said), 3, said)
+
+    def test_what_is_no_regular_file_goes(self):
+        os.makedirs(self.marks_dir)
+        outside = os.path.join(self.tmp, "outside")
+        self.write(outside, "mine\n")
+        os.symlink(outside, os.path.join(self.marks_dir, "k-a.json"))
+        os.symlink(outside, os.path.join(self.marks_dir, "k-a.lock"))
+        os.mkfifo(os.path.join(self.marks_dir, "k-b.lock"))
+        os.makedirs(os.path.join(self.marks_dir, "k-c.json", "sub"))
+        self.write(os.path.join(self.marks_dir, "k-d.lock"), "")  # a real lock file stays
+        os.mkfifo(os.path.join(self.verified, ".lock"))
+        said = self.demote()
+        self.assertEqual(sorted(os.listdir(self.marks_dir)), ["k-d.lock"])
+        self.assertFalse(os.path.lexists(os.path.join(self.verified, ".lock")))
+        self.assertEqual(self.read(outside), "mine\n")
+        self.assertEqual(len(said), 5, said)
+
+    def test_a_link_at_the_marks_dir_goes(self):
+        outside = os.path.join(self.tmp, "outside")
+        os.makedirs(outside)
+        self.write(os.path.join(outside, "k-a.json"), '{"verified": true}')
+        os.makedirs(self.verified)
+        os.symlink(outside, self.marks_dir)
+        said = self.demote()
+        self.assertFalse(os.path.lexists(self.marks_dir))
+        self.assertEqual(self.read(os.path.join(outside, "k-a.json")), '{"verified": true}')
+        self.assertEqual(len(said), 1, said)
+
+    def test_names_come_out_masked(self):
+        os.makedirs(self.marks_dir)
+        self.write(os.path.join(self.marks_dir, "k-\x1b]0;x\x07.json"), "{}")
+        (line,) = self.demote()
+        self.assertNotIn("\x1b", line)
+
+    def test_no_dir_no_work(self):
+        self.assertEqual(self.demote(), [])
+
+
+class FifoStoreLock(LanesRepo):
+    """A FIFO planted at the stores' .lock (in a window, as WindowDemotion's) refuses at once:
+    opened for writing without O_NONBLOCK, it would wait for a reader forever."""
+
+    def test_new_refuses_a_fifo_lock(self):
+        verified = os.path.join(self.home, ".local", "state", "dotclaude", "verified")
+        os.makedirs(verified)
+        os.mkfifo(os.path.join(verified, ".lock"))
+        try:
+            p = subprocess.run([sys.executable, LANE, "new", "chart-fix"], cwd=self.main,
+                               env=self.env, capture_output=True, text=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            self.fail("lane new waited on a FIFO at the stores' .lock")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn(".lock", p.stderr)
+        self.assertFalse(os.path.exists(self.lane_path("chart-fix")))
+
+
 class CredentialConfig(unittest.TestCase):
     """credential_config: the credential.* keys of the system and global config, both global
     files, in git's own order, each value as the file has it; no include is followed."""

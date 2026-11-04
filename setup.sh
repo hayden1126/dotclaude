@@ -123,6 +123,32 @@ if [[ -L $verified_dir || ! -d $verified_dir || ! -O $verified_dir ]]; then
 fi
 chmod 700 "$verified_dir"
 
+# The window (Hayden's pick, 2026-11-03): while the live settings.json lacks either rule that
+# keeps lanes out of the stores' dir (an install from an older dotclaude), any lane's sandbox can
+# write there, and a planted marker would let `lane adopt` run a setup sandbox-off in a tree
+# nobody verified. So when the settings this run replaces lack a rule, every marker there is
+# demoted to pending once the new settings are in place (lane's demote_marks, below). The flag
+# in the stores' dir carries that to the next run if this one stops in between.
+lane_cli="$REPO_DIR/skills/lanes/scripts/lane"
+verified_window=0
+python3 -I - "$lane_cli" "$CLAUDE_DIR/settings.json" "$verified_dir" <<'PY' || verified_window=1
+import importlib.machinery, importlib.util, os, sys
+loader = importlib.machinery.SourceFileLoader("lane_cli", sys.argv[1])
+mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("lane_cli", loader))
+loader.exec_module(mod)
+if not mod.settings_rules_problem(sys.argv[2]):
+    sys.exit(0)
+try:  # by fd, never through a link planted there in the window
+    top = os.open(sys.argv[3], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    os.close(os.open(".demote-pending", os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
+                     0o600, dir_fd=top))
+except OSError as e:
+    print(f"!! can't write {sys.argv[3]}/.demote-pending ({e.strerror}): this run still "
+          "demotes the markers after its settings copy, but a run stopped between the two "
+          "leaves them for a hand check", file=sys.stderr)
+sys.exit(1)
+PY
+
 mkdir -p "$CLAUDE_DIR"
 
 # ---------------------------------------------------------------------------
@@ -265,6 +291,27 @@ python3 -I "$REPO_DIR/merge-settings.py" --checkout "$REPO_DIR" "$REPO_DIR/setti
   "$CLAUDE_DIR/settings.machine.json" "$CLAUDE_DIR/settings.json" > "$MERGED_SETTINGS" \
   || { warn "settings.machine.json or the live settings.json is not valid JSON; settings.json left unchanged"; exit 1; }
 copy_managed "$MERGED_SETTINGS" "$CLAUDE_DIR/settings.json"
+if [[ $verified_window -eq 1 || -e $verified_dir/.demote-pending || -L $verified_dir/.demote-pending ]]; then
+  demoted=0
+  python3 -I - "$lane_cli" "$HOME" <<'PY' || demoted=$?
+import importlib.machinery, importlib.util, sys
+loader = importlib.machinery.SourceFileLoader("lane_cli", sys.argv[1])
+mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("lane_cli", loader))
+loader.exec_module(mod)
+said = mod.demote_marks(sys.argv[2])
+for line in said:
+    print(f"!! {line}", file=sys.stderr)
+if said:
+    print("!! the settings this install replaced let every lane write the stores' dir: redo "
+          "each lane named above as demoted (`lane done <id> --abandon`, then `lane new`)",
+          file=sys.stderr)
+PY
+  if [[ $demoted -eq 0 ]]; then
+    rm -f "$verified_dir/.demote-pending"
+  else
+    warn "demoting the markers in $verified_dir failed (see above): rerun setup.sh, which tries again while $verified_dir/.demote-pending is there"
+  fi
+fi
 link "$REPO_DIR/CLAUDE.md"       "$CLAUDE_DIR/CLAUDE.md"
 link "$REPO_DIR/notify-toast.ps1" "$CLAUDE_DIR/notify-toast.ps1"
 

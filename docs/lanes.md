@@ -903,6 +903,16 @@ find out who made it before anything else runs git in that repo.
   through the lane's admin dir pointer under the shared git dir, which a lane can rewrite while
   the setup runs (residual of LR7). Pinning git's common dir for the setup would aim any git it
   runs in another repo (an npm git dependency, say) at the lane repo's git dir, so it stays open.
+- An install whose live settings.json lacked either stores' rule (one from an older dotclaude)
+  left the stores' dir open to every lane until the next install restored them: the window. A
+  marker planted then would let `adopt` run the setup in a tree nobody verified, so setup.sh,
+  when the settings it replaces lack a rule, turns every marker pending once the new settings
+  are in, and removes whatever there, or at the stores' `.lock`, is no regular file (a FIFO at a
+  lock would hang a run). Each lane it names must be redone (`lane done <id> --abandon`, then
+  `lane new`). A flag in the stores' dir carries the demotion to the next run if one stops
+  between its settings copy and the demotion. Still open: a command the sandbox started during
+  the window keeps its write access there until it exits, since its mounts were set at its
+  start.
 - The stores' dir is out of every lane's write reach but not its read reach, so a lane's sandbox
   can take a lane's finishing lock and hold it. While it does, `new` (of that id), `adopt`,
   `open` and `done` of that lane refuse. That denies service and runs nothing, like a held lanes
