@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Save a delegated reader's report to a private file (12-retro step 3).
 
   save_handback.py OUT_DIR NAME=OUTPUT_FILE...

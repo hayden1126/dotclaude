@@ -5,7 +5,7 @@
 # FAILS CLOSED: if the guard cannot run (missing link, no python3), exit 2 blocks the spawn
 # with the reason on stderr, which Claude sees. Fix the install; do not delete the hook.
 guard="$HOME/.claude/skills/delegation/scripts/agent-spawn-guard"
-python3 "$guard" || {
+python3 -I "$guard" || {
   echo "agent-spawn-guard could not run ($guard): Agent spawns are blocked until it is fixed" >&2
   exit 2
 }

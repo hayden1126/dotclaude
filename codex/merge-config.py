@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """merge-config.py — apply dotclaude's managed keys to ~/.codex/config.toml.
 
 Codex treats its config.toml as runtime state: it appends a [projects."<path>"]

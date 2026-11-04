@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Check that every extract block is mapped in the backbone's coverage matrix, from the hub root.
 
   coverage_check.py [--root DIR]

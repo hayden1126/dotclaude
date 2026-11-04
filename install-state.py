@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """install-state.py: what setup.sh's links say about lane installs, and which plugins changed.
 
 A lane installs from its own worktree to test a change, and the next install from anywhere else

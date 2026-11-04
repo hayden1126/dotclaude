@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Check the notes' cross-references (STYLE S12), from the hub root.
 
   linkcheck.py [--root DIR]      the Markdown notes, notes/NN-*.md, against _build/backbone.md
