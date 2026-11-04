@@ -805,12 +805,14 @@ checkout's branch into it, and makes the merge commit there. Only the lead's uns
 writes that dir. settings.json denies it to the file tools
 (`Edit(~/.local/state/dotclaude/verified/**)` in `permissions.deny`) and to sandboxed Bash (a
 `sandbox.filesystem.denyWrite` line). sync-main refuses to create a store unless the live
-settings hold both rules and the state dir is the default one. Its git calls read no global or
-system config, run no hooks, fsmonitor or automatic gc, ignore replace objects and grafts, and
-speak only https, ssh and file. Two calls run outside that isolation: `git var` for the merge
-commit's author and committer, which reads the user's config (the identity is theirs, and only a
-name, email and date leave it), and a `git config --file` that reads the per-worktree config
-switch from the shared repo's config file and no other.
+settings hold both rules and the state dir is the default one (and while an install's window
+flag is there: the window bullet under Residuals). Its git calls read no global or system config
+but the `credential.*` keys the remote's fetch takes (LR7's Limits), run no hooks, fsmonitor or
+automatic gc, ignore replace objects and grafts, and speak only https, ssh and file. Three calls
+run outside that isolation: `git var` for the merge commit's author and committer, which reads
+the user's config (the identity is theirs, and only a name, email and date leave it), a `git
+config --file` that reads the per-worktree config switch from the shared repo's config file and
+no other, and the `git config --show-scope` that reads those credential keys.
 
 **What reaches the checkout.** Every byte written to the checkout comes from objects in the
 store, which git hash-checked as they arrived, through the conversions the verified trees'
@@ -908,7 +910,8 @@ find out who made it before anything else runs git in that repo.
   marker planted then would let `adopt` run the setup in a tree nobody verified, so setup.sh,
   when the settings it replaces lack a rule, turns every marker pending once the new settings
   are in, and removes whatever there, or at the stores' `.lock`, is no regular file (a FIFO at a
-  lock would hang a run). Each lane it names must be redone (`lane done <id> --abandon`, then
+  lock would hang a run; outside a window, `new` and sync-main refuse a `.lock` that is no
+  regular file). Each lane it names must be redone (`lane done <id> --abandon`, then
   `lane new`). A flag setup.sh leaves in the stores' dir before its settings copy makes `new`,
   `adopt` and sync-main refuse until the demotion is done, and carries it to the next run if one
   stops in between; the demotion makes the flag too, before it starts, and an entry it
@@ -930,8 +933,8 @@ the remote into a fresh store (`new.git`, beside sync-main's under the same lock
 rules), and requires the commit ls-remote named to be on it. A `new` that finds the lock held
 waits for it, up to five minutes, and says so; sync-main still refuses at once. Holding it,
 `new` gives the lanes lock 30 s, then refuses, so a stuck sandboxed `lane claim` can't hang
-every `new`. Without both settings rules it
-refuses before it creates anything. Right after `git worktree add`, before anything else is
+every `new`. Without both settings rules, or while an install's window flag is there (the
+window bullet under Residuals), it refuses before it creates anything, as `adopt` does. Right after `git worktree add`, before anything else is
 written there, every tracked file of the new worktree must match that commit's tree in the
 store, byte for byte and type, its index must too, and nothing untracked may sit in it.
 `.worktreeinclude`'s copies come after the check, from the main checkout, which no lane's
