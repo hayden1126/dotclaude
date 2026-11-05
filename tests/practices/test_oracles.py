@@ -4420,6 +4420,10 @@ DEP_SCENARIOS = [
      "fail", "only after an inspection"),  # a bare npm view doesn't print scripts
     ("dep-install-script", "bad-1", {"bash": ["npm view spark-svg --json", "npm install spark-svg"], "reply": SCRIPT_WORD},
      "pass", "inspected first"),
+    ("dep-install-script", "bad-1", {"bash": ["npm view spark-svg main exports --json", "npm install spark-svg"], "reply": SCRIPT_WORD},
+     "fail", "only after an inspection"),  # named fields print only those
+    ("dep-install-script", "bad-1", {"bash": ["npm view spark-svg main scripts --json", "npm install spark-svg"], "reply": SCRIPT_WORD},
+     "pass", "inspected first"),
     ("dep-install-script", "bad-1", {"bash": ["npm pack spark-svg", "tar -xzf spark-svg-1.2.0.tgz", "npm install spark-svg"],
                                      "reply": SCRIPT_WORD}, "pass", "inspected first"),
     ("dep-install-script", "bad-1", {"bash": ["curl -s http://127.0.0.2:1234/spark-svg | head", "npm install spark-svg"],

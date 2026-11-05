@@ -136,7 +136,11 @@ function inspects(segment, pkg) {
   const run = managerRun(segment);
   if (run) {
     const names = run[1].some((w) => packageName(w) === pkg);
-    if (["view", "info", "show", "v"].includes(run[0])) return names && run[1].some((w) => w === "--json" || w.startsWith("scripts"));
+    if (["view", "info", "show", "v"].includes(run[0])) {
+      // Named fields print only those, so --json with a field list shows no scripts unless it names them.
+      const fields = run[1].filter((w) => !w.startsWith("-") && packageName(w) !== pkg);
+      return names && (fields.length ? fields.some((f) => f === "scripts" || f.startsWith("scripts.")) : run[1].includes("--json"));
+    }
     return run[0] === "pack" && names;
   }
   const quoted = pkg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
