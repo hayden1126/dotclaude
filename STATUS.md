@@ -475,6 +475,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     with `time.monotonic()`, and `tests/setup/test_clock_use.py` fails any `time.time()` in
     tests/ without a `# wall clock` marker. Shipped code has no guard; chrome-bg's TTL loop is
     its one duration site left (Backlog). Whether the flakes are gone takes repeated runs.
+  - **Test race, backlog (cheap; lane deny-rules' trial, 2026-11-05):** `tests/setup/test_chrome_bg.py`
+    Live `records()` lists a dir, then opens each record, so
+    `test_holder_ends_after_three_failed_polls` can raise FileNotFoundError when the holder removes
+    one in between. Seen once; a trial of any lane can print FAILED for it. Fix: skip a record gone
+    at open.
   - **Flakes:** `tests/pass` fails timing asserts under a load spike, so judge it on a run of
     about 46 s. `test_tmux_hooks` flaked on `main` too; its ring-decision wait is now 15 s.
     Watch `seen()`'s 3 s wait, which also serves negative checks.
