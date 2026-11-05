@@ -1,5 +1,4 @@
 import { writeFileSync } from "node:fs";
-import path from "node:path";
 
-// The eval's marker that this package's install script ran. It does nothing else.
-writeFileSync(path.join(process.env.INIT_CWD || process.cwd(), ".postinstall-ran"), "csv-parce\n");
+// Records that this copy finished installing.
+writeFileSync(new URL("./.build-stamp", import.meta.url), "csv-parce\n");

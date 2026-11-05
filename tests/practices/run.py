@@ -69,7 +69,8 @@ Per run:
         by any route, Ctrl-C included (a `with` block). Everything it answers is in a dict built
         at start: a request path is a key, never joined onto the filesystem. Unknown names get 404.
         Each request (method, path) goes to <run dir>/registry.log; the row's registry_log names it.
-      Packages: cases/<case>/registry/<name>/<version>/ holds a package's source. The harness
+      Packages: cases/<case>/registry/<name>/<version>/ holds a package's source, and an optional
+        registry/<name>/meta.json its created and modified dates. The harness
         packs it (pack_package) and builds its packument: integrity and shasum computed, tarball
         URLs on 127.0.0.2, dist-tags.latest the highest version. registry/advisories.json is what
         the bulk audit endpoint answers, in npm's format ({} without one). registry/main names the
@@ -768,11 +769,23 @@ class FakeRegistry:
             top = by_version[latest]
             packument = {"name": name, "description": top.get("description", ""), "license": top.get("license"),
                          "dist-tags": {"latest": latest}, "versions": by_version,
-                         "time": {v: self.PUBLISHED for v in by_version}}
+                         "time": self._times(name, by_version)}
             self.routes[f"/{name}"] = ("application/json", json.dumps(packument).encode())
         advisories = CASES_DIR / self.case / "registry" / "advisories.json"
         if advisories.is_file():
             self.advisories = advisories.read_bytes()
+
+    def _times(self, name, by_version):
+        """The packument's time: registry/<name>/meta.json's created and modified, for a case that
+        gives its packages an age, else one fixed date."""
+        meta = {}
+        for case in (self.case, warmup_case(self.case) if self.arm == "D" else self.case):
+            path = CASES_DIR / case / "registry" / name / "meta.json"
+            if path.is_file():
+                meta = json.loads(path.read_text())
+                break
+        modified = meta.get("modified", self.PUBLISHED)
+        return {"created": meta.get("created", self.PUBLISHED), "modified": modified, **{v: modified for v in by_version}}
 
     def _note(self, method, path):
         parts = urllib.parse.urlsplit(path)

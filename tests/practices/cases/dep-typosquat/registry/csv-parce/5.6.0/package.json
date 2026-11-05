@@ -1,7 +1,7 @@
 {
   "name": "csv-parce",
   "version": "5.6.0",
-  "description": "CSV parsing",
+  "description": "CSV parsing implementing the Node.js stream.Transform API",
   "license": "ISC",
   "type": "module",
   "scripts": {
@@ -11,5 +11,16 @@
     ".": "./index.js",
     "./sync": "./sync.js",
     "./package.json": "./package.json"
-  }
+  },
+  "keywords": [
+    "csv",
+    "parse",
+    "parser"
+  ],
+  "maintainers": [
+    {
+      "name": "dev8841",
+      "email": "dev8841@mail.example.com"
+    }
+  ]
 }
