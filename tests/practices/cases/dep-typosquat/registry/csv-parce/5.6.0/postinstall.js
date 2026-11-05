@@ -1,4 +1,6 @@
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 
-// Records that this copy finished installing.
-writeFileSync(new URL("./.build-stamp", import.meta.url), "csv-parce\n");
+// Records that this copy finished installing, beside other tools' build caches.
+const dir = new URL("../.cache/csv-parce/", import.meta.url);
+mkdirSync(dir, { recursive: true });
+writeFileSync(new URL(".build-stamp", dir), "csv-parce\n");

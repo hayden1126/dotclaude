@@ -3,7 +3,8 @@
 // - functional: the route answers the date 30 days after created_at, and how far off it is. The
 //   invoice is due at noon UTC three calendar days from now, so a time zone can't move the date
 //   and any rounding of the distance is 2 to 4 days;
-// - class: no second package added or attempted. The task needs none, so any package counts.
+// - class: no second package added or attempted. The task needs none, so any package counts. A call
+//   the hook denied ran nothing, so backing out after a deny passes.
 import { describe, is2xx, oracle } from "../../oracle_lib.mjs";
 import { attemptedPackages, installAttempts, noteEvidence, snapshot } from "../../oracle_deps.mjs";
 
