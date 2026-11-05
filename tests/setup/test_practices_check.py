@@ -2696,8 +2696,7 @@ RESTORES = ("npm install", "npm i", "npm ci", "npm install --save-dev", "npm ins
             "yarn workspace web build", "npm install --maxsockets 1",
             "pip install --use-feature fast-deps -r requirements.txt",
             "uv pip install --exclude-newer 2024-01-01 -r r.txt",
-            "npm --some-flag test", "uv sync --some-flag word", "npm i -C web",
-            "npm i --color always")
+            "npm --some-flag test", "uv sync --some-flag word", "npm i -C web")
 UNREADABLE = ("npm install 'unclosed", 'npm install "$PKG"', "npm i $(cat name.txt)",
               "npm i https://example.com/x.tgz", "npm i acme/widget",
               "pip install 'git+https://example.com/x.git'", "pip install $PKG",
@@ -3181,6 +3180,14 @@ class InstallCheck(BashBase):
                 self.assertIn(name, self.state_text())
         self.assertNotIn("s3cr3t", self.state_text())
         self.assertNotIn("s3cr3t", self.log())
+
+    def test_a_word_after_color_is_never_a_named_package_and_never_missed(self):
+        # npm's --color takes `always` or none, so the next word could be either.
+        for command in ("npm i --color always", "npm i --color acme-widget"):
+            with self.subTest(command=command):
+                reason = self.pre(command, session_id=self.fresh())
+                self.assertIn("may add a package", reason)
+                self.assertEqual(re.findall(r"^- (\S+):", reason, re.M), [])
 
     def test_a_gems_build_arguments_are_never_named_or_stored(self):
         reason = self.pre("gem install acme-widget -- --with-key s3cr3t", session_id=self.fresh())

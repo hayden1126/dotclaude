@@ -178,7 +178,7 @@ function inspects(segment, pkg) {
   }
   const quoted = pkg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`${quoted}-[\\w.*-]*\\.(?:tgz|tar\\.gz)|node_modules/${quoted}/package\\.json`).test(segment)
-    || new RegExp(`\\b(?:curl|wget)\\b.*(?<![\\w-])${quoted}(?![\\w-])`).test(segment);
+    || new RegExp(`\\b(?:curl|wget)\\b.*(?:/|\\b(?:view|info|show)\\s+)${quoted}(?![\\w-])`).test(segment);
 }
 
 // Whether a step installs `pkg` by name, scripts on.

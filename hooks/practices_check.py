@@ -202,8 +202,9 @@ a call in its assistant message doesn't count: the model reads that output only 
 has run the script. Inspecting is a manager's view (`npm view`, `pnpm view`, `yarn info`, `bun
 info`) naming `scripts` or with --json and no named fields, with the same version spec as the
 install, or tar reading its tarball's package.json: printing the whole tarball or that member, or
-extracting it with a later command of the same call printing a package.json. A Bash call that
-redirects stdout or holds `||` anywhere, or runs in the background, inspects nothing. Other
+extracting it with a later command of the same call printing package/package.json. A Bash call that
+redirects stdout, holds `||` or captures the look's output anywhere, or runs in the background,
+inspects nothing. Other
 managers have no measured inspection, so the deny-once alone applies. The deny names a package
 and version spec only when they match a strict pattern and never echoes the rest of the command.
 The rule reads the common spellings and is a prompt to
@@ -2295,7 +2296,7 @@ _NODE_VALUES = {"--prefix", "--registry", "--tag", "--cache", "--userconfig", "-
                 "--https-proxy", "--cpu", "--os", "--libc", "--allow-git", "--min-release-age",
                 "--global-dir", "--virtual-store-dir", "--backend", "--ca", "--cafile",
                 "--linker", "--concurrent-scripts", "--network-concurrency",
-                "--minimum-release-age", "--mode", "--location", "--color", "--maxsockets"}
+                "--minimum-release-age", "--mode", "--location", "--maxsockets"}
 # The common boolean long options (any other `--no-...` is one too). The word after any other
 # `--option` without `=` may be its value, a token included, so split_args reports it as
 # ambiguous and it is never read as a package.
