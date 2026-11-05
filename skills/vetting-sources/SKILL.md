@@ -59,13 +59,13 @@ Cite-safety, for the reader: `safe` (quote as-is), `needs-caveat` (quote with a 
 
 ## Phase 3: Brief
 
-Order the report so a busy reader gets value top-down: **bottom-line verdict**, then **fix before citing** (ranked, with the correct value and a verifiable source link per item), then **safe to cite** (the confirmed set), then **looks wrong but is fine** (so nobody "corrects" a correct number), then **minor slips**. Write the brief in the reader's language even though the source stayed verbatim through the audit, and re-verify any figure after you translate or reformat it. Delegate prose to `writing-voice`; QA the multi-section draft with `staged-reader-review`.
+Order the report so a busy reader gets value top-down: **bottom-line verdict**, then **fix before citing** (ranked, with the correct value and a verifiable source link per item), then **safe to cite** (the confirmed set), then **looks wrong but is fine** (so nobody "corrects" a correct number), then **minor slips**. Write the brief in the reader's language even though the source stayed verbatim through the audit, and re-verify any figure after you translate or reformat it. Delegate prose to `technical-writing`; QA the multi-section draft with `staged-reader-review`.
 
 For an executive PDF: strip every internal reference (file paths, fact ids, method, agent counts). Cite only sources you actually opened and verified; where a correction has no verifiable source, say so rather than invent one. Render a self-contained styled HTML to PDF with headless Chrome (`--headless --print-to-pdf`); see `references/workflow-scaffolds.md`.
 
 ## Delegate, do not reimplement
 
-`ebook-extract` / `browser-reader-extract` for raw text with page markers · `dispatching-parallel-agents` for the fan-out · `research-discipline` for how to search · `research-sourcing` for source provenance (inline its contract, never fork it) · `writing-voice` for report prose · `staged-reader-review` for report QA · `deck-production` if the brief becomes a deck.
+`ebook-extract` / `browser-reader-extract` for raw text with page markers · `dispatching-parallel-agents` for the fan-out · `research-discipline` for how to search · `research-sourcing` for source provenance (inline its contract, never fork it) · `technical-writing` for report prose · `staged-reader-review` for report QA · `deck-production` if the brief becomes a deck.
 
 ## Common Mistakes
 

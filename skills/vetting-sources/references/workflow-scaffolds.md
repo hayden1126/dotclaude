@@ -92,4 +92,4 @@ pdftoppm -png -r 110 out.pdf pg && Read pg-1.png   # eyeball layout, CJK, tables
 ```
 
 `<a href>` links render clickable in the PDF; use them for the verifiable source per
-correction. No em dashes in the prose (see `writing-voice`).
+correction. No em dashes in the prose (see `technical-writing`).

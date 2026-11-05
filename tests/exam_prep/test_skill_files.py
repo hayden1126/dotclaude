@@ -94,7 +94,7 @@ class Prose(unittest.TestCase):
     def test_no_em_dash(self):
         hits = [f"{rel}:{n}" for rel, text in files(SKILL)
                 for n, line in enumerate(text.splitlines(), 1) if EM_DASH in line]
-        self.assertEqual(hits, [], "writing-voice: colons, parentheses or full stops instead")
+        self.assertEqual(hits, [], "technical-writing: colons, parentheses or full stops instead")
 
 
 class CitedIds(unittest.TestCase):

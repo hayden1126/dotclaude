@@ -124,7 +124,7 @@ implementing.
   authored by Hayden and Friends; plugin-owned skills/hooks install from marketplaces. A handoff skill/hook
   authored here is the right kind of thing to vendor.
 - Hayden's global rules (`~/.claude/CLAUDE.md`): be an adversarial sparring partner, not a yes-man; ask
-  before implementing on a design fork; no em dashes in prose/docs/commit messages (writing-voice);
+  before implementing on a design fork; no em dashes in prose/docs/commit messages (technical-writing);
   propose and confirm before any deletion; never `git push` or `git checkout`/reset without explicit
   approval; branch-first if committing on a default branch.
 - Heads-up: during the originating session the Bash auto-safety classifier had repeated transient
