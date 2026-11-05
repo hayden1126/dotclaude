@@ -37,6 +37,7 @@ import json
 import math
 import os
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -1712,12 +1713,38 @@ def cwd_inside(value, root: str) -> bool:
     return isinstance(value, str) and "\0" not in value and inside(value, root)
 
 
+def kernel_cwd_inside(cwd, root: str, resolved: bool = False) -> bool:
+    """Whether a cwd the kernel reported (a readlink of /proc/<pid>/cwd) is root or under it
+    (root realpath'd here, unless resolved says it already is). The kernel's path is already
+    resolved, so it is compared as read, never through realpath: a removed cwd reads `<path>
+    (deleted)`, and a lane can plant a symlink at that very name, which realpath would follow
+    into any dir. The text is tried as read first (a live dir may be named so), then without
+    the suffix, so a removed one counts by the path it had."""
+    if not isinstance(cwd, str) or "\0" in cwd or not cwd.startswith("/"):
+        return False
+    real = root if resolved else os.path.realpath(root)
+    under = real.rstrip(os.sep) + os.sep
+    return any(c == real or c.startswith(under)
+               for c in (cwd, *([cwd.removesuffix(" (deleted)")] if cwd.endswith(" (deleted)")
+                                else [])))
+
+
+
 # ---- processes ------------------------------------------------------------------------------
 # `lane done` decides what to end from kernel facts (/proc) and Claude Code's own files (session
 # files, transcripts), which sandboxed Bash can't write; never from lane.json, which it can. Any
 # read here may race the process's exit, so an OSError means "gone or unknown", never a crash.
 
 PROC = "/proc"
+
+
+def proc_cwd_inside(pid, root: str, proc: str = PROC, resolved: bool = False) -> bool:
+    """kernel_cwd_inside for pid's cwd; False when it can't be read."""
+    try:
+        cwd = os.readlink(os.path.join(proc, str(pid), "cwd"))
+    except OSError:
+        return False
+    return kernel_cwd_inside(cwd, root, resolved)
 EXITED = ("Z", "X")  # /proc/<pid>/stat states of a process that has exited (zombie, dead)
 STOPPED = ("T", "t")  # stopped (Ctrl+Z) and traced: tmux/claude-saved's stopped() reads the same
 TRANSCRIPT_HEAD = 64 * 1024  # bytes of a transcript read for its first recorded cwd
@@ -2178,6 +2205,89 @@ def proc_env(pid: int, key: str, proc: str = PROC) -> str | None:
         if entry.startswith(want):
             return entry[len(want):].decode(errors="replace")
     return None
+
+
+SERVE_ENV = "LANE_SERVE"  # a serve's token, in the environment of all it starts
+SERVED_MAX = 1 << 20  # bytes of a serve record load_served reads
+
+
+def load_served(repo: "Repo", lane_id: str, port: int) -> dict | None:
+    """The record `lane serve` wrote for port, or None: gone, or no record of the right shape.
+    Only sandbox-off serve writes the dir (Repo.served_dir), but the shape is checked anyway."""
+    try:
+        rec = json.loads(read_head(repo.served_path(lane_id, port), SERVED_MAX) or b"null")
+    except (ValueError, RecursionError):
+        return None
+    ok = (isinstance(rec, dict) and rec.get("lane") == lane_id and rec.get("port") == port
+          and all(type(rec.get(k)) is int and rec[k] > 0 for k in ("pid", "start"))
+          and all(isinstance(rec.get(k), str) and rec[k] for k in ("boot", "token")))
+    return rec if ok else None
+
+
+def served_records(repo: "Repo", lane_id: str) -> list[dict]:
+    """Every record of lane lane_id's serves that reads, by port."""
+    try:
+        names = os.listdir(repo.served_dir(lane_id))
+    except FileNotFoundError:
+        return []
+    ports = [int(n[:-5]) for n in names if n.endswith(".json") and n[:-5].isdigit()]
+    return [rec for port in sorted(ports) if (rec := load_served(repo, lane_id, port))]
+
+
+def this_boot(rec: dict) -> bool:
+    """Whether rec's serve ran in this boot; a record from an earlier one names nothing alive."""
+    try:
+        return rec["boot"] == boot_id()
+    except OSError:
+        return False
+
+
+def serve_state(rec: dict, root: str, deadline: float, proc: str = PROC) -> str | None:
+    """What still runs of rec's serve in the lane's dir root, for the session-start line:
+    'listening' when one of its processes holds a listening socket on its port, 'running' when
+    some run but none does, None when none runs (or the record is from an earlier boot). A
+    process counts only while its cwd is in root (kernel_cwd_inside) and it carries the serve's
+    token, as `serve`'s own proof has it, so one another lane starts elsewhere with the readable token counts for
+    nothing. Each process costs one readlink, and only those in root an environ read; past
+    deadline (time.monotonic) it raises TimeoutError, so a lane that starts many can only cost
+    the line its serves part."""
+    if not this_boot(rec):
+        return None
+    root = os.path.realpath(root)  # once, not per process
+    carriers = []
+    for name in os.listdir(proc):
+        if time.monotonic() > deadline:
+            raise TimeoutError("the serve scan ran out of time")
+        if not (name.isascii() and name.isdigit()):
+            continue
+        if proc_cwd_inside(name, root, proc, resolved=True) \
+                and proc_env(int(name), SERVE_ENV, proc) == rec["token"]:
+            carriers.append(name)
+    if not carriers:
+        return None
+    sockets = {f"socket:[{inode}]" for inode in listeners(rec["port"], proc)}
+    for name in carriers:
+        try:  # scandir, not listdir: a carrier with a huge fd table meets the deadline too
+            with os.scandir(os.path.join(proc, name, "fd")) as fds:
+                for fd in fds:
+                    if time.monotonic() > deadline:
+                        raise TimeoutError("the serve scan ran out of time")
+                    with contextlib.suppress(OSError):
+                        if os.readlink(fd.path) in sockets:
+                            return "listening"
+        except TimeoutError:  # an OSError too: never taken for an unreadable fd dir
+            raise
+        except OSError:
+            continue
+    return "running"
+
+
+def serve_text(rec: dict, cap: int) -> str:
+    """The command rec's serve started, masked (shown) and cut to cap characters."""
+    argv = rec.get("argv")
+    ok = isinstance(argv, list) and argv and all(isinstance(a, str) for a in argv)
+    text = shown(shlex.join(argv)) if ok else "?"
+    return text if len(text) <= cap else text[:cap - 1] + "…"
 
 
 def proc_tmux(pid: int, proc: str = PROC) -> tuple[str, int, int, str] | None:
