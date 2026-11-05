@@ -18,7 +18,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 SCRIPT = os.path.join(REPO, "bin", "deny-coverage")
 
 
-class DenyCoverage(unittest.TestCase):
+class CoverageBase(unittest.TestCase):
     def setUp(self):
         self.home = os.path.realpath(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.home, True)
@@ -51,6 +51,8 @@ class DenyCoverage(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         return r.stdout
 
+
+class DenyCoverage(CoverageBase):
     def test_a_covered_home_reports_nothing(self):
         self.write(".local/bin/tool", "#!/bin/sh\n")
         self.assertEqual(self.run_it(), "")
@@ -297,6 +299,8 @@ class DenyCoverage(unittest.TestCase):
         out = self.run_it()
         self.assertNotIn("Edit(~/.alt/**)", out)
         self.assertNotIn("Edit(~/.self/**)", out)
+        self.assertIn("no rule can cover", out)
+        self.assertIn(".alt", out)
 
     def test_a_dot_dir_linked_into_a_checkout_is_named_with_the_checkout(self):
         self.mk("proj/.git")
@@ -633,7 +637,7 @@ class DenyCoverage(unittest.TestCase):
 
 
 
-class Table(DenyCoverage):
+class Table(CoverageBase):
     """Each way a path is reached against what it resolves to. Two rules hold in every cell:
     no pasted rule takes a repo or a path sessions must write, even through a link, and each
     reached path prints something. Two gaps are on purpose, both in the docstring: the Windows mount
