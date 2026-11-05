@@ -12,8 +12,9 @@ It looks at four things:
     in a script's first line, a virtualenv's pyvenv.cfg home and the absolute paths in its .pth
     files, and the files a script sources or execs. Outside home only what this user can write
     counts. /mnt is skipped: Windows paths need their own subtree rules.
-  - The same for what the settings run (hooks, the status line, MCP servers, with those in
-    ~/.claude.json) and for what the shell startup files source.
+  - The same for what the settings run (hooks, the status line, helper commands, MCP servers, with
+    those in ~/.claude.json) and for what the shell startup files source. A dir a command names, as
+    with `cd` or `--directory`, counts as run from.
   - Each top-level dir in home whose name starts with a dot, a few others tools install into
     (~/go, ~/nltk_data, ~/sdk), and each dir in ~/.cache. A rule costs nothing for a dir no session
     writes, so these get one whether or not they hold code. Home's dot-files aren't scanned: the
@@ -102,8 +103,9 @@ def p_under_any(path, roots):
 
 
 class Scan:
-    def __init__(self, rules, home, skip):
+    def __init__(self, rules, home, skip, config=None):
         self.rules, self.raw, self.home, self.skip = rules, home, os.path.realpath(home), skip
+        self.config = config or os.path.join(home, ".claude")
         self.seen = set()
         self.uncovered = {}   # the rule to paste -> why
         self.in_project = {}  # the path -> why
@@ -167,9 +169,12 @@ class Scan:
         return f"Edit({tail}/**)" if os.path.isdir(root) else f"Edit({tail})"
 
     def must_stay_open(self, path):
-        """Whether a rule on path would cover what a session must write."""
+        """Whether a rule on path would cover what a session must write, by any spelling: home's
+        link, a link at one of those paths, a config dir of another name."""
         homes = {self.home, os.path.realpath(self.home)}
         keep = [os.path.join(h, d) for h in homes for d in MUST_STAY_OPEN]
+        keep += [os.path.join(self.config, d) for d in ("projects", "plans", "jobs")]
+        keep += [os.path.realpath(k) for k in keep]
         return (p_under_any(path, keep) or any(under(k, path) for k in keep)
                 or any(under(t, path) for t in ("/tmp", "/var/tmp", *homes)))
 
@@ -325,6 +330,9 @@ class Scan:
                 continue
             real = os.path.realpath(d)
             if not os.path.isdir(real):
+                # A session could make it and shadow a command; the dirs setup fills wait until then.
+                if under(d, self.raw) and d not in usual:
+                    self.note(d, "a PATH dir")
                 continue
             self.note(d, "a PATH dir")
             try:
@@ -357,6 +365,9 @@ class Scan:
 
         claude_json = self.load_json(os.path.join(self.home, ".claude.json"))
         projects = claude_json.get("projects")
+        for key in ("apiKeyHelper", "awsAuthRefresh", "awsCredentialExport", "otelHeadersHelper"):
+            if isinstance(settings.get(key), str):
+                words.append(settings[key])
         try:
             walk(settings.get("hooks"))
             walk(settings.get("statusLine"))
@@ -375,6 +386,9 @@ class Scan:
                 target = self.expand(word)
                 if target and os.path.isfile(target) and not DATA_FILE.search(target):
                     self.follow(target, "run by the settings")
+                elif (target and os.path.isdir(target) and under(target, self.home)
+                      and target != self.home):  # a cd or a --directory
+                    self.note(target, "run from by the settings")
 
     @staticmethod
     def load_json(path):
@@ -459,7 +473,7 @@ def main(argv):
     skip = [os.path.realpath(os.path.join(home, "dotclaude"))]
     if args.checkout:
         skip.append(os.path.realpath(args.checkout))
-    scan = Scan(rules, home, skip)
+    scan = Scan(rules, home, skip, config)
     scan.path_dirs(os.environ.get("PATH", ""))
     scan.commands(settings)
     scan.shell_startup()

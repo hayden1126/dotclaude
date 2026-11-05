@@ -539,6 +539,46 @@ class DenyCoverage(CoverageBase):
                            capture_output=True, text=True, timeout=30)
         self.assertEqual(r.returncode, 0, r.stderr)
 
+    def test_a_linked_must_write_path_stays_open(self):
+        self.mk(".data/p")
+        self.mk(".claude")
+        os.symlink(os.path.join(self.home, ".data/p"), os.path.join(self.home, ".claude/projects"))
+        self.assertNotIn('"Edit(~/.data/**)"', self.run_it())
+
+    def test_a_config_dir_of_another_name_stays_open(self):
+        self.mk(".claude-work/projects")
+        settings = os.path.join(self.home, "s.json")
+        with open(settings, "w") as f:
+            json.dump({"permissions": {"deny": self.deny}}, f)
+        r = subprocess.run([sys.executable, "-I", SCRIPT, "--settings", settings],
+                           env={"HOME": self.home, "PATH": self.bin,
+                                "CLAUDE_CONFIG_DIR": os.path.join(self.home, ".claude-work")},
+                           capture_output=True, text=True, timeout=30)
+        self.assertNotIn('"Edit(~/.claude-work/**)"', r.stdout)
+
+    def test_an_absent_path_dir_in_home_gets_a_rule(self):
+        out = self.run_it(path=f"{self.home}/.newtool/bin:/usr/bin")
+        self.assertIn("Edit(~/.newtool", out)
+
+    def test_a_dir_a_command_names_gets_a_rule(self):
+        self.mk("mcp/srv")
+        self.mk("tools/x")
+        out = self.run_with(self.settings_with(
+            mcpServers={"s": {"command": "uv", "args": ["--directory", f"{self.home}/mcp/srv", "run"]}},
+            hooks={"Stop": [{"hooks": [{"command": "cd ~/tools/x && ./run.sh"}]}]}))
+        self.assertIn('"Edit(~/mcp/srv/**)"', out)
+        self.assertIn('"Edit(~/tools/x/**)"', out)
+
+    def test_home_named_by_a_command_gets_no_rule(self):
+        out = self.run_with(self.settings_with(hooks={"Stop": [{"hooks": [
+            {"command": 'cd "$HOME" && true'}]}]}))
+        self.assertNotIn("run by the settings", out)
+
+    def test_an_api_key_helper_is_followed(self):
+        self.write("keys/helper.sh", "#!/bin/sh\n")
+        self.assertIn('"Edit(~/keys/helper.sh)"', self.run_with(self.settings_with(
+            apiKeyHelper="~/keys/helper.sh")))
+
     def test_a_big_or_binary_script_still_gives_its_interpreter(self):
         self.write(".interp/bin/py", "\0binary")
         self.write(".local/bin/big", f"#!{self.home}/.interp/bin/py\n" + "x" * 300000)
@@ -699,10 +739,11 @@ class Table(CoverageBase):
                "dot_dir_link", "hook", "status_line", "mcp")
 
     def protected(self):
-        out = [self.home, *(os.path.join(self.home, r) for r in self.REPOS)]
-        out += [os.path.join(self.home, d) for d in (
+        """The paths no pasted rule may touch: (a repo or must-write path, with what's under it)."""
+        keep = [os.path.join(self.home, r) for r in self.REPOS]
+        keep += [os.path.join(self.home, d) for d in (
             ".claude/projects", ".claude/plans", ".claude/jobs", ".cache/claude-sandbox")]
-        return [os.path.realpath(p) for p in out]
+        return [os.path.realpath(p) for p in keep]
 
     def pasted_roots(self, out):
         for rule in re.findall(r'^  "Edit\((.+)\)",$', out, re.M):
@@ -724,26 +765,35 @@ class Table(CoverageBase):
         self.assertEqual(r.returncode, 0, r.stderr)
         return r.stdout
 
+    def reach_nothing(self, rel):
+        pass
+
+    def spelled_in_every_run(self, rel):
+        """What the home scan names whether or not anything reaches it."""
+        return rel.split("/")[0] in (".thing", ".held", ".claude", ".cache")
+
     def test_every_cell(self):
         for reach in self.REACHES:
             for what, rel in self.TARGETS.items():
                 with self.subTest(reach=reach, target=what):
                     self.setUp()
+                    baseline = self.cell("nothing", rel)
+                    self.setUp()
                     out = self.cell(reach, rel)
                     for rule, root in self.pasted_roots(out):
+                        self.assertNotEqual(root, os.path.realpath(self.home), rule)
+                        self.assertFalse(root != "/" and os.path.realpath(self.home).startswith(root + "/"),
+                                         rule)
                         for keep in self.protected():
                             self.assertFalse(
-                                keep == root or keep.startswith(root + "/"),
-                                f"{rule} takes {keep}:\n{out}")
-                    if what != "a skipped checkout":
-                        self.assertTrue(self.named(out, rel), f"nothing names {rel}:\n{out}")
-
-    def named(self, out, rel):
-        """Whether the output names the path, its dir, or a root above it."""
-        parts = rel.split("/")
-        spellings = ["/".join(parts[:n]) for n in range(1, len(parts) + 1)]
-        spellings += [".lnk", ".pdir", "mid"]
-        return any(s in out for s in spellings)
+                                keep == root or keep.startswith(root + "/") or root.startswith(keep + "/"),
+                                f"{rule} touches {keep}:\n{out}")
+                    if what == "a skipped checkout":
+                        continue   # silent on purpose: denyWrite covers it
+                    if self.spelled_in_every_run(rel):
+                        self.assertIn(rel.split("/")[0], out)
+                    else:
+                        self.assertNotEqual(out, baseline, f"nothing names {rel}:\n{out}")
 
 
 if __name__ == "__main__":
