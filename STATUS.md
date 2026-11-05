@@ -90,9 +90,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - #144 (exam-prep): rules public, evidence private (Hayden, 2026-10-20).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
-  - **Live lanes** (briefs in each record). Merge order: 1 npx-cwd (`fix/npx-shim-cwd`, carries the lead's notes),
-    2 dev-cycle (`feat/dev-cycle-rules`), 3 hackathon (`feat/hackathon-mode`; a hackathon starts
-    2026-11-14, so it aims to merge by 2026-11-11 and moves up if needed), 4 practices
+  - **Live lanes** (briefs in each record). Merge order: 1 dev-cycle (`feat/dev-cycle-rules`, carries the lead's notes),
+    2 hackathon (`feat/hackathon-mode`; a hackathon starts 2026-11-14, so it aims to merge by
+    2026-11-11 and moves up if needed), 3 practices
     (`feat/practices-auth-secrets`, its next PR).
     Merged and installed from main, all closed: chrome-dup (#151, 2026-10-29: one chrome-devtools
     server, the plugin's; sandbox gap fixes N1 and N3's bun part, `hooks/sandbox-caches.sh`; its
@@ -118,6 +118,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     capella-studio lane artexport's report; a fork's hook output never reaches its model, so it
     knows its lane only from the parent's copied line, docs/lanes.md S5; the delegation canary
     checks the source enum; untried against lane practices' settings.json change),
+    npx-cwd (#165, 2026-11-05: SW1; a launch by Claude Code starts at `/`),
     hook-isolate (#163, 2026-11-04: DA17 parts (a) and (b); hook shims and Python shebangs run
     `python3 -I`; the widened Edit denies, so a `~/.local/lib` install needs the sandbox off),
     design-audit (#159, 2026-11-03: the ask-check `threat` rule and the CLAUDE.md line on naming what
@@ -161,8 +162,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     hunt.
   - **Fix lanes from lane sweep** (2026-11-04; private: sandbox-audit FINDINGS, "Sandbox reach
     sweep, 2026-11", rows SW1 to SW14, each naming its fix and files). Most severe first:
-    1. SW1 (high): one file plus its tests (an N2 follow-up). In lane npx-cwd (Hayden's pick,
-       2026-11-04).
+    1. SW1 (high): done in #165 (lane npx-cwd, 2026-11-05).
     2. SW3, SW7, SW12, SW14, SW4 (high): one deny-rule lane folded into DA12 (a); settings,
        the machine overlay, a setup step, test_settings (lane practices changes the last). It
        also takes the deny rule in SW1's limits (lane npx-cwd's review round 2).
