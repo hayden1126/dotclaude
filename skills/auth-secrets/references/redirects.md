@@ -54,13 +54,24 @@ export function safeRedirect(raw: unknown, fallback = "/"): string {
 
 Call `safeRedirectPath` wherever the value arrives or is stored (the sign-in page that puts `next` into a form field or a cookie, an OAuth `state` record), and `safeRedirect` only where the server redirects. Store the path, never the absolute URL: step 3 refuses an absolute URL, so a stored one would send every sign-in to the fallback on its second check. Read the param once: the framework has already decoded it, and a second `decodeURIComponent` after the check turns `%2F%2F` into `//`.
 
-A validator that also runs in the browser can't read a server env var, so it needs another origin source. Keep the signature the task or the code already names, and resolve the origin inside the validator instead of adding a required argument that breaks its other callers:
+## When the validator also runs in the browser
 
-```ts
-// In a browser, the page's own origin is the app's origin. On the server, use config.
-const appOrigin = () =>
-  typeof window !== "undefined" ? window.location.origin : new URL(requiredEnv("APP_ORIGIN")).origin;
-```
+A browser has no server env var, so `APP_ORIGIN` above throws as soon as the module loads, while server rendering and Node tests still pass. Keep the signature the task or the code already names, instead of adding a required argument that breaks its other callers, and change the code above in three places:
+
+1. Delete the module-level `APP_ORIGIN` line, and import no env module (one marked `server-only`, or one that validates at load, breaks the client bundle).
+2. Add this helper:
+
+   ```ts
+   // In a browser, the page's own origin is the app's origin. On the server, use config.
+   function appOrigin(): string {
+     if (typeof window !== "undefined") return window.location.origin;
+     const origin = process.env.APP_ORIGIN;
+     if (!origin) throw new Error("APP_ORIGIN is required");
+     return new URL(origin).origin;
+   }
+   ```
+
+3. At the top of `safeRedirectPath` and `safeRedirect`, write `const origin = appOrigin();` and use `origin` where the code above says `APP_ORIGIN`. Keep it outside the `try`: inside, a missing server setting would be caught and every value would go to the fallback with no error.
 
 ## The traps, and why each check exists
 
@@ -114,6 +125,19 @@ test.each(cases)("safeRedirectPath(%j)", (raw, want) => {
   expect(path).toBe(want);
   expect(safeRedirectPath(path)).toBe(path); // a stored value checks again to the same answer
   expect(safeRedirect(raw)).toBe(new URL(want, "https://app.example.com").href);
+});
+```
+
+Run this table in a Node test environment: under jsdom, `window.location.origin` is the test page's and the last line fails. If the validator also runs in the browser, add a test in its own file, since a module loads only once:
+
+```ts
+test("the browser form loads and checks with no server config", async () => {
+  delete process.env.APP_ORIGIN;
+  vi.stubGlobal("window", { location: { origin: "https://app.example.com" } }); // or assign globalThis.window
+  const { safeRedirectPath } = await import("./safe-redirect");
+  expect(safeRedirectPath("/dashboard?tab=2")).toBe("/dashboard?tab=2");
+  expect(safeRedirectPath("//evil.example")).toBe("/");
+  expect(safeRedirectPath("/.//evil.example")).toBe("/evil.example");
 });
 ```
 
