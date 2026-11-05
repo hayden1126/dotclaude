@@ -130,7 +130,7 @@ test.each(cases)("safeRedirectPath(%j)", (raw, want) => {
 });
 ```
 
-Run this table in a Node test environment with `APP_ORIGIN=https://app.example.com`: under jsdom, `window.location.origin` is the test page's and the last line fails. If the validator also runs in the browser, add these tests in their own file, since a module loads only once. They can't see an env module it imports; a client build does:
+Run this table in a Node test environment with `APP_ORIGIN=https://app.example.com`: under jsdom, `window.location.origin` is the test page's and the last line fails. If the validator also runs in the browser, add the tests below. They don't prove step 1: an env module that needs a variable these tests set still passes here and throws at page load. Keep them in their own file, since a module loads only once:
 
 ```ts
 test("the browser form loads and checks with no server config", async () => {
