@@ -170,9 +170,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     4. SW2, SW6, SW9 (medium): the Windows side; part is Hayden's call.
     5. SW5 (Hayden's pick): a tripwire, lane-able, beside lane ports' tamper checks.
     Hayden's own, not lanes: SW8 (his overlay edit, live at #163's reinstall), SW13 (see its
-    row), SW11 (recheck after a uv upgrade).
-  - **Dev-cycle rules from three external skill sets** (Hayden, 2026-11-04: a lane at the next
-    free slot). A researcher read pstack-claude, ponytail and Cursor's
+    row), SW11 (recheck after a uv upgrade). By hand when convenient, details in the rows and
+    lane sweep's closed record: SW10, SW9, SW3, and the elevated scheduled-task listing the
+    sweep could not inventory.
+  - **Dev-cycle rules from three external skill sets** (Hayden, 2026-11-04). In lane dev-cycle
+    (`feat/dev-cycle-rules`), after ports and practices in merge order; it overlaps ports on
+    `docs/lanes.md`. A researcher read pstack-claude, ponytail and Cursor's
     thermo-nuclear-code-quality-review (all MIT): install none (pstack's session-start mandate
     and autonomy rules, and ponytail's always-on hooks and telemetry, contradict CLAUDE.md), port
     these as text edits. Reviewer agent and delegation brief: a finding survives only with the
