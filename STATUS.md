@@ -231,6 +231,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     prune is only temporary, and a sandboxed `prune` half-deletes live entries
     ([[sandbox-recreates-closed-worktree-dirs]], [[git-worktree-prune-shared]]). Leave them.
     Related: a read-only 0-byte `.git/config.lock` while a lane's sandboxed command runs (Notes).
+    Seen too (lane practices, 2026-11-04): one sandboxed Bash in a running session failed at start,
+    `bwrap: Can't get type of source .../.git/worktrees/sweep/config.worktree`, within minutes of
+    `lane done sweep` (timing only, not proven); a retry worked.
   - **Another `lane done` close-path gap** (lane done-safe's reviewer round 1, 2026-10-24).
     Details and the proposed fix are in the same private file, rows "cmd_done path trust" and
     "same, widened". The fix is a design change to `new`/`adopt`/`done` with a migration for
