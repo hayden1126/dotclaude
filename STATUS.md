@@ -213,9 +213,13 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     `demo-first-scope`, `demo-video`, `pitch`. For both modes: `interview` (Hayden, a long vision chat with researched suggestions) and a `frontend-motion` skill from
     `animate` and `better-ui` (MIT). After the event: a `public-ready` skill (Hayden's ask) that
     cleans the repo for release. Hayden's picks: machine protection stays, plus an access list
-    approved at kickoff per project; pushes stay under CLAUDE.md's rule, approved at kickoff; the
-    agent runs on the laptop, set up from dotclaude. First step: a spike proving a scripted demo recording here.
+    approved at kickoff per project; pushes stay under CLAUDE.md's rule, approved at kickoff; a
+    public repo gets a secrets check before each push; sessions run on HAYPC with a laptop as the
+    remote. The skills stay plain folders others can copy. First step: a spike proving a scripted demo recording here.
     Review and plan: `~/scratch/external-skills/hackathon-review-2026-11-05.md`.
+  - **dotclaude on a Mac** (Hayden, 2026-11-05: he may get a MacBook Pro and may share his setup
+    with people on Macs). `setup.sh` has some Darwin branches but has never been run there, and
+    hooks and notifiers lean on WSL. Pairs with [[hayden-new-device-goal]]. After lane hackathon.
   - **Who can turn the practices gate off** (Hayden, 2026-11-05: not any session without him).
     Private: sandbox-audit FINDINGS, PG1, with Hayden's picked fix. `hooks/practices_check.py`,
     settings, a setup step, tests. In lane hackathon, after #164.
