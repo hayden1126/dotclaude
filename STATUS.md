@@ -169,10 +169,18 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     3. SW10 (medium-high): codex-delegate and the excluded-command guard, with tests.
     4. SW2, SW6, SW9 (medium): the Windows side; part is Hayden's call.
     5. SW5 (Hayden's pick): a tripwire, lane-able, beside lane ports' tamper checks.
-    Hayden's own, not lanes: SW8 (his overlay edit, live at #163's reinstall), SW13 (see its
-    row), SW11 (recheck after a uv upgrade).
-  - **Dev-cycle rules from three external skill sets** (Hayden, 2026-11-04: a lane at the next
-    free slot). A researcher read pstack-claude, ponytail and Cursor's
+    Hayden's own, not lanes: SW8 (overlay lines, live at #163's reinstall), SW13 (see its
+    row), SW11 (recheck after a uv upgrade). By hand when convenient, details in the rows and
+    lane sweep's closed record: SW10, SW9, SW3, and the elevated scheduled-task listing the
+    sweep could not inventory.
+  - **Dev-cycle rules from three external skill sets** (Hayden, 2026-11-04). In lane dev-cycle
+    (`feat/dev-cycle-rules`), after ports and practices in merge order; it overlaps ports on
+    `docs/lanes.md` and `skills/lanes/SKILL.md`. Added (Hayden, 2026-11-04, after #163's chain
+    stalled for about 8 hours): two sentences in The lead, step 7 of the skill. A chain that stops
+    before step 6 still tells every remaining lane "main moved", what stalled, and that installs
+    stay held. A chain stopped on something that can clear without the lead arms a read-only
+    background loop that exits when it clears, which wakes the lead to finish the chain; at the
+    2-hour limit the lead tells Hayden. A researcher read pstack-claude, ponytail and Cursor's
     thermo-nuclear-code-quality-review (all MIT): install none (pstack's session-start mandate
     and autonomy rules, and ponytail's always-on hooks and telemetry, contradict CLAUDE.md), port
     these as text edits. Reviewer agent and delegation brief: a finding survives only with the
@@ -189,6 +197,18 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     ([[instagram-reel-transcripts]]); the profile's reel list may need a login, so ask Hayden
     for the URLs if WebFetch can't list them. Fold any further tools they name into the same
     adopt / take ideas / skip review. The report: `~/scratch/external-skills/review-2026-11-04.md`.
+  - **A verify-app skill template for app repos** (Hayden's pick, 2026-11-04, via lane dev-cycle's
+    reels review, `~/scratch/external-skills/reels-review-2026-11-04.md`). Adapted from pstack's
+    create-verification-skill and maintain-verification-skill (MIT): launch, a read-only health
+    check, drive, evidence, cleanup; it must run once before it counts. Its own lane, proven on a
+    real app repo, since dotclaude has no running app.
+  - **A per-lane data dir or database name beside the port block in `lane new`** (Hayden's pick,
+    2026-11-04, same review): ports isolate servers but not data. Lane-able after ports merges
+    (`skills/lanes/scripts/lane`).
+  - **`lane ls` names an overdue reinstall** (Hayden's pick, 2026-11-04; after #163's chain
+    stalled). When the lane holding the install has a merged PR, the `install: held by` line says
+    the lead's reinstall is overdue. Derived on each call, no new state. Lane-able after ports
+    merges (`skills/lanes/scripts/lane`, `tests/lanes`).
   - **Next lane when a slot frees (Hayden's pick):** the serve jail (it closes live private
     rows), shared lane locks or structured `Keep open`, all on the lane CLI files lane ports'
     PR 2 also changes (`lane trial` early); or SW1, the one-file fix.
@@ -219,6 +239,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     prune is only temporary, and a sandboxed `prune` half-deletes live entries
     ([[sandbox-recreates-closed-worktree-dirs]], [[git-worktree-prune-shared]]). Leave them.
     Related: a read-only 0-byte `.git/config.lock` while a lane's sandboxed command runs (Notes).
+    Seen too (lane practices, 2026-11-04): one sandboxed Bash in a running session failed at start,
+    `bwrap: Can't get type of source .../.git/worktrees/sweep/config.worktree`, within minutes of
+    `lane done sweep` (timing only, not proven); a retry worked.
   - **Another `lane done` close-path gap** (lane done-safe's reviewer round 1, 2026-10-24).
     Details and the proposed fix are in the same private file, rows "cmd_done path trust" and
     "same, widened". The fix is a design change to `new`/`adopt`/`done` with a migration for
