@@ -400,8 +400,17 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Live lanes: `lane ls`; state in their records. Next lane when a slot frees: Hayden's pick
-     (Backlog). Before each post-merge chain, run DA15's
+  0. Live lanes: `lane ls`; state in their records (2026-11-05: hackathon, practices' next PR,
+     deny-rules; one slot free, Hayden's pick from the Backlog). Lane hackathon merges by Nov 11:
+     move it up if the queue threatens that. Install freeze Nov 12 through Nov 15. A chain that
+     stops before its "main moved" step still tells the lanes, and arms a wake on the blocker
+     (`skills/lanes/SKILL.md`). Recheck GitHub's secret-scanning alerts on this repo once. Open
+     with Hayden (repeat them in each reply's Waiting list until answered): try `/interview` in
+     the prep repo named in [[dotclaude-hackathon-mode]]; rehearse reaching this machine from another
+     network by Nov 12; whether the event's local-lead email went out; by Nov 12 whether his
+     teammates want the skills and who presents; hq's three questions and the SW13 fix for the hq
+     window; whether to backlog a lanes-skill rule that a lane writes its after-merge record only
+     after the merge returns and at least 10 s later. Before each post-merge chain, run DA15's
      pre-check from the private FINDINGS rows, and its added checks before any sandbox-off fetch
      in this repo. Since #161, `lane new` runs only with the sandbox off. Since #156's install, a lone
      excluded call (gh, git push or fetch, lane) runs only from a repo's top. Running sessions took
