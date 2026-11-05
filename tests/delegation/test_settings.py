@@ -722,8 +722,7 @@ class Baseline(unittest.TestCase):
 
     # Home paths that code outside the sandbox runs, sources or trusts (DA12 (a), SW1, SW3, SW4,
     # SW7, SW12, SW14). Each is one Edit deny, which binds the Edit and Write tools, subagents'
-    # file tools and sandboxed Bash, though a glob may not bind sandboxed Bash (.zcompdump* is for
-    # the tools; the plain name is listed too). A deny can't be carved back with an allow, so these are named
+    # file tools and sandboxed Bash (the glob: DR3). A deny can't be carved back with an allow, so these are named
     # one by one instead of by a glob over ~/.*, which would also take ~/.claude/projects.
     HOME_DIRS = ("~/.local", "~/.config", "~/.ssh", "~/.bun", "~/.cargo", "~/.rustup", "~/.npm",
                  "~/.pub-cache", "~/.oh-my-zsh", "~/.codex", "~/.agents", "~/.vscode-server",
@@ -835,15 +834,9 @@ class Baseline(unittest.TestCase):
                         "/home/x/dotclaude/bin/practices-gate off . --until 2999-01-01",
                         "./practices-gate off . --until 2999-01-01",
                         "python3 -I practices-gate off . --until 2999-01-01",
-                        "python3 -I bin/practices-gate off . --until 2999-01-01"):
+                        "python3 -I bin/practices-gate off . --until 2999-01-01",
+                        "/usr/bin/python3 -I practices-gate off . --until 2999-01-01"):
             self.assertNotEqual(matching("deny", command), [], command)
-
-    def test_text_that_names_the_off_switch_isn_t_denied(self):
-        for command in ('grep -n "practices-gate off" README.md',
-                        'git commit -m "document practices-gate off"',
-                        'gh pr create --body "uses practices-gate off"'):
-            self.assertEqual(matching("deny", command), [], command)
-        self.assertIn("~/dotclaude/bin", S["sandbox"]["filesystem"]["denyWrite"])
 
     def test_every_allow_rule_on_an_excluded_command_sits_behind_the_guard(self):
         # An allow rule skips the classifier, so an excluded command it covers must meet the

@@ -274,14 +274,14 @@ class DenyCoverage(unittest.TestCase):
         self.mk("code/p/.git")
         os.symlink(os.path.join(self.home, "code"), os.path.join(self.home, ".x"))
         out = self.run_it()
-        self.assertNotIn("Edit(~/.x/**)", out)
-        self.assertNotIn("Edit(~/code/**)", out)
-        self.assertIn("no rule can cover", out)
+        self.assertNotIn('"Edit(~/.x/**)"', out)
+        self.assertNotIn('"Edit(~/code/**)"', out)
+        self.assertIn("checkout", out)
 
     def test_a_dot_dir_holding_a_repo_gets_no_rule(self):
         self.mk(".things/deep/repo/.git")
         out = self.run_it()
-        self.assertNotIn("Edit(~/.things/**)", out)
+        self.assertNotIn('"Edit(~/.things/**)"', out)
         self.assertIn(".things", out)
 
     def test_a_link_s_own_name_is_judged_by_its_target(self):
@@ -357,6 +357,93 @@ class DenyCoverage(unittest.TestCase):
                 out = self.run_it(deny=[*self.deny, "Edit(~/lib2/tool)"])
                 self.assertIn('"Edit(~/lib2/lib/**)"', out)
                 os.unlink(os.path.join(self.bin, "t"))
+
+    def test_a_link_to_a_checkout_with_an_odd_name_prints_no_broken_rule(self):
+        self.mk("my code/.git")
+        self.mk("my code/vim")
+        os.symlink(os.path.join(self.home, "my code/vim"), os.path.join(self.home, ".vim"))
+        out = self.run_it()
+        self.assertNotIn("Edit(~/my code", out)
+        self.assertIn("my code", out)
+
+    def test_a_deep_repo_is_seen_and_a_big_subtree_doesn_t_hide_a_shallow_one(self):
+        self.mk(".things/a/b/c/d/e/f/.git")
+        self.assertNotIn('"Edit(~/.things/**)"', self.run_it())
+        for n in range(300):
+            self.mk(f".bulk/zz/d{n}")
+        self.mk(".bulk/aa/repo/.git")
+        self.assertNotIn('"Edit(~/.bulk/**)"', self.run_it())
+
+    def test_a_plugin_clone_in_a_dot_dir_gets_its_rule_with_the_cost(self):
+        self.mk(".tmux/plugins/tpm/.git")
+        out = self.run_it()
+        self.assertNotIn('"Edit(~/.tmux/**)"', out)   # not in the paste block
+        self.assertIn("    Edit(~/.tmux/**)", out)
+        self.assertIn("checkout", out)
+
+    def test_a_narrowed_rule_says_what_stays_open(self):
+        self.write("work/acme/bin/tool", "#!/bin/sh\n")
+        self.mk("work/acme/repo/.git")
+        out = self.run_it(path=os.path.join(self.home, "work/acme/bin"))
+        self.assertIn('"Edit(~/work/acme/bin/**)"', out)
+        self.assertIn("beside it stays open", out)
+
+    def test_a_one_file_rule_says_what_stays_open(self):
+        self.write("mcps/a.py", "x\n")
+        self.write(".claude.json", json.dumps({"mcpServers": {"a": {"command": f"{self.home}/mcps/a.py"}}}), 0o600)
+        self.assertIn("beside it stays open", self.run_it())
+
+    def test_a_hop_through_a_linked_dir_resolves_from_the_real_dir(self):
+        self.write("dotfiles/scripts/t", "#!/bin/sh\n")
+        self.mk("dotfiles/bin")
+        os.symlink("../scripts/t", os.path.join(self.home, "dotfiles/bin/t"))
+        os.symlink("dotfiles/bin", os.path.join(self.home, ".bin"))
+        out = self.run_it(path=os.path.join(self.home, ".bin"))
+        self.assertNotIn("Edit(~/scripts/t)", out)
+
+    def test_a_quote_split_and_a_spaced_path_in_a_hook(self):
+        self.write("mytools/hook.sh", "#!/bin/sh\n")
+        self.write("my tools/x.sh", "#!/bin/sh\n")
+        out = self.run_with(self.settings_with(hooks={"Stop": [{"hooks": [
+            {"command": 'bash "$HOME"/mytools/hook.sh'},
+            {"command": 'bash "$HOME/my tools/x.sh"'}]}]}))
+        self.assertIn('"Edit(~/mytools/hook.sh)"', out)
+        self.assertIn("my tools/x.sh", out)      # named, with no rule
+        self.assertNotIn('"Edit(~/my tools', out)
+
+    def test_a_data_file_in_mcp_args_isn_t_code(self):
+        self.write("work/client/config.json", "{}\n", 0o644)
+        self.assertNotIn("work/client", self.run_with(self.settings_with(
+            mcpServers={"s": {"command": "node", "args": ["--config", f"{self.home}/work/client/config.json"]}})))
+
+    def test_a_link_into_the_skipped_checkout_prints_nothing_for_it(self):
+        self.mk("dotclaude/.git")
+        self.mk("dotclaude/x")
+        os.symlink(os.path.join(self.home, "dotclaude/x"), os.path.join(self.home, ".t"))
+        out = self.run_it()
+        self.assertNotIn("Edit(~/dotclaude", out)
+
+    def test_a_linked_home_reads_as_home(self):
+        real, link = self.home, self.home + "-link"
+        os.symlink(real, link)
+        self.addCleanup(os.unlink, link)
+        self.write(".local/bin/tool", "#!/bin/sh\n")
+        settings = os.path.join(real, "s.json")
+        with open(settings, "w") as f:
+            json.dump({"permissions": {"deny": self.deny}}, f)
+        r = subprocess.run([sys.executable, "-I", SCRIPT, "--settings", settings],
+                           env={"HOME": link, "PATH": os.path.join(link, ".local/bin")},
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual((r.returncode, r.stdout), (0, ""), r.stderr)
+
+    def test_a_deep_or_blocking_claude_json_is_no_crash(self):
+        path = os.path.join(self.home, ".claude.json")
+        with open(path, "w") as f:
+            f.write('{"mcpServers":' + "[" * 900 + "]" * 900 + "}")
+        self.run_it()
+        os.unlink(path)
+        os.mkfifo(path)
+        self.run_it()
 
     def test_a_big_or_binary_script_still_gives_its_interpreter(self):
         self.write(".interp/bin/py", "\0binary")
@@ -439,11 +526,10 @@ class DenyCoverage(unittest.TestCase):
         self.assertIn("can't read", r.stderr)
 
     def test_the_rule_reader_agrees_with_the_baseline(self):
-        # The baseline's own rules read as rules here: ~/.local covers a state file, a one-file
-        # rule covers only that file, and a glob stays within one path part.
+        # The baseline's own rules read as rules here: ~/.local covers what's below it, and its
+        # dir rules cover the dirs this looks at.
         with open(os.path.join(REPO, "settings.json")) as f:
             deny = json.load(f)["permissions"]["deny"]
-        self.write(".zcompdump-HAYPC-5.9", "")
         self.mk(".ssh")
         self.mk(".cargo")
         self.assertEqual(self.run_it(deny=deny), "")
