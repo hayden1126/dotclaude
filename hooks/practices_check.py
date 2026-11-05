@@ -225,8 +225,10 @@ except ImportError:  # python3 < 3.11: reported by the startup health check
     tomllib = None
 
 BUDGET = 2.0  # seconds, well under settings.json's 5 s kill
-try:  # tests only: a tiny budget proves the skip path without a slow pattern
-    BUDGET = float(os.environ.get("PRACTICES_TEST_BUDGET") or BUDGET)
+try:  # tests only: a tiny budget proves the skip path without a slow pattern. Only with
+    # CLAUDE_CONFIG_DIR set, which a project's settings can't pass to a hook, as they can this one.
+    if os.environ.get("CLAUDE_CONFIG_DIR"):
+        BUDGET = float(os.environ.get("PRACTICES_TEST_BUDGET") or BUDGET)
 except ValueError:
     pass
 CONTENT_MAX = 256 << 10
@@ -381,6 +383,10 @@ def path_matches(globs, rel):
 
 
 def expand(pattern, helpers):
+    # With re.M, \\s after ^ runs across every blank line below, from each one: text with 60,000 of
+    # them takes the run to the 5 s kill, which allows the call. Anything those \\s* found past a
+    # newline, ^ finds on its own line, so staying on the line finds the same.
+    pattern = pattern.replace(r"^\s*", r"^[^\S\n]*").replace(r"^(?!\s*", r"^(?![^\S\n]*")
     if "{auth_helpers}" not in pattern:
         return pattern
     names = sorted(set(AUTH_HELPERS) | {h for h in helpers if HELPER.fullmatch(h)},

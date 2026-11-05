@@ -1979,6 +1979,45 @@ class TwoPasses(BashBase):
         self.assertEqual(PC.HEADS_READ, {})
 
 
+class TestKnob(Base):
+    def budget_with(self, **env):
+        spec = importlib.util.spec_from_file_location("pc_knob", ENGINE)
+        m = importlib.util.module_from_spec(spec)
+        with mock.patch.dict(os.environ, {"HOME": self.home, **env}, clear=True):
+            spec.loader.exec_module(m)
+        return m.BUDGET
+
+    def test_a_project_s_env_can_t_shrink_the_budget(self):
+        # Claude Code passes a project's env to hooks, all but CLAUDE_CONFIG_DIR and HOME (measured).
+        self.assertEqual(self.budget_with(PRACTICES_TEST_BUDGET="0.0001"), 2.0)
+
+    def test_the_knob_works_under_a_test_s_own_config_dir(self):
+        self.assertEqual(self.budget_with(PRACTICES_TEST_BUDGET="0.5", CLAUDE_CONFIG_DIR=self.config), 0.5)
+
+
+class HostilePadding(Base):
+    """Text a repo chooses, against the shipped patterns, must not reach the 5 s kill."""
+
+    def setUp(self):
+        super().setUp()
+        shutil.rmtree(os.path.join(self.proj, ".claude", "skills"))
+        for name in ("server-code", "auth-secrets"):
+            os.symlink(os.path.join(REPO, "skills", name), os.path.join(self.config, "skills", name))
+        self.rows([use("t-a", "Skill", skill="server-code"), result("t-a", "ok"),
+                   use("t-b", "Skill", skill="auth-secrets"), result("t-b", "ok")])
+
+    def test_padding_leaves_time_to_deny(self):
+        code = "db.insert(items).values({ ...body })\n"
+        for name, padding in (("blank lines", "\n" * 200_000), ("space lines", " \n" * 100_000),
+                              ("parens", "(" * 200_000 + "\n"), ("quotes", '"' * 200_000 + "\n"),
+                              ("tabs", "\t" * 200_000 + "\n")):
+            with self.subTest(name):
+                started = time.monotonic()
+                self.fire(f"lib/{name[:3]}.ts", padding + code)
+                self.assertLess(time.monotonic() - started, 3.5, name)
+                self.assertNotIn("Traceback", self.log())
+
+
 class WhatARepoCantFake(Base):
     """Round 3: text a repo chooses must not read as a deny given or a skill loaded."""
 
