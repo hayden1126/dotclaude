@@ -2677,6 +2677,9 @@ INSTALLS = (
     ("NODE_ENV=test npm i acme-widget", ["acme-widget"]),
     ("bash -c 'npm i acme-widget'", ["acme-widget"]),
     ("echo $(npm i acme-widget)", ["acme-widget"]),
+    ("npm -C web i acme-widget", ["acme-widget"]),
+    ("npm --location global i acme-widget", ["acme-widget"]),
+    ("gem install acme-widget -- --with-key s3cr3t", ["acme-widget"]),
     ("npm i acme-widget acme-gadget && pip install acme-tool",
      ["acme-widget", "acme-gadget", "acme-tool"]),
 )
@@ -2693,7 +2696,8 @@ RESTORES = ("npm install", "npm i", "npm ci", "npm install --save-dev", "npm ins
             "yarn workspace web build", "npm install --maxsockets 1",
             "pip install --use-feature fast-deps -r requirements.txt",
             "uv pip install --exclude-newer 2024-01-01 -r r.txt",
-            "npm --some-flag test", "uv sync --some-flag word")
+            "npm --some-flag test", "uv sync --some-flag word", "npm i -C web",
+            "npm i --color always")
 UNREADABLE = ("npm install 'unclosed", 'npm install "$PKG"', "npm i $(cat name.txt)",
               "npm i https://example.com/x.tgz", "npm i acme/widget",
               "pip install 'git+https://example.com/x.git'", "pip install $PKG",
@@ -2819,7 +2823,6 @@ class InstallCheck(BashBase):
         for tid, command in enumerate(("npm view acme-widget scripts",
                                        "npm view acme-widget scripts --json",
                                        "npm view acme-widget --json scripts",
-                                       "npm view acme-widget scripts.postinstall",
                                        "npm view acme-widget version scripts",
                                        "npm view acme-widget --json",
                                        "npm info acme-widget scripts",
@@ -2851,6 +2854,10 @@ class InstallCheck(BashBase):
                                        "cat /tmp/package/package.json",
                                        "tar xzf acme-widget-1.2.3.tgz && "
                                        "jq .scripts package/package.json",
+                                       "tar xzf acme-widget-1.2.3.tgz && "
+                                       "jq . package/package.json",
+                                       "tar xzf acme-widget-1.2.3.tgz && "
+                                       "grep -A3 scripts package/package.json",
                                        "tar --file=acme-widget-1.2.3.tgz -xz && "
                                        "cat package/package.json",
                                        'd=$(mktemp -d); tar -xzf "$d/acme-widget-1.2.3.tgz" -C "$d"'
@@ -2861,6 +2868,11 @@ class InstallCheck(BashBase):
 
     def test_a_look_that_shows_no_scripts_doesnt_count(self):
         for tid, command in enumerate(("npm view acme-widget",
+                                       "npm view acme-widget scripts.test",
+                                       "tar xzf acme-widget-1.2.3.tgz && cat ./package.json",
+                                       "tar xzf acme-widget-1.2.3.tgz && cat apps/web/package.json",
+                                       "tar xzf acme-widget-1.2.3.tgz && "
+                                       "jq -r .version package/package.json",
                                        "npm view acme-widget version",
                                        "npm view acme-widget main --json",
                                        "npm view acme-widget --json main version",
@@ -2914,6 +2926,9 @@ class InstallCheck(BashBase):
 
     def test_an_inspection_whose_output_went_away_doesnt_count(self):
         for tid, command in enumerate(("npm view acme-widget scripts >/dev/null",
+                                       "npm view acme-widget scripts 2>/dev/null >&2",
+                                       "v=$(npm view acme-widget scripts); echo done",
+                                       "v=`npm view acme-widget scripts`; echo done",
                                        "npm view acme-widget scripts > out.txt",
                                        "npm view acme-widget scripts >> out.txt",
                                        "npm view acme-widget scripts 1>/dev/null",
@@ -2950,6 +2965,7 @@ class InstallCheck(BashBase):
                                        "npm view acme-widget scripts 1>&2",
                                        "npm view acme-widget scripts>&2",
                                        "npm view acme-widget scripts | tee >(wc -l)",
+                                       "d=$(mktemp -d); npm view acme-widget scripts",
                                        "npm view acme-widget scripts && echo ok")):
             with self.subTest(command=command):
                 self.rows(self.view(f"v{tid}", command))
@@ -2973,6 +2989,9 @@ class InstallCheck(BashBase):
                 ("tar xzOf acme-widget-1.2.3.tgz package/package.json", "npm i acme-widget@1.2.3",
                  True),
                 ("tar xzOf acme-widget-1.2.3.tgz package/package.json", "npm i acme-widget@2.0.0",
+                 False),
+                ("tar xzOf acme-widget-*.tgz package/package.json", "npm i acme-widget", True),
+                ("tar xzOf acme-widget-*.tgz package/package.json", "npm i acme-widget@2.0.0",
                  False)):
             with self.subTest(seen=seen, install=install):
                 self.rows(self.view("v1", seen))
@@ -3162,6 +3181,11 @@ class InstallCheck(BashBase):
                 self.assertIn(name, self.state_text())
         self.assertNotIn("s3cr3t", self.state_text())
         self.assertNotIn("s3cr3t", self.log())
+
+    def test_a_gems_build_arguments_are_never_named_or_stored(self):
+        reason = self.pre("gem install acme-widget -- --with-key s3cr3t", session_id=self.fresh())
+        self.assertNotIn("s3cr3t", reason)
+        self.assertNotIn("s3cr3t", self.state_text())
 
     def test_an_unlisted_option_gets_one_deny_that_names_no_package(self):
         for command, manager in (("npm i --brand-new-flag acme-widget", "npm"),

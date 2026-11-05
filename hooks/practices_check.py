@@ -2295,7 +2295,7 @@ _NODE_VALUES = {"--prefix", "--registry", "--tag", "--cache", "--userconfig", "-
                 "--https-proxy", "--cpu", "--os", "--libc", "--allow-git", "--min-release-age",
                 "--global-dir", "--virtual-store-dir", "--backend", "--ca", "--cafile",
                 "--linker", "--concurrent-scripts", "--network-concurrency",
-                "--minimum-release-age", "--mode", "--maxsockets"}
+                "--minimum-release-age", "--mode", "--location", "--color", "--maxsockets"}
 # The common boolean long options (any other `--no-...` is one too). The word after any other
 # `--option` without `=` may be its value, a token included, so split_args reports it as
 # ambiguous and it is never read as a package.
@@ -2307,7 +2307,7 @@ NODE_FLAGS = {"--save", "--save-dev", "--save-prod", "--save-optional", "--save-
               "--strict-peer-deps", "--prefer-dedupe", "--package-lock", "--package-lock-only",
               "--workspaces", "--include-workspace-root", "--workspace-root", "--install-links",
               "--audit", "--fund", "--bin-links", "--silent", "--quiet", "--verbose", "--json",
-              "--color", "--offline", "--prefer-offline", "--prefer-online", "--yes", "--dev",
+              "--offline", "--prefer-offline", "--prefer-online", "--yes", "--dev",
               "--peer", "--optional", "--exact", "--tilde", "--production", "--frozen-lockfile",
               "--pure-lockfile", "--lockfile-only", "--recursive", "--aggregate-output",
               "--stream", "--use-stderr", "--fail-if-no-match", "--yarn", "--analyze",
@@ -2349,7 +2349,7 @@ _PIP_VALUES = {"-r", "--requirement", "-c", "--constraint", "-e", "--editable", 
                "--use-feature", "--use-deprecated", "--exists-action", "--root-user-action",
                "--global-option", "--keyring-provider"}
 VALUE_OPTS = {
-    "npm": _NODE_VALUES | {"-w"},
+    "npm": _NODE_VALUES | {"-w", "-C"},
     "pnpm": (_NODE_VALUES - {"--workspace"}) | {"-C", "-F"},  # pnpm's -w and --workspace take none
     "yarn": _NODE_VALUES,
     "bun": _NODE_VALUES | {"-c"},
@@ -2377,6 +2377,8 @@ VALUE_OPTS = {
     "gem": {"-v", "--version", "-i", "--install-dir", "-n", "--bindir", "-s", "--source", "-p",
             "--http-proxy", "--platform", "--document", "--build-root"},
     "composer": {"-d", "--working-dir", "--with"}}
+# The words that come before a manager's add verb, so an unlisted option doesn't take them.
+BEFORE_VERB = {"yarn": {"global", "workspace"}, "composer": {"global"}, "uv": {"pip"}}
 SOURCE_OPTS = {"-e", "--editable", "--git", "--github"}  # their value can be a remote source
 PIP_HEAD = re.compile(r"pip\d*(?:\.\d+)?")  # pip3, pip3.12
 INTERPRETER = re.compile(r"python\d*(?:\.\d+)?")  # `python3.12 -m pip install x`
@@ -2407,12 +2409,15 @@ TAR_LONG = {"--extract": "x", "--get": "x", "--to-stdout": "O", "--file": "f", "
             "--strip-components": "C", "--gzip": "z", "--gunzip": "z", "--ungzip": "z",
             "--bzip2": "j", "--xz": "J", "--verbose": "v", "--wildcards": "v",
             "--no-same-owner": "o", "--no-same-permissions": "v"}
-# What prints a package.json named as its argument, unlike echo, ls or test.
-FILE_READERS = {"cat", "head", "tail", "less", "more", "bat", "jq", "grep", "egrep", "rg", "sed",
-                "awk", "node", "python", "python3"}
+# What prints a package.json named as its argument, unlike echo, ls or test. A filter prints only
+# what it's asked for, so one must also name the scripts (or be jq's whole-file `.`).
+FILE_READERS = {"cat", "head", "tail", "less", "more", "bat"}
+FILE_FILTERS = {"jq", "grep", "egrep", "rg", "sed", "awk", "node", "python", "python3"}
 # The redirections that leave stdout in the call's result: `2>`, `2>>`, `2>&1`, `>&2`, and `>(` is
 # a process substitution. Any other `>` sends it away.
 KEPT_OUTPUT = re.compile(r"(?:(?<!\w)\d+)?>&\d+(?!\w)|(?<!\w)(?:[02-9]|\d\d+)>>?\|?|>\(")
+CAPTURED = re.compile(r"`|\$\(\s*(?:npm|pnpm|yarn|bun|tar)\b")  # `$(mktemp -d)` is fine
+STDERR_AWAY = re.compile(r"(?<!\w)2>>?\s*[^&\s].*>&2|>&2.*(?<!\w)2>>?\s*[^&\s]")  # takes stdout too
 UNNAMED = "?"  # the state key's package for a call with an ambiguous word: it names none
 
 
@@ -2471,8 +2476,10 @@ def install_of(head, args):
     manager = "pip" if PIP_HEAD.fullmatch(head) else head
     if manager not in ADD_VERBS:
         return None
+    if manager == "gem" and "--" in args:  # what follows goes to the gem's build, not to gem
+        args = args[:args.index("--")]
     words, opts, ambiguous = split_args(args, VALUE_OPTS[manager], FLAGS[manager],
-                                        ADD_VERBS[manager] | {"global", "workspace", "pip"})
+                                        ADD_VERBS[manager] | BEFORE_VERB.get(manager, set()))
     if manager in ("yarn", "composer") and words[:1] == ["global"]:
         words = words[1:]
     elif manager == "yarn" and words[:1] == ["workspace"]:  # `yarn workspace web add x`
@@ -2586,16 +2593,25 @@ def tar_parts(args):
 
 
 def is_manifest(word):
-    """Whether word names a package.json in a folder: a bare one is the repo's own, not the
-    unpacked tarball's."""
-    return "/" in word and word.rsplit("/", 1)[-1] == "package.json"
+    """Whether a tar member word names a package.json."""
+    return word.rsplit("/", 1)[-1] == "package.json"
+
+
+def reads_unpacked(head, words):
+    """Whether this command prints the package.json a tarball unpacks to, package/package.json:
+    a bare one, or another folder's, is the repo's own."""
+    if not any(w == "package/package.json" or w.endswith("/package/package.json") for w in words):
+        return False
+    return head in FILE_READERS or (head in FILE_FILTERS and any(
+        "script" in w or (head == "jq" and w == ".") for w in words))
 
 
 def tar_reads(args, pkg, spec, read_after):
     """Whether this tar's output can show pkg's scripts: it prints the whole tarball or a member
     naming package.json, or extracts those with read_after, a later command of the call printing
     a package.json. A tarball's version, unlike a view's spec, is what `npm pack x` resolved `x`
-    to, so it differs only from another pinned spec."""
+    to, so it differs only from another pinned spec, and a pinned install needs the version
+    spelled out."""
     parts = tar_parts(args)
     if parts is None or "x" not in parts[0]:
         return False
@@ -2603,7 +2619,7 @@ def tar_reads(args, pkg, spec, read_after):
     if members and not any(is_manifest(m) for m in members):
         return False
     return ("O" in modes or read_after) and any(
-        v and (spec is None or "*" in v or v == spec)
+        v and (spec is None or v == spec)
         for v in (tarball_version(a, pkg) for a in archives))
 
 
@@ -2623,14 +2639,16 @@ def inspects(head, args, pkg, spec, read_after=False):
         return False
     fields = words[2:]
     if fields:
-        return any(f == "scripts" or f.startswith("scripts.") for f in fields)
+        return "scripts" in fields  # `scripts.test` shows one script, not what runs at install
     return "--json" in opts or "--json=true" in opts
 
 
 def hides_output(command):
-    """Whether this Bash command redirects stdout, or holds `||`, anywhere: blunt, since a false
-    answer costs one deny and a true one can hide the only output the model would read."""
-    return "||" in command or ">" in KEPT_OUTPUT.sub(" ", command)
+    """Whether this Bash command redirects stdout, holds `||`, or captures a manager's or tar's
+    output, anywhere: blunt, since a false answer costs one deny and a true one can hide the only
+    output the model would read."""
+    return ("||" in command or ">" in KEPT_OUTPUT.sub(" ", command)
+            or bool(CAPTURED.search(command) or STDERR_AWAY.search(command)))
 
 
 def command_inspects(command, pkg, spec):
@@ -2644,8 +2662,7 @@ def command_inspects(command, pkg, spec):
         return False
     return any(
         inspects(head, args, pkg, spec, any(
-            later in FILE_READERS and any(is_manifest(w) for w in words)
-            for later, words, _, _ in calls[n + 1:]))
+            reads_unpacked(later, words) for later, words, _, _ in calls[n + 1:]))
         for n, (head, args, _, _) in enumerate(calls))
 
 
