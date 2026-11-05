@@ -41,7 +41,7 @@ console.log(beats.length);
 
 
 def clean_env(**overrides):
-    env = {k: v for k, v in os.environ.items() if k not in {"OUT", "SIZE", "FPS", "BEATS", "HEADED", "APP_CMD", "APP_URL", "PORT", "SLOW_SCRIPT_MS"}}
+    env = {k: v for k, v in os.environ.items() if k not in {"OUT", "SIZE", "FPS", "BEATS", "HEADED", "APP_CMD", "APP_URL", "PORT", "SLOW_SCRIPT_MS", "SLOW_ROOT_MS"}}
     env.update(overrides)
     return env
 
@@ -326,10 +326,11 @@ class Takes(unittest.TestCase):
         self.assertEqual((stream["width"], stream["height"]), (1280, 720))
         self.assertEqual(stream["r_frame_rate"], "24/1")
 
-        in_beats = self.project(one_beat(act, "export const size = '640x360';"))
+        in_beats = self.project(one_beat(act, "export const size = '640x360';\nexport const fps = 24;"))
         self.assertEqual(in_beats.take().returncode, 0)
         stream, _ = ffprobe(in_beats.out / "demo.mp4")
         self.assertEqual((stream["width"], stream["height"]), (640, 360))
+        self.assertEqual(stream["r_frame_rate"], "24/1", "fps in beats.mjs holds for every retake")
         self.assertEqual(in_beats.take(SIZE="1280x720").returncode, 0)
         stream, _ = ffprobe(in_beats.out / "demo.mp4")
         self.assertEqual((stream["width"], stream["height"]), (1280, 720), "SIZE beats beats.mjs")
@@ -488,6 +489,38 @@ class Takes(unittest.TestCase):
         self.assertEqual(project.take().returncode, 0)
         for name, kept in (("demo.prev.mp4", "demo.mp4"), ("captions.prev.srt", "captions.srt"), ("steps.prev.json", "steps.json")):
             self.assertEqual((project.out / name).read_bytes(), first[kept], name)
+
+    def test_a_page_slow_to_answer_starts_a_take_and_is_asked_once(self):
+        project = self.project(one_beat(
+            "const hits = await page.evaluate(async () => (await fetch('/hits')).json());"
+            " if (hits > 2) throw new Error('the page was asked ' + hits + ' times');"))
+        result = project.take(SLOW_ROOT_MS="3000", SIZE="640x360")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_an_app_already_running_elsewhere_is_recorded_and_left_running(self):
+        project = self.project(one_beat("await page.waitForTimeout(100);"))
+        running = subprocess.Popen([NODE, "server.mjs"], cwd=project.root, env=project.env(), stdout=subprocess.DEVNULL)
+        self.addCleanup(running.wait)
+        self.addCleanup(running.kill)
+        self.wait_for_port(project, running)
+        result = project.take(APP_CMD="", SIZE="640x360")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((project.out / "demo.mp4").exists())
+        self.assertTrue(port_open(project.port), "a take stopped an app it didn't start")
+
+    def test_setup_keeps_beats_already_written(self):
+        text = (SKILL / "SKILL.md").read_text()
+        command = re.search(r"`(mkdir -p demo && cat .*?)`\. Add", text).group(1)
+        with tempfile.TemporaryDirectory() as tmp:
+            env = clean_env(CLAUDE_SKILL_DIR=str(SKILL))
+            subprocess.run(["sh", "-c", command], cwd=tmp, env=env, check=True)
+            beats = Path(tmp) / "demo" / "beats.mjs"
+            self.assertEqual(beats.read_text(), (TEMPLATE / "beats.mjs").read_text())
+            beats.write_text("// mine")
+            (Path(tmp) / "demo" / "record.mjs").write_text("// old")
+            subprocess.run(["sh", "-c", command], cwd=tmp, env=env, check=True)
+            self.assertEqual(beats.read_text(), "// mine")
+            self.assertEqual((Path(tmp) / "demo" / "record.mjs").read_text(), (TEMPLATE / "record.mjs").read_text())
 
     def test_a_first_load_past_the_step_timeout_is_fine(self):
         project = self.project(one_beat("await page.waitForTimeout(100);"))

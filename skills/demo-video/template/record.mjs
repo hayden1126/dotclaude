@@ -6,8 +6,9 @@
 //
 //   node demo/record.mjs
 //
-// Env: APP_CMD, APP_URL and SIZE override beats.mjs. HEADED=1 rehearses in a visible browser. SIZE
-// defaults to 1920x1080, FPS to 30. BEATS=3 or BEATS=3-4 makes a short clip of those beats, counted
+// Env: APP_CMD, APP_URL, SIZE and FPS override beats.mjs. HEADED=1 rehearses in a visible browser. SIZE
+// defaults to 1920x1080, FPS to 30. An empty app command records an app already running elsewhere,
+// which the take neither starts nor stops. BEATS=3 or BEATS=3-4 makes a short clip of those beats, counted
 // from 1: the earlier beats still run, so the app reaches the right state, and are trimmed off.
 // OUT is the output dir. Its default beside this file is out/, or out-clip/ with BEATS and
 // out-rehearsal/ with HEADED, so a clip or a rehearsal can't replace the full take in out/.
@@ -19,6 +20,7 @@
 // take moves the set it replaces to demo.prev.mp4, captions.prev.srt and steps.prev.json.
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -173,12 +175,25 @@ function withLimit(promise, ms, message) {
   return Promise.race([promise, limit]).finally(() => clearTimeout(timer));
 }
 
-async function answers(url) {
+async function answers(url, timeoutMs) {
   try {
-    return await fetch(url, { signal: AbortSignal.timeout(2000) });
+    return await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
   } catch {
     return null;
   }
+}
+
+// A listener, found with no request, so waiting for the app can't call its APIs over and over.
+function portOpen(url) {
+  const { hostname, port, protocol } = new URL(url);
+  const host = hostname.replace(/^\[|\]$/g, '');
+  return new Promise(resolve => {
+    const socket = net.connect({ host, port: Number(port) || (protocol === 'https:' ? 443 : 80), timeout: 2000 });
+    const done = open => { socket.destroy(); resolve(open); };
+    socket.once('connect', () => done(true));
+    socket.once('timeout', () => done(false));
+    socket.once('error', () => done(false));
+  });
 }
 
 function startApp(cmd) {
@@ -193,8 +208,13 @@ async function waitUntilUp(url) {
   const deadline = Date.now() + APP_WAIT_MS;
   while (Date.now() < deadline) {
     if (appExit !== null) throw new Error(`the app exited (${appExit}) before it answered at ${url}`);
-    if ((await answers(url))?.ok) return;
-    await new Promise(resolve => setTimeout(resolve, 100));
+    if (!(await portOpen(url))) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      continue;
+    }
+    // A page may take a while to render, so its one request gets all the time that's left.
+    if ((await answers(url, Math.max(deadline - Date.now(), 1000)))?.ok) return;
+    await new Promise(resolve => setTimeout(resolve, 1000));
   }
   throw new Error(`the app never answered at ${url} within ${APP_WAIT_MS / 1000} s`);
 }
@@ -253,7 +273,7 @@ async function record() {
   const project = await import(new URL('./beats.mjs', import.meta.url));
   checkBeats(project);
   const size = parseSize(process.env.SIZE || project.size || '1920x1080');
-  const fps = parseFps(process.env.FPS || '30');
+  const fps = parseFps(process.env.FPS || String(project.fps ?? '30'));
   const [firstBeat, lastBeat] = parseBeatRange(process.env.BEATS, project.beats.length);
   const chromium = await loadChromium();
   checkFfmpeg();
@@ -263,8 +283,12 @@ async function record() {
 
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
   stage = fs.mkdtempSync(OUT + '.take-');
-  if (await answers(url)) throw new Error(`something already answers at ${url}: stop it, or point APP_URL elsewhere`);
-  startApp(process.env.APP_CMD || project.app.cmd);
+  // An empty command means the app already runs elsewhere (deployed, on a board), so it's left alone.
+  const cmd = process.env.APP_CMD ?? project.app.cmd;
+  if (cmd) {
+    if (await portOpen(url)) throw new Error(`something already answers at ${url}: stop it, or point APP_URL elsewhere`);
+    startApp(cmd);
+  }
   await waitUntilUp(url);
 
   const problems = [];

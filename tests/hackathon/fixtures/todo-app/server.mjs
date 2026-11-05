@@ -46,14 +46,17 @@ document.getElementById('add').onsubmit = async event => {
 load();
 </script>`;
 
+let rootHits = 0;
 http.createServer((request, response) => {
   let body = '';
   request.on('data', chunk => { body += chunk; });
   request.on('end', () => {
     if (request.url === '/') {
+      rootHits += 1;
       response.setHeader('content-type', 'text/html');
-      return response.end(page);
+      return void setTimeout(() => response.end(page), Number(process.env.SLOW_ROOT_MS || 0));
     }
+    if (request.url === '/hits') return response.end(String(rootHits));
     if (request.url === '/api' && request.method === 'GET') return response.end(JSON.stringify(todos));
     if (request.url === '/api') {
       todos.push({ id: todos.length, text: body, done: false });

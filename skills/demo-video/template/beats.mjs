@@ -2,12 +2,16 @@
 // this file and does the rest. The example drives a plain to-do list. Replace it with your script.
 
 export const app = {
-  cmd: 'npm start', // Starts the app and keeps running. record.mjs stops it at the end. APP_CMD overrides.
+  // Starts the app and keeps running. record.mjs stops it at the end. APP_CMD overrides. Use '' for an
+  // app already running elsewhere (deployed, on a board): the take neither starts nor stops it.
+  cmd: 'npm start',
   url: 'http://127.0.0.1:3000/', // The page to open. The take starts once it answers. APP_URL overrides.
 };
 
-// The video's size, when the event asks for something other than 1920x1080. SIZE overrides.
+// The video's size and frame rate, when the event asks for something other than 1920x1080 at 30.
+// SIZE and FPS override.
 // export const size = '1280x720';
+// export const fps = 24;
 
 // A failed request to the app's own host or any local port kills a take. Other hosts only warn, so a
 // font CDN can't ruin one. List an outside host here when the demo depends on it.

@@ -17,13 +17,13 @@ It is a submission asset, a backup if the live demo fails on stage, or both. It 
 
 Read `EVENT.md` at the project root: whether video is required, its length and format, and the judging format. If the file is missing, ask the user for the length and whether this is a submission asset, a stage backup or both. If no video is required and there is no live slot, this skill may not apply: say so, and ask before going on.
 
-- **Submission asset:** the full script, within the required length. Set `size` in `beats.mjs` and `FPS` to the required format. For a file-size cap, re-encode the result with a higher `-crf`.
+- **Submission asset:** the full script, within the required length. Set `size` and `fps` in `beats.mjs` to the required format, so every retake keeps it. For a file-size cap, re-encode the result with a higher `-crf`.
 - **Stage backup:** the same path the team will show live, within the slot.
 - **Fallback for one step:** in a live demo with real backends, a clip of the risky step can stand in for only that step. Record it with `BEATS=3-4`: beats 1 and 2 still run, so the app reaches the right state, and are trimmed off. It lands in `demo/out-clip/`, so give a second clip its own `OUT`. Whoever is on stage says it's a recording.
 
 ## Setup
 
-1. Copy the template into the project, `mkdir -p demo && for f in "${CLAUDE_SKILL_DIR}"/template/*.mjs; do cat "$f" > "demo/${f##*/}"; done`, and add `demo/out*` and `demo/frames/` to `.gitignore`.
+1. Copy the template into the project, which keeps any beats already written: `mkdir -p demo && cat "${CLAUDE_SKILL_DIR}/template/record.mjs" > demo/record.mjs && { [ -e demo/beats.mjs ] || cat "${CLAUDE_SKILL_DIR}/template/beats.mjs" > demo/beats.mjs; }`. Add `demo/out*` and `demo/frames/` to `.gitignore`.
 2. Install Playwright at a pinned version: `npm i -D playwright@<version>` (run `npm init -y` first if there's no `package.json`).
 3. Get the browser. On an ordinary machine: `npx playwright install chromium`.
 4. On a machine with a sandboxed shell and a browser cache, the browser CDN may not be allowed. Pick the Playwright version whose build is already cached: `node_modules/playwright-core/browsers.json` names the revision each version wants, and the cache folder names the ones it holds. Stay on the headless shell, the default here, since full Chrome may abort in a sandbox. A visible browser may not start inside a command sandbox either. Then the user runs that `HEADED=1` rehearsal themselves, from their own terminal. Don't ask for the sandbox to be turned off, since a take runs the app, its dependencies and the browser.
@@ -31,7 +31,7 @@ Read `EVENT.md` at the project root: whether video is required, its length and f
 
 ## Write the beats
 
-`demo/beats.mjs` is the only file to edit. `demo/record.mjs` is the machinery. Set `app.cmd` and `app.url`, then turn the script in `DEMO.md` into beats, one caption plus one action each. If there's no `DEMO.md`, ask the user for the script. Don't invent one.
+`demo/beats.mjs` is the only file to edit. `demo/record.mjs` is the machinery. Set `app.cmd` and `app.url`. For an app already running elsewhere (deployed, on a board or a LAN address), set `app.cmd` to `''`: the take neither starts nor stops it, and the start state is yours to reset. Then turn the script in `DEMO.md` into beats, one caption plus one action each. If there's no `DEMO.md`, ask the user for the script. Don't invent one.
 
 - End each action by waiting for what the viewer should see, such as `await page.getByText('Saved').waitFor()`. A wait that fails is what makes a broken take fail loud. Locators can't see the caption or the cursor, so a wait only ever matches the app.
 - Make the start state repeatable. `app.cmd` should reset or seed the data, or the second take will differ from the first.
@@ -47,7 +47,7 @@ Run `node demo/record.mjs` from the project root. Output lands in `demo/out/`: `
 | `BEATS=3-4` | A short clip of those beats, counted from 1, in `demo/out-clip/` |
 | `HEADED=1` | Rehearse in a visible browser, in `demo/out-rehearsal/`. Don't ship this take. |
 | `OUT` | Output dir. Wins over all of these defaults. |
-| `SIZE=1280x720`, `FPS=24` | Override the format; both size numbers even |
+| `SIZE=1280x720`, `FPS=24` | Override `beats.mjs` for one take; both size numbers even |
 
 A clip or a rehearsal never touches the full take in `demo/out/`. A good take replaces the last one in its own output dir and moves it to `demo.prev.mp4`, `captions.prev.srt` and `steps.prev.json`, one generation only, so copy a take you want to keep, or give each take its own `OUT`. A failed take leaves the last good one in place and says so.
 
@@ -68,9 +68,9 @@ Read the exit message. A broken step gets fixed in the app. A step that's genuin
 | Message | Meaning |
 |---|---|
 | `the app exited ... before it answered` | `app.cmd` died. The app's last output is printed below the message. |
-| `the app never answered` | Wrong `app.url`, or the app took over 60 s to start |
+| `the app never answered` | Wrong `app.url`, or the app took over 60 s to start, or `app.url` keeps answering with an error |
 | `Timeout` on `page.goto` | The first page took over 60 s in the browser. Warm the app up in `app.cmd`, or fix what the page waits on. |
-| `something already answers` | A server from another run holds the port |
+| `something already answers` | A server from another run holds the port. If that's the app you mean to record, set `app.cmd` to `''`. |
 | `page error`, `HTTP 5xx`, `request failed` | The app really broke during the beat named |
 | `Timeout` on a selector | The thing the viewer should see never appeared, or a slow step needs its own wait |
 | A browser launch error with `HEADED=1` | No visible browser can start here. The user rehearses from their own terminal. |
