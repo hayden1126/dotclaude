@@ -96,7 +96,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     2 practices (`feat/practices-auth-secrets`, its next PR; paused 2026-10-24, resumed by
     Hayden 2026-11-04; it conflicts with
     origin/main on its own, per lane-fixes' and ports' trials: README.md and
-    `tests/delegation/test_settings.py`; on resuming it merges origin/main first).
+    `tests/delegation/test_settings.py`; on resuming it merges origin/main first), 3 dev-cycle
+    (`feat/dev-cycle-rules`), 4 npx-cwd (`fix/npx-shim-cwd`; it shares no file with the others,
+    so it can move up if it is ready first).
     Merged and installed from main, all closed: chrome-dup (#151, 2026-10-29: one chrome-devtools
     server, the plugin's; sandbox gap fixes N1 and N3's bun part, `hooks/sandbox-caches.sh`; its
     install changed running sessions' sandbox live, [[cc-sandbox-config-reloads-live]]),
@@ -163,7 +165,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     hunt.
   - **Fix lanes from lane sweep** (2026-11-04; private: sandbox-audit FINDINGS, "Sandbox reach
     sweep, 2026-11", rows SW1 to SW14, each naming its fix and files). Most severe first:
-    1. SW1 (high): one file plus its tests (an N2 follow-up).
+    1. SW1 (high): one file plus its tests (an N2 follow-up). In lane npx-cwd (Hayden's pick,
+       2026-11-04).
     2. SW3, SW7, SW12, SW14, SW4 (high): one deny-rule lane folded into DA12 (a); settings,
        the machine overlay, a setup step, test_settings (lane practices changes the last).
     3. SW10 (medium-high): codex-delegate and the excluded-command guard, with tests.
@@ -211,7 +214,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     merges (`skills/lanes/scripts/lane`, `tests/lanes`).
   - **Next lane when a slot frees (Hayden's pick):** the serve jail (it closes live private
     rows), shared lane locks or structured `Keep open`, all on the lane CLI files lane ports'
-    PR 2 also changes (`lane trial` early); or SW1, the one-file fix.
+    PR 2 also changes (`lane trial` early).
   - G8 open probes (a) and (b) (Hayden's pick, 2026-10-14): Hayden runs
     `~/scratch/sandbox-audit/g8-probe/run.py` by hand with the sandbox off, because the auto-mode
     classifier refused the run. Results go into the private findings file's G8 section.
