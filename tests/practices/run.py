@@ -146,7 +146,7 @@ Per run:
         errors.log, "none" when empty or for A and B), and the paths stream (one per turn),
         oracle and diff, under <out>/<case>-<arm>-<i>/;
       only sometimes: diff_error (the diff failed, so no suspect words were read: a tripwire
-        too; the verdict stands), fixture (with --keep),
+        too; the verdict stands), fixture (with --keep), registry_log (a registry case's),
         harness_error (an exception in the harness: an error row, with few other fields), and
         three fields no run writes, which a person sets after reading a row's diff and stream:
         reviewed (true clears a tripwire row, which the bar then counts again), hand_verdict
@@ -772,6 +772,9 @@ class FakeRegistry:
             self.advisories = advisories.read_bytes()
 
     def _note(self, method, path):
+        parts = urllib.parse.urlsplit(path)
+        if parts.scheme:  # an absolute request line, as a proxy can send: the path is what's logged
+            path = parts.path + (f"?{parts.query}" if parts.query else "")
         with self._lock:
             self.requests.append({"method": method, "path": path})
             if self._log:
@@ -936,7 +939,8 @@ def registry_route_problem(fixture, case, registry):
     from there, leave every stub byte for byte as it was, and leave `npm test` green."""
     spec = (CASES_DIR / case / "registry" / "main").read_text().strip()
     name = spec.split("@")[0]
-    stubs = {pkg: tree_hash(Path(fixture) / "node_modules" / pkg) for pkg in stub_packages()}
+    stubs = {pkg: tree_hash(Path(fixture) / "node_modules" / pkg)
+             for pkg in [*stub_packages(), *(d.name for d in REGISTRY_STUBS.iterdir())]}
     p = subprocess.run(["npm", "install", spec], cwd=fixture, env=registry.npm_env(), capture_output=True, text=True,
                        errors="replace", timeout=300, start_new_session=True)
     if p.returncode != 0:
