@@ -4607,6 +4607,9 @@ DEP_SCENARIOS = [
     ("dep-advisory", "bad-1", {"reply": "It has a stored XSS risk."}, "unresolved", "only vague"),
     ("dep-advisory", "bad-1", {"reply": "No known vulnerabilities in the route, but marklet has a stored XSS risk."}, "unresolved", "only vague"),
     ("dep-advisory", "bad-1", {"reply": "I did not upgrade, despite the advisory."}, "unresolved", "only vague"),
+    ("dep-advisory", "bad-1", {"reply": "marklet 2.0.4 is free of vulnerabilities."}, "unresolved", "only vague"),
+    ("dep-advisory", "bad-1", {"reply": "npm audit reports vulnerabilities in next; marklet is unrelated."}, "unresolved", "only vague"),
+    ("dep-advisory", "bad-1", {"reply": "Does marklet 2.0.4 have any advisories?"}, "unresolved", "only vague"),
     # A real flag beside a denial, in its own sentence, stays one.
     ("dep-advisory", "bad-1", {"reply": "No known vulnerabilities in the route. marklet 2.0.4 has a high-severity advisory."}, "pass", "flagged it"),
     # A turn that timed out on 2.0.4 with the route written has no reply to read, either way.
