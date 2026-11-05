@@ -25,6 +25,11 @@ import sys
 import tempfile
 
 RULE = re.compile(r"[\w.:-]+")
+OFF_FILE_MAX = 64 * 1024
+
+
+class Refusal(Exception):
+    pass
 
 
 def passwd_home():
@@ -33,39 +38,61 @@ def passwd_home():
         import pwd  # noqa: PLC0415 (Unix only)
     except ImportError:
         return os.path.expanduser("~")
-    return pwd.getpwuid(os.getuid()).pw_dir
+    try:
+        return pwd.getpwuid(os.getuid()).pw_dir
+    except KeyError as e:
+        raise Refusal("this uid has no passwd entry") from e
 
 
 def off_file():
     return os.path.join(passwd_home(), ".local", "state", "dotclaude", "practices-off.json")
 
 
-class Refusal(Exception):
-    pass
-
-
 def under(path, root):
     return path == root or path.startswith(root.rstrip("/") + "/")
 
 
-def read_entries(path):
-    """The file's entries, [] when it is missing. A file this command wouldn't have written is
-    left for a person to look at, never replaced."""
+def entry_ok(e, home):
+    """The engine's check (hooks/practices_check.py, _off_entry_ok), so this command never carries
+    an entry over that would make the engine ignore the file, or that it was ignoring."""
+    if not isinstance(e, dict) or not isinstance(e.get("dir"), str):
+        return False
+    d, until = e["dir"], e.get("until")
+    if not os.path.isabs(d) or os.path.normpath(d) != d or under(home, d):
+        return False
     try:
-        st = os.lstat(path)
+        if datetime.date.fromisoformat(until).isoformat() != until:
+            return False
+    except (TypeError, ValueError):
+        return False
+    if "rule" in e:
+        return (isinstance(e["rule"], str) and bool(e["rule"]) and isinstance(e.get("reason"), str)
+                and bool(e["reason"].strip()))
+    return True
+
+
+def read_entries(path):
+    """The file's entries, [] when it is missing. A file the engine would ignore is left for a
+    person to look at, never listed as in force and never replaced."""
+    look = f"{path} is one the gate ignores: look at it and remove it by hand"
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
     except FileNotFoundError:
         return []
-    if not stat.S_ISREG(st.st_mode):
-        raise Refusal(f"{path} isn't a regular file: look at it and remove it by hand")
+    except OSError as e:
+        raise Refusal(look) from e
     try:
-        with open(path) as f:
-            data = json.load(f)
+        with os.fdopen(fd, "rb") as f:
+            st = os.fstat(fd)
+            if (not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid()
+                    or st.st_mode & (stat.S_IWGRP | stat.S_IWOTH) or st.st_size > OFF_FILE_MAX):
+                raise Refusal(look)
+            data = json.loads(f.read(OFF_FILE_MAX + 1))
     except (OSError, ValueError, RecursionError) as e:
-        raise Refusal(f"{path} can't be read ({type(e).__name__}): look at it and remove it by "
-                      "hand") from e
+        raise Refusal(look) from e
     entries = data.get("entries") if isinstance(data, dict) and data.get("version") == 1 else None
-    if not isinstance(entries, list) or not all(isinstance(e, dict) for e in entries):
-        raise Refusal(f"{path} isn't in this command's format: look at it and remove it by hand")
+    if not isinstance(entries, list) or not all(entry_ok(e, passwd_home()) for e in entries):
+        raise Refusal(look)
     return entries
 
 
@@ -108,9 +135,9 @@ def cmd_off(args, path):
         raise Refusal(f"--until {args.until!r} isn't a date (YYYY-MM-DD)")
     if until < datetime.date.today():
         raise Refusal(f"--until {args.until} has passed")
-    if args.rule and not RULE.fullmatch(args.rule):
-        raise Refusal(f"--rule {args.rule!r} isn't a rule id")
-    if bool(args.rule) != bool(args.reason and args.reason.strip()):
+    if args.rule is not None and not RULE.fullmatch(args.rule):
+        raise Refusal(f"--rule {args.rule!r} isn't a rule id")  # an empty one would drop the whole gate
+    if (args.rule is not None) != bool(args.reason and args.reason.strip()):
         raise Refusal("--rule and a non-empty --reason go together")
     home = os.path.realpath(passwd_home())
     dirs = [real_dir(d) for d in args.dirs]
@@ -132,10 +159,10 @@ def cmd_off(args, path):
 
 
 def cmd_on(args, path):
-    dirs = [real_dir(d) for d in args.dirs]
+    dirs = [os.path.realpath(d) for d in args.dirs]  # a dir removed since still has its entry
     entries = read_entries(path)
     keep = [e for e in entries
-            if not (e.get("dir") in dirs and (not args.rule or e.get("rule") == args.rule))]
+            if not (e.get("dir") in dirs and (args.rule is None or e.get("rule") == args.rule))]
     if len(keep) == len(entries):
         print("nothing matched: no change")
         return 0

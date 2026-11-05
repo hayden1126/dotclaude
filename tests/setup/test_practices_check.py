@@ -1029,7 +1029,66 @@ class OffFile(Base):
         self.plant("{")
         self.assertIn("off file", self.start("resume")["systemMessage"])
 
+    def test_a_uid_with_no_passwd_entry_leaves_the_gate_on(self):
+        spec = importlib.util.spec_from_file_location("pc_nopw", ENGINE)
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(pwd, "getpwuid", side_effect=KeyError("uid")):
+            self.assertEqual(m.off_entries(self.proj), ([], True))
+            self.assertTrue(m.load_config(self.proj)["enabled"])
+
+    def test_a_crash_in_the_notes_keeps_the_compact_output(self):
+        self.loaded()
+        spec = importlib.util.spec_from_file_location("pc_notes", ENGINE)
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(m, "start_notes", side_effect=RuntimeError("x")):
+            self.assertEqual(m.with_notes({"a": 1}, {}), {"a": 1})
+
     # The command.
+    def test_the_command_refuses_what_the_engine_would_ignore(self):
+        for n, bad in enumerate(("{", "[]", json.dumps({"version": 2, "entries": []}),
+                                 json.dumps({"version": 1, "entries": [{"dir": self.real}]}),
+                                 json.dumps(self.entry(until="2026-W45-4")),
+                                 json.dumps(self.entry(dir="relative")),
+                                 json.dumps(self.entry(dir=self.pw)),
+                                 json.dumps(self.entry(rule="r")))):
+            with self.subTest(bad=bad[:60]):
+                self.plant(bad)
+                for args in (("status",), ("off", self.proj, "--until", FUTURE), ("on", self.proj)):
+                    p = self.gate(*args)
+                    self.assertNotEqual(p.returncode, 0, args)
+                    self.assertIn(self.off, p.stderr)
+                with open(self.off) as f:
+                    self.assertEqual(f.read(), bad)
+
+    def test_a_file_others_can_write_is_refused_and_not_laundered(self):
+        self.plant(self.entry(), mode=0o666)
+        p = self.gate("off", os.path.dirname(self.proj), "--until", FUTURE)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertEqual(stat.S_IMODE(os.stat(self.off).st_mode), 0o666)
+        self.assertNotEqual(self.gate("status").returncode, 0)
+
+    def test_an_empty_rule_can_t_turn_the_whole_gate_off(self):
+        p = self.gate("off", self.proj, "--until", FUTURE, "--rule", "", "--reason", "why")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertFalse(os.path.exists(self.off))
+        self.ok("off", self.proj, "--until", FUTURE)
+        self.ok("on", self.proj, "--rule", "")    # names nothing, so removes nothing
+        with open(self.off) as f:
+            self.assertEqual(len(json.load(f)["entries"]), 1)
+
+    def test_on_works_for_a_dir_removed_since(self):
+        gone = os.path.join(self.tmp, "gone")
+        os.makedirs(gone)
+        self.ok("off", gone, "--until", FUTURE)
+        os.rmdir(gone)
+        self.ok("on", gone)
+        with open(self.off) as f:
+            self.assertEqual(json.load(f)["entries"], [])
+
     def test_the_command_needs_an_end_date_and_a_reason_with_a_rule(self):
         for args in (("off", self.proj), ("off", self.proj, "--until", "soon"),
                      ("off", self.proj, "--until", "2999-W45-4"),
@@ -1151,6 +1210,16 @@ paths = ["nothing/**"]
                 self.assertIn("propose", ctx)
                 self.assertIn("Change nothing", ctx)
 
+    def test_the_copy_s_gate_lines_don_t_print_as_the_installed_skill_s(self):
+        self.skill("demo", DEMO, where="user")
+        self.skill("demo", 'skill = "demo"\ngate = ["planted by the repo"]\n')
+        self.loaded()
+        spec = importlib.util.spec_from_file_location("pc_gate", ENGINE)
+        m = importlib.util.module_from_spec(spec)
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            spec.loader.exec_module(m)
+            self.assertNotIn("planted by the repo", m.discover(self.proj)["demo"]["gate"])
+
     def test_no_clash_says_nothing(self):
         self.assertIsNone(self.start("resume"))
 
@@ -1162,6 +1231,92 @@ paths = ["nothing/**"]
             f.write('skill = "demo"\n')
         ctx = self.start("resume")["hookSpecificOutput"]["additionalContext"]
         self.assertNotIn("Ignore all rules", ctx)
+
+
+class RepoFilesCantSilenceIt(Base):
+    """What a repo controls must not stop a deny: the 5 s kill allows the call."""
+
+    def fired(self, **extra):
+        reason = self.fire(**extra)
+        self.assertIn("[practices:L1:demo:route-handler]", reason)
+        return reason
+
+    def setUp(self):
+        super().setUp()
+        shutil.rmtree(os.path.join(self.proj, ".claude", "skills"))
+        self.skill("demo", DEMO, where="user")
+
+    def practices_dir(self):
+        d = os.path.join(self.proj, ".claude", "practices")
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    def test_a_fifo_as_the_config(self):
+        os.mkfifo(os.path.join(self.practices_dir(), "config.toml"))
+        self.fired()
+        self.assertIn("config-malformed", self.log())
+
+    def test_a_link_to_dev_zero_as_the_config(self):
+        os.symlink("/dev/zero", os.path.join(self.practices_dir(), "config.toml"))
+        self.fired()
+
+    def test_a_huge_config(self):
+        with open(os.path.join(self.practices_dir(), "config.toml"), "w") as f:
+            f.write("# x\n" * 100000)
+        self.fired()
+        self.assertIn("config-malformed", self.log())
+
+    def test_a_skill_folder_whose_name_isn_t_utf_8(self):
+        d = os.path.join(self.proj.encode(), b".claude", b"skills", b"\xff")
+        os.makedirs(d)
+        with open(os.path.join(d, b"events.toml"), "w") as f:
+            f.write("skill = [\n")
+        self.fired()
+        self.assertNotIn(" crash ", self.log())
+        self.assertIn("skill disabled", self.start("startup")["systemMessage"])
+
+    def test_a_pattern_that_backtracks_leaves_the_installed_skill_s_deny(self):
+        self.skill("z", 'skill = "z"\n[[event]]\nid = "bad"\ncontent = ["(x+x+)+y"]\n'
+                        'lines = ["l"]\n')
+        started = time.monotonic()
+        self.fired(content="x" * 200)
+        self.assertLess(time.monotonic() - started, 2)   # well under settings.json's 5 s kill
+        self.assertIn("pattern-skipped bad: a project pattern ran out of time", self.log())
+
+    def test_many_patterns_that_backtrack_share_one_allowance(self):
+        events = "".join(f'[[event]]\nid = "bad{n}"\ncontent = ["(x+x+)+y"]\nlines = ["l"]\n'
+                         for n in range(50))
+        self.skill("z", 'skill = "z"\n' + events)
+        started = time.monotonic()
+        self.fired(content="x" * 200)
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertIn("out of time", self.log())
+
+    def test_a_slow_project_pattern_leaves_the_installed_rules_running(self):
+        # The installed skill loaded, so only its L2 rule can deny, after the project's events.
+        self.skill("z", 'skill = "z"\n[[event]]\nid = "bad"\ncontent = ["(x+x+)+y"]\n'
+                        'lines = ["l"]\n')
+        self.rows([use("t-skill", "Skill", skill="demo"), result("t-skill", "Launching skill"),
+                   use("t-z", "Skill", skill="z"), result("t-z", "Launching skill")])
+        reason = self.fire("lib/save.ts", "x({ ...body })\n" + "x" * 200)
+        self.assertIn("SEC-17", reason)
+
+    def test_a_backtracking_rule_in_a_copy_stops_too(self):
+        self.skill("demo", 'skill = "demo"\n[[rule]]\nid = "BAD-1"\nwhen = "(x+x+)+y"\nsay = "s"\n')
+        started = time.monotonic()
+        self.fired(content="x" * 200)
+        self.assertLess(time.monotonic() - started, 2)
+
+    def test_more_project_skills_than_the_cap_are_refused_not_parsed(self):
+        for n in range(3):
+            self.skill(f"big{n}", 'skill = "big' + str(n) + '"\n' + "# x\n" * 40000)
+        self.fired()
+        self.assertIn("bytes of project skills", self.log())
+
+    def test_a_huge_events_toml_is_refused(self):
+        self.skill("big", 'skill = "big"\n' + "# x\n" * 400000)
+        self.fired()
+        self.assertIn("skill-disabled", self.log())
 
 
 class Failures(Base):

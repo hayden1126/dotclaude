@@ -197,13 +197,91 @@ class DenyCoverage(unittest.TestCase):
         self.write(".to[ol/bin/x", "")
         self.link(".to[ol/bin/x", "x")
         out = self.run_it()
-        self.assertIn("can't be written as a rule", out)
+        self.assertIn("the name can't be written as one", out)
         self.assertNotIn('"Edit(~/.to[ol', out)
 
     def test_a_control_character_in_a_name_can_t_reach_the_terminal(self):
         self.write(".evil\x1b[31m/bin/x", "")
         self.link(".evil\x1b[31m/bin/x", "x")
         self.assertNotIn("\x1b", self.run_it())
+
+    def test_code_under_cache_or_claude_never_prints_a_rule_on_the_whole_dir(self):
+        self.write(".cache/newtool/t", "#!/bin/sh\n")
+        self.write(".claude/local/x", "#!/bin/sh\n")
+        self.link(".cache/newtool/t", "t")
+        self.link(".claude/local/x", "x")
+        out = self.run_it()
+        self.assertNotIn("Edit(~/.cache/**)", out)
+        self.assertNotIn("Edit(~/.claude/**)", out)
+        self.assertIn('"Edit(~/.cache/newtool/**)"', out)
+        self.assertIn('"Edit(~/.claude/local/**)"', out)
+
+    def test_code_in_what_must_stay_writable_is_named_with_no_rule(self):
+        for rel in (".cache/claude-sandbox/x", ".claude/projects/x", ".claude/plans/x", ".claude/jobs/x"):
+            with self.subTest(rel=rel):
+                self.write(rel, "#!/bin/sh\n")
+                name = rel.replace("/", "-")
+                self.link(rel, name)
+                out = self.run_it()
+                self.assertIn("no rule can cover", out)
+                self.assertNotIn(f'"Edit(~/{rel.rsplit("/", 1)[0]}', out)
+                os.unlink(os.path.join(self.bin, name))
+
+    def test_the_named_home_dirs_beyond_the_dot_dirs(self):
+        for d in ("go/pkg/mod", "nltk_data", "sdk/x"):
+            self.mk(d)
+        out = self.run_it()
+        for rule in ("Edit(~/go/**)", "Edit(~/nltk_data/**)", "Edit(~/sdk/**)"):
+            self.assertIn(f'"{rule}"', out)
+
+    def test_a_dot_dir_in_a_checkout_stays_out_of_the_paste_block(self):
+        self.mk("dotfiles/.git")
+        self.mk("dotfiles/vim")
+        os.symlink(os.path.join(self.home, "dotfiles/vim"), os.path.join(self.home, ".vim"))
+        out = self.run_it()
+        self.assertNotIn('"Edit(~/dotfiles', out)
+        self.assertIn("    Edit(~/dotfiles/**)", out)
+        self.assertIn('"Edit(~/.vim/**)"', out)    # the link's own name
+
+    def test_a_dot_dir_linked_to_home_gets_no_rule_on_home(self):
+        os.symlink(self.home, os.path.join(self.home, ".self"))
+        out = self.run_it()
+        self.assertNotIn("Edit(~/./", out)
+        self.assertIn("no rule can cover", out)
+
+    def test_a_big_or_binary_script_still_gives_its_interpreter(self):
+        self.write(".interp/bin/py", "\0binary")
+        self.write(".local/bin/big", f"#!{self.home}/.interp/bin/py\n" + "x" * 300000)
+        self.write(".interp2/bin/py", "\0binary")
+        self.write(".local/bin/zipapp", f"#!{self.home}/.interp2/bin/py\n\0zip")
+        out = self.run_it()
+        self.assertIn("Edit(~/.interp/**)", out)
+        self.assertIn("Edit(~/.interp2/**)", out)
+
+    def test_commands_after_a_test_a_then_or_with_no_exec(self):
+        for n in "1234":
+            self.write(f".c{n}/f", "")
+        self.write(".local/bin/tool", "#!/bin/sh\n"
+                                      f'[ -f "$HOME/.c1/f" ] && . "$HOME/.c1/f"\n'
+                                      f"if true; then source ~/.c2/f; fi\n"
+                                      f"true; {self.home}/.c3/f arg\n"
+                                      f"{self.home}/.c4/f\n"
+                                      "# ~/.notreal/f\n"
+                                      "echo ~/.alsonot/f\n")
+        self.mk(".local")
+        out = self.run_it()
+        for n in "1234":
+            self.assertIn(f"Edit(~/.c{n}/**)", out)
+        self.assertNotIn("notreal", out)
+        self.assertNotIn("alsonot", out)
+
+    def test_a_writable_script_outside_home_leads_to_its_interpreter(self):
+        outside = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, outside, True)
+        self.write(".interp/bin/py", "\0binary")
+        with open(os.path.join(outside, "tool"), "w") as f:
+            f.write(f"#!{self.home}/.interp/bin/py\n")
+        self.assertIn("Edit(~/.interp/**)", self.run_it(path=outside))
 
     def test_unreadable_settings_warn_and_exit_0(self):
         r = subprocess.run([sys.executable, "-I", SCRIPT, "--settings", "/nonexistent"],

@@ -212,6 +212,7 @@ from bisect import bisect_right
 import mmap
 import os
 import re
+import signal
 import stat
 import sys
 import time
@@ -243,6 +244,9 @@ AUTH_HELPERS = ("auth", "getServerSession", "getSession", "currentUser", "getCur
                 "requireUser", "requireAuth", "verifySession", "getUser", "withAuth")
 ID = re.compile(r"[\w.-]+")
 OFF_FILE_MAX = 64 * 1024
+CONFIG_MAX = 64 * 1024
+SKILL_MAX = 1 << 20
+PROJECT_SKILLS_MAX = 256 * 1024  # all of a project's events.toml files together
 AT = ("edit", "commit")  # a [[rule]]'s `at` when it gives none: checked at both
 # An [auth] helpers name: an identifier, dotted allowed (auth.requireUser). An empty or blank
 # name would turn `(?:...|)` into a match for any call and silence SEC-01.
@@ -265,7 +269,7 @@ def log(kind, detail):
                 os.replace(path, path + ".1")
         except OSError:
             pass
-        with open(path, "a", encoding="utf-8") as f:
+        with open(path, "a", encoding="utf-8", errors="backslashreplace") as f:
             f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {kind} {detail}\n")
     except OSError:
         pass
@@ -278,6 +282,43 @@ class Budget(Exception):
 def check_budget(what="transcript read"):
     if time.monotonic() - START > BUDGET:
         raise Budget(what)
+
+
+# The time all of a project's patterns may take in one run. A project's skill can ship a pattern
+# that backtracks, and the checks between patterns can't stop one that is running. Spending the
+# whole budget there would also end the run's transcript read, which allows the call, so its
+# patterns get this much and installed patterns, which run first, keep the rest.
+PROJECT_PATTERN_TIME = 0.5
+CLOCK = {"project": False, "spent": 0.0}
+
+
+def _on_alarm(_signum, _frame):
+    if CLOCK["project"]:
+        raise PatternError("a project pattern ran out of time")
+    raise Budget("a pattern")
+
+
+def on_the_clock(call):
+    """call() with an alarm at what is left of the time for it, at least 50 ms: Python's re engine
+    runs signal handlers as it matches."""
+    left = BUDGET - (time.monotonic() - START)
+    if CLOCK["project"]:
+        share = PROJECT_PATTERN_TIME - CLOCK["spent"]
+        if share <= 0:
+            raise PatternError("the project's patterns are out of time")
+        left = min(left, share)
+    try:
+        signal.signal(signal.SIGALRM, _on_alarm)
+        signal.setitimer(signal.ITIMER_REAL, max(left, 0.05))
+    except ValueError:  # not the main thread
+        return call()
+    started = time.monotonic()
+    try:
+        return call()
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        if CLOCK["project"]:
+            CLOCK["spent"] += time.monotonic() - started
 
 
 class Crumb:
@@ -380,7 +421,7 @@ def expand(pattern, helpers):
 
 
 def search(pattern, text, helpers=()):
-    return re.search(expand(pattern, helpers), text, re.MULTILINE) is not None
+    return on_the_clock(lambda: re.search(expand(pattern, helpers), text, re.MULTILINE)) is not None
 
 
 def scan_text(content):
@@ -456,8 +497,11 @@ def when_lines(rule, lines, helpers=()):
         starts.append(pos)
         pos += len(line) + 1
     try:
-        found = {bisect_right(starts, m.start()) - 1
-                 for m in re.finditer(expand(rule["when"], helpers), text, re.MULTILINE)}
+        found = on_the_clock(lambda: {
+            bisect_right(starts, m.start()) - 1
+            for m in re.finditer(expand(rule["when"], helpers), text, re.MULTILINE)})
+    except PatternError as e:
+        raise PatternError(f"{rule['id']}: {e}") from e
     except (re.error, RecursionError, TypeError, ValueError) as e:
         raise PatternError(f"{rule['id']}: {type(e).__name__}: {e}") from e
     return [lines[k] for k in sorted(found)]
@@ -475,6 +519,8 @@ class PatternError(Exception):
 def guarded(pattern, text, helpers, owner):
     try:
         return search(pattern, text, helpers)
+    except PatternError as e:
+        raise PatternError(f"{owner}: {e}") from e
     except (re.error, RecursionError, TypeError, ValueError) as e:
         raise PatternError(f"{owner}: {type(e).__name__}: {e}") from e
 
@@ -543,12 +589,22 @@ def _at_ok(at):
     return _strs(at) and bool(at) and set(at) <= set(AT) and len(at) == len(set(at))
 
 
+def read_toml(path, cap):
+    """The TOML at path. A repo chooses these files, so one that would block (a FIFO), never end (a
+    link to /dev/zero) or take the run's budget to parse raises ValueError instead."""
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    with os.fdopen(fd, "rb") as f:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > cap:
+            raise ValueError(f"not a regular file of at most {cap} bytes")
+        return tomllib.loads(f.read(cap + 1).decode("utf-8"))
+
+
 def load_skill(folder):
     """(skill dict, None) for a folder's events.toml, or (None, why) when it is malformed."""
     path = os.path.join(folder, "events.toml")
     try:
-        with open(path, "rb") as f:
-            data = tomllib.load(f)
+        data = read_toml(path, SKILL_MAX)
     except (OSError, ValueError, RecursionError) as e:  # TOMLDecodeError is a ValueError
         return None, f"{path}: {type(e).__name__}: {e}"
     name = data.get("skill", os.path.basename(folder))
@@ -578,12 +634,12 @@ def load_skill(folder):
 
 
 def add_copy(installed, copy):
-    """A project copy of an installed skill: its gate lines, events and rules with new ids are
-    added, so it can't take anything away. The copy's dir is kept for the session-start note."""
+    """A project copy of an installed skill: its events and rules with new ids are added, so it
+    can't take anything away. Its gate lines stay out: they print under the installed skill's
+    SKILL.md as what that skill requires. The copy's dir is kept for the session-start note."""
     ids = {x["id"] for x in installed["events"] + installed["rules"]}
     installed["events"] += [e for e in copy["events"] if e["id"] not in ids]
     installed["rules"] += [r for r in copy["rules"] if r["id"] not in ids]
-    installed["gate"] += [line for line in copy["gate"] if line not in installed["gate"]]
     installed.setdefault("copies", []).append(copy["dir"])
 
 
@@ -595,6 +651,7 @@ def discover(project, quiet=False):
     roots = [os.path.join(config_home(), "skills")]
     if project:
         roots.append(os.path.join(project, ".claude", "skills"))
+    left = PROJECT_SKILLS_MAX
     for root in roots:
         project_root = root != roots[0]
         try:
@@ -605,11 +662,17 @@ def discover(project, quiet=False):
             folder = os.path.join(root, n)
             if not os.path.isfile(os.path.join(folder, "events.toml")):
                 continue
-            skill, why = load_skill(folder)
+            if project_root:
+                left -= os.path.getsize(os.path.join(folder, "events.toml"))
+            skill, why = (None, f"{folder}: over {PROJECT_SKILLS_MAX} bytes of project skills") \
+                if left < 0 else load_skill(folder)
             if skill is None:
                 if not quiet:
                     log("skill-disabled", why)
-            elif project_root and skills.get(skill["name"], {}).get("installed"):
+                continue
+            for item in skill["events"] + skill["rules"]:
+                item["project"] = project_root
+            if project_root and skills.get(skill["name"], {}).get("installed"):
                 add_copy(skills[skill["name"]], skill)
             else:
                 skills[skill["name"]] = {**skill, "installed": not project_root}
@@ -623,11 +686,15 @@ def passwd_home():
         import pwd  # noqa: PLC0415 (Unix only)
     except ImportError:
         return os.path.expanduser("~")
-    return pwd.getpwuid(os.getuid()).pw_dir
+    try:
+        return pwd.getpwuid(os.getuid()).pw_dir
+    except KeyError:  # a uid with no entry: no off file can be trusted, so the gate stays on
+        return None
 
 
 def off_file():
-    return os.path.join(passwd_home(), ".local", "state", "dotclaude", "practices-off.json")
+    home = passwd_home()
+    return home and os.path.join(home, ".local", "state", "dotclaude", "practices-off.json")
 
 
 def _off_entry_ok(e):
@@ -656,6 +723,9 @@ def off_entries(project):
     if not project:
         return [], False
     path = off_file()
+    if not path:
+        log("off-file-bad", "this uid has no passwd entry")
+        return [], True
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
     except FileNotFoundError:
@@ -696,8 +766,7 @@ def load_config(project):
            "disable": {e["rule"] for e in entries if "rule" in e}, "helpers": ()}
     path = os.path.join(project, ".claude", "practices", "config.toml")
     try:
-        with open(path, "rb") as f:
-            data = tomllib.load(f)
+        data = read_toml(path, CONFIG_MAX)
     except FileNotFoundError:
         return off
     except (OSError, ValueError, RecursionError) as e:
@@ -1238,6 +1307,7 @@ def run_patterns(items, fn, cut=False):
     cut, the Budget then goes on up, so a scan knows it was cut short)."""
     out = []
     for n, item in enumerate(items):
+        CLOCK["project"] = bool(item[1].get("project"))
         try:
             if fn(item):
                 out.append(item)
@@ -1249,6 +1319,8 @@ def run_patterns(items, fn, cut=False):
             if cut:
                 raise
             break
+        finally:
+            CLOCK["project"] = False
     return out
 
 
@@ -2629,7 +2701,7 @@ def start_notes(event):
     lines = []
     entries, bad = off_entries(project)
     if bad:
-        lines.append(f"the off file {off_file()} can't be used, so the gate stays on here")
+        lines.append("the off file can't be used, so the gate stays on here")
     for e in entries:
         what = f"rule {e['rule']} is off ({e['reason']})" if "rule" in e else "the gate is off"
         lines.append(f"{what} in {e['dir']} until {e['until']} (practices-gate)".replace(
@@ -2649,8 +2721,13 @@ def start_notes(event):
 
 
 def with_notes(out, event):
-    """out (a session start's output, or None) with start_notes added."""
-    lines, context = start_notes(event)
+    """out (a session start's output, or None) with start_notes added. A crash here is logged and
+    keeps out, which may carry reloadSkills."""
+    try:
+        lines, context = start_notes(event)
+    except Exception as e:  # noqa: BLE001
+        log("crash", f"start_notes: {type(e).__name__}: {e}")
+        return out
     if not lines and not context:
         return out
     out = dict(out or {})

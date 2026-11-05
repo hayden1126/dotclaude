@@ -12,19 +12,25 @@ It looks at two things:
     in a script's first line, a virtualenv's pyvenv.cfg home and the absolute paths in its .pth
     files, and the files a script sources or execs. Outside home only what this user can write
     counts. /mnt is skipped: Windows paths need their own subtree rules.
-  - Each top-level dir in home whose name starts with a dot, and each dir in ~/.cache, since a rule
-    can't cover all of ~/.cache (~/.cache/claude-sandbox must stay writable). A rule costs nothing
-    for a dir no session writes, so these get one whether or not they hold code.
+  - Each top-level dir in home whose name starts with a dot, a few others tools install into
+    (~/go, ~/nltk_data, ~/sdk), and each dir in ~/.cache. A rule costs nothing for a dir no session
+    writes, so these get one whether or not they hold code.
+
+No rule it prints covers all of ~/.claude or ~/.cache, since a deny can't be carved back and sessions
+must write ~/.claude/projects, plans and jobs and ~/.cache/claude-sandbox. Code reached under one of
+those four is named apart.
 
 Each uncovered root prints as a rule to paste into settings.machine.json. A root inside a git
 checkout stays out of that list, since a deny there takes the tree from the project's own sessions:
 the fix is to install the tool outside it. It prints per checkout, with the rule for one no session
 works in (a cloned SDK) or one an excluded command runs from. The checkout setup runs from, and
-~/dotclaude, are skipped, since denyWrite and the install hold cover them.
+~/dotclaude, are skipped: denyWrite covers sandboxed Bash there, and a rule would take the tree from
+its own sessions.
 
-Known limit: it reads a script's source and exec lines only when the path is literal, under $HOME or
-~, or relative to the script ($0). A path built from any other variable, or a bare command name
-(`exec corepack pnpm`), isn't followed.
+Known limit: it follows a script's commands only at a command position (a line's start, after `;`,
+`&`, `|`, `then` or `do`), and only when the path is literal, under $HOME or ~, or relative to the
+script ($0). A path built from any other variable, or a bare command name (`exec corepack pnpm`),
+isn't followed.
 """
 import argparse
 import glob
@@ -40,9 +46,13 @@ TEXT_MAX = 256 * 1024
 # name) would make a wrong rule, so such a path is named and gets none.
 PLAIN = re.compile(r"[\w./@+,=:-]+")
 SKIP_HOME = {".cache", ".claude"}
+OTHER_HOME_DIRS = {"go", "nltk_data", "sdk"}
 SKIP_CACHE = {"claude-sandbox"}
-DIR_REASONS = {"a home dot-dir", "a dir in ~/.cache"}
-SOURCE_LINE = re.compile(r"""^\s*(?:source|\.|exec)\s+(?P<path>"[^"]+"|'[^']+'|[^\s;&|]+)""", re.M)
+MUST_STAY_OPEN = (".claude/projects", ".claude/plans", ".claude/jobs", ".cache/claude-sandbox")
+DIR_REASONS = {"a home dir", "a dir in ~/.cache"}
+# A word at a command position, after a source, a dot or an exec if there is one.
+COMMAND_WORD = re.compile(r"""(?:^|[;&|]|\bthen\b|\bdo\b)[ \t]*(?:(?:source|\.|exec)[ \t]+)?"""
+                          r"""(?P<path>"[^"\n]+"|'[^'\n]+'|[^\s;&|]+)""", re.M)
 SCRIPT_DIR = re.compile(r"""\$\(\s*cd\s+"?\$\(dirname\s+"?(?:\$0|\$\{0\}|\$BASH_SOURCE)"?\)"?(?P<up>(?:/\.\.)*)"?"""
                         r"""\s*&&\s*pwd\s*\)|\$\(dirname\s+"?(?:\$0|\$\{0\})"?\)""")
 
@@ -66,6 +76,10 @@ def rule_matches(rule, path, home):
 
 def under(path, root):
     return path == root or path.startswith(root.rstrip("/") + "/")
+
+
+def p_under_any(path, roots):
+    return any(under(path, r) for r in roots)
 
 
 class Scan:
@@ -96,26 +110,33 @@ class Scan:
         if not under(path, self.home):
             return f"Edit(/{path}/**)" if os.path.isdir(path) else f"Edit(/{path})"
         parts = os.path.relpath(path, self.home).split(os.sep)
-        keep = parts[:1] if parts[0].startswith(".") or len(parts) == 1 else parts[:2]
+        one_part = parts[0].startswith(".") and parts[0] not in SKIP_HOME
+        keep = parts[:1] if one_part or len(parts) == 1 else parts[:2]
         tail = "/".join(keep)
         whole = os.path.join(self.home, *keep)
         return f"Edit(~/{tail}/**)" if os.path.isdir(whole) else f"Edit(~/{tail})"
 
+    def must_stay_open(self, path):
+        """Whether a rule on path would cover what a session must write."""
+        return p_under_any(path, [os.path.join(self.home, d) for d in MUST_STAY_OPEN]) \
+            or under(self.home, path)
+
+    def judge(self, p, why, rule):
+        if any(under(p, s) for s in self.skip) or under(p, "/mnt") or self.covered(p):
+            return
+        if not under(p, self.home) and not (os.path.lexists(p) and os.access(p, os.W_OK)):
+            return
+        if not PLAIN.fullmatch(p) or self.must_stay_open(p):
+            self.odd.setdefault(p, why)
+        elif self.checkout_of(p):
+            self.in_project.setdefault(p, why)
+        else:
+            self.uncovered.setdefault(rule(p), why)
+
     def note(self, path, why):
-        """Judge one path, as given and as it resolves."""
+        """Judge one path, as given and as it resolves, under its tool root's rule."""
         for p in dict.fromkeys((os.path.normpath(path), os.path.realpath(path))):
-            if any(under(p, s) for s in self.skip) or self.covered(p):
-                continue
-            if under(p, "/mnt"):
-                continue
-            if not under(p, self.home) and not (os.path.lexists(p) and os.access(p, os.W_OK)):
-                continue
-            if not PLAIN.fullmatch(p):
-                self.odd.setdefault(p, why)
-            elif self.checkout_of(p):
-                self.in_project.setdefault(p, why)
-            else:
-                self.uncovered.setdefault(self.root_rule(p), why)
+            self.judge(p, why, self.root_rule)
 
     def follow(self, path, why, depth=0):
         """Judge path and everything it leads to."""
@@ -131,19 +152,17 @@ class Scan:
         if not stat.S_ISREG(st.st_mode):  # a FIFO would block the read
             return
         self.venv(real, why, depth)
+        words = self.shebang(real)
+        if words and os.path.isabs(words[0]) and os.path.basename(words[0]) != "env":
+            self.follow(words[0], f"interpreter of {real}", depth + 1)
+            self.venv(words[0], f"interpreter of {real}", depth)
         text = self.read(real, st)
         if text is None:
             return
-        for line in text.split("\n", 1)[:1]:
-            if line.startswith("#!"):
-                words = line[2:].split()
-                if words and os.path.isabs(words[0]) and os.path.basename(words[0]) != "env":
-                    self.follow(words[0], f"interpreter of {real}", depth + 1)
-                    self.venv(words[0], f"interpreter of {real}", depth)
         # The script-relative form first, since its nested quotes would end a quoted word early.
         here = os.path.dirname(real)
         text = SCRIPT_DIR.sub(lambda m: here + (m.groupdict().get("up") or ""), text)
-        for m in SOURCE_LINE.finditer(text):
+        for m in COMMAND_WORD.finditer(text):
             target = self.expand(m.group("path").strip("\"'"))
             if target:
                 self.follow(target, f"sourced or run by {real}", depth + 1)
@@ -163,6 +182,18 @@ class Scan:
             for line in self.lines(pth):
                 if line.startswith("/"):
                     self.follow(line.strip(), f"named by {pth}", depth + 1)
+
+    @staticmethod
+    def shebang(path):
+        """The words of a file's #! line, read apart so a big file or a zipapp still gives them."""
+        try:
+            with open(path, "rb") as f:
+                head = f.read(512)
+        except OSError:
+            return []
+        if not head.startswith(b"#!"):
+            return []
+        return head[2:].split(b"\n", 1)[0].decode("utf-8", "replace").split()
 
     def lines(self, path):
         text = self.read(path)
@@ -218,7 +249,7 @@ class Scan:
                 if under(real, self.home):
                     self.follow(entry, f"in the PATH dir {d}")
                 elif os.path.lexists(entry) and os.access(entry, os.W_OK) and not os.path.isdir(entry):
-                    self.note(entry, f"in the PATH dir {d}")
+                    self.follow(entry, f"in the PATH dir {d}")
 
     def home_dirs(self):
         for parent, skip in ((self.home, SKIP_HOME), (os.path.join(self.home, ".cache"), SKIP_CACHE)):
@@ -230,25 +261,15 @@ class Scan:
                 path = os.path.join(parent, name)
                 if name in skip or not os.path.isdir(path):
                     continue
-                if parent == self.home and not name.startswith("."):
+                if parent == self.home and not name.startswith(".") and name not in OTHER_HOME_DIRS:
                     continue
-                why = "a home dot-dir" if parent == self.home else "a dir in ~/.cache"
+                why = "a home dir" if parent == self.home else "a dir in ~/.cache"
                 self.note_dir(path, why)
 
     def note_dir(self, path, why):
-        real = os.path.realpath(path)
-        # A rule on a whole dir needs its own name, never its tool root's: ~/.cache/x is its own.
-        for p in dict.fromkeys((path, real)):
-            if any(under(p, s) for s in self.skip) or under(p, "/mnt") or self.covered(p):
-                continue
-            if not under(p, self.home) and not os.access(p, os.W_OK):
-                continue
-            if not PLAIN.fullmatch(p):
-                self.odd.setdefault(p, why)
-            elif under(p, self.home):
-                self.uncovered.setdefault(f"Edit(~/{os.path.relpath(p, self.home)}/**)", why)
-            else:
-                self.uncovered.setdefault(f"Edit(/{p}/**)", why)
+        """Judge a dir, as given and as it resolves, under a rule of its own."""
+        for p in dict.fromkeys((path, os.path.realpath(path))):
+            self.judge(p, why, self.root_rule_for_dir)
 
 
 def deny_rules(path):
@@ -294,7 +315,8 @@ def main(argv):
             print(f"  {show(root)}: {len(paths)} path(s), such as {show(paths[0])}")
             print(f"    {scan.root_rule_for_dir(root)}")
     if scan.odd:
-        print("deny-coverage: names that can't be written as a rule. Look at each:")
+        print("deny-coverage: paths no rule can cover (the name can't be written as one, or a rule "
+              "would take what sessions must write). Look at each:")
         for path, why in sorted(scan.odd.items()):
             print(f"  {show(path)}  ({show(why)})")
     return 0
