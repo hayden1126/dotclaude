@@ -343,7 +343,8 @@ inherits the lead from it.
    limit: `--drop` its watch rather than re-arm). Otherwise use a plain loop (`run_in_background`,
    `timeout: 7200000`). A loop runs sandboxed, where a piped `lane ls` shows PR state and sessions
    as `?` and other sessions' pids are hidden, so it tests what it can see there, and a check that
-   fails means not cleared.
+   fails means not cleared. A blocker it can't see, such as gh being down (gh fails in the sandbox),
+   gets no wake: the one line to Hayden says so.
 8. **Shared gates.** Wrap any run that can't happen twice at once (a browser-driven test gate, an
    e2e suite on a fixed port) in `lane lock <name> -- <cmd>`. List the names once with
    `lane init --locks gate,e2e` (it takes the full list and replaces the old one); an unlisted name is refused, since a typo would split the mutual
