@@ -249,8 +249,8 @@ function encode(webm, trim, fps, expected) {
   if (result.status !== 0) throw new Error(`ffmpeg failed: ${result.error?.message || 'exit ' + result.status}`);
   const probe = spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0',
     path.join(stage, 'demo.mp4')], { encoding: 'utf8' });
-  const duration = Number(probe.stdout);
-  if (probe.status !== 0 || !duration) throw new Error(`can't read the new video's length: ${probe.stderr || probe.error?.message}`);
+  const duration = Number(probe.stdout) || 0; // An empty video reads N/A.
+  if (probe.status !== 0) throw new Error(`can't read the new video's length: ${probe.stderr || probe.error?.message}`);
   // The recorder logs its own errors and carries on, so a video can come out short with exit 0.
   if (duration < expected - SHORT_VIDEO_S) {
     throw new Error(`the recording stopped early: ${duration.toFixed(1)} s of video for ${expected.toFixed(1)} s of beats`);
@@ -314,13 +314,19 @@ async function record() {
     const context = await browser.newContext({ viewport: size, recordVideo: { dir: stage, size } });
     await context.addInitScript(overlay, { x: size.width / 2, y: 200 });
     const page = await context.newPage();
-    // The video starts at the first frame the page paints, not at newPage. Paint one now, so the
-    // video starts here and not whenever a slow app first paints, which would shift the trim and
-    // every caption. Not pure white, since that changes nothing on a blank page and so paints no
-    // frame. The trim and the captions count from this moment.
-    await page.setContent('<!doctype html><title>Starting</title><body style="background:#fefefe">');
-    await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
+    // The video starts at the first frame the page paints, not at newPage. Keep repainting now, so
+    // it starts here and not whenever a slow app first paints, which would shift the trim and every
+    // caption. A page that changes every frame can't paint nothing, as a still one can, and it stays
+    // up until a slow app's first response arrives. The trim and the captions count from this moment.
+    await page.setContent(`<!doctype html><title>Starting</title><body style="background:#fefefe"><script>
+      let flip = false;
+      (function repaint() {
+        document.body.style.background = (flip = !flip) ? '#fdfdfd' : '#fefefe';
+        requestAnimationFrame(repaint);
+      })();
+    </script>`);
     const t0 = Date.now();
+    await page.waitForTimeout(150); // The first frame reaches the recorder.
     const elapsed = () => (Date.now() - t0) / 1000;
     const watch = watched => {
       watched.setDefaultTimeout(STEP_TIMEOUT_MS);
