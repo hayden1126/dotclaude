@@ -142,12 +142,18 @@ export function installAttempts() {
 
 // Packages whose tarball came from the registry, which catches an install bash doesn't spell out
 // (`node -e "execSync('npm i x')"`, say). A cached answer sends no request, so this only adds. A tarball
-// of a package a step that ran inspected is explained, so it's no attempt to add: `npm pack slugify`,
-// or a `curl` of the tarball, after a deny. Known limit: an `npm view` explains one too, though it
-// fetches none, so an install hidden in `node -e` beside it goes unseen unless package.json shows it.
-export function tarballsFetched() {
+// of a package a step that ran inspected is explained: lookedAtTarballs() has those.
+function fetchedNames() {
   const names = requests.filter((r) => r.method === "GET").map((r) => /^\/([^/]+)\/-\//.exec(r.path)?.[1]).filter(Boolean);
-  return [...new Set(names)].filter((name) => !STUBS.has(name) && !ranSteps.some(({ segment }) => inspects(segment, name)));
+  return [...new Set(names)].filter((name) => !STUBS.has(name));
+}
+const lookedAt = (name) => ranSteps.some(({ segment }) => inspects(segment, name));
+export const tarballsFetched = () => fetchedNames().filter((name) => !lookedAt(name));
+
+// Packages whose tarball a look explains, minus `known`: `npm pack x` after a deny, backing out by
+// reading it, looks the same as an install hidden beside that look, so a person reads these.
+export function lookedAtTarballs(known = []) {
+  return fetchedNames().filter((name) => lookedAt(name) && !known.includes(name) && !attemptedPackages(known).includes(name));
 }
 
 // Every package the session tried to add, by command or by tarball, minus `known`.
@@ -172,7 +178,7 @@ function inspects(segment, pkg) {
   }
   const quoted = pkg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`${quoted}-[\\w.*-]*\\.(?:tgz|tar\\.gz)|node_modules/${quoted}/package\\.json`).test(segment)
-    || new RegExp(`\\b(?:curl|wget)\\b.*/${quoted}(?:[\\s"'/]|$)`).test(segment);
+    || new RegExp(`\\b(?:curl|wget)\\b.*(?<![\\w-])${quoted}(?![\\w-])`).test(segment);
 }
 
 // Whether a step installs `pkg` by name, scripts on.
@@ -256,7 +262,7 @@ export function noteEvidence(t, facts) {
     marker: facts.marker,
     versions: facts.versions,
     attempts: installAttempts().map((a) => a.command.slice(0, 200)),
-    tarballs: tarballsFetched(),
+    tarballs: fetchedNames(),
     reply: reply.slice(0, 500),
   }));
 }
