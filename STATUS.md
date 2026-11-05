@@ -406,8 +406,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Live lanes: `lane ls`; state in their records (2026-11-05: hackathon, practices' next PR,
-     deny-rules; one slot free, Hayden's pick from the Backlog). Lane hackathon merges by Nov 11:
+  0. Live lanes: `lane ls`; state in their records (2026-11-05: hackathon, practices' next PR;
+     deny-rules parked with draft #167; two slots free, Hayden's pick from the Backlog). After
+     hackathon's chain, run `lane open deny-rules`: it installs and runs its live checks, and lane
+     hackathon re-checks its kickoff path once that lands, before Nov 12. Lane hackathon merges by Nov 11:
      move it up if the queue threatens that. Install freeze Nov 12 through Nov 15. A chain that
      stops before its "main moved" step still tells the lanes, and arms a wake on the blocker
      (`skills/lanes/SKILL.md`). Open
