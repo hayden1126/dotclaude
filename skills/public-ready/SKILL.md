@@ -54,14 +54,14 @@ gh api repos/<owner>/<repo> --jq .security_and_analysis
 
 ## After judging
 
-Confirm judging has ended before steps 2 and 5, since a demo judges still use may deploy from this repo, and its history may still prove something.
+Confirm judging has ended before steps 2 and 6, since a demo judges still use may deploy from this repo, and its history may still prove something.
 
 1. **Rotate or revoke** every key and test account in `ACCESS.md`, without breaking a demo link judges still need: if one must stay up, keep its key, name it, and set a date to revoke it. With no `ACCESS.md`, list what the project uses from its config and deploy settings (names, not values) and confirm with the user.
 2. **Remove** hardcoded demo data, personal data and faked paths, using `DEMO.md`'s cut list if present. A faked path becomes real or goes away.
 3. **Security review, gate on.** First the user turns back on any security gate they turned off. Use the session's security review if it has one. Otherwise walk through auth, input handling, secrets and a dependency audit by hand, and report what you checked.
-4. **`VISION.md`, `PITCH.md`, `DEMO.md` and `EVENT.md`.** Decide with the user what happens to each before the repo goes public: keep, edit or remove. They may hold private thinking, such as Q&A prep. A file taken out of the tree stays in the old history, so a commit that held one is a reason for step 5.
-5. **Propose a clean history,** usually a fresh repo from one commit. Scan its tree first, since one commit carries whatever the tree has. Keep the old repo while the event still links to it. Deleting the old history is the user's call.
-6. **Undo the mode, last,** because the project's `CLAUDE.md` holds the scan rule that the commits above still need. Remove the hackathon mode section from it, and undo what `ACCESS.md` logs. With no `ACCESS.md`, read the hosts and any `enabledPlugins` change from `.claude/settings.local.json`. The local settings are the user's edit: they remove those hosts and that change. Decide with the user what happens to `ACCESS.md` last, on the same terms as step 4.
+4. **`VISION.md`, `PITCH.md`, `DEMO.md` and `EVENT.md`.** Decide with the user what happens to each before the repo goes public: keep, edit or remove. They may hold private thinking, such as Q&A prep. A file taken out of the tree stays in the old history, so a commit that held one is a reason for step 6.
+5. **Undo the mode, after the commits above,** because the project's `CLAUDE.md` holds the scan rule they still need. Remove the hackathon mode section from it, and undo what `ACCESS.md` logs. With no `ACCESS.md`, read the hosts and any `enabledPlugins` change from `.claude/settings.local.json`. The local settings are the user's edit: they remove those hosts and that change. Decide with the user what happens to `ACCESS.md` last, on the same terms as step 4.
+6. **Propose a clean history, last,** so it leaves out the mode section and whatever step 4 removed, usually a fresh repo from one commit. Scan its tree first, as in the first step of the path above, since one commit carries whatever the tree has. Keep the old repo while the event still links to it. Deleting the old history is the user's call.
 
 ## Stop if you catch yourself
 

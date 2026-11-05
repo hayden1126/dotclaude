@@ -128,11 +128,12 @@ class EventProfile(unittest.TestCase):
             self.assertIn("forbids work before the start", text)
             self.assertIn("design only", text)
 
-    def test_public_ready_undoes_the_mode_last(self):
+    def test_public_ready_undoes_the_mode_after_its_commits_and_cuts_history_last(self):
         after = read(skill_path("public-ready", "SKILL.md")).split("## After judging")[1]
         steps = re.findall(r"(?m)^(\d)\. \*\*(.*?)\*\*", after)
-        self.assertEqual(steps[-1][0], "6")
-        self.assertIn("Undo the mode", steps[-1][1])
+        self.assertEqual([number for number, _ in steps], list("123456"))
+        self.assertIn("Undo the mode", steps[4][1])
+        self.assertIn("clean history", steps[5][1])
 
     def test_pitch_does_not_assume_a_video(self):
         text = read(skill_path("pitch", "SKILL.md"))
