@@ -91,10 +91,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
   - **Live lanes** (briefs in each record). Merge order: 1 hackathon (`feat/hackathon-mode`, carries the lead's notes; a hackathon starts
-    2026-11-14, so it merges by 2026-11-11), 2 practices (`feat/practices-dependencies`, its next
-    PR), 3 deny-rules (`fix/deny-rules`).
+    2026-11-14, so it merges by 2026-11-11), 2 deny-rules (`fix/deny-rules`, ahead of an unstarted PR
+    so it can install before the freeze; if it misses Nov 11, its merge and install wait until Nov 16), 3
+    practices (`feat/practices-dependencies`, its next PR).
     **Install freeze on HAYPC, Nov 12 through Nov 15** (Hayden, 2026-11-05): no lane installs in
-    that window, except fixes for lane hackathon, so the event runs what the dry run tested.
+    that window, except fixes for lane hackathon, so the event runs what the dry run tested. The lead's
+    reinstall after a merge counts as an install, so no other lane merges in that window.
     Merged and installed from main, all closed: chrome-dup (#151, 2026-10-29: one chrome-devtools
     server, the plugin's; sandbox gap fixes N1 and N3's bun part, `hooks/sandbox-caches.sh`; its
     install changed running sessions' sandbox live, [[cc-sandbox-config-reloads-live]]),
