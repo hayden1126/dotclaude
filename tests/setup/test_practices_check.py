@@ -2027,6 +2027,10 @@ class WhatARepoCantFake(Base):
         self.add(use("t9", "Read", file_path="README.md"), result("t9", self.MARKER))
         self.assertIsNotNone(self.fire())
 
+    def test_a_marker_in_a_result_whose_call_is_gone_needs_the_error_flag(self):
+        self.add(result("t9", self.MARKER))   # a compaction dropped the call's row
+        self.assertIsNotNone(self.fire())
+
     def test_a_marker_in_a_failing_bash_call_is_no_deny_given(self):
         self.add(use("t9", "Bash", command="cat README.md; false"),
                  result("t9", "Exit code 1\n" + self.MARKER, error=True))
