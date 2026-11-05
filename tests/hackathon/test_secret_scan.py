@@ -947,6 +947,42 @@ class Round2(ScanCase):
         self.assertEqual(self.scan().returncode, 0)
         self.assertLess(time.monotonic() - started, 60)
 
+    def test_provider_tokens_under_a_neutral_name(self):
+        hexa = "0123456789abcdef"
+        cases = [("gl" + "pat-", tail(24)), ("nt" + "n_", tail(46)), ("do" + "p_v1_", tail(64, hexa)),
+                 ("dp" + ".pt.", tail(40)), ("li" + "n_api_", tail(40)), ("sh" + "pat_", tail(32, hexa)),
+                 ("pscale" + "_tkn_", tail(40)), ("pp" + "lx-", tail(48)), ("xkey" + "sib-", tail(64, hexa)),
+                 ("sntry" + "s_", tail(60)), ("hv" + "s.", tail(40)), ("da" + "pi", tail(32, hexa)),
+                 ("tv" + "ly-", tail(32)), ("pc" + "sk_", tail(40)), ("vc" + "p_", tail(30)),
+                 ("sk_" + "prod_", tail(30)), ("api" + "_org_", tail(34)), ("key" + "-", tail(32, hexa)),
+                 ("SK", tail(32, hexa)), ("fc" + "-", tail(32, hexa))]
+        self.assert_found([(f'value = "{prefix}{body}"', body) for prefix, body in cases])
+
+    def test_a_webhook_url_or_a_curl_user(self):
+        body = tail(24)
+        self.assert_found([(f"post https://discord.com/api/webhooks/{'1' * 18}/{body}", body),
+                           (f"https://hooks.slack.com/services/{body}{body}", body),
+                           (f"curl -u elastic:{body} https://localhost:9200", body)])
+        self.assert_clean(["curl -u $USER:$PASS https://localhost:9200", "curl --user admin https://x.test"])
+
+    def test_a_bare_value_under_a_strong_name_in_code_or_yaml(self):
+        short = tail(15)
+        dotted = "dp." + "xy." + tail(30)
+        self.assert_found([(f"dropboxToken = {short}", short), (f"dropbox_token: {short}", short),
+                           (f"some_token: {dotted}", dotted)])
+        self.assert_clean(["token = request.token2", "api_token: config.tokens.apiToken1", "token: oauth2ClientToken"])
+
+    def test_a_long_numeric_token_under_a_strong_name(self):
+        digits = "1" + "918588660504966"
+        self.assert_found([(f'asanaToken = "{digits}"', digits), (f"DISCORD_TOKEN={digits}", digits)])
+        self.assert_clean(['tokens: "12345678"', 'token = "1111111111111111"'])
+
+    def test_names_that_hold_a_secret_word_without_being_one(self):
+        self.assert_clean(["credentialsId: 'ff083f76-7804-4ef1-80e4-fe975bb9141b'",
+                           '"credentialId": "B9mTcFSck2LzJO2S3ols63"',
+                           "(id)hf_" + "requiredCharacteristicTypesForDisplayMetadata;",
+                           'const privateToken = "' + "a" * 32 + '";'])
+
     def test_a_merge_of_what_is_already_pushed_reports_nothing(self):
         line, _ = planted()["stripe-key"]
         self.commit("a.txt", "base\n")
