@@ -1,6 +1,6 @@
 ---
 name: technical-writing
-description: How to write or edit commit messages, PR descriptions, GitHub issues and comments, code review comments, READMEs, docs and reports, cited reports included. Enforces literal prose, a direct stance, brevity, no em dashes, and an iterate-until-clean loop. Not for chat with Hayden, messages or emails to people (formal-voice, casual-voice), or essays and academic papers (a sourced project).
+description: How to write or edit commit messages, PR descriptions, GitHub issues and comments, code review comments, READMEs, docs and reports, cited reports included. Enforces literal prose, a direct stance, brevity, no em dashes, and an iterate-until-clean loop. Not for chat with Hayden, messages or emails to people (formal-voice, casual-voice), or essays, academic papers and other work inside a sourced project.
 ---
 
 # Technical writing

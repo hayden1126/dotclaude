@@ -1,6 +1,6 @@
 ---
 name: formal-voice
-description: How to draft or edit a formal email, letter, message or slide copy in Hayden's name, such as for a professor, an investor, a client or an employer. Not for chat with Hayden, commits, PRs or docs (technical-writing), casual messages (casual-voice), or essays and academic papers (a sourced project).
+description: How to draft or edit a formal email, letter, message or slide copy in Hayden's name, such as for a professor, an investor, a client or an employer. Not for chat with Hayden, commits, PRs, GitHub issues or docs (technical-writing), casual messages (casual-voice), or essays and academic papers (a sourced project).
 ---
 
 # Formal voice
