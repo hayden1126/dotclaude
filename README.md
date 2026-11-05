@@ -735,8 +735,7 @@ need nothing extra.
     install, `pip install`, `uv add`, `poetry add`, `cargo add`, `bundle add`, `gem install`,
     `composer require`) is denied once per manager and package, unless the same simple command
     turns scripts off (`--ignore-scripts`, `--only-binary :all:`) or, for the npm family, an
-    earlier step of the call or an earlier Bash call inspected it (`npm view <pkg> scripts`,
-    `npm pack <pkg>`). The deny names the package and the check, and the resend passes. Restores
+    earlier Bash call inspected it (`npm view <pkg> scripts`, `npm pack <pkg>`). The deny names the package and the check, and the resend passes. Restores
     (a bare install, `npm ci`, `pip install -r`, a local path) never fire. A form it can't read
     (an expansion, a URL, `xargs`) passes, logged as `install-skipped`.
 

@@ -29,13 +29,12 @@ What the engine reads:
 - **Adds:** `npm`, `pnpm`, `yarn` and `bun` `add`, `install`, `i` and npm's other spellings; `pip`, `pip3`, `python3 -m pip` and `uv pip` `install`; `uv`, `poetry`, `cargo` and `bundle` `add`; `gem install`; `composer require`. `go get` runs no code at install, so it isn't read.
 - **Restores, never denied:** a bare install, `npm ci`, `pip install -r file`, `uv sync`, `poetry install`, `bundle install`, a local path, `pip install -e .`.
 - **Scripts off, never denied:** `--ignore-scripts` in the same simple command for the npm family, `--only-binary :all:` for pip and uv.
-- **Inspected, never denied (npm family only):** `npm view <pkg>` naming `scripts` or with `--json` and no named fields, `npm pack <pkg>`, or `tar`, `curl` or `wget` naming its tarball, in an earlier step of the same call or in an earlier Bash call whose result isn't an error. Named fields print only those, so `npm view <pkg> main --json` doesn't count.
+- **Inspected, never denied (npm family only):** `npm view <pkg>` naming `scripts` or with `--json` and no named fields, `npm pack <pkg>`, or `tar`, `curl` or `wget` naming its tarball, in an earlier Bash call whose result isn't an error. A step of the same call doesn't count: `npm view x scripts && npm i x` runs the script before anyone reads the output. Named fields print only those, so `npm view <pkg> main --json` doesn't count.
 - **Other managers:** no way to inspect was measured for them, so the deny-once alone applies.
 - **The deny:** names only the package, when it matches a strict name pattern, and the check. The resend passes, and the next new package is denied again.
 - **What passes, logged as `install-skipped`:** a word no pattern fits (an expansion, a URL, a git shorthand) and an install inside a launcher (`xargs`, `find -exec`, `sh -c` with an expansion).
 
 Accepted limits:
-- A step in the same call counts as inspected, though the script's output isn't read before that call's install runs. A deny here would stop the common `npm view x scripts && npm i x`, and the reply still has to say what the script does.
 - A resend passes unread. The rule costs one round trip and asks for an honest reply; it doesn't block.
 - `cargo add` runs no code itself; `build.rs` runs at the next build. It is in the rule because the next build runs it unread.
 - bun and current pnpm skip a dependency's lifecycle scripts by default, per their documentation. The rule denies once for them anyway: a repo's config can turn the scripts back on, and the engine doesn't read it.

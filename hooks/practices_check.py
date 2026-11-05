@@ -193,8 +193,9 @@ at install) is denied once per manager and package, the version stripped (key
 resend passes). Restores name no package and never fire: a bare install, `npm ci`, `pip install
 -r`, `uv sync`, a local path, `pip install -e .`. It doesn't fire when the same simple command
 turns scripts off (--ignore-scripts for the npm family, --only-binary :all: for pip and uv) or,
-for the npm family, when the package was inspected: by an earlier step of this call, or by a
-Bash call in the transcript (or, for a subagent, the parent's) whose result isn't an error.
+for the npm family, when an earlier Bash call in the transcript (or, for a subagent, the parent's)
+with a result that isn't an error inspected the package. A step of this same call doesn't count:
+its output comes back only after the call's install has run the script.
 Inspecting is `npm view <pkg>` naming `scripts` or with --json and no named fields, `npm pack
 <pkg>`, or tar, curl or wget naming its tarball. Other managers have no measured inspection, so
 the deny-once alone applies. The deny names a package only when it matches a strict pattern and
@@ -2475,14 +2476,14 @@ def inspected_earlier(event, pkgs):
 
 
 def read_installs(event):
-    """([(manager, package)] this call would add with scripts on and no earlier step of it
-    inspecting them, in order; whether part of it couldn't be read)."""
+    """([(manager, package)] this call would add with scripts on, in order; whether part of it
+    couldn't be read)."""
     cmd = command_of(event)
     if not cmd or not MANAGER_NAMED.search(cmd):
         return [], False
     if len(cmd) > CMD_MAX:
         return [], names_an_install(cmd)
-    rest, found, before, unread = [], [], [], False
+    rest, found, unread = [], [], False
     cwd = event.get("cwd") if isinstance(event.get("cwd"), str) else None
     CRUMB.mark("(the command)", "bash", "SEC-64")
     try:
@@ -2493,7 +2494,6 @@ def read_installs(event):
     for head, args, _, _ in calls:
         add = install_of(head, args)
         if add is None:
-            before.append((head, args))
             if head not in READERS and (head not in HEADS or "foreach" in args):
                 rest.append(" ".join(args))  # `poetry run pip install x`
             continue
@@ -2503,8 +2503,7 @@ def read_installs(event):
         for word in words:
             pkg, readable = package_of(manager, word)
             unread = unread or not readable
-            if pkg and (manager, pkg) not in found and not (
-                    manager in NPM_FAMILY and any(inspects(h, a, pkg) for h, a in before)):
+            if pkg and (manager, pkg) not in found:
                 found.append((manager, pkg))
     return found, unread or any(names_an_install(t) for t in rest)
 

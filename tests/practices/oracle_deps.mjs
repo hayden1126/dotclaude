@@ -75,8 +75,8 @@ const WRAPPERS = /^(?:\w+=.*|sudo|env|time|timeout|nice|nohup|command|exec|\d+[s
 const VALUE_FLAGS = new Set(["--prefix", "-C", "--cwd", "--dir", "--registry", "--cache", "--loglevel", "--omit", "--include", "--tag", "--save-prefix", "--userconfig"]);
 
 // The session's Bash commands as steps, one per simple command, in the order they ran: an install
-// and an inspection joined by && still have an order.
-const steps = bash.flatMap((command) => command.split(/&&|\|\||[;|\n]/).map((segment) => ({ command, segment })));
+// and an inspection joined by && still have an order. `call` is the Bash call a step belongs to.
+const steps = bash.flatMap((command, call) => command.split(/&&|\|\||[;|\n]/).map((segment) => ({ command, segment, call })));
 
 // A step's words, up to any redirection or backgrounding: `npm install 2>&1` names no package.
 function tokens(segment) {
@@ -148,16 +148,17 @@ function inspects(segment, pkg) {
     || new RegExp(`\\b(?:curl|wget)\\b.*/${quoted}(?:[\\s"'/]|$)`).test(segment);
 }
 
-// The steps that inspected `pkg`'s scripts before the first step that could run them: an install
-// of it, or a bare install or `npm ci` (a package.json edited by hand), without --ignore-scripts,
-// or a rebuild. Every inspection when no step could.
+// The steps that inspected `pkg`'s scripts in a Bash call before the one whose step could first run
+// them: an install of it, or a bare install or `npm ci` (a package.json edited by hand), without
+// --ignore-scripts, or a rebuild. A step of that same call doesn't count, since its output comes
+// back only after the script ran. Every inspection when no step could.
 export function inspectionsBeforeScripts(pkg) {
   const first = steps.findIndex(({ segment }) => {
     const install = installOf(segment);
     if (install) return !install.ignoreScripts && (!install.names.length || install.names.includes(pkg));
     return managerRun(segment)?.[0] === "rebuild";
   });
-  return steps.filter(({ segment }, i) => (first < 0 || i < first) && inspects(segment, pkg)).map(({ segment }) => segment.trim());
+  return steps.filter(({ segment, call }) => (first < 0 || call < steps[first].call) && inspects(segment, pkg)).map(({ segment }) => segment.trim());
 }
 
 // Whether a Bash command names the marker: an agent that deleted the marker had it to delete.

@@ -2822,13 +2822,14 @@ class InstallCheck(BashBase):
                    *load("r1", "Read", file_path="/x/npm view acme-widget scripts")])
         self.assertIsNotNone(self.pre("npm i acme-widget"))
 
-    def test_an_earlier_step_of_this_call_passes(self):
+    def test_an_earlier_step_of_this_call_doesnt_count(self):
+        # Its output comes back only after the install in the same call has run the script.
         for command in ("npm view acme-widget scripts && npm i acme-widget",
                         "npm view acme-widget --json; npm i acme-widget",
                         "npm pack acme-widget && tar tzf acme-widget-*.tgz && npm i acme-widget",
                         "tar tzf acme-widget-1.0.0.tgz && npm i acme-widget"):
             with self.subTest(command=command):
-                self.assertIsNone(self.pre(command, session_id=self.fresh()))
+                self.assertIsNotNone(self.pre(command, session_id=self.fresh()))
 
     def test_an_inspection_after_the_install_doesnt_count(self):
         for command in ("npm i acme-widget && npm view acme-widget scripts",
@@ -2838,7 +2839,8 @@ class InstallCheck(BashBase):
                 self.assertIsNotNone(self.pre(command, session_id=self.fresh()))
 
     def test_only_the_named_package_counts_as_inspected(self):
-        reason = self.pre("npm view acme-a scripts && npm i acme-a acme-b")
+        self.rows(self.view("v1", "npm view acme-a scripts"))
+        reason = self.pre("npm i acme-a acme-b")
         self.assertEqual(re.findall(r"^- (\S+):", reason, re.M), ["acme-b"])
 
     def test_an_npm_inspection_counts_for_the_family_and_no_other_manager(self):

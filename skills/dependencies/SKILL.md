@@ -34,4 +34,4 @@ When the repo has a deploy workflow and no dependency list, name [references/lif
 
 ## When the hook stops an install
 
-`[practices:SEC-64]` names each package and its check. Run the check and read the output, then install. If you resend without checking, the call passes, and your reply says what the script does and that you read it after it ran. A repo can turn the rule off in `.claude/practices/config.toml`, with a reason, as `rule = "SEC-64"` under `[[disable]]`.
+`[practices:SEC-64]` names each package and its check. Run the check and read the output, then install. If you resend without checking, the call passes, and your reply says what the script does and that you read it after it ran.
