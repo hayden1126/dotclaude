@@ -93,9 +93,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **Live lanes** (briefs in each record). Merge order: 1 practices (`feat/practices-auth-secrets`, carries the lead's notes, its next PR; paused 2026-10-24, resumed by
     Hayden 2026-11-04; it conflicts with
     origin/main on its own, per lane-fixes' and ports' trials: README.md and
-    `tests/delegation/test_settings.py`; on resuming it merges origin/main first), 2 dev-cycle
-    (`feat/dev-cycle-rules`), 3 npx-cwd (`fix/npx-shim-cwd`; it shares no file with the others,
-    so it can move up if it is ready first).
+    `tests/delegation/test_settings.py`; on resuming it merges origin/main first), 2 npx-cwd
+    (`fix/npx-shim-cwd`; moved up 2026-11-05, ready first), 3 dev-cycle (`feat/dev-cycle-rules`), 4 hackathon (`feat/hackathon-mode`; a hackathon starts
+    2026-11-14, so it aims to merge by 2026-11-11 and moves up if needed).
     Merged and installed from main, all closed: chrome-dup (#151, 2026-10-29: one chrome-devtools
     server, the plugin's; sandbox gap fixes N1 and N3's bun part, `hooks/sandbox-caches.sh`; its
     install changed running sessions' sandbox live, [[cc-sandbox-config-reloads-live]]),
@@ -166,7 +166,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     1. SW1 (high): one file plus its tests (an N2 follow-up). In lane npx-cwd (Hayden's pick,
        2026-11-04).
     2. SW3, SW7, SW12, SW14, SW4 (high): one deny-rule lane folded into DA12 (a); settings,
-       the machine overlay, a setup step, test_settings (lane practices changes the last).
+       the machine overlay, a setup step, test_settings (lane practices changes the last). It
+       also takes the deny rule in SW1's limits (lane npx-cwd's review round 2).
     3. SW10 (medium-high): codex-delegate and the excluded-command guard, with tests.
     4. SW2, SW6, SW9 (medium): the Windows side; part is Hayden's call.
     5. SW5 (Hayden's pick): a tripwire, lane-able, beside lane ports' tamper checks.
@@ -206,12 +207,22 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **A per-lane data dir or database name beside the port block in `lane new`** (Hayden's pick,
     2026-11-04, same review): ports isolate servers but not data. Lane-able after ports merges
     (`skills/lanes/scripts/lane`).
-  - **A hackathon mode and skill set** (Hayden, 2026-11-05; proposed, his forks open). Opt-in per
-    repo, built on the video "The Claude Code workflow that helped me win 5 Hackathons in a Row"
-    (a sponsored video), jmo-skills and paradev.com; install none. New manual skills: `hackathon`,
-    `demo-first-scope`, `demo-video`, `pitch`. For both modes: a `frontend-motion` skill from
-    `animate` and `better-ui` (MIT). First step: a spike proving a scripted demo recording here.
+  - **A hackathon mode and skill set** (Hayden, 2026-11-05). In lane hackathon. Opt-in per repo,
+    built on the video "The Claude Code workflow that helped me win 5 Hackathons in a Row" (a
+    sponsored video), jmo-skills and paradev.com; install none. New manual skills: `hackathon`,
+    `demo-first-scope`, `demo-video`, `pitch`. For both modes: `interview` (Hayden, a long vision chat with researched suggestions) and a `frontend-motion` skill from
+    `animate` and `better-ui` (MIT). After the event: a `public-ready` skill (Hayden's ask) that
+    cleans the repo for release. Hayden's picks: machine protection stays, plus an access list
+    approved at kickoff per project; pushes stay under CLAUDE.md's rule, approved at kickoff; a
+    public repo gets a secrets check before each push; sessions run on HAYPC with a laptop as the
+    remote. The skills stay plain folders others can copy. First step: a spike proving a scripted demo recording here.
     Review and plan: `~/scratch/external-skills/hackathon-review-2026-11-05.md`.
+  - **dotclaude on a Mac** (Hayden, 2026-11-05: he may get a MacBook Pro and may share his setup
+    with people on Macs). `setup.sh` has some Darwin branches but has never been run there, and
+    hooks and notifiers lean on WSL. Pairs with [[hayden-new-device-goal]]. After lane hackathon.
+  - **Who can turn the practices gate off** (Hayden, 2026-11-05: not any session without him).
+    Private: sandbox-audit FINDINGS, PG1, with Hayden's picked fix. `hooks/practices_check.py`,
+    settings, a setup step, tests. In lane hackathon, after #164.
   - **`lane ls` names an overdue reinstall** (Hayden's pick, 2026-11-04; after #163's chain
     stalled). When the lane holding the install has a merged PR, the `install: held by` line says
     the lead's reinstall is overdue. Derived on each call, no new state. Lane-able after ports
