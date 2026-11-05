@@ -450,6 +450,15 @@ class HiddenContent(ScanCase):
         self.assertNotIn("AK", self.git("log", "-p", "-1"))  # git itself now shows the swap
         self.assert_found("a.txt")
 
+    def test_a_graft_file(self):
+        self.commit("clean.txt", "clean\n")
+        first = self.git("rev-parse", "HEAD").strip()
+        self.commit("a.txt", self.line + "\n")
+        self.commit("a.txt", "gone\n")
+        with open(os.path.join(self.work, ".git", "info", "grafts"), "w") as f:
+            f.write(f"{self.git('rev-parse', 'HEAD').strip()} {first}\n")
+        self.assert_found("a.txt")
+
     def test_a_utf16_file(self):
         for encoding in ("utf-16", "utf-16-le", "utf-16-be"):
             with self.subTest(encoding):
