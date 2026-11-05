@@ -411,7 +411,7 @@ class Takes(unittest.TestCase):
     def test_a_wait_cannot_match_the_caption(self):
         passes_only_on_the_caption = self.project(one_beat("await page.getByText('One beat').waitFor({ timeout: 1000 });"))
         result = passes_only_on_the_caption.take()
-        self.assert_failed_clean(passes_only_on_the_caption, result, "One beat")
+        self.assert_failed_clean(passes_only_on_the_caption, result, "Timeout 1000ms")
 
     def test_a_caption_repeating_the_apps_text_does_not_break_a_wait(self):
         beats = (
@@ -437,9 +437,9 @@ class Takes(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         frames = caption_band(project.out / "demo.mp4")
         starts = srt_starts(project.out / "captions.srt")
-        blank = bytes([frames[0][0]]) * len(frames[0])
+        # The wiped page is plain white, so a frame with no overlay has no dark pixel in this band.
         at_second = frames[min(int((starts[1] + 0.5) * 30), len(frames) - 1)]
-        self.assertGreater(band_difference(at_second, blank), BAND_CHANGE, "the caption is gone from the frame")
+        self.assertLess(min(at_second), 100, "the caption is gone from the frame")
 
     def test_a_playwright_click_reaches_the_app_through_the_overlay(self):
         project = self.project(one_beat("await page.locator('#new-item').click({ timeout: 2000 });"
@@ -480,13 +480,46 @@ class Takes(unittest.TestCase):
     def test_ffmpeg_cannot_read_a_keypress_from_the_terminal(self):
         self.assertIn("'-nostdin'", (TEMPLATE / "record.mjs").read_text())
 
-    def test_a_retake_keeps_the_last_video_beside_it(self):
+    def test_a_retake_keeps_the_last_set_beside_it(self):
         project = self.project(one_beat("await page.waitForTimeout(100);"))
         self.assertEqual(project.take().returncode, 0)
-        first = (project.out / "demo.mp4").read_bytes()
+        first = {name: (project.out / name).read_bytes() for name in ("demo.mp4", "captions.srt", "steps.json")}
         self.assertFalse((project.out / "demo.prev.mp4").exists())
         self.assertEqual(project.take().returncode, 0)
-        self.assertEqual((project.out / "demo.prev.mp4").read_bytes(), first)
+        for name, kept in (("demo.prev.mp4", "demo.mp4"), ("captions.prev.srt", "captions.srt"), ("steps.prev.json", "steps.json")):
+            self.assertEqual((project.out / name).read_bytes(), first[kept], name)
+
+    def test_a_first_load_past_the_step_timeout_is_fine(self):
+        project = self.project(one_beat("await page.waitForTimeout(100);"))
+        result = project.take(SLOW_SCRIPT_MS="9000", SIZE="640x360")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_signal_during_the_encode_publishes_nothing(self):
+        project = self.project(one_beat("await page.waitForTimeout(100);"))
+        self.assertEqual(project.take().returncode, 0)
+        good = (project.out / "demo.mp4").read_bytes()
+        bin_dir = project.root / "bin"
+        bin_dir.mkdir()
+        real = shutil.which("ffmpeg")
+        marker = project.root / "encoding"
+        shim = bin_dir / "ffmpeg"
+        shim.write_text(f'#!/bin/sh\ncase " $* " in *" -movflags "*) touch "{marker}"; sleep 2;; esac\nexec "{real}" "$@"\n')
+        shim.chmod(0o755)
+        take = subprocess.Popen([NODE, "demo/record.mjs"], cwd=project.root,
+                                env=project.env(PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}"),
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(take.wait)
+        self.addCleanup(take.kill)
+        for _ in range(600):
+            if marker.exists():
+                break
+            time.sleep(0.05)
+        self.assertTrue(marker.exists(), "the take never reached its encode")
+        take.send_signal(signal.SIGTERM)
+        self.assertEqual(take.wait(timeout=30), 128 + signal.SIGTERM)
+        self.assertEqual((project.out / "demo.mp4").read_bytes(), good)
+        self.assertFalse((project.out / "demo.prev.mp4").exists())
+        self.assertEqual(project.leftovers(), ["out"])
 
     def test_a_second_tab_is_watched_and_warned_about(self):
         opener = ("const [tab] = await Promise.all([page.context().waitForEvent('page'),"
@@ -644,17 +677,21 @@ class Takes(unittest.TestCase):
         self.assertFalse(port_open(project.port), "the app outlived the take")
 
     def test_a_signal_takes_down_an_app_that_ignores_sigterm(self):
-        project = self.project()
-        stubborn = project.root / "stubborn.mjs"
-        stubborn.write_text("process.on('SIGTERM', () => {}); await import('./server.mjs');\n")
-        take = subprocess.Popen([NODE, "demo/record.mjs"], cwd=project.root, env=project.env(APP_CMD="exec node stubborn.mjs"),
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.addCleanup(take.wait)
-        self.addCleanup(take.kill)
-        self.wait_for_port(project, take)
-        take.send_signal(signal.SIGTERM)
-        self.assertEqual(take.wait(timeout=30), 128 + signal.SIGTERM)
-        self.assertFalse(port_open(project.port), "the app outlived the take")
+        for sent in (signal.SIGTERM, signal.SIGINT):
+            with self.subTest(sent.name):
+                project = self.project()
+                stubborn = project.root / "stubborn.mjs"
+                stubborn.write_text("process.on('SIGTERM', () => {}); await import('./server.mjs');\n")
+                take = subprocess.Popen([NODE, "demo/record.mjs"], cwd=project.root,
+                                        env=project.env(APP_CMD="exec node stubborn.mjs"),
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self.addCleanup(take.wait)
+                self.addCleanup(take.kill)
+                self.wait_for_port(project, take)
+                time.sleep(3)  # The browser is up by now, and Playwright's own handlers would be too.
+                take.send_signal(sent)
+                self.assertEqual(take.wait(timeout=30), 128 + sent)
+                self.assertFalse(port_open(project.port), "the app outlived the take")
 
     def wait_for_port(self, project, take):
         for _ in range(200):

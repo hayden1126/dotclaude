@@ -16,7 +16,7 @@
 // that exits gives a non-zero exit and no new video. The take is built in a staging dir beside OUT
 // and moved in only once it is whole. A failed take leaves the previous good one in OUT, since that
 // may be the only backup there is, and says so, so a stale video can't pass for this one. A good
-// take moves the one it replaces to demo.prev.mp4.
+// take moves the set it replaces to demo.prev.mp4, captions.prev.srt and steps.prev.json.
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -30,6 +30,7 @@ const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
 const STEP_TIMEOUT_MS = 8000;
 const BEAT_LIMIT_S = 60; // Catches what the step timeout can't, such as an evaluate that never returns.
 const APP_WAIT_MS = 60000;
+const FIRST_LOAD_MS = 60000; // A dev server's first browser load can compile for a while.
 const SHORT_VIDEO_S = 1; // The recorder pads the end, so a healthy video is never this far under the beats.
 const HOLD_MS = 900; // Each caption stays up this long after its action, so a viewer can read the result.
 
@@ -238,9 +239,11 @@ function encode(webm, trim, fps, expected) {
 
 function publish() {
   fs.mkdirSync(OUT, { recursive: true });
-  // An exit of 0 doesn't prove a take is good, so the one it replaces stays beside it.
-  const last = path.join(OUT, 'demo.mp4');
-  if (fs.existsSync(last)) fs.copyFileSync(last, path.join(OUT, 'demo.prev.mp4'));
+  // An exit of 0 doesn't prove a take is good, so the one it replaces stays beside it, as a set.
+  for (const name of OUTPUTS) {
+    const last = path.join(OUT, name);
+    if (fs.existsSync(last)) fs.copyFileSync(last, path.join(OUT, name.replace('.', '.prev.')));
+  }
   for (const name of OUTPUTS) fs.renameSync(path.join(stage, name), path.join(OUT, name));
   fs.rmSync(stage, { recursive: true, force: true });
   stage = null;
@@ -279,7 +282,10 @@ async function record() {
   };
   const troubles = () => [...problems, ...(appExit !== null ? [`the app exited during the take (${appExit})`] : [])];
 
-  const browser = await chromium.launch({ headless: process.env.HEADED !== '1' });
+  // This file's own handlers stop the app first. Playwright's would exit before they finish.
+  const browser = await chromium.launch({
+    headless: process.env.HEADED !== '1', handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false,
+  });
   try {
     const context = await browser.newContext({ viewport: size, recordVideo: { dir: stage, size } });
     await context.addInitScript(overlay, { x: size.width / 2, y: 200 });
@@ -311,7 +317,7 @@ async function record() {
       console.warn('warning:', message);
     });
 
-    const opened = await page.goto(url);
+    const opened = await page.goto(url, { timeout: FIRST_LOAD_MS });
     if (!opened?.ok()) throw new Error(`${url} answered ${opened?.status()} in the browser`);
     await page.mouse.move(size.width / 2, 200);
     const lead = elapsed();
@@ -342,6 +348,9 @@ async function record() {
     const trim = firstBeat > 1 ? steps[0].start : Math.max(0, lead - 0.2);
     writeSidecars(steps, lead, trim, warnings);
     encode(webm, trim, fps, steps.at(-1).end - trim);
+    // spawnSync holds back a signal's handler until the encode ends, so this is where it counts.
+    await new Promise(resolve => setImmediate(resolve));
+    if (signalled !== null) return;
     publish();
     console.log(`${path.join(OUT, 'demo.mp4')}: ${(steps.at(-1).end - trim).toFixed(1)} s across ${steps.length} beats`);
   } finally {

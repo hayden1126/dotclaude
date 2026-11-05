@@ -35,7 +35,7 @@ Read `EVENT.md` at the project root: whether video is required, its length and f
 
 - End each action by waiting for what the viewer should see, such as `await page.getByText('Saved').waitFor()`. A wait that fails is what makes a broken take fail loud. Locators can't see the caption or the cursor, so a wait only ever matches the app.
 - Make the start state repeatable. `app.cmd` should reset or seed the data, or the second take will differ from the first.
-- Keep captions short enough to read in the time the beat runs. They sit at the bottom of the page, so keep important UI out from under them.
+- Keep captions short enough to read in the time the beat runs. They sit at the bottom of the page, so keep important UI out from under them. A native `<dialog>` or popover draws over them and the cursor, so check those beats in the frames.
 
 ## Run it
 
@@ -49,7 +49,7 @@ Run `node demo/record.mjs` from the project root. Output lands in `demo/out/`: `
 | `OUT` | Output dir. Wins over all of these defaults. |
 | `SIZE=1280x720`, `FPS=24` | Override the format; both size numbers even |
 
-A clip or a rehearsal never touches the full take in `demo/out/`. A good take replaces the last one in its own output dir and moves it to `demo.prev.mp4`, one generation only, so copy a take you want to keep, or give each take its own `OUT`. A failed take leaves the last good one in place and says so.
+A clip or a rehearsal never touches the full take in `demo/out/`. A good take replaces the last one in its own output dir and moves it to `demo.prev.mp4`, `captions.prev.srt` and `steps.prev.json`, one generation only, so copy a take you want to keep, or give each take its own `OUT`. A failed take leaves the last good one in place and says so.
 
 ## Believe it only after looking
 
@@ -69,6 +69,7 @@ Read the exit message. A broken step gets fixed in the app. A step that's genuin
 |---|---|
 | `the app exited ... before it answered` | `app.cmd` died. The app's last output is printed below the message. |
 | `the app never answered` | Wrong `app.url`, or the app took over 60 s to start |
+| `Timeout` on `page.goto` | The first page took over 60 s in the browser. Warm the app up in `app.cmd`, or fix what the page waits on. |
 | `something already answers` | A server from another run holds the port |
 | `page error`, `HTTP 5xx`, `request failed` | The app really broke during the beat named |
 | `Timeout` on a selector | The thing the viewer should see never appeared, or a slow step needs its own wait |
