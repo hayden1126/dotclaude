@@ -217,6 +217,11 @@ The one popover that stays centered, with the backdrop's opacity alongside it so
 .backdrop {
   transition: opacity 250ms var(--ease-out);
 }
+
+.backdrop[data-starting-style],
+.backdrop[data-ending-style] {
+  opacity: 0;
+}
 ```
 
 ## Drawer or sheet
@@ -238,12 +243,14 @@ The destination state's duration applies, so this opens over 500 ms and closes o
 /* It has no fade of its own, so reduced motion gets one in place of the slide */
 @media (prefers-reduced-motion: reduce) {
   .drawer {
-    transition-property: opacity;
+    transition-property: opacity, visibility;
   }
 
+  /* In place and invisible, so visibility keeps it from taking clicks */
   .drawer[data-closed] {
     transform: none;
     opacity: 0;
+    visibility: hidden;
   }
 }
 ```
@@ -345,16 +352,22 @@ const item = {
   },
 };
 
+const fadeOnly = {
+  hidden: { opacity: 0 },
+  visible: { opacity: 1, transition: { duration: 0.3 } },
+};
+
 function PageHeader() {
+  const variants = useReducedMotion() ? fadeOnly : item;
   return (
     <motion.div
       initial="hidden"
       animate="visible"
       variants={{ visible: { transition: { staggerChildren: 0.1 } } }}
     >
-      <motion.h1 variants={item}>Welcome</motion.h1>
-      <motion.p variants={item}>A description of the page.</motion.p>
-      <motion.div variants={item}>
+      <motion.h1 variants={variants}>Welcome</motion.h1>
+      <motion.p variants={variants}>A description of the page.</motion.p>
+      <motion.div variants={variants}>
         <Button>Get started</Button>
       </motion.div>
     </motion.div>
@@ -760,9 +773,11 @@ Three layers in light mode: a 1px ring, lift, then ambient depth. Depth shadows 
     0px 2px 4px 0px oklch(0 0 0 / 0.06);
 }
 
-/* Redefine under the project's dark selector */
---shadow-border: 0 0 0 1px oklch(1 0 0 / 0.08);
---shadow-border-hover: 0 0 0 1px oklch(1 0 0 / 0.13);
+/* Use the project's own dark selector */
+.dark {
+  --shadow-border: 0 0 0 1px oklch(1 0 0 / 0.08);
+  --shadow-border-hover: 0 0 0 1px oklch(1 0 0 / 0.13);
+}
 
 .card {
   border: 1px solid transparent;
@@ -785,8 +800,11 @@ Three layers in light mode: a 1px ring, lift, then ambient depth. Depth shadows 
 :root {
   --image-outline: oklch(0 0 0 / 0.1);
 }
-/* Redefine under the project's dark selector */
---image-outline: oklch(1 0 0 / 0.1);
+
+/* Use the project's own dark selector */
+.dark {
+  --image-outline: oklch(1 0 0 / 0.1);
+}
 
 .content-image {
   outline: 1px solid var(--image-outline);

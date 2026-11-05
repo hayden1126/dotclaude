@@ -102,7 +102,7 @@ UI durations stay under 300 ms. A drawer's 500 ms open and the 300 ms row are th
 
 - **Press:** scale `0.96` over 150 ms `--ease-out`, never on disabled. Give the component an opt-out where the motion would distract, through its variant API or a `static` prop.
 - **Stagger:** lists 30 to 80 ms between items (50 ms unless you have a reason). A staged hero entrance splits into semantic chunks (title, description, actions) 100 ms apart, each with opacity, `4px` blur and `12px` `translateY`. Never stagger routine interactions, and never let a stagger hold up input.
-- **Spring** when the motion is drag with momentum, a gesture the user can reverse (it carries velocity through the interruption), or decorative mouse-tracking. Default `{ type: "spring", duration: 0.5, bounce: 0 }`. Bounce 0.1 to 0.3 only for drag-to-dismiss and deliberately playful moments.
+- **Spring** when the motion is drag with momentum, a gesture the user can reverse (it carries velocity through the interruption), or decorative mouse-tracking. Default `{ type: "spring", duration: 0.5, bounce: 0 }`. Bounce 0.1 to 0.3 only for drag-to-dismiss.
 
 ### 6. Interruption and exit
 
@@ -158,7 +158,7 @@ Gate hover with `@media (hover: hover) and (pointer: fine)`, because `:hover` la
 | `scale(0)`; animating `width`, `height`, `margin`, `padding`, `top`, `left` | The entry scale from step 4; `transform`, `opacity` |
 | Motion `x`, `y`, `scale` props | Full `transform` string |
 | Press below `0.96` (`active:scale-95`, `whileTap`), or with no disabled exclusion | `0.96` on `enabled:active:` or `:not(:disabled):active` |
-| `bounce:` above 0 outside drag-to-dismiss and playful moments | `bounce: 0` |
+| `bounce:` above 0 outside drag-to-dismiss | `bounce: 0` |
 | Everything entering at once | List stagger, 30 to 80 ms |
 | `opacity: 0` in a base rule that only an `animation` reveals | Hidden state in the `from` keyframe, `animation-fill-mode: both` |
 | Plain `:hover`, or Tailwind 3 `hover:`, outside the pointer query | `@media (hover: hover) and (pointer: fine)` |
