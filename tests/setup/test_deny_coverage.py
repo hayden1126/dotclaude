@@ -572,7 +572,22 @@ class DenyCoverage(CoverageBase):
     def test_home_named_by_a_command_gets_no_rule(self):
         out = self.run_with(self.settings_with(hooks={"Stop": [{"hooks": [
             {"command": 'cd "$HOME" && true'}]}]}))
-        self.assertNotIn("run by the settings", out)
+        self.assertNotIn("by the settings", out)
+
+    def test_a_dir_and_an_absent_path_dir_spelled_through_a_linked_home(self):
+        real, link = self.home, self.home + "-link"
+        os.symlink(real, link)
+        self.addCleanup(os.unlink, link)
+        self.mk("mcp/srv")
+        settings = os.path.join(real, "s.json")
+        with open(settings, "w") as f:
+            json.dump({"permissions": {"deny": self.deny},
+                       "mcpServers": {"s": {"command": "uv", "args": [f"{link}/mcp/srv"]}}}, f)
+        r = subprocess.run([sys.executable, "-I", SCRIPT, "--settings", settings],
+                           env={"HOME": link, "PATH": f"{real}/.absent/bin"},
+                           capture_output=True, text=True, timeout=30)
+        self.assertIn("Edit(~/mcp/srv/**)", r.stdout)
+        self.assertIn("Edit(~/.absent", r.stdout)
 
     def test_an_api_key_helper_is_followed(self):
         self.write("keys/helper.sh", "#!/bin/sh\n")
@@ -770,14 +785,14 @@ class Table(CoverageBase):
 
     def spelled_in_every_run(self, rel):
         """What the home scan names whether or not anything reaches it."""
-        return rel.split("/")[0] in (".thing", ".held", ".claude", ".cache")
+        return rel.split("/")[0] in (".thing", ".held")
 
     def test_every_cell(self):
         for reach in self.REACHES:
             for what, rel in self.TARGETS.items():
                 with self.subTest(reach=reach, target=what):
                     self.setUp()
-                    baseline = self.cell("nothing", rel)
+                    baseline = self.cell("nothing", rel).replace(self.home, "H")
                     self.setUp()
                     out = self.cell(reach, rel)
                     for rule, root in self.pasted_roots(out):
@@ -793,7 +808,8 @@ class Table(CoverageBase):
                     if self.spelled_in_every_run(rel):
                         self.assertIn(rel.split("/")[0], out)
                     else:
-                        self.assertNotEqual(out, baseline, f"nothing names {rel}:\n{out}")
+                        self.assertNotEqual(out.replace(self.home, "H"), baseline,
+                                            f"nothing names {rel}:\n{out}")
 
 
 if __name__ == "__main__":

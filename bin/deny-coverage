@@ -331,7 +331,7 @@ class Scan:
             real = os.path.realpath(d)
             if not os.path.isdir(real):
                 # A session could make it and shadow a command; the dirs setup fills wait until then.
-                if under(d, self.raw) and d not in usual:
+                if (under(d, self.raw) or under(d, self.home)) and d not in usual:
                     self.note(d, "a PATH dir")
                 continue
             self.note(d, "a PATH dir")
@@ -386,8 +386,8 @@ class Scan:
                 target = self.expand(word)
                 if target and os.path.isfile(target) and not DATA_FILE.search(target):
                     self.follow(target, "run by the settings")
-                elif (target and os.path.isdir(target) and under(target, self.home)
-                      and target != self.home):  # a cd or a --directory
+                elif (target and os.path.isdir(target) and target not in (self.home, self.raw)
+                      and (under(target, self.home) or under(target, self.raw))):  # a cd, a --directory
                     self.note(target, "run from by the settings")
 
     @staticmethod
