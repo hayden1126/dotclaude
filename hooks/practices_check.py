@@ -2586,7 +2586,9 @@ def tar_parts(args):
 
 
 def is_manifest(word):
-    return word.rsplit("/", 1)[-1] == "package.json"
+    """Whether word names a package.json in a folder: a bare one is the repo's own, not the
+    unpacked tarball's."""
+    return "/" in word and word.rsplit("/", 1)[-1] == "package.json"
 
 
 def tar_reads(args, pkg, spec, read_after):

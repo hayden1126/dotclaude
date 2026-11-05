@@ -2880,6 +2880,7 @@ class InstallCheck(BashBase):
                                        "tar xzOf acme-widget-1.2.3.tgz package/x.js",
                                        "tar -xzf acme-widget-1.2.3.tgz && ls package",
                                        "tar -xzf acme-widget-1.2.3.tgz && echo package.json",
+                                       "tar -xzf acme-widget-1.2.3.tgz && cat package.json",
                                        "tar -xzf acme-widget-1.2.3.tgz && "
                                        "ls package/package.json",
                                        "cat package/package.json; "
