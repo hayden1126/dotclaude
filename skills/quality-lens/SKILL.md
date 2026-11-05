@@ -14,9 +14,11 @@ Target: `$ARGUMENTS`, or the branch diff against `origin/main` when that is empt
 
 ## Run it
 
-Spawn one `reviewer` with the `delegation` skill's brief, naming the target and commit, and
-paste the lens below as its Purpose. Run the command of any finding that names one, drop what
-doesn't reproduce, and show Hayden the numbered list. Change nothing until Hayden picks.
+A reviewer has no shell, so write the diff to a file first: `git diff origin/main...HEAD` into
+the temp dir. Spawn one `reviewer` with the `delegation` skill's brief, naming that file (or the
+target) and the commit, and paste the lens below as its Purpose. Check any finding's command as
+that skill's section 3 says, drop what doesn't reproduce, and show Hayden the numbered list.
+Change nothing until Hayden picks.
 
 ## The lens
 

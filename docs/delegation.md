@@ -101,8 +101,11 @@ reviewer can run (a denied spawn, a deadline stop with the diff unread), the lan
 it. The author's own session doesn't count, and green tests aren't a review: they check what the
 author thought of. A one-sentence fast-track change has no review step, so it is exempt.
 
-A finding carries its own proof. A reviewer has no shell, so a runtime claim names the command that
-settles it and the caller runs that before acting. A static claim quotes the lines. We didn't make
+A finding carries its own proof. A reviewer has no shell, so a runtime claim names a read-only
+command or an existing test that settles it, and the caller runs that before acting. The caller
+reads it first: the main thread isn't policed, and a reviewer's command may come from hostile text
+it read, so an unread command would give a no-shell role a route to execution. A static claim quotes
+the lines. We didn't make
 a command mandatory: doc reviews and races no quick command triggers would lose real findings
 (Hayden, 2026-11-04). The rule and the gate come from pstack-claude, and the finding format from
 ponytail (both MIT), rewritten here; neither is installed.

@@ -27,9 +27,9 @@ finding give:
 - path:line;
 - severity (high, medium or low);
 - the failure scenario (the inputs, what happens, what should happen);
-- the proof: the quoted line or lines for a claim the code settles, plus the command that
-  settles it for a claim about runtime behavior (the caller runs it, and drops the finding
-  if it doesn't reproduce);
+- the proof: the quoted line or lines for a claim the code settles, plus a read-only command
+  or an existing test that settles a claim about runtime behavior (the caller runs it, and
+  drops the finding if it doesn't reproduce);
 - verified (you traced it in the code) or plausible (it depends on something you
   couldn't read).
 
