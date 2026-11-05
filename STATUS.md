@@ -404,7 +404,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
      deny-rules; one slot free, Hayden's pick from the Backlog). Lane hackathon merges by Nov 11:
      move it up if the queue threatens that. Install freeze Nov 12 through Nov 15. A chain that
      stops before its "main moved" step still tells the lanes, and arms a wake on the blocker
-     (`skills/lanes/SKILL.md`). Recheck GitHub's secret-scanning alerts on this repo once. Open
+     (`skills/lanes/SKILL.md`). Recheck GitHub's secret-scanning alerts on this repo once. Compact the memory index
+     (MEMORY.md, 20.4 KB) under 17.1 KB: shorten its lines, and ask before dropping an entry. Open
      with Hayden (repeat them in each reply's Waiting list until answered): try `/interview` in
      the prep repo named in [[dotclaude-hackathon-mode]]; rehearse reaching this machine from another
      network by Nov 12; whether the event's local-lead email went out; by Nov 12 whether his
