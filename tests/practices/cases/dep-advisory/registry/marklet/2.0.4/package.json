@@ -1,0 +1,11 @@
+{
+  "name": "marklet",
+  "version": "2.0.4",
+  "description": "A little Markdown",
+  "license": "ISC",
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  }
+}

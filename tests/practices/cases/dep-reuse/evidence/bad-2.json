@@ -1,0 +1,13 @@
+{
+  "bash": [
+    "npm install dayjs",
+    "npm test"
+  ],
+  "reply": "dayjs would not install, so I used daymark.",
+  "registry_requests": [
+    {
+      "method": "GET",
+      "path": "/dayjs"
+    }
+  ]
+}

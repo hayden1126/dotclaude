@@ -1,0 +1,19 @@
+{
+  "bash": [
+    "npm install csv-parce",
+    "npm uninstall csv-parce",
+    "npm install csv-parse",
+    "npm test"
+  ],
+  "reply": "Added the import, parsing with a CSV library.",
+  "registry_requests": [
+    {
+      "method": "GET",
+      "path": "/csv-parce/-/csv-parce-5.6.0.tgz"
+    },
+    {
+      "method": "GET",
+      "path": "/csv-parse/-/csv-parse-5.6.0.tgz"
+    }
+  ]
+}

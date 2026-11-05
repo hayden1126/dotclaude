@@ -9,12 +9,14 @@
 
 Manual only, never in the suite: it makes model calls, and runs sandbox-off (the sandbox
 hides the credential). `--dry-run` makes none: it builds one fixture per case and arm, runs
-the fixture's visible `npm test`, and prints the claude command lines. The offline proof that
-the oracles are right is test_oracles.py.
+the fixture's visible `npm test`, and prints the claude command lines; for a registry case
+(below) it also starts the registry and runs a real `npm install` of the case's main package.
+The offline proof that the oracles are right is test_oracles.py.
 
 Skills and cases: PRACTICES_SKILLS names the practices skills, explicitly. Each case has an
 owner (the skill whose bug class it plants) and a kind, target or benign (CASE_INFO). Each
-owner has one benign case.
+owner has one benign case. A listed skill may not exist yet (dependencies, before its first
+sweep): arm A and the offline tests don't need it, and B, C and D refuse without its SKILL.md.
 
 Arms:
   A  no skill, no hooks (the RED baseline: it should fail most runs of each target case)
@@ -57,6 +59,46 @@ Per run:
     .claude/settings.json turns the sandbox on with autoAllowBashIfSandboxed (the agent's Bash
     runs confined to the fixture, without prompts), plus the skill and hooks for its arm. The
     harness's git reads no global or system config, so no global ignore rule hides .claude/.
+  - Registry case: a case whose dir has registry/ (the dependencies skill's dep-* cases). Every
+    other case builds as above, with no .npmrc, no network settings and no server. No run may
+    touch the public npm registry, where a mistyped name could run a stranger's code, so:
+      Server: FakeRegistry, a stdlib http.server thread in run.py, one per run, on 127.0.0.2 and
+        a free port (a sandboxed command has its own network namespace and a forced NO_PROXY
+        naming 127.0.0.1, so only another loopback address reaches the host, through the
+        sandbox's proxy). It starts before the fixture is built and stops when the session ends,
+        by any route, Ctrl-C included (a `with` block). Everything it answers is in a dict built
+        at start: a request path is a key, never joined onto the filesystem. Unknown names get 404.
+        Each request (method, path) goes to <run dir>/registry.log; the row's registry_log names it.
+      Packages: cases/<case>/registry/<name>/<version>/ holds a package's source. The harness
+        packs it (pack_package) and builds its packument: integrity and shasum computed, tarball
+        URLs on 127.0.0.2, dist-tags.latest the highest version. registry/advisories.json is what
+        the bulk audit endpoint answers, in npm's format ({} without one). registry/main names the
+        package the dry run installs. It also serves the stub packages (below), and in arm D the
+        warm-up case's packages.
+      Fixture: .npmrc (`registry=`, `cache=.npm-cache`, `fund=false`) in the initial commit, and
+        in .claude/settings.json's sandbox `allowUnsandboxedCommands: false` and
+        `network.allowedDomains: ["127.0.0.2"]`, so registry.npmjs.org answers 403. Known limit:
+        allowedDomains has no port, so the agent can also reach whatever else listens on all
+        host interfaces, through 127.0.0.2. .npm-cache is in both git dirs' info/exclude, so like
+        node_modules it is in no diff.
+      Stubs: `npm install <new package>` would otherwise fetch react-dom (in package.json, in no
+        stub dir: E404) and prune server-only and client-only (stubs package.json doesn't name),
+        so keep_stubs() puts registry_stubs/react-dom in node_modules and names all five in
+        package.json. npm then fetches none of them; `npm ci` and a removed node_modules get
+        byte-identical copies from the registry, and grading reinstalls the stubs anyway.
+      setup/ (optional): an overlay copied in before the initial commit. Each registry package
+        its package.json names goes into node_modules (apply_setup), as if already installed.
+      Evidence: after the session, before grading, grade() writes evidence.json into the grading
+        scratch dir and names it in ORACLE_EVIDENCE: bash (the agent's Bash commands from the
+        stream, in order), reply (the final result text), registry_requests and deps_before (what
+        package.json depended on before the turn), all the case turn's, so arm D's warm-up doesn't
+        count. The agent never sees it. oracle_deps.mjs reads it, once, on load, before any agent
+        code runs. A live session's sandbox may point npm_config_cache elsewhere, so a cached
+        answer can mean no request: an oracle decides on bash and the fixture, and uses
+        registry_requests only to catch an install bash doesn't show.
+      Offline, cases/<case>/evidence/<overlay>.json supplies the evidence for test_oracles.py.
+      Arm D: a plain fixture never warms up with a registry case's prompt (warmup_case), so
+        adding a registry owner moved no existing case's warm-up.
   - Session: `claude -p --output-format stream-json --verbose --model M --setting-sources
     project,local --strict-mcp-config --permission-mode acceptEdits --max-turns 60`, cwd the
     fixture, 900 s timeout per turn, env passed through unchanged. project,local drops every
@@ -104,7 +146,7 @@ Per run:
         errors.log, "none" when empty or for A and B), and the paths stream (one per turn),
         oracle and diff, under <out>/<case>-<arm>-<i>/;
       only sometimes: diff_error (the diff failed, so no suspect words were read: a tripwire
-        too; the verdict stands), fixture (with --keep),
+        too; the verdict stands), fixture (with --keep), registry_log (a registry case's),
         harness_error (an exception in the harness: an error row, with few other fields), and
         three fields no run writes, which a person sets after reading a row's diff and stream:
         reviewed (true clears a tripwire row, which the bar then counts again), hand_verdict
@@ -124,7 +166,9 @@ Per run:
     skill installed (arm A's is {}); `hook`, hook_hash() of the practices hook (practices-check.sh,
     the practices_check.py it runs, the bash_words.py that loads, and hook_settings()'s wiring
     with placeholder dirs) for C and D, "none" for A and B; `case` (the row's case_hash),
-    case_hash() over cases/<case>/, oracle_lib.mjs, next_stub/, stubs/ and fixture/; `warmup`
+    case_hash() over cases/<case>/, oracle_lib.mjs, next_stub/, stubs/ and fixture/ (a registry
+    case adds oracle_deps.mjs, registry_stubs/, the source of FakeRegistry and arm D's warm-up
+    packages, which leaves every other case's value alone); `warmup`
     (warmup_hash), the sha256 of arm D's warm-up prompt, "none" for A, B and C; and `harness`
     (harness_hash), the sha256 of this run.py. Pooling refuses on any of the five; the Claude
     Code version is recorded but only warned on (one line per model when rows hold more than
@@ -217,10 +261,15 @@ about a second and never blocks on it (a --summarize probe holds it for an insta
 until it ends), so a rewrite can't leave the run's later rows in the replaced file.
 """
 import argparse
+import base64
 import concurrent.futures
 import contextlib
 import fcntl
+import gzip
 import hashlib
+import http.server
+import inspect
+import io
 import json
 import os
 import re
@@ -229,9 +278,11 @@ import shutil
 import signal
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import time
+import urllib.parse
 import uuid
 from pathlib import Path
 from typing import NamedTuple
@@ -246,7 +297,7 @@ LOADER = FIXTURE_SRC / "scripts" / "register.mjs"
 SKILLS_DIR = REPO / "skills"
 # The practices skills arms B, C and D install, all of them in every run. Named here rather than
 # found by their events.toml, so a skill that gains one later doesn't silently change the arms.
-PRACTICES_SKILLS = ["server-code", "auth-secrets"]
+PRACTICES_SKILLS = ["server-code", "auth-secrets", "dependencies"]
 HOOK = REPO / "hooks" / "practices-check.sh"  # a shim: it runs practices_check.py beside it
 REPO_SETTINGS = REPO / "settings.json"  # arms C and D take the hook's wiring from here
 
@@ -275,6 +326,12 @@ CASE_INFO = {
     "signup": Case("auth-secrets", TARGET),
     "remember-me": Case("auth-secrets", TARGET),
     "auth-benign": Case("auth-secrets", BENIGN),
+    "dep-few-lines": Case("dependencies", TARGET),
+    "dep-reuse": Case("dependencies", TARGET),
+    "dep-typosquat": Case("dependencies", TARGET),
+    "dep-install-script": Case("dependencies", TARGET),
+    "dep-advisory": Case("dependencies", TARGET),
+    "dep-benign": Case("dependencies", BENIGN),
 }
 CASES = list(CASE_INFO)
 
@@ -288,12 +345,14 @@ def benign_case(owner):
 def warmup_case(case):
     """Arm D's warm-up for `case`: its owner's benign case, except for a benign case itself,
     which warms up with the next practices skill's benign case, so its task turn doesn't find
-    the work already done."""
+    the work already done. A benign case that needs a registry only warms up a registry case: a
+    plain fixture has none to install its package from, so it is passed over there."""
     owner, kind = CASE_INFO[case]
     if kind != BENIGN:
         return benign_case(owner)
     i = PRACTICES_SKILLS.index(owner)
-    return benign_case((PRACTICES_SKILLS[i + 1:] + PRACTICES_SKILLS[:i])[0])
+    others = [benign_case(name) for name in PRACTICES_SKILLS[i + 1:] + PRACTICES_SKILLS[:i]]
+    return next(c for c in others if is_registry_case(case) or not is_registry_case(c))
 
 
 ARMS = ["A", "B", "C", "D"]
@@ -427,12 +486,22 @@ def hook_hash(settings=None, hook=None):
 
 def case_hash(case):
     """sha256 over what a run of `case` starts from and is graded by: cases/<case>/ (prompt,
-    oracle, overlays), oracle_lib.mjs, the next stub, the other stubs and the fixture."""
+    oracle, overlays, registry, setup), oracle_lib.mjs, the next stub, the other stubs and the
+    fixture. A registry case adds what serves and grades it, which no other case uses:
+    oracle_deps.mjs, registry_stubs/, the FakeRegistry source and arm D's warm-up packages."""
     h = hashlib.sha256()
-    for label, path in (("case", CASES_DIR / case), ("oracle_lib.mjs", HERE / "oracle_lib.mjs"),
-                        ("next_stub", STUB_SRC), ("stubs", STUBS_SRC), ("fixture", FIXTURE_SRC)):
+    parts = [("case", CASES_DIR / case), ("oracle_lib.mjs", HERE / "oracle_lib.mjs"),
+             ("next_stub", STUB_SRC), ("stubs", STUBS_SRC), ("fixture", FIXTURE_SRC)]
+    if is_registry_case(case):
+        parts += [("oracle_deps.mjs", ORACLE_DEPS), ("registry_stubs", REGISTRY_STUBS)]
+        warmup = warmup_case(case)
+        if warmup != case and is_registry_case(warmup):
+            parts.append(("warmup_registry", CASES_DIR / warmup / "registry"))
+    for label, path in parts:
         digest = tree_hash(path) if path.is_dir() else hashlib.sha256(path.read_bytes()).hexdigest()
         h.update(f"{label} {digest}\n".encode())
+    if is_registry_case(case):
+        h.update(f"registry_server {hashlib.sha256(inspect.getsource(FakeRegistry).encode()).hexdigest()}\n".encode())
     return h.hexdigest()
 
 
@@ -537,12 +606,14 @@ def remove_fixture(fixture):
             shutil.rmtree(d, ignore_errors=True)
 
 
-def build_fixture(arm, run_dir=None):
+def build_fixture(arm, run_dir=None, case=None, registry=None):
     """A fresh fixture for one run: the app, the stub packages, an initial commit, then the
     arm's harness config as a second commit, in the fixture's own repo for the agent. The same
     tree is also the baseline commit of the harness's private git dir (harness_git_dir), which
     the diff is taken against. Returns (path, the baseline commit's SHA). Arms C and D wire the
-    hook with hook_dirs(run_dir), so they need one."""
+    hook with hook_dirs(run_dir), so they need one. With `case` and its running `registry`, a
+    registry case's fixture also gets its setup/ overlay, the .npmrc, the sandbox's network
+    settings and the ignore rule for npm's cache."""
     if arm in ("C", "D") and run_dir is None:
         raise ValueError(f"arm {arm} wires the hook with dirs in the run dir, and none was given")
     root = Path(tempfile.mkdtemp(prefix=FIXTURE_PREFIX))
@@ -552,11 +623,19 @@ def build_fixture(arm, run_dir=None):
     harness_git_dir(root).parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(FIXTURE_SRC, root, dirs_exist_ok=True)
     install_stubs(root)
+    if registry is not None:
+        apply_setup(root, case)
+        keep_stubs(root)
+        (root / ".npmrc").write_text(registry.npmrc())
     git("init", "-q", cwd=root)
+    if registry is not None:
+        ignore_npm_cache(root / ".git")
     git("add", "-A", cwd=root)
     git("commit", "-qm", "Initial commit", cwd=root)
 
     settings = {"sandbox": {"enabled": True, "autoAllowBashIfSandboxed": True}}
+    if registry is not None:
+        settings["sandbox"].update(REGISTRY_SANDBOX)
     if arm in ("B", "C", "D"):
         for name in PRACTICES_SKILLS:
             shutil.copytree(SKILLS_DIR / name, root / ".claude" / "skills" / name)
@@ -567,6 +646,8 @@ def build_fixture(arm, run_dir=None):
     git("add", "-A", ".claude", cwd=root)
     git("commit", "-qm", "Local Claude Code settings", cwd=root)
     harness_git(root, "init", "-q")
+    if registry is not None:
+        ignore_npm_cache(harness_git_dir(root))
     harness_git(root, "add", "-A")
     harness_git(root, "commit", "-qm", "Harness baseline")
     return root, harness_git(root, "rev-parse", "HEAD").strip()
@@ -575,6 +656,305 @@ def build_fixture(arm, run_dir=None):
 def npm_test(root):
     p = subprocess.run(["npm", "test"], cwd=root, capture_output=True, text=True, errors="replace", timeout=300)
     return p.returncode == 0, p.stdout + p.stderr
+
+
+# ---------------------------------------------------------------- fake registry
+
+ORACLE_DEPS = HERE / "oracle_deps.mjs"  # the oracle helpers only registry cases import
+REGISTRY_STUBS = HERE / "registry_stubs"  # react-dom: in the fixture's package.json, not in stubs/
+REGISTRY_HOST = "127.0.0.2"  # 127.0.0.1 is in the sandbox's forced NO_PROXY, so it never reaches the host
+REGISTRY_SANDBOX = {"allowUnsandboxedCommands": False, "network": {"allowedDomains": [REGISTRY_HOST]}}
+NPM_CACHE = ".npm-cache"
+PACKAGE_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+INSTALL_SCRIPTS = ("preinstall", "install", "postinstall")
+# Settings that would beat, or add to, the fixture's .npmrc when the harness runs npm itself.
+_NPM_ENV_DROPPED = re.compile(r"^(npm_config_.*|.*_proxy)$", re.I)
+
+
+def is_registry_case(case):
+    return (CASES_DIR / case / "registry").is_dir()
+
+
+def version_key(version):
+    """A version as numbers, for the highest-version comparison; a case's versions are plain x.y.z."""
+    return tuple(int(part) for part in version.split("."))
+
+
+def registry_packages(registry_dir):
+    """[(name, version, source dir)] a case's registry/ declares, as <name>/<version>/. A dir whose
+    package.json disagrees with its path is refused, so a packument can't name another package."""
+    found = []
+    for pkg in sorted(d for d in Path(registry_dir).iterdir() if d.is_dir()):
+        for src in sorted(d for d in pkg.iterdir() if d.is_dir()):
+            manifest = json.loads((src / "package.json").read_text())
+            if (manifest.get("name"), manifest.get("version")) != (pkg.name, src.name) or not PACKAGE_NAME.match(pkg.name):
+                raise ValueError(f"{src}: package.json names {manifest.get('name')}@{manifest.get('version')}")
+            found.append((pkg.name, src.name, src))
+    return found
+
+
+def pack_package(src):
+    """An npm tarball of a package's source: every file under package/, with a fixed mode and
+    time, so one source always packs to the same bytes."""
+    src, raw = Path(src), io.BytesIO()
+    with gzip.GzipFile(fileobj=raw, mode="wb", mtime=0) as gz, tarfile.open(fileobj=gz, mode="w") as tar:
+        for rel in sorted(p.relative_to(src).as_posix() for p in src.rglob("*") if p.is_file()):
+            data = (src / rel).read_bytes()
+            info = tarfile.TarInfo(f"package/{rel}")
+            info.size, info.mode = len(data), 0o644
+            tar.addfile(info, io.BytesIO(data))
+    return raw.getvalue()
+
+
+class FakeRegistry:
+    """One run's npm registry: a stdlib HTTP server in a thread on 127.0.0.2, on a free port.
+    Everything it answers is in a dict built at start from the case's registry/ dir (with arm D's
+    warm-up case's, when that has one) and the stub packages, so a request path is only ever a
+    key: never a filesystem path. Each request goes to `requests` and to `log_path`. A `with`
+    block runs it, and leaving the block by any route stops it."""
+
+    PUBLISHED = "2026-01-15T09:00:00.000Z"
+
+    def __init__(self, case, arm="A", log_path=None):
+        self.case, self.arm, self.log_path = case, arm, log_path
+        self.requests, self.routes, self.advisories = [], {}, b"{}"
+        self._lock = threading.Lock()
+        self._server = self._log = None
+
+    @property
+    def url(self):
+        return f"http://{REGISTRY_HOST}:{self._server.server_address[1]}/"
+
+    def npmrc(self):
+        return f"registry={self.url}\ncache={NPM_CACHE}\nfund=false\n"
+
+    def npm_env(self):
+        """The env for npm run by the harness itself, never the agent. It runs in this process's
+        network namespace, where the registry is, so no proxy applies; nothing in the env may beat
+        the fixture's .npmrc; and no user npmrc is read. The registry is set again here so nothing
+        can send this npm to another one."""
+        env = {k: v for k, v in os.environ.items() if not _NPM_ENV_DROPPED.match(k)}
+        return dict(env, npm_config_registry=self.url, npm_config_userconfig=os.devnull,
+                    npm_config_update_notifier="false")
+
+    def _add(self, name, version, src, versions):
+        tarball = pack_package(src)
+        manifest = json.loads((Path(src) / "package.json").read_text())
+        path = f"{name}/-/{name}-{version}.tgz"
+        if f"/{path}" in self.routes:
+            raise ValueError(f"{name}@{version} is declared twice for {self.case}")
+        self.routes[f"/{path}"] = ("application/octet-stream", tarball)
+        integrity = base64.b64encode(hashlib.sha512(tarball).digest()).decode()
+        manifest["dist"] = {"tarball": f"{self.url}{path}", "shasum": hashlib.sha1(tarball).hexdigest(),
+                            "integrity": f"sha512-{integrity}"}
+        if any(s in (manifest.get("scripts") or {}) for s in INSTALL_SCRIPTS):
+            manifest["hasInstallScript"] = True
+        versions.setdefault(name, {})[version] = manifest
+
+    def _build(self):
+        versions = {}
+        for name, src in {**stub_packages(), **{d.name: d for d in sorted(REGISTRY_STUBS.iterdir())}}.items():
+            self._add(name, json.loads((src / "package.json").read_text())["version"], src, versions)
+        warmup = warmup_case(self.case) if self.arm == "D" else self.case
+        for case in dict.fromkeys((self.case, warmup)):
+            if is_registry_case(case):
+                for name, version, src in registry_packages(CASES_DIR / case / "registry"):
+                    self._add(name, version, src, versions)
+        for name, by_version in versions.items():
+            latest = max(by_version, key=version_key)
+            top = by_version[latest]
+            packument = {"name": name, "description": top.get("description", ""), "license": top.get("license"),
+                         "dist-tags": {"latest": latest}, "versions": by_version,
+                         "time": {v: self.PUBLISHED for v in by_version}}
+            self.routes[f"/{name}"] = ("application/json", json.dumps(packument).encode())
+        advisories = CASES_DIR / self.case / "registry" / "advisories.json"
+        if advisories.is_file():
+            self.advisories = advisories.read_bytes()
+
+    def _note(self, method, path):
+        parts = urllib.parse.urlsplit(path)
+        if parts.scheme:  # an absolute request line, as a proxy can send: the path is what's logged
+            path = parts.path + (f"?{parts.query}" if parts.query else "")
+        with self._lock:
+            self.requests.append({"method": method, "path": path})
+            if self._log:
+                self._log.write(f"{method} {path}\n")
+                self._log.flush()
+
+    def _handler(self):
+        registry = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            timeout = 10  # an idle connection doesn't keep its thread
+
+            def log_message(self, *_args):
+                pass
+
+            def _send(self, status, content_type, body):
+                self.send_response(status)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                if self.command != "HEAD":
+                    self.wfile.write(body)
+
+            def do_GET(self):
+                registry._note(self.command, self.path)
+                key = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
+                content_type, body = registry.routes.get(key, ("application/json", None))
+                if body is None:
+                    self._send(404, "application/json", b'{"error":"not found"}')
+                else:
+                    self._send(200, content_type, body)
+
+            do_HEAD = do_GET
+
+            def do_POST(self):
+                registry._note(self.command, self.path)
+                self._drain()
+                if urllib.parse.urlsplit(self.path).path == "/-/npm/v1/security/advisories/bulk":
+                    self._send(200, "application/json", registry.advisories)
+                else:
+                    self._send(404, "application/json", b'{"error":"not found"}')
+
+            def _refuse(self):
+                registry._note(self.command, self.path)
+                self._send(405, "application/json", b'{"error":"read-only"}')
+
+            do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _refuse
+
+            def _drain(self):
+                """Reads the body npm sends, unused: answering over an unread body can reset the
+                connection. Content-Length or chunked, a bounded amount."""
+                length = self.headers.get("Content-Length")
+                if length and length.isdigit():
+                    self.rfile.read(min(int(length), 2 ** 24))
+                elif "chunked" in (self.headers.get("Transfer-Encoding") or ""):
+                    for _ in range(2 ** 12):
+                        size = int(self.rfile.readline(64).strip() or b"0", 16)
+                        self.rfile.read(min(size, 2 ** 20) + 2)
+                        if not size:
+                            break
+
+        return Handler
+
+    def __enter__(self):
+        self._server = http.server.ThreadingHTTPServer((REGISTRY_HOST, 0), self._handler())
+        self._server.daemon_threads = True
+        try:
+            self._build()
+            if self.log_path is not None:
+                self._log = open(self.log_path, "a")
+        except BaseException:
+            self._server.server_close()
+            raise
+        threading.Thread(target=self._server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True).start()
+        return self
+
+    def __exit__(self, *_exc):
+        self._server.shutdown()
+        self._server.server_close()
+        with self._lock:
+            if self._log:
+                self._log.close()
+            self._log = None
+        return False
+
+
+def apply_setup(root, case):
+    """Copies the case's setup/ overlay into the fixture, then puts each registry package its
+    package.json names into node_modules, as a project that already installed it would have."""
+    setup = CASES_DIR / case / "setup"
+    if setup.is_dir():
+        shutil.copytree(setup, root, dirs_exist_ok=True)
+        install_declared(root, case)
+
+
+def keep_stubs(root):
+    """Makes `npm install` leave the stubs alone, which needs two things in a registry fixture.
+    react-dom is in package.json but in no stub dir: it goes into node_modules, or npm fetches it.
+    server-only and client-only are stubs package.json doesn't name, and npm prunes what's
+    extraneous, so they go in package.json, at their versions. Measured with npm 11."""
+    for src in REGISTRY_STUBS.iterdir():
+        shutil.copytree(src, Path(root) / "node_modules" / src.name)
+    path = Path(root) / "package.json"
+    manifest = json.loads(path.read_text())
+    deps = dict(manifest.get("dependencies") or {})
+    for name, src in stub_packages().items():
+        deps.setdefault(name, json.loads((src / "package.json").read_text())["version"])
+    manifest["dependencies"] = dict(sorted(deps.items()))
+    path.write_text(json.dumps(manifest, indent=2) + "\n")
+
+
+def install_declared(root, case):
+    """Copies into node_modules every package the fixture's package.json names that the case's
+    registry declares, at the named version (else its highest), without npm. Offline tests use it
+    for an overlay's dependencies too."""
+    declared = json.loads((Path(root) / "package.json").read_text()).get("dependencies") or {}
+    packages = registry_packages(CASES_DIR / case / "registry")
+    for name, wanted in declared.items():
+        versions = {version: src for pkg, version, src in packages if pkg == name}
+        if versions:
+            dest = Path(root) / "node_modules" / name
+            shutil.rmtree(dest, ignore_errors=True)
+            shutil.copytree(versions.get(wanted.lstrip("^~"), versions[max(versions, key=version_key)]), dest)
+
+
+def ignore_npm_cache(git_dir):
+    """npm's cache is in the fixture (the sandbox lets the agent write there) and in no diff."""
+    info = Path(git_dir) / "info"
+    info.mkdir(parents=True, exist_ok=True)
+    with open(info / "exclude", "a") as f:
+        f.write(f"{NPM_CACHE}/\n")
+
+
+def package_deps(root):
+    """{name: range} of everything the fixture's package.json depends on, in any section; {} when
+    it can't be read."""
+    try:
+        manifest = json.loads((Path(root) / "package.json").read_text())
+        return {k: v for section in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies")
+                for k, v in (manifest.get(section) or {}).items()}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def oracle_evidence(events, deps_before, requests):
+    """What a registry case's oracle gets besides the fixture, from the case turn: the agent's
+    Bash commands in order, its final reply, the registry requests, and the package.json
+    dependencies from before the turn."""
+    result = result_event(events) or {}
+    return {
+        "bash": [u["input"]["command"] for u in tool_uses(events)
+                 if u.get("name") == "Bash" and isinstance((u.get("input") or {}).get("command"), str)],
+        "reply": result.get("result") if isinstance(result.get("result"), str) else "",
+        "registry_requests": requests,
+        "deps_before": deps_before,
+    }
+
+
+def registry_route_problem(fixture, case, registry):
+    """The dry run's proof of the route, as a problem string or None: a real `npm install` of the
+    case's main package (registry/main names it) through the registry, which must fetch its tarball
+    from there, leave every stub byte for byte as it was, and leave `npm test` green."""
+    spec = (CASES_DIR / case / "registry" / "main").read_text().strip()
+    name = spec.split("@")[0]
+    stubs = {pkg: tree_hash(Path(fixture) / "node_modules" / pkg)
+             for pkg in [*stub_packages(), *(d.name for d in REGISTRY_STUBS.iterdir())]}
+    p = subprocess.run(["npm", "install", spec], cwd=fixture, env=registry.npm_env(), capture_output=True, text=True,
+                       errors="replace", timeout=300, start_new_session=True)
+    if p.returncode != 0:
+        return f"npm install {spec} exited {p.returncode}: {(p.stdout + p.stderr)[-1500:]}"
+    if not any(r["path"].startswith(f"/{name}/-/") for r in registry.requests):
+        return f"npm install {spec} fetched no tarball from the registry: {registry.requests}"
+    if not (Path(fixture) / "node_modules" / name / "package.json").is_file():
+        return f"npm install {spec} left no node_modules/{name}"
+    changed = [pkg for pkg, digest in stubs.items()
+               if not (Path(fixture) / "node_modules" / pkg).is_dir() or tree_hash(Path(fixture) / "node_modules" / pkg) != digest]
+    if changed:
+        return f"npm install {spec} replaced or removed stubs: {', '.join(changed)}"
+    ok, output = npm_test(fixture)
+    return None if ok else f"npm test failed after the install: {output[-1500:]}"
 
 
 # ---------------------------------------------------------------- session
@@ -719,6 +1099,7 @@ BWRAP_FLAGS = ["--unshare-net", "--unshare-pid", "--unshare-ipc", "--die-with-pa
 SYSTEM_DIRS = ["/usr", "/etc", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32"]
 PRACTICES_MOUNT = "/practices"  # where this checkout's tests/practices appears inside
 DUMMY_LLM_KEY = "sk-test-0000000000000000"  # agent code may refuse to run without a key
+EVIDENCE_VAR = "ORACLE_EVIDENCE"  # a registry case's oracle reads the session's evidence from this path
 
 
 def system_binds():
@@ -771,13 +1152,19 @@ def contained(cmd, writable, readable=None, cwd=None, real_home=None):
     return [*args, "--", *cmd]
 
 
-def grade_env(fixture, scratch):
+def grade_env(fixture, scratch, evidence=None):
     """The oracle's whole environment: an allowlist, nothing inherited beyond it. HOME, DB_PATH
-    and TMPDIR live in `scratch`, the oracle's only writable dir besides the fixture."""
+    and TMPDIR live in `scratch`, the oracle's only writable dir besides the fixture. With
+    `evidence` (a registry case's), that JSON goes in `scratch` and EVIDENCE_VAR names it."""
     scratch = Path(scratch)
     for d in ("home", "tmp"):
         (scratch / d).mkdir(parents=True, exist_ok=True)
+    extra = {}
+    if evidence is not None:
+        (scratch / "evidence.json").write_text(json.dumps(evidence))
+        extra[EVIDENCE_VAR] = str(scratch / "evidence.json")
     return {
+        **extra,
         "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
         "HOME": str(scratch / "home"),
         "LANG": os.environ.get("LANG", "C.UTF-8"),
@@ -800,14 +1187,15 @@ def grading_contained(unsafe):
              "Run sandbox-off with bwrap installed, or pass --unsafe-grade to grade uncontained.")
 
 
-def grade(fixture, case, run_dir, contain=True, home=None):
+def grade(fixture, case, run_dir, contain=True, home=None, evidence=None):
     """Runs the case's oracle against the fixture, under bwrap unless `contain` is False.
     The oracle writes only to the fixture and a fresh scratch dir (HOME, DB_PATH, TMPDIR) in
     the system temp dir, removed afterwards; run_dir may sit under $HOME, so run.py writes the
     oracle's output there itself, outside bwrap. `home` is the real home kept out (default
-    $HOME). Returns the verdict dict; a missing verdict line or a timeout scores broken, a
-    node_modules the agent pointed outside the fixture scores broken untouched, and a fixture
-    the sandbox refuses (a writable path under $HOME) scores error."""
+    $HOME). `evidence` is a registry case's oracle_evidence(), written into the scratch dir only
+    now, after the session exited. Returns the verdict dict; a missing verdict line or a timeout
+    scores broken, a node_modules the agent pointed outside the fixture scores broken untouched,
+    and a fixture the sandbox refuses (a writable path under $HOME) scores error."""
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
     problem = node_modules_problem(fixture)
@@ -817,7 +1205,7 @@ def grade(fixture, case, run_dir, contain=True, home=None):
     install_stubs(fixture)  # the agent could have edited node_modules/next
     scratch = Path(tempfile.mkdtemp(prefix="practices-grade-"))
     try:
-        env = grade_env(fixture, scratch)
+        env = grade_env(fixture, scratch, evidence)
         if contain:
             inside = Path(PRACTICES_MOUNT)
             try:
@@ -1075,11 +1463,11 @@ def infra_failures(labels, exits, events_by_turn, timed_out_label=None):
     return failures
 
 
-def finish_run(fixture, harness_sha, case, run_dir, contain, skip_grade=()):
+def finish_run(fixture, harness_sha, case, run_dir, contain, skip_grade=(), evidence=None):
     """Saves the agent's diff, then grades (unless `skip_grade` lists infra failures, which
     score error). The diff is taken before grading touches the fixture (the stub reinstall, any
     files the agent's code writes); a failed diff is recorded and never costs the verdict.
-    Returns (verdict dict, diff error or None)."""
+    `evidence` goes to grade(). Returns (verdict dict, diff error or None)."""
     run_dir = Path(run_dir)
     diff_error = None
     problem = git_dir_problem(fixture)
@@ -1093,41 +1481,47 @@ def finish_run(fixture, harness_sha, case, run_dir, contain, skip_grade=()):
     if skip_grade:
         return {"verdict": "error", "checks": [{"name": "harness", "ok": False,
                                                 "detail": "; ".join(skip_grade)}]}, diff_error
-    return grade(fixture, case, run_dir, contain=contain), diff_error
+    return grade(fixture, case, run_dir, contain=contain, evidence=evidence), diff_error
 
 
 def run_one(case, arm, index, args, out):
     run_dir = out / f"{case}-{arm}-{index}"
     run_dir.mkdir(parents=True, exist_ok=True)
-    fixture, harness_sha = build_fixture(arm, run_dir)
-    skills = installed_skills(fixture)  # before the session, which could edit its copy
-    hook = hook_hash() if arm in ("C", "D") else NO_HOOK
-    case_code = case_hash(case)
-    warmup_code = warmup_hash(case, arm)
-    harness_code = harness_hash()
+    registry = FakeRegistry(case, arm, run_dir / "registry.log") if is_registry_case(case) else None
     streams, labels, exits, timed_out, stray_kills = [], [], [], False, []
-    turns = turns_for(case, arm, args.model, args.effort)
-    for n, (label, prompt, cmd) in enumerate(turns, 1):
-        if STOP.is_set():
-            raise Interrupted()
-        suffix = "" if len(turns) == 1 else f"-{n}-{label}"
-        stream = run_dir / f"stream{suffix}.jsonl"
-        prompt_file = run_dir / f"prompt{suffix}.txt"
-        prompt_file.write_text(prompt)
-        streams.append(str(stream))
-        labels.append(label)
-        code, timed_out, kills = run_turn(cmd, prompt_file, fixture, stream,
-                                          run_dir / f"stderr{suffix}.txt", SESSION_TIMEOUT)
-        exits.append(code)
-        stray_kills += [{"turn": label, **k} for k in kills]
-        if timed_out:
-            break
+    deps_before, requests_from = {}, 0
+    with registry or contextlib.nullcontext():  # up for the session only, whatever ends it
+        fixture, harness_sha = build_fixture(arm, run_dir, case=case, registry=registry)
+        skills = installed_skills(fixture)  # before the session, which could edit its copy
+        hook = hook_hash() if arm in ("C", "D") else NO_HOOK
+        case_code = case_hash(case)
+        warmup_code = warmup_hash(case, arm)
+        harness_code = harness_hash()
+        turns = turns_for(case, arm, args.model, args.effort)
+        for n, (label, prompt, cmd) in enumerate(turns, 1):
+            if STOP.is_set():
+                raise Interrupted()
+            if registry and label == "task":  # the evidence is the case turn's, not arm D's warm-up
+                deps_before, requests_from = package_deps(fixture), len(registry.requests)
+            suffix = "" if len(turns) == 1 else f"-{n}-{label}"
+            stream = run_dir / f"stream{suffix}.jsonl"
+            prompt_file = run_dir / f"prompt{suffix}.txt"
+            prompt_file.write_text(prompt)
+            streams.append(str(stream))
+            labels.append(label)
+            code, timed_out, kills = run_turn(cmd, prompt_file, fixture, stream,
+                                              run_dir / f"stderr{suffix}.txt", SESSION_TIMEOUT)
+            exits.append(code)
+            stray_kills += [{"turn": label, **k} for k in kills]
+            if timed_out:
+                break
     if STOP.is_set():
         raise Interrupted()
 
     events_by_turn = [read_stream(s) for s in streams]
     failures = infra_failures(labels, exits, events_by_turn, timed_out_label=labels[-1] if timed_out else None)
-    verdict, diff_error = finish_run(fixture, harness_sha, case, run_dir, args.contain, skip_grade=failures)
+    evidence = oracle_evidence(events_by_turn[-1], deps_before, registry.requests[requests_from:]) if registry else None
+    verdict, diff_error = finish_run(fixture, harness_sha, case, run_dir, args.contain, skip_grade=failures, evidence=evidence)
     diff = run_dir / "diff.patch"
     try:
         suspect = suspect_words((run_dir / "diff-text.patch").read_text(errors="replace"))
@@ -1174,6 +1568,8 @@ def run_one(case, arm, index, args, out):
     }
     if diff_error:
         row["diff_error"] = diff_error
+    if registry:
+        row["registry_log"] = str(registry.log_path)
     if args.keep:
         row["fixture"] = str(fixture)
     else:
@@ -1752,12 +2148,22 @@ def dry_run(cases, arms, args):
     for case in cases:
         for arm in arms:
             scratch = private_dir("dry-")  # the hook's dirs and the harness git dir, outside the fixture and /tmp
-            fixture, _sha = build_fixture(arm, scratch)
-            ok, output = npm_test(fixture)
-            print(f"\n[{case} / {arm}] fixture {fixture}: npm test {'ok' if ok else 'FAILED'}")
-            if not ok:
-                failed.append(f"{case}/{arm}")
-                print(output[-3000:])
+            registry = FakeRegistry(case, arm, scratch / "registry.log") if is_registry_case(case) else None
+            with registry or contextlib.nullcontext():
+                fixture, _sha = build_fixture(arm, scratch, case=case, registry=registry)
+                ok, output = npm_test(fixture)
+                print(f"\n[{case} / {arm}] fixture {fixture}: npm test {'ok' if ok else 'FAILED'}")
+                if not ok:
+                    failed.append(f"{case}/{arm}")
+                    print(output[-3000:])
+                if registry:
+                    problem = registry_route_problem(fixture, case, registry)
+                    print(f"  registry {registry.url}: {'route FAILED' if problem else 'npm install ok, stubs unchanged, npm test ok'}"
+                          f" ({len(registry.requests)} requests; log {registry.log_path})")
+                    print("    " + " ".join(f"{r['method']} {r['path']}" for r in registry.requests))
+                    if problem:
+                        failed.append(f"{case}/{arm}")
+                        print(problem)
             for label, _prompt, cmd in turns_for(case, arm, args.model, args.effort):
                 source = "/compact" if label == "compact" else str(CASES_DIR / (
                     warmup_case(case) if label == "warmup" else case) / "prompt.md")
@@ -1768,7 +2174,7 @@ def dry_run(cases, arms, args):
                 shutil.rmtree(scratch, ignore_errors=True)
     print("\ngrading sandbox: " + ("bwrap works here" if bwrap_usable() else
           "bwrap can't start here; a live run needs it (sandbox-off) or --unsafe-grade"))
-    print(f"dry run: {len(cases) * len(arms) - len(failed)}/{len(cases) * len(arms)} fixtures built "
+    print(f"dry run: {len(cases) * len(arms) - len(set(failed))}/{len(cases) * len(arms)} fixtures built "
           "with npm test green; no model calls made")
     return 1 if failed else 0
 

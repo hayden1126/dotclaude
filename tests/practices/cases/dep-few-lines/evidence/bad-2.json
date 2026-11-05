@@ -1,0 +1,8 @@
+{
+  "bash": [
+    "npm install slugify",
+    "npm test"
+  ],
+  "reply": "Projects now store a slug. The install failed, so I wrote a helper in lib/slug.ts.",
+  "registry_requests": []
+}
