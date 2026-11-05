@@ -217,6 +217,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     public repo gets a secrets check before each push; sessions run on HAYPC with a laptop as the
     remote. The skills stay plain folders others can copy. First step: a spike proving a scripted demo recording here.
     Review and plan: `~/scratch/external-skills/hackathon-review-2026-11-05.md`.
+  - **From the Claude Code changelog, 2.1.221 to 2.1.318** (lead's review, 2026-11-05;
+    `~/scratch/external-skills/cc-updates-2026-11-05.md`). `onFailure: "block"` on the hooks with no
+    fail-closed wrapper; `notify_when_idle` for lane waits; check idle compaction (2.1.299) against
+    lanes and autopass. Lanes stay: Projects has no install hold, merge order or handoff gate.
   - **dotclaude on a Mac** (Hayden, 2026-11-05: he may get a MacBook Pro and may share his setup
     with people on Macs). `setup.sh` has some Darwin branches but has never been run there, and
     hooks and notifiers lean on WSL. Pairs with [[hayden-new-device-goal]]. After lane hackathon.
