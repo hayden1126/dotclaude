@@ -1900,6 +1900,46 @@ class BashBase(GitMixin, Base):
         return self.post(command, tid)
 
 
+class TwoPasses(BashBase):
+    """An installed skill and a project skill in one repo: each level runs once per kind."""
+
+    def setUp(self):
+        super().setUp()
+        self.skill("inst", 'skill = "inst"\n[[rule]]\nid = "I-1"\nwhen = "never-in-these-tests"\n'
+                           'say = "s"\n', where="user")
+
+    def in_process(self, level, tid):
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            return PC.two_passes(level, self.event("git commit -m x", "PostToolUse", tid))
+
+    def test_a_commit_the_installed_pass_lets_by_is_scanned_by_the_project_pass(self):
+        told = self.committed(**{"a.ts": "x({ ...body })\n"})
+        self.assertIn("SEC-17 (demo) at a.ts:1", told)
+        self.assertNotIn("no repo was recorded", self.log())
+
+    def test_each_call_in_a_process_reads_its_own_record_in_both_passes(self):
+        seen = []
+
+        def level(event):
+            seen.append(PC.recorded_heads(event))
+
+        with mock.patch.object(PC, "_read_heads", side_effect=lambda e: e["tool_use_id"]):
+            self.in_process(level, "t1")
+            self.in_process(level, "t2")
+        self.assertEqual(seen, ["t1", "t1", "t2", "t2"])
+
+    def test_a_level_that_raises_leaves_no_scope_or_record_behind(self):
+        def level(event):
+            PC.recorded_heads(event)
+            raise RuntimeError("planted")
+
+        with mock.patch.object(PC, "_read_heads", return_value="r"), \
+                self.assertRaises(RuntimeError):
+            self.in_process(level, "t1")
+        self.assertEqual(PC.SCOPE["now"], "all")
+        self.assertEqual(PC.HEADS_READ, {})
+
+
 class L3s(BashBase):
     def test_a_commit_that_adds_a_flagged_line_is_told_once_without_the_text(self):
         told = self.committed(**{"lib__a.ts": "const a = 1\nx({ ...body })\n"})

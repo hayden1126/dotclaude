@@ -2741,19 +2741,23 @@ def two_passes(level, event):
     when the first pass speaks, the second doesn't run, and its findings wait for a later call."""
     global START  # noqa: PLW0603
     project = bash_project(event)
-    SCOPE["now"] = "installed"
-    ran = bool(discover(project, quiet=True))
-    if ran:
-        out = level(event)
-        if out:
-            return out
-    SCOPE["now"] = "project"
-    if discover(project, quiet=True):
+    try:
+        SCOPE["now"] = "installed"
+        ran = bool(discover(project, quiet=True))
         if ran:
-            START = time.monotonic()  # its own budget: the kill now costs only this pass
-        return level(event)
-    SCOPE["now"] = "installed"
-    return None if ran else level(event)   # no skills at all: the levels that need none
+            out = level(event)
+            if out:
+                return out
+        SCOPE["now"] = "project"
+        if discover(project, quiet=True):
+            if ran:
+                START = time.monotonic()  # its own budget: the kill now costs only this pass
+            return level(event)
+        SCOPE["now"] = "installed"
+        return None if ran else level(event)   # no skills at all: the levels that need none
+    finally:  # both belong to this call alone
+        SCOPE["now"] = "all"
+        HEADS_READ.clear()
 
 
 def main():
