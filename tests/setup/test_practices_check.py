@@ -2010,12 +2010,62 @@ class HostilePadding(Base):
         code = "db.insert(items).values({ ...body })\n"
         for name, padding in (("blank lines", "\n" * 200_000), ("space lines", " \n" * 100_000),
                               ("parens", "(" * 200_000 + "\n"), ("quotes", '"' * 200_000 + "\n"),
-                              ("tabs", "\t" * 200_000 + "\n")):
+                              ("tabs", "\t" * 200_000 + "\n"),
+                              ("require", "require(" + "\n" * 200_000),
+                              ("require many", ("require(" + "\n" * 500) * 400),
+                              ("export", "export " + "\n" * 200_000),
+                              ("await", "await " + " \n" * 100_000),
+                              ("braces", ("{" * 3999 + "\n") * 64),
+                              ("data", ("data=" * 799 + "\n") * 64)):
             with self.subTest(name):
                 started = time.monotonic()
-                self.fire(f"lib/{name[:3]}.ts", padding + code)
+                reason = self.fire(f"lib/{name.replace(chr(32), chr(95))}.ts", padding + code)
                 self.assertLess(time.monotonic() - started, 3.5, name)
-                self.assertNotIn("Traceback", self.log())
+                self.assertIn("SEC-04", reason or "", name)
+                self.assertNotIn(" crash ", self.log())
+
+    def test_a_slow_rule_costs_only_itself(self):
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "BUDGET", 1e9), mock.patch.object(PC, "PATTERN_TIME", 0.05):
+            slow = {"id": "slow", "when": "(x+x+)+y"}
+            fine = {"id": "fine", "when": "z"}
+            s = {"name": "m"}
+            got = PC.run_patterns([(s, slow), (s, fine)],
+                                  lambda i: PC.rule_fires(i[1], "a.ts", "x" * 64 + "z"))
+        self.assertEqual([r["id"] for _, r in got], ["fine"])
+        self.assertIn("m:slow", self.log())
+
+    def test_a_slow_unless_excuses_nothing(self):
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "PATTERN_TIME", 0.05):
+            rule = {"id": "r", "when": "z", "unless": "(x+x+)+y"}
+            self.assertTrue(PC.on_the_clock(lambda: PC.rule_fires(rule, "a.ts", "x" * 64 + "z")))
+        self.assertIn("still fires", self.log())
+
+
+class SqueezedText(Base):
+    def test_a_long_whitespace_run_is_cut_and_a_short_one_kept(self):
+        self.assertEqual(PC.scan_text("a" + " " * 500 + "b"), "a" + " " * PC.WS_RUN_MAX + "b")
+        self.assertEqual(PC.scan_text("a" + "\n" * 500 + "b"), "a" + "\n" * PC.WS_RUN_MAX + "b")
+        kept = "a\n\n" + " " * 12 + "b\n"
+        self.assertEqual(PC.scan_text(kept), kept)
+
+    def test_blank_added_lines_past_the_cap_leave_the_join_keeping_line_numbers(self):
+        lines = [(1, "x"), *((n, "") for n in range(2, 500)), (500, "y(z)")]
+        self.assertEqual(PC.when_lines({"id": "R", "when": "y\\(z"}, lines), [(500, "y(z)")])
+
+    def test_a_commit_s_padding_doesn_t_reach_the_kill(self):
+        rule = {"id": "R", "when": "x", "unless": r"require\(\s*\)\s*[\"']q"}
+        blob = "x\n" + "require(" + "\n" * 200_000
+        started = time.monotonic()
+        self.assertEqual(len(PC.file_hits(rule, [(1, "x")], blob)), 1)
+        self.assertLess(time.monotonic() - started, 1)
+
+    def test_the_line_start_rewrite_leaves_a_class_and_an_escaped_caret_alone(self):
+        self.assertEqual(PC.expand(r"[^\s*]x", ()), r"[^\s*]x")
+        self.assertEqual(PC.expand(r"\^\s*x", ()), r"\^\s*x")
+        self.assertEqual(PC.expand(r"^\s*x", ()), r"^[^\S\n]*x")
+        self.assertEqual(PC.expand(r"^(?!\s*x)", ()), r"^(?![^\S\n]*x)")
 
 
 class WhatARepoCantFake(Base):
@@ -2045,6 +2095,17 @@ class WhatARepoCantFake(Base):
     def test_a_read_of_another_skill_md_of_that_name_loads_nothing(self):
         self.add(*load("t9", "Read", file_path="/somewhere/else/demo/SKILL.md"))
         self.assertIsNotNone(self.fire())
+
+    def test_a_tilde_path_to_the_skill_loads_it(self):
+        self.skill("instd", 'skill = "instd"\n[[event]]\nid = "e"\npaths = ["docs/**"]\n'
+                            'lines = ["l"]\n', where="user")
+        rel = os.path.relpath(os.path.join(self.config, "skills", "instd", "SKILL.md"), self.home)
+        self.add(*load("t9", "Read", file_path=f"~/{rel}"))
+        self.assertIsNone(self.fire("docs/x.md", "plain\n"))
+
+    def test_a_read_path_python_can_t_encode_loads_nothing(self):
+        block = {"name": "Read", "input": {"file_path": "/x/" + chr(0xd800) + "/SKILL.md"}}
+        self.assertIsNone(PC.loaded_name(block))
 
     def test_a_read_of_the_skill_s_own_md_loads_it(self):
         path = os.path.join(self.proj, ".claude", "skills", "demo", "SKILL.md")

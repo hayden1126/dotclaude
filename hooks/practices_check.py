@@ -214,6 +214,7 @@ from bisect import bisect_right
 import mmap
 import os
 import re
+import signal
 import stat
 import sys
 import time
@@ -234,6 +235,16 @@ except ValueError:
 CONTENT_MAX = 256 << 10
 FILE_MAX = 1 << 20  # bytes of the current file read to apply an Edit; scans still cap at CONTENT_MAX
 LINE_MAX = 4000
+# Patterns' \\s* cross lines, so a long whitespace run costs each of them n^2 wherever a literal
+# comes before it, past any line cap. No pattern needs one this long: past it, a run is cut. Lines
+# below such a run, 33 blank lines or more, then report a smaller number.
+WS_RUN_MAX = 32
+# The time one event or rule may take in a run. Text a repo chooses can still make a pattern slow
+# (a long line of one character, repeated); this costs the run that rule, not the 5 s kill, which
+# would allow the call with every other rule unread.
+PATTERN_TIME = 0.4
+WS_RUN = re.compile(r"\s{%d,}" % (WS_RUN_MAX + 1))
+LINE_START_WS = re.compile(r"(?<![\\\[])\^(\(\?!)?\\s\*")
 PARSE_MAX = 1 << 20  # transcript rows bigger than this are never a load or a deny
 LOG_MAX = 64 << 10
 DIGEST_MAX = 2000
@@ -383,10 +394,10 @@ def path_matches(globs, rel):
 
 
 def expand(pattern, helpers):
-    # With re.M, \\s after ^ runs across every blank line below, from each one: text with 60,000 of
-    # them takes the run to the 5 s kill, which allows the call. Anything those \\s* found past a
-    # newline, ^ finds on its own line, so staying on the line finds the same.
-    pattern = pattern.replace(r"^\s*", r"^[^\S\n]*").replace(r"^(?!\s*", r"^(?![^\S\n]*")
+    # With re.M, \\s after ^ runs across the blank lines below, from each one, which adds up over
+    # many short runs. Anything those \\s* found past a newline, ^ finds on its own line, so
+    # staying on the line finds the same.
+    pattern = LINE_START_WS.sub(lambda m: "^" + (m.group(1) or "") + r"[^\S\n]*", pattern)
     if "{auth_helpers}" not in pattern:
         return pattern
     names = sorted(set(AUTH_HELPERS) | {h for h in helpers if HELPER.fullmatch(h)},
@@ -398,9 +409,14 @@ def search(pattern, text, helpers=()):
     return re.search(expand(pattern, helpers), text, re.MULTILINE) is not None
 
 
+def squeeze(text):
+    return WS_RUN.sub(lambda m: m.group()[:WS_RUN_MAX], text)
+
+
 def scan_text(content):
-    """The content as scanned: CONTENT_MAX characters, each line cut to LINE_MAX."""
-    return "\n".join(line[:LINE_MAX] for line in content[:CONTENT_MAX].split("\n"))
+    """The content as scanned: CONTENT_MAX characters, each line cut to LINE_MAX, each whitespace
+    run to WS_RUN_MAX."""
+    return squeeze("\n".join(line[:LINE_MAX] for line in content[:CONTENT_MAX].split("\n")))
 
 
 def event_fires(event, rel, text, helpers=(), crumb=None):
@@ -432,7 +448,7 @@ def rule_fires(rule, rel, text, helpers=(), crumb=None, after_text=None, after=N
         crumb.mark(rel, "L2", rule["id"])
     if not guarded(rule["when"], text, helpers, rule["id"]):
         return False
-    return not (rule.get("unless") and guarded(rule["unless"], after_text, helpers, rule["id"]))
+    return not excused(rule, after_text, helpers)
 
 
 def line_hits(rule, lines, helpers=()):
@@ -442,7 +458,7 @@ def line_hits(rule, lines, helpers=()):
     for n, line in lines:
         if not guarded(rule["when"], line, helpers, rule["id"]) or allowed(rule["id"], line):
             continue
-        if rule.get("unless") and guarded(rule["unless"], line, helpers, rule["id"]):
+        if excused(rule, line, helpers):
             continue
         out.append((n, line))
     return out
@@ -455,8 +471,10 @@ def file_hits(rule, lines, blob, helpers=()):
     first, on the added lines alone: the blob checks cost a pass over the whole file each, so
     they run only for a file `when` flags (a file with no `when` match gives [] either way)."""
     hits = when_lines(rule, lines, helpers)
-    if not hits or allowed(rule["id"], blob) or (rule.get("unless") and guarded(
-            rule["unless"], blob, helpers, rule["id"])):
+    if not hits:
+        return []
+    blob = scan_text(blob)
+    if allowed(rule["id"], blob) or excused(rule, blob, helpers):
         return []
     return hits
 
@@ -464,12 +482,17 @@ def file_hits(rule, lines, blob, helpers=()):
 def when_lines(rule, lines, helpers=()):
     """[(number, line)] of the lines that a match of a rule's `when`, over the lines joined,
     starts on."""
-    lines = list(lines)
-    text = "\n".join(line for _, line in lines)
+    lines, blanks, kept = list(lines), 0, []
+    for item in lines:  # the numbers stay with the lines, so blank ones can go from the join
+        blanks = blanks + 1 if not item[1].strip() else 0
+        if blanks <= WS_RUN_MAX:
+            kept.append(item)
+    lines = kept
+    text = "\n".join(squeeze(line) for _, line in lines)
     starts, pos = [], 0
     for _, line in lines:
         starts.append(pos)
-        pos += len(line) + 1
+        pos += len(squeeze(line)) + 1
     try:
         found = {bisect_right(starts, m.start()) - 1
                  for m in re.finditer(expand(rule["when"], helpers), text, re.MULTILINE)}
@@ -487,11 +510,42 @@ class PatternError(Exception):
     pass
 
 
+class SlowPattern(PatternError):
+    pass
+
+
+def on_the_clock(call):
+    """call() under a repeating alarm at PATTERN_TIME: Python's re engine runs signal handlers as
+    it matches. Unclocked where there is no alarm or this isn't the main thread."""
+    def ring(_signum, _frame):
+        raise SlowPattern(f"ran past {PATTERN_TIME}s on this text")
+
+    try:
+        signal.signal(signal.SIGALRM, ring)
+        signal.setitimer(signal.ITIMER_REAL, PATTERN_TIME, PATTERN_TIME)
+    except (AttributeError, ValueError):
+        return call()
+    try:
+        return call()
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+
+
 def guarded(pattern, text, helpers, owner):
     try:
         return search(pattern, text, helpers)
     except (re.error, RecursionError, TypeError, ValueError, OverflowError) as e:
         raise PatternError(f"{owner}: {type(e).__name__}: {e}") from e
+
+
+def excused(rule, text, helpers):
+    """Whether a rule's `unless` matches. One that runs out of time excuses nothing, so slow text
+    can't stand in for the guard the rule asks for."""
+    try:
+        return bool(rule.get("unless")) and guarded(rule["unless"], text, helpers, rule["id"])
+    except SlowPattern as e:
+        log("pattern-skipped", f"{rule['id']}'s unless: {e}; the rule still fires")
+        return False
 
 
 def lint_regex(pattern):
@@ -860,11 +914,17 @@ class Transcript:
         """The tool name of the call with this id before offset before, or None if not found."""
         if not isinstance(tool_id, str) or not tool_id:
             return None
-        for _, _, d in self.hits(json.dumps(tool_id).encode(), 0, before):
-            if d.get("type") == "assistant":
+        needle = json.dumps(tool_id).encode()
+        i = self.m.rfind(needle, 0, before)
+        while i != -1:  # backward: the call sits just before its result
+            check_budget()
+            s, e = self.line_at(i)
+            d = self.parse(s, e)
+            if d is not None and d.get("type") == "assistant":
                 for b in blocks(d):
                     if b.get("type") == "tool_use" and b.get("id") == tool_id:
                         return b.get("name")
+            i = self.m.rfind(needle, 0, s)
         return None
 
     def assistant_after(self, pos):
@@ -906,8 +966,11 @@ def loaded_name(b):
         return inp["skill"].rsplit(":", 1)[-1].strip() or None
     fp = inp.get("file_path")
     if b.get("name") == "Read" and isinstance(fp, str) and fp.replace("\\", "/").endswith(
-            "/SKILL.md") and "\0" not in fp:
-        return os.path.dirname(os.path.realpath(fp.replace("\\", "/")))
+            "/SKILL.md"):
+        try:
+            return os.path.dirname(os.path.realpath(os.path.expanduser(fp.replace("\\", "/"))))
+        except ValueError:  # a NUL or a lone surrogate: no file by that name was read
+            return None
     return None
 
 
@@ -1328,8 +1391,10 @@ def run_patterns(items, fn, cut=False):
     out = []
     for n, item in enumerate(items):
         try:
-            if fn(item):
+            if on_the_clock(lambda item=item: fn(item)):
                 out.append(item)
+        except SlowPattern as e:
+            log("pattern-skipped", f"{item[0]['name']}:{item[1]['id']}: {e}")
         except PatternError as e:
             log("pattern-skipped", str(e))
         except Budget:
@@ -1437,7 +1502,12 @@ def pre_tool_use(event):
                     continue
                 pending.append((s, r))
                 keys.append(key)
-                keys += [f"{key}|{_sha1(line.strip())}" for line in l2_lines(r, text, helpers)]
+                try:
+                    lines = on_the_clock(lambda r=r: l2_lines(r, text, helpers))
+                except SlowPattern as e:  # the rule's key alone: a later scan then rereads the file
+                    log("pattern-skipped", f"{s['name']}:{r['id']}: {e}")
+                    lines = []
+                keys += [f"{key}|{_sha1(line.strip())}" for line in lines]
             if pending:
                 reason = l2_reason(pending, rel)
         # A deny needs a way for its resend through: the state key, or a transcript that will
