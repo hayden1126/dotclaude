@@ -266,12 +266,17 @@ class Takes(unittest.TestCase):
         result = project.take(APP_CMD="echo the-reason-it-died; exit 7")
         self.assert_failed_clean(project, result, "the-reason-it-died")
 
-    def test_failed_take_removes_the_previous_video(self):
+    def test_failed_take_keeps_the_previous_video_and_says_so(self):
         project = self.project(one_beat("await page.waitForTimeout(100);"))
         self.assertEqual(project.take().returncode, 0)
-        self.assertTrue((project.out / "demo.mp4").exists())
+        video = project.out / "demo.mp4"
+        before = video.read_bytes()
         result = project.take(APP_CMD="exit 0")
-        self.assert_failed_clean(project, result, "before it answered")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("is the previous take, unchanged", result.stderr)
+        self.assertEqual(video.read_bytes(), before)
+        self.assertEqual(project.leftovers(), ["out"], "a failed take left its staging dir")
+        self.assertFalse(port_open(project.port), "the app outlived the take")
 
     def test_output_dir_keeps_files_it_did_not_write(self):
         project = self.project()

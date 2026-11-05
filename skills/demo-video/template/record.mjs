@@ -12,9 +12,9 @@
 // run, so the app reaches the right state, and are trimmed off.
 //
 // A take fails loud: any page error, a 5xx, a failed first-party request, a step timeout, or an app
-// that exits gives a non-zero exit and no output video. The take is built in a staging dir beside
-// OUT and moved in only once it is whole. The previous take in OUT is removed at the start, so a
-// stale video can't pass for this one.
+// that exits gives a non-zero exit and no new video. The take is built in a staging dir beside OUT
+// and moved in only once it is whole. A failed take leaves the previous good one in OUT, since that
+// may be the only backup there is, and says so, so a stale video can't pass for this one.
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -148,11 +148,6 @@ function checkFfmpeg() {
   }
 }
 
-function clearOldTake() {
-  for (const name of OUTPUTS) fs.rmSync(path.join(OUT, name), { force: true });
-  try { fs.rmdirSync(OUT); } catch { /* absent, or it also holds the user's own files: leave it */ }
-}
-
 function withLimit(promise, ms, message) {
   let timer;
   const limit = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), ms); });
@@ -223,7 +218,6 @@ function publish() {
 }
 
 async function record() {
-  clearOldTake();
   const project = await import(new URL('./beats.mjs', import.meta.url));
   checkBeats(project);
   const size = parseSize(process.env.SIZE || project.size || '1920x1080');
@@ -330,6 +324,9 @@ try {
   await record();
 } catch (e) {
   explainFailure(e);
+  if (fs.existsSync(path.join(OUT, 'demo.mp4'))) {
+    console.error(`this take failed: ${path.join(OUT, 'demo.mp4')} is the previous take, unchanged`);
+  }
   exitCode = 1;
 }
 await stopApp();

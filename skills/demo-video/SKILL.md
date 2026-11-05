@@ -49,7 +49,7 @@ Run `node demo/record.mjs` from the project root. Output lands in `demo/out/`: `
 | `HEADED=1` | Rehearse in a visible browser. Don't ship this take. |
 | `SIZE=1280x720`, `FPS=24` | Override the format; both size numbers even |
 
-Each run starts by removing the last take in its output dir. Copy a take you want to keep, or give each take its own `OUT`.
+A good take replaces the last one in its output dir, so copy a take you want to keep, or give each take its own `OUT`. A failed take leaves the last good one in place and says so.
 
 ## Believe it only after looking
 
@@ -63,7 +63,7 @@ An exit of 0 proves the script ran, not that the video is good.
 
 ## When a take fails
 
-Read the exit message, then fix the app, not the script's timeouts. A step that needs more than 8 s is too slow for a viewer as well. A failed take leaves no video, on purpose.
+Read the exit message, then fix the app, not the script's timeouts. A step that needs more than 8 s is too slow for a viewer as well. A failed take makes no new video, on purpose.
 
 | Message | Meaning |
 |---|---|

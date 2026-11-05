@@ -100,6 +100,19 @@ class Shape(unittest.TestCase):
         with open(SCRIPT) as f:
             self.assertEqual(f.readline().rstrip("\n"), "#!/usr/bin/python3 -I")
 
+    def test_a_crash_is_cant_run_never_clean(self):
+        with open(SCRIPT) as f:
+            source = f.read()
+        self.assertIn("def main():", source)
+        broken = source.replace("def main():", "def main():\n    raise RuntimeError('boom')\n\n\ndef _main():", 1)
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "broken")
+            with open(path, "w") as f:
+                f.write(broken)
+            p = subprocess.run([sys.executable, "-I", path], capture_output=True, text=True, cwd=d)
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertIn("can't run", p.stderr)
+
 
 class Secrets(ScanCase):
     def test_each_kind_is_caught_and_its_value_never_printed(self):
