@@ -43,8 +43,8 @@ Work through these as a checklist. Ask for what's the user's, one step at a time
 Fixed times from `EVENT.md`, written in `DEMO.md`. Count working hours, not wall time. Start from the working blocks and hard deadlines, and work back from the earliest deadline (slides due before a pitch come before the submission). Checkpoints: plan ends, demo path runs end to end, feature freeze, rehearse and record. Use 25-30 / 50 / 75% of working hours only when the schedule gives nothing firmer.
 
 Two shapes, neither of them a default:
-- 24 hours straight, Sat 12:00 to Sun 12:00, expo table, video required, the team resting 00:00-06:00: 18 working hours, so plan ends Sat 15:00, demo path Sat 21:00, freeze Sun 08:00, then record and rehearse the walkthrough, with no stage rehearsal.
-- Two days, off site in the evening, Sat 10:00-18:00 and Sun 09:00-12:00, slides due Sun 12:00 for a 5-minute pitch at 14:00: 11 working hours, so plan ends Sat 11:30, demo path Sat 16:00, freeze Sun 09:30, then record, rehearse live and finish the slides by 12:00.
+- 24 hours straight, Sat 12:00 to Sun 12:00, expo table, video required, the team resting 00:00-06:00: 18 working hours, so plan ends Sat 17:00, demo path Sat 21:00, freeze Sun 08:00, then record and rehearse the walkthrough, with no stage rehearsal.
+- Two days, off site in the evening, Sat 09:00-17:00 and Sun 09:00-12:00, slides due Sun 12:00 for a 3-minute pitch at 14:00: 11 working hours, so plan ends Sat 12:00, demo path Sat 14:30, freeze Sun 09:15, then record, rehearse live and finish the slides by 12:00.
 
 An unattended evening block counts as working time only if tasks are queued for it. Reminders: use `CronCreate` for each checkpoint if the session has it; otherwise state the working time left in each reply and ask the user to set alarms. An `/interview` running past its checkpoint gets one reminder, and the user still ends it.
 
