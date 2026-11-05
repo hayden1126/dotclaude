@@ -235,9 +235,11 @@ except ValueError:
 CONTENT_MAX = 256 << 10
 FILE_MAX = 1 << 20  # bytes of the current file read to apply an Edit; scans still cap at CONTENT_MAX
 LINE_MAX = 4000
-# Patterns' \\s* cross lines, so a long whitespace run costs each of them n^2 wherever a literal
-# comes before it, past any line cap. No pattern needs one this long: past it, a run is cut. Lines
-# below such a run, 33 blank lines or more, then report a smaller number.
+# Patterns' \\s* cross lines, so a whitespace run across lines costs each of them n^2 wherever a
+# literal comes before it, past any line cap. No pattern needs one this long: past it, such a run
+# keeps its line breaks up to this many and the last line's indent. Lines below 33 blank lines or
+# more then report a smaller number. A run inside a line stays, under LINE_MAX: finding keys hash
+# the raw line, and PATTERN_TIME bounds it.
 WS_RUN_MAX = 32
 # The time one event or rule may take in a run. Text a repo chooses can still make a pattern slow
 # (a long line of one character, repeated); this costs the run that rule, not the 5 s kill, which
@@ -409,13 +411,20 @@ def search(pattern, text, helpers=()):
     return re.search(expand(pattern, helpers), text, re.MULTILINE) is not None
 
 
+def _cut_run(m):
+    run = m.group()
+    if "\n" not in run:
+        return run
+    return "\n" * min(run.count("\n"), WS_RUN_MAX) + run[run.rindex("\n") + 1:]
+
+
 def squeeze(text):
-    return WS_RUN.sub(lambda m: m.group()[:WS_RUN_MAX], text)
+    return WS_RUN.sub(_cut_run, text)
 
 
 def scan_text(content):
     """The content as scanned: CONTENT_MAX characters, each line cut to LINE_MAX, each whitespace
-    run to WS_RUN_MAX."""
+    run across lines to WS_RUN_MAX line breaks."""
     return squeeze("\n".join(line[:LINE_MAX] for line in content[:CONTENT_MAX].split("\n")))
 
 
@@ -473,8 +482,7 @@ def file_hits(rule, lines, blob, helpers=()):
     hits = when_lines(rule, lines, helpers)
     if not hits:
         return []
-    blob = scan_text(blob)
-    if allowed(rule["id"], blob) or excused(rule, blob, helpers):
+    if allowed(rule["id"], blob) or excused(rule, scan_text(blob), helpers):
         return []
     return hits
 
@@ -483,16 +491,17 @@ def when_lines(rule, lines, helpers=()):
     """[(number, line)] of the lines that a match of a rule's `when`, over the lines joined,
     starts on."""
     lines, blanks, kept = list(lines), 0, []
-    for item in lines:  # the numbers stay with the lines, so blank ones can go from the join
-        blanks = blanks + 1 if not item[1].strip() else 0
+    for n, line in lines:  # the numbers stay with the lines, so blank ones can go from the join
+        blank = not line.strip()
+        blanks = blanks + 1 if blank else 0
         if blanks <= WS_RUN_MAX:
-            kept.append(item)
-    lines = kept
-    text = "\n".join(squeeze(line) for _, line in lines)
+            kept.append((n, line, "" if blank else line))
+    lines = [item[:2] for item in kept]
+    text = "\n".join(item[2] for item in kept)
     starts, pos = [], 0
-    for _, line in lines:
+    for item in kept:
         starts.append(pos)
-        pos += len(squeeze(line)) + 1
+        pos += len(item[2]) + 1
     try:
         found = {bisect_right(starts, m.start()) - 1
                  for m in re.finditer(expand(rule["when"], helpers), text, re.MULTILINE)}

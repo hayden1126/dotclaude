@@ -2044,11 +2044,28 @@ class HostilePadding(Base):
 
 
 class SqueezedText(Base):
-    def test_a_long_whitespace_run_is_cut_and_a_short_one_kept(self):
-        self.assertEqual(PC.scan_text("a" + " " * 500 + "b"), "a" + " " * PC.WS_RUN_MAX + "b")
+    def test_a_long_run_across_lines_is_cut_and_a_short_one_kept(self):
         self.assertEqual(PC.scan_text("a" + "\n" * 500 + "b"), "a" + "\n" * PC.WS_RUN_MAX + "b")
         kept = "a\n\n" + " " * 12 + "b\n"
         self.assertEqual(PC.scan_text(kept), kept)
+
+    def test_a_run_inside_a_line_is_left_for_the_keys_to_match_the_raw_line(self):
+        line = "eval(x)" + " " * 40 + "// n"  # practices-allow: SEC-13 a test string, never run
+        rule = {"id": "R", "when": "eval"}
+        self.assertEqual(PC.scan_text(line), line)
+        self.assertEqual(PC.l2_lines(rule, PC.scan_text(line), ())[0],
+                         PC.file_hits(rule, [(1, line)], line)[0][1])
+
+    def test_a_cut_run_keeps_its_line_break_and_the_next_line_s_start(self):
+        text = "// x" + " " * 40 + "\n" + "  " + '"use client"\nenv\n'
+        self.assertEqual(PC.scan_text(text), '// x\n  "use client"\nenv\n')
+        rule = {"id": "R", "when": "env",
+                "unless": r"""\A(?![\s\S]{0,500}?^\s*["']use client["'])"""}
+        self.assertEqual(PC.file_hits(rule, [(3, "env")], text), [(3, "env")])
+
+    def test_an_allow_comment_past_the_line_cap_still_counts_at_commit(self):
+        blob = "x" * (PC.LINE_MAX + 10) + " // practices-allow: R why\nenv\n"
+        self.assertEqual(PC.file_hits({"id": "R", "when": "env"}, [(2, "env")], blob), [])
 
     def test_blank_added_lines_past_the_cap_leave_the_join_keeping_line_numbers(self):
         lines = [(1, "x"), *((n, "") for n in range(2, 500)), (500, "y(z)")]
