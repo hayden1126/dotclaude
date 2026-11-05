@@ -4856,7 +4856,7 @@ class RealNpmRoute(unittest.TestCase):
         self.assertEqual((root / ".npmrc").read_text(), self.registry.npmrc())
         self.assertEqual(json.loads((root / ".claude/settings.json").read_text())["sandbox"],
                          {"enabled": True, "autoAllowBashIfSandboxed": True, "allowUnsandboxedCommands": False,
-                          "network": {"allowedDomains": ["127.0.0.2"]}})
+                          "network": {"allowedDomains": [f"127.0.0.2:{self.registry._server.server_address[1]}"]}})
         self.assertIn(".npmrc", run.git("ls-files", cwd=root).split())
 
     def test_install_keeps_every_stub_and_fetches_none(self):

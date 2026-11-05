@@ -77,10 +77,9 @@ Per run:
         warm-up case's packages.
       Fixture: .npmrc (`registry=`, `cache=.npm-cache`, `fund=false`) in the initial commit, and
         in .claude/settings.json's sandbox `allowUnsandboxedCommands: false` and
-        `network.allowedDomains: ["127.0.0.2"]`, so registry.npmjs.org answers 403. Known limit:
-        allowedDomains has no port, so the agent can also reach whatever else listens on all
-        host interfaces, through 127.0.0.2. .npm-cache is in both git dirs' info/exclude, so like
-        node_modules it is in no diff.
+        `network.allowedDomains: ["127.0.0.2:<port>"]`, this run's port alone, so registry.npmjs.org
+        and anything else listening on the host answer 403. .npm-cache is in both git dirs'
+        info/exclude, so like node_modules it is in no diff.
       Stubs: `npm install <new package>` would otherwise fetch react-dom (in package.json, in no
         stub dir: E404) and prune server-only and client-only (stubs package.json doesn't name),
         so keep_stubs() puts registry_stubs/react-dom in node_modules and names all five in
@@ -635,7 +634,7 @@ def build_fixture(arm, run_dir=None, case=None, registry=None):
 
     settings = {"sandbox": {"enabled": True, "autoAllowBashIfSandboxed": True}}
     if registry is not None:
-        settings["sandbox"].update(REGISTRY_SANDBOX)
+        settings["sandbox"].update(registry.sandbox())
     if arm in ("B", "C", "D"):
         for name in PRACTICES_SKILLS:
             shutil.copytree(SKILLS_DIR / name, root / ".claude" / "skills" / name)
@@ -663,7 +662,6 @@ def npm_test(root):
 ORACLE_DEPS = HERE / "oracle_deps.mjs"  # the oracle helpers only registry cases import
 REGISTRY_STUBS = HERE / "registry_stubs"  # react-dom: in the fixture's package.json, not in stubs/
 REGISTRY_HOST = "127.0.0.2"  # 127.0.0.1 is in the sandbox's forced NO_PROXY, so it never reaches the host
-REGISTRY_SANDBOX = {"allowUnsandboxedCommands": False, "network": {"allowedDomains": [REGISTRY_HOST]}}
 NPM_CACHE = ".npm-cache"
 PACKAGE_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 INSTALL_SCRIPTS = ("preinstall", "install", "postinstall")
@@ -727,6 +725,11 @@ class FakeRegistry:
 
     def npmrc(self):
         return f"registry={self.url}\ncache={NPM_CACHE}\nfund=false\n"
+
+    def sandbox(self):
+        """The fixture's sandbox settings: this run's port alone, so nothing else on the host."""
+        return {"allowUnsandboxedCommands": False,
+                "network": {"allowedDomains": [f"{REGISTRY_HOST}:{self._server.server_address[1]}"]}}
 
     def npm_env(self):
         """The env for npm run by the harness itself, never the agent. It runs in this process's
