@@ -5074,6 +5074,9 @@ class RealNpmRoute(unittest.TestCase):
                          {"enabled": True, "autoAllowBashIfSandboxed": True, "allowUnsandboxedCommands": False,
                           "network": {"allowedDomains": [f"127.0.0.2:{self.registry._server.server_address[1]}"]}})
         self.assertIn(".npmrc", run.git("ls-files", cwd=root).split())
+        # An agent's npm in another folder has no .npmrc, and must still reach this registry.
+        self.assertEqual(json.loads((root / ".claude/settings.json").read_text())["env"],
+                         {"npm_config_registry": self.registry.url, "npm_config_cache": str(root.resolve() / run.NPM_CACHE)})
 
     def test_install_keeps_every_stub_and_fetches_none(self):
         root, sha = self.fixture("dep-benign")

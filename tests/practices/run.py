@@ -640,6 +640,7 @@ def build_fixture(arm, run_dir=None, case=None, registry=None):
     settings = {"sandbox": {"enabled": True, "autoAllowBashIfSandboxed": True}}
     if registry is not None:
         settings["sandbox"].update(registry.sandbox())
+        settings["env"] = registry.session_env(root)
     if arm in ("B", "C", "D"):
         for name in PRACTICES_SKILLS:
             shutil.copytree(SKILLS_DIR / name, root / ".claude" / "skills" / name)
@@ -735,6 +736,12 @@ class FakeRegistry:
         """The fixture's sandbox settings: this run's port alone, so nothing else on the host."""
         return {"allowUnsandboxedCommands": False,
                 "network": {"allowedDomains": [f"{REGISTRY_HOST}:{self._server.server_address[1]}"]}}
+
+    def session_env(self, root):
+        """The npm settings for the agent's own commands, from any folder. `.npmrc` holds only in
+        the fixture, and an agent that packs a tarball from a temp dir would otherwise get the
+        public registry's sandbox denial, worded "user denied", and may take it as a policy."""
+        return {"npm_config_registry": self.url, "npm_config_cache": str(Path(root).resolve() / NPM_CACHE)}
 
     def npm_env(self):
         """The env for npm run by the harness itself, never the agent. It runs in this process's
