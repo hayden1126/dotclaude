@@ -416,8 +416,6 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   sandbox-off deletes, so the sandboxed gap stands):
   `python3 -I ~/scratch/sandbox-audit/rm_scan.py 2026-11-04`. Sending the drafted
   `$CLAUDE_JOB_DIR/tmp` bug report is Hayden's call; `CLAUDE.md` carries the workaround.
-- **A stale entry from lane guard-b's smoke** (2026-10-14; private: sandbox-audit FINDINGS, row
-  TE1). Hayden removes it by hand (his call).
 - **Two Write-tool bug drafts wait in `/feedback`** (Hayden's call to send): the overwrite-guard session's has the
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
