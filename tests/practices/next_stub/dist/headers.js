@@ -1,5 +1,7 @@
 // cookies() and headers() work both awaited (Next 15) and called synchronously (Next 14).
-import { cookieArgs, requestStore } from "./context.js";
+// Like Next, a cookie set or deleted through cookies() in a route handler is sent on its
+// response: the request scope collects the Set-Cookie lines (runWithRequest in test-context.js).
+import { cookieArgs, requestStore, serializeCookie } from "./context.js";
 
 function currentStore(name) {
   const store = requestStore.getStore();
@@ -31,12 +33,15 @@ export function cookies() {
       return map.has(name);
     },
     set(...args) {
-      const [name, value] = cookieArgs(args);
+      const [name, value, options] = cookieArgs(args);
       map.set(name, value);
+      store.setCookies?.push(serializeCookie(name, value, options));
       return jar;
     },
     delete(name) {
-      map.delete(typeof name === "object" ? name.name : name);
+      const options = typeof name === "object" ? name : { name };
+      map.delete(options.name);
+      store.setCookies?.push(serializeCookie(options.name, "", { path: options.path, domain: options.domain, maxAge: 0, expires: new Date(0) }));
       return jar;
     },
     get size() {
