@@ -90,10 +90,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - #144 (exam-prep): rules public, evidence private (Hayden, 2026-10-20).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
-  - **Live lanes** (briefs in each record). Merge order: 1 dev-cycle (`feat/dev-cycle-rules`, carries the lead's notes),
-    2 hackathon (`feat/hackathon-mode`; a hackathon starts 2026-11-14, so it aims to merge by
-    2026-11-11 and moves up if needed), 3 practices
-    (`feat/practices-auth-secrets`, its next PR), 4 deny-rules (`fix/deny-rules`).
+  - **Live lanes** (briefs in each record). Merge order: 1 hackathon (`feat/hackathon-mode`, carries the lead's notes; a hackathon starts
+    2026-11-14, so it merges by 2026-11-11), 2 practices (`feat/practices-dependencies`, its next
+    PR), 3 deny-rules (`fix/deny-rules`).
     **Install freeze on HAYPC, Nov 12 through Nov 15** (Hayden, 2026-11-05): no lane installs in
     that window, except fixes for lane hackathon, so the event runs what the dry run tested.
     Merged and installed from main, all closed: chrome-dup (#151, 2026-10-29: one chrome-devtools
@@ -120,6 +119,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     capella-studio lane artexport's report; a fork's hook output never reaches its model, so it
     knows its lane only from the parent's copied line, docs/lanes.md S5; the delegation canary
     checks the source enum; untried against lane practices' settings.json change),
+    dev-cycle (#166, 2026-11-05: the external-skills ports, `quality-lens`, stalled-chain rules in
+    the lanes skill, and `writing-voice` split into `technical-writing`, `formal-voice` and
+    `casual-voice`; a running session keeps the old CLAUDE.md until its next start),
     npx-cwd (#165, 2026-11-05: SW1; a launch by Claude Code starts at `/`),
     hook-isolate (#163, 2026-11-04: DA17 parts (a) and (b); hook shims and Python shebangs run
     `python3 -I`; the widened Edit denies, so a `~/.local/lib` install needs the sandbox off),
@@ -174,30 +176,6 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     row), SW11 (recheck after a uv upgrade). By hand when convenient, details in the rows and
     lane sweep's closed record: SW10, SW9, SW3, and the elevated scheduled-task listing the
     sweep could not inventory.
-  - **Dev-cycle rules from three external skill sets** (Hayden, 2026-11-04). In lane dev-cycle
-    (`feat/dev-cycle-rules`), after ports and practices in merge order; it overlaps ports on
-    `docs/lanes.md` and `skills/lanes/SKILL.md`. Added (Hayden, 2026-11-04, after #163's chain
-    stalled for about 8 hours): two sentences in The lead, step 7 of the skill. A chain that stops
-    before step 6 still tells every remaining lane "main moved", what stalled, and that installs
-    stay held. A chain stopped on something that can clear without the lead arms a read-only
-    background loop that exits when it clears, which wakes the lead to finish the chain; at the
-    2-hour limit the lead tells Hayden. A researcher read pstack-claude, ponytail and Cursor's
-    thermo-nuclear-code-quality-review (all MIT): install none (pstack's session-start mandate
-    and autonomy rules, and ponytail's always-on hooks and telemetry, contradict CLAUDE.md), port
-    these as text edits. Reviewer agent and delegation brief: a finding survives only with the
-    command that proves it; "no concrete case, no finding"; numbered findings with `Verdict:` and
-    `Not checked:` lines; grep every caller. docs/delegation.md: no independent reviewer, the
-    gate stays closed. docs/lanes.md: a verdict is tied to a head SHA, merge with
-    `--match-head-commit`. coding-practices: reproduce first and commit the failing repro, a
-    characterization test before a refactor, verify-this verdicts, deslop checks. writing-voice:
-    the PR body template. Open for the lane's plan: a manual quality-lens skill from the Cursor
-    rubric, capped at medium; ponytail's `shortcut:` marker (Hayden unsure, 2026-11-04; the
-    lead's lean: keep the no-"for now" ban, add only an assumption-comment line). Also in scope
-    (Hayden, 2026-11-04): the reels of instagram.com/youraveragetechbro, first the "How to become
-    a 10x AI-Native Developer" series that named ponytail; transcripts through getthescript.app
-    ([[instagram-reel-transcripts]]); the profile's reel list may need a login, so ask Hayden
-    for the URLs if WebFetch can't list them. Fold any further tools they name into the same
-    adopt / take ideas / skip review. The report: `~/scratch/external-skills/review-2026-11-04.md`.
   - **A verify-app skill template for app repos** (Hayden's pick, 2026-11-04, via lane dev-cycle's
     reels review, `~/scratch/external-skills/reels-review-2026-11-04.md`). Adapted from pstack's
     create-verification-skill and maintain-verification-skill (MIT): launch, a read-only health
