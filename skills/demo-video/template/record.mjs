@@ -198,17 +198,17 @@ function portOpen(url) {
 
 // Playwright's browser ignores the proxy variables, and a command sandbox reaches outside hosts only
 // through them. Local addresses stay direct.
-function browserProxy() {
+function browserProxy(localHost) {
   const value = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy;
   if (!value) return {};
-  const proxy = new URL(value);
+  const proxy = new URL(value.includes('://') ? value : 'http://' + value); // curl accepts host:port too.
   const bypass = (process.env.NO_PROXY || process.env.no_proxy || '').split(',').filter(host => host && host !== '::1');
   return {
     proxy: {
       server: `${proxy.protocol}//${proxy.host}`, // A password in the URL goes in its own field, or Playwright hangs.
       username: decodeURIComponent(proxy.username),
       password: decodeURIComponent(proxy.password),
-      bypass: ['localhost', '127.0.0.1', '[::1]', ...bypass].join(','),
+      bypass: ['localhost', '127.0.0.1', '[::1]', ...(localHost ? [localHost] : []), ...bypass].join(','),
     },
   };
 }
@@ -270,7 +270,7 @@ function encode(webm, trim, fps, expected) {
   const duration = Number(probe.stdout) || 0; // An empty video reads N/A.
   if (probe.status !== 0) throw new Error(`can't read the new video's length: ${probe.stderr || probe.error?.message}`);
   // The recorder logs its own errors and carries on, so a video can come out short with exit 0.
-  if (duration < expected - SHORT_VIDEO_S) {
+  if (!duration || duration < expected - SHORT_VIDEO_S) {
     throw new Error(`the recording stopped early: ${duration.toFixed(1)} s of video for ${expected.toFixed(1)} s of beats`);
   }
 }
@@ -328,7 +328,7 @@ async function record() {
   // This file's own handlers stop the app first. Playwright's would exit before they finish.
   const browser = await chromium.launch({
     headless: process.env.HEADED !== '1', handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false,
-    ...browserProxy(),
+    ...browserProxy(cmd ? new URL(url).hostname : null), // An app this take starts stays direct.
   });
   try {
     const context = await browser.newContext({
@@ -363,6 +363,10 @@ async function record() {
       });
     };
     watch(page);
+    // The page's own host counts from the moment it commits, so a redirect's first load is covered.
+    page.on('framenavigated', frame => {
+      if (frame === page.mainFrame()) firstParty.add(new URL(frame.url()).hostname);
+    });
     context.on('page', tab => {
       if (tab === page) return;
       watch(tab);
@@ -373,7 +377,6 @@ async function record() {
 
     const opened = await page.goto(url, { timeout: FIRST_LOAD_MS });
     if (!opened?.ok()) throw new Error(`${url} answered ${opened?.status()} in the browser`);
-    firstParty.add(new URL(page.url()).hostname); // A redirect, such as the bare domain to www.
     await page.mouse.move(size.width / 2, 200);
     const lead = elapsed();
 

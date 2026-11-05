@@ -443,8 +443,51 @@ class Takes(unittest.TestCase):
         for start in starts[1:]:
             self.assertLess(min(abs(start - change) for change in changes), CAPTION_TOLERANCE_S, seen)
 
+    def test_an_empty_video_never_replaces_a_short_clip(self):
+        # A clip starts on its own first caption, so a quick beat runs just under a second.
+        project = self.project(
+            "export const app = { cmd: 'node server.mjs', url: 'http://unused.invalid/' };\n"
+            "export const beats = [{ caption: 'First', act: async () => {} }, { caption: 'Quick', act: async () => {} }];\n")
+        self.assertEqual(project.take(BEATS="2", SIZE="640x360").returncode, 0)
+        clip = project.root / "demo" / "out-clip" / "demo.mp4"
+        good = clip.read_bytes()
+        bin_dir = project.root / "bin"
+        bin_dir.mkdir()
+        real = shutil.which("ffmpeg")
+        shim = bin_dir / "ffmpeg"
+        # Seeking past the end gives an mp4 with no frames and exit 0, whose length reads N/A.
+        shim.write_text(
+            '#!/bin/sh\ncase " $* " in *" -movflags "*)\n'
+            '  prev=""; n=$#; i=0\n'
+            '  while [ $i -lt $n ]; do a=$1; shift; [ "$prev" = "-ss" ] && a=9999; set -- "$@" "$a"; prev=$a; i=$((i+1)); done;;\n'
+            f'esac\nexec "{real}" "$@"\n')
+        shim.chmod(0o755)
+        result = project.take(BEATS="2", SIZE="640x360", PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(clip.read_bytes(), good)
+
+    def test_a_scheme_less_proxy_variable_and_a_local_app_on_another_address(self):
+        project = self.project(one_beat("await page.waitForTimeout(100);"))
+        dead = f"127.0.0.1:{free_port()}"
+        env = {name: dead for name in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")}
+        result = project.take(SIZE="640x360", **env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        other = self.project(one_beat("await page.waitForTimeout(100);"))
+        env = clean_env(PORT=str(other.port), SIZE="640x360", APP_URL=f"http://0.0.0.0:{other.port}/", NO_PROXY="", no_proxy="",
+                        **{name: "http://" + dead for name in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")})
+        result = subprocess.run([NODE, "demo/record.mjs"], cwd=other.root, env=env, capture_output=True, text=True,
+                                timeout=TAKE_TIMEOUT_S)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_a_redirect_to_another_host_keeps_the_apps_failures_loud(self):
-        project = self.project(one_beat("await page.evaluate(() => fetch('/boom'));"))
+        for page_html, act in (("<h1>x</h1>", "await page.evaluate(() => fetch('/boom'));"),
+                               ("<script src=/boom></script><h1>x</h1>", "await page.waitForTimeout(100);")):
+            with self.subTest(page_html):
+                self.check_a_redirect(page_html, act)
+
+    def check_a_redirect(self, page_html, act):
+        project = self.project(one_beat(act))
         (project.root / "redirects.mjs").write_text(
             "import http from 'node:http';\n"
             "http.createServer((request, response) => {\n"
@@ -454,7 +497,7 @@ class Takes(unittest.TestCase):
             "  }\n"
             "  if (request.url === '/boom') { response.statusCode = 500; return response.end(); }\n"
             "  response.setHeader('content-type', 'text/html');\n"
-            "  response.end('<!doctype html><title>x</title><h1>x</h1>');\n"
+            f"  response.end('<!doctype html><title>x</title>{page_html}');\n"
             "}).listen(Number(process.env.PORT), '0.0.0.0');\n")
         running = subprocess.Popen([NODE, "redirects.mjs"], cwd=project.root, env=project.env(), stdout=subprocess.DEVNULL)
         self.addCleanup(running.wait)
