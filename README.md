@@ -191,11 +191,22 @@ Every Python this repo starts runs isolated (`-I`): hooks call `python3 -I`, scr
 (hooks, excluded commands, tmux, the status line, setup). Without `-I`, Python puts the script's
 dir or the cwd first on its import path, honours `PYTHON*` variables and loads the user
 site-packages, where a planted `usercustomize.py` or `.pth` file would run unsandboxed.
-`settings.json` also denies `Edit(~/.local/lib/**)` and `Edit(~/Library/Python/**)`, so the Edit
+`settings.json` also denies `Edit(~/.local/**)` and `Edit(~/Library/Python/**)`, so the Edit
 and Write tools can't plant one (sandboxed Bash already can't). `tests/setup/test_install_helpers.py`
 enforces all of this over hooks/, bin/, tmux/, statusline/, git/, codex/, the skills' scripts and the
 top-level scripts. The deck-production scripts are the one exception: they run only in sandboxed Bash and
 import their siblings.
+
+The Edit and Write tools aren't sandboxed, so `settings.json` also denies them the home paths that
+code outside the sandbox runs, sources or trusts: `~/.local`, `~/.config`, tool and cache dirs, shell
+and tool dotfiles, whatever `denyRead` hides, and the parts of `~/.claude` that load as code or
+instructions. `tests/delegation/test_settings.py` pins the list. `~/.claude/projects`, `plans` and
+`jobs` stay writable, and so does `~/.cache/claude-sandbox`. A deny also binds the permission check
+on Bash paths, which has three costs. A session's `rm`, `mv` or `chmod` in those dirs is refused, so
+you run it. A `cp` from them is refused too, so copy with `cat src > dest`. And a skill or agent
+can't be written straight into `~/.claude/skills` or `agents`: put it in this repo and let `setup.sh`
+link it. Editing `settings.machine.json` from a session prompts each time, since `setup.sh` merges it
+into the live settings.
 
 Asks cover what an excluded command could still be made to run or read:
 - tmux: every other verb, alias and prefix, a bare `tmux`, a global flag, a `;` chain, a `#(`
