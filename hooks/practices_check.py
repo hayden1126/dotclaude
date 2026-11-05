@@ -102,8 +102,9 @@ timeout kill takes the whole process group, so a killed scan leaves it behind. S
 start, as one systemMessage line (shown to the user only), and prints nothing when all is well.
 
 Bash levels. settings.json sends a Bash call here only when its command (the payload's
-"command" string, never the tool_response output) holds git with commit or push, or gh with pr
-ready or pr create (PostToolUse: git with commit), so Python never starts for any other call.
+"command" string, never the tool_response output) holds git with commit or push, gh with pr
+ready or pr create, or a package manager with an add verb (PostToolUse: git with commit), so
+Python never starts for any other call.
 The prefilter is one `LC_ALL=C grep -E`, linear in the payload (a bash `case` glob backtracked
 over every "git" in a large output). Every practices entry in settings.json (edit, Bash and
 SessionStart) runs the shim only when it exists and then exits 0; a deny is JSON on stdout.
@@ -183,6 +184,23 @@ key per line it named (`L2|<skill>|<rule>|<path>|sha1(the stripped line)`); a fi
 of those lines was accepted at edit time and is skipped, and any other line of that rule in
 that file is still told (a transcript marker names no line, so it accepts none). A deny or
 tell names a finding by rule, path and line, never the matched text, and so does errors.log.
+
+SEC-64, the engine's other rule, runs first in PreToolUse(Bash) and reads no repo: a Bash call
+that adds a named package (ADD_VERBS: npm, pnpm, yarn and bun add and install, pip and uv pip
+install, uv, poetry, cargo and bundle add, gem install, composer require; `go get` runs no code
+at install) is denied once per manager and package, the version stripped (key
+`SEC-64|engine|<manager>|<package>`; a call adding several names every unseen one, and the
+resend passes). Restores name no package and never fire: a bare install, `npm ci`, `pip install
+-r`, `uv sync`, a local path, `pip install -e .`. It doesn't fire when the same simple command
+turns scripts off (--ignore-scripts for the npm family, --only-binary :all: for pip and uv) or,
+for the npm family, when the package was inspected: by an earlier step of this call, or by a
+Bash call in the transcript (or, for a subagent, the parent's) whose result isn't an error.
+Inspecting is `npm view <pkg>` naming `scripts` or with --json and no named fields, `npm pack
+<pkg>`, or tar, curl or wget naming its tarball. Other managers have no measured inspection, so
+the deny-once alone applies. The deny names a package only when it matches a strict pattern and
+never echoes the rest of the command. A word it can't read (an expansion, a URL) and an install
+left to a launcher (the forms bash_calls leaves unread for git) pass, logged as install-skipped
+with no command text. A key that can't be kept drops the deny.
 
 git runs objects only, through Repo: a system git (SYSTEM_GITS), every GIT_* variable stripped
 from the env, no system or global config, GIT_ALLOW_PROTOCOL=none (a partial clone's lazy fetch
@@ -2245,10 +2263,314 @@ def review_block(touched, mb, head, branch, shown=8):
             "check won't stop the resend.\n\n" + "\n\n".join(parts))
 
 
+# ---------------------------------------------------------------- SEC-64, the install check
+
+SEC64 = {"id": "SEC-64", "say": (
+    "Read a package's install scripts before its first install, or install with scripts off.")}
+NPM_FAMILY = {"npm", "pnpm", "yarn", "bun"}
+PY_MANAGERS = {"pip", "uv", "poetry"}
+# Each manager's words that add a package named after them. npm's are its documented aliases.
+ADD_VERBS = {
+    "npm": {"add", "install", "i", "in", "ins", "inst", "insta", "instal", "isnt", "isnta",
+            "isntal", "isntall", "install-test", "it"},
+    "pnpm": {"add", "install", "i"}, "yarn": {"add", "install", "i"},
+    "bun": {"add", "a", "install", "i"}, "pip": {"install"}, "uv": {"add"}, "poetry": {"add"},
+    "cargo": {"add"}, "bundle": {"add"}, "gem": {"install", "i"},
+    "composer": {"require", "r"}}
+# The common options that take the next word, so it isn't read as a package. One missing here
+# costs a deny naming that word, once.
+_NODE_VALUES = {"--prefix", "--registry", "--tag", "--cache", "--userconfig", "--globalconfig",
+                "--workspace", "--omit", "--include", "--loglevel", "--save-prefix", "--otp",
+                "--before", "--install-strategy", "--pack-destination", "--cwd", "--dir",
+                "--filter", "--store-dir", "--modules-folder", "--cache-folder", "--cache-dir",
+                "--reporter", "--network-timeout", "--config", "--proxy", "--https-proxy"}
+_PIP_VALUES = {"-r", "--requirement", "-c", "--constraint", "-e", "--editable", "-t", "--target",
+               "--prefix", "--root", "--src", "-i", "--index-url", "--extra-index-url", "-f",
+               "--find-links", "--platform", "--python-version", "--implementation", "--abi",
+               "--no-binary", "--only-binary", "--trusted-host", "--proxy", "--cert",
+               "--client-cert", "--timeout", "--retries", "--log", "--cache-dir", "--progress-bar",
+               "--upgrade-strategy", "--report", "--config-settings", "--python", "-p"}
+VALUE_OPTS = {
+    "npm": _NODE_VALUES | {"-w"},
+    "pnpm": _NODE_VALUES | {"-C", "-F"},  # pnpm's -w is --workspace-root, which takes nothing
+    "yarn": _NODE_VALUES,
+    "bun": _NODE_VALUES | {"-c"},
+    "pip": _PIP_VALUES,
+    "uv": _PIP_VALUES | {"--project", "--directory", "--package", "--group", "--optional",
+                         "--index", "--default-index", "--branch", "--tag", "--rev", "-C"},
+    "poetry": {"-C", "--directory", "-P", "--project", "-G", "--group", "-E", "--extras",
+               "--source", "--python", "--platform", "--markers"},
+    "cargo": {"-F", "--features", "--rename", "--path", "--git", "--branch", "--tag", "--rev",
+              "--registry", "--manifest-path", "-p", "--package", "--target", "--config",
+              "--lockfile-path", "--color", "-Z"},
+    "bundle": {"-v", "--version", "-g", "--group", "-s", "--source", "-r", "--require", "--path",
+               "--git", "--github", "--branch", "--ref", "--glob"},
+    "gem": {"-v", "--version", "-i", "--install-dir", "-n", "--bindir", "-s", "--source", "-p",
+            "--http-proxy", "--platform", "--document", "--build-root"},
+    "composer": {"-d", "--working-dir", "--with"}}
+INTERPRETERS = {"python", "python3"}  # `python3 -m pip install x`
+READERS = {"tar", "curl", "wget"}  # reading a tarball
+INSTALL_HEADS = {"pip3"} | set(ADD_VERBS) | INTERPRETERS | READERS | set(HEADS)
+MANAGER_NAMED = re.compile(r"(?<![\w.-])(?:npm|pnpm|yarn|bun|pip3?|uv|poetry|cargo|bundle|gem"
+                           r"|composer)(?![\w-])")
+ADD_NAMED = re.compile(r"(?<![\w-])(?:add|install|i|require)(?![\w-])")
+LOCAL_PREFIX = (".", "/", "~", "file:", "link:", "workspace:", "portal:")  # `.[dev]` too
+ARCHIVE_SUFFIX = (".tgz", ".tar", ".tar.gz", ".tar.bz2", ".zip", ".whl", ".gem", ".crate")
+_NAME = r"[A-Za-z0-9][\w.-]{0,213}"
+NPM_PACKAGE = re.compile(rf"((?:@[a-z0-9][\w.-]{{0,213}}/)?{_NAME})(?:@[^/:\s]*)?", re.ASCII)
+COMPOSER_PACKAGE = re.compile(rf"({_NAME}/{_NAME})(?::\S*)?", re.ASCII)
+OTHER_PACKAGE = re.compile(  # requests[socks]>=2, serde@1, rails:7.0, x (>=1,<2)
+    rf"({_NAME})(?:\[[^\]]*\])?(?:@[^/:\s]*|:[^/\s]*|\s*[=<>!~;(^].*)?", re.ASCII | re.DOTALL)
+
+
+def names_an_install(text):
+    """Whether text names a package manager and, after it, an add verb, word by word."""
+    m = MANAGER_NAMED.search(text)
+    return bool(m and ADD_NAMED.search(text, m.end()))
+
+
+def split_args(args, value_opts):
+    """(positional words, option words) of a manager's arguments. An option in value_opts takes
+    the next word and `--flag true|false` its boolean, both folded to `<option>=<value>`."""
+    words, opts, i = [], [], 0
+    while i < len(args):
+        a = args[i]
+        i += 1
+        if not a.startswith("-") or a == "-":
+            words.append(a)
+        elif i < len(args) and (a in value_opts
+                                or (a.startswith("--") and args[i] in ("true", "false"))):
+            opts.append(f"{a}={args[i]}")
+            i += 1
+        else:
+            opts.append(a)
+    return words, opts
+
+
+def install_of(head, args):
+    """(manager, the words after the add verb, option words) when this simple command is a
+    manager's add verb, else None."""
+    if head in INTERPRETERS:
+        at = args.index("-m") if "-m" in args else len(args)
+        if args[at + 1:at + 2] not in (["pip"], ["pip3"]):
+            return None
+        head, args = "pip", args[at + 2:]
+    manager = "pip" if head == "pip3" else head
+    if manager not in ADD_VERBS:
+        return None
+    words, opts = split_args(args, VALUE_OPTS[manager])
+    if manager == "yarn" and words[:1] == ["global"]:
+        words = words[1:]
+    if manager == "uv" and words[:2] == ["pip", "install"]:
+        return manager, words[2:], opts
+    if not words or words[0] not in ADD_VERBS[manager]:
+        return None
+    return manager, words[1:], opts
+
+
+def scripts_off(manager, opts):
+    """Whether these options stop the install running a package's code. npm reads the last one."""
+    if manager in NPM_FAMILY:
+        off = False
+        for o in opts:
+            if o in ("--ignore-scripts", "--ignore-scripts=true"):
+                off = True
+            elif o in ("--ignore-scripts=false", "--no-ignore-scripts"):
+                off = False
+        return off
+    if manager in ("pip", "uv"):  # --no-binary takes a package back out of --only-binary
+        return "--only-binary=:all:" in opts and not any(
+            o.startswith("--no-binary") for o in opts)
+    return False
+
+
+def package_of(manager, word):
+    """(package name, version stripped; whether the word is readable). A local path or file is
+    (None, True), never an add from a registry; a word no pattern fits (an expansion, a URL, a
+    git shorthand) is (None, False)."""
+    if word.startswith(LOCAL_PREFIX) or ("://" not in word and (
+            word.endswith(ARCHIVE_SUFFIX) or (manager in PY_MANAGERS and "/" in word))):
+        return None, True
+    if manager in NPM_FAMILY:
+        if "@npm:" in word:  # an alias: `x@npm:real@1` installs real
+            word = word.split("@npm:", 1)[1]
+        m = NPM_PACKAGE.fullmatch(word)
+    elif manager == "composer":
+        if not re.search(r"[/$%]", word):
+            return None, True  # the version word of `composer require vendor/pkg ^1.0`
+        m = COMPOSER_PACKAGE.fullmatch(word)
+    else:
+        m = OTHER_PACKAGE.fullmatch(word)
+    return (m.group(1), True) if m else (None, False)
+
+
+def flat_name(pkg):
+    """The name in the tarball npm pack writes: @scope/name packs to scope-name-<version>.tgz."""
+    return pkg[1:].replace("/", "-") if pkg.startswith("@") else pkg
+
+
+def tarball_named(word, pkg):
+    """Whether word names pkg's tarball: npm pack's, or a registry URL's
+    <pkg>/-/<name>-<version>.tgz."""
+    stem = pkg.rsplit("/", 1)[-1] if f"{pkg}/-/" in word else flat_name(pkg)
+    return bool(re.fullmatch(re.escape(stem) + r"-[\d*][\w.*+-]*\.(?:tgz|tar\.gz)",
+                             word.rsplit("/", 1)[-1], re.ASCII))
+
+
+def inspects(head, args, pkg):
+    """Whether this simple command shows pkg's install scripts: `npm view` naming scripts, or
+    with --json and no named fields (named fields print only those; a bare view shows no
+    scripts), `npm pack`, or a reader naming its tarball."""
+    if head in READERS:
+        return any(tarball_named(a, pkg) for a in args)
+    if head != "npm":
+        return False
+    words, opts = split_args(args, VALUE_OPTS["npm"])
+    if len(words) < 2:
+        return False
+    if words[0] == "pack":
+        return "--dry-run" not in opts and any(package_of("npm", w)[0] == pkg for w in words[1:])
+    if words[0] in ("view", "info", "show", "v") and package_of("npm", words[1])[0] == pkg:
+        fields = words[2:]
+        if fields:
+            return any(f == "scripts" or f.startswith("scripts.") for f in fields)
+        return "--json" in opts or "--json=true" in opts
+    return False
+
+
+def command_inspects(command, pkg):
+    """Whether a Bash command from the transcript holds an inspection of pkg."""
+    if len(command) > CMD_MAX:
+        return False
+    try:
+        calls = load_bash_words().calls(command, {"npm"} | READERS, None,
+                                        check=lambda: check_budget("command parse"))
+    except ValueError:
+        return False
+    return any(inspects(head, args, pkg) for head, args, _, _ in calls)
+
+
+def bash_rows(t, needle):
+    """(command, tool id, row end) of each assistant Bash call in the rows holding needle."""
+    for _, end, d in t.hits(needle):
+        if d.get("type") != "assistant":
+            continue
+        for b in blocks(d):
+            inp = b.get("input")
+            command = inp.get("command") if isinstance(inp, dict) else None
+            if b.get("type") == "tool_use" and b.get("name") == "Bash" \
+                    and isinstance(command, str):
+                yield command, b.get("id"), end
+
+
+def inspected_earlier(event, pkgs):
+    """Those of pkgs that a Bash call with a result that isn't an error inspected, in this
+    transcript or, for a subagent, the parent's. A tarball's name holds only the flat name."""
+    CRUMB.mark("(the transcript)", "transcript", "SEC-64")
+    with Transcripts(event) as ts:
+        return {pkg for pkg in pkgs if any(
+            command_inspects(command, pkg) and t.succeeded(tool_id, end)
+            for t in ts.all() for needle in {pkg, flat_name(pkg)}
+            for command, tool_id, end in bash_rows(t, needle.encode()))}
+
+
+def read_installs(event):
+    """([(manager, package)] this call would add with scripts on and no earlier step of it
+    inspecting them, in order; whether part of it couldn't be read)."""
+    cmd = command_of(event)
+    if not cmd or not MANAGER_NAMED.search(cmd):
+        return [], False
+    if len(cmd) > CMD_MAX:
+        return [], names_an_install(cmd)
+    rest, found, before, unread = [], [], [], False
+    cwd = event.get("cwd") if isinstance(event.get("cwd"), str) else None
+    CRUMB.mark("(the command)", "bash", "SEC-64")
+    try:
+        calls = load_bash_words().calls(cmd, INSTALL_HEADS, cwd, rest,
+                                        check=lambda: check_budget("command parse"))
+    except ValueError:
+        return [], names_an_install(cmd)
+    for head, args, _, _ in calls:
+        add = install_of(head, args)
+        if add is None:
+            before.append((head, args))
+            if head not in READERS and (head not in HEADS or "foreach" in args):
+                rest.append(" ".join(args))  # `poetry run pip install x`
+            continue
+        manager, words, opts = add
+        if scripts_off(manager, opts):
+            continue
+        for word in words:
+            pkg, readable = package_of(manager, word)
+            unread = unread or not readable
+            if pkg and (manager, pkg) not in found and not (
+                    manager in NPM_FAMILY and any(inspects(h, a, pkg) for h, a in before)):
+                found.append((manager, pkg))
+    return found, unread or any(names_an_install(t) for t in rest)
+
+
+def install_key(manager, pkg):
+    if manager in PY_MANAGERS:  # PEP 503: Foo_Bar and foo-bar are one package
+        pkg = re.sub(r"[-_.]+", "-", pkg).lower()
+    return f"SEC-64|engine|{manager}|{pkg}"
+
+
+def install_reason(found):
+    """The deny for these (manager, package) pairs: rule, package and check, no other command
+    text."""
+    lines = [f"[practices:SEC-64] {SEC64['say']}"]
+    for manager, pkg in found:
+        if manager in NPM_FAMILY:
+            lines.append(f"- {pkg}: run `npm view {pkg} scripts` and read what it prints, or "
+                         "install it with `--ignore-scripts`.")
+        elif manager in ("pip", "uv"):
+            lines.append(f"- {pkg}: install it with `--only-binary :all:` (a wheel runs no code "
+                         "at install), or read its build code first.")
+        else:
+            lines.append(f"- {pkg}: read what it runs at install or build ({manager}).")
+    lines.append("Load the `dependencies` skill when it is listed. Resending this call passes "
+                 "this check. In your reply, say what the script does and whether you read it "
+                 "before or after it ran.")
+    return "\n".join(lines)
+
+
+def install_check(event):
+    """SEC-64: the deny for this call, or None. A form it can't read, a spent budget or a fault
+    allows the call and logs it, and the git levels still run."""
+    try:
+        found, unread = read_installs(event)
+        if not (found or unread):
+            return None
+        cfg = load_config(bash_project(event))
+        if not cfg["enabled"] or is_off(cfg, ENGINE, SEC64["id"]):
+            return None
+        if unread:
+            log("install-skipped", "the command adds a package in a form this check can't read "
+                "(an expansion, a URL, a launcher such as xargs, or too long to parse), so that "
+                "part wasn't checked")
+        seen = state_keys(event)
+        found = [k for k in found if install_key(*k) not in seen]
+        npm = list(dict.fromkeys(pkg for manager, pkg in found if manager in NPM_FAMILY))
+        read = inspected_earlier(event, npm) if npm else set()
+        new = [k for k in found if not (k[0] in NPM_FAMILY and k[1] in read)]
+        if not new or not state_add(event, [install_key(*k) for k in new]):
+            return None
+        return deny(install_reason(new))
+    except Budget as e:
+        log("budget-spent", f"after {BUDGET}s, in SEC-64's {e}; the call was allowed")
+    except Exception as e:  # noqa: BLE001  never at the cost of the push and PR checks
+        log("crash", f"SEC-64: {type(e).__name__}: {e}")
+    return None
+
+
 def bash_pre(event):
-    """PreToolUse(Bash): deny a call that both commits and pushes once, record HEAD before a
-    commit (L3s), deny a push once per new finding in what it would send, and deny a PR's
-    `ready` once until a reviewer ran with the gate lines of the skills it touches (L3r)."""
+    """PreToolUse(Bash): deny an unread package install once per package (SEC-64), deny a call
+    that both commits and pushes once, record HEAD before a commit (L3s), deny a push once per
+    new finding in what it would send, and deny a PR's `ready` once until a reviewer ran with the
+    gate lines of the skills it touches (L3r)."""
+    out = install_check(event)
+    if out:
+        return out
     gits, ghs, named = bash_calls(event)
     commits = [g for g in gits if g[0] == "commit"]
     pushes = [g for g in gits if g[0] == "push"]
@@ -2479,6 +2801,7 @@ LABELS = {"skill-disabled": ("skill disabled", "skills disabled"),
           "config-malformed": ("malformed config", "malformed configs"),
           "state-error": ("state error", "state errors"), "crash": ("crash", "crashes"),
           "git-skipped": ("git call skipped", "git calls skipped"),
+          "install-skipped": ("package install skipped", "package installs skipped"),
           "scan-truncated": ("scan cut short", "scans cut short"),
           "project-unknown": ("edit without a project dir", "edits without a project dir")}
 # For debugging, never an engine error: a deliberate choice (a delete push sends nothing to

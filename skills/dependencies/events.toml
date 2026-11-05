@@ -1,0 +1,10 @@
+# dependencies: the skill's entry for the practices hook (hooks/practices_check.py).
+#
+# No [[event]] or [[rule]]: an install is a Bash call, not an edit, so the engine's own rule
+# SEC-64 is the trigger. The gate line returns after a compaction when the skill was loaded.
+
+skill = "dependencies"
+
+gate = [
+  "Before a first install, run `npm view <pkg> scripts` (or the manager's equivalent) or install with scripts off; say what the script does and whether you read it before or after it ran (SEC-64).",
+]

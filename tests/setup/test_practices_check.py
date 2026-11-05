@@ -2600,5 +2600,459 @@ class FileHits(unittest.TestCase):
         self.assertNotIn(self.RULE["unless"], seen)
 
 
+# SEC-64: (the command, the packages its deny names). Nothing here is ever run: the tests feed
+# each command to the hook, and the names are made up.
+INSTALLS = (
+    ("npm install acme-widget", ["acme-widget"]),
+    ("npm i acme-widget", ["acme-widget"]),
+    ("npm add acme-widget", ["acme-widget"]),
+    ("npm isntall acme-widget", ["acme-widget"]),
+    ("npm install-test acme-widget", ["acme-widget"]),
+    ("npm install --save-dev acme-widget", ["acme-widget"]),
+    ("npm i -g acme-widget", ["acme-widget"]),
+    ("npm --prefix ./web install acme-widget", ["acme-widget"]),
+    ("npm install --registry http://127.0.0.1:4873/ --tag beta acme-widget", ["acme-widget"]),
+    ("npm -w web install acme-widget", ["acme-widget"]),
+    ("pnpm add acme-widget", ["acme-widget"]),
+    ("pnpm install acme-widget", ["acme-widget"]),
+    ("pnpm i acme-widget", ["acme-widget"]),
+    ("pnpm add -w acme-widget", ["acme-widget"]),  # pnpm's -w takes no word
+    ("pnpm -F web add acme-widget", ["acme-widget"]),
+    ("yarn add acme-widget", ["acme-widget"]),
+    ("yarn install acme-widget", ["acme-widget"]),
+    ("yarn i acme-widget", ["acme-widget"]),
+    ("yarn global add acme-widget", ["acme-widget"]),
+    ("bun add acme-widget", ["acme-widget"]),
+    ("bun install acme-widget", ["acme-widget"]),
+    ("bun i acme-widget", ["acme-widget"]),
+    ("pip install acme_widget", ["acme_widget"]),
+    ("pip3 install acme-widget", ["acme-widget"]),
+    ("python3 -m pip install acme-widget", ["acme-widget"]),
+    ("pip install 'acme-widget[extra]>=2,<3'", ["acme-widget"]),
+    ("pip install acme-widget==1.2.3", ["acme-widget"]),
+    ("pip install -r requirements.txt acme-widget", ["acme-widget"]),
+    ("uv pip install acme-widget", ["acme-widget"]),
+    ("uv add acme-widget", ["acme-widget"]),
+    ("poetry add acme-widget", ["acme-widget"]),
+    ("poetry add acme-widget@^1.0 --group dev", ["acme-widget"]),
+    ("cargo add acme-widget", ["acme-widget"]),
+    ("cargo add acme-widget@1.0 --features extra", ["acme-widget"]),
+    ("bundle add acme-widget", ["acme-widget"]),
+    ("bundle add acme-widget --version 1.0", ["acme-widget"]),
+    ("gem install acme-widget", ["acme-widget"]),
+    ("gem install acme-widget -v 1.0", ["acme-widget"]),
+    ("composer require acme/widget", ["acme/widget"]),
+    ("composer require acme/widget:^1.0", ["acme/widget"]),
+    ("composer require acme/widget ^1.0", ["acme/widget"]),
+    # The reader's own forms.
+    ("cd web && npm i acme-widget", ["acme-widget"]),
+    ("sudo -E npm i acme-widget", ["acme-widget"]),
+    ("NODE_ENV=test npm i acme-widget", ["acme-widget"]),
+    ("bash -c 'npm i acme-widget'", ["acme-widget"]),
+    ("echo $(npm i acme-widget)", ["acme-widget"]),
+    ("npm i acme-widget acme-gadget && pip install acme-tool",
+     ["acme-widget", "acme-gadget", "acme-tool"]),
+)
+RESTORES = ("npm install", "npm i", "npm ci", "npm install --save-dev", "npm install ./vendor/x",
+            "npm install ../x", "npm install ./x-1.0.0.tgz", "npm i x-1.0.0.tgz",
+            "npm i file:../x", "pnpm install", "pnpm i --frozen-lockfile", "yarn", "yarn install",
+            "bun install", "pip install -r requirements.txt", "pip3 install -r a.txt -c b.txt",
+            "pip install -e .", "pip install .", "pip install '.[dev]'", "pip install ./x",
+            "pip install dist/x-1.0-py3-none-any.whl", "uv sync", "uv pip install -r a.txt",
+            "uv pip install -e .", "uv add ./x", "uv lock", "poetry install", "poetry lock",
+            "bundle install", "cargo build", "cargo add --path ../x", "composer install",
+            "go get example.com/acme/widget", "npm run add-widget", "npm test",
+            "pip install", "pip list", "gem list")
+UNREADABLE = ("npm install 'unclosed", 'npm install "$PKG"', "npm i $(cat name.txt)",
+              "npm i https://example.com/x.tgz", "npm i acme/widget",
+              "pip install 'git+https://example.com/x.git'", "pip install $PKG",
+              "composer require $PKG", "xargs npm install", "find . -exec npm install x ;",
+              'sh -c "npm i $PKG"', "sh <<EOF\nnpm i acme-widget\nEOF",
+              "poetry run pip install acme-widget", "uv run npm install acme-widget")
+TEXT_ONLY = ("git commit -m 'npm install acme-widget'", "grep -rn 'npm install acme-widget' .",
+             "gh pr create --draft --title 'pip install acme-widget'",
+             "cat > notes.md <<EOF\nnpm install acme-widget\nEOF")
+
+
+class InstallCheck(BashBase):
+    """SEC-64. Each row takes its own session, so one row's key can't pass another's."""
+
+    AGENT = "a0123456789abcdef"
+
+    def setUp(self):
+        super().setUp()
+        self.sessions = iter(range(1, 1 << 30))
+
+    def fresh(self):
+        return f"session-{next(self.sessions)}"
+
+    def view(self, tid, command, error=False, **kw):
+        """An earlier Bash call and its result."""
+        return [use(tid, "Bash", command=command, **kw),
+                result(tid, "out", error=error, sidechain=kw.get("sidechain", False))]
+
+    def agent_file(self):
+        d = os.path.join(self.transcript[:-len(".jsonl")], "subagents")
+        os.makedirs(d, exist_ok=True)
+        return os.path.join(d, f"agent-{self.AGENT}.jsonl")
+
+    def test_each_manager_and_verb_is_denied_naming_its_packages(self):
+        for command, names in INSTALLS:
+            with self.subTest(command=command):
+                sid = self.fresh()
+                reason = self.pre(command, session_id=sid)
+                self.assertIsNotNone(reason)
+                self.assertTrue(reason.startswith("[practices:SEC-64] "), reason)
+                self.assertEqual(re.findall(r"^- (\S+):", reason, re.M), names)
+                self.assertIsNone(self.pre(command, session_id=sid))
+
+    def test_restores_and_other_commands_pass_with_no_log(self):
+        for command in RESTORES:
+            with self.subTest(command=command):
+                self.assertIsNone(self.pre(command, session_id=self.fresh()))
+        self.assertNotIn("install-skipped", self.log())
+
+    def test_a_form_it_cant_read_is_allowed_and_logged_without_its_text(self):
+        for command in UNREADABLE:
+            with self.subTest(command=command):
+                before = self.log().count("install-skipped")
+                self.assertIsNone(self.pre(command, session_id=self.fresh()))
+                self.assertGreater(self.log().count("install-skipped"), before)
+        for word in ("PKG", "example.com", "name.txt", "acme"):
+            self.assertNotIn(word, self.log())
+        self.assertNotIn("crash", self.log())
+
+    def test_a_command_over_the_parse_limit_is_allowed_and_logged(self):
+        pad = "x" * (PC.CMD_MAX + 1)
+        self.assertIsNone(self.pre(f"npm install acme-widget # {pad}"))
+        self.assertIn("install-skipped", self.log())
+
+    def test_text_about_an_install_is_neither_denied_nor_logged(self):
+        for command in TEXT_ONLY:
+            with self.subTest(command=command):
+                self.assertIsNone(self.pre(command, session_id=self.fresh()))
+        self.assertNotIn("install-skipped", self.log())
+
+    def test_a_word_it_cant_read_doesnt_stop_the_rest_of_the_call(self):
+        reason = self.pre('npm i "$PKG" acme-widget')
+        self.assertEqual(re.findall(r"^- (\S+):", reason, re.M), ["acme-widget"])
+        self.assertIn("install-skipped", self.log())
+
+    def test_scripts_off_in_the_same_simple_command_passes(self):
+        for command in ("npm install --ignore-scripts acme-widget",
+                        "npm install acme-widget --ignore-scripts",
+                        "npm --ignore-scripts install acme-widget",
+                        "npm i --ignore-scripts=true acme-widget",
+                        "npm i --ignore-scripts true acme-widget",
+                        "npm i --no-ignore-scripts --ignore-scripts acme-widget",
+                        "pnpm add --ignore-scripts acme-widget",
+                        "yarn add --ignore-scripts acme-widget",
+                        "bun add --ignore-scripts acme-widget",
+                        "pip install --only-binary :all: acme-widget",
+                        "pip install --only-binary=:all: acme-widget",
+                        "pip3 install acme-widget --only-binary :all:",
+                        "uv pip install --only-binary :all: acme-widget"):
+            with self.subTest(command=command):
+                self.assertIsNone(self.pre(command, session_id=self.fresh()))
+
+    def test_scripts_left_on_are_denied(self):
+        for command, names in (
+                ("npm i --ignore-scripts=false acme-widget", ["acme-widget"]),
+                ("npm i --ignore-scripts false acme-widget", ["acme-widget"]),
+                ("npm i --no-ignore-scripts acme-widget", ["acme-widget"]),
+                ("npm i --ignore-scripts --no-ignore-scripts acme-widget", ["acme-widget"]),
+                ("npm i --ignore-scripts acme-a && npm i acme-b", ["acme-b"]),  # another command
+                ("pip install --only-binary acme-a acme-widget", ["acme-widget"]),
+                ("pip install --only-binary :all: --no-binary acme-a acme-widget",
+                 ["acme-widget"]),
+                ("pip install --ignore-scripts acme-widget", ["acme-widget"]),
+                ("cargo add --ignore-scripts acme-widget", ["acme-widget"])):
+            with self.subTest(command=command):
+                reason = self.pre(command, session_id=self.fresh())
+                self.assertEqual(re.findall(r"^- (\S+):", reason, re.M), names)
+
+    def test_an_inspection_in_the_transcript_passes(self):
+        for tid, command in enumerate(("npm view acme-widget scripts",
+                                       "npm view acme-widget scripts --json",
+                                       "npm view acme-widget --json scripts",
+                                       "npm view acme-widget@1.2.3 scripts",
+                                       "npm view acme-widget scripts.postinstall",
+                                       "npm view acme-widget version scripts",
+                                       "npm view acme-widget --json",
+                                       "npm info acme-widget scripts",
+                                       "npm show acme-widget scripts",
+                                       "npm v acme-widget scripts",
+                                       "npm view acme-widget --json | jq .scripts",
+                                       "cd /tmp && npm pack acme-widget",
+                                       "npm pack acme-widget@1.2.3",
+                                       "tar -tzf acme-widget-1.2.3.tgz",
+                                       "tar xzOf ./acme-widget-1.2.3.tgz package/package.json",
+                                       "curl -s https://example.test/acme-widget/-/"
+                                       "acme-widget-1.2.3.tgz | tar xz")):
+            with self.subTest(command=command):
+                self.rows(self.view(f"v{tid}", command))
+                self.assertIsNone(self.pre("npm i acme-widget", session_id=self.fresh()))
+
+    def test_a_look_that_shows_no_scripts_doesnt_count(self):
+        for tid, command in enumerate(("npm view acme-widget",
+                                       "npm view acme-widget version",
+                                       "npm view acme-widget main --json",
+                                       "npm view acme-widget --json main version",
+                                       "npm view acme-widget --json=false",
+                                       "npm view acme-widget scriptsfoo",
+                                       "npm view acme-gadget scripts",
+                                       "npm view acme-widget-extra scripts",
+                                       "npm pack",
+                                       "npm pack acme-widget --dry-run",
+                                       "echo npm view acme-widget scripts",
+                                       "tar -tzf acme-widget-extra-1.2.3.tgz",
+                                       "tar -tzf acme-widget.tgz")):
+            with self.subTest(command=command):
+                self.rows(self.view(f"v{tid}", command))
+                self.assertIsNotNone(self.pre("npm i acme-widget", session_id=self.fresh()))
+
+    def test_an_inspection_that_failed_or_has_no_result_doesnt_count(self):
+        self.rows(self.view("v1", "npm view acme-widget scripts", error=True))
+        self.assertIsNotNone(self.pre("npm i acme-widget", session_id=self.fresh()))
+        self.rows([use("v2", "Bash", command="npm view acme-widget scripts")])
+        self.assertIsNotNone(self.pre("npm i acme-widget", session_id=self.fresh()))
+
+    def test_a_row_that_only_mentions_an_inspection_doesnt_count(self):
+        self.rows([text("run npm view acme-widget scripts first"),
+                   *load("r1", "Read", file_path="/x/npm view acme-widget scripts")])
+        self.assertIsNotNone(self.pre("npm i acme-widget"))
+
+    def test_an_earlier_step_of_this_call_passes(self):
+        for command in ("npm view acme-widget scripts && npm i acme-widget",
+                        "npm view acme-widget --json; npm i acme-widget",
+                        "npm pack acme-widget && tar tzf acme-widget-*.tgz && npm i acme-widget",
+                        "tar tzf acme-widget-1.0.0.tgz && npm i acme-widget"):
+            with self.subTest(command=command):
+                self.assertIsNone(self.pre(command, session_id=self.fresh()))
+
+    def test_an_inspection_after_the_install_doesnt_count(self):
+        for command in ("npm i acme-widget && npm view acme-widget scripts",
+                        "npm i acme-widget; npm pack acme-widget",
+                        "npm view acme-widget main --json && npm i acme-widget"):
+            with self.subTest(command=command):
+                self.assertIsNotNone(self.pre(command, session_id=self.fresh()))
+
+    def test_only_the_named_package_counts_as_inspected(self):
+        reason = self.pre("npm view acme-a scripts && npm i acme-a acme-b")
+        self.assertEqual(re.findall(r"^- (\S+):", reason, re.M), ["acme-b"])
+
+    def test_an_npm_inspection_counts_for_the_family_and_no_other_manager(self):
+        self.rows(self.view("v1", "npm view acme-widget scripts"))
+        for command in ("pnpm add acme-widget", "yarn add acme-widget", "bun add acme-widget"):
+            with self.subTest(command=command):
+                self.assertIsNone(self.pre(command, session_id=self.fresh()))
+        for command in ("pip install acme-widget", "gem install acme-widget",
+                        "cargo add acme-widget"):
+            with self.subTest(command=command):
+                self.assertIsNotNone(self.pre(command, session_id=self.fresh()))
+
+    def test_denied_once_per_package_and_manager(self):
+        self.assertIn("acme-a", self.pre("npm i acme-a"))
+        self.assertIsNone(self.pre("npm i acme-a"))
+        reason = self.pre("npm i acme-b")
+        self.assertIn("acme-b", reason)
+        self.assertNotIn("acme-a", reason)
+        self.assertIsNone(self.pre("npm i acme-a acme-b"))
+        reason = self.pre("npm i acme-a acme-c")  # only the unseen one
+        self.assertEqual(re.findall(r"^- (\S+):", reason, re.M), ["acme-c"])
+        self.assertIsNotNone(self.pre("pnpm add acme-a"))  # another manager
+        self.assertIsNone(self.pre("pnpm add acme-a"))
+
+    def test_a_scoped_package_and_a_version_are_stripped_from_the_key(self):
+        reason = self.pre("npm i @acme/widget@1.2.3")
+        self.assertIn("npm view @acme/widget scripts", reason)
+        self.assertNotIn("1.2.3", reason)
+        self.assertIsNone(self.pre("npm i @acme/widget@2"))
+        self.assertIsNone(self.pre("npm i @acme/widget"))
+        self.assertIn("@acme/gadget", self.pre("npm i @acme/gadget@latest"))
+        self.assertIn("real-one", self.pre("npm i alias-name@npm:real-one@1"))
+        self.assertIsNotNone(self.pre("pip install Acme_Tool==1"))
+        self.assertIsNone(self.pre("pip install acme-tool>=2"))  # PEP 503 names one package
+        self.assertIsNone(self.pre("pip3 install acme.tool"))
+        self.assertIsNone(self.pre("python3 -m pip install acme-tool"))
+
+    def test_a_scoped_inspection_in_the_transcript_and_its_tarball(self):
+        self.rows(self.view("v1", "npm view @acme/widget@1 scripts"))
+        self.assertIsNone(self.pre("npm i @acme/widget"))
+        self.rows(self.view("v2", "tar tzf acme-gadget-1.0.0.tgz"))
+        self.assertIsNone(self.pre("npm i @acme/gadget"))
+
+    def test_the_deny_names_the_package_and_the_check_and_nothing_else(self):
+        reason = self.pre("API_TOKEN=hunter2 npm install --registry https://u:hunter2@host/ "
+                          "'odd;word' acme-widget@9.9.9 --otp 123456")
+        self.assertTrue(reason.startswith("[practices:SEC-64] Read a package's install scripts "
+                                          "before its first install, or install with scripts "
+                                          "off."), reason)
+        self.assertIn("`npm view acme-widget scripts`", reason)
+        self.assertIn("`--ignore-scripts`", reason)
+        self.assertIn("Load the `dependencies` skill when it is listed", reason)
+        self.assertIn("Resending this call passes", reason)
+        self.assertIn("say what the script does", reason)
+        for word in ("hunter2", "odd", "9.9.9", "123456", "API_TOKEN", "--registry"):
+            self.assertNotIn(word, reason)
+        self.assertNotIn("hunter2", self.log())
+        reason = self.pre("pip install acme-tool")
+        self.assertIn("`--only-binary :all:`", reason)
+        self.assertNotIn("npm view", reason)
+        reason = self.pre("gem install acme-tool")
+        self.assertIn("(gem)", reason)
+        self.assertNotIn("npm view", reason)
+
+    def test_is_off_and_enabled_false_turn_it_off(self):
+        for body in ('[[disable]]\nrule = "SEC-64"\nreason = "a vendored registry"\n',
+                     '[[disable]]\nrule = "engine:SEC-64"\nreason = "a vendored registry"\n',
+                     "enabled = false\n"):
+            with self.subTest(body=body):
+                self.config_toml(body)
+                self.assertIsNone(self.pre("npm i acme-widget", session_id=self.fresh()))
+                self.assertIsNone(self.pre('npm i "$PKG"', session_id=self.fresh()))
+        self.assertNotIn("install-skipped", self.log())
+        self.config_toml('[[disable]]\nrule = "SEC-60"\nreason = "another rule"\n')
+        self.assertIsNotNone(self.pre("npm i acme-widget", session_id=self.fresh()))
+
+    def test_a_subagent_reads_its_own_transcript_and_the_parents(self):
+        self.rows(self.view("s1", "npm view acme-a scripts", sidechain=True),
+                  path=self.agent_file())
+        self.assertIsNone(self.pre("npm i acme-a", agent_id=self.AGENT))
+        reason = self.pre("npm i acme-b", agent_id=self.AGENT)
+        self.assertIn("acme-b", reason)
+        self.assertIsNone(self.pre("npm i acme-b", agent_id=self.AGENT))
+        self.rows(self.view("p1", "npm view acme-c scripts"))  # the parent read it
+        self.assertIsNone(self.pre("npm i acme-c", agent_id=self.AGENT))
+
+    def test_a_subagents_key_is_its_own(self):
+        self.assertIsNotNone(self.pre("npm i acme-a"))
+        self.assertIsNotNone(self.pre("npm i acme-a", agent_id=self.AGENT))
+        self.assertIsNone(self.pre("npm i acme-a", agent_id=self.AGENT))
+
+    def test_a_subagents_inspection_doesnt_count_for_the_parent(self):
+        self.rows(self.view("s1", "npm view acme-a scripts", sidechain=True),
+                  path=self.agent_file())
+        self.assertIsNotNone(self.pre("npm i acme-a"))
+
+    def test_with_no_transcript_the_deny_once_still_holds(self):
+        os.unlink(self.transcript)
+        self.assertIsNotNone(self.pre("npm i acme-a"))
+        self.assertIsNone(self.pre("npm i acme-a"))
+
+    def test_a_deny_whose_key_cant_be_kept_is_dropped(self):
+        os.makedirs(os.path.join(self.state, "dotclaude", "practices"))
+        with open(os.path.join(self.state, "dotclaude", "practices", "denies"), "w") as f:
+            f.write("a file where the folder goes")
+        self.assertIsNone(self.pre("npm i acme-a"))
+        self.assertIn("state-error", self.log())
+
+    def test_a_spent_budget_allows_and_logs(self):
+        self.env["PRACTICES_TEST_BUDGET"] = "0"
+        self.assertIsNone(self.pre("npm i acme-a"))
+        self.assertIn("budget-spent", self.log())
+
+    def test_a_budget_spent_in_the_transcript_read_allows_and_logs(self):
+        self.rows([use(f"v{n}", "Bash", command="npm view acme-a main") for n in range(5)])
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "check_budget", side_effect=PC.Budget("transcript read")):
+            self.assertIsNone(PC.install_check(self.event("npm i acme-a", "PreToolUse", "b1")))
+            PC.CRUMB.clear()
+        self.assertIn("budget-spent", self.log())
+        self.assertEqual(glob.glob(os.path.join(self.state, "dotclaude", "practices", "denies",
+                                                "*.json")), [])
+
+    def test_a_fault_is_logged_and_the_push_check_still_runs(self):
+        seen = []
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "read_installs", side_effect=KeyError("boom")), \
+                mock.patch.object(PC, "bash_calls",
+                                  side_effect=lambda e: seen.append(e) or ([], [], False)):
+            self.assertIsNone(PC.bash_pre(self.event("npm i acme-a", "PreToolUse", "b1")))
+        self.assertEqual(len(seen), 1)
+        self.assertIn("crash", self.log())
+
+    def test_a_call_with_an_install_and_a_commit_is_denied_for_the_install_first(self):
+        command = "npm i acme-a && git commit -m x"
+        self.assertTrue(self.pre(command).startswith("[practices:SEC-64]"))
+        self.assertIsNone(self.pre(command))  # the commit levels run on the resend
+        self.assertTrue(glob.glob(os.path.join(self.state, "dotclaude", "practices", "heads",
+                                               "*")))
+
+    def test_the_health_line_counts_a_skipped_install(self):
+        self.assertIsNone(self.pre('npm i "$PKG"'))
+        self.assertIn("1 package install skipped", self.start("startup")["systemMessage"])
+
+
+class InstallPrefilter(Base):
+    """The real settings.json command against a stand-in hook that only reports it ran."""
+
+    def ran(self, payload):
+        hooks = os.path.join(self.home, ".claude", "hooks")
+        os.makedirs(hooks, exist_ok=True)
+        with open(os.path.join(hooks, "practices-check.sh"), "w") as f:
+            f.write("cat >/dev/null; echo RAN\n")
+        with open(os.path.join(REPO, "settings.json")) as f:
+            (cmd,) = [h["command"] for e in json.load(f)["hooks"]["PreToolUse"]
+                      if e.get("matcher") == "Bash" for h in e["hooks"]
+                      if "practices-check" in h["command"]]
+        p = subprocess.run(["sh", "-c", cmd], input=payload, capture_output=True, text=True,
+                           env=self.env, timeout=10)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return "RAN" in p.stdout
+
+    def both(self, command):
+        event = {"tool_name": "Bash", "tool_input": {"command": command}}
+        return self.ran(json.dumps(event)), self.ran(json.dumps(event, separators=(",", ":")))
+
+    def test_every_install_reaches_the_hook(self):
+        for command, _ in INSTALLS:
+            with self.subTest(command=command):
+                self.assertEqual(self.both(command), (True, True))
+
+    def test_every_add_verb_the_engine_reads_reaches_the_hook(self):
+        for manager, verbs in PC.ADD_VERBS.items():
+            for verb in verbs:
+                with self.subTest(manager=manager, verb=verb):
+                    self.assertEqual(self.both(f"{manager} {verb} acme-widget"), (True, True))
+        self.assertEqual(self.both("uv pip install acme-widget"), (True, True))
+
+    def test_the_git_and_gh_forms_still_reach_the_hook(self):
+        for command in ("git commit -m x", "git push origin main", "gh pr ready 5",
+                        "gh pr create --draft"):
+            with self.subTest(command=command):
+                self.assertEqual(self.both(command), (True, True))
+
+    def test_other_commands_dont_start_python(self):
+        for command in ("ls", "git status", "git log --oneline", "npm test", "npm run build",
+                        "cargo build", "cat notes.md", "gh pr view 5", "pip list", "pip freeze",
+                        "npm view acme-widget scripts", "uv sync", "poetry run pytest"):
+            with self.subTest(command=command):
+                self.assertEqual(self.both(command), (False, False))
+
+    def test_text_outside_the_command_doesnt_reach_the_hook(self):
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {
+            "command": "ls", "description": "npm install acme-widget"}})
+        self.assertFalse(self.ran(payload))
+
+
+class DependenciesSkill(unittest.TestCase):
+    def test_it_loads_with_the_gate_line_and_no_file_events_or_rules(self):
+        skill, why = PC.load_skill(os.path.join(REPO, "skills", "dependencies"))
+        self.assertIsNone(why)
+        self.assertEqual(skill["name"], "dependencies")
+        self.assertEqual((skill["events"], skill["rules"]), ([], []))
+        self.assertEqual(len(skill["gate"]), 1)
+        self.assertIn("SEC-64", skill["gate"][0])
+
+    def test_the_skill_and_the_engine_state_the_same_rule_id(self):
+        with open(os.path.join(REPO, "skills", "dependencies", "SKILL.md")) as f:
+            body = f.read()
+        self.assertIn("**Gate rule SEC-64", body)
+        self.assertIn("references/lifecycle.md", body)
+        self.assertIn(".claude/practices/dependencies.md", body)
+        self.assertLess(len(body.splitlines()), 50)
+
+
 if __name__ == "__main__":
     unittest.main()

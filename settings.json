@@ -471,7 +471,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "i=$(cat); printf '%s' \"$i\" | LC_ALL=C grep -qE '\"command\"[[:space:]]*:[[:space:]]*\"([^\"\\\\]|\\\\.)*(git([^\"\\\\]|\\\\.)*(commit|push)|gh([^\"\\\\]|\\\\.)*pr([^\"\\\\]|\\\\.)*(ready|create))' && [ -f \"$HOME/.claude/hooks/practices-check.sh\" ] && printf '%s' \"$i\" | bash \"$HOME/.claude/hooks/practices-check.sh\"; exit 0",
+            "command": "i=$(cat); printf '%s' \"$i\" | LC_ALL=C grep -qE '\"command\"[[:space:]]*:[[:space:]]*\"([^\"\\\\]|\\\\.)*(git([^\"\\\\]|\\\\.)*(commit|push)|gh([^\"\\\\]|\\\\.)*pr([^\"\\\\]|\\\\.)*(ready|create)|(npm|yarn|bun|pip|uv|poetry|cargo|gem|composer)([^\"\\\\]|\\\\.)*(add|ins|isnt|require|[[:space:]](i|in|it|a|r)[[:space:]]))' && [ -f \"$HOME/.claude/hooks/practices-check.sh\" ] && printf '%s' \"$i\" | bash \"$HOME/.claude/hooks/practices-check.sh\"; exit 0",
             "timeout": 5
           }
         ]
