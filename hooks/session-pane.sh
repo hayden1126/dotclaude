@@ -68,11 +68,10 @@ play_ring() {
 # the common case, no Python starts; a dangling link there still goes to the reader, so the log
 # says why. A flag that can't be read means not muted: redundancy over silence.
 read_mute() {
-  local flag="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude/mute.json" py out
+  local flag="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude/mute.json" out
   mute_sound=0 mute_toast=0 mute_note=""
   [ -e "$flag" ] || [ -L "$flag" ] || return 0
-  if py=$(command -v python3 || command -v python) &&
-     out=$("$py" -I "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/mute_state.py" check \
+  if out=$(python3 -I "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/mute_state.py" check \
              </dev/null 2>/dev/null) &&
      [[ $out =~ ^([01])\ ([01])\ (unreadable|malformed|-)$ ]]; then
     mute_sound=${BASH_REMATCH[1]} mute_toast=${BASH_REMATCH[2]}

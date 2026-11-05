@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Check stage 02's extracts against MANIFEST.md's scope, from the hub root.
 
   extract_check.py [--root DIR]

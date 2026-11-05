@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Check the cram order (08-practice step 7, FB-157), from the hub root.
 
   cram_check.py [practice/cram-order.md] [--notes _build/notes.html] [--plain]

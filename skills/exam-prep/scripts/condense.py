@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Condense Claude Code session transcripts into private shards for the retro (12-retro step 2).
 
   condense.py [--since TIME] [--until TIME] OUT_DIR TRANSCRIPT.jsonl...

@@ -498,7 +498,8 @@ say "git: set maintenance.auto false globally (LR3)"
 # The custom-command widget ctx-breakdown.py (per-category context chips, line 1)
 # lives in ccstatusline's own config dir, so it survives ccstatusline reinstalls.
 # The settings baseline carries a placeholder commandPath; we patch it here with this
-# machine's absolute python and script paths, because ccstatusline runs widget
+# machine's absolute python and script paths (with -I for a script this repo ships;
+# a user's own widget keeps the plain interpreter), because ccstatusline runs widget
 # commands through the platform shell where $HOME/%USERPROFILE% expansion is not
 # portable. An existing file loses the retired session-summary rows (lines 2-3).
 CC_CFG_DIR="$HOME/.config/ccstatusline"
@@ -510,6 +511,8 @@ python3 -I - "$REPO_DIR/statusline/ccstatusline-settings.json" "$CC_CFG_DIR/sett
 import json, os, shutil, sys, time
 baseline_path, dst = sys.argv[1], sys.argv[2]
 cfgdir = os.path.dirname(dst)
+# The widget scripts this repo ships: statusline/*.py, beside the baseline.
+SHIPPED = {n for n in os.listdir(os.path.dirname(baseline_path)) if n.endswith('.py')}
 
 def give_up(why):
     print(f"!! {dst} {why}; ccstatusline settings not installed")
@@ -521,8 +524,8 @@ def script_at(toks):
 
 def patch_paths(settings):
     """Rewrite every custom-command widget whose commandPath names a bare *.py
-    script to this machine's absolute python + absolute script path, preserving
-    any trailing args."""
+    script to this machine's absolute python (with -I for a shipped script) +
+    absolute script path, preserving any trailing args."""
     for line in settings.get('lines', []):
         for w in line:
             if w.get('type') != 'custom-command':
@@ -531,9 +534,14 @@ def patch_paths(settings):
             idx = script_at(toks)
             if idx is None:
                 continue
-            script = os.path.join(cfgdir, os.path.basename(toks[idx].strip('"')))
+            name = os.path.basename(toks[idx].strip('"'))
+            script = os.path.join(cfgdir, name)
             rest = toks[idx + 1:]
-            w['commandPath'] = ' '.join([f'"{sys.executable}"', f'"{script}"'] + rest)
+            # ccstatusline runs the widget outside the sandbox, so a script this repo ships
+            # runs isolated (-I: no user site, no PYTHON* env). A user's own widget may need
+            # their site-packages, so it keeps the plain interpreter.
+            py = [f'"{sys.executable}"'] + (['-I'] if name in SHIPPED else [])
+            w['commandPath'] = ' '.join(py + [f'"{script}"'] + rest)
 
 def well_formed(settings):
     """Whether lines has the shape the helpers here read: a list of lists of widget

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """lane: parallel Claude sessions, one git worktree ("lane") each, with single-writer records.
 
   lane init [--root DIR] [--setup CMD] [--ports A-B] [--block N] [--cap N] [--locks A,B]

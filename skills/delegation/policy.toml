@@ -170,7 +170,9 @@ write_denied = ["~/.claude", "~/.gitconfig", "~/.config/git", "~/.zshrc", "~/.zs
   "~/.zprofile", "~/.zlogin", "~/.bashrc", "~/.bash_profile", "~/.profile", "~/.oh-my-zsh",
   "~/.config/gh", "~/.ssh", "~/.local/bin",
   # PATH dirs and install dirs an excluded command resolves through (hooks/excluded_guard.py).
-  "~/.bun/bin", "~/.cargo/bin", "~/.local/share/claude", "~/.local/lib/node_modules",
+  "~/.bun/bin", "~/.cargo/bin", "~/.local/share/claude",
+  # npm's global prefix and the Python user site (Linux, macOS): both load into unsandboxed code.
+  "~/.local/lib", "~/Library/Python",
   # chrome-devtools-mcp's config file, the Chrome it names (setup-chrome-wsl.sh) and its profile:
   # all load outside the sandbox at session start.
   "~/.config/cd4a", "~/chrome", "~/.cache/chrome-devtools-mcp",
