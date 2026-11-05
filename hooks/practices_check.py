@@ -83,11 +83,22 @@ Subagents: a payload with agent_id carries the parent's transcript_path, so ever
 uses <transcript_path minus .jsonl>/subagents/agent-<agent_id>.jsonl, and its sidechain rows.
 When that file is missing or empty, the state file alone carries deny-once.
 
-Per repo, <project>/.claude/practices/config.toml: `enabled = false` turns the engine off there;
-`[[disable]]` with `rule` (an event or rule id, or `<skill>:<id>`) and a non-empty `reason` turns
-one off; `[auth] helpers = [...]` feeds `{auth_helpers}`, identifier names only (dotted allowed,
-like `auth.requireUser`; an empty or blank name would match any call), others dropped and
-logged. A malformed file falls back to the defaults (never turning a check off) and is logged.
+Per repo, <project>/.claude/practices/config.toml: `[auth] helpers = [...]` feeds
+`{auth_helpers}`, identifier names only (dotted allowed, like `auth.requireUser`; an empty or
+blank name would match any call), others dropped and logged. A malformed file falls back to the
+defaults (never turning a check off) and is logged.
+
+Turning the gate off isn't the repo's call, since a session can write its own repo. bin/practices-gate,
+run by hand, writes ~/.local/state/dotclaude/practices-off.json: dated entries that turn the engine
+off, or one rule off (an event or rule id, or `<skill>:<id>`) with a reason, at and below a dir. Its
+home comes from the passwd entry and no environment variable moves it. A repo's own `enabled` and
+`[[disable]]` are ignored and logged. A file that is malformed, a link, not a regular file, not the
+user's own or writable by others is ignored whole, so the gate stays on, and it is logged. Each
+session start names what is off for its project.
+
+A project skill can't replace an installed skill of the same name: every installed rule applies and
+the project copy adds only ids the installed skill lacks. Each session start names the clash and tells
+the model to compare the two copies and propose what to do.
 
 Failure posture (allow and loud): a BUDGET-second run budget on time.monotonic(); patterns left
 when it is spent are skipped and logged, and a transcript read checks it on every row it parses
@@ -194,6 +205,7 @@ runs, and a tracked symlink is read as its target path. The user's safe.director
 forwarded with -c, read as plain text from their global config files (one not theirs alone is
 skipped, and named when git refuses the repo). Each call's timeout is what is left of the budget.
 """
+import datetime
 import hashlib
 import json
 from bisect import bisect_right
@@ -230,6 +242,7 @@ NOT_ENTRIES = (b'{"type":"api-request', b'{"type":"attachment"', b'{"type":"file
 AUTH_HELPERS = ("auth", "getServerSession", "getSession", "currentUser", "getCurrentUser",
                 "requireUser", "requireAuth", "verifySession", "getUser", "withAuth")
 ID = re.compile(r"[\w.-]+")
+OFF_FILE_MAX = 64 * 1024
 AT = ("edit", "commit")  # a [[rule]]'s `at` when it gives none: checked at both
 # An [auth] helpers name: an identifier, dotted allowed (auth.requireUser). An empty or blank
 # name would turn `(?:...|)` into a match for any call and silence SEC-01.
@@ -564,14 +577,26 @@ def load_skill(folder):
             "rules": rules}, None
 
 
-def discover(project):
-    """{name: skill} from the user's skills, then the project's (none when project is None),
-    which win a clash."""
+def add_copy(installed, copy):
+    """A project copy of an installed skill: its gate lines, events and rules with new ids are
+    added, so it can't take anything away. The copy's dir is kept for the session-start note."""
+    ids = {x["id"] for x in installed["events"] + installed["rules"]}
+    installed["events"] += [e for e in copy["events"] if e["id"] not in ids]
+    installed["rules"] += [r for r in copy["rules"] if r["id"] not in ids]
+    installed["gate"] += [line for line in copy["gate"] if line not in installed["gate"]]
+    installed.setdefault("copies", []).append(copy["dir"])
+
+
+def discover(project, quiet=False):
+    """{name: skill} from the user's skills, then the project's (none when project is None). A
+    project skill of an installed skill's name adds to it and never replaces it (add_copy). quiet
+    logs no malformed skill, for a second look in one run."""
     skills = {}
     roots = [os.path.join(config_home(), "skills")]
     if project:
         roots.append(os.path.join(project, ".claude", "skills"))
     for root in roots:
+        project_root = root != roots[0]
         try:
             names = sorted(os.listdir(root))
         except OSError:
@@ -582,46 +607,113 @@ def discover(project):
                 continue
             skill, why = load_skill(folder)
             if skill is None:
-                log("skill-disabled", why)
+                if not quiet:
+                    log("skill-disabled", why)
+            elif project_root and skills.get(skill["name"], {}).get("installed"):
+                add_copy(skills[skill["name"]], skill)
             else:
-                skills[skill["name"]] = skill
+                skills[skill["name"]] = {**skill, "installed": not project_root}
     return skills
 
 
+def passwd_home():
+    """The home in the passwd entry: the off file must not move with $HOME or $XDG_STATE_HOME,
+    which a project's settings can set for a hook. bin/practices-gate does the same."""
+    try:
+        import pwd  # noqa: PLC0415 (Unix only)
+    except ImportError:
+        return os.path.expanduser("~")
+    return pwd.getpwuid(os.getuid()).pw_dir
+
+
+def off_file():
+    return os.path.join(passwd_home(), ".local", "state", "dotclaude", "practices-off.json")
+
+
+def _off_entry_ok(e):
+    if not isinstance(e, dict) or not isinstance(e.get("dir"), str):
+        return False
+    d, until = e["dir"], e.get("until")
+    home = passwd_home()
+    if not os.path.isabs(d) or os.path.normpath(d) != d or under(home, d):  # never home or above
+        return False
+    try:
+        # Exactly YYYY-MM-DD: fromisoformat also reads 2026-W45-4, which as a string sorts after
+        # every date and so would never lapse.
+        if datetime.date.fromisoformat(until).isoformat() != until:
+            return False
+    except (TypeError, ValueError):
+        return False
+    if "rule" in e:
+        return (isinstance(e["rule"], str) and bool(e["rule"]) and isinstance(e.get("reason"), str)
+                and bool(e["reason"].strip()))
+    return True
+
+
+def off_entries(project):
+    """The entries in force at the project: (entries, whether the file is bad). Any fault ignores
+    the whole file, so the gate stays on."""
+    if not project:
+        return [], False
+    path = off_file()
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return [], False
+    except OSError as e:
+        log("off-file-bad", f"{path}: {type(e).__name__}")
+        return [], True
+    try:
+        st = os.fstat(fd)
+        if (not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid()
+                or st.st_mode & (stat.S_IWGRP | stat.S_IWOTH) or st.st_size > OFF_FILE_MAX):
+            log("off-file-bad", f"{path}: not a private regular file of this user's")
+            return [], True
+        data = json.loads(os.read(fd, OFF_FILE_MAX + 1))
+    except (OSError, ValueError, RecursionError) as e:
+        log("off-file-bad", f"{path}: {type(e).__name__}")
+        return [], True
+    finally:
+        os.close(fd)
+    entries = data.get("entries") if isinstance(data, dict) and data.get("version") == 1 else None
+    if not isinstance(entries, list) or not all(_off_entry_ok(e) for e in entries):
+        log("off-file-bad", f"{path}: not the format bin/practices-gate writes")
+        return [], True
+    real = os.path.realpath(project)
+    today = datetime.date.today().isoformat()  # local, as the command's --until is
+    return [e for e in entries if under(real, e["dir"]) and e["until"] >= today], False
+
+
 def load_config(project):
-    """{"enabled", "disable" (a set of ids and skill:ids), "helpers"} from the project's
-    config.toml; defaults on any fault, or when project is None."""
+    """{"enabled", "disable" (a set of ids and skill:ids), "helpers"}: the first two from the off
+    file, the helpers from the project's config.toml; defaults on any fault, or when project is
+    None."""
     default = {"enabled": True, "disable": set(), "helpers": ()}
     if not project:
         return default
+    entries, _ = off_entries(project)
+    off = {"enabled": not any("rule" not in e for e in entries),
+           "disable": {e["rule"] for e in entries if "rule" in e}, "helpers": ()}
     path = os.path.join(project, ".claude", "practices", "config.toml")
     try:
         with open(path, "rb") as f:
             data = tomllib.load(f)
     except FileNotFoundError:
-        return default
+        return off
     except (OSError, ValueError, RecursionError) as e:
         log("config-malformed", f"{path}: {type(e).__name__}: {e}")
-        return default
-    enabled = data.get("enabled", True)
-    disable = data.get("disable", [])
+        return off
+    if "enabled" in data or "disable" in data:
+        log("config-ignored", f"{path}: a repo can't turn the gate off; run `practices-gate` by hand")
     auth = data.get("auth", {})
     helpers = auth.get("helpers", []) if isinstance(auth, dict) else None
-    if not isinstance(enabled, bool) or not isinstance(disable, list) or not _strs(helpers):
-        log("config-malformed", f"{path}: bad enabled, disable or auth.helpers")
-        return default
-    off = set()
-    for d in disable:
-        if (isinstance(d, dict) and isinstance(d.get("rule"), str) and d["rule"]
-                and isinstance(d.get("reason"), str) and d["reason"].strip()):
-            off.add(d["rule"])
-        else:
-            log("config-malformed", f"{path}: a [[disable]] without rule and reason is ignored")
+    if not _strs(helpers):
+        log("config-malformed", f"{path}: bad auth.helpers")
+        return off
     bad = [h for h in helpers if not HELPER.fullmatch(h)]
     if bad:
         log("config-malformed", f"{path}: auth.helpers dropped {bad!r}: not identifier names")
-    return {"enabled": enabled, "disable": off,
-            "helpers": tuple(h for h in helpers if HELPER.fullmatch(h))}
+    return {**off, "helpers": tuple(h for h in helpers if HELPER.fullmatch(h))}
 
 
 def is_off(cfg, skill, item_id):
@@ -2477,6 +2569,8 @@ LABELS = {"skill-disabled": ("skill disabled", "skills disabled"),
           "pattern-skipped": ("pattern skipped", "patterns skipped"),
           "budget-spent": ("time budget spent", "time budgets spent"),
           "config-malformed": ("malformed config", "malformed configs"),
+          "config-ignored": ("repo off setting ignored", "repo off settings ignored"),
+          "off-file-bad": ("unusable off file", "unusable off file reads"),
           "state-error": ("state error", "state errors"), "crash": ("crash", "crashes"),
           "git-skipped": ("git call skipped", "git calls skipped"),
           "scan-truncated": ("scan cut short", "scans cut short"),
@@ -2525,6 +2619,52 @@ def prune(folder, now):
         pass
 
 
+def start_notes(event):
+    """(lines for the user, text for the model) about this project at any session start: what the
+    off file turns off here, and each project copy of an installed skill. Paths reach the model
+    only when printable, since a folder name is the project's to choose."""
+    project = bash_project(event)
+    if not project:
+        return [], None
+    lines = []
+    entries, bad = off_entries(project)
+    if bad:
+        lines.append(f"the off file {off_file()} can't be used, so the gate stays on here")
+    for e in entries:
+        what = f"rule {e['rule']} is off ({e['reason']})" if "rule" in e else "the gate is off"
+        lines.append(f"{what} in {e['dir']} until {e['until']} (practices-gate)".replace(
+            "the gate is off in", "off in"))
+    context = []
+    for name, skill in sorted(discover(project, quiet=True).items()):
+        for copy in skill.get("copies", []):
+            lines.append(f"this project has its own copy of the skill {name}; both run")
+            shown = copy if copy.isprintable() else "(a folder under the project's .claude/skills)"
+            context.append(
+                f"This project has its own copy of the installed practices skill {name}: {shown}, "
+                f"beside {skill['dir']}. Both run: every installed rule applies, and the copy only "
+                "adds rules with new ids. Read both, tell the user how they differ, and propose "
+                "what to do: keep both, rename the copy, move a rule into the installed skill, or "
+                "delete the copy. Change nothing until the user decides.")
+    return lines, "\n".join(context) or None
+
+
+def with_notes(out, event):
+    """out (a session start's output, or None) with start_notes added."""
+    lines, context = start_notes(event)
+    if not lines and not context:
+        return out
+    out = dict(out or {})
+    if lines:
+        note = "practices hooks: " + "; ".join(lines)
+        out["systemMessage"] = f"{out['systemMessage']}; {'; '.join(lines)}" \
+            if out.get("systemMessage") else note
+    if context:
+        spec = out.setdefault("hookSpecificOutput", {"hookEventName": "SessionStart"})
+        spec["additionalContext"] = (spec["additionalContext"] + "\n" + context
+                                     if spec.get("additionalContext") else context)
+    return out
+
+
 def main():
     event = json.load(sys.stdin)
     if not isinstance(event, dict):
@@ -2537,6 +2677,7 @@ def main():
         source = event.get("source")
         out = health(event) if source == "startup" else compact(event) if source == "compact" \
             else None
+        out = with_notes(out, event)
     elif name == "PostToolUse":
         out = post_tool_use(event)
     else:

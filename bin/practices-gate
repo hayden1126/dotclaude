@@ -1,0 +1,180 @@
+#!/usr/bin/python3 -I
+"""Turn the practices gate off for a dir, until a date. Run it by hand, with a `!` line.
+
+    practices-gate off DIR... --until YYYY-MM-DD
+    practices-gate off DIR... --until YYYY-MM-DD --rule ID --reason WHY
+    practices-gate on DIR... [--rule ID]
+    practices-gate status
+
+`off` covers each dir and everything below it, through the end of that date. `--rule` drops one
+event or rule (its id, or `<skill>:<id>`) and needs a reason. A repo and its lanes are two dirs, so
+name both. `on` removes the matching entries, all of them for a dir when no rule is named.
+
+The choice is written to ~/.local/state/dotclaude/practices-off.json, under the home in the passwd
+entry. hooks/practices_check.py reads it and ignores a repo's own off settings. Each session start
+in a covered dir names what is off. Sandboxed Bash and the Edit and Write tools can't write that
+file, and a deny rule keeps a session from running this command; a `!` line runs outside both.
+"""
+import argparse
+import datetime
+import json
+import os
+import re
+import stat
+import sys
+import tempfile
+
+RULE = re.compile(r"[\w.:-]+")
+
+
+def passwd_home():
+    """The home in the passwd entry: the same lookup as hooks/practices_check.py."""
+    try:
+        import pwd  # noqa: PLC0415 (Unix only)
+    except ImportError:
+        return os.path.expanduser("~")
+    return pwd.getpwuid(os.getuid()).pw_dir
+
+
+def off_file():
+    return os.path.join(passwd_home(), ".local", "state", "dotclaude", "practices-off.json")
+
+
+class Refusal(Exception):
+    pass
+
+
+def under(path, root):
+    return path == root or path.startswith(root.rstrip("/") + "/")
+
+
+def read_entries(path):
+    """The file's entries, [] when it is missing. A file this command wouldn't have written is
+    left for a person to look at, never replaced."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return []
+    if not stat.S_ISREG(st.st_mode):
+        raise Refusal(f"{path} isn't a regular file: look at it and remove it by hand")
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (OSError, ValueError, RecursionError) as e:
+        raise Refusal(f"{path} can't be read ({type(e).__name__}): look at it and remove it by "
+                      "hand") from e
+    entries = data.get("entries") if isinstance(data, dict) and data.get("version") == 1 else None
+    if not isinstance(entries, list) or not all(isinstance(e, dict) for e in entries):
+        raise Refusal(f"{path} isn't in this command's format: look at it and remove it by hand")
+    return entries
+
+
+def write_entries(path, entries):
+    parent = os.path.dirname(path)
+    try:
+        os.makedirs(parent, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix=".practices-off.", dir=parent)
+    except OSError as e:
+        raise Refusal(f"can't write under {parent} ({e.strerror}). Run this by hand with a `!` line: "
+                      "a sandboxed call can't write there") from e
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump({"version": 1, "entries": entries}, f, indent=1)
+            f.write("\n")
+        os.replace(tmp, path)
+    except OSError:
+        os.unlink(tmp)
+        raise
+
+
+def real_dir(d):
+    real = os.path.realpath(d)
+    if not os.path.isdir(real):
+        raise Refusal(f"{d} isn't a dir")
+    return real
+
+
+def live(entries):
+    today = datetime.date.today().isoformat()
+    return [e for e in entries if isinstance(e.get("until"), str) and e["until"] >= today]
+
+
+def cmd_off(args, path):
+    try:
+        until = datetime.date.fromisoformat(args.until)
+    except ValueError as e:
+        raise Refusal(f"--until {args.until!r} isn't a date (YYYY-MM-DD)") from e
+    if until.isoformat() != args.until:  # fromisoformat also reads 20261105 and 2026-W45-4
+        raise Refusal(f"--until {args.until!r} isn't a date (YYYY-MM-DD)")
+    if until < datetime.date.today():
+        raise Refusal(f"--until {args.until} has passed")
+    if args.rule and not RULE.fullmatch(args.rule):
+        raise Refusal(f"--rule {args.rule!r} isn't a rule id")
+    if bool(args.rule) != bool(args.reason and args.reason.strip()):
+        raise Refusal("--rule and a non-empty --reason go together")
+    home = os.path.realpath(passwd_home())
+    dirs = [real_dir(d) for d in args.dirs]
+    for d in dirs:
+        if under(home, d) or under(passwd_home(), d):
+            raise Refusal(f"{d} holds your home: name the repo")
+    entries = live(read_entries(path))
+    for d in dirs:
+        entries = [e for e in entries if (e.get("dir"), e.get("rule")) != (d, args.rule)]
+        entry = {"dir": d, "until": args.until}
+        if args.rule:
+            entry.update(rule=args.rule, reason=args.reason.strip())
+        entries.append(entry)
+    write_entries(path, entries)
+    what = f"rule {args.rule}" if args.rule else "the practices gate"
+    for d in dirs:
+        print(f"{what} is off in {d} through {args.until}")
+    return 0
+
+
+def cmd_on(args, path):
+    dirs = [real_dir(d) for d in args.dirs]
+    entries = read_entries(path)
+    keep = [e for e in entries
+            if not (e.get("dir") in dirs and (not args.rule or e.get("rule") == args.rule))]
+    if len(keep) == len(entries):
+        print("nothing matched: no change")
+        return 0
+    write_entries(path, live(keep))
+    print(f"removed {len(entries) - len(keep)} entr{'y' if len(entries) - len(keep) == 1 else 'ies'}")
+    return 0
+
+
+def cmd_status(_args, path):
+    entries = live(read_entries(path))
+    if not entries:
+        print("the practices gate is on everywhere: nothing is off")
+    for e in entries:
+        what = f"rule {e['rule']} ({e.get('reason', '')})" if "rule" in e else "the gate"
+        print(f"{e.get('dir')}: {what} off through {e['until']}")
+    return 0
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(prog="practices-gate", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    off = sub.add_parser("off")
+    off.add_argument("dirs", nargs="+", metavar="DIR")
+    off.add_argument("--until", required=True)
+    off.add_argument("--rule")
+    off.add_argument("--reason")
+    on = sub.add_parser("on")
+    on.add_argument("dirs", nargs="+", metavar="DIR")
+    on.add_argument("--rule")
+    sub.add_parser("status")
+    args = ap.parse_args(argv)
+    path = off_file()
+    try:
+        return {"off": cmd_off, "on": cmd_on, "status": cmd_status}[args.cmd](args, path)
+    except Refusal as e:
+        print(f"practices-gate: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

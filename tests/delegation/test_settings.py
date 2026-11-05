@@ -822,6 +822,16 @@ class Baseline(unittest.TestCase):
                   *(f"~/{f}" for f in self.HOME_FILES if "*" not in f)):
             self.assertTrue(any(p == d or p.startswith(d + "/") for d in denied), p)
 
+    def test_only_hayden_s_hand_runs_the_practices_off_switch(self):
+        # A `!` line goes around permission rules, so these leave it the only route. A sandboxed
+        # run couldn't write the file anyway; these stop one with the sandbox off.
+        for command in ("practices-gate off . --until 2999-01-01", "practices-gate status",
+                        "~/.local/bin/practices-gate off . --until 2999-01-01",
+                        "/home/x/dotclaude/bin/practices-gate off . --until 2999-01-01",
+                        "python3 -I bin/practices-gate off . --until 2999-01-01"):
+            self.assertNotEqual(matching("deny", command), [], command)
+        self.assertIn("~/dotclaude/bin", S["sandbox"]["filesystem"]["denyWrite"])
+
     def test_every_allow_rule_on_an_excluded_command_sits_behind_the_guard(self):
         # An allow rule skips the classifier, so an excluded command it covers must meet the
         # guard first.

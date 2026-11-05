@@ -48,7 +48,7 @@ Every rule gets L0, L1 and L4 through the skill. The table below lists the furth
 ## Per-repo layer
 
 - `.claude/practices/auth-secrets.md`: prose repo rules the skill reads first, such as "auth is Supabase with secure email change on" or "the session store is `lib/session.ts`". They win over the defaults.
-- `.claude/practices/config.toml`: `[[disable]]` with a `rule` and a non-empty `reason` turns one event or rule off.
+- Turning one event or rule off is not a repo setting: `practices-gate off <dir> --until <date> --rule <id> --reason <why>`, run by hand.
 
 ## Rules
 

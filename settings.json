@@ -244,6 +244,8 @@
       "Bash(bash -c *git push*--force*)",
       "Bash(bash -c *git reset*--hard*)",
       "Bash(claude *ultrareview*)",
+      "Bash(practices-gate*)",
+      "Bash(*practices-gate off*)",
       "Edit(~/.local/bin/**)",
       "Edit(~/.bun/bin/**)",
       "Edit(~/.cargo/bin/**)",
