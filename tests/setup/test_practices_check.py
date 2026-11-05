@@ -1304,10 +1304,14 @@ class RepoFilesCantSilenceIt(Base):
         self.z_skill('[[event]]\nid = "mine"\npaths = ["docs/**"]\nlines = ["l"]\n')
         self.assertIn("[practices:L1:z:mine]", self.fire("docs/x.md", "plain\n"))
 
-    def test_a_project_rule_with_a_shared_id_never_fires_in_its_pass(self):
-        self.loaded()
+    def test_a_project_event_with_a_shared_id_never_fires_in_its_pass(self):
         self.skill("demo", 'skill = "demo"\n[[event]]\nid = "route-handler"\npaths = ["docs/**"]\n'
                            'lines = ["l"]\n')
+        self.assertIsNone(self.fire("docs/x.md", "plain\n"))
+
+    def test_a_project_rule_with_a_shared_id_never_fires_in_its_pass(self):
+        self.loaded()
+        self.skill("demo", 'skill = "demo"\n[[rule]]\nid = "SEC-17"\nwhen = "plain"\nsay = "s"\n')
         self.assertIsNone(self.fire("docs/x.md", "plain\n"))
 
     def test_a_commit_scan_keeps_its_record_for_the_second_pass(self):
@@ -1927,6 +1931,18 @@ class TwoPasses(BashBase):
             self.in_process(level, "t1")
             self.in_process(level, "t2")
         self.assertEqual(seen, ["t1", "t1", "t2", "t2"])
+
+    def test_the_project_pass_gets_its_own_budget(self):
+        spent = []
+
+        def level(event):
+            spent.append(time.monotonic() - PC.START)
+            PC.START -= 100  # this pass used all of it
+
+        with mock.patch.object(PC, "START", time.monotonic()):
+            self.in_process(level, "t1")
+        self.assertEqual(len(spent), 2)
+        self.assertLess(spent[1], 50)
 
     def test_a_level_that_raises_leaves_no_scope_or_record_behind(self):
         def level(event):
