@@ -11,5 +11,5 @@
 d="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude"
 err="$d/delegation-ledger.err"
 { mkdir -p "$d" && : >>"$err"; } 2>/dev/null || err=/dev/null
-python3 "$HOME/.claude/skills/delegation/scripts/watch-guard" 2>>"$err"
+python3 -I "$HOME/.claude/skills/delegation/scripts/watch-guard" 2>>"$err"
 exit 0

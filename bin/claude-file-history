@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """List and restore Claude Code's own backups of a file.
 
 Before each Write or Edit tool call, Claude Code copies the file it is about to change to

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """agent-spawn-guard: PreToolUse(Agent) policy for delegation roles.
 
 Two rules:

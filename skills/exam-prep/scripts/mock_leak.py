@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """The leak check (08-practice, FB-154): a page the student reads before a mock holds no key.
 
   mock_leak.py [--no-markers] <page> practice/*-key.md

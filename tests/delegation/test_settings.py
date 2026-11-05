@@ -683,10 +683,22 @@ class Baseline(unittest.TestCase):
         deny = S["permissions"]["deny"]
         sandbox_deny = S["sandbox"]["filesystem"]["denyWrite"]
         for p in ("~/.local/bin", "~/.bun/bin", "~/.cargo/bin", "~/.local/share/claude",
-                  "~/.local/lib/node_modules"):
+                  "~/.local/lib"):
             self.assertIn(f"Edit({p}/**)", deny)
             self.assertNotIn(p, sandbox_deny)
             self.assertIn(p, POLICY["protect"]["write_denied"])
+
+    def test_the_python_user_site_is_write_protected(self):
+        # A usercustomize.py or .pth file in the user site runs in every Python that doesn't
+        # pass -I, some of it outside the sandbox (DA17). Sandboxed Bash can't write there; the
+        # Edit deny keeps the Edit and Write tools (and subagents') out too. ~/.local/lib also
+        # holds npm's global prefix, which excluded heads resolve through.
+        deny = S["permissions"]["deny"]
+        for p in ("~/.local/lib", "~/Library/Python"):   # Linux, macOS
+            self.assertIn(f"Edit({p}/**)", deny)
+            self.assertNotIn(p, S["sandbox"]["filesystem"]["denyWrite"])
+            self.assertIn(p, POLICY["protect"]["write_denied"])
+        self.assertNotIn("Edit(~/.local/lib/node_modules/**)", deny)   # covered by the wider rule
 
     def test_the_chrome_devtools_config_chrome_and_profile_are_write_protected(self):
         # chrome-devtools-mcp reads ~/.config/cd4a/config.json at every session start and runs
