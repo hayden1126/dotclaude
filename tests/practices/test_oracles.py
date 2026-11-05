@@ -52,8 +52,36 @@ def build(dest):
     return dest
 
 
-def run_oracle(fixture, case, workdir):
-    return run.grade(fixture, case, Path(workdir) / "grade", contain=False)
+def run_oracle(fixture, case, workdir, evidence=None):
+    return run.grade(fixture, case, Path(workdir) / "grade", contain=False, evidence=evidence)
+
+
+def overlay_evidence(case, variant):
+    """A registry case's session evidence for one overlay: cases/<case>/evidence/<overlay>.json
+    (an empty session for "empty"), with what the harness adds at run time left to the caller."""
+    path = CASES / case / "evidence" / f"{variant}.json"
+    return json.loads(path.read_text()) if path.is_file() else {"bash": [], "reply": "", "registry_requests": []}
+
+
+def registry_verdict(case, variant, tmp, **changes):
+    """Grades a registry case as a live run would, without npm or a server: the fixture with its
+    setup/ and stubs as build_fixture leaves them, deps_before taken there, then the overlay (or
+    {path: text or None} in `files`) and the packages its package.json names. `changes` replace
+    fields of the overlay's evidence, and `files` adds to the overlay."""
+    fixture = build(Path(tmp) / "fixture")
+    run.apply_setup(fixture, case)
+    run.keep_stubs(fixture)
+    evidence = dict(overlay_evidence(case, variant), deps_before=run.package_deps(fixture))
+    if variant != "empty":
+        shutil.copytree(CASES / case / variant, fixture, dirs_exist_ok=True)
+    for rel, text in (changes.pop("files", None) or {}).items():
+        if text is None:
+            (fixture / rel).unlink()
+        else:
+            (fixture / rel).parent.mkdir(parents=True, exist_ok=True)
+            (fixture / rel).write_text(text)
+    run.install_declared(fixture, case)
+    return run_oracle(fixture, case, tmp, {**evidence, **changes})
 
 
 def case_names():
@@ -70,6 +98,8 @@ class OracleVerdicts(unittest.TestCase):
     def verdict(self, case, variant):
         with tempfile.TemporaryDirectory(prefix="practices-test-") as tmp:
             tmp = Path(tmp)
+            if run.is_registry_case(case):
+                return registry_verdict(case, variant, tmp)
             fixture = build(tmp / "fixture")
             if variant != "empty":
                 shutil.copytree(CASES / case / variant, fixture, dirs_exist_ok=True)
@@ -138,6 +168,24 @@ class OracleVerdicts(unittest.TestCase):
 
     def test_remember_me(self):
         self.check_case("remember-me")
+
+    def test_dep_few_lines(self):
+        self.check_case("dep-few-lines")
+
+    def test_dep_reuse(self):
+        self.check_case("dep-reuse")
+
+    def test_dep_typosquat(self):
+        self.check_case("dep-typosquat")
+
+    def test_dep_install_script(self):
+        self.check_case("dep-install-script")
+
+    def test_dep_advisory(self):
+        self.check_case("dep-advisory")
+
+    def test_dep_benign(self):
+        self.check_case("dep-benign")
 
 
 # Secure implementations written differently from good/: each must still score pass.
