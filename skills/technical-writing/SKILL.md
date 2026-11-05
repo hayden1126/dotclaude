@@ -1,6 +1,6 @@
 ---
 name: technical-writing
-description: How to write commit messages, PR descriptions, code review comments, READMEs, docs and reports. Enforces literal prose, brevity, no em dashes, and an iterate-until-clean loop. Not for chat with Hayden, messages or emails to people (formal-voice, casual-voice), or essays and cited work (a sourced project).
+description: How to write or edit commit messages, PR descriptions, GitHub issues and comments, code review comments, READMEs, docs and reports, cited reports included. Enforces literal prose, a direct stance, brevity, no em dashes, and an iterate-until-clean loop. Not for chat with Hayden, messages or emails to people (formal-voice, casual-voice), or essays and academic papers (a sourced project).
 ---
 
 # Technical writing
@@ -11,6 +11,9 @@ The reader has no context from the session and wants the facts. Write what happe
 Every word fights to stay. If a sentence adds nothing, cut it. If two sentences say the same thing, merge them into one shorter sentence.
 
 **Iteration loop.** After a draft, reread every sentence and ask: does it add something new? does it repeat? does it sound AI-generated? does the section flow start to finish? If any answer is wrong, rewrite or cut, then reread again. Stop when a full reread surfaces nothing.
+
+## Stance
+State views clearly. Acknowledge real uncertainty, but don't hedge for safety.
 
 ## Say it literally
 Apply these to what you write now. Don't sweep old docs for them.

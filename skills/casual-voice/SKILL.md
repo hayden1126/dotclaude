@@ -1,6 +1,6 @@
 ---
 name: casual-voice
-description: How to draft a casual message or informal post in Hayden's name, such as a text, a chat message, a friendly email or a personal post. Not for chat with Hayden, commits, PRs or docs (technical-writing), formal emails (formal-voice), or essays and cited work (a sourced project).
+description: How to draft or edit a casual message or informal post in Hayden's name, such as a text, a chat message, a friendly email or a personal post. Not for chat with Hayden, commits, PRs, GitHub issues or docs (technical-writing), formal emails (formal-voice), or essays and academic papers (a sourced project).
 ---
 
 # Casual voice

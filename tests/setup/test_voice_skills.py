@@ -33,8 +33,10 @@ class VoiceSkills(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(REPO, "skills", old)))
         found = subprocess.run(["git", "grep", "-l", "--untracked", old, "--",
                                 ".", ":!STATUS.md", ":!PLAN.md"],
-                               cwd=REPO, capture_output=True, text=True).stdout.split()
-        self.assertEqual(found, [])
+                               cwd=REPO, capture_output=True, text=True)
+        # 1 means no match; anything above it means git failed, and the check didn't run.
+        self.assertLessEqual(found.returncode, 1, found.stderr)
+        self.assertEqual(found.stdout.split(), [])
 
 
 if __name__ == "__main__":
