@@ -1060,7 +1060,7 @@ class Rearm(Base):
         self.write_transcript(525_000)
         self.assertEqual(self.stop(), block("hard", "525k"))
         self.assertEqual(self.stop_at(546_000, skill_call("pass", sidechain=True),
-                                      skill_call("writing-voice"), bash_call("git status")),
+                                      skill_call("technical-writing"), bash_call("git status")),
                          block("hard", "546k"))
 
     def test_a_handoff_before_the_firing_does_not_count(self):

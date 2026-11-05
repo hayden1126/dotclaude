@@ -11,7 +11,7 @@ A storyboard-first, fact-cited, adversarially verified deck, built as a fixed-ca
 
 Two ideas carry the whole thing. **The storyboard is the spec**, approved by a human before any HTML exists, and amended in the same unit of work whenever a build supersedes it. **Every claim is mechanically traceable**, so a linter rather than a memory catches the slide that quietly changed.
 
-This skill delegates and does not reimplement: `writing-voice` for copy, `dataviz` before any chart, `artifact-design` for visual craft, `chrome-devtools` for the screenshot loop, `handoff` at phase boundaries. It defines no status document.
+This skill delegates and does not reimplement: `formal-voice` for copy (the deck's `voice.md` wins), `dataviz` before any chart, `artifact-design` for visual craft, `chrome-devtools` for the screenshot loop, `handoff` at phase boundaries. It defines no status document.
 
 ## When to use
 
