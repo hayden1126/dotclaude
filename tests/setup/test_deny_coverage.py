@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -629,6 +630,116 @@ class DenyCoverage(unittest.TestCase):
         self.assertIn('bin/deny-coverage" --settings "$CLAUDE_DIR/settings.json" --checkout "$REPO_DIR"',
                       text)
         self.assertLess(text.index('copy_managed "$MERGED_SETTINGS"'), text.index("bin/deny-coverage"))
+
+
+
+class Table(DenyCoverage):
+    """Each way a path is reached against what it resolves to. Two rules hold in every cell:
+    no pasted rule takes a repo or a path sessions must write, even through a link, and each
+    reached path prints something. Two gaps are on purpose, both in the docstring: the Windows mount
+    (/mnt), which a test can't create, so test_the_repo_walk_stays_out_of_mnt covers it, and a
+    skipped checkout, which stays silent since denyWrite covers it."""
+
+    TARGETS = {
+        "a plain dir": "tools/x/run.sh",
+        "a repo": "proj/bin/run.sh",
+        "a dir above a repo": "work/acme/bin/run.sh",
+        "a dot-dir": ".thing/bin/run.sh",
+        "a dot-dir holding a repo": ".held/bin/run.sh",
+        "a path sessions must write": ".claude/projects/p/run.sh",
+        "a sandbox cache": ".cache/claude-sandbox/t/run.sh",
+        "a skipped checkout": "dotclaude/bin/run.sh",
+        "a name no rule can spell": "my tools/run.sh",
+    }
+    REPOS = ("proj", "work/acme/repo", ".held/plugins/p", "dotclaude", "code/p")
+
+    def build(self):
+        for repo in self.REPOS:
+            self.mk(f"{repo}/.git")
+        self.mk(".claude/plans")
+        self.mk(".claude/jobs")
+        for rel in self.TARGETS.values():
+            self.write(rel, "#!/bin/sh\n")
+
+    def reach_path_link(self, rel):
+        self.link(rel, "t")
+
+    def reach_middle_link(self, rel):
+        self.mk("mid")
+        os.symlink(os.path.join(self.home, rel), os.path.join(self.home, "mid/cur"))
+        self.link("mid/cur", "t")
+
+    def reach_linked_path_dir(self, rel):
+        os.symlink(os.path.dirname(os.path.join(self.home, rel)), os.path.join(self.home, ".pdir"))
+        return os.path.join(self.home, ".pdir")
+
+    def reach_script(self, rel):
+        self.write(".local/bin/w", f'#!/bin/sh\nexec "$HOME/{rel}"\n')
+
+    def reach_startup_file(self, rel):
+        self.write(".zshrc", f'. "$HOME/{rel}"\n', 0o644)
+
+    def reach_dot_dir_link(self, rel):
+        os.symlink(os.path.dirname(os.path.join(self.home, rel)), os.path.join(self.home, ".lnk"))
+
+    def reach_hook(self, rel):
+        return {"hooks": {"Stop": [{"hooks": [{"command": f'bash "$HOME/{rel}"'}]}]}}
+
+    def reach_status_line(self, rel):
+        return {"statusLine": {"command": f'"$HOME/{rel}" --x'}}
+
+    def reach_mcp(self, rel):
+        return {"mcpServers": {"s": {"command": "node", "args": [f"{self.home}/{rel}"]}}}
+
+    REACHES = ("path_link", "middle_link", "linked_path_dir", "script", "startup_file",
+               "dot_dir_link", "hook", "status_line", "mcp")
+
+    def protected(self):
+        out = [self.home, *(os.path.join(self.home, r) for r in self.REPOS)]
+        out += [os.path.join(self.home, d) for d in (
+            ".claude/projects", ".claude/plans", ".claude/jobs", ".cache/claude-sandbox")]
+        return [os.path.realpath(p) for p in out]
+
+    def pasted_roots(self, out):
+        for rule in re.findall(r'^  "Edit\((.+)\)",$', out, re.M):
+            body = rule[:-3] if rule.endswith("/**") else rule
+            yield rule, os.path.realpath(body.replace("~", self.home, 1) if body.startswith("~")
+                                         else body[1:])
+
+    def cell(self, reach, rel):
+        self.build()
+        how = getattr(self, f"reach_{reach}")(rel)
+        settings = how if isinstance(how, dict) else {}
+        path = how if isinstance(how, str) else self.bin
+        settings_path = os.path.join(self.home, "s.json")
+        with open(settings_path, "w") as f:
+            json.dump({"permissions": {"deny": self.deny}, **settings}, f)
+        r = subprocess.run([sys.executable, "-I", SCRIPT, "--settings", settings_path],
+                           env={"HOME": self.home, "PATH": path}, capture_output=True, text=True,
+                           timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout
+
+    def test_every_cell(self):
+        for reach in self.REACHES:
+            for what, rel in self.TARGETS.items():
+                with self.subTest(reach=reach, target=what):
+                    self.setUp()
+                    out = self.cell(reach, rel)
+                    for rule, root in self.pasted_roots(out):
+                        for keep in self.protected():
+                            self.assertFalse(
+                                keep == root or keep.startswith(root + "/"),
+                                f"{rule} takes {keep}:\n{out}")
+                    if what != "a skipped checkout":
+                        self.assertTrue(self.named(out, rel), f"nothing names {rel}:\n{out}")
+
+    def named(self, out, rel):
+        """Whether the output names the path, its dir, or a root above it."""
+        parts = rel.split("/")
+        spellings = ["/".join(parts[:n]) for n in range(1, len(parts) + 1)]
+        spellings += [".lnk", ".pdir", "mid"]
+        return any(s in out for s in spellings)
 
 
 if __name__ == "__main__":

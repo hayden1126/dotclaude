@@ -371,7 +371,7 @@ class Scan:
         for text in words:
             quoted = [a or b for a, b in QUOTED.findall(text)]
             plain = COMMAND_PATH.findall(re.sub(r"\"/", "/", text))  # "$HOME"/x
-            for word in dict.fromkeys([*quoted, *plain]):
+            for word in dict.fromkeys([text, *quoted, *plain]):  # an MCP arg is one word, spaces too
                 target = self.expand(word)
                 if target and os.path.isfile(target) and not DATA_FILE.search(target):
                     self.follow(target, "run by the settings")
