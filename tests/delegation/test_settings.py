@@ -733,6 +733,9 @@ class Baseline(unittest.TestCase):
     HOME_FILES = (".zshrc", ".zshenv", ".zprofile", ".zlogin", ".zlogout", ".bashrc",
                   ".bash_profile", ".bash_login", ".bash_logout", ".profile", ".gitconfig",
                   ".tmux.conf", ".inputrc", ".lesskey", ".less", ".zcompdump*", "CLAUDE.md",
+                  ".bash_aliases", ".curlrc", ".wgetrc", ".vimrc", ".exrc", ".pdbrc", ".gdbinit",
+                  ".pypirc", ".yarnrc", ".yarnrc.yml", ".bunfig.toml", ".condarc", ".gemrc",
+                  ".irbrc", ".Rprofile", ".p10k.zsh", ".fzf.zsh", ".fzf.bash",
                   ".netrc", ".git-credentials", ".secrets.env", ".npmrc", ".claude.json",
                   ".zsh_history", ".bash_history")
     CLAUDE_DIRS = ("agents", "skills", "hooks", "commands", "plugins", "sessions", "rules",

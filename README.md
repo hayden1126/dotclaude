@@ -724,7 +724,8 @@ need nothing extra.
   The shared engine for the practices skills (`server-code` and `auth-secrets`). Each skill ships an
   `events.toml` naming the edits that are its event (a route handler, a server action, a data
   export) and a few high-precision bad patterns. The engine reads every installed skill's file,
-  and the project's copy wins over `~/.claude/skills`. It acts at five levels:
+  installed skills first and a project's after them, so a project's file can only add rules. It acts at
+  five levels:
   - **L1:** an edit that is a skill's event is denied once until the skill is loaded in this
     context (a Skill call, or a Read of its SKILL.md since the last compaction). The deny carries
     the event's lines, and the resend passes.

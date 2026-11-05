@@ -140,7 +140,8 @@ class DenyCoverage(unittest.TestCase):
         self.link("dotclaude/bin/a", "a")
         self.link("lanes/x/bin/b", "b")
         out = self.run_it(extra=["--checkout", os.path.join(self.home, "lanes/x")])
-        self.assertEqual(out, "")
+        self.assertNotIn("dotclaude", out)
+        self.assertNotIn("lanes/x", out)
 
     def test_home_dot_dirs_with_no_rule(self):
         self.mk(".ipython")
@@ -148,7 +149,7 @@ class DenyCoverage(unittest.TestCase):
         self.mk(".claude/x")
         out = self.run_it()
         self.assertIn('"Edit(~/.ipython/**)"', out)
-        self.assertNotIn("notdot", out)
+        self.assertNotIn('"Edit(~/notdot', out)
         self.assertNotIn(".claude", out)
 
     def test_cache_dirs_get_their_own_rule_and_never_the_sandbox_s(self):
@@ -282,6 +283,46 @@ class DenyCoverage(unittest.TestCase):
         with open(os.path.join(outside, "tool"), "w") as f:
             f.write(f"#!{self.home}/.interp/bin/py\n")
         self.assertIn("Edit(~/.interp/**)", self.run_it(path=outside))
+
+    def test_a_link_to_all_of_claude_or_cache_or_a_word_naming_tmp_gets_no_rule(self):
+        self.mk(".claude/x")
+        self.mk(".cache/y")
+        os.symlink(os.path.join(self.home, ".claude"), os.path.join(self.home, ".alt"))
+        os.symlink(os.path.join(self.home, ".cache"), os.path.join(self.home, ".alt2"))
+        out = self.run_it()
+        self.assertNotIn("Edit(~/.claude/**)", out)
+        self.assertNotIn("Edit(~/.cache/**)", out)
+        self.write(".local/bin/t", "#!/bin/sh\nexec /tmp\n")
+        self.assertNotIn("Edit(//tmp/**)", self.run_it())
+
+    def test_comments_and_words_naming_no_file_print_nothing(self):
+        self.mk("scratch/audit")
+        self.write(".local/bin/tool", "#!/bin/sh\ntrue  # then ~/scratch/audit/x\n"
+                                      "true; ~/scratch/audit\n; ~/scratch/nofile\n")
+        self.assertNotIn("Edit(~/scratch/audit", self.run_it())
+
+    def test_a_quote_inside_a_word(self):
+        self.write(".tools/env", "")
+        self.write(".local/bin/tool", '#!/bin/sh\n. "$HOME"/.tools/env\n')
+        self.assertIn('"Edit(~/.tools/**)"', self.run_it())
+
+    def test_a_nul_in_a_first_line_doesn_t_crash_it(self):
+        self.write(".local/bin/tool", "#!/x\0y")
+        self.mk(".ipython")
+        self.assertIn("Edit(~/.ipython/**)", self.run_it())
+
+    def test_the_dirs_setup_fills_are_checked_with_a_minimal_path(self):
+        self.write(".newtool/t", "#!/bin/sh\n")
+        self.link(".newtool/t", "t")
+        self.assertIn("Edit(~/.newtool/**)", self.run_it(path="/usr/bin"))
+
+    def test_a_claude_md_above_projects_is_named_apart(self):
+        self.mk("code/p/.git")
+        self.mk("own/.git")
+        out = self.run_it()
+        self.assertIn("    Edit(~/code/CLAUDE.md)", out)
+        self.assertNotIn('"Edit(~/code/CLAUDE.md)"', out)
+        self.assertNotIn("Edit(~/own/CLAUDE.md)", out)
 
     def test_unreadable_settings_warn_and_exit_0(self):
         r = subprocess.run([sys.executable, "-I", SCRIPT, "--settings", "/nonexistent"],

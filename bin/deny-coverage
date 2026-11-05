@@ -29,8 +29,8 @@ its own sessions.
 
 Known limit: it follows a script's commands only at a command position (a line's start, after `;`,
 `&`, `|`, `then` or `do`), and only when the path is literal, under $HOME or ~, or relative to the
-script ($0). A path built from any other variable, or a bare command name (`exec corepack pnpm`),
-isn't followed.
+script ($0), and names a file. A path built from any other variable, a bare command name (`exec
+corepack pnpm`) and an argument (`exec node ~/.tool/cli.js`, `env A=1 ~/x`) aren't followed.
 """
 import argparse
 import glob
@@ -52,7 +52,8 @@ MUST_STAY_OPEN = (".claude/projects", ".claude/plans", ".claude/jobs", ".cache/c
 DIR_REASONS = {"a home dir", "a dir in ~/.cache"}
 # A word at a command position, after a source, a dot or an exec if there is one.
 COMMAND_WORD = re.compile(r"""(?:^|[;&|]|\bthen\b|\bdo\b)[ \t]*(?:(?:source|\.|exec)[ \t]+)?"""
-                          r"""(?P<path>"[^"\n]+"|'[^'\n]+'|[^\s;&|]+)""", re.M)
+                          r"""(?P<path>(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|"'])+)""", re.M)
+COMMENT = re.compile(r"(?:^|\s)#.*$", re.M)
 SCRIPT_DIR = re.compile(r"""\$\(\s*cd\s+"?\$\(dirname\s+"?(?:\$0|\$\{0\}|\$BASH_SOURCE)"?\)"?(?P<up>(?:/\.\.)*)"?"""
                         r"""\s*&&\s*pwd\s*\)|\$\(dirname\s+"?(?:\$0|\$\{0\})"?\)""")
 
@@ -89,6 +90,7 @@ class Scan:
         self.uncovered = {}   # the rule to paste -> why
         self.in_project = {}  # the path -> why
         self.odd = {}         # the path -> why
+        self.above = {}       # the rule for a CLAUDE.md above projects -> its dir
 
     def covered(self, path):
         """Whether a rule covers path, or path as a dir (a trailing /** names only what's below)."""
@@ -118,8 +120,9 @@ class Scan:
 
     def must_stay_open(self, path):
         """Whether a rule on path would cover what a session must write."""
-        return p_under_any(path, [os.path.join(self.home, d) for d in MUST_STAY_OPEN]) \
-            or under(self.home, path)
+        keep = [os.path.join(self.home, d) for d in MUST_STAY_OPEN]
+        return (p_under_any(path, keep) or any(under(k, path) for k in keep)
+                or any(under(t, path) for t in ("/tmp", "/var/tmp", self.home)))
 
     def judge(self, p, why, rule):
         if any(under(p, s) for s in self.skip) or under(p, "/mnt") or self.covered(p):
@@ -162,9 +165,9 @@ class Scan:
         # The script-relative form first, since its nested quotes would end a quoted word early.
         here = os.path.dirname(real)
         text = SCRIPT_DIR.sub(lambda m: here + (m.groupdict().get("up") or ""), text)
-        for m in COMMAND_WORD.finditer(text):
-            target = self.expand(m.group("path").strip("\"'"))
-            if target:
+        for m in COMMAND_WORD.finditer(COMMENT.sub("", text)):
+            target = self.expand(re.sub("[\"']", "", m.group("path")))
+            if target and os.path.isfile(target):  # a word that names no file is no command
                 self.follow(target, f"sourced or run by {real}", depth + 1)
 
     def venv(self, path, why, depth):
@@ -193,7 +196,8 @@ class Scan:
             return []
         if not head.startswith(b"#!"):
             return []
-        return head[2:].split(b"\n", 1)[0].decode("utf-8", "replace").split()
+        line = head[2:].split(b"\n", 1)[0]
+        return [] if b"\0" in line else line.decode("utf-8", "replace").split()
 
     def lines(self, path):
         text = self.read(path)
@@ -233,7 +237,9 @@ class Scan:
         return f"Edit(/{d}/**)"
 
     def path_dirs(self, path_var):
-        for d in path_var.split(os.pathsep):
+        # The dirs setup fills are checked even when this run's PATH lacks them.
+        usual = [os.path.join(self.home, d) for d in (".local/bin", ".bun/bin", ".cargo/bin", "bin")]
+        for d in dict.fromkeys([*path_var.split(os.pathsep), *usual]):
             if not os.path.isabs(d) or under(d, "/mnt"):
                 continue
             real = os.path.realpath(d)
@@ -250,6 +256,16 @@ class Scan:
                     self.follow(entry, f"in the PATH dir {d}")
                 elif os.path.lexists(entry) and os.access(entry, os.W_OK) and not os.path.isdir(entry):
                     self.follow(entry, f"in the PATH dir {d}")
+
+    def above_projects(self):
+        """A CLAUDE.md in a home dir that isn't itself a checkout loads in every session below it."""
+        for name in sorted(os.listdir(self.home)):
+            d = os.path.join(self.home, name)
+            if (name.startswith(".") or not os.path.isdir(d) or any(under(d, x) for x in self.skip)
+                    or os.path.lexists(os.path.join(d, ".git"))):
+                continue
+            if PLAIN.fullmatch(d) and not self.covered(os.path.join(d, "CLAUDE.md")):
+                self.above[f"Edit(~/{name}/CLAUDE.md)"] = d
 
     def home_dirs(self):
         for parent, skip in ((self.home, SKIP_HOME), (os.path.join(self.home, ".cache"), SKIP_CACHE)):
@@ -299,6 +315,7 @@ def main(argv):
     scan = Scan(rules, home, skip)
     scan.path_dirs(os.environ.get("PATH", ""))
     scan.home_dirs()
+    scan.above_projects()
     if scan.uncovered:
         print(f"deny-coverage: {len(scan.uncovered)} root(s) with no Edit deny rule. Add these to "
               "permissions.deny in settings.machine.json, then rerun setup:")
@@ -307,6 +324,11 @@ def main(argv):
         reached = {r: w for r, w in scan.uncovered.items() if w not in DIR_REASONS}
         for rule, why in sorted(reached.items()):
             print(f"  {rule} is {show(why)}")
+    if scan.above:
+        print("deny-coverage: a CLAUDE.md in these dirs would load in every session below them. Add "
+              "a rule for each that holds projects, not one you work in directly:")
+        for rule in sorted(scan.above):
+            print(f"    {rule}")
     if scan.in_project:
         print("deny-coverage: reached inside a git checkout. A rule there takes the tree from that "
               "project's own sessions, so install the tool outside it. For a checkout no session "

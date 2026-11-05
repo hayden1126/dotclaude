@@ -3258,6 +3258,13 @@ class RunHarness(unittest.TestCase):
                     problems = r.gate_off_problems(hook)
                     self.assertEqual(len(problems), 1, problems)
                     self.assertIn("practices-gate on", problems[0])
+                # and the arms' own prereq check is what reports it
+                settings = tmp / "settings.json"
+                settings.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "Edit", "hooks": [
+                    {"type": "command", "command": 'bash "$HOME/.claude/hooks/practices-check.sh"'}]}]}}))
+                kw = dict(skills=[], skills_dir=tmp, hook=hook, settings=settings)
+                self.assertTrue(any("practices-gate on" in p for p in r.prereq_problems(["C"], **kw)))
+                self.assertEqual(r.prereq_problems(["B"], **kw), [])
 
     def test_prereqs_refuse_a_missing_skill(self):
         r = self.harness

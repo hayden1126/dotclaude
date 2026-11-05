@@ -37,8 +37,10 @@ at CONTENT_MAX characters and each line at LINE_MAX. The token `{auth_helpers}` 
 expands to an alternation of AUTH_HELPERS plus the repo's `[auth] helpers`, each regex-escaped,
 so SEC-01 can name a repo's own auth helper.
 
-Skills are found in <project>/.claude/skills/*/ and in ${CLAUDE_CONFIG_DIR:-~/.claude}/skills/*/,
-links followed. On a name clash the project copy wins. The project dir, for every level and the
+Skills are found in ${CLAUDE_CONFIG_DIR:-~/.claude}/skills/*/ and in <project>/.claude/skills/*/,
+links followed. An edit, commit, push or PR call runs twice, installed skills first, and stops at the
+first pass that speaks (two_passes): a project's patterns can throw or hang, and the call is allowed
+when they do, but by then the installed skills have spoken. The project dir, for every level and the
 startup health check alike, is CLAUDE_PROJECT_DIR, else the cwd recorded at the session's first
 SessionStart, never the call's own cwd (a cd moves it); with neither, an edit is checked against
 the user's skills alone with the default config, logged as project-unknown, and the L4 digest
@@ -97,8 +99,8 @@ user's own or writable by others is ignored whole, so the gate stays on, and it 
 session start names what is off for its project.
 
 A project skill can't replace an installed skill of the same name: every installed rule applies and
-the project copy adds only ids the installed skill lacks. Each session start names the clash and tells
-the model to compare the two copies and propose what to do.
+the project copy adds only ids the installed skill lacks, in the second pass. Each session start names
+the clash and tells the model to compare the two copies and propose what to do.
 
 Failure posture (allow and loud): a BUDGET-second run budget on time.monotonic(); patterns left
 when it is spent are skipped and logged, and a transcript read checks it on every row it parses
@@ -212,7 +214,6 @@ from bisect import bisect_right
 import mmap
 import os
 import re
-import signal
 import stat
 import sys
 import time
@@ -245,6 +246,7 @@ AUTH_HELPERS = ("auth", "getServerSession", "getSession", "currentUser", "getCur
 ID = re.compile(r"[\w.-]+")
 OFF_FILE_MAX = 64 * 1024
 CONFIG_MAX = 64 * 1024
+HELPERS_MAX = 100
 SKILL_MAX = 1 << 20
 PROJECT_SKILLS_MAX = 256 * 1024  # all of a project's events.toml files together
 AT = ("edit", "commit")  # a [[rule]]'s `at` when it gives none: checked at both
@@ -282,43 +284,6 @@ class Budget(Exception):
 def check_budget(what="transcript read"):
     if time.monotonic() - START > BUDGET:
         raise Budget(what)
-
-
-# The time all of a project's patterns may take in one run. A project's skill can ship a pattern
-# that backtracks, and the checks between patterns can't stop one that is running. Spending the
-# whole budget there would also end the run's transcript read, which allows the call, so its
-# patterns get this much and installed patterns, which run first, keep the rest.
-PROJECT_PATTERN_TIME = 0.5
-CLOCK = {"project": False, "spent": 0.0}
-
-
-def _on_alarm(_signum, _frame):
-    if CLOCK["project"]:
-        raise PatternError("a project pattern ran out of time")
-    raise Budget("a pattern")
-
-
-def on_the_clock(call):
-    """call() with an alarm at what is left of the time for it, at least 50 ms: Python's re engine
-    runs signal handlers as it matches."""
-    left = BUDGET - (time.monotonic() - START)
-    if CLOCK["project"]:
-        share = PROJECT_PATTERN_TIME - CLOCK["spent"]
-        if share <= 0:
-            raise PatternError("the project's patterns are out of time")
-        left = min(left, share)
-    try:
-        signal.signal(signal.SIGALRM, _on_alarm)
-        signal.setitimer(signal.ITIMER_REAL, max(left, 0.05))
-    except ValueError:  # not the main thread
-        return call()
-    started = time.monotonic()
-    try:
-        return call()
-    finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        if CLOCK["project"]:
-            CLOCK["spent"] += time.monotonic() - started
 
 
 class Crumb:
@@ -421,7 +386,7 @@ def expand(pattern, helpers):
 
 
 def search(pattern, text, helpers=()):
-    return on_the_clock(lambda: re.search(expand(pattern, helpers), text, re.MULTILINE)) is not None
+    return re.search(expand(pattern, helpers), text, re.MULTILINE) is not None
 
 
 def scan_text(content):
@@ -497,12 +462,9 @@ def when_lines(rule, lines, helpers=()):
         starts.append(pos)
         pos += len(line) + 1
     try:
-        found = on_the_clock(lambda: {
-            bisect_right(starts, m.start()) - 1
-            for m in re.finditer(expand(rule["when"], helpers), text, re.MULTILINE)})
-    except PatternError as e:
-        raise PatternError(f"{rule['id']}: {e}") from e
-    except (re.error, RecursionError, TypeError, ValueError) as e:
+        found = {bisect_right(starts, m.start()) - 1
+                 for m in re.finditer(expand(rule["when"], helpers), text, re.MULTILINE)}
+    except (re.error, RecursionError, TypeError, ValueError, OverflowError) as e:
         raise PatternError(f"{rule['id']}: {type(e).__name__}: {e}") from e
     return [lines[k] for k in sorted(found)]
 
@@ -519,9 +481,7 @@ class PatternError(Exception):
 def guarded(pattern, text, helpers, owner):
     try:
         return search(pattern, text, helpers)
-    except PatternError as e:
-        raise PatternError(f"{owner}: {e}") from e
-    except (re.error, RecursionError, TypeError, ValueError) as e:
+    except (re.error, RecursionError, TypeError, ValueError, OverflowError) as e:
         raise PatternError(f"{owner}: {type(e).__name__}: {e}") from e
 
 
@@ -634,48 +594,68 @@ def load_skill(folder):
 
 
 def add_copy(installed, copy):
-    """A project copy of an installed skill: its events and rules with new ids are added, so it
-    can't take anything away. Its gate lines stay out: they print under the installed skill's
-    SKILL.md as what that skill requires. The copy's dir is kept for the session-start note."""
+    """A project copy of an installed skill, for a view of both (the session-start note, the
+    digest): its events and rules with new ids are added, so it can't take anything away. Its gate
+    lines stay out: they print under the installed skill's SKILL.md as what that skill requires."""
     ids = {x["id"] for x in installed["events"] + installed["rules"]}
     installed["events"] += [e for e in copy["events"] if e["id"] not in ids]
     installed["rules"] += [r for r in copy["rules"] if r["id"] not in ids]
     installed.setdefault("copies", []).append(copy["dir"])
 
 
-def discover(project, quiet=False):
-    """{name: skill} from the user's skills, then the project's (none when project is None). A
-    project skill of an installed skill's name adds to it and never replaces it (add_copy). quiet
-    logs no malformed skill, for a second look in one run."""
-    skills = {}
-    roots = [os.path.join(config_home(), "skills")]
-    if project:
-        roots.append(os.path.join(project, ".claude", "skills"))
-    left = PROJECT_SKILLS_MAX
-    for root in roots:
-        project_root = root != roots[0]
+def _load_root(root, quiet, cap=None):
+    """[skill] from each folder under root that has an events.toml. A project's folders share cap
+    bytes. Whatever a folder holds, a fault here costs only that skill."""
+    out = []
+    try:
+        names = sorted(os.listdir(root))
+    except OSError:
+        return out
+    for n in names:
+        folder = os.path.join(root, n)
+        path = os.path.join(folder, "events.toml")
         try:
-            names = sorted(os.listdir(root))
-        except OSError:
-            continue
-        for n in names:
-            folder = os.path.join(root, n)
-            if not os.path.isfile(os.path.join(folder, "events.toml")):
+            if not os.path.isfile(path):
                 continue
-            if project_root:
-                left -= os.path.getsize(os.path.join(folder, "events.toml"))
+            if cap is not None:
+                cap -= os.path.getsize(path)
             skill, why = (None, f"{folder}: over {PROJECT_SKILLS_MAX} bytes of project skills") \
-                if left < 0 else load_skill(folder)
-            if skill is None:
-                if not quiet:
-                    log("skill-disabled", why)
-                continue
-            for item in skill["events"] + skill["rules"]:
-                item["project"] = project_root
-            if project_root and skills.get(skill["name"], {}).get("installed"):
-                add_copy(skills[skill["name"]], skill)
-            else:
-                skills[skill["name"]] = {**skill, "installed": not project_root}
+                if cap is not None and cap < 0 else load_skill(folder)
+        except Exception as e:  # noqa: BLE001 (a repo chooses these files)
+            skill, why = None, f"{folder}: {type(e).__name__}: {e}"
+        if skill is not None:
+            out.append(skill)
+        elif not quiet:
+            log("skill-disabled", why)
+    return out
+
+
+# Which skills this pass sees: "all" for a view of both, "installed" or "project" for a level's two
+# passes (two_passes).
+SCOPE = {"now": "all"}
+
+
+def discover(project, quiet=False):
+    """{name: skill} in the current SCOPE (a project's none when project is None). In "all", a
+    project skill of an installed skill's name adds to it and never replaces it (add_copy). In
+    "project", such a copy holds only the ids the installed skill lacks. quiet logs no malformed
+    skill, for a second look in one run."""
+    scope = SCOPE["now"]
+    installed = {sk["name"]: sk for sk in _load_root(os.path.join(config_home(), "skills"), quiet)}
+    if scope == "installed" or not project:
+        return {} if scope == "project" else installed
+    copies = _load_root(os.path.join(project, ".claude", "skills"), quiet, PROJECT_SKILLS_MAX)
+    skills = {} if scope == "project" else installed
+    for copy in copies:
+        name = copy["name"]
+        if scope == "all" and name in installed:
+            add_copy(installed[name], copy)
+            continue
+        if name in installed:
+            ids = {x["id"] for x in installed[name]["events"] + installed[name]["rules"]}
+            copy["events"] = [e for e in copy["events"] if e["id"] not in ids]
+            copy["rules"] = [r for r in copy["rules"] if r["id"] not in ids]
+        skills[name] = copy
     return skills
 
 
@@ -782,7 +762,10 @@ def load_config(project):
     bad = [h for h in helpers if not HELPER.fullmatch(h)]
     if bad:
         log("config-malformed", f"{path}: auth.helpers dropped {bad!r}: not identifier names")
-    return {**off, "helpers": tuple(h for h in helpers if HELPER.fullmatch(h))}
+    good = [h for h in helpers if HELPER.fullmatch(h)]
+    if len(good) > HELPERS_MAX:  # these reach installed rules' patterns, in the first pass
+        log("config-malformed", f"{path}: auth.helpers kept the first {HELPERS_MAX}")
+    return {**off, "helpers": tuple(good[:HELPERS_MAX])}
 
 
 def is_off(cfg, skill, item_id):
@@ -1307,7 +1290,6 @@ def run_patterns(items, fn, cut=False):
     cut, the Budget then goes on up, so a scan knows it was cut short)."""
     out = []
     for n, item in enumerate(items):
-        CLOCK["project"] = bool(item[1].get("project"))
         try:
             if fn(item):
                 out.append(item)
@@ -1319,8 +1301,6 @@ def run_patterns(items, fn, cut=False):
             if cut:
                 raise
             break
-        finally:
-            CLOCK["project"] = False
     return out
 
 
@@ -2036,7 +2016,19 @@ def record_heads(event, commits, bounds):
 
 def recorded_heads(event):
     """(heads, tops) that record_heads wrote for this tool_use_id (deleted once read), or None.
-    A record without tops (written before they were) reads as tops unknown."""
+    A record without tops (written before they were) reads as tops unknown. The file goes at the
+    first read, so a level's second pass gets the same answer."""
+    if SCOPE["now"] == "all":
+        return _read_heads(event)
+    if "record" not in HEADS_READ:
+        HEADS_READ["record"] = _read_heads(event)
+    return HEADS_READ["record"]
+
+
+HEADS_READ = {}
+
+
+def _read_heads(event):
     path = _heads_file(event)
     try:
         with open(path, encoding="utf-8") as f:
@@ -2742,6 +2734,28 @@ def with_notes(out, event):
     return out
 
 
+def two_passes(level, event):
+    """The installed skills' verdict first, then the project's. A repo chooses a project skill's
+    patterns and globs, so one can throw or run into the 5 s kill, and either allows the call. By
+    then the installed skills have already had their say, so a project skill can only add to them:
+    when the first pass speaks, the second doesn't run, and its findings wait for a later call."""
+    global START  # noqa: PLW0603
+    project = bash_project(event)
+    SCOPE["now"] = "installed"
+    ran = bool(discover(project, quiet=True))
+    if ran:
+        out = level(event)
+        if out:
+            return out
+    SCOPE["now"] = "project"
+    if discover(project, quiet=True):
+        if ran:
+            START = time.monotonic()  # its own budget: the kill now costs only this pass
+        return level(event)
+    SCOPE["now"] = "installed"
+    return None if ran else level(event)   # no skills at all: the levels that need none
+
+
 def main():
     event = json.load(sys.stdin)
     if not isinstance(event, dict):
@@ -2755,10 +2769,8 @@ def main():
         out = health(event) if source == "startup" else compact(event) if source == "compact" \
             else None
         out = with_notes(out, event)
-    elif name == "PostToolUse":
-        out = post_tool_use(event)
     else:
-        out = pre_tool_use(event)
+        out = two_passes(post_tool_use if name == "PostToolUse" else pre_tool_use, event)
     if out:
         print(json.dumps(out))
 

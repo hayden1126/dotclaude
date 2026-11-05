@@ -325,7 +325,7 @@ class L1(Base):
         self.assertIsNone(self.fire())
 
     def test_one_deny_names_every_skill_that_fired(self):
-        self.skill("other", OTHER, where="user")
+        self.skill("other", OTHER)
         reason = self.fire()
         self.assertIn("[practices:L1:demo:route-handler]", reason)
         self.assertIn("[practices:L1:other:routes-too]", reason)
@@ -775,8 +775,7 @@ class Discovery(Base):
         self.skill("demo", 'skill = "demo"\n[[event]]\nid = "py"\npaths = ["*.py"]\n',
                    where="user")
         reason = self.fire()    # an event only the project copy has
-        self.assertIn(os.path.join(self.config, "skills", "demo", "SKILL.md"), reason)
-        self.assertNotIn(self.proj + "/.claude", reason)
+        self.assertIn("[practices:L1:demo:route-handler]", reason)   # the copy's own, in its pass
         self.assertIn("[practices:L1:demo:py]", self.fire("tool.py", "x = 1\n"))
 
     def test_user_skills_are_found(self):
@@ -1275,47 +1274,74 @@ class RepoFilesCantSilenceIt(Base):
         self.assertNotIn(" crash ", self.log())
         self.assertIn("skill disabled", self.start("startup")["systemMessage"])
 
-    def test_a_pattern_that_backtracks_leaves_the_installed_skill_s_deny(self):
-        self.skill("z", 'skill = "z"\n[[event]]\nid = "bad"\ncontent = ["(x+x+)+y"]\n'
-                        'lines = ["l"]\n')
+    def z_skill(self, body):
+        self.skill("z", 'skill = "z"\n' + body)
+
+    def test_a_pattern_that_backtracks_never_reaches_a_call_the_installed_skill_denies(self):
+        self.z_skill('[[event]]\nid = "bad"\ncontent = ["(x+x+)+y"]\nlines = ["l"]\n')
         started = time.monotonic()
         self.fired(content="x" * 200)
         self.assertLess(time.monotonic() - started, 2)   # well under settings.json's 5 s kill
-        self.assertIn("pattern-skipped bad: a project pattern ran out of time", self.log())
 
-    def test_many_patterns_that_backtrack_share_one_allowance(self):
-        events = "".join(f'[[event]]\nid = "bad{n}"\ncontent = ["(x+x+)+y"]\nlines = ["l"]\n'
-                         for n in range(50))
-        self.skill("z", 'skill = "z"\n' + events)
+    def test_a_glob_that_backtracks(self):
+        self.z_skill('[[event]]\nid = "bad"\npaths = ["' + "**" * 20 + 'nomatch"]\nlines = ["l"]\n')
         started = time.monotonic()
-        self.fired(content="x" * 200)
+        self.fired()
         self.assertLess(time.monotonic() - started, 2)
-        self.assertIn("out of time", self.log())
 
-    def test_a_slow_project_pattern_leaves_the_installed_rules_running(self):
-        # The installed skill loaded, so only its L2 rule can deny, after the project's events.
-        self.skill("z", 'skill = "z"\n[[event]]\nid = "bad"\ncontent = ["(x+x+)+y"]\n'
-                        'lines = ["l"]\n')
-        self.rows([use("t-skill", "Skill", skill="demo"), result("t-skill", "Launching skill"),
-                   use("t-z", "Skill", skill="z"), result("t-z", "Launching skill")])
-        reason = self.fire("lib/save.ts", "x({ ...body })\n" + "x" * 200)
-        self.assertIn("SEC-17", reason)
+    def test_a_rule_that_matches_at_once_then_backtracks(self):
+        self.z_skill('[[rule]]\nid = "B-1"\nwhen = "\\\\A|(x+x+)+y"\nsay = "s"\n')
+        self.loaded()
+        self.assertIn("SEC-17", self.fire("lib/save.ts", "x({ ...body })\n" + "x" * 200))
 
-    def test_a_backtracking_rule_in_a_copy_stops_too(self):
-        self.skill("demo", 'skill = "demo"\n[[rule]]\nid = "BAD-1"\nwhen = "(x+x+)+y"\nsay = "s"\n')
-        started = time.monotonic()
-        self.fired(content="x" * 200)
-        self.assertLess(time.monotonic() - started, 2)
+    def test_a_pattern_that_overflows_and_a_glob_that_recurses(self):
+        self.z_skill('[[event]]\nid = "bad1"\ncontent = ["a{99999999999}"]\nlines = ["l"]\n'
+                     '[[event]]\nid = "bad2"\npaths = ["' + "{" * 600 + "}" * 600 + '"]\nlines = ["l"]\n')
+        self.fired()
+
+    def test_the_project_pass_still_speaks_when_the_installed_pass_doesn_t(self):
+        self.loaded()
+        self.z_skill('[[event]]\nid = "mine"\npaths = ["docs/**"]\nlines = ["l"]\n')
+        self.assertIn("[practices:L1:z:mine]", self.fire("docs/x.md", "plain\n"))
+
+    def test_a_project_rule_with_a_shared_id_never_fires_in_its_pass(self):
+        self.loaded()
+        self.skill("demo", 'skill = "demo"\n[[event]]\nid = "route-handler"\npaths = ["docs/**"]\n'
+                           'lines = ["l"]\n')
+        self.assertIsNone(self.fire("docs/x.md", "plain\n"))
+
+    def test_a_commit_scan_keeps_its_record_for_the_second_pass(self):
+        spec = importlib.util.spec_from_file_location("pc_heads", ENGINE)
+        m = importlib.util.module_from_spec(spec)
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            spec.loader.exec_module(m)
+            m.SCOPE["now"] = "installed"
+            with mock.patch.object(m, "_read_heads", return_value=({"d": "h"}, {})) as read:
+                self.assertEqual(m.recorded_heads({}), ({"d": "h"}, {}))
+                self.assertEqual(m.recorded_heads({}), ({"d": "h"}, {}))
+            self.assertEqual(read.call_count, 1)
+
+    def test_a_long_helper_list_is_capped(self):
+        names = ", ".join(f'"h{n}"' for n in range(5000))
+        with open(os.path.join(self.practices_dir(), "config.toml"), "w") as f:
+            f.write(f"[auth]\nhelpers = [{names}]\n")
+        spec = importlib.util.spec_from_file_location("pc_helpers", ENGINE)
+        m = importlib.util.module_from_spec(spec)
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            spec.loader.exec_module(m)
+            self.assertEqual(len(m.load_config(self.proj)["helpers"]), m.HELPERS_MAX)
 
     def test_more_project_skills_than_the_cap_are_refused_not_parsed(self):
         for n in range(3):
             self.skill(f"big{n}", 'skill = "big' + str(n) + '"\n' + "# x\n" * 40000)
         self.fired()
+        self.start("startup")
         self.assertIn("bytes of project skills", self.log())
 
     def test_a_huge_events_toml_is_refused(self):
         self.skill("big", 'skill = "big"\n' + "# x\n" * 400000)
         self.fired()
+        self.start("startup")
         self.assertIn("skill-disabled", self.log())
 
 
