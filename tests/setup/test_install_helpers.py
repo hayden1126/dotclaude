@@ -911,7 +911,7 @@ class SetupWiring(unittest.TestCase):
                       '<<\'PY\' || verified_window=1', calls["setup.sh"])  # the window's check
         self.assertIn('python3 -I - "$lane_cli" "$HOME" <<\'PY\' || demoted=$?',
                       calls["setup.sh"])  # its demotion
-        self.assertEqual(len(calls["setup.sh"]), 16)
+        self.assertEqual(len(calls["setup.sh"]), 17)
         self.assertEqual(len(calls["sync.sh"]), 2)
         self.assertEqual(len(calls["setup-tmux.sh"]), 2)  # swap_in's os.replace and the .tmux.conf write
         self.assertEqual(len(calls["setup-chrome-wsl.sh"]), 2)  # the plugin version and the config merge

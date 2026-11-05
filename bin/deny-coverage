@@ -1,0 +1,304 @@
+#!/usr/bin/python3 -I
+"""Name what code outside the sandbox runs from home that no Edit deny rule covers.
+
+settings.json denies the Edit and Write tools whole tool dirs by name, so a tool installed
+somewhere new starts uncovered. setup.sh runs this after it installs the settings. It reports and
+exits 0; it changes nothing.
+
+    deny-coverage [--settings FILE] [--checkout DIR]
+
+It looks at two things:
+  - Each PATH dir, each entry in it, and what that entry leads to: a link's target, the interpreter
+    in a script's first line, a virtualenv's pyvenv.cfg home and the absolute paths in its .pth
+    files, and the files a script sources or execs. Outside home only what this user can write
+    counts. /mnt is skipped: Windows paths need their own subtree rules.
+  - Each top-level dir in home whose name starts with a dot, and each dir in ~/.cache, since a rule
+    can't cover all of ~/.cache (~/.cache/claude-sandbox must stay writable). A rule costs nothing
+    for a dir no session writes, so these get one whether or not they hold code.
+
+Each uncovered root prints as a rule to paste into settings.machine.json. A root inside a git
+checkout stays out of that list, since a deny there takes the tree from the project's own sessions:
+the fix is to install the tool outside it. It prints per checkout, with the rule for one no session
+works in (a cloned SDK) or one an excluded command runs from. The checkout setup runs from, and
+~/dotclaude, are skipped, since denyWrite and the install hold cover them.
+
+Known limit: it reads a script's source and exec lines only when the path is literal, under $HOME or
+~, or relative to the script ($0). A path built from any other variable, or a bare command name
+(`exec corepack pnpm`), isn't followed.
+"""
+import argparse
+import glob
+import json
+import os
+import re
+import stat
+import sys
+
+MAX_DEPTH = 6
+TEXT_MAX = 256 * 1024
+# Rule text a person can paste: anything else (a glob character, a quote, a control character in a
+# name) would make a wrong rule, so such a path is named and gets none.
+PLAIN = re.compile(r"[\w./@+,=:-]+")
+SKIP_HOME = {".cache", ".claude"}
+SKIP_CACHE = {"claude-sandbox"}
+DIR_REASONS = {"a home dot-dir", "a dir in ~/.cache"}
+SOURCE_LINE = re.compile(r"""^\s*(?:source|\.|exec)\s+(?P<path>"[^"]+"|'[^']+'|[^\s;&|]+)""", re.M)
+SCRIPT_DIR = re.compile(r"""\$\(\s*cd\s+"?\$\(dirname\s+"?(?:\$0|\$\{0\}|\$BASH_SOURCE)"?\)"?(?P<up>(?:/\.\.)*)"?"""
+                        r"""\s*&&\s*pwd\s*\)|\$\(dirname\s+"?(?:\$0|\$\{0\})"?\)""")
+
+
+def show(text):
+    """A path for the terminal, with no control characters of its own."""
+    return text if text.isprintable() else repr(text)
+
+
+def rule_matches(rule, path, home):
+    """Whether an Edit deny rule covers the absolute path. A * stays within one path part, a
+    trailing /** takes everything below, and a rule covers what sits under a dir it matches."""
+    m = re.fullmatch(r"Edit\((//|~/)(.+)\)", rule) if isinstance(rule, str) else None
+    if not m:
+        return False
+    body = ("/" if m.group(1) == "//" else home.rstrip("/") + "/") + m.group(2)
+    tree = body.endswith("/**")
+    regex = re.escape(body[:-3] if tree else body).replace(r"\*", "[^/]*")
+    return re.fullmatch(regex + ("/.*" if tree else "(/.*)?"), path) is not None
+
+
+def under(path, root):
+    return path == root or path.startswith(root.rstrip("/") + "/")
+
+
+class Scan:
+    def __init__(self, rules, home, skip):
+        self.rules, self.home, self.skip = rules, home, skip
+        self.seen = set()
+        self.uncovered = {}   # the rule to paste -> why
+        self.in_project = {}  # the path -> why
+        self.odd = {}         # the path -> why
+
+    def covered(self, path):
+        """Whether a rule covers path, or path as a dir (a trailing /** names only what's below)."""
+        return any(rule_matches(r, path, self.home) or rule_matches(r, path + "/x", self.home)
+                   for r in self.rules)
+
+    def checkout_of(self, path):
+        """The nearest dir at or above path, below home, that holds .git, or None."""
+        d = path if os.path.isdir(path) else os.path.dirname(path)
+        while under(d, self.home) and d != self.home:
+            if os.path.lexists(os.path.join(d, ".git")):
+                return d
+            d = os.path.dirname(d)
+        return None
+
+    def root_rule(self, path):
+        """The rule for path's tool root: its first part under home for a dot name, its first two
+        for anything else (~/tools/foo), and the path itself outside home."""
+        if not under(path, self.home):
+            return f"Edit(/{path}/**)" if os.path.isdir(path) else f"Edit(/{path})"
+        parts = os.path.relpath(path, self.home).split(os.sep)
+        keep = parts[:1] if parts[0].startswith(".") or len(parts) == 1 else parts[:2]
+        tail = "/".join(keep)
+        whole = os.path.join(self.home, *keep)
+        return f"Edit(~/{tail}/**)" if os.path.isdir(whole) else f"Edit(~/{tail})"
+
+    def note(self, path, why):
+        """Judge one path, as given and as it resolves."""
+        for p in dict.fromkeys((os.path.normpath(path), os.path.realpath(path))):
+            if any(under(p, s) for s in self.skip) or self.covered(p):
+                continue
+            if under(p, "/mnt"):
+                continue
+            if not under(p, self.home) and not (os.path.lexists(p) and os.access(p, os.W_OK)):
+                continue
+            if not PLAIN.fullmatch(p):
+                self.odd.setdefault(p, why)
+            elif self.checkout_of(p):
+                self.in_project.setdefault(p, why)
+            else:
+                self.uncovered.setdefault(self.root_rule(p), why)
+
+    def follow(self, path, why, depth=0):
+        """Judge path and everything it leads to."""
+        real = os.path.realpath(path)
+        self.note(path, why)
+        if real in self.seen or depth > MAX_DEPTH or any(under(real, s) for s in self.skip):
+            return
+        self.seen.add(real)
+        try:
+            st = os.stat(real)
+        except OSError:
+            return
+        if not stat.S_ISREG(st.st_mode):  # a FIFO would block the read
+            return
+        self.venv(real, why, depth)
+        text = self.read(real, st)
+        if text is None:
+            return
+        for line in text.split("\n", 1)[:1]:
+            if line.startswith("#!"):
+                words = line[2:].split()
+                if words and os.path.isabs(words[0]) and os.path.basename(words[0]) != "env":
+                    self.follow(words[0], f"interpreter of {real}", depth + 1)
+                    self.venv(words[0], f"interpreter of {real}", depth)
+        # The script-relative form first, since its nested quotes would end a quoted word early.
+        here = os.path.dirname(real)
+        text = SCRIPT_DIR.sub(lambda m: here + (m.groupdict().get("up") or ""), text)
+        for m in SOURCE_LINE.finditer(text):
+            target = self.expand(m.group("path").strip("\"'"))
+            if target:
+                self.follow(target, f"sourced or run by {real}", depth + 1)
+
+    def venv(self, path, why, depth):
+        """A virtualenv's python: its pyvenv.cfg home and the paths in its .pth files."""
+        root = os.path.dirname(os.path.dirname(os.path.abspath(path)))
+        cfg = os.path.join(root, "pyvenv.cfg")
+        if not os.path.isfile(cfg) or cfg in self.seen:
+            return
+        self.seen.add(cfg)
+        for line in self.lines(cfg):
+            key, _, value = line.partition("=")
+            if key.strip() == "home" and os.path.isabs(value.strip()):
+                self.follow(value.strip(), f"venv home of {root}", depth + 1)
+        for pth in glob.glob(os.path.join(glob.escape(root), "lib", "python*", "site-packages", "*.pth")):
+            for line in self.lines(pth):
+                if line.startswith("/"):
+                    self.follow(line.strip(), f"named by {pth}", depth + 1)
+
+    def lines(self, path):
+        text = self.read(path)
+        return text.splitlines() if text else []
+
+    @staticmethod
+    def read(path, st=None):
+        try:
+            st = st or os.stat(path)
+            if not stat.S_ISREG(st.st_mode) or st.st_size > TEXT_MAX:
+                return None
+            with open(path, "rb") as f:
+                data = f.read(TEXT_MAX)
+        except OSError:
+            return None
+        return None if b"\0" in data else data.decode("utf-8", "replace")
+
+    def expand(self, word):
+        """The absolute path a source or exec word names, or None if it isn't literal enough."""
+        word = re.sub(r"\$\{HOME\}|\$HOME", self.home, word)
+        if word.startswith("~/"):
+            word = self.home + word[1:]
+        if "$" in word or "`" in word or not os.path.isabs(word):
+            return None
+        return os.path.normpath(word)
+
+    def by_checkout(self):
+        """{checkout: [the paths reached in it]}, for the report."""
+        out = {}
+        for path in sorted(self.in_project):
+            out.setdefault(self.checkout_of(path), []).append(path)
+        return out
+
+    def root_rule_for_dir(self, d):
+        if under(d, self.home):
+            return f"Edit(~/{os.path.relpath(d, self.home)}/**)"
+        return f"Edit(/{d}/**)"
+
+    def path_dirs(self, path_var):
+        for d in path_var.split(os.pathsep):
+            if not os.path.isabs(d) or under(d, "/mnt"):
+                continue
+            real = os.path.realpath(d)
+            if not os.path.isdir(real):
+                continue
+            self.note(d, "a PATH dir")
+            try:
+                names = sorted(os.listdir(real))
+            except OSError:
+                continue
+            for name in names:
+                entry = os.path.join(d, name)
+                if under(real, self.home):
+                    self.follow(entry, f"in the PATH dir {d}")
+                elif os.path.lexists(entry) and os.access(entry, os.W_OK) and not os.path.isdir(entry):
+                    self.note(entry, f"in the PATH dir {d}")
+
+    def home_dirs(self):
+        for parent, skip in ((self.home, SKIP_HOME), (os.path.join(self.home, ".cache"), SKIP_CACHE)):
+            try:
+                names = sorted(os.listdir(parent))
+            except OSError:
+                continue
+            for name in names:
+                path = os.path.join(parent, name)
+                if name in skip or not os.path.isdir(path):
+                    continue
+                if parent == self.home and not name.startswith("."):
+                    continue
+                why = "a home dot-dir" if parent == self.home else "a dir in ~/.cache"
+                self.note_dir(path, why)
+
+    def note_dir(self, path, why):
+        real = os.path.realpath(path)
+        # A rule on a whole dir needs its own name, never its tool root's: ~/.cache/x is its own.
+        for p in dict.fromkeys((path, real)):
+            if any(under(p, s) for s in self.skip) or under(p, "/mnt") or self.covered(p):
+                continue
+            if not under(p, self.home) and not os.access(p, os.W_OK):
+                continue
+            if not PLAIN.fullmatch(p):
+                self.odd.setdefault(p, why)
+            elif under(p, self.home):
+                self.uncovered.setdefault(f"Edit(~/{os.path.relpath(p, self.home)}/**)", why)
+            else:
+                self.uncovered.setdefault(f"Edit(/{p}/**)", why)
+
+
+def deny_rules(path):
+    """The live permissions.deny list, or None with a message if it can't be read."""
+    try:
+        with open(path) as f:
+            deny = (json.load(f).get("permissions") or {}).get("deny") or []
+    except (OSError, ValueError, RecursionError, AttributeError) as e:
+        print(f"deny-coverage: can't read {path}: {e}", file=sys.stderr)
+        return None
+    return deny if isinstance(deny, list) else []
+
+
+def main(argv):
+    home = os.path.expanduser("~")
+    config = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(home, ".claude")
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--settings", default=os.path.join(config, "settings.json"))
+    ap.add_argument("--checkout", help="the checkout setup runs from")
+    args = ap.parse_args(argv)
+    rules = deny_rules(args.settings)
+    if rules is None:
+        return 0
+    skip = [os.path.realpath(os.path.join(home, "dotclaude"))]
+    if args.checkout:
+        skip.append(os.path.realpath(args.checkout))
+    scan = Scan(rules, home, skip)
+    scan.path_dirs(os.environ.get("PATH", ""))
+    scan.home_dirs()
+    if scan.uncovered:
+        print(f"deny-coverage: {len(scan.uncovered)} root(s) with no Edit deny rule. Add these to "
+              "permissions.deny in settings.machine.json, then rerun setup:")
+        for rule in sorted(scan.uncovered):
+            print(f'  "{rule}",')
+        reached = {r: w for r, w in scan.uncovered.items() if w not in DIR_REASONS}
+        for rule, why in sorted(reached.items()):
+            print(f"  {rule} is {show(why)}")
+    if scan.in_project:
+        print("deny-coverage: reached inside a git checkout. A rule there takes the tree from that "
+              "project's own sessions, so install the tool outside it. For a checkout no session "
+              "works in, or one an excluded command runs from, the rule is right despite that:")
+        for root, paths in sorted(scan.by_checkout().items()):
+            print(f"  {show(root)}: {len(paths)} path(s), such as {show(paths[0])}")
+            print(f"    {scan.root_rule_for_dir(root)}")
+    if scan.odd:
+        print("deny-coverage: names that can't be written as a rule. Look at each:")
+        for path, why in sorted(scan.odd.items()):
+            print(f"  {show(path)}  ({show(why)})")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
