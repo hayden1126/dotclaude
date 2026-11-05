@@ -6,7 +6,7 @@
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design lives in the repo's `PLAN.md` or its doc,
 > not only under `~/.claude/plans/`, which the next plan overwrites ([[plan-file-not-durable]]).
 
-Last updated: 2026-11-04
+Last updated: 2026-11-05
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 Lead branch: `chore/after-pr4` (the lead's STATUS commits; the lane next in merge order carries
@@ -325,6 +325,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - Log only: a background session passing on its own (Hayden kept the bg pass manual,
     2026-10-18; don't build it without his ask); chrome-bg's gc judges `expires` by wall clock
     (a run can stop up to 0.6 s early; the holder's loop is monotonic since #126).
+  - **Watch:** if the memory-index size hook asks again, shorten MEMORY.md's lines and ask
+    before dropping an entry.
   - **Watch:** `~/.claude/CLAUDE.md` vanished once after a lane install (2026-10-20, before
     #140 made `setup.sh`'s links atomic); check `ls -la ~/.claude/CLAUDE.md` after each
     reinstall. Also asks the ask-check hook (#131) denies wrongly, and replies that skip the
@@ -404,8 +406,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
      deny-rules; one slot free, Hayden's pick from the Backlog). Lane hackathon merges by Nov 11:
      move it up if the queue threatens that. Install freeze Nov 12 through Nov 15. A chain that
      stops before its "main moved" step still tells the lanes, and arms a wake on the blocker
-     (`skills/lanes/SKILL.md`). Recheck GitHub's secret-scanning alerts on this repo once. Compact the memory index
-     (MEMORY.md, 20.4 KB) under 17.1 KB: shorten its lines, and ask before dropping an entry. Open
+     (`skills/lanes/SKILL.md`). Open
      with Hayden (repeat them in each reply's Waiting list until answered): try `/interview` in
      the prep repo named in [[dotclaude-hackathon-mode]]; rehearse reaching this machine from another
      network by Nov 12; whether the event's local-lead email went out; by Nov 12 whether his
