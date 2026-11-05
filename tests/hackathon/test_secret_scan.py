@@ -5,6 +5,7 @@ looks like a real token, and a scan of the file itself stays clean."""
 import glob
 import os
 import random
+import re
 import shutil
 import string
 import subprocess
@@ -43,6 +44,13 @@ def planted():
     add("slack-webhook", "hook = https://{}", "hooks.slack.com/services/T" + "123/B456/", tail(24))
     add("openai-key", "llm = {}", "sk-" + "proj-", tail(40))
     add("anthropic-key", "llm2 = {}", "sk-" + "ant-", tail(40))
+    add("openrouter-key", "llm3 = {}", "sk-" + "or-" + "v1-", tail(64))
+    add("groq-key", "llm4 = {}", "gs" + "k_", tail(52))
+    add("huggingface-token", "llm5 = {}", "hf" + "_", tail(34))
+    add("replicate-token", "llm6 = {}", "r8" + "_", tail(40))
+    add("xai-key", "llm7 = {}", "xa" + "i-", tail(80))
+    add("jwt", "session = {}", "ey" + "J", tail(20) + ".ey" + "J" + tail(30) + "." + tail(20))
+    add("bearer-token", "curl -H 'Authorization: Bearer {}'", "", tail(32))
     add("assignment", "API_KEY={}", "", tail(32))
     add("url-password", "url = postgres://admin:{}@db.vendor.test/app", "", tail(20))
     return out
@@ -162,7 +170,7 @@ class Secrets(ScanCase):
                 self.git("rm", "-q", "--", name)
                 self.git("commit", "-q", "-m", "gone")
 
-    def test_a_binary_secret_file_is_caught_by_name_and_counted(self):
+    def test_a_binary_secret_file_is_caught_by_name(self):
         path = os.path.join(self.work, "bundle.p12")
         with open(path, "wb") as f:
             f.write(b"\0\1\2binary")
@@ -171,7 +179,55 @@ class Secrets(ScanCase):
         p = self.scan()
         self.assertEqual(p.returncode, 1)
         self.assertIn("bundle.p12:- secret-file", p.stdout)
-        self.assertIn("1 binary file change(s)", p.stderr)
+
+    def assert_each_line_found(self, cases):
+        for line, rule, secret in cases:
+            with self.subTest(line=line):
+                sha = self.commit("cfg.txt", line + "\n", "case")
+                p = self.scan()
+                self.assertEqual(p.returncode, 1, p.stdout)
+                own = [row for row in p.stdout.splitlines() if row.startswith(sha[:12])]
+                self.assertEqual(len(own), 1, p.stdout)
+                self.assertIn(f"cfg.txt:1 {rule} ", own[0])
+                self.assertNotIn(secret, p.stdout + p.stderr)
+                self.git("rm", "-q", "cfg.txt")
+                self.git("commit", "-q", "-m", "gone")
+
+    def test_a_token_is_caught_wherever_it_sits_on_the_line(self):
+        groq = "gs" + "k_" + tail(52)
+        hf = "hf" + "_" + tail(34)
+        jwt = "ey" + "J" + tail(20) + ".ey" + "J" + tail(30) + "." + tail(20)
+        self.assert_each_line_found([
+            (f'headers = {{"Authorization": "Bearer {groq}"}}', "groq-key", groq[4:]),
+            (f'const k = process.env.K || "{hf}"', "huggingface-token", hf[4:]),
+            (f'new Groq("{groq}")', "groq-key", groq[4:]),
+            (f"SUPABASE_SERVICE_ROLE={jwt}", "jwt", jwt[4:]),
+        ])
+
+    def test_the_wider_assignment_names(self):
+        value = tail(32)
+        self.assert_each_line_found([
+            (f"{name}={value}", "assignment", value)
+            for name in ("DB_PASS", "pass_prod", "api_keys", "tokens", "SUPABASE_SERVICE_ROLE", "serviceRoleKey")
+        ] + [(f'"Authorization": "{value}"', "assignment", value)])
+
+    def test_a_type_annotation_does_not_hide_a_value(self):
+        value = tail(32)
+        self.assert_each_line_found([(f'api_key: str = "{value}"', "assignment", value)])
+
+    def test_a_short_plain_password_is_a_finding(self):
+        plain = "Hack" + "athon2026!"
+        self.assert_each_line_found([
+            (f"ADMIN_PASSWORD={plain}", "assignment", plain),
+            (f"DB_PASS={'sun' + 'shine'}", "assignment", "sunshine"),
+            (f"- POSTGRES_PASSWORD={'sun' + 'shine'}", "assignment", "sunshine"),
+            (f'passwd = "{plain}"', "assignment", plain),
+            ('"pwd": "{}"'.format("correct " + "horse"), "assignment", "correct horse"),
+            (f'db_password: str = "{plain}"', "assignment", plain),
+            (f'connect(password="{plain}")', "assignment", plain),
+            (f'if (password === "{plain}") ok()', "assignment", plain),
+            (f"pass: {'hunter' + '2222'}", "assignment", "hunter2222"),
+        ])
 
     def test_a_secret_only_a_merge_adds_is_seen(self):
         line, _ = planted()["stripe-key"]
@@ -223,6 +279,30 @@ class Clean(ScanCase):
         p = self.scan()
         self.assertEqual(p.returncode, 0, p.stdout)
 
+    def test_ordinary_password_and_bearer_code_is_not_a_finding(self):
+        lines = ["password = user.password",
+                 "password: hashedPassword,",
+                 "connect(password=db_password)",
+                 "pass: config.db2.pass",
+                 "password = getPassword2(12345678)",
+                 "PASSWORD=changeme123",
+                 "PASSWORD=$DB_PASSWORD",
+                 'password: "********"',
+                 'password = "short"',
+                 'password = "<your password>"',
+                 'password = f"{prefix}{suffix}"',
+                 'password: `${first}${second}`',
+                 'pass = "{{ secrets.DB_PASS }}"',
+                 "PWD=/srv/app/current",
+                 "pass_through = upstream12",
+                 "const pass = process.env.DB_PASS",
+                 '"Bearer ${token}"',
+                 "Bearer YOUR_ACCESS_TOKEN_GOES_HERE",
+                 "the bearer token goes in the header"]
+        self.commit("code.txt", "\n".join(lines) + "\n")
+        p = self.scan()
+        self.assertEqual(p.returncode, 0, p.stdout)
+
     def test_an_example_env_file_passes_by_name_but_its_content_is_read(self):
         self.commit(".env.example", "API_KEY=\n")
         self.assertEqual(self.scan().returncode, 0)
@@ -263,6 +343,147 @@ class Allow(ScanCase):
         self.commit(".env", "A=1  # secret-scan: allow\n")
         self.assertEqual(self.scan().returncode, 1)
 
+    def test_the_summary_counts_what_the_comment_suppressed(self):
+        one, _ = planted()["stripe-key"]
+        two, _ = planted()["github-token"]
+        self.commit("a.py", f"{one}  # secret-scan: allow\n{two}  # secret-scan: allow\n")
+        p = self.scan()
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertIn("clean, 1 commit(s), 2 line(s) allowed by comment", p.stdout)
+        third, _ = planted()["groq-key"]
+        self.commit("b.py", third + "\n")
+        p = self.scan()
+        self.assertEqual(p.returncode, 1, p.stdout)
+        self.assertIn("2 line(s) allowed by comment", p.stdout)
+
+    def test_a_comment_on_a_line_with_no_finding_counts_for_nothing(self):
+        self.commit("a.py", "x = 1  # secret-scan: allow\n")
+        p = self.scan()
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertNotIn("allowed", p.stdout)
+
+    def test_a_merge_does_not_count_an_allowed_line_twice(self):
+        line, _ = planted()["stripe-key"]
+        self.commit("a.txt", "base\n")
+        self.git("checkout", "-q", "-b", "side")
+        self.commit("b.txt", f"{line}  # secret-scan: allow\n")
+        self.git("checkout", "-q", "main")
+        self.commit("c.txt", "main\n")
+        self.git("merge", "-q", "--no-ff", "-m", "merge", "side")
+        self.assertIn("1 line(s) allowed by comment", self.scan().stdout)
+
+
+class AllowName(ScanCase):
+    def test_it_excuses_that_base_name_and_says_so(self):
+        self.commit("docs/pitch.key", "a deck\n")
+        self.assertEqual(self.scan().returncode, 1)
+        p = self.scan("--allow-name", "pitch.key")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("allowed by --allow-name: docs/pitch.key", p.stdout)
+        self.assertIn("clean, 1 commit(s), 1 file name(s) allowed by --allow-name", p.stdout)
+
+    def test_it_is_repeatable_and_excuses_nothing_else(self):
+        self.commit("pitch.key", "a deck\n")
+        self.commit("demo.key", "a deck\n")
+        self.commit("server.key", "not a deck\n")
+        p = self.scan("--allow-name", "pitch.key", "--allow-name", "demo.key")
+        self.assertEqual(p.returncode, 1, p.stdout)
+        self.assertIn("server.key:- secret-file", p.stdout)
+        self.assertNotIn("pitch.key:-", p.stdout)
+        self.assertNotIn("demo.key:-", p.stdout)
+        self.assertIn("2 file name(s) allowed", p.stdout)
+
+    def test_it_excuses_the_name_not_the_content(self):
+        line, _ = planted()["github-token"]
+        self.commit("pitch.key", line + "\n")
+        p = self.scan("--allow-name", "pitch.key")
+        self.assertEqual(p.returncode, 1, p.stdout)
+        self.assertIn("pitch.key:1 github-token", p.stdout)
+
+
+class HiddenContent(ScanCase):
+    def setUp(self):
+        super().setUp()
+        self.line, self.secret = planted()["aws-access-key"]
+
+    def assert_found(self, path, rule="aws-access-key"):
+        p = self.scan()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn(f"{path}:1 {rule}", p.stdout)
+        self.assertNotIn(self.secret, p.stdout + p.stderr)
+
+    def test_a_repo_attributes_file(self):
+        self.commit(".gitattributes", "* -diff\n")
+        self.commit("a.txt", self.line + "\n")
+        self.assert_found("a.txt")
+
+    def test_a_binary_attribute_on_a_folder(self):
+        self.commit(".gitattributes", "data/** binary\n")
+        self.commit("data/a.txt", self.line + "\n")
+        self.assert_found("data/a.txt")
+
+    def test_info_attributes(self):
+        with open(os.path.join(self.work, ".git", "info", "attributes"), "w") as f:
+            f.write("* -diff\n")
+        self.commit("a.txt", self.line + "\n")
+        self.assert_found("a.txt")
+
+    def test_the_global_attributes_file(self):
+        path = os.path.join(self.home, "attributes")
+        with open(path, "w") as f:
+            f.write("* -diff\n")
+        self.git("config", "core.attributesFile", path)
+        self.commit("a.txt", self.line + "\n")
+        self.assert_found("a.txt")
+
+    def test_a_low_big_file_threshold(self):
+        self.git("config", "core.bigFileThreshold", "1")
+        self.commit("a.txt", self.line + "\n")
+        self.assert_found("a.txt")
+
+    def test_a_replace_ref(self):
+        self.commit("a.txt", self.line + "\n")
+        with open(os.path.join(self.root, "clean"), "w") as f:
+            f.write("nothing here\n")
+        clean = self.git("hash-object", "-w", os.path.join(self.root, "clean"))
+        self.git("replace", self.git("rev-parse", "HEAD:a.txt"), clean)
+        self.assertNotIn("AK", self.git("log", "-p", "-1"))  # git itself now shows the swap
+        self.assert_found("a.txt")
+
+    def test_a_utf16_file(self):
+        for encoding in ("utf-16", "utf-16-le", "utf-16-be"):
+            with self.subTest(encoding):
+                with open(os.path.join(self.work, "a.txt"), "wb") as f:
+                    f.write((self.line + "\nnext line\n").encode(encoding))
+                self.git("add", "a.txt")
+                self.git("commit", "-q", "-m", encoding)
+                self.assert_found("a.txt")
+                self.git("rm", "-q", "a.txt")
+                self.git("commit", "-q", "-m", "gone")
+
+    def test_a_utf16_line_past_the_first(self):
+        with open(os.path.join(self.work, "a.txt"), "wb") as f:
+            f.write(("one\ntwo\n" + self.line + "\n").encode("utf-16"))
+        self.git("add", "a.txt")
+        self.git("commit", "-q", "-m", "utf16")
+        p = self.scan()
+        self.assertEqual(p.returncode, 1, p.stdout)
+        self.assertIn("a.txt:3 aws-access-key", p.stdout)
+
+    def test_a_token_among_binary_bytes(self):
+        with open(os.path.join(self.work, "blob.bin"), "wb") as f:
+            f.write(b"\0\1\2\xff\xfe" + self.line.encode() + b"\n\0\3")
+        self.git("add", "blob.bin")
+        self.git("commit", "-q", "-m", "binary")
+        self.assert_found("blob.bin")
+
+    def test_a_very_long_line_does_not_stall_the_scan(self):
+        self.commit("bundle.txt", "a" * 2_000_000 + "\n" + self.line + "\n")
+        p = subprocess.run([sys.executable, "-I", SCRIPT], cwd=self.work, env=self.env,
+                           capture_output=True, text=True, timeout=120)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("bundle.txt:2 aws-access-key", p.stdout)
+
 
 class Ranges(ScanCase):
     def test_all_reaches_a_secret_removed_in_a_later_commit(self):
@@ -298,7 +519,7 @@ class Ranges(ScanCase):
         self.commit("clean.txt", "fine\n")
         p = self.scan()
         self.assertEqual(p.returncode, 0, p.stdout)
-        self.assertIn("clean, 1 commit(s), @{push}..HEAD", p.stdout)
+        self.assertIn("clean, 1 commit(s), HEAD, commits not on any remote-tracking ref", p.stdout)
         new, _ = planted()["stripe-key"]
         self.commit("new.txt", new + "\n")
         p = self.scan()
@@ -315,7 +536,7 @@ class Ranges(ScanCase):
         self.commit("a.txt", "clean\n")
         self.assertEqual(self.scan().returncode, 1)
 
-    def test_with_no_upstream_all_of_heads_history_is_read(self):
+    def test_with_no_remote_tracking_refs_all_of_heads_history_is_read(self):
         line, _ = planted()["github-token"]
         self.commit("a.txt", line + "\n")
         self.commit("a.txt", "clean now\n")
@@ -323,12 +544,97 @@ class Ranges(ScanCase):
         self.assertEqual(p.returncode, 1, p.stdout)
         self.assertIn("all of HEAD's history", p.stdout)
 
-    def test_a_detached_head_reads_all_of_its_history(self):
-        line, _ = planted()["github-token"]
-        self.commit("a.txt", line + "\n")
+    def test_a_detached_head_reads_what_is_not_pushed(self):
+        old, _ = planted()["github-token"]
+        self.commit("old.txt", old + "\n")
         self.add_pushed_upstream()
         self.git("checkout", "-q", "--detach")
-        self.assertEqual(self.scan().returncode, 1)
+        self.assertEqual(self.scan().returncode, 0)
+        new, _ = planted()["stripe-key"]
+        self.commit("new.txt", new + "\n")
+        p = self.scan()
+        self.assertEqual(p.returncode, 1, p.stdout)
+        self.assertNotIn("old.txt", p.stdout)
+
+    def test_a_secret_on_another_branch_needs_that_branch_named(self):
+        # The case the old @{push}..HEAD got wrong: `git push origin task-a` from main.
+        self.commit("a.txt", "base\n")
+        self.add_pushed_upstream()
+        self.git("checkout", "-q", "-b", "task-a")
+        line, _ = planted()["github-token"]
+        self.commit("b.txt", line + "\n")
+        self.git("checkout", "-q", "main")
+        p = self.scan()
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertIn("HEAD, commits not on", p.stdout)  # it says it read HEAD, not task-a
+        p = self.scan("task-a")
+        self.assertEqual(p.returncode, 1, p.stdout)
+        self.assertIn("b.txt:1 github-token", p.stdout)
+        self.assertIn("task-a, commits not on", p.stdout)
+
+    def test_several_refs_are_all_read(self):
+        self.commit("a.txt", "base\n")
+        self.add_pushed_upstream()
+        for branch, rule in (("one", "github-token"), ("two", "stripe-key")):
+            self.git("checkout", "-q", "-b", branch, "main")
+            self.commit(branch + ".txt", planted()[rule][0] + "\n")
+        self.git("checkout", "-q", "main")
+        p = self.scan("one", "two")
+        self.assertIn("one.txt:1 github-token", p.stdout)
+        self.assertIn("two.txt:1 stripe-key", p.stdout)
+
+    def add_second_remote(self):
+        bare = os.path.join(self.root, "public.git")
+        self.git("init", "-q", "--bare", bare)
+        self.git("remote", "add", "public", bare)
+        return bare
+
+    def test_remote_reads_what_that_remote_lacks(self):
+        self.commit("a.txt", "base\n")
+        self.add_pushed_upstream()
+        self.add_second_remote()
+        self.git("push", "-q", "public", "main")
+        line, _ = planted()["github-token"]
+        self.commit("b.txt", line + "\n")
+        self.git("push", "-q", "origin", "main")
+        self.assertEqual(self.scan().returncode, 0)  # on origin, so the default skips it
+        p = self.scan("--remote", "public")
+        self.assertEqual(p.returncode, 1, p.stdout)
+        self.assertIn("b.txt:1 github-token", p.stdout)
+        self.assertIn("commits not on public", p.stdout)
+
+    def test_a_remote_never_pushed_to_means_the_whole_history(self):
+        line, _ = planted()["github-token"]
+        self.commit("a.txt", line + "\n")
+        self.commit("a.txt", "clean now\n")
+        self.add_pushed_upstream()
+        self.add_second_remote()
+        p = self.scan("--remote", "public")
+        self.assertEqual(p.returncode, 1, p.stdout)
+        self.assertIn("all of HEAD's history (nothing tracked from public)", p.stdout)
+
+    def test_a_remote_name_matches_only_that_remote(self):
+        # `--remote pub` must not take its exclusions from `public`.
+        line, _ = planted()["github-token"]
+        self.commit("a.txt", line + "\n")
+        self.add_second_remote()
+        self.git("push", "-q", "public", "main")
+        self.assertEqual(self.scan("--remote", "public").returncode, 0)
+        self.assertEqual(self.scan("--remote", "pub").returncode, 1)
+
+    def test_a_key_in_pushed_history_does_not_trip_a_new_branch(self):
+        line, _ = planted()["github-token"]
+        self.commit("a.txt", line + "\n")
+        self.commit("a.txt", "rotated\n")
+        self.add_pushed_upstream()
+        self.git("checkout", "-q", "-b", "new-branch")
+        self.commit("b.txt", "fine\n")
+        p = self.scan()
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertIn("clean, 1 commit(s)", p.stdout)
+        p = self.scan("--all")
+        self.assertEqual(p.returncode, 1, p.stdout)
+        self.assertIn("a.txt:1 github-token", p.stdout)
 
     def test_the_users_git_config_cannot_hide_anything(self):
         # Each of these changes `git log -p` output a parser would otherwise trust.
@@ -380,9 +686,42 @@ class CantRun(ScanCase):
         self.git("clone", "-q", "--depth", "1", "file://" + self.work, clone)
         self.assert_cant_run(self.scan("--all", cwd=clone))
 
+    def test_a_shallow_clone_with_nothing_to_exclude_refuses(self):
+        self.commit("a.txt", "one\n")
+        self.commit("a.txt", "two\n")
+        clone = os.path.join(self.root, "shallow")
+        self.git("clone", "-q", "--depth", "1", "file://" + self.work, clone)
+        self.assert_cant_run(self.scan("--remote", "public", cwd=clone))
+        self.assertEqual(self.scan(cwd=clone).returncode, 0)  # origin's ref bounds the range
+        self.git("remote", "remove", "origin", cwd=clone)
+        self.assert_cant_run(self.scan(cwd=clone))
+
+    def test_a_ref_that_does_not_resolve(self):
+        self.commit("a.txt", "x\n")
+        self.assert_cant_run(self.scan("no-such-branch"))
+        self.assert_cant_run(self.scan("HEAD", "no-such-branch"))
+        self.assert_cant_run(self.scan("HEAD~1..HEAD"))
+        self.assert_cant_run(self.scan("HEAD:a.txt"))
+
+    def test_a_ref_cannot_be_an_option_to_git_log(self):
+        self.commit("a.txt", "x\n")
+        self.assertEqual(self.scan("--", "--not").returncode, 2)
+
+    def test_a_remote_that_is_a_pattern(self):
+        self.commit("a.txt", "x\n")
+        for pattern in ("*", "pub*", "", "[a]", "a\\b"):
+            with self.subTest(pattern):
+                self.assert_cant_run(self.scan("--remote", pattern))
+
+    def test_all_takes_no_ref_or_remote(self):
+        self.commit("a.txt", "x\n")
+        self.assertEqual(self.scan("--all", "HEAD").returncode, 2)
+        self.assertEqual(self.scan("--all", "--remote", "origin").returncode, 2)
+
     def test_a_bad_argument(self):
         self.commit("a.txt", "x\n")
         self.assertEqual(self.scan("--nope").returncode, 2)
+        self.assertEqual(self.scan("--allow", "x").returncode, 2)  # no abbreviated flags
 
 
 class TheSkillsOwnFiles(ScanCase):
@@ -398,6 +737,75 @@ class TheSkillsOwnFiles(ScanCase):
         self.git("commit", "-q", "-m", "copy")
         p = self.scan()
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+
+
+class TheKickoffFiles(unittest.TestCase):
+    """What another machine, or a session after /clear, reads. Other skills read these names."""
+
+    @staticmethod
+    def read(*rest):
+        with open(os.path.join(SKILL, *rest), encoding="utf-8") as f:
+            return f.read()
+
+    def test_the_event_profile_has_the_live_and_venue_fields_and_who_to_ask(self):
+        for text in (self.read("templates", "EVENT.md"), self.read("SKILL.md")):
+            self.assertIn("What must run live", text)
+            self.assertIn("Venue screen size and network", text)
+        self.assertIn("Who to ask when a field is unknown", self.read("templates", "EVENT.md"))
+
+    def test_demo_md_names_each_skill_and_when_it_is_due(self):
+        text = self.read("templates", "DEMO.md")
+        self.assertIn("## Due", text)
+        self.assertIn("not this event", text)
+        for row in ("`/interview`", "`/demo-first-scope`", "`/demo-video`", "`/pitch`",
+                    "`/public-ready` before submitting", "`/public-ready` after judging"):
+            with self.subTest(row):
+                self.assertRegex(text, rf"(?m)^\| {re.escape(row)} \|")
+
+    def test_the_project_file_survives_a_clear(self):
+        text = self.read("templates", "project-CLAUDE.md")
+        self.assertIn("`VISION.md`", text)
+        self.assertIn("/interview", text)
+        self.assertIn("goes away when the mode ends", text.splitlines()[0])
+
+    def test_pitch_is_skipped_only_with_neither_a_talk_nor_a_table(self):
+        self.assertRegex(self.read("SKILL.md"), r"\| `/pitch` \| `EVENT.md` has neither a talk nor a table \|")
+
+    def test_the_commit_question_covers_every_private_file(self):
+        step = re.search(r"(?m)^6\. .*$", self.read("SKILL.md")).group(0)
+        for name in ("EVENT.md", "DEMO.md", "ACCESS.md", "VISION.md", "PITCH.md", "git add -A"):
+            with self.subTest(name):
+                self.assertIn(name, step)
+
+    def test_a_plugin_turned_off_is_logged_to_be_undone(self):
+        step = re.search(r"(?m)^5\. .*$", self.read("SKILL.md")).group(0)
+        self.assertIn("ACCESS.md", step)
+        self.assertIn("enabledPlugins", self.read("templates", "ACCESS.md"))
+
+    def test_the_terms_mean_something_on_another_machine(self):
+        for text in (self.read("SKILL.md"), self.read("templates", "project-CLAUDE.md")):
+            self.assertIn("390 and at least 1024 wide", text)
+            self.assertIn("pre-merge trial runs", text)
+            self.assertIn("long planning and status documents", text)
+            self.assertNotIn("lane trials", text)
+            self.assertNotIn("SPEC, PLAN, STATUS", text)
+
+    def test_the_clock_examples_match_their_percentages(self):
+        text = self.read("SKILL.md")
+        self.assertIn("plan ends Sat 17:00, demo path Sat 21:00, freeze Sun 07:30", text)
+        self.assertIn("plan ends Sat 12:00, demo path Sat 14:30, freeze Sun 09:15", text)
+
+    def test_the_gitignore_says_how_to_keep_a_keynote_deck(self):
+        self.assertIn("!pitch.key", self.read("templates", "gitignore"))
+
+    def test_the_skill_describes_the_scan_as_it_now_works(self):
+        text = self.read("SKILL.md")
+        self.assertIn("secret-scan [--remote R] [REF ...]", text)
+        self.assertNotIn("@{push}", text)
+        for word in ("--allow-name", "--tags", "--all", "untracked `.env`",
+                     "exit 0 doesn't prove"):
+            with self.subTest(word):
+                self.assertIn(word, text)
 
 
 if __name__ == "__main__":

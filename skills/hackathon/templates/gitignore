@@ -3,6 +3,8 @@
 .env.*
 !.env.example
 *.pem
+# This also hides a Keynote deck. To keep one, add `!pitch.key` below it, and tell the scan with
+# `--allow-name pitch.key`, on the user's word.
 *.key
 *.p12
 *.pfx

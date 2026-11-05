@@ -17,6 +17,18 @@ Fixed times worked back from the earliest deadline in `EVENT.md`, counting worki
 | Rehearse live or the expo walkthrough (only if `EVENT.md` has one) | | |
 | Slides ready (only if `EVENT.md` asks for slides) | | |
 
+## Due
+Which skill to ask the user to type, and when. Filled in at kickoff from the clock and `EVENT.md`: a time, or "not this event".
+
+| Skill | Due | Done |
+|---|---|---|
+| `/interview` | | |
+| `/demo-first-scope` | | |
+| `/demo-video` | | |
+| `/pitch` | | |
+| `/public-ready` before submitting | | |
+| `/public-ready` after judging | | |
+
 ## Demo script
 Written first. What the judge sees, step by step, fitted to the slot in `EVENT.md`.
 

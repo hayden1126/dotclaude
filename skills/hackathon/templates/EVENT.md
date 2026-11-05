@@ -4,6 +4,8 @@ Facts about this event, read by every skill in hackathon mode. Copied from the e
 
 Rules read from: <link or "pasted by the user">, on <date>.
 
+Who to ask when a field is unknown: the user, who takes it to the organisers at <contact or channel, or "unknown, re-check on <date>">.
+
 ## Schedule and deadlines
 All fixed times, with the time zone.
 
@@ -21,6 +23,8 @@ All fixed times, with the time zone.
 - Length of a slot, with Q&A: unknown, re-check on <date>
 - Criteria: unknown, re-check on <date>
 - Who presents, and on whose machine: unknown, re-check on <date>
+- What must run live: unknown, re-check on <date> (a rule requiring live capabilities on stage)
+- Venue screen size and network: unknown, re-check on <date>
 
 ## AI and pre-work rules
 - AI use allowed, and what must be disclosed: unknown, re-check on <date>
