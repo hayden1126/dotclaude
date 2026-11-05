@@ -189,7 +189,10 @@ SEC-64, the engine's other rule, runs first in PreToolUse(Bash) and reads no rep
 that adds a named package (ADD_VERBS: npm, pnpm, yarn and bun add and install, pip and uv pip
 install, uv, poetry, cargo and bundle add, gem install, composer require; `go get` runs no code
 at install) is denied once per manager and package (key `SEC-64|engine|<manager>|<package>`, no
-version in it; a call adding several names every unseen one, and the resend passes). Restores
+version in it; a call adding several names every unseen one, and the resend passes). The word
+after an `--option` this check doesn't list could be that option's value or a package, so it is
+never stored or echoed; the call gets one deny that names no package, keyed
+`SEC-64|engine|<manager>|?`, beside any named one. Restores
 name no package and never fire: a bare install, `npm ci`, `pip install -r`, `uv sync`, a local
 path, `pip install -e .`. It doesn't fire when the same simple command turns scripts off
 (--ignore-scripts for the npm family, --only-binary :all: for pip and uv pip, --no-build for uv)
@@ -197,11 +200,13 @@ or, for the npm family, when an earlier Bash call in the transcript (or, for a s
 parent's) with a result that isn't an error inspected the package. A step of this same call or
 a call in its assistant message doesn't count: the model reads that output only after the install
 has run the script. Inspecting is a manager's view (`npm view`, `pnpm view`, `yarn info`, `bun
-info`) naming `scripts` or with --json and no named fields, or tar extracting or printing its
-tarball, with its stdout in the result and in the foreground. One naming a version spec other
-than the install's doesn't count. Other managers have no measured inspection, so the deny-once
-alone applies. The deny names a package and version spec only when they match a strict pattern
-and never echoes the rest of the command. The rule reads the common spellings and is a prompt to
+info`) naming `scripts` or with --json and no named fields, with the same version spec as the
+install, or tar reading its tarball's package.json: printing the whole tarball or that member, or
+extracting it with a later command of the same call printing a package.json. A Bash call that
+redirects stdout or holds `||` anywhere, or runs in the background, inspects nothing. Other
+managers have no measured inspection, so the deny-once alone applies. The deny names a package
+and version spec only when they match a strict pattern and never echoes the rest of the command.
+The rule reads the common spellings and is a prompt to
 check, not a boundary; what it can't read is logged as install-skipped with no command text. A
 key that can't be kept drops the deny.
 
@@ -2280,7 +2285,7 @@ ADD_VERBS = {
     "pnpm": {"add", "install", "i"}, "yarn": {"add", "install", "i"},
     "bun": {"add", "a", "install", "i"}, "pip": {"install"}, "uv": {"add"}, "poetry": {"add"},
     "cargo": {"add"}, "bundle": {"add"}, "gem": {"install", "i"},
-    "composer": {"require", "r"}}
+    "composer": {"require", "r", "req", "requ", "requi", "requir"}}
 # The common options that take the next word, so it isn't read as a package.
 _NODE_VALUES = {"--prefix", "--registry", "--tag", "--cache", "--userconfig", "--globalconfig",
                 "--workspace", "--omit", "--include", "--loglevel", "--save-prefix", "--otp",
@@ -2290,9 +2295,10 @@ _NODE_VALUES = {"--prefix", "--registry", "--tag", "--cache", "--userconfig", "-
                 "--https-proxy", "--cpu", "--os", "--libc", "--allow-git", "--min-release-age",
                 "--global-dir", "--virtual-store-dir", "--backend", "--ca", "--cafile",
                 "--linker", "--concurrent-scripts", "--network-concurrency",
-                "--minimum-release-age", "--mode"}
-# The npm family's boolean long options (any `--no-...` is one too). The word after any other
-# `--option` without `=` may be its value, a token included, so it is never read as a package.
+                "--minimum-release-age", "--mode", "--maxsockets"}
+# The common boolean long options (any other `--no-...` is one too). The word after any other
+# `--option` without `=` may be its value, a token included, so split_args reports it as
+# ambiguous and it is never read as a package.
 NODE_FLAGS = {"--save", "--save-dev", "--save-prod", "--save-optional", "--save-peer",
               "--save-exact", "--save-bundle", "--save-text-lockfile",
               "--save-workspace-protocol", "--workspace", "--global", "--force", "--dry-run",
@@ -2307,13 +2313,41 @@ NODE_FLAGS = {"--save", "--save-dev", "--save-prod", "--save-optional", "--save-
               "--stream", "--use-stderr", "--fail-if-no-match", "--yarn", "--analyze",
               "--only-missing", "--trust", "--ignore-engines", "--ignore-optional",
               "--ignore-platform", "--ignore-workspace-root-check", "--non-interactive", "--flat",
-              "--har", "--interactive", "--cached", "--prefer-dev", "--help", "--version"}
+              "--har", "--interactive", "--cached", "--prefer-dev", "--help", "--version",
+              "--unsafe-perm", "--engine-strict", "--shamefully-hoist"}
+_PIP_FLAGS = {"--upgrade", "--user", "--force-reinstall", "--ignore-installed", "--pre", "--quiet",
+              "--verbose", "--no-input", "--dry-run", "--require-hashes",
+              "--break-system-packages", "--isolated", "--compile", "--prefer-binary",
+              "--ignore-requires-python", "--use-pep517", "--check-build-dependencies", "--debug",
+              "--require-virtualenv", "--disable-pip-version-check", "--help", "--version"}
+FLAGS = {
+    "npm": NODE_FLAGS, "pnpm": NODE_FLAGS, "yarn": NODE_FLAGS, "bun": NODE_FLAGS,
+    "pip": _PIP_FLAGS,
+    "uv": _PIP_FLAGS | {"--dev", "--raw", "--frozen", "--locked", "--lfs", "--active", "--workspace",
+                        "--reinstall", "--compile-bytecode", "--refresh", "--offline",
+                        "--all-extras", "--system", "--exact", "--strict", "--managed-python",
+                        "--system-certs"},
+    "poetry": {"--dev", "--dry-run", "--lock", "--allow-prereleases", "--editable", "--quiet",
+               "--verbose", "--ansi", "--help", "--version"},
+    "cargo": {"--dev", "--build", "--optional", "--dry-run", "--locked", "--offline", "--frozen",
+              "--default-features", "--public", "--ignore-rust-version", "--quiet", "--verbose",
+              "--help"},
+    "bundle": {"--skip-install", "--strict", "--optimistic", "--quiet"},
+    "gem": {"--user-install", "--conservative", "--force", "--prerelease", "--development",
+            "--development-all", "--minimal-deps", "--ignore-dependencies", "--local", "--remote",
+            "--both", "--quiet", "--silent", "--verbose", "--help"},
+    "composer": {"--dev", "--no-update", "--no-install", "--with-all-dependencies", "-W",
+                 "--with-dependencies", "--prefer-dist", "--prefer-source", "--sort-packages",
+                 "--update-with-dependencies", "--dry-run", "--quiet", "--verbose", "--ansi",
+                 "--help", "--version"}}
 _PIP_VALUES = {"-r", "--requirement", "-c", "--constraint", "-e", "--editable", "-t", "--target",
                "--prefix", "--root", "--src", "-i", "--index-url", "--extra-index-url", "-f",
                "--find-links", "--platform", "--python-version", "--implementation", "--abi",
                "--no-binary", "--only-binary", "--trusted-host", "--proxy", "--cert",
                "--client-cert", "--timeout", "--retries", "--log", "--cache-dir", "--progress-bar",
-               "--upgrade-strategy", "--report", "--config-settings", "--python", "-p"}
+               "--upgrade-strategy", "--report", "--config-settings", "--python", "-p",
+               "--use-feature", "--use-deprecated", "--exists-action", "--root-user-action",
+               "--global-option", "--keyring-provider"}
 VALUE_OPTS = {
     "npm": _NODE_VALUES | {"-w"},
     "pnpm": (_NODE_VALUES - {"--workspace"}) | {"-C", "-F"},  # pnpm's -w and --workspace take none
@@ -2321,7 +2355,18 @@ VALUE_OPTS = {
     "bun": _NODE_VALUES | {"-c"},
     "pip": _PIP_VALUES,
     "uv": _PIP_VALUES | {"--project", "--directory", "--package", "--group", "--optional",
-                         "--index", "--default-index", "--branch", "--tag", "--rev", "-C"},
+                         "--index", "--default-index", "--branch", "--tag", "--rev", "-C",
+                         "--extra", "--exclude-newer", "--exclude-newer-package", "--script",
+                         "--requirements", "--constraints", "--overrides", "--excludes",
+                         "-m", "--marker", "-b", "--build-constraints", "--bounds",
+                         "--index-strategy", "-P", "--upgrade-package", "--upgrade-group",
+                         "--resolution", "--prerelease", "--fork-strategy",
+                         "--reinstall-package", "--refresh-package", "--link-mode",
+                         "--config-setting", "--config-settings-package", "--config-file",
+                         "--color", "--allow-insecure-host", "--python-platform",
+                         "--torch-backend", "--no-build-package", "--no-binary-package",
+                         "--no-sources-package", "--no-install-package",
+                         "--no-build-isolation-package"},
     "poetry": {"-C", "--directory", "-P", "--project", "-G", "--group", "-E", "--extras",
                "--source", "--python", "--platform", "--markers"},
     "cargo": {"-F", "--features", "--rename", "--path", "--git", "--branch", "--tag", "--rev",
@@ -2336,7 +2381,7 @@ SOURCE_OPTS = {"-e", "--editable", "--git", "--github"}  # their value can be a 
 PIP_HEAD = re.compile(r"pip\d*(?:\.\d+)?")  # pip3, pip3.12
 INTERPRETER = re.compile(r"python\d*(?:\.\d+)?")  # `python3.12 -m pip install x`
 LAUNCHERS = {"xargs", "find", "fd", "parallel", "ssh", "watch", "eval", "setsid", "flock", "dash",
-             "ksh"} | {"bash", "sh", "zsh"}
+             "ksh", "corepack", "mise", "asdf", "volta"} | {"bash", "sh", "zsh"}
 RUNNERS = {"uv", "poetry", "pipenv", "pdm", "hatch", "rye", "bundle"} | NPM_FAMILY
 RUN_WORDS = {"run", "exec", "x", "dlx"}
 # Named so a wrapper's `sudo -E pip3.12 ...` isn't taken for the wrapper's own argument.
@@ -2344,7 +2389,7 @@ INSTALL_HEADS = (set(ADD_VERBS) | set(HEADS) | LAUNCHERS | {"pip3", "python", "p
                  | {f"{name}3.{minor}" for name in ("pip", "python") for minor in range(7, 20)})
 MANAGER_NAMED = re.compile(r"(?<![\w.-])(?:npm|pnpm|yarn|bun|pip3?|uv|poetry|cargo|bundle|gem"
                            r"|composer)(?![\w-])")
-ADD_NAMED = re.compile(r"(?<![\w-])(?:add|install|i|require)(?![\w-])")
+ADD_NAMED = re.compile(r"(?<![\w-])(?:add|install|i|req|requ|requi|requir|require)(?![\w-])")
 LOCAL_PREFIX = (".", "/", "~", "file:", "link:", "workspace:", "portal:")  # `.[dev]` too
 ARCHIVE_SUFFIX = (".tgz", ".tar", ".tar.gz", ".tar.bz2", ".zip", ".whl", ".gem", ".crate")
 _NAME = r"[A-Za-z0-9][\w.-]{0,213}"
@@ -2355,14 +2400,20 @@ OTHER_PACKAGE = re.compile(  # requests[socks]>=2, serde@1, rails:7.0, x (>=1,<2
 SPEC_SHOWN = re.compile(r"[\w.^~+-]{1,64}", re.ASCII)  # a version spec the deny may repeat
 VIEW_VERBS = {"npm": {"view", "info", "show", "v"}, "pnpm": {"view", "info", "show", "v"},
               "yarn": {"info"}, "bun": {"info"}}
-TAR_LONG = {"--extract": "x", "--get": "x", "--to-stdout": "O", "--list": "t", "--create": "c",
-            "--append": "c", "--update": "c", "--concatenate": "c", "--catenate": "c",
-            "--delete": "c", "--diff": "c", "--compare": "c"}
-TAR_NOT_READING = set("tcAurd")
-# A redirection that sends stdout away from the call's result: >, >>, >|, 1>, &>. `2>`, `2>&1`
-# and `>&2` leave it in the result, and `>(` is a process substitution.
-STDOUT_AWAY = re.compile(r"(?<![\d>&])1?>>?\|?(?![&(>])|&>>?")
-SHOWN_AWAY = "%AWAY%"  # stands in for one, as a word of its own command, for bash_words to keep
+# The tar options whose effect on what it prints is known; any other means it counts as no read.
+# f takes the archive and C a value that isn't a member; the rest take none or `=value`.
+TAR_SHORT = set("xOzjJZvfCopm")
+TAR_LONG = {"--extract": "x", "--get": "x", "--to-stdout": "O", "--file": "f", "--directory": "C",
+            "--strip-components": "C", "--gzip": "z", "--gunzip": "z", "--ungzip": "z",
+            "--bzip2": "j", "--xz": "J", "--verbose": "v", "--wildcards": "v",
+            "--no-same-owner": "o", "--no-same-permissions": "v"}
+# What prints a package.json named as its argument, unlike echo, ls or test.
+FILE_READERS = {"cat", "head", "tail", "less", "more", "bat", "jq", "grep", "egrep", "rg", "sed",
+                "awk", "node", "python", "python3"}
+# The redirections that leave stdout in the call's result: `2>`, `2>>`, `2>&1`, `>&2`, and `>(` is
+# a process substitution. Any other `>` sends it away.
+KEPT_OUTPUT = re.compile(r"(?:(?<!\w)\d+)?>&\d+(?!\w)|(?<!\w)(?:[02-9]|\d\d+)>>?\|?|>\(")
+UNNAMED = "?"  # the state key's package for a call with an ambiguous word: it names none
 
 
 class EveryHead(frozenset):
@@ -2381,14 +2432,18 @@ def names_an_install(text):
 
 
 def split_args(args, value_opts, flags=None, verbs=()):
-    """(positional words, option words, whether a word went unread) of a manager's arguments. An
+    """(positional words, option words, whether a word is ambiguous) of a manager's arguments. An
     option in value_opts takes the next word and `--flag true|false` its boolean, both folded to
-    `<option>=<value>`. With flags, the word after any other `--option` without `=` is dropped
-    unread, unless it is one of verbs and no positional word came before it."""
-    words, opts, unread, i = [], [], False, 0
+    `<option>=<value>`. With flags, the word after any other `--option` without `=` could be its
+    value or a package: it is dropped and reported as ambiguous, unless it is one of verbs and no
+    positional word came before it. Every word after `--` is positional."""
+    words, opts, ambiguous, i = [], [], False, 0
     while i < len(args):
         a = args[i]
         i += 1
+        if a == "--":
+            words.extend(args[i:])
+            break
         if not a.startswith("-") or a == "-":
             words.append(a)
         elif i < len(args) and (a in value_opts
@@ -2400,13 +2455,13 @@ def split_args(args, value_opts, flags=None, verbs=()):
             if (flags is not None and i < len(args) and a.startswith("--") and "=" not in a
                     and a not in flags and not a.startswith("--no-")
                     and not args[i].startswith("-") and (words or args[i] not in verbs)):
-                unread = True
+                ambiguous = True
                 i += 1
-    return words, opts, unread
+    return words, opts, ambiguous
 
 
 def install_of(head, args):
-    """(manager, the words after the add verb, option words, whether a word went unread) when
+    """(manager, the words after the add verb, option words, whether a word is ambiguous) when
     this simple command is a manager's add verb, else None."""
     if INTERPRETER.fullmatch(head):
         at = args.index("-m") if "-m" in args else len(args)
@@ -2416,18 +2471,17 @@ def install_of(head, args):
     manager = "pip" if PIP_HEAD.fullmatch(head) else head
     if manager not in ADD_VERBS:
         return None
-    words, opts, unread = split_args(
-        args, VALUE_OPTS[manager], NODE_FLAGS if manager in NPM_FAMILY else None,
-        ADD_VERBS[manager] | {"global", "workspace"})
-    if manager == "yarn" and words[:1] == ["global"]:
+    words, opts, ambiguous = split_args(args, VALUE_OPTS[manager], FLAGS[manager],
+                                        ADD_VERBS[manager] | {"global", "workspace", "pip"})
+    if manager in ("yarn", "composer") and words[:1] == ["global"]:
         words = words[1:]
     elif manager == "yarn" and words[:1] == ["workspace"]:  # `yarn workspace web add x`
         words = words[2:]
     if manager == "uv" and words[:2] == ["pip", "install"]:
-        return manager, words[2:], opts, unread
+        return manager, words[2:], opts, ambiguous
     if not words or words[0] not in ADD_VERBS[manager]:
         return None
-    return manager, words[1:], opts, unread
+    return manager, words[1:], opts, ambiguous
 
 
 def scripts_off(manager, opts):
@@ -2497,37 +2551,73 @@ def tarball_version(word, pkg):
     return m.group(1) if m else None
 
 
-def tar_reads(args, pkg, spec):
-    """Whether this tar extracts or prints pkg's tarball, as opposed to listing or writing one.
-    A tarball's version, unlike a view's spec, is what `npm pack x` resolved `x` to, so it
-    differs only from another pinned spec."""
-    modes = set()
+def tar_parts(args):
+    """(mode letters, archives, member words) of a tar's arguments, or None for an option whose
+    effect on what it prints isn't known here."""
+    modes, archives, members, taking = set(), [], [], []
     for n, a in enumerate(args):
-        if a.startswith("--"):
-            modes.add(TAR_LONG.get(a))
-        elif a.startswith("-") or n == 0:  # `-xOzf file`, or the old `xOzf file`
-            modes |= set(re.split("[fC]", a.lstrip("-"), maxsplit=1)[0])
-    if not modes & {"x", "O"} or modes & TAR_NOT_READING:
+        if taking:
+            if taking.pop(0) == "f":
+                archives.append(a)
+        elif a.startswith("--"):
+            name, eq, value = a.partition("=")
+            if name not in TAR_LONG:
+                return None
+            modes.add(TAR_LONG[name])
+            if TAR_LONG[name] in "fC" and not eq:
+                taking.append(TAR_LONG[name])
+            elif TAR_LONG[name] == "f":
+                archives.append(value)
+        elif (a.startswith("-") and a != "-") or n == 0:  # `-xOzf file`, or the old `xOzf file`
+            letters = a.lstrip("-")
+            for m, c in enumerate(letters):
+                if c not in TAR_SHORT:
+                    return None
+                modes.add(c)
+                if c in "fC" and a.startswith("-") and letters[m + 1:]:  # `-fname` holds its value
+                    if c == "f":
+                        archives.append(letters[m + 1:])
+                    break
+                if c in "fC":
+                    taking.append(c)
+        else:
+            members.append(a)
+    return modes, archives, members
+
+
+def is_manifest(word):
+    return word.rsplit("/", 1)[-1] == "package.json"
+
+
+def tar_reads(args, pkg, spec, read_after):
+    """Whether this tar's output can show pkg's scripts: it prints the whole tarball or a member
+    naming package.json, or extracts those with read_after, a later command of the call printing
+    a package.json. A tarball's version, unlike a view's spec, is what `npm pack x` resolved `x`
+    to, so it differs only from another pinned spec."""
+    parts = tar_parts(args)
+    if parts is None or "x" not in parts[0]:
         return False
-    return any(v and (spec is None or "*" in v or v == spec)
-               for v in (tarball_version(a, pkg) for a in args))
+    modes, archives, members = parts
+    if members and not any(is_manifest(m) for m in members):
+        return False
+    return ("O" in modes or read_after) and any(
+        v and (spec is None or "*" in v or v == spec)
+        for v in (tarball_version(a, pkg) for a in archives))
 
 
-def inspects(head, args, pkg, spec):
+def inspects(head, args, pkg, spec, read_after=False):
     """Whether this simple command shows pkg's install scripts, for the spec being installed:
     a manager's view naming scripts, or with --json and no named fields (named fields print only
-    those; a bare view shows no scripts), or tar reading its tarball. A view naming another spec
-    shows another release, and output sent away shows nothing."""
-    if SHOWN_AWAY in args:
-        return False
+    those; a bare view shows no scripts), or tar reading its tarball. A view's spec must equal
+    the install's, None meaning unversioned or latest."""
     if head == "tar":
-        return tar_reads(args, pkg, spec)
+        return tar_reads(args, pkg, spec, read_after)
     if head not in VIEW_VERBS:
         return False
     words, opts, _ = split_args(args, VALUE_OPTS[head])
     if len(words) < 2 or words[0] not in VIEW_VERBS[head]:
         return False
-    if package_of(head, words[1])[0] != pkg or npm_spec(words[1]) not in (None, spec):
+    if package_of(head, words[1])[0] != pkg or npm_spec(words[1]) != spec:
         return False
     fields = words[2:]
     if fields:
@@ -2535,17 +2625,26 @@ def inspects(head, args, pkg, spec):
     return "--json" in opts or "--json=true" in opts
 
 
+def hides_output(command):
+    """Whether this Bash command redirects stdout, or holds `||`, anywhere: blunt, since a false
+    answer costs one deny and a true one can hide the only output the model would read."""
+    return "||" in command or ">" in KEPT_OUTPUT.sub(" ", command)
+
+
 def command_inspects(command, pkg, spec):
     """Whether a Bash command from the transcript holds an inspection of pkg."""
-    if len(command) > CMD_MAX:
+    if len(command) > CMD_MAX or hides_output(command):
         return False
     try:
-        calls = load_bash_words().calls(STDOUT_AWAY.sub(f" {SHOWN_AWAY} ", command),
-                                        NPM_FAMILY | {"tar"}, None,
+        calls = load_bash_words().calls(command, EveryHead(INSTALL_HEADS | {"tar"}), None,
                                         check=lambda: check_budget("command parse"))
     except ValueError:
         return False
-    return any(inspects(head, args, pkg, spec) for head, args, _, _ in calls)
+    return any(
+        inspects(head, args, pkg, spec, any(
+            later in FILE_READERS and any(is_manifest(w) for w in words)
+            for later, words, _, _ in calls[n + 1:]))
+        for n, (head, args, _, _) in enumerate(calls))
 
 
 def bash_rows(t, needle):
@@ -2612,37 +2711,41 @@ def launches(head, args):
 
 
 def read_installs(event):
-    """([(manager, package, version spec)] this call would add with scripts on, in order; whether
-    part of it couldn't be read)."""
+    """([(manager, package, version spec)] this call would add with scripts on, in order, each
+    spec of a package kept; whether part of it couldn't be read; the managers with a word that
+    may be a package or an option's value)."""
     cmd = command_of(event)
     if not cmd or not MANAGER_NAMED.search(cmd):
-        return [], False
+        return [], False, []
     if len(cmd) > CMD_MAX:
-        return [], names_an_install(cmd)
-    rest, found, unread = [], [], False
+        return [], names_an_install(cmd), []
+    rest, found, unread, ambiguous = [], [], False, []
     cwd = event.get("cwd") if isinstance(event.get("cwd"), str) else None
     CRUMB.mark("(the command)", "bash", "SEC-64")
     try:
         calls = load_bash_words().calls(cmd, EveryHead(INSTALL_HEADS), cwd, rest,
                                         check=lambda: check_budget("command parse"))
     except ValueError:
-        return [], names_an_install(cmd)
+        return [], names_an_install(cmd), []
     for head, args, _, _ in calls:
         add = install_of(head, args) if head else None
         if add is None:
             if head and launches(head, args):
                 rest.append(" ".join(args))
             continue
-        manager, words, opts, skipped = add
+        manager, words, opts, unsure = add
         if scripts_off(manager, opts):
             continue
-        unread = unread or skipped or source_in_options(opts)
+        unread = unread or source_in_options(opts)
+        if unsure and manager not in ambiguous:
+            ambiguous.append(manager)
         for word in words:
             pkg, readable = package_of(manager, word)
             unread = unread or not readable
-            if pkg and not any(f[:2] == (manager, pkg) for f in found):
-                found.append((manager, pkg, npm_spec(word) if manager in NPM_FAMILY else None))
-    return found, unread or any(names_an_install(t) for t in rest)
+            item = (manager, pkg, npm_spec(word) if manager in NPM_FAMILY else None)
+            if pkg and item not in found:
+                found.append(item)
+    return found, unread or any(names_an_install(t) for t in rest), ambiguous
 
 
 def install_key(manager, pkg, _spec=None):
@@ -2652,9 +2755,9 @@ def install_key(manager, pkg, _spec=None):
     return f"SEC-64|engine|{manager}|{pkg}"
 
 
-def install_reason(found):
+def install_reason(found, unnamed=False):
     """The deny for these (manager, package, spec) triples: rule, package, spec and check, no
-    other command text."""
+    other command text. With unnamed, one line for a word that may be a package, naming none."""
     lines = [f"[practices:SEC-64] {SEC64['say']}"]
     for manager, pkg, spec in found:
         if manager in NPM_FAMILY:
@@ -2672,6 +2775,11 @@ def install_reason(found):
                          "install), or read its build code first.")
         else:
             lines.append(f"- {pkg}: read what it runs at install or build ({manager}).")
+    if unnamed:
+        lines.append("This install may add a package: a word after an option this check doesn't "
+                     "know could be a package or that option's value, so it isn't repeated here. "
+                     "Read that package's install scripts first, or install with scripts off "
+                     "where this manager has a way.")
     if any(manager in NPM_FAMILY for manager, _, _ in found):
         lines.append("`npm view` shows only this package's own scripts. A dependency's install "
                      "scripts can run too, and only turning scripts off covers them.")
@@ -2687,8 +2795,8 @@ def install_check(event):
     global BUDGET
     whole, BUDGET = BUDGET, BUDGET * SEC64_SHARE
     try:
-        found, unread = read_installs(event)
-        if not (found or unread):
+        found, unread, ambiguous = read_installs(event)
+        if not (found or unread or ambiguous):
             return None
         cfg = load_config(bash_project(event))
         if not cfg["enabled"] or is_off(cfg, ENGINE, SEC64["id"]):
@@ -2698,12 +2806,15 @@ def install_check(event):
                 "so that part wasn't checked")
         seen = state_keys(event)
         found = [k for k in found if install_key(*k) not in seen]
+        unnamed = [install_key(m, UNNAMED) for m in ambiguous
+                   if install_key(m, UNNAMED) not in seen]
         wanted = list(dict.fromkeys(k[1:] for k in found if k[0] in NPM_FAMILY))
         read = inspected_earlier(event, wanted) if wanted else set()
         new = [k for k in found if not (k[0] in NPM_FAMILY and k[1:] in read)]
-        if not new or not state_add(event, [install_key(*k) for k in new]):
+        keys = [install_key(*k) for k in new] + unnamed
+        if not keys or not state_add(event, keys):
             return None
-        return deny(install_reason(new))
+        return deny(install_reason(new, bool(unnamed)))
     except Budget as e:
         log("budget-spent", f"after {BUDGET}s, in SEC-64's {e}; the call was allowed")
     except Exception as e:  # noqa: BLE001  never at the cost of the push and PR checks

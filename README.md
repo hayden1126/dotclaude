@@ -736,8 +736,10 @@ need nothing extra.
     `composer require`) is denied once per manager and package, unless the same simple command
     turns scripts off (`--ignore-scripts`, `--only-binary :all:`, `--no-build` for `uv`) or, for
     the npm family, an earlier Bash call showed the scripts of that version (`npm view <pkg>
-    scripts`, or `tar` extracting its tarball). The deny names the package and the check, and the
-    resend passes. Restores (a bare install, `npm ci`, `pip install -r`, a local path) never fire.
+    scripts`, or `tar` showing its tarball's `package.json`), with its stdout left in the result.
+    The deny names the package and the check, and the resend passes. A word that could be an
+    option's value is never named or stored: the call gets one deny that names no package. Restores
+    (a bare install, `npm ci`, `pip install -r`, a local path) never fire.
     `npm view <pkg> scripts` shows only that package's own scripts; only `--ignore-scripts` covers
     its dependencies. The rule reads the common spellings and is a prompt to check, not a boundary.
 

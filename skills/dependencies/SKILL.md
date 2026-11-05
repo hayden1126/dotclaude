@@ -34,4 +34,4 @@ When the repo has a deploy workflow and no dependency list, name [references/lif
 
 ## When the hook stops an install
 
-`[practices:SEC-64]` names each package and its check. Run the check and read the output, then install. If you resend without checking, the call passes, and your reply says what the script does and that you read it after it ran.
+`[practices:SEC-64]` names each package and its check. Run the check and read the output, then install. A deny that names no package means a word in the call may be one: read that package's scripts or install with scripts off, then resend. If you resend without checking, the call passes, and your reply says what the script does and that you read it after it ran.
