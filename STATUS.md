@@ -94,8 +94,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     Hayden 2026-11-04; it conflicts with
     origin/main on its own, per lane-fixes' and ports' trials: README.md and
     `tests/delegation/test_settings.py`; on resuming it merges origin/main first), 2 npx-cwd
-    (`fix/npx-shim-cwd`; moved up 2026-11-05, ready first), 3 dev-cycle (`feat/dev-cycle-rules`), 4 hackathon (`feat/hackathon-mode`; a hackathon about
-    2026-11-15, so it aims to merge by 2026-11-12 and moves up if needed).
+    (`fix/npx-shim-cwd`; moved up 2026-11-05, ready first), 3 dev-cycle (`feat/dev-cycle-rules`), 4 hackathon (`feat/hackathon-mode`; a hackathon starts
+    2026-11-14, so it aims to merge by 2026-11-11 and moves up if needed).
     Merged and installed from main, all closed: chrome-dup (#151, 2026-10-29: one chrome-devtools
     server, the plugin's; sandbox gap fixes N1 and N3's bun part, `hooks/sandbox-caches.sh`; its
     install changed running sessions' sandbox live, [[cc-sandbox-config-reloads-live]]),
