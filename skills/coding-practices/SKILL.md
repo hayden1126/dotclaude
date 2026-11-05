@@ -21,8 +21,9 @@ If you catch yourself thinking "for development, the simplest approach is...", s
 9. **Reproduce a bug first.** For a non-trivial bug, commit the failing repro before the fix. "Might help" is a hypothesis and doesn't ship: test it, and take out what the evidence refutes.
 10. **Pin behavior before a refactor.** Write a characterization test that passes on the old code, then refactor with it green.
 11. **Verify claims by experiment.** State a claim that can fail, run the same command on the baseline and on the change, and report VERIFIED, NOT VERIFIED or INCONCLUSIVE. Keep scratch output in the temp dir.
-12. **Cut slop.** Remove defensive checks abnormal for a trusted path, casts that dodge the type system, and nesting an early return fixes. Validation at trust boundaries stays.
-13. **Name known limits.** Finished code with a known limit carries one comment naming it and when to upgrade: `# limit: one writer per lane; needs a lock if lanes ever share a worktree`. The code must be correct for today's real use, or the "for now" ban applies. The comment never exempts code from review.
+12. **Prove a change on the real path.** Exercise what a user would, rather than test-only endpoints, check side effects such as files written or rows inserted, and keep the evidence through cleanup.
+13. **Cut slop.** Remove defensive checks abnormal for a trusted path, casts that dodge the type system, and nesting an early return fixes. Validation at trust boundaries stays.
+14. **Name known limits.** Finished code with a known limit carries one comment naming it and when to upgrade: `# limit: one writer per lane; needs a lock if lanes ever share a worktree`. The code must be correct for today's real use, or the "for now" ban applies. The comment never exempts code from review.
 
 ## Python function pattern
 ```python

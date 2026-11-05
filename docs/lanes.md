@@ -325,8 +325,8 @@ new defects come from, so Hayden picked two pins (2026-11-04):
 
 - **The ready ask names the reviewed commit** and `git diff --stat <sha>..HEAD`. Anything past it
   beyond a carry of the lead's notes, a clean merge of main or a version renumber gets reviewed
-  again; the trial covers what those merges break. A hand-resolved conflict is new code, so it
-  counts as a change. pstack's `git patch-id` check is left out: it survives a rebase, and a pushed
+  again; the trial covers what those merges break. Any other hand-resolved conflict is new code, so
+  it counts as a change. pstack's `git patch-id` check is left out: it survives a rebase, and a pushed
   lane branch merges main instead of rebasing.
 - **The merge runs `gh pr merge <n> --merge --match-head-commit <sha>`** with the full commit Hayden
   approved, so GitHub refuses a head that moved. A refusal means a new ask. `--merge` is there
@@ -339,8 +339,8 @@ A planned review that can't run keeps the gate closed (`docs/delegation.md`, "Th
 about 8 hours on a blocker fixed in another window 4 minutes later, while lane ports waited for a
 merge that never needed the reinstall. So a stopped chain still sends step 6's messages, saying what
 stalled, and arms a wake on the blocker ("The lead", step 7, in `skills/lanes/SKILL.md`). A stop at
-step 1 can't say main moved, and a DA15/DA16 refusal tells no lane to merge until Hayden rules: the
-shared git dir is the thing in doubt.
+step 1 reports the merge as unproven, since a lane's `merged #N` can be wrong, and a DA15/DA16
+refusal tells no lane to merge until Hayden rules: the shared git dir is the thing in doubt.
 
 ## One lead per main checkout (lane two-sessions, 2026-10-14)
 
