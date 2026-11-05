@@ -317,6 +317,27 @@ came a median 44 minutes after the lane opened, so the Expected line is what cov
 opened together; it named a median 62% of the files each lane merged (outside `tests/`,
 STATUS.md and README.md, which the rule skips).
 
+## Commit pins on ready and merge (lane dev-cycle, 2026-11-04)
+
+An approval attached to a PR number, while the code under that number could still move. A review
+saw commit A, a "small" fix B followed, and the ask for ready only quoted the trial. Fixes are where
+new defects come from, so Hayden picked two pins (2026-11-04):
+
+- **The ready ask names the reviewed commit** and `git diff --stat <sha>..HEAD`. Anything past it
+  beyond a carry of the lead's notes or a merge of main gets reviewed again; the trial covers what
+  those two merges break. pstack's `git patch-id` check is left out: it survives a rebase, and a
+  pushed lane branch merges main instead of rebasing.
+- **The merge runs `gh pr merge <n> --match-head-commit <sha>`** with the commit Hayden approved, so
+  GitHub refuses a head that moved. A refusal means a new ask. It can't cover a merge clicked on
+  GitHub, and the ask rule on `gh pr merge` stays.
+
+A planned review that can't run keeps the gate closed (`docs/delegation.md`, "The review gate").
+
+**A stalled chain still tells the lanes** (Hayden, 2026-11-04). #163's post-merge chain stopped for
+about 8 hours on a blocker fixed in another window 4 minutes later, while lane ports waited for a
+merge that never needed the reinstall. So a stopped chain still sends "main moved" and arms a wake
+on the blocker ("The lead", step 7, in `skills/lanes/SKILL.md`).
+
 ## One lead per main checkout (lane two-sessions, 2026-10-14)
 
 The night capella-studio got its first lanes, its main checkout held two live sessions. The lead,

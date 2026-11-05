@@ -39,3 +39,12 @@ Never open with "Great question" or "That's interesting." Start with substance.
 
 ## Formatting
 Bold for emphasis (not caps). Italics for technical terms. Bullets sparingly.
+
+## PR body
+Use these headings, in this order. Why and Verification are always there. The others appear only when they say something, so a small PR stays small.
+- **Why:** the problem, and who hit it.
+- **What changed:** the behavior, not a file list.
+- **Scope:** what this deliberately leaves out.
+- **Tradeoffs:** what was given up, and the option not taken.
+- **Blast radius:** what else this can break, and for whom.
+- **Verification:** the commands run and their results.

@@ -93,6 +93,20 @@ Each layer covers what the others can't.
 | `worktree.baseRef: "head"` | `settings.json` | A writer's worktree branches from the current branch, not from `main` |
 | `teammateMode: "in-process"` | `settings.json` | Pins the default: split-pane teammates are separate processes whose hook input has no `agent_id`, so the policy would never see them |
 
+### The review gate
+
+Where the work plans an independent review, the gate stays closed until one has run. If no
+reviewer can run (a denied spawn, a deadline stop with the diff unread), the lane records
+`BLOCKED: independent review` in its Asks for Hayden and doesn't ask for ready until Hayden waives
+it. The author's own session doesn't count, and green tests aren't a review: they check what the
+author thought of. A one-sentence fast-track change has no review step, so it is exempt.
+
+A finding carries its own proof. A reviewer has no shell, so a runtime claim names the command that
+settles it and the caller runs that before acting. A static claim quotes the lines. We didn't make
+a command mandatory: doc reviews and races no quick command triggers would lose real findings
+(Hayden, 2026-11-04). The rule and the gate come from pstack-claude, and the finding format from
+ponytail (both MIT), rewritten here; neither is installed.
+
 ### Subagent policy
 
 The rules live in `policy.toml`; the script only interprets them.

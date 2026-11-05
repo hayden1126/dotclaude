@@ -138,6 +138,11 @@ validated (`report_ok`).
   verification yourself, and merge single-threaded.
 - **Reader:** if its output must survive this session, write the report to the artifact
   path yourself. Readers have no write tools.
+- **Reviewer:** run each finding's command before acting on it, and drop what doesn't
+  reproduce. A planned independent review that can't run keeps the gate closed: record
+  `BLOCKED: independent review` in your Asks for Hayden (no lane: tell Hayden), and don't ask
+  for ready until Hayden waives it. The author's own session doesn't count as independent, and
+  green tests aren't a review. A fast-track change with no review step is exempt.
 
 ## 4. Liveness and recovery
 
