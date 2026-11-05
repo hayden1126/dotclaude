@@ -203,6 +203,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **dotclaude on a Mac** (Hayden, 2026-11-05: he may get a MacBook Pro and may share his setup
     with people on Macs). `setup.sh` has some Darwin branches but has never been run there, and
     hooks and notifiers lean on WSL. Pairs with [[hayden-new-device-goal]]. After lane hackathon.
+  - **A README paragraph against the gaps-by-id rule** (lane deny-rules' reviewer, 2026-11-05).
+    Private: sandbox-audit FINDINGS, PG8. For lane practices, in its next PR.
   - **Who can turn the practices gate off** (Hayden, 2026-11-05: not any session without him).
     Private: sandbox-audit FINDINGS, PG1, with Hayden's picked fix. In lane deny-rules (Hayden,
     2026-11-05), with lane practices reviewing the engine change.
