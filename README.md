@@ -734,15 +734,19 @@ need nothing extra.
   - **SEC-64:** a Bash call that adds a named package (`npm`, `pnpm`, `yarn` or `bun` add or
     install, `pip install`, `uv add`, `poetry add`, `cargo add`, `bundle add`, `gem install`,
     `composer require`) is denied once per manager and package, unless the same simple command
-    turns scripts off (`--ignore-scripts`, `--only-binary :all:`) or, for the npm family, an
-    earlier Bash call inspected it (`npm view <pkg> scripts`, `npm pack <pkg>`). The deny names the package and the check, and the resend passes. Restores
-    (a bare install, `npm ci`, `pip install -r`, a local path) never fire. A form it can't read
-    (an expansion, a URL, `xargs`) passes, logged as `install-skipped`.
+    turns scripts off (`--ignore-scripts`, `--only-binary :all:`, `--no-build` for `uv`) or, for
+    the npm family, an earlier Bash call showed the scripts of that version (`npm view <pkg>
+    scripts`, or `tar` extracting its tarball). The deny names the package and the check, and the
+    resend passes. Restores (a bare install, `npm ci`, `pip install -r`, a local path) never fire.
+    `npm view <pkg> scripts` shows only that package's own scripts; only `--ignore-scripts` covers
+    its dependencies. The rule reads the common spellings and is a prompt to check, not a boundary.
 
   Events match on the path or on the file as it will read after the edit. L1 and L2 don't judge a
-  file written through Bash; L3s sees its content at commit and push. The Bash levels read git
-  objects only (no index, no working tree, no program a repo's config names), never echo a matched
-  value, and sit behind a shell prefilter, so Python starts only for a command that names git
+  file written through Bash; L3s sees its content at commit and push. The git levels read git
+  objects only (no index, no working tree, no program a repo's config names) and never echo a
+  matched value; SEC-64 names the package and, when it is plain, the version spec, and no other
+  command text. All of them sit behind a shell prefilter, so Python starts only for a command
+  that names git
   with commit or push, gh with pr ready or create, or a package manager with an add verb. The
   Bash reader follows chains, wrappers
   (`sudo`, `env`, `time`; `env -C` and `sudo -D` move the cwd), a `cd` (only to the end of its

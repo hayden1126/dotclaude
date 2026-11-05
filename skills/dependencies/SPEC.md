@@ -26,16 +26,16 @@ Why this one: `npm install x` runs x's lifecycle scripts as part of the install,
 | L4 | The gate line after a compaction, when the skill was loaded | SessionStart(compact) |
 
 What the engine reads:
-- **Adds:** `npm`, `pnpm`, `yarn` and `bun` `add`, `install`, `i` and npm's other spellings; `pip`, `pip3`, `python3 -m pip` and `uv pip` `install`; `uv`, `poetry`, `cargo` and `bundle` `add`; `gem install`; `composer require`. `go get` runs no code at install, so it isn't read.
+- **Adds:** `npm`, `pnpm`, `yarn` and `bun` `add`, `install`, `i` and npm's other spellings; `yarn workspace <name> add`; `pip`, `pip3`, `pip3.12`, `python3 -m pip`, `python3.12 -m pip` and `uv pip` `install`; `uv`, `poetry`, `cargo` and `bundle` `add`; `gem install`; `composer require`. `go get` runs no code at install, so it isn't read.
 - **Restores, never denied:** a bare install, `npm ci`, `pip install -r file`, `uv sync`, `poetry install`, `bundle install`, a local path, `pip install -e .`.
-- **Scripts off, never denied:** `--ignore-scripts` in the same simple command for the npm family, `--only-binary :all:` for pip and uv.
-- **Inspected, never denied (npm family only):** `npm view <pkg>` naming `scripts` or with `--json` and no named fields, `npm pack <pkg>`, or `tar`, `curl` or `wget` naming its tarball, in an earlier Bash call whose result isn't an error. A step of the same call doesn't count: `npm view x scripts && npm i x` runs the script before anyone reads the output. Named fields print only those, so `npm view <pkg> main --json` doesn't count.
+- **Scripts off, never denied:** in the same simple command, `--ignore-scripts` for npm, pnpm, bun and Yarn 1 (`--mode skip-build` for later Yarn), `--only-binary :all:` for pip and uv pip, `--no-build` for uv (`uv add` has no `--only-binary`).
+- **Inspected, never denied (npm family only):** `npm view` or `pnpm view` (with `info`, `show` or `v`), `yarn info` or `bun info`, naming `scripts` or with `--json` and no named fields, or `tar` extracting or printing its tarball, in an earlier Bash call whose result isn't an error. `npm pack`, `curl`, `wget`, `tar -t` and `tar -c` show no script and don't count. Neither does a step of the same call or a call in the same assistant message: the model reads that output only after the install has run the script. Neither does output sent away (stdout redirected, `run_in_background`), or a look naming a version spec other than the install's: `npm view x@1.0.0 scripts` then `npm i x` is denied. Named fields print only those, so `npm view <pkg> main --json` doesn't count.
 - **Other managers:** no way to inspect was measured for them, so the deny-once alone applies.
-- **The deny:** names only the package, when it matches a strict name pattern, and the check. The resend passes, and the next new package is denied again.
-- **What passes, logged as `install-skipped`:** a word no pattern fits (an expansion, a URL, a git shorthand) and an install inside a launcher (`xargs`, `find -exec`, `sh -c` with an expansion).
+- **The deny:** names only the package and, when each matches a strict pattern, its version spec (`npm view x@1.0.0 scripts`), and the check. A word that could be an option's value is never named or stored. The resend passes, and the next new package is denied again.
 
-Accepted limits:
-- A resend passes unread. The rule costs one round trip and asks for an honest reply; it doesn't block.
+Notes:
+- The rule reads the common spellings and is a prompt to check, not a boundary. A resend passes unread: it costs one round trip and asks for an honest reply.
+- `npm view x scripts` shows only x's own scripts. A dependency's install scripts run on `npm i x` too, and only `--ignore-scripts` covers them. A reply must not say "no scripts" as if that were the whole tree.
 - `cargo add` runs no code itself; `build.rs` runs at the next build. It is in the rule because the next build runs it unread.
 - bun and current pnpm skip a dependency's lifecycle scripts by default, per their documentation. The rule denies once for them anyway: a repo's config can turn the scripts back on, and the engine doesn't read it.
 
@@ -45,7 +45,7 @@ Measured with no skill and no hook (5 runs per model): an install script run unr
 
 **Unmeasured:**
 - Whether the skill and the deny improve the install-script result: this file ships before that run.
-- Every manager but npm. The rule's forms for the others come from their documentation.
+- Every manager but npm. The rule's forms for the others come from their documentation. The `uv`, `pnpm` and `bun` options were read from their `--help`; `yarn` wasn't installed where this was written.
 - A plausible made-up name, as opposed to the easy lookalike that was measured.
 - The licence line, and the recipes in `references/lifecycle.md`.
 
