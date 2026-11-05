@@ -1,8 +1,9 @@
 """bin/npx: the shim setup.sh links into ~/.local/bin ahead of the real npx (stdlib only). Claude
 Code starts stdio MCP servers in the project dir, which sandboxed Bash and the file tools can
 write, and npx prefers that dir's node_modules and .npmrc (sandbox gap N2). For a launch by Claude
-Code, or an exact-version spec, the shim puts --prefix=/ first, so npx reads neither; anything
-else reaches the real npx untouched.
+Code, or an exact-version spec, the shim puts --prefix=/ first, so npx takes no package from there
+and reads no .npmrc. A launch by Claude Code also starts at / (sandbox gap SW1) and refuses a dot
+path, which would resolve there. Anything else keeps its cwd.
 
 Each test runs the shim with a fake real npx later on PATH that prints its args, one per line."""
 import os
@@ -15,6 +16,9 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 SHIM = os.path.join(REPO, "bin", "npx")
 PREFIX = "--prefix=/"
 MARKER = b"dotclaude-npx-shim"
+DAEMON_DIRS = (".local", "share", "claude", "versions")
+DOT_PATHS = (".", "..", "./x", "../x", "./", "--root=.", "--root=./x", "--root=../x", "--root=..",
+             "./a=b", "--mount=src=.", "a=b=./c")
 
 
 def is_a_shim(path):
@@ -24,6 +28,12 @@ def is_a_shim(path):
             return MARKER in f.read(4096)
     except OSError:
         return False
+
+
+def bare_path():
+    """PATH without any installed shim, this checkout's or another's, for a control run."""
+    return os.pathsep.join(d for d in os.environ["PATH"].split(os.pathsep)
+                           if not is_a_shim(os.path.join(d, "npx")))
 
 
 class NpxShim(unittest.TestCase):
@@ -42,15 +52,24 @@ class NpxShim(unittest.TestCase):
         # The shim dir twice, as on HAYPC where ~/.local/bin is listed twice.
         self.path = os.pathsep.join([self.shim_dir, self.shim_dir, self.real_dir, "/usr/bin",
                                      "/bin"])
+        self.pwd_dir = os.path.join(self.tmp, "pwd bin")
+        os.makedirs(self.pwd_dir)
+        with open(os.path.join(self.pwd_dir, "npx"), "w") as f:
+            f.write('#!/bin/sh\npwd -P\nfor a; do printf "%s\\n" "$a"; done\n')
+        os.chmod(os.path.join(self.pwd_dir, "npx"), 0o755)
+        self.pwd_path = os.pathsep.join([self.shim_dir, self.pwd_dir, "/usr/bin", "/bin"])
+        self.proj = os.path.realpath(os.path.join(self.tmp, "up", "proj"))
+        os.makedirs(self.proj)
 
-    def npx(self, *args, parent=None, path=None, script='"$0" "$@"; :', argv1=None):
-        """The args the real npx got, run as `npx` from PATH; with parent, from a process of
-        that name (Claude Code's comm is `claude`). With argv1, the parent runs that script
-        file (after any options in a list) in place of `-c script`."""
+    def run_npx(self, *args, parent=None, path=None, script='"$0" "$@"; exit $?', argv1=None,
+                cwd=None):
+        """The finished run of `npx` from PATH; with parent, from a process of that name (Claude
+        Code's comm is `claude`). With argv1, the parent runs that script file (after any options
+        in a list) in place of `-c script`."""
         env = {"PATH": path or self.path, "HOME": self.tmp}
         cmd = ["npx", *args]
         if parent:
-            # A bash named `parent` runs the shim as a child; the trailing `:` stops bash from
+            # A bash named `parent` runs the shim as a child; the trailing `exit` stops bash from
             # exec-ing it in place, which would make the shim's parent bash's own parent.
             named = os.path.join(self.tmp, parent)
             if not os.path.lexists(named):
@@ -59,10 +78,36 @@ class NpxShim(unittest.TestCase):
                 cmd = [named, "-c", script, *cmd]
             else:
                 cmd = [named, *([argv1] if isinstance(argv1, str) else argv1), *cmd]
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=10, env=env)
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=10, env=env, cwd=cwd)
+
+    def npx(self, *args, **kw):
+        """The args the real npx got."""
+        p = self.run_npx(*args, **kw)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(p.stderr, "")
         return p.stdout.splitlines()
+
+    def npx_from_proj(self, *args, **kw):
+        """(the cwd the real npx ran in, the args it got), started from the project dir."""
+        out = self.npx(*args, path=self.pwd_path, cwd=self.proj, **kw)
+        return out[0], out[1:]
+
+    def npm_claude_cli(self):
+        """Claude Code's cli.js as npm installs it, run by a bash named `node` (see below)."""
+        pkg = os.path.join(self.tmp, "lib", "node_modules", "@anthropic-ai", "claude-code")
+        os.makedirs(pkg, exist_ok=True)
+        cli = os.path.join(pkg, "cli.js")
+        with open(cli, "w") as f:
+            f.write('"$@"; exit $?\n')
+        return cli
+
+    def bash_in(self, *dirs):
+        """A copy of bash named for the daemon's versioned path, under the given dirs."""
+        where = os.path.join(self.tmp, *dirs)
+        os.makedirs(where, exist_ok=True)
+        copy = os.path.join(where, "2.1.302")
+        shutil.copy(shutil.which("bash"), copy)
+        return copy
 
     def test_an_exact_version_skips_the_project_dir(self):
         self.assertEqual(self.npx("chrome-devtools-mcp@1.11.0"),
@@ -90,7 +135,14 @@ class NpxShim(unittest.TestCase):
                      ["--cache", "/c", "-y", "pkg@1.2.3"], ["-p", "pkg@1.2.3", "cmd"],
                      ["--package=pkg@1.2.3", "cmd"], ["pkg@v1.2.3"],
                      ["--tag", "latest", "pkg@1.2.3"], ["--before", "2026-01-01", "pkg@1.2.3"],
-                     ["--omit", "dev", "--include", "peer", "--location", "user", "pkg@1.2.3"]):
+                     ["--omit", "dev", "--include", "peer", "--location", "user", "pkg@1.2.3"],
+                     ["-p=pkg@1.2.3", "cmd"]):
+            self.assertEqual(self.npx(*args), [PREFIX, *args], args)
+        for option in ("-c", "--call", "--registry", "--cache", "--prefix", "--userconfig",
+                       "--globalconfig", "--loglevel", "-w", "--workspace", "--node-options",
+                       "--script-shell", "--before", "--tag", "--omit", "--include", "--location",
+                       "--shell", "--npm", "--node-arg", "-n"):
+            args = [option, "value", "pkg@1.2.3"]
             self.assertEqual(self.npx(*args), [PREFIX, *args], args)
 
     def test_an_unpinned_package_option_reaches_npx_untouched(self):
@@ -100,11 +152,7 @@ class NpxShim(unittest.TestCase):
         # comm is `node`, and node runs Claude Code's cli.js, through the `claude` link npm
         # puts on PATH or by its own path. A bash named `node` stands in: its script file is
         # its first argument, as node's is, and an option before it is skipped.
-        pkg = os.path.join(self.tmp, "lib", "node_modules", "@anthropic-ai", "claude-code")
-        os.makedirs(pkg)
-        cli = os.path.join(pkg, "cli.js")
-        with open(cli, "w") as f:
-            f.write('"$@"; :\n')
+        cli = self.npm_claude_cli()
         link = os.path.join(self.tmp, "claude-link")
         os.symlink(cli, link)
         on_path = os.path.join(self.tmp, "bin", "claude")
@@ -115,9 +163,14 @@ class NpxShim(unittest.TestCase):
                              [PREFIX, "some-mcp"], script)
         self.assertEqual(self.npx("some-mcp", parent="node", argv1=["--norc", cli]),
                          [PREFIX, "some-mcp"])
+        named = os.path.join(self.tmp, "elsewhere", "claude")  # by its name, not by its package
+        os.makedirs(os.path.dirname(named))
+        with open(named, "w") as f:
+            f.write('"$@"; exit $?\n')
+        self.assertEqual(self.npx("some-mcp", parent="node", argv1=named), [PREFIX, "some-mcp"])
         other = os.path.join(self.tmp, "server.js")
         with open(other, "w") as f:
-            f.write('"$@"; :\n')
+            f.write('"$@"; exit $?\n')
         self.assertEqual(self.npx("some-mcp", parent="node", argv1=other), ["some-mcp"])
         self.assertEqual(self.npx("some-mcp", parent="node"), ["some-mcp"])
 
@@ -128,19 +181,13 @@ class NpxShim(unittest.TestCase):
     def test_a_session_the_daemon_runs_counts_too(self):
         # Exec'd by its versioned path: comm is the version, the executable is in versions/.
         # A copy of bash there, since /proc's exe resolves a link to the real bash.
-        versions = os.path.join(self.tmp, ".local", "share", "claude", "versions")
-        os.makedirs(versions)
-        shutil.copy(shutil.which("bash"), os.path.join(versions, "2.1.302"))
-        elsewhere = os.path.join(self.tmp, "other")
-        os.makedirs(elsewhere)
-        shutil.copy(shutil.which("bash"), os.path.join(elsewhere, "2.1.302"))
         script = '"$0" "$@"; :'
-        p = subprocess.run([os.path.join(versions, "2.1.302"), "-c", script, "npx", "some-mcp"],
+        p = subprocess.run([self.bash_in(*DAEMON_DIRS), "-c", script, "npx", "some-mcp"],
                            capture_output=True, text=True, timeout=10,
                            env={"PATH": self.path, "HOME": self.tmp})
         self.assertEqual((p.returncode, p.stdout.splitlines()), (0, [PREFIX, "some-mcp"]),
                          p.stderr)
-        p = subprocess.run([os.path.join(elsewhere, "2.1.302"), "-c", script, "npx", "some-mcp"],
+        p = subprocess.run([self.bash_in("other"), "-c", script, "npx", "some-mcp"],
                            capture_output=True, text=True, timeout=10,
                            env={"PATH": self.path, "HOME": self.tmp})
         self.assertEqual(p.stdout.splitlines(), ["some-mcp"], p.stderr)
@@ -157,6 +204,12 @@ class NpxShim(unittest.TestCase):
     def test_another_parent_is_not_claude_code(self):
         self.assertEqual(self.npx("some-mcp", parent="claudex"), ["some-mcp"])
 
+    def test_a_dir_named_npx_is_not_the_real_npx(self):
+        dir_ahead = os.path.join(self.tmp, "dir ahead")
+        os.makedirs(os.path.join(dir_ahead, "npx"))
+        path = os.pathsep.join([self.shim_dir, dir_ahead, self.real_dir, "/usr/bin", "/bin"])
+        self.assertEqual(self.npx("tsc", path=path), ["tsc"])
+
     def test_no_real_npx_fails_with_127(self):
         bash_dir = os.path.join(self.tmp, "bash only")  # env finds bash, nothing finds npx
         os.makedirs(bash_dir)
@@ -167,11 +220,128 @@ class NpxShim(unittest.TestCase):
         self.assertEqual(p.returncode, 127)
         self.assertIn("no npx on PATH", p.stderr)
 
+    def test_a_launch_by_claude_code_starts_at_root(self):
+        self.assertEqual(self.npx_from_proj("-y", "some-mcp", parent="claude"),
+                         ("/", [PREFIX, "-y", "some-mcp"]))
+        self.assertEqual(self.npx_from_proj("pkg@1.2.3", parent="claude"),
+                         ("/", [PREFIX, "pkg@1.2.3"]))
+        self.assertEqual(self.npx_from_proj("some-mcp", parent="node",
+                                            argv1=self.npm_claude_cli()),
+                         ("/", [PREFIX, "some-mcp"]))
+        p = subprocess.run([self.bash_in(*DAEMON_DIRS), "-c", '"$0" "$@"; :', "npx", "some-mcp"],
+                           capture_output=True, text=True, timeout=10, cwd=self.proj,
+                           env={"PATH": self.pwd_path, "HOME": self.tmp})
+        self.assertEqual(p.stdout.splitlines(), ["/", PREFIX, "some-mcp"], p.stderr)
+
+    def test_any_other_launch_keeps_its_cwd(self):
+        # Hayden's own `npx tool@1.2.3 ./x` must still find the path.
+        self.assertEqual(self.npx_from_proj("pkg@1.2.3", "./rel"),
+                         (self.proj, [PREFIX, "pkg@1.2.3", "./rel"]))
+        self.assertEqual(self.npx_from_proj("tsc", "--version"),
+                         (self.proj, ["tsc", "--version"]))
+        self.assertEqual(self.npx_from_proj("some-mcp", parent="claudex"),
+                         (self.proj, ["some-mcp"]))
+
+    def test_a_dot_path_on_a_launch_by_claude_code_is_refused(self):
+        # From /, a server given `.` would get the whole disk, with no error.
+        for arg in DOT_PATHS:
+            for args in ((arg, "some-mcp"), ("some-mcp", arg), ("-y", "pkg@1.2.3", "--x", arg)):
+                p = self.run_npx(*args, parent="claude", cwd=self.proj, path=self.pwd_path)
+                self.assertEqual((p.returncode, p.stdout), (1, ""), args)  # real npx didn't run
+                self.assertIn(arg, p.stderr)
+                self.assertIn("absolute path", p.stderr)
+
+    def test_other_arguments_on_a_launch_by_claude_code_pass(self):
+        for arg in (".env", "...", ".foo/bar", "src/x", "/abs/./x", "--a=b", "--a=.env", "x.",
+                    "--port=8080", ""):
+            self.assertEqual(self.npx("some-mcp", arg, parent="claude"),
+                             [PREFIX, "some-mcp", arg], arg)
+
+    def test_a_dot_path_on_any_other_launch_passes(self):
+        for args in (["eslint", "."], ["prettier@3.0.0", "--write", "."], ["tsc", "-p", "./x"]):
+            out = self.npx(*args)
+            self.assertEqual(out[-len(args):], args, args)
+
+    def test_the_shim_runs_nothing_from_the_cwd_by_a_relative_path_entry(self):
+        # Empty, dot and named entries, after the shim's own dir so the launch still finds it.
+        os.makedirs(os.path.join(self.proj, "rel"))
+        log = os.path.join(self.tmp, "ran.log")
+        for name in ("cat", "readlink", "npx", "rel/readlink", "rel/npx"):
+            tool = os.path.join(self.proj, name)
+            with open(tool, "w") as f:
+                f.write(f'#!/bin/sh\necho {name} >>"{log}"\n')
+            os.chmod(tool, 0o755)
+        for entry in ("", ".", "rel"):
+            path = os.pathsep.join([self.shim_dir, entry, self.pwd_dir, "/usr/bin", "/bin"])
+            self.assertEqual(self.npx("some-mcp", parent="claude", cwd=self.proj, path=path),
+                             ["/", PREFIX, "some-mcp"], entry)
+            self.assertFalse(os.path.exists(log), entry)
+
+    def test_a_launch_by_claude_code_is_known_without_cat(self):
+        bash_dir = os.path.join(self.tmp, "bash only")
+        os.makedirs(bash_dir)
+        os.symlink(shutil.which("bash"), os.path.join(bash_dir, "bash"))
+        path = os.pathsep.join([self.shim_dir, self.pwd_dir, bash_dir])
+        self.assertEqual(self.npx("some-mcp", parent="claude", cwd=self.proj, path=path),
+                         ["/", PREFIX, "some-mcp"])
+
+    def real_npx(self, args, parent=None, shimmed=True):
+        """A clean run of the real npx from the project dir, through the shim unless shimmed is
+        False; with parent, from a bash of that name standing in for Claude Code. Its home, cache
+        and npm settings are the test's own, and it installs nothing."""
+        bare = bare_path()
+        if not shutil.which("npx", path=bare):
+            self.skipTest("npx not installed")
+        cmd = ["npx", *args]
+        if parent:
+            named = os.path.join(self.tmp, parent)
+            if not os.path.lexists(named):
+                os.symlink(shutil.which("bash"), named)
+            cmd = [named, "-c", '"$0" "$@"; exit $?', *cmd]
+        path = os.pathsep.join([self.shim_dir, bare]) if shimmed else bare
+        env = {k: v for k, v in os.environ.items() if not k.lower().startswith("npm_config_")}
+        env.update(PATH=path, HOME=self.tmp, npm_config_update_notifier="false",
+                   npm_config_cache=os.path.join(self.tmp, "npm cache"))
+        p = subprocess.run(cmd, cwd=self.proj, capture_output=True, text=True, timeout=60, env=env)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return p
+
+    def test_a_launch_by_claude_code_leaves_the_project_off_path(self):
+        up = os.path.dirname(self.proj)
+        chain = [os.path.join(d, "node_modules", ".bin") for d in (self.proj, up)]
+        args = ["-c", 'pwd; printf "%s\\n" "$PATH"']
+        control = self.real_npx(args, shimmed=False).stdout.splitlines()
+        self.assertEqual(control[0], self.proj)
+        for d in chain:
+            self.assertIn(d, control[1].split(os.pathsep))
+        out = self.real_npx(args, parent="claude").stdout.splitlines()
+        self.assertEqual(out[0], "/")
+        for d in chain:
+            self.assertNotIn(d, out[1].split(os.pathsep))
+
+    def test_a_launch_by_claude_code_runs_no_planted_tool(self):
+        args = ["-c", 'node -e "console.log(1)"']
+        log = os.path.join(self.tmp, "planted.log")
+        for where in (self.proj, os.path.dirname(self.proj)):
+            bindir = os.path.join(where, "node_modules", ".bin")
+            os.makedirs(bindir)
+            for name in ("sh", "node"):
+                tool = os.path.join(bindir, name)
+                with open(tool, "w") as f:
+                    f.write(f'#!/bin/sh\necho {name} >>"{log}"\n')
+                os.chmod(tool, 0o755)
+                self.real_npx(args, shimmed=False)
+                with open(log) as f:
+                    self.assertEqual(f.read().split(), [name], where)  # the plant works
+                os.remove(log)
+                p = self.real_npx(args, parent="claude")
+                self.assertFalse(os.path.exists(log), (where, name))
+                self.assertEqual(p.stdout.strip(), "1", p.stderr)
+                os.remove(tool)
+
     def test_the_planted_tree_does_not_run(self):
         # The real npx, offline: a planted ./node_modules/semver must lose to the npx cache.
-        # PATH without any installed shim, this checkout's or another's, for the control run.
-        bare = os.pathsep.join(d for d in os.environ["PATH"].split(os.pathsep)
-                               if not is_a_shim(os.path.join(d, "npx")))
+        bare = bare_path()
         if not shutil.which("npx", path=bare):
             self.skipTest("npx not installed")
         proj = os.path.join(self.tmp, "proj")

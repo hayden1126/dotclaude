@@ -7,7 +7,10 @@
 # project, where only root can create either. The flag must come before the spec, or npx hands
 # it to the package. It also makes / npm's global prefix for that run (globals under
 # /lib/node_modules, global config /etc/npmrc, npm_config_prefix=/ in the package's env).
-# Anything else, such as Hayden's own `npx tsc` in a project, reaches the real npx untouched.
+# A launch by Claude Code also starts at / (sandbox gap SW1), so the server's cwd is / too, and a
+# dot path, which would then name / or a dir under it with no error, is refused. Anything else,
+# such as Hayden's own `npx tsc` or `npx tool@1.2.3 ./x` in a project, keeps its cwd, and without
+# an exact version reaches the real npx untouched.
 # tests/setup/test_npx_shim.py holds the cases.
 # dotclaude-npx-shim: setup.sh and the tests know this shim, or a copy of it, by this line.
 set -uo pipefail
@@ -27,12 +30,16 @@ is_a_shim() {
 real=""
 IFS=: read -ra dirs <<<"$PATH"
 for d in "${dirs[@]}"; do
-  [[ $d == /* && -x $d/npx ]] || continue
+  [[ $d == /* && -f $d/npx && -x $d/npx ]] || continue
   is_a_shim "$d/npx" && continue
   real="$d/npx"
   break
 done
 [[ -n $real ]] || { echo "npx shim: no npx on PATH besides this shim" >&2; exit 127; }
+abs=""
+for d in "${dirs[@]}"; do
+  [[ $d == /* ]] && abs+=":$d"
+done
 
 # Claude Code is the native binary (comm `claude`; a session the daemon runs is exec'd by its
 # versioned path, so its comm is the version and its executable sits in claude/versions/) or,
@@ -42,7 +49,7 @@ done
 # elsewhere (macOS: its comm is the executable's path, its args come space-joined).
 parent_is_claude() {
   local comm exe a script="" words
-  comm="$(cat "/proc/$PPID/comm" 2>/dev/null || ps -o comm= -p "$PPID" 2>/dev/null)"
+  { read -r comm <"/proc/$PPID/comm"; } 2>/dev/null || comm="$(ps -o comm= -p "$PPID" 2>/dev/null)"
   exe="$(readlink "/proc/$PPID/exe" 2>/dev/null)" || exe="$comm"
   [[ $exe == */claude/versions/* ]] && return 0
   comm="${comm##*/}"
@@ -64,8 +71,8 @@ parent_is_claude() {
   [[ $script == */@anthropic-ai/claude-code/* ]]
 }
 
-# The package spec: a -p/--package value, else the first operand. The value of an option npm
-# reads one for is skipped, so it is never taken for the spec.
+# The package spec: a -p/--package value, else the first operand. The value of an option on the
+# list, npx's own and the common npm ones, is skipped, so it is never taken for the spec.
 spec=""
 for ((i = 1; i <= $#; i++)); do
   a="${!i}"
@@ -73,8 +80,10 @@ for ((i = 1; i <= $#; i++)); do
     --) ((i++)); spec="${!i-}"; break ;;
     -p|--package) ((i++)); spec="${!i-}"; break ;;
     --package=*) spec="${a#--package=}"; break ;;
+    -p=*) spec="${a#-p=}"; break ;;
     -c|--call|--registry|--cache|--prefix|--userconfig|--globalconfig|--loglevel|-w|--workspace|\
-    --node-options|--script-shell|--before|--tag|--omit|--include|--location)
+    --node-options|--script-shell|--before|--tag|--omit|--include|--location|--shell|--npm|\
+    --node-arg|-n)
       ((i++)) ;;
     -*) ;;
     *) spec="$a"; break ;;
@@ -82,7 +91,18 @@ for ((i = 1; i <= $#; i++)); do
 done
 exact='^(@[^/@]+/)?[^/@]+@v?[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]*)?$'
 
-if [[ $spec =~ $exact ]] || parent_is_claude; then
+# The check runs commands from the cwd it hasn't left yet, so never by a relative PATH entry.
+# Exit 1, not 2: a hook's exit 2 is Claude Code's code for blocking.
+if (PATH="${abs#:}"; parent_is_claude); then
+  for a in "$@"; do
+    case "$a" in
+      .|..|./*|../*|*=.|*=..|*=./*|*=../*)
+        echo "npx shim: a launch by Claude Code starts at /, so use an absolute path, not: $a" >&2
+        exit 1 ;;
+    esac
+  done
+  cd / || exit 1
   exec "$real" --prefix=/ "$@"
 fi
+[[ $spec =~ $exact ]] && exec "$real" --prefix=/ "$@"
 exec "$real" "$@"
