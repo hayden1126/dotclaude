@@ -2016,7 +2016,8 @@ class HostilePadding(Base):
                               ("export", "export " + "\n" * 200_000),
                               ("await", "await " + " \n" * 100_000),
                               ("braces", ("{" * 3999 + "\n") * 64),
-                              ("data", ("data=" * 799 + "\n") * 64)):
+                              ("data", ("data=" * 799 + "\n") * 64),
+                              ("in-line runs", ("export" + " " * 3993 + "x\n") * 64)):
             with self.subTest(name):
                 started = time.monotonic()
                 reason = self.fire(f"lib/{name.replace(chr(32), chr(95))}.ts", padding + code)

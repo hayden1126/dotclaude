@@ -72,7 +72,7 @@ CLAUDE_JSON_MAX = 64 << 20
 WALK_DEPTH = 8
 WALK_DIRS = 20000
 # Files a command names that hold no code.
-DATA_FILE = re.compile(r"\.(?:json|ya?ml|toml|ini|conf|txt|md|csv|env)$", re.I)
+DATA_FILE = re.compile(r"\.(?:json|ya?ml|toml|txt|md|csv)$", re.I)
 ONLY_THIS = "; a rule on this path alone: what sits beside it stays open"
 
 
@@ -130,6 +130,8 @@ class Scan:
         runs out counts as no: past WALK_DIRS it is a tool's install, and the rule's cost, a repo
         gone read-only, shows at once, while a missing rule never does."""
         top = os.path.realpath(root)
+        if under(top, "/mnt"):  # a walk over the Windows mount takes minutes
+            return False
         if top in self.holds:
             return self.holds[top]
         left, queue, found = WALK_DIRS, collections.deque([(top, 0)]), False
@@ -174,7 +176,8 @@ class Scan:
     def narrowed(self, p, root):
         """The widest of root, p's dir and p that holds no checkout, or None."""
         for d in (root, os.path.dirname(p), p):
-            if (under(d, root) and d not in (self.home, os.path.realpath(self.home))
+            if (under(d, root) and not self.must_stay_open(d)
+                    and not self.must_stay_open(os.path.realpath(d))
                     and not self.holds_checkout(d)):
                 return d
         return None
@@ -183,8 +186,7 @@ class Scan:
         if self.raw != self.home and under(p, self.raw):  # home's own link is home
             p = os.path.join(self.home, os.path.relpath(p, self.raw))
         real = os.path.realpath(p)  # a rule on a link's name acts on what it points at
-        if (any(under(p, s) for s in self.skip) or under(p, "/mnt") or under(real, "/mnt")
-                or self.covered(p) or self.covered(real)):
+        if any(under(p, s) for s in self.skip) or under(p, "/mnt") or self.covered(p):
             return
         if any(under(real, s) for s in self.skip):  # its own name's rule would take that tree
             self.odd.setdefault(p, f"{why}, a link into a checkout denyWrite covers")
@@ -482,7 +484,8 @@ def main(argv):
               "works in, or one an excluded command runs from, the rule is right despite that:")
         for root, paths in sorted(scan.by_checkout().items()):
             print(f"  {show(root)}: {len(paths)} path(s), such as {show(paths[0])}")
-            if PLAIN.fullmatch(root) and not scan.must_stay_open(root):
+            if (PLAIN.fullmatch(root) and not scan.must_stay_open(root)
+                    and not scan.must_stay_open(os.path.realpath(root))):
                 print(f"    {scan.rule_for(root)}")
     if scan.odd:
         print("deny-coverage: paths no rule can cover (the name can't be written as one, or a rule "

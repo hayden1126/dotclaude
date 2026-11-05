@@ -487,10 +487,36 @@ class DenyCoverage(unittest.TestCase):
         out = self.run_it()
         self.assertIn(f"Edit(~/notes/**) is what {self.home}/.x links to", out)
 
-    def test_a_link_into_mnt_is_skipped(self):
-        target = "/mnt/deny-coverage-test-absent"
-        os.symlink(target, os.path.join(self.home, ".win"))
-        self.assertEqual(self.run_it(), "")
+    def test_the_repo_walk_stays_out_of_mnt(self):
+        m = self.module()
+        with mock.patch.object(m.os, "scandir", side_effect=AssertionError("walked")):
+            self.assertFalse(m.Scan([], self.home, []).holds_checkout("/mnt/c/Users/x"))
+
+    def test_a_rule_on_a_link_to_what_must_stay_open_never_prints(self):
+        self.write(".claude/tool/run", "#!/bin/sh\n")
+        self.mk(".claude/projects")
+        os.symlink(os.path.join(self.home, ".claude"), os.path.join(self.home, ".c"))
+        os.symlink(self.home, os.path.join(self.home, ".h"))
+        self.write("s2.sh", "")
+        out = self.run_with(self.settings_with(hooks={"Stop": [{"hooks": [
+            {"command": "~/.c/tool/run"}, {"command": "~/.h/s2.sh"}]}]}))
+        self.assertNotIn("Edit(~/.c/**)", out)
+        self.assertNotIn("Edit(~/.h/**)", out)
+        self.assertIn('"Edit(~/.c/tool/**)"', out)     # narrowed to what the hook runs
+
+    def test_a_middle_link_with_a_covered_target_keeps_its_rule(self):
+        self.write(".tool/t", "#!/bin/sh\n")
+        self.mk("tools/x")
+        os.symlink(os.path.join(self.home, ".tool/t"), os.path.join(self.home, "tools/x/cur"))
+        self.link("tools/x/cur", "t")
+        self.assertIn('"Edit(~/tools/x/**)"',
+                      self.run_it(deny=[*self.deny, "Edit(~/.tool/**)"]))
+
+    def test_a_sourced_env_file_is_code(self):
+        self.write("tools/x/dev.env", "A=1\n", 0o644)
+        out = self.run_with(self.settings_with(hooks={"Stop": [{"hooks": [
+            {"command": ". ~/tools/x/dev.env && x"}]}]}))
+        self.assertIn("Edit(~/tools/x/**)", out)
 
     def test_a_path_link_into_a_skipped_checkout_is_named(self):
         self.write("dotclaude/bin/t", "#!/bin/sh\n")
@@ -499,14 +525,11 @@ class DenyCoverage(unittest.TestCase):
         self.assertNotIn("Edit(~/dotclaude", out)
         self.assertIn(".mybin", out)
 
-    def test_a_link_whose_target_is_covered_prints_nothing(self):
-        self.mk("dotfiles/.git")
-        self.mk("dotfiles/vim")
-        os.symlink(os.path.join(self.home, "dotfiles/vim"), os.path.join(self.home, ".vim"))
-        self.assertNotIn(".vim", self.run_it(deny=[*self.deny, "Edit(~/dotfiles/**)"]))
-
     def test_a_missing_home_is_no_crash(self):
-        r = subprocess.run([sys.executable, "-I", SCRIPT, "--settings", "/dev/null"],
+        settings = os.path.join(self.home, "s.json")
+        with open(settings, "w") as f:
+            f.write("{}")
+        r = subprocess.run([sys.executable, "-I", SCRIPT, "--settings", settings],
                            env={"HOME": os.path.join(self.home, "absent"), "PATH": self.bin},
                            capture_output=True, text=True, timeout=30)
         self.assertEqual(r.returncode, 0, r.stderr)
