@@ -10,6 +10,7 @@ MANUAL = ("interview", "hackathon", "demo-first-scope", "demo-video", "pitch", "
 AUTO = ("frontend-motion",)
 READS_THE_PROFILE = ("demo-first-scope", "demo-video", "pitch", "public-ready")
 DENYLIST = os.path.expanduser("~/scratch/hackathon/denylist.txt")
+EM_DASH = chr(0x2014)
 
 
 def skill_path(name, *rest):
@@ -28,7 +29,7 @@ def frontmatter(name):
 
 def text_files(name):
     for root, dirs, files in os.walk(skill_path(name)):
-        dirs[:] = [d for d in dirs if d != "node_modules"]
+        dirs[:] = [d for d in dirs if d not in ("node_modules", "__pycache__")]
         for f in files:
             if not f.startswith("LICENSE"):
                 yield os.path.join(root, f)
@@ -63,7 +64,16 @@ class StandsAlone(unittest.TestCase):
         for name in MANUAL + AUTO:
             for path in text_files(name):
                 with self.subTest(path=path):
-                    self.assertNotIn("—", read(path))
+                    self.assertNotIn(EM_DASH, read(path))
+
+    def test_no_em_dashes_in_what_this_mode_added_elsewhere(self):
+        lines = [line for line in read(skill_path("frontend-ui-discipline", "SKILL.md")).splitlines()
+                 if "frontend-motion" in line or line.startswith("- **Reference first:**")]
+        lines += [line for line in read(os.path.join(REPO, "README.md")).splitlines()
+                  if line.startswith("| `tests/hackathon/`")]
+        self.assertGreaterEqual(len(lines), 3)
+        for line in lines:
+            self.assertNotIn(EM_DASH, line)
 
     def test_nothing_unpinned_or_unguarded_is_suggested(self):
         for name in MANUAL + AUTO:
@@ -80,7 +90,8 @@ class EventProfile(unittest.TestCase):
 
     def test_the_kickoff_ships_the_profile_template_with_its_fields(self):
         text = read(skill_path("hackathon", "templates", "EVENT.md")).lower()
-        for field in ("schedule", "deadline", "judging", "video", "submission", "licence", "hardware"):
+        for field in ("schedule", "deadline", "judging", "what must run live", "venue screen size",
+                      "video", "submission", "third-party", "licence", "hardware", "work allowed before"):
             with self.subTest(field):
                 self.assertIn(field, text)
 
@@ -104,37 +115,78 @@ class EventProfile(unittest.TestCase):
                     with self.subTest(name=name, other=other):
                         self.assertNotIn(f"{other}/SKILL.md", read(skill_path(name, "SKILL.md")))
 
+    def test_a_skill_that_points_at_another_asks_the_user_to_type_it(self):
+        for name in MANUAL:
+            text = read(skill_path(name, "SKILL.md"))
+            if any(f"`/{other}`" in text for other in MANUAL if other != name):
+                with self.subTest(name):
+                    self.assertRegex(text, r"\b(type|types|typed|type it)\b")
+
+    def test_a_no_pre_work_rule_is_held_where_building_starts(self):
+        for text in (read(skill_path("hackathon", "SKILL.md")),
+                     read(skill_path("hackathon", "templates", "project-CLAUDE.md"))):
+            self.assertIn("forbids work before the start", text)
+            self.assertIn("design only", text)
+
+    def test_public_ready_undoes_the_mode_last(self):
+        after = read(skill_path("public-ready", "SKILL.md")).split("## After judging")[1]
+        steps = re.findall(r"(?m)^(\d)\. \*\*(.*?)\*\*", after)
+        self.assertEqual(steps[-1][0], "6")
+        self.assertIn("Undo the mode", steps[-1][1])
+
+    def test_pitch_does_not_assume_a_video(self):
+        text = read(skill_path("pitch", "SKILL.md"))
+        self.assertIn("if there is one", text)
+        self.assertIn("when there's no video", text)
+
 
 class Attribution(unittest.TestCase):
     def test_interview_keeps_its_seed_license(self):
         self.assertIn("Johnathan Mo", read(skill_path("interview", "LICENSE")))
+        self.assertIn("Permission is hereby granted", read(skill_path("interview", "LICENSE")))
         self.assertIn("Johnathan Mo", read(skill_path("interview", "SKILL.md")))
 
     def test_frontend_motion_keeps_both_licenses_and_pins_its_sources(self):
-        self.assertIn("Emil Kowalski", read(skill_path("frontend-motion", "LICENSE-animate")))
-        self.assertIn("Jakub Krehel", read(skill_path("frontend-motion", "LICENSE-better-ui")))
+        for name, author in (("LICENSE-animate", "Emil Kowalski"), ("LICENSE-better-ui", "Jakub Krehel")):
+            with self.subTest(name):
+                text = read(skill_path("frontend-motion", name))
+                self.assertIn(author, text)
+                self.assertIn("Permission is hereby granted", text)
         notice = read(skill_path("frontend-motion", "NOTICE"))
         for pin in ("e8a175d", "d574cc8"):
             with self.subTest(pin):
                 self.assertIn(pin, notice)
 
     def test_what_the_port_dropped_stays_out(self):
-        text = read(skill_path("frontend-motion", "SKILL.md"))
-        for gone in ("as a menu", "Initial Response", "review-animations", "pick-ui-library"):
-            with self.subTest(gone):
-                self.assertNotIn(gone, text)
+        for path in (skill_path("frontend-motion", "SKILL.md"), skill_path("frontend-motion", "references", "recipes.md")):
+            text = read(path)
+            for gone in ("as a menu", "Initial Response", "review-animations", "pick-ui-library", "playful"):
+                with self.subTest(path=path, gone=gone):
+                    self.assertNotIn(gone, text)
+
+    def test_no_bare_custom_property_at_a_stylesheets_top_level(self):
+        # A declaration outside a rule swallows the rule after it, so a pasted .card silently vanishes.
+        recipes = read(skill_path("frontend-motion", "references", "recipes.md"))
+        for block in re.findall(r"```css\n(.*?)```", recipes, re.S):
+            depth = 0
+            for line in block.splitlines():
+                if depth == 0:
+                    with self.subTest(line=line):
+                        self.assertNotRegex(line, r"^\s*--[\w-]+\s*:")
+                depth += line.count("{") - line.count("}")
 
 
 @unittest.skipUnless(os.path.exists(DENYLIST), "the private denylist isn't on this machine")
 class PrivateNames(unittest.TestCase):
     def test_no_denylisted_string_in_the_mode_files(self):
         terms = [t.strip().lower() for t in read(DENYLIST).splitlines() if t.strip()]
-        paths = [os.path.abspath(__file__)]
+        paths = [os.path.join(REPO, "README.md"), skill_path("frontend-ui-discipline", "SKILL.md")]
         for name in MANUAL + AUTO:
             paths += list(text_files(name))
+        for root, dirs, files in os.walk(os.path.dirname(os.path.abspath(__file__))):
+            dirs[:] = [d for d in dirs if d != "__pycache__"]
+            paths += [os.path.join(root, f) for f in files]
         for path in paths:
-            if path == os.path.abspath(__file__):
-                continue
             text = read(path).lower()
             for term in terms:
                 with self.subTest(path=path, term="(private)"):

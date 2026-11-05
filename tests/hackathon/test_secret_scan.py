@@ -6,6 +6,7 @@ import glob
 import os
 import random
 import re
+import shlex
 import shutil
 import string
 import subprocess
@@ -58,6 +59,11 @@ def planted():
 
 def private_key_line():
     return "-----BEGIN " + "RSA PRIVATE" + " KEY-----"
+
+
+def read_skill(name):
+    with open(os.path.join(REPO, "skills", name, "SKILL.md"), encoding="utf-8") as f:
+        return f.read()
 
 
 class ScanCase(unittest.TestCase):
@@ -748,6 +754,210 @@ class TheSkillsOwnFiles(ScanCase):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
 
 
+class Round2(ScanCase):
+    """Shapes real projects hold. Fake values are built at runtime, as everywhere in this file."""
+
+    def findings(self, line):
+        self.commit("cfg.txt", line + "\n", line)
+        p = self.scan()
+        self.git("rm", "-q", "cfg.txt")
+        self.git("commit", "-q", "-m", "gone")
+        self.git("update-ref", "refs/remotes/seen/main", "HEAD")  # the next scan reads only its own line
+        return p
+
+    def assert_found(self, lines):
+        for line, secret in lines:
+            with self.subTest(line):
+                p = self.findings(line)
+                self.assertEqual(p.returncode, 1, p.stdout)
+                self.assertNotIn(secret, p.stdout)
+
+    def assert_clean(self, lines):
+        for line in lines:
+            with self.subTest(line):
+                p = self.findings(line)
+                self.assertEqual(p.returncode, 0, p.stdout)
+
+    def test_a_secret_inside_another_names_value(self):
+        value = tail(24)
+        short = "hunter" + "2222"
+        self.assert_found([
+            (f'fetch("https://newsapi.org/v2/top?apiKey={value}")', value),
+            (f"run: API_KEY={value}", value),
+            (f"jdbc:postgresql://h/db?user=u&password={short}", short),
+            (f'cmd: "curl https://x.test/?token={value}&a=b"', value),
+        ])
+
+    def test_a_compound_name_in_one_word(self):
+        value = tail(24)
+        self.assert_found([(f"{name}={value}", value) for name in
+                           ("PGPASSWORD", "AUTHTOKEN", "CLIENTSECRET", "SECRETKEY", "dbpassword", "APITOKEN")])
+        plain = "sun" + "shine"
+        self.assert_found([(f"PGPASSWORD={plain}", plain)])
+
+    def test_words_that_only_end_like_a_secret_word(self):
+        value = tail(24)
+        self.assert_clean([f"{name} = {value}" for name in ("monkey", "turkey", "compass", "bypass", "cwd")])
+
+    def test_a_weak_key_in_a_secret_name_with_no_digit(self):
+        weak = "supersecret" + "keyforourapp"
+        dashed = "my-super-" + "secret-signing-key"
+        self.assert_found([
+            (f'app.secret_key = "{weak}"', weak),
+            (f"JWT_SECRET={weak}", weak),
+            (f'client_secret: "{dashed}"', dashed),
+            (f'const API_TOKEN = "{dashed}";', dashed),
+            (f'signingKey: "{weak}"', weak),
+        ])
+
+    def test_a_name_that_only_holds_a_secret_word_keeps_its_word_shaped_value(self):
+        self.assert_clean([
+            'const STORAGE_KEY = "hackathon-demo-state-v1"',
+            'const TOKEN_KEY = "app_access_token_v2"',
+            'cacheKey: "user-session-cache-2024"',
+            'SECRET_HEADER = "X-Webhook-Signature"',
+            'token_endpoint = "oauth/access/token-exchange"',
+            'api_key = "OPENWEATHER_API_KEY"',
+            'secret: "see the docs for what goes here"',
+            "secret_key = get_secret_key_from_vault",
+            "client_secret=client_secret_value,",
+        ])
+
+    def test_a_kwarg_on_its_own_line_is_not_an_env_line(self):
+        self.assert_clean(["    password=hashed_password,", "    password=hashed_password",
+                           "  db_password=settings_password,  # from the vault"])
+        plain = "sun" + "shine"
+        self.assert_found([(f"    DB_PASSWORD={plain}", plain), (f"PASSWORD={plain}  # dev", plain)])
+
+    def test_a_url_template_is_not_a_password(self):
+        self.assert_clean(['url = f"postgres://{user}:{password}@{host}/db"',
+                           "mongodb+srv://<username>:<password>@cluster0.mongodb.net/",
+                           "postgres://user:password@host:5432/db",
+                           "redis://default:%(pw)s@cache.vendor.test",
+                           "postgres://$USER:$PASS@host/db",
+                           "amqp://guest:secret@broker.vendor.test"])
+
+    def test_a_url_with_no_username_still_holds_a_password(self):
+        value = tail(12)
+        self.assert_found([(f"REDIS_URL=redis://:{value}@cache.vendor.test:6379", value)])
+
+    def test_a_placeholder_shaped_token_is_not_a_finding(self):
+        self.assert_clean(["OPENAI_API_KEY=sk-" + "x" * 24,
+                           "key = sk-" + "0" * 24,
+                           "aws = AK" + "IAIOSFODNN7" + "EXAMPLE",
+                           "gh = gh" + "p_" + "x" * 36])
+
+    def test_a_message_is_not_a_password(self):
+        self.assert_clean(['errors.password = "Password is required"',
+                           'password: "Enter your password",',
+                           'pass: "Must be at least 8 characters"',
+                           'password = "Please try again later"',
+                           '{"pass' + 'word": "y", "user": "someone"}'])
+        phrase = "correct horse " + "battery staple"
+        self.assert_found([(f'password = "{phrase}"', phrase)])
+
+    def test_more_token_shapes(self):
+        sendgrid = "SG" + "." + tail(22) + "." + tail(43)
+        npm = "np" + "m_" + tail(36)
+        supabase = "sb" + "p_" + tail(40, "abcdef0123456789")
+        basic = "dXNlcjpwYXNz" + "d29yZDEyMw=="
+        self.assert_found([(f'sgMail.setApiKey("{sendgrid}")', sendgrid), (f"reg = {npm}", npm),
+                           (f"sup = {supabase}", supabase), (f"Authorization: Basic {basic}", basic)])
+        self.assert_clean(["Basic authentication is on", "Basic ${credentials}", "// Basic usageExamples below"])
+
+    def test_a_merge_of_what_is_already_pushed_reports_nothing(self):
+        line, _ = planted()["stripe-key"]
+        self.commit("a.txt", "base\n")
+        self.add_pushed_upstream()
+        self.git("checkout", "-q", "-b", "task")
+        self.commit("t.txt", "task\n")
+        self.git("checkout", "-q", "main")
+        self.commit("b.txt", line + "\n")
+        self.commit(".env", "A=1\n")
+        self.git("push", "-q", "origin", "main")
+        self.git("checkout", "-q", "task")
+        self.git("merge", "-q", "--no-ff", "-m", "merge", "main")
+        p = self.scan("task")
+        self.assertEqual(p.returncode, 0, p.stdout)
+
+    def test_a_merge_still_shows_what_neither_parent_held(self):
+        line, _ = planted()["stripe-key"]
+        other, _ = planted()["github-token"]
+        self.commit("a.txt", "base\n")
+        self.add_pushed_upstream()
+        self.git("checkout", "-q", "-b", "task")
+        self.commit("t.txt", "task\n")
+        self.git("checkout", "-q", "main")
+        self.commit("b.txt", line + "\n")
+        self.git("push", "-q", "origin", "main")
+        self.git("checkout", "-q", "task")
+        self.git("merge", "-q", "--no-ff", "--no-commit", "main")
+        with open(os.path.join(self.work, "b.txt"), "a") as f:
+            f.write(other + "\n")
+        self.git("add", "b.txt")
+        self.git("commit", "-q", "-m", "merge")
+        p = self.scan("task")
+        self.assertEqual(p.returncode, 1, p.stdout)
+        self.assertIn("b.txt:2 github-token", p.stdout)
+        self.assertNotIn("stripe-key", p.stdout)
+
+    def test_all_says_it_covers_this_clones_refs(self):
+        self.commit("a.txt", "base\n")
+        p = self.scan("--all")
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertIn("every commit on this clone's refs", p.stdout)
+
+    def test_the_fetch_the_skills_name_reaches_what_only_the_remote_holds(self):
+        line, _ = planted()["github-token"]
+        self.commit("a.txt", "base\n")
+        self.add_pushed_upstream()
+        other = os.path.join(self.root, "other")
+        self.git("clone", "-q", os.path.join(self.root, "remote.git"), other)
+        self.git("checkout", "-q", "-b", "teammate", cwd=other)
+        with open(os.path.join(other, "b.txt"), "w") as f:
+            f.write(line + "\n")
+        self.git("add", "b.txt", cwd=other)
+        self.git("commit", "-q", "-m", "c", cwd=other)
+        self.git("push", "-q", "origin", "teammate", cwd=other)
+        self.assertEqual(self.scan("--all").returncode, 0, "not fetched yet")
+        fetch = re.search(r"`git (fetch origin '[^`]+')`", read_skill("public-ready")).group(1).split()
+        self.git(*[word.strip("'") for word in fetch])
+        p = self.scan("--all")
+        self.assertEqual(p.returncode, 1, p.stdout)
+        self.assertIn("b.txt:1 github-token", p.stdout)
+        for name in ("hackathon", "public-ready"):
+            self.assertIn(" ".join(fetch), read_skill(name), name)
+
+    def test_the_public_ready_fallback_catches_names_in_any_case(self):
+        skill = read_skill("public-ready")
+        command = re.search(r"(?m)^\s*(git log --all --name-only --format=%h .*)$", skill).group(1)
+        for line in ("API_KEY=abc", "DB_PASSWORD=x", '"pass' + 'word": "y"', "client_secret: z"):
+            with self.subTest(line):
+                self.commit("cfg.txt", line + "\n", line)
+                hits = subprocess.run(shlex.split(command), cwd=self.work, env=self.env,
+                                      capture_output=True, text=True)
+                self.assertEqual(hits.returncode, 0, hits.stderr)
+                self.assertIn(self.git("rev-parse", "--short", "HEAD"), hits.stdout)
+                self.git("rm", "-q", "cfg.txt")
+                self.git("commit", "-q", "-m", "gone")
+
+    def test_all_refuses_a_ref_it_cannot_read(self):
+        line, secret = planted()["github-token"]
+        self.commit("a.txt", "base\n")
+        path = os.path.join(self.root, "loose")
+        with open(path, "w") as f:
+            f.write(line + "\n")
+        blob = self.git("hash-object", "-w", path)
+        self.git("tag", "blobtag", blob)
+        p = self.scan("--all")
+        self.assertEqual(p.returncode, 2, p.stdout)
+        self.assertIn("refs/tags/blobtag", p.stderr)
+        self.assertNotIn(secret, p.stderr + p.stdout)
+        self.git("tag", "-d", "blobtag")
+        self.git("tag", "-a", "-m", "ok", "v1")
+        self.assertEqual(self.scan("--all").returncode, 0)
+
+
 class TheKickoffFiles(unittest.TestCase):
     """What another machine, or a session after /clear, reads. Other skills read these names."""
 
@@ -777,8 +987,8 @@ class TheKickoffFiles(unittest.TestCase):
         self.assertIn("/interview", text)
         self.assertIn("goes away when the mode ends", text.splitlines()[0])
 
-    def test_pitch_is_skipped_only_with_neither_a_talk_nor_a_table(self):
-        self.assertRegex(self.read("SKILL.md"), r"\| `/pitch` \| `EVENT.md` has neither a talk nor a table \|")
+    def test_pitch_is_skipped_only_with_no_talk_no_table_and_no_slides(self):
+        self.assertRegex(self.read("SKILL.md"), r"\| `/pitch` \| `EVENT.md` has no talk, no table and no slides \|")
 
     def test_the_commit_question_covers_every_private_file(self):
         step = re.search(r"(?m)^6\. .*$", self.read("SKILL.md")).group(0)

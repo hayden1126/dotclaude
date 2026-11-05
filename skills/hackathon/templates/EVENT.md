@@ -33,6 +33,7 @@ All fixed times, with the time zone.
 ## Submission
 - Where, and the fields it asks for: unknown, re-check on <date>
 - Citations it requires: unknown, re-check on <date>
+- Third-party material allowed (code, data, images), and how to disclose it: unknown, re-check on <date>
 
 ## Video
 - Required (yes or no, with length and format): unknown, re-check on <date>

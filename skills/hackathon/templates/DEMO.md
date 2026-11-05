@@ -33,7 +33,7 @@ Which skill to ask the user to type, and when. Filled in at kickoff from the clo
 Written first. What the judge sees, step by step, fitted to the slot in `EVENT.md`.
 
 ## Cut list
-What we won't build, and why.
+Each item: real, seeded or cut, when to review that call, and what we say about it.
 
 ## Decisions
 One line each, with who made the call.
@@ -45,4 +45,4 @@ Independent tasks, one writer each. Name the merge owner. No motor or hardware c
 |---|---|---|
 
 ## Backup
-What happens if the live demo fails on stage, and who switches. Skip this with no live slot.
+One line: what happens if the live demo fails on stage. `/pitch` writes the switch rule in full in `PITCH.md`. Skip this with no live slot.

@@ -14,11 +14,11 @@ This covers an expo table as well as a stage: read "on stage" below as wherever 
 Two things, kept apart:
 
 - **The live demo:** the team runs the actual product in front of the judges.
-- **The backup:** the video made with `/demo-video`, which the user types. Without that skill, any clean screen recording of the product works. It's never passed off as live.
+- **The backup,** if `EVENT.md`'s Video section or the user wants one: the video made with `/demo-video`, which the user types. Without that skill, any clean screen recording of the product works. It's never passed off as live.
 
 ## Start
 
-Read `EVENT.md`. If it's missing, ask for only what this needs: format (live, video, both, expo table), length, Q&A time and slides deadline. Either way, ask about `What must run live` and `Venue screen size and network` when the field is missing or marked unknown, since the live demo rests on them. If the event hasn't published a field, say so and use a stated guess. Read `DEMO.md` if it exists: its script, seeded parts and honesty decisions carry over.
+Read `EVENT.md`. If it's missing, ask for only what this needs: format (live, video, both, expo table), length, Q&A time, slides deadline and whether there is a backup video. Either way, ask about `What must run live` and `Venue screen size and network` when the field is missing or marked unknown, since the live demo rests on them. If the event hasn't published a field, say so and use a stated guess. Read `DEMO.md` if it exists: its script, seeded parts and honesty decisions carry over.
 
 Write the plan to `PITCH.md`. In a public repo, ask where it goes first, since Q&A prep may not be for the public.
 
@@ -67,9 +67,11 @@ Write it down before the first rehearsal. Nobody debates it on stage.
 
 - **What failure:** for example an error page, a blank screen, or no response.
 - **How long you wait:** a number of seconds, set from the measured times above, and whether one retry is allowed.
-- **Who says it:** one named person says "switching to the video".
+- **Who says it:** one named person says the switch line: "switching to the video", or the fallback from the check above when there's no video.
 
-The video sits as a local file on the presenting machine, open and cued, not behind a link. Decide who narrates over it.
+A video sits as a local file on the presenting machine, open and cued, not behind a link. Decide who narrates over it. With no video and no fallback, the rule is what the team says and shows instead: a slide, the last good state, or how it works at a whiteboard.
+
+Put one line pointing at this rule in `DEMO.md`'s Backup.
 
 ## Rehearse
 
@@ -82,5 +84,5 @@ Twice at least, timed by someone with a clock. Log each time in `PITCH.md`. One 
 - Services warm, spend caps have room, the network and its backup both tried.
 - Demo data reset to the first beat. Anything the team chose to start early is running or done, with its result ready.
 - One last run of the demo path. After that, no code changes or rebuilds.
-- Video and slides open locally. Slides submitted, if they were due.
+- The video, if there is one, and the slides open locally. Slides submitted, if they were due.
 - Driver, talker, Q&A owners and timekeeper all know their part. The switch rule read aloud once. Room and running order confirmed.
