@@ -1,0 +1,27 @@
+# Secrets: never commit. The scan step checks this too, since an ignore rule can be forced past.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+credentials.json
+service-account*.json
+
+# Local to this machine
+.claude/settings.local.json
+
+# Build output and dependencies
+node_modules/
+dist/
+build/
+.next/
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
