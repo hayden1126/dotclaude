@@ -112,6 +112,21 @@ class DeleteGuard(unittest.TestCase):
                 self.assertFalse(self.denied(command))
                 self.assertTrue(self.denied(command + "\nrm -rf \"$TMPDIR\"/x"))
 
+    def test_a_wrapper_options_argument_is_never_the_command(self):
+        # Review round 1: the shared walk read `sudo -R /x rm -rf ~` as the command /x. After an
+        # option the tables don't know, the next word is skipped unless it is a deleter, as
+        # before the extraction; an option word is never another option's argument.
+        for command in ("sudo -R /x rm -rf ~", "sudo --chroot /x rm -rf ~",
+                        "sudo --chroot=/x rm -rf ~", "sudo -c cls rm -rf ~",
+                        "sudo --login-class cls rm -rf ~", "sudo -a style rm -rf ~",
+                        "sudo -D /d -g grp -h host -p pr -r role -t type -T 5 -U u -C 3 rm -rf ~",
+                        "doas -a style rm -rf ~", "doas -C /etc/doas.conf rm -rf ~",
+                        "doas -u root rm -rf ~", "env -u X -C /d -S 'a b' rm -rf ~",
+                        "sudo --some-new-flag /x rm -rf ~", "sudo -E -u root rm -rf ~",
+                        "sudo -Eu root rm -rf ~", "sudo -uroot rm -rf ~", "sudo -E rm -rf ~"):
+            with self.subTest(command=command):
+                self.assertTrue(self.denied(command))
+
     def test_values_are_followed_through_loops_braces_cd_and_reassignment(self):
         for command in ("for d in ~/*; do rm -rf \"$d\"; done", "set -- ~; rm -rf \"$1\"",
                         "rm -rf ~/{code,vault}", "rm -rf /{tmp,var}",
@@ -205,6 +220,24 @@ class DeleteGuard(unittest.TestCase):
                                    text=True, env=env, timeout=10)
                 self.assertEqual(p.returncode, 0, p.stderr)
                 self.assertEqual("RAN" in p.stdout, ran, p.stdout)
+
+    def test_a_module_planted_in_the_hooks_dir_never_runs(self):
+        # Review round 1: bash_words went in by putting the hooks dir first on sys.path, so a
+        # shlex.py there ran, outside the sandbox, when bash_words imported shlex.
+        hooks = os.path.join(self.tmp, "hooks")
+        os.makedirs(hooks)
+        for name in ("delete-guard.sh", "delete_guard.py", "bash_words.py"):
+            shutil.copy(os.path.join(REPO, "hooks", name), hooks)
+        ran = os.path.join(self.tmp, "ran")
+        with open(os.path.join(hooks, "shlex.py"), "w") as f:
+            f.write(f"open({ran!r}, 'a').write('planted')\n")
+        event = {"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+                 "tool_input": {"command": "rm -rf $T", "dangerouslyDisableSandbox": True}}
+        p = subprocess.run(["bash", os.path.join(hooks, "delete-guard.sh")],
+                           input=json.dumps(event), capture_output=True, text=True,
+                           env=self.env, timeout=10)
+        self.assertIn('"deny"', p.stdout)  # bash_words ran
+        self.assertFalse(os.path.exists(ran), "the planted shlex.py ran")
 
     def test_fails_open(self):
         self.assertIsNone(self.fire("x", raw="not json"))

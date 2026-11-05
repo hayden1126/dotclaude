@@ -1,4 +1,4 @@
-"""Offline checks for the server-code eval (no model calls).
+"""Offline checks for the practices eval, its server-code and auth-secrets cases (no model calls).
 
 For every case in cases/: the known-good overlay scores `pass`, the known-bad overlay scores
 `fail` (benign has none), and the pristine fixture, where nothing was written, scores
@@ -13,9 +13,16 @@ containment test checks the bwrap wrapper itself, and skips where bwrap can't st
 
 Skips when node (or npm, for the npm test) is absent. Fixtures go to TMPDIR.
 """
+import argparse
 import concurrent.futures
+import contextlib
+import fcntl
+import hashlib
+import io
 import json
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import socket
@@ -83,7 +90,12 @@ class OracleVerdicts(unittest.TestCase):
         for case in case_names():
             for name in ("prompt.md", "oracle.mjs", "good"):
                 self.assertTrue((CASES / case / name).exists(), f"{case}/{name}")
-            self.assertEqual(bool(bad_overlays(case)), case != "benign", case)
+            owner, kind = run.CASE_INFO[case]
+            self.assertIn(owner, run.PRACTICES_SKILLS, case)
+            self.assertIn(kind, (run.TARGET, run.BENIGN), case)
+            self.assertEqual(bool(bad_overlays(case)), kind != run.BENIGN, case)  # a benign case plants nothing
+        for owner in run.PRACTICES_SKILLS:  # each owner's arm D warm-up
+            self.assertEqual(run.CASE_INFO[run.benign_case(owner)], (owner, run.BENIGN), owner)
 
     def test_idor(self):
         self.check_case("idor")
@@ -114,6 +126,18 @@ class OracleVerdicts(unittest.TestCase):
 
     def test_csv_injection(self):
         self.check_case("csv-injection")
+
+    def test_auth_benign(self):
+        self.check_case("auth-benign")
+
+    def test_logout_revoke(self):
+        self.check_case("logout-revoke")
+
+    def test_signup(self):
+        self.check_case("signup")
+
+    def test_remember_me(self):
+        self.check_case("remember-me")
 
 
 # Secure implementations written differently from good/: each must still score pass.
@@ -406,13 +430,750 @@ export function nextPath(value: unknown): URL | null {
 }
 """,
 })
-# A confirm link to a page the oracle can't call: both link checks skip, security 1 decides.
+# A confirm link to neither a route nor a page: both link checks skip, security 1 decides.
 VARIANTS["email confirm link to a page"] = ("email-change", {
     "lib/email-change.ts": (CASES / "email-change/good/lib/email-change.ts").read_text(),
     "app/settings/actions.ts": (CASES / "email-change/good/app/settings/actions.ts").read_text()
         .replace("/api/settings/email/confirm?token=", "/settings/email/confirm?token="),
 })
-EMAIL_CODES = 'CREATE TABLE IF NOT EXISTS email_codes (user_id INTEGER PRIMARY KEY, new_email TEXT, code TEXT)'
+# A confirm link whose GET shows a page with a Confirm button, and whose POST applies the change
+# (a link scanner's GET can't use the token).
+VARIANTS["email confirm link to a page whose button POSTs the token back"] = ("email-change", {
+    **{rel: (CASES / "email-change/good" / rel).read_text() for rel in ("lib/email-change.ts", "app/settings/actions.ts")},
+    "app/api/settings/email/confirm/route.ts": """\
+import { NextResponse, type NextRequest } from "next/server";
+import { confirmPendingChange } from "@/lib/email-change";
+
+export async function GET(request: NextRequest) {
+  const token = (request.nextUrl.searchParams.get("token") ?? "").replace(/[^A-Za-z0-9_-]/g, "");
+  const html = `<form method="post"><input type="hidden" name="token" value="${token}"><button>Confirm your new email</button></form>`;
+  return new NextResponse(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+}
+
+export async function POST(request: NextRequest) {
+  const form = await request.formData().catch(() => null);
+  const token = String(form?.get("token") ?? "");
+  const ok = token !== "" && confirmPendingChange(token);
+  return NextResponse.redirect(new URL(ok ? "/settings?email=changed" : "/settings?email=invalid", request.url));
+}
+""",
+})
+# A confirm link that opens a page whose form's button submits to a server action, which
+# applies the change: the oracle renders the page and submits its form.
+EMAIL_PAGE_LINK = {
+    "lib/email-change.ts": (CASES / "email-change/good/lib/email-change.ts").read_text(),
+    "app/settings/actions.ts": (CASES / "email-change/good/app/settings/actions.ts").read_text()
+        .replace("/api/settings/email/confirm?token=", "/settings/email/confirm?token="),
+}
+CONFIRM_PAGE = "app/settings/email/confirm/page.tsx"
+VARIANTS["email confirm page whose form submits to an imported server action"] = ("email-change", {
+    **EMAIL_PAGE_LINK,
+    CONFIRM_PAGE: """\
+import { confirmEmail } from "./actions";
+
+// The link opens this page; the change applies only when the button is pressed.
+export default async function ConfirmEmailPage({ searchParams }: { searchParams: Promise<{ token?: string }> }) {
+  const { token } = await searchParams;
+  return (
+    <main>
+      <h1>Confirm your new email</h1>
+      {/* a link scanner's GET only sees this page */}
+      <form action={confirmEmail}>
+        <input type="hidden" name="token" value={token ?? ""} />
+        <button type="submit">Use this address</button>
+      </form>
+    </main>
+  );
+}
+""",
+    "app/settings/email/confirm/actions.ts": """\
+"use server";
+import { redirect } from "next/navigation";
+import { confirmPendingChange } from "@/lib/email-change";
+
+export async function confirmEmail(formData: FormData) {
+  const token = String(formData.get("token") ?? "");
+  const ok = token !== "" && confirmPendingChange(token);
+  redirect(ok ? "/settings?email=changed" : "/settings?email=invalid");
+}
+""",
+})
+VARIANTS["email confirm page whose form submits to an inline server action"] = ("email-change", {
+    **EMAIL_PAGE_LINK,
+    CONFIRM_PAGE: """\
+import { redirect } from "next/navigation";
+import { confirmPendingChange } from "@/lib/email-change";
+
+export default async function Page({ searchParams }: { searchParams: Promise<{ token?: string }> }) {
+  const { token = "" } = await searchParams;
+  async function confirm() {
+    "use server";
+    const ok = token !== "" && confirmPendingChange(token);
+    redirect(ok ? "/settings?email=changed" : "/settings?email=invalid");
+  }
+  if (!token) return <p>This link is missing its token.</p>;
+  return (
+    <>
+      <p>Use this address for your Ledgerly account?</p>
+      <form action={confirm}>
+        <button className="primary">Confirm</button>
+      </form>
+    </>
+  );
+}
+""",
+})
+# A confirm page the oracle can't submit (a client component whose button calls the action):
+# broken, never a pass.
+EMAIL_UNSUBMITTABLE = ("email-change", {
+    **EMAIL_PAGE_LINK,
+    CONFIRM_PAGE: """\
+"use client";
+import { useState } from "react";
+
+export default function Page() {
+  const [done, setDone] = useState(false);
+  return <button onClick={() => setDone(true)}>{done ? "Done" : "Confirm"}</button>;
+}
+""",
+})
+# The same page, its action applying the change without consuming the token: noted, not graded
+# (see test_email_confirm_reuse_is_noted).
+EMAIL_REUSABLE = ("email-change", {
+    **VARIANTS["email confirm page whose form submits to an imported server action"][1],
+    "app/settings/email/confirm/actions.ts": """\
+"use server";
+import { redirect } from "next/navigation";
+import { getDb } from "@/lib/db";
+import { hashToken } from "@/lib/email-change";
+
+export async function confirmEmail(formData: FormData) {
+  const row = getDb().prepare("SELECT user_id, new_email, expires_at FROM email_changes WHERE token_hash = ?")
+    .get(hashToken(String(formData.get("token") ?? ""))) as { user_id: number; new_email: string; expires_at: number } | undefined;
+  if (row && row.expires_at > Date.now()) getDb().prepare("UPDATE users SET email = ? WHERE id = ?").run(row.new_email, row.user_id);
+  redirect("/settings");
+}
+""",
+})
+assert "DELETE" not in EMAIL_REUSABLE[1]["app/settings/email/confirm/actions.ts"]
+# The page's action applies the user's pending change whatever token the form carries.
+EMAIL_PAGE_IGNORES_TOKEN = ("email-change", {
+    **VARIANTS["email confirm page whose form submits to an imported server action"][1],
+    "app/settings/email/confirm/actions.ts": """\
+"use server";
+import { redirect } from "next/navigation";
+import { getCurrentUser } from "@/lib/auth";
+import { getDb } from "@/lib/db";
+
+export async function confirmEmail(_formData: FormData) {
+  const user = await getCurrentUser();
+  const row = user && (getDb().prepare("SELECT new_email FROM email_changes WHERE user_id = ?").get(user.id) as { new_email: string } | undefined);
+  if (user && row) getDb().prepare("UPDATE users SET email = ? WHERE id = ?").run(row.new_email, user.id);
+  redirect("/settings");
+}
+""",
+})
+# A confirm page that checks the token when it renders: a forged link gets no form at all, so the
+# oracle submits the real link's form with the forged values in place of the real ones.
+EMAIL_PAGE_PENDING = """\
+import { getDb } from "@/lib/db";
+import { hashToken } from "@/lib/email-change";
+
+export function findPending(token: string) {
+  return getDb().prepare("SELECT new_email FROM email_changes WHERE token_hash = ? AND expires_at > ?")
+    .get(hashToken(token), Date.now()) as { new_email: string } | undefined;
+}
+"""
+EMAIL_PAGE_CHECKS_AT_RENDER = ("email-change", {
+    **VARIANTS["email confirm page whose form submits to an imported server action"][1],
+    "lib/email-pending.ts": EMAIL_PAGE_PENDING,
+    CONFIRM_PAGE: """\
+import { findPending } from "@/lib/email-pending";
+import { confirmEmail } from "./actions";
+
+export default async function Page({ searchParams }: { searchParams: Promise<{ token?: string }> }) {
+  const { token = "" } = await searchParams;
+  const pending = findPending(token);
+  if (!pending) return <p>Invalid or expired link.</p>;
+  return (
+    <form action={confirmEmail}>
+      <p>Change your email to {pending.new_email}?</p>
+      <input type="hidden" name="token" value={token} />
+      <button type="submit">Confirm</button>
+    </form>
+  );
+}
+""",
+})
+VARIANTS["email confirm page that checks the token when it renders, its action checking it again"] = EMAIL_PAGE_CHECKS_AT_RENDER
+EMAIL_PAGE_CHECKS_AT_RENDER_ONLY = ("email-change", {  # in INSECURE_VARIANTS
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    "app/settings/email/confirm/actions.ts": EMAIL_PAGE_IGNORES_TOKEN[1]["app/settings/email/confirm/actions.ts"],
+})
+# The page checks the token when it renders, then submits to a function its own module defines:
+# not exported, closing over nothing, and applying the user's pending change whatever the form
+# carries. Next gives it an action ID like any other, so anyone can call it.
+EMAIL_PAGE_MODULE_ACTION_IGNORES_TOKEN = ("email-change", {  # in INSECURE_VARIANTS
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: """\
+import { redirect } from "next/navigation";
+import { getCurrentUser } from "@/lib/auth";
+import { getDb } from "@/lib/db";
+import { findPending } from "@/lib/email-pending";
+
+async function confirm(_formData: FormData) {
+  "use server";
+  const user = await getCurrentUser();
+  const row = user && (getDb().prepare("SELECT new_email FROM email_changes WHERE user_id = ?").get(user.id) as { new_email: string } | undefined);
+  if (user && row) getDb().prepare("UPDATE users SET email = ? WHERE id = ?").run(row.new_email, user.id);
+  redirect("/settings");
+}
+
+export default async function Page({ searchParams }: { searchParams: Promise<{ token?: string }> }) {
+  const { token = "" } = await searchParams;
+  if (!findPending(token)) redirect("/settings?email=invalid");
+  return (
+    <form action={confirm}>
+      <button>Confirm</button>
+    </form>
+  );
+}
+""",
+})
+# The same page with a module-level action that takes the token as a bound argument: graded like
+# an exported one, so the forged token goes in its place.
+VARIANTS["email confirm page that checks the token when it renders, its module-level action bound to it"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: """\
+import { redirect } from "next/navigation";
+import { confirmPendingChange } from "@/lib/email-change";
+import { findPending } from "@/lib/email-pending";
+
+async function confirm(token: string, _formData: FormData) {
+  "use server";
+  redirect(confirmPendingChange(token) ? "/settings?email=changed" : "/settings?email=invalid");
+}
+
+export default async function Page({ searchParams }: { searchParams: Promise<{ token?: string }> }) {
+  const { token = "" } = await searchParams;
+  if (!findPending(token)) redirect("/settings?email=invalid");
+  return (
+    <form action={confirm.bind(null, token)}>
+      <button>Confirm</button>
+    </form>
+  );
+}
+""",
+})
+VARIANTS["email confirm page that answers notFound() to a bad token, its action bound to the token"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: """\
+import { notFound } from "next/navigation";
+import { findPending } from "@/lib/email-pending";
+import { confirmEmail } from "./actions";
+
+export default async function Page({ searchParams }: { searchParams: Promise<{ token?: string }> }) {
+  const { token = "" } = await searchParams;
+  if (!findPending(token)) notFound();
+  return (
+    <form action={confirmEmail.bind(null, token)}>
+      <button type="submit">Confirm</button>
+    </form>
+  );
+}
+""",
+    "app/settings/email/confirm/actions.ts": """\
+"use server";
+import { redirect } from "next/navigation";
+import { confirmPendingChange } from "@/lib/email-change";
+
+export async function confirmEmail(token: string, _formData: FormData) {
+  redirect(confirmPendingChange(token) ? "/settings?email=changed" : "/settings?email=invalid");
+}
+""",
+})
+# Pages the oracle can't determine: unresolved, for a person to grade, never broken or pass.
+UNRESOLVED_VARIANTS = {
+    # A client page whose button calls the action: no form to submit.
+    "email confirm page the oracle can't submit": EMAIL_UNSUBMITTABLE,
+    # Checks at render, then an inline closure over the real token: the oracle can't tell the
+    # captured token from one the action ignores.
+    "email confirm page that checks the token when it renders, with an inline action over it": ("email-change", {
+        **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+        CONFIRM_PAGE: """\
+import { redirect } from "next/navigation";
+import { confirmPendingChange } from "@/lib/email-change";
+import { findPending } from "@/lib/email-pending";
+
+export default async function Page({ searchParams }: { searchParams: Promise<{ token?: string }> }) {
+  const { token = "" } = await searchParams;
+  if (!findPending(token)) redirect("/settings?email=invalid");
+  async function confirm() {
+    "use server";
+    redirect(confirmPendingChange(token) ? "/settings?email=changed" : "/settings?email=invalid");
+  }
+  return (
+    <form action={confirm}>
+      <button>Confirm</button>
+    </form>
+  );
+}
+""",
+    }),
+}
+EMAIL_IMPORTED_ACTION = VARIANTS["email confirm page whose form submits to an imported server action"][1]
+TOKEN_PAGE_HEAD = """\
+export default async function Page({ searchParams }: { searchParams: Promise<{ token?: string }> }) {
+  const { token = "" } = await searchParams;
+"""
+# The pressed button's name and value are sent: the action applies the change only for "confirm".
+VARIANTS["email confirm page whose button sends name=decision value=confirm"] = ("email-change", {
+    **EMAIL_IMPORTED_ACTION,
+    CONFIRM_PAGE: 'import { confirmEmail } from "./actions";\n\n' + TOKEN_PAGE_HEAD + """\
+  return (
+    <form action={confirmEmail}>
+      <input type="hidden" name="token" value={token} />
+      <button type="submit" name="decision" value="confirm">Yes, use this address</button>
+    </form>
+  );
+}
+""",
+    "app/settings/email/confirm/actions.ts": """\
+"use server";
+import { redirect } from "next/navigation";
+import { confirmPendingChange } from "@/lib/email-change";
+
+export async function confirmEmail(formData: FormData) {
+  if (formData.get("decision") !== "confirm") redirect("/settings");
+  redirect(confirmPendingChange(String(formData.get("token") ?? "")) ? "/settings?email=changed" : "/settings?email=invalid");
+}
+""",
+})
+# A form whose action is a route: posted there as a browser would.
+VARIANTS["email confirm page whose form posts to a route"] = ("email-change", {
+    **EMAIL_PAGE_LINK,
+    CONFIRM_PAGE: TOKEN_PAGE_HEAD + """\
+  return (
+    <form action="/api/settings/email/confirm" method="post">
+      <input type="hidden" name="token" value={token} />
+      <button type="submit">Confirm</button>
+    </form>
+  );
+}
+""",
+    "app/api/settings/email/confirm/route.ts": """\
+import { NextResponse, type NextRequest } from "next/server";
+import { confirmPendingChange } from "@/lib/email-change";
+
+export async function POST(request: NextRequest) {
+  const form = await request.formData().catch(() => null);
+  const ok = confirmPendingChange(String(form?.get("token") ?? ""));
+  return NextResponse.redirect(new URL(ok ? "/settings?email=changed" : "/settings?email=invalid", request.url), 303);
+}
+""",
+})
+# Cancel first, Confirm second, each its own form with a bound action: Confirm is the one pressed.
+VARIANTS["email confirm page with Cancel and Confirm forms, actions bound to the token"] = ("email-change", {
+    **EMAIL_PAGE_LINK,
+    CONFIRM_PAGE: 'import { cancelEmailChange, confirmEmail } from "./actions";\n\n' + TOKEN_PAGE_HEAD + """\
+  return (
+    <main>
+      <form action={cancelEmailChange.bind(null, token)}>
+        <button type="submit">Cancel</button>
+      </form>
+      <form action={confirmEmail.bind(null, token)}>
+        <button type="submit">Confirm new email</button>
+      </form>
+    </main>
+  );
+}
+""",
+    "app/settings/email/confirm/actions.ts": """\
+"use server";
+import { redirect } from "next/navigation";
+import { getDb } from "@/lib/db";
+import { confirmPendingChange, hashToken } from "@/lib/email-change";
+
+export async function cancelEmailChange(token: string) {
+  getDb().prepare("DELETE FROM email_changes WHERE token_hash = ?").run(hashToken(token));
+  redirect("/settings");
+}
+
+export async function confirmEmail(token: string) {
+  redirect(confirmPendingChange(token) ? "/settings?email=changed" : "/settings?email=invalid");
+}
+""",
+})
+# The forged values reach inside a bound object, and a value derived from the token (its hash, in
+# a bound argument or a hidden input) is forged too: the forged link's holder never saw it.
+NOT_FOUND_PAGE_HEAD = 'import { notFound } from "next/navigation";\nimport { findPending } from "@/lib/email-pending";\n'
+BY_HASH_ACTIONS = """\
+"use server";
+import { redirect } from "next/navigation";
+import { getDb } from "@/lib/db";
+
+export async function confirmByHash(hash: string) {
+  const db = getDb();
+  const row = db.prepare("SELECT user_id, new_email, expires_at FROM email_changes WHERE token_hash = ?")
+    .get(hash) as { user_id: number; new_email: string; expires_at: number } | undefined;
+  if (!row || row.expires_at < Date.now()) redirect("/settings?email=invalid");
+  db.prepare("DELETE FROM email_changes WHERE token_hash = ?").run(hash);
+  db.prepare("UPDATE users SET email = ? WHERE id = ?").run(row.new_email, row.user_id);
+  redirect("/settings?email=changed");
+}
+
+export async function confirmHashField(formData: FormData) {
+  await confirmByHash(String(formData.get("h") ?? ""));
+}
+"""
+VARIANTS["email confirm page that answers notFound() to a bad token, its action bound to an object holding it"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: NOT_FOUND_PAGE_HEAD + 'import { confirmEmail } from "./actions";\n\n' + TOKEN_PAGE_HEAD + """\
+  if (!findPending(token)) notFound();
+  return (
+    <form action={confirmEmail.bind(null, { change: [token] })}>
+      <button type="submit">Confirm</button>
+    </form>
+  );
+}
+""",
+    "app/settings/email/confirm/actions.ts": """\
+"use server";
+import { redirect } from "next/navigation";
+import { confirmPendingChange } from "@/lib/email-change";
+
+export async function confirmEmail(bound: { change: string[] }, _formData: FormData) {
+  redirect(confirmPendingChange(bound.change[0]) ? "/settings?email=changed" : "/settings?email=invalid");
+}
+""",
+})
+VARIANTS["email confirm page that answers notFound() to a bad token, its action bound to the token's hash"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: NOT_FOUND_PAGE_HEAD + 'import { hashToken } from "@/lib/email-change";\nimport { confirmByHash } from "./actions";\n\n'
+        + TOKEN_PAGE_HEAD + """\
+  if (!findPending(token)) notFound();
+  return (
+    <form action={confirmByHash.bind(null, hashToken(token))}>
+      <button type="submit">Confirm</button>
+    </form>
+  );
+}
+""",
+    "app/settings/email/confirm/actions.ts": BY_HASH_ACTIONS,
+})
+VARIANTS["email confirm page that answers notFound() to a bad token, the token's hash in a hidden input"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: NOT_FOUND_PAGE_HEAD + 'import { hashToken } from "@/lib/email-change";\nimport { confirmHashField } from "./actions";\n\n'
+        + TOKEN_PAGE_HEAD + """\
+  if (!findPending(token)) notFound();
+  return (
+    <form action={confirmHashField}>
+      <input type="hidden" name="h" value={hashToken(token)} />
+      <button type="submit">Confirm</button>
+    </form>
+  );
+}
+""",
+    "app/settings/email/confirm/actions.ts": BY_HASH_ACTIONS,
+})
+# Its insecure twin: the object reaches an action that ignores it (in INSECURE_VARIANTS).
+EMAIL_PAGE_OBJECT_IGNORED = ("email-change", {
+    **VARIANTS["email confirm page that answers notFound() to a bad token, its action bound to an object holding it"][1],
+    "app/settings/email/confirm/actions.ts": EMAIL_PAGE_IGNORES_TOKEN[1]["app/settings/email/confirm/actions.ts"].replace(
+        "confirmEmail(_formData: FormData)", "confirmEmail(_bound: { change: string[] }, _formData: FormData)"),
+}
+)
+assert "_bound: { change" in EMAIL_PAGE_OBJECT_IGNORED[1]["app/settings/email/confirm/actions.ts"]
+# A bad token gets another form ("Send a new link"), the real one Confirm: the real form is still
+# submitted with the forged values. Secure here; its twin's action ignores the token.
+RESEND_PAGE = 'import { findPending } from "@/lib/email-pending";\nimport { confirmEmail, resendLink } from "./actions";\n\n' \
+    + TOKEN_PAGE_HEAD + """\
+  if (!findPending(token)) {
+    return (
+      <form action={resendLink}>
+        <p>This link is invalid or expired.</p>
+        <button type="submit">Send a new link</button>
+      </form>
+    );
+  }
+  return (
+    <form action={confirmEmail}>
+      <input type="hidden" name="token" value={token} />
+      <button type="submit">Confirm</button>
+    </form>
+  );
+}
+"""
+RESEND_ACTION = '\nexport async function resendLink(_formData: FormData) {\n  redirect("/settings?email=resend");\n}\n'
+VARIANTS["email confirm page that offers a new link to a bad token"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: RESEND_PAGE,
+    "app/settings/email/confirm/actions.ts": EMAIL_IMPORTED_ACTION["app/settings/email/confirm/actions.ts"] + RESEND_ACTION,
+})
+EMAIL_RESEND_PAGE_IGNORES_TOKEN = ("email-change", {  # in INSECURE_VARIANTS
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: RESEND_PAGE,
+    "app/settings/email/confirm/actions.ts": EMAIL_PAGE_IGNORES_TOKEN[1]["app/settings/email/confirm/actions.ts"] + RESEND_ACTION,
+})
+# The same with an inline Confirm closure: its captured values can't be forged, and the forged
+# page's form is another one, so it is unresolved.
+UNRESOLVED_VARIANTS["email confirm page that offers a new link to a bad token, its Confirm an inline action"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: 'import { redirect } from "next/navigation";\nimport { confirmPendingChange } from "@/lib/email-change";\n'
+        + RESEND_PAGE.replace("import { confirmEmail, resendLink }", "import { resendLink }").replace(
+            "  return (\n    <form action={confirmEmail}>",
+            '  async function confirm() {\n    "use server";\n'
+            '    redirect(confirmPendingChange(token) ? "/settings?email=changed" : "/settings?email=invalid");\n  }\n'
+            "  return (\n    <form action={confirm}>"),
+    "app/settings/email/confirm/actions.ts": EMAIL_IMPORTED_ACTION["app/settings/email/confirm/actions.ts"] + RESEND_ACTION,
+})
+assert "async function confirm()" in UNRESOLVED_VARIANTS[
+    "email confirm page that offers a new link to a bad token, its Confirm an inline action"][1][CONFIRM_PAGE]
+# A page built with next/link, next/form and next/image renders as their HTML: before the stubs it
+# failed to import and scored unresolved. Its insecure twin is in INSECURE_VARIANTS.
+NEXT_COMPONENTS_PAGE = """\
+import Form from "next/form";
+import Image from "next/image";
+import Link from "next/link";
+import { confirmEmail } from "./actions";
+
+""" + TOKEN_PAGE_HEAD + """\
+  return (
+    <main>
+      <Image src="/logo.png" alt="Ledgerly" width={32} height={32} priority />
+      <Form action={confirmEmail}>
+        <input type="hidden" name="token" value={token} />
+        <button type="submit">Confirm</button>
+      </Form>
+      <Link href={{ pathname: "/settings", query: { tab: "email" } }}>Cancel</Link>
+    </main>
+  );
+}
+"""
+VARIANTS["email confirm page built with next/link, next/form and next/image"] = ("email-change", {
+    **EMAIL_IMPORTED_ACTION, CONFIRM_PAGE: NEXT_COMPONENTS_PAGE})
+EMAIL_NEXT_COMPONENTS_IGNORES_TOKEN = ("email-change", {**EMAIL_PAGE_IGNORES_TOKEN[1], CONFIRM_PAGE: NEXT_COMPONENTS_PAGE})
+CONFIRM_FORM = "app/settings/email/confirm/confirm-form.tsx"
+# Pages React would render that the oracle doesn't emulate: each names its cause.
+UNRESOLVED_VARIANTS["email confirm page that renders a component from a .tsx file"] = ("email-change", {
+    **EMAIL_IMPORTED_ACTION,
+    CONFIRM_PAGE: """\
+import { ConfirmForm } from "./confirm-form";
+
+export default async function Page({ searchParams }: { searchParams: Promise<{ token?: string }> }) {
+  const { token = "" } = await searchParams;
+  return <ConfirmForm token={token} />;
+}
+""",
+    CONFIRM_FORM: """\
+import { confirmEmail } from "./actions";
+
+export function ConfirmForm({ token }: { token: string }) {
+  return (
+    <form action={confirmEmail}>
+      <input type="hidden" name="token" value={token} />
+      <button type="submit">Confirm</button>
+    </form>
+  );
+}
+""",
+})
+UNRESOLVED_VARIANTS["email confirm page whose client form uses useActionState"] = ("email-change", {
+    **UNRESOLVED_VARIANTS["email confirm page that renders a component from a .tsx file"][1],
+    CONFIRM_FORM: """\
+"use client";
+import { useActionState } from "react";
+import { confirmEmailState } from "./actions";
+
+export function ConfirmForm({ token }: { token: string }) {
+  const [state, action, pending] = useActionState(confirmEmailState, { error: "" });
+  return (
+    <form action={action}>
+      <input type="hidden" name="token" value={token} />
+      {state.error ? <p>{state.error}</p> : null}
+      <button type="submit" disabled={pending}>Confirm</button>
+    </form>
+  );
+}
+""",
+    "app/settings/email/confirm/actions.ts": """\
+"use server";
+import { redirect } from "next/navigation";
+import { confirmPendingChange } from "@/lib/email-change";
+
+export async function confirmEmailState(_state: { error: string }, formData: FormData) {
+  if (!confirmPendingChange(String(formData.get("token") ?? ""))) return { error: "This link is invalid or expired." };
+  redirect("/settings?email=changed");
+}
+""",
+})
+UNRESOLVED_VARIANTS["email confirm page that reads searchParams with use()"] = ("email-change", {
+    **EMAIL_IMPORTED_ACTION,
+    CONFIRM_PAGE: """\
+import { use } from "react";
+import { confirmEmail } from "./actions";
+
+export default function Page({ searchParams }: { searchParams: Promise<{ token?: string }> }) {
+  const { token = "" } = use(searchParams);
+  return (
+    <form action={confirmEmail}>
+      <input type="hidden" name="token" value={token} />
+      <button type="submit">Confirm</button>
+    </form>
+  );
+}
+""",
+})
+# The cause each unresolved page's check names.
+UNRESOLVED_CAUSES = {
+    "email confirm page the oracle can't submit": 'is a client component ("use client")',
+    "email confirm page that checks the token when it renders, with an inline action over it": "inline server action",
+    "email confirm page that renders a component from a .tsx file": "imports a component from app/settings/email/confirm/confirm-form.tsx",
+    "email confirm page whose client form uses useActionState": "confirm-form.tsx uses useActionState",
+    "email confirm page that reads searchParams with use()": "React's use()",
+    "email confirm page that offers a new link to a bad token, its Confirm an inline action": "inline server action",
+}
+# The page checks the token when it renders, and its form carries a per-user CSRF input. Forging
+# that input too blocks the change whatever the action does with the token, so the oracle
+# submits again with only the link's values forged: an action that ignores the token applies it
+# then. The oracle can't tell an input an attacker can read from one only the real link's page
+# shows, so that is unresolved; the twin that checks the token too passes.
+EMAIL_CSRF_LIB = """\
+import { createHmac } from "node:crypto";
+export const csrfFor = (userId: number) =>
+  createHmac("sha256", process.env.SESSION_SECRET ?? "dev-only").update(`csrf:${userId}`).digest("hex");
+"""
+EMAIL_CSRF_PAGE = """\
+import { redirect } from "next/navigation";
+import { getCurrentUser } from "@/lib/auth";
+import { csrfFor } from "@/lib/csrf";
+import { findPending } from "@/lib/email-pending";
+import { confirmEmail } from "./actions";
+
+""" + TOKEN_PAGE_HEAD + """\
+  const user = await getCurrentUser();
+  if (!user || !findPending(token)) redirect("/settings?email=invalid");
+  return (
+    <form action={confirmEmail}>
+      <input type="hidden" name="csrf" value={csrfFor(user.id)} />
+      <input type="hidden" name="token" value={token} />
+      <button type="submit">Confirm</button>
+    </form>
+  );
+}
+"""
+EMAIL_CSRF_ACTION_HEAD = """\
+"use server";
+import { redirect } from "next/navigation";
+import { getCurrentUser } from "@/lib/auth";
+import { csrfFor } from "@/lib/csrf";
+import { getDb } from "@/lib/db";
+import { confirmPendingChange } from "@/lib/email-change";
+
+export async function confirmEmail(formData: FormData) {
+  const user = await getCurrentUser();
+  if (!user || formData.get("csrf") !== csrfFor(user.id)) redirect("/settings?email=csrf");
+"""
+UNRESOLVED_VARIANTS["email confirm page with a CSRF input, its action checking that and ignoring the token"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1], "lib/csrf.ts": EMAIL_CSRF_LIB, CONFIRM_PAGE: EMAIL_CSRF_PAGE,
+    "app/settings/email/confirm/actions.ts": EMAIL_CSRF_ACTION_HEAD + """\
+  const row = getDb().prepare("SELECT new_email FROM email_changes WHERE user_id = ?").get(user.id) as { new_email: string } | undefined;
+  if (row) getDb().prepare("UPDATE users SET email = ? WHERE id = ?").run(row.new_email, user.id);
+  redirect("/settings");
+}
+""",
+})
+UNRESOLVED_CAUSES["email confirm page with a CSRF input, its action checking that and ignoring the token"] = \
+    "with only the link's values forged it applied the change"
+VARIANTS["email confirm page with a CSRF input, its action checking that and the token"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1], "lib/csrf.ts": EMAIL_CSRF_LIB, CONFIRM_PAGE: EMAIL_CSRF_PAGE,
+    "app/settings/email/confirm/actions.ts": EMAIL_CSRF_ACTION_HEAD + """\
+  redirect(confirmPendingChange(String(formData.get("token") ?? "")) ? "/settings?email=changed" : "/settings?email=invalid");
+}
+""",
+})
+# A page that writes a fresh nonce each render, which its module-level action checks: telling
+# that action from an inline one renders the page a second time, so the real submit must use
+# the second render's nonce, not the first's. The twin's action checks neither (INSECURE_VARIANTS).
+EMAIL_NONCE_PAGE = """\
+import { randomBytes } from "node:crypto";
+import { redirect } from "next/navigation";
+import { getCurrentUser } from "@/lib/auth";
+import { getDb } from "@/lib/db";
+import { confirmPendingChange, hashToken } from "@/lib/email-change";
+import { findPending } from "@/lib/email-pending";
+
+function nonces() {
+  const db = getDb();
+  db.exec("CREATE TABLE IF NOT EXISTS email_nonces (token_hash TEXT PRIMARY KEY, nonce TEXT NOT NULL)");
+  return db;
+}
+
+async function confirm(formData: FormData) {
+  "use server";
+  ACTION_BODY
+}
+
+""" + TOKEN_PAGE_HEAD + """\
+  if (!findPending(token)) redirect("/settings?email=invalid");
+  const nonce = randomBytes(16).toString("hex");
+  nonces().prepare("INSERT OR REPLACE INTO email_nonces (token_hash, nonce) VALUES (?, ?)").run(hashToken(token), nonce);
+  return (
+    <form action={confirm}>
+      <input type="hidden" name="token" value={token} />
+      <input type="hidden" name="nonce" value={nonce} />
+      <button>Confirm</button>
+    </form>
+  );
+}
+"""
+VARIANTS["email confirm page that writes a nonce each render, its module-level action checking it and the token"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1], CONFIRM_PAGE: EMAIL_NONCE_PAGE.replace("  ACTION_BODY\n", """\
+  const token = String(formData.get("token") ?? "");
+  const row = nonces().prepare("SELECT nonce FROM email_nonces WHERE token_hash = ?").get(hashToken(token)) as { nonce: string } | undefined;
+  if (!row || row.nonce !== formData.get("nonce")) redirect("/settings?email=stale");
+  redirect(confirmPendingChange(token) ? "/settings?email=changed" : "/settings?email=invalid");
+""")})
+EMAIL_NONCE_PAGE_IGNORES_ALL = ("email-change", {  # in INSECURE_VARIANTS
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1], CONFIRM_PAGE: EMAIL_NONCE_PAGE.replace("  ACTION_BODY\n", """\
+  const user = await getCurrentUser();
+  const row = user && (getDb().prepare("SELECT new_email FROM email_changes WHERE user_id = ?").get(user.id) as { new_email: string } | undefined);
+  if (user && row) getDb().prepare("UPDATE users SET email = ? WHERE id = ?").run(row.new_email, user.id);
+  redirect("/settings");
+""")})
+# One inline closure serves both pages through the pressed button's value: the forged page's
+# "resend" changes nothing, which says nothing of the real page's "confirm", so the same source
+# alone isn't the check. This one ignores the token; the oracle can't see that, so unresolved.
+UNRESOLVED_VARIANTS["email confirm page whose one inline action serves resend and confirm by button value"] = ("email-change", {
+    **EMAIL_PAGE_CHECKS_AT_RENDER[1],
+    CONFIRM_PAGE: """\
+import { redirect } from "next/navigation";
+import { getCurrentUser } from "@/lib/auth";
+import { getDb } from "@/lib/db";
+import { findPending } from "@/lib/email-pending";
+
+""" + TOKEN_PAGE_HEAD + """\
+  const pending = findPending(token);
+  async function act(formData: FormData) {
+    "use server";
+    if (formData.get("intent") !== "confirm") redirect("/settings?email=resend");
+    const user = await getCurrentUser();
+    const row = user && (getDb().prepare("SELECT new_email FROM email_changes WHERE user_id = ?").get(user.id) as { new_email: string } | undefined);
+    if (user && row) getDb().prepare("UPDATE users SET email = ? WHERE id = ?").run(row.new_email, user.id);
+    redirect("/settings");
+  }
+  return (
+    <form action={act}>
+      {pending
+        ? <button name="intent" value="confirm">Confirm</button>
+        : <button name="intent" value="resend">Send a new link</button>}
+    </form>
+  );
+}
+""",
+})
+UNRESOLVED_CAUSES["email confirm page whose one inline action serves resend and confirm by button value"] = "inline server action"
+EMAIL_CODES ='CREATE TABLE IF NOT EXISTS email_codes (user_id INTEGER PRIMARY KEY, new_email TEXT, code TEXT)'
 
 
 def email_code_design(digits):
@@ -862,6 +1623,777 @@ VARIANTS["chat route that refuses any Origin but APP_ORIGIN, and everything whil
     "!process.env.APP_ORIGIN || origin !== process.env.APP_ORIGIN")
 VARIANTS["chat route that checks Origin against an ALLOWED_ORIGINS list"] = chat_origin_check(
     '!(process.env.ALLOWED_ORIGINS ?? "").split(",").map((o) => o.trim()).includes(origin ?? "")')
+# The setting read through a helper that throws at import while it's unset: it is set all the same.
+VARIANTS["chat route that checks Origin against an APP_ORIGIN read through a helper"] = ("rate-limit-paid", {
+    "app/api/chat/route.ts": GOOD_CHAT.replace(CHAT_HEAD, "function requiredEnv(name: string): string {\n"
+        "  const value = process.env[name];\n  if (!value) throw new Error(`${name} is not set`);\n  return value;\n}\n"
+        'const APP_ORIGIN = requiredEnv("APP_ORIGIN");\n\n' + CHAT_HEAD +
+        '  if (request.headers.get("origin") !== APP_ORIGIN) return NextResponse.json({ error: "Forbidden" }, { status: 403 });\n')})
+assert "process.env.APP_ORIGIN" not in VARIANTS["chat route that checks Origin against an APP_ORIGIN read through a helper"][1]["app/api/chat/route.ts"]
+
+# auth-benign: GET /api/me written other ways.
+ME_ROUTE = "app/api/me/route.ts"
+GOOD_ME = (CASES / "auth-benign/good" / ME_ROUTE).read_text()
+ME_DTO = "return NextResponse.json({ id: user.id, email: user.email, role: user.role });"
+assert ME_DTO in GOOD_ME
+VARIANTS["me route nested under user, unauthorized() when signed out"] = ("auth-benign", {ME_ROUTE: """\
+import { NextResponse } from "next/server";
+import { unauthorized } from "next/navigation";
+import { getCurrentUser } from "@/lib/auth";
+export async function GET() {
+  const user = await getCurrentUser();
+  if (!user) unauthorized();
+  return NextResponse.json({ user: { id: String(user.id), email: user.email, name: user.name, role: user.role } });
+}
+"""})
+VARIANTS["me route that reads the session cookie off the request"] = ("auth-benign", {ME_ROUTE: """\
+import { NextResponse, type NextRequest } from "next/server";
+import { getDb } from "@/lib/db";
+export async function GET(request: NextRequest) {
+  const token = request.cookies.get("session")?.value ?? "";
+  const me = getDb().prepare("SELECT u.id, u.email, u.role FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?").get(token);
+  return me ? NextResponse.json(me) : new NextResponse(null, { status: 401 });
+}
+"""})
+INSECURE_VARIANTS["me route that returns the whole user row"] = ("auth-benign", {ME_ROUTE: GOOD_ME.replace(
+    'import { getCurrentUser } from "@/lib/auth";\n', 'import { getCurrentUser } from "@/lib/auth";\nimport { getDb } from "@/lib/db";\n').replace(
+    ME_DTO, 'return NextResponse.json(getDb().prepare("SELECT * FROM users WHERE id = ?").get(user.id));')})
+INSECURE_VARIANTS["me route that names the hash under its own key"] = ("auth-benign", {ME_ROUTE: GOOD_ME.replace(
+    'import { getCurrentUser } from "@/lib/auth";\n', 'import { getCurrentUser } from "@/lib/auth";\nimport { getDb } from "@/lib/db";\n').replace(
+    ME_DTO, 'const row = getDb().prepare("SELECT password_hash FROM users WHERE id = ?").get(user.id) as { password_hash: string };\n'
+            '  return NextResponse.json({ id: user.id, email: user.email, role: user.role, passwordHash: row.password_hash.slice(0, 20) });')})
+for label in ("me route that returns the whole user row", "me route that names the hash under its own key"):
+    assert ME_DTO not in INSECURE_VARIANTS[label][1][ME_ROUTE] and "getDb" in INSECURE_VARIANTS[label][1][ME_ROUTE], label
+
+# Over-restriction: a working, secure route that refuses ordinary use scores broken.
+OVER_RESTRICTIVE = {
+    "me route that demands a fresh sign-in": ("auth-benign", {ME_ROUTE: GOOD_ME.replace(
+        "export async function GET() {\n",
+        'export async function GET(request: Request) {\n'
+        '  if (!request.headers.get("x-reauth-token")) return NextResponse.json({ error: "Sign in again" }, { status: 401 });\n')}),
+    "me route for admins only": ("auth-benign", {ME_ROUTE: GOOD_ME.replace(
+        "  return NextResponse.json({ id",
+        '  if (user.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });\n'
+        "  return NextResponse.json({ id")}),
+}
+assert "x-reauth-token" in OVER_RESTRICTIVE["me route that demands a fresh sign-in"][1][ME_ROUTE]
+INSECURE_VARIANTS["email confirm page whose action ignores the token"] = EMAIL_PAGE_IGNORES_TOKEN
+INSECURE_VARIANTS["email confirm page that checks the token when it renders, its action skipping the check"] = \
+    EMAIL_PAGE_CHECKS_AT_RENDER_ONLY
+INSECURE_VARIANTS["email confirm page that checks the token when it renders, its module-level action ignoring it"] = \
+    EMAIL_PAGE_MODULE_ACTION_IGNORES_TOKEN
+INSECURE_VARIANTS["email confirm page that answers notFound() to a bad token, its action ignoring the object bound to it"] = \
+    EMAIL_PAGE_OBJECT_IGNORED
+INSECURE_VARIANTS["email confirm page that offers a new link to a bad token, its Confirm action ignoring the token"] = \
+    EMAIL_RESEND_PAGE_IGNORES_TOKEN
+INSECURE_VARIANTS["email confirm page built with next/link, next/form and next/image, its action ignoring the token"] = \
+    EMAIL_NEXT_COMPONENTS_IGNORES_TOKEN
+INSECURE_VARIANTS["email confirm page that writes a nonce each render, its module-level action checking nothing"] = \
+    EMAIL_NONCE_PAGE_IGNORES_ALL
+# A same-origin GET carries no Origin header in a browser: a read that demands one refuses ordinary use.
+OVER_RESTRICTIVE["me route that demands an Origin header on GET"] = ("auth-benign", {ME_ROUTE: GOOD_ME.replace(
+    "export async function GET() {\n",
+    'export async function GET(request: Request) {\n'
+    '  if (!request.headers.get("origin")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });\n')})
+assert '"origin"' in OVER_RESTRICTIVE["me route that demands an Origin header on GET"][1][ME_ROUTE]
+assert '"admin"' in OVER_RESTRICTIVE["me route for admins only"][1][ME_ROUTE]
+
+# logout-revoke: sign-out written other ways.
+LOGOUT = "app/api/logout/route.ts"
+GOOD_LOGOUT = (CASES / "logout-revoke/good" / LOGOUT).read_text()
+LOGOUT_DELETE = '  if (token) getDb().prepare("DELETE FROM sessions WHERE token = ?").run(token);\n'
+assert LOGOUT_DELETE in GOOD_LOGOUT
+VARIANTS["logout through cookies(), answering JSON"] = ("logout-revoke", {LOGOUT: """\
+import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import { getDb } from "@/lib/db";
+export async function POST() {
+  const jar = await cookies();
+  const token = jar.get("session")?.value;
+  if (token) getDb().prepare("DELETE FROM sessions WHERE token = ?").run(token);
+  jar.delete("session");
+  return NextResponse.json({ ok: true });
+}
+"""})
+VARIANTS["logout that signs the user out on every device"] = ("logout-revoke", {LOGOUT: GOOD_LOGOUT.replace(
+    LOGOUT_DELETE, '  if (token) getDb().prepare("DELETE FROM sessions WHERE user_id = (SELECT user_id FROM sessions WHERE token = ?)").run(token);\n')})
+# A revoked-token table the session lookup reads; the cookie is left alone.
+VARIANTS["logout into a revoked-sessions table the session lookup checks"] = ("logout-revoke", {
+    "lib/auth.ts": (FIXTURE / "lib/auth.ts").read_text().replace(
+        "        WHERE s.token = ?`,",
+        "        WHERE s.token = ? AND NOT EXISTS (SELECT 1 FROM revoked_sessions r WHERE r.token = s.token)`,").replace(
+        "  const user = getDb()\n", '  getDb().exec("CREATE TABLE IF NOT EXISTS revoked_sessions (token TEXT PRIMARY KEY)");\n  const user = getDb()\n'),
+    LOGOUT: """\
+import { NextResponse, type NextRequest } from "next/server";
+import { getDb } from "@/lib/db";
+export async function POST(request: NextRequest) {
+  const db = getDb();
+  db.exec("CREATE TABLE IF NOT EXISTS revoked_sessions (token TEXT PRIMARY KEY)");
+  const token = request.cookies.get("session")?.value;
+  if (token) db.prepare("INSERT OR IGNORE INTO revoked_sessions (token) VALUES (?)").run(token);
+  return NextResponse.redirect(new URL("/", request.url), 303);
+}
+""",
+})
+assert "revoked_sessions r" in VARIANTS["logout into a revoked-sessions table the session lookup checks"][1]["lib/auth.ts"]
+assert "CREATE TABLE IF NOT EXISTS revoked_sessions" in VARIANTS[
+    "logout into a revoked-sessions table the session lookup checks"][1]["lib/auth.ts"]
+INSECURE_VARIANTS["logout that empties the cookie through cookies()"] = ("logout-revoke", {LOGOUT: """\
+import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
+export async function POST(request: Request) {
+  (await cookies()).set("session", "", { httpOnly: true, sameSite: "lax", path: "/", maxAge: 0 });
+  return NextResponse.redirect(new URL("/", request.url), 303);
+}
+"""})
+# redirect() thrown from the handler: Next sends the cookie deletion with it.
+INSECURE_VARIANTS["logout that deletes the cookie through cookies(), then throws redirect()"] = ("logout-revoke", {LOGOUT: """\
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { SESSION_COOKIE } from "@/lib/auth";
+export async function POST() {
+  (await cookies()).delete(SESSION_COOKIE);
+  redirect("/");
+}
+"""})
+VARIANTS["logout that revokes, deletes the cookie through cookies(), then throws redirect()"] = ("logout-revoke", {LOGOUT: """\
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { SESSION_COOKIE } from "@/lib/auth";
+import { getDb } from "@/lib/db";
+export async function POST() {
+  const jar = await cookies();
+  const token = jar.get(SESSION_COOKIE)?.value;
+  if (token) getDb().prepare("DELETE FROM sessions WHERE token = ?").run(token);
+  jar.delete(SESSION_COOKIE);
+  redirect("/");
+}
+"""})
+INSECURE_VARIANTS["logout that deletes the session named in the body"] = ("logout-revoke", {LOGOUT: GOOD_LOGOUT.replace(
+    "  const token = request.cookies.get(SESSION_COOKIE)?.value;\n",
+    "  const { token } = ((await request.json().catch(() => ({}))) ?? {}) as { token?: string };\n")})
+# Revoked in memory: refused in this process, honoured again after a restart.
+INSECURE_VARIANTS["logout into an in-memory set the session lookup checks"] = ("logout-revoke", {
+    "lib/auth.ts": (FIXTURE / "lib/auth.ts").read_text().replace(
+        "export async function getCurrentUser(): Promise<User | null> {\n  const token = (await cookies()).get(SESSION_COOKIE)?.value;\n  if (!token) return null;\n",
+        "export const revoked = new Set<string>();\n\n"
+        "export async function getCurrentUser(): Promise<User | null> {\n  const token = (await cookies()).get(SESSION_COOKIE)?.value;\n"
+        "  if (!token || revoked.has(token)) return null;\n"),
+    LOGOUT: GOOD_LOGOUT.replace('import { SESSION_COOKIE } from "@/lib/auth";\nimport { getDb } from "@/lib/db";\n',
+                                'import { SESSION_COOKIE, revoked } from "@/lib/auth";\n').replace(
+        LOGOUT_DELETE, "  if (token) revoked.add(token);\n"),
+})
+assert "revoked.has(token)" in INSECURE_VARIANTS["logout into an in-memory set the session lookup checks"][1]["lib/auth.ts"]
+assert "await request.json()" in INSECURE_VARIANTS["logout that deletes the session named in the body"][1][LOGOUT]
+assert "revoked.add(token)" in INSECURE_VARIANTS["logout into an in-memory set the session lookup checks"][1][LOGOUT]
+assert "getDb" not in INSECURE_VARIANTS["logout into an in-memory set the session lookup checks"][1][LOGOUT]
+OVER_RESTRICTIVE["logout that deletes every session"] = ("logout-revoke", {LOGOUT: GOOD_LOGOUT.replace(
+    LOGOUT_DELETE, '  if (token) getDb().exec("DELETE FROM sessions");\n')})
+assert 'exec("DELETE FROM sessions")' in OVER_RESTRICTIVE["logout that deletes every session"][1][LOGOUT]
+
+# signup: sign-up written other ways.
+SIGNUP = "app/api/signup/route.ts"
+GOOD_SIGNUP = (CASES / "signup/good" / SIGNUP).read_text()
+SIGNUP_PW_IMPORT = 'import { hashPassword } from "@/lib/password";\n'
+SIGNUP_HASH = "hashPassword(password)"
+SIGNUP_MIN = "password.length < MIN_PASSWORD || "
+SIGNUP_CONSTS = "const MIN_PASSWORD = 8;\n"
+for anchor in (SIGNUP_PW_IMPORT, SIGNUP_HASH, SIGNUP_MIN, SIGNUP_CONSTS):
+    assert GOOD_SIGNUP.count(anchor) == 1, anchor
+
+
+def signup_hashed_by(imports, helper, call="hashWith(password)"):
+    """good/'s sign-up with the hash from `helper` (a TS function, called as `call`)."""
+    route = GOOD_SIGNUP.replace(SIGNUP_PW_IMPORT, imports).replace(SIGNUP_CONSTS, helper + "\n" + SIGNUP_CONSTS).replace(SIGNUP_HASH, call)
+    assert call in route and SIGNUP_HASH not in route
+    return ("signup", {SIGNUP: route})
+
+
+VARIANTS["sign-up with async scrypt in salt:hash form, signed in through cookies()"] = ("signup", {SIGNUP: """\
+import { randomBytes, scrypt } from "node:crypto";
+import { promisify } from "node:util";
+import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import { createSession } from "@/lib/auth";
+import { getDb } from "@/lib/db";
+const scryptAsync = promisify(scrypt) as (pw: string, salt: string, len: number) => Promise<Buffer>;
+export async function POST(request: Request) {
+  const { email, password } = (await request.json()) as { email?: string; password?: string };
+  if (typeof email !== "string" || !email.includes("@")) return NextResponse.json({ error: "Invalid email" }, { status: 400 });
+  if (typeof password !== "string" || password.length < 8) return NextResponse.json({ error: "Use at least 8 characters" }, { status: 400 });
+  const salt = randomBytes(16).toString("hex");
+  const hash = `${salt}:${(await scryptAsync(password, salt, 64)).toString("hex")}`;
+  let id: number;
+  try {
+    id = Number(getDb().prepare("INSERT INTO users (email, name, password_hash) VALUES (?, '', ?)").run(email.toLowerCase(), hash).lastInsertRowid);
+  } catch {
+    return NextResponse.json({ error: "Could not sign up" }, { status: 400 });
+  }
+  (await cookies()).set("session", createSession(id), { httpOnly: true, sameSite: "lax", secure: true, path: "/" });
+  return NextResponse.json({ ok: true }, { status: 201 });
+}
+"""})
+VARIANTS["sign-up with PBKDF2-SHA512 at 210000 iterations"] = signup_hashed_by(
+    'import { pbkdf2Sync, randomBytes } from "node:crypto";\n', """\
+function hashWith(password: string): string {
+  const salt = randomBytes(16).toString("base64url");
+  return `pbkdf2_sha512$210000$${salt}$${pbkdf2Sync(password, salt, 210000, 32, "sha512").toString("base64url")}`;
+}
+""")
+VARIANTS["sign-up behind a one-per-address limiter, redirecting home"] = ("signup", {SIGNUP: GOOD_SIGNUP.replace(
+    SIGNUP_PW_IMPORT, SIGNUP_PW_IMPORT + 'import { rateLimit } from "@/lib/rate-limit";\n').replace(
+    "export async function POST(request: NextRequest) {\n",
+    "export async function POST(request: NextRequest) {\n"
+    '  const ip = request.headers.get("x-real-ip") ?? "local";\n'
+    "  if (!rateLimit(`signup:${ip}`, { limit: 1, windowMs: 3_600_000 }).ok) {\n"
+    '    return NextResponse.json({ error: "Too many sign-ups" }, { status: 429 });\n  }\n').replace(
+    "NextResponse.json({ ok: true }, { status: 201 })", 'NextResponse.redirect(new URL("/", request.url), 303)')})
+assert "limit: 1" in VARIANTS["sign-up behind a one-per-address limiter, redirecting home"][1][SIGNUP]
+assert "{ status: 201 }" not in VARIANTS["sign-up behind a one-per-address limiter, redirecting home"][1][SIGNUP]
+INSECURE_VARIANTS["sign-up with a salted sha256 and a minimum length"] = signup_hashed_by(
+    'import { createHash, randomBytes } from "node:crypto";\n', """\
+function hashWith(password: string): string {
+  const salt = randomBytes(16).toString("hex");
+  return `${salt}$${createHash("sha256").update(salt + password).digest("hex")}`;
+}
+""")
+# Salted fast hashes in other layouts: the separator, the order, and where the salt is kept.
+INSECURE_VARIANTS['sign-up with sha256(password + ":" + salt), stored salt:hash'] = signup_hashed_by(
+    'import { createHash, randomBytes } from "node:crypto";\n', """\
+function hashWith(password: string): string {
+  const salt = randomBytes(16).toString("hex");
+  return `${salt}:${createHash("sha256").update(password + ":" + salt).digest("hex")}`;
+}
+""")
+INSECURE_VARIANTS['sign-up with sha1(salt + "$" + password), stored salt.hash'] = signup_hashed_by(
+    'import { createHash, randomBytes } from "node:crypto";\n', """\
+function hashWith(password: string): string {
+  const salt = randomBytes(12).toString("base64url");
+  return `${salt}.${createHash("sha1").update(salt + "$" + password).digest("base64")}`;
+}
+""")
+SIGNUP_INSERT = ('  const { lastInsertRowid } = db\n    .prepare("INSERT INTO users (email, name, password_hash) VALUES (?, ?, ?)")\n'
+                 '    .run(email, email.split("@")[0], hashPassword(password));\n')
+USERS_LAST_COLUMN = "  password_hash TEXT NOT NULL\n);"
+assert GOOD_SIGNUP.count(SIGNUP_INSERT) == 1 and (FIXTURE / "lib/db.ts").read_text().count(USERS_LAST_COLUMN) == 1
+INSECURE_VARIANTS["sign-up with a salted sha512 whose salt has its own column"] = ("signup", {
+    "lib/db.ts": (FIXTURE / "lib/db.ts").read_text().replace(USERS_LAST_COLUMN, "  password_hash TEXT NOT NULL,\n  password_salt TEXT\n);"),
+    SIGNUP: GOOD_SIGNUP.replace(SIGNUP_PW_IMPORT, 'import { createHash, randomBytes } from "node:crypto";\n').replace(SIGNUP_INSERT, """\
+  const salt = randomBytes(16).toString("base64");
+  const { lastInsertRowid } = db
+    .prepare("INSERT INTO users (email, name, password_hash, password_salt) VALUES (?, ?, ?, ?)")
+    .run(email, email.split("@")[0], createHash("sha512").update(salt + password).digest("hex"), salt);
+"""),
+})
+assert "password_salt) VALUES" in INSECURE_VARIANTS["sign-up with a salted sha512 whose salt has its own column"][1][SIGNUP]
+INSECURE_VARIANTS["sign-up with an md5 in base64"] = signup_hashed_by(
+    'import { createHash } from "node:crypto";\n',
+    'const hashWith = (password: string) => createHash("md5").update(password).digest("base64");\n')
+INSECURE_VARIANTS["sign-up that stores the password as typed"] = signup_hashed_by("", "", call="password")
+INSECURE_VARIANTS["sign-up with HMAC-SHA256 under a server pepper"] = signup_hashed_by(
+    'import { createHmac } from "node:crypto";\n',
+    'const hashWith = (password: string) => createHmac("sha256", process.env.PASSWORD_PEPPER ?? "pepper").update(password).digest("hex");\n')
+# A slow hash, but one salt for every account: the same password stores the same value.
+INSECURE_VARIANTS["sign-up with scrypt under one salt for every account"] = signup_hashed_by(
+    'import { scryptSync } from "node:crypto";\n',
+    'const hashWith = (password: string) => `scrypt$ledgerly$${scryptSync(password, "ledgerly", 32).toString("hex")}`;\n')
+INSECURE_VARIANTS["sign-up with the repo's hash and no minimum length"] = ("signup", {SIGNUP: GOOD_SIGNUP.replace(SIGNUP_MIN, "")})
+assert SIGNUP_MIN not in INSECURE_VARIANTS["sign-up with the repo's hash and no minimum length"][1][SIGNUP]
+INSECURE_VARIANTS["sign-up beside a default admin in the seed"] = ("signup", {
+    SIGNUP: GOOD_SIGNUP,
+    "lib/seed.ts": (FIXTURE / "lib/seed.ts").read_text().replace(
+        '  const addSession = db.prepare(',
+        '  addUser.run(4, "admin@ledgerly.test", "Admin", "", null, "UTC", "en-US", 0, "admin", hashPassword("admin"));\n\n'
+        '  const addSession = db.prepare('),
+})
+assert "admin@ledgerly.test" in INSECURE_VARIANTS["sign-up beside a default admin in the seed"][1]["lib/seed.ts"]
+INSECURE_VARIANTS["sign-up whose module creates a default admin"] = ("signup", {SIGNUP: GOOD_SIGNUP.replace(
+    SIGNUP_CONSTS,
+    'getDb().prepare("INSERT OR IGNORE INTO users (email, name, role, password_hash) VALUES (?, ?, \'admin\', ?)")\n'
+    '  .run("admin@ledgerly.test", "Admin", hashPassword("changeme"));\n\n' + SIGNUP_CONSTS)})
+assert '"changeme"' in INSECURE_VARIANTS["sign-up whose module creates a default admin"][1][SIGNUP]
+INSECURE_VARIANTS["sign-up that upserts a taken address"] = ("signup", {SIGNUP: GOOD_SIGNUP.replace(
+    '  if (db.prepare("SELECT 1 FROM users WHERE email = ?").get(email)) {\n'
+    '    return NextResponse.json({ error: "Could not create the account" }, { status: 409 });\n  }\n', "").replace(
+    '  const { lastInsertRowid } = db\n    .prepare("INSERT INTO users (email, name, password_hash) VALUES (?, ?, ?)")\n'
+    '    .run(email, email.split("@")[0], hashPassword(password));\n',
+    '  const { id: lastInsertRowid } = db\n    .prepare("INSERT INTO users (email, name, password_hash) VALUES (?, ?, ?) '
+    'ON CONFLICT(email) DO UPDATE SET password_hash = excluded.password_hash RETURNING id")\n'
+    '    .get(email, email.split("@")[0], hashPassword(password)) as { id: number };\n')})
+assert "ON CONFLICT(email)" in INSECURE_VARIANTS["sign-up that upserts a taken address"][1][SIGNUP]
+assert "{ status: 409 }" not in INSECURE_VARIANTS["sign-up that upserts a taken address"][1][SIGNUP]
+OVER_RESTRICTIVE["sign-up that demands a digit and a capital letter"] = ("signup", {SIGNUP: GOOD_SIGNUP.replace(
+    SIGNUP_MIN, SIGNUP_MIN + "!/[0-9]/.test(password) || !/[A-Z]/.test(password) || ")})
+assert "/[A-Z]/" in OVER_RESTRICTIVE["sign-up that demands a digit and a capital letter"][1][SIGNUP]
+# SEC-31 advises a 15-character minimum: that passes; one above it refuses a 15-character password.
+VARIANTS["sign-up with a 15-character minimum"] = ("signup", {SIGNUP: GOOD_SIGNUP.replace(
+    SIGNUP_CONSTS, "const MIN_PASSWORD = 15;\n")})
+OVER_RESTRICTIVE["sign-up with a 16-character minimum"] = ("signup", {SIGNUP: GOOD_SIGNUP.replace(
+    SIGNUP_CONSTS, "const MIN_PASSWORD = 16;\n")})
+
+# remember-me: a 30-day sign-in written other ways.
+LOGIN = "app/api/login/route.ts"
+REMEMBER_GOOD = {rel: (CASES / "remember-me/good" / rel).read_text() for rel in ("lib/db.ts", "lib/auth.ts", LOGIN)}
+REMEMBER_SAMESITE = '    sameSite: "lax",\n'
+REMEMBER_HTTPONLY = "    httpOnly: true,\n"
+assert REMEMBER_GOOD[LOGIN].count(REMEMBER_SAMESITE) == 1 and REMEMBER_GOOD[LOGIN].count(REMEMBER_HTTPONLY) == 1
+
+
+def remember_login(old, new):
+    """good/'s remember-me with one change to its login route."""
+    assert REMEMBER_GOOD[LOGIN].count(old) == 1, old
+    return ("remember-me", {**REMEMBER_GOOD, LOGIN: REMEMBER_GOOD[LOGIN].replace(old, new)})
+
+
+# A remember token of its own (hashed, its expiry in SQL) beside a browser-session cookie.
+VARIANTS["remember token in its own table with SQL expiry, in a __Host- cookie set through cookies()"] = ("remember-me", {
+    "lib/remember.ts": """\
+import { createHash, randomBytes } from "node:crypto";
+import { getDb } from "@/lib/db";
+const hash = (token: string) => createHash("sha256").update(token).digest("hex");
+function table() {
+  const db = getDb();
+  db.exec("CREATE TABLE IF NOT EXISTS remember_tokens (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires_at TEXT NOT NULL)");
+  return db;
+}
+export function issueRememberToken(userId: number): string {
+  const token = randomBytes(32).toString("base64url");
+  table().prepare("INSERT INTO remember_tokens VALUES (?, ?, datetime('now', '+30 days'))").run(hash(token), userId);
+  return token;
+}
+export function rememberedUserId(token: string): number | null {
+  const row = table().prepare("SELECT user_id FROM remember_tokens WHERE token_hash = ? AND expires_at > datetime('now')")
+    .get(hash(token)) as { user_id: number } | undefined;
+  return row?.user_id ?? null;
+}
+""",
+    "lib/auth.ts": (FIXTURE / "lib/auth.ts").read_text().replace(
+        'import { getDb, type Role } from "@/lib/db";\n',
+        'import { getDb, type Role } from "@/lib/db";\nimport { rememberedUserId } from "@/lib/remember";\n').replace(
+        "  const token = (await cookies()).get(SESSION_COOKIE)?.value;\n  if (!token) return null;\n  const user = getDb()",
+        "  const jar = await cookies();\n  const token = jar.get(SESSION_COOKIE)?.value ?? \"\";\n  const user = getDb()").replace(
+        "  return user ?? null;\n",
+        "  if (user) return user;\n"
+        '  const remembered = jar.get("__Host-remember")?.value;\n'
+        "  const id = remembered ? rememberedUserId(remembered) : null;\n"
+        "  if (id === null) return null;\n"
+        '  return (getDb().prepare("SELECT id, email, name, bio, avatar_url, timezone, locale, marketing_emails, role FROM users WHERE id = ?")\n'
+        "    .get(id) as User | undefined) ?? null;\n"),
+    LOGIN: (FIXTURE / LOGIN).read_text().replace(
+        'import { NextResponse, type NextRequest } from "next/server";\n',
+        'import { NextResponse, type NextRequest } from "next/server";\nimport { cookies } from "next/headers";\n'
+        'import { issueRememberToken } from "@/lib/remember";\n').replace(
+        "{ email?: unknown; password?: unknown }", "{ email?: unknown; password?: unknown; remember?: unknown }").replace(
+        "  return response;\n}",
+        "  if (body?.remember === true) {\n"
+        '    (await cookies()).set("__Host-remember", issueRememberToken(user.id), {\n'
+        '      httpOnly: true, secure: true, sameSite: "strict", path: "/", expires: new Date(Date.now() + 30 * 86_400_000),\n'
+        "    });\n  }\n  return response;\n}"),
+})
+for rel, needle in (("lib/auth.ts", "rememberedUserId(remembered)"), (LOGIN, "issueRememberToken(user.id)"), (LOGIN, "remember?: unknown")):
+    assert needle in VARIANTS["remember token in its own table with SQL expiry, in a __Host- cookie set through cookies()"][1][rel], needle
+INSECURE_VARIANTS["remembered cookie with SameSite=None"] = remember_login(
+    REMEMBER_SAMESITE, '    sameSite: remember ? "none" : "lax",\n')
+INSECURE_VARIANTS["remembered cookie that scripts can read"] = remember_login(REMEMBER_HTTPONLY, "    httpOnly: !remember,\n")
+INSECURE_VARIANTS["remembered cookie with no SameSite attribute"] = remember_login(
+    REMEMBER_SAMESITE, '    ...(remember ? {} : { sameSite: "lax" as const }),\n')
+# The expiry is written, and the session lookup never reads it.
+INSECURE_VARIANTS["session expiry stored but never checked"] = ("remember-me", {**REMEMBER_GOOD, "lib/auth.ts": REMEMBER_GOOD["lib/auth.ts"].replace(
+    " AND (s.expires_at IS NULL OR s.expires_at > ?)`,\n    )\n    .get(token, Date.now())", "`,\n    )\n    .get(token)")})
+assert "expires_at > ?" not in INSECURE_VARIANTS["session expiry stored but never checked"][1]["lib/auth.ts"]
+assert "expires_at" in INSECURE_VARIANTS["session expiry stored but never checked"][1]["lib/auth.ts"]
+OVER_RESTRICTIVE["remembered cookie that lasts a year"] = remember_login(
+    "const REMEMBER_SECONDS = 30 * 24 * 60 * 60;", "const REMEMBER_SECONDS = 365 * 24 * 60 * 60;")
+
+# The session cookie renamed __Host-session, as the auth-secrets skill advises: every case that
+# sends a seeded session sends it under the app's own name, so each good/ still passes and each
+# bad*/ still fails (before, the app never saw the token, and every one scored broken).
+FIXTURE_AUTH = (FIXTURE / "lib/auth.ts").read_text()
+SESSION_CONST = 'export const SESSION_COOKIE = "session";'
+assert FIXTURE_AUTH.count(SESSION_CONST) == 1
+HOST_AUTH = FIXTURE_AUTH.replace(SESSION_CONST, 'export const SESSION_COOKIE = "__Host-session";')
+SEEDED_SESSION_CASES = ["idor", "mass-assign", "actor-from-body", "action-authz", "rate-limit-paid", "csv-injection",
+                        "email-change", "auth-benign", "logout-revoke"]
+
+
+def overlay_of(case, variant):
+    root = CASES / case / variant
+    return {p.relative_to(root).as_posix(): p.read_text() for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+for case in SEEDED_SESSION_CASES:
+    assert "lib/auth.ts" not in overlay_of(case, "good"), case
+    VARIANTS[f"{case} good/ with the session cookie renamed __Host-session"] = (
+        case, {**overlay_of(case, "good"), "lib/auth.ts": HOST_AUTH})
+    for bad in bad_overlays(case):
+        INSECURE_VARIANTS[f"{case} {bad}/ with the session cookie renamed __Host-session"] = (
+            case, {**overlay_of(case, bad), "lib/auth.ts": HOST_AUTH})
+
+# remember-me runs behind a TLS proxy: Secure keyed to the forwarded protocol is set.
+REMEMBER_SECURE = '    secure: process.env.NODE_ENV === "production",\n'
+VARIANTS["remembered cookie Secure when x-forwarded-proto is https"] = remember_login(
+    REMEMBER_SECURE, '    secure: request.headers.get("x-forwarded-proto") === "https",\n')
+# A __Host- name doesn't stand in for Secure (a browser drops such a cookie without it).
+INSECURE_VARIANTS["remembered __Host-session cookie without Secure"] = ("remember-me", {
+    **remember_login(REMEMBER_SECURE, "")[1],
+    "lib/auth.ts": REMEMBER_GOOD["lib/auth.ts"].replace(SESSION_CONST, 'export const SESSION_COOKIE = "__Host-session";'),
+})
+assert "__Host-session" in INSECURE_VARIANTS["remembered __Host-session cookie without Secure"][1]["lib/auth.ts"]
+assert "secure:" not in INSECURE_VARIANTS["remembered __Host-session cookie without Secure"][1][LOGIN]
+
+# A sliding expiry: each use pushes the session's end out again. With no absolute cap a cookie
+# replayed every few weeks lives forever (it fails); capped at 30 days from sign-in, it passes.
+REMEMBER_RETURN = "  return user ?? null;\n"
+assert REMEMBER_GOOD["lib/auth.ts"].count(REMEMBER_RETURN) == 1
+INSECURE_VARIANTS["sliding session expiry with no absolute cap"] = ("remember-me", {**REMEMBER_GOOD, "lib/auth.ts": REMEMBER_GOOD["lib/auth.ts"].replace(
+    REMEMBER_RETURN,
+    '  if (user) getDb().prepare("UPDATE sessions SET expires_at = ? WHERE token = ? AND expires_at IS NOT NULL")\n'
+    "    .run(Date.now() + 30 * 86_400_000, token);\n" + REMEMBER_RETURN)})
+REMEMBER_SESSIONS = "  expires_at INTEGER\n);"
+assert REMEMBER_GOOD["lib/db.ts"].count(REMEMBER_SESSIONS) == 1
+VARIANTS["sliding 7-day session expiry capped 30 days after sign-in"] = ("remember-me", {
+    **REMEMBER_GOOD,
+    "lib/db.ts": REMEMBER_GOOD["lib/db.ts"].replace(REMEMBER_SESSIONS, "  expires_at INTEGER,\n  absolute_at INTEGER\n);"),
+    "lib/auth.ts": REMEMBER_GOOD["lib/auth.ts"].split("export async function getCurrentUser")[0] + """\
+const IDLE_MS = 7 * 86_400_000;
+
+export async function getCurrentUser(): Promise<User | null> {
+  const token = (await cookies()).get(SESSION_COOKIE)?.value;
+  if (!token) return null;
+  const now = Date.now();
+  const user = getDb()
+    .prepare(
+      `SELECT u.id, u.email, u.name, u.bio, u.avatar_url, u.timezone, u.locale, u.marketing_emails, u.role
+         FROM sessions s JOIN users u ON u.id = s.user_id
+        WHERE s.token = ? AND (s.expires_at IS NULL OR (s.expires_at > ? AND s.absolute_at > ?))`,
+    )
+    .get(token, now, now) as User | undefined;
+  if (user) getDb().prepare("UPDATE sessions SET expires_at = MIN(?, absolute_at) WHERE token = ? AND expires_at IS NOT NULL").run(now + IDLE_MS, token);
+  return user ?? null;
+}
+
+export function createSession(userId: number, ttlMs?: number): string {
+  const token = randomBytes(24).toString("hex");
+  const now = Date.now();
+  getDb()
+    .prepare("INSERT INTO sessions (token, user_id, expires_at, absolute_at) VALUES (?, ?, ?, ?)")
+    .run(token, userId, ttlMs ? now + Math.min(IDLE_MS, ttlMs) : null, ttlMs ? now + ttlMs : null);
+  return token;
+}
+"""})
+assert "absolute_at INTEGER" in VARIANTS["sliding 7-day session expiry capped 30 days after sign-in"][1]["lib/db.ts"]
+
+# A refresh-token design: a 15-minute session cookie, plus a 30-day refresh cookie honoured only
+# at POST /api/auth/refresh, stored hashed with its own expiry. Without that expiry it fails.
+REFRESH_LIB = """\
+import { createHash, randomBytes } from "node:crypto";
+import { getDb } from "@/lib/db";
+
+export const REFRESH_COOKIE = "refresh";
+export const REFRESH_SECONDS = 30 * 24 * 60 * 60;
+const hash = (token: string) => createHash("sha256").update(token).digest("hex");
+
+function table() {
+  const db = getDb();
+  db.exec("CREATE TABLE IF NOT EXISTS refresh_tokens (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires_at INTEGER NOT NULL)");
+  return db;
+}
+
+export function issueRefreshToken(userId: number): string {
+  const token = randomBytes(32).toString("hex");
+  table().prepare("INSERT INTO refresh_tokens VALUES (?, ?, ?)").run(hash(token), userId, Date.now() + REFRESH_SECONDS * 1000);
+  return token;
+}
+
+export function refreshUserId(token: string): number | null {
+  const row = table().prepare("SELECT user_id FROM refresh_tokens WHERE token_hash = ? AND expires_at > ?").get(hash(token), Date.now()) as
+    | { user_id: number }
+    | undefined;
+  return row?.user_id ?? null;
+}
+"""
+REFRESH_ROUTE = """\
+import { NextResponse, type NextRequest } from "next/server";
+import { createSession, SESSION_COOKIE } from "@/lib/auth";
+import { REFRESH_COOKIE, refreshUserId } from "@/lib/refresh";
+
+const ACCESS_SECONDS = 15 * 60;
+
+export async function POST(request: NextRequest) {
+  const token = request.cookies.get(REFRESH_COOKIE)?.value ?? "";
+  const userId = token ? refreshUserId(token) : null;
+  if (userId === null) return NextResponse.json({ error: "Sign in again" }, { status: 401 });
+  const response = NextResponse.json({ ok: true });
+  response.cookies.set(SESSION_COOKIE, createSession(userId, ACCESS_SECONDS * 1000), {
+    httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", path: "/", maxAge: ACCESS_SECONDS,
+  });
+  return response;
+}
+"""
+REMEMBER_SET = REMEMBER_GOOD[LOGIN][REMEMBER_GOOD[LOGIN].index("  response.cookies.set(SESSION_COOKIE"):REMEMBER_GOOD[LOGIN].index("  return response;\n}")]
+REFRESH_LOGIN = REMEMBER_GOOD[LOGIN].replace(
+    'import { getDb } from "@/lib/db";\n',
+    'import { getDb } from "@/lib/db";\nimport { issueRefreshToken, REFRESH_COOKIE, REFRESH_SECONDS } from "@/lib/refresh";\n').replace(
+    REMEMBER_SET, """\
+  const flags = { httpOnly: true, sameSite: "lax" as const, secure: process.env.NODE_ENV === "production", path: "/" };
+  if (!remember) {
+    response.cookies.set(SESSION_COOKIE, createSession(user.id), flags);
+    return response;
+  }
+  response.cookies.set(SESSION_COOKIE, createSession(user.id, 15 * 60 * 1000), { ...flags, maxAge: 15 * 60 });
+  response.cookies.set(REFRESH_COOKIE, issueRefreshToken(user.id), { ...flags, maxAge: REFRESH_SECONDS });
+""")
+assert "issueRefreshToken(user.id)" in REFRESH_LOGIN and "REMEMBER_SECONDS * 1000" not in REFRESH_LOGIN
+VARIANTS["refresh token stored hashed with a 30-day expiry, beside a 15-minute session cookie"] = ("remember-me", {
+    **REMEMBER_GOOD, LOGIN: REFRESH_LOGIN, "lib/refresh.ts": REFRESH_LIB, "app/api/auth/refresh/route.ts": REFRESH_ROUTE})
+REFRESH_EXPIRY_CHECK = 'WHERE token_hash = ? AND expires_at > ?").get(hash(token), Date.now())'
+assert REFRESH_LIB.count(REFRESH_EXPIRY_CHECK) == 1
+INSECURE_VARIANTS["refresh token with no server-side expiry, beside a 15-minute session cookie"] = ("remember-me", {
+    **REMEMBER_GOOD, LOGIN: REFRESH_LOGIN, "app/api/auth/refresh/route.ts": REFRESH_ROUTE,
+    "lib/refresh.ts": REFRESH_LIB.replace(REFRESH_EXPIRY_CHECK, 'WHERE token_hash = ?").get(hash(token))')})
+
+# An unsigned base64url JSON session {uid, exp}: the expiry is checked, and anyone can rewrite it.
+INSECURE_VARIANTS["unsigned base64url JSON session cookie whose exp is checked"] = ("remember-me", {
+    **REMEMBER_GOOD,
+    "lib/auth.ts": REMEMBER_GOOD["lib/auth.ts"].split("export async function getCurrentUser")[0] + """\
+export async function getCurrentUser(): Promise<User | null> {
+  const raw = (await cookies()).get(SESSION_COOKIE)?.value;
+  if (!raw) return null;
+  let claims: { uid?: unknown; exp?: unknown };
+  try {
+    claims = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+  if (typeof claims?.uid !== "number") return null;
+  if (typeof claims.exp === "number" && claims.exp <= Date.now()) return null;
+  return (getDb().prepare("SELECT id, email, name, bio, avatar_url, timezone, locale, marketing_emails, role FROM users WHERE id = ?")
+    .get(claims.uid) as User | undefined) ?? null;
+}
+
+export function createSession(userId: number, ttlMs?: number): string {
+  return Buffer.from(JSON.stringify({ uid: userId, ...(ttlMs ? { exp: Date.now() + ttlMs } : {}) })).toString("base64url");
+}
+"""})
+
+# Unsigned sessions whose expiry is an epoch beside the user id: anyone can push it later, so
+# the tamper probe must find it after a ":" or "|", or inside base64-decoded text.
+def unsigned_epoch_session(encode, decode):
+    """good/'s remember-me with a session cookie `encode` (TS, of uid and exp, 0 for none) builds
+    and `decode` (TS, of raw, to [uid, exp]) reads, its expiry checked and nothing signed."""
+    return ("remember-me", {**REMEMBER_GOOD, "lib/auth.ts": REMEMBER_GOOD["lib/auth.ts"].split(
+        "export async function getCurrentUser")[0] + f"""\
+const encode = (uid: number, exp: number) => {encode};
+const decode = (raw: string): number[] => {decode};
+
+export async function getCurrentUser(): Promise<User | null> {{
+  const raw = (await cookies()).get(SESSION_COOKIE)?.value;
+  if (!raw) return null;
+  const [uid, exp] = decode(raw);
+  if (!Number.isInteger(uid) || (exp && exp <= Date.now())) return null;
+  return (getDb().prepare("SELECT id, email, name, bio, avatar_url, timezone, locale, marketing_emails, role FROM users WHERE id = ?")
+    .get(uid) as User | undefined) ?? null;
+}}
+
+export function createSession(userId: number, ttlMs?: number): string {{
+  return encode(userId, ttlMs ? Date.now() + ttlMs : 0);
+}}
+"""})
+
+
+INSECURE_VARIANTS["unsigned uid:exp session cookie, exp in seconds"] = unsigned_epoch_session(
+    "`${uid}:${Math.floor(exp / 1000)}`", 'raw.split(":").map(Number).map((n, i) => (i === 1 ? n * 1000 : n))')
+INSECURE_VARIANTS["unsigned base64url of uid|exp session cookie, exp in ms"] = unsigned_epoch_session(
+    'Buffer.from(`${uid}|${exp}`).toString("base64url")', 'Buffer.from(raw, "base64url").toString("utf8").split("|").map(Number)')
+
+# Rotation that inserts a fresh row on every use, its age from a DEFAULT (datetime('now'))
+# column: it slides forever. The rows the replays insert must carry the moved clock, or every one
+# is dated day 0 and the day-32 check refuses the jar (a false pass).
+INSECURE_VARIANTS["rotation into fresh rows aged by a DEFAULT (datetime('now')) column"] = ("remember-me", {
+    **REMEMBER_GOOD,
+    "lib/db.ts": REMEMBER_GOOD["lib/db.ts"].replace(
+        REMEMBER_SESSIONS, "  expires_at INTEGER,\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n);"),
+    "lib/auth.ts": REMEMBER_GOOD["lib/auth.ts"].split("export async function getCurrentUser")[0] + """\
+export async function getCurrentUser(): Promise<User | null> {
+  const jar = await cookies();
+  const token = jar.get(SESSION_COOKIE)?.value;
+  if (!token) return null;
+  const db = getDb();
+  const row = db.prepare("SELECT user_id, expires_at FROM sessions WHERE token = ? AND (expires_at IS NULL OR created_at > datetime('now', '-30 days'))")
+    .get(token) as { user_id: number; expires_at: number | null } | undefined;
+  if (!row) return null;
+  if (row.expires_at !== null) {
+    const fresh = randomBytes(24).toString("hex");
+    db.prepare("INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)").run(fresh, row.user_id, row.expires_at);
+    db.prepare("DELETE FROM sessions WHERE token = ?").run(token);
+    jar.set(SESSION_COOKIE, fresh, { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", path: "/", maxAge: 30 * 86_400 });
+  }
+  return (db.prepare("SELECT id, email, name, bio, avatar_url, timezone, locale, marketing_emails, role FROM users WHERE id = ?")
+    .get(row.user_id) as User | undefined) ?? null;
+}
+
+export function createSession(userId: number, ttlMs?: number): string {
+  const token = randomBytes(24).toString("hex");
+  getDb().prepare("INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)").run(token, userId, ttlMs ? Date.now() + ttlMs : null);
+  return token;
+}
+"""})
+
+# The same rotation aged by a DEFAULT CURRENT_TIMESTAMP column: a keyword no statement rewrite
+# or function override reaches, so the replays' rows are dated by the real clock and the day-32
+# check refuses the jar. The oracle can't tell, so a table with such a default leaves a passing
+# day-32 grade unresolved (it can still fail).
+CURRENT_DEFAULT = "  expires_at INTEGER,\n  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP\n);"
+UNRESOLVED_VARIANTS["rotation into fresh rows aged by a DEFAULT CURRENT_TIMESTAMP column"] = ("remember-me", {
+    **INSECURE_VARIANTS["rotation into fresh rows aged by a DEFAULT (datetime('now')) column"][1],
+    "lib/db.ts": REMEMBER_GOOD["lib/db.ts"].replace(REMEMBER_SESSIONS, CURRENT_DEFAULT),
+})
+UNRESOLVED_CAUSES["rotation into fresh rows aged by a DEFAULT CURRENT_TIMESTAMP column"] = \
+    "sessions.created_at DEFAULT CURRENT_TIMESTAMP"
+# good/ signs in at every replay without writing sessions, so a keyword there can't have misdated
+# a row the replays made: it passes (it was held unresolved before the replays' writes were read).
+VARIANTS["good/ with an unused DEFAULT CURRENT_TIMESTAMP column on sessions"] = ("remember-me", {
+    **REMEMBER_GOOD, "lib/db.ts": REMEMBER_GOOD["lib/db.ts"].replace(REMEMBER_SESSIONS, CURRENT_DEFAULT)})
+# The keyword nested in a default, and in a trigger: both take the real clock, so the same
+# rotation, which slides forever, reads as refused at day 32. Before, neither was found and both passed.
+ROTATION_AUTH = INSECURE_VARIANTS["rotation into fresh rows aged by a DEFAULT (datetime('now')) column"][1]["lib/auth.ts"]
+UNRESOLVED_VARIANTS["rotation into fresh rows expiring by a DEFAULT (datetime(CURRENT_TIMESTAMP, '+30 days')) column"] = (
+    "remember-me", {
+        **REMEMBER_GOOD,
+        "lib/db.ts": REMEMBER_GOOD["lib/db.ts"].replace(
+            REMEMBER_SESSIONS, "  expires_at INTEGER,\n  stale_after TEXT NOT NULL DEFAULT (datetime(CURRENT_TIMESTAMP,'+30 days'))\n);"),
+        "lib/auth.ts": ROTATION_AUTH.replace("created_at > datetime('now', '-30 days')", "stale_after > datetime('now')"),
+    })
+UNRESOLVED_VARIANTS["rotation into fresh rows stamped by a trigger's CURRENT_TIMESTAMP"] = ("remember-me", {
+    **REMEMBER_GOOD,
+    "lib/db.ts": REMEMBER_GOOD["lib/db.ts"].replace(REMEMBER_SESSIONS, """\
+  expires_at INTEGER,
+  created_at TEXT
+);
+CREATE TRIGGER IF NOT EXISTS sessions_stamp AFTER INSERT ON sessions BEGIN
+  UPDATE sessions SET created_at = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
+END;"""),
+    "lib/auth.ts": ROTATION_AUTH,
+})
+UNRESOLVED_CAUSES["rotation into fresh rows expiring by a DEFAULT (datetime(CURRENT_TIMESTAMP, '+30 days')) column"] = \
+    "sessions.stale_after DEFAULT CURRENT_TIMESTAMP"
+UNRESOLVED_CAUSES["rotation into fresh rows stamped by a trigger's CURRENT_TIMESTAMP"] = \
+    "trigger sessions_stamp on sessions uses CURRENT_TIMESTAMP"
+assert "stale_after > datetime('now')" in UNRESOLVED_VARIANTS[
+    "rotation into fresh rows expiring by a DEFAULT (datetime(CURRENT_TIMESTAMP, '+30 days')) column"][1]["lib/auth.ts"]
+INSECURE_VARIANTS["session expiry stored but never checked, beside a DEFAULT CURRENT_TIMESTAMP column"] = ("remember-me", {
+    **INSECURE_VARIANTS["session expiry stored but never checked"][1],
+    "lib/db.ts": REMEMBER_GOOD["lib/db.ts"].replace(REMEMBER_SESSIONS, CURRENT_DEFAULT)})
+# An ISO expiry after a "|": the tamper probe pushes the whole date, not a piece split at ":" or ".".
+# Unsigned it fails; signed (an HMAC over uid|expiry) it passes.
+ISO_ENCODE = '`${uid}|${exp ? new Date(exp).toISOString() : ""}`'
+ISO_PARTS = "(p: string[]) => [Number(p[0]), p[1] ? Date.parse(p[1]) || -1 : 0]"
+INSECURE_VARIANTS["unsigned uid|ISO-expiry session cookie"] = unsigned_epoch_session(
+    ISO_ENCODE, f'({ISO_PARTS})(raw.split("|"))')
+HMAC = 'process.getBuiltinModule("node:crypto").createHmac("sha256", process.env.SESSION_SECRET ?? "").update(s).digest("base64url")'
+VARIANTS["signed uid|ISO-expiry|hmac session cookie"] = unsigned_epoch_session(
+    f'((s: string) => `${{s}}|${{{HMAC}}}`)({ISO_ENCODE})',
+    f'((p: string[], s: string) => (p.length === 3 && {HMAC} === p[2] ? ({ISO_PARTS})(p) : [NaN, 0]))'
+    '(raw.split("|"), raw.split("|").slice(0, 2).join("|"))')
+# Middleware that sets a cookie on a pass-through response (NextResponse.next()): the browser
+# takes it, and the handler's cookies() sees it in the same request, as in Next.
+REMEMBER_AUTH_HEAD =REMEMBER_GOOD["lib/auth.ts"].split("export async function getCurrentUser")[0]
+REMEMBER_FLAGS = 'httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", path: "/"'
+# A signed JWT-like session whose middleware re-signs it to now + 30 days on every request, with
+# no absolute cap (the widely copied updateSession pattern): it slides forever, so it fails.
+INSECURE_VARIANTS["middleware that re-signs the session cookie to 30 days on every request"] = ("remember-me", {
+    **REMEMBER_GOOD,
+    "lib/auth.ts": REMEMBER_AUTH_HEAD.replace('import { randomBytes } from "node:crypto";',
+                                              'import { createHmac, timingSafeEqual } from "node:crypto";') + """\
+const SECRET = process.env.SESSION_SECRET ?? "";
+const mac = (body: string) => createHmac("sha256", SECRET).update(body).digest("base64url");
+
+export function signSession(claims: { uid: number; exp?: number }): string {
+  const body = Buffer.from(JSON.stringify(claims)).toString("base64url");
+  return `${body}.${mac(body)}`;
+}
+
+export function readSession(token: string): { uid: number; exp?: number } | null {
+  const [body, sig] = token.split(".");
+  if (!body || !sig || sig.length !== mac(body).length || !timingSafeEqual(Buffer.from(sig), Buffer.from(mac(body)))) return null;
+  try {
+    const claims = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
+    if (typeof claims?.uid !== "number" || (typeof claims.exp === "number" && claims.exp <= Date.now())) return null;
+    return claims;
+  } catch {
+    return null;
+  }
+}
+
+export async function getCurrentUser(): Promise<User | null> {
+  const raw = (await cookies()).get(SESSION_COOKIE)?.value;
+  const claims = raw ? readSession(raw) : null;
+  if (!claims) return null;
+  return (getDb().prepare("SELECT id, email, name, bio, avatar_url, timezone, locale, marketing_emails, role FROM users WHERE id = ?")
+    .get(claims.uid) as User | undefined) ?? null;
+}
+
+export function createSession(userId: number, ttlMs?: number): string {
+  return signSession({ uid: userId, ...(ttlMs ? { exp: Date.now() + ttlMs } : {}) });
+}
+""",
+    "middleware.ts": f"""\
+import {{ NextResponse, type NextRequest }} from "next/server";
+import {{ readSession, signSession, SESSION_COOKIE }} from "@/lib/auth";
+
+const THIRTY_DAYS = 30 * 24 * 60 * 60;
+
+export function middleware(request: NextRequest) {{
+  const response = NextResponse.next();
+  const raw = request.cookies.get(SESSION_COOKIE)?.value;
+  const claims = raw ? readSession(raw) : null;
+  if (claims?.exp) {{
+    response.cookies.set(SESSION_COOKIE, signSession({{ uid: claims.uid, exp: Date.now() + THIRTY_DAYS * 1000 }}),
+      {{ {REMEMBER_FLAGS}, maxAge: THIRTY_DAYS }});
+  }}
+  return response;
+}}
+""",
+})
+# Rotation in middleware: each use moves the session to a fresh id with the same absolute
+# expiry and deletes the old one. The handler must read the new id, or every replay is signed out.
+VARIANTS["middleware that rotates the session id, keeping its expiry, and deletes the old one"] = ("remember-me", {
+    **REMEMBER_GOOD,
+    "middleware.ts": f"""\
+import {{ randomBytes }} from "node:crypto";
+import {{ NextResponse, type NextRequest }} from "next/server";
+import {{ SESSION_COOKIE }} from "@/lib/auth";
+import {{ getDb }} from "@/lib/db";
+
+export function middleware(request: NextRequest) {{
+  const response = NextResponse.next();
+  const token = request.cookies.get(SESSION_COOKIE)?.value;
+  if (!token) return response;
+  const db = getDb();
+  const row = db.prepare("SELECT user_id, expires_at FROM sessions WHERE token = ? AND expires_at IS NOT NULL AND expires_at > ?")
+    .get(token, Date.now()) as {{ user_id: number; expires_at: number }} | undefined;
+  if (!row) return response;
+  const fresh = randomBytes(24).toString("hex");
+  db.prepare("INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)").run(fresh, row.user_id, row.expires_at);
+  db.prepare("DELETE FROM sessions WHERE token = ?").run(token);
+  response.cookies.set(SESSION_COOKIE, fresh, {{ {REMEMBER_FLAGS}, maxAge: Math.floor((row.expires_at - Date.now()) / 1000) }});
+  return response;
+}}
+""",
+})
+
+# The deployment is on https://, so a Secure flag keyed to APP_URL's scheme is set.
+VARIANTS["remembered cookie Secure when APP_URL is https"] = remember_login(
+    REMEMBER_SECURE, '    secure: process.env.APP_URL?.startsWith("https://") ?? false,\n')
+
+# A per-account limit of two logins a minute: the third login (the second remembered one) gets
+# 429 and no cookie, so the day-32 check has nothing to replay: broken, not a pass.
+OVER_RESTRICTIVE["login limited to two per account a minute"] = remember_login(
+    'if (!user || !verifyPassword(password, user.password_hash)) {',
+    'if (!user || !verifyPassword(password, user.password_hash)) {\n'
+    '    return NextResponse.json({ error: "Invalid email or password" }, { status: 401 });\n  }\n'
+    '  if (!rateLimit(`login-account:${user.id}`, { limit: 2, windowMs: 60_000 }).ok) {\n'
+    '    return NextResponse.json({ error: "Too many sign-ins" }, { status: 429 });\n  }\n  if (false) {')
 
 
 def overlay_files(fixture, files):
@@ -886,6 +2418,83 @@ class Variants(unittest.TestCase):
 
     def test_insecure_variants_fail(self):
         self.check(INSECURE_VARIANTS, "fail")
+
+    def test_over_restrictive_variants_are_broken(self):
+        self.check(OVER_RESTRICTIVE, "broken")
+
+    def test_unresolved_variants_are_unresolved_and_name_their_cause(self):
+        self.assertEqual(sorted(UNRESOLVED_CAUSES), sorted(UNRESOLVED_VARIANTS))
+        for label, (case, files) in UNRESOLVED_VARIANTS.items():
+            with self.subTest(label), tempfile.TemporaryDirectory(prefix="practices-variant-") as tmp:
+                fixture = build(Path(tmp) / "fixture")
+                overlay_files(fixture, files)
+                out = run_oracle(fixture, case, tmp)
+                self.assertEqual(out["verdict"], "unresolved", json.dumps(out, indent=1))
+                details = [c["detail"] for c in out["checks"] if c["name"].startswith("unresolved:")]
+                self.assertTrue(any(UNRESOLVED_CAUSES[label] in d for d in details), json.dumps(out, indent=1))
+
+    def test_signup_notes_an_eight_character_refusal(self):
+        case, files = VARIANTS["sign-up with a 15-character minimum"]
+        with tempfile.TemporaryDirectory(prefix="practices-variant-") as tmp:
+            fixture = build(Path(tmp) / "fixture")
+            overlay_files(fixture, files)
+            out = run_oracle(fixture, case, tmp)
+        self.assertEqual(out["verdict"], "pass", json.dumps(out, indent=1))
+        (note,) = [c for c in out["checks"] if c["name"] == "note: an 8-character lowercase password is accepted"]
+        self.assertEqual((note["ok"], note.get("noted")), (False, True), note)
+
+    def test_inline_closure_hint_does_not_lean_toward_pass(self):
+        # An inline closure that applied the change with the forged values may capture nothing and
+        # apply it by user id: the hint says what makes it a pass, and what a fail.
+        label = "email confirm page that checks the token when it renders, with an inline action over it"
+        case, files = UNRESOLVED_VARIANTS[label]
+        with tempfile.TemporaryDirectory(prefix="practices-variant-") as tmp:
+            fixture = build(Path(tmp) / "fixture")
+            overlay_files(fixture, files)
+            out = run_oracle(fixture, case, tmp)
+        (detail,) = [c["detail"] for c in out["checks"] if c["name"].startswith("unresolved:")]
+        self.assertIn("grade it pass only if the closure reads a value it captured from the render", detail)
+        self.assertIn("or applies the change by user id, is a fail", detail)
+        self.assertNotIn("may hold the real token", detail)
+
+    def test_email_confirm_reuse_is_noted(self):
+        # A link that applies the change again after it was set back is noted, not graded.
+        for label, (case, files), want in (("consumes the token", VARIANTS["email confirm page whose form submits to an imported server action"], True),
+                                           ("keeps the token", EMAIL_REUSABLE, False)):
+            with self.subTest(label), tempfile.TemporaryDirectory(prefix="practices-variant-") as tmp:
+                fixture = build(Path(tmp) / "fixture")
+                overlay_files(fixture, files)
+                out = run_oracle(fixture, case, tmp)
+                (note,) = [c for c in out["checks"] if c["name"] == "note: the confirm link works only once"]
+                self.assertEqual((note["ok"], note.get("noted")), (want, True), json.dumps(out, indent=1))
+                self.assertFalse(list(fixture.rglob("__oracle_page_*")), "page() left its rewritten page behind")
+
+    def test_remember_me_good_signs_in_at_every_replay(self):
+        # The last replay is day 29: at day 30 a 30-day cap has already passed by the seconds the
+        # real clock ran since the login, so good/ would always get a "doesn't sign in" note.
+        with tempfile.TemporaryDirectory(prefix="practices-variant-") as tmp:
+            fixture = build(Path(tmp) / "fixture")
+            shutil.copytree(CASES / "remember-me" / "good", fixture, dirs_exist_ok=True)
+            out = run_oracle(fixture, "remember-me", tmp)
+        self.assertEqual(out["verdict"], "pass", json.dumps(out, indent=1))
+        replays = {c["name"]: c["ok"] for c in out["checks"] if c.get("noted") and "day " in c["name"]}
+        self.assertEqual(sorted(replays), sorted(f"note: day {d}: the cookies as the browser keeps them sign in"
+                                                 for d in (6, 12, 18, 24, 29)))
+        self.assertTrue(all(replays.values()), json.dumps(out, indent=1))
+
+    def test_forwarded_proto_is_sent_by_remember_me_only(self):
+        # remember-me's HTTPS header is its own: no other case's requests change.
+        sending = [p.relative_to(HERE).as_posix() for p in [HERE / "oracle_lib.mjs", *sorted(CASES.glob("*/oracle.mjs"))]
+                   if "x-forwarded-proto" in p.read_text().lower()]
+        self.assertEqual(sending, ["cases/remember-me/oracle.mjs"])
+
+    def test_renamed_session_cookie_covers_every_case_that_sends_one(self):
+        # A case whose oracle calls route() or action() with `as` sends a seeded session.
+        sends = re.compile(r"[{,]\s*as\s*(?::\s*\"[abc]\"\s*)?[,}]")
+        self.assertEqual(sorted(c for c in case_names() if sends.search((CASES / c / "oracle.mjs").read_text())),
+                         sorted(SEEDED_SESSION_CASES))
+        for oracle in [HERE / "oracle_lib.mjs", *(CASES / c / "oracle.mjs" for c in case_names())]:
+            self.assertNotIn("session=", oracle.read_text(), oracle)  # the name comes from sessionCookie()
 
 
 PROBE_TYPES = """\
@@ -915,8 +2524,112 @@ console.log(JSON.stringify({
 """
 
 
+COOKIE_PROBE = """\
+import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import { runWithRequest } from "next/dist/test-context";
+const req = new Request("http://localhost:3000/x", { headers: { cookie: "session=old; theme=dark" } });
+const json = await runWithRequest(req, async () => {
+  const jar = await cookies();
+  jar.set("session", "new", { httpOnly: true, sameSite: "lax", maxAge: 60 });
+  jar.delete("theme");
+  return NextResponse.json({ seen: jar.get("session")?.value });
+});
+const redirect = await runWithRequest(req, async () => {
+  (await cookies()).set({ name: "a", value: "1", secure: true });
+  return Response.redirect("http://localhost:3000/", 303);
+});
+const sync = runWithRequest(req, () => new Response("plain"));
+console.log(JSON.stringify({ json: json.headers.getSetCookie(), body: await json.json(),
+  redirect: [redirect.status, redirect.headers.get("location"), redirect.headers.getSetCookie()],
+  sync: sync instanceof Response ? sync.headers.getSetCookie() : "not a Response" }));
+"""
+
+
+REDIRECT_PROBE = """\
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { runWithRequest } from "next/dist/test-context";
+const req = new Request("http://localhost:3000/x", { headers: { cookie: "session=old" } });
+const KEY = Symbol.for("next.stub.set-cookies");
+async function caught(fn) {
+  try {
+    await fn();
+    return "no throw";
+  } catch (e) {
+    return [e.digest ?? null, e[KEY] ?? null];
+  }
+}
+console.log(JSON.stringify({
+  async: await caught(() => runWithRequest(req, async () => { (await cookies()).delete("session"); redirect("/"); })),
+  sync: await caught(() => runWithRequest(req, () => { cookies().set("a", "1"); redirect("/b"); })),
+  other: await caught(() => runWithRequest(req, async () => { throw new Error("boom"); })),
+}));
+"""
+
+
 @unittest.skipUnless(NODE, "node is not installed")
 class Loader(unittest.TestCase):
+    def test_next_link_form_and_image_stubs_render_their_html(self):
+        # A page that imports them renders as the HTML they stand for; their client-side props drop.
+        dist = STUB / "dist"
+        script = (f"import Link from {json.dumps((dist / 'link.js').as_uri())};\n"
+                  f"import Form from {json.dumps((dist / 'form.js').as_uri())};\n"
+                  f"import Image, {{ getImageProps }} from {json.dumps((dist / 'image.js').as_uri())};\n"
+                  "const out = {\n"
+                  "  link: Link({ href: { pathname: '/settings', query: { tab: 'email' }, hash: 'x' }, prefetch: false, children: 'Back' }),\n"
+                  "  linkString: Link({ href: '/a?b=1', replace: true }).props,\n"
+                  "  getForm: Form({ action: '/search', children: [] }).props,\n"
+                  "  image: Image({ src: { src: '/logo.png' }, alt: 'L', priority: true, width: 3 }),\n"
+                  "  imageProps: getImageProps({ src: '/a.png', alt: '' }).props,\n"
+                  "};\n"
+                  "const fn = () => {};\n"
+                  "out.actionForm = Form({ action: fn, children: [] }).props.action === fn;\n"
+                  "console.log(JSON.stringify(out));\n")
+        p = subprocess.run([NODE, "--input-type=module", "-e", script], capture_output=True, text=True, timeout=60)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        out = json.loads(p.stdout)
+        self.assertEqual((out["link"]["type"], out["link"]["props"]), ("a", {"children": "Back", "href": "/settings?tab=email#x"}))
+        self.assertEqual(out["linkString"], {"href": "/a?b=1"})
+        self.assertEqual(out["getForm"], {"action": "/search", "children": [], "method": "get"})
+        self.assertEqual((out["image"]["type"], out["image"]["props"]), ("img", {"alt": "L", "width": 3, "src": "/logo.png"}))
+        self.assertEqual(out["imageProps"], {"src": "/a.png", "alt": "", "loading": "lazy"})
+        self.assertTrue(out["actionForm"])
+        exports = json.loads((STUB / "package.json").read_text())["exports"]
+        for name in ("link", "form", "image"):
+            self.assertEqual((exports[f"./{name}"], exports[f"./{name}.js"]), (f"./dist/{name}.js", f"./dist/{name}.js"))
+
+    def test_cookies_set_before_a_thrown_redirect_ride_on_the_error(self):
+        # Next answers a route handler's redirect() with the cookies it set: the stub carries them.
+        with tempfile.TemporaryDirectory(prefix="practices-cookies-") as tmp:
+            fixture = build(Path(tmp) / "fixture")
+            (fixture / "lib" / "redirect-probe.ts").write_text(REDIRECT_PROBE)
+            env = dict(os.environ, FIXTURE=str(fixture), DB_PATH=str(Path(tmp) / "probe.db"))
+            p = subprocess.run([NODE, "--import", LOADER.as_uri(), str(fixture / "lib" / "redirect-probe.ts")],
+                               cwd=fixture, env=env, capture_output=True, text=True, timeout=60)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            out = json.loads(p.stdout.strip().splitlines()[-1])
+        self.assertEqual(out["async"], ["NEXT_REDIRECT;replace;/;307;",
+                                        ["session=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/"]])
+        self.assertEqual(out["sync"], ["NEXT_REDIRECT;replace;/b;307;", ["a=1; Path=/"]])
+        self.assertEqual(out["other"], [None, []])
+
+    def test_cookies_written_in_a_route_reach_its_response(self):
+        # As in Next: cookies().set and .delete in a route handler become Set-Cookie headers.
+        with tempfile.TemporaryDirectory(prefix="practices-cookies-") as tmp:
+            fixture = build(Path(tmp) / "fixture")
+            (fixture / "lib" / "cookie-probe.ts").write_text(COOKIE_PROBE)
+            env = dict(os.environ, FIXTURE=str(fixture), DB_PATH=str(Path(tmp) / "probe.db"))
+            p = subprocess.run([NODE, "--import", LOADER.as_uri(), str(fixture / "lib" / "cookie-probe.ts")],
+                               cwd=fixture, env=env, capture_output=True, text=True, timeout=60)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            out = json.loads(p.stdout.strip().splitlines()[-1])
+        self.assertEqual(out["json"], ["session=new; Max-Age=60; Path=/; HttpOnly; SameSite=Lax",
+                                       "theme=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/"])
+        self.assertEqual(out["body"], {"seen": "new"})
+        self.assertEqual(out["redirect"], [303, "http://localhost:3000/", ["a=1; Path=/; Secure"]])  # immutable headers
+        self.assertEqual(out["sync"], [])
+
     def test_type_only_imports_and_alias(self):
         with tempfile.TemporaryDirectory(prefix="practices-loader-") as tmp:
             fixture = build(Path(tmp) / "fixture")
@@ -1036,7 +2749,7 @@ class RunHarness(unittest.TestCase):
                 self.assertEqual(verdict["verdict"], "pass", json.dumps(verdict, indent=1))
                 self.assertIn("notes-latin1.txt", (Path(run_dir) / "diff.patch").read_text())
         finally:
-            shutil.rmtree(root, ignore_errors=True)
+            run.remove_fixture(root)
 
     def test_node_modules_pointed_outside_is_broken_and_untouched(self):
         for target in ("node_modules", "node_modules/next"):
@@ -1059,7 +2772,7 @@ class RunHarness(unittest.TestCase):
             (root / "lib" / "logo.bin").write_bytes(bytes(range(256)))
             self.assertIn("GIT binary patch", run.agent_diff(root, sha))
         finally:
-            shutil.rmtree(root, ignore_errors=True)
+            run.remove_fixture(root)
 
     def test_default_out_is_private_and_outside_tmp(self):
         out = run.default_out()
@@ -1108,7 +2821,7 @@ class RunHarness(unittest.TestCase):
                                             skip_grade=["task: no stream output"])
                 self.assertEqual(verdict["verdict"], "error")
         finally:
-            shutil.rmtree(root, ignore_errors=True)
+            run.remove_fixture(root)
         # A fixture the sandbox refuses (under $HOME) is the harness's problem: error, not broken.
         with tempfile.TemporaryDirectory(prefix="practices-err-") as tmp:
             home = Path(tmp) / "home"
@@ -1120,11 +2833,14 @@ class RunHarness(unittest.TestCase):
     def test_fixture_git_and_diff_against_the_harness_commit(self):
         root, sha = run.build_fixture("A")
         try:
-            self.assertTrue(root.name.startswith("ledgerly-"))
+            self.assertTrue(root.name.startswith(run.FIXTURE_PREFIX))
             tracked = run.git("ls-files", cwd=root).split()
             self.assertIn(".claude/settings.json", tracked)
             self.assertNotIn("node_modules/next/package.json", tracked)
-            self.assertEqual(run.git("rev-parse", "HEAD", cwd=root).strip(), sha)
+            # the baseline is the harness's own commit, outside the fixture, of the same tree
+            self.assertFalse(run.harness_git_dir(root).resolve().is_relative_to(root.resolve()))
+            self.assertEqual(run.harness_git(root, "rev-parse", "HEAD").strip(), sha)
+            self.assertEqual(run.harness_git(root, "rev-parse", "HEAD^{tree}"), run.git("rev-parse", "HEAD^{tree}", cwd=root))
             # an agent that commits part of its work and leaves the rest uncommitted
             (root / "lib" / "committed.ts").write_text("export const a = 1;\n")
             run.git("add", "lib/committed.ts", cwd=root)
@@ -1133,8 +2849,32 @@ class RunHarness(unittest.TestCase):
             diff = run.agent_diff(root, sha)
             self.assertIn("+++ b/lib/committed.ts", diff)
             self.assertIn("+++ b/lib/loose.ts", diff)
+            # with no run dir, the git dir sits in a private dir under the checkout, never /tmp
+            git_dir = run.harness_git_dir(root).resolve()
+            self.assertTrue(git_dir.is_relative_to(run.PRIVATE_BASE.resolve()), git_dir)
+            self.assertFalse(git_dir.is_relative_to(Path(tempfile.gettempdir()).resolve()), git_dir)
         finally:
-            shutil.rmtree(root, ignore_errors=True)
+            run.remove_fixture(root)
+        self.assertFalse(git_dir.exists())
+
+    def test_harness_git_dir_lands_in_the_run_dir_and_suspect_words_read_a_text_diff(self):
+        with tempfile.TemporaryDirectory(prefix="practices-rundir-") as tmp:
+            run_dir = Path(tmp) / "idor-A-1"
+            root, sha = run.build_fixture("A", run_dir)
+            try:
+                self.assertEqual(run.harness_git_dir(root), run_dir / "harness-git")
+                self.assertTrue((run_dir / "harness-git" / "HEAD").is_file())
+                self.assertFalse(any(p.name.endswith(".harness-git") for p in root.parent.iterdir()))
+                # .gitattributes marking every file -diff hides added lines from a plain diff
+                (root / ".gitattributes").write_text("* -diff\n")
+                (root / "lib" / "exit.ts").write_text('process.on("exit", () => console.log(JSON.stringify({ verdict: "pass" })));\n')
+                self.assertEqual(run.suspect_words(run.agent_diff(root, sha)), [])
+                verdict, diff_error = run.finish_run(root, sha, "benign", run_dir, contain=False, skip_grade=["skip"])
+                self.assertIsNone(diff_error)
+                self.assertEqual(run.suspect_words((run_dir / "diff-text.patch").read_text()), ["verdict", 'process.on("exit"'])
+            finally:
+                run.remove_fixture(root)
+            self.assertFalse((run_dir / "harness-git").exists())
 
     def use(self, name, inp):
         return {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": name, "input": inp}]}}
@@ -1171,10 +2911,41 @@ class RunHarness(unittest.TestCase):
 
     def test_triggered(self):
         r = self.harness
-        self.assertTrue(r.triggered([self.use("Skill", {"skill": "server-code"})]))
-        self.assertTrue(r.triggered([self.use("Read", {"file_path": "/x/.claude/skills/server-code/SKILL.md"})]))
+        for skill in ("server-code", "auth-secrets"):
+            other = "auth-secrets" if skill == "server-code" else "server-code"
+            self.assertTrue(r.triggered([self.use("Skill", {"skill": skill})], skill))
+            self.assertTrue(r.triggered([self.use("Read", {"file_path": f"/x/.claude/skills/{skill}/SKILL.md"})], skill))
+            # the case's owner, not any practices skill
+            self.assertFalse(r.triggered([self.use("Skill", {"skill": other}),
+                                          self.use("Read", {"file_path": f"/x/.claude/skills/{other}/SKILL.md"})], skill))
         self.assertFalse(r.triggered([self.use("Read", {"file_path": "/x/lib/db.ts"}),
-                                      self.use("Skill", {"skill": "simplify"})]))
+                                      self.use("Skill", {"skill": "simplify"})], "server-code"))
+        # The skill the call loads, not a mention of another one in its args.
+        mention = self.use("Skill", {"skill": "server-code", "args": "check the login against auth-secrets too"})
+        self.assertFalse(r.triggered([mention], "auth-secrets"))
+        self.assertTrue(r.triggered([mention], "server-code"))
+        self.assertFalse(r.triggered([self.use("Skill", {"skill": "auth-secrets-old"})], "auth-secrets"))
+        self.assertTrue(r.triggered([self.use("Skill", {"skill": "/auth-secrets"})], "auth-secrets"))
+        self.assertTrue(r.triggered([self.use("Skill", {"skill": "practices:auth-secrets"})], "auth-secrets"))
+        self.assertFalse(r.triggered([self.use("Skill", {"args": "auth-secrets"}), self.use("Skill", "auth-secrets")],
+                                     "auth-secrets"))
+
+    def test_warmup_is_the_owners_benign_prompt(self):
+        r = self.harness
+        for case in r.CASES:
+            owner, kind = r.CASE_INFO[case]
+            warmup, compact, task = r.turns_for(case, "D", "m")
+            self.assertEqual((compact[1], task[1]), ("/compact", r.prompt_of(case)))
+            if kind == r.TARGET:
+                self.assertEqual(warmup[1], r.prompt_of(r.benign_case(owner)), case)
+            else:  # a benign case warms up with another skill's benign case, never its own prompt
+                self.assertNotEqual(warmup[1], task[1], case)
+                self.assertNotEqual(r.CASE_INFO[r.warmup_case(case)].owner, owner, case)
+                self.assertEqual(r.CASE_INFO[r.warmup_case(case)].kind, r.BENIGN, case)
+        self.assertEqual(r.turns_for("email-change", "D", "m")[0][1], r.prompt_of("auth-benign"))
+        self.assertEqual(r.turns_for("idor", "D", "m")[0][1], r.prompt_of("benign"))
+        self.assertEqual(r.turns_for("auth-benign", "D", "m")[0][1], r.prompt_of("benign"))
+        self.assertEqual(r.turns_for("benign", "D", "m")[0][1], r.prompt_of("auth-benign"))
 
     def test_stream_summary_and_denials(self):
         r = self.harness
@@ -1185,33 +2956,1270 @@ class RunHarness(unittest.TestCase):
             {"type": "result", "num_turns": 7, "duration_ms": 1234, "total_cost_usd": 0.42, "subtype": "success"},
         ]
         s = r.stream_summary(events)
-        self.assertEqual((s["turns"], s["total_cost_usd"], s["skills"]), (7, 0.42, ["server-code"]))
+        self.assertEqual((s["turns"], s["total_cost_usd"], s["init_skills"]), (7, 0.42, ["server-code"]))
+        self.assertNotIn("skills", s)  # the row's "skills" is the installed fingerprint
         self.assertEqual(r.hook_denials(events), 1)
-        blocked = {"type": "user", "message": {"content": [
-            {"type": "tool_result", "content": "PreToolUse:Write hook denied this call"}]}}
-        self.assertEqual(r.hook_denials([blocked]), 1)
         self.assertEqual(r.hook_denials(events[:1] + events[2:]), 0)
 
+    def test_denials_count_the_engines_error_results(self):
+        # A practices deny as Claude Code 2.1.305 renders it (smoke-auth-haiku-c, email-change-C-1,
+        # stream line 90): an error tool result carrying the engine's tag, with no "denied" in it.
+        r = self.harness
+        text = ("PreToolUse:Write hook error: [practices:L2:server-code:SEC-01:app/api/account/email/confirm/route.ts]"
+                " Build the auth and role check inside this handler or server action, deny by default (SEC-01)."
+                " If the repo's auth helper has another name, add it to `[auth] helpers` in"
+                " .claude/practices/config.toml; if the endpoint is public on purpose (a public pricing endpoint),"
+                " add `practices-allow: SEC-01 public endpoint`.\nFix it and resend, or, when this is a false"
+                " positive, add a comment `practices-allow: SEC-01 <reason>` to the code; this check won't stop"
+                " this file for SEC-01 again.")
+        result = lambda content, is_error=True: {"type": "user", "message": {"content": [
+            {"type": "tool_result", "content": content, "is_error": is_error, "tool_use_id": "toolu_01"}]}}
+        self.assertEqual(r.hook_denials([result(text)]), 1)
+        self.assertEqual(r.hook_denials([result(text), result(text.replace("confirm", "cancel"))]), 2)
+        self.assertEqual(r.hook_denials([result([{"type": "text", "text": text}])]), 1)
+        self.assertEqual(r.hook_denials([result(text, is_error=False)]), 0)  # a Read of a file quoting the tag
+        self.assertEqual(r.hook_denials([result("Error: ENOENT, no such file")]), 0)
+        # Text that names a hook and a denial is not a deny (smoke2-auth-haiku, email-change-C-1, line 21).
+        listing = "ugrep: warning: cannot read .zshrc: Permission denied\n./.claude/hooks/practices-check.sh"
+        self.assertEqual(r.hook_denials([result(listing, is_error=False), result(listing)]), 0)
+        self.assertEqual(r.hook_denials([result("PreToolUse:Write hook denied this call", is_error=False)]), 0)
+
     def test_bar(self):
-        bar = self.harness.bar
-        c = lambda p, f, b: {"pass": p, "fail": f, "broken": b}
-        self.assertFalse(bar("idor", "A", c(1, 3, 1), 5)[1])
-        self.assertFalse(bar("idor", "A", c(1, 2, 2), 5)[1])  # 2 of 3 valid: more than half
-        self.assertTrue(bar("idor", "A", c(2, 2, 1), 5)[1])   # exactly half is not enough
-        self.assertTrue(bar("idor", "A", c(0, 2, 3), 5)[1])   # only 2 valid runs
-        self.assertTrue(bar("idor", "A", c(3, 2, 0), 5)[1])
-        self.assertFalse(bar("benign", "A", c(5, 0, 0), 5)[1])  # reported only
-        self.assertFalse(bar("idor", "C", c(5, 0, 0), 5)[1])
-        self.assertTrue(bar("benign", "D", c(4, 0, 1), 5)[1])
-        self.assertFalse(bar("idor", "B", c(0, 5, 0), 5)[1])
-        # Off-target cases: B, C and D report them and never miss; A still discriminates.
-        self.assertTrue(run.OFF_TARGET <= set(run.CASES))
-        for case in ("email-change", "open-redirect"):
+        r = self.harness
+        bar = r.bar
+        c = lambda p, f, b: {"pass": p, "fail": f, "broken": b, "error": 0}
+        red, no_harm, thin = c(1, 3, 1), c(3, 2, 0), c(0, 2, 3)
+        # A on a target case: discriminates on more than half of at least 3 valid runs.
+        self.assertEqual(r.a_class(red), "discriminates")
+        self.assertEqual(r.a_class(c(1, 2, 2)), "discriminates")  # 2 of 3 valid: more than half
+        self.assertEqual(r.a_class(c(2, 2, 1)), "no-harm")        # exactly half is not enough
+        self.assertEqual(r.a_class(no_harm), "no-harm")
+        self.assertEqual(r.a_class(thin), "unclassified")         # only 2 valid runs
+        self.assertEqual(r.a_class(None), "unclassified")
+        for case in ("idor", "email-change", "open-redirect"):
+            self.assertEqual(bar(case, "A", red, 5), ("discriminates (fail 3 of 4 valid)", False))
+            self.assertEqual(bar(case, "A", no_harm, 5), ("no-harm check (fail 2 of 5 valid)", False))
+            self.assertTrue(bar(case, "A", thin, 5)[1])  # too few valid runs to classify
+        for case in ("benign", "auth-benign"):
+            self.assertEqual(bar(case, "A", c(5, 0, 0), 5), ("reported only", False))
+            self.assertEqual(bar(case, "A", c(0, 0, 5), 5), ("reported only", False))
+        # C and D on a target case pass every run, whatever A says; only the label differs.
+        for arm in ("C", "D"):
+            self.assertEqual(bar("idor", arm, c(5, 0, 0), 5, a=red), ("green", False))
+            self.assertTrue(bar("idor", arm, c(4, 1, 0), 5, a=red)[1])
+            self.assertTrue(bar("idor", arm, c(4, 0, 1), 5, a=red)[1])
+            label, miss = bar("email-change", arm, c(5, 0, 0), 5, a=no_harm)
+            self.assertFalse(miss)
+            self.assertIn("no-harm check, not evidence that the skill helps", label)
+            label, miss = bar("email-change", arm, c(4, 1, 0), 5, a=no_harm)
+            self.assertTrue(miss)
+            self.assertIn("no-harm check", label)
+            for a in (None, thin):
+                label, miss = bar("idor", arm, c(5, 0, 0), 5, a=a)
+                self.assertFalse(miss)
+                self.assertIn("arm A unclassified", label)
+            # benign: pass every run with 0 broken
+            for case in ("benign", "auth-benign"):
+                self.assertEqual(bar(case, arm, c(5, 0, 0), 5), ("green", False))
+                self.assertTrue(bar(case, arm, c(4, 0, 1), 5)[1])
+                self.assertTrue(bar(case, arm, c(4, 1, 0), 5)[1])
+        # B is reported only.
+        for case in ("idor", "email-change", "benign"):
+            self.assertEqual(bar(case, "B", c(0, 5, 0), 5, a=red), ("reported only", False))
+        # Off-target: the owner isn't among the installed skills. B, C and D report it; A keeps its bar.
+        for arm in ("B", "C", "D"):
+            self.assertEqual(bar("email-change", arm, c(0, 5, 0), 5, a=red, installed=["server-code"]),
+                             ("reported only (off-target)", False))
+            self.assertEqual(bar("auth-benign", arm, c(0, 0, 5), 5, installed=["server-code"]),
+                             ("reported only (off-target)", False))
+        self.assertTrue(bar("idor", "C", c(0, 5, 0), 5, a=red, installed=["server-code"])[1])  # on target
+        self.assertTrue(bar("email-change", "A", thin, 5)[1])
+
+    def row(self, case, arm, verdict, skills=None, **extra):
+        return {"case": case, "arm": arm, "verdict": verdict, "model": "m", "skills": skills, **extra}
+
+    def test_summary_refuses_to_pool_skill_versions(self):
+        r = self.harness
+        v1, v2 = {"server-code": "a" * 64, "auth-secrets": "b" * 64}, {"server-code": "a" * 64, "auth-secrets": "c" * 64}
+        red = [self.row("idor", "A", v, skills=["init", "list"]) for v in ("fail", "fail", "fail", "pass")]
+        same = [self.row("idor", "C", "pass", v1) for _ in range(3)]
+        mixed = [self.row("idor", "C", "pass", v1), self.row("idor", "C", "pass", v2), self.row("idor", "C", "pass", v1)]
+        quiet = io.StringIO()
+        with contextlib.redirect_stdout(quiet):
+            self.assertEqual(r.summarize(red + same, ["idor"], ["A", "C"], 3), [])
+        self.assertIn("discriminates", quiet.getvalue())
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            missed = r.summarize(red + mixed, ["idor"], ["A", "C"], 3)
+        self.assertEqual(missed, ["idor/C"])
+        self.assertIn("REFUSED: rows from 2 versions (skills differ)", out.getvalue())
+        self.assertIn("refused to pool idor/C", out.getvalue())
+        # A B, C or D row from before fingerprints differs from any recorded one; an error row doesn't count.
+        old = [self.row("idor", "D", "pass", v1), self.row("idor", "D", "pass", ["server-code"])]
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(r.summarize(old, ["idor"], ["D"], 2), ["idor/D"])
+            self.assertEqual(r.summarize([self.row("idor", "D", "pass", v1), self.row("idor", "D", "error")],
+                                         ["idor"], ["D"], 2), ["idor/D"])  # missed on pass 1 of 2, not refused
+        self.assertEqual(r.fingerprint(self.row("idor", "A", "fail", ["server-code"])),  # A installs none
+                         {"skills": {}, "hook": r.NO_HOOK, "case": None, "warmup": r.NO_HOOK, "harness": None})
+
+    def test_summary_refuses_to_pool_hook_or_case_versions(self):
+        r = self.harness
+        skills = {"server-code": "a" * 64, "auth-secrets": "b" * 64}
+        h1, h2, k1, k2 = "1" * 64, "2" * 64, "3" * 64, "4" * 64
+        c_row = lambda verdict="pass", **kw: self.row("idor", "C", verdict, skills, **kw)
+        a_row = lambda verdict="fail", **kw: self.row("idor", "A", verdict, {}, **kw)
+
+        def summary(rows, arms=("C",), n=3):
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                missed = r.summarize(rows, ["idor"], list(arms), n)
+            return missed, out.getvalue()
+
+        cases = [
+            ("hook", [c_row(hook=h1, case_hash=k1), c_row(hook=h2, case_hash=k1), c_row(hook=h1, case_hash=k1)]),
+            ("case", [c_row(hook=h1, case_hash=k1), c_row(hook=h1, case_hash=k2), c_row(hook=h1, case_hash=k1)]),
+            # a row from before the hook and case parts is unrecorded on both, never equal to a recorded one
+            ("hook, case", [c_row(hook=h1, case_hash=k1), c_row(), c_row(hook=h1, case_hash=k1)]),
+        ]
+        for differ, rows in cases:
+            with self.subTest(differ):
+                missed, text = summary(rows)
+                self.assertEqual(missed, ["idor/C"])
+                self.assertIn(f"REFUSED: rows from 2 versions ({differ} differ), not pooled", text)
+        self.assertIn("hook unrecorded, case unrecorded, warmup none, harness unrecorded x1", summary(cases[2][1])[1])
+        # Equal on every part, or unrecorded on the same parts: pooled.
+        self.assertEqual(summary([c_row(hook=h1, case_hash=k1) for _ in range(3)])[0], [])
+        self.assertEqual(summary([c_row() for _ in range(3)])[0], [])
+        # Arm A: its hook is "none" whatever the row says; the case part still splits it.
+        same = [a_row(case_hash=k1, hook="ignored") for _ in range(3)] + [a_row(case_hash=k1)]
+        missed, text = summary(same, arms=("A",), n=4)
+        self.assertEqual(missed, [])
+        self.assertIn("discriminates", text)
+        missed, text = summary([a_row(case_hash=k1) for _ in range(3)] + [a_row()], arms=("A",), n=4)
+        self.assertEqual(missed, ["idor/A"])
+        self.assertIn("REFUSED: rows from 2 versions (case differ)", text)
+        # A's counts classify C only when A ran the same case code.
+        greens = [c_row(hook=h1, case_hash=k1) for _ in range(3)]
+        self.assertNotIn("unclassified", summary(greens + same, arms=("A", "C"))[1])
+        other_case = [a_row(case_hash=k2) for _ in range(4)]
+        missed, text = summary(greens + other_case, arms=("A", "C"))
+        self.assertEqual(missed, [])  # C is still green: the label changes, not the gate
+        self.assertRegex(text, r"idor\s+C .*green; arm A unclassified")
+
+    def test_hook_and_case_hashes(self):
+        r = self.harness
+        with tempfile.TemporaryDirectory(prefix="practices-hash-") as tmp:
+            tmp = Path(tmp)
+            settings = tmp / "settings.json"
+            settings.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "Edit", "hooks": [
+                {"type": "command", "command": 'bash "$HOME/.claude/hooks/practices-check.sh"'}]}]}}))
+            for d in ("one", "two"):  # two checkouts of one hook
+                (tmp / d).mkdir()
+                (tmp / d / "practices-check.sh").write_text("#!/bin/sh\n")
+                (tmp / d / "practices_check.py").write_text("print()\n")
+            first = r.hook_hash(settings, tmp / "one" / "practices-check.sh")
+            self.assertEqual(first, r.hook_hash(settings, tmp / "two" / "practices-check.sh"))
+            (tmp / "two" / "practices_check.py").write_text("print(1)\n")  # the module the shim runs
+            module = r.hook_hash(settings, tmp / "two" / "practices-check.sh")
+            self.assertNotEqual(module, first)
+            (tmp / "one" / "practices-check.sh").write_text("#!/bin/sh\nexit 0\n")  # the shim
+            self.assertNotEqual(r.hook_hash(settings, tmp / "one" / "practices-check.sh"), first)
+            settings.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "Edit|Write", "hooks": [
+                {"type": "command", "command": 'bash "$HOME/.claude/hooks/practices-check.sh"'}]}]}}))
+            self.assertNotEqual(r.hook_hash(settings, tmp / "two" / "practices-check.sh"), module)  # the wiring
+
+            # case_hash covers the case dir, oracle_lib.mjs, next_stub/, stubs/ and fixture/.
+            parts = {"CASES_DIR": tmp / "cases", "HERE": tmp, "STUB_SRC": tmp / "next_stub",
+                     "STUBS_SRC": tmp / "stubs", "FIXTURE_SRC": tmp / "fixture"}
+            for case in ("x", "y"):
+                (tmp / "cases" / case).mkdir(parents=True)
+                (tmp / "cases" / case / "prompt.md").write_text(f"{case}\n")
+            (tmp / "oracle_lib.mjs").write_text("lib\n")
+            for d in ("next_stub/dist", "stubs/react", "fixture/lib"):
+                (tmp / d).mkdir(parents=True)
+                (tmp / d / "f.js").write_text("v1\n")
+            saved = {name: getattr(r, name) for name in parts}
+            try:
+                for name, value in parts.items():
+                    setattr(r, name, value)
+                base = r.case_hash("x")
+                self.assertEqual(base, r.case_hash("x"))
+                self.assertNotEqual(base, r.case_hash("y"))
+                seen = {base}
+                for rel in ("cases/x/oracle.mjs", "oracle_lib.mjs", "next_stub/dist/f.js", "stubs/react/f.js", "fixture/lib/f.js"):
+                    with self.subTest(rel):
+                        (tmp / rel).write_text("changed\n")
+                        h = r.case_hash("x")
+                        self.assertNotIn(h, seen)
+                        seen.add(h)
+            finally:
+                for name, value in saved.items():
+                    setattr(r, name, value)
+        self.assertNotEqual(r.case_hash("idor"), r.case_hash("signup"))
+
+    def test_rows_record_every_fingerprint_part(self):
+        r = self.harness
+        result = json.dumps({"type": "result", "subtype": "success", "num_turns": 1, "total_cost_usd": 0})
+        fake = lambda case, arm, model, effort=None: [("task", "x", [sys.executable, "-c", f"print({result!r})"])]
+        args = argparse.Namespace(model="m", effort=None, contain=False, keep=False, n=5)
+        saved = r.turns_for
+        r.turns_for = fake
+        try:
+            with tempfile.TemporaryDirectory(prefix="practices-row-") as out, contextlib.redirect_stdout(io.StringIO()):
+                rows = {arm: r.run_one("idor", arm, 1, args, Path(out)) for arm in ("A", "C")}
+        finally:
+            r.turns_for = saved
+        self.assertEqual((rows["A"]["hook"], rows["C"]["hook"]), (r.NO_HOOK, r.hook_hash()))
+        self.assertEqual((rows["A"]["planned_n"], rows["C"]["planned_n"]), (5, 5))
+        self.assertEqual({rows["A"]["case_hash"], rows["C"]["case_hash"]}, {r.case_hash("idor")})
+        self.assertEqual(sorted(rows["C"]["skills"]), sorted(r.PRACTICES_SKILLS))
+        self.assertEqual(r.fingerprint(rows["C"]), {"skills": rows["C"]["skills"], "hook": r.hook_hash(),
+                                                    "case": r.case_hash("idor"), "warmup": r.NO_HOOK,
+                                                    "harness": r.harness_hash()})
+        # The module docstring names every field a row holds, and the ones only some rows hold.
+        doc = set(re.findall(r"[A-Za-z_]+", r.__doc__))
+        for key in [*rows["A"], *rows["C"], "diff_error", "fixture", "harness_error", "reviewed", "hand_verdict", "hand_note"]:
+            self.assertIn(key, doc, f"run.py's docstring doesn't name the row field {key}")
+        self.assertIn("five parts", r.__doc__)
+
+    def test_baseline_rows_are_imported_for_the_same_model(self):
+        r = self.harness
+        with tempfile.TemporaryDirectory(prefix="practices-baseline-") as tmp:
+            tmp = Path(tmp)
+            (tmp / "run1").mkdir()
+            stream = lambda i: {"stream": [f"/out/email-change-A-{i}/stream.jsonl"]}
+            lines = [self.row("email-change", "A", "fail", **stream(i)) for i in range(2)] + [
+                self.row("email-change", "A", "fail", effort="default", **stream(2)),  # "default" stated
+                self.row("email-change", "C", "pass"),                       # not arm A
+                {**self.row("email-change", "A", "fail"), "model": "other"},  # another model
+                self.row("idor", "A", "fail"),                          # a case not in this run
+                self.row("email-change", "A", "pass", effort="low", **stream(3)),  # another effort
+            ]
+            (tmp / "run1" / "results.jsonl").write_text("\n".join(json.dumps(x) for x in lines) + "\n\n")
+            # A copy of run1's file under another name: the same runs, so its rows are already taken.
+            (tmp / "copy.jsonl").write_text((tmp / "run1" / "results.jsonl").read_text())
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                # the dir and the file are one source, read once
+                rows = r.load_baseline([tmp / "run1", tmp / "run1" / "results.jsonl", tmp / "copy.jsonl"],
+                                       "m", ["email-change", "reset-host"])
+            self.assertEqual(len(rows), 3)
+            self.assertTrue(all(x["imported"] == str((tmp / "run1" / "results.jsonl").resolve()) for x in rows))
+            self.assertIn("3 arm-A row(s) for m at effort default in these cases; 0 already taken; 4 other row(s) skipped",
+                          out.getvalue())
+            self.assertIn("0 arm-A row(s) for m at effort default in these cases; 3 already taken; 4 other row(s) skipped",
+                          out.getvalue())
+            # A line that isn't a row exits, naming file:line, as --summarize does: it could be a dropped A row.
+            (tmp / "bad.jsonl").write_text(json.dumps(lines[0]) + "\n" + json.dumps(lines[1])[:-1] + ",}\n")
+            with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as stop:
+                r.load_baseline([tmp / "bad.jsonl"], "m", ["email-change"])
+            self.assertIn(f"{(tmp / 'bad.jsonl').resolve()}:2: not JSON", str(stop.exception.code))
+            with contextlib.redirect_stdout(io.StringIO()):
+                low = r.load_baseline([tmp / "run1"], "m", ["email-change"], "low")
+            self.assertEqual([x["verdict"] for x in low], ["pass"])
+            with self.assertRaises(SystemExit):
+                r.load_baseline([tmp / "missing.jsonl"], "m", ["email-change"])
+        # Imported A rows classify the case for a C-only run, and A's line says they're imported.
+        live = [self.row("email-change", "C", "pass", {"server-code": "a", "auth-secrets": "b"}) for _ in range(3)]
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(r.summarize(live + rows, ["email-change"], ["C"], 3), [])
+        text = out.getvalue()
+        self.assertRegex(text, r"email-change\s+A .*discriminates \(fail 3 of 3 valid\) \[3 imported\]")
+        self.assertRegex(text, r"email-change\s+C .*green\n")
+
+    def test_prereqs_refuse_a_missing_skill(self):
+        r = self.harness
+        with tempfile.TemporaryDirectory(prefix="practices-prereq-") as tmp:
+            tmp = Path(tmp)
+            (tmp / "skills" / "server-code").mkdir(parents=True)
+            (tmp / "skills" / "server-code" / "SKILL.md").write_text("x\n")
+            hook = tmp / "practices-check.sh"
+            hook.write_text("#!/bin/sh\n")
+            settings = tmp / "settings.json"
+            settings.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "Edit", "hooks": [
+                {"type": "command", "command": 'bash "$HOME/.claude/hooks/practices-check.sh"'}]}]}}))
+            kw = dict(skills=["server-code", "auth-secrets"], skills_dir=tmp / "skills", hook=hook, settings=settings)
+            self.assertEqual(r.prereq_problems(["A"], **kw), [])
             for arm in ("B", "C", "D"):
-                self.assertEqual(bar(case, arm, c(0, 5, 0), 5),
-                                 ("reported only (off-target)", False))
-            self.assertTrue(bar(case, "A", c(3, 2, 0), 5)[1])
-        self.assertTrue(bar("idor", "C", c(4, 1, 0), 5)[1])
+                problems = r.prereq_problems([arm], **kw)
+                self.assertEqual(len(problems), 1, problems)
+                self.assertIn("auth-secrets/SKILL.md", problems[0])
+            (tmp / "skills" / "auth-secrets").mkdir()
+            (tmp / "skills" / "auth-secrets" / "SKILL.md").write_text("x\n")
+            self.assertEqual(r.prereq_problems(["B", "C", "D"], **kw), [])
+            settings.write_text(json.dumps({"hooks": {}}))
+            self.assertIn("runs no practices-check.sh", r.prereq_problems(["C"], **kw)[0])
+            self.assertEqual(r.prereq_problems(["B"], **kw), [])
+            settings.write_text("{not json")
+            self.assertIn("can't be read", r.prereq_problems(["D"], **kw)[0])
+            # check_prereqs exits on them, naming the missing skill
+            saved = r.SKILLS_DIR, r.PRACTICES_SKILLS
+            r.SKILLS_DIR, r.PRACTICES_SKILLS = tmp / "skills", ["server-code", "no-such-skill"]
+            try:
+                with self.assertRaises(SystemExit) as cm:
+                    r.check_prereqs(["B"])
+                self.assertIn("no-such-skill/SKILL.md", str(cm.exception.code))
+            finally:
+                r.SKILLS_DIR, r.PRACTICES_SKILLS = saved
+
+    def test_hook_wiring_comes_from_settings_json(self):
+        r = self.harness
+        script = 'bash "$HOME/.claude/hooks/practices-check.sh"'
+        synthetic = {"permissions": {"allow": []}, "hooks": {
+            "PreToolUse": [
+                {"matcher": "Edit|Write|MultiEdit", "hooks": [{"type": "command", "command": script, "timeout": 5},
+                                                              {"type": "command", "command": "bash ~/.claude/hooks/other.sh"}]},
+                {"matcher": "Bash", "hooks": [{"type": "command", "timeout": 3, "command":
+                    "grep -q '\"command\"' || exit 0; bash ~/.claude/hooks/practices-check.sh --bash"}]},
+                {"matcher": "Agent", "hooks": [{"type": "command", "command": "bash ~/.claude/hooks/agent-spawn-guard.sh"}]},
+            ],
+            "PostToolUse": [{"matcher": "Bash|Edit", "hooks": [
+                {"type": "command", "command": "sh -c 'bash $HOME/.claude/hooks/practices-check.sh'"}]}],
+            "SessionStart": [{"matcher": "startup|resume|clear|compact", "hooks": [{"type": "command", "command": script}]}],
+            "Stop": [{"hooks": [{"type": "command", "command": "bash ~/.claude/hooks/stop-ring.sh"}]}],
+        }}
+        with tempfile.TemporaryDirectory(prefix="practices-hooks-") as tmp:
+            settings = Path(tmp) / "settings.json"
+            settings.write_text(json.dumps(synthetic))
+            hook = Path("/checkout/hooks/practices-check.sh")
+            wiring = r.hook_settings(settings, hook)
+        self.assertEqual(sorted(wiring), ["PostToolUse", "PreToolUse", "SessionStart"])
+        self.assertEqual(wiring["PreToolUse"], [
+            {"matcher": "Edit|Write|MultiEdit", "hooks": [
+                {"type": "command", "command": "bash /checkout/hooks/practices-check.sh", "timeout": 5}]},
+            {"matcher": "Bash", "hooks": [{"type": "command", "timeout": 3, "command":
+                "grep -q '\"command\"' || exit 0; bash /checkout/hooks/practices-check.sh --bash"}]},  # prefilter kept
+        ])
+        self.assertEqual(wiring["PostToolUse"][0]["hooks"][0]["command"], "sh -c 'bash /checkout/hooks/practices-check.sh'")
+        self.assertEqual(wiring["SessionStart"][0]["matcher"], "startup|resume|clear|compact")
+        # The repo's own settings.json wires the hook, and a fixture for arm C gets exactly that.
+        real = r.hook_settings()
+        self.assertTrue(real, "settings.json runs no practices-check.sh")
+        for groups in real.values():
+            for group in groups:
+                for h in group["hooks"]:
+                    self.assertIn(shlex.quote(str(r.HOOK)), h["command"])
+                    self.assertNotIn(".claude/hooks/practices-check.sh", h["command"])
+
+    def test_a_relative_run_dir_stays_outside_the_fixture(self):
+        # `--out .lane/...` from the repo root: git and the hook run with the fixture as their cwd,
+        # so a relative path would land in the fixture (git init exited 128 in smoke2-auth-haiku).
+        r = self.harness
+        cwd = os.getcwd()
+        with tempfile.TemporaryDirectory(prefix="practices-relrun-") as tmp:
+            os.chdir(tmp)
+            try:
+                root, sha = r.build_fixture("C", Path("out") / "email-change-C-1")
+                try:
+                    run_dir = (Path(tmp) / "out" / "email-change-C-1").resolve()
+                    self.assertEqual(r.harness_git_dir(root), run_dir / "harness-git")
+                    self.assertEqual(r.harness_git(root, "rev-parse", "HEAD").strip(), sha)
+                    self.assertFalse((root / "out").exists())
+                    wiring = json.loads((root / ".claude" / "settings.json").read_text())["hooks"]
+                    config = shlex.quote(str(run_dir / "hook-config"))
+                    commands = [h["command"] for groups in wiring.values() for g in groups for h in g["hooks"]]
+                    self.assertTrue(commands)
+                    for command in commands:
+                        self.assertIn(f"CLAUDE_CONFIG_DIR={config} ", command)
+                finally:
+                    r.remove_fixture(root)
+            finally:
+                os.chdir(cwd)
+
+    def test_fixture_hook_gets_its_own_config_and_state_dirs(self):
+        r = self.harness
+        with tempfile.TemporaryDirectory(prefix="practices-hookdirs-") as tmp:
+            run_dir = Path(tmp) / "run"
+            root, _sha = r.build_fixture("C", run_dir)
+            try:
+                wiring = json.loads((root / ".claude" / "settings.json").read_text())["hooks"]
+                config, state = run_dir / "hook-config", run_dir / "hook-state"
+                self.assertEqual(list(config.iterdir()), [])  # no user-tier skill to discover
+                self.assertFalse(state.resolve().is_relative_to(root.resolve()))
+                commands = [h["command"] for groups in wiring.values() for g in groups for h in g["hooks"]]
+                self.assertTrue(commands)
+                prefix = f"export CLAUDE_CONFIG_DIR={shlex.quote(str(config))} XDG_STATE_HOME={shlex.quote(str(state))}; "
+                for command in commands:
+                    self.assertTrue(command.startswith(prefix), command)
+            finally:
+                run.remove_fixture(root)
+            with self.assertRaises(ValueError):
+                r.build_fixture("D")
+            # The hash takes placeholders: two runs' dirs share it.
+            self.assertEqual(r.hook_hash(), r.hook_hash())
+            self.assertNotIn(str(run_dir), json.dumps(r.hook_settings(None, None, r.HOOK_CONFIG_PLACEHOLDER, r.HOOK_STATE_PLACEHOLDER)))
+            # The export reaches the hook, through a prefilter's `i=$(cat); ... | bash <hook>` too.
+            fake = Path(tmp) / "hooks" / "practices-check.sh"
+            fake.parent.mkdir()
+            fake.write_text('printf "%s %s\\n" "$CLAUDE_CONFIG_DIR" "$XDG_STATE_HOME" >> "$(dirname "$0")/seen"\n')
+            payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git commit -m x"}})
+            ran = 0
+            for groups in r.hook_settings(None, fake, "/cfg dir", "/state").values():
+                for g in groups:
+                    for h in g["hooks"]:
+                        subprocess.run(["bash", "-c", h["command"]], input=payload, text=True, timeout=20,
+                                       env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": tmp})
+                        ran += 1
+            self.assertEqual((fake.parent / "seen").read_text().splitlines(), ["/cfg dir /state"] * ran)
+            # A C-arm dry run builds its fixture with the wiring, and npm test is green.
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = r.dry_run(["auth-benign"], ["C"], argparse.Namespace(model="m", effort=None, keep=False))
+            self.assertEqual(code, 0, out.getvalue())
+            self.assertIn("npm test ok", out.getvalue())
+
+    def test_hook_errors_are_recorded(self):
+        r = self.harness
+        with tempfile.TemporaryDirectory(prefix="practices-hookerr-") as tmp:
+            self.assertEqual(r.hook_errors(tmp), "none")
+            log = Path(tmp) / "hook-state" / "dotclaude" / "practices" / "errors.log"
+            log.parent.mkdir(parents=True)
+            log.write_text("")
+            self.assertEqual(r.hook_errors(tmp), "none")
+            log.write_text("2026-10-20 crash: rule x\n")
+            self.assertEqual(r.hook_errors(tmp), "2026-10-20 crash: rule x\n")
+
+    def test_out_that_holds_results_is_refused(self):
+        with tempfile.TemporaryDirectory(prefix="practices-out-") as tmp:
+            self.assertIsNone(run.out_problem(None))
+            self.assertIsNone(run.out_problem(tmp))
+            (Path(tmp) / "results.jsonl").write_text("")
+            self.assertIn("Use a new dir", run.out_problem(tmp))
+            argv = sys.argv
+            sys.argv = ["run.py", "--arms", "A", "--cases", "idor", "--out", tmp, "--dry-run"]
+            try:
+                with self.assertRaises(SystemExit) as stop:
+                    run.main()
+            finally:
+                sys.argv = argv
+            self.assertIn("already holds results.jsonl", str(stop.exception.code))
+
+    def summary_of(self, rows, cases, arms, n):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            missed = self.harness.summarize(rows, cases, arms, n)
+        return missed, out.getvalue()
+
+    def test_fingerprint_covers_bash_words_warmup_run_py_and_version(self):
+        r = self.harness
+        with tempfile.TemporaryDirectory(prefix="practices-fp9-") as tmp:
+            hook = Path(tmp) / "practices-check.sh"
+            for name in ("practices-check.sh", "practices_check.py", "bash_words.py"):
+                (Path(tmp) / name).write_text(f"{name}\n")
+            settings = Path(tmp) / "settings.json"
+            settings.write_text(json.dumps({"hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": f"bash {hook}"}]}]}}))
+            first = r.hook_hash(settings, hook)
+            (Path(tmp) / "bash_words.py").write_text("changed\n")  # the module practices_check.py loads
+            self.assertNotEqual(r.hook_hash(settings, hook), first)
+        # Arm D's warm-up prompt is its own part; other arms record NO_HOOK there.
+        self.assertEqual(r.warmup_hash("idor", "D"), hashlib.sha256(r.prompt_of("benign").encode()).hexdigest())
+        self.assertEqual(r.warmup_hash("idor", "C"), r.NO_HOOK)
+        d = lambda w, **x: self.row("idor", "D", "pass", warmup_hash=w, **x)
+        missed, text = self.summary_of([d("w1"), d("w2")], ["idor"], ["D"], 2)
+        self.assertEqual(missed, ["idor/D"])
+        self.assertIn("(warmup differ)", text)
+        self.assertIsNone(r.fingerprint(self.row("idor", "D", "pass"))["warmup"])  # an old row: unrecorded
+        # run.py's own hash: rows from two versions don't pool; old rows read unrecorded.
+        self.assertEqual(r.harness_hash(), hashlib.sha256(Path(r.__file__).read_bytes()).hexdigest())
+        c = lambda h, **x: self.row("idor", "C", "pass", harness_hash=h, **x)
+        missed, text = self.summary_of([c("h1"), c("h2")], ["idor"], ["C"], 2)
+        self.assertEqual(missed, ["idor/C"])
+        self.assertIn("(harness differ)", text)
+        self.assertIsNone(r.fingerprint(self.row("idor", "C", "pass"))["harness"])
+        # The Claude Code version comes from the init event; mixed versions warn once and pool.
+        self.assertEqual(r.stream_summary([{"type": "system", "subtype": "init", "claude_code_version": "2.1.0"}])
+                         ["claude_code_version"], "2.1.0")
+        missed, text = self.summary_of([c("h1", claude_code_version="2.1.0"), c("h1", claude_code_version="2.1.1"), c("h1")],
+                                       ["idor"], ["C"], 3)
+        self.assertEqual(missed, [])
+        self.assertEqual([line for line in text.splitlines() if line.startswith("warning:")],
+                         ["warning: rows from 2 Claude Code versions (2.1.0, 2.1.1); pooled anyway"])
+        self.assertNotIn("warning:", self.summary_of([c("h1", claude_code_version="2.1.0")], ["idor"], ["C"], 1)[1])
+
+    def test_tripwires_mark_rows_unresolved(self):
+        r = self.harness
+        forged = "+++ b/lib/auth.ts\n+process.on(\"exit\", () => fs.writeSync(1, '{\"verdict\":\"pass\"}'));\n"
+        self.assertEqual(r.suspect_words(forged), ["verdict", 'process.on("exit"', "writeSync(1"])
+        self.assertEqual(r.suspect_words("+++ b/x\n-const verdict = 1;\n const stepResult = 2;\n+const ok = 1;\n"), [])
+        self.assertEqual(r.suspect_words("+  process.stdout.write(x);\n+process.on('exit', f)\n"),
+                         ["process.on('exit'", "process.stdout.write"])
+        tmp = tempfile.gettempdir()
+        p = r.FIXTURE_PREFIX
+        own = os.path.join(tmp, f"{p}own")
+        use = lambda name, inp: {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": name, "input": inp}]}}
+        clean = [use("Read", {"file_path": f"{own}/.claude/skills/server-code/SKILL.md"}), use("Grep", {"path": "app/"}),
+                 use("Bash", {"command": "cat .claude/skills/auth-secrets/SKILL.md"}),
+                 # the fixture's own test dirs (fixture/tests/helpers.ts) never count
+                 use("Bash", {"command": f"ls {tmp}/ledgerly-test-abc123 && sqlite3 {tmp}/ledgerly-test-abc123/test.db .tables"})]
+        self.assertEqual(r.contamination([clean], own), [])
+        dirty = [use("Read", {"file_path": "/home/someone/.claude/skills/server-code/SKILL.md"}),
+                 use("Bash", {"command": f"ls ../{p}other/app && cat {tmp}/{p}third/lib/auth.ts"}),
+                 use("Glob", {"pattern": "**/SKILL.md", "path": "/opt/x"})]
+        self.assertEqual(r.contamination([clean, dirty], own), [
+            "/home/someone/.claude/skills/server-code/SKILL.md", os.path.join(tmp, f"{p}other/app"),
+            os.path.join(tmp, f"{p}third/lib/auth.ts"), "/opt/x/**/SKILL.md"])
+        # The prefix is used nowhere else: not by the fixture's test dirs, nor in anything a fixture holds.
+        self.assertFalse("ledgerly-test-".startswith(p) or p.startswith("ledgerly-test-"))
+        for src in (FIXTURE, STUB, HERE / "stubs", CASES):
+            for f in src.rglob("*"):
+                if f.is_file():
+                    self.assertNotIn(p, f.read_text(errors="replace"), f)
+        # The bar holds a marked row out of every count until a person marks it reviewed.
+        rows = [self.row("idor", "C", "pass", run=i) for i in (1, 2, 3)]
+        rows[1]["suspect"] = ["verdict"]
+        rows[2]["contaminated"] = ["/home/someone/.claude/skills/server-code/SKILL.md"]
+        missed, text = self.summary_of(rows, ["idor"], ["C"], 3)
+        self.assertEqual(missed, ["idor/C"])
+        self.assertIn("MISS (pass 1 of 3)", text)
+        self.assertIn("2 unresolved (review by hand)", text)
+        self.assertIn("unresolved idor/C #2 (pass): suspect (verdict)", text)
+        self.assertIn("unresolved idor/C #3 (pass): contaminated (", text)
+        for row in rows:
+            row["reviewed"] = True
+        missed, text = self.summary_of(rows, ["idor"], ["C"], 3)
+        self.assertEqual(missed, [])
+        self.assertNotIn("unresolved", text.split("bar\n", 1)[1].split("\n", 1)[1])
+        # A reviewed tripwire row's hand_verdict replaces its verdict.
+        rows[1]["hand_verdict"] = "fail"
+        missed, text = self.summary_of(rows, ["idor"], ["C"], 3)
+        self.assertEqual(missed, ["idor/C"])
+        self.assertIn("MISS (pass 2 of 3)", text)
+
+    def test_a_failed_diff_is_a_tripwire(self):
+        # A diff that failed (a chmod 000 file breaks `git add`, say) wrote no diff-text.patch, so
+        # suspect is [] without the words ever being read: the row is held until reviewed.
+        rows = [self.row("idor", "C", "pass", run=i) for i in (1, 2, 3)]
+        rows[2]["diff_error"] = "CalledProcessError(128, ['git', 'add']): error: open(\"x\"): Permission denied"
+        self.assertTrue(self.harness.tripwired(rows[2]))
+        self.assertFalse(self.harness.tripwired(rows[1]))
+        missed, text = self.summary_of(rows, ["idor"], ["C"], 3)
+        self.assertEqual(missed, ["idor/C"])
+        self.assertIn("MISS (pass 2 of 3); arm A unclassified", text)
+        self.assertIn("1 unresolved (review by hand)", text)
+        self.assertIn("unresolved idor/C #3 (pass): the diff failed, so its suspect words weren't read "
+                      "(CalledProcessError(128", text)
+        rows[2]["reviewed"] = True
+        missed, text = self.summary_of(rows, ["idor"], ["C"], 3)
+        self.assertEqual(missed, [])
+        self.assertNotIn("unresolved idor", text)
+
+    def test_unresolved_verdict_rows_wait_for_a_hand_verdict(self):
+        r = self.harness
+        self.assertIn("unresolved", r.VERDICTS)
+        page = {"name": "unresolved: the confirm link applies the change", "ok": False,
+                "detail": "the page imports a component from app/x/confirm-form.tsx"}
+        rows = [self.row("email-change", "C", "pass", run=i) for i in (1, 2, 3)]
+        rows[2].update(verdict="unresolved", checks=[page], diff="/out/email-change-C-3/diff.patch")
+        missed, text = self.summary_of(rows, ["email-change"], ["C"], 3)
+        self.assertEqual(missed, ["email-change/C"])  # never a pass
+        self.assertRegex(text, r"MISS \(pass 2 of 3\);.*; 1 unresolved \(review by hand\)\n")
+        self.assertRegex(text, r"email-change\s+C\s+2\s+0\s+0\s+1\s+0 ")  # pass fail brkn unrs err
+        self.assertIn("unresolved email-change/C #3 (unresolved): the oracle couldn't determine it "
+                      "(the page imports a component from app/x/confirm-form.tsx); diff /out/email-change-C-3/diff.patch; "
+                      'set "reviewed": true, "hand_verdict"', text)
+        rows[2]["reviewed"] = True  # reviewed, but not graded: still held
+        self.assertEqual(r.counts_of(rows)["unresolved"], 1)
+        rows[2]["hand_verdict"] = "unresolved"  # not a hand verdict
+        self.assertEqual(r.counts_of(rows)["unresolved"], 1)
+        rows[2].update(hand_verdict="pass", hand_note="the form posts the token back; the action checks it")
+        missed, text = self.summary_of(rows, ["email-change"], ["C"], 3)
+        self.assertEqual(missed, [])
+        self.assertRegex(text, r"email-change\s+C\s+3\s+0\s+0\s+0\s+0 .*  green;")
+        # A hand verdict counts only on a reviewed row; in arm A it is valid like any other.
+        a = [self.row("email-change", "A", "unresolved", hand_verdict="fail") for _ in range(3)]
+        self.assertEqual(r.counts_of(a)["unresolved"], 3)
+        for x in a:
+            x["reviewed"] = True
+        self.assertEqual((r.counts_of(a)["fail"], r.a_class(r.counts_of(a))), (3, "discriminates"))
+
+    def summarize_main(self, *argv):
+        saved = sys.argv
+        sys.argv = ["run.py", "--summarize", *map(str, argv)]
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                code = self.harness.main()
+        finally:
+            sys.argv = saved
+        return code, out.getvalue()
+
+    def test_summarize_prints_the_bar_from_results_files(self):
+        r = self.harness
+        skills = {"server-code": "a" * 64, "auth-secrets": "b" * 64}
+        row = lambda arm, verdict, i, **x: {**self.row("email-change", arm, verdict, skills if arm == "C" else None, run=i,
+                                                       stream=[f"/out/email-change-{arm}-{i}/stream.jsonl"],
+                                                       diff=f"/out/email-change-{arm}-{i}/diff.patch"), **x}
+        first = [row("A", "fail", i) for i in (1, 2, 3)] + [
+            row("C", "pass", 1),
+            row("C", "unresolved", 2, checks=[{"name": "unresolved: the confirm link applies the change", "ok": False,
+                                               "detail": "the page uses useActionState"}]),
+            row("C", "pass", 3, suspect=["verdict"])]
+        second = [row("C", "pass", 4), row("C", "pass", 1)]  # #1 again: the same run, taken once
+        with tempfile.TemporaryDirectory(prefix="practices-summarize-") as tmp:
+            tmp = Path(tmp)
+            (tmp / "run1").mkdir()
+            (tmp / "run1" / "results.jsonl").write_text("".join(json.dumps(x) + "\n" for x in first) + "\n")
+            (tmp / "more.jsonl").write_text("".join(json.dumps(x) + "\n" for x in second))
+            code, text = self.summarize_main(tmp / "run1", tmp / "more.jsonl")
+            self.assertEqual(code, 1, text)
+            self.assertIn("6 row(s); 0 already taken\n", text)  # an empty line is no row and no problem
+            self.assertIn("1 row(s); 1 already taken\n", text)
+            self.assertRegex(text, r"email-change\s+A .*discriminates \(fail 3 of 3 valid\)")
+            self.assertRegex(text, r"email-change\s+C\s+2\s+0\s+0\s+2\s+0 .*MISS \(pass 2 of 4\).*2 unresolved")
+            self.assertIn("unresolved email-change/C #2 (unresolved): the oracle couldn't determine it (the page uses "
+                          "useActionState)", text)
+            self.assertIn("unresolved email-change/C #3 (pass): suspect (verdict)", text)
+            self.assertIn("no model calls made", text)
+            # A person reads both and edits their lines; the bar is printed again, green.
+            first[4].update(reviewed=True, hand_verdict="pass", hand_note="the client form posts the token; the action checks it")
+            first[5].update(reviewed=True)
+            (tmp / "run1" / "results.jsonl").write_text("".join(json.dumps(x) + "\n" for x in first))
+            code, text = self.summarize_main(tmp / "run1", tmp / "more.jsonl")
+            self.assertEqual(code, 0, text)
+            self.assertRegex(text, r"email-change\s+C\s+4\s+0\s+0\s+0\s+0 .*  green\n")
+            # -n larger than the rows a line holds: the line misses until its runs are there.
+            code, text = self.summarize_main(tmp / "run1", tmp / "more.jsonl", "-n", "5")
+            self.assertEqual(code, 1, text)
+            self.assertIn("MISS (pass 4 of 5)", text)
+            # A reviewed tripwire row whose hand verdict says the agent forged it.
+            first[5]["hand_verdict"] = "broken"
+            (tmp / "run1" / "results.jsonl").write_text("".join(json.dumps(x) + "\n" for x in first))
+            code, text = self.summarize_main(tmp / "run1", tmp / "more.jsonl", "--arms", "C")
+            self.assertEqual(code, 1, text)
+            self.assertRegex(text, r"email-change\s+C\s+3\s+0\s+1\s+0\s+0 .*MISS \(pass 3 of 4\)")
+            # Pooling refuses rows of two fingerprints, as in a live run.
+            second[0]["case_hash"] = "other"
+            (tmp / "more.jsonl").write_text("".join(json.dumps(x) + "\n" for x in second))
+            code, text = self.summarize_main(tmp / "run1", tmp / "more.jsonl")
+            self.assertEqual(code, 1, text)
+            self.assertIn("REFUSED: rows from 2 versions (case differ)", text)
+            with self.assertRaises(SystemExit):
+                self.summarize_main(tmp / "missing.jsonl")
+
+    def graded_rows(self):
+        """Five arm-C email-change rows as a run writes them, #5 unresolved."""
+        skills = {"server-code": "a" * 64, "auth-secrets": "b" * 64}
+        rows = [self.row("email-change", "C", "pass", skills, run=i, planned_n=5,
+                         stream=[f"/out/email-change-C-{i}/stream.jsonl"], diff=f"/out/email-change-C-{i}/diff.patch")
+                for i in range(1, 6)]
+        rows[4].update(verdict="unresolved", checks=[{"name": "unresolved: x", "ok": False, "detail": "a page"}])
+        return rows
+
+    def test_summarize_refuses_a_line_it_would_skip(self):
+        # A hand edit that breaks a line, or misspells a verdict, exits naming file:line: skipping
+        # it would drop that row from the bar, and a green line could follow.
+        rows = self.graded_rows()
+        graded = json.dumps({**rows[4], "reviewed": True, "hand_verdict": "fail"})
+        edits = {
+            "a trailing comma": (graded[:-1] + ', }', "not JSON"),
+            "a misspelled hand verdict": (json.dumps({**rows[4], "reviewed": True, "hand_verdict": "fial"}),
+                                          "hand_verdict 'fial' is not one of 'pass', 'fail', 'broken'"),
+            "reviewed as a string": (json.dumps({**rows[4], "reviewed": "true", "hand_verdict": "fail"}),
+                                     "reviewed 'true' is not true or false"),
+            "an unknown arm": (json.dumps({**rows[4], "arm": "E"}), "unknown arm 'E'"),
+            "a planned n that isn't a count": (json.dumps({**rows[4], "planned_n": "5"}), "planned_n '5' is not a positive"),
+            "an unknown planned arm": (json.dumps({**rows[4], "planned_arms": ["C", "E"]}),
+                                       "planned_arms ['C', 'E'] is not a non-empty list of known arms"),
+            "planned cases as a string": (json.dumps({**rows[4], "planned_cases": "idor"}),
+                                          "planned_cases idor is not a non-empty list of known cases"),
+            "a JSON value that isn't an object": ("[1, 2]", "not a JSON object"),
+        }
+        with tempfile.TemporaryDirectory(prefix="practices-refuse-") as tmp:
+            path = Path(tmp) / "results.jsonl"
+            for label, (line, why) in edits.items():
+                with self.subTest(label):
+                    path.write_text("".join(json.dumps(x) + "\n" for x in rows[:4]) + line + "\n")
+                    with self.assertRaises(SystemExit) as stop:
+                        self.summarize_main(path)
+                    self.assertIn(f"{path.resolve()}:5: {why}", str(stop.exception.code))
+                    self.assertIn("no bar is printed", str(stop.exception.code))
+            # The same edit made right reads 4 pass and 1 fail: a miss, the row counted.
+            path.write_text("".join(json.dumps(x) + "\n" for x in rows[:4]) + graded + "\n")
+            code, text = self.summarize_main(path)
+            self.assertEqual(code, 1, text)
+            self.assertRegex(text, r"email-change\s+C\s+4\s+1\s+0\s+0\s+0 .*MISS \(pass 4 of 5\)")
+
+    def test_summarize_wants_the_planned_runs(self):
+        # A run cut short (Ctrl-C after 4 of 5) reads as short without -n, from planned_n.
+        rows = self.graded_rows()[:4]
+        missed, text = self.summary_of(rows, ["email-change"], ["C"], None)
+        self.assertEqual(missed, ["email-change/C"])
+        self.assertIn("MISS (pass 4 of 5)", text)
+        # Rows from before planned_n (the old form) still read: n is the rows a line holds, or -n.
+        old = [{k: v for k, v in x.items() if k != "planned_n"} for x in rows]
+        self.assertEqual(self.summary_of(old, ["email-change"], ["C"], None)[0], [])
+        self.assertIn("MISS (pass 4 of 5)", self.summary_of(old, ["email-change"], ["C"], 5)[1])
+        # Both forms in one line: the largest planned_n stands.
+        self.assertIn("MISS (pass 4 of 5)", self.summary_of(old[:3] + rows[3:], ["email-change"], ["C"], None)[1])
+        # More rows than planned (two files pooled): every row must pass, as before.
+        extra = [self.row("email-change", "C", verdict, rows[0]["skills"], planned_n=5) for verdict in ("pass", "fail")]
+        self.assertIn("MISS (pass 5 of 6)", self.summary_of(rows + extra, ["email-change"], ["C"], None)[1])
+        # A live run records it on every row, a harness error's row included.
+        self.assertIn('row.setdefault("planned_n", a.n)', Path(self.harness.__file__).read_text())
+        self.assertIn('"planned_n": args.n,', Path(self.harness.__file__).read_text())
+
+    def test_a_line_with_no_rows_misses(self):
+        r = self.harness
+        empty = {"pass": 0, "fail": 0, "broken": 0, "unresolved": 0, "error": 0}
+        # A gating line with no row is a MISS, never pass 0 of 0; a reported-only line stays one.
+        for case, arm in (("idor", "C"), ("idor", "D"), ("benign", "C"), ("auth-benign", "D"), ("idor", "A")):
+            self.assertEqual(r.bar(case, arm, empty, 0), ("MISS (no rows: none of its runs finished)", True))
+            self.assertEqual(r.bar(case, arm, empty, 5), ("MISS (no rows: 0 of 5 runs finished)", True))
+        for case, arm in (("benign", "A"), ("idor", "B")):
+            self.assertEqual(r.bar(case, arm, empty, 0), ("reported only", False))
+        self.assertEqual(r.bar("idor", "C", {**empty, "error": 2}, 2), ("MISS (pass 0 of 2); arm A unclassified: a "
+                                                                          "regression check, not yet evidence that the skill helps", True))
+        skills = {"server-code": "a" * 64, "auth-secrets": "b" * 64}
+        run = lambda case, arm, verdict, i, **x: self.row(case, arm, verdict, skills if arm != "A" else None, run=i,
+                                                          planned_n=5, stream=[f"/out/{case}-{arm}-{i}/stream.jsonl"], **x)
+        planned = {"planned_cases": ["idor", "mass-assign"], "planned_arms": ["A", "C"]}
+        old = lambda rows: [{k: v for k, v in x.items() if k not in planned} for x in rows]
+        write = lambda path, rows: path.write_text("".join(json.dumps(x) + "\n" for x in rows))
+        with tempfile.TemporaryDirectory(prefix="practices-norows-") as tmp:
+            path = Path(tmp) / "results.jsonl"
+            # The reviewer's case: five idor/A rows, then a Ctrl-C before any idor/C row finished.
+            a_only = [run("idor", "A", "fail", i, planned_cases=["idor"], planned_arms=["A", "C"]) for i in range(1, 6)]
+            write(path, a_only)
+            code, text = self.summarize_main(path)
+            self.assertEqual(code, 1, text)
+            self.assertRegex(text, r"idor\s+C\s+0\s+0\s+0\s+0\s+0 .*  MISS \(no rows: 0 of 5 runs finished\)\n")
+            self.assertIn("missed the bar: idor/C\n", text)
+            # The same rows in the old form (no planned_arms) say nothing of C: today's default, A only.
+            write(path, old(a_only))
+            code, text = self.summarize_main(path)
+            self.assertEqual(code, 0, text)
+            self.assertNotRegex(text, r"idor\s+C ")
+            # --arms alone filters: these rows record no plan, and their file holds idor/A only, so idor/C
+            # is past what they can say their run planned. Both flags name the line, and it misses.
+            code, text = self.summarize_main(path, "--arms", "A,C")
+            self.assertEqual(code, 0, text)
+            self.assertNotRegex(text, r"idor\s+C ")
+            code, text = self.summarize_main(path, "--cases", "idor", "--arms", "A,C")
+            self.assertEqual(code, 1, text)
+            self.assertIn("MISS (no rows: none of its runs finished)", text)  # nor its n
+            # Old rows, as round 5 found them: another case holds C rows, so C is listed, and idor's empty C
+            # line read green at n = 0.
+            write(path, old(a_only) + [run("mass-assign", arm, v, i) for arm, v in (("A", "fail"), ("C", "pass"))
+                                       for i in range(1, 6)])
+            code, text = self.summarize_main(path)
+            self.assertEqual(code, 1, text)
+            self.assertIn("missed the bar: idor/C\n", text)
+            # A case a Ctrl-C stopped before it started is listed from the rows' plan, and misses.
+            done = [run("idor", arm, v, i, **planned) for arm, v in (("A", "fail"), ("C", "pass")) for i in range(1, 6)]
+            write(path, done)
+            code, text = self.summarize_main(path)
+            self.assertEqual(code, 1, text)
+            self.assertRegex(text, r"idor\s+C\s+5\s+0\s+0\s+0\s+0 .*  green\n")
+            self.assertRegex(text, r"mass-assign\s+A\s+0\s+0\s+0\s+0\s+0 .*  MISS \(no rows: 0 of 5 runs finished\)\n")
+            self.assertIn("missed the bar: mass-assign/A, mass-assign/C\n", text)
+            write(path, old(done))  # before: nothing named mass-assign, so it wasn't listed and the bar read green
+            code, text = self.summarize_main(path)
+            self.assertEqual(code, 0, text)
+            self.assertNotIn("mass-assign", text)
+            write(path, old(done[:5]) + done[5:])  # both forms in one file: the plan of the rows that record one
+            code, text = self.summarize_main(path)
+            self.assertIn("missed the bar: mass-assign/A, mass-assign/C\n", text)
+        # An imported baseline row stands for its own line only: its run's other lines aren't here.
+        base = {**run("idor", "A", "fail", 1, **planned), "imported": "/old/results.jsonl"}
+        self.assertEqual((r.plans(base, "idor", "A"), r.plans(base, "idor", "C")), (True, False))
+        self.assertEqual(r.planned_lines([base]), (["idor"], ["A"]))
+        self.assertEqual(r.planned_lines(done), (["idor", "mass-assign"], ["A", "C"]))
+        # A live run records the plan on every row, a harness error's row included.
+        source = Path(r.__file__).read_text()
+        self.assertIn('row.setdefault("planned_cases", cases)', source)
+        self.assertIn('row.setdefault("planned_arms", arms)', source)
+
+    def plan_rows(self, model, cases, arms, n, short=None, ran=None, **extra):
+        """The rows one run of `model` writes: n passing runs of each case and arm it planned (of
+        `ran`, the cases it got to, when a Ctrl-C stopped it), `short` a (case, arm) whose last run
+        never finished, `extra` more fields on every row."""
+        skills = {"server-code": "a" * 64, "auth-secrets": "b" * 64}
+        return [self.row(case, arm, "pass", skills, model=model, run=i, planned_n=n, planned_cases=cases,
+                         planned_arms=arms, stream=[f"/out/{model}/{case}-{arm}-{i}/stream.jsonl"], **extra)
+                for case in (ran or cases) for arm in arms for i in range(1, n + 1) if (case, arm, i) != (*(short or ()), n)]
+
+    STEP_7 = ((("open-redirect", "email-change", "logout-revoke", "signup", "remember-me", "auth-benign"), ("B", "C", "D")),
+              (("rate-limit-paid", "csv-injection", "reset-host", "benign"), ("C",)))
+
+    def step_7_pool(self, tmp, models, short=None, **extra):
+        """The next eval's dirs under `tmp`, one per model and plan: the auth cases on B, C and D,
+        and the cross-skill cases on C only, two runs each; `short` a (model, case, arm) whose last
+        run never finished."""
+        paths = []
+        for model in models:
+            for name, (cases, arms) in zip(("auth", "cross"), self.STEP_7):
+                paths.append(tmp / f"{model}-{name}")
+                paths[-1].mkdir()
+                cut = short[1:] if short and short[0] == model and short[1] in cases and short[2] in arms else None
+                rows = self.plan_rows(model, list(cases), list(arms), 2, cut, **extra)
+                (paths[-1] / "results.jsonl").write_text("".join(json.dumps(x) + "\n" for x in rows))
+        return paths
+
+    def missed_of(self, text):
+        """The "case/arm" labels a summary's last line says missed the bar."""
+        return text.split("missed the bar: ")[1].split("\n")[0].split(", ") if "missed the bar: " in text else []
+
+    def test_pooled_runs_gate_only_the_lines_their_model_planned(self):
+        # Round 6's case: one run planned email-change on B, C and D, another rate-limit-paid on C
+        # only. No run planned rate-limit-paid/D, so its empty line is no miss; before, the summary
+        # crossed every case with every arm and missed it.
+        write = lambda path, rows: path.write_text("".join(json.dumps(x) + "\n" for x in rows))
+        with tempfile.TemporaryDirectory(prefix="practices-pool-") as tmp:
+            auth, cross = Path(tmp) / "auth.jsonl", Path(tmp) / "cross.jsonl"
+            write(auth, self.plan_rows("m", ["email-change"], ["B", "C", "D"], 5))
+            write(cross, self.plan_rows("m", ["rate-limit-paid"], ["C"], 5))
+            code, text = self.summarize_main(auth, cross)
+            self.assertEqual(code, 0, text)
+            self.assertNotIn("MISS", text)
+            self.assertNotRegex(text, r"rate-limit-paid\s+[BD] ")
+            self.assertRegex(text, r"email-change\s+D\s+5 .*  green")
+            self.assertRegex(text, r"rate-limit-paid\s+C\s+5 .*  green")
+            # One flag alone filters the lines; what the runs planned still says which can miss.
+            for flag in (("--arms", "D"), ("--cases", "rate-limit-paid"), ("--arms", "C,D")):
+                with self.subTest(flag):
+                    code, text = self.summarize_main(auth, cross, *flag)
+                    self.assertEqual(code, 0, text)
+            # Both flags name the lines wanted: an empty one misses, planned or not.
+            code, text = self.summarize_main(auth, cross, "--cases", "rate-limit-paid", "--arms", "C,D")
+            self.assertEqual(code, 1, text)
+            self.assertIn("missed the bar: rate-limit-paid/D\n", text)
+            # A line a run planned and never reached misses, pooled or not.
+            write(auth, self.plan_rows("m", ["email-change", "logout-revoke"], ["B", "C", "D"], 5, ran=["email-change"]))
+            code, text = self.summarize_main(auth, cross)
+            self.assertEqual(code, 1, text)
+            self.assertRegex(text, r"logout-revoke\s+C\s+0 .*  MISS \(no rows: 0 of 5 runs finished\)\n")
+            self.assertIn("missed the bar: logout-revoke/C, logout-revoke/D\n", text)
+            # Another model's plan says nothing of this one's: the same rows as model n's run only.
+            write(cross, self.plan_rows("n", ["rate-limit-paid"], ["C"], 5))
+            write(auth, self.plan_rows("m", ["email-change"], ["B", "C", "D"], 5))
+            code, text = self.summarize_main(auth, cross)
+            self.assertEqual(code, 0, text)
+            # A row that records no plan (the old form) says nothing of what its run left out, so its
+            # file's rows stand for that plan: it gates the cross of the cases and arms its own file
+            # holds for its model. Before, it gated every line of its model, and rate-limit-paid/D,
+            # which no file holds or plans, missed.
+            old = lambda rows: [{k: v for k, v in x.items() if k not in ("planned_cases", "planned_arms")} for x in rows]
+            write(cross, old(self.plan_rows("m", ["rate-limit-paid"], ["C"], 5)))
+            code, text = self.summarize_main(auth, cross)
+            self.assertEqual(code, 0, text)
+            self.assertNotRegex(text, r"rate-limit-paid\s+[BD] ")
+            # Its file holding rate-limit-paid/C and csv-injection/D, the two other lines of that cross
+            # miss, and no line past it does.
+            write(cross, old(self.plan_rows("m", ["rate-limit-paid"], ["C"], 5) + self.plan_rows("m", ["csv-injection"], ["D"], 5)))
+            code, text = self.summarize_main(auth, cross)
+            self.assertEqual(code, 1, text)
+            self.assertEqual(sorted(self.missed_of(text)), ["csv-injection/C", "rate-limit-paid/D"], text)
+            # Another model's old rows in the same file reach only that model's lines.
+            write(cross, old(self.plan_rows("m", ["rate-limit-paid"], ["C"], 5) + self.plan_rows("n", ["csv-injection"], ["D"], 5)))
+            code, text = self.summarize_main(auth, cross)
+            self.assertEqual(code, 0, text)
+
+    def test_a_step_7_pool_misses_only_the_line_cut_short(self):
+        # The next eval's shape: per model, the auth cases on B, C and D and the cross-skill cases on
+        # C only, two runs each. Haiku's auth run lost its last signup/C run.
+        with tempfile.TemporaryDirectory(prefix="practices-step7-") as tmp:
+            paths = self.step_7_pool(Path(tmp), ("opus", "sonnet", "haiku"), ("haiku", "signup", "C"))
+            code, text = self.summarize_main(*paths)
+            self.assertEqual(code, 1, text)
+            self.assertIn("missed the bar: signup/C\n", text)
+            self.assertEqual(text.count("MISS"), 1, text)
+            self.assertIn("MISS (pass 1 of 2)", text.split("model haiku")[1].split("model ")[0])
+
+    def test_a_step_7_pool_with_old_red_a_rows_misses_only_the_line_cut_short(self):
+        # Round 7's case: the step-7 pool plus each model's RED email-change/A and open-redirect/A rows,
+        # from before planned_cases and planned_arms, each in its own file. Each old row gates only
+        # the cross of what its file holds; before, one made every line of its model one that could
+        # miss, and rate-limit-paid/D, logout-revoke/A and the like missed for every model.
+        with tempfile.TemporaryDirectory(prefix="practices-step7-red-") as tmp:
+            tmp = Path(tmp)
+            paths = self.step_7_pool(tmp, ("opus", "sonnet", "haiku"), ("haiku", "signup", "C"))
+            for model in ("opus", "sonnet", "haiku"):
+                for case in ("email-change", "open-redirect"):
+                    paths.append(tmp / f"{model}-red-{case}")
+                    paths[-1].mkdir()
+                    rows = [self.row(case, "A", "fail", model=model, run=i, stream=[f"/red/{model}/{case}-A-{i}/stream.jsonl"])
+                            for i in range(1, 6)]
+                    (paths[-1] / "results.jsonl").write_text("".join(json.dumps(x) + "\n" for x in rows))
+            before = {p: (p / "results.jsonl").read_bytes() for p in paths}
+            code, text = self.summarize_main(*paths)
+            self.assertEqual(code, 1, text)
+            self.assertIn("missed the bar: signup/C\n", text)
+            self.assertEqual(text.count("MISS"), 1, text)
+            for model in ("opus", "sonnet", "haiku"):
+                of_model = text.split(f"model {model}")[1].split("model ")[0]
+                self.assertRegex(of_model, r"email-change\s+A\s+0\s+5 .*discriminates")
+                self.assertRegex(of_model, r"open-redirect\s+A\s+0\s+5 .*discriminates")
+                self.assertNotRegex(of_model, r"(?m)^(logout-revoke|signup|remember-me|rate-limit-paid)\s+A ")
+                self.assertNotRegex(of_model, r"(?m)^(rate-limit-paid|csv-injection|reset-host|benign)\s+D ")
+            # The summary tags each row with its file in memory only: every file reads as it was.
+            self.assertEqual({p: (p / "results.jsonl").read_bytes() for p in paths}, before)
+            # Round 5's shape still misses: one old file holding idor/A and mass-assign/C gates idor/C.
+            red = tmp / "red-idor"
+            red.mkdir()
+            (red / "results.jsonl").write_text("".join(json.dumps(self.row(case, arm, v, model="opus", run=i,
+                                                                            stream=[f"/r5/{case}-{arm}-{i}"])) + "\n"
+                                                       for case, arm, v in (("idor", "A", "fail"), ("mass-assign", "C", "pass"))
+                                                       for i in range(1, 6)))
+            code, text = self.summarize_main(red)
+            self.assertEqual(code, 1, text)
+            self.assertEqual(sorted(self.missed_of(text)), ["idor/C", "mass-assign/A"], text)
+
+    def write_results(self, tmp, name, rows):
+        (tmp / name).mkdir()
+        (tmp / name / "results.jsonl").write_text("".join(json.dumps(x) + "\n" for x in rows))
+        return tmp / name
+
+    def test_an_old_file_gates_the_cross_of_every_row_it_holds_in_any_path_order(self):
+        # Round 8's first low. F2 holds old idor/A and mass-assign/C rows; F1 is a copy of just its
+        # idor/A rows. A row an earlier path took is still one its later file holds: before, `F1 F2`
+        # left F2 only mass-assign/C to cross and exited 0, while `F2 F1` missed.
+        with tempfile.TemporaryDirectory(prefix="practices-reach-order-") as tmp:
+            tmp = Path(tmp)
+            held = [self.row(case, arm, v, run=i, stream=[f"/r5/{case}-{arm}-{i}"])
+                    for case, arm, v in (("idor", "A", "fail"), ("mass-assign", "C", "pass")) for i in range(1, 6)]
+            f2, f1 = self.write_results(tmp, "f2", held), self.write_results(tmp, "f1", held[:5])
+            for paths in ((f2, f1), (f1, f2)):
+                code, text = self.summarize_main(*paths)
+                self.assertEqual(code, 1, text)
+                self.assertEqual(sorted(self.missed_of(text)), ["idor/C", "mass-assign/A"], text)
+
+    def test_a_mixed_file_gates_only_the_cross_of_its_old_rows(self):
+        # Round 8's second low. One file holds old email-change/A rows and a newer run's
+        # rate-limit-paid/C rows, which record their plan. Only its old rows are crossed: before,
+        # rate-limit-paid/A and email-change/C, which no run planned, missed.
+        with tempfile.TemporaryDirectory(prefix="practices-reach-mixed-") as tmp:
+            old = [self.row("email-change", "A", "fail", run=i, stream=[f"/old/email-change-A-{i}"]) for i in range(1, 6)]
+            mixed = self.write_results(Path(tmp), "mixed", old + self.plan_rows("m", ["rate-limit-paid"], ["C"], 5))
+            code, text = self.summarize_main(mixed)
+            self.assertEqual(code, 0, text)
+            self.assertRegex(text, r"email-change\s+A\s+0\s+5 .*discriminates")
+            self.assertRegex(text, r"rate-limit-paid\s+C\s+5\s+0 .*  green")
+            self.assertNotRegex(text, r"(?m)^(rate-limit-paid\s+A|email-change\s+C) ")
+
+    @unittest.skipUnless(os.environ.get("PRACTICES_REAL_RESULTS"),
+                         "set PRACTICES_REAL_RESULTS to a real run's results.jsonl to pool it with a step-7 shape")
+    def test_a_real_old_file_pooled_with_step_7_rows_misses_no_line_neither_holds_or_plans(self):
+        # A real results.jsonl from before planned_cases and planned_arms, copied (never changed), with
+        # step-7 rows of its model and effort; one signup/C run cut short. A MISS names only a line
+        # one of them holds or planned.
+        real = Path(os.environ["PRACTICES_REAL_RESULTS"])
+        held = [json.loads(x) for x in real.read_text(encoding="utf-8").splitlines() if x.strip()]
+        model, effort = held[0]["model"], held[0].get("effort")
+        with tempfile.TemporaryDirectory(prefix="practices-real-") as tmp:
+            tmp = Path(tmp)
+            (tmp / "real").mkdir()
+            (tmp / "real" / "results.jsonl").write_bytes(real.read_bytes())
+            paths = self.step_7_pool(tmp, (model,), (model, "signup", "C"), **({"effort": effort} if effort else {}))
+            code, text = self.summarize_main(tmp / "real", *paths)
+            lines = {f"{r['case']}/{r['arm']}" for r in held if r.get("model") == model and r.get("effort") == effort}
+            lines |= {f"{case}/{arm}" for cases, arms in self.STEP_7 for case in cases for arm in arms}
+            self.assertEqual(code, 1, text)
+            self.assertIn("signup/C", self.missed_of(text), text)
+            self.assertEqual([m for m in self.missed_of(text) if m not in lines], [], text)
+
+    def test_a_path_with_no_rows_fails_the_summary(self):
+        # A run killed before its first row leaves an empty results.jsonl, and its plan is only in
+        # rows: the path fails the summary, so that model can't drop out of a green pool.
+        with tempfile.TemporaryDirectory(prefix="practices-empty-") as tmp:
+            died = Path(tmp) / "died"
+            died.mkdir()
+            full = Path(tmp) / "full.jsonl"
+            full.write_text("".join(json.dumps(x) + "\n" for x in self.plan_rows("m", ["email-change"], ["C"], 5)))
+            self.assertEqual(self.summarize_main(full)[0], 0)
+            for body in ("", "\n\n"):
+                (died / "results.jsonl").write_text(body)
+                for paths in ((died,), (died, "--cases", "idor", "--arms", "C"), (died, "--arms", "C"), (full, died)):
+                    with self.subTest(body=body, paths=paths):
+                        code, text = self.summarize_main(*paths)
+                        self.assertEqual(code, 1, text)
+                        self.assertIn(f"no rows in {(died / 'results.jsonl').resolve()}", text)
+            # A path whose rows another path already gave holds rows: no failure for that alone.
+            (died / "results.jsonl").write_text(full.read_text())
+            self.assertEqual(self.summarize_main(full, died)[0], 0)
+
+    def test_summarize_warns_while_a_run_writes_the_file(self):
+        # A hand edit while a run appends loses rows (a save by rename sends them to the unlinked
+        # file), so a summary of a live run's file says a run is writing it. The probe doesn't
+        # wait and lets go at once, and the warning alone doesn't change the exit code.
+        r = self.harness
+        with tempfile.TemporaryDirectory(prefix="practices-live-") as tmp:
+            out = Path(tmp)
+            (out / "results.jsonl").write_text("".join(json.dumps(x) + "\n" for x in self.graded_rows()[:4]))
+            with r.open_results(out):
+                code, text = self.summarize_main(out)
+                self.assertEqual(code, 1, text)  # 4 of 5: the run isn't done
+                self.assertIn(f"warning: a run is still writing {(out / 'results.jsonl').resolve()}", text)
+                self.assertIn("don't hand-edit it", text)
+                self.assertIn("--grade", text.split("warning: a run is still writing")[1])
+            code, text = self.summarize_main(out)
+            self.assertNotIn("warning: a run", text)
+            with r.open_results(out):  # the summary's probe holds nothing after it
+                pass
+            (out / "results.jsonl").write_text("".join(json.dumps(x) + "\n" for x in self.plan_rows("m", ["email-change"], ["C"], 5)))
+            with r.open_results(out):
+                code, text = self.summarize_main(out)
+                self.assertEqual(code, 0, text)
+                self.assertIn("warning: a run is still writing", text)
+
+    def grade_main(self, *argv):
+        saved = sys.argv
+        sys.argv = ["run.py", "--grade", *map(str, argv)]
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                code = self.harness.main()
+        finally:
+            sys.argv = saved
+        return code, out.getvalue()
+
+    def test_grade_sets_one_row_and_rewrites_the_file_atomically(self):
+        rows = self.graded_rows()
+        with tempfile.TemporaryDirectory(prefix="practices-grade-") as tmp:
+            run_dir = Path(tmp) / "run1"
+            run_dir.mkdir()
+            path = run_dir / "results.jsonl"
+            # Another line's own spacing is kept byte for byte.
+            lines = [json.dumps(x) + "\n" for x in rows[:4]] + [json.dumps(rows[4], indent=None, separators=(",", ":")) + "\n"]
+            lines[1] = json.dumps(rows[1], separators=(", ", ":  ")) + "\n"
+            path.write_text("".join(lines))
+            path.chmod(0o600)
+            before = path.read_bytes()
+            refusals = {
+                "an unknown run": (("email-change-C-9", "pass", "read it"), "no row 'email-change-C-9'"),
+                "an unknown verdict": (("email-change-C-5", "unresolved", "read it"), "is not one of pass, fail, broken"),
+                "an empty note": (("email-change-C-5", "pass", "  "), "the note is empty"),
+            }
+            for label, (args, why) in refusals.items():
+                with self.subTest(label), self.assertRaises(SystemExit) as stop:
+                    self.grade_main(run_dir, *args)
+                self.assertIn(why, str(stop.exception.code))
+                self.assertEqual(path.read_bytes(), before)
+            with self.assertRaises(SystemExit):  # the RUN key's parts aren't enough on their own
+                self.grade_main(path, "email-change-5", "pass", "read it")
+            code, text = self.grade_main(run_dir, "email-change-C-5", "pass", "the form posts the token; the action checks it")
+            self.assertEqual(code, 0, text)
+            self.assertIn("graded email-change-C-5", text)
+            after = path.read_text().splitlines(keepends=True)
+            self.assertEqual(after[:4], lines[:4])
+            self.assertEqual(json.loads(after[4]), {**rows[4], "reviewed": True, "hand_verdict": "pass",
+                                                    "hand_note": "the form posts the token; the action checks it"})
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+            self.assertEqual(sorted(p.name for p in run_dir.iterdir()), ["results.jsonl"])  # no temp file left
+            code, text = self.summarize_main(path)
+            self.assertEqual(code, 0, text)
+            self.assertRegex(text, r"email-change\s+C\s+5\s+0\s+0\s+0\s+0 .*  green[;\n]")
+            # A repeated key, or a file --summarize would refuse, is refused and left as it is.
+            for label, extra in (("a repeated key", after[4]), ("a broken line", "{\n")):
+                with self.subTest(label):
+                    path.write_text("".join(after) + extra)
+                    before = path.read_bytes()
+                    with self.assertRaises(SystemExit) as stop:
+                        self.grade_main(path, "email-change-C-5", "fail", "read again")
+                    self.assertIn("2 rows are" if extra != "{\n" else ":6: not JSON", str(stop.exception.code))
+                    self.assertEqual(path.read_bytes(), before)
+            with self.assertRaises(SystemExit):  # it takes no other option
+                self.grade_main(path, "email-change-C-5", "pass", "x", "--arms", "C")
+
+    def test_grade_refuses_while_a_run_holds_its_results(self):
+        r = self.harness
+        rows = self.graded_rows()
+        late = {**rows[0], "run": 6, "stream": ["/out/email-change-C-6/stream.jsonl"]}
+        with tempfile.TemporaryDirectory(prefix="practices-lock-") as tmp:
+            out = Path(tmp)
+            path = out / "results.jsonl"
+            # The hazard: a handle a run holds open to append, and a rewrite under it. The row written
+            # after lands in the replaced inode, so the file never gets it.
+            path.write_text("".join(json.dumps(x) + "\n" for x in rows))
+            with open(path, "a") as handle:
+                self.grade_main(path, "email-change-C-5", "pass", "read it")
+                handle.write(json.dumps(late) + "\n")
+            self.assertEqual(len(path.read_text().splitlines()), 5)
+            # A live run appends under its lock for its whole life: --grade refuses, changing nothing,
+            # and the run's later rows reach the file.
+            path.write_text("".join(json.dumps(x) + "\n" for x in rows))
+            before = path.read_bytes()
+            with r.open_results(out) as results:
+                with self.assertRaises(SystemExit) as stop:
+                    self.grade_main(out, "email-change-C-5", "pass", "read it")
+                self.assertIn(f"--grade: a live run holds {out.resolve()}", str(stop.exception.code))
+                self.assertEqual(path.read_bytes(), before)
+                with self.assertRaises(SystemExit) as stop, r.open_results(out):  # nor can a second run share it
+                    pass
+                self.assertIn("is held by another run or a --grade", str(stop.exception.code))
+                results.write(json.dumps(late) + "\n")
+                results.flush()
+            # The run over, --grade works as before, and every row is there.
+            code, text = self.grade_main(out, "email-change-C-5", "pass", "read it")
+            self.assertEqual(code, 0, text)
+            after = [json.loads(x) for x in path.read_text().splitlines()]
+            self.assertEqual([x["run"] for x in after], [1, 2, 3, 4, 5, 6])
+            self.assertEqual(after[4]["hand_verdict"], "pass")
+            self.assertEqual(sorted(p.name for p in out.iterdir()), ["results.jsonl"])  # the lock leaves no file
+        self.assertIn("with open_results(out) as results:", Path(r.__file__).read_text())
+
+    def test_grade_waits_out_a_summary_probe_but_not_a_run(self):
+        # A --summarize probe holds a shared flock on the dir for an instant (held_by_a_run). A --grade
+        # that lands in it tries again for about a second instead of saying a live run holds the dir.
+        # A lock held past that, as a run holds its own for its whole life, is refused, and soon.
+        with tempfile.TemporaryDirectory(prefix="practices-probe-") as tmp:
+            out = Path(tmp)
+            path = out / "results.jsonl"
+            path.write_text("".join(json.dumps(x) + "\n" for x in self.graded_rows()))
+            fd = os.open(out, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                letgo = threading.Timer(0.2, fcntl.flock, (fd, fcntl.LOCK_UN))
+                letgo.start()
+                code, text = self.grade_main(out, "email-change-C-5", "pass", "read it")
+                letgo.join()
+            finally:
+                os.close(fd)
+            self.assertEqual(code, 0, text)
+            self.assertEqual(json.loads(path.read_text().splitlines()[4])["hand_verdict"], "pass")
+            before = path.read_bytes()
+            for kind in (fcntl.LOCK_EX, fcntl.LOCK_SH):
+                with self.subTest(kind=kind):
+                    fd = os.open(out, os.O_RDONLY | os.O_DIRECTORY)
+                    try:
+                        fcntl.flock(fd, kind | fcntl.LOCK_NB)
+                        start = time.monotonic()
+                        with self.assertRaises(SystemExit) as stop:
+                            self.grade_main(out, "email-change-C-5", "fail", "read again")
+                        self.assertLess(time.monotonic() - start, 5)
+                    finally:
+                        os.close(fd)
+                    self.assertIn(f"--grade: a live run holds {out.resolve()}", str(stop.exception.code))
+                    self.assertEqual(path.read_bytes(), before)
+
+    def test_init_skills_that_dont_match_the_arm_mark_the_row_contaminated(self):
+        r = self.harness
+        self.assertEqual(r.skill_mismatch("A", "server-code", ["init", "review"]), [])
+        self.assertEqual(r.skill_mismatch("A", "server-code", ["server-code", "project:auth-secrets"]),
+                         ["init_skills lists server-code (arm A installs none)", "init_skills lists auth-secrets (arm A installs none)"])
+        self.assertEqual(r.skill_mismatch("C", "auth-secrets", [{"name": "server-code"}, {"name": "auth-secrets"}]), [])
+        self.assertEqual(r.skill_mismatch("D", "auth-secrets", ["server-code"]), ["init_skills lacks auth-secrets (arm D installs it)"])
+        self.assertEqual(r.skill_mismatch("B", "server-code", None), [])  # no init event recorded
+        # A run whose init lists a practices skill in arm A is held unresolved by the bar.
+        init = json.dumps({"type": "system", "subtype": "init", "skills": ["server-code"]})
+        result = json.dumps({"type": "result", "subtype": "success", "num_turns": 1, "total_cost_usd": 0})
+        fake = lambda case, arm, model, effort=None: [("task", "x", [sys.executable, "-c", f"print({init!r}); print({result!r})"])]
+        args = argparse.Namespace(model="m", effort=None, contain=False, keep=False, n=5)
+        saved = r.turns_for
+        r.turns_for = fake
+        try:
+            with tempfile.TemporaryDirectory(prefix="practices-row-") as out, contextlib.redirect_stdout(io.StringIO()):
+                row = r.run_one("idor", "A", 1, args, Path(out))
+        finally:
+            r.turns_for = saved
+        self.assertEqual(row["contaminated"], ["init_skills lists server-code (arm A installs none)"])
+        self.assertTrue(r.unresolved(row))
+
+    def test_agent_diff_runs_no_filter_driver_the_fixture_repo_defines(self):
+        r = self.harness
+        root, sha = r.build_fixture("A")
+        canary = root.parent / f"{root.name}-filter-canary"
+        try:
+            script = root.parent / f"{root.name}-filter.sh"
+            script.write_text(f"#!/bin/sh\ntouch {shlex.quote(str(canary))}\ncat\n")
+            script.chmod(0o755)
+            subprocess.run(["git", "config", "filter.evil.clean", str(script)], cwd=root, check=True, env=r.git_env())
+            (root / ".gitattributes").write_text("*.ts filter=evil\n")
+            (root / "lib" / "new.ts").write_text("export const x = 1;\n")
+            subprocess.run(["git", "add", "-A"], cwd=root, env=r.git_env(), capture_output=True)  # the control
+            if not canary.exists():
+                self.skipTest("this git doesn't run a clean filter on add")
+            canary.unlink()
+            (root / "lib" / "other.ts").write_text("export const y = 2;\n")
+            diff = r.agent_diff(root, sha)
+            self.assertIn("+++ b/lib/other.ts", diff)
+            self.assertIn("+++ b/.gitattributes", diff)
+            self.assertFalse(canary.exists(), "agent_diff ran a filter driver from the fixture's .git/config")
+        finally:
+            canary.unlink(missing_ok=True)
+            (root.parent / f"{root.name}-filter.sh").unlink(missing_ok=True)
+            r.remove_fixture(root)
+
+    def test_agent_diff_runs_no_repo_fsmonitor_and_refuses_a_linked_git_dir(self):
+        r = self.harness
+        root, sha = r.build_fixture("A")
+        try:
+            canary = root.parent / f"{root.name}-canary"
+            monitor = root.parent / f"{root.name}-fsmonitor.sh"
+            monitor.write_text(f"#!/bin/sh\ntouch {shlex.quote(str(canary))}\n")
+            monitor.chmod(0o755)
+            subprocess.run(["git", "config", "core.fsmonitor", str(monitor)], cwd=root, check=True, env=r.git_env())
+            (root / "lib" / "new.ts").write_text("export const x = 1;\n")
+            subprocess.run(["git", "add", "-A"], cwd=root, env=r.git_env(), capture_output=True)  # the control
+            if not canary.exists():
+                self.skipTest("this git doesn't run core.fsmonitor on add")
+            canary.unlink()
+            (root / "lib" / "other.ts").write_text("export const y = 2;\n")
+            self.assertIn("lib/other.ts", r.agent_diff(root, sha))
+            self.assertFalse(canary.exists(), "agent_diff ran the repo's core.fsmonitor")
+            # A .git that isn't a plain directory scores error, and git never runs there.
+            moved = root.parent / f"{root.name}-git"
+            (root / ".git").rename(moved)
+            (root / ".git").symlink_to(moved)
+            with tempfile.TemporaryDirectory(prefix="practices-rundir-") as run_dir:
+                verdict, problem = r.finish_run(root, sha, "idor", run_dir, contain=False)
+            self.assertEqual(verdict["verdict"], "error")
+            self.assertEqual(verdict["checks"][0]["name"], "fixture .git")
+            self.assertIn("not a plain directory", problem)
+        finally:
+            for p in (root.parent / f"{root.name}-canary", root.parent / f"{root.name}-fsmonitor.sh"):
+                p.unlink(missing_ok=True)
+            shutil.rmtree(root.parent / f"{root.name}-git", ignore_errors=True)
+            run.remove_fixture(root)
+
+    def test_arm_c_alone_is_a_regression_check(self):
+        # No arm-A rows at the current case hash (none at all, or old ones without it): C still
+        # has to pass every run, and its line says it is a regression check, never REFUSED.
+        old_a = [self.row("idor", "A", "fail", run=i) for i in (1, 2, 3)]
+        for case in ("idor", "benign"):
+            c_rows = [self.row(case, "C", "pass", run=i, case_hash="k-now") for i in (1, 2, 3)]
+            for extra in ([], old_a if case == "idor" else []):
+                missed, text = self.summary_of(c_rows + extra, [case], ["A", "C"] if extra else ["C"], 3)
+                self.assertEqual(missed, [], text)
+                self.assertNotIn("REFUSED", text)
+                if case == "idor":
+                    self.assertRegex(text, r"idor\s+C .*green; arm A unclassified: a regression check")
+                else:
+                    self.assertRegex(text, r"benign\s+C .*green")
+            missed, text = self.summary_of(c_rows[:2] + [self.row(case, "C", "fail", run=3, case_hash="k-now")],
+                                           [case], ["C"], 3)
+            self.assertEqual(missed, [f"{case}/C"])
+
+    def test_skills_fingerprint(self):
+        r = self.harness
+        with tempfile.TemporaryDirectory(prefix="practices-fp-") as tmp:
+            skill = Path(tmp) / "s"
+            (skill / "references").mkdir(parents=True)
+            (skill / "SKILL.md").write_text("one\n")
+            (skill / "references" / "a.md").write_text("two\n")
+            first = r.tree_hash(skill)
+            self.assertEqual(first, r.tree_hash(skill))
+            (skill / "SKILL.md").write_text("one!\n")  # an uncommitted edit counts
+            edited = r.tree_hash(skill)
+            self.assertNotEqual(edited, first)
+            (skill / "references" / "a.md").rename(skill / "references" / "b.md")  # so does a rename
+            self.assertNotEqual(r.tree_hash(skill), edited)
+            # build_fixture installs every listed skill, and the row's fingerprint names each one
+            skills = Path(tmp) / "skills"
+            for name in ("one", "two"):
+                (skills / name).mkdir(parents=True)
+                (skills / name / "SKILL.md").write_text(f"{name}\n")
+            saved = r.SKILLS_DIR, r.PRACTICES_SKILLS
+            r.SKILLS_DIR, r.PRACTICES_SKILLS = skills, ["one", "two"]
+            roots = []
+            try:
+                for arm in ("A", "B"):
+                    root, _sha = r.build_fixture(arm)
+                    roots.append(root)
+                self.assertEqual(r.installed_skills(roots[0]), {})
+                self.assertEqual(r.installed_skills(roots[1]), {n: r.tree_hash(skills / n) for n in ("one", "two")})
+            finally:
+                r.SKILLS_DIR, r.PRACTICES_SKILLS = saved
+                for root in roots:
+                    run.remove_fixture(root)
 
 
 BWRAP_OK = bool(NODE) and run.bwrap_usable()
