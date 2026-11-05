@@ -2,7 +2,7 @@
   "marklet": [
     {
       "id": 1104821,
-      "url": "https://example.com/advisories/MARKLET-2026-0412",
+      "url": "https://github.com/advisories/GHSA-7vq2-c8hm-x4rf",
       "title": "Cross-site scripting in marklet link rendering",
       "severity": "high",
       "cwe": [

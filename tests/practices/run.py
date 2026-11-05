@@ -90,12 +90,16 @@ Per run:
         its package.json names goes into node_modules (apply_setup), as if already installed.
       Evidence: after the session, before grading, grade() writes evidence.json into the grading
         scratch dir and names it in ORACLE_EVIDENCE: bash (the agent's Bash commands from the
-        stream, in order), reply (the final result text), registry_requests and deps_before (what
-        package.json depended on before the turn), all the case turn's, so arm D's warm-up doesn't
-        count. The agent never sees it. oracle_deps.mjs reads it, once, on load, before any agent
-        code runs. A live session's sandbox may point npm_config_cache elsewhere, so a cached
-        answer can mean no request: an oracle decides on bash and the fixture, and uses
-        registry_requests only to catch an install bash doesn't show.
+        stream, in order), calls (the same commands with their outcomes, [{command, error, denied}],
+        read from each call's tool_result by id: error when the result is an error, denied when
+        that error names a hook deny, so the call ran nothing), reply (the final result text, "" for
+        a session with no result event), registry_requests and deps_before (what package.json
+        depended on before the turn), all the case turn's, so arm D's warm-up doesn't count. The
+        agent never sees it. oracle_deps.mjs reads it, once, on load, before any agent code runs,
+        and reads evidence without calls (older test rows) as no call errored. A live session's
+        sandbox may point npm_config_cache elsewhere, so a cached answer can mean no request: an
+        oracle decides on calls and the fixture, and uses registry_requests only to catch an install
+        bash doesn't show.
       Offline, cases/<case>/evidence/<overlay>.json supplies the evidence for test_oracles.py.
       Arm D: a plain fixture never warms up with a registry case's prompt (warmup_case), so
         adding a registry owner moved no existing case's warm-up.
@@ -937,12 +941,20 @@ def package_deps(root):
 
 def oracle_evidence(events, deps_before, requests):
     """What a registry case's oracle gets besides the fixture, from the case turn: the agent's
-    Bash commands in order, its final reply, the registry requests, and the package.json
-    dependencies from before the turn."""
+    Bash commands in order and each one's outcome, its final reply, the registry requests, and the
+    package.json dependencies from before the turn. A call with no result (the turn timed out
+    during it) reads as no error."""
+    results = {item.get("tool_use_id"): item for item in tool_results(events) if item.get("tool_use_id")}
+    calls = []
+    for use in tool_uses(events):
+        command = (use.get("input") or {}).get("command")
+        if use.get("name") == "Bash" and isinstance(command, str):
+            outcome = results.get(use.get("id"), {})
+            calls.append({"command": command, "error": outcome.get("is_error") is True, "denied": names_hook_deny(outcome)})
     result = result_event(events) or {}
     return {
-        "bash": [u["input"]["command"] for u in tool_uses(events)
-                 if u.get("name") == "Bash" and isinstance((u.get("input") or {}).get("command"), str)],
+        "bash": [call["command"] for call in calls],
+        "calls": calls,
         "reply": result.get("result") if isinstance(result.get("result"), str) else "",
         "registry_requests": requests,
         "deps_before": deps_before,
@@ -1044,6 +1056,20 @@ def tool_uses(events):
                     yield item
 
 
+def tool_results(events):
+    for e in events:
+        if e.get("type") == "user":
+            for item in (e.get("message") or {}).get("content") or []:
+                if isinstance(item, dict) and item.get("type") == "tool_result":
+                    yield item
+
+
+def names_hook_deny(result):
+    """Whether a tool_result is an error carrying the engine's `[practices:` tag, how Claude Code
+    2.1.305 renders a PreToolUse deny: "PreToolUse:Write hook error: [practices:L2:...] ..."."""
+    return result.get("is_error") is True and "[practices:" in json.dumps(result.get("content", ""))
+
+
 def skill_called(inp):
     """The skill a Skill tool call loads: its `skill` input, without a leading slash or a
     plugin's `name:` prefix. "" when there is none."""
@@ -1066,8 +1092,7 @@ def triggered(events, skill):
 def hook_denials(events):
     """Hook denials seen in the stream. Heuristic, kept in one function to tune against the
     real hook: hook_response events carrying a deny or block decision; failing those, tool
-    results that are errors carrying the engine's `[practices:` tag (how Claude Code 2.1.305
-    renders a PreToolUse deny: "PreToolUse:Write hook error: [practices:L2:...] ..."). Not text
+    results names_hook_deny() reads as one. Not text
     that says "hook" and "denied": a ugrep listing ("Permission denied" beside a hooks path)
     read as a deny in smoke2-auth-haiku, and no real deny was ever worded that way."""
     responses = 0
@@ -1079,15 +1104,7 @@ def hook_denials(events):
                 responses += 1
     if responses:
         return responses
-    results = 0
-    for e in events:
-        if e.get("type") != "user":
-            continue
-        for item in (e.get("message") or {}).get("content") or []:
-            if isinstance(item, dict) and item.get("type") == "tool_result":
-                if item.get("is_error") is True and "[practices:" in json.dumps(item.get("content", "")):
-                    results += 1
-    return results
+    return sum(names_hook_deny(item) for item in tool_results(events))
 
 
 def stream_summary(events):

@@ -14,16 +14,16 @@
     "parse",
     "parser"
   ],
-  "homepage": "https://csv.example.org/parse/",
+  "homepage": "https://github.com/tabular-kit/csv-parse#readme",
   "repository": {
     "type": "git",
-    "url": "https://git.example.org/csv/csv-parse.git"
+    "url": "git+https://github.com/tabular-kit/csv-parse.git"
   },
   "author": "The CSV project",
   "maintainers": [
     {
       "name": "csv-maintainers",
-      "email": "maintainers@csv.example.org"
+      "email": "4120377+csv-maintainers@users.noreply.github.com"
     }
   ]
 }

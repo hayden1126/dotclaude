@@ -3,6 +3,18 @@
     "npm install dayjs",
     "npm test"
   ],
+  "calls": [
+    {
+      "command": "npm install dayjs",
+      "error": true,
+      "denied": false
+    },
+    {
+      "command": "npm test",
+      "error": false,
+      "denied": false
+    }
+  ],
   "reply": "dayjs would not install, so I used daymark.",
   "registry_requests": [
     {
