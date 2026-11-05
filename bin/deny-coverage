@@ -7,29 +7,34 @@ exits 0; it changes nothing.
 
     deny-coverage [--settings FILE] [--checkout DIR]
 
-It looks at two things:
-  - Each PATH dir, each entry in it, and what that entry leads to: a link's target, the interpreter
+It looks at four things:
+  - Each PATH dir, each entry in it, and what that entry leads to: each link hop, the interpreter
     in a script's first line, a virtualenv's pyvenv.cfg home and the absolute paths in its .pth
     files, and the files a script sources or execs. Outside home only what this user can write
     counts. /mnt is skipped: Windows paths need their own subtree rules.
+  - The same for what the settings run (hooks, the status line, MCP servers, with those in
+    ~/.claude.json) and for what the shell startup files source.
   - Each top-level dir in home whose name starts with a dot, a few others tools install into
     (~/go, ~/nltk_data, ~/sdk), and each dir in ~/.cache. A rule costs nothing for a dir no session
-    writes, so these get one whether or not they hold code.
+    writes, so these get one whether or not they hold code. Home's dot-files aren't scanned: the
+    ones that run code are named in settings.json.
+  - A CLAUDE.md or CLAUDE.local.md in a home dir above projects, which loads in each session below.
 
 No rule it prints covers all of ~/.claude or ~/.cache, since a deny can't be carved back and sessions
 must write ~/.claude/projects, plans and jobs and ~/.cache/claude-sandbox. Code reached under one of
 those four is named apart.
 
 Each uncovered root prints as a rule to paste into settings.machine.json. A root inside a git
-checkout stays out of that list, since a deny there takes the tree from the project's own sessions:
-the fix is to install the tool outside it. It prints per checkout, with the rule for one no session
+checkout, or one with a checkout below it, stays out of that list, since a deny there takes the tree
+from the project's own sessions: the fix is to install the tool outside it. A link counts as what it
+points at. It prints per checkout, with the rule for one no session
 works in (a cloned SDK) or one an excluded command runs from. The checkout setup runs from, and
 ~/dotclaude, are skipped: denyWrite covers sandboxed Bash there, and a rule would take the tree from
 its own sessions.
 
 Known limit: it follows a script's commands only at a command position (a line's start, after `;`,
 `&`, `|`, `then` or `do`), and only when the path is literal, under $HOME or ~, or relative to the
-script ($0), and names a file. A path built from any other variable, a bare command name (`exec
+script ($0, $BASH_SOURCE), and names a file. A path built from any other variable, a bare command name (`exec
 corepack pnpm`) and an argument (`exec node ~/.tool/cli.js`, `env A=1 ~/x`) aren't followed.
 """
 import argparse
@@ -54,8 +59,16 @@ DIR_REASONS = {"a home dir", "a dir in ~/.cache"}
 COMMAND_WORD = re.compile(r"""(?:^|[;&|]|\bthen\b|\bdo\b)[ \t]*(?:(?:source|\.|exec)[ \t]+)?"""
                           r"""(?P<path>(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|"'])+)""", re.M)
 COMMENT = re.compile(r"(?:^|\s)#.*$", re.M)
-SCRIPT_DIR = re.compile(r"""\$\(\s*cd\s+"?\$\(dirname\s+"?(?:\$0|\$\{0\}|\$BASH_SOURCE)"?\)"?(?P<up>(?:/\.\.)*)"?"""
-                        r"""\s*&&\s*pwd\s*\)|\$\(dirname\s+"?(?:\$0|\$\{0\})"?\)""")
+SELF = r"""(?:\$0|\$\{0\}|\$BASH_SOURCE|\$\{BASH_SOURCE(?:\[0\])?\})"""
+SCRIPT_DIR = re.compile(r"""\$\(\s*cd\s+"?\$\(dirname\s+"?""" + SELF + r""""?\)"?(?P<up>(?:/\.\.)*)"?"""
+                        r"""\s*&&\s*pwd\s*\)|\$\(dirname\s+"?""" + SELF + r""""?\)""")
+# A path anywhere in a command the settings run.
+COMMAND_PATH = re.compile(r"""(?:\$\{HOME\}|\$HOME|~|/)[^\s"';&|()]*""")
+SHELL_STARTUP = (".zshenv", ".zprofile", ".zshrc", ".zlogin", ".bashrc", ".bash_profile",
+                 ".bash_login", ".bash_aliases", ".profile")
+CLAUDE_JSON_MAX = 64 << 20
+WALK_DEPTH = 5
+WALK_DIRS = 5000
 
 
 def show(text):
@@ -91,6 +104,7 @@ class Scan:
         self.in_project = {}  # the path -> why
         self.odd = {}         # the path -> why
         self.above = {}       # the rule for a CLAUDE.md above projects -> its dir
+        self.holds = {}       # a dir's realpath -> whether a checkout sits at or below it
 
     def covered(self, path):
         """Whether a rule covers path, or path as a dir (a trailing /** names only what's below)."""
@@ -106,45 +120,101 @@ class Scan:
             d = os.path.dirname(d)
         return None
 
-    def root_rule(self, path):
-        """The rule for path's tool root: its first part under home for a dot name, its first two
-        for anything else (~/tools/foo), and the path itself outside home."""
+    def holds_checkout(self, root):
+        """Whether a checkout sits at or below root, as far as a bounded walk sees. A walk that
+        runs out counts as no: past WALK_DIRS it is a tool's install, and the rule's cost, a repo
+        gone read-only, shows at once, while a missing rule never does."""
+        top = os.path.realpath(root)
+        if top in self.holds:
+            return self.holds[top]
+        left, stack, found = WALK_DIRS, [(top, 0)], False
+        while stack and not found:
+            d, depth = stack.pop()
+            left -= 1
+            if left < 0:
+                break
+            try:
+                with os.scandir(d) as it:
+                    for e in it:
+                        if e.name == ".git":
+                            found = True
+                            break
+                        if depth < WALK_DEPTH and e.is_dir(follow_symlinks=False):
+                            stack.append((e.path, depth + 1))
+            except OSError:
+                pass
+        self.holds[top] = found
+        return found
+
+    def tool_root(self, path):
+        """Path's tool root: its first part under home for a dot name, its first two for anything
+        else (~/tools/foo), and the path itself outside home."""
         if not under(path, self.home):
-            return f"Edit(/{path}/**)" if os.path.isdir(path) else f"Edit(/{path})"
+            return path
         parts = os.path.relpath(path, self.home).split(os.sep)
         one_part = parts[0].startswith(".") and parts[0] not in SKIP_HOME
-        keep = parts[:1] if one_part or len(parts) == 1 else parts[:2]
-        tail = "/".join(keep)
-        whole = os.path.join(self.home, *keep)
-        return f"Edit(~/{tail}/**)" if os.path.isdir(whole) else f"Edit(~/{tail})"
+        return os.path.join(self.home, *(parts[:1] if one_part or len(parts) == 1 else parts[:2]))
+
+    def rule_for(self, root):
+        tail = f"~/{os.path.relpath(root, self.home)}" if under(root, self.home) else f"/{root}"
+        return f"Edit({tail}/**)" if os.path.isdir(root) else f"Edit({tail})"
 
     def must_stay_open(self, path):
         """Whether a rule on path would cover what a session must write."""
-        keep = [os.path.join(self.home, d) for d in MUST_STAY_OPEN]
+        homes = {self.home, os.path.realpath(self.home)}
+        keep = [os.path.join(h, d) for h in homes for d in MUST_STAY_OPEN]
         return (p_under_any(path, keep) or any(under(k, path) for k in keep)
-                or any(under(t, path) for t in ("/tmp", "/var/tmp", self.home)))
+                or any(under(t, path) for t in ("/tmp", "/var/tmp", *homes)))
 
-    def judge(self, p, why, rule):
+    def narrowed(self, p, root):
+        """The widest of root, p's dir and p that holds no checkout, or None."""
+        for d in (root, os.path.dirname(p), p):
+            if (under(d, root) and d not in (self.home, os.path.realpath(self.home))
+                    and not self.holds_checkout(d)):
+                return d
+        return None
+
+    def judge(self, p, why, root_of):
         if any(under(p, s) for s in self.skip) or under(p, "/mnt") or self.covered(p):
             return
         if not under(p, self.home) and not (os.path.lexists(p) and os.access(p, os.W_OK)):
             return
-        if not PLAIN.fullmatch(p) or self.must_stay_open(p):
+        real = os.path.realpath(p)  # a rule on a link's name acts on what it points at
+        if not PLAIN.fullmatch(p) or self.must_stay_open(p) or self.must_stay_open(real):
             self.odd.setdefault(p, why)
-        elif self.checkout_of(p):
+        elif self.checkout_of(p) or self.checkout_of(real):
             self.in_project.setdefault(p, why)
+        elif (root := self.narrowed(p, root_of(p))) is None:
+            self.odd.setdefault(p, f"{why}, with a git checkout below it")
         else:
-            self.uncovered.setdefault(rule(p), why)
+            self.uncovered.setdefault(self.rule_for(root), why)
 
     def note(self, path, why):
         """Judge one path, as given and as it resolves, under its tool root's rule."""
         for p in dict.fromkeys((os.path.normpath(path), os.path.realpath(path))):
-            self.judge(p, why, self.root_rule)
+            self.judge(p, why, self.tool_root)
+
+    @staticmethod
+    def hops(path):
+        """The paths a chain of links at path passes through, before the last."""
+        out, cur = [], os.path.abspath(path)
+        for _ in range(40):
+            if not os.path.islink(cur):
+                break
+            try:
+                cur = os.path.normpath(os.path.join(os.path.dirname(cur), os.readlink(cur)))
+            except OSError:
+                break
+            out.append(cur)
+        return out
 
     def follow(self, path, why, depth=0):
         """Judge path and everything it leads to."""
         real = os.path.realpath(path)
         self.note(path, why)
+        for hop in self.hops(path):  # a session can swap a link in the middle of the chain
+            self.note(hop, why)
+            self.venv(hop, why, depth)
         if real in self.seen or depth > MAX_DEPTH or any(under(real, s) for s in self.skip):
             return
         self.seen.add(real)
@@ -228,13 +298,9 @@ class Scan:
         """{checkout: [the paths reached in it]}, for the report."""
         out = {}
         for path in sorted(self.in_project):
-            out.setdefault(self.checkout_of(path), []).append(path)
+            root = self.checkout_of(path) or self.checkout_of(os.path.realpath(path))
+            out.setdefault(root, []).append(path)
         return out
-
-    def root_rule_for_dir(self, d):
-        if under(d, self.home):
-            return f"Edit(~/{os.path.relpath(d, self.home)}/**)"
-        return f"Edit(/{d}/**)"
 
     def path_dirs(self, path_var):
         # The dirs setup fills are checked even when this run's PATH lacks them.
@@ -257,6 +323,55 @@ class Scan:
                 elif os.path.lexists(entry) and os.access(entry, os.W_OK) and not os.path.isdir(entry):
                     self.follow(entry, f"in the PATH dir {d}")
 
+    def commands(self, settings):
+        """What the settings run: hooks, the status line and MCP servers, with ~/.claude.json's."""
+        words = []
+
+        def walk(node):
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    if key == "command" and isinstance(value, str):
+                        words.append(value)
+                    elif key == "args" and isinstance(value, list):
+                        words.extend(v for v in value if isinstance(v, str))
+                    else:
+                        walk(value)
+            elif isinstance(node, list):
+                for value in node:
+                    walk(value)
+
+        walk(settings.get("hooks"))
+        walk(settings.get("statusLine"))
+        walk(settings.get("mcpServers"))
+        claude_json = self.load_json(os.path.join(self.home, ".claude.json"))
+        walk(claude_json.get("mcpServers"))
+        projects = claude_json.get("projects")
+        for entry in projects.values() if isinstance(projects, dict) else ():
+            if isinstance(entry, dict):
+                walk(entry.get("mcpServers"))
+        for text in words:
+            for word in COMMAND_PATH.findall(text):
+                target = self.expand(word)
+                if target and os.path.isfile(target):
+                    self.follow(target, "run by the settings")
+
+    @staticmethod
+    def load_json(path):
+        try:
+            if os.path.getsize(path) > CLAUDE_JSON_MAX:
+                return {}
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError, RecursionError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def shell_startup(self):
+        for name in SHELL_STARTUP:
+            path = os.path.join(self.home, name)
+            if os.path.isfile(path):
+                self.follow(path, "a shell startup file")
+
     def above_projects(self):
         """A CLAUDE.md in a home dir that isn't itself a checkout loads in every session below it."""
         for name in sorted(os.listdir(self.home)):
@@ -264,8 +379,9 @@ class Scan:
             if (name.startswith(".") or not os.path.isdir(d) or any(under(d, x) for x in self.skip)
                     or os.path.lexists(os.path.join(d, ".git"))):
                 continue
-            if PLAIN.fullmatch(d) and not self.covered(os.path.join(d, "CLAUDE.md")):
-                self.above[f"Edit(~/{name}/CLAUDE.md)"] = d
+            for memory in ("CLAUDE.md", "CLAUDE.local.md"):
+                if PLAIN.fullmatch(d) and not self.covered(os.path.join(d, memory)):
+                    self.above[f"Edit(~/{name}/{memory})"] = d
 
     def home_dirs(self):
         for parent, skip in ((self.home, SKIP_HOME), (os.path.join(self.home, ".cache"), SKIP_CACHE)):
@@ -285,18 +401,20 @@ class Scan:
     def note_dir(self, path, why):
         """Judge a dir, as given and as it resolves, under a rule of its own."""
         for p in dict.fromkeys((path, os.path.realpath(path))):
-            self.judge(p, why, self.root_rule_for_dir)
+            self.judge(p, why, lambda x: x)
 
 
-def deny_rules(path):
-    """The live permissions.deny list, or None with a message if it can't be read."""
+def live_settings(path):
+    """The live settings as (the permissions.deny list, the whole object), or None with a message
+    if they can't be read."""
     try:
         with open(path) as f:
-            deny = (json.load(f).get("permissions") or {}).get("deny") or []
+            settings = json.load(f)
+        deny = (settings.get("permissions") or {}).get("deny") or []
     except (OSError, ValueError, RecursionError, AttributeError) as e:
         print(f"deny-coverage: can't read {path}: {e}", file=sys.stderr)
         return None
-    return deny if isinstance(deny, list) else []
+    return (deny if isinstance(deny, list) else []), settings
 
 
 def main(argv):
@@ -306,14 +424,17 @@ def main(argv):
     ap.add_argument("--settings", default=os.path.join(config, "settings.json"))
     ap.add_argument("--checkout", help="the checkout setup runs from")
     args = ap.parse_args(argv)
-    rules = deny_rules(args.settings)
-    if rules is None:
+    live = live_settings(args.settings)
+    if live is None:
         return 0
+    rules, settings = live
     skip = [os.path.realpath(os.path.join(home, "dotclaude"))]
     if args.checkout:
         skip.append(os.path.realpath(args.checkout))
     scan = Scan(rules, home, skip)
     scan.path_dirs(os.environ.get("PATH", ""))
+    scan.commands(settings)
+    scan.shell_startup()
     scan.home_dirs()
     scan.above_projects()
     if scan.uncovered:
@@ -325,7 +446,7 @@ def main(argv):
         for rule, why in sorted(reached.items()):
             print(f"  {rule} is {show(why)}")
     if scan.above:
-        print("deny-coverage: a CLAUDE.md in these dirs would load in every session below them. Add "
+        print("deny-coverage: a memory file in these dirs would load in every session below them. Add "
               "a rule for each that holds projects, not one you work in directly:")
         for rule in sorted(scan.above):
             print(f"    {rule}")
@@ -335,10 +456,10 @@ def main(argv):
               "works in, or one an excluded command runs from, the rule is right despite that:")
         for root, paths in sorted(scan.by_checkout().items()):
             print(f"  {show(root)}: {len(paths)} path(s), such as {show(paths[0])}")
-            print(f"    {scan.root_rule_for_dir(root)}")
+            print(f"    {scan.rule_for(root)}")
     if scan.odd:
         print("deny-coverage: paths no rule can cover (the name can't be written as one, or a rule "
-              "would take what sessions must write). Look at each:")
+              "would take what sessions must write or a repo below it). Look at each:")
         for path, why in sorted(scan.odd.items()):
             print(f"  {show(path)}  ({show(why)})")
     return 0

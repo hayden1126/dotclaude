@@ -682,7 +682,8 @@ def _off_entry_ok(e):
         return False
     d, until = e["dir"], e.get("until")
     home = passwd_home()
-    if not os.path.isabs(d) or os.path.normpath(d) != d or under(home, d):  # never home or above
+    if (not os.path.isabs(d) or os.path.normpath(d) != d or under(home, d)  # never home or above
+            or home == d or home.startswith(d.rstrip(os.sep) + os.sep)):  # home's link too
         return False
     try:
         # Exactly YYYY-MM-DD: fromisoformat also reads 2026-W45-4, which as a string sorts after

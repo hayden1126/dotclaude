@@ -722,7 +722,8 @@ class Baseline(unittest.TestCase):
 
     # Home paths that code outside the sandbox runs, sources or trusts (DA12 (a), SW1, SW3, SW4,
     # SW7, SW12, SW14). Each is one Edit deny, which binds the Edit and Write tools, subagents'
-    # file tools and sandboxed Bash. A deny can't be carved back with an allow, so these are named
+    # file tools and sandboxed Bash, though a glob may not bind sandboxed Bash (.zcompdump* is for
+    # the tools; the plain name is listed too). A deny can't be carved back with an allow, so these are named
     # one by one instead of by a glob over ~/.*, which would also take ~/.claude/projects.
     HOME_DIRS = ("~/.local", "~/.config", "~/.ssh", "~/.bun", "~/.cargo", "~/.rustup", "~/.npm",
                  "~/.pub-cache", "~/.oh-my-zsh", "~/.codex", "~/.agents", "~/.vscode-server",
@@ -732,7 +733,8 @@ class Baseline(unittest.TestCase):
               "google-chrome-for-testing-headless", "pipx")
     HOME_FILES = (".zshrc", ".zshenv", ".zprofile", ".zlogin", ".zlogout", ".bashrc",
                   ".bash_profile", ".bash_login", ".bash_logout", ".profile", ".gitconfig",
-                  ".tmux.conf", ".inputrc", ".lesskey", ".less", ".zcompdump*", "CLAUDE.md",
+                  ".tmux.conf", ".inputrc", ".lesskey", ".less", ".zcompdump", ".zcompdump*",
+                  "CLAUDE.md", "CLAUDE.local.md", ".mcp.json", ".npm-init.js",
                   ".bash_aliases", ".curlrc", ".wgetrc", ".vimrc", ".exrc", ".pdbrc", ".gdbinit",
                   ".pypirc", ".yarnrc", ".yarnrc.yml", ".bunfig.toml", ".condarc", ".gemrc",
                   ".irbrc", ".Rprofile", ".p10k.zsh", ".fzf.zsh", ".fzf.bash",
@@ -825,14 +827,22 @@ class Baseline(unittest.TestCase):
                   *(f"~/{f}" for f in self.HOME_FILES if "*" not in f)):
             self.assertTrue(any(p == d or p.startswith(d + "/") for d in denied), p)
 
-    def test_only_hayden_s_hand_runs_the_practices_off_switch(self):
-        # A `!` line goes around permission rules, so these leave it the only route. A sandboxed
-        # run couldn't write the file anyway; these stop one with the sandbox off.
+    def test_the_practices_off_switch_s_usual_spellings_are_denied(self):
+        # A `!` line goes around permission rules. A sandboxed run can't write the file anyway;
+        # these stop the command's usual spellings with the sandbox off (PG4).
         for command in ("practices-gate off . --until 2999-01-01", "practices-gate status",
                         "~/.local/bin/practices-gate off . --until 2999-01-01",
                         "/home/x/dotclaude/bin/practices-gate off . --until 2999-01-01",
+                        "./practices-gate off . --until 2999-01-01",
+                        "python3 -I practices-gate off . --until 2999-01-01",
                         "python3 -I bin/practices-gate off . --until 2999-01-01"):
             self.assertNotEqual(matching("deny", command), [], command)
+
+    def test_text_that_names_the_off_switch_isn_t_denied(self):
+        for command in ('grep -n "practices-gate off" README.md',
+                        'git commit -m "document practices-gate off"',
+                        'gh pr create --body "uses practices-gate off"'):
+            self.assertEqual(matching("deny", command), [], command)
         self.assertIn("~/dotclaude/bin", S["sandbox"]["filesystem"]["denyWrite"])
 
     def test_every_allow_rule_on_an_excluded_command_sits_behind_the_guard(self):

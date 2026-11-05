@@ -1004,6 +1004,27 @@ class OffFile(Base):
             self.assertEqual(engine.off_file(), want)
             self.assertEqual(gate.off_file(), want)
 
+    def test_engine_and_command_both_refuse_a_dir_above_a_linked_home(self):
+        top = tempfile.mkdtemp(dir=self.tmp)
+        os.makedirs(os.path.join(top, "real", "h"))
+        os.makedirs(os.path.join(top, "links"))
+        home = os.path.join(top, "links", "h")
+        os.symlink(os.path.join(top, "real", "h"), home)
+        spec = importlib.util.spec_from_file_location("pc_linked", ENGINE)
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        loader = importlib.machinery.SourceFileLoader("gate_linked", GATE)
+        g = importlib.util.module_from_spec(importlib.util.spec_from_loader("gate_linked", loader))
+        loader.exec_module(g)
+        with mock.patch.object(m, "passwd_home", return_value=home):
+            for above in (os.path.join(top, "real"), os.path.join(top, "links")):
+                e = {"dir": above, "until": "2999-01-01"}
+                self.assertFalse(m._off_entry_ok(e), above)
+                self.assertFalse(g.entry_ok(e, home), above)
+            e = {"dir": os.path.join(top, "other"), "until": "2999-01-01"}
+            self.assertTrue(m._off_entry_ok(e))
+            self.assertTrue(g.entry_ok(e, home))
+
     def test_every_session_start_names_what_is_off_here(self):
         self.ok("off", self.proj, "--until", FUTURE)
         for source in ("startup", "resume", "clear", "compact", "fork"):

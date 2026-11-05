@@ -13,7 +13,8 @@ name both. `on` removes the matching entries, all of them for a dir when no rule
 The choice is written to ~/.local/state/dotclaude/practices-off.json, under the home in the passwd
 entry. hooks/practices_check.py reads it and ignores a repo's own off settings. Each session start
 in a covered dir names what is off. Sandboxed Bash and the Edit and Write tools can't write that
-file, and a deny rule keeps a session from running this command; a `!` line runs outside both.
+file, and deny rules stop a session running this command under its usual spellings; a `!` line runs
+outside both.
 """
 import argparse
 import datetime
@@ -58,7 +59,8 @@ def entry_ok(e, home):
     if not isinstance(e, dict) or not isinstance(e.get("dir"), str):
         return False
     d, until = e["dir"], e.get("until")
-    if not os.path.isabs(d) or os.path.normpath(d) != d or under(home, d):
+    if (not os.path.isabs(d) or os.path.normpath(d) != d or under(home, d)
+            or under(os.path.realpath(home), d)):
         return False
     try:
         if datetime.date.fromisoformat(until).isoformat() != until:

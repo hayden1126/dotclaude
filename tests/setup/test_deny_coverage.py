@@ -242,13 +242,121 @@ class DenyCoverage(unittest.TestCase):
         out = self.run_it()
         self.assertNotIn('"Edit(~/dotfiles', out)
         self.assertIn("    Edit(~/dotfiles/**)", out)
-        self.assertIn('"Edit(~/.vim/**)"', out)    # the link's own name
+        self.assertNotIn('"Edit(~/.vim/**)"', out)   # a rule on the link would act on the checkout
 
     def test_a_dot_dir_linked_to_home_gets_no_rule_on_home(self):
         os.symlink(self.home, os.path.join(self.home, ".self"))
         out = self.run_it()
-        self.assertNotIn("Edit(~/./", out)
+        self.assertNotIn("Edit(~/.self", out)
         self.assertIn("no rule can cover", out)
+
+    def settings_with(self, **extra):
+        return {"permissions": {"deny": self.deny}, **extra}
+
+    def run_with(self, settings):
+        path = os.path.join(self.home, "s.json")
+        with open(path, "w") as f:
+            json.dump(settings, f)
+        r = subprocess.run([sys.executable, "-I", SCRIPT, "--settings", path],
+                           env={"HOME": self.home, "PATH": self.bin}, capture_output=True,
+                           text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout
+
+    def test_a_root_above_a_repo_narrows_so_the_repo_stays_writable(self):
+        self.write("work/acme/bin/tool", "#!/bin/sh\n")
+        self.mk("work/acme/repo/.git")
+        out = self.run_it(path=os.path.join(self.home, "work/acme/bin"))
+        self.assertNotIn("Edit(~/work/acme/**)", out)
+        self.assertIn('"Edit(~/work/acme/bin/**)"', out)
+
+    def test_a_dot_dir_linked_to_a_dir_of_repos_gets_no_rule(self):
+        self.mk("code/p/.git")
+        os.symlink(os.path.join(self.home, "code"), os.path.join(self.home, ".x"))
+        out = self.run_it()
+        self.assertNotIn("Edit(~/.x/**)", out)
+        self.assertNotIn("Edit(~/code/**)", out)
+        self.assertIn("no rule can cover", out)
+
+    def test_a_dot_dir_holding_a_repo_gets_no_rule(self):
+        self.mk(".things/deep/repo/.git")
+        out = self.run_it()
+        self.assertNotIn("Edit(~/.things/**)", out)
+        self.assertIn(".things", out)
+
+    def test_a_link_s_own_name_is_judged_by_its_target(self):
+        self.mk(".claude/projects")
+        os.symlink(os.path.join(self.home, ".claude"), os.path.join(self.home, ".alt"))
+        os.symlink(self.home, os.path.join(self.home, ".self"))
+        out = self.run_it()
+        self.assertNotIn("Edit(~/.alt/**)", out)
+        self.assertNotIn("Edit(~/.self/**)", out)
+
+    def test_a_dot_dir_linked_into_a_checkout_is_named_with_the_checkout(self):
+        self.mk("proj/.git")
+        self.mk("proj/vim")
+        os.symlink(os.path.join(self.home, "proj/vim"), os.path.join(self.home, ".vim"))
+        out = self.run_it()
+        self.assertNotIn('"Edit(~/.vim/**)"', out)
+        self.assertIn("inside a git checkout", out)
+
+    def test_a_hook_status_line_and_mcp_command_are_followed(self):
+        self.write("mytools/hook.sh", "#!/bin/sh\n")
+        self.write("mytools2/status.sh", "#!/bin/sh\n")
+        self.write("mytools3/server.js", "x\n")
+        out = self.run_with(self.settings_with(
+            hooks={"Stop": [{"hooks": [{"type": "command",
+                                        "command": '[ -f "$HOME/mytools/hook.sh" ] && bash ~/mytools/hook.sh'}]}]},
+            statusLine={"type": "command", "command": "~/mytools2/status.sh --x"},
+            mcpServers={"s": {"command": "node", "args": ["~/mytools3/server.js"]}}))
+        self.assertIn('"Edit(~/mytools/hook.sh)"', out)
+        self.assertIn('"Edit(~/mytools2/status.sh)"', out)
+        self.assertIn('"Edit(~/mytools3/server.js)"', out)
+
+    def test_an_mcp_server_in_claude_json_is_followed(self):
+        self.write("mcps/a.py", "x\n")
+        self.write("mcps2/b.py", "x\n")
+        self.write(".claude.json", json.dumps({
+            "mcpServers": {"a": {"command": f"{self.home}/mcps/a.py"}},
+            "projects": {"/p": {"mcpServers": {"b": {"command": "python3",
+                                                     "args": [f"{self.home}/mcps2/b.py"]}}}}}), 0o600)
+        out = self.run_it()
+        self.assertIn('"Edit(~/mcps/a.py)"', out)
+        self.assertIn('"Edit(~/mcps2/b.py)"', out)
+
+    def test_what_a_shell_startup_file_sources_is_followed(self):
+        self.write("mytools/env.sh", "x=1\n")
+        self.write(".zshrc", "source ~/mytools/env.sh\n", 0o644)
+        self.assertIn('"Edit(~/mytools/env.sh)"', self.run_it(
+            deny=[*self.deny, "Edit(~/.zshrc)"]))
+
+    def test_a_link_s_middle_hop_and_a_venv_behind_a_link_are_judged(self):
+        self.write("envs/v/pyvenv.cfg", "home = /usr/bin\n", 0o644)
+        self.write("envs/v/lib/python3.12/site-packages/e.pth", f"{self.home}/editable\n", 0o644)
+        self.write("editable/x.py", "x\n", 0o644)
+        self.mk("envs/v/bin")
+        os.symlink(sys.executable, os.path.join(self.home, "envs/v/bin/python"))
+        self.link("envs/v/bin/python", "py")
+        out = self.run_it()
+        self.assertIn('"Edit(~/envs/v/**)"', out)
+        self.assertIn('"Edit(~/editable/**)"', out)
+
+    def test_a_claude_local_md_above_projects_is_named(self):
+        self.mk("code/p/.git")
+        out = self.run_it()
+        self.assertIn("Edit(~/code/CLAUDE.md)", out)
+        self.assertIn("Edit(~/code/CLAUDE.local.md)", out)
+
+    def test_bash_source_with_an_index_is_the_script_s_dir(self):
+        self.write("lib2/lib/x.sh", "y=1\n")
+        for spelling in ('$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)', '$(dirname "${BASH_SOURCE[0]}")',
+                         '$(dirname "$BASH_SOURCE")', '$(dirname "${BASH_SOURCE}")'):
+            with self.subTest(spelling):
+                self.write("lib2/tool", f'#!/bin/sh\n. "{spelling}/lib/x.sh"\n')
+                self.link("lib2/tool", "t")
+                out = self.run_it(deny=[*self.deny, "Edit(~/lib2/tool)"])
+                self.assertIn('"Edit(~/lib2/lib/**)"', out)
+                os.unlink(os.path.join(self.bin, "t"))
 
     def test_a_big_or_binary_script_still_gives_its_interpreter(self):
         self.write(".interp/bin/py", "\0binary")
