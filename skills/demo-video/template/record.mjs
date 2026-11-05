@@ -15,7 +15,8 @@
 // A take fails loud: any page error, a 5xx, a failed first-party request, a step timeout, or an app
 // that exits gives a non-zero exit and no new video. The take is built in a staging dir beside OUT
 // and moved in only once it is whole. A failed take leaves the previous good one in OUT, since that
-// may be the only backup there is, and says so, so a stale video can't pass for this one.
+// may be the only backup there is, and says so, so a stale video can't pass for this one. A good
+// take moves the one it replaces to demo.prev.mp4.
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -29,6 +30,7 @@ const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
 const STEP_TIMEOUT_MS = 8000;
 const BEAT_LIMIT_S = 60; // Catches what the step timeout can't, such as an evaluate that never returns.
 const APP_WAIT_MS = 60000;
+const SHORT_VIDEO_S = 1; // The recorder pads the end, so a healthy video is never this far under the beats.
 const HOLD_MS = 900; // Each caption stays up this long after its action, so a viewer can read the result.
 
 let appProcess = null;
@@ -36,42 +38,54 @@ let appExit = null;
 let stage = null;
 
 // Runs inside the page, on every load, so the cursor and caption survive a reload through
-// sessionStorage. Mouse events over an iframe don't reach the top page, so the dot pauses there.
+// sessionStorage. Mouse events over an iframe don't reach the top page, so the dot pauses there. A
+// closed shadow root keeps the overlay out of reach of locators, so a beat's wait for text can only
+// match the app: a caption can neither pass that wait nor make it ambiguous. An app that replaces
+// the page's content loses the overlay until the next caption brings it back.
 function overlay({ x, y }) {
   if (window !== window.top) return;
-  const add = () => {
-    if (document.getElementById('__demo_cursor')) return;
-    const cursor = document.createElement('div');
-    cursor.id = '__demo_cursor';
-    cursor.style.cssText = 'position:fixed;left:0;top:0;width:22px;height:22px;border-radius:50%;background:#0008;border:2px solid #fff;z-index:2147483647;pointer-events:none;transform:translate(-50%,-50%);transition:width .1s,height .1s';
-    document.documentElement.append(cursor);
-    const at = JSON.parse(sessionStorage.getItem('__demo_at') || JSON.stringify([x, y]));
+  const read = (key, fallback) => { try { return sessionStorage.getItem(key) ?? fallback; } catch { return fallback; } };
+  const write = (key, value) => { try { sessionStorage.setItem(key, value); } catch { /* no storage on this page */ } };
+  let at = JSON.parse(read('__demo_at', JSON.stringify([x, y])));
+  let host, cursor, box;
+  const place = () => {
     cursor.style.left = at[0] + 'px';
     cursor.style.top = at[1] + 'px';
-    addEventListener('mousemove', e => {
-      cursor.style.left = e.clientX + 'px';
-      cursor.style.top = e.clientY + 'px';
-      sessionStorage.setItem('__demo_at', JSON.stringify([e.clientX, e.clientY]));
-    }, true);
-    addEventListener('mousedown', () => { cursor.style.width = cursor.style.height = '14px'; }, true);
-    addEventListener('mouseup', () => { cursor.style.width = cursor.style.height = '22px'; }, true);
-    const box = document.createElement('div');
-    box.id = '__demo_caption';
-    box.style.cssText = 'position:fixed;left:50%;bottom:48px;transform:translateX(-50%);max-width:80%;padding:12px 24px;border-radius:10px;background:#000c;color:#fff;font:600 32px/1.3 system-ui,sans-serif;z-index:2147483646;pointer-events:none;opacity:0;transition:opacity .15s';
-    document.documentElement.append(box);
-    const caption = sessionStorage.getItem('__demo_caption');
-    if (caption) { box.textContent = caption; box.style.opacity = 1; }
+  };
+  const show = caption => {
+    box.textContent = caption;
+    box.style.opacity = caption ? 1 : 0;
+  };
+  const add = () => {
+    if (host?.isConnected) return;
+    host = document.createElement('demo-overlay');
+    host.style.cssText = 'all:initial;position:fixed;inset:0;z-index:2147483647;pointer-events:none';
+    const root = host.attachShadow({ mode: 'closed' });
+    box = document.createElement('div');
+    box.style.cssText = 'position:fixed;left:50%;bottom:48px;transform:translateX(-50%);max-width:80%;padding:12px 24px;border-radius:10px;background:#000c;color:#fff;font:600 32px/1.3 system-ui,sans-serif;opacity:0;transition:opacity .15s';
+    cursor = document.createElement('div');
+    cursor.style.cssText = 'position:fixed;left:0;top:0;width:22px;height:22px;border-radius:50%;background:#0008;border:2px solid #fff;transform:translate(-50%,-50%);transition:width .1s,height .1s';
+    root.append(box, cursor);
+    document.documentElement.append(host);
+    place();
+    show(read('__demo_caption', ''));
+  };
+  addEventListener('mousemove', e => {
+    at = [e.clientX, e.clientY];
+    write('__demo_at', JSON.stringify(at));
+    if (host) place();
+  }, true);
+  addEventListener('mousedown', () => { if (host) cursor.style.width = cursor.style.height = '14px'; }, true);
+  addEventListener('mouseup', () => { if (host) cursor.style.width = cursor.style.height = '22px'; }, true);
+  window.__demoCaption = caption => {
+    add();
+    show(caption);
+    write('__demo_caption', caption);
   };
   if (document.documentElement) add(); else addEventListener('DOMContentLoaded', add);
 }
 
-const setCaption = (page, text) => page.evaluate(caption => {
-  const box = document.getElementById('__demo_caption');
-  if (!box) throw new Error('the caption box is gone: the app replaced the whole document');
-  box.textContent = caption;
-  box.style.opacity = caption ? 1 : 0;
-  sessionStorage.setItem('__demo_caption', caption);
-}, text);
+const setCaption = (page, text) => page.evaluate(caption => window.__demoCaption(caption), text);
 
 // What a beat's action receives. A target is a selector string or a Playwright locator.
 function helpers(page) {
@@ -143,6 +157,8 @@ async function loadChromium() {
 
 // Checked first, so an old ffmpeg can't waste a whole take. Homebrew's ffmpeg has all of this.
 function checkFfmpeg() {
+  const prober = spawnSync('ffprobe', ['-version'], { stdio: 'ignore' });
+  if (prober.status !== 0) throw new Error('ffprobe is needed, and normally comes with ffmpeg');
   const probe = spawnSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'color=s=16x16:d=0.1',
     '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-fps_mode', 'cfr', '-f', 'null', '-'], { encoding: 'utf8' });
   if (probe.status !== 0) {
@@ -205,15 +221,26 @@ function writeSidecars(steps, lead, trim, warnings) {
   fs.writeFileSync(path.join(stage, 'steps.json'), JSON.stringify({ lead, trim, steps, warnings }, null, 1));
 }
 
-function encode(webm, trim, fps) {
-  const result = spawnSync('ffmpeg', ['-y', '-loglevel', 'error', '-ss', String(trim), '-i', webm,
+function encode(webm, trim, fps, expected) {
+  const result = spawnSync('ffmpeg', ['-nostdin', '-y', '-loglevel', 'error', '-ss', String(trim), '-i', webm,
     '-c:v', 'libx264', '-preset', 'medium', '-crf', '18', '-pix_fmt', 'yuv420p', '-r', fps, '-fps_mode', 'cfr',
-    '-movflags', '+faststart', '-an', path.join(stage, 'demo.mp4')], { stdio: 'inherit' });
+    '-movflags', '+faststart', '-an', path.join(stage, 'demo.mp4')], { stdio: ['ignore', 'inherit', 'inherit'] });
   if (result.status !== 0) throw new Error(`ffmpeg failed: ${result.error?.message || 'exit ' + result.status}`);
+  const probe = spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0',
+    path.join(stage, 'demo.mp4')], { encoding: 'utf8' });
+  const duration = Number(probe.stdout);
+  if (probe.status !== 0 || !duration) throw new Error(`can't read the new video's length: ${probe.stderr || probe.error?.message}`);
+  // The recorder logs its own errors and carries on, so a video can come out short with exit 0.
+  if (duration < expected - SHORT_VIDEO_S) {
+    throw new Error(`the recording stopped early: ${duration.toFixed(1)} s of video for ${expected.toFixed(1)} s of beats`);
+  }
 }
 
 function publish() {
   fs.mkdirSync(OUT, { recursive: true });
+  // An exit of 0 doesn't prove a take is good, so the one it replaces stays beside it.
+  const last = path.join(OUT, 'demo.mp4');
+  if (fs.existsSync(last)) fs.copyFileSync(last, path.join(OUT, 'demo.prev.mp4'));
   for (const name of OUTPUTS) fs.renameSync(path.join(stage, name), path.join(OUT, name));
   fs.rmSync(stage, { recursive: true, force: true });
   stage = null;
@@ -257,15 +284,31 @@ async function record() {
     const context = await browser.newContext({ viewport: size, recordVideo: { dir: stage, size } });
     await context.addInitScript(overlay, { x: size.width / 2, y: 200 });
     const page = await context.newPage();
-    const t0 = Date.now(); // The video starts with the page, so the trim and the captions count from here.
+    // The video starts at the first frame the page paints, not at newPage. Paint one now, so the
+    // video starts here and not whenever a slow app first paints, which would shift the trim and
+    // every caption. Not pure white, since that changes nothing on a blank page and so paints no
+    // frame. The trim and the captions count from this moment.
+    await page.setContent('<!doctype html><title>Starting</title><body style="background:#fefefe">');
+    await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
+    const t0 = Date.now();
     const elapsed = () => (Date.now() - t0) / 1000;
-    page.setDefaultTimeout(STEP_TIMEOUT_MS);
-    page.on('pageerror', e => problems.push('page error: ' + e.message));
-    page.on('response', r => { if (r.status() >= 500) report(r.url(), `HTTP ${r.status()} ${r.url()}`); });
-    page.on('requestfailed', r => {
-      // ERR_ABORTED is the page cancelling its own request (a reload, an AbortController), not a failure.
-      const reason = r.failure()?.errorText;
-      if (reason !== 'net::ERR_ABORTED') report(r.url(), `request failed: ${r.url()} (${reason})`);
+    const watch = watched => {
+      watched.setDefaultTimeout(STEP_TIMEOUT_MS);
+      watched.on('pageerror', e => problems.push('page error: ' + e.message));
+      watched.on('response', r => { if (r.status() >= 500) report(r.url(), `HTTP ${r.status()} ${r.url()}`); });
+      watched.on('requestfailed', r => {
+        // ERR_ABORTED is the page cancelling its own request (a reload, an AbortController), not a failure.
+        const reason = r.failure()?.errorText;
+        if (reason !== 'net::ERR_ABORTED') report(r.url(), `request failed: ${r.url()} (${reason})`);
+      });
+    };
+    watch(page);
+    context.on('page', tab => {
+      if (tab === page) return;
+      watch(tab);
+      const message = 'a second tab opened: the video shows only the first';
+      warnings.push(message);
+      console.warn('warning:', message);
     });
 
     const opened = await page.goto(url);
@@ -278,9 +321,12 @@ async function record() {
     for (const [index, { caption, act, limit = BEAT_LIMIT_S }] of project.beats.slice(0, lastBeat).entries()) {
       const start = elapsed();
       try {
-        await setCaption(page, caption);
-        await withLimit(act(kit), limit * 1000, `ran past its ${limit} s limit`);
-        await page.waitForTimeout(HOLD_MS);
+        // The caption is inside the limit too: a page the last beat wedged never answers it.
+        await withLimit((async () => {
+          await setCaption(page, caption);
+          await act(kit);
+          await page.waitForTimeout(HOLD_MS);
+        })(), limit * 1000, `ran past its ${limit} s limit`);
       } catch (e) {
         throw new Error(`beat "${caption}": ${[...troubles(), e.message].join('; ')}`);
       }
@@ -295,7 +341,7 @@ async function record() {
 
     const trim = firstBeat > 1 ? steps[0].start : Math.max(0, lead - 0.2);
     writeSidecars(steps, lead, trim, warnings);
-    encode(webm, trim, fps);
+    encode(webm, trim, fps, steps.at(-1).end - trim);
     publish();
     console.log(`${path.join(OUT, 'demo.mp4')}: ${(steps.at(-1).end - trim).toFixed(1)} s across ${steps.length} beats`);
   } finally {
@@ -312,24 +358,30 @@ function explainFailure(error) {
   }
 }
 
-// The backstop for a signal or an uncaught error: no app left running, no half-built take.
+// The backstop for an uncaught error: no app left running, no half-built take.
 process.on('exit', () => {
   signalApp('SIGTERM');
   if (stage) fs.rmSync(stage, { recursive: true, force: true });
 });
+// The app sits in its own process group, so a Ctrl-C never reaches it: stop it here, by force if need be.
+let signalled = null;
 for (const [signal, number] of [['SIGINT', 2], ['SIGTERM', 15], ['SIGHUP', 1]]) {
-  process.on(signal, () => process.exit(128 + number));
+  process.on(signal, () => {
+    if (signalled !== null) return;
+    signalled = 128 + number;
+    stopApp().finally(() => process.exit(signalled));
+  });
 }
 
 let exitCode = 0;
 try {
   await record();
 } catch (e) {
-  explainFailure(e);
+  if (signalled === null) explainFailure(e);
   if (fs.existsSync(path.join(OUT, 'demo.mp4'))) {
     console.error(`this take failed: ${path.join(OUT, 'demo.mp4')} is the previous take, unchanged`);
   }
   exitCode = 1;
 }
 await stopApp();
-process.exit(exitCode);
+process.exit(signalled ?? exitCode);

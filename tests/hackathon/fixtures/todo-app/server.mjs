@@ -4,7 +4,8 @@ import http from 'node:http';
 
 const port = Number(process.env.PORT || 4173);
 const todos = [];
-const page = `<!doctype html><meta charset=utf-8><title>To-do</title>
+const slowScript = process.env.SLOW_SCRIPT_MS ? '<script src=/slow.js></script>' : '';
+const page = `<!doctype html><meta charset=utf-8><title>To-do</title>${slowScript}
 <style>
  body{font:20px/1.5 system-ui,sans-serif;background:#f6f4ef;color:#1f1d1a;margin:0;display:grid;place-items:center;min-height:100vh}
  main{width:640px;background:#fff;border-radius:16px;padding:40px;box-shadow:0 10px 40px #0002}
@@ -63,6 +64,7 @@ http.createServer((request, response) => {
       todos[toggle[1]].done = !todos[toggle[1]].done;
       return response.end('ok');
     }
+    if (request.url === '/slow.js') return void setTimeout(() => response.end(''), Number(process.env.SLOW_SCRIPT_MS));
     if (request.url === '/boom') { response.statusCode = 500; return response.end(); }
     if (request.url === '/drop') return request.socket.destroy();
     if (request.url === '/die') process.exit(3);

@@ -41,7 +41,7 @@ console.log(beats.length);
 
 
 def clean_env(**overrides):
-    env = {k: v for k, v in os.environ.items() if k not in {"OUT", "SIZE", "FPS", "BEATS", "HEADED", "APP_CMD", "APP_URL", "PORT"}}
+    env = {k: v for k, v in os.environ.items() if k not in {"OUT", "SIZE", "FPS", "BEATS", "HEADED", "APP_CMD", "APP_URL", "PORT", "SLOW_SCRIPT_MS"}}
     env.update(overrides)
     return env
 
@@ -398,6 +398,109 @@ class Takes(unittest.TestCase):
                 for start in starts:
                     self.assertLess(min(abs(start - change) for change in changes), CAPTION_TOLERANCE_S, seen)
 
+    def test_captions_stay_true_when_the_first_page_is_slow_to_paint(self):
+        project = self.caption_take(0, SLOW_SCRIPT_MS="4000")
+        starts = srt_starts(project.out / "captions.srt")
+        steps = json.loads((project.out / "steps.json").read_text())
+        self.assertGreater(steps["lead"], 3.5, "the slow load really happened")
+        changes = band_changes(caption_band(project.out / "demo.mp4"), 30)
+        seen = f"changes {changes} against captions {starts}"
+        for start in starts:
+            self.assertLess(min(abs(start - change) for change in changes), CAPTION_TOLERANCE_S, seen)
+
+    def test_a_wait_cannot_match_the_caption(self):
+        passes_only_on_the_caption = self.project(one_beat("await page.getByText('One beat').waitFor({ timeout: 1000 });"))
+        result = passes_only_on_the_caption.take()
+        self.assert_failed_clean(passes_only_on_the_caption, result, "One beat")
+
+    def test_a_caption_repeating_the_apps_text_does_not_break_a_wait(self):
+        beats = (
+            "export const app = { cmd: 'node server.mjs', url: 'http://unused.invalid/' };\n"
+            "export const beats = [{ caption: 'To-do', act: async ({ page }) => {\n"
+            "  await page.getByText('To-do', { exact: true }).waitFor();\n"
+            "} }];\n")
+        project = self.project(beats)
+        result = project.take()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_the_overlay_can_be_seen_after_the_app_replaces_the_page(self):
+        beats = (
+            "export const app = { cmd: 'node server.mjs', url: 'http://unused.invalid/' };\n"
+            "const wipe = async ({ page }) => {\n"
+            "  await page.evaluate(() => { document.documentElement.replaceChildren(document.createElement('body')); });\n"
+            "  await page.waitForTimeout(600);\n"
+            "};\n"
+            "const hold = async ({ page }) => { await page.waitForTimeout(1000); };\n"
+            "export const beats = [{ caption: 'Wiped', act: wipe }, { caption: 'Still captioned', act: hold }];\n")
+        project = self.project(beats)
+        result = project.take(SIZE=CAPTION_TAKE_SIZE)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        frames = caption_band(project.out / "demo.mp4")
+        starts = srt_starts(project.out / "captions.srt")
+        blank = bytes([frames[0][0]]) * len(frames[0])
+        at_second = frames[min(int((starts[1] + 0.5) * 30), len(frames) - 1)]
+        self.assertGreater(band_difference(at_second, blank), BAND_CHANGE, "the caption is gone from the frame")
+
+    def test_a_playwright_click_reaches_the_app_through_the_overlay(self):
+        project = self.project(one_beat("await page.locator('#new-item').click({ timeout: 2000 });"
+                                        " await page.locator('#new-item:focus').waitFor({ timeout: 1000 });"))
+        result = project.take()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_beat_that_wedges_the_page_fails_at_the_next_caption(self):
+        beats = (
+            "export const app = { cmd: 'node server.mjs', url: 'http://unused.invalid/' };\n"
+            "export const beats = [\n"
+            "  { caption: 'Wedge', act: async ({ page }) => {\n"
+            "    await page.evaluate(() => { setTimeout(() => { for (;;); }, 0); });\n"
+            "  } },\n"
+            "  { caption: 'Next', limit: 3, act: async () => {} },\n"
+            "];\n")
+        project = self.project(beats)
+        self.assert_failed_clean(project, project.take(), "ran past its 3 s limit")
+
+    def test_a_short_video_never_replaces_a_good_take(self):
+        beats = one_beat("await page.waitForTimeout(5000);")
+        project = self.project(beats)
+        self.assertEqual(project.take().returncode, 0)
+        good = (project.out / "demo.mp4").read_bytes()
+        # A stand-in ffmpeg that cuts the video to a second, as a recorder dying midway would leave it.
+        bin_dir = project.root / "bin"
+        bin_dir.mkdir()
+        real = shutil.which("ffmpeg")
+        shim = bin_dir / "ffmpeg"
+        shim.write_text(f'#!/bin/sh\ncase " $* " in *" -movflags "*) exec "{real}" -t 1 "$@";; *) exec "{real}" "$@";; esac\n')
+        shim.chmod(0o755)
+        result = project.take(PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("the recording stopped early", result.stderr)
+        self.assertEqual((project.out / "demo.mp4").read_bytes(), good)
+        self.assertEqual(project.leftovers(), ["out"])
+
+    def test_ffmpeg_cannot_read_a_keypress_from_the_terminal(self):
+        self.assertIn("'-nostdin'", (TEMPLATE / "record.mjs").read_text())
+
+    def test_a_retake_keeps_the_last_video_beside_it(self):
+        project = self.project(one_beat("await page.waitForTimeout(100);"))
+        self.assertEqual(project.take().returncode, 0)
+        first = (project.out / "demo.mp4").read_bytes()
+        self.assertFalse((project.out / "demo.prev.mp4").exists())
+        self.assertEqual(project.take().returncode, 0)
+        self.assertEqual((project.out / "demo.prev.mp4").read_bytes(), first)
+
+    def test_a_second_tab_is_watched_and_warned_about(self):
+        opener = ("const [tab] = await Promise.all([page.context().waitForEvent('page'),"
+                  " page.evaluate(() => { window.open('/', '_blank'); })]);"
+                  " await tab.waitForLoadState();")
+        project = self.project(one_beat(opener + " await page.waitForTimeout(300);"))
+        result = project.take()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("a second tab opened", result.stderr)
+        self.assertEqual(len(json.loads((project.out / "steps.json").read_text())["warnings"]), 1)
+
+        broken = self.project(one_beat(opener + " await tab.evaluate(() => fetch('/boom')); await page.waitForTimeout(100);"))
+        self.assert_failed_clean(broken, broken.take(), "HTTP 500")
+
     def test_a_clip_starts_on_its_first_caption(self):
         for delay_ms in CAPTION_DELAYS_MS:
             with self.subTest(delay_ms=delay_ms):
@@ -458,12 +561,16 @@ class Takes(unittest.TestCase):
         self.assertFalse(port_open(project.port), "the app outlived the take")
 
     def test_output_dir_keeps_files_it_did_not_write(self):
-        project = self.project()
+        project = self.project(one_beat("await page.waitForTimeout(100);"))
         project.out.mkdir()
         (project.out / "notes.txt").write_text("mine")
-        result = project.take(APP_CMD="exit 0")
-        self.assertEqual(result.returncode, 1)
+        failed = project.take(APP_CMD="exit 0")
+        self.assertEqual(failed.returncode, 1)
         self.assertEqual([p.name for p in project.out.iterdir()], ["notes.txt"])
+        good = project.take()
+        self.assertEqual(good.returncode, 0, good.stderr)
+        self.assertEqual(sorted(p.name for p in project.out.iterdir()),
+                         ["captions.srt", "demo.mp4", "notes.txt", "steps.json"])
 
     def test_port_already_answering(self):
         project = self.project()
@@ -529,19 +636,32 @@ class Takes(unittest.TestCase):
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.addCleanup(take.wait)
         self.addCleanup(take.kill)
-        for _ in range(200):
-            if port_open(project.port):
-                break
-            time.sleep(0.05)
+        self.wait_for_port(project, take)
         time.sleep(2)
         take.send_signal(signal.SIGTERM)
         self.assertEqual(take.wait(timeout=30), 128 + signal.SIGTERM)
         self.assertEqual(project.leftovers(), [])
-        for _ in range(60):
-            if not port_open(project.port):
-                break
-            time.sleep(0.05)
         self.assertFalse(port_open(project.port), "the app outlived the take")
+
+    def test_a_signal_takes_down_an_app_that_ignores_sigterm(self):
+        project = self.project()
+        stubborn = project.root / "stubborn.mjs"
+        stubborn.write_text("process.on('SIGTERM', () => {}); await import('./server.mjs');\n")
+        take = subprocess.Popen([NODE, "demo/record.mjs"], cwd=project.root, env=project.env(APP_CMD="exec node stubborn.mjs"),
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(take.wait)
+        self.addCleanup(take.kill)
+        self.wait_for_port(project, take)
+        take.send_signal(signal.SIGTERM)
+        self.assertEqual(take.wait(timeout=30), 128 + signal.SIGTERM)
+        self.assertFalse(port_open(project.port), "the app outlived the take")
+
+    def wait_for_port(self, project, take):
+        for _ in range(200):
+            if port_open(project.port):
+                return
+            time.sleep(0.05)
+        self.fail(f"the app never opened its port, take exit {take.poll()}")
 
 
 if __name__ == "__main__":
