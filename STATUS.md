@@ -28,8 +28,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   [[dotclaude-danger-guard-retired]].
 - Older: `git log` and the PRs back to #10. One stays here because git can't show it: client deck
   data left the tree in PR #28, and its history was deliberately left as-is (Hayden's call).
-- **Codex setup shared with a friend** (2026-09-29): private, ready to share at
-  https://claude.ai/artifact/KWwrPkLsbMUi7Ugjfskqsz (republish by that URL).
+- **Codex setup shared with a friend** (2026-09-29): a private page; its link is in
+  `~/scratch/lanes/PRIVATE.md`.
 - **tmux tabs come back after their server dies** (PR #70, installed 2026-10-05; design in
   `PLAN.md`, behavior in README "Tabs come back after a reboot", decisions in
   [[dotclaude-tmux-restore]]). Ran for real on 2026-10-13 (`restore.log`, 13:58
@@ -90,12 +90,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - #144 (exam-prep): rules public, evidence private (Hayden, 2026-10-20).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
-  - **Live lanes** (briefs in each record). Merge order: 1 practices (`feat/practices-auth-secrets`, carries the lead's notes, its next PR; paused 2026-10-24, resumed by
-    Hayden 2026-11-04; it conflicts with
-    origin/main on its own, per lane-fixes' and ports' trials: README.md and
-    `tests/delegation/test_settings.py`; on resuming it merges origin/main first), 2 npx-cwd
-    (`fix/npx-shim-cwd`; moved up 2026-11-05, ready first), 3 dev-cycle (`feat/dev-cycle-rules`), 4 hackathon (`feat/hackathon-mode`; a hackathon starts
-    2026-11-14, so it aims to merge by 2026-11-11 and moves up if needed).
+  - **Live lanes** (briefs in each record). Merge order: 1 npx-cwd (`fix/npx-shim-cwd`, carries the lead's notes),
+    2 dev-cycle (`feat/dev-cycle-rules`), 3 hackathon (`feat/hackathon-mode`; a hackathon starts
+    2026-11-14, so it aims to merge by 2026-11-11 and moves up if needed), 4 practices
+    (`feat/practices-auth-secrets`, its next PR).
     Merged and installed from main, all closed: chrome-dup (#151, 2026-10-29: one chrome-devtools
     server, the plugin's; sandbox gap fixes N1 and N3's bun part, `hooks/sandbox-caches.sh`; its
     install changed running sessions' sandbox live, [[cc-sandbox-config-reloads-live]]),
@@ -226,7 +224,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     hooks and notifiers lean on WSL. Pairs with [[hayden-new-device-goal]]. After lane hackathon.
   - **Who can turn the practices gate off** (Hayden, 2026-11-05: not any session without him).
     Private: sandbox-audit FINDINGS, PG1, with Hayden's picked fix. `hooks/practices_check.py`,
-    settings, a setup step, tests. In lane hackathon, after #164.
+    settings, a setup step, tests. In lane hackathon; #164 has merged, so it can start.
   - **`lane ls` names an overdue reinstall** (Hayden's pick, 2026-11-04; after #163's chain
     stalled). When the lane holding the install has a merged PR, the `install: held by` line says
     the lead's reinstall is overdue. Derived on each call, no new state. Lane-able after ports
@@ -244,7 +242,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **A development-practices skill suite (security, ux, then others)** (Hayden, 2026-10-19;
     context handed over by capella-studio's lead, session 5788b9fb). In lane practices; the
     first PR merged as #142 (the `server-code` skill, its `practices-check` gate hook and a
-    planted-bug eval), auth-secrets next. Repo rules sit in a per-repo layer the skill reads if
+    planted-bug eval), auth-secrets as #164 (2026-11-05), more to follow. Repo rules sit in a per-repo layer the skill reads if
     present (`.claude/practices/<skill>.md`); checks stay in each repo's tests. Hayden's scope:
     security covers everything (OWASP ASVS as the backbone, the reels' concrete failures as
     planted-bug evals), ux is the whole user experience and links `frontend-ui-discipline` for
@@ -274,11 +272,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **A probe of one command lane pass-fixes leaves exempt** (2026-10-29; private: sandbox-audit
     FINDINGS, G5b section, "Fix 4 scope", exemption (b)). It is a paid Codex run. Deferred by
     Hayden (2026-10-29): no Codex subscription now. Reopen when he has one.
-  - **Excluded-guard follow-ups from #156** (low; lane guard-gaps, 2026-11-01; listed in #156's
-    body): `config_entries` whitespace and line breaks differ from git's; `Machine._chain` and
-    `check_hooks_dir` fold `..` lexically; gh user aliases aren't modelled; LANE_FETCHES doesn't
-    expand a `remotes.origin` group; candidacy could narrow to the lines Claude Code really
-    exempts. Lane-able (`hooks/excluded_guard.py`, `tests/setup/test_excluded_guard.py`).
+  - **Excluded-guard follow-ups from #156** (low; lane guard-gaps, 2026-11-01; private:
+    sandbox-audit FINDINGS, row GF1). Lane-able (`hooks/excluded_guard.py`, `tests/setup/test_excluded_guard.py`).
   - **`lane lock <name> --shared -- <cmd>`** (feature; capella-studio lead, session 6bceec36,
     on Hayden's pick in capella lane checkfix's window, 2026-10-30). Shared holders coexist; an
     exclusive holder waits for all of them, and a queued exclusive waiter blocks new shared ones
@@ -421,11 +416,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   sandbox-off deletes, so the sandboxed gap stands):
   `python3 -I ~/scratch/sandbox-audit/rm_scan.py 2026-11-04`. Sending the drafted
   `$CLAUDE_JOB_DIR/tmp` bug report is Hayden's call; `CLAUDE.md` carries the workaround.
-- **A stale trust entry from lane guard-b's smoke** (2026-10-14): `~/.claude.json` still trusts
-  the deleted `/tmp/claude-1000/guard-b-tab`. A sandboxed session can recreate that path with its
-  own `.claude/settings.json`, so the lead recommends removing the entry. Hayden removes it by
-  hand (his call, 2026-10-14): the `projects` key `/tmp/claude-1000/guard-b-tab`. Its two
-  transcripts expire on their own.
+- **A stale entry from lane guard-b's smoke** (2026-10-14; private: sandbox-audit FINDINGS, row
+  TE1). Hayden removes it by hand (his call).
 - **Two Write-tool bug drafts wait in `/feedback`** (Hayden's call to send): the overwrite-guard session's has the
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
@@ -437,8 +429,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
      in this repo. Since #161, `lane new` runs only with the sandbox off. Since #156's install, a lone
      excluded call (gh, git push or fetch, lane) runs only from a repo's top. Running sessions took
      #157's cache narrowing live at its install (2026-10-31 14:39 local): a session started
-     before it needs a `/pass` before a sandboxed uv, pip, pnpm, node-gyp, bun or Playwright run. Pending with Hayden, outside the lanes: `wsl --shutdown` at a break applies the 18 GB
-     WSL cap set in `C:\Users\hayde\.wslconfig` on 2026-10-23 (backup `.wslconfig.bak-20261023`).
+     before it needs a `/pass` before a sandboxed uv, pip, pnpm, node-gyp, bun or Playwright run. Pending with Hayden, outside the lanes: `wsl --shutdown` at a break applies the
+     WSL memory cap in `.wslconfig`.
      Before each lead STATUS commit, grep it against the exam-prep denylist
      ([[lead-status-denylist-check]]). After each reinstall,
      check `ls -la ~/.claude/CLAUDE.md` (the Watch item). Watch that push asks open with the
