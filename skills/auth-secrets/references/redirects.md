@@ -58,11 +58,13 @@ Call `safeRedirectPath` wherever the value arrives or is stored (the sign-in pag
 
 A browser has no server env var, so `APP_ORIGIN` above throws as soon as the module loads, while server rendering and Node tests still pass. Keep the signature the task or the code already names, instead of adding a required argument that breaks its other callers, and change the code above in three places:
 
-1. Delete the module-level `APP_ORIGIN` line, and import no env module (one marked `server-only`, or one that validates at load, breaks the client bundle).
+1. Delete the module-level `APP_ORIGIN` line and the comment above it, and import no env module (one marked `server-only`, or one that validates at load, breaks the client bundle).
 2. Add this helper:
 
    ```ts
-   // In a browser, the page's own origin is the app's origin. On the server, use config.
+   // In a browser, the page's own origin is the app's origin. On the server, use config,
+   // never request.url or the Host header: behind a proxy those carry the server's own
+   // address, and Host is client-supplied.
    function appOrigin(): string {
      if (typeof window !== "undefined") return window.location.origin;
      const origin = process.env.APP_ORIGIN;
@@ -128,16 +130,23 @@ test.each(cases)("safeRedirectPath(%j)", (raw, want) => {
 });
 ```
 
-Run this table in a Node test environment: under jsdom, `window.location.origin` is the test page's and the last line fails. If the validator also runs in the browser, add a test in its own file, since a module loads only once:
+Run this table in a Node test environment with `APP_ORIGIN=https://app.example.com`: under jsdom, `window.location.origin` is the test page's and the last line fails. If the validator also runs in the browser, add these tests in their own file, since a module loads only once. They can't see an env module it imports; a client build does:
 
 ```ts
 test("the browser form loads and checks with no server config", async () => {
   delete process.env.APP_ORIGIN;
-  vi.stubGlobal("window", { location: { origin: "https://app.example.com" } }); // or assign globalThis.window
+  (globalThis as any).window = { location: { origin: "https://app.example.com" } };
   const { safeRedirectPath } = await import("./safe-redirect");
   expect(safeRedirectPath("/dashboard?tab=2")).toBe("/dashboard?tab=2");
   expect(safeRedirectPath("//evil.example")).toBe("/");
   expect(safeRedirectPath("/.//evil.example")).toBe("/evil.example");
+});
+
+test("on the server, a missing setting throws instead of using the fallback", async () => {
+  delete process.env.APP_ORIGIN;
+  delete (globalThis as any).window;
+  const { safeRedirectPath } = await import("./safe-redirect");
+  expect(() => safeRedirectPath("/dashboard")).toThrow("APP_ORIGIN");
 });
 ```
 
