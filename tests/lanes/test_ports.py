@@ -13,7 +13,7 @@ import time
 import unittest
 from unittest import mock
 
-from _fixture import LANE, LanesRepo
+from _fixture import HOOKS, LANE, LanesRepo
 
 import lanelib  # on sys.path through _fixture
 
@@ -149,10 +149,11 @@ def ipv6():
         return False
 
 
-class Serve(LanesRepo):
+class ServeSetup(LanesRepo):
     """`lane serve`: start a lane's server in its own session and prove the port's listener is
     it. The suite's processes share one pid and network namespace even when it runs sandboxed,
-    so /proc shows them and their sockets (_LANE_TEST_SANDBOXED=0, from the fixture)."""
+    so /proc shows them and their sockets (_LANE_TEST_SANDBOXED=0, from the fixture). The
+    setup and helpers only, with no tests, so a class built on it runs none of Serve's."""
 
     def setUp(self):
         super().setUp()
@@ -197,6 +198,9 @@ class Serve(LanesRepo):
         repo = lanelib.Repo(self.main, self.common)
         path = repo.served_path("web", port)
         return json.loads(self.read(path)) if os.path.exists(path) else None
+
+class Serve(ServeSetup):
+    """`lane serve`'s own tests."""
 
     def test_serve_starts_the_server_and_proves_the_listener(self):
         p = self.serve("--", sys.executable, self.server, "127.0.0.1", "{port}")
@@ -667,6 +671,460 @@ class Serve(LanesRepo):
         self.assertIsNotNone(self.served(self.lo))
 
 
+class PortCommands(ServeSetup):
+    """`lane port ls` and `lane port who`: what holds each port, read sandbox-off from /proc;
+    and the session-start line naming the lane's live serves, from serve's own records."""
+
+    def port(self, *args, cwd=None):
+        return self.run_lane("port", *args, cwd=cwd or self.path)
+
+    def serve_ok(self, *argv):
+        p = self.serve("--", *argv)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+
+    def carrier(self, token, cwd=None):
+        """A process in the lane (or cwd) carrying a serve's token, listening nowhere."""
+        proc = subprocess.Popen([sys.executable, "-c", f"import time; time.sleep(600)  # {self.tmp}"],
+                                env=dict(os.environ, LANE_SERVE=token), cwd=cwd or self.path,
+                                start_new_session=True)
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.kill)
+        deadline = time.monotonic() + 5
+        while lanelib.proc_env(proc.pid, "LANE_SERVE") != token and time.monotonic() < deadline:
+            time.sleep(0.02)
+        return proc
+
+    def record(self, port, pid, token, boot=None, argv=("npm", "run", "dev")):
+        """A serve record for port, as serve writes it."""
+        repo = lanelib.Repo(self.main, self.common)
+        os.makedirs(repo.served_dir("web"), exist_ok=True)
+        self.write(repo.served_path("web", port), json.dumps({
+            "lane": "web", "port": port, "pid": pid, "start": lanelib.proc_start(pid) or 1,
+            "boot": boot or lanelib.boot_id(), "token": token, "argv": list(argv),
+            "log": "x", "started": "2026-11-04T00:00:00+00:00"}))
+
+    def context(self):
+        out = self.hook("lane-identity.sh", {"session_id": "sess-0001", "cwd": self.path,
+                                             "source": "startup", "hook_event_name": "SessionStart"})
+        return out["additionalContext"].partition("\n")[0]
+
+    def outside_port(self):
+        while True:
+            port = free_run(1)
+            if port not in range(self.lo, self.lo + 3):
+                return port
+
+    def test_ls_names_each_port_free_served_or_held(self):
+        self.serve_ok(sys.executable, self.server, "127.0.0.1", "{port}")
+        other = self.foreign("127.0.0.1", self.lo + 2)
+        p = self.port("ls")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        lines = p.stdout.splitlines()
+        self.assertEqual(lines[0], f"lane web: ports {self.lo}-{self.lo + 2}")
+        self.assertRegex(lines[1], rf"^  {self.lo}  lane serve: .*srv\.py 127\.0\.0\.1 {self.lo}$")
+        self.assertEqual(lines[2], f"  {self.lo + 1}  free")
+        self.assertRegex(lines[3], rf"^  {self.lo + 2}  held by pid {other.pid} \(python")
+        self.assertEqual(len(lines), 4)
+
+    def test_ls_takes_an_id_and_from_main_lists_every_lane(self):
+        self.serve_ok(sys.executable, self.server, "127.0.0.1", "{port}")
+        for args, cwd in ((("web",), self.path), (("web",), self.main), ((), self.main)):
+            with self.subTest(args=args, cwd=cwd):
+                p = self.port("ls", *args, cwd=cwd)
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertIn(f"lane web: ports {self.lo}-{self.lo + 2}\n", p.stdout)
+                self.assertIn(f"  {self.lo}  lane serve: ", p.stdout)
+        p = self.port("ls", "nosuch")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("no lane nosuch", p.stderr)
+
+    def test_ls_says_a_serve_that_runs_but_does_not_listen(self):
+        token = f"web:{self.lo + 1}:{'ab' * 16}"
+        proc = self.carrier(token)
+        self.record(self.lo + 1, proc.pid, token)
+        p = self.port("ls")
+        self.assertIn(f"  {self.lo + 1}  lane serve: npm run dev, not listening\n", p.stdout)
+        proc.kill()
+        proc.wait()
+        p = self.port("ls")  # the record outlives its processes: the port is free again
+        self.assertIn(f"  {self.lo + 1}  free\n", p.stdout)
+
+    def test_who_names_the_block_the_serve_and_every_listener(self):
+        self.serve_ok(sys.executable, self.server, "127.0.0.1", "{port}")
+        p = self.port("who", str(self.lo), cwd=self.main)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        lines = p.stdout.splitlines()
+        self.assertEqual(lines[0], f"port {self.lo}: in lane web's ports {self.lo}-{self.lo + 2}")
+        self.assertRegex(lines[1], r"^  lane web's serve: .*srv\.py")
+        self.assertRegex(lines[2], r"^  listener: pid \d+ \(python[^,]*, lane web\), lane web's serve$")
+        other = self.foreign("127.0.0.1", self.lo + 2)
+        p = self.port("who", str(self.lo + 2))
+        self.assertEqual(p.stdout.splitlines()[1:], [f"  listener: pid {other.pid} ({lanelib.proc_stat(other.pid)[0]})"])
+        self.assertEqual(self.port("who", str(self.lo + 1)).stdout.splitlines()[1:],
+                         ["  nothing listens on it"])
+
+    def test_who_takes_a_port_outside_every_block(self):
+        port = self.outside_port()
+        other = self.foreign("127.0.0.1", port)
+        p = self.port("who", str(port))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(p.stdout.splitlines()[0], f"port {port}: in no lane's ports")
+        self.assertIn(f"listener: pid {other.pid} ", p.stdout)
+        for bad in ("x", "0", "65536", "-1"):
+            with self.subTest(port=bad):
+                self.assertEqual(self.port("who", bad).returncode, 2)
+
+    def test_both_refuse_in_the_sandbox(self):
+        # Its own pid namespace hides every other process's sockets: a sandboxed answer would
+        # call a held port free.
+        self.env["_LANE_TEST_SANDBOXED"] = "1"
+        for args in (("ls",), ("who", str(self.lo))):
+            with self.subTest(args=args):
+                p = self.port(*args)
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertIn(f"Run it as a bare `lane port {' '.join(args)}`", p.stderr)
+                self.assertEqual(p.stdout, "")
+
+    def test_an_edited_block_is_checked_against_the_range(self):
+        # lane.json is sandbox-writable: a lane can't widen its block into ports it doesn't hold.
+        path = os.path.join(self.common, "lanes", "web", "lane.json")
+        rec = json.loads(self.read(path))
+        rec["block"] = 5
+        self.write(path, json.dumps(rec))
+        p = self.port("ls")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("outside the repo's range", p.stderr)
+        self.assertNotIn(str(self.lo + 3), p.stdout)
+        p = self.port("ls", cwd=self.main)
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("outside the repo's range", p.stdout + p.stderr)
+        self.assertNotIn(f"  {self.lo + 3}", p.stdout)
+        p = self.port("who", str(self.lo + 3))
+        self.assertIn(f"port {self.lo + 3}: in no lane's ports", p.stdout)
+
+    def test_control_characters_print_masked(self):
+        script = (f"import os, sys; os.execv(sys.executable, [sys.executable, {self.server!r}, "
+                  f"'127.0.0.1', sys.argv[1]])")
+        self.serve_ok(sys.executable, "-c", script, "{port}", "\x1b[31mred")
+        for args in (("ls",), ("who", str(self.lo))):
+            out = self.port(*args).stdout
+            self.assertNotIn("\x1b", out)
+            self.assertIn("?[31mred", out)
+        self.assertNotIn("\x1b", self.context())
+
+    def test_the_session_line_names_the_lanes_live_serves(self):
+        self.assertIn(f"ports {self.lo}-{self.lo + 2}. Your record", self.context())
+        self.serve_ok(sys.executable, self.server, "127.0.0.1", "{port}")
+        line = self.context()
+        self.assertRegex(line, rf"ports {self.lo}-{self.lo + 2} \(serves: {self.lo} .{{1,60}}\)\. "
+                         "Your record")
+        self.assertIn("…", line)  # the interpreter's and the script's paths pass the cap
+        self.assertNotIn("not listening", line)
+
+    def test_the_session_line_counts_a_serve_by_its_token_after_its_leader_exits(self):
+        token = f"web:{self.lo + 1}:{'cd' * 16}"
+        gone = subprocess.Popen([sys.executable, "-c", "pass"])
+        gone.wait()
+        self.carrier(token)  # a process a wrapper left behind, in the lane, listening nowhere
+        self.record(self.lo + 1, gone.pid, token)
+        self.assertIn(f"(serves: {self.lo + 1} npm run dev, not listening)", self.context())
+
+    def test_a_token_carrier_outside_the_lane_counts_for_nothing(self):
+        # The token is readable to any lane's sandboxed Bash: another lane can start a process
+        # carrying it, but not, in its sandbox, one whose cwd is outside its own tree and in
+        # this lane's... unless it cds there. Outside the lane it names nothing.
+        token = f"web:{self.lo + 1}:{'cd' * 16}"
+        proc = self.carrier(token, cwd=self.tmp)
+        self.record(self.lo + 1, proc.pid, token)
+        self.assertNotIn("serves", self.context())
+        self.assertIn(f"  {self.lo + 1}  free\n", self.port("ls").stdout)
+
+    def test_the_session_line_skips_dead_other_boot_and_malformed_records(self):
+        repo = lanelib.Repo(self.main, self.common)
+        gone = subprocess.Popen([sys.executable, "-c", "pass"])
+        gone.wait()
+        self.record(self.lo, gone.pid, f"web:{self.lo}:{'ef' * 16}")
+        token = f"web:{self.lo + 1}:{'12' * 16}"
+        self.record(self.lo + 1, self.carrier(token).pid, token, boot="another-boot")
+        self.write(repo.served_path("web", self.lo + 2), "{")
+        line = self.context()
+        self.assertIn(f"ports {self.lo}-{self.lo + 2}. Your record", line)
+        self.assertNotIn("serves", line)
+
+    def test_the_line_still_prints_when_the_serves_part_fails(self):
+        repo = lanelib.Repo(self.main, self.common)
+        os.makedirs(os.path.dirname(repo.served_dir("web")), exist_ok=True)
+        self.write(repo.served_dir("web"), "")  # a file where the dir goes: listdir raises
+        line = self.context()
+        self.assertIn(f"You are lane `web`", line)
+        self.assertIn(f"ports {self.lo}-{self.lo + 2}. Your record", line)
+
+    def test_a_listener_with_the_token_outside_the_lane_is_named_not_the_serve(self):
+        token = f"web:{self.lo}:{'34' * 16}"
+        proc = subprocess.Popen([sys.executable, self.server, "127.0.0.1", str(self.lo)],
+                                stdout=subprocess.PIPE, text=True, start_new_session=True,
+                                env=dict(os.environ, LANE_SERVE=token), cwd=self.tmp)
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.kill)
+        self.assertIn("listening", proc.stdout.readline())
+        self.record(self.lo, proc.pid, token)
+        row = self.port("ls").stdout.splitlines()[1]
+        self.assertTrue(row.startswith(f"  {self.lo}  held by pid {proc.pid} ("), row)
+        self.assertNotIn("lane serve", row)
+
+    def test_a_socket_the_serve_shares_with_a_cleared_environment_says_so(self):
+        # A worker that cleared its environment, forked after serve's check passed, holds the
+        # serve's own listening socket: the serve still listens.
+        script = textwrap.dedent(f"""\
+            import os, socket, subprocess, sys, time
+            s = socket.socket()
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(("127.0.0.1", int(sys.argv[1])))
+            s.listen()
+            print("listening", flush=True)
+            time.sleep(1.5)
+            subprocess.Popen(["env", "-i", sys.executable, "-c",
+                              "import time; time.sleep(600)  # worker {self.tmp}"],
+                             pass_fds=(s.fileno(),))
+            time.sleep(600)
+        """)
+        path = os.path.join(self.tmp, "fork.py")
+        self.write(path, script)
+        p = self.serve("--ready", "^listening", "--", sys.executable, path, "{port}")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        deadline = time.monotonic() + 10
+        workers = []
+        while not workers and time.monotonic() < deadline:
+            workers = [int(n) for n in os.listdir("/proc") if n.isdigit() and f"# worker {self.tmp}"
+                       in " ".join(lanelib.proc_cmdline(int(n)) or [])]
+            time.sleep(0.05)
+        self.assertTrue(workers)
+        self.addCleanup(lambda: [os.kill(w, signal.SIGKILL) for w in workers
+                                 if lanelib.proc_stat(w)])
+        row = self.port("ls").stdout.splitlines()[1]
+        self.assertIn("lane serve: ", row)
+        self.assertIn(f", its socket shared with pid {workers[0]} (", row)
+        self.assertNotIn("not listening", row)
+
+    def test_who_says_a_serve_that_does_not_listen_beside_another_listener(self):
+        # The serve still runs but listens nowhere, and a server in the lane's own tree (not the
+        # serve's) holds the port: who must not read as "the serve listens".
+        token = f"web:{self.lo}:{'56' * 16}"
+        self.record(self.lo, self.carrier(token).pid, token)
+        proc = subprocess.Popen([sys.executable, self.server, "127.0.0.1", str(self.lo)],
+                                stdout=subprocess.PIPE, text=True, start_new_session=True,
+                                cwd=self.path)
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.kill)
+        self.assertIn("listening", proc.stdout.readline())
+        lines = self.port("who", str(self.lo)).stdout.splitlines()
+        self.assertEqual(lines[1], "  lane web's serve: npm run dev, not listening")
+        self.assertRegex(lines[2], rf"^  listener: pid {proc.pid} \([^)]*, lane web\)$")
+        self.assertIn(f"  {self.lo}  lane serve: npm run dev, not listening; held by pid {proc.pid}",
+                      self.port("ls").stdout)
+
+    def test_who_names_a_block_that_does_not_check_out(self):
+        # api widens its block into web's: both refuse, and the port must not read as nobody's.
+        self.two_lanes()
+        self.edit("api", port=self.lo + 1)
+        p = self.port("who", str(self.lo + 1), cwd=self.main)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        lines = p.stdout.splitlines()
+        self.assertEqual(lines[0], f"port {self.lo + 1}: in no lane's ports")
+        self.assertEqual(len([x for x in lines if x.startswith("  but lane ")]), 2, p.stdout)
+
+    def test_a_long_symlinked_lane_path_does_not_win_the_label(self):
+        self.two_lanes()
+        link = os.path.join(self.lane_path("api"), "z" * 80)
+        os.symlink(os.path.dirname(self.path), link)
+        self.edit("api", path=link)
+        proc = subprocess.Popen([sys.executable, self.server, "127.0.0.1", str(self.lo + 1)],
+                                stdout=subprocess.PIPE, text=True, start_new_session=True,
+                                cwd=self.path)
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.kill)
+        self.assertIn("listening", proc.stdout.readline())
+        out = self.port("who", str(self.lo + 1), cwd=self.main).stdout
+        self.assertIn(", lanes web, api (their lane.json paths overlap))", out)
+
+    def test_a_deleted_cwd_never_counts_as_in_the_lane(self):
+        # The kernel reports a removed cwd as `<path> (deleted)`; a symlink planted at that
+        # name must not make the process count as in the lane.
+        token = f"web:{self.lo}:{'78' * 16}"
+        d = os.path.join(self.tmp, "gone")
+        script = textwrap.dedent(f"""\
+            import os, socket, sys, time
+            os.makedirs({d!r}); os.chdir({d!r})
+            s = socket.socket()
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(("127.0.0.1", {self.lo})); s.listen()
+            print("listening", flush=True)
+            time.sleep(600)
+        """)
+        proc = subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE, text=True,
+                                start_new_session=True, env=dict(os.environ, LANE_SERVE=token))
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.kill)
+        self.assertIn("listening", proc.stdout.readline())
+        os.rmdir(d)
+        os.symlink(self.path, d + " (deleted)")
+        self.assertTrue(os.readlink(f"/proc/{proc.pid}/cwd").endswith(" (deleted)"))
+        self.record(self.lo, proc.pid, token)
+        row = self.port("ls").stdout.splitlines()[1]
+        self.assertTrue(row.startswith(f"  {self.lo}  held by pid {proc.pid} ("), row)
+        self.assertNotIn("serves", self.context())
+
+    def test_a_kernel_cwd_is_compared_as_read(self):
+        os.symlink(self.path, os.path.join(self.tmp, "gone (deleted)"))
+        for cwd, inside in ((self.path, True), (self.path + "/src", True),
+                            (self.path + "/src (deleted)", True),  # removed, under the lane
+                            (os.path.join(self.tmp, "gone (deleted)"), False),  # the planted link
+                            (os.path.join(self.tmp, "gone (deleted)") + "/x", False),
+                            (self.path + " (deleted)", True),  # the lane's root, removed
+                            (self.path + "x", False), ("relative", False), (None, False),
+                            (self.path + "\0", False)):
+            with self.subTest(cwd=cwd):
+                self.assertEqual(lanelib.kernel_cwd_inside(cwd, self.path), inside)
+        odd = os.path.join(self.tmp, "wt (deleted)")  # a live dir named so, as a lane's root
+        os.mkdir(odd)
+        for cwd in (odd, odd + "/src"):
+            with self.subTest(cwd=cwd):
+                self.assertTrue(lanelib.kernel_cwd_inside(cwd, odd))
+
+    def sleeper(self, cwd):
+        proc = subprocess.Popen([sys.executable, "-c", f"import time; time.sleep(600)  # {self.tmp}"],
+                                cwd=cwd, start_new_session=True)
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.kill)
+        deadline = time.monotonic() + 5
+        while lanelib.proc_cmdline(proc.pid) in (None, []) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        return proc
+
+    def test_done_and_stop_sort_processes_by_the_kernels_cwd(self):
+        # in_lane (done's survey) and in_dir (serve --stop, done's serve sorting): a removed cwd
+        # with a link planted at its ` (deleted)` name never counts as in the lane; a process at
+        # a lane root whose name ends so does.
+        mod = load_lane_script()
+        d = os.path.join(self.tmp, "gone")
+        os.mkdir(d)
+        planted = self.sleeper(d)
+        os.rmdir(d)
+        os.symlink(self.path, d + " (deleted)")
+        inside = self.sleeper(self.path)
+        odd = os.path.join(self.tmp, "wt (deleted)")
+        os.mkdir(odd)
+        at_odd = self.sleeper(odd)
+        procs = lanelib.scan()
+        self.assertIn(inside.pid, mod.in_lane(procs, self.path))
+        self.assertNotIn(planted.pid, mod.in_lane(procs, self.path))
+        self.assertIn(at_odd.pid, mod.in_lane(procs, odd))
+        self.assertTrue(mod.in_dir(procs[inside.pid], self.path))
+        self.assertFalse(mod.in_dir(procs[planted.pid], self.path))
+        self.assertTrue(mod.in_dir(procs[at_odd.pid], odd))
+
+    def test_the_serve_scan_raises_past_its_deadline(self):
+        token = f"web:{self.lo}:{'9a' * 16}"
+        proc = self.carrier(token)
+        self.record(self.lo, proc.pid, token)
+        rec = lanelib.load_served(lanelib.Repo(self.main, self.common), "web", self.lo)
+        self.assertEqual(lanelib.serve_state(rec, self.path, time.monotonic() + 30), "running")
+        with self.assertRaises(TimeoutError):
+            lanelib.serve_state(rec, self.path, time.monotonic() - 1)
+        # Past the deadline in the carriers' fd scan (after listeners() was read), not only in
+        # the process scan: an fd dir error must not swallow it (TimeoutError is an OSError).
+        late = {"now": False}
+        real_listeners, real_monotonic = lanelib.listeners, time.monotonic
+        def listeners(*a):
+            late["now"] = True
+            return real_listeners(*a)
+        with mock.patch.object(lanelib, "listeners", listeners), \
+                mock.patch.object(lanelib.time, "monotonic",
+                                  lambda: real_monotonic() + (100 if late["now"] else 0)):
+            with self.assertRaises(TimeoutError):
+                lanelib.serve_state(rec, self.path, real_monotonic() + 30)
+
+    def test_the_hooks_clock_starts_at_the_process_not_the_import(self):
+        # The 5 s kill counts from the spawn: interpreter start and imports count too.
+        driver = ("import sys, time; time.sleep(0.5); sys.path.insert(0, sys.argv[1]); "
+                  "import lane_identity as m; print(time.monotonic() - m.T0)")
+        p = subprocess.run([sys.executable, "-c", driver, HOOKS], capture_output=True, text=True,
+                           env=self.env, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertGreaterEqual(float(p.stdout), 0.45)
+        self.assertLess(float(p.stdout), 10)
+
+    def test_the_hook_drops_the_serves_part_once_its_time_is_up(self):
+        # Run as the hook runs, with its start moved 10 s back: past SERVES_BY, the serves part
+        # is dropped and the identity line still prints.
+        self.serve_ok(sys.executable, self.server, "127.0.0.1", "{port}")
+        self.assertIn("(serves: ", self.context())
+        driver = ("import json, sys; sys.path.insert(0, sys.argv[1]); import lane_identity as m; "
+                  "m.T0 -= 10; m.main()")
+        payload = {"session_id": "sess-0001", "cwd": self.path, "source": "startup",
+                   "hook_event_name": "SessionStart"}
+        p = subprocess.run([sys.executable, "-c", driver, HOOKS], input=json.dumps(payload),
+                           capture_output=True, text=True, env=self.env, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        line = json.loads(p.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn(f"ports {self.lo}-{self.lo + 2}. Your record", line)
+        self.assertNotIn("serves", line)
+
+    def two_lanes(self):
+        """A second lane, api, on the three ports after web's."""
+        self.lane("init", "--ports", f"{self.lo}-{self.lo + 5}", "--block", "3")
+        self.lane("new", "api")
+
+    def edit(self, lane_id, **fields):
+        path = os.path.join(self.common, "lanes", lane_id, "lane.json")
+        rec = json.loads(self.read(path))
+        rec.update(fields)
+        self.write(path, json.dumps(rec))
+
+    def test_from_main_a_bad_lane_is_named_and_the_rest_still_listed(self):
+        self.two_lanes()
+        self.edit("web", port=self.lo - 10)  # below the range, clear of api's block
+        p = self.port("ls", cwd=self.main)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("lane web's lane.json names ports", p.stderr)
+        self.assertIn(f"lane api: ports {self.lo + 3}-{self.lo + 5}\n", p.stdout)
+        self.assertNotIn("lane web:", p.stdout)
+
+    def test_a_listener_is_labelled_with_the_deepest_lane_path(self):
+        # api sorts before web; its lane.json path, rewritten to the dir above both lanes,
+        # must not label web's listeners as api's.
+        self.two_lanes()
+        self.edit("api", path=os.path.dirname(self.path))
+        proc = subprocess.Popen([sys.executable, self.server, "127.0.0.1", str(self.lo + 1)],
+                                stdout=subprocess.PIPE, text=True, start_new_session=True,
+                                cwd=self.path)
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.kill)
+        self.assertIn("listening", proc.stdout.readline())
+        out = self.port("who", str(self.lo + 1), cwd=self.main).stdout
+        self.assertIn(f"listener: pid {proc.pid} (", out)
+        self.assertIn(", lanes web, api (their lane.json paths overlap))", out)
+        self.assertNotIn(", lane api)", out)
+
+    def test_a_listener_in_overlapping_lane_paths_names_every_lane(self):
+        # Real lanes never nest: an equal path (a twin) or one inside another lane names both,
+        # never the rewritten one alone.
+        self.two_lanes()
+        os.makedirs(os.path.join(self.path, "src"))
+        proc = subprocess.Popen([sys.executable, self.server, "127.0.0.1", str(self.lo + 1)],
+                                stdout=subprocess.PIPE, text=True, start_new_session=True,
+                                cwd=os.path.join(self.path, "src"))
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.kill)
+        self.assertIn("listening", proc.stdout.readline())
+        for path, label in ((self.path, "lanes api, web"),
+                            (os.path.join(self.path, "src"), "lanes api, web")):
+            with self.subTest(path=path):
+                self.edit("api", path=path)
+                out = self.port("who", str(self.lo + 1), cwd=self.main).stdout
+                self.assertIn(f", {label} (their lane.json paths overlap))", out)
+
+
 class ServedRecords(LanesRepo):
     """`lane done` (and `park`, through survey) and the processes `lane serve` started."""
 
@@ -730,7 +1188,7 @@ class ServedRecords(LanesRepo):
                      and self.tmp in " ".join(lanelib.proc_cmdline(int(n)) or [])
                      and self.server in " ".join(lanelib.proc_cmdline(int(n)) or [])]
         self.addCleanup(os.kill, daemon, signal.SIGKILL)
-        self.assertIsNone(load_lane_script().load_served(self.repo, "web", self.lo))
+        self.assertIsNone(lanelib.load_served(self.repo, "web", self.lo))
 
     def test_done_ends_a_served_tree_with_no_lane_session_id(self):
         # Served from a plain terminal (no CLAUDE_CODE_SESSION_ID: the fixture's env has none),

@@ -32,7 +32,7 @@ what. `docs/lanes.md` holds the design and why; this is the operating guide.
 ## At session start
 
 The `lane-identity` hook names your lane, the branch (or detached commit) your worktree has checked
-out, claims, ports and record. Then read, in order:
+out, claims, ports (with your live `lane serve`s) and record. Then read, in order:
 
 1. your record, `<lane>/.lane/STATUS.md` (Brief, Asks for Hayden, Next);
 2. the project STATUS.md (direction, backlog);
@@ -84,6 +84,9 @@ an unregistered worktree: `lane whoami` tells you which.
    <port>` ends it; `done` and `park` end it too. Nothing outside the lane's dir is signalled
    (a shared daemon such as Gradle's may carry the token), so run the server in the
    foreground, from the lane.
+   `lane port ls` lists your block's ports (free, your serve, or who else listens), and `lane
+   port who <port>` names whoever holds any port; run both bare. Your session-start line names
+   your live serves.
 
    **Tell the lead before you reach past your worktree.** Before an act whose effect leaves the
    lane's worktree (an install from the lane, anything that takes a cap slot), and whenever the
@@ -423,6 +426,7 @@ resend passes.
 | `lane open <id>` | the lane's session in a new tmux window, in plan mode; `--model`/`--effort` override init's defaults for the launch; `--focus` switches to it, or to the live session's window; `--print` shows the tmux command |
 | `lane addr <id>` / `lane addr lead` | `uds:<socket>`, the SendMessage address of the lane's (or the lead's) one live session; refuses on none or several, except that `lead` picks the recorded lead or its resume among several (and refuses with the way to pick when none is). A stopped session (Ctrl+Z) is never an address: the refusal names its window to `fg` it in. `--repo PATH` looks in the lanes repo whose main checkout holds PATH instead of the cwd's, from any dir: a session in another repo reports a dotclaude bug to what `lane addr --repo ~/dotclaude lead` prints. Bare: it must see other processes |
 | `lane lead` | makes the session that runs it the lead (from the main checkout only; Hayden: `! lane lead` at its prompt). Bare |
+| `lane port ls [<id>]`, `lane port who <port>` | sandbox off (bare, no prompt): what holds each port of the lane's block (from main: every lane's), or any port: free, the lane's serve, or the listener's pid, command and lane |
 | `lane serve -- <cmd>` | from a lane, sandbox off: start `<cmd>` on a port of the lane's block (`{port}` or `$PORT`; `--port N` picks one) in a session of its own, wait for its listener (after `--ready RE`, if given), and fail unless every listener on the port is the serve's; `--stop PORT` ends what a serve started there |
 | `lane lock gate -- <cmd>` | run `<cmd>` under the named lock, waiting while another run holds it; `--wait SECS` gives up with exit 75 (docs/lanes.md: telling it from the command's own 75) |
 | `lane trial --run "<suite>" ...` | from a lane: merge origin/main and every other live lane's commits (or only the ids given) onto its HEAD in a scratch tree, run each suite there under the `suite` lock (and init's `--trial-locks`), and rerun a failed one on HEAD plus origin/main alone to tell the merge's failures from the location's; with nothing merged, run them once on HEAD plus origin/main; exit 0 clean, 1 on a conflict, a failure of the merge's own or one with no test id to compare (a lane that conflicts with origin/main alone is untried, not a failure), 75 on `--wait`; `--keep` keeps the tree; `--link PATH` symlinks a lane dir into it |
@@ -443,18 +447,18 @@ and a new lane), `closing` (a `lane done` stopped partway; rerun it), `parked` (
 park` ended its sessions and freed its slot; it never shows `orphan`). With a lane parked or
 the cap passed, a `cap: N of M slots held (K parked)` line follows the board.
 
-Run `lane init`, `new`, `adopt`, `ls`, `open`, `done`, `park`, `sync-main`, `addr` and `lead` as bare commands: those are in
+Run `lane init`, `new`, `adopt`, `ls`, `port ls`, `port who`, `open`, `done`, `park`, `sync-main`, `addr` and `lead` as bare commands: those are in
 `excludedCommands`, so they run outside the sandbox with the network, gh's credential and a view
 of other processes. Piped or sandboxed, `ls` says what it skipped (PR state, sessions and window
-show `?`), and `new`, `open`, `done`, `park`, `sync-main`, `addr` and `lead` refuse. `lane ls` also names any record it left out (a
-`lane.json` the CLI didn't write, or two claiming one path): look at it before removing it. While one is left out, `new`, `adopt` and `claim` refuse to hand out claims, ports or cap slots. A session file that won't read as JSON makes `open` refuse, naming it: one named `<pid>.json` stops counting once that process ends, any other must be removed. `addr lead` refuses beside one whose process runs in the main checkout (or whose cwd can't be read) or is the recorded lead's. `open --print` still prints, but warns that it
+show `?`), and `new`, `port`, `open`, `done`, `park`, `sync-main`, `addr` and `lead` refuse. `lane ls` also names any record it left out (a
+`lane.json` the CLI didn't write, or two claiming one path): look at it before removing it. While one is left out, `new`, `adopt` and `claim` refuse to hand out claims, ports or cap slots, and `port ls` and `port who` refuse too. A session file that won't read as JSON makes `open` refuse, naming it: one named `<pid>.json` stops counting once that process ends, any other must be removed. `addr lead` refuses beside one whose process runs in the main checkout (or whose cwd can't be read) or is the recorded lead's. `open --print` still prints, but warns that it
 can't see a live session, so its command may start a second one. `lane serve` has no
 excludedCommands entry: it refuses in the sandbox, whose own network and pids hide every
 listener but its own, and runs when you turn the sandbox off, so each start meets the usual
 approval. Every other subcommand runs sandboxed. `lane lock` and `lane trial` must: the commands
 they run inherit their sandbox.
 
-`ls`, `new`, `adopt`, `open`, `done`, `park`, `sync-main`, `addr` and `lead` have allow rules, so auto mode's classifier never refuses
+`ls`, `port`, `new`, `adopt`, `open`, `done`, `park`, `sync-main`, `addr` and `lead` have allow rules, so auto mode's classifier never refuses
 them. Each call meets the excluded-command guard first (docs/delegation.md), and the asks on
 `init --setup`, `init --root` and `done --abandon` still win over the allow rules.
 

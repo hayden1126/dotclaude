@@ -3,7 +3,7 @@
 SessionStart (every source: startup, resume, clear, compact, fork):
   in a lane     tells the model its absolute identity (lane id, what its worktree has checked
                 out: a branch, or a detached HEAD's commit; lane.json's branch, labeled, when
-                HEAD can't be read; claims, ports, record path)
+                HEAD can't be read; claims, ports and the lane's live serves, record path)
                 and the rules that keep it absolute, and appends {session_id, startedAt} to
                 lane.json sessions[] (not again for a session already listed and not ended, so a
                 compact keeps its start). On compact it adds "re-read your record": the summary
@@ -38,6 +38,21 @@ SCRIPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__
 sys.path.insert(0, SCRIPTS)
 import lanelib  # noqa: E402
 
+def started() -> float:
+    """This process's start on time.monotonic()'s clock, from /proc/self/stat (field 22, clock
+    ticks since boot, against CLOCK_BOOTTIME): interpreter start and imports count against the
+    5 s kill too. Now, if it can't be read."""
+    now = time.monotonic()
+    try:
+        with open("/proc/self/stat") as f:
+            ticks = int(f.read().rpartition(")")[2].split()[19])
+        return now - max(0.0, time.clock_gettime(time.CLOCK_BOOTTIME)
+                         - ticks / os.sysconf("SC_CLK_TCK"))
+    except (OSError, ValueError, IndexError, AttributeError):
+        return now
+
+
+T0 = started()  # the hook's start, for the serves part's deadline
 LOCK_WAIT = 2.0
 # Each git call that reads HEAD. settings.json kills the hook at 5 s, which costs the whole line,
 # so the lock wait and two calls (a detached HEAD makes two) must time out well before that.
@@ -90,11 +105,35 @@ def checked_out(repo: lanelib.Repo, lane: dict) -> str:
     return f"branch `{name}`"
 
 
-def lane_context(lane: dict, source: str, where: str) -> str:
+SERVE_CAP = 60  # characters of each live serve's command the line names
+# The serves part runs last, after resolve()'s git, the lock wait and checked_out's git, and gets
+# at most SERVE_BUDGET, never past SERVES_BY seconds from this process's start (T0): the 5 s kill
+# costs the whole line, and bash's start before it and the print after need the rest. When the
+# steps before it took that long, the serves part is skipped.
+SERVE_BUDGET = 1.0
+SERVES_BY = 4.0
+
+
+def live_serves(repo: lanelib.Repo, lane: dict, deadline: float) -> str:
+    """' (serves: 5191 npm run dev; 5192 vite, not listening)' for the lane's serves that still
+    run in its dir (lanelib.serve_state), from serve's own records (a dir only sandbox-off serve
+    writes), or '': a record that won't read, from an earlier boot or with nothing left running
+    there names nothing. It raises TimeoutError past deadline (time.monotonic), and the caller
+    drops only this part."""
+    parts = []
+    for rec in lanelib.served_records(repo, lane["id"]):
+        state = lanelib.serve_state(rec, lane["path"], deadline)
+        if state is not None:
+            parts.append(f"{rec['port']} {lanelib.serve_text(rec, SERVE_CAP)}"
+                         f"{'' if state == 'listening' else ', not listening'}")
+    return f" (serves: {'; '.join(parts)})" if parts else ""
+
+
+def lane_context(lane: dict, source: str, where: str, serving: str = "") -> str:
     claims = ", ".join(lane.get("claims", [])) or "none"
     lines = [
         f"You are lane `{lane['id']}`: {where}, claims {claims}, "
-        f"{lanelib.ports_text(lane)}. Your record is {lanelib.record_path(lane)} "
+        f"{lanelib.ports_text(lane)}{serving}. Your record is {lanelib.record_path(lane)} "
         "(Brief, State, Decisions, Asks for Hayden, Not mine, Next): read it before acting.",
         "Other lanes' records are read-only. Ownership comes only from `lane who #<n>` (claims), "
         "never from prose, agent lists or tab titles. Never write relative identity ('another "
@@ -265,7 +304,14 @@ def main():
                 start(repo, lane, event)
             except (lanelib.LockTimeout, OSError, ValueError) as e:  # identity still matters
                 log(f"register skipped {type(e).__name__}: {e}")
-            text = lane_context(lane, event.get("source") or "", checked_out(repo, lane))
+            where = checked_out(repo, lane)
+            try:
+                serving = live_serves(repo, lane, min(time.monotonic() + SERVE_BUDGET,
+                                                      T0 + SERVES_BY))
+            except Exception as e:  # the identity line matters more than the serves
+                log(f"serves skipped {type(e).__name__}: {e}")
+                serving = ""
+            text = lane_context(lane, event.get("source") or "", where, serving)
         elif kind == "main" and lanes:
             text = board_line(repo, lanes)
         else:

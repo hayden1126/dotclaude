@@ -804,6 +804,53 @@ every other lane's block before it uses it. A planted `lane.json` can still clai
 `new` runs out sooner, or overlap another lane, so that lane's serve refuses; it can block work,
 but it can't aim a signal.
 
+**`lane port ls` and `lane port who` (lane ports, PR 2, 2026-11-04).** They say what holds a
+port, read from `/proc` and never changing anything:
+- `lane port ls` lists each port of the lane's block (from the main checkout, every lane's;
+  `lane port ls <id>` names one). A port reads `free`, `lane serve: <cmd>` (with `, not listening`
+  while the serve runs but nothing of it listens, or `, its socket shared with pid N (...)` when a
+  process without the token holds the serve's own socket, a worker that cleared its environment),
+  or `held by pid N (comm, lane X)` for any other listener. A listener is the serve's only while
+  it carries the serve's token and runs in the lane's dir, as serve's proof has it; any other is named. The block is checked as serve checks
+  it: one past the config's range or into another lane's block refuses, and one widened within
+  the range over free ports is listed, as serve would use it (the `lane.json` paragraph above).
+- `lane port who <port>` names the lane whose block holds the port (or none), that lane's live
+  serve there (`, not listening` as in `ls`), and every listener, the serve's own marked
+  `lane X's serve` (`lane X's serve shares it` for a socket it shares). A `lane.json` whose block names the port but doesn't check out is named
+  (`but ...`, exit 1), so a lane that widens its block into another's can't make the port read
+  as no lane's. It takes any port, one outside every block too.
+
+Both refuse in the sandbox, where the command's own network and pid namespaces hide every other
+process's sockets, so a held port would read free. They are `excludedCommands` with allow rules (Hayden's
+pick, 2026-11-04), like `lane ls`: run bare, they run outside the sandbox with no prompt, and
+what runs is the installed lane CLI, the same file `lane ls` runs.
+
+The lane-identity hook's line adds the lane's live serves after the block: `ports 5191-5193
+(serves: 5191 npm run dev; 5192 vite, not listening)`, each command masked and cut to 60
+characters. It reads serve's records (the state dir, which sandboxed Bash can't write) and counts
+one while a process carrying its token runs in the lane's dir (a wrapper that exited leaves its
+server), and says `not listening` unless one of them holds a listening socket on the port. A
+record from an earlier boot, one that won't read or one with nothing left running there names
+nothing. The scan costs a readlink per process (an environ read only for those in the lane). It
+runs last and gives up after a second, or 4 s after the hook's process started, whichever comes
+first, so the 5 s kill never costs the identity line; any failure there drops only that part. It is a
+pointer, not the proof: `lane port ls` also names any other listener on the port. A lane that
+starts a token carrier in another lane's dir can still make that lane's line say a serve runs.
+
+**Which processes count as in a lane.** A listener's lane, a serve's own processes (`port`, the
+hook, `serve --stop`) and `done`'s survey of what runs in a lane all compare the cwd the kernel
+reports (`/proc/<pid>/cwd`) as read, never through realpath (lanelib.kernel_cwd_inside). A
+removed cwd reads `<path> (deleted)`, and a lane can plant a symlink at that name, which realpath
+would follow into another lane: the text is tried as read, then without the suffix, so a removed
+dir counts by the path it had. Real lanes never nest, so when more than one lane's path holds a
+listener's cwd (a rewritten `lane.json`: a twin, or a path above or inside another lane), `port`
+names them all, `lanes web, api (their lane.json paths overlap)`, rather than pick one.
+
+No claim registry (`lane port claim`), Hayden's pick (2026-11-04): a claim is advisory, since a
+process that never claims still binds the port, and serve's listener check already closes the
+bug above. The registry would have added a state file, dead-pid cleanup and rules for serve,
+`done` and `park`.
+
 ## Verified merges (`lane sync-main`)
 
 `lane sync-main <n>` merges a merged PR into the main checkout's branch and writes only what git
@@ -1086,11 +1133,11 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
 - **S3, `excludedCommands`:** `lane new` fetches and `lane ls` asks gh for PR state, and both
   need the credential the sandbox hides; `ls`, `open`, `done`, `addr` and `lead` also need to
   see other processes. PR 1 excluded `lane *`. PR 2 narrowed it to `lane init`, `new`, `adopt`, `ls`,
-  `open` and `done` (lane-addr added `addr`, two-sessions `lead`, park `park`, and DA15/DA16 `sync-main` with a PR number), each by name, because `lane lock -- <cmd>` must stay sandboxed: under
+  `open` and `done` (lane-addr added `addr`, two-sessions `lead`, park `park`, DA15/DA16 `sync-main` with a PR number, and ports' PR 2 `port ls` and `port who`, which read other processes' sockets), each by name, because `lane lock -- <cmd>` must stay sandboxed: under
   `lane *`, any command wrapped in it ran sandbox-off without the `dangerouslyDisableSandbox`
   flag the delete guard checks. `whoami`, `claim`, `release`, `who`, `note`, `asks` and `lock`
   touch only `<common-dir>/lanes/` and the lane's `.lane/`, which a lane-rooted sandbox can
-  write (S1). A sandboxed (piped) `ls` says what it skipped; `new`, `open`, `done`, `park`, `sync-main`, `addr` and `lead` refuse.
+  write (S1). A sandboxed (piped) `ls` says what it skipped; `new`, `port`, `open`, `done`, `park`, `sync-main`, `addr` and `lead` refuse.
   `serve` has no entry: it refuses in the sandbox and runs only when its caller turns the
   sandbox off, so each start meets the usual approval ("Ports and `lane serve`").
   `park` fetches, asks gh, sees and signals the lane's sessions and writes its flag in the
@@ -1105,7 +1152,8 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   - A `lane.json` must pass `lanelib.record_problem` (its id is its dir's name, its branch can't
     be read as a git option, its path is absolute, and so on), or every command and hook leaves
     it out, and `lane ls` names it. While one is left out, what it holds can't be told: `new`,
-    `adopt` and `claim` refuse to hand out a claim, port or cap slot, and a checkout outside
+    `adopt` and `claim` refuse to hand out a claim, port or cap slot, `port ls` and `port who`
+    refuse (a block can't be checked against one that can't be read), and a checkout outside
     the main one that matches no record can't take itself for unregistered (`handoff-check`
     fails, `pass-respawn` refuses). Two records sharing a path only count there when the
     path is that checkout's. The main checkout is always `main`, checked before any record,
@@ -1140,7 +1188,7 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   The excluded-command inventory (2026-10-13, `tests/delegation/command_inventory.py`) adds three
   asks: `lane init --setup` names the command each new lane runs, `lane init --root` moves where
   lanes live, and `lane done --abandon` closes unmerged work. The rest of `lane` asks nothing.
-  The excluded-command guard (docs/delegation.md) then let `ls`, `new`, `adopt`, `open`, `done`,
+  The excluded-command guard (docs/delegation.md) then let `ls`, `port`, `new`, `adopt`, `open`, `done`,
   `park`, `sync-main`, `addr` and `lead` take allow rules, so the classifier never refuses them: an allow rule skips the
   classifier, and the guard checks each call's git config, PATH and cwd first. The three asks
   still win.
