@@ -90,14 +90,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - #144 (exam-prep): rules public, evidence private (Hayden, 2026-10-20).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
-  - **Live lanes** (briefs in each record). Merge order: 1 ports (its PR 2: `lane port ls` and
-    `lane port who`, and the lane's serves in the session-start line, on `feat/lane-port-who`,
-    carries the lead's notes; its last PR),
-    2 practices (`feat/practices-auth-secrets`, its next PR; paused 2026-10-24, resumed by
+  - **Live lanes** (briefs in each record). Merge order: 1 practices (`feat/practices-auth-secrets`, carries the lead's notes, its next PR; paused 2026-10-24, resumed by
     Hayden 2026-11-04; it conflicts with
     origin/main on its own, per lane-fixes' and ports' trials: README.md and
-    `tests/delegation/test_settings.py`; on resuming it merges origin/main first), 3 dev-cycle
-    (`feat/dev-cycle-rules`), 4 npx-cwd (`fix/npx-shim-cwd`; it shares no file with the others,
+    `tests/delegation/test_settings.py`; on resuming it merges origin/main first), 2 dev-cycle
+    (`feat/dev-cycle-rules`), 3 npx-cwd (`fix/npx-shim-cwd`; it shares no file with the others,
     so it can move up if it is ready first).
     Merged and installed from main, all closed: chrome-dup (#151, 2026-10-29: one chrome-devtools
     server, the plugin's; sandbox gap fixes N1 and N3's bun part, `hooks/sandbox-caches.sh`; its
@@ -127,12 +124,13 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     `python3 -I`; the widened Edit denies, so a `~/.local/lib` install needs the sandbox off),
     design-audit (#159, 2026-11-03: the ask-check `threat` rule and the CLAUDE.md line on naming what
     runs outside the sandbox; its findings, DA1 to DA17, are private and backlogged by id).
-    Merged and installed, lane kept open for its next PR: ports (#155, 2026-11-01: `lane serve`
+    Merged and installed: ports (#155, 2026-11-01: `lane serve`
     with the listener check, a block of ports per lane in `lane ls`, the midnight test flake;
     #161, 2026-11-04: DA15/DA16 and private rows LR1 to LR7, so `lane new` verifies its checkout
     against a fetched store and refuses in the sandbox, the store fetches take only the global
     and system `credential.*` keys, and open, adopt and done respect a finishing lock; residuals
-    in the private rows).
+    in the private rows; #162, 2026-11-05: `lane port ls`, `lane port who` and the lane's serves
+    in the session-start line, no `claim` on Hayden's pick; its last PR).
     #154's install made new refusals live in every session: arithmetic like `$((SECONDS+12))` and
     `git -C <dir> fetch` in a command that would leave the sandbox.
   - Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
@@ -208,13 +206,19 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **A per-lane data dir or database name beside the port block in `lane new`** (Hayden's pick,
     2026-11-04, same review): ports isolate servers but not data. Lane-able after ports merges
     (`skills/lanes/scripts/lane`).
+  - **A hackathon mode and skill set** (Hayden, 2026-11-05; proposed, his forks open). Opt-in per
+    repo, built on the video "The Claude Code workflow that helped me win 5 Hackathons in a Row"
+    (a sponsored video), jmo-skills and paradev.com; install none. New manual skills: `hackathon`,
+    `demo-first-scope`, `demo-video`, `pitch`. For both modes: a `frontend-motion` skill from
+    `animate` and `better-ui` (MIT). First step: a spike proving a scripted demo recording here.
+    Review and plan: `~/scratch/external-skills/hackathon-review-2026-11-05.md`.
   - **`lane ls` names an overdue reinstall** (Hayden's pick, 2026-11-04; after #163's chain
     stalled). When the lane holding the install has a merged PR, the `install: held by` line says
     the lead's reinstall is overdue. Derived on each call, no new state. Lane-able after ports
     merges (`skills/lanes/scripts/lane`, `tests/lanes`).
   - **Next lane when a slot frees (Hayden's pick):** the serve jail (it closes live private
-    rows), shared lane locks or structured `Keep open`, all on the lane CLI files lane ports'
-    PR 2 also changes (`lane trial` early).
+    rows), shared lane locks or structured `Keep open`, all on the lane CLI files, free now
+    that lane ports has merged.
   - G8 open probes (a) and (b) (Hayden's pick, 2026-10-14): Hayden runs
     `~/scratch/sandbox-audit/g8-probe/run.py` by hand with the sandbox off, because the auto-mode
     classifier refused the run. Results go into the private findings file's G8 section.
@@ -295,19 +299,6 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     `tests/lanes`). Scope widened (Hayden, 2026-10-31, via lane cache-gaps): the jail also wraps
     project hooks, and the lane closes the whole family of private rows that share one root
     (DS1, H1, N1 to N3) in one mechanism rather than per-tool fixes.
-  - **Ports: blocks per lane, `lane port`, `lane serve`** (lane ports; feature; capella-studio lane prefs,
-    session 78db7f95, 2026-10-29). A lane's run script started a dev server on a port another
-    lane's dev held; the start failed and its checks silently tested the other server. Proposed:
-    (1) a block of ports per lane, shown in `ls`; (2) `lane port claim [--purpose]`, `port who`,
-    `port ls`; (3) `lane serve [--port N] -- <cmd>`: claim, start it in its own session, wait for
-    its ready line or death, check the listener's pid is in that session; (4) a SessionStart
-    "your ports" line. Hayden's scope (2026-10-29): PR 1 is (3) with (1); (2) and (4) a later PR.
-    PR 1 merged as #155. PR 2 (`feat/lane-port-who`, planned 2026-11-04, Hayden's picks): `lane
-    port ls`, `lane port who <port>`, and the lane's live serves in the session-start line; no
-    `claim` (a claim is advisory: a process that never claims still binds). It also touches
-    settings.json and its test (lane practices changes both). The lane's last PR.
-    Only (3)'s listener check closes the silent wrong-server run. Lane-able (`lane`,
-    `lanelib.py`, `tests/lanes`, `docs/lanes.md`, the lane-identity hook). The midnight test flake below rides along.
   - **Lanes skill: rebase only at your turn** (capella-studio lead, session 80ab3852, 2026-10-25;
     Hayden picked all three in capella's window). (A) The lead, step 7.6: only the lane next in
     merge order merges or rebases origin/main; the others get "main moved", check conflicts, and
