@@ -145,7 +145,7 @@ class Project:
     def leftovers(self):
         return sorted(p.name for p in (self.root / "demo").iterdir() if p.name.startswith("out"))
 
-    def wrap_browser(self, new_page_delay_ms=0):
+    def wrap_browser(self, new_page_delay_ms=0, set_content_delay_ms=0):
         """Puts a Playwright shim in the project: always headless, since a test may have no display.
 
         The launch options land in launch.json, so a test can check that a take asked for a window. The
@@ -169,7 +169,13 @@ export const chromium = {{ launch: async options => {{
     const newPage = context.newPage.bind(context);
     context.newPage = async () => {{
       await new Promise(resolve => setTimeout(resolve, {new_page_delay_ms}));
-      return newPage();
+      const page = await newPage();
+      const setContent = page.setContent.bind(page);
+      page.setContent = async (...args) => {{
+        await setContent(...args);
+        await new Promise(resolve => setTimeout(resolve, {set_content_delay_ms}));
+      }};
+      return page;
     }};
     return context;
   }};
@@ -206,6 +212,23 @@ class TemplateOffline(unittest.TestCase):
         head = text.split("---")[1]
         self.assertIn("name: demo-video", head)
         self.assertIn("disable-model-invocation: true", head)
+
+    def test_ffmpeg_cannot_read_a_keypress_from_the_terminal(self):
+        self.assertIn("'-nostdin'", (TEMPLATE / "record.mjs").read_text())
+
+    def test_setup_keeps_beats_already_written(self):
+        text = (SKILL / "SKILL.md").read_text()
+        command = re.search(r"`(mkdir -p demo && cat .*?)`\. Add", text).group(1)
+        with tempfile.TemporaryDirectory() as tmp:
+            env = clean_env(CLAUDE_SKILL_DIR=str(SKILL))
+            subprocess.run(["sh", "-c", command], cwd=tmp, env=env, check=True)
+            beats = Path(tmp) / "demo" / "beats.mjs"
+            self.assertEqual(beats.read_text(), (TEMPLATE / "beats.mjs").read_text())
+            beats.write_text("// mine")
+            (Path(tmp) / "demo" / "record.mjs").write_text("// old")
+            subprocess.run(["sh", "-c", command], cwd=tmp, env=env, check=True)
+            self.assertEqual(beats.read_text(), "// mine")
+            self.assertEqual((Path(tmp) / "demo" / "record.mjs").read_text(), (TEMPLATE / "record.mjs").read_text())
 
     def test_skill_never_sends_a_rehearsal_outside_the_sandbox(self):
         text = (SKILL / "SKILL.md").read_text()
@@ -409,6 +432,81 @@ class Takes(unittest.TestCase):
         for start in starts:
             self.assertLess(min(abs(start - change) for change in changes), CAPTION_TOLERANCE_S, seen)
 
+    def test_captions_stay_true_when_the_start_page_returns_late(self):
+        project = self.project(CAPTION_BEATS)
+        project.wrap_browser(set_content_delay_ms=1000)
+        result = project.take(SIZE=CAPTION_TAKE_SIZE)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        starts = srt_starts(project.out / "captions.srt")
+        changes = band_changes(caption_band(project.out / "demo.mp4"), 30)
+        seen = f"changes {changes} against captions {starts}"
+        for start in starts[1:]:
+            self.assertLess(min(abs(start - change) for change in changes), CAPTION_TOLERANCE_S, seen)
+
+    def test_a_redirect_to_another_host_keeps_the_apps_failures_loud(self):
+        project = self.project(one_beat("await page.evaluate(() => fetch('/boom'));"))
+        (project.root / "redirects.mjs").write_text(
+            "import http from 'node:http';\n"
+            "http.createServer((request, response) => {\n"
+            "  if (request.headers.host.startsWith('127.0.0.3')) {\n"
+            "    response.writeHead(302, { location: `http://127.0.0.2:${process.env.PORT}/` });\n"
+            "    return response.end();\n"
+            "  }\n"
+            "  if (request.url === '/boom') { response.statusCode = 500; return response.end(); }\n"
+            "  response.setHeader('content-type', 'text/html');\n"
+            "  response.end('<!doctype html><title>x</title><h1>x</h1>');\n"
+            "}).listen(Number(process.env.PORT), '0.0.0.0');\n")
+        running = subprocess.Popen([NODE, "redirects.mjs"], cwd=project.root, env=project.env(), stdout=subprocess.DEVNULL)
+        self.addCleanup(running.wait)
+        self.addCleanup(running.kill)
+        self.wait_for_port(project, running)
+        result = subprocess.run([NODE, "demo/record.mjs"], cwd=project.root, capture_output=True, text=True, timeout=TAKE_TIMEOUT_S,
+                                env=clean_env(PORT=str(project.port), APP_CMD="", APP_URL=f"http://127.0.0.3:{project.port}/"))
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("HTTP 500", result.stderr)
+
+    @unittest.skipUnless(shutil.which("openssl"), "openssl is not installed")
+    def test_a_self_signed_app_records_when_the_project_says_so(self):
+        project = self.project(one_beat("await page.locator('h1').waitFor();", "export const ignoreHTTPSErrors = true;"))
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "key.pem", "-out", "cert.pem",
+                        "-days", "1", "-subj", "/CN=localhost"], cwd=project.root, capture_output=True, check=True)
+        (project.root / "tls.mjs").write_text(
+            "import https from 'node:https';\nimport fs from 'node:fs';\n"
+            "https.createServer({ key: fs.readFileSync('key.pem'), cert: fs.readFileSync('cert.pem') }, (request, response) => {\n"
+            "  response.setHeader('content-type', 'text/html');\n"
+            "  response.end('<!doctype html><title>x</title><h1>x</h1>');\n"
+            "}).listen(Number(process.env.PORT), '127.0.0.1');\n")
+        url = f"https://127.0.0.1:{project.port}/"
+        result = subprocess.run([NODE, "demo/record.mjs"], cwd=project.root, capture_output=True, text=True, timeout=TAKE_TIMEOUT_S,
+                                env=clean_env(PORT=str(project.port), APP_CMD="node tls.mjs", APP_URL=url))
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_the_browser_goes_through_the_proxy_variables_with_their_password(self):
+        project = self.project(one_beat("await page.locator('h1').waitFor();"))
+        (project.root / "proxy.mjs").write_text(
+            "import http from 'node:http';\n"
+            "const wanted = 'Basic ' + Buffer.from('user:pa@ss').toString('base64');\n"
+            "http.createServer((request, response) => {\n"
+            "  if (request.headers['proxy-authorization'] !== wanted) {\n"
+            "    response.writeHead(407, { 'proxy-authenticate': 'Basic realm=\"x\"' });\n"
+            "    return response.end();\n"
+            "  }\n"
+            "  response.setHeader('content-type', 'text/html');\n"
+            "  response.end('<!doctype html><title>x</title><h1>through the proxy</h1>');\n"
+            "}).listen(Number(process.env.PORT), '127.0.0.1');\n")
+        running = subprocess.Popen([NODE, "proxy.mjs"], cwd=project.root, env=project.env(), stdout=subprocess.DEVNULL)
+        self.addCleanup(running.wait)
+        self.addCleanup(running.kill)
+        self.wait_for_port(project, running)
+        proxy = f"http://user:pa%40ss@127.0.0.1:{project.port}"
+        env = clean_env(APP_CMD="", APP_URL="http://demo.invalid/", SIZE="640x360", HTTP_PROXY=proxy, HTTPS_PROXY=proxy,
+                        http_proxy=proxy, https_proxy=proxy)
+        result = subprocess.run([NODE, "demo/record.mjs"], cwd=project.root, env=env, capture_output=True, text=True,
+                                timeout=TAKE_TIMEOUT_S)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("pa@ss", result.stdout + result.stderr)
+        self.assertNotIn("pa%40ss", result.stdout + result.stderr)
+
     def test_a_wait_cannot_match_the_caption(self):
         passes_only_on_the_caption = self.project(one_beat("await page.getByText('One beat').waitFor({ timeout: 1000 });"))
         result = passes_only_on_the_caption.take()
@@ -478,9 +576,6 @@ class Takes(unittest.TestCase):
         self.assertEqual((project.out / "demo.mp4").read_bytes(), good)
         self.assertEqual(project.leftovers(), ["out"])
 
-    def test_ffmpeg_cannot_read_a_keypress_from_the_terminal(self):
-        self.assertIn("'-nostdin'", (TEMPLATE / "record.mjs").read_text())
-
     def test_a_retake_keeps_the_last_set_beside_it(self):
         project = self.project(one_beat("await page.waitForTimeout(100);"))
         self.assertEqual(project.take().returncode, 0)
@@ -507,20 +602,6 @@ class Takes(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((project.out / "demo.mp4").exists())
         self.assertTrue(port_open(project.port), "a take stopped an app it didn't start")
-
-    def test_setup_keeps_beats_already_written(self):
-        text = (SKILL / "SKILL.md").read_text()
-        command = re.search(r"`(mkdir -p demo && cat .*?)`\. Add", text).group(1)
-        with tempfile.TemporaryDirectory() as tmp:
-            env = clean_env(CLAUDE_SKILL_DIR=str(SKILL))
-            subprocess.run(["sh", "-c", command], cwd=tmp, env=env, check=True)
-            beats = Path(tmp) / "demo" / "beats.mjs"
-            self.assertEqual(beats.read_text(), (TEMPLATE / "beats.mjs").read_text())
-            beats.write_text("// mine")
-            (Path(tmp) / "demo" / "record.mjs").write_text("// old")
-            subprocess.run(["sh", "-c", command], cwd=tmp, env=env, check=True)
-            self.assertEqual(beats.read_text(), "// mine")
-            self.assertEqual((Path(tmp) / "demo" / "record.mjs").read_text(), (TEMPLATE / "record.mjs").read_text())
 
     def test_a_first_load_past_the_step_timeout_is_fine(self):
         project = self.project(one_beat("await page.waitForTimeout(100);"))

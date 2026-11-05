@@ -196,6 +196,23 @@ function portOpen(url) {
   });
 }
 
+// Playwright's browser ignores the proxy variables, and a command sandbox reaches outside hosts only
+// through them. Local addresses stay direct.
+function browserProxy() {
+  const value = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy;
+  if (!value) return {};
+  const proxy = new URL(value);
+  const bypass = (process.env.NO_PROXY || process.env.no_proxy || '').split(',').filter(host => host && host !== '::1');
+  return {
+    proxy: {
+      server: `${proxy.protocol}//${proxy.host}`, // A password in the URL goes in its own field, or Playwright hangs.
+      username: decodeURIComponent(proxy.username),
+      password: decodeURIComponent(proxy.password),
+      bypass: ['localhost', '127.0.0.1', '[::1]', ...bypass].join(','),
+    },
+  };
+}
+
 function startApp(cmd) {
   const log = fs.openSync(path.join(stage, 'app.log'), 'a');
   appProcess = spawn(cmd, { shell: true, stdio: ['ignore', log, log], detached: true });
@@ -204,7 +221,7 @@ function startApp(cmd) {
   appProcess.on('error', e => { appExit = e.message; });
 }
 
-async function waitUntilUp(url) {
+async function waitUntilUp(url, anyCertificate) {
   const deadline = Date.now() + APP_WAIT_MS;
   while (Date.now() < deadline) {
     if (appExit !== null) throw new Error(`the app exited (${appExit}) before it answered at ${url}`);
@@ -212,6 +229,7 @@ async function waitUntilUp(url) {
       await new Promise(resolve => setTimeout(resolve, 100));
       continue;
     }
+    if (anyCertificate) return; // This process would refuse the certificate, so the browser judges.
     // A page may take a while to render, so its one request gets all the time that's left.
     if ((await answers(url, Math.max(deadline - Date.now(), 1000)))?.ok) return;
     await new Promise(resolve => setTimeout(resolve, 1000));
@@ -278,18 +296,19 @@ async function record() {
   const chromium = await loadChromium();
   checkFfmpeg();
   const url = process.env.APP_URL || project.app.url;
-  const appHost = new URL(url).hostname;
+  const firstParty = new Set([new URL(url).hostname, ...LOOPBACK]);
   const requiredHosts = new Set(project.requiredHosts ?? []);
 
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
   stage = fs.mkdtempSync(OUT + '.take-');
-  // An empty command means the app already runs elsewhere (deployed, on a board), so it's left alone.
+  // An empty command means the app already runs elsewhere (deployed, on a board), so it's left alone
+  // and the browser is the only judge of whether it answers: this process may have no route to it.
   const cmd = process.env.APP_CMD ?? project.app.cmd;
   if (cmd) {
     if (await portOpen(url)) throw new Error(`something already answers at ${url}: stop it, or point APP_URL elsewhere`);
     startApp(cmd);
+    await waitUntilUp(url, Boolean(project.ignoreHTTPSErrors));
   }
-  await waitUntilUp(url);
 
   const problems = [];
   const warnings = [];
@@ -297,7 +316,7 @@ async function record() {
   // project lists in requiredHosts should.
   const report = (requestUrl, message) => {
     const host = new URL(requestUrl).hostname;
-    if (host === appHost || LOOPBACK.has(host) || requiredHosts.has(host)) {
+    if (firstParty.has(host) || requiredHosts.has(host)) {
       problems.push(message);
     } else {
       warnings.push(message);
@@ -309,24 +328,29 @@ async function record() {
   // This file's own handlers stop the app first. Playwright's would exit before they finish.
   const browser = await chromium.launch({
     headless: process.env.HEADED !== '1', handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false,
+    ...browserProxy(),
   });
   try {
-    const context = await browser.newContext({ viewport: size, recordVideo: { dir: stage, size } });
+    const context = await browser.newContext({
+      viewport: size, recordVideo: { dir: stage, size }, ignoreHTTPSErrors: Boolean(project.ignoreHTTPSErrors),
+    });
     await context.addInitScript(overlay, { x: size.width / 2, y: 200 });
     const page = await context.newPage();
     // The video starts at the first frame the page paints, not at newPage. Keep repainting now, so
     // it starts here and not whenever a slow app first paints, which would shift the trim and every
     // caption. A page that changes every frame can't paint nothing, as a still one can, and it stays
-    // up until a slow app's first response arrives. The trim and the captions count from this moment.
+    // up until a slow app's first response arrives. The trim and the captions count from its first
+    // frame, which the page times itself, since setContent can return well after it.
     await page.setContent(`<!doctype html><title>Starting</title><body style="background:#fefefe"><script>
       let flip = false;
       (function repaint() {
         document.body.style.background = (flip = !flip) ? '#fdfdfd' : '#fefefe';
-        requestAnimationFrame(repaint);
+        requestAnimationFrame(() => { window.__firstFrameAt ??= Date.now(); repaint(); });
       })();
     </script>`);
-    const t0 = Date.now();
+    await page.waitForFunction(() => window.__firstFrameAt);
     await page.waitForTimeout(150); // The first frame reaches the recorder.
+    const t0 = await page.evaluate(() => window.__firstFrameAt);
     const elapsed = () => (Date.now() - t0) / 1000;
     const watch = watched => {
       watched.setDefaultTimeout(STEP_TIMEOUT_MS);
@@ -349,6 +373,7 @@ async function record() {
 
     const opened = await page.goto(url, { timeout: FIRST_LOAD_MS });
     if (!opened?.ok()) throw new Error(`${url} answered ${opened?.status()} in the browser`);
+    firstParty.add(new URL(page.url()).hostname); // A redirect, such as the bare domain to www.
     await page.mouse.move(size.width / 2, 200);
     const lead = elapsed();
 

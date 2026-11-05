@@ -31,7 +31,7 @@ Read `EVENT.md` at the project root: whether video is required, its length and f
 
 ## Write the beats
 
-`demo/beats.mjs` is the only file to edit. `demo/record.mjs` is the machinery. Set `app.cmd` and `app.url`. For an app already running elsewhere (deployed, on a board or a LAN address), set `app.cmd` to `''`: the take neither starts nor stops it, and the start state is yours to reset. Then turn the script in `DEMO.md` into beats, one caption plus one action each. If there's no `DEMO.md`, ask the user for the script. Don't invent one.
+`demo/beats.mjs` is the only file to edit. `demo/record.mjs` is the machinery. Set `app.cmd` and `app.url`. For an app already running elsewhere (deployed, on a board or a LAN address), set `app.cmd` to `''`: the take neither starts nor stops it, and the start state is yours to reset. Only the browser reaches it. A sandboxed shell has its own network, so an app in another terminal isn't reachable from there and a remote host must be on the allowed list: otherwise the user runs the take from their own terminal. Export `ignoreHTTPSErrors = true` for a self-signed certificate. Then turn the script in `DEMO.md` into beats, one caption plus one action each. If there's no `DEMO.md`, ask the user for the script. Don't invent one.
 
 - End each action by waiting for what the viewer should see, such as `await page.getByText('Saved').waitFor()`. A wait that fails is what makes a broken take fail loud. Locators can't see the caption or the cursor, so a wait only ever matches the app.
 - Make the start state repeatable. `app.cmd` should reset or seed the data, or the second take will differ from the first.
@@ -59,7 +59,7 @@ An exit of 0 proves the script ran, not that the video is good.
 2. Look at them at ship size, not as thumbnails. Text must be legible, captions must not cover what the beat shows, and nothing may look half loaded.
 3. Run a second take with `OUT=demo/out2` and compare: `ffprobe -v error -show_entries format=duration -of csv=p=0 demo/out/demo.mp4`. Two takes should match within 2 s. A bigger gap means something in the app is racing.
 
-**Measured on one machine:** a 119 s demo took 127 s of wall time. **Unproven:** macOS, a real app calling outside hosts through a proxy, a framework that hydrates the whole document, and audio.
+**Measured on one machine:** a 119 s demo took 127 s of wall time. **Measured in a command sandbox:** the browser reaches an allowed outside host through the proxy variables, and a host not allowed fails loud with `net::ERR_TUNNEL_CONNECTION_FAILED`. **Unproven:** macOS, a framework that hydrates the whole document, audio, and an app's own server calling outside hosts from a sandbox, which depends on whether its HTTP client honours those variables (Node's `fetch` needs `NODE_USE_ENV_PROXY=1`, from Node 24).
 
 ## When a take fails
 
@@ -69,6 +69,7 @@ Read the exit message. A broken step gets fixed in the app. A step that's genuin
 |---|---|
 | `the app exited ... before it answered` | `app.cmd` died. The app's last output is printed below the message. |
 | `the app never answered` | Wrong `app.url`, or the app took over 60 s to start, or `app.url` keeps answering with an error |
+| `net::ERR_` on `page.goto` | The browser can't reach `app.url`. In a sandboxed shell, `ERR_TUNNEL_CONNECTION_FAILED` means the host isn't on the allowed list. |
 | `Timeout` on `page.goto` | The first page took over 60 s in the browser. Warm the app up in `app.cmd`, or fix what the page waits on. |
 | `something already answers` | A server from another run holds the port. If that's the app you mean to record, set `app.cmd` to `''`. |
 | `page error`, `HTTP 5xx`, `request failed` | The app really broke during the beat named |

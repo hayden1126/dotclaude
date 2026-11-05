@@ -13,6 +13,9 @@ export const app = {
 // export const size = '1280x720';
 // export const fps = 24;
 
+// For an app on a self-signed certificate, such as a board on the LAN:
+// export const ignoreHTTPSErrors = true;
+
 // A failed request to the app's own host or any local port kills a take. Other hosts only warn, so a
 // font CDN can't ruin one. List an outside host here when the demo depends on it.
 export const requiredHosts = [];
