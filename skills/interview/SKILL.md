@@ -17,7 +17,7 @@ If a brainstorming skill or similar mandate is active in the session, `/intervie
 
 1. Find the file. If `VISION.md` is at the repo root or where the user names, read it and resume from "where we are". If it covers another topic or isn't in the shape below, ask before touching it.
 2. Choose where it goes: repo root by default, or where the user names. If `git remote -v` shows a remote, check whether the repo is public; if the visibility can't be read, ask. In a public repo, ask where the file goes before writing it, since ideas may not be meant for the public. Say the path once, so the user can give it again on a resume. Don't commit it unless asked.
-3. Read what the repo already says (README, existing code, read-only), so nothing you ask is already answered there.
+3. Read what the repo already says (README, `EVENT.md` if there is one, existing code, read-only), so nothing you ask is already answered there.
 4. Ask. No explanation of the process. With no topic and no file, the first question is what the product is.
 
 ## The rules, most important first
