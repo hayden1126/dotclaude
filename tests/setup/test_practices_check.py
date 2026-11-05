@@ -23,6 +23,7 @@ import os
 import pwd
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -296,7 +297,8 @@ class L1(Base):
 
     def test_the_marker_is_found_whatever_claude_code_wraps_it_in(self):
         reason = self.fire()
-        self.add(result("t1", [{"type": "text", "text": "Hook said no >> " + reason}]))
+        self.add(use("t1", "Write", file_path="x"),
+                 result("t1", [{"type": "text", "text": "Hook said no >> " + reason}], error=True))
         self.assertIsNone(self.fire())
 
     def test_a_second_event_of_the_same_skill_denies_separately(self):
@@ -1977,6 +1979,93 @@ class TwoPasses(BashBase):
         self.assertEqual(PC.HEADS_READ, {})
 
 
+class WhatARepoCantFake(Base):
+    """Round 3: text a repo chooses must not read as a deny given or a skill loaded."""
+
+    MARKER = "[practices:L1:demo:route-handler]"
+
+    def test_a_marker_in_a_file_the_model_read_is_no_deny_given(self):
+        self.add(use("t9", "Read", file_path="README.md"), result("t9", self.MARKER))
+        self.assertIsNotNone(self.fire())
+
+    def test_a_marker_in_a_failing_bash_call_is_no_deny_given(self):
+        self.add(use("t9", "Bash", command="cat README.md; false"),
+                 result("t9", "Exit code 1\n" + self.MARKER, error=True))
+        self.assertIsNotNone(self.fire())
+
+    def test_an_l2_marker_in_a_file_the_model_read_is_no_deny_given(self):
+        self.loaded()
+        self.add(use("t9", "Read", file_path="README.md"),
+                 result("t9", "[practices:L2:demo:SEC-17:lib/save.ts]"))
+        self.assertIn("SEC-17", self.fire("lib/save.ts", "x({ ...body })\n"))
+
+    def test_a_read_of_another_skill_md_of_that_name_loads_nothing(self):
+        self.add(*load("t9", "Read", file_path="/somewhere/else/demo/SKILL.md"))
+        self.assertIsNotNone(self.fire())
+
+    def test_a_read_of_the_skill_s_own_md_loads_it(self):
+        path = os.path.join(self.proj, ".claude", "skills", "demo", "SKILL.md")
+        self.add(*load("t9", "Read", file_path=path))
+        self.assertIsNone(self.fire())
+
+    def test_a_skill_name_past_the_cap_is_refused(self):
+        self.skill("long", 'skill = "' + "n" * 65 + '"\n')
+        self.start("startup")
+        self.assertIn("skill-disabled", self.log())
+
+    def test_session_start_names_the_repo_s_auth_helpers(self):
+        d = os.path.join(self.proj, ".claude", "practices")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "config.toml"), "w") as f:
+            f.write(f'[auth]\nhelpers = ["requireUser", "{"h" * 81}"]\n')
+        said = self.start("startup")["systemMessage"]
+        self.assertIn("requireUser", said)
+        self.assertNotIn("h" * 81, said)
+        self.assertNotIn("h" * 81, json.dumps(self.config_helpers()))
+
+    def config_helpers(self):
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            return PC.load_config(self.proj)["helpers"]
+
+
+class PlantedGitFiles(BashBase):
+    def alarm(self):
+        signal.signal(signal.SIGALRM, lambda *_: self.fail("hung"))
+        signal.alarm(5)
+        self.addCleanup(signal.alarm, 0)
+
+    def test_a_fifo_as_alternates_doesn_t_hang(self):
+        self.alarm()
+        path = os.path.join(self.proj, ".git", "objects", "info", "alternates")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        os.mkfifo(path)
+        self.assertEqual(list(PC.alternates(os.path.join(self.proj, ".git", "objects"))), [None])
+
+    def test_a_nul_in_alternates_reads_as_unreadable(self):
+        path = os.path.join(self.proj, ".git", "objects", "info", "alternates")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(b"a\0b\n")
+        self.assertEqual(list(PC.alternates(os.path.join(self.proj, ".git", "objects"))), [None])
+
+    def test_a_fifo_or_nul_as_a_worktree_s_gitdir_file_claims_nothing(self):
+        self.alarm()
+        self.commit(**{"a.ts": "1\n"})
+        wt = os.path.join(self.tmp, "wt")
+        subprocess.run(["git", "-C", self.proj, "worktree", "add", "-q", wt, "-b", "w"], check=True)
+        gd = os.path.join(self.proj, ".git", "worktrees", "wt", "gitdir")
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "BUDGET", 1e9):
+            self.assertIsNotNone(PC.Bounds(wt).own)
+            os.unlink(gd)
+            os.mkfifo(gd)
+            self.assertIsNone(PC.Bounds(wt).own)
+            os.unlink(gd)
+            with open(gd, "wb") as f:
+                f.write(b"a\0b\n")
+            self.assertIsNone(PC.Bounds(wt).own)
+
+
 class L3s(BashBase):
     def test_a_commit_that_adds_a_flagged_line_is_told_once_without_the_text(self):
         told = self.committed(**{"lib__a.ts": "const a = 1\nx({ ...body })\n"})
@@ -2540,6 +2629,22 @@ class L3r(BashBase):
 
     def marker(self, rev="HEAD"):
         return f"[practices:review:{self.sh('rev-parse', rev)[:12]}]"
+
+    def test_a_spent_budget_stops_reading_changed_files(self):
+        calls = []
+
+        def spends(items, fn, cut=False):
+            calls.append(1)
+            PC.START -= 100
+            return []
+
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "START", time.monotonic()), \
+                mock.patch.object(PC, "run_patterns", spends):
+            PC.pre_tool_use(self.event("gh pr ready", "PreToolUse", "b-spent"))
+        PC.CRUMB.clear()
+        self.assertEqual(len(calls), 1)
+        self.assertIn("budget-spent", self.log())
 
     def test_denies_once_with_the_block_to_paste_and_the_resend_passes(self):
         reason = self.pre("gh pr create --title x --body y")
