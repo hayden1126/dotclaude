@@ -53,7 +53,7 @@ The file opens with one line for a reader with no context: the interview is in p
 - **Questions asked**, one line each, so none repeats
 - **Where we are**: the pending question and any research still running (after a restart it is lost: start it again if it still matters)
 
-**6. Design only.** No product code, scaffolding, dependency installs or project creation during the interview, unless the user asks for a throwaway spike, which stays out of the repo and comes back as a finding. Some events forbid work before they start: when the user says so, this holds strictly, and a later request for a spike gets one reminder of that first.
+**6. Design only.** No product code, scaffolding, dependency installs or project creation during the interview, unless the user asks for a throwaway spike, which stays out of the repo and comes back as a finding. Some events forbid work before they start. When `EVENT.md` or the user says so and the event hasn't started, this holds strictly: no spike either, whoever asks, since a breach can disqualify the team. Offer to research the question by reading instead, and say that only the user can check the event's rules and decide otherwise.
 
 ## Visual questions: the board
 
@@ -88,7 +88,7 @@ Between questions you may spend time on research, but not silently for long: say
 
 ## Ending, only on the user's word
 
-Update `VISION.md` and mark it ended in its first line. Read back in chat the product in a sentence, the top decisions, what's still open and any guesses still unconfirmed, and ask the user to correct them. Then name the next step as a suggestion: a spec or plan in regular work; `/demo-first-scope` if the user is in a hackathon and has it (otherwise, scope to the demo first). Don't start it.
+Update `VISION.md` and mark it ended in its first line. Read back in chat the product in a sentence, the top decisions, what's still open and any guesses still unconfirmed, and ask the user to correct them. Then name the next step as a suggestion: a spec or plan in regular work; in a hackathon, `/demo-first-scope`, which the user types if they have it (otherwise, scope to the demo first). Don't start it.
 
 ## Stop if you catch yourself
 

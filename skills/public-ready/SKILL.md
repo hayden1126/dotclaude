@@ -43,7 +43,7 @@ This can be needed before the event's deadline, whether the repo is public yet o
 Making a private repo public is a step in the user's GitHub settings. Before it:
 
 - Run step 1 again on the final commit.
-- Decide with the user what happens to `VISION.md` and `PITCH.md`, since they may hold private thinking. Check whether they were ever committed: `git log --all --oneline -- VISION.md PITCH.md`. A file taken out of the tree stays in the old history, and the rule above forbids rewriting it until judging ends, so going public publishes it. Say that plainly. The choices are to accept it, to stay private until judging ends, or to submit from a fresh repo if the rules allow.
+- Decide with the user what happens to `VISION.md`, `PITCH.md`, `DEMO.md`, `EVENT.md` and `ACCESS.md`, since they may hold private thinking, such as what the team says about a seeded part. Check whether they were ever committed: `git log --all --oneline -- VISION.md PITCH.md DEMO.md EVENT.md ACCESS.md`. A file taken out of the tree stays in the old history, and the rule above forbids rewriting it until judging ends, so going public publishes it. Say that plainly. The choices are to accept it, to stay private until judging ends, or to submit from a fresh repo if the rules allow.
 
 Right after it, turn on the second layer behind the scan, on the user's OK, since it changes their repo, and read it back:
 
@@ -59,7 +59,7 @@ Confirm judging has ended before steps 2 and 5, since a demo judges still use ma
 1. **Rotate or revoke** every key and test account in `ACCESS.md`, without breaking a demo link judges still need: if one must stay up, keep its key, name it, and set a date to revoke it. With no `ACCESS.md`, list what the project uses from its config and deploy settings (names, not values) and confirm with the user.
 2. **Remove** hardcoded demo data, personal data and faked paths, using `DEMO.md`'s cut list if present. A faked path becomes real or goes away.
 3. **Security review, gate on.** First the user turns back on any security gate they turned off. Use the session's security review if it has one. Otherwise walk through auth, input handling, secrets and a dependency audit by hand, and report what you checked.
-4. **`VISION.md` and `PITCH.md`.** Decide with the user what happens to each before the repo goes public: keep, edit or remove. They may hold private thinking, such as Q&A prep. A file taken out of the tree stays in the old history, so a commit that held one is a reason for step 5.
+4. **`VISION.md`, `PITCH.md`, `DEMO.md`, `EVENT.md` and `ACCESS.md`.** Decide with the user what happens to each before the repo goes public: keep, edit or remove. They may hold private thinking, such as Q&A prep. A file taken out of the tree stays in the old history, so a commit that held one is a reason for step 5.
 5. **Propose a clean history,** usually a fresh repo from one commit. Scan its tree first, since one commit carries whatever the tree has. Keep the old repo while the event still links to it. Deleting the old history is the user's call.
 6. **Undo the mode, last,** because the project's `CLAUDE.md` holds the scan rule that the commits above still need. Remove the hackathon mode section from it, and undo what `ACCESS.md` logs. The local settings are the user's edit: they remove its hosts and any `enabledPlugins` change.
 

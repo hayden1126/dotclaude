@@ -18,7 +18,7 @@ Two things, kept apart:
 
 ## Start
 
-Read `EVENT.md`. If it's missing, ask for only what this needs: format (live, video, both, expo table), length, Q&A time, slides deadline and whether there is a backup video. Either way, ask about `What must run live` and `Venue screen size and network` when the field is missing or marked unknown, since the live demo rests on them. If the event hasn't published a field, say so and use a stated guess. Read `DEMO.md` if it exists: its script, seeded parts and honesty decisions carry over.
+Read `EVENT.md`. If it's missing, ask for only what this needs: format (live, video, both, expo table), length, Q&A time, slides deadline and whether there is a backup video. Either way, ask about `What must run live` and `Venue screen size and network` when the field is missing or marked unknown, since the live demo rests on them. If the event hasn't published a field, say so and use a stated guess, marked as a guess in `PITCH.md`, with the date to re-check it. Replan when the real value appears. Read `DEMO.md` if it exists: its script, seeded parts and honesty decisions carry over.
 
 Write the plan to `PITCH.md`. In a public repo, ask where it goes first, since Q&A prep may not be for the public.
 

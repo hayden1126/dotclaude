@@ -12,6 +12,7 @@ import string
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -864,6 +865,87 @@ class Round2(ScanCase):
         self.assert_found([(f'sgMail.setApiKey("{sendgrid}")', sendgrid), (f"reg = {npm}", npm),
                            (f"sup = {supabase}", supabase), (f"Authorization: Basic {basic}", basic)])
         self.assert_clean(["Basic authentication is on", "Basic ${credentials}", "// Basic usageExamples below"])
+
+    def test_a_bracket_assignment(self):
+        value = tail(24)
+        plain = "Hack" + "athon2026!"
+        self.assert_found([(f"app.config['SECRET_KEY'] = '{value}'", value),
+                           (f'os.environ["DB_PASSWORD"] = "{plain}"', plain),
+                           (f"settings['api_key'] = \"{value}\"", value)])
+        self.assert_clean(["headers['Content-Type'] = 'application/json'", "cache['user_key'] = 'profile-page'"])
+
+    def test_punctuation_inside_a_quoted_value(self):
+        generated = "a7k2(m9x!q3" + "z)w8v^t5r&y1u%p6n#s4b"
+        insecure = "django-insecure-" + "1a(2b3c4d5e6f7g"
+        self.assert_found([(f"SECRET_KEY = '{generated}'", generated), (f"SECRET_KEY = '{insecure}'", insecure),
+                           (f'client_secret: "{generated}"', generated)])
+
+    def test_a_value_later_on_the_line(self):
+        value = tail(24)
+        weak = "supersecret" + "123"
+        plain = "Hack" + "athon2026!"
+        self.assert_found([(f'const JWT_SECRET = process.env.JWT_SECRET || "{weak}"', weak),  # practices-allow: SEC-41-fallback a planted line for the scanner to find
+                           (f'API_KEY = os.getenv("API_KEY", "{value}")', value),  # practices-allow: SEC-41-fallback a planted line for the scanner to find
+                           (f'secret_key: str | None = "{value}"', value),
+                           (f'db_password = os.environ.get("DB_PASSWORD", "{plain}")', plain),  # practices-allow: SEC-41-fallback a planted line for the scanner to find
+                           (f'"api_key = \\"{value}\\"\\n",', value),
+                           (f'{{\\"pass' + f'word\\": \\"{plain}\\"}}', plain)])
+        self.assert_clean(['const token = localStorage.getItem("auth_token_storage")',
+                           'token = request.headers.get("X-Auth-Token-Header")',
+                           'const apiKey = env.API_KEY ?? "missing-configuration"',
+                           'secret = load("config/secrets.production.yml")',
+                           'token = encode(`crypto.randomBytes(32).toString`)',
+                           "the pass picked here (`skills/pass/SKILL.md:23,80,103`) stays"])
+
+    def test_a_short_value_under_a_strong_name(self):
+        self.assert_found([("JWT_SECRET=my" + "secret123", "secret123"), ('API_TOKEN = "abc' + '123def"', '123def')])
+        self.assert_clean(['token: "required"', 'token = "Bearer"', 'tokens: "12345678"', 'token = "session-v2"'])
+
+    def test_a_suffix_after_the_secret_word(self):
+        plain = "Hack" + "athon2026!"
+        self.assert_found([(f"DB_PASSWORD_PROD={plain}", plain), (f"ADMIN_PASSWORD_2={plain}", plain),
+                           ("JWT_SECRET_STAGING=my" + "secret123", "secret123")])
+        self.assert_clean(['password_hint = "the name of my dog"', "password_reset_url = /reset/form/here"])
+
+    def test_a_dollar_sign_inside_a_real_value(self):
+        dollar = "$uper" + "S3cret!"
+        self.assert_found([("mongodb+srv://u:Pa$$" + "w0rd1@cluster0.vendor.test/", "w0rd1"),
+                           (f'password = "{dollar}"', "S3cret")])
+        self.assert_clean(["PASSWORD=$DB_PASSWORD", "PASSWORD=${DB_PASSWORD}", "password = $(cat /run/secret)",
+                           "postgres://$USER:$PASS@host/db", 'secrets="$HOME/.secrets.env"'])
+
+    def test_a_code_reference_is_not_a_secret(self):
+        self.assert_clean(["clientSecret: env.AUTH0_CLIENT_SECRET,", "client_secret=settings.OAUTH2_CLIENT_SECRET,",
+                           "authenticate(password=password1)", "apiKey: config.google.mapsKey2,"])
+        value = tail(24)
+        self.assert_found([(f"api_key: {value}", value), ("pass: hunter" + "2222", "2222")])
+
+    def test_ordinary_values_under_a_weak_name(self):
+        self.assert_clean(['authDomain: "my-app-a1b2c.firebaseapp.com"', 'Key: "uploads/avatars/user123.png"',
+                           'token_endpoint: "/oauth2/v1/token"', "key: ubuntu22-node18-deps",
+                           '"pass' + 'word": "Pass' + 'word"', 'errors.password = "Too short"'])
+
+    def test_two_values_in_a_merge_are_both_reported(self):
+        first, second = tail(24), tail(24)
+        self.commit("a.txt", "base\n")
+        self.git("checkout", "-q", "-b", "side")
+        self.commit("cfg.txt", f"API_KEY={first}\n")
+        self.git("checkout", "-q", "main")
+        self.commit("c.txt", "main\n")
+        self.git("merge", "-q", "--no-ff", "--no-commit", "side")
+        with open(os.path.join(self.work, "cfg.txt"), "a") as f:
+            f.write(f"JWT_SECRET={second}\n")
+        self.git("add", "cfg.txt")
+        self.git("commit", "-q", "-m", "merge")
+        p = self.scan()
+        self.assertEqual(p.returncode, 1, p.stdout)
+        self.assertEqual(p.stdout.count("cfg.txt:"), 2, p.stdout)
+
+    def test_a_dotted_run_does_not_stall_the_scan(self):
+        started = time.monotonic()
+        self.commit("min.js", "a." * 200000 + "\n")
+        self.assertEqual(self.scan().returncode, 0)
+        self.assertLess(time.monotonic() - started, 60)
 
     def test_a_merge_of_what_is_already_pushed_reports_nothing(self):
         line, _ = planted()["stripe-key"]

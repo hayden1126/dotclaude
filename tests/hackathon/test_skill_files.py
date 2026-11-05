@@ -120,7 +120,7 @@ class EventProfile(unittest.TestCase):
             text = read(skill_path(name, "SKILL.md"))
             if any(f"`/{other}`" in text for other in MANUAL if other != name):
                 with self.subTest(name):
-                    self.assertRegex(text, r"\b(type|types|typed|type it)\b")
+                    self.assertRegex(text, r"(?i)\b(?:user|them|you|asks?)\b[^.\n]{0,60}\btypes?\b|\btypes? (?:it|`/)|\buser types\b")
 
     def test_a_no_pre_work_rule_is_held_where_building_starts(self):
         for text in (read(skill_path("hackathon", "SKILL.md")),
