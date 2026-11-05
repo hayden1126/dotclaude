@@ -197,6 +197,14 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     ([[instagram-reel-transcripts]]); the profile's reel list may need a login, so ask Hayden
     for the URLs if WebFetch can't list them. Fold any further tools they name into the same
     adopt / take ideas / skip review. The report: `~/scratch/external-skills/review-2026-11-04.md`.
+  - **A verify-app skill template for app repos** (Hayden's pick, 2026-11-04, via lane dev-cycle's
+    reels review, `~/scratch/external-skills/reels-review-2026-11-04.md`). Adapted from pstack's
+    create-verification-skill and maintain-verification-skill (MIT): launch, a read-only health
+    check, drive, evidence, cleanup; it must run once before it counts. Its own lane, proven on a
+    real app repo, since dotclaude has no running app.
+  - **A per-lane data dir or database name beside the port block in `lane new`** (Hayden's pick,
+    2026-11-04, same review): ports isolate servers but not data. Lane-able after ports merges
+    (`skills/lanes/scripts/lane`).
   - **`lane ls` names an overdue reinstall** (Hayden's pick, 2026-11-04; after #163's chain
     stalled). When the lane holding the install has a merged PR, the `install: held by` line says
     the lead's reinstall is overdue. Derived on each call, no new state. Lane-able after ports
