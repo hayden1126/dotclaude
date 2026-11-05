@@ -94,7 +94,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     Hayden 2026-11-04; it conflicts with
     origin/main on its own, per lane-fixes' and ports' trials: README.md and
     `tests/delegation/test_settings.py`; on resuming it merges origin/main first), 2 npx-cwd
-    (`fix/npx-shim-cwd`; moved up 2026-11-05, ready first), 3 dev-cycle (`feat/dev-cycle-rules`).
+    (`fix/npx-shim-cwd`; moved up 2026-11-05, ready first), 3 dev-cycle (`feat/dev-cycle-rules`), 4 hackathon (`feat/hackathon-mode`; a hackathon about
+    2026-11-15, so it aims to merge by 2026-11-12 and moves up if needed).
     Merged and installed from main, all closed: chrome-dup (#151, 2026-10-29: one chrome-devtools
     server, the plugin's; sandbox gap fixes N1 and N3's bun part, `hooks/sandbox-caches.sh`; its
     install changed running sessions' sandbox live, [[cc-sandbox-config-reloads-live]]),
@@ -206,18 +207,18 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **A per-lane data dir or database name beside the port block in `lane new`** (Hayden's pick,
     2026-11-04, same review): ports isolate servers but not data. Lane-able after ports merges
     (`skills/lanes/scripts/lane`).
-  - **A hackathon mode and skill set** (Hayden, 2026-11-05; some forks open). Opt-in per repo,
+  - **A hackathon mode and skill set** (Hayden, 2026-11-05). In lane hackathon. Opt-in per repo,
     built on the video "The Claude Code workflow that helped me win 5 Hackathons in a Row" (a
     sponsored video), jmo-skills and paradev.com; install none. New manual skills: `hackathon`,
     `demo-first-scope`, `demo-video`, `pitch`. For both modes: a `frontend-motion` skill from
     `animate` and `better-ui` (MIT). After the event: a `public-ready` skill (Hayden's ask) that
     cleans the repo for release. Hayden's picks: machine protection stays, plus an access list
-    approved at kickoff per project; the agent runs on the laptop, set up from dotclaude. First
-    step: a spike proving a scripted demo recording here.
+    approved at kickoff per project; pushes stay under CLAUDE.md's rule, approved at kickoff; the
+    agent runs on the laptop, set up from dotclaude. First step: a spike proving a scripted demo recording here.
     Review and plan: `~/scratch/external-skills/hackathon-review-2026-11-05.md`.
   - **Who can turn the practices gate off** (Hayden, 2026-11-05: not any session without him).
-    Private: sandbox-audit FINDINGS, PG1. `hooks/practices_check.py`, settings, a setup step, tests;
-    lane practices owns the engine, so it follows #164.
+    Private: sandbox-audit FINDINGS, PG1, with Hayden's picked fix. `hooks/practices_check.py`,
+    settings, a setup step, tests. In lane hackathon, after #164.
   - **`lane ls` names an overdue reinstall** (Hayden's pick, 2026-11-04; after #163's chain
     stalled). When the lane holding the install has a merged PR, the `install: held by` line says
     the lead's reinstall is overdue. Derived on each call, no new state. Lane-able after ports
