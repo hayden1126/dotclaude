@@ -210,7 +210,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **A hackathon mode and skill set** (Hayden, 2026-11-05). In lane hackathon. Opt-in per repo,
     built on the video "The Claude Code workflow that helped me win 5 Hackathons in a Row" (a
     sponsored video), jmo-skills and paradev.com; install none. New manual skills: `hackathon`,
-    `demo-first-scope`, `demo-video`, `pitch`. For both modes: a `frontend-motion` skill from
+    `demo-first-scope`, `demo-video`, `pitch`. For both modes: `interview` (Hayden, a long vision chat with researched suggestions) and a `frontend-motion` skill from
     `animate` and `better-ui` (MIT). After the event: a `public-ready` skill (Hayden's ask) that
     cleans the repo for release. Hayden's picks: machine protection stays, plus an access list
     approved at kickoff per project; pushes stay under CLAUDE.md's rule, approved at kickoff; the
