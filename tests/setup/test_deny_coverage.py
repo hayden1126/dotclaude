@@ -1,4 +1,8 @@
 """bin/deny-coverage: what it finds from each kind of path, under a fake home and PATH."""
+import contextlib
+import importlib.machinery
+import importlib.util
+import io
 import json
 import os
 import shutil
@@ -7,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SCRIPT = os.path.join(REPO, "bin", "deny-coverage")
@@ -366,13 +371,24 @@ class DenyCoverage(unittest.TestCase):
         self.assertNotIn("Edit(~/my code", out)
         self.assertIn("my code", out)
 
-    def test_a_deep_repo_is_seen_and_a_big_subtree_doesn_t_hide_a_shallow_one(self):
+    def module(self):
+        loader = importlib.machinery.SourceFileLoader("deny_coverage_mod", SCRIPT)
+        spec = importlib.util.spec_from_loader("deny_coverage_mod", loader)
+        m = importlib.util.module_from_spec(spec)
+        loader.exec_module(m)
+        return m
+
+    def test_a_deep_repo_is_seen(self):
         self.mk(".things/a/b/c/d/e/f/.git")
         self.assertNotIn('"Edit(~/.things/**)"', self.run_it())
-        for n in range(300):
+
+    def test_a_big_subtree_doesn_t_hide_a_shallow_repo(self):
+        for n in range(150):
             self.mk(f".bulk/zz/d{n}")
-        self.mk(".bulk/aa/repo/.git")
-        self.assertNotIn('"Edit(~/.bulk/**)"', self.run_it())
+        self.mk(".bulk/repo/.git")
+        m = self.module()
+        m.WALK_DIRS = 100
+        self.assertTrue(m.Scan([], self.home, []).holds_checkout(os.path.join(self.home, ".bulk")))
 
     def test_a_plugin_clone_in_a_dot_dir_gets_its_rule_with_the_cost(self):
         self.mk(".tmux/plugins/tpm/.git")
@@ -438,12 +454,62 @@ class DenyCoverage(unittest.TestCase):
 
     def test_a_deep_or_blocking_claude_json_is_no_crash(self):
         path = os.path.join(self.home, ".claude.json")
-        with open(path, "w") as f:
-            f.write('{"mcpServers":' + "[" * 900 + "]" * 900 + "}")
-        self.run_it()
-        os.unlink(path)
         os.mkfifo(path)
         self.run_it()
+        os.unlink(path)
+        deep = []
+        for _ in range(100_000):
+            deep = [deep]
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, {"HOME": self.home}), contextlib.redirect_stderr(err):
+            self.module().Scan([], self.home, []).commands({"hooks": deep})
+        self.assertIn("nests too deep", err.getvalue())
+
+    def test_a_word_is_judged_as_data_not_a_whole_arg(self):
+        self.write("t/run.sh", "#!/bin/sh\n")
+        self.write("client/c.json", "{}\n", 0o644)
+        out = self.run_with(self.settings_with(mcpServers={"s": {
+            "command": f"node {self.home}/client/c.json",
+            "args": ["-c", f"exec {self.home}/t/run.sh --config {self.home}/client/c.json"]}}))
+        self.assertIn('"Edit(~/t/run.sh)"', out)
+        self.assertNotIn("Edit(~/client/**)", out)
+        self.assertNotIn("Edit(~/client/c.json)", out)
+
+    def test_a_checkout_that_must_stay_open_prints_no_rule(self):
+        self.mk(".claude/.git")
+        self.write(".claude/local/x", "#!/bin/sh\n")
+        self.link(".claude/local/x", "x")
+        self.assertNotIn("Edit(~/.claude/**)", self.run_it())
+
+    def test_a_link_s_target_says_why_it_prints(self):
+        self.mk("notes")
+        os.symlink(os.path.join(self.home, "notes"), os.path.join(self.home, ".x"))
+        out = self.run_it()
+        self.assertIn(f"Edit(~/notes/**) is what {self.home}/.x links to", out)
+
+    def test_a_link_into_mnt_is_skipped(self):
+        target = "/mnt/deny-coverage-test-absent"
+        os.symlink(target, os.path.join(self.home, ".win"))
+        self.assertEqual(self.run_it(), "")
+
+    def test_a_path_link_into_a_skipped_checkout_is_named(self):
+        self.write("dotclaude/bin/t", "#!/bin/sh\n")
+        os.symlink(os.path.join(self.home, "dotclaude/bin"), os.path.join(self.home, ".mybin"))
+        out = self.run_it(path=os.path.join(self.home, ".mybin"))
+        self.assertNotIn("Edit(~/dotclaude", out)
+        self.assertIn(".mybin", out)
+
+    def test_a_link_whose_target_is_covered_prints_nothing(self):
+        self.mk("dotfiles/.git")
+        self.mk("dotfiles/vim")
+        os.symlink(os.path.join(self.home, "dotfiles/vim"), os.path.join(self.home, ".vim"))
+        self.assertNotIn(".vim", self.run_it(deny=[*self.deny, "Edit(~/dotfiles/**)"]))
+
+    def test_a_missing_home_is_no_crash(self):
+        r = subprocess.run([sys.executable, "-I", SCRIPT, "--settings", "/dev/null"],
+                           env={"HOME": os.path.join(self.home, "absent"), "PATH": self.bin},
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_a_big_or_binary_script_still_gives_its_interpreter(self):
         self.write(".interp/bin/py", "\0binary")

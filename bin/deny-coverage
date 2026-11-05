@@ -71,7 +71,7 @@ SHELL_STARTUP = (".zshenv", ".zprofile", ".zshrc", ".zlogin", ".bashrc", ".bash_
 CLAUDE_JSON_MAX = 64 << 20
 WALK_DEPTH = 8
 WALK_DIRS = 20000
-# Files a server's arguments name that hold no code.
+# Files a command names that hold no code.
 DATA_FILE = re.compile(r"\.(?:json|ya?ml|toml|ini|conf|txt|md|csv|env)$", re.I)
 ONLY_THIS = "; a rule on this path alone: what sits beside it stays open"
 
@@ -183,8 +183,11 @@ class Scan:
         if self.raw != self.home and under(p, self.raw):  # home's own link is home
             p = os.path.join(self.home, os.path.relpath(p, self.raw))
         real = os.path.realpath(p)  # a rule on a link's name acts on what it points at
-        if (any(under(p, s) or under(real, s) for s in self.skip) or under(p, "/mnt")
-                or self.covered(p)):
+        if (any(under(p, s) for s in self.skip) or under(p, "/mnt") or under(real, "/mnt")
+                or self.covered(p) or self.covered(real)):
+            return
+        if any(under(real, s) for s in self.skip):  # its own name's rule would take that tree
+            self.odd.setdefault(p, f"{why}, a link into a checkout denyWrite covers")
             return
         if not under(p, self.home) and not (os.path.lexists(p) and os.access(p, os.W_OK)):
             return
@@ -343,8 +346,7 @@ class Scan:
                     if key == "command" and isinstance(value, str):
                         words.append(value)
                     elif key == "args" and isinstance(value, list):
-                        words.extend(v for v in value if isinstance(v, str)
-                                     and not DATA_FILE.search(v))
+                        words.extend(v for v in value if isinstance(v, str))
                     else:
                         walk(value)
             elif isinstance(node, list):
@@ -369,7 +371,7 @@ class Scan:
             plain = COMMAND_PATH.findall(re.sub(r"\"/", "/", text))  # "$HOME"/x
             for word in dict.fromkeys([*quoted, *plain]):
                 target = self.expand(word)
-                if target and os.path.isfile(target):
+                if target and os.path.isfile(target) and not DATA_FILE.search(target):
                     self.follow(target, "run by the settings")
 
     @staticmethod
@@ -392,7 +394,11 @@ class Scan:
 
     def above_projects(self):
         """A CLAUDE.md in a home dir that isn't itself a checkout loads in every session below it."""
-        for name in sorted(os.listdir(self.home)):
+        try:
+            names = sorted(os.listdir(self.home))
+        except OSError:
+            return
+        for name in names:
             d = os.path.join(self.home, name)
             if (name.startswith(".") or not os.path.isdir(d) or any(under(d, x) for x in self.skip)
                     or os.path.lexists(os.path.join(d, ".git"))):
@@ -418,8 +424,10 @@ class Scan:
 
     def note_dir(self, path, why):
         """Judge a dir, as given and as it resolves, under a rule of its own."""
-        for p in dict.fromkeys((path, os.path.realpath(path))):
-            self.judge(p, why, lambda x: x)
+        real = os.path.realpath(path)
+        self.judge(path, why, lambda x: x)
+        if real != path:
+            self.judge(real, f"what {path} links to", lambda x: x)
 
 
 def live_settings(path):
@@ -474,11 +482,11 @@ def main(argv):
               "works in, or one an excluded command runs from, the rule is right despite that:")
         for root, paths in sorted(scan.by_checkout().items()):
             print(f"  {show(root)}: {len(paths)} path(s), such as {show(paths[0])}")
-            if PLAIN.fullmatch(root):
+            if PLAIN.fullmatch(root) and not scan.must_stay_open(root):
                 print(f"    {scan.rule_for(root)}")
     if scan.odd:
         print("deny-coverage: paths no rule can cover (the name can't be written as one, or a rule "
-              "would take what sessions must write or a repo below it). Look at each:")
+              "would take what sessions must write). Look at each:")
         for path, why in sorted(scan.odd.items()):
             print(f"  {show(path)}  ({show(why)})")
     return 0
