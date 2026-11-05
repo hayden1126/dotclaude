@@ -137,7 +137,13 @@ an unregistered worktree: `lane whoami` tells you which.
    breaks without a textual conflict. Pass each suite bare, with no fail-fast flag (`-x`, `-f`:
    it hides failures behind a shared one), not wrapped in `lane lock suite`
    (the trial holds it already), and never start a trial under that lock. Quote its last lines
-   in the ask. A conflict or a failure only on the merge concerns both lanes: write it in your
+   in the ask. Name in it the commit the last review saw and `git diff --stat <sha>..HEAD`, or say
+   the change is fast-track with no review step. Anything past that commit beyond a carry of the
+   lead's notes, a clean merge of main or a version renumber gets reviewed again, any other
+   hand-resolved conflict included, since green tests aren't a verdict. A review that can't run keeps the gate
+   closed (the `delegation` skill, section 3). The merge ask names the full commit
+   (`git rev-parse HEAD`), and the merge runs `gh pr merge <n> --merge --match-head-commit <sha>`
+   with it, so GitHub refuses if the branch has moved since Hayden's ok. A conflict or a failure only on the merge concerns both lanes: write it in your
    record, tell the other lane, and don't ask for ready until the two of you (and the lead, for
    the merge order) have settled it. A conflict the trial says is between two other lanes is
    theirs: rerun with the `lane trial <id> ...` it names to try that lane with yours alone. One
@@ -307,7 +313,10 @@ inherits the lead from it.
       then `./setup-tmux.sh`) from the main checkout under `lane lock install`, sandbox off,
       and diff both copies after. That releases the merged lane's install hold, which `done`
       refuses while it stands, and also a hold by a lane whose PR hasn't merged (a PR merged
-      ahead of it). Step 6 tells that lane; if the chain stops before step 6, message it anyway.
+      ahead of it). Step 6 tells that lane. A chain that stops before step 6 still sends step 6's
+      messages, with what stalled and whether step 3 ran (until it has, installs stay held). A stop
+      at step 1 says only that #N's merge is reported but unproven and what stalled, with no order
+      to merge main, and one citing DA15/DA16 sends nothing until Hayden rules.
    4. Check that no installed link or `source-file` line points into a lane: `lane ls` shows no
       `install: held by` line, and `done` names either.
    5. Add one backlog line to the project STATUS on the lead's branch (lane id, PR number,
@@ -330,7 +339,15 @@ inherits the lead from it.
       `--abandon` here.
 
    Then tell Hayden one line ("#42 merged: installed, lane chart-fix closed, api-docs nudged"),
-   or the step that failed. A failed step stops the chain.
+   or the step that failed. A failed step stops the chain. A chain stopped on something that can
+   clear without the lead arms a read-only background wait that exits when it clears, which wakes
+   the lead to finish the chain; at the 2-hour limit the lead tells Hayden. Use
+   `delegation-ledger wait` when a pid, file or log line shows the blocker (its exit 75 is that
+   limit: `--drop` its watch rather than re-arm). Otherwise use a plain loop (`run_in_background`,
+   `timeout: 7200000`). A loop runs sandboxed, where a piped `lane ls` shows PR state and sessions
+   as `?` and other sessions' pids are hidden, so it tests what it can see there, and a check that
+   fails means not cleared. A blocker it can't see, such as gh being down (gh fails in the sandbox),
+   gets no wake: the one line to Hayden says so.
 8. **Shared gates.** Wrap any run that can't happen twice at once (a browser-driven test gate, an
    e2e suite on a fixed port) in `lane lock <name> -- <cmd>`. List the names once with
    `lane init --locks gate,e2e` (it takes the full list and replaces the old one); an unlisted name is refused, since a typo would split the mutual

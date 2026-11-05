@@ -59,5 +59,15 @@ Never work around a denial. Finish the rest of the task if you can, and report `
 - Run: `<command>`
 - Pass means: <the criteria>. Quote the output in the report.
 
+## Verification (reviewers)
+- Review: <the files, or a diff file the parent wrote: you have no shell to compute one> at
+  commit `<sha>`.
+- Number the findings. No concrete case, no finding; no findings is a valid result.
+- Prove each one: quote the lines for a claim the code settles, and add a read-only command or
+  an existing test that settles a runtime claim. You have no shell, so the parent runs it, and
+  drops the finding if it doesn't reproduce.
+- When a change alters a signature, a return value or behavior, grep every caller.
+- Close with `Verdict:` and `Not checked:` lines, before the JSON block.
+
 <!-- The block-intent vocabulary comes from cc-safety-net's src/core/decision.ts
 (github.com/kenryu42/cc-safety-net, MIT). -->
