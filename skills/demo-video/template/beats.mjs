@@ -19,7 +19,8 @@ export const requiredHosts = [];
 //   type(target, text)   click, then type at a human pace
 //   page                 the Playwright page, for waits, keys and assertions
 // A target is a selector string or a Playwright locator. Each wait gives up after 8 s and fails the
-// take, so end an action by waiting for what the viewer should see. A beat that runs longer than
+// take, so end an action by waiting for what the viewer should see. A step that is genuinely slow
+// gets a longer wait on that one line: `.waitFor({ timeout: 15000 })`. A beat that runs longer than
 // 60 s in total fails too: add `limit: <seconds>` to allow more. An empty caption hides the box.
 export const beats = [
   {

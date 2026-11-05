@@ -6,10 +6,11 @@
 //
 //   node demo/record.mjs
 //
-// Env: APP_CMD, APP_URL and SIZE override beats.mjs. OUT is the output dir (default: out/ beside
-// this file). HEADED=1 rehearses in a visible browser. SIZE defaults to 1920x1080, FPS to 30.
-// BEATS=3 or BEATS=3-4 makes a short clip of those beats, counted from 1: the earlier beats still
-// run, so the app reaches the right state, and are trimmed off.
+// Env: APP_CMD, APP_URL and SIZE override beats.mjs. HEADED=1 rehearses in a visible browser. SIZE
+// defaults to 1920x1080, FPS to 30. BEATS=3 or BEATS=3-4 makes a short clip of those beats, counted
+// from 1: the earlier beats still run, so the app reaches the right state, and are trimmed off.
+// OUT is the output dir. Its default beside this file is out/, or out-clip/ with BEATS and
+// out-rehearsal/ with HEADED, so a clip or a rehearsal can't replace the full take in out/.
 //
 // A take fails loud: any page error, a 5xx, a failed first-party request, a step timeout, or an app
 // that exits gives a non-zero exit and no new video. The take is built in a staging dir beside OUT
@@ -21,7 +22,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const OUT = path.resolve(process.env.OUT || path.join(HERE, 'out'));
+const DEFAULT_OUT = process.env.HEADED === '1' ? 'out-rehearsal' : process.env.BEATS ? 'out-clip' : 'out';
+const OUT = path.resolve(process.env.OUT || path.join(HERE, DEFAULT_OUT));
 const OUTPUTS = ['demo.mp4', 'captions.srt', 'steps.json'];
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
 const STEP_TIMEOUT_MS = 8000;
@@ -253,10 +255,10 @@ async function record() {
   const browser = await chromium.launch({ headless: process.env.HEADED !== '1' });
   try {
     const context = await browser.newContext({ viewport: size, recordVideo: { dir: stage, size } });
-    const t0 = Date.now();
-    const elapsed = () => (Date.now() - t0) / 1000;
     await context.addInitScript(overlay, { x: size.width / 2, y: 200 });
     const page = await context.newPage();
+    const t0 = Date.now(); // The video starts with the page, so the trim and the captions count from here.
+    const elapsed = () => (Date.now() - t0) / 1000;
     page.setDefaultTimeout(STEP_TIMEOUT_MS);
     page.on('pageerror', e => problems.push('page error: ' + e.message));
     page.on('response', r => { if (r.status() >= 500) report(r.url(), `HTTP ${r.status()} ${r.url()}`); });

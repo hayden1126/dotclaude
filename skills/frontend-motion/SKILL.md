@@ -54,14 +54,20 @@ Never install a library for a fade or an icon swap. If the task needs a componen
 
 ### 4. Pick the properties
 
-- **`transform` and `opacity` only.** `width`, `height`, `margin`, `padding`, `top` and `left` re-run layout. `clip-path` is the sanctioned third; `height` is tolerated only for accordions.
+- **Move and scale with `transform` and `opacity`.** `width`, `height`, `margin`, `padding`, `top` and `left` re-run layout. Two more are allowed, each for one job: `clip-path` for reveals and fills, and `filter: blur` on infrequent entrances and their exits. Blur stays small (`4px`, or `2px` masking a crossfade), because its cost grows with the radius, worst in Safari, and a larger one just reads as out of focus. `height` is tolerated only for accordions. Color and `box-shadow` state changes move nothing, so they may transition too.
 - **Name them.** `transition-property: scale, opacity`, never `all`.
-- **Never `scale(0)`.** Panels start from `scale(0.95)` with `opacity: 0`. Icon swaps are the one exception, at `0.25`.
+- **Never `scale(0)`.** Everything enters with `opacity: 0` from the scale in the table below.
 - **`transform-origin` at the trigger** for popovers, dropdowns, menus and tooltips (`var(--transform-origin)` in Base UI). Modals stay centered.
 - **Percentages in `translate()`** are relative to the element itself. Prefer `translateY(100%)` over hardcoded pixels for a full slide.
 - **In Motion, use the full transform string.** `animate={{ transform: "translateX(100px)" }}` is hardware accelerated; the `x`, `y` and `scale` shorthands drop frames under load.
 - **Set `transform` on the element directly.** Driving a child through a CSS variable on its parent recalculates styles for every child.
 - **`will-change` only after you see first-frame stutter,** naming the animated property. Limit it to transform properties, `opacity` and `filter`.
+
+| Entering | Starts from |
+| --- | --- |
+| Dropdown, popover, menu, select, modal | `scale(0.95)` |
+| Tooltip | `scale(0.97)`, the named exception: it is small and lasts 125 ms, so `0.95` reads as a jump |
+| Icon swap | `scale(0.25)` |
 
 ### 5. Easing and duration, or a spring
 
@@ -69,7 +75,7 @@ Never install a library for a fade or an icon swap. If the task needs a componen
 | --- | --- |
 | Entering, exiting, press, and the default | `--ease-out` |
 | Moving or morphing on screen | `--ease-in-out` |
-| Drawer or sheet | `--ease-drawer` |
+| Drawer or sheet opening | `--ease-drawer` |
 | Hover or color change | `ease` |
 | Constant motion (marquee, progress) | `linear` |
 
@@ -88,11 +94,11 @@ Never `ease-in` on UI: it delays the moment the user is watching. The built-in `
 | Dropdown, popover, select, accordion | 200 ms |
 | Toast, modal | 250 ms |
 | Drawer | 500 ms open, 200 ms close |
-| Exit, unless listed above | 150 ms |
+| Exit | 150 ms, or 200 ms for a full slide-out (drawer, toast). A tooltip keeps its 125 ms. |
 | Group entrance per item, infrequent icon cross-fade | 300 ms |
 | Marketing or explanatory | Longer is fine (scroll reveal 600 ms) |
 
-UI durations stay under 300 ms; modals and drawers may reach 500 ms. The 300 ms row is the only other exception, because both are infrequent by definition.
+UI durations stay under 300 ms. A drawer's 500 ms open and the 300 ms row are the only exceptions, because both are infrequent by definition.
 
 - **Press:** scale `0.96` over 150 ms `--ease-out`, never on disabled. Give the component an opt-out where the motion would distract, through its variant API or a `static` prop.
 - **Stagger:** lists 30 to 80 ms between items (50 ms unless you have a reason). A staged hero entrance splits into semantic chunks (title, description, actions) 100 ms apart, each with opacity, `4px` blur and `12px` `translateY`. Never stagger routine interactions, and never let a stagger hold up input.
@@ -110,14 +116,15 @@ UI durations stay under 300 ms; modals and drawers may reach 500 ms. The 300 ms 
 
 These ship with the animation, every time.
 ```css
-.panel { transition: opacity 150ms var(--ease-out); }
+/* The element's own duration from step 5, here a modal's. */
+.modal { transition: opacity 250ms var(--ease-out); }
 
 @media (prefers-reduced-motion: no-preference) {
-  .panel { transition-property: opacity, translate, scale, filter; transition-duration: 200ms; }
+  .modal { transition-property: opacity, transform, translate, scale, filter; }
 }
 ```
 
-Movement, scale and blur run only under `no-preference`. Under reduced motion, cross-fade opacity rather than removing the element instantly: fewer and gentler, not zero. In Tailwind use `motion-safe:`. In Motion, branch on `useReducedMotion()` and keep only opacity; `<MotionConfig reducedMotion="user">` alone leaves `filter` running.
+Movement, scale and blur run only under `no-preference`, at the fade's duration and easing. Under reduced motion, cross-fade opacity rather than removing the element instantly: fewer and gentler, not zero. In Tailwind use `motion-safe:`. In Motion, branch on `useReducedMotion()` and keep only opacity; `<MotionConfig reducedMotion="user">` alone leaves `filter` running.
 
 Gate hover with `@media (hover: hover) and (pointer: fine)`, because `:hover` latches after a tap on touch. Where a control draws its own pressed state, also set `-webkit-tap-highlight-color: transparent`. More hover and touch mechanics: `frontend-ui-discipline`, if present.
 
@@ -148,7 +155,7 @@ Gate hover with `@media (hover: hover) and (pointer: fine)`, because `:hover` la
 | UI duration over 300 ms with no reason | The duration table |
 | `transform-origin: center` on a trigger-anchored popover | `var(--transform-origin)` (modals exempt) |
 | Keyframes on toasts or toggles, `animation:` on `:hover` or `.open` | A transition on the same properties |
-| `scale(0)`; animating `width`, `height`, `margin`, `padding`, `top`, `left` | `scale(0.95)`; `transform`, `opacity` |
+| `scale(0)`; animating `width`, `height`, `margin`, `padding`, `top`, `left` | The entry scale from step 4; `transform`, `opacity` |
 | Motion `x`, `y`, `scale` props | Full `transform` string |
 | Press below `0.96` (`active:scale-95`, `whileTap`), or with no disabled exclusion | `0.96` on `enabled:active:` or `:not(:disabled):active` |
 | `bounce:` above 0 outside drag-to-dismiss and playful moments | `bounce: 0` |

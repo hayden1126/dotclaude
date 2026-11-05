@@ -19,14 +19,14 @@ Read `EVENT.md` at the project root: whether video is required, its length and f
 
 - **Submission asset:** the full script, within the required length. Set `size` in `beats.mjs` and `FPS` to the required format. For a file-size cap, re-encode the result with a higher `-crf`.
 - **Stage backup:** the same path the team will show live, within the slot.
-- **Fallback for one step:** in a live demo with real backends, a clip of the risky step can stand in for only that step. Record it with `BEATS=3-4`: beats 1 and 2 still run, so the app reaches the right state, and are trimmed off. Whoever is on stage says it's a recording.
+- **Fallback for one step:** in a live demo with real backends, a clip of the risky step can stand in for only that step. Record it with `BEATS=3-4`: beats 1 and 2 still run, so the app reaches the right state, and are trimmed off. It lands in `demo/out-clip/`, so give a second clip its own `OUT`. Whoever is on stage says it's a recording.
 
 ## Setup
 
 1. Copy the template into the project, `mkdir -p demo && cp "${CLAUDE_SKILL_DIR}"/template/*.mjs demo/`, and add `demo/out*` and `demo/frames/` to `.gitignore`.
 2. Install Playwright at a pinned version: `npm i -D playwright@<version>` (run `npm init -y` first if there's no `package.json`).
 3. Get the browser. On an ordinary machine: `npx playwright install chromium`.
-4. On a machine with a sandboxed shell and a browser cache, the browser CDN may not be allowed. Pick the Playwright version whose build is already cached: `node_modules/playwright-core/browsers.json` names the revision each version wants, and the cache folder names the ones it holds. Stay on the headless shell, the default here, since full Chrome may abort in a sandbox. For the same reason, rehearse with `HEADED=1` outside the sandbox.
+4. On a machine with a sandboxed shell and a browser cache, the browser CDN may not be allowed. Pick the Playwright version whose build is already cached: `node_modules/playwright-core/browsers.json` names the revision each version wants, and the cache folder names the ones it holds. Stay on the headless shell, the default here, since full Chrome may abort in a sandbox. A visible browser may not start inside a command sandbox either. Then the user runs that `HEADED=1` rehearsal themselves, from their own terminal. Don't ask for the sandbox to be turned off, since a take runs the app, its dependencies and the browser.
 5. Check for `ffmpeg` 5.1 or later with libx264, since `-fps_mode` arrived in 5.1. On a Mac: `brew install ffmpeg`. The script checks this before it starts a take.
 
 ## Write the beats
@@ -44,12 +44,12 @@ Run `node demo/record.mjs` from the project root. Output lands in `demo/out/`: `
 | Env | Does |
 |---|---|
 | `APP_CMD`, `APP_URL` | Override `beats.mjs` |
-| `BEATS=3-4` | A short clip of those beats, counted from 1 |
-| `OUT` | Output dir |
-| `HEADED=1` | Rehearse in a visible browser. Don't ship this take. |
+| `BEATS=3-4` | A short clip of those beats, counted from 1, in `demo/out-clip/` |
+| `HEADED=1` | Rehearse in a visible browser, in `demo/out-rehearsal/`. Don't ship this take. |
+| `OUT` | Output dir. Wins over all of these defaults. |
 | `SIZE=1280x720`, `FPS=24` | Override the format; both size numbers even |
 
-A good take replaces the last one in its output dir, so copy a take you want to keep, or give each take its own `OUT`. A failed take leaves the last good one in place and says so.
+A clip or a rehearsal never touches the full take in `demo/out/`. A good take replaces the last one in its own output dir, so copy a take you want to keep, or give each take its own `OUT`. A failed take leaves the last good one in place and says so.
 
 ## Believe it only after looking
 
@@ -63,7 +63,7 @@ An exit of 0 proves the script ran, not that the video is good.
 
 ## When a take fails
 
-Read the exit message, then fix the app, not the script's timeouts. A step that needs more than 8 s is too slow for a viewer as well. A failed take makes no new video, on purpose.
+Read the exit message. A broken step gets fixed in the app. A step that's genuinely slow, such as a 12 s live AI call, gets its own longer wait on that one line (`waitFor({ timeout })`, for example `page.getByText('Done').waitFor({ timeout: 20000 })`), and a caption saying so or a cut in the edit, since a viewer won't sit through it in silence. The 8 s default stays for everything else. A beat that runs past 60 s in all also needs `limit: <seconds>` on that beat. A failed take makes no new video, on purpose.
 
 | Message | Meaning |
 |---|---|
@@ -71,7 +71,8 @@ Read the exit message, then fix the app, not the script's timeouts. A step that 
 | `the app never answered` | Wrong `app.url`, or the app took over 60 s to start |
 | `something already answers` | A server from another run holds the port |
 | `page error`, `HTTP 5xx`, `request failed` | The app really broke during the beat named |
-| `Timeout` on a selector | The thing the viewer should see never appeared |
+| `Timeout` on a selector | The thing the viewer should see never appeared, or a slow step needs its own wait |
+| A browser launch error with `HEADED=1` | No visible browser can start here. The user rehearses from their own terminal. |
 | `warning, third-party request` | Not fatal, but look at the frames. If the demo needs that host, add it to `requiredHosts`. |
 
 ## Voiceover (optional, untested)

@@ -6,6 +6,7 @@ node_modules/playwright, whose browser build is installed or cached. They instal
 
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -24,6 +25,10 @@ FIXTURE = HERE / "fixtures" / "todo-app"
 PLAYWRIGHT_DIR = os.environ.get("HACKATHON_PLAYWRIGHT")
 NODE = shutil.which("node")
 TAKE_TIMEOUT_S = 120
+BAND_BOTTOM = 130  # The caption box sits 48 px off the bottom edge, and one line of it is about 66 px tall.
+BAND_HEIGHT = 110
+BAND_SIZE = (480, 24)
+BAND_CHANGE = 1.0  # Mean change in gray level per pixel: encoder noise stays well under it.
 
 # Imports a beats file the way record.mjs does, with no Playwright on hand, and checks its shape.
 BEATS_SHAPE_CHECK = """
@@ -79,6 +84,39 @@ def top_level_atoms(path):
     return atoms
 
 
+def srt_starts(path):
+    stamps = re.findall(r"^(\d\d):(\d\d):(\d\d),(\d{3}) --> ", path.read_text(), re.MULTILINE)
+    return [int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000 for h, m, s, ms in stamps]
+
+
+def caption_band(path):
+    """The strip of each frame the caption sits in, small and gray, as one bytes object per frame."""
+    width, height = BAND_SIZE
+    raw = subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", str(path),
+         "-vf", f"crop=iw:{BAND_HEIGHT}:0:ih-{BAND_BOTTOM},scale={width}:{height},format=gray",
+         "-f", "rawvideo", "-"],
+        capture_output=True, check=True).stdout
+    size = width * height
+    return [raw[i:i + size] for i in range(0, len(raw), size)]
+
+
+def band_difference(one, other):
+    return sum(abs(a - b) for a, b in zip(one, other)) / len(one)
+
+
+def band_changes(frames, fps):
+    """The time each visible change in the band begins. A fade over a few frames counts as one."""
+    changes = []
+    changing = False
+    for index in range(1, len(frames)):
+        moved = band_difference(frames[index - 1], frames[index]) > BAND_CHANGE
+        if moved and not changing:
+            changes.append(index / fps)
+        changing = moved
+    return changes
+
+
 class Project:
     """A throwaway project laid out the way the skill says: template in demo/, app beside it."""
 
@@ -107,6 +145,38 @@ class Project:
     def leftovers(self):
         return sorted(p.name for p in (self.root / "demo").iterdir() if p.name.startswith("out"))
 
+    def wrap_browser(self, new_page_delay_ms=0):
+        """Puts a Playwright shim in the project: always headless, since a test may have no display.
+
+        The launch options land in launch.json, so a test can check that a take asked for a window. The
+        delay comes before the page and so before the video, as a slow machine's would.
+        """
+        (self.root / "node_modules").unlink()
+        shim = self.root / "node_modules" / "playwright"
+        shim.mkdir(parents=True)
+        real = Path(PLAYWRIGHT_DIR).resolve() / "node_modules" / "resolve-from-here.js"
+        (shim / "package.json").write_text('{"type": "module", "main": "index.mjs"}')
+        (shim / "index.mjs").write_text(f"""
+import {{ createRequire }} from 'node:module';
+import fs from 'node:fs';
+const {{ chromium: real }} = createRequire({json.dumps(str(real))})('playwright');
+export const chromium = {{ launch: async options => {{
+  fs.writeFileSync('launch.json', JSON.stringify(options));
+  const browser = await real.launch({{ ...options, headless: true }});
+  const newContext = browser.newContext.bind(browser);
+  browser.newContext = async contextOptions => {{
+    const context = await newContext(contextOptions);
+    const newPage = context.newPage.bind(context);
+    context.newPage = async () => {{
+      await new Promise(resolve => setTimeout(resolve, {new_page_delay_ms}));
+      return newPage();
+    }};
+    return context;
+  }};
+  return browser;
+}} }};
+""")
+
 
 def one_beat(act, extra=""):
     return (
@@ -115,12 +185,34 @@ def one_beat(act, extra=""):
         f"export const beats = [{{ caption: 'One beat', act: async ({{ page, click }}) => {{ {act} }} }}];\n")
 
 
+# Four captions of different lengths, with nothing else moving in the band.
+CAPTION_TAKE_SIZE = "1280x720"
+CAPTION_TOLERANCE_S = 0.3
+CAPTION_DELAYS_MS = (0, 1000)  # On a quick machine the gap before the page is under the tolerance, so force one too.
+CAPTION_BEATS = (
+    "export const app = { cmd: 'node server.mjs', url: 'http://unused.invalid/' };\n"
+    "const act = async ({ page }) => { await page.waitForTimeout(1000); };\n"
+    "export const beats = [\n"
+    "  { caption: 'First', act },\n"
+    "  { caption: 'The second caption is a good deal longer', act },\n"
+    "  { caption: 'Third, of a middling length', act },\n"
+    "  { caption: 'Fourth, and short again', act },\n"
+    "];\n")
+
+
 class TemplateOffline(unittest.TestCase):
     def test_skill_is_manual_and_named(self):
         text = (SKILL / "SKILL.md").read_text()
         head = text.split("---")[1]
         self.assertIn("name: demo-video", head)
         self.assertIn("disable-model-invocation: true", head)
+
+    def test_skill_never_sends_a_rehearsal_outside_the_sandbox(self):
+        text = (SKILL / "SKILL.md").read_text()
+        self.assertNotIn("outside the sandbox", text)
+        self.assertIn("their own terminal", text)
+        for needed in ("out-clip", "out-rehearsal", "waitFor({ timeout })"):
+            self.assertIn(needed, text)
 
     def test_skill_fits_itself_to_the_event(self):
         text = (SKILL / "SKILL.md").read_text()
@@ -246,15 +338,102 @@ class Takes(unittest.TestCase):
         project = self.project()
         result = project.take(BEATS="5-6")
         self.assertEqual(result.returncode, 0, result.stderr)
-        steps = json.loads((project.out / "steps.json").read_text())["steps"]
+        clip = project.root / "demo" / "out-clip"
+        steps = json.loads((clip / "steps.json").read_text())["steps"]
         self.assertEqual([s["caption"][:4] for s in steps], ["Tick", "Relo"])
-        srt = (project.out / "captions.srt").read_text()
+        srt = (clip / "captions.srt").read_text()
         self.assertEqual(srt.count(" --> "), 2)
         self.assertIn("00:00:00,000 --> ", srt.splitlines()[1])
         self.assertNotIn("Type one in", srt)
-        _, duration = ffprobe(project.out / "demo.mp4")
+        _, duration = ffprobe(clip / "demo.mp4")
         expected = steps[-1]["end"] - steps[0]["start"]
         self.assertLess(abs(duration - expected), 1.5, "the lead-in beats are trimmed off")
+
+    def test_a_clip_or_a_rehearsal_leaves_the_full_take_alone(self):
+        project = self.project(one_beat("await page.waitForTimeout(100);"))
+        self.assertEqual(project.take().returncode, 0)
+        full = (project.out / "demo.mp4").read_bytes()
+
+        clip = project.take(BEATS="1")
+        self.assertEqual(clip.returncode, 0, clip.stderr)
+        self.assertTrue((project.root / "demo" / "out-clip" / "demo.mp4").exists())
+        self.assertEqual((project.out / "demo.mp4").read_bytes(), full, "a clip replaced the full take")
+
+        project.wrap_browser()
+        rehearsal = project.take(HEADED="1")
+        self.assertEqual(rehearsal.returncode, 0, rehearsal.stderr)
+        self.assertFalse(json.loads((project.root / "launch.json").read_text())["headless"])
+        self.assertTrue((project.root / "demo" / "out-rehearsal" / "demo.mp4").exists())
+        self.assertEqual((project.out / "demo.mp4").read_bytes(), full, "a rehearsal replaced the full take")
+
+    def test_an_explicit_out_wins(self):
+        project = self.project(one_beat("await page.waitForTimeout(100);"))
+        project.wrap_browser()
+        for name, overrides in (("clip", {"BEATS": "1"}), ("rehearsal", {"HEADED": "1"})):
+            with self.subTest(name):
+                result = project.take(OUT=f"demo/out-mine-{name}", **overrides)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue((project.root / "demo" / f"out-mine-{name}" / "demo.mp4").exists())
+        self.assertEqual(project.leftovers(), ["out-mine-clip", "out-mine-rehearsal"])
+
+    def caption_take(self, delay_ms, **overrides):
+        project = self.project(CAPTION_BEATS)
+        if delay_ms:
+            project.wrap_browser(new_page_delay_ms=delay_ms)
+        result = project.take(SIZE=CAPTION_TAKE_SIZE, **overrides)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return project
+
+    def test_captions_land_where_the_srt_says(self):
+        for delay_ms in CAPTION_DELAYS_MS:
+            with self.subTest(delay_ms=delay_ms):
+                project = self.caption_take(delay_ms)
+                starts = srt_starts(project.out / "captions.srt")
+                self.assertEqual(len(starts), 4)
+                changes = band_changes(caption_band(project.out / "demo.mp4"), 30)
+                seen = f"changes {changes} against captions {starts}"
+                # A take with a quick page load also opens on that first paint, beside the first caption.
+                for change in changes:
+                    self.assertLess(min(abs(start - change) for start in starts), CAPTION_TOLERANCE_S, seen)
+                for start in starts:
+                    self.assertLess(min(abs(start - change) for change in changes), CAPTION_TOLERANCE_S, seen)
+
+    def test_a_clip_starts_on_its_first_caption(self):
+        for delay_ms in CAPTION_DELAYS_MS:
+            with self.subTest(delay_ms=delay_ms):
+                clip = self.caption_take(delay_ms, BEATS="2-3").root / "demo" / "out-clip"
+                starts = srt_starts(clip / "captions.srt")
+                self.assertEqual(starts[0], 0)
+                frames = caption_band(clip / "demo.mp4")
+                changes = band_changes(frames, 30)
+                seen = f"changes {changes} against captions {starts}"
+                # The earlier beat's caption may show for a frame or two, but no longer than the tolerance.
+                late = [change for change in changes if change >= CAPTION_TOLERANCE_S]
+                self.assertEqual(len(late), 1, seen)
+                self.assertLess(abs(starts[1] - late[0]), CAPTION_TOLERANCE_S, seen)
+                settled = frames[int(CAPTION_TOLERANCE_S * 30)]
+                just_before_next = frames[int(late[0] * 30) - 2]
+                self.assertLess(band_difference(settled, just_before_next), BAND_CHANGE, "the clip opens on another caption")
+
+    def test_a_slow_step_gets_its_own_wait_and_the_default_stays(self):
+        late = ("await page.evaluate(() => { setTimeout(() => { const late = document.createElement('p');"
+                " late.id = 'late'; document.body.append(late); }, 9000); });")
+        slow = self.project(one_beat(late + " await page.locator('#late').waitFor({ state: 'attached', timeout: 15000 });"))
+        result = slow.take()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        default = self.project(one_beat(late + " await page.locator('#late').waitFor({ state: 'attached' });"))
+        self.assert_failed_clean(default, default.take(), "8000ms")
+
+    def test_a_beat_limit_can_be_raised_past_the_default(self):
+        beats = (
+            "export const app = { cmd: 'node server.mjs', url: 'http://unused.invalid/' };\n"
+            "export const beats = [{ caption: 'A long live call', limit: 75, act: async ({ page }) => {\n"
+            "  await page.waitForTimeout(61000);\n"
+            "} }];\n")
+        project = self.project(beats)
+        result = project.take(SIZE="640x360")
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_app_that_exits_at_once(self):
         project = self.project()

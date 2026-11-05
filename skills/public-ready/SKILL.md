@@ -23,7 +23,7 @@ This can be needed before the event's deadline, whether the repo is public yet o
 
 1. **Full-history secrets scan.** Use the first one available:
    - `secret-scan --all` from the hackathon skill's folder, if present: `python3 -I "${CLAUDE_SKILL_DIR}/../hackathon/scripts/secret-scan" --all`
-   - gitleaks, if installed: `gitleaks git .` (`gitleaks detect` on older versions)
+   - gitleaks, if installed: `gitleaks git . --redact -v` (`gitleaks detect --redact -v` on older versions), so values stay off screen. These flags weren't run when this was written, since gitleaks wasn't installed. If one is refused, check `gitleaks --help` and keep redaction on.
    - a stated pattern pass over `git log -p`, using `-G` so values stay off screen, plus a check of file names:
 
    ```
@@ -40,16 +40,18 @@ This can be needed before the event's deadline, whether the repo is public yet o
 5. **README:** what it is, how to run it, the demo video, the licence, citations. Also what's seeded or simulated, if `DEMO.md` lists any.
 6. **Submission fields,** read from the event's own guide or `EVENT.md`, with the deadline and its time zone. List each field, its value and what's missing. No event: skip this.
 
-Making a private repo public is a step in the user's GitHub settings. Run step 1 again on the final commit first.
+Making a private repo public is a step in the user's GitHub settings. First run step 1 again on the final commit, and decide with the user what happens to `VISION.md` and `PITCH.md`, since they may hold private thinking.
 
 ## After judging
 
-Confirm judging has ended before step 4.
+Confirm judging has ended before step 6.
 
-1. **Rotate or revoke** every key and test account in `ACCESS.md`, without breaking a demo link judges still need: if one must stay up, keep its key, name it, and set a date to revoke it. With no `ACCESS.md`, list what the project uses from its config and deploy settings (names, not values) and confirm with the user. The user removes its hosts from the local settings and turns any security gate back on.
-2. **Remove** hardcoded demo data, personal data and faked paths, using `DEMO.md`'s cut list if present. A faked path becomes real or goes away.
-3. **Security review, gate on.** Use the session's security review if it has one. Otherwise walk through auth, input handling, secrets and a dependency audit by hand, and report what you checked.
-4. **Propose a clean history,** usually a fresh repo from one commit. Scan its tree first, since one commit carries whatever the tree has. Keep the old repo while the event still links to it. Deleting the old history is the user's call.
+1. **Rotate or revoke** every key and test account in `ACCESS.md`, without breaking a demo link judges still need: if one must stay up, keep its key, name it, and set a date to revoke it. With no `ACCESS.md`, list what the project uses from its config and deploy settings (names, not values) and confirm with the user.
+2. **Undo the mode.** Remove the hackathon mode section from the project's `CLAUDE.md`, and undo what `ACCESS.md` logs. The local settings are the user's edit: they remove its hosts and any `enabledPlugins` change, and turn back on any security gate the user turned off.
+3. **Remove** hardcoded demo data, personal data and faked paths, using `DEMO.md`'s cut list if present. A faked path becomes real or goes away.
+4. **Security review, gate on.** Use the session's security review if it has one. Otherwise walk through auth, input handling, secrets and a dependency audit by hand, and report what you checked.
+5. **`VISION.md` and `PITCH.md`.** Decide with the user what happens to each before the repo goes public: keep, edit or remove. They may hold private thinking, such as Q&A prep. A file taken out of the tree stays in the old history, so a commit that held one is a reason for step 6.
+6. **Propose a clean history,** usually a fresh repo from one commit. Scan its tree first, since one commit carries whatever the tree has. Keep the old repo while the event still links to it. Deleting the old history is the user's call.
 
 ## Stop if you catch yourself
 

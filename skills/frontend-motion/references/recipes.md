@@ -14,20 +14,29 @@ Start from the recipe, then adapt. The rules behind each value are in `../SKILL.
 
 ## Reduced-motion fallback
 
-The opacity fade runs for everyone. Movement, scale and blur join it only without the preference.
+The opacity fade runs for everyone, at the element's own duration and easing (here a modal's). Movement, scale and blur join it only without the preference.
 
 ```css
-.panel {
-  transition: opacity 150ms var(--ease-out);
+.modal {
+  transition: opacity 250ms var(--ease-out);
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .panel {
-    transition-property: opacity, translate, scale, filter;
-    transition-duration: 200ms;
+  .modal {
+    transition-property: opacity, transform, translate, scale, filter;
+  }
+}
+
+/* The hidden state stays in place, or the element jumps before it fades */
+@media (prefers-reduced-motion: reduce) {
+  .modal[data-starting-style],
+  .modal[data-ending-style] {
+    transform: none;
   }
 }
 ```
+
+To apply it, swap a recipe's `transition` shorthand for these rules, with the recipe's duration and easing, and reset whichever of `translate`, `scale` and `filter` its hidden state sets too. A `transition-duration` on an exit state keeps working, since the gate names properties only. Press, `display: none`, drawer, group entrance, hold to confirm and icon swap carry their own gate below.
 
 In Tailwind, prefix movement, scale and blur utilities with `motion-safe:`. In Motion, branch and keep only opacity:
 
@@ -124,7 +133,7 @@ An element toggled from `display: none` has no previous style to transition from
 [popover] {
   opacity: 0;
   scale: 0.95;
-  transition-property: opacity, scale, display, overlay;
+  transition-property: opacity, display, overlay;
   transition-duration: 150ms;
   transition-timing-function: var(--ease-out);
   transition-behavior: allow-discrete;
@@ -140,6 +149,19 @@ An element toggled from `display: none` has no previous style to transition from
   [popover]:popover-open {
     opacity: 0;
     scale: 0.95;
+  }
+}
+
+/* display and overlay stay in both lists, or the exit fade is cut off */
+@media (prefers-reduced-motion: no-preference) {
+  [popover] {
+    transition-property: opacity, scale, display, overlay;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [popover] {
+    scale: 1;
   }
 }
 ```
@@ -185,7 +207,7 @@ The one popover that stays centered, with the backdrop's opacity alongside it so
 .modal[data-starting-style],
 .modal[data-ending-style] {
   opacity: 0;
-  transform: scale(0.96);
+  transform: scale(0.95);
 }
 
 .modal[data-ending-style] {
@@ -209,7 +231,20 @@ The destination state's duration applies, so this opens over 500 ms and closes o
 
 .drawer[data-closed] {
   transform: translateY(100%);
-  transition: transform 200ms var(--ease-out);
+  transition-duration: 200ms;
+  transition-timing-function: var(--ease-out);
+}
+
+/* It has no fade of its own, so reduced motion gets one in place of the slide */
+@media (prefers-reduced-motion: reduce) {
+  .drawer {
+    transition-property: opacity;
+  }
+
+  .drawer[data-closed] {
+    transform: none;
+    opacity: 0;
+  }
 }
 ```
 
@@ -355,7 +390,11 @@ function PageHeader() {
 .item-exit {
   opacity: 0;
   transform: translateY(-12px);
-  transition: opacity 150ms var(--ease-out), transform 150ms var(--ease-out);
+  filter: blur(4px);
+  transition:
+    opacity 150ms var(--ease-out),
+    transform 150ms var(--ease-out),
+    filter 150ms var(--ease-out);
 }
 
 /* Bad: dramatic exit that steals focus */
@@ -479,8 +518,10 @@ For destructive actions where a plain click fires too easily. `linear` is correc
   transition: clip-path 2s linear;             /* press: slow and deliberate */
 }
 
-.button:not(:disabled):active {
-  scale: 0.96;
+@media (prefers-reduced-motion: no-preference) {
+  .button:not(:disabled):active {
+    scale: 0.96;
+  }
 }
 ```
 
@@ -537,13 +578,13 @@ element.style.transform = `translateY(${distance}px)`;
 
 ## Masking a crossfade that won't settle
 
-When two states overlap visibly and no easing or duration fixes it, blur the seam, so the eye reads one transformation instead of two objects swapping. Stay under `20px`: heavy blur is expensive, especially in Safari.
+When two states overlap visibly and no easing or duration fixes it, blur the seam, so the eye reads one transformation instead of two objects swapping. Keep it at `2px`, `4px` at most: blur costs more as the radius grows, especially in Safari.
 
 ```css
 .content {
   transition:
-    filter 200ms ease,
-    opacity 200ms ease;
+    filter 200ms var(--ease-out),
+    opacity 200ms var(--ease-out);
 }
 
 .content.transitioning {

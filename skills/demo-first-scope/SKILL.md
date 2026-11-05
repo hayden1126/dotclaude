@@ -13,7 +13,7 @@ Plan backward from what the judges see. Everything not on the demo path has to e
 
 ## Start
 
-1. **`EVENT.md`.** Read it if it exists. If it doesn't, ask for only what this needs: judging criteria, format (live, video, both, expo table) and length, working hours left, earliest deadline, and any pre-work rule. If the event hasn't published a field, say so and use a stated guess, marked as a guess in `DEMO.md`. Replace it when the real value appears.
+1. **`EVENT.md`.** Read it if it exists. If it doesn't, ask for only what this needs: judging criteria, format (live, video, both, expo table) and length, working hours left, earliest deadline, and any pre-work rule. Either way, ask about `What must run live` and `Venue screen size and network` when the field is missing or marked unknown, since the live-capability check rests on them. If the event hasn't published a field, say so and use a stated guess, marked as a guess in `DEMO.md`. Replace it when the real value appears.
 2. **`VISION.md`.** Look at the repo root and ask if it isn't there, since it may have been kept elsewhere. If it exists, read it and don't re-ask what it settles. If it's missing, ask the user to type `/interview` first or to say why not. Not having that skill is a reason: ask what the product is and who it's for, then go on.
 3. **`DEMO.md`.** Create it if absent. If it exists, add to it and keep what's there. In a public repo everything in it is public once pushed, so no keys, and nothing the team wants private.
 
@@ -39,13 +39,13 @@ If this scope and `VISION.md` disagree, name it: what each says, and which call 
 
 ## Live-capability check
 
-List each thing that must really happen live: real backend, live AI call, real-time data, hardware.
+List each thing that must really happen live, starting from `What must run live`: real backend, live AI call, real-time data, hardware.
 
 | Live thing | Time it takes | Depends on | Fallback on stage |
 |---|---|---|---|
 | ... | measured, or an estimate marked as one | network, an outside API and its rate limit, a cold start, a device | a cached answer, seeded data, a recording of that step, a second network |
 
-Then note how services stay warm, the spend cap on each paid key, and when the team rehearses on the venue's network or a hotspot. Whether a slow step runs live or starts before the pitch is the team's call from that timing. If the event requires a capability live on stage, a fallback keeps the talk going but doesn't meet the rule, so say that in the table.
+Then note how services stay warm, the spend cap on each paid key, and when the team rehearses on the venue's network or a hotspot, at the size in `Venue screen size and network`. Whether a slow step runs live or starts before the pitch is the team's call from that timing. If the event requires a capability live on stage, a fallback keeps the talk going but doesn't meet the rule, so say that in the table.
 
 ## Demo script
 

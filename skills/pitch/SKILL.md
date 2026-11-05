@@ -9,6 +9,8 @@ disable-model-invocation: true
 
 From the user: $ARGUMENTS
 
+This covers an expo table as well as a stage: read "on stage" below as wherever judges see the demo. A video-only event needs only the Video only section.
+
 Two things, kept apart:
 
 - **The live demo:** the team runs the actual product in front of the judges.
@@ -16,7 +18,7 @@ Two things, kept apart:
 
 ## Start
 
-Read `EVENT.md`. If it's missing, ask for only what this needs: format (live, video, both, expo table), length, Q&A time, slides deadline, any rule on what must run live, and the venue's screen size. If the event hasn't published a field, say so and use a stated guess. Read `DEMO.md` if it exists: its script, seeded parts and honesty decisions carry over.
+Read `EVENT.md`. If it's missing, ask for only what this needs: format (live, video, both, expo table), length, Q&A time and slides deadline. Either way, ask about `What must run live` and `Venue screen size and network` when the field is missing or marked unknown, since the live demo rests on them. If the event hasn't published a field, say so and use a stated guess. Read `DEMO.md` if it exists: its script, seeded parts and honesty decisions carry over.
 
 Write the plan to `PITCH.md`. In a public repo, ask where it goes first, since Q&A prep may not be for the public.
 
@@ -25,11 +27,15 @@ Write the plan to `PITCH.md`. In a public repo, ask where it goes first, since Q
 | Format | Plan |
 |---|---|
 | Live | Default: motivation, then mostly live demo, then technical challenges, with where the world is heading if it fits. |
-| Video only | The video is the pitch, so effort goes there. Skip the stage sections, and ask the user to type `/demo-video`. |
-| Expo table | A short walk-up loop that restarts cleanly, a longer cut for a judge who stays, and a reset between visitors. Sort out power, screen and network at the table. |
+| Video only | See below. |
+| Expo table | A short walk-up loop that restarts cleanly, a longer cut for a judge who stays, and a reset between visitors. Sort out power, screen and network at the table. The sections below apply there too. |
 | Both | A plan for each. |
 
 Give each part a time. The parts fill the slot and don't overrun. If it runs long, cut content rather than talk faster. "Talk as long as you can" applies only where no limit exists.
+
+## Video only
+
+The video is the pitch, so effort goes there: ask the user to type `/demo-video`, and fit it to the length and format in `EVENT.md`. Skip the rest of this skill, keeping Q&A and slides only if the event has them.
 
 ## Q&A and slides
 
@@ -41,13 +47,13 @@ Slides: find their deadline, which can fall well before the pitch, and finish be
 
 Nothing depends on this agent, its setup or the machine it runs on, since a teammate may present from their own laptop.
 
-- Rehearse on the presenting machine, in the browser they'll use, at the venue's screen size.
+- Rehearse on the presenting machine, in the browser they'll use, at the size in `Venue screen size and network`.
 - One person drives while another talks. Name them.
 - A local offline copy on the presenting machine is one possible fallback, not a requirement. Some events require live capabilities on stage.
 
 ## Live-capability check, at rehearsal
 
-List each thing that must really happen live: real backend, live AI call, real-time data, hardware.
+List each thing that must really happen live, starting from `What must run live`: real backend, live AI call, real-time data, hardware.
 
 | Live thing | Time it takes, measured | Depends on | Fallback on stage |
 |---|---|---|---|
