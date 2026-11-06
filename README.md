@@ -763,13 +763,10 @@ need nothing extra.
   command text. All of them sit behind a shell prefilter, so Python starts only for a command
   that names git
   with commit or push, gh with pr ready or create, or a package manager with an add verb. The
-  Bash reader follows chains, wrappers
-  (`sudo`, `env`, `time`; `env -C` and `sudo -D` move the cwd), a `cd` (only to the end of its
-  subshell), `pushd` and `popd`, `$(...)` and backtick bodies, process substitutions and a
-  literal `bash -c` script. A form it can't read (an alias, a function, `eval`, a script file,
-  `xargs`, a heredoc or here-string body that a shell runs) passes, logged as `git-skipped`
-  whenever what's left of the command names a commit, push or PR call. A command over 64 KB
-  isn't parsed at all: it passes, logged as `git-skipped` when it names a call.
+  Bash reader follows the usual shell forms (chains, common wrappers, `cd`, command
+  substitutions, a literal `bash -c` script). A call it can't read passes and is logged, with no
+  command text, when it names a commit, push, PR or install; the private sandbox audit tracks
+  the detail as PG8.
   A PR readied in the GitHub web UI never reaches the hook. Turning the gate off moved out of the repo,
   since a session can write its own repo: `! practices-gate off <dir>... --until YYYY-MM-DD`, or
   `--rule <id> --reason <why>` for one rule, covers that dir and everything below it (a repo and its
@@ -780,9 +777,7 @@ need nothing extra.
   only add rules: session start names the clash and tells the model to compare the copies and propose
   what to do.
   The engine keeps a 2 s budget under the 5 s kill. A scan the budget cuts short denies once on
-  what it read and says so, and the resend of that range passes unscanned, with any push or PR
-  call in the same command that the cut left unchecked; a push adding about 4 MB of text reaches
-  that cut. Fails open but loud: a crash lets the edit through, the next
+  what it read and says so, and the resend passes. Fails open but loud: a crash lets the edit through, the next
   session start names the error, and a deny whose resend couldn't pass (its state write failed,
   with no transcript to fall back on) is dropped and logged rather than repeated.
   Errors go to `$XDG_STATE_HOME/dotclaude/practices/errors.log`.
