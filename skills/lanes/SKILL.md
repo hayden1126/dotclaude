@@ -285,9 +285,10 @@ inherits the lead from it.
    `new --reuse-branch` or switched to another branch gets one more gh call per branch for its
    merged PRs, and a full answer there keeps the flag on too. Until then, message the lane; if
    its session is gone, or it answers that it can't fix the reason, add it to Hayden's asks with
-   that reason (`lane ls --json` gives it as `handoff_why`). Once he has seen it, his yes lets the
-   lead run a plain `lane done` with the flag on, which the standing approval doesn't cover.
-   Without that yes, never order a merge or close a lane before the gate passes.
+   that reason (a bare `lane ls --json` gives it as `handoff_why`). Never order a merge or close
+   a lane before the gate passes. The one exception is the flag alone, on a merged lane: once
+   Hayden has seen its reason and `handoff-check` passes, his yes lets the lead run a plain
+   `lane done` with the flag on, which the standing approval doesn't cover.
 6. **Watch and order.** Watch `lane ls`. Keep the merge order in the project STATUS. A lane
    whose install is live can't merge main sandboxed: its own hooks, skills and tests are
    write-protected then (`docs/lanes.md` S3). It asks the lead to reinstall from main, which
