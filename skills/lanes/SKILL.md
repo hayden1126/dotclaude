@@ -168,9 +168,12 @@ an unregistered worktree: `lane whoami` tells you which.
 
    The lane that learns of the merge
    (it ran `gh pr merge`, or Hayden said "merged" in its window) writes the outcome into its
-   record, starts its Next with `Keep open: <why>` on one line if more PRs will follow, and
-   finishes its handoff. Then, as its last act (the lead's `lane done` ends its session), it
-   sends the lead `merged #N`, to what a bare `lane addr lead` prints. It says nothing more about
+   record only after the merge command returns (a write within 3 s of the merge reads as older
+   than it), starts its Next with `Keep open: <why>` on one line if more PRs will follow, and
+   finishes its handoff. It runs a bare `lane ls --check`, which exits 1 and names the reason
+   when its row shows `handoff?`, and fixes that and reruns it. Then, as its last act (the
+   lead's `lane done` ends its session), it sends the lead `merged #N`, to what a bare
+   `lane addr lead` prints. It says nothing more about
    the merge to Hayden and never proposes `lane done`: the lead runs the rest (The lead, step 7).
    When `lane addr lead` refuses (no lead running, several sessions and none picked, or the
    lead stopped), it tells Hayden once that #N merged, with the refusal's way to pick the lead
@@ -275,7 +278,7 @@ inherits the lead from it.
    a bare `lane ls` shows no `handoff?` flag. The flag lights when the record may be behind the
    lane's work: a PR from the lane's branches merged after the record's last write, a commit is
    newer than it, or a session that started after it has ended, so that session never wrote it
-   (both times within 10 s count as after, for the clock's steps). It stays on whenever any of
+   (a merge within 3 s and a session start within 10 s of the write count as after, for the clock's steps). It stays on whenever any of
    that can't be read (gh, a `mergedAt`, the record, a session stamp, the last commit). Once
    gh's list holds its full 200 PRs, a lane older than the oldest, adopted, made with
    `new --reuse-branch` or switched to another branch gets one more gh call per branch for its
@@ -420,6 +423,7 @@ resend passes.
 | `lane whoami` | your lane id, `main`, `unregistered` or `plain` (`--json` for scripts) |
 | `lane ls` | the board: branch, ahead/behind, PR, port block, claims, live sessions, context (CTX: `312k*` past the auto-pass soft tier, `523k!` past hard), state (STATE: busy, idle, waiting, shell; message a lane idle past soft to run /pass), tmux window, flags; then any held locks, each pair of lanes whose changed files overlap (with the files), a main checkout with two or more live sessions (each one's window, the lead first) or a stopped lead (its window to `fg` it in), and the install hold |
 | `lane ls --requests` | request to lane, from claims only |
+| `lane ls --check` | from a lane, bare: exit 0 when its row shows no `handoff?`, or exit 1 and the reason (the after-merge step before `merged #N`); it refuses outside a lane and when gh can't answer, as in the sandbox |
 | `lane who 42` | the lane that claims #42, or "unclaimed" (with a warning while a left-out record may hold it) |
 | `lane claim 42` / `lane release 42` | claim or drop a request for your lane |
 | `lane note "<text>"` | append a timestamped line to your record's State |

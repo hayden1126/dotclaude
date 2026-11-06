@@ -29,7 +29,7 @@ liveness, flags) are derived on each `ls`, never stored. skills/lanes/SKILL.md i
 docs/lanes.md the design. Run `init`, `new`, `adopt`, `ls`, `port ls`, `port who`, `open`, `done`, `park`, `sync-main`, `addr` and `lead` bare,
 so their excludedCommands entries take them out of the sandbox: `new`, `ls`, `done` and `park` need the
 network and the GitHub credential (`new` refuses without them; `ls` and `done` say what they
-skipped; `park` refuses), `ls`, `port`, `open`, `done`, `park`, `addr` and `lead` need to see other
+skipped; `ls --check` and `park` refuse), `ls`, `port`, `open`, `done`, `park`, `addr` and `lead` need to see other
 processes, and `lead` writes the lead record in the state dir, as `park` does its flag. Every other subcommand runs sandboxed; `lock` and `trial`
 must, so the commands they run stay sandboxed too. `serve` is the one exception with no
 excludedCommands entry: it refuses in the sandbox (whose own network and pids hide listeners)
