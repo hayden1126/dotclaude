@@ -90,11 +90,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - #144 (exam-prep): rules public, evidence private (Hayden, 2026-10-20).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
-  - **Live lanes** (briefs in each record). Merge order (Hayden, 2026-11-06): 1 deny-rules (`fix/deny-rules`, draft #167,
-    carries the lead's notes), 2 hackathon (`feat/hackathon-mode`; a hackathon starts 2026-11-14, so
-    it merges by 2026-11-11), 3 practices (`feat/practices-dependencies`, its next PR). #167 installs
-    from its worktree before lane hackathon's dry run (Hayden, 2026-11-06), and no install runs
-    during it.
+  - **Live lanes** (briefs in each record). Merge order: 1 hackathon (`feat/hackathon-mode`, carries the lead's notes; a
+    hackathon starts 2026-11-14, so it merges by 2026-11-11), 2 practices
+    (`feat/practices-dependencies`, its next PR; after the event, the lead's lean). No install
+    runs during lane hackathon's dry run.
     **Install freeze on HAYPC, Nov 12 through Nov 15** (Hayden, 2026-11-05): no lane installs in
     that window, except fixes for lane hackathon, so the event runs what the dry run tested. The lead's
     reinstall after a merge counts as an install, so no other lane merges in that window.
@@ -122,6 +121,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     capella-studio lane artexport's report; a fork's hook output never reaches its model, so it
     knows its lane only from the parent's copied line, docs/lanes.md S5; the delegation canary
     checks the source enum; untried against lane practices' settings.json change),
+    deny-rules (#167, 2026-11-06: SW3, SW7, SW12, SW14, SW4, DA12 (a) and PG1; installed before
+    lane hackathon's dry run on Hayden's pick; Hayden's leftover asks are in its closed record's
+    Asks for Hayden, `.git/lanes/_closed/deny-rules-2026-11-06/`),
     dev-cycle (#166, 2026-11-05: the external-skills ports, `quality-lens`, stalled-chain rules in
     the lanes skill, and `writing-voice` split into `technical-writing`, `formal-voice` and
     `casual-voice`; a running session keeps the old CLAUDE.md until its next start),
@@ -170,8 +172,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **Fix lanes from lane sweep** (2026-11-04; private: sandbox-audit FINDINGS, "Sandbox reach
     sweep, 2026-11", rows SW1 to SW14, each naming its fix and files). Most severe first:
     1. SW1 (high): done in #165 (lane npx-cwd, 2026-11-05).
-    2. SW3, SW7, SW12, SW14, SW4 (high): in lane deny-rules (Hayden, 2026-11-05), folded into
-       DA12 (a), with the deny rule in SW1's limits and PG1.
+    2. SW3, SW7, SW12, SW14, SW4 (high): done in #167 (lane deny-rules, 2026-11-06), with DA12
+       (a), SW1's leftover rule and PG1. SW3's row closes after Hayden's own step there.
     3. SW10 (medium-high): codex-delegate and the excluded-command guard, with tests.
     4. SW2, SW6, SW9 (medium): the Windows side; part is Hayden's call.
     5. SW5 (Hayden's pick): a tripwire, lane-able, beside lane ports' tamper checks.
@@ -206,9 +208,6 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     hooks and notifiers lean on WSL. Pairs with [[hayden-new-device-goal]]. After lane hackathon.
   - **A README paragraph against the gaps-by-id rule** (lane deny-rules' reviewer, 2026-11-05).
     Private: sandbox-audit FINDINGS, PG8. For lane practices, in its next PR.
-  - **Who can turn the practices gate off** (Hayden, 2026-11-05: not any session without him).
-    Private: sandbox-audit FINDINGS, PG1, with Hayden's picked fix. In lane deny-rules (Hayden,
-    2026-11-05), with lane practices reviewing the engine change.
   - **`lane ls` names an overdue reinstall** (Hayden's pick, 2026-11-04; after #163's chain
     stalled). When the lane holding the install has a merged PR, the `install: held by` line says
     the lead's reinstall is overdue. Derived on each call, no new state. Lane-able after ports
@@ -407,10 +406,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Live lanes: `lane ls`; state in their records (2026-11-05: hackathon, practices' next PR;
-     deny-rules first in merge order with draft #167, reopened 2026-11-06; one slot free, Hayden's
-     pick from the Backlog). #167 installs before lane hackathon's dry run (Hayden's pick), so
-     the dry run tests the event's rules. Lane hackathon merges by Nov 11:
+  0. Live lanes: `lane ls`; state in their records (2026-11-06: hackathon, practices' next PR;
+     two slots free, Hayden's pick from the Backlog). #167 merged and is installed from main, so
+     lane hackathon's dry run tests the event's rules. Hayden's leftover asks from lane deny-rules
+     (an overlay paste plus a setup rerun, probe leftovers, local tool cleanups): its closed
+     record. Lane hackathon merges by Nov 11:
      move it up if the queue threatens that. Install freeze Nov 12 through Nov 15. A chain that
      stops before its "main moved" step still tells the lanes, and arms a wake on the blocker
      (`skills/lanes/SKILL.md`). Open
