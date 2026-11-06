@@ -7,7 +7,7 @@
   lane new <id> [--branch B] [--reuse-branch] [--claim N ...] [--goal T] [--files T]
                [--overlaps T] [--done-when T] [--constraints T]
   lane adopt <path> [--id SLUG]
-  lane ls [--json] [--requests]
+  lane ls [--json] [--requests] | lane ls --check
   lane open <id> [--focus] [--print] [--model M] [--effort E] [prompt]
   lane addr [--repo PATH] <id> | lane addr [--repo PATH] lead
   lane lead
@@ -152,6 +152,7 @@ CLOCK_SLACK = 10  # secs: HAYPC's wall clock steps, and GitHub keeps another clo
 # secs past mergedAt a record must land to count as after the merge: the clock's 0.5 s steps, and
 # mergedAt's whole seconds. Well under a turn's 10 s, or a prompt after-merge write reads as older.
 MERGE_SLACK = 3
+NO_MERGE_LIST = "gh can't list the lane's merged PRs"  # handoff_why's reason; `ls --check` refuses
 TEE_GRACE = 10.0  # secs run_child keeps reading a teed pipe once its child exits
 TRIAL_GIT_WAIT = 120  # secs each git call of `lane trial` may take
 HANDED_GIT_WAIT = 10  # secs the git `addr --repo` runs may take: a FIFO include would hold it
@@ -1724,7 +1725,7 @@ def handoff_why(repo: Repo, lane: dict, ref: str, merges: list[float | None] | N
     if mtime is None:
         return "the record can't be read"
     if merges is None:
-        return "gh can't list the lane's merged PRs"
+        return NO_MERGE_LIST
     if None in merges:
         return "a merged PR's merge time can't be read"
     if merges and mtime <= (newest := max(merges)) + MERGE_SLACK:
@@ -1763,11 +1764,11 @@ def warn_left_out(repo: Repo) -> None:
 
 def check_own_lane(repo: Repo) -> int:
     """`ls --check`: the board's handoff? verdict on the caller's lane, read from its row so the
-    lane and the lead's gate can't disagree. 1 when it's lit. gh can't answer in the
-    sandbox, where every lane is lit, so that refuses rather than report a flag it can't judge."""
+    lane and the lead's gate can't disagree. 1 when it's lit. With no list of merged PRs (the
+    sandbox lights every lane this way) it refuses: the lane has nothing to fix."""
     lane_id = own_lane(repo)["id"]
     row = next(r for r in board(repo) if r["id"] == lane_id)
-    if row["pr"] == "?":
+    if row["handoff_why"] == NO_MERGE_LIST:
         raise LaneError(f"gh can't answer (no network or credential, or the sandbox), so lane "
                         f"{lane_id}'s handoff? can't be judged: run `lane ls --check` bare")
     if row["handoff_why"]:

@@ -1012,6 +1012,16 @@ class HandoffFlag(LanesRepo):
         self.assertIn("bare", p.stderr)
         self.assertEqual(p.stdout, "")
 
+    def test_check_refuses_when_gh_cannot_list_a_branch_s_merges(self):
+        # gh's main list answered, so the row has a PR label, but only the branch's own call could
+        # say what merged: the lane has nothing to fix, so it mustn't read as a lit flag.
+        self.full_list(lanelib.parse_iso(self.lane_json("chart-fix")["created"]) + 3600)
+        self.env["FAKE_GH_MERGED"] = "fail"
+        p = self.check()
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("gh can't answer", p.stderr)
+        self.assertEqual(p.stdout, "")
+
     def test_check_refuses_outside_a_lane(self):
         p = self.run_lane("ls", "--check")
         self.assertNotEqual(p.returncode, 0)

@@ -170,9 +170,10 @@ an unregistered worktree: `lane whoami` tells you which.
    (it ran `gh pr merge`, or Hayden said "merged" in its window) writes the outcome into its
    record only after the merge command returns (a write within 3 s of the merge reads as older
    than it), starts its Next with `Keep open: <why>` on one line if more PRs will follow, and
-   finishes its handoff. It runs a bare `lane ls --check`, which exits 1 and names the reason
-   when its row shows `handoff?`, and fixes that and reruns it. Then, as its last act (the
-   lead's `lane done` ends its session), it sends the lead `merged #N`, to what a bare
+   finishes its handoff. Just before `handoff-check`, it runs a bare `lane ls --check`, which
+   exits 1 and names the reason when its row shows `handoff?`: it fixes that and reruns it, or
+   adds what it can't fix to its `merged #N` message. Then, as its last act (the lead's
+   `lane done` ends its session), it sends the lead `merged #N`, to what a bare
    `lane addr lead` prints. It says nothing more about
    the merge to Hayden and never proposes `lane done`: the lead runs the rest (The lead, step 7).
    When `lane addr lead` refuses (no lead running, several sessions and none picked, or the

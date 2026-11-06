@@ -57,10 +57,9 @@ Use it when a handoff already ran this session, or when `handoff-check` says the
 In a lane, once the lane's PR has merged (it ran `gh pr merge`, or Hayden said "merged"):
 
 1. Write the final outcome into the lane record, only after the merge command returns or Hayden says "merged": a write within 3 s of the merge reads as older than it. If more PRs will follow on this lane, start the Next block with `Keep open: <why>` on one line (a bullet may wrap, indented): `lane done` refuses the lane while that line stands (commenting it out doesn't release it: delete it), and the step after it is the first item.
-2. Finish the procedure as usual, `handoff-check` last.
-3. Run a bare `lane ls --check`. It exits 1 and names the reason when the lane's row shows `handoff?`, the flag the lead's gate reads, which `handoff-check` can't judge because gh fails in the sandbox. Fix what it names and rerun it. A rewrite needs no wait: the next turn lands past the 3 s.
-4. Send the lead `merged #N` (SendMessage to what a bare `lane addr lead` prints, run just before the send) as the session's last act. Say nothing more about the merge to Hayden: the lead proves it, reinstalls, adds the backlog line and runs `lane done` on Hayden's standing approval, then reports (the `lanes` skill, "Who asks Hayden what"). Never propose `lane done`: only the lead can run it.
-5. `lane addr lead` refuses (no lead running, or several sessions and none picked): tell Hayden once that #N merged, with the refusal's way to pick the lead if it gives one.
+2. Finish the procedure as usual, `handoff-check` last. Just before `handoff-check`, run a bare `lane ls --check`. It exits 1 and names the reason when the lane's row shows `handoff?`, the flag the lead's gate reads, which `handoff-check` can't judge because gh fails in the sandbox. Fix what it names and rerun it. A rewrite needs no wait: the next turn lands past the 3 s. When it refuses, or names something the lane can't fix, add that to the `merged #N` message.
+3. Send the lead `merged #N` (SendMessage to what a bare `lane addr lead` prints, run just before the send) as the session's last act. Say nothing more about the merge to Hayden: the lead proves it, reinstalls, adds the backlog line and runs `lane done` on Hayden's standing approval, then reports (the `lanes` skill, "Who asks Hayden what"). Never propose `lane done`: only the lead can run it.
+4. `lane addr lead` refuses (no lead running, or several sessions and none picked): tell Hayden once that #N merged, with the refusal's way to pick the lead if it gives one.
 
 ## Volatile git state: derive, never store
 

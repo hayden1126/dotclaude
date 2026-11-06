@@ -238,7 +238,7 @@ Why it works this way:
   costs one rewrite; one over 3 s ahead makes a write just before the merge read as after it.
 - **`lane ls --check` shows the lane the verdict** (Hayden, 2026-11-06). A lane writes its
   after-merge record only after the merge command returns, then runs a bare `lane ls --check`
-  before it sends `merged #N`. The check reads the lane's board row, so it can't disagree with
+  just before `handoff-check`, so a rewrite it asks for still gets checked. The check reads the lane's board row, so it can't disagree with
   the lead's gate. It sits in `ls` because the verdict needs gh, which fails in the sandbox where
   `handoff-check` runs, and because `lane ls *` is already an excluded command and an allow rule,
   so it needed no new rule. Sandboxed, it refuses rather than report a flag it can't judge. The
