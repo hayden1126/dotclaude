@@ -160,6 +160,13 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     hackathon merges (it owns `skills/demo-video/` and its tests); lead's lean: after the event.
     Music and footage need a recorded source and licence per file (lane license's rule), and
     recording a voice from WSL needs the Windows microphone, still unprobed.
+  - **Two gaps in the lead's close gate** (`skills/lanes/SKILL.md`, text already on main; found by
+    lane merge-record, 2026-11-06). (1) A merged lane with no live session and a failing
+    `handoff-check` has no written next step: the lead never respawns another lane's session, and
+    Hayden's yes lifts only the `handoff?` flag. (2) A merged lane whose worktree is gone can't
+    pass `handoff-check`, yet `lane open`'s refusal says `lane done` closes it. Evidence: lane
+    merge-record's record, Not mine, and its `.lane/artifacts/gate-table.md` rows 7 and 13. Fits a
+    lanes-skill lane after merge-record merges.
   - **Fix lanes from lane design-audit** (Hayden's picks, 2026-11-01). Private: sandbox-audit
     FINDINGS, "Design-decision audit, 2026-11", one row per id with the detail. Most severe first:
     1. DA15 with DA16 (high): done in #161 (lane ports, 2026-11-04), with LR1 to LR7. The lead
