@@ -1722,10 +1722,10 @@ def handoff_why(repo: Repo, lane: dict, ref: str, merges: list[float | None] | N
     every session ends after its own last write, a /pass's too. merges is merges_of's. Anything
     it can't read gives a reason too: the hand-back gate fails closed."""
     _, mtime = record_text(repo, lane)
-    if mtime is None:
-        return "the record can't be read"
     if merges is None:
         return NO_MERGE_LIST
+    if mtime is None:
+        return "the record can't be read"
     if None in merges:
         return "a merged PR's merge time can't be read"
     if merges and mtime <= (newest := max(merges)) + MERGE_SLACK:
@@ -1769,8 +1769,9 @@ def check_own_lane(repo: Repo) -> int:
     lane_id = own_lane(repo)["id"]
     row = next(r for r in board(repo) if r["id"] == lane_id)
     if row["handoff_why"] == NO_MERGE_LIST:
-        raise LaneError(f"gh can't answer (no network or credential, or the sandbox), so lane "
-                        f"{lane_id}'s handoff? can't be judged: run `lane ls --check` bare")
+        raise LaneError(f"gh can't list lane {lane_id}'s merged PRs (no network or credential, "
+                        f"the sandbox, or {PR_LIMIT} on one branch), so its handoff? can't be "
+                        "judged: run `lane ls --check` bare")
     if row["handoff_why"]:
         say(f"lane {lane_id}: handoff? {row['handoff_why']}")
         return 1

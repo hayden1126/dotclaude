@@ -1008,8 +1008,17 @@ class HandoffFlag(LanesRepo):
         del self.env["FAKE_GH_OUT"]
         p = self.check()
         self.assertNotEqual(p.returncode, 0)
-        self.assertIn("gh can't answer", p.stderr)
+        self.assertIn("gh can't list", p.stderr)
         self.assertIn("bare", p.stderr)
+        self.assertEqual(p.stdout, "")
+
+    def test_check_refuses_with_gh_silent_and_no_record(self):
+        # Sandboxed, gh's silence comes first: the record may read fine from a bare run.
+        del self.env["FAKE_GH_OUT"]
+        os.unlink(self.record("chart-fix"))
+        p = self.check()
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("gh can't list", p.stderr)
         self.assertEqual(p.stdout, "")
 
     def test_check_refuses_when_gh_cannot_list_a_branch_s_merges(self):
@@ -1019,7 +1028,7 @@ class HandoffFlag(LanesRepo):
         self.env["FAKE_GH_MERGED"] = "fail"
         p = self.check()
         self.assertNotEqual(p.returncode, 0)
-        self.assertIn("gh can't answer", p.stderr)
+        self.assertIn("gh can't list", p.stderr)
         self.assertEqual(p.stdout, "")
 
     def test_check_refuses_outside_a_lane(self):
