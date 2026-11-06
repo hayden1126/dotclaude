@@ -221,6 +221,7 @@ import concurrent.futures
 import contextlib
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -354,7 +355,23 @@ def prereq_problems(arms, skills=None, skills_dir=None, hook=None, settings=None
                 problems.append(f"arms C and D take the hook's wiring from {settings}, which runs no practices-check.sh")
         except (OSError, ValueError, AttributeError, TypeError) as e:
             problems.append(f"arms C and D take the hook's wiring from {settings}, which can't be read: {e}")
+        problems += gate_off_problems(hook)
     return problems
+
+
+def gate_off_problems(hook):
+    """Why a gating arm's rows would mislead: the off file reads from the passwd entry's home, so a
+    run's own state dir can't hide it, and an entry above the fixtures in the system temp dir would
+    silence the hook with rows that look clean."""
+    engine = Path(hook).parent / "practices_check.py"
+    if not engine.is_file():
+        return []
+    spec = importlib.util.spec_from_file_location("practices_check_for_prereqs", engine)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    entries, _ = module.off_entries(os.path.join(tempfile.gettempdir(), FIXTURE_PREFIX + "x"))
+    return [f"arms C and D run under {tempfile.gettempdir()}, where practices-gate has the gate off "
+            f"({e['dir']}, until {e['until']}): run `practices-gate on {e['dir']}` first" for e in entries]
 
 
 def check_prereqs(arms):

@@ -775,6 +775,10 @@ python3 -I "$REPO_DIR/install-state.py" plugins \
 # settings.machine.json with the Edit deny rules that clear them.
 python3 -I "$REPO_DIR/hooks/excluded_guard.py" --scan \
   || warn "the excluded-command guard would refuse the calls above: look at each dir, fix each as the scan says (most by pasting the settings.machine.json it printed), and rerun setup where its last line says"
+# Name what code outside the sandbox runs from home that no Edit deny rule covers, with the rule to
+# paste for each root. It changes nothing and always exits 0.
+python3 -I "$REPO_DIR/bin/deny-coverage" --settings "$CLAUDE_DIR/settings.json" --checkout "$REPO_DIR" \
+  || warn "the deny coverage check failed (see above)"
 
 # ---------------------------------------------------------------------------
 # 8. Final checklist
