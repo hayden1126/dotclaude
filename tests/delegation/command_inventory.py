@@ -391,7 +391,18 @@ OTHER_RULES = [
 ]
 
 ASKS = TMUX_RULES + CLAUDE_RULES + OTHER_RULES
-DENIES = CLAUDE_DENY
+# The practices gate's off switch is Hayden's alone: a `!` line goes around permission rules.
+PRACTICES_DENY = [
+    Rule("Bash(practices-gate*)", "only Hayden turns the practices gate off, with a `!` line",
+         ["practices-gate off . --until 2999-01-01", "practices-gate status"]),
+    Rule("Bash(*practices-gate off*)", "the same, by any path or interpreter; a command that only "
+         "names the phrase, such as a grep, is denied too, which costs a rewording",
+         ["~/.local/bin/practices-gate off . --until 2999-01-01",
+          "python3 -I bin/practices-gate off . --until 2999-01-01",
+          "python3 -I practices-gate off . --until 2999-01-01"]),
+]
+
+DENIES = CLAUDE_DENY + PRACTICES_DENY
 
 # The hot path (rule D): calls skills and real use make, which must match an excluded entry and
 # no ask or deny.

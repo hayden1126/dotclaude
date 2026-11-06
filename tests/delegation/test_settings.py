@@ -720,6 +720,124 @@ class Baseline(unittest.TestCase):
         self.assertIn("~/.local/state/dotclaude/verified",
                       S["sandbox"]["filesystem"]["denyWrite"])
 
+    # Home paths that code outside the sandbox runs, sources or trusts (DA12 (a), SW1, SW3, SW4,
+    # SW7, SW12, SW14). Each is one Edit deny, which binds the Edit and Write tools, subagents'
+    # file tools and sandboxed Bash (the glob: DR3). A deny can't be carved back with an allow, so these are named
+    # one by one instead of by a glob over ~/.*, which would also take ~/.claude/projects.
+    HOME_DIRS = ("~/.local", "~/.config", "~/.ssh", "~/.bun", "~/.cargo", "~/.rustup", "~/.npm",
+                 "~/.pub-cache", "~/.oh-my-zsh", "~/.codex", "~/.agents", "~/.vscode-server",
+                 "~/bin", "~/node_modules", "~/.aws", "~/.google_workspace_mcp", "~/.docker",
+                 "~/.supabase", "~/.azure")
+    CACHES = ("uv", "pip", "pnpm", "node", "node-gyp", "ms-playwright", "go-build", "puppeteer",
+              "google-chrome-for-testing-headless", "pipx")
+    HOME_FILES = (".zshrc", ".zshenv", ".zprofile", ".zlogin", ".zlogout", ".bashrc",
+                  ".bash_profile", ".bash_login", ".bash_logout", ".profile", ".gitconfig",
+                  ".tmux.conf", ".inputrc", ".lesskey", ".less", ".zcompdump", ".zcompdump*",
+                  "CLAUDE.md", "CLAUDE.local.md", ".mcp.json", ".npm-init.js",
+                  ".bash_aliases", ".curlrc", ".wgetrc", ".vimrc", ".exrc", ".pdbrc", ".gdbinit",
+                  ".pypirc", ".yarnrc", ".yarnrc.yml", ".bunfig.toml", ".condarc", ".gemrc",
+                  ".irbrc", ".Rprofile", ".p10k.zsh", ".fzf.zsh", ".fzf.bash",
+                  ".netrc", ".git-credentials", ".secrets.env", ".npmrc", ".claude.json",
+                  ".zsh_history", ".bash_history")
+    CLAUDE_DIRS = ("agents", "skills", "hooks", "commands", "plugins", "sessions", "rules",
+                   "output-styles", "workflows", "routines", "dev-mods", "daemon")
+    CLAUDE_FILES = ("CLAUDE.md", ".claude.json", ".credentials.json", "settings.json",
+                    "settings.local.json", "notify-toast.ps1", "daemon.json",
+                    "scheduled_tasks.json", "launch.json", "loop.md")
+
+    @staticmethod
+    def edit_denied(path):
+        """Whether an Edit deny rule covers the ~/ path: a rule's * stays within one path part,
+        its /** takes everything below, and it covers what sits under a dir it matches."""
+        for rule in S["permissions"]["deny"]:
+            m = re.fullmatch(r"Edit\((.+)\)", rule)
+            if not m:
+                continue
+            body = m.group(1)
+            tree = body.endswith("/**")
+            regex = re.escape(body[:-3] if tree else body).replace(r"\*", "[^/]*")
+            if re.fullmatch(regex + ("/.*" if tree else "(/.*)?"), path):
+                return True
+        return False
+
+    def test_the_home_paths_unsandboxed_code_trusts_are_edit_denied(self):
+        deny = S["permissions"]["deny"]
+        rules = [f"Edit({p}/**)" for p in self.HOME_DIRS]
+        rules += [f"Edit(~/.cache/{c}/**)" for c in self.CACHES]
+        rules += [f"Edit(~/{f})" for f in self.HOME_FILES]
+        rules += [f"Edit(~/.claude/{d}/**)" for d in self.CLAUDE_DIRS]
+        rules += [f"Edit(~/.claude/{f})" for f in self.CLAUDE_FILES]
+        self.assertEqual([r for r in rules if r not in deny], [])
+
+    def test_real_targets_behind_each_row_are_covered(self):
+        # One real path per reader, so a rule that loses its dir or its spelling fails here.
+        for path in ("~/.local/state/dotclaude/lanes/x.toml",
+                     "~/.local/share/uv/python/cpython/bin/python",
+                     "~/.local/aws-cli/v2/current/dist/aws", "~/.local/go/bin/go",
+                     "~/.config/git/config", "~/.config/systemd/user/x.service",
+                     "~/.bun/install/global/node_modules/ccstatusline/dist/ccstatusline.js",
+                     "~/.bun/_bun", "~/.cargo/env", "~/.cargo/registry/src/x/build.rs",
+                     "~/.rustup/settings.toml", "~/.npm/_npx/abc/node_modules/.bin/x",
+                     "~/.pub-cache/hosted/pub.dev/hooks/x.dart", "~/.oh-my-zsh/lib/git.zsh",
+                     "~/.codex/plugins/cache/x", "~/.codex/config.toml",
+                     "~/.agents/skills/x/SKILL.md", "~/.vscode-server/server-env-setup",
+                     "~/.vscode-server/bin/abc/node", "~/bin/tmux-remote",
+                     "~/node_modules/bufferutil/index.js", "~/.cache/uv/x",
+                     "~/.cache/node/corepack/v1/pnpm/9/x", "~/.cache/puppeteer/x", "~/.zcompdump",
+                     "~/.zcompdump-HAYPC-5.9", "~/CLAUDE.md", "~/.claude.json",
+                     "~/.claude/.claude.json", "~/.claude/settings.local.json",
+                     "~/.claude/skills/new/.claude-plugin/plugin.json", "~/.claude/agents/x.md",
+                     "~/.claude/plugins/cache/x/hooks/hooks.json", "~/.claude/sessions/1.json"):
+            self.assertTrue(self.edit_denied(path), path)
+
+    def test_what_a_session_must_write_stays_open(self):
+        # A deny can't be carved back, so a rule that grows over one of these breaks memory,
+        # plan files, background jobs or the sandbox's own caches. Lanes and projects too.
+        for path in ("~/.claude/projects/-x/memory/MEMORY.md", "~/.claude/plans/x.md",
+                     "~/.claude/jobs/x/tmp/y", "~/.claude/keybindings.json",
+                     "~/.cache/claude-sandbox/npm/x", "~/dotclaude/README.md",
+                     "~/dotclaude-lanes/x/README.md", "~/code/x/.claude/settings.local.json",
+                     "~/scratch/x", "~/Downloads/x", "~/.claude/settings.machine.json"):
+            self.assertFalse(self.edit_denied(path), path)
+
+    def test_every_deny_read_entry_is_edit_denied_too(self):
+        # A credential or history file a session can't read is one it mustn't replace either.
+        for p in S["sandbox"]["filesystem"]["denyRead"]:
+            self.assertTrue(self.edit_denied(p) or self.edit_denied(p + "/x"), p)
+
+    def test_every_edit_rule_is_spelled_from_home_or_the_root(self):
+        # A single leading / is relative to the settings file, so it would protect nothing.
+        for rule in S["permissions"]["deny"] + S["permissions"]["ask"]:
+            if rule.startswith("Edit("):
+                self.assertRegex(rule, r"^Edit\((//|~/)", rule)
+
+    def test_the_machine_overlay_prompts_and_sandboxed_bash_can_t_write_it(self):
+        # setup.sh merges it into the live settings, so a write there becomes hooks that run
+        # outside the sandbox after the next install. An ask, so a session can still propose an
+        # edit: with the live settings denied, it is the one route left for a settings change.
+        self.assertIn("Edit(~/.claude/settings.machine.json)", S["permissions"]["ask"])
+        self.assertIn("~/.claude/settings.machine.json", S["sandbox"]["filesystem"]["denyWrite"])
+
+    def test_the_subagent_policy_denies_the_same_home_paths(self):
+        # The policy reads realpaths and matches below a listed path, so ~/.claude covers its
+        # children and ~/.local its own.
+        denied = POLICY["protect"]["write_denied"]
+        for p in (*self.HOME_DIRS, *(f"~/.cache/{c}" for c in self.CACHES),
+                  *(f"~/{f}" for f in self.HOME_FILES if "*" not in f)):
+            self.assertTrue(any(p == d or p.startswith(d + "/") for d in denied), p)
+
+    def test_the_practices_off_switch_s_usual_spellings_are_denied(self):
+        # A `!` line goes around permission rules. A sandboxed run can't write the file anyway;
+        # these stop the command's usual spellings with the sandbox off (PG4).
+        for command in ("practices-gate off . --until 2999-01-01", "practices-gate status",
+                        "~/.local/bin/practices-gate off . --until 2999-01-01",
+                        "/home/x/dotclaude/bin/practices-gate off . --until 2999-01-01",
+                        "./practices-gate off . --until 2999-01-01",
+                        "python3 -I practices-gate off . --until 2999-01-01",
+                        "python3 -I bin/practices-gate off . --until 2999-01-01",
+                        "/usr/bin/python3 -I practices-gate off . --until 2999-01-01"):
+            self.assertNotEqual(matching("deny", command), [], command)
+
     def test_every_allow_rule_on_an_excluded_command_sits_behind_the_guard(self):
         # An allow rule skips the classifier, so an excluded command it covers must meet the
         # guard first.
@@ -925,8 +1043,10 @@ class Inventory(unittest.TestCase):
         self.assertLessEqual({r.rule for r in inv.ASKS}, set(S["permissions"]["ask"]))
         self.assertLessEqual({r.rule for r in inv.DENIES}, set(S["permissions"]["deny"]))
         # Every other ask is the git and gh baseline that
-        # test_destructive_git_is_denied_and_anything_that_can_reach_main_asks covers.
-        for rule in set(S["permissions"]["ask"]) - {r.rule for r in inv.ASKS}:
+        # test_destructive_git_is_denied_and_anything_that_can_reach_main_asks covers, and the
+        # machine overlay's ask, which test_the_machine_overlay_prompts... covers.
+        overlay = "Edit(~/.claude/settings.machine.json)"
+        for rule in set(S["permissions"]["ask"]) - {r.rule for r in inv.ASKS} - {overlay}:
             self.assertRegex(rule, r"^Bash\((git|gh) ", rule)
 
     def test_raw_samples_ask_and_the_hot_path_does_not(self):

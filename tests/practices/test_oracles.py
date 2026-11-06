@@ -33,6 +33,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -3225,6 +3226,45 @@ class RunHarness(unittest.TestCase):
         text = out.getvalue()
         self.assertRegex(text, r"email-change\s+A .*discriminates \(fail 3 of 3 valid\) \[3 imported\]")
         self.assertRegex(text, r"email-change\s+C .*green\n")
+
+    def test_prereqs_refuse_a_gate_turned_off_above_the_fixtures(self):
+        # The real engine, with only its passwd lookup replaced: the off file can't move with a
+        # run's own state dir, so an entry there would silence a gating arm's hook.
+        r = self.harness
+        with tempfile.TemporaryDirectory(prefix="practices-off-") as tmp:
+            tmp = Path(tmp).resolve()
+            hook = tmp / "hooks" / "practices-check.sh"
+            hook.parent.mkdir()
+            hook.write_text("#!/bin/sh\n")
+            engine = (r.HOOK.parent / "practices_check.py").read_text()
+            (hook.parent / "practices_check.py").write_text(
+                engine + f"\n\ndef passwd_home():\n    return {str(tmp / 'pw')!r}\n")
+            systemp = tmp / "systemp"
+            systemp.mkdir()
+            off = tmp / "pw" / ".local" / "state" / "dotclaude" / "practices-off.json"
+            off.parent.mkdir(parents=True)
+            with mock.patch.object(r.tempfile, "gettempdir", return_value=str(systemp)):
+                self.assertEqual(r.gate_off_problems(hook), [])   # no file
+                off.write_text(json.dumps({"version": 1, "entries": [
+                    {"dir": str(tmp / "other"), "until": "2999-01-01"}]}))
+                off.chmod(0o600)
+                self.assertEqual(r.gate_off_problems(hook), [])   # elsewhere
+                off.write_text(json.dumps({"version": 1, "entries": [
+                    {"dir": str(systemp), "until": "2020-01-01"}]}))
+                self.assertEqual(r.gate_off_problems(hook), [])   # lapsed
+                for entry in ({"dir": str(systemp), "until": "2999-01-01"},
+                              {"dir": str(systemp), "until": "2999-01-01", "rule": "x", "reason": "y"}):
+                    off.write_text(json.dumps({"version": 1, "entries": [entry]}))
+                    problems = r.gate_off_problems(hook)
+                    self.assertEqual(len(problems), 1, problems)
+                    self.assertIn("practices-gate on", problems[0])
+                # and the arms' own prereq check is what reports it
+                settings = tmp / "settings.json"
+                settings.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "Edit", "hooks": [
+                    {"type": "command", "command": 'bash "$HOME/.claude/hooks/practices-check.sh"'}]}]}}))
+                kw = dict(skills=[], skills_dir=tmp, hook=hook, settings=settings)
+                self.assertTrue(any("practices-gate on" in p for p in r.prereq_problems(["C"], **kw)))
+                self.assertEqual(r.prereq_problems(["B"], **kw), [])
 
     def test_prereqs_refuse_a_missing_skill(self):
         r = self.harness

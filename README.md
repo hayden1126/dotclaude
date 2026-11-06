@@ -191,11 +191,22 @@ Every Python this repo starts runs isolated (`-I`): hooks call `python3 -I`, scr
 (hooks, excluded commands, tmux, the status line, setup). Without `-I`, Python puts the script's
 dir or the cwd first on its import path, honours `PYTHON*` variables and loads the user
 site-packages, where a planted `usercustomize.py` or `.pth` file would run unsandboxed.
-`settings.json` also denies `Edit(~/.local/lib/**)` and `Edit(~/Library/Python/**)`, so the Edit
+`settings.json` also denies `Edit(~/.local/**)` and `Edit(~/Library/Python/**)`, so the Edit
 and Write tools can't plant one (sandboxed Bash already can't). `tests/setup/test_install_helpers.py`
 enforces all of this over hooks/, bin/, tmux/, statusline/, git/, codex/, the skills' scripts and the
 top-level scripts. The deck-production scripts are the one exception: they run only in sandboxed Bash and
 import their siblings.
+
+The Edit and Write tools aren't sandboxed, so `settings.json` also denies them the home paths that
+code outside the sandbox runs, sources or trusts: `~/.local`, `~/.config`, tool and cache dirs, shell
+and tool dotfiles, whatever `denyRead` hides, and the parts of `~/.claude` that load as code or
+instructions. `tests/delegation/test_settings.py` pins the list. `~/.claude/projects`, `plans` and
+`jobs` stay writable, and so does `~/.cache/claude-sandbox`. A deny also binds the permission check
+on Bash paths, which has three costs. A session's `rm`, `mv` or `chmod` in those dirs is refused, so
+you run it. A `cp` from them is refused too, so copy with `cat src > dest`. And a skill or agent
+can't be written straight into `~/.claude/skills` or `agents`: put it in this repo and let `setup.sh`
+link it. Editing `settings.machine.json` from a session prompts each time, since `setup.sh` merges it
+into the live settings.
 
 Asks cover what an excluded command could still be made to run or read:
 - tmux: every other verb, alias and prefix, a bare `tmux`, a global flag, a `;` chain, a `#(`
@@ -289,6 +300,8 @@ sees it.
 | `hooks/blank-display.sh` | SessionStart hook: in a repo that opts in with `git config dotclaude.blankDisplay true` (every worktree of it), sets `DISPLAY` and `WAYLAND_DISPLAY` empty for Bash through `CLAUDE_ENV_FILE`, so a headed browser can't open in front of you; silent elsewhere; a shim over `hooks/blank_display.py`; fails open; see docs/chrome-devtools-wsl.md "Background Windows Chrome for probes" | symlink `~/.claude/hooks/blank-display.sh` and `blank_display.py` |
 | `hooks/sandbox-caches.sh` | SessionStart hook: creates `~/.cache/claude-sandbox/<tool>` dirs and, through `CLAUDE_ENV_FILE`, exports the cache vars of npm, bun, uv, pip, pnpm and node-gyp to them for sandboxed Bash only, so the sandbox keeps the default caches (where plugin MCP servers and unsandboxed installs run from) read-only; silent; fails open, and a sandboxed install then gets a write error | symlink `~/.claude/hooks/sandbox-caches.sh` |
 | `bin/cache-unlink` | Counts, per project, the files under the dirs you name that are hardlinks into the uv, pnpm or bun cache (installs made before copy mode, sandbox gap N3; `--files` lists them); `--apply` gives each a copy of its own, writing only through dirs it opened without following a link. Links inside a cache never count; an unreadable dir makes the report incomplete. Run it from a terminal: it refuses inside the sandbox | symlink `~/.local/bin/cache-unlink` when that dir exists |
+| `bin/practices-gate` | Turns the practices gate off for a dir until a date, or one rule with a reason, and turns it back on. You run it with a `!` line; deny rules stop a session running it under its usual spellings. It writes `~/.local/state/dotclaude/practices-off.json` | symlink `~/.local/bin/practices-gate` when that dir exists |
+| `bin/deny-coverage` | Reports what code outside the sandbox runs from home that no Edit deny rule covers: what each PATH entry, hook, status line and MCP server leads to (each link hop, a script's interpreter, a virtualenv's home and `.pth` paths, what a script sources or execs), what the shell startup files source, plus home dot-dirs, `~/go`, `~/nltk_data`, `~/sdk` and `~/.cache` dirs, and a memory file above projects. It prints the rules to paste into `settings.machine.json` and changes nothing. It doesn't follow a path built from a variable other than `$HOME`, `$0` or `$BASH_SOURCE`, or a bare command name, and it doesn't scan home's dot-files, whose code-running ones `settings.json` names | symlink `~/.local/bin/deny-coverage` when that dir exists; `setup.sh` runs it after installing the settings |
 | `bin/claude-file-history` | Lists and restores Claude Code's own backups of a file (`~/.claude/file-history`), found through the transcripts | symlink `~/.local/bin/claude-file-history` when that dir exists |
 | `bin/npx` | Shim ahead of the real npx: for a launch by Claude Code (an MCP server, which starts in the project dir) or an exact-version spec (`pkg@1.2.3`), it puts `--prefix=/` first, so npx takes no package from the project dir's `node_modules` and reads no `.npmrc` there (sandbox gap N2). A launch by Claude Code also starts at `/` (sandbox gap SW1), so the server's cwd is `/`: a relative path it is given or writes to resolves there. The shim refuses a dot path on such a launch (`.`, `./x`, `--root=../x`, exit 1), which would otherwise name `/` or a dir under it with no error, so give that server an absolute path. A version-manager npx behind the shim (asdf, mise) that takes its version only from the project dir fails there: set a global default. Anything else keeps its cwd, such as your own `npx tool@1.2.3 ./x`, and without an exact version, such as your own `npx tsc`, reaches the real npx untouched. An npx command in a hook can run from `/`, so give it absolute paths and no glob: `npx prettier --write "**/*.js"` would walk the whole disk. `--prefix=/` also makes `/` npm's global prefix for that run (`npm_config_prefix=/` reaches the package). So a project's own MCP server that needs the project's registry or local install should start with `node <path>`, not npx: under the shim, `npx -y @corp/mcp` would resolve on the public registry | symlink `~/.local/bin/npx` when that dir exists (ahead of `/usr/bin` on PATH); an npx already there that isn't dotclaude's (npm's own, with npm's prefix at `~/.local`) is left alone and named |
 | `bin/chrome-bg` | WSL2 only, run sandbox-off: runs Windows Chrome behind all your windows for headed puppeteer probes; `run -- CMD` hands CMD the browserURL in `$CHROME_BG_URL` and stops Chrome when CMD ends, `start`, `stop` and `ls` manage detached runs, `check` is the live self-test; see docs/chrome-devtools-wsl.md "Background Windows Chrome for probes" | symlink `~/.local/bin/chrome-bg` when that dir exists |
@@ -711,7 +724,8 @@ need nothing extra.
   The shared engine for the practices skills (`server-code` and `auth-secrets`). Each skill ships an
   `events.toml` naming the edits that are its event (a route handler, a server action, a data
   export) and a few high-precision bad patterns. The engine reads every installed skill's file,
-  and the project's copy wins over `~/.claude/skills`. It acts at five levels:
+  installed skills first and a project's after them, so a project's file can only add rules. It acts at
+  five levels:
   - **L1:** an edit that is a skill's event is denied once until the skill is loaded in this
     context (a Skill call, or a Read of its SKILL.md since the last compaction). The deny carries
     the event's lines, and the resend passes.
@@ -741,8 +755,15 @@ need nothing extra.
   `xargs`, a heredoc or here-string body that a shell runs) passes, logged as `git-skipped`
   whenever what's left of the command names a commit, push or PR call. A command over 64 KB
   isn't parsed at all: it passes, logged as `git-skipped` when it names a call.
-  A PR readied in the GitHub web UI never reaches the hook. A repo turns it off with
-  `enabled = false` in `.claude/practices/config.toml`, or turns one rule off there with a reason.
+  A PR readied in the GitHub web UI never reaches the hook. Turning the gate off moved out of the repo,
+  since a session can write its own repo: `! practices-gate off <dir>... --until YYYY-MM-DD`, or
+  `--rule <id> --reason <why>` for one rule, covers that dir and everything below it (a repo and its
+  lanes root are two dirs). `practices-gate on <dir>` undoes it, and `practices-gate status` lists what
+  is off. Deny rules stop a session running it under its usual spellings, and each session start in a
+  covered dir names what is off. A repo's own `enabled` and `[[disable]]` in `.claude/practices/config.toml` are ignored
+  and logged; its `[auth] helpers` still count. A project's copy of an installed practices skill can
+  only add rules: session start names the clash and tells the model to compare the copies and propose
+  what to do.
   The engine keeps a 2 s budget under the 5 s kill. A scan the budget cuts short denies once on
   what it read and says so, and the resend of that range passes unscanned, with any push or PR
   call in the same command that the cut left unchecked; a push adding about 4 MB of text reaches
