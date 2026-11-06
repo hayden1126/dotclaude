@@ -2660,15 +2660,23 @@ class Push(BashBase):
     def test_without_claude_project_dir_a_cd_moves_neither_the_config_nor_the_skills(self):
         # Review round 2, leftover 1: the Bash levels read config.toml and the project skills
         # from the call's cwd, so a config there turned them off after a cd.
+        # A repo's config can no longer turn the gate off, so the probe is what it still sets:
+        # [auth] helpers, which clear SEC-01 here only when read from the project's own config.
         del self.env["CLAUDE_PROJECT_DIR"]
         self.start("startup")  # records the project as the session's cwd
+        handler = "export async function GET() {\n  return requireMember()\n}\n"
+        self.config_toml('[auth]\nhelpers = ["requireMember"]\n')
+        self.commit(**{"app/a/route.ts": handler})
+        self.assertIsNone(self.run_hook(self.event("git push", "PreToolUse", "b-proj")))
+        os.remove(os.path.join(self.proj, ".claude", "practices", "config.toml"))
         sub = os.path.join(self.proj, "sub")
         os.makedirs(os.path.join(sub, ".claude", "practices"))
         with open(os.path.join(sub, ".claude", "practices", "config.toml"), "w") as f:
-            f.write("enabled = false\n")
-        self.commit(**{"new.ts": "y({ ...body })\n"})
+            f.write('[auth]\nhelpers = ["requireMember"]\n')
+        self.commit(**{"app/b/route.ts": handler})
         out = self.run_hook({**self.event("git push", "PreToolUse", "b-sub"), "cwd": sub})
-        self.assertIn("SEC-17 (demo) at new.ts:1",
+        self.assertIsNotNone(out, "the helpers were read from the call's cwd")
+        self.assertIn("SEC-01 (demo) at app/b/route.ts:1",
                       out["hookSpecificOutput"]["permissionDecisionReason"])
 
     def test_the_gate_judges_the_repo_a_wrapper_dir_or_a_subshell_leaves(self):
