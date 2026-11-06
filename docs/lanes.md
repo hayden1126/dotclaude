@@ -241,8 +241,10 @@ Why it works this way:
   just before `handoff-check`, so a rewrite it asks for still gets checked. The check reads the lane's board row, so it can't disagree with
   the lead's gate. It sits in `ls` because the verdict needs gh, which fails in the sandbox where
   `handoff-check` runs, and because `lane ls *` is already an excluded command and an allow rule,
-  so it needed no new rule. Sandboxed, it refuses rather than report a flag it can't judge. The
-  lane has to run it, so the lead's gate stays the backstop.
+  so it needed no new rule. With no list of merged PRs (sandboxed, offline, or a full list on one
+  branch), it refuses rather than report a flag it can't judge. The lane has to run it, so the
+  lead's gate stays the backstop, and a reason the lane can't fix goes in its State for the lead
+  to read.
 - **What it can't tell.** A write after the merge is taken as the after-merge handoff, so a lane
   that never heard of a GitHub merge, then wrote a routine update and exited, passes; the lead's
   message to a live lane covers that window. Whatever can't be read (gh, a `mergedAt`, a session

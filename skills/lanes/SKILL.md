@@ -284,8 +284,9 @@ inherits the lead from it.
    gh's list holds its full 200 PRs, a lane older than the oldest, adopted, made with
    `new --reuse-branch` or switched to another branch gets one more gh call per branch for its
    merged PRs, and a full answer there keeps the flag on too. Until then, message the lane; if
-   its session is gone, add it to Hayden's asks. Never order a merge or close a lane before the
-   gate passes.
+   its session is gone, add it to Hayden's asks. A lane whose State names a reason it can't fix
+   (Lifecycle, step 6) has nothing left to do: read that, then ask Hayden. Never order a merge or
+   close a lane before the gate passes.
 6. **Watch and order.** Watch `lane ls`. Keep the merge order in the project STATUS. A lane
    whose install is live can't merge main sandboxed: its own hooks, skills and tests are
    write-protected then (`docs/lanes.md` S3). It asks the lead to reinstall from main, which
@@ -339,9 +340,9 @@ inherits the lead from it.
       `Keep open:` line: then leave it open. A merged lane with no live session passes when its
       record was written after the merge (its after-merge handoff), so it closes without an
       ask. A gate that fails on a lane with no live session is the lead's one ask to Hayden,
-      since no lane is left to ask: its record is older than the merge, so it may have stopped
-      before writing `Keep open:`, or its last session ended without writing it. Never
-      `--abandon` here.
+      since no lane is left to ask. Its State may name a reason it couldn't fix; otherwise its
+      record is older than the merge, so it may have stopped before writing `Keep open:`, or its
+      last session ended without writing it. Never `--abandon` here.
 
    Then tell Hayden one line ("#42 merged: installed, lane chart-fix closed, api-docs nudged"),
    or the step that failed. A failed step stops the chain. A chain stopped on something that can
@@ -424,7 +425,7 @@ resend passes.
 | `lane whoami` | your lane id, `main`, `unregistered` or `plain` (`--json` for scripts) |
 | `lane ls` | the board: branch, ahead/behind, PR, port block, claims, live sessions, context (CTX: `312k*` past the auto-pass soft tier, `523k!` past hard), state (STATE: busy, idle, waiting, shell; message a lane idle past soft to run /pass), tmux window, flags; then any held locks, each pair of lanes whose changed files overlap (with the files), a main checkout with two or more live sessions (each one's window, the lead first) or a stopped lead (its window to `fg` it in), and the install hold |
 | `lane ls --requests` | request to lane, from claims only |
-| `lane ls --check` | from a lane, bare: exit 0 when its row shows no `handoff?`, or exit 1 and the reason (the after-merge step before `merged #N`); it refuses outside a lane and when gh can't answer, as in the sandbox |
+| `lane ls --check` | from a lane, bare: exit 0 when its row shows no `handoff?`, or exit 1 and the reason (the after-merge step before `merged #N`); it refuses outside a lane and when gh can't list the lane's merged PRs (sandboxed, offline, or a full list on one branch) |
 | `lane who 42` | the lane that claims #42, or "unclaimed" (with a warning while a left-out record may hold it) |
 | `lane claim 42` / `lane release 42` | claim or drop a request for your lane |
 | `lane note "<text>"` | append a timestamped line to your record's State |
