@@ -151,6 +151,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     two sources, interview's jmo origin, the deck fonts, vendored parable and reveal), and
     anything ported without a licence comes out. Then a root LICENSE and the README line. Lane
     license has it.
+  - **demo-video upgrade** (Hayden, 2026-11-06: "at a later pass"): recorded voiceovers, music,
+    transitions, and real camera footage cut in with the scripted take. Today the skill records
+    one silent take and has one untested ffmpeg line for a voiceover. Starts after lane
+    hackathon merges (it owns `skills/demo-video/` and its tests); lead's lean: after the event.
+    Music and footage need a recorded source and licence per file (lane license's rule), and
+    recording a voice from WSL needs the Windows microphone, still unprobed.
   - **Fix lanes from lane design-audit** (Hayden's picks, 2026-11-01). Private: sandbox-audit
     FINDINGS, "Design-decision audit, 2026-11", one row per id with the detail. Most severe first:
     1. DA15 with DA16 (high): done in #161 (lane ports, 2026-11-04), with LR1 to LR7. The lead
