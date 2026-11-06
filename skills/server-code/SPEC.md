@@ -35,7 +35,7 @@ Every rule gets L0, L1 and L4 through the skill. The table below lists the furth
 ## Per-repo layer
 
 - `.claude/practices/server-code.md`: prose repo rules the skill reads first, such as "the auth helper is `requireMember()`" or "the limiter lives in `lib/rate-limit.ts`". They win over the defaults.
-- `.claude/practices/config.toml`: knobs for the hook. `[auth] helpers = ["requireMember"]` adds the repo's auth helpers to SEC-01: its `unless` holds the `{auth_helpers}` token, which the engine expands to its default helper names plus these, each regex-escaped. `[[disable]]` with a `rule` and a non-empty `reason` turns one event or rule off, and `enabled = false` turns the hook off for the repo.
+- `.claude/practices/config.toml`: knobs for the hook. `[auth] helpers = ["requireMember"]` adds the repo's auth helpers to SEC-01: its `unless` holds the `{auth_helpers}` token, which the engine expands to its default helper names plus these, each regex-escaped. Turning the hook or one rule off is not a repo setting: `practices-gate`, run by hand, does it for a dir until a date.
 
 ## Rules
 

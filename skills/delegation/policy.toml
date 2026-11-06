@@ -176,6 +176,19 @@ write_denied = ["~/.claude", "~/.gitconfig", "~/.config/git", "~/.zshrc", "~/.zs
   # chrome-devtools-mcp's config file, the Chrome it names (setup-chrome-wsl.sh) and its profile:
   # all load outside the sandbox at session start.
   "~/.config/cd4a", "~/chrome", "~/.cache/chrome-devtools-mcp",
+  # What unsandboxed code runs, sources or trusts in home: the same list as settings.json's Edit
+  # denies. Listed by tool, never by a glob over dot-dirs: ~/.cache/claude-sandbox stays open.
+  "~/.local", "~/.config", "~/.bun", "~/.cargo", "~/.rustup", "~/.npm", "~/.pub-cache",
+  "~/.agents", "~/.vscode-server", "~/bin", "~/node_modules", "~/.aws", "~/.google_workspace_mcp",
+  "~/.docker", "~/.supabase", "~/.azure", "~/.cache/uv", "~/.cache/pip", "~/.cache/pnpm",
+  "~/.cache/node", "~/.cache/node-gyp", "~/.cache/ms-playwright", "~/.cache/go-build",
+  "~/.cache/puppeteer", "~/.cache/google-chrome-for-testing-headless", "~/.cache/pipx",
+  "~/.zlogout", "~/.bash_login", "~/.bash_logout", "~/.bash_aliases", "~/.curlrc", "~/.wgetrc",
+  "~/.vimrc", "~/.exrc", "~/.pdbrc", "~/.gdbinit", "~/.pypirc", "~/.yarnrc", "~/.yarnrc.yml",
+  "~/.bunfig.toml", "~/.condarc", "~/.gemrc", "~/.irbrc", "~/.Rprofile", "~/.p10k.zsh",
+  "~/.fzf.zsh", "~/.fzf.bash", "~/Library/LaunchAgents", "~/.tmux.conf", "~/.inputrc", "~/.lesskey",
+  "~/.less", "~/.zcompdump", "~/CLAUDE.md", "~/CLAUDE.local.md", "~/.mcp.json", "~/.npm-init.js", "~/.netrc", "~/.git-credentials", "~/.secrets.env", "~/.npmrc",
+  "~/.claude.json", "~/.zsh_history", "~/.bash_history",
   "~/dotclaude/settings.json", "~/dotclaude/hooks", "~/dotclaude/skills", "~/dotclaude/agents",
   "~/dotclaude/CLAUDE.md", "~/dotclaude/codex", "~/.codex",
   # Run or installed outside the sandbox: ccstatusline, the Notification hook, setup.sh and
