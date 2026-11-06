@@ -92,8 +92,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
       device-wide mute").
   - **Live lanes** (briefs in each record). Merge order (Hayden, 2026-11-06): 1 deny-rules (`fix/deny-rules`, draft #167,
     carries the lead's notes), 2 hackathon (`feat/hackathon-mode`; a hackathon starts 2026-11-14, so
-    it merges by 2026-11-11), 3 practices (`feat/practices-dependencies`, its next PR). No install
-    while lane hackathon's dry run runs.
+    it merges by 2026-11-11), 3 practices (`feat/practices-dependencies`, its next PR). #167 installs
+    from its worktree before lane hackathon's dry run (Hayden, 2026-11-06), and no install runs
+    during it.
     **Install freeze on HAYPC, Nov 12 through Nov 15** (Hayden, 2026-11-05): no lane installs in
     that window, except fixes for lane hackathon, so the event runs what the dry run tested. The lead's
     reinstall after a merge counts as an install, so no other lane merges in that window.
@@ -408,8 +409,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 - **Next (lead, main checkout):**
   0. Live lanes: `lane ls`; state in their records (2026-11-05: hackathon, practices' next PR;
      deny-rules first in merge order with draft #167, reopened 2026-11-06; one slot free, Hayden's
-     pick from the Backlog). Lane hackathon re-checks its kickoff path after #167's reinstall from
-     main, before Nov 12, if its dry run ran before #167 installed. Lane hackathon merges by Nov 11:
+     pick from the Backlog). #167 installs before lane hackathon's dry run (Hayden's pick), so
+     the dry run tests the event's rules. Lane hackathon merges by Nov 11:
      move it up if the queue threatens that. Install freeze Nov 12 through Nov 15. A chain that
      stops before its "main moved" step still tells the lanes, and arms a wake on the blocker
      (`skills/lanes/SKILL.md`). Open
