@@ -338,6 +338,15 @@ sees it.
 | `setup.sh` | The installer | run once per machine |
 | `sync.sh` | Regenerates the derived plugin lists from live `~/.claude/` | run after plugin changes |
 
+### The hackathon skills on another machine
+
+The hackathon mode's skills (`hackathon`, `interview`, `demo-first-scope`, `demo-video`, `pitch`, `public-ready`) and `frontend-motion` are plain folders with no installer. To use them on another machine, copy all seven into the same skills folder, either `~/.claude/skills/` (every project) or a project's `.claude/skills/` (that project only), and start a new session. They sit side by side because `public-ready` runs `hackathon`'s scanner by a relative path. In a project, add `.claude/` to the file `git rev-parse --git-path info/exclude` prints, so a commit doesn't publish them. All but `frontend-motion` load only when typed, as `/hackathon` and so on.
+
+- `secret-scan` in `hackathon` needs git and python3 with its standard library.
+- `demo-video` needs Node, ffmpeg 5.1 or later with libx264 (ffprobe comes with it), a pinned Playwright installed inside the project's `demo/` folder, and its Chromium build. Its `SKILL.md` gives the install commands. macOS is untested.
+- Steps that name a dotclaude piece (the practices gate, lanes, a review skill) fall back to a plain step, or are skipped, when it isn't there.
+- `interview` and `frontend-motion` carry the licences of the work they adapt.
+
 ## Plugins
 
 `setup.sh` installs eight plugins. Seven are from
