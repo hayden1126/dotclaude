@@ -243,8 +243,10 @@ Why it works this way:
   `handoff-check` runs, and because `lane ls *` is already an excluded command and an allow rule,
   so it needed no new rule. With no list of merged PRs (sandboxed, offline, or a full list on one
   branch), it refuses rather than report a flag it can't judge. The lane has to run it, so the
-  lead's gate stays the backstop, and a reason the lane can't fix goes in its State for the lead
-  to read.
+  lead's gate stays the backstop. A reason the lane can't fix goes in its State, and the lead
+  takes it to Hayden, whose yes allows a plain `lane done` with the flag on (2026-11-06): `done`
+  never reads the flag, so the gate is the skill's rule, and a flag that can't clear would
+  otherwise hold the lane open for good.
 - **What it can't tell.** A write after the merge is taken as the after-merge handoff, so a lane
   that never heard of a GitHub merge, then wrote a routine update and exited, passes; the lead's
   message to a live lane covers that window. Whatever can't be read (gh, a `mergedAt`, a session

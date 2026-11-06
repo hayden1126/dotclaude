@@ -284,9 +284,10 @@ inherits the lead from it.
    gh's list holds its full 200 PRs, a lane older than the oldest, adopted, made with
    `new --reuse-branch` or switched to another branch gets one more gh call per branch for its
    merged PRs, and a full answer there keeps the flag on too. Until then, message the lane; if
-   its session is gone, add it to Hayden's asks. A lane whose State names a reason it can't fix
-   (Lifecycle, step 6) has nothing left to do: read that, then ask Hayden. Never order a merge or
-   close a lane before the gate passes.
+   its session is gone, or it answers that it can't fix the reason, add it to Hayden's asks with
+   that reason (`lane ls --json` gives it as `handoff_why`). Once he has seen it, his yes lets the
+   lead run a plain `lane done` with the flag on, which the standing approval doesn't cover.
+   Without that yes, never order a merge or close a lane before the gate passes.
 6. **Watch and order.** Watch `lane ls`. Keep the merge order in the project STATUS. A lane
    whose install is live can't merge main sandboxed: its own hooks, skills and tests are
    write-protected then (`docs/lanes.md` S3). It asks the lead to reinstall from main, which
@@ -340,9 +341,9 @@ inherits the lead from it.
       `Keep open:` line: then leave it open. A merged lane with no live session passes when its
       record was written after the merge (its after-merge handoff), so it closes without an
       ask. A gate that fails on a lane with no live session is the lead's one ask to Hayden,
-      since no lane is left to ask. Its State may name a reason it couldn't fix; otherwise its
-      record is older than the merge, so it may have stopped before writing `Keep open:`, or its
-      last session ended without writing it. Never `--abandon` here.
+      since no lane is left to ask (step 5 says what his yes allows). A record older than the
+      merge means the lane may have stopped before writing `Keep open:`, or its last session
+      ended without writing it. Never `--abandon` here.
 
    Then tell Hayden one line ("#42 merged: installed, lane chart-fix closed, api-docs nudged"),
    or the step that failed. A failed step stops the chain. A chain stopped on something that can
@@ -392,6 +393,7 @@ what").
 | A new-lane table, the merge order | the lead | its window |
 | The post-merge chain (The lead, step 7) | the lead | standing approval: no ask, one line or the failed step |
 | `lane done` after a merge | the lead | standing approval once the hand-back gate passes, unless the lane's Next has `Keep open:` |
+| `lane done` with `handoff?` still lit | the lead | asks Hayden each time, with the reason (The lead, step 5) |
 | `lane done --abandon` | the lead | asks Hayden every time (an ask rule) |
 | `lane park` of a lane waiting its merge turn | the lead | on the lane's `park me`, no ask: `lane open` undoes it |
 | More PRs to come on the lane | the lane | `Keep open: <why>` at the top of its Next |
