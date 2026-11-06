@@ -144,6 +144,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
 
   Backlog:
+  - **License dotclaude under MIT, in a PR of its own** (Hayden's pick 2026-11-06, via lane
+    hackathon). README's License section already says MIT, but the repo has no LICENSE file.
+    First trace where everything came from: parts carry their own licences (frontend-motion's
+    two sources, interview's jmo origin, the deck fonts, vendored parable and reveal), and
+    anything ported without a licence comes out. Then a root LICENSE and the README line. No
+    lane owns it yet.
   - **Fix lanes from lane design-audit** (Hayden's picks, 2026-11-01). Private: sandbox-audit
     FINDINGS, "Design-decision audit, 2026-11", one row per id with the detail. Most severe first:
     1. DA15 with DA16 (high): done in #161 (lane ports, 2026-11-04), with LR1 to LR7. The lead
@@ -407,8 +413,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 ## Notes for next session
 - **Next (lead, main checkout):**
   0. Live lanes: `lane ls`; state in their records (2026-11-06: hackathon, practices' next PR;
-     two slots free, Hayden's pick from the Backlog). #167 merged and is installed from main, so
-     lane hackathon's dry run tests the event's rules. Hayden's leftover asks from lane deny-rules
+     two slots free, Hayden's pick from the Backlog). #167 merged and is installed from main; lane
+     hackathon's dry run ran on it 2026-11-06 and is done, so installs may resume. Hayden's leftover asks from lane deny-rules
      (an overlay paste plus a setup rerun, probe leftovers, local tool cleanups): its closed
      record. Lane hackathon merges by Nov 11:
      move it up if the queue threatens that. Install freeze Nov 12 through Nov 15. A chain that
