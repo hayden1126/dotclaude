@@ -339,9 +339,9 @@ inherits the lead from it.
       lane gets no message: no session reads it, and its `rebase` flag carries it to its
       unpark.
    7. `lane done <id>` once the hand-back gate (step 5) passes, unless the lane's Next has a
-      `Keep open:` line: then leave it open. A merged lane with no live session passes when its
-      record was written after the merge (its after-merge handoff), so it closes without an
-      ask. A gate that fails on a lane with no live session is the lead's one ask to Hayden,
+      `Keep open:` line: then leave it open. A merged lane with no live session closes without
+      an ask when that gate passes, as it does after a complete after-merge handoff. A gate that
+      fails on a lane with no live session is the lead's one ask to Hayden,
       since no lane is left to ask (step 5 says what his yes allows). A record older than the
       merge means the lane may have stopped before writing `Keep open:`, or its last session
       ended without writing it. Never `--abandon` here.
