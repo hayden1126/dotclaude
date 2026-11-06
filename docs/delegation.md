@@ -108,7 +108,7 @@ it read, so an unread command would give a no-shell role a route to execution. A
 the lines. We didn't make
 a command mandatory: doc reviews and races no quick command triggers would lose real findings
 (Hayden, 2026-11-04). The rule and the gate come from pstack-claude, and the finding format from
-ponytail (both MIT), rewritten here; neither is installed.
+ponytail (github.com/dietrichgebert/ponytail), both MIT, rewritten here; neither is installed.
 
 ### Subagent policy
 

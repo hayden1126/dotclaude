@@ -41,4 +41,6 @@ Use these headings, in this order. Why and Verification are always there. The ot
 - **Blast radius:** what else this can break, and for whom.
 - **Verification:** the commands run and their results.
 
-<!-- The literal-prose rules adapt pstack-claude's unslop skill, rules 26, 32 and 33 (MIT). -->
+<!-- The literal-prose rules adapt pstack-claude's unslop skill, rules 26, 32 and 33
+(github.com/michael-denyer/pstack-claude, MIT, Copyright (c) 2026 Lauren Tan and Michael Denyer,
+text in LICENSE-pstack-claude). -->

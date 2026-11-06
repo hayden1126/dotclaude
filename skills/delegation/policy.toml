@@ -6,8 +6,8 @@
 # the script refuses a malformed file (it denies the policed tools, it does not guess).
 #
 # The five intents and their footers follow cc-safety-net (github.com/kenryu42/cc-safety-net,
-# MIT, Copyright (c) 2026 J Liew), reworded for delegated agents. Every denial names one, so the
-# agent knows whether to retry, narrow the task or report it.
+# MIT, Copyright (c) 2026 J Liew, text in LICENSE-cc-safety-net), reworded for delegated agents.
+# Every denial names one, so the agent knows whether to retry, narrow the task or report it.
 
 [intents]
 hard_stop = "Do not retry this or look for a workaround (another tool, flag or path). List it in blocked_actions and continue with the rest of the task."
