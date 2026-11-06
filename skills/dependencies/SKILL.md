@@ -24,7 +24,7 @@ If `.claude/practices/dependencies.md` exists in the repo, read it first. Its re
 No hook checks these lines. They apply all the same.
 
 - **Reuse first (not enforced).** Use the codebase, then the stdlib or platform, then an installed dependency, then new code. Never add a dependency for a few lines.
-- **Check the package (not enforced).** Confirm it exists and is the one intended: exact name, age, maintainers and repository. A name one letter off a famous package, or a week-old package with no repository, is a reason to stop and tell the user.
+- **Check the package (not enforced).** Confirm it exists and is the one intended: exact name, age, maintainers and repository. A name one letter off a famous package, or a package under a month old and with no repository, is a reason to stop and tell the user.
 - **Check the licence (not enforced).** Confirm it is compatible with this repo's licence and how the code ships.
 - **Lock and audit (not enforced here; SEC-60 is enforced at commit).** Keep a lockfile and run the ecosystem's audit (`npm audit`, `pip-audit`, `cargo audit`). Fix or flag what it reports, including a version the user pinned: name the advisory and the fixed version, then let the user decide about the pin.
 
