@@ -37,8 +37,10 @@ at CONTENT_MAX characters and each line at LINE_MAX. The token `{auth_helpers}` 
 expands to an alternation of AUTH_HELPERS plus the repo's `[auth] helpers`, each regex-escaped,
 so SEC-01 can name a repo's own auth helper.
 
-Skills are found in <project>/.claude/skills/*/ and in ${CLAUDE_CONFIG_DIR:-~/.claude}/skills/*/,
-links followed. On a name clash the project copy wins. The project dir, for every level and the
+Skills are found in ${CLAUDE_CONFIG_DIR:-~/.claude}/skills/*/ and in <project>/.claude/skills/*/,
+links followed. An edit, commit, push or PR call runs twice, installed skills first, and stops at the
+first pass that speaks (two_passes): a project's patterns can throw or hang, and the call is allowed
+when they do, but by then the installed skills have spoken. The project dir, for every level and the
 startup health check alike, is CLAUDE_PROJECT_DIR, else the cwd recorded at the session's first
 SessionStart, never the call's own cwd (a cd moves it); with neither, an edit is checked against
 the user's skills alone with the default config, logged as project-unknown, and the L4 digest
@@ -83,11 +85,22 @@ Subagents: a payload with agent_id carries the parent's transcript_path, so ever
 uses <transcript_path minus .jsonl>/subagents/agent-<agent_id>.jsonl, and its sidechain rows.
 When that file is missing or empty, the state file alone carries deny-once.
 
-Per repo, <project>/.claude/practices/config.toml: `enabled = false` turns the engine off there;
-`[[disable]]` with `rule` (an event or rule id, or `<skill>:<id>`) and a non-empty `reason` turns
-one off; `[auth] helpers = [...]` feeds `{auth_helpers}`, identifier names only (dotted allowed,
-like `auth.requireUser`; an empty or blank name would match any call), others dropped and
-logged. A malformed file falls back to the defaults (never turning a check off) and is logged.
+Per repo, <project>/.claude/practices/config.toml: `[auth] helpers = [...]` feeds
+`{auth_helpers}`, identifier names only (dotted allowed, like `auth.requireUser`; an empty or
+blank name would match any call), others dropped and logged. A malformed file falls back to the
+defaults (never turning a check off) and is logged.
+
+Turning the gate off isn't the repo's call, since a session can write its own repo. bin/practices-gate,
+run by hand, writes ~/.local/state/dotclaude/practices-off.json: dated entries that turn the engine
+off, or one rule off (an event or rule id, or `<skill>:<id>`) with a reason, at and below a dir. Its
+home comes from the passwd entry and no environment variable moves it. A repo's own `enabled` and
+`[[disable]]` are ignored and logged. A file that is malformed, a link, not a regular file, not the
+user's own or writable by others is ignored whole, so the gate stays on, and it is logged. Each
+session start names what is off for its project.
+
+A project skill can't replace an installed skill of the same name: every installed rule applies and
+the project copy adds only ids the installed skill lacks, in the second pass. Each session start names
+the clash and tells the model to compare the two copies and propose what to do.
 
 Failure posture (allow and loud): a BUDGET-second run budget on time.monotonic(); patterns left
 when it is spent are skipped and logged, and a transcript read checks it on every row it parses
@@ -194,12 +207,14 @@ runs, and a tracked symlink is read as its target path. The user's safe.director
 forwarded with -c, read as plain text from their global config files (one not theirs alone is
 skipped, and named when git refuses the repo). Each call's timeout is what is left of the budget.
 """
+import datetime
 import hashlib
 import json
 from bisect import bisect_right
 import mmap
 import os
 import re
+import signal
 import stat
 import sys
 import time
@@ -211,13 +226,27 @@ except ImportError:  # python3 < 3.11: reported by the startup health check
     tomllib = None
 
 BUDGET = 2.0  # seconds, well under settings.json's 5 s kill
-try:  # tests only: a tiny budget proves the skip path without a slow pattern
-    BUDGET = float(os.environ.get("PRACTICES_TEST_BUDGET") or BUDGET)
+try:  # tests only: a tiny budget proves the skip path without a slow pattern. Only with
+    # CLAUDE_CONFIG_DIR set, which a project's settings can't pass to a hook, as they can this one.
+    if os.environ.get("CLAUDE_CONFIG_DIR"):
+        BUDGET = float(os.environ.get("PRACTICES_TEST_BUDGET") or BUDGET)
 except ValueError:
     pass
 CONTENT_MAX = 256 << 10
 FILE_MAX = 1 << 20  # bytes of the current file read to apply an Edit; scans still cap at CONTENT_MAX
 LINE_MAX = 4000
+# Patterns' \\s* cross lines, so a whitespace run across lines costs each of them n^2 wherever a
+# literal comes before it, past any line cap. No pattern needs one this long: past it, such a run
+# keeps its line breaks up to this many and the last line's indent. Lines below 33 blank lines or
+# more then report a smaller number. A run inside a line stays, under LINE_MAX: finding keys hash
+# the raw line, and PATTERN_TIME bounds it.
+WS_RUN_MAX = 32
+# The time one event or rule may take in a run. Text a repo chooses can still make a pattern slow
+# (a long line of one character, repeated); this costs the run that rule, not the 5 s kill, which
+# would allow the call with every other rule unread.
+PATTERN_TIME = 0.4
+WS_RUN = re.compile(r"\s{%d,}" % (WS_RUN_MAX + 1))
+LINE_START_WS = re.compile(r"(?<![\\\[])\^(\(\?!)?\\s\*")
 PARSE_MAX = 1 << 20  # transcript rows bigger than this are never a load or a deny
 LOG_MAX = 64 << 10
 DIGEST_MAX = 2000
@@ -230,6 +259,14 @@ NOT_ENTRIES = (b'{"type":"api-request', b'{"type":"attachment"', b'{"type":"file
 AUTH_HELPERS = ("auth", "getServerSession", "getSession", "currentUser", "getCurrentUser",
                 "requireUser", "requireAuth", "verifySession", "getUser", "withAuth")
 ID = re.compile(r"[\w.-]+")
+OFF_FILE_MAX = 64 * 1024
+CONFIG_MAX = 64 * 1024
+HELPERS_MAX = 100
+HELPER_LEN_MAX = 80
+SKILL_NAME_MAX = 64
+EDIT_TOOLS = ("Edit", "Write", "MultiEdit")
+SKILL_MAX = 1 << 20
+PROJECT_SKILLS_MAX = 256 * 1024  # all of a project's events.toml files together
 AT = ("edit", "commit")  # a [[rule]]'s `at` when it gives none: checked at both
 # An [auth] helpers name: an identifier, dotted allowed (auth.requireUser). An empty or blank
 # name would turn `(?:...|)` into a match for any call and silence SEC-01.
@@ -252,7 +289,7 @@ def log(kind, detail):
                 os.replace(path, path + ".1")
         except OSError:
             pass
-        with open(path, "a", encoding="utf-8") as f:
+        with open(path, "a", encoding="utf-8", errors="backslashreplace") as f:
             f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {kind} {detail}\n")
     except OSError:
         pass
@@ -359,6 +396,10 @@ def path_matches(globs, rel):
 
 
 def expand(pattern, helpers):
+    # With re.M, \\s after ^ runs across the blank lines below, from each one, which adds up over
+    # many short runs. Anything those \\s* found past a newline, ^ finds on its own line, so
+    # staying on the line finds the same.
+    pattern = LINE_START_WS.sub(lambda m: "^" + (m.group(1) or "") + r"[^\S\n]*", pattern)
     if "{auth_helpers}" not in pattern:
         return pattern
     names = sorted(set(AUTH_HELPERS) | {h for h in helpers if HELPER.fullmatch(h)},
@@ -370,9 +411,21 @@ def search(pattern, text, helpers=()):
     return re.search(expand(pattern, helpers), text, re.MULTILINE) is not None
 
 
+def _cut_run(m):
+    run = m.group()
+    if "\n" not in run:
+        return run
+    return "\n" * min(run.count("\n"), WS_RUN_MAX) + run[run.rindex("\n") + 1:]
+
+
+def squeeze(text):
+    return WS_RUN.sub(_cut_run, text)
+
+
 def scan_text(content):
-    """The content as scanned: CONTENT_MAX characters, each line cut to LINE_MAX."""
-    return "\n".join(line[:LINE_MAX] for line in content[:CONTENT_MAX].split("\n"))
+    """The content as scanned: CONTENT_MAX characters, each line cut to LINE_MAX, each whitespace
+    run across lines to WS_RUN_MAX line breaks."""
+    return squeeze("\n".join(line[:LINE_MAX] for line in content[:CONTENT_MAX].split("\n")))
 
 
 def event_fires(event, rel, text, helpers=(), crumb=None):
@@ -404,7 +457,7 @@ def rule_fires(rule, rel, text, helpers=(), crumb=None, after_text=None, after=N
         crumb.mark(rel, "L2", rule["id"])
     if not guarded(rule["when"], text, helpers, rule["id"]):
         return False
-    return not (rule.get("unless") and guarded(rule["unless"], after_text, helpers, rule["id"]))
+    return not excused(rule, after_text, helpers)
 
 
 def line_hits(rule, lines, helpers=()):
@@ -414,7 +467,7 @@ def line_hits(rule, lines, helpers=()):
     for n, line in lines:
         if not guarded(rule["when"], line, helpers, rule["id"]) or allowed(rule["id"], line):
             continue
-        if rule.get("unless") and guarded(rule["unless"], line, helpers, rule["id"]):
+        if excused(rule, line, helpers):
             continue
         out.append((n, line))
     return out
@@ -427,8 +480,9 @@ def file_hits(rule, lines, blob, helpers=()):
     first, on the added lines alone: the blob checks cost a pass over the whole file each, so
     they run only for a file `when` flags (a file with no `when` match gives [] either way)."""
     hits = when_lines(rule, lines, helpers)
-    if not hits or allowed(rule["id"], blob) or (rule.get("unless") and guarded(
-            rule["unless"], blob, helpers, rule["id"])):
+    if not hits:
+        return []
+    if allowed(rule["id"], blob) or excused(rule, scan_text(blob), helpers):
         return []
     return hits
 
@@ -436,16 +490,22 @@ def file_hits(rule, lines, blob, helpers=()):
 def when_lines(rule, lines, helpers=()):
     """[(number, line)] of the lines that a match of a rule's `when`, over the lines joined,
     starts on."""
-    lines = list(lines)
-    text = "\n".join(line for _, line in lines)
+    lines, blanks, kept = list(lines), 0, []
+    for n, line in lines:  # the numbers stay with the lines, so blank ones can go from the join
+        blank = not line.strip()
+        blanks = blanks + 1 if blank else 0
+        if blanks <= WS_RUN_MAX:
+            kept.append((n, line, "" if blank else line))
+    lines = [item[:2] for item in kept]
+    text = "\n".join(item[2] for item in kept)
     starts, pos = [], 0
-    for _, line in lines:
+    for item in kept:
         starts.append(pos)
-        pos += len(line) + 1
+        pos += len(item[2]) + 1
     try:
         found = {bisect_right(starts, m.start()) - 1
                  for m in re.finditer(expand(rule["when"], helpers), text, re.MULTILINE)}
-    except (re.error, RecursionError, TypeError, ValueError) as e:
+    except (re.error, RecursionError, TypeError, ValueError, OverflowError) as e:
         raise PatternError(f"{rule['id']}: {type(e).__name__}: {e}") from e
     return [lines[k] for k in sorted(found)]
 
@@ -459,11 +519,42 @@ class PatternError(Exception):
     pass
 
 
+class SlowPattern(PatternError):
+    pass
+
+
+def on_the_clock(call):
+    """call() under a repeating alarm at PATTERN_TIME: Python's re engine runs signal handlers as
+    it matches. Unclocked where there is no alarm or this isn't the main thread."""
+    def ring(_signum, _frame):
+        raise SlowPattern(f"ran past {PATTERN_TIME}s on this text")
+
+    try:
+        signal.signal(signal.SIGALRM, ring)
+        signal.setitimer(signal.ITIMER_REAL, PATTERN_TIME, PATTERN_TIME)
+    except (AttributeError, ValueError):
+        return call()
+    try:
+        return call()
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+
+
 def guarded(pattern, text, helpers, owner):
     try:
         return search(pattern, text, helpers)
-    except (re.error, RecursionError, TypeError, ValueError) as e:
+    except (re.error, RecursionError, TypeError, ValueError, OverflowError) as e:
         raise PatternError(f"{owner}: {type(e).__name__}: {e}") from e
+
+
+def excused(rule, text, helpers):
+    """Whether a rule's `unless` matches. One that runs out of time excuses nothing, so slow text
+    can't stand in for the guard the rule asks for."""
+    try:
+        return bool(rule.get("unless")) and guarded(rule["unless"], text, helpers, rule["id"])
+    except SlowPattern as e:
+        log("pattern-skipped", f"{rule['id']}'s unless: {e}; the rule still fires")
+        return False
 
 
 def lint_regex(pattern):
@@ -530,19 +621,29 @@ def _at_ok(at):
     return _strs(at) and bool(at) and set(at) <= set(AT) and len(at) == len(set(at))
 
 
+def read_toml(path, cap):
+    """The TOML at path. A repo chooses these files, so one that would block (a FIFO), never end (a
+    link to /dev/zero) or take the run's budget to parse raises ValueError instead."""
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    with os.fdopen(fd, "rb") as f:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > cap:
+            raise ValueError(f"not a regular file of at most {cap} bytes")
+        return tomllib.loads(f.read(cap + 1).decode("utf-8"))
+
+
 def load_skill(folder):
     """(skill dict, None) for a folder's events.toml, or (None, why) when it is malformed."""
     path = os.path.join(folder, "events.toml")
     try:
-        with open(path, "rb") as f:
-            data = tomllib.load(f)
+        data = read_toml(path, SKILL_MAX)
     except (OSError, ValueError, RecursionError) as e:  # TOMLDecodeError is a ValueError
         return None, f"{path}: {type(e).__name__}: {e}"
     name = data.get("skill", os.path.basename(folder))
     gate = data.get("gate", [])
     events, rules = data.get("event", []), data.get("rule", [])
-    if not isinstance(name, str) or not ID.fullmatch(name) or not _strs(gate) or not (
-            isinstance(events, list) and isinstance(rules, list)):
+    if not isinstance(name, str) or not ID.fullmatch(name) or len(name) > SKILL_NAME_MAX \
+            or not _strs(gate) or not (isinstance(events, list) and isinstance(rules, list)):
         return None, f"{path}: bad skill, gate, event or rule"
     ids = []
     for ev in events:
@@ -564,64 +665,180 @@ def load_skill(folder):
             "rules": rules}, None
 
 
-def discover(project):
-    """{name: skill} from the user's skills, then the project's (none when project is None),
-    which win a clash."""
-    skills = {}
-    roots = [os.path.join(config_home(), "skills")]
-    if project:
-        roots.append(os.path.join(project, ".claude", "skills"))
-    for root in roots:
+def add_copy(installed, copy):
+    """A project copy of an installed skill, for a view of both (the session-start note, the
+    digest): its events and rules with new ids are added, so it can't take anything away. Its gate
+    lines stay out: they print under the installed skill's SKILL.md as what that skill requires."""
+    ids = {x["id"] for x in installed["events"] + installed["rules"]}
+    installed["events"] += [e for e in copy["events"] if e["id"] not in ids]
+    installed["rules"] += [r for r in copy["rules"] if r["id"] not in ids]
+    installed.setdefault("copies", []).append(copy["dir"])
+
+
+def _load_root(root, quiet, cap=None):
+    """[skill] from each folder under root that has an events.toml. A project's folders share cap
+    bytes. Whatever a folder holds, a fault here costs only that skill."""
+    out = []
+    try:
+        names = sorted(os.listdir(root))
+    except OSError:
+        return out
+    for n in names:
+        folder = os.path.join(root, n)
+        path = os.path.join(folder, "events.toml")
         try:
-            names = sorted(os.listdir(root))
-        except OSError:
-            continue
-        for n in names:
-            folder = os.path.join(root, n)
-            if not os.path.isfile(os.path.join(folder, "events.toml")):
+            if not os.path.isfile(path):
                 continue
-            skill, why = load_skill(folder)
-            if skill is None:
-                log("skill-disabled", why)
-            else:
-                skills[skill["name"]] = skill
+            if cap is not None:
+                cap -= os.path.getsize(path)
+            skill, why = (None, f"{folder}: over {PROJECT_SKILLS_MAX} bytes of project skills") \
+                if cap is not None and cap < 0 else load_skill(folder)
+        except Exception as e:  # noqa: BLE001 (a repo chooses these files)
+            skill, why = None, f"{folder}: {type(e).__name__}: {e}"
+        if skill is not None:
+            out.append(skill)
+        elif not quiet:
+            log("skill-disabled", why)
+    return out
+
+
+# Which skills this pass sees: "all" for a view of both, "installed" or "project" for a level's two
+# passes (two_passes).
+SCOPE = {"now": "all"}
+
+
+def discover(project, quiet=False):
+    """{name: skill} in the current SCOPE (a project's none when project is None). In "all", a
+    project skill of an installed skill's name adds to it and never replaces it (add_copy). In
+    "project", such a copy holds only the ids the installed skill lacks. quiet logs no malformed
+    skill, for a second look in one run."""
+    scope = SCOPE["now"]
+    installed = {sk["name"]: sk for sk in _load_root(os.path.join(config_home(), "skills"), quiet)}
+    if scope == "installed" or not project:
+        return {} if scope == "project" else installed
+    copies = _load_root(os.path.join(project, ".claude", "skills"), quiet, PROJECT_SKILLS_MAX)
+    skills = {} if scope == "project" else installed
+    for copy in copies:
+        name = copy["name"]
+        if scope == "all" and name in installed:
+            add_copy(installed[name], copy)
+            continue
+        if name in installed:
+            ids = {x["id"] for x in installed[name]["events"] + installed[name]["rules"]}
+            copy["events"] = [e for e in copy["events"] if e["id"] not in ids]
+            copy["rules"] = [r for r in copy["rules"] if r["id"] not in ids]
+        skills[name] = copy
     return skills
 
 
+def passwd_home():
+    """The home in the passwd entry: the off file must not move with $HOME or $XDG_STATE_HOME,
+    which a project's settings can set for a hook. bin/practices-gate does the same."""
+    try:
+        import pwd  # noqa: PLC0415 (Unix only)
+    except ImportError:
+        return os.path.expanduser("~")
+    try:
+        return pwd.getpwuid(os.getuid()).pw_dir
+    except KeyError:  # a uid with no entry: no off file can be trusted, so the gate stays on
+        return None
+
+
+def off_file():
+    home = passwd_home()
+    return home and os.path.join(home, ".local", "state", "dotclaude", "practices-off.json")
+
+
+def _off_entry_ok(e):
+    if not isinstance(e, dict) or not isinstance(e.get("dir"), str):
+        return False
+    d, until = e["dir"], e.get("until")
+    home = passwd_home()
+    if (not os.path.isabs(d) or os.path.normpath(d) != d or under(home, d)  # never home or above
+            or home == d or home.startswith(d.rstrip(os.sep) + os.sep)):  # home's link too
+        return False
+    try:
+        # Exactly YYYY-MM-DD: fromisoformat also reads 2026-W45-4, which as a string sorts after
+        # every date and so would never lapse.
+        if datetime.date.fromisoformat(until).isoformat() != until:
+            return False
+    except (TypeError, ValueError):
+        return False
+    if "rule" in e:
+        return (isinstance(e["rule"], str) and bool(e["rule"]) and isinstance(e.get("reason"), str)
+                and bool(e["reason"].strip()))
+    return True
+
+
+def off_entries(project):
+    """The entries in force at the project: (entries, whether the file is bad). Any fault ignores
+    the whole file, so the gate stays on."""
+    if not project:
+        return [], False
+    path = off_file()
+    if not path:
+        log("off-file-bad", "this uid has no passwd entry")
+        return [], True
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return [], False
+    except OSError as e:
+        log("off-file-bad", f"{path}: {type(e).__name__}")
+        return [], True
+    try:
+        st = os.fstat(fd)
+        if (not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid()
+                or st.st_mode & (stat.S_IWGRP | stat.S_IWOTH) or st.st_size > OFF_FILE_MAX):
+            log("off-file-bad", f"{path}: not a private regular file of this user's")
+            return [], True
+        data = json.loads(os.read(fd, OFF_FILE_MAX + 1))
+    except (OSError, ValueError, RecursionError) as e:
+        log("off-file-bad", f"{path}: {type(e).__name__}")
+        return [], True
+    finally:
+        os.close(fd)
+    entries = data.get("entries") if isinstance(data, dict) and data.get("version") == 1 else None
+    if not isinstance(entries, list) or not all(_off_entry_ok(e) for e in entries):
+        log("off-file-bad", f"{path}: not the format bin/practices-gate writes")
+        return [], True
+    real = os.path.realpath(project)
+    today = datetime.date.today().isoformat()  # local, as the command's --until is
+    return [e for e in entries if under(real, e["dir"]) and e["until"] >= today], False
+
+
 def load_config(project):
-    """{"enabled", "disable" (a set of ids and skill:ids), "helpers"} from the project's
-    config.toml; defaults on any fault, or when project is None."""
+    """{"enabled", "disable" (a set of ids and skill:ids), "helpers"}: the first two from the off
+    file, the helpers from the project's config.toml; defaults on any fault, or when project is
+    None."""
     default = {"enabled": True, "disable": set(), "helpers": ()}
     if not project:
         return default
+    entries, _ = off_entries(project)
+    off = {"enabled": not any("rule" not in e for e in entries),
+           "disable": {e["rule"] for e in entries if "rule" in e}, "helpers": ()}
     path = os.path.join(project, ".claude", "practices", "config.toml")
     try:
-        with open(path, "rb") as f:
-            data = tomllib.load(f)
+        data = read_toml(path, CONFIG_MAX)
     except FileNotFoundError:
-        return default
+        return off
     except (OSError, ValueError, RecursionError) as e:
         log("config-malformed", f"{path}: {type(e).__name__}: {e}")
-        return default
-    enabled = data.get("enabled", True)
-    disable = data.get("disable", [])
+        return off
+    if "enabled" in data or "disable" in data:
+        log("config-ignored", f"{path}: a repo can't turn the gate off; run `practices-gate` by hand")
     auth = data.get("auth", {})
     helpers = auth.get("helpers", []) if isinstance(auth, dict) else None
-    if not isinstance(enabled, bool) or not isinstance(disable, list) or not _strs(helpers):
-        log("config-malformed", f"{path}: bad enabled, disable or auth.helpers")
-        return default
-    off = set()
-    for d in disable:
-        if (isinstance(d, dict) and isinstance(d.get("rule"), str) and d["rule"]
-                and isinstance(d.get("reason"), str) and d["reason"].strip()):
-            off.add(d["rule"])
-        else:
-            log("config-malformed", f"{path}: a [[disable]] without rule and reason is ignored")
+    if not _strs(helpers):
+        log("config-malformed", f"{path}: bad auth.helpers")
+        return off
     bad = [h for h in helpers if not HELPER.fullmatch(h)]
     if bad:
         log("config-malformed", f"{path}: auth.helpers dropped {bad!r}: not identifier names")
-    return {"enabled": enabled, "disable": off,
-            "helpers": tuple(h for h in helpers if HELPER.fullmatch(h))}
+    good = [h for h in helpers if HELPER.fullmatch(h) and len(h) <= HELPER_LEN_MAX]
+    if len(good) > HELPERS_MAX:  # these reach installed rules' patterns, in the first pass
+        log("config-malformed", f"{path}: auth.helpers kept the first {HELPERS_MAX}")
+    return {**off, "helpers": tuple(good[:HELPERS_MAX])}
 
 
 def is_off(cfg, skill, item_id):
@@ -702,6 +919,23 @@ class Transcript:
                     return not b.get("is_error")
         return False
 
+    def call_name(self, tool_id, before):
+        """The tool name of the call with this id before offset before, or None if not found."""
+        if not isinstance(tool_id, str) or not tool_id:
+            return None
+        needle = json.dumps(tool_id).encode()
+        i = self.m.rfind(needle, 0, before)
+        while i != -1:  # backward: the call sits just before its result
+            check_budget()
+            s, e = self.line_at(i)
+            d = self.parse(s, e)
+            if d is not None and d.get("type") == "assistant":
+                for b in blocks(d):
+                    if b.get("type") == "tool_use" and b.get("id") == tool_id:
+                        return b.get("name")
+            i = self.m.rfind(needle, 0, s)
+        return None
+
     def assistant_after(self, pos):
         return any(d.get("type") == "assistant" for _, _, d in self.hits(b'"assistant"', pos))
 
@@ -733,16 +967,25 @@ def result_texts(d):
 
 
 def loaded_name(b):
-    """The skill a tool_use block loads (its bare name), or None."""
+    """What a tool_use block loads: a Skill call's bare name, or the realpath of the dir whose
+    SKILL.md a Read took, since a Read names one copy and a repo can hold its own of any name.
+    None otherwise."""
     inp = b.get("input") if isinstance(b.get("input"), dict) else {}
     if b.get("name") == "Skill" and isinstance(inp.get("skill"), str):
         return inp["skill"].rsplit(":", 1)[-1].strip() or None
     fp = inp.get("file_path")
     if b.get("name") == "Read" and isinstance(fp, str) and fp.replace("\\", "/").endswith(
             "/SKILL.md"):
-        parent = fp.replace("\\", "/").rsplit("/", 2)
-        return parent[-2] if len(parent) >= 2 and parent[-2] else None
+        try:
+            return os.path.dirname(os.path.realpath(os.path.expanduser(fp.replace("\\", "/"))))
+        except ValueError:  # a NUL or a lone surrogate: no file by that name was read
+            return None
     return None
+
+
+def is_loaded(skill, loads):
+    return (skill["name"] in loads or os.path.basename(skill["dir"]) in loads
+            or os.path.realpath(skill["dir"]) in loads)
 
 
 class Window:
@@ -772,9 +1015,19 @@ class Window:
                         names.add(n)
         return names
 
-    def results(self, needle):
-        return [text for _, _, d in self.rows(needle) if d.get("type") == "user"
-                for text in result_texts(d)]
+    def denies(self, needle):
+        """The text of each errored result of an edit tool's call that holds needle: a hook's deny
+        reads that way, and a file the model read, or a Bash call that failed printing it, doesn't.
+        A call whose row isn't found (a compaction dropped it) counts."""
+        out = []
+        for s, _, d in self.rows(needle):
+            if d.get("type") != "user":
+                continue
+            for b in blocks(d):
+                if b.get("type") == "tool_result" and b.get("is_error"):
+                    if self.t.call_name(b.get("tool_use_id"), s) in (None, *EDIT_TOOLS):
+                        out += list(result_texts({"message": {"content": [b]}}))
+        return out
 
 
 def l1_window(t):
@@ -1147,8 +1400,10 @@ def run_patterns(items, fn, cut=False):
     out = []
     for n, item in enumerate(items):
         try:
-            if fn(item):
+            if on_the_clock(lambda item=item: fn(item)):
                 out.append(item)
+        except SlowPattern as e:
+            log("pattern-skipped", f"{item[0]['name']}:{item[1]['id']}: {e}")
         except PatternError as e:
             log("pattern-skipped", str(e))
         except Budget:
@@ -1228,10 +1483,10 @@ def pre_tool_use(event):
             CRUMB.mark(rel, "transcript", "L1 loads and denies")
             win, bid = l1_window(t) if t is not None else (None, "none")
             loads = win.loads() if win else set()
-            denied = win.results(b"[practices:L1:") if win else []
+            denied = win.denies(b"[practices:L1:") if win else []
             pending = {}
             for s, ev in fired:
-                if s["name"] in loads or os.path.basename(s["dir"]) in loads:
+                if is_loaded(s, loads):
                     continue
                 marker = f"[practices:L1:{s['name']}:{ev['id']}]"
                 key = f"L1|{bid}|{s['name']}|{ev['id']}"
@@ -1247,7 +1502,7 @@ def pre_tool_use(event):
             denied = []
             if hit and t is not None:
                 CRUMB.mark(rel, "transcript", "L2 denies")
-                denied = Window(t, 0, None).results(b"[practices:L2:")
+                denied = Window(t, 0, None).denies(b"[practices:L2:")
             pending = []
             for s, r in hit:
                 marker = f"[practices:L2:{s['name']}:{r['id']}:{rel}]"
@@ -1256,7 +1511,12 @@ def pre_tool_use(event):
                     continue
                 pending.append((s, r))
                 keys.append(key)
-                keys += [f"{key}|{_sha1(line.strip())}" for line in l2_lines(r, text, helpers)]
+                try:
+                    lines = on_the_clock(lambda r=r: l2_lines(r, text, helpers))
+                except SlowPattern as e:  # the rule's key alone: a later scan then rereads the file
+                    log("pattern-skipped", f"{s['name']}:{r['id']}: {e}")
+                    lines = []
+                keys += [f"{key}|{_sha1(line.strip())}" for line in lines]
             if pending:
                 reason = l2_reason(pending, rel)
         # A deny needs a way for its resend through: the state key, or a transcript that will
@@ -1499,13 +1759,24 @@ def under(path, root):
     return p == root or p.startswith(root.rstrip(os.sep) + os.sep)
 
 
+def read_plain(path, cap):
+    """Up to cap bytes of a regular file; OSError for anything else, so a FIFO can't block."""
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError("not a regular file")
+        return os.read(fd, cap)
+    finally:
+        os.close(fd)
+
+
 def alternates(objects, depth=0):
     """The realpath of each object dir that objects/info/alternates names, then of the ones
     each of those names (lazily, so a caller stops before reading past an outside one); None
     for an entry this can't read (a quoted path), or past git's depth."""
     try:
-        with open(os.path.join(objects, "info", "alternates"), "rb") as f:
-            text = f.read(GITCONFIG_MAX).decode("utf-8", "surrogateescape")
+        text = read_plain(os.path.join(objects, "info", "alternates"), GITCONFIG_MAX).decode(
+            "utf-8", "surrogateescape")
     except FileNotFoundError:
         return
     except OSError:
@@ -1514,7 +1785,7 @@ def alternates(objects, depth=0):
     for line in text.split("\n"):  # as git reads it: no stripping, # starts a comment
         if not line or line.startswith("#"):
             continue
-        if line.startswith('"') or depth >= ALTERNATES_DEPTH:
+        if line.startswith('"') or "\0" in line or depth >= ALTERNATES_DEPTH:
             yield None
             continue
         d = os.path.realpath(os.path.join(objects, line))  # an absolute line stays itself
@@ -1543,11 +1814,12 @@ class Bounds:
         else:  # a linked worktree, like a lane
             back = None
             try:
-                with open(os.path.join(gd, "gitdir"), encoding="utf-8",
-                          errors="surrogateescape") as f:
-                    back = f.read(4096).strip()
+                back = read_plain(os.path.join(gd, "gitdir"), 4096).decode(
+                    "utf-8", "surrogateescape").strip()
             except OSError:
                 pass
+            if back and "\0" in back:
+                back = None
             top = os.path.realpath(r.top) if r.top else None
             ok = bool(back and top and under(gd, cd) and under(self.project, top)
                       and os.path.realpath(os.path.join(gd, back))
@@ -1683,7 +1955,8 @@ def scan(repo, spec, rules, level, ctx, lockfiles=True):
     (logged as scan-truncated), the findings are those read before it and cut is the range's
     cut key, `<level>|engine|cut|-|sha1(git dir and commits)`: a level that denies on them
     keeps it, and a resend of the same range then passes unscanned (logged), rather than
-    getting further and being denied again."""
+    getting further and being denied again. The key is shared by a level's two passes, so that
+    resend passes as the deny said, in both."""
     found, key = [], f"{level}|engine|cut|-|unread"
     try:
         commits, more = repo.commits(*spec, cap=MAX_COMMITS)
@@ -1705,7 +1978,7 @@ def scan(repo, spec, rules, level, ctx, lockfiles=True):
 def unchecked_key(ctx, level, n):
     """The key of the command's call number n (pushes first, then PR calls), which a cut scan
     earlier in the same command left unchecked: tied to that scan's cut key and the command, so
-    only the resend of the same command over the same commits passes it."""
+    only a resend of the same command whose cut scan read the same commits passes it."""
     return f"{level}|engine|cut|-|" + _sha1(f"{ctx['cut']}\n{n}\n{ctx['command']}")
 
 
@@ -1750,8 +2023,11 @@ def _scan(repo, commits, more, rules, level, ctx, lockfiles, found):
     if locks and not is_off(ctx["cfg"], ENGINE, "SEC-60") and not ctx["audited"]():
         for commit, path, noid in locks:
             found.append(Finding(level, ENGINE, SEC60, path, 0, noid, commit))
-    wanted = [f for f in files
-              if any(not r.get("paths") or path_matches(r["paths"], f[1]) for _, r in rules)]
+    wanted = []
+    for f in files:
+        check_budget("changed-file list")
+        if any(not r.get("paths") or path_matches(r["paths"], f[1]) for _, r in rules):
+            wanted.append(f)
     blobs, skipped = repo.blobs([x for _, _, o, n, _ in wanted for x in (n, o)], FILE_MAX,
                                 BYTES_MAX)
     if skipped:
@@ -1872,7 +2148,19 @@ def record_heads(event, commits, bounds):
 
 def recorded_heads(event):
     """(heads, tops) that record_heads wrote for this tool_use_id (deleted once read), or None.
-    A record without tops (written before they were) reads as tops unknown."""
+    A record without tops (written before they were) reads as tops unknown. The file goes at the
+    first read, so a level's second pass gets the same answer."""
+    if SCOPE["now"] == "all":
+        return _read_heads(event)
+    if "record" not in HEADS_READ:
+        HEADS_READ["record"] = _read_heads(event)
+    return HEADS_READ["record"]
+
+
+HEADS_READ = {}
+
+
+def _read_heads(event):
     path = _heads_file(event)
     try:
         with open(path, encoding="utf-8") as f:
@@ -2205,6 +2493,9 @@ def _l3r(event, ghs, skills, cfg, ts, ctx, bounds, first, blocks_, keys, found, 
         events = [(s, ev) for s in skills.values() for ev in s["events"]
                   if not is_off(cfg, s, ev["id"])]
         for path, oid in files:
+            if time.monotonic() - START > BUDGET:  # keep what the files read so far have told
+                log("budget-spent", f"after {BUDGET}s, L3r stopped reading the changed files")
+                break
             text = scan_text(text_of(blobs.get(oid)) or "")
             for s, _ in run_patterns(events, lambda x: event_fires(x[1], path, text,
                                                                   cfg["helpers"], CRUMB)):
@@ -2389,8 +2680,7 @@ def compact(event):
             CRUMB.mark("(compaction digest)", "transcript", "L4 loads")
             t = Transcript(m, bool(event.get("agent_id")))
             loads = compact_window(t).loads()
-            names = sorted(n for n, s in skills.items()
-                           if n in loads or os.path.basename(s["dir"]) in loads)
+            names = sorted(n for n, s in skills.items() if is_loaded(s, loads))
             if names:
                 out["additionalContext"] = digest(names, skills)
     except Budget as e:
@@ -2477,6 +2767,8 @@ LABELS = {"skill-disabled": ("skill disabled", "skills disabled"),
           "pattern-skipped": ("pattern skipped", "patterns skipped"),
           "budget-spent": ("time budget spent", "time budgets spent"),
           "config-malformed": ("malformed config", "malformed configs"),
+          "config-ignored": ("repo off setting ignored", "repo off settings ignored"),
+          "off-file-bad": ("unusable off file", "unusable off file reads"),
           "state-error": ("state error", "state errors"), "crash": ("crash", "crashes"),
           "git-skipped": ("git call skipped", "git calls skipped"),
           "scan-truncated": ("scan cut short", "scans cut short"),
@@ -2525,6 +2817,87 @@ def prune(folder, now):
         pass
 
 
+def start_notes(event):
+    """(lines for the user, text for the model) about this project at any session start: what the
+    off file turns off here, and each project copy of an installed skill. Paths reach the model
+    only when printable, since a folder name is the project's to choose."""
+    project = bash_project(event)
+    if not project:
+        return [], None
+    lines = []
+    entries, bad = off_entries(project)
+    if bad:
+        lines.append("the off file can't be used, so the gate stays on here")
+    for e in entries:
+        what = f"rule {e['rule']} is off ({e['reason']})" if "rule" in e else "the gate is off"
+        lines.append(f"{what} in {e['dir']} until {e['until']} (practices-gate)".replace(
+            "the gate is off in", "off in"))
+    helpers = load_config(project)["helpers"]
+    if helpers:
+        lines.append("this project names its own auth checks, which quiet SEC-01: "
+                     + ", ".join(helpers[:10]) + (" and more" if len(helpers) > 10 else ""))
+    context = []
+    for name, skill in sorted(discover(project, quiet=True).items()):
+        for copy in skill.get("copies", []):
+            lines.append(f"this project has its own copy of the skill {name}; both run")
+            shown = copy if copy.isprintable() else "(a folder under the project's .claude/skills)"
+            context.append(
+                f"This project has its own copy of the installed practices skill {name}: {shown}, "
+                f"beside {skill['dir']}. Both run: every installed rule applies, and the copy only "
+                "adds rules with new ids. Read both, tell the user how they differ, and propose "
+                "what to do: keep both, rename the copy, move a rule into the installed skill, or "
+                "delete the copy. Change nothing until the user decides.")
+    return lines, "\n".join(context) or None
+
+
+def with_notes(out, event):
+    """out (a session start's output, or None) with start_notes added. A crash here is logged and
+    keeps out, which may carry reloadSkills."""
+    try:
+        lines, context = start_notes(event)
+    except Exception as e:  # noqa: BLE001
+        log("crash", f"start_notes: {type(e).__name__}: {e}")
+        return out
+    if not lines and not context:
+        return out
+    out = dict(out or {})
+    if lines:
+        note = "practices hooks: " + "; ".join(lines)
+        out["systemMessage"] = f"{out['systemMessage']}; {'; '.join(lines)}" \
+            if out.get("systemMessage") else note
+    if context:
+        spec = out.setdefault("hookSpecificOutput", {"hookEventName": "SessionStart"})
+        spec["additionalContext"] = (spec["additionalContext"] + "\n" + context
+                                     if spec.get("additionalContext") else context)
+    return out
+
+
+def two_passes(level, event):
+    """The installed skills' verdict first, then the project's. A repo chooses a project skill's
+    patterns and globs, so one can throw or run into the 5 s kill, and either allows the call. By
+    then the installed skills have already had their say, so a project skill can only add to them:
+    when the first pass speaks, the second doesn't run, and its findings wait for a later call."""
+    global START  # noqa: PLW0603
+    project = bash_project(event)
+    try:
+        SCOPE["now"] = "installed"
+        ran = bool(discover(project, quiet=True))
+        if ran:
+            out = level(event)
+            if out:
+                return out
+        SCOPE["now"] = "project"
+        if discover(project, quiet=True):
+            if ran:
+                START = time.monotonic()  # its own budget: the kill now costs only this pass
+            return level(event)
+        SCOPE["now"] = "installed"
+        return None if ran else level(event)   # no skills at all: the levels that need none
+    finally:  # both belong to this call alone
+        SCOPE["now"] = "all"
+        HEADS_READ.clear()
+
+
 def main():
     event = json.load(sys.stdin)
     if not isinstance(event, dict):
@@ -2537,10 +2910,9 @@ def main():
         source = event.get("source")
         out = health(event) if source == "startup" else compact(event) if source == "compact" \
             else None
-    elif name == "PostToolUse":
-        out = post_tool_use(event)
+        out = with_notes(out, event)
     else:
-        out = pre_tool_use(event)
+        out = two_passes(post_tool_use if name == "PostToolUse" else pre_tool_use, event)
     if out:
         print(json.dumps(out))
 

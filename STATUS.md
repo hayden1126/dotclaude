@@ -6,7 +6,7 @@
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design lives in the repo's `PLAN.md` or its doc,
 > not only under `~/.claude/plans/`, which the next plan overwrites ([[plan-file-not-durable]]).
 
-Last updated: 2026-11-04
+Last updated: 2026-11-05
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 Lead branch: `chore/after-pr4` (the lead's STATUS commits; the lane next in merge order carries
@@ -90,12 +90,14 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - #144 (exam-prep): rules public, evidence private (Hayden, 2026-10-20).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
-  - **Live lanes** (briefs in each record). Merge order: 1 dev-cycle (`feat/dev-cycle-rules`, carries the lead's notes),
-    2 hackathon (`feat/hackathon-mode`; a hackathon starts 2026-11-14, so it aims to merge by
-    2026-11-11 and moves up if needed), 3 practices
-    (`feat/practices-auth-secrets`, its next PR), 4 deny-rules (`fix/deny-rules`).
+  - **Live lanes** (briefs in each record). Merge order (Hayden, 2026-11-06): 1 deny-rules (`fix/deny-rules`, draft #167,
+    carries the lead's notes), 2 hackathon (`feat/hackathon-mode`; a hackathon starts 2026-11-14, so
+    it merges by 2026-11-11), 3 practices (`feat/practices-dependencies`, its next PR). #167 installs
+    from its worktree before lane hackathon's dry run (Hayden, 2026-11-06), and no install runs
+    during it.
     **Install freeze on HAYPC, Nov 12 through Nov 15** (Hayden, 2026-11-05): no lane installs in
-    that window, except fixes for lane hackathon, so the event runs what the dry run tested.
+    that window, except fixes for lane hackathon, so the event runs what the dry run tested. The lead's
+    reinstall after a merge counts as an install, so no other lane merges in that window.
     Merged and installed from main, all closed: chrome-dup (#151, 2026-10-29: one chrome-devtools
     server, the plugin's; sandbox gap fixes N1 and N3's bun part, `hooks/sandbox-caches.sh`; its
     install changed running sessions' sandbox live, [[cc-sandbox-config-reloads-live]]),
@@ -120,6 +122,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     capella-studio lane artexport's report; a fork's hook output never reaches its model, so it
     knows its lane only from the parent's copied line, docs/lanes.md S5; the delegation canary
     checks the source enum; untried against lane practices' settings.json change),
+    dev-cycle (#166, 2026-11-05: the external-skills ports, `quality-lens`, stalled-chain rules in
+    the lanes skill, and `writing-voice` split into `technical-writing`, `formal-voice` and
+    `casual-voice`; a running session keeps the old CLAUDE.md until its next start),
     npx-cwd (#165, 2026-11-05: SW1; a launch by Claude Code starts at `/`),
     hook-isolate (#163, 2026-11-04: DA17 parts (a) and (b); hook shims and Python shebangs run
     `python3 -I`; the widened Edit denies, so a `~/.local/lib` install needs the sandbox off),
@@ -174,30 +179,6 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     row), SW11 (recheck after a uv upgrade). By hand when convenient, details in the rows and
     lane sweep's closed record: SW10, SW9, SW3, and the elevated scheduled-task listing the
     sweep could not inventory.
-  - **Dev-cycle rules from three external skill sets** (Hayden, 2026-11-04). In lane dev-cycle
-    (`feat/dev-cycle-rules`), after ports and practices in merge order; it overlaps ports on
-    `docs/lanes.md` and `skills/lanes/SKILL.md`. Added (Hayden, 2026-11-04, after #163's chain
-    stalled for about 8 hours): two sentences in The lead, step 7 of the skill. A chain that stops
-    before step 6 still tells every remaining lane "main moved", what stalled, and that installs
-    stay held. A chain stopped on something that can clear without the lead arms a read-only
-    background loop that exits when it clears, which wakes the lead to finish the chain; at the
-    2-hour limit the lead tells Hayden. A researcher read pstack-claude, ponytail and Cursor's
-    thermo-nuclear-code-quality-review (all MIT): install none (pstack's session-start mandate
-    and autonomy rules, and ponytail's always-on hooks and telemetry, contradict CLAUDE.md), port
-    these as text edits. Reviewer agent and delegation brief: a finding survives only with the
-    command that proves it; "no concrete case, no finding"; numbered findings with `Verdict:` and
-    `Not checked:` lines; grep every caller. docs/delegation.md: no independent reviewer, the
-    gate stays closed. docs/lanes.md: a verdict is tied to a head SHA, merge with
-    `--match-head-commit`. coding-practices: reproduce first and commit the failing repro, a
-    characterization test before a refactor, verify-this verdicts, deslop checks. writing-voice:
-    the PR body template. Open for the lane's plan: a manual quality-lens skill from the Cursor
-    rubric, capped at medium; ponytail's `shortcut:` marker (Hayden unsure, 2026-11-04; the
-    lead's lean: keep the no-"for now" ban, add only an assumption-comment line). Also in scope
-    (Hayden, 2026-11-04): the reels of instagram.com/youraveragetechbro, first the "How to become
-    a 10x AI-Native Developer" series that named ponytail; transcripts through getthescript.app
-    ([[instagram-reel-transcripts]]); the profile's reel list may need a login, so ask Hayden
-    for the URLs if WebFetch can't list them. Fold any further tools they name into the same
-    adopt / take ideas / skip review. The report: `~/scratch/external-skills/review-2026-11-04.md`.
   - **A verify-app skill template for app repos** (Hayden's pick, 2026-11-04, via lane dev-cycle's
     reels review, `~/scratch/external-skills/reels-review-2026-11-04.md`). Adapted from pstack's
     create-verification-skill and maintain-verification-skill (MIT): launch, a read-only health
@@ -223,6 +204,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **dotclaude on a Mac** (Hayden, 2026-11-05: he may get a MacBook Pro and may share his setup
     with people on Macs). `setup.sh` has some Darwin branches but has never been run there, and
     hooks and notifiers lean on WSL. Pairs with [[hayden-new-device-goal]]. After lane hackathon.
+  - **A README paragraph against the gaps-by-id rule** (lane deny-rules' reviewer, 2026-11-05).
+    Private: sandbox-audit FINDINGS, PG8. For lane practices, in its next PR.
   - **Who can turn the practices gate off** (Hayden, 2026-11-05: not any session without him).
     Private: sandbox-audit FINDINGS, PG1, with Hayden's picked fix. In lane deny-rules (Hayden,
     2026-11-05), with lane practices reviewing the engine change.
@@ -347,6 +330,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - Log only: a background session passing on its own (Hayden kept the bg pass manual,
     2026-10-18; don't build it without his ask); chrome-bg's gc judges `expires` by wall clock
     (a run can stop up to 0.6 s early; the holder's loop is monotonic since #126).
+  - **Watch:** if the memory-index size hook asks again, shorten MEMORY.md's lines and ask
+    before dropping an entry.
   - **Watch:** `~/.claude/CLAUDE.md` vanished once after a lane install (2026-10-20, before
     #140 made `setup.sh`'s links atomic); check `ls -la ~/.claude/CLAUDE.md` after each
     reinstall. Also asks the ask-check hook (#131) denies wrongly, and replies that skip the
@@ -422,8 +407,19 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Live lanes: `lane ls`; state in their records. Next lane when a slot frees: Hayden's pick
-     (Backlog). Before each post-merge chain, run DA15's
+  0. Live lanes: `lane ls`; state in their records (2026-11-05: hackathon, practices' next PR;
+     deny-rules first in merge order with draft #167, reopened 2026-11-06; one slot free, Hayden's
+     pick from the Backlog). #167 installs before lane hackathon's dry run (Hayden's pick), so
+     the dry run tests the event's rules. Lane hackathon merges by Nov 11:
+     move it up if the queue threatens that. Install freeze Nov 12 through Nov 15. A chain that
+     stops before its "main moved" step still tells the lanes, and arms a wake on the blocker
+     (`skills/lanes/SKILL.md`). Open
+     with Hayden (repeat them in each reply's Waiting list until answered): try `/interview` in
+     the prep repo named in [[dotclaude-hackathon-mode]]; rehearse reaching this machine from another
+     network by Nov 12; whether the event's local-lead email went out; by Nov 12 whether his
+     teammates want the skills and who presents; hq's three questions and the SW13 fix for the hq
+     window; whether to backlog a lanes-skill rule that a lane writes its after-merge record only
+     after the merge returns and at least 10 s later. Before each post-merge chain, run DA15's
      pre-check from the private FINDINGS rows, and its added checks before any sandbox-off fetch
      in this repo. Since #161, `lane new` runs only with the sandbox off. Since #156's install, a lone
      excluded call (gh, git push or fetch, lane) runs only from a repo's top. Running sessions took
@@ -482,6 +478,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     with `time.monotonic()`, and `tests/setup/test_clock_use.py` fails any `time.time()` in
     tests/ without a `# wall clock` marker. Shipped code has no guard; chrome-bg's TTL loop is
     its one duration site left (Backlog). Whether the flakes are gone takes repeated runs.
+  - **Test race, backlog (cheap; lane deny-rules' trial, 2026-11-05):** `tests/setup/test_chrome_bg.py`
+    Live `records()` lists a dir, then opens each record, so
+    `test_holder_ends_after_three_failed_polls` can raise FileNotFoundError when the holder removes
+    one in between. Seen once; a trial of any lane can print FAILED for it. Fix: skip a record gone
+    at open.
   - **Flakes:** `tests/pass` fails timing asserts under a load spike, so judge it on a run of
     about 46 s. `test_tmux_hooks` flaked on `main` too; its ring-decision wait is now 15 s.
     Watch `seen()`'s 3 s wait, which also serves negative checks.

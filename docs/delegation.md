@@ -200,7 +200,10 @@ repo that turns the sandbox off loses subagent Bash; the policy still applies.
   The protected paths are:
   - `~/.claude`, the project's `.claude` (except `.claude/worktrees`) and `.mcp.json`;
   - git hooks and config;
-  - shell rc files;
+  - shell rc files and other tools' startup files;
+  - what unsandboxed code runs or trusts in home: `~/.local`, `~/.config`, tool dirs such as
+    `~/.cargo` and `~/.npm`, named dirs in `~/.cache` and credentials (`write_denied` in
+    `policy.toml` lists them all; the same paths are Edit denies in `settings.json`);
   - the live enforcement sources in `~/dotclaude`;
   - the ledger and the liveness index (`~/.local/state/dotclaude`), so an agent can't reset its
     own deadline clock.
