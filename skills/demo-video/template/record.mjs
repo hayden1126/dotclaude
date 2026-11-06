@@ -154,7 +154,7 @@ async function loadChromium() {
   try {
     return (await import('playwright')).chromium;
   } catch (e) {
-    throw new Error(`playwright won't load (${e.code || e.message}). Install a pinned version: npm i -D playwright@<version>`);
+    throw new Error(`playwright won't load (${e.code || e.message}). Install a pinned version in demo/: ( cd demo && { [ -e package.json ] || npm init -y >/dev/null; } && npm i -D playwright@<version> )`);
   }
 }
 

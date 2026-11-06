@@ -21,7 +21,7 @@ If `EVENT.md` exists, licence, citation, repo and submission rules come from it.
 
 This can be needed before the event's deadline, whether the repo is public yet or not.
 
-1. **Full-history secrets scan.** First run `git fetch origin '+refs/*:refs/remotes/everything/*'`, or hand that to the user if it can't run here: every scan below reads only this clone's refs, and going public also exposes branches and pull requests only the remote holds. Then use the first one available:
+1. **Full-history secrets scan.** First ask the user to run `git fetch origin '+refs/*:refs/remotes/everything/*'` from their own terminal or as a `!` line, since a machine guard may refuse its quoted pattern from a session: every scan below reads only this clone's refs, and going public also exposes branches and pull requests only the remote holds. Then use the first one available:
    - `secret-scan --all` from the hackathon skill's folder, if present: `python3 -I "${CLAUDE_SKILL_DIR}/../hackathon/scripts/secret-scan" --all`
    - gitleaks, if installed: `gitleaks git . --redact -v` (`gitleaks detect --redact -v` on older versions), so values stay off screen. These flags weren't run when this was written, since gitleaks wasn't installed. If one is refused, check `gitleaks --help` and keep redaction on.
    - a stated pattern pass over `git log -p`, using `-G` so values stay off screen, plus a check of file names:
@@ -43,7 +43,7 @@ This can be needed before the event's deadline, whether the repo is public yet o
 Making a private repo public is a step in the user's GitHub settings. Before it:
 
 - Run step 1 again on the final commit.
-- Decide with the user what happens to `VISION.md`, `PITCH.md`, `DEMO.md`, `EVENT.md` and `ACCESS.md`, since they may hold private thinking, such as what the team says about a seeded part. Check whether they were ever committed: `git log --all --oneline -- VISION.md PITCH.md DEMO.md EVENT.md ACCESS.md`. A file taken out of the tree stays in the old history, and the rule above forbids rewriting it until judging ends, so going public publishes it. Say that plainly. The choices are to accept it, to stay private until judging ends, or to submit from a fresh repo if the rules allow.
+- Decide with the user what happens to `VISION.md`, `PITCH.md`, `DEMO.md`, `EVENT.md`, `ACCESS.md` and the mode's section of `CLAUDE.md`, since they may hold private thinking, such as what the team says about a seeded part, or show how the team works. Check whether they were ever committed: `git log --all --oneline -- VISION.md PITCH.md DEMO.md EVENT.md ACCESS.md`, and for the mode's section, `git log --all --oneline -S'Hackathon mode (this section goes away' -- CLAUDE.md`. A file taken out of the tree stays in the old history, and the rule above forbids rewriting it until judging ends, so going public publishes it. Say that plainly. The choices are to accept it, to stay private until judging ends, or to submit from a fresh repo if the rules allow.
 
 Right after it, turn on the second layer behind the scan, on the user's OK, since it changes their repo, and read it back:
 
