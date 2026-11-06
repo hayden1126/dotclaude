@@ -177,6 +177,20 @@ class Secrets(ScanCase):
                 self.git("rm", "-q", "--", name)
                 self.git("commit", "-q", "-m", "gone")
 
+    def test_env_file_variants_by_name(self):
+        # The clean names first: the scan reads all of HEAD's history, so a flagged name stays found.
+        for name in (".environment.ts", ".env.example", ".env-example", ".env_sample"):
+            with self.subTest(name):
+                self.commit(name, "nothing secret inside\n", name)
+                p = self.scan()
+                self.assertEqual(p.returncode, 0, p.stdout)
+        for name in (".envrc", ".envrc.local", ".env-local", ".env_prod", "deploy/.env.staging"):
+            with self.subTest(name):
+                self.commit(name, "nothing secret inside\n", name)
+                p = self.scan()
+                self.assertEqual(p.returncode, 1, p.stdout)
+                self.assertIn(f"{name}:- secret-file", p.stdout)
+
     def test_a_binary_secret_file_is_caught_by_name(self):
         path = os.path.join(self.work, "bundle.p12")
         with open(path, "wb") as f:
@@ -958,6 +972,22 @@ class Round2(ScanCase):
                  ("SK", tail(32, hexa)), ("fc" + "-", tail(32, hexa))]
         self.assert_found([(f'value = "{prefix}{body}"', body) for prefix, body in cases])
 
+    def test_a_token_with_no_fixed_prefix_shows_none_of_itself(self):
+        hexa = "0123456789abcdef"
+        azure = tail(3) + "8" + "Q" + "~" + tail(34)
+        twilio = "SK" + tail(32, hexa)
+        discord = "M" + tail(23) + "." + tail(6) + "." + tail(27)
+        telegram = "1234567890" + ":" + "AA" + tail(33)
+        replicate = "r8" + "_" + "Q" + tail(24)
+        for value, rule, shown in ((azure, "azure-secret", "***"), (twilio, "twilio-key", "SK***"),
+                                   (discord, "discord-token", "***"), (telegram, "telegram-token", "***"),
+                                   (replicate, "replicate-token", "r8_***")):
+            with self.subTest(rule):
+                p = self.findings(f"value = {value}")
+                self.assertEqual(p.returncode, 1, p.stdout)
+                self.assertIn(f"{rule} {shown}\n", p.stdout)
+                self.assertNotIn(value[:4] + "***", p.stdout)
+
     def test_a_webhook_url_or_a_curl_user(self):
         body = tail(24)
         self.assert_found([(f"post https://discord.com/api/webhooks/{'1' * 18}/{body}", body),
@@ -1131,6 +1161,26 @@ class TheKickoffFiles(unittest.TestCase):
         text = self.read("SKILL.md")
         self.assertIn("plan ends Sat 17:00, demo path Sat 21:00, freeze Sun 07:30", text)
         self.assertIn("plan ends Sat 12:00, demo path Sat 14:30, freeze Sun 09:15", text)
+
+    def test_the_gitignore_hides_every_env_file_the_scan_flags(self):
+        scanner = self.read("scripts", "secret-scan")
+        words = re.search(r"SAFE_FILE = re\.compile\(r\"\\\.env\[\._-\]\(\?:([a-z|?]+)\)", scanner).group(1)
+        safe = [w for w in words.replace("defaults?", "default|defaults").split("|")]
+        with tempfile.TemporaryDirectory() as tmp:
+            # Only the template applies: no global excludes, no outer repo.
+            env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+            env.update(HOME=tmp, XDG_CONFIG_HOME=tmp, GIT_CONFIG_NOSYSTEM="1")
+            repo = os.path.join(tmp, "repo")
+            subprocess.run(["git", "init", "-q", repo], check=True, env=env)
+            with open(os.path.join(repo, ".gitignore"), "w") as f:
+                f.write(self.read("templates", "gitignore"))
+
+            def ignored(name):
+                return subprocess.run(["git", "-C", repo, "check-ignore", "-q", name], env=env).returncode == 0
+            for name in (".env", ".env.local", ".env-local", ".env_prod", ".envrc", ".envrc.local"):
+                self.assertTrue(ignored(name), name)
+            for name in [".environment.ts"] + [f".env{sep}{w}" for sep in "._-" for w in safe]:
+                self.assertFalse(ignored(name), name)
 
     def test_the_gitignore_says_how_to_keep_a_keynote_deck(self):
         self.assertIn("!pitch.key", self.read("templates", "gitignore"))
