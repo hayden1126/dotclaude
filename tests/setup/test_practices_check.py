@@ -2668,6 +2668,8 @@ class Push(BashBase):
         self.config_toml('[auth]\nhelpers = ["requireMember"]\n')
         self.commit(**{"app/a/route.ts": handler})
         self.assertIsNone(self.run_hook(self.event("git push", "PreToolUse", "b-proj")))
+        for fault in ("crash", "budget-spent", "git-skipped"):  # each allows the call too
+            self.assertNotIn(fault, self.log())
         os.remove(os.path.join(self.proj, ".claude", "practices", "config.toml"))
         sub = os.path.join(self.proj, "sub")
         os.makedirs(os.path.join(sub, ".claude", "practices"))
@@ -2676,8 +2678,8 @@ class Push(BashBase):
         self.commit(**{"app/b/route.ts": handler})
         out = self.run_hook({**self.event("git push", "PreToolUse", "b-sub"), "cwd": sub})
         self.assertIsNotNone(out, "the helpers were read from the call's cwd")
-        self.assertIn("SEC-01 (demo) at app/b/route.ts:1",
-                      out["hookSpecificOutput"]["permissionDecisionReason"])
+        reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertIn("SEC-01 (demo) at app/b/route.ts:1", reason)
 
     def test_the_gate_judges_the_repo_a_wrapper_dir_or_a_subshell_leaves(self):
         # Review round 2, low 7: the gate judged the wrong repo (still inside the bounds).

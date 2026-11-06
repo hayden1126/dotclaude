@@ -766,7 +766,7 @@ need nothing extra.
   Bash reader follows the usual shell forms (chains, common wrappers, `cd`, command
   substitutions, a literal `bash -c` script). A call it can't read passes and is logged, with no
   command text, when it names a commit, push, PR or install; the private sandbox audit tracks
-  the detail as PG8.
+  the detail as PG8. Like SEC-64, the git levels are a prompt to check, not a boundary.
   A PR readied in the GitHub web UI never reaches the hook. Turning the gate off moved out of the repo,
   since a session can write its own repo: `! practices-gate off <dir>... --until YYYY-MM-DD`, or
   `--rule <id> --reason <why>` for one rule, covers that dir and everything below it (a repo and its
@@ -776,8 +776,9 @@ need nothing extra.
   and logged; its `[auth] helpers` still count. A project's copy of an installed practices skill can
   only add rules: session start names the clash and tells the model to compare the copies and propose
   what to do.
-  The engine keeps a 2 s budget under the 5 s kill. A scan the budget cuts short denies once on
-  what it read and says so, and the resend passes. Fails open but loud: a crash lets the edit through, the next
+  The engine keeps a 2 s budget under the 5 s kill. A scan the budget cuts short is judged on
+  what it read and says so; with no finding there the call passes, logged. A resend over the
+  same range passes unscanned. Fails open but loud: a crash lets the edit through, the next
   session start names the error, and a deny whose resend couldn't pass (its state write failed,
   with no transcript to fall back on) is dropped and logged rather than repeated.
   Errors go to `$XDG_STATE_HOME/dotclaude/practices/errors.log`.
