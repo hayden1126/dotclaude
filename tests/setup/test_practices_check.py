@@ -4186,6 +4186,7 @@ class InstallOffFile(OffFile):
                 self.assertIsNone(self.pre('npm i "$PKG"', f"b{n}"))
                 self.assertIsNone(self.pre("npm i --brand-new-flag acme-widget", f"c{n}"))
         self.assertNotIn("install-skipped", self.log())
+        self.assertNotIn("crash", self.log())  # a crash would allow the call too
 
     def test_another_rule_in_the_off_file_leaves_it_on(self):
         self.plant(self.entry(rule="SEC-60", reason="x"))
@@ -4206,8 +4207,8 @@ class InstallTwoPasses(BashBase):
     def one_deny_and_a_clean_resend(self, kind):
         self.layout(kind)
         reason = self.pre("npm i acme-widget")
-        self.assertEqual(reason.count("[practices:SEC-64]"), 1)
-        self.assertIsNone(self.pre("npm i acme-widget"))
+        self.assertTrue(reason.startswith("[practices:SEC-64] "), reason)
+        self.assertIsNone(self.pre("npm i acme-widget"))  # with both kinds, the second pass reruns it
         self.assertIn("acme-other", self.pre("npm i acme-other"))
         self.assertIsNone(self.pre("npm i --ignore-scripts acme-third"))
         self.assertNotIn("crash", self.log())
