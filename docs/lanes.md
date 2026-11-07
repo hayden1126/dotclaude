@@ -246,7 +246,8 @@ Why it works this way:
   branch), it refuses rather than report a flag it can't judge. The lane has to run it, so the
   lead's gate stays the backstop. A lane notes a reason it can't fix in its State and tells the
   lead when asked. The lead takes the flag's current reason to Hayden. Once `handoff-check`
-  passes, his yes allows a plain `lane done` with the flag on (2026-11-06): `done` never reads
+  passes, his yes allows a plain `lane done` with the flag on (2026-11-06; the skill's step 5
+  lists his yes's other two cases): `done` never reads
   the flag, so that half of the gate is the skill's rule, and a flag that can't clear would
   otherwise hold the lane open for good. It changes nothing for a merge order.
 - **What it can't tell.** A write after the merge is taken as the after-merge handoff, so a lane
@@ -695,7 +696,8 @@ keeps every restore entry. On success, under the lanes lock, the flag is written
 removed.
 
 **The board.** A parked lane shows `parked` and never `orphan`; `--json` rows carry `parked`
-(the stamp, or null). With a lane parked or the cap passed, a `cap: N of M slots held (K
+(the stamp, or null), `base_overlaps` (the files `main-touched` names) and `merges` (the lane's
+PRs' merge times, which the install line's `overdue` reads). With a lane parked or the cap passed, a `cap: N of M slots held (K
 parked)` line follows, with `, X over` past the cap. It counts the same records as `new`, twins included, by the same rule. The lead sends a parked lane no "main
 moved" message, since no session reads it: at the lane's turn the lead runs `lane open <id>` first
 (Merge turns). `lane trial` keeps merging parked lanes, which are live and will merge.
@@ -1435,8 +1437,10 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   `idle`, `waiting`, or `shell` while a background shell runs at the prompt), as `states` in
   `--json`. A stopped session (Ctrl+Z) drives none of these columns: its lane gets the `stopped`
   flag (beside `orphan` when no session runs), and `--json` lists it in `stopped_sessions`. The lead messages a lane that sits idle past soft: "context N k, run /pass". It does this by hand for now; no code
-  sends that message. The lead never respawns another lane's pane, since only that lane holds
-  the context its handoff needs.
+  sends that message. The lead never respawns another lane's pane for a pass, since only that
+  lane holds the context its handoff needs; it reopens a lane only in the two cases the skill
+  names (a parked lane at its merge turn, and on Hayden's yes a merged lane whose gate fails with
+  no session left).
 - **`lane lock <name> -- <cmd>`** serializes shared gates with a flock on
   `<common-dir>/lanes/_locks/<name>`, apart from the CLI's own `.lock`. The name must be listed in
   the config's `locks`, since a typo would split the mutual exclusion. Once it holds the lock, it

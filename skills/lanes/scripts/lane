@@ -1507,10 +1507,10 @@ def per_worktree_config(repo: Repo) -> bool | None:
 
 def changed_files(repo: Repo, lane: dict, base: str, ref: str, lanes: list[dict],
                   per_worktree: bool | None) -> tuple[set[str], str | None]:
-    """The files a live lane's work changes, for the board's overlap flag, and why part of them
-    went unread (None when nothing did). Committed: the three-dot diff from base to ref
-    (lane_head's), so main's later commits and a merged lane's work drop out; it reads objects
-    only. Uncommitted: modified, staged and untracked files, from `git status` in the lane.
+    """The files a live lane's work changes, for the board's overlap and main-touched flags, and
+    why part of them went unread (None when nothing did). Committed: the three-dot diff from base
+    to ref (lane_head's), so main's later commits and a merged lane's work drop out; it reads
+    objects only. Uncommitted: modified, staged and untracked files, from `git status` in the lane.
 
     That status is the first git `ls` runs in a lane, sandbox-off, so it runs only once each
     gate passes, else the lane keeps its committed set and `ls` warns. lanes is every record
