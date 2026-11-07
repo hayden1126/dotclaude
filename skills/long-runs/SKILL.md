@@ -7,29 +7,11 @@ description: Use when about to start, plan or rerun a long or multi-part job (te
 
 A job takes as long as its slowest chain, not the sum of its parts. Work that out before starting, and afterwards state exactly what ran.
 
-This applies to a job of about 15 minutes or more, several checks together, or a rerun after a change.
-
-## Plan the run
-
-Answer these in order, in the plan itself.
-
-1. **Where does the time go?** Find each part's last measured time, and whether it waits or burns CPU (its log, the load average, cores and memory free). Parts that mostly wait stack well on one machine.
-2. **What can the change reach?** Read the diff, including what a rebase brought in. Run what it can reach. Compare to a baseline only where main changed what's measured. Prove each risk with the cheapest test that truly hits it.
-3. **What evidence still holds?** A past pass holds only for the same tree hash and the same inputs: dependencies, runtime, services and data.
-4. **What runs at once?** Cheap checks first, so a broken build fails fast, then every independent long part together. If you don't know whether two parts share a port, database, lock or output dir, find out: read the config, or run a small slice of both at once. Unknown is a question to answer, never a reason to stay serial. Keep parts apart when they do share state, or when a test depends on timing.
-5. **What voids what?** Review before sweeps. The long matrix runs once, at the final head.
-
-Before cutting a check to save time, do steps 2 and 4. A lighter set gives up coverage, and those two don't.
-
-Keep a signal that the load changed nothing: a line each part prints, such as how many waits gave up, or a pass count set against the last run. A green exit under load isn't that signal.
-
-While a lock or build is busy, prepare the next step.
-
-For CI, ask the same questions: what runs concurrently, what skips by path, what's cached, and what the deploy repeats from the checks.
+This applies to starting or rerunning a job of about 15 minutes or more, or several checks together.
 
 ## Say what didn't run
 
-Every check the plan drops or reuses gets this block, in the same report as the result (the reply, the PR body, the release note):
+Every check that didn't run, planned or not, and every result reused from an earlier run, gets this block in the same report as the result (the reply, the PR body, the release note):
 
 ```
 Skipped: <what didn't run>
@@ -37,7 +19,27 @@ Safe because: <why>
 Caught by: <what would catch a problem>
 ```
 
+When you can't show it's safe, say so: `Safe because: not shown`, `Caught by: nothing yet`, and name the risk. Never invent a reason to fill the block.
+
 A skip never reads as a pass: "all green" covers only what ran. This skill drops no gate the repo or the user requires, such as `lane trial` before ready, a review or an install smoke test.
+
+## Plan the run
+
+Answer these in order, in the plan itself.
+
+1. **Where does the time go?** Find each part's last measured time, and whether it waits or burns CPU (its log, the load average, cores and memory free). Parts that mostly wait stack well on one machine.
+2. **What can the change reach?** Read the diff, including what a rebase brought in. Run what it can reach, and count anything shared (a lockfile, build config, a common module) as reaching all it feeds. Rerun a baseline on main only where main changed what's measured. Prove each risk with the cheapest test that truly hits it.
+3. **What evidence still holds?** A past pass holds only for the same tree hash and the same inputs: dependencies, runtime, services and data. `lane trial` merges other lanes' work, so its tree isn't your tree.
+4. **What runs at once?** Cheap checks first, so a broken build fails fast, then every independent long part together, as far as cores and memory allow. If you don't know whether two parts share a port, database, lock or output dir, find out: read the config, or try a small slice on throwaway state. Unknown is a question to answer, never a reason to stay serial. Keep parts apart when they do share state, or when a test depends on timing.
+5. **What voids what?** Review before sweeps. The long matrix runs once, at the final head.
+
+Cutting a check comes last: try step 4 first, since it gives up no coverage. Whatever step 2 drops is a skip, so it gets the block above.
+
+Keep a signal that the load changed nothing, beyond the pass itself: a line each part prints, such as how many waits gave up or tests retried, or time per case against the last run.
+
+While a lock or build is busy, prepare the next step without touching the tree under test: script the run, draft the PR text, or work on a separate branch in another worktree.
+
+For CI, ask the same questions: what runs concurrently, what skips by path, what's cached, and what the deploy repeats from the checks.
 
 ## Quoting a time
 

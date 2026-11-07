@@ -3,7 +3,9 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import tempfile
+import threading
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -68,6 +70,19 @@ class SkillFile(unittest.TestCase):
     def test_a_skip_never_reads_as_a_pass(self):
         self.assertIn("A skip never reads as a pass", skill_text())
         self.assertIn('"all green" covers only what ran', skill_text())
+
+    def test_an_unsafe_skip_says_so_instead_of_inventing_a_reason(self):
+        self.assertIn("`Safe because: not shown`", skill_text())
+        self.assertIn("`Caught by: nothing yet`", skill_text())
+        self.assertIn("Never invent a reason", skill_text())
+
+    def test_the_record_covers_unplanned_skips_and_reused_results(self):
+        self.assertIn("planned or not", skill_text())
+        self.assertIn("every result reused", skill_text())
+
+    def test_the_guardrail_comes_before_the_plan(self):
+        self.assertLess(skill_text().index("## Say what didn't run"),
+                        skill_text().index("## Plan the run"))
 
     def test_required_gates_stay(self):
         self.assertIn("drops no gate the repo or the user requires", skill_text())
@@ -150,6 +165,11 @@ class Plan(unittest.TestCase):
         self.assertEqual({r["case"]["id"] for r in runs if r["arm"] == "A"}, {"b"})
         self.assertEqual({r["case"]["id"] for r in runs if r["arm"] == "B"}, {"a", "q", "b"})
 
+    def test_a_rep_of_everything_comes_before_the_next_rep(self):
+        # A stop at the cap must leave every arm covered, not the last arm empty.
+        runs = harness.plan_runs(self.CASES, "BC", ["opus"], 2)
+        self.assertEqual({r["rep"] for r in runs[:6]}, {0})
+
     def test_counts_reps_and_models(self):
         self.assertEqual(len(harness.plan_runs(self.CASES, "B", ["opus", "sonnet"], 5)), 30)
 
@@ -159,12 +179,45 @@ class Plan(unittest.TestCase):
         self.assertEqual([r["rep"] for r in runs], [1])
 
 
+class Fingerprint(unittest.TestCase):
+    CASE = {"prompt": "p", "notes": "n"}
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.write("one")
+
+    def write(self, text):
+        with open(os.path.join(self.root, "SKILL.md"), "w") as f:
+            f.write(text)
+
+    def mark(self, arm, line="l", case=None):
+        return harness.fingerprint(case or self.CASE, arm, self.root, line)
+
+    def test_a_case_edit_moves_every_arm(self):
+        edited = {"prompt": "p", "notes": "changed"}
+        for arm in "ABC":
+            self.assertNotEqual(self.mark(arm), self.mark(arm, case=edited))
+
+    def test_a_skill_edit_moves_b_and_c_only(self):
+        before = [self.mark(arm) for arm in "ABC"]
+        self.write("two")
+        after = [self.mark(arm) for arm in "ABC"]
+        self.assertEqual(before[0], after[0])
+        self.assertNotEqual(before[1], after[1])
+        self.assertNotEqual(before[2], after[2])
+
+    def test_a_reworded_claude_md_line_moves_c_only(self):
+        self.assertEqual(self.mark("B", "l"), self.mark("B", "m"))
+        self.assertNotEqual(self.mark("C", "l"), self.mark("C", "m"))
+
+
 class Fixture(unittest.TestCase):
     CASE = {"id": "c", "kind": "behaviour", "prompt": "p", "notes": "the notes\n"}
 
     def build(self, arm, line="load the skill"):
         root = tempfile.mkdtemp()
-        self.addCleanup(lambda: __import__("shutil").rmtree(root, ignore_errors=True))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         skill = os.path.join(root, "src")
         os.makedirs(skill)
         with open(os.path.join(skill, "SKILL.md"), "w") as f:
@@ -222,10 +275,15 @@ class Summary(unittest.TestCase):
         row = harness.summarize(stream(("Read", {"file_path": "NOTES.md"})), "B")
         self.assertFalse(row["loaded"])
 
-    def test_a_missing_result_costs_nothing_and_says_so(self):
+    def test_a_missing_result_counts_as_its_own_stop_and_says_so(self):
         row = harness.summarize([], "B")
-        self.assertEqual(row["cost"], 0)
+        self.assertEqual(row["cost"], harness.RUN_BUDGET_USD)
         self.assertTrue(row["broken"])
+
+    def test_an_error_subtype_is_broken_even_without_is_error(self):
+        events = stream()
+        events[-1]["subtype"] = "error_max_turns"
+        self.assertTrue(harness.summarize(events, "B")["broken"])
 
     def test_arm_a_listing_the_skill_is_contaminated(self):
         self.assertTrue(harness.summarize(stream(), "A")["contaminated"])
@@ -243,39 +301,57 @@ class Summary(unittest.TestCase):
 
 
 class Budget(unittest.TestCase):
-    def test_stops_before_the_cap_counting_runs_in_flight(self):
-        budget = harness.Budget(cap=1.0, spent=0.0, per_run=0.4)
-        self.assertTrue(budget.start())
-        self.assertTrue(budget.start())
-        self.assertFalse(budget.start())  # 0.8 reserved, a third would reach 1.2
+    def test_refuses_when_nothing_in_flight_could_free_room(self):
+        self.assertFalse(harness.Budget(cap=0.3, spent=0.0, per_run=0.4).start())
 
-    def test_a_finished_run_swaps_its_reserve_for_what_it_cost(self):
+    def test_a_run_past_the_cap_waits_for_one_in_flight(self):
+        budget = harness.Budget(cap=1.0, spent=0.0, per_run=0.4)
+        self.assertTrue(budget.start())
+        self.assertTrue(budget.start())  # 0.8 reserved: a third would reach 1.2
+        started = []
+        third = threading.Thread(target=lambda: started.append(budget.start()))
+        third.start()
+        third.join(0.05)
+        self.assertEqual(started, [])
+        budget.finish(0.1)
+        third.join(5)
+        self.assertEqual(started, [True])
+
+    def test_a_waiting_run_is_refused_when_the_last_finish_leaves_no_room(self):
         budget = harness.Budget(cap=1.0, spent=0.0, per_run=0.4)
         budget.start()
-        budget.start()
-        budget.finish(0.1)
-        self.assertTrue(budget.start())  # 0.1 spent + 0.4 reserved + 0.4 new
+        budget.finish(0.9)
+        self.assertFalse(budget.start())
 
 
 class Report(unittest.TestCase):
-    ROWS = [
-        {"case": "a", "kind": "loads", "arm": "B", "model": "opus", "loaded": True, "cost": 0.5,
-         "skill_hash": "h2"},
-        {"case": "a", "kind": "loads", "arm": "B", "model": "opus", "loaded": False, "cost": 0.5,
-         "skill_hash": "h2"},
-        {"case": "a", "kind": "loads", "arm": "B", "model": "opus", "loaded": True, "cost": 0.5,
-         "skill_hash": "h1"},
-        {"case": "a", "kind": "loads", "arm": "B", "model": "opus", "loaded": True, "cost": 0.5,
-         "skill_hash": "h2", "broken": True},
-    ]
+    def row(self, mark="now", **extra):
+        return {"case": "a", "kind": "loads", "arm": "B", "model": "opus", "loaded": True,
+                "cost": 0.5, "fingerprint": mark, "reply_id": "r", **extra}
 
-    def test_counts_only_rows_of_the_current_text_and_not_broken_ones(self):
-        lines = harness.report(self.ROWS, "h2")
-        self.assertIn("a", lines[1])
-        self.assertIn("1/2", lines[1])
+    def test_counts_only_current_rows_that_ran_cleanly(self):
+        rows = [self.row(), self.row(loaded=False), self.row("old"), self.row(broken=True),
+                self.row(contaminated=True)]
+        self.assertIn("1/2", harness.report(rows, {"now"})[1])
 
     def test_total_spend_counts_every_row(self):
-        self.assertIn("$2.00", harness.report(self.ROWS, "h2")[-1])
+        rows = [self.row(), self.row("old"), self.row(broken=True), self.row(loaded=False)]
+        self.assertIn("$2.00", harness.report(rows, {"now"})[-1])
+
+    def test_grades_join_back_by_reply_id(self):
+        rows = [self.row(reply_id="x"), self.row(reply_id="y"), self.row(reply_id="z")]
+        line = harness.report(rows, {"now"}, {"x": "pass", "y": "fail"})[1]
+        self.assertTrue(line.endswith("3/3    1/2"), line)
+
+
+class Blinding(unittest.TestCase):
+    def test_a_reply_file_shows_neither_arm_nor_load_result(self):
+        with open(os.path.join(HERE, "run.py")) as f:
+            source = f.read()
+        block = source[source.index('os.path.join(out, "replies", reply_id'):]
+        block = block[:block.index("return row")]
+        self.assertNotIn("loaded", block)
+        self.assertNotIn("arm", block)
 
 
 if __name__ == "__main__":

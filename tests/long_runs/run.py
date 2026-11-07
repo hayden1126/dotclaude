@@ -13,8 +13,10 @@ competes with the real skill list; `project,local` alone would overstate loading
 turns hooks off, so a run can't touch session state, tabs or tmux.
 limit: real sessions also get the hooks' skill-first text, so load rates here may read low.
 
-Loading is counted from the stream. Behaviour replies are read by a person: regex grading of
-replies never settled in tests/practices. `skip_fields` only flags a reply for that reading.
+Loading is counted from the stream. Behaviour replies are graded by reading, since regex grading
+of replies never settled in tests/practices: replies/ holds each one under a random id with no arm
+or load result, and a reader's verdicts go in grades.json, {reply id: pass, partial or fail}, which
+the report joins back. Cases the no-skill arm already passes stay as regression guards.
 
     python3 tests/long_runs/run.py --out DIR --arms A --kinds behaviour --cap 5
     python3 tests/long_runs/run.py --out DIR --report-only
@@ -40,7 +42,7 @@ SKILL_DIR = os.path.join(REPO, "skills", SKILL)
 KINDS = ("loads", "quiet", "behaviour")
 MODELS = {"opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5"}
 MAX_TURNS = 6
-RUN_BUDGET_USD = 2  # one run's own stop, far above a normal run
+RUN_BUDGET_USD = 1  # one run's own stop, about five times a normal Opus run
 TIMEOUT_S = 300
 SKIP_LABELS = ("Skipped:", "Safe because:", "Caught by:")
 
@@ -63,13 +65,16 @@ def load_cases(path=os.path.join(HERE, "cases.json")):
         return json.load(f)
 
 
-def skill_hash(skill_dir=SKILL_DIR):
-    """sha256 of the skill's text, so a row is tied to the words it tested. "" with no skill."""
-    path = os.path.join(skill_dir, "SKILL.md")
-    if not os.path.isfile(path):
-        return ""
-    with open(path, "rb") as f:
-        return hashlib.sha256(f.read()).hexdigest()[:12]
+def fingerprint(case, arm, skill_dir=SKILL_DIR, line=""):
+    """sha256 of what a run is given: the case, and per arm the skill and CLAUDE.md's line. A row
+    with another fingerprint tested something else, so resume and the report leave it out."""
+    h = hashlib.sha256("\0".join((case["prompt"], case["notes"], arm)).encode())
+    if arm in "BC":
+        with open(os.path.join(skill_dir, "SKILL.md"), "rb") as f:
+            h.update(f.read())
+    if arm == "C":
+        h.update(line.encode())
+    return h.hexdigest()[:12]
 
 
 def claude_md_line(path=os.path.join(REPO, "CLAUDE.md")):
@@ -78,19 +83,20 @@ def claude_md_line(path=os.path.join(REPO, "CLAUDE.md")):
         return next((line.strip() for line in f if SKILL in line), "")
 
 
-def plan_runs(cases, arms, models, reps, text_hash="", done=()):
-    """Every run still to do. `done` holds (case, arm, model, rep, skill hash) already recorded."""
+def plan_runs(cases, arms, models, reps, stamp=lambda case, arm: "", done=()):
+    """Every run still to do, a rep of everything before the next rep, so a stop at the cap leaves
+    every cell covered evenly. `done` holds (case, arm, model, rep, fingerprint) already recorded."""
     runs = []
-    for model in models:
-        for arm in arms:
-            arm_hash = "" if arm == "A" else text_hash
-            for case in cases:
-                if arm == "A" and case["kind"] != "behaviour":
-                    continue
-                for rep in range(reps):
-                    if (case["id"], arm, model, rep, arm_hash) not in done:
+    for rep in range(reps):
+        for model in models:
+            for arm in arms:
+                for case in cases:
+                    if arm == "A" and case["kind"] != "behaviour":
+                        continue
+                    mark = stamp(case, arm)
+                    if (case["id"], arm, model, rep, mark) not in done:
                         runs.append({"case": case, "arm": arm, "model": model, "rep": rep,
-                                     "skill_hash": arm_hash})
+                                     "fingerprint": mark})
     return runs
 
 
@@ -134,42 +140,46 @@ def summarize(events, arm):
     reply = (result or {}).get("result") or ""
     return {
         "loaded": practices.triggered(events, SKILL),
-        "cost": (result or {}).get("total_cost_usd") or 0,
+        # A run with no result (a timeout) still spent, so it counts as its own stop.
+        "cost": RUN_BUDGET_USD if result is None else result.get("total_cost_usd") or 0,
         "turns": (result or {}).get("num_turns"),
         "reply": reply,
         "skip_fields": skip_fields(reply),
-        "broken": result is None or bool(result.get("is_error")),
+        "broken": (result is None or bool(result.get("is_error"))
+                   or str(result.get("subtype", "")).startswith("error")),
         "contaminated": bool(init) and listed != (arm in "BC"),
     }
 
 
 class Budget:
-    """Refuses a run that could pass the cap, counting each run in flight at `per_run`."""
+    """Holds a run back while it could pass the cap, reserving `per_run` for each run in flight,
+    and refuses it once nothing in flight could free room. Set `per_run` to RUN_BUDGET_USD and
+    the cap holds: no run spends past its own stop."""
 
-    def __init__(self,
-        cap: float,
-        spent: float,
-        per_run: float,
-    ) -> None:
+    def __init__(self, cap, spent, per_run):
         self.cap, self.spent, self.per_run, self.flying = cap, spent, per_run, 0
-        self.lock = threading.Lock()
+        self.room = threading.Condition()
 
-    def start(self) -> bool:
-        with self.lock:
-            if self.spent + (self.flying + 1) * self.per_run > self.cap:
-                return False
+    def start(self):
+        with self.room:
+            while self.spent + (self.flying + 1) * self.per_run > self.cap:
+                if not self.flying:
+                    return False
+                self.room.wait()
             self.flying += 1
             return True
 
-    def finish(self, cost: float) -> None:
-        with self.lock:
+    def finish(self, cost):
+        with self.room:
             self.flying -= 1
             self.spent += cost
+            self.room.notify_all()
 
 
 def run_one(run, out, skill_dir, line):
     case, arm, model, rep = run["case"], run["arm"], run["model"], run["rep"]
-    name = f"{case['id']}-{arm}-{model}-{rep}-{run['skill_hash'] or 'none'}"
+    name = f"{case['id']}-{arm}-{model}-{rep}-{run['fingerprint']}"
+    reply_id = hashlib.sha256(name.encode()).hexdigest()[:10]
     stream_path = os.path.join(out, "streams", name + ".jsonl")
     root = tempfile.mkdtemp(prefix="wk-", dir="/tmp")
     work = os.path.join(root, "proj")
@@ -191,12 +201,12 @@ def run_one(run, out, skill_dir, line):
         shutil.rmtree(root, ignore_errors=True)
     row = summarize(practices.read_stream(stream_path), arm)
     row.update(case=case["id"], kind=case["kind"], arm=arm, model=model, rep=rep,
-               skill_hash=run["skill_hash"], seconds=round(time.monotonic() - start, 1),
-               timed_out=timed_out)
-    with open(os.path.join(out, "replies", name + ".md"), "w") as f:
-        f.write(f"# {name}\n\nloaded: {row['loaded']}, skip fields: {row['skip_fields']}\n\n"
-                f"Prompt: {case['prompt']}\n\nExpect: {case.get('expect', '')}\n\n---\n\n"
-                f"{row['reply']}\n")
+               fingerprint=run["fingerprint"], reply_id=reply_id, timed_out=timed_out,
+               seconds=round(time.monotonic() - start, 1))
+    if case["kind"] == "behaviour":
+        with open(os.path.join(out, "replies", reply_id + ".md"), "w") as f:
+            f.write(f"Prompt: {case['prompt']}\n\nNotes:\n\n{case['notes']}\n"
+                    f"Expect: {case['expect']}\n\n---\n\n{row['reply']}\n")
     return row
 
 
@@ -208,20 +218,30 @@ def read_rows(out):
         return [json.loads(line) for line in f if line.strip()]
 
 
-def report(rows, text_hash):
-    """One line per case, arm and model at the current text; spend over every row comes last."""
+def read_grades(out):
+    path = os.path.join(out, "grades.json")
+    if not os.path.isfile(path):
+        return {}
+    with open(path) as f:
+        return json.load(f)
+
+
+def report(rows, current, grades=None):
+    """One line per case, arm and model over rows of `current` fingerprints: loads, then graded
+    passes. Spend over every row comes last, since a voided row still cost money."""
     cells = {}
     for row in rows:
-        if row.get("broken") or row.get("contaminated"):
+        if row.get("broken") or row.get("contaminated") or row["fingerprint"] not in current:
             continue
-        if row["arm"] != "A" and row["skill_hash"] != text_hash:
-            continue
-        cell = cells.setdefault((row["kind"], row["case"], row["arm"], row["model"]), [0, 0])
+        cell = cells.setdefault((row["kind"], row["case"], row["arm"], row["model"]), [0, 0, 0, 0])
         cell[0] += bool(row.get("loaded"))
         cell[1] += 1
-    lines = ["kind       case                  arm model   loaded"]
-    for (kind, case, arm, model), (hits, total) in sorted(cells.items()):
-        lines.append(f"{kind:10} {case:21} {arm:3} {model:7} {hits}/{total}")
+        grade = (grades or {}).get(row.get("reply_id"))
+        cell[2] += grade == "pass"
+        cell[3] += grade is not None
+    lines = ["kind       case                  arm model   loaded graded-pass"]
+    for (kind, case, arm, model), (hits, total, passes, graded) in sorted(cells.items()):
+        lines.append(f"{kind:10} {case:21} {arm:3} {model:7} {hits}/{total}    {passes}/{graded}")
     bad = sum(bool(r.get("broken") or r.get("contaminated")) for r in rows)
     lines.append(f"rows {len(rows)}, broken or contaminated {bad}, "
                  f"spent ${sum(r.get('cost', 0) for r in rows):.2f}")
@@ -237,28 +257,34 @@ def main():
     parser.add_argument("--cases", help="comma-separated case ids; default all")
     parser.add_argument("--kinds", help="comma-separated kinds; default all")
     parser.add_argument("--cap", type=float, default=5.0, help="USD ceiling over all of --out")
-    parser.add_argument("--per-run", type=float, default=0.5, help="USD reserved per run in flight")
+    parser.add_argument("--per-run", type=float, default=RUN_BUDGET_USD,
+                        help="USD reserved per run in flight")
     parser.add_argument("--jobs", type=int, default=6)
     parser.add_argument("--report-only", action="store_true")
     args = parser.parse_args()
 
     os.makedirs(os.path.join(args.out, "streams"), exist_ok=True)
     os.makedirs(os.path.join(args.out, "replies"), exist_ok=True)
-    text_hash = skill_hash()
     rows = read_rows(args.out)
+    all_cases = load_cases()
+    line = claude_md_line()
+
+    def stamp(case, arm):
+        return fingerprint(case, arm, line=line)
+
+    current = {stamp(case, arm) for case in all_cases for arm in "ABC"}
     if args.report_only:
-        print("\n".join(report(rows, text_hash)))
+        print("\n".join(report(rows, current, read_grades(args.out))))
         return
 
-    cases = load_cases()
+    cases = all_cases
     if args.cases:
         cases = [c for c in cases if c["id"] in args.cases.split(",")]
     if args.kinds:
         cases = [c for c in cases if c["kind"] in args.kinds.split(",")]
-    done = {(r["case"], r["arm"], r["model"], r["rep"], r["skill_hash"]) for r in rows
-            if not r.get("broken")}
-    runs = plan_runs(cases, args.arms, args.models.split(","), args.reps, text_hash, done)
-    line = claude_md_line()
+    done = {(r["case"], r["arm"], r["model"], r["rep"], r["fingerprint"]) for r in rows
+            if not (r.get("broken") or r.get("contaminated"))}
+    runs = plan_runs(cases, args.arms, args.models.split(","), args.reps, stamp, done)
     budget = Budget(args.cap, sum(r.get("cost", 0) for r in rows), args.per_run)
     write_lock = threading.Lock()
 
@@ -269,7 +295,7 @@ def main():
         try:
             row = run_one(run, args.out, SKILL_DIR, line)
         finally:
-            budget.finish(row.get("cost", 0))
+            budget.finish(row.get("cost", RUN_BUDGET_USD))
         with write_lock, open(os.path.join(args.out, "results.jsonl"), "a") as f:
             f.write(json.dumps(row) + "\n")
         return True
@@ -277,7 +303,7 @@ def main():
     with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
         ran = list(pool.map(work, runs))
     print(f"planned {len(runs)}, ran {sum(ran)}, refused at the cap {ran.count(False)}")
-    print("\n".join(report(read_rows(args.out), text_hash)))
+    print("\n".join(report(read_rows(args.out), current, read_grades(args.out))))
     print("LONG_RUNS_EVAL_DONE")
 
 
