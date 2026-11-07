@@ -131,6 +131,20 @@ def tone(path, seconds, lead=0.0, frequency=440, gain=4, rate=48000):
     subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i", graph, str(path)], check=True)
 
 
+def sequence(path, parts, rate=48000):
+    """A stand-in voice from parts in order: (frequency or None for silence, seconds, gain)."""
+    sources = []
+    for frequency, seconds, *gain in parts:
+        if frequency:
+            sources.append(f"sine=frequency={frequency}:sample_rate={rate}:duration={seconds},volume={gain[0] if gain else 4}")
+        else:
+            sources.append(f"anullsrc=r={rate}:cl=mono:d={seconds}")
+    inputs = [arg for source in sources for arg in ("-f", "lavfi", "-i", source)]
+    joined = "".join(f"[{i}:a]aformat=channel_layouts=mono[a{i}];" for i in range(len(sources)))
+    joined += "".join(f"[a{i}]" for i in range(len(sources))) + f"concat=n={len(sources)}:v=0:a=1"
+    subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", *inputs, "-filter_complex", joined, str(path)], check=True)
+
+
 def level(path, start, end, frequency=None):
     """The mean level in dB between two times, in a narrow band around `frequency` when given."""
     band = f"bandpass=f={frequency}:width_type=h:width=60," * 4 if frequency else ""  # One pass leaks a loud tone nearby.
@@ -264,16 +278,20 @@ class TemplateOffline(unittest.TestCase):
 
     def test_a_voice_recording_stays_out_of_git_and_out_of_an_agents_hands(self):
         text = (SKILL / "SKILL.md").read_text()
-        self.assertIn("`demo/voice/` and `demo/node_modules/`", text)
+        self.assertIn("`demo/voice*/` and `demo/node_modules/`", text)
         self.assertIn("Never run it for them with the sandbox off", text)
         self.assertIn("never run `voice.mjs` with the sandbox off", text)
         self.assertNotIn("RDPSource", (TEMPLATE / "record.mjs").read_text())
 
     def test_voice_never_records(self):
         text = (TEMPLATE / "voice.mjs").read_text()
-        # The recording line is only ever printed: spawnSync's calls name no capture device.
-        for call in re.findall(r"spawnSync\(.*?\)", text, re.S):
-            self.assertNotIn("pulse", call)
+        # The capture device appears once, in the line it prints, and that line only ever goes to console.log.
+        self.assertEqual(text.count("RDPSource"), 1)
+        self.assertEqual(text.count("pulse"), 1)
+        uses = [line for line in text.splitlines() if "recordLine(" in line]
+        self.assertTrue(uses)
+        for line in uses:
+            self.assertTrue(line.startswith("const recordLine") or "console.log(" in line, line)
 
     def test_skill_never_sends_a_rehearsal_outside_the_sandbox(self):
         text = (SKILL / "SKILL.md").read_text()
@@ -988,15 +1006,39 @@ class Voice(unittest.TestCase):
         self.assertGreater(level(self.result, 0.3, 3.0), HEARD_DB)
         self.assertLess(level(self.result, 3.6, 7.5), -60)
 
-    def test_a_quiet_click_before_the_read_does_not_stop_the_trim(self):
-        click = self.root / "click.wav"
-        tone(click, 0.05, gain=0.1)
-        read = self.root / "read.wav"
-        tone(read, 3, lead=1.5)
-        subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(click), "-i", str(read), "-filter_complex",
-                        "amix=inputs=2:normalize=0:duration=longest", str(self.voice_dir / "all.wav")], check=True)
+    def test_a_click_before_the_read_does_not_stop_the_trim(self):
+        sequence(self.voice_dir / "all.wav", [(None, 0.3), (2000, 0.08, 2), (None, 1.2), (440, 3)])
         self.built()
-        self.assertGreater(level(self.result, 0.3, 3.0), HEARD_DB)
+        self.assertGreater(level(self.result, 0.35, 0.6, 440), HEARD_DB, "the read starts late, kept behind the click")
+        self.assertLess(level(self.result, 0.0, 3.0, 2000), -50, "the click was kept")
+
+    def test_a_noisy_room_still_trims(self):
+        subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i",
+                        "aevalsrc=0.03*random(0)+0.3*sin(2*PI*440*t)*between(t\\,2\\,4):d=6",
+                        str(self.voice_dir / "all.wav")], check=True)
+        self.built()
+        self.assertGreater(level(self.result, 0.4, 0.6, 440), HEARD_DB)
+
+    def test_a_soft_first_sound_is_kept(self):
+        # About -48 dB: under the bar for speech, so only the margin keeps it.
+        sequence(self.voice_dir / "all.wav", [(None, 1.0), (440, 0.15, 0.032), (1000, 2)])
+        self.built()
+        self.assertGreater(level(self.result, 0.2, 0.3, 440), -70, "the soft opening was cut")
+        self.assertGreater(level(self.result, 0.5, 2.0, 1000), HEARD_DB)
+
+    def test_silence_after_the_last_word_is_dropped(self):
+        tone(self.voice_dir / "all.wav", 7, frequency=440)
+        sequence(self.voice_dir / "2.wav", [(None, 0.5), (1000, 1.5), (None, 3.0)])  # Longer than beat 2 only with its tail.
+        self.built()
+        self.assertGreater(level(self.result, 3.2, 4.4, 1000), HEARD_DB)
+
+    def test_a_piped_recording_that_does_not_know_its_length(self):
+        piped = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i",
+                                "aevalsrc=0.5*sin(2*PI*440*t)*(lt(t\\,1)+gt(t\\,2)):d=3", "-c:a", "libopus", "-f", "webm", "-"],
+                               capture_output=True, check=True)
+        (self.voice_dir / "all.webm").write_bytes(piped.stdout)
+        self.built()
+        self.assertGreater(level(self.result, 2.3, 3.0), HEARD_DB, "the last sentence was lost")
 
     def test_clips_land_on_their_beats(self):
         tone(self.voice_dir / "1.wav", 1)
@@ -1004,7 +1046,7 @@ class Voice(unittest.TestCase):
         self.built()
         self.assertGreater(level(self.result, 0.3, 1.1), HEARD_DB)
         self.assertLess(level(self.result, 1.5, 5.3), -60)
-        self.assertGreater(level(self.result, 5.6, 6.4), HEARD_DB)
+        self.assertGreater(level(self.result, 5.6, 6.0), HEARD_DB, "a clip's leading silence was kept")
 
     def test_a_clip_may_run_on_into_a_beat_with_no_voice(self):
         tone(self.voice_dir / "1.wav", 4)
@@ -1019,6 +1061,20 @@ class Voice(unittest.TestCase):
         self.assertLess(level(self.result, 3.2, 5.2, 440), -50, "the read still plays under the retake")
         self.assertGreater(level(self.result, 3.2, 4.9, 1000), HEARD_DB)
         self.assertGreater(level(self.result, 5.7, 7.0, 440), HEARD_DB)
+
+    def test_the_read_resumes_at_its_own_place_after_a_retake(self):
+        # The read's second tone starts in the file just where beat 3 starts in the take, after its 1 s lead.
+        sequence(self.voice_dir / "all.wav", [(None, 1.0), (440, 5.3), (880, 1.7)])
+        tone(self.voice_dir / "2.wav", 2, frequency=1000)
+        self.built()
+        self.assertLess(level(self.result, 5.8, 6.3, 440), -50, "the read came back at the wrong place in the file")
+        self.assertGreater(level(self.result, 5.8, 7.0, 880), HEARD_DB)
+
+    def test_a_clip_after_the_read_has_ended_may_run_on(self):
+        tone(self.voice_dir / "all.wav", 2)
+        tone(self.voice_dir / "2.wav", 3)
+        self.built()
+        self.assertGreater(level(self.result, 5.6, 5.9), HEARD_DB)
 
     def test_two_retakes_side_by_side(self):
         tone(self.voice_dir / "all.wav", 7, frequency=440)
@@ -1165,6 +1221,32 @@ esac
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn("silent", result.stderr)
         self.assertEqual(self.result.read_bytes(), before)
+
+    def test_a_clip_takes_voice_dir_is_its_own(self):
+        other = self.demo / "out-clip"
+        shutil.copytree(self.out, other)
+        tone(self.voice_dir / "1.wav", 1)
+        result = self.run_voice("cues", OUT=str(other))
+        self.assertIn("demo/voice-clip/1.wav", result.stdout)
+        self.assertNotIn("demo/voice/1.wav", result.stdout)
+        refused = self.run_voice(OUT=str(other))
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("voice-clip", refused.stderr)
+
+    def test_an_out_with_another_name_needs_voice_named(self):
+        other = self.demo / "takes"
+        shutil.copytree(self.out, other)
+        result = self.run_voice("cues", OUT=str(other))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("set VOICE", result.stderr)
+
+    def test_a_recording_line_survives_spaces_and_quotes_in_its_path(self):
+        odd = self.root / "it's a voice"
+        result = self.run_voice("cues", VOICE=str(odd))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        line = next(l for l in result.stdout.splitlines() if "beat 2:" in l).split("beat 2: ", 1)[1]
+        import shlex
+        self.assertEqual(Path(self.root, shlex.split(line)[-1]).resolve(), (odd / "2.wav").resolve())
 
     def test_cues_list_each_beat_and_a_line_to_record_it(self):
         result = self.run_voice("cues")

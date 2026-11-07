@@ -32,7 +32,9 @@
 // read gets redone. Silence before the first word is dropped, so a voice lands on its caption however
 // late it started.
 //
-// Env: OUT is the take's dir and VOICE the files' dir, by default out/ and voice/ beside this file.
+// Env: OUT is the take's dir, by default out/ beside this file. VOICE is the voice files' dir, by
+// default named after OUT (out/ pairs with voice/, out-clip/ with voice-clip/), since a beat number
+// means a beat of one take.
 //
 // A build fails loud, and a failed one leaves the last good file alone. A good one moves the file it
 // replaces to demo-voice.prev.mp4. The picture is copied, never re-encoded.
@@ -43,7 +45,6 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const OUT = path.resolve(process.env.OUT || path.join(HERE, 'out'));
-const VOICE = path.resolve(process.env.VOICE || path.join(HERE, 'voice'));
 const TAKE = path.join(OUT, 'demo.mp4');
 const STEPS = path.join(OUT, 'steps.json');
 const RESULT = path.join(OUT, 'demo-voice.mp4');
@@ -52,8 +53,13 @@ const BUILDING = path.join(OUT, `.demo-voice.${process.pid}.mp4`);
 const FILE_NAME = /^(all|\d+)\.[^.]+$/i;
 const TOO_QUIET_DB = -25; // A real microphone gave -31 dB on a room with nobody talking, and 0 dB on a voice.
 const CLIPPED_DB = -0.1;
-const BELOW_PEAK_DB = 25; // Quieter than this under the file's own peak isn't speech, so a key click before it isn't either.
-const PAUSE_S = 0.2; // Silence shorter than this is a gap between words.
+const RATE = 48000;
+const WINDOW_S = 0.05; // Speech is found in windows this long.
+const ABOVE_FLOOR_DB = 10; // Speech is this much louder than the room's own noise,
+const BELOW_LOUDEST_DB = 35; // and no quieter than this under the loudest window, in a silent room.
+const FLOOR_RANGE_DB = 16; // A file whose windows span less than this has no quiet part: it is all speech.
+const SPEECH_RUN = 4; // Loud windows in a row that start the speech. A click is shorter.
+const MARGIN_S = 0.1; // Kept around the speech, for a soft first or last sound.
 const FADE_S = 0.01; // Keeps a cut from clicking.
 const SLACK_S = 0.05;
 const LENGTH_SLACK_S = 0.1;
@@ -89,20 +95,48 @@ function peakOf(file) {
   return found ? Number(found[1]) : -Infinity; // Pure digital silence prints no number.
 }
 
-// Where the speech in a file starts and stops, by the file's own peak, so a quiet recorder works too.
-function speechIn(file, duration) {
-  const peak = peakOf(file);
-  if (peak < TOO_QUIET_DB) {
-    throw new Error(`${shown(file)} is too quiet to be a voice (peak ${peak} dB): check the input device, its mute and its level`);
+// A container may not know its own length (a piped webm reads N/A), so lengths and levels come from
+// the decoded sound, one window at a time.
+function windowsOf(file) {
+  const result = spawnSync('ffmpeg', ['-nostdin', '-nostats', '-hide_banner', '-loglevel', 'error', '-i', file, '-map', '0:a:0',
+    '-af', `aformat=sample_rates=${RATE}:channel_layouts=mono,asetnsamples=n=${RATE * WINDOW_S}:p=0,`
+      + 'astats=metadata=1:reset=1:measure_perchannel=none:measure_overall=Peak_level+RMS_level+Number_of_samples,'
+      + 'ametadata=mode=print:file=-', '-f', 'null', '-'], { encoding: 'utf8', maxBuffer: 1 << 28 });
+  if (result.status !== 0) throw new Error(`can't read ${shown(file)}: ${result.error?.message || result.stderr.trim()}`);
+  const windows = [];
+  for (const line of result.stdout.split('\n')) {
+    if (line.startsWith('frame:')) windows.push({ Peak_level: -Infinity, RMS_level: -Infinity, Number_of_samples: 0 });
+    const found = /^lavfi\.astats\.Overall\.(\w+)=(.+)$/.exec(line.trim());
+    if (found && windows.length) {
+      const value = Number(found[2]);
+      windows.at(-1)[found[1]] = Number.isNaN(value) ? -Infinity : value; // Silence reads -inf.
+    }
   }
-  if (peak >= CLIPPED_DB) console.warn(`warning: ${shown(file)} clipped (peak ${peak} dB): turn the input down, or back off the microphone`);
-  const log = analyse(file, `silencedetect=n=${peak - BELOW_PEAK_DB}dB:d=${PAUSE_S}`);
-  const starts = [...log.matchAll(/silence_start: (-?[\d.]+)/g)].map(match => Number(match[1]));
-  const ends = [...log.matchAll(/silence_end: (-?[\d.]+)/g)].map(match => Number(match[1]));
-  const from = starts.length && starts[0] <= SLACK_S && ends.length ? ends[0] : 0;
-  const trailing = starts.length > ends.length || ends.at(-1) >= duration - SLACK_S;
-  const to = starts.length && trailing && starts.at(-1) > from ? starts.at(-1) : duration;
-  return { from, to };
+  return windows;
+}
+
+// Where the speech in a file starts and stops. The bar sits over the room's own noise, so a noisy
+// room still trims, and a click before the first word is too short to start the speech.
+function speechIn(file) {
+  const windows = windowsOf(file);
+  const duration = windows.reduce((sum, window) => sum + window.Number_of_samples, 0) / RATE;
+  if (!duration) throw new Error(`${shown(file)} has no audio in it`);
+  const peak = Math.max(...windows.map(window => window.Peak_level));
+  if (peak < TOO_QUIET_DB) {
+    throw new Error(`${shown(file)} is too quiet to be a voice (peak ${peak.toFixed(1)} dB): check the input device, its mute and its level`);
+  }
+  if (peak >= CLIPPED_DB) console.warn(`warning: ${shown(file)} clipped (peak ${peak.toFixed(1)} dB): turn the input down, or back off the microphone`);
+  const levels = windows.map(window => window.RMS_level);
+  const heard = levels.filter(Number.isFinite).sort((one, other) => one - other);
+  const loudest = heard.at(-1);
+  const floor = heard[Math.floor(heard.length / 10)] ?? -Infinity;
+  const bar = loudest - floor < FLOOR_RANGE_DB ? loudest - BELOW_LOUDEST_DB
+    : Math.max(floor + ABOVE_FLOOR_DB, loudest - BELOW_LOUDEST_DB);
+  const loud = levels.map(level => level > bar);
+  const first = loud.findIndex((_, index) => index + SPEECH_RUN <= loud.length && loud.slice(index, index + SPEECH_RUN).every(Boolean));
+  if (first < 0) throw new Error(`${shown(file)} has no stretch of speech in it, only short sounds`);
+  const last = loud.lastIndexOf(true);
+  return { from: Math.max(0, first * WINDOW_S - MARGIN_S), to: Math.min(duration, (last + 1) * WINDOW_S + MARGIN_S) };
 }
 
 function readTake() {
@@ -114,8 +148,16 @@ function readTake() {
   return { beats, length: probe(TAKE).duration };
 }
 
+function voiceDir() {
+  if (process.env.VOICE) return path.resolve(process.env.VOICE);
+  const name = path.basename(OUT);
+  if (!name.startsWith('out')) throw new Error(`OUT is ${shown(OUT)}, so set VOICE too: only an OUT named out... has a voice dir of its own`);
+  return path.join(path.dirname(OUT), 'voice' + name.slice('out'.length));
+}
+
 function readVoices(beats) {
-  const names = fs.existsSync(VOICE) ? fs.readdirSync(VOICE, { withFileTypes: true }) : [];
+  const dir = voiceDir();
+  const names = fs.existsSync(dir) ? fs.readdirSync(dir, { withFileTypes: true }) : [];
   const voices = new Map();
   for (const entry of names) {
     if (!entry.isFile() || entry.name.startsWith('.')) continue;
@@ -124,14 +166,10 @@ function readVoices(beats) {
     const key = found[1].toLowerCase() === 'all' ? 'all' : Number(found[1]);
     if (key !== 'all' && (key < 1 || key > beats.length)) throw new Error(`${entry.name}: this take has beats 1 to ${beats.length}`);
     if (voices.has(key)) throw new Error(`${entry.name}: ${voices.get(key).name} is already that part, so remove one`);
-    voices.set(key, { name: entry.name, file: path.join(VOICE, entry.name) });
+    voices.set(key, { name: entry.name, file: path.join(dir, entry.name) });
   }
-  if (!voices.size) throw new Error(`no voice files in ${shown(VOICE)}: \`node ${shown(fileURLToPath(import.meta.url))} cues\` lists what to record`);
-  for (const voice of voices.values()) {
-    const { audio, duration } = probe(voice.file);
-    if (!audio) throw new Error(`${voice.name} has no audio in it`);
-    Object.assign(voice, speechIn(voice.file, duration));
-  }
+  if (!voices.size) throw new Error(`no voice files in ${shown(dir)}: \`node ${shown(fileURLToPath(import.meta.url))} cues\` lists what to record`);
+  for (const voice of voices.values()) Object.assign(voice, speechIn(voice.file));
   return voices;
 }
 
@@ -139,12 +177,14 @@ function readVoices(beats) {
 // talk over the read coming back.
 function placeVoices(voices, beats, length) {
   const read = voices.get('all');
+  const opening = beats[0].start;
+  const closing = read ? opening + read.to - read.from : 0;
   const clips = [...voices.keys()].filter(key => key !== 'all').sort((one, other) => one - other);
   const parts = clips.map((beat, index) => {
     const clip = voices.get(beat);
     const { start, end } = beats[beat - 1];
     const next = clips[index + 1];
-    const [limit, what] = read ? [end, 'the read comes back']
+    const [limit, what] = read && closing > end ? [end, 'the read comes back']
       : next ? [beats[next - 1].start, `beat ${next}'s clip`] : [length, 'the take ends'];
     const spoken = clip.to - clip.from;
     if (start + spoken > limit + SLACK_S) {
@@ -154,7 +194,6 @@ function placeVoices(voices, beats, length) {
   });
   if (!read) return parts;
 
-  const opening = beats[0].start;
   const spans = [];
   let at = opening;
   for (const beat of clips) {
@@ -162,7 +201,6 @@ function placeVoices(voices, beats, length) {
     if (start > at) spans.push([at, start]);
     at = Math.max(at, end);
   }
-  const closing = opening + read.to - read.from;
   if (closing > at) spans.push([at, closing]);
   for (const [start, end] of spans) {
     const stop = Math.min(end, closing);
@@ -222,16 +260,17 @@ const recordLine = (seconds, file) => 'ffmpeg -nostdin -hide_banner -loglevel er
 
 function cues() {
   const { beats, length } = readTake();
-  fs.mkdirSync(VOICE, { recursive: true });
+  const dir = voiceDir();
+  fs.mkdirSync(dir, { recursive: true });
   console.log(`${shown(TAKE)}: ${length.toFixed(1)} s, ${beats.length} beats\n`);
   beats.forEach(({ caption, start, end }, index) => {
     console.log(`  ${index + 1}. at ${start.toFixed(1)} s, ${(end - start).toFixed(1)} s long: ${caption}`);
   });
-  console.log(`\nSave a recording from any app in ${shown(VOICE)}, as all.<ext> or <beat>.<ext>.`);
+  console.log(`\nSave a recording from any app in ${shown(dir)}, as all.<ext> or <beat>.<ext>.`);
   console.log('Under WSLg, the speaker can type one of these. It stops by itself, and spare silence is dropped:\n');
-  console.log(`  whole read: ${recordLine(length, path.join(VOICE, 'all.wav'))}`);
+  console.log(`  whole read: ${recordLine(length, path.join(dir, 'all.wav'))}`);
   beats.forEach(({ start, end }, index) => {
-    console.log(`  beat ${index + 1}: ${recordLine(end - start, path.join(VOICE, `${index + 1}.wav`))}`);
+    console.log(`  beat ${index + 1}: ${recordLine(end - start, path.join(dir, `${index + 1}.wav`))}`);
   });
 }
 
