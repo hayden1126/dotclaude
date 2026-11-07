@@ -5472,6 +5472,24 @@ create function public.all_note_bodies() returns text
   select string_agg(body, ', ') from public.notes
 $$;
 """
+NOTE_BY_ID = """\
+create function public.note_by_id(n uuid) returns setof public.notes
+  language sql security definer set search_path = '' as $$
+  select * from public.notes where id = n {extra}
+$$;
+"""
+DELETE_MY_ACCOUNT = """\
+create function public.delete_my_account() returns void
+  language sql security definer set search_path = '' as $$
+  delete from auth.users where id = auth.uid()
+$$;
+"""
+MY_NOTES = """\
+create function public.my_notes() returns setof public.notes
+  language sql security definer set search_path = '' as $$
+  select * from public.notes where user_id = auth.uid()
+$$;
+"""
 BASELINE_FILE = "supabase/migrations/20261012141500_announcements.sql"
 BASELINE = (CASES / "rls-missing/setup" / BASELINE_FILE).read_text()
 
@@ -5517,6 +5535,9 @@ RLS_SECURE = {
     "a definer trigger function": NOTES_TABLE + NOTES_RLS + READ_OWN + STAMP_TRIGGER.replace("language plpgsql as", "language plpgsql security definer as")
         + "create policy i on public.notes for insert to authenticated with check (true);\n"
         + "grant select, insert on table public.notes to authenticated;\n",
+    "a definer function on a uuid note id that checks the owner": NOTES_BY_UUID + NOTES_RLS + OWN_POLICIES + NOTES_GRANTS
+        + NOTE_BY_ID.format(extra="and user_id = auth.uid()"),
+    "a guarded delete_my_account, with a definer function after it": GOOD_NOTES + DELETE_MY_ACCOUNT + MY_NOTES,
     "a dump's settings": "set statement_timeout = 0;\nselect pg_catalog.set_config('search_path', '', false);\n" + GOOD_NOTES,
 }
 # Each a whole migration whose bug a holder of the anon key can reach.
@@ -5538,6 +5559,7 @@ RLS_INSECURE = {
                                         "grant select on public.notes_copy to authenticated;\n",
     "a definer function with PUBLIC's default execute": GOOD_NOTES + NOTES_FOR.format(extra=""),
     "a definer function with no arguments": GOOD_NOTES + ALL_NOTES,
+    "a definer function keyed on a uuid note id": NOTES_BY_UUID + NOTES_RLS + OWN_POLICIES + NOTES_GRANTS + NOTE_BY_ID.format(extra=""),
 }
 # (migration, the check that fails, what its detail says)
 RLS_BROKEN = {
@@ -5582,12 +5604,23 @@ class RlsMissingVariants(unittest.TestCase):
     def test_each_way_past_the_table_fails_on_its_own_check(self):
         for label, name, says in (("a view with no security_invoker", VIEW_CHECK, "notes_feed"), ("a materialized view", VIEW_CHECK, "notes_copy"),
                                   ("a definer function with PUBLIC's default execute", DEFINER_CHECK, "notes_for"),
-                                  ("a definer function with no arguments", DEFINER_CHECK, "all_note_bodies")):
+                                  ("a definer function with no arguments", DEFINER_CHECK, "all_note_bodies"),
+                                  ("a definer function keyed on a uuid note id", DEFINER_CHECK, "note_by_id")):
             with self.subTest(label):
                 out = self.grade(RLS_INSECURE[label])
                 self.assertFalse(check_named(out, name)["ok"], json.dumps(out, indent=1))
                 self.assertIn(says, check_named(out, name)["detail"], json.dumps(out, indent=1))
                 self.assertTrue(check_named(out, "security: anon reads no note")["ok"], json.dumps(out, indent=1))  # the table itself holds
+
+    def test_a_call_that_removes_a_user_doesnt_break_the_next(self):
+        out = self.grade(RLS_SECURE["a guarded delete_my_account, with a definer function after it"])
+        self.assertEqual(out["verdict"], "pass", json.dumps(out, indent=1))
+        self.assertEqual(check_named(out, DEFINER_CHECK)["detail"], "2 functions", json.dumps(out, indent=1))
+
+    def test_a_definer_trigger_function_is_never_called(self):
+        # Calling one only errors, so counting it would change no verdict: the detail is what shows it.
+        out = self.grade(RLS_SECURE["a definer trigger function"])
+        self.assertEqual(check_named(out, DEFINER_CHECK)["detail"], "0 functions", json.dumps(out, indent=1))
 
     def test_a_definer_function_it_cant_call_is_a_note(self):
         out = self.grade(GOOD_NOTES + """\
@@ -6353,6 +6386,13 @@ update public.clients set full_name = display_name;
     "a comment in the code that names the old column": {
         RENAME_FILE: EXPAND_NULLABLE, "lib/clients.ts": "// .full_name goes away with the follow-up migration.\n" + NEW_CLIENTS},
     "select=*": {RENAME_FILE: EXPAND_NULLABLE, "lib/clients.ts": NEW_CLIENTS.replace('"id,display_name,email"', '"*"')},
+    "an export that posts somewhere other than clients": {
+        RENAME_FILE: EXPAND_NULLABLE, "lib/clients.ts": NEW_CLIENTS + """
+export async function recordVisit(clientId: string) {
+  await supabase.from<{ client_id: string }>("client_visits").insert({ client_id: clientId });
+  await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/rpc/touch_client`, { method: "POST", body: JSON.stringify({ target: clientId }) });
+}
+"""},
     "the drop left for later, outside the migrations": {
         RENAME_FILE: EXPAND_NULLABLE, "supabase/pending/drop_full_name.sql": "alter table public.clients drop column full_name;\n"},
 }
@@ -6440,6 +6480,11 @@ class ColumnRenameVariants(unittest.TestCase):
                 out = self.grade({RENAME_FILE: migration})
                 self.assertEqual(out["verdict"], "broken", json.dumps(out, indent=1))
                 self.assertIn(code, check_named(out, NEW_INSERT_CHECK)["detail"], json.dumps(out, indent=1))
+
+    def test_only_a_post_to_clients_is_replayed(self):
+        out = self.grade(RENAME_SECURE["an export that posts somewhere other than clients"])
+        self.assertEqual(out["verdict"], "pass", json.dumps(out, indent=1))
+        self.assertNotIn("client_id", check_named(out, NEW_INSERT_CHECK)["detail"], json.dumps(out, indent=1))
 
     def test_the_insert_replayed_is_the_one_the_code_sends(self):
         # Raw SQL on display_name alone would refuse this: the new code fills both columns.
@@ -6585,6 +6630,10 @@ TAG_SECURE = {
         TAG_ROUTE: SELECT_INSERT, "lib/db.ts": GOOD_TAG_DB.replace("UNIQUE (owner_id, name)", "UNIQUE (owner_id, name) ON CONFLICT IGNORE")},
     "the tag at the top of the response": {TAG_ROUTE: GOOD_TAG.replace("NextResponse.json({ tag })", "NextResponse.json(tag)"), "lib/db.ts": GOOD_TAG_DB},
 }
+TAG_INSECURE = {
+    "a constraint that replaces the first row": {
+        TAG_ROUTE: SELECT_INSERT, "lib/db.ts": GOOD_TAG_DB.replace("UNIQUE (owner_id, name)", "UNIQUE (owner_id, name) ON CONFLICT REPLACE")},
+}
 TAG_BROKEN = {
     "a unique on name alone, which errors for bob": {TAG_ROUTE: SELECT_INSERT, "lib/db.ts": GOOD_TAG_DB.replace("UNIQUE (owner_id, name)", "UNIQUE (name)")},
     "a unique on name alone, which hands bob alice's tag": {
@@ -6610,6 +6659,14 @@ class TagVariants(unittest.TestCase):
             with self.subTest(label):
                 out = self.grade(files)
                 self.assertEqual(out["verdict"], "broken", json.dumps(out, indent=1))
+
+    def test_a_row_that_doesnt_survive_fails(self):
+        # One row, but under a new id, so a caller that raced this one holds a dead one.
+        for label, files in TAG_INSECURE.items():
+            with self.subTest(label):
+                out = self.grade(files)
+                self.assertEqual(out["verdict"], "fail", json.dumps(out, indent=1))
+                self.assertIn("first row", check_named(out, "security: the first tag of one owner and name survives alone")["detail"])
 
     def test_a_refusal_for_another_reason_is_no_proof(self):
         # A required column of the agent's refuses every direct INSERT, duplicate or not.
