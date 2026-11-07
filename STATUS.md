@@ -90,11 +90,14 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - #144 (exam-prep): rules public, evidence private (Hayden, 2026-10-20).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
-  - **Live lanes** (briefs in each record). Merge order (Hayden, 2026-11-06): 1 deny-rules (`fix/deny-rules`, draft #167,
-    carries the lead's notes), 2 hackathon (`feat/hackathon-mode`; a hackathon starts 2026-11-14, so
-    it merges by 2026-11-11), 3 practices (`feat/practices-dependencies`, its next PR). #167 installs
-    from its worktree before lane hackathon's dry run (Hayden, 2026-11-06), and no install runs
-    during it.
+  - **Live lanes** (briefs in each record). Merge order: 1 hackathon (`feat/hackathon-mode`, carries the lead's notes; a
+    hackathon starts 2026-11-14, so it merges by 2026-11-11), 2 practices
+    (`feat/practices-dependencies`, its next PR; live at the event, Hayden 2026-11-06, so it
+    merges by 2026-11-11; hackathon mode has its install check off, through Hayden's own
+    `practices-gate` line at kickoff, since no session may turn the gate off), 3 merge-record
+    (`fix/after-merge-record`, opened 2026-11-06 on Hayden's pick; by 2026-11-11), 4 license
+    (`chore/license`, opened 2026-11-06 on Hayden's pick; last, since it and lanes hackathon and
+    practices change README.md).
     **Install freeze on HAYPC, Nov 12 through Nov 15** (Hayden, 2026-11-05): no lane installs in
     that window, except fixes for lane hackathon, so the event runs what the dry run tested. The lead's
     reinstall after a merge counts as an install, so no other lane merges in that window.
@@ -122,6 +125,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     capella-studio lane artexport's report; a fork's hook output never reaches its model, so it
     knows its lane only from the parent's copied line, docs/lanes.md S5; the delegation canary
     checks the source enum; untried against lane practices' settings.json change),
+    deny-rules (#167, 2026-11-06: SW3, SW7, SW12, SW14, SW4, DA12 (a) and PG1; installed before
+    lane hackathon's dry run on Hayden's pick; Hayden's leftover asks are in its closed record's
+    Asks for Hayden, `.git/lanes/_closed/deny-rules-2026-11-06/`),
     dev-cycle (#166, 2026-11-05: the external-skills ports, `quality-lens`, stalled-chain rules in
     the lanes skill, and `writing-voice` split into `technical-writing`, `formal-voice` and
     `casual-voice`; a running session keeps the old CLAUDE.md until its next start),
@@ -142,6 +148,25 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
 
   Backlog:
+  - **License dotclaude under MIT, in a PR of its own** (Hayden's pick 2026-11-06, via lane
+    hackathon). README's License section already says MIT, but the repo has no LICENSE file.
+    First trace where everything came from: parts carry their own licences (frontend-motion's
+    two sources, interview's jmo origin, the deck fonts, vendored parable and reveal), and
+    anything ported without a licence comes out. Then a root LICENSE and the README line. Lane
+    license has it.
+  - **demo-video upgrade** (Hayden, 2026-11-06: "at a later pass"): recorded voiceovers, music,
+    transitions, and real camera footage cut in with the scripted take. Today the skill records
+    one silent take and has one untested ffmpeg line for a voiceover. Starts after lane
+    hackathon merges (it owns `skills/demo-video/` and its tests); lead's lean: after the event.
+    Music and footage need a recorded source and licence per file (lane license's rule), and
+    recording a voice from WSL needs the Windows microphone, still unprobed.
+  - **Two gaps in the lead's close gate** (`skills/lanes/SKILL.md`, text already on main; found by
+    lane merge-record, 2026-11-06). (1) A merged lane with no live session and a failing
+    `handoff-check` has no written next step: the lead never respawns another lane's session, and
+    Hayden's yes lifts only the `handoff?` flag. (2) A merged lane whose worktree is gone can't
+    pass `handoff-check`, yet `lane open`'s refusal says `lane done` closes it. Evidence: lane
+    merge-record's record, Not mine, and its `.lane/artifacts/gate-table.md` rows 7 and 13. Fits a
+    lanes-skill lane after merge-record merges.
   - **Fix lanes from lane design-audit** (Hayden's picks, 2026-11-01). Private: sandbox-audit
     FINDINGS, "Design-decision audit, 2026-11", one row per id with the detail. Most severe first:
     1. DA15 with DA16 (high): done in #161 (lane ports, 2026-11-04), with LR1 to LR7. The lead
@@ -170,8 +195,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **Fix lanes from lane sweep** (2026-11-04; private: sandbox-audit FINDINGS, "Sandbox reach
     sweep, 2026-11", rows SW1 to SW14, each naming its fix and files). Most severe first:
     1. SW1 (high): done in #165 (lane npx-cwd, 2026-11-05).
-    2. SW3, SW7, SW12, SW14, SW4 (high): in lane deny-rules (Hayden, 2026-11-05), folded into
-       DA12 (a), with the deny rule in SW1's limits and PG1.
+    2. SW3, SW7, SW12, SW14, SW4 (high): done in #167 (lane deny-rules, 2026-11-06), with DA12
+       (a), SW1's leftover rule and PG1. SW3's row closes after Hayden's own step there.
     3. SW10 (medium-high): codex-delegate and the excluded-command guard, with tests.
     4. SW2, SW6, SW9 (medium): the Windows side; part is Hayden's call.
     5. SW5 (Hayden's pick): a tripwire, lane-able, beside lane ports' tamper checks.
@@ -206,9 +231,6 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     hooks and notifiers lean on WSL. Pairs with [[hayden-new-device-goal]]. After lane hackathon.
   - **A README paragraph against the gaps-by-id rule** (lane deny-rules' reviewer, 2026-11-05).
     Private: sandbox-audit FINDINGS, PG8. For lane practices, in its next PR.
-  - **Who can turn the practices gate off** (Hayden, 2026-11-05: not any session without him).
-    Private: sandbox-audit FINDINGS, PG1, with Hayden's picked fix. In lane deny-rules (Hayden,
-    2026-11-05), with lane practices reviewing the engine change.
   - **`lane ls` names an overdue reinstall** (Hayden's pick, 2026-11-04; after #163's chain
     stalled). When the lane holding the install has a merged PR, the `install: held by` line says
     the lead's reinstall is overdue. Derived on each call, no new state. Lane-able after ports
@@ -407,19 +429,19 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Live lanes: `lane ls`; state in their records (2026-11-05: hackathon, practices' next PR;
-     deny-rules first in merge order with draft #167, reopened 2026-11-06; one slot free, Hayden's
-     pick from the Backlog). #167 installs before lane hackathon's dry run (Hayden's pick), so
-     the dry run tests the event's rules. Lane hackathon merges by Nov 11:
+  0. Live lanes: `lane ls`; state in their records (2026-11-06: hackathon, practices' next PR;
+     merge-record, license; no slot free). #167 merged and is installed from main; lane
+     hackathon's dry run ran on it 2026-11-06 and is done, so installs may resume. Hayden's leftover asks from lane deny-rules
+     (an overlay paste plus a setup rerun, probe leftovers, local tool cleanups): its closed
+     record. Lane hackathon merges by Nov 11:
      move it up if the queue threatens that. Install freeze Nov 12 through Nov 15. A chain that
      stops before its "main moved" step still tells the lanes, and arms a wake on the blocker
      (`skills/lanes/SKILL.md`). Open
      with Hayden (repeat them in each reply's Waiting list until answered): try `/interview` in
      the prep repo named in [[dotclaude-hackathon-mode]]; rehearse reaching this machine from another
-     network by Nov 12; whether the event's local-lead email went out; by Nov 12 whether his
-     teammates want the skills and who presents; hq's three questions and the SW13 fix for the hq
-     window; whether to backlog a lanes-skill rule that a lane writes its after-merge record only
-     after the merge returns and at least 10 s later. Before each post-merge chain, run DA15's
+     network by Nov 12; the event's local-lead email (not sent as of 2026-11-06); by Nov 12 who
+     presents (his teammates want the skills, 2026-11-06); hq's three questions and the SW13 fix for the hq
+     window. Before each post-merge chain, run DA15's
      pre-check from the private FINDINGS rows, and its added checks before any sandbox-off fetch
      in this repo. Since #161, `lane new` runs only with the sandbox off. Since #156's install, a lone
      excluded call (gh, git push or fetch, lane) runs only from a repo's top. Running sessions took
