@@ -90,9 +90,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - #144 (exam-prep): rules public, evidence private (Hayden, 2026-10-20).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
-  - **Live lanes** (briefs in each record). Merge order: 1 env-names
-    (`fix/secret-scan-env-names`, #171, carries the lead's notes; by 2026-11-11), 2 license
-    (`chore/license`, opened 2026-11-06 on Hayden's pick; last).
+  - **Live lanes** (briefs in each record). Merge order: 1 license
+    (`chore/license`, opened 2026-11-06 on Hayden's pick; carries the lead's notes).
     **Install freeze on HAYPC, Nov 12 through Nov 15** (Hayden, 2026-11-05): no lane installs in
     that window, except fixes for lane hackathon, so the event runs what the dry run tested. The lead's
     reinstall after a merge counts as an install, so no other lane merges in that window.
@@ -120,6 +119,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     capella-studio lane artexport's report; a fork's hook output never reaches its model, so it
     knows its lane only from the parent's copied line, docs/lanes.md S5; the delegation canary
     checks the source enum; untried against lane practices' settings.json change),
+    env-names (#171, 2026-11-07, merge 87ab19f: `secret-scan` and the hackathon gitignore
+    template catch `.env~`, `.envrc-local` and other backup and copy names; installed from main),
     merge-record (#170, 2026-11-07, merge 20d8bcd: a lane writes its after-merge record only
     after the merge command returns, and `lane ls --check` shows the gate's reason; installed
     from main),
@@ -163,11 +164,6 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     hackathon merges (it owns `skills/demo-video/` and its tests); lead's lean: after the event.
     Music and footage need a recorded source and licence per file (lane license's rule), and
     recording a voice from WSL needs the Windows microphone, still unprobed.
-  - **secret-scan misses `.env~` and `.envrc-local`/`.envrc_local`** (low; the practices review
-    before #168's ready, 2026-11-06): neither `secret-scan` nor
-    `skills/hackathon/templates/gitignore` covers them. Small, but it touches the hackathon
-    skills, so it merges and installs before Nov 12. Lane env-names has it. Evidence: lane
-    hackathon's closed record, `artifacts/smoke/cec4381/practices-review.md`.
   - **Cheaper review before ready** (Hayden's picks, 2026-11-07; for lane practices' next PR,
     `hooks/practices_check.py`'s ready gate): (1) a new head keeps the last review's clearance
     when its changes since the reviewed head touch no file a skill watches (a STATUS carry, doc
@@ -444,11 +440,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Live lanes: `lane ls`; state in their records (2026-11-07: env-names with #171,
-     license, practices kept open). #170 merged and is installed from main; lanes hackathon
-     and merge-record closed 2026-11-07. Hayden's leftover asks from lane deny-rules
+  0. Live lanes: `lane ls`; state in their records (2026-11-07: license,
+     practices kept open). #171 merged and is installed from main; lanes hackathon,
+     merge-record and env-names closed 2026-11-07. Hayden's leftover asks from lane deny-rules
      (an overlay paste plus a setup rerun, probe leftovers, local tool cleanups): its closed
-     record. Lane env-names merges and installs by Nov 11. Install freeze Nov 12 through Nov 15. A chain that
+     record. Lane license is next; a merge after Nov 11 waits for Nov 16. Install freeze Nov 12 through Nov 15. A chain that
      stops before its "main moved" step still tells the lanes, and arms a wake on the blocker
      (`skills/lanes/SKILL.md`). Open
      with Hayden (repeat them in each reply's Waiting list until answered): try `/interview` in
