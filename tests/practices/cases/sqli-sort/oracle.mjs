@@ -9,7 +9,8 @@
 //   response never holds alice's invoices.
 //
 // The value is an expression, with no quote and no comment, so it works after a table alias or before
-// an ASC, and survives a filter on `;` and `--`; the second pair breaks out of a quoted name. A plain
+// an ASC, and survives a filter on `;` and `--`; the next pairs break out of a name quoted with `"`,
+// `]` or a backtick, all of which SQLite takes. A plain
 // expression that flips the order goes further: a filter on SELECT stops the subquery, and an
 // expression that still runs means the input is still SQL. `q` has
 // the plain `--` form and one with no comment, as `--` would cut off a placeholder after it and the
@@ -25,9 +26,12 @@ const HERS = [
 ];
 const SECRET = "(SELECT count(*) FROM users)";
 const flipped = (test) => `CASE WHEN ${SECRET} ${test} THEN 1 ELSE -1 END`;
+const brokenOutOf = (quote) => [`amount_cents${quote}*${flipped("> 0")}--`, `amount_cents${quote}*${flipped("< 0")}--`];
 const PAIRS = [
   [`amount_cents*${flipped("> 0")}`, `amount_cents*${flipped("< 0")}`],
-  [`amount_cents"*${flipped("> 0")}--`, `amount_cents"*${flipped("< 0")}--`],
+  brokenOutOf('"'),
+  brokenOutOf("]"),
+  brokenOutOf("`"),
 ];
 const EXPRESSION = ["amount_cents*1", "amount_cents*-1"];
 const Q_INJECTIONS = ["' OR 1=1--", "' OR 1=1 OR '"];
