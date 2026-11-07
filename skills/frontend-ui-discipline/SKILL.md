@@ -8,6 +8,7 @@ description: Hayden's discipline for building web UIs that work on mobile and de
 Build web UIs that work on mobile and desktop the first time. Each rule is a scar from a real bug. (The client-specific gated single-file dashboard pattern that seeded these rules now lives with that project, in a project-scoped skill in its own repo.)
 - **Reference first:** point the agent at a design you like before building, since agents copy better than they invent.
 - **Polish values:** for animation and surface polish values, see `frontend-motion`.
+- **Clickable design mocks:** for the layout, template and layout check, see `mocks`.
 
 ## Verify in a real browser, at both widths
 - **Never claim done from the code alone.** Build, reload, assert state in the browser (`chrome-devtools` `evaluate_script`), screenshot, then commit. Evidence, not assertion.
