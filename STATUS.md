@@ -173,6 +173,16 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     new skill, built now by lane mocks (2026-11-07).
     Reference template and a scripted check (not run yet): lane themes's
     `.lane/mock/` in that repo, archived with the lane when it closes.
+  - **Faster work: parallel runs and stated skips** (Hayden, 2026-11-07, via lane themes in
+    another repo: "another skill for speeding up processes like running stuff in parallel etc,
+    for both during dev, spikes, verification, release checks, CI stuff etc, also smart thinking
+    about what we can skip or only looking at diff etc when appropriate"). Habits: before quoting
+    a duration, find what the job spends its time on (waits or CPU) and run independent parts at
+    once, keeping a signal that the load changed nothing; use lock and build waits to prepare the
+    next step; run only what a change can reach, reuse evidence that still holds, prove with the
+    cheapest test that hits the risk, order steps by what voids what. Guardrail: every skip is
+    written down (what didn't run, why it's safe, what would catch a problem), and never reads as
+    a pass. Home and timing not picked.
   - **Secret-name follow-ups from lane env-names** (low, 2026-11-07): five notes on names the
     secret checks and ignore rules miss or wrongly flag, outside that lane's brief. Not picked
     yet. Evidence: lane env-names's closed record, Not mine
