@@ -25,7 +25,9 @@ paths = [
   "**/alembic/versions/**",
   "**/drizzle/**",
 ]
-at = ["edit", "commit"]
+at = ["edit", "commit", "bash"]
+# The Bash level has no path to match, so it reads these words in the command instead.
+command = '''(?i)migrat|alembic|drizzle'''
 when = '''(?ix)
   \brename\s+(?:column|table|to)\b
   | \bdrop\s+(?:column|table)\b
@@ -42,7 +44,7 @@ when = '''(?ix)
   | \b(?:RenameField|RemoveField|RenameModel|DeleteModel)\b
   # Alembic's alter_column rename.
   | \bnew_column_name\s*=
-  # Knex and TypeORM.
-  | \b(?:renameColumn|renameTable|dropColumns?|dropTable(?:IfExists)?)\b
+  # Knex, TypeORM and Sequelize.
+  | \b(?:renameColumn|renameTable|removeColumn|dropColumns?|dropTable(?:IfExists)?)\b
 '''
 say = "This migration renames or drops something the old release may still read, and migrations run before the new code is live. Build add-then-remove by default and say so in your reply: add the new column, keep both in sync, remove the old one in a later release. If this is the contract step, check the old release is gone, then resend or add `practices-allow: REL-31 <reason>`. A drop in a down migration is a false match: resend."

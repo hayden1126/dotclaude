@@ -16,7 +16,8 @@ Each practices skill ships an events.toml beside its SKILL.md:
   when = '''regex'''
   unless = '''optional regex'''
   paths = ["optional globs"]
-  at = ["edit", "commit"]   # optional: the levels it runs at, both by default
+  at = ["edit", "commit"]   # optional: the levels it runs at, both by default; "bash" is opt-in
+  command = '''regex'''     # required with "bash": the path words a command must hold
   scope = "line"            # optional: judged line by line (default "file")
   say = "one line"
 
@@ -58,6 +59,7 @@ Levels:
       after the edit suppresses it. L2 doesn't run in a call L1 denies, nor for a rule whose
       `at` lacks "edit". A `scope = "line"` rule (a key shape) is judged per line of new: `when`,
       `unless` and the allow all on the one line, so an allow covers only its own line.
+  L2b a rule with "bash" in `at`, read against a Bash call's raw command, below.
   L3s, push and L3r: the Bash levels, below.
   L4  SessionStart(compact): a digest (under DIGEST_MAX characters, shared among the skills
       and cut only between lines) naming the practices skills loaded since the previous
@@ -116,8 +118,9 @@ start, as one systemMessage line (shown to the user only), and prints nothing wh
 
 Bash levels. settings.json sends a Bash call here only when its command (the payload's
 "command" string, never the tool_response output) holds git with commit or push, gh with pr
-ready or pr create, or a package manager with an add verb (PostToolUse: git with commit), so
-Python never starts for any other call.
+ready or pr create, a package manager with an add verb, or, in either order and any case, a
+path word and a rename or drop word for L2b (PostToolUse: git with commit), so Python never
+starts for any other call. A test ties L2b's rules to that filter by their samples.
 The prefilter is one `LC_ALL=C grep -E`, linear in the payload (a bash `case` glob backtracked
 over every "git" in a large output). Every practices entry in settings.json (edit, Bash and
 SessionStart) runs the shim only when it exists and then exits 0; a deny is JSON on stdout.
@@ -139,7 +142,7 @@ command never runs the parse into the 5 s kill.
 Accepted limits beyond those logs: `eval`, an alias, a function or a script file
 that runs git with nothing naming it in the command; a command inside an unquoted heredoc's
 $(...); a function body's cd, read as if it ran. A file written by a heredoc or `cat >`
-escapes L1 and L2, and L3s is its backstop.
+escapes L1 and L2, and L3s is its backstop; L2b is the one exception.
 A repo is read only inside Bounds: git runs only in (or pointed at) the project dir
 (CLAUDE_PROJECT_DIR, else the cwd recorded at the session's first SessionStart, never the call's
 own cwd; the Bash levels read config.toml and the project skills from it too, so a cd moves
@@ -197,6 +200,17 @@ key per line it named (`L2|<skill>|<rule>|<path>|sha1(the stripped line)`); a fi
 of those lines was accepted at edit time and is skipped, and any other line of that rule in
 that file is still told (a transcript marker names no line, so it accepts none). A deny or
 tell names a finding by rule, path and line, never the matched text, and so does errors.log.
+
+L2b runs in PreToolUse(Bash) right after SEC-64 and reads no repo and no file. Its rule gives
+`command` in place of `paths`: a call is denied when `command` and `when` both match the raw
+command text and neither `unless` nor `practices-allow: <id>` is in it. It is blunt on purpose: a
+false match (a commit message that names a migration and a drop) costs one resend. Each matched
+line gets a key, `L2b|<skill>|<rule>|sha1(the stripped line)`, and the call is denied when any of
+its keys is new, so a resend passes and a different line is denied again. The deny's marker is
+`[practices:L2:<skill>:<rule>:bash]`, and it never echoes the matched text. A command over CMD_MAX
+is skipped. L2b shares SEC-64's part of the budget, fails the same way and reads the same off
+file. sed, a Python write or a name built from parts can still pass; L3s and push read those
+commits.
 
 SEC-64, the engine's other rule, runs first in PreToolUse(Bash) and reads no repo: a Bash call
 that adds a named package (ADD_VERBS: npm, pnpm, yarn and bun add and install, pip and uv pip
@@ -295,6 +309,7 @@ EDIT_TOOLS = ("Edit", "Write", "MultiEdit")
 SKILL_MAX = 1 << 20
 PROJECT_SKILLS_MAX = 256 * 1024  # all of a project's events.toml files together
 AT = ("edit", "commit")  # a [[rule]]'s `at` when it gives none: checked at both
+LEVELS = AT + ("bash",)  # what `at` may name: "bash" is opt-in, so no rule gains it by default
 # An [auth] helpers name: an identifier, dotted allowed (auth.requireUser). An empty or blank
 # name would turn `(?:...|)` into a match for any call and silence SEC-01.
 HELPER = re.compile(r"[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*")
@@ -644,8 +659,14 @@ def _strs(v):
 
 
 def _at_ok(at):
-    """A rule's `at`: a non-empty list of "edit" and "commit", each at most once."""
-    return _strs(at) and bool(at) and set(at) <= set(AT) and len(at) == len(set(at))
+    """A rule's `at`: a non-empty list of LEVELS, each at most once."""
+    return _strs(at) and bool(at) and set(at) <= set(LEVELS) and len(at) == len(set(at))
+
+
+def _command_ok(rule):
+    """A rule's `command`: a string when given, and not empty on a rule that runs at "bash"."""
+    command = rule.get("command", "")
+    return isinstance(command, str) and (bool(command) or "bash" not in rule.get("at", AT))
 
 
 def read_toml(path, cap):
@@ -683,7 +704,8 @@ def load_skill(folder):
         if not (isinstance(r, dict) and isinstance(r.get("id"), str) and ID.fullmatch(r["id"])
                 and isinstance(r.get("when"), str) and isinstance(r.get("say"), str)
                 and isinstance(r.get("unless", ""), str) and _strs(r.get("paths", []))
-                and _at_ok(r.get("at", list(AT))) and r.get("scope", "file") in ("file", "line")):
+                and _at_ok(r.get("at", list(AT))) and _command_ok(r)
+                and r.get("scope", "file") in ("file", "line")):
             return None, f"{path}: bad rule {r.get('id') if isinstance(r, dict) else r!r}"
         ids.append(r["id"])
     if len(ids) != len(set(ids)):
@@ -2567,7 +2589,8 @@ def review_block(touched, mb, head, branch, shown=8):
 
 SEC64 = {"id": "SEC-64", "say": (
     "Read a package's install scripts before its first install, or install with scripts off.")}
-SEC64_SHARE = 0.5  # of BUDGET, counted from the start of the run; the git levels keep the rest
+# Of BUDGET, counted from the start of the run, for SEC-64 and L2b; the git levels keep the rest.
+SEC64_SHARE = 0.5
 NPM_FAMILY = {"npm", "pnpm", "yarn", "bun"}
 PY_MANAGERS = {"pip", "uv", "poetry"}
 # Each manager's words that add a package named after them. npm's are its documented aliases.
@@ -3135,12 +3158,74 @@ def install_check(event):
     return None
 
 
+# ---------------------------------------------------------------- L2b, a command's text
+
+def bash_lines(rule, text, helpers=()):
+    """The lines of a Bash command's scanned text that a "bash" rule flags: `command` and `when`
+    both match, and neither `unless` nor `practices-allow: <id>` is in the text (for a
+    `scope = "line"` rule, on the flagged line)."""
+    if not guarded(rule["command"], text, helpers, rule["id"]):
+        return []
+    if rule.get("scope") != "line" and (allowed(rule["id"], text)
+                                        or excused(rule, text, helpers)):
+        return []
+    return l2_lines(rule, text, helpers)
+
+
+def text_reason(pending):
+    return "\n\n".join(
+        f"[practices:L2:{skill['name']}:{rule['id']}:bash] {rule['say']}\nThis check reads command "
+        "text only, so it can match what the command doesn't do. Resending a false match passes "
+        "it." for skill, rule in pending)
+
+
+def text_check(event):
+    """L2b: the deny for this call, or None. A fault allows the call and logs it, and the git
+    levels still run, with their share of the budget."""
+    global BUDGET
+    whole, BUDGET = BUDGET, BUDGET * SEC64_SHARE
+    try:
+        cmd = command_of(event)
+        if not cmd or len(cmd) > CMD_MAX:
+            return None
+        project = bash_project(event)
+        cfg = load_config(project)
+        if not cfg["enabled"]:
+            return None
+        rules = [(s, r) for s in discover(project).values() for r in s["rules"]
+                 if "bash" in r.get("at", AT) and not is_off(cfg, s, r["id"])]
+        text, found = scan_text(cmd), []
+
+        def hits(item):
+            s, r = item
+            CRUMB.mark("(the command)", "bash", r["id"])
+            found.extend((s, r, f"L2b|{s['name']}|{r['id']}|{_sha1(line.strip())}")
+                         for line in bash_lines(r, text, cfg["helpers"]))
+            return False
+
+        run_patterns(rules, hits)
+        seen = state_keys(event)
+        new = [item for item in found if item[2] not in seen]
+        if not new or not state_add(event, [key for _, _, key in found]):
+            return None
+        pending = {(s["name"], r["id"]): (s, r) for s, r, _ in new}
+        return deny(text_reason(pending.values()))
+    except Budget as e:
+        log("budget-spent", f"after {BUDGET}s, in L2b's {e}; the call was allowed")
+    except Exception as e:  # noqa: BLE001  never at the cost of the push and PR checks
+        log("crash", f"L2b: {type(e).__name__}: {e}")
+    finally:
+        BUDGET = whole
+    return None
+
+
 def bash_pre(event):
-    """PreToolUse(Bash): deny a first package install once per package (SEC-64), deny a call
-    that both commits and pushes once, record HEAD before a commit (L3s), deny a push once per
-    new finding in what it would send, and deny a PR's `ready` once until a reviewer ran with the
-    gate lines of the skills it touches (L3r)."""
-    out = install_check(event)
+    """PreToolUse(Bash): deny a first package install once per package (SEC-64), deny a command
+    whose text a "bash" rule flags once per line (L2b), deny a call that both commits and pushes
+    once, record HEAD before a commit (L3s), deny a push once per new finding in what it would
+    send, and deny a PR's `ready` once until a reviewer ran with the gate lines of the skills it
+    touches (L3r)."""
+    out = install_check(event) or text_check(event)
     if out:
         return out
     gits, ghs, named = bash_calls(event)

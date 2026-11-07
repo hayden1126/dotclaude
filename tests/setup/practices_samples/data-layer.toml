@@ -1,6 +1,8 @@
 # Samples for skills/data-layer/events.toml: for REL-31, migrations that must fire and near
 # misses that must not. The practices engine test runs each one. kind = "rule" is an edit to
-# `path` that writes `content`; kind = "bash" is a Bash call whose command is `content`.
+# `path` that writes `content`; kind = "bash" is a Bash call whose command is `content`. Keep
+# `rename` and `drop` out of the paths: settings.json's filter would pass on the path alone, and
+# the test tying the filter to these samples would stop checking the statement.
 
 # ---------------------------------------------------------------- SQL that must fire
 
@@ -357,7 +359,7 @@ content = '''
 kind = "rule"
 id = "REL-31"
 fires = true
-path = "db/migrate/20261107120000_rename_users.rb"
+path = "db/migrate/20261107120000_users.rb"
 content = '''
 rename_column :users, :full_name, :display_name
 '''
@@ -366,7 +368,7 @@ rename_column :users, :full_name, :display_name
 kind = "rule"
 id = "REL-31"
 fires = true
-path = "db/migrate/20261107120000_rename_users.rb"
+path = "db/migrate/20261107120000_users.rb"
 content = '''
 remove_column :users, :full_name
 '''
@@ -375,7 +377,7 @@ remove_column :users, :full_name
 kind = "rule"
 id = "REL-31"
 fires = true
-path = "db/migrate/20261107120000_rename_users.rb"
+path = "db/migrate/20261107120000_users.rb"
 content = '''
 remove_columns :users, :full_name, :nickname
 '''
@@ -384,7 +386,7 @@ remove_columns :users, :full_name, :nickname
 kind = "rule"
 id = "REL-31"
 fires = true
-path = "db/migrate/20261107120000_rename_users.rb"
+path = "db/migrate/20261107120000_users.rb"
 content = '''
 rename_table :users, :people
 '''
@@ -393,7 +395,7 @@ rename_table :users, :people
 kind = "rule"
 id = "REL-31"
 fires = true
-path = "db/migrate/20261107120000_rename_users.rb"
+path = "db/migrate/20261107120000_users.rb"
 content = '''
 drop_table :legacy_users
 '''
@@ -402,7 +404,7 @@ drop_table :legacy_users
 kind = "rule"
 id = "REL-31"
 fires = true
-path = "db/migrate/20261107120000_rename_users.rb"
+path = "db/migrate/20261107120000_users.rb"
 content = '''
     t.remove_column :full_name
 '''
@@ -411,7 +413,7 @@ content = '''
 kind = "rule"
 id = "REL-31"
 fires = true
-path = "users/migrations/0002_rename.py"
+path = "users/migrations/0002_users.py"
 content = '''
         migrations.RenameField(model_name='user', old_name='full_name', new_name='display_name'),
 '''
@@ -420,7 +422,7 @@ content = '''
 kind = "rule"
 id = "REL-31"
 fires = true
-path = "users/migrations/0002_rename.py"
+path = "users/migrations/0002_users.py"
 content = '''
         migrations.RemoveField(model_name='user', name='full_name'),
 '''
@@ -429,7 +431,7 @@ content = '''
 kind = "rule"
 id = "REL-31"
 fires = true
-path = "users/migrations/0002_rename.py"
+path = "users/migrations/0002_users.py"
 content = '''
         migrations.RenameModel(old_name='User', new_name='Person'),
 '''
@@ -438,7 +440,7 @@ content = '''
 kind = "rule"
 id = "REL-31"
 fires = true
-path = "users/migrations/0002_rename.py"
+path = "users/migrations/0002_users.py"
 content = '''
         migrations.DeleteModel(name='LegacyUser'),
 '''
@@ -447,7 +449,7 @@ content = '''
 kind = "rule"
 id = "REL-31"
 fires = true
-path = "alembic/versions/3f2a_rename.py"
+path = "alembic/versions/3f2a_users.py"
 content = '''
     op.drop_column('users', 'full_name')
 '''
@@ -456,7 +458,7 @@ content = '''
 kind = "rule"
 id = "REL-31"
 fires = true
-path = "alembic/versions/3f2a_rename.py"
+path = "alembic/versions/3f2a_users.py"
 content = '''
     op.drop_table('legacy_users')
 '''
@@ -465,7 +467,7 @@ content = '''
 kind = "rule"
 id = "REL-31"
 fires = true
-path = "alembic/versions/3f2a_rename.py"
+path = "alembic/versions/3f2a_users.py"
 content = '''
     op.rename_table('users', 'people')
 '''
@@ -474,7 +476,7 @@ content = '''
 kind = "rule"
 id = "REL-31"
 fires = true
-path = "alembic/versions/3f2a_rename.py"
+path = "alembic/versions/3f2a_users.py"
 content = '''
     op.alter_column('users', 'full_name', new_column_name='display_name')
 '''
@@ -483,7 +485,7 @@ content = '''
 kind = "rule"
 id = "REL-31"
 fires = true
-path = "alembic/versions/3f2a_rename.py"
+path = "alembic/versions/3f2a_users.py"
 content = '''
         batch_op.drop_column('full_name')
 '''
@@ -492,7 +494,7 @@ content = '''
 kind = "rule"
 id = "REL-31"
 fires = true
-path = "alembic/versions/3f2a_rename.py"
+path = "alembic/versions/3f2a_users.py"
 content = '''
         new_column_name = 'display_name',
 '''
@@ -501,7 +503,7 @@ content = '''
 kind = "rule"
 id = "REL-31"
 fires = true
-path = "services/api/alembic/versions/3f2a_rename.py"
+path = "services/api/alembic/versions/3f2a_users.py"
 content = '''
     op.drop_column('users', 'full_name')
 '''
@@ -558,6 +560,15 @@ fires = true
 path = "migrations/20261107_users.js"
 content = '''
   await knex.schema.dropTableIfExists('legacy_users');
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "migrations/20261107_users.js"
+content = '''
+  await queryInterface.removeColumn('users', 'full_name');
 '''
 
 # ---------------------------------------------------------------- near misses in a migration: these keep the old release working
@@ -818,7 +829,7 @@ update users set display_name = full_name where display_name is null;
 kind = "rule"
 id = "REL-31"
 fires = false
-path = "db/migrate/20261107120000_rename_users.rb"
+path = "db/migrate/20261107120000_users.rb"
 content = '''
 add_column :users, :display_name, :string
 '''
@@ -827,7 +838,7 @@ add_column :users, :display_name, :string
 kind = "rule"
 id = "REL-31"
 fires = false
-path = "db/migrate/20261107120000_rename_users.rb"
+path = "db/migrate/20261107120000_users.rb"
 content = '''
 remove_index :users, :full_name
 '''
@@ -836,7 +847,7 @@ remove_index :users, :full_name
 kind = "rule"
 id = "REL-31"
 fires = false
-path = "db/migrate/20261107120000_rename_users.rb"
+path = "db/migrate/20261107120000_users.rb"
 content = '''
 rename_index :users, :old_idx, :new_idx
 '''
@@ -845,7 +856,7 @@ rename_index :users, :old_idx, :new_idx
 kind = "rule"
 id = "REL-31"
 fires = false
-path = "users/migrations/0002_rename.py"
+path = "users/migrations/0002_users.py"
 content = '''
         migrations.AddField(model_name='user', name='display_name', field=models.TextField()),
 '''
@@ -854,7 +865,7 @@ content = '''
 kind = "rule"
 id = "REL-31"
 fires = false
-path = "users/migrations/0002_rename.py"
+path = "users/migrations/0002_users.py"
 content = '''
         migrations.RemoveConstraint(model_name='user', name='user_key'),
 '''
@@ -863,7 +874,7 @@ content = '''
 kind = "rule"
 id = "REL-31"
 fires = false
-path = "users/migrations/0002_rename.py"
+path = "users/migrations/0002_users.py"
 content = '''
         migrations.RenameIndex(model_name='user', new_name='a', old_name='b'),
 '''
@@ -872,7 +883,7 @@ content = '''
 kind = "rule"
 id = "REL-31"
 fires = false
-path = "alembic/versions/3f2a_rename.py"
+path = "alembic/versions/3f2a_users.py"
 content = '''
     op.add_column('users', sa.Column('display_name', sa.Text()))
 '''
@@ -881,7 +892,7 @@ content = '''
 kind = "rule"
 id = "REL-31"
 fires = false
-path = "alembic/versions/3f2a_rename.py"
+path = "alembic/versions/3f2a_users.py"
 content = '''
     op.drop_index('ix_users_full_name')
 '''
@@ -890,7 +901,7 @@ content = '''
 kind = "rule"
 id = "REL-31"
 fires = false
-path = "alembic/versions/3f2a_rename.py"
+path = "alembic/versions/3f2a_users.py"
 content = '''
     op.drop_constraint('users_key', 'users')
 '''
@@ -977,4 +988,199 @@ path = "supabase/migrations/20261107120000_users.sql"
 content = '''
 -- practices-allow: REL-31 contract step, the old release left on 2026-11-01
 alter table users drop column full_name;
+'''
+
+# ---------------------------------------------------------------- Bash commands that must fire
+
+[[sample]]
+kind = "bash"
+id = "REL-31"
+fires = true
+content = '''
+cat > supabase/migrations/20261107120000_users.sql <<'EOF'
+alter table users rename column full_name to display_name;
+EOF
+'''
+
+[[sample]]
+kind = "bash"
+id = "REL-31"
+fires = true
+content = '''
+f=supabase/migrations/20261107120000_users.sql; printf 'alter table t rename column a to b;\n' > "$f"
+'''
+
+[[sample]]
+kind = "bash"
+id = "REL-31"
+fires = true
+content = '''
+printf 'alter table t rename column a to b;\n' > db/migrations/0002_t.sql
+'''
+
+[[sample]]
+kind = "bash"
+id = "REL-31"
+fires = true
+content = '''
+echo 'ALTER TABLE users DROP COLUMN full_name;' >> MIGRATIONS/0002_users.sql
+'''
+
+[[sample]]
+kind = "bash"
+id = "REL-31"
+fires = true
+content = '''
+tee drizzle/0003_users.sql <<EOF
+ALTER TABLE "users" RENAME TO "people";
+EOF
+'''
+
+[[sample]]
+kind = "bash"
+id = "REL-31"
+fires = true
+content = '''
+cat > db/migrate/20261107120000_users.rb <<'RUBY'
+class UsersStep < ActiveRecord::Migration[7.1]
+  def change
+    rename_column :users, :full_name, :display_name
+  end
+end
+RUBY
+'''
+
+[[sample]]
+kind = "bash"
+id = "REL-31"
+fires = true
+content = '''
+printf "  remove_column :users, :full_name\n" >> db/migrate/20261107120000_users.rb
+'''
+
+[[sample]]
+kind = "bash"
+id = "REL-31"
+fires = true
+content = '''
+cat > users/migrations/0002_users.py <<'PY'
+operations = [migrations.RenameField(model_name="user", old_name="a", new_name="b")]
+PY
+'''
+
+[[sample]]
+kind = "bash"
+id = "REL-31"
+fires = true
+content = '''
+printf 'operations = [RemoveField(model_name="user", name="a")]\n' > users/migrations/0002.py
+'''
+
+[[sample]]
+kind = "bash"
+id = "REL-31"
+fires = true
+content = '''
+printf 'operations = [DeleteModel(name="User")]\n' > users/migrations/0002.py
+'''
+
+[[sample]]
+kind = "bash"
+id = "REL-31"
+fires = true
+content = '''
+printf "op.alter_column('users', 'a', new_column_name='b')\n" >> alembic/versions/3f2a.py
+'''
+
+[[sample]]
+kind = "bash"
+id = "REL-31"
+fires = true
+content = '''
+printf "await q.removeColumn('users', 'a');\n" >> migrations/20261107_users.js
+'''
+
+[[sample]]
+kind = "bash"
+id = "REL-31"
+fires = true
+content = '''
+cat > alembic/versions/3f2a_users.py <<'PY'
+def upgrade():
+    op.alter_column("users", "full_name", new_column_name="display_name")
+PY
+'''
+
+[[sample]]
+kind = "bash"
+id = "REL-31"
+fires = true
+content = '''
+printf "table.dropColumn('full_name');\n" >> migrations/20261107_users.js
+'''
+
+# ---------------------------------------------------------------- Bash commands that must not
+
+[[sample]]
+kind = "bash"
+id = "REL-31"
+fires = false
+content = '''
+printf 'alter table t rename column a to b;\n' > "$f"
+'''
+
+[[sample]]
+kind = "bash"
+id = "REL-31"
+fires = false
+content = '''
+psql "$DB" -c 'drop table scratch_rows;'
+'''
+
+[[sample]]
+kind = "bash"
+id = "REL-31"
+fires = false
+content = '''
+cat > supabase/migrations/20261107120000_users.sql <<'EOF'
+alter table users add column display_name text;
+EOF
+'''
+
+[[sample]]
+kind = "bash"
+id = "REL-31"
+fires = false
+content = '''
+cat > supabase/migrations/20261107120000_users.sql <<'EOF'
+alter table users alter column full_name drop not null;
+-- a later migration drops full_name
+EOF
+'''
+
+[[sample]]
+kind = "bash"
+id = "REL-31"
+fires = false
+content = '''
+cat > supabase/migrations/20261107120000_users.sql <<'EOF'
+-- practices-allow: REL-31 contract step, the old release left on 2026-11-01
+alter table users drop column full_name;
+EOF
+'''
+
+[[sample]]
+kind = "bash"
+id = "REL-31"
+fires = false
+content = '''
+ls supabase/migrations
+'''
+
+[[sample]]
+kind = "bash"
+id = "REL-31"
+fires = false
+content = '''
+alembic upgrade head
 '''

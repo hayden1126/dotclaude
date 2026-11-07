@@ -9,8 +9,9 @@ lists the uuids it kept) followed by an isCompactSummary user row; a subagent's 
 event JSON on stdin of `bash hooks/practices-check.sh`.
 
 The samples check loads every tests/setup/practices_samples/*.toml ([[sample]] kind, id, fires,
-path, content) against skills/<file stem>/events.toml, and every shipped skills/*/events.toml
-must parse, keep unique ids and pass the backtracking lint.
+path, content; kind = "bash" takes a command as content and no path) against
+skills/<file stem>/events.toml, and every shipped skills/*/events.toml must parse, keep unique ids
+and pass the backtracking lint.
 """
 import contextlib
 import glob
@@ -22,6 +23,7 @@ import json
 import os
 import pwd
 import re
+import shlex
 import shutil
 import signal
 import stat
@@ -1490,10 +1492,14 @@ def check_samples(sample_file, skill_dir):
         except KeyError as e:
             wrong.append(f"{s['kind']} {s['id']}: no key shape {e}")
             continue
-        fn = PC.event_fires if s["kind"] == "event" else PC.rule_fires
-        got = fn(item, s["path"], PC.scan_text(content))
+        if s["kind"] == "bash":
+            got = bool(PC.bash_lines(item, PC.scan_text(content)))
+        else:
+            fn = PC.event_fires if s["kind"] == "event" else PC.rule_fires
+            got = fn(item, s["path"], PC.scan_text(content))
         if got != s["fires"]:
-            wrong.append(f"{s['kind']} {s['id']} on {s['path']}: fired={got}, want {s['fires']}")
+            wrong.append(f"{s['kind']} {s['id']} on {s.get('path', 'a Bash call')}: fired={got}, "
+                         f"want {s['fires']}")
     return wrong
 
 
@@ -1504,6 +1510,8 @@ def regexes(skill):
         yield r["id"], r["when"]
         if r.get("unless"):
             yield r["id"], r["unless"]
+        if r.get("command"):
+            yield r["id"], r["command"]
 
 
 class Shipped(unittest.TestCase):
@@ -4335,6 +4343,420 @@ class DependenciesSkill(unittest.TestCase):
         self.assertIn("references/lifecycle.md", body)
         self.assertIn(".claude/practices/dependencies.md", body)
         self.assertLess(len(body.splitlines()), 50)
+
+
+DATA_LAYER = os.path.join(REPO, "skills", "data-layer")
+MIGRATION = "supabase/migrations/20261107120000_users.sql"
+HEREDOC = (f"cat > {MIGRATION} <<'EOF'\n"
+           "alter table users rename column full_name to display_name;\nEOF\n")
+PRINTF = f"f={MIGRATION}; printf 'alter table t rename column a to b;\\n' > \"$f\""
+# A rule with its own words, so a test can say what a pass runs without the shipped pattern.
+WORDS_RULE = """
+skill = "{name}"
+[[rule]]
+id = "{rule}"
+at = ["bash"]
+command = '''{command}'''
+when = '''{when}'''
+say = "Say this."
+"""
+
+
+def words_rule(name="words", rule="W-1", command="pathword", when="badword"):
+    return WORDS_RULE.format(name=name, rule=rule, command=command, when=when)
+
+
+def data_layer_samples(kind=None):
+    with open(os.path.join(SAMPLES, "data-layer.toml"), "rb") as f:
+        samples = tomllib.load(f)["sample"]
+    return [s for s in samples if kind is None or s["kind"] == kind]
+
+
+class TextBase(BashBase):
+    """REL-31 as installed: the shipped events.toml in the user's skills."""
+
+    def setUp(self):
+        super().setUp()
+        with open(os.path.join(DATA_LAYER, "events.toml")) as f:
+            self.skill("data-layer", f.read(), where="user")
+
+    def state_rows(self):
+        rows = []
+        for path in glob.glob(os.path.join(self.state, "dotclaude", "practices", "denies", "*")):
+            with open(path) as f:
+                rows += json.load(f)["keys"]
+        return rows
+
+
+class BashText(TextBase):
+    """The Bash text level: a rule with "bash" read against the raw command."""
+
+    def test_a_heredoc_is_denied_once_and_the_resend_passes(self):
+        self.assertTrue(self.pre(HEREDOC).startswith("[practices:L2:data-layer:REL-31:bash] "))
+        self.assertIsNone(self.pre(HEREDOC))
+
+    def test_a_one_line_printf_is_denied_once_and_the_resend_passes(self):
+        self.assertTrue(self.pre(PRINTF).startswith("[practices:L2:data-layer:REL-31:bash] "))
+        self.assertIsNone(self.pre(PRINTF))
+
+    def test_a_second_different_rename_is_denied_again(self):
+        self.assertIsNotNone(self.pre(HEREDOC))
+        self.assertIsNone(self.pre(HEREDOC))
+        other = HEREDOC.replace("full_name to display_name", "nick to handle")
+        self.assertIsNotNone(self.pre(other))
+        self.assertIsNone(self.pre(other))
+
+    def test_a_heredoc_of_two_renames_is_one_deny_and_the_resend_passes(self):
+        both = (f"cat > {MIGRATION} <<'EOF'\nalter table users rename column a to b;\n"
+                "alter table users drop column nick;\nEOF\n")
+        self.assertIsNotNone(self.pre(both))
+        self.assertIsNone(self.pre(both))
+
+    def test_a_kept_line_plus_a_new_one_is_denied_for_the_new_one(self):
+        self.assertIsNotNone(self.pre(HEREDOC))
+        more = HEREDOC.replace("\nEOF", "\nalter table users drop column nick;\nEOF")
+        self.assertIsNotNone(self.pre(more))
+        self.assertIsNone(self.pre(more))
+
+    def test_the_key_is_the_skill_the_rule_and_the_line_s_hash(self):
+        self.pre(HEREDOC)
+        line = "alter table users rename column full_name to display_name;"
+        self.assertEqual(self.state_rows(), [
+            f"L2b|data-layer|REL-31|{hashlib.sha1(line.encode()).hexdigest()}"])
+
+    def test_no_path_word_or_no_ddl_passes(self):
+        for command in ("printf 'alter table t rename column a to b;\\n' > \"$f\"",
+                        "psql -c 'drop table scratch_rows'",
+                        f"cat > {MIGRATION} <<'EOF'\nalter table users add column a text;\nEOF\n",
+                        "ls supabase/migrations"):
+            with self.subTest(command=command):
+                self.assertIsNone(self.pre(command))
+        self.assertEqual(self.state_rows(), [])
+
+    def test_the_reason_carries_the_say_and_the_resend_note_and_no_command_text(self):
+        reason = self.pre(HEREDOC)
+        skill, _ = PC.load_skill(DATA_LAYER)
+        self.assertIn(skill["rules"][0]["say"], reason)
+        self.assertIn("reads command text only", reason)
+        self.assertIn("resend", reason.rsplit("\n", 1)[-1].lower())
+        for word in ("full_name", "display_name", "supabase", "cat >"):
+            self.assertNotIn(word, reason)
+
+    def test_practices_allow_in_the_command_passes_with_no_key(self):
+        allow = HEREDOC.replace("alter", "-- practices-allow: REL-31 the contract step\nalter", 1)
+        self.assertIsNone(self.pre(allow))
+        self.assertEqual(self.state_rows(), [])
+        self.assertIsNotNone(self.pre(HEREDOC.replace("alter",
+                                                      "-- practices-allow: REL-310 no\nalter", 1)))
+
+    def test_a_command_over_the_cap_is_skipped(self):
+        self.assertIsNone(self.pre(HEREDOC + "# " + "x" * PC.CMD_MAX))
+        self.assertEqual(self.state_rows(), [])
+        self.assertIsNotNone(self.pre(HEREDOC + "# " + "x" * (PC.CMD_MAX - len(HEREDOC) - 2)))
+
+    def test_a_spent_budget_allows_and_logs(self):
+        self.env["PRACTICES_TEST_BUDGET"] = "0"
+        self.assertIsNone(self.pre(HEREDOC))
+        self.assertIn("budget-spent", self.log())
+        self.assertEqual(self.state_rows(), [])
+
+    def test_a_deny_whose_key_cant_be_kept_is_dropped(self):
+        os.makedirs(os.path.join(self.state, "dotclaude", "practices"))
+        with open(os.path.join(self.state, "dotclaude", "practices", "denies"), "w") as f:
+            f.write("a file where the folder goes")
+        self.assertIsNone(self.pre(HEREDOC))
+        self.assertIn("state-error", self.log())
+
+    def test_a_fault_is_logged_and_the_push_check_still_runs(self):
+        seen = []
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "discover", side_effect=KeyError("boom")), \
+                mock.patch.object(PC, "bash_calls",
+                                  side_effect=lambda e: seen.append(e) or ([], [], False)):
+            self.assertIsNone(PC.bash_pre(self.event(HEREDOC, "PreToolUse", "b1")))
+        self.assertEqual(len(seen), 1)
+        self.assertIn("crash", self.log())
+
+    def test_the_budget_is_put_back_after_a_deny_and_a_fault(self):
+        whole = PC.BUDGET
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "START", time.monotonic()):
+            self.assertIsNotNone(PC.text_check(self.event(HEREDOC, "PreToolUse", "b1")))
+            self.assertEqual(PC.BUDGET, whole)
+            with mock.patch.object(PC, "discover", side_effect=KeyError("boom")):
+                self.assertIsNone(PC.text_check(self.event(HEREDOC, "PreToolUse", "b2")))
+            self.assertEqual(PC.BUDGET, whole)
+        PC.CRUMB.clear()
+
+    def test_each_pattern_leaves_a_breadcrumb_naming_the_rule(self):
+        marks = []
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "START", time.monotonic()), \
+                mock.patch.object(PC.CRUMB, "mark", side_effect=lambda *a: marks.append(a)):
+            PC.text_check(self.event(HEREDOC, "PreToolUse", "b1"))
+        self.assertIn(("(the command)", "bash", "REL-31"), marks)
+
+    def test_a_call_that_also_commits_runs_the_commit_levels_on_the_resend(self):
+        command = f"{PRINTF} && git commit -m x"
+        self.assertTrue(self.pre(command).startswith("[practices:L2:data-layer:REL-31:bash]"))
+        self.assertEqual(glob.glob(os.path.join(self.state, "dotclaude", "practices", "heads",
+                                                "*")), [])
+        self.assertIsNone(self.pre(command))
+        self.assertTrue(glob.glob(os.path.join(self.state, "dotclaude", "practices", "heads",
+                                               "*")))
+
+    def test_the_install_check_speaks_first_and_each_resend_moves_on(self):
+        command = f"npm i acme-a && {PRINTF}"
+        self.assertTrue(self.pre(command).startswith("[practices:SEC-64]"))
+        self.assertTrue(self.pre(command).startswith("[practices:L2:data-layer:REL-31:bash]"))
+        self.assertIsNone(self.pre(command))
+
+    def test_it_reads_no_repo_and_no_file(self):
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "START", time.monotonic()), \
+                mock.patch.object(PC, "open_transcript", side_effect=AssertionError), \
+                mock.patch.object(PC, "Repo", side_effect=AssertionError):
+            self.assertIsNotNone(PC.text_check(self.event(HEREDOC, "PreToolUse", "b1")))
+        PC.CRUMB.clear()
+        self.assertFalse(os.path.exists(os.path.join(self.proj, MIGRATION)))
+
+
+class BashTextPasses(BashBase):
+    """Installed rules first, then a project's, and a project's pattern can't cost the call."""
+
+    def pattern_case(self, **patterns):
+        self.skill("words", words_rule(**patterns))
+        command = "pathword badword"
+        self.assertIsNone(self.pre(command))
+        self.assertIn("pattern-skipped", self.log())
+        self.assertNotIn("crash", self.log())
+
+    def test_a_project_skill_s_bad_when_allows_the_call_and_is_logged(self):
+        self.pattern_case(when="(")
+
+    def test_a_project_skill_s_bad_command_allows_the_call_and_is_logged(self):
+        self.pattern_case(command="(")
+
+    def test_a_project_skill_s_slow_pattern_allows_the_call_and_is_logged(self):
+        self.skill("words", words_rule(command="(a+)+$"))
+        self.assertIsNone(self.pre("a" * 40 + "b badword"))
+        self.assertIn("pattern-skipped", self.log())
+        self.assertIn("ran past", self.log())
+
+    def test_a_bad_project_rule_leaves_the_next_rule_and_the_installed_one_on(self):
+        self.skill("bad", words_rule(name="bad", rule="B-1", when="("))
+        self.skill("inst", words_rule(name="inst", rule="I-1"), where="user")
+        self.skill("zzz", words_rule(name="zzz", rule="Z-1", when="otherword"))
+        self.assertIn("[practices:L2:inst:I-1:bash]", self.pre("pathword badword"))
+        self.assertIn("[practices:L2:zzz:Z-1:bash]", self.pre("pathword otherword"))
+
+    def test_each_pass_denies_its_own_rule_once(self):
+        self.skill("inst", words_rule(name="inst", rule="I-1"), where="user")
+        self.skill("words", words_rule(name="words", rule="P-1"))
+        self.assertIn("[practices:L2:inst:I-1:bash]", self.pre("pathword badword"))
+        self.assertIn("[practices:L2:words:P-1:bash]", self.pre("pathword badword"))
+        self.assertIsNone(self.pre("pathword badword"))
+
+    def test_a_project_copy_can_t_replace_the_installed_rule(self):
+        self.skill("inst", words_rule(name="inst", rule="I-1"), where="user")
+        self.skill("inst", words_rule(name="inst", rule="I-1", when="neverthis"))
+        self.assertIn("[practices:L2:inst:I-1:bash]", self.pre("pathword badword"))
+
+    def test_with_project_skills_alone_and_with_installed_skills_alone(self):
+        self.skill("words", words_rule())
+        self.assertIsNotNone(self.pre("pathword badword"))
+        self.assertIsNone(self.pre("pathword badword"))
+        shutil.rmtree(os.path.join(self.proj, ".claude", "skills"))
+        self.skill("words", words_rule(when="otherword"), where="user")
+        self.assertIsNotNone(self.pre("pathword otherword"))
+        self.assertIsNone(self.pre("pathword otherword"))
+
+    def test_an_unless_in_the_command_passes(self):
+        self.skill("words", words_rule() + "unless = 'guardword'\n")
+        self.assertIsNone(self.pre("pathword badword guardword"))
+        self.assertIsNotNone(self.pre("pathword badword"))
+
+    def test_a_line_scoped_rule_reads_its_allow_on_the_line(self):
+        self.skill("words", words_rule() + "scope = 'line'\n")
+        self.assertIsNone(self.pre("pathword badword # practices-allow: W-1 ok"))
+        self.assertIsNotNone(self.pre("pathword\nbadword\n# practices-allow: W-1 ok"))
+
+
+class BashAt(BashBase):
+    """`at` gains "bash" as an opt-in. AT stays the default, so no other rule moves."""
+
+    def rule_file(self, **fields):
+        body = 'skill = "x"\n[[rule]]\nid = "X-1"\nwhen = "w"\nsay = "s"\n' + "".join(
+            f"{k} = {v}\n" for k, v in fields.items())
+        return PC.load_skill(self.skill("x", body))
+
+    def test_a_bash_rule_needs_a_command_string(self):
+        for fields in ({"at": '["bash"]'}, {"at": '["bash"]', "command": "7"},
+                       {"at": '["bash"]', "command": '""'},
+                       {"at": '["edit", "bash"]', "command": '["migrat"]'}):
+            with self.subTest(fields=fields):
+                skill, why = self.rule_file(**fields)
+                self.assertIsNone(skill)
+                self.assertIn("bad rule 'X-1'", why)
+
+    def test_a_good_bash_rule_loads(self):
+        for at in ('["bash"]', '["edit", "commit", "bash"]', '["commit", "bash"]'):
+            with self.subTest(at=at):
+                skill, why = self.rule_file(at=at, command='"migrat"')
+                self.assertIsNone(why)
+                self.assertEqual(skill["rules"][0]["command"], "migrat")
+
+    def test_an_unknown_level_or_a_repeat_fails_as_before(self):
+        for at in ('["push"]', '["bash", "push"]', '["bash", "bash"]', "[]", '"bash"'):
+            with self.subTest(at=at):
+                self.assertIsNone(self.rule_file(at=at, command='"migrat"')[0])
+
+    def test_a_non_string_command_fails_on_any_rule(self):
+        self.assertIsNone(self.rule_file(command="7")[0])
+
+    def test_the_default_stays_edit_and_commit(self):
+        self.assertEqual(PC.AT, ("edit", "commit"))
+        self.assertIsNone(self.pre("cat > lib/a.ts <<'X'\nx({ ...body })\nX\n"))
+
+    def test_a_rule_without_bash_never_runs_on_a_command_even_with_a_command_word(self):
+        self.skill("words", words_rule().replace('at = ["bash"]', 'at = ["edit", "commit"]'))
+        self.assertIsNone(self.pre("pathword badword"))
+
+    def test_a_bash_only_rule_never_runs_at_edit_or_commit(self):
+        self.skill("words", words_rule())
+        self.loaded()
+        self.assertIsNone(self.fire("lib/pathword.ts", "badword\n"))
+        self.assertIsNone(self.committed(**{"pathword.txt": "badword\n"}))
+
+    def test_only_rel_31_has_a_bash_level_among_the_shipped_rules(self):
+        found = []
+        for path in sorted(glob.glob(os.path.join(REPO, "skills", "*", "events.toml"))):
+            skill, why = PC.load_skill(os.path.dirname(path))
+            self.assertIsNone(why)
+            found += [r["id"] for r in skill["rules"] if "bash" in r.get("at", PC.AT)]
+        self.assertEqual(found, ["REL-31"])
+
+
+class BashTextOffFile(OffFile):
+    """The Bash text level reads the same off file as every other rule."""
+
+    def setUp(self):
+        super().setUp()
+        with open(os.path.join(DATA_LAYER, "events.toml")) as f:
+            self.skill("data-layer", f.read(), where="user")
+
+    def pre(self, command, sid):
+        return self.run_hook({"session_id": sid, "transcript_path": self.transcript,
+                              "cwd": self.proj, "hook_event_name": "PreToolUse",
+                              "tool_name": "Bash", "tool_input": {"command": command},
+                              "tool_use_id": "b-now"})
+
+    def test_the_off_file_turns_it_off_by_rule_or_whole(self):
+        for n, over in enumerate(({"rule": "REL-31", "reason": "x"},
+                                  {"rule": "data-layer:REL-31", "reason": "x"}, {})):
+            with self.subTest(over=over):
+                self.plant(self.entry(**over))
+                self.assertIsNone(self.pre(HEREDOC, f"a{n}"))
+        self.assertNotIn("crash", self.log())  # a crash would allow the call too
+
+    def test_another_rule_in_the_off_file_leaves_it_on(self):
+        self.plant(self.entry(rule="SEC-60", reason="x"))
+        self.assertIsNotNone(self.pre(HEREDOC, "s"))
+
+
+class TextPrefilter(Base):
+    """settings.json's real filter against each shipped "bash" rule, by its samples, so the two
+    can't drift: a form the rule fires on that the filter stops would never reach it."""
+
+    ran, both = InstallPrefilter.ran, InstallPrefilter.both
+
+    def rule(self):
+        return PC.load_skill(DATA_LAYER)[0]["rules"][0]
+
+    def test_every_shipped_bash_rule_has_samples_both_ways(self):
+        for path in sorted(glob.glob(os.path.join(REPO, "skills", "*", "events.toml"))):
+            skill, why = PC.load_skill(os.path.dirname(path))
+            self.assertIsNone(why)
+            for rule in (r for r in skill["rules"] if "bash" in r.get("at", PC.AT)):
+                with self.subTest(rule=rule["id"]):
+                    with open(os.path.join(SAMPLES, f"{skill['name']}.toml"), "rb") as f:
+                        samples = [s for s in tomllib.load(f)["sample"]
+                                   if s["kind"] == "bash" and s["id"] == rule["id"]]
+                    self.assertTrue(any(s["fires"] for s in samples))
+                    self.assertTrue(any(not s["fires"] for s in samples))
+
+    def test_every_bash_sample_that_fires_reaches_the_hook(self):
+        for s in data_layer_samples("bash"):
+            if s["fires"]:
+                with self.subTest(command=s["content"]):
+                    self.assertEqual(self.both(s["content"]), (True, True))
+
+    def test_every_edit_sample_written_through_bash_reaches_the_hook_and_fires(self):
+        """A heredoc puts the path first and a printf the statement first, each in upper case too,
+        and each fires at the Bash level as it fires at an edit."""
+        rule = self.rule()
+        for s in data_layer_samples("rule"):
+            if not s["fires"]:
+                continue
+            body = s["content"].strip("\n")
+            for command in (f"cat > {s['path']} <<'X'\n{body}\nX\n",
+                            f"printf %s {shlex.quote(body)} > {s['path']}"):
+                with self.subTest(command=command):
+                    self.assertEqual(self.both(command), (True, True))
+                    self.assertEqual(self.both(command.upper()), (True, True))
+                    self.assertTrue(PC.bash_lines(rule, PC.scan_text(command)))
+
+    def test_commands_with_only_one_word_don_t_start_python(self):
+        for command in ("ls", "git status", "npm test", "ls migrations", "npm run migrate",
+                        "alembic upgrade head", "python manage.py migrate", "cat drizzle/0001.sql",
+                        "rm -rf build", "docker compose down --rmi local",
+                        "echo rename", "psql -c 'drop table scratch_rows'",
+                        "mv a.txt b.txt", "cat MIGRATIONS.md"):
+            with self.subTest(command=command):
+                self.assertEqual(self.both(command), (False, False))
+
+    def test_text_outside_the_command_doesnt_reach_the_hook(self):
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {
+            "command": "ls", "description": "rename a column in the migrations folder"}})
+        self.assertFalse(self.ran(payload))
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {
+            "command": "ls migrations", "description": "drop column"}})
+        self.assertFalse(self.ran(payload))
+
+
+class DataLayerRule(TextBase):
+    """REL-31 at its three levels, through the hook."""
+
+    def test_the_skill_is_one_rule_at_three_levels_with_no_event(self):
+        skill, why = PC.load_skill(DATA_LAYER)
+        self.assertIsNone(why)
+        self.assertEqual(skill["events"], [])
+        (rule,) = skill["rules"]
+        self.assertEqual(rule["id"], "REL-31")
+        self.assertEqual(rule["at"], ["edit", "commit", "bash"])
+        for word in ("add-then-remove", "say so in your reply", "practices-allow: REL-31"):
+            self.assertIn(word, rule["say"])
+
+    def test_an_edit_is_denied_once_for_the_file(self):
+        statement = "alter table users drop column full_name;\n"
+        self.assertIn(f"[practices:L2:data-layer:REL-31:{MIGRATION}]",
+                      self.fire(MIGRATION, statement))
+        self.assertIsNone(self.fire(MIGRATION, statement))
+
+    def test_a_commit_is_told(self):
+        told = self.committed(**{MIGRATION: "alter table users rename to people;\n"})
+        self.assertIn(f"REL-31 (data-layer) at {MIGRATION}:1", told)
+
+    def test_a_commit_outside_the_paths_is_not_told(self):
+        self.assertIsNone(self.committed(**{"lib/q.sql": "alter table users rename to people;\n"}))
+
+    def test_every_form_that_fires_matches_on_one_line(self):
+        rule = PC.load_skill(DATA_LAYER)[0]["rules"][0]
+        for s in data_layer_samples("rule"):
+            if s["fires"]:
+                with self.subTest(content=s["content"]):
+                    self.assertTrue(any(PC.search(rule["when"], line)
+                                        for line in s["content"].split("\n")))
 
 
 if __name__ == "__main__":
