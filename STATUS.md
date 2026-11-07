@@ -164,6 +164,13 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     hackathon merges (it owns `skills/demo-video/` and its tests); lead's lean: after the event.
     Music and footage need a recorded source and licence per file (lane license's rule), and
     recording a voice from WSL needs the Windows microphone, still unprobed.
+  - **One-screen layout for clickable mocks** (Hayden, 2026-11-07, via a lane in another repo:
+    "This should be how mocks are made from now on"). On wide windows: no page scroll, one
+    control row, the render fit to the window and fixed in place, the questions column beside it
+    the only thing that scrolls, secondary notes at its foot; stacked below 1,101 px. No dotclaude
+    skill owns mocks yet (frontend-ui-discipline has one line), so it needs a home picked.
+    Reference template and a scripted check (not run yet): lane themes's
+    `.lane/mock/` in that repo, archived with the lane when it closes.
   - **Secret-name follow-ups from lane env-names** (low, 2026-11-07): five notes on names the
     secret checks and ignore rules miss or wrongly flag, outside that lane's brief. Not picked
     yet. Evidence: lane env-names's closed record, Not mine
