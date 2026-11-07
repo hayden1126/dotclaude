@@ -360,6 +360,8 @@ CASE_INFO = {
     "data-benign": Case("data-layer", BENIGN),
     "column-rename": Case("data-layer", TARGET),
     "index-live-table": Case("data-layer", TARGET),
+    "column-rename-bare": Case("data-layer", TARGET),
+    "index-live-table-bare": Case("data-layer", TARGET),
     "tag-get-or-create": Case("data-layer", TARGET),
     "tx-network": Case("data-layer", TARGET),
 }

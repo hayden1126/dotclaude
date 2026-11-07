@@ -5373,8 +5373,9 @@ class Containment(unittest.TestCase):
 
 PGLITE_OK = bool(NODE) and (run.ORACLE_PG_DIR / "node_modules" / run.PGLITE / "package.json").is_file()
 NO_PGLITE = "PGlite isn't installed: run npm ci --ignore-scripts in tests/practices/oracle_pg"
-PG_CASES = ["column-rename", "data-benign", "index-live-table", "rls-missing"]
-DATA_CASES = ["column-rename", "data-benign", "index-live-table", "rls-missing", "sqli-sort", "tag-get-or-create", "tx-network"]
+PG_CASES = ["column-rename", "column-rename-bare", "data-benign", "index-live-table", "index-live-table-bare", "rls-missing"]
+DATA_CASES = ["column-rename", "column-rename-bare", "data-benign", "index-live-table", "index-live-table-bare", "rls-missing",
+              "sqli-sort", "tag-get-or-create", "tx-network"]
 
 
 def pg_grade(case, overlay="good", files=None, drop=()):
@@ -5419,6 +5420,14 @@ class DataLayerCases(unittest.TestCase):
     @unittest.skipUnless(PGLITE_OK, NO_PGLITE)
     def test_index_live_table(self):
         self.check_case("index-live-table")
+
+    @unittest.skipUnless(PGLITE_OK, NO_PGLITE)
+    def test_column_rename_bare(self):
+        self.check_case("column-rename-bare")
+
+    @unittest.skipUnless(PGLITE_OK, NO_PGLITE)
+    def test_index_live_table_bare(self):
+        self.check_case("index-live-table-bare")
 
     @unittest.skipUnless(NODE, "node is not installed")
     def test_tag_get_or_create(self):
@@ -5893,6 +5902,40 @@ HINTS = re.compile(r"(?i)\b(?:rls|row.level|polic(?:y|ies)|grants?|privileges?|s
                    r"whitelist|escap\w*|parameteri[sz]\w*|anon\w*|service.role|attack\w*|unsafe|untrusted|"
                    r"downtime|compatib\w*|backward\w*|expand|contract|concurrent\w*|locks?|locking|blocking|"
                    r"transactions?|autocommit|atomic\w*|races?|duplicates?|uniqu\w*|idempoten\w*)\b")
+
+
+# Each bare case and the sentence its notes lack: the fact that makes the rule apply, stated outright
+# in the original. What a bare case measures is whether a model acts without being told.
+BARE_CASES = {"column-rename-bare": ("column-rename", "old instances keep serving"),
+              "index-live-table-bare": ("index-live-table", "180M rows")}
+
+
+class BareCases(unittest.TestCase):
+    """A difference between a case and its bare twin is only readable if the notes are all that differ."""
+
+    @staticmethod
+    def files(case):
+        root = CASES / case
+        return {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+
+    def test_only_the_notes_differ(self):
+        for bare, (original, _sentence) in BARE_CASES.items():
+            with self.subTest(case=bare):
+                ours, theirs = self.files(bare), self.files(original)
+                self.assertEqual(sorted(ours), sorted(theirs))
+                self.assertEqual([rel for rel in ours if ours[rel] != theirs[rel]], ["setup/CLAUDE.md"])
+
+    def test_the_notes_lose_the_deciding_fact_and_nothing_else(self):
+        for bare, (original, sentence) in BARE_CASES.items():
+            with self.subTest(case=bare):
+                ours = (CASES / bare / "setup/CLAUDE.md").read_text()
+                theirs = (CASES / original / "setup/CLAUDE.md").read_text()
+                self.assertIn(sentence, theirs)
+                self.assertNotIn(sentence, ours)
+                self.assertTrue(theirs.startswith(ours.rstrip("\n")), "the notes were edited, not only cut")
+
+    def test_deploy_script_stays_to_be_found(self):
+        self.assertIn("psql", (CASES / "column-rename-bare/setup/scripts/deploy.sh").read_text())
 
 
 class PgHarness(unittest.TestCase):
