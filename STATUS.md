@@ -164,6 +164,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     hackathon merges (it owns `skills/demo-video/` and its tests); lead's lean: after the event.
     Music and footage need a recorded source and licence per file (lane license's rule), and
     recording a voice from WSL needs the Windows microphone, still unprobed.
+  - **Secret-name follow-ups from lane env-names** (low, 2026-11-07): five notes on names the
+    secret checks and ignore rules miss or wrongly flag, outside that lane's brief. Not picked
+    yet. Evidence: lane env-names's closed record, Not mine
+    (`.git/lanes/_closed/env-names-2026-11-06/`).
   - **Cheaper review before ready** (Hayden's picks, 2026-11-07; for lane practices' next PR,
     `hooks/practices_check.py`'s ready gate): (1) a new head keeps the last review's clearance
     when its changes since the reviewed head touch no file a skill watches (a STATUS carry, doc
