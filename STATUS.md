@@ -6,7 +6,7 @@
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design lives in the repo's `PLAN.md` or its doc,
 > not only under `~/.claude/plans/`, which the next plan overwrites ([[plan-file-not-durable]]).
 
-Last updated: 2026-11-05
+Last updated: 2026-11-07
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 Lead branch: `chore/after-pr4` (the lead's STATUS commits; the lane next in merge order carries
@@ -90,9 +90,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - #144 (exam-prep): rules public, evidence private (Hayden, 2026-10-20).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
-  - **Live lanes** (briefs in each record). Merge order: 1 merge-record
-    (`fix/after-merge-record`, draft #170, carries the lead's notes; by 2026-11-11), 2 env-names
-    (`fix/secret-scan-env-names`, opened 2026-11-07 on Hayden's pick; by 2026-11-11), 3 license
+  - **Live lanes** (briefs in each record). Merge order: 1 env-names
+    (`fix/secret-scan-env-names`, #171, carries the lead's notes; by 2026-11-11), 2 license
     (`chore/license`, opened 2026-11-06 on Hayden's pick; last).
     **Install freeze on HAYPC, Nov 12 through Nov 15** (Hayden, 2026-11-05): no lane installs in
     that window, except fixes for lane hackathon, so the event runs what the dry run tested. The lead's
@@ -121,6 +120,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     capella-studio lane artexport's report; a fork's hook output never reaches its model, so it
     knows its lane only from the parent's copied line, docs/lanes.md S5; the delegation canary
     checks the source enum; untried against lane practices' settings.json change),
+    merge-record (#170, 2026-11-07, merge 20d8bcd: a lane writes its after-merge record only
+    after the merge command returns, and `lane ls --check` shows the gate's reason; installed
+    from main),
     practices (#169, 2026-11-07, merge 459bda9: the `dependencies` skill and SEC-64, the install
     check, live on HAYPC; hackathon mode turns SEC-64 off through Hayden's own `practices-gate`
     line at kickoff; installed from main; the lane stays open for later PRs),
@@ -442,11 +444,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Live lanes: `lane ls`; state in their records (2026-11-07: merge-record with #170, env-names,
-     license, practices kept open). #169 merged and is installed from main; lane hackathon
-     closed 2026-11-07. Hayden's leftover asks from lane deny-rules
+  0. Live lanes: `lane ls`; state in their records (2026-11-07: env-names with #171,
+     license, practices kept open). #170 merged and is installed from main; lanes hackathon
+     and merge-record closed 2026-11-07. Hayden's leftover asks from lane deny-rules
      (an overlay paste plus a setup rerun, probe leftovers, local tool cleanups): its closed
-     record. Lanes practices and merge-record merge and install by Nov 11. Install freeze Nov 12 through Nov 15. A chain that
+     record. Lane env-names merges and installs by Nov 11. Install freeze Nov 12 through Nov 15. A chain that
      stops before its "main moved" step still tells the lanes, and arms a wake on the blocker
      (`skills/lanes/SKILL.md`). Open
      with Hayden (repeat them in each reply's Waiting list until answered): try `/interview` in
