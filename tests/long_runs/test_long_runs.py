@@ -101,16 +101,27 @@ class SkillFile(unittest.TestCase):
 
     def test_the_example_quotes_only_measured_figures(self):
         example = skill_text().split("## Example")[1].split("## See also")[0]
-        self.assertIn("2 h 37 min for one engine", example)
-        self.assertIn("15-minute wait", example)  # the serial time holds a lock wait: say so
-        self.assertNotIn("nearly all", example)  # a time share nobody measured
-        self.assertIn("in both engines", example)  # the serial time is one engine's: say so
-        self.assertIn("took 40 min", example)
-        self.assertIn("0 of 1,537", example)
-        self.assertIn("At a load of 45", example)  # load has a cost, whatever the signal read
-        self.assertIn("also took 40 min", example)  # the split run's whole sweep, 40 min 29 s
-        self.assertNotIn("38 min", example)  # that run's first phase, not its sweep time
-        self.assertNotIn("under 1", example)  # a load figure nobody measured
+        for measured in (
+            "about 2 h 37 min for one engine",  # the start wasn't logged; one engine against two
+            "at least six lock waits nobody timed",  # the serial time holds waiting
+            "isn't all parallelism",
+            "about 1,500 page waits, not CPU",
+            "in both engines, in one lock hold, took 40 min",  # the sweep, 39 min 31 s
+            "in that sweep: 0 of 15,370",  # the slowest sweep only, all ten runs of it
+            "also took 40 min",  # the split run's whole sweep, 40 min 29 s
+            "mean load of 59 in its main phase against 32",  # 59 covers that phase alone
+            "5 of 15,370 page waits gave up",  # the split run's signal moved
+            "Two things changed",  # it split and it moved two checks: don't credit one
+            "At a load of 45",  # load has a cost, whatever the signal read
+        ):
+            self.assertIn(measured, example)
+        for unmeasured in (
+            "under 1",  # a load figure nobody measured
+            "nearly all", "most of it",  # time shares nobody measured
+            "38 min",  # the split run's first phase, not its sweep time
+            "1,537",  # one run of one sweep, read as the whole run's count
+        ):
+            self.assertNotIn(unmeasured, example)
 
     def test_it_points_to_delegation_and_coding_practices_rather_than_repeating_them(self):
         self.assertIn("`delegation`", skill_text())
