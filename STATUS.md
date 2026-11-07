@@ -94,7 +94,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     (`chore/license`, opened 2026-11-06 on Hayden's pick; carries the lead's notes), 2 mocks
     (`feat/mocks-skill`, opened 2026-11-07 on Hayden's pick; by 2026-11-11; after license, since
     both change README.md), 3 speed
-    (`feat/speed-skill`, opened 2026-11-07 on Hayden's pick; by 2026-11-11; after mocks, since all
+    (`feat/speed-skill`, the `long-runs` skill plus one CLAUDE.md line, opened 2026-11-07 on Hayden's pick; by 2026-11-11; after mocks, since all
     three change README.md).
     **Install freeze on HAYPC, Nov 12 through Nov 15** (Hayden, 2026-11-05): no lane installs in
     that window, except fixes for lane hackathon, so the event runs what the dry run tested. The lead's
@@ -185,6 +185,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     cheapest test that hits the risk, order steps by what voids what. Guardrail: every skip is
     written down (what didn't run, why it's safe, what would catch a problem), and never reads as
     a pass. Hayden picked a new skill, built now by lane speed (2026-11-07).
+  - **Lanes waiting their merge turn** (from lane speed's transcript survey, 2026-11-07; kept out
+    of its skill by Hayden): lanes rebased again and again while waiting their turn (another repo,
+    2026-10-25), and a lane sat idle about 50 minutes because its lead never told it its turn had
+    come (another repo, 2026-11-03). Lead and lanes-skill matters: a turn notice from the lead's
+    post-merge step, and no re-merge of main while waiting unless main changed the lane's files.
   - **Teardown race in `tests/setup/test_tmux_hooks.py`** (low; found by lane license's trial,
     2026-11-07): `hooks/stop-ring.sh` logs `rang` and then plays the ring, whose detached test stub
     appends to `calls.log` in the test's temp dir, while the test's `decided()` returns on the log
