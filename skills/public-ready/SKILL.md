@@ -28,7 +28,7 @@ This can be needed before the event's deadline, whether the repo is public yet o
 
    ```
    git log --all --name-only --format=%h -i -G'AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36}|github_pat_|sk-[A-Za-z0-9_-]{20,}|xox[abprs]-|AIza[0-9A-Za-z_-]{35}|BEGIN [A-Z ]*PRIVATE KEY|(api_?key|secret|token|password)["'\'']?[[:space:]]*[:=]'
-   git log --all --name-only --format= | sort -u | grep -E '(^|/)\.env|\.pem$|\.key$|id_rsa|credentials'
+   git log --all --name-only --format= | sort -u | grep -E '(^|/)#?\.env|\.env\b|\.pem|\.key|id_rsa|credentials'
    ```
 
    Say which one ran and that patterns only find what they know. Report commit and file, never the value.
