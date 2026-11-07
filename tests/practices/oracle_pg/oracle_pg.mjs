@@ -27,8 +27,10 @@ const SESSION = `reset role; reset all; set search_path to "$user", public, exte
 // A Supabase project as an agent's migration finds it. No `alter default privileges` and no grant on
 // public tables: since 2026-10-30 a new public table gets no grants to anon, authenticated or
 // service_role unless a migration grants them, and a missing grant fails with 42501 before RLS is
-// looked at, so a blanket grant here would pass a migration that can't work on the real thing. The
-// auth.* bodies are Supabase's: the claims PostgREST sets, and the older per-claim settings.
+// looked at, so a blanket grant here would pass a migration that can't work on the real thing. That
+// goes for sequences too: the change's opt-in statements also revoke `usage, select` on them, so a
+// bigserial needs a grant of its own, and an identity column, which needs no sequence grant, doesn't.
+// The auth.* bodies are Supabase's: the claims PostgREST sets, and the older per-claim settings.
 // pgcrypto and uuid-ossp come enabled on a new project, so `uuid_generate_v4()` works with no line of
 // its own, and so does the publication behind Realtime. The other three roles are never graded: a
 // migration may name them (a trigger on auth.users).
