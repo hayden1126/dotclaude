@@ -1,32 +1,8 @@
 # Secrets: never commit. The scan step checks this too, since an ignore rule can be forced past.
-.env
-.env.*
-.env-*
-.env_*
-.env *
-.env(*
-.envrc
-.envrc.*
-.envrc-*
-.envrc_*
-.envrc *
-.envrc(*
 # This also hides Babylon.js's environment texture. To keep one, add `!environment.env` below the
 # safe names, and tell the scan with `--allow-name environment.env`, on the user's word.
 *.env
 # The shape of the config, with no values: these are meant to be committed.
-!.env[._-]example
-!.env[._-]sample
-!.env[._-]template
-!.env[._-]dist
-!.env[._-]default
-!.env[._-]defaults
-!.envrc[._-]example
-!.envrc[._-]sample
-!.envrc[._-]template
-!.envrc[._-]dist
-!.envrc[._-]default
-!.envrc[._-]defaults
 !example.env
 !sample.env
 !template.env
@@ -39,6 +15,31 @@
 !*[._-]dist.env
 !*[._-]default.env
 !*[._-]defaults.env
+# These come after the lines above, so `.env.local.default.env` stays hidden.
+.env
+.env.*
+.env-*
+.env_*
+.env *
+.env(*
+.envrc
+.envrc.*
+.envrc-*
+.envrc_*
+.envrc *
+.envrc(*
+!.env[._-]example
+!.env[._-]sample
+!.env[._-]template
+!.env[._-]dist
+!.env[._-]default
+!.env[._-]defaults
+!.envrc[._-]example
+!.envrc[._-]sample
+!.envrc[._-]template
+!.envrc[._-]dist
+!.envrc[._-]default
+!.envrc[._-]defaults
 *.pem
 # This also hides a Keynote deck. To keep one, add `!pitch.key` below it, and tell the scan with
 # `--allow-name pitch.key`, on the user's word.

@@ -71,6 +71,7 @@ FLAGGED_AND_IGNORED = (
     ".env~", ".envrc~", "#.env#", "#.envrc#", ".env.~1~", ".envrc.~1~", ".env.bak", ".env.save",
     ".envrc.bak", ".env-local~", ".envrc-local~", ".env.example~", ".env.sample.bak",
     "secrets.env", "prod.env", ".secrets.env", "prod.env~", "prod.env.bak", "deep/er/.env~",
+    ".env.local.default.env", ".env.example.env", ".envrc-sample.env",
     "id_rsa~", "#id_rsa#", "id_rsa.~1~", "id_rsa.bak", "id_rsa.bak~", "id_rsa~.bak", "id_rsa.old",
     "server.pem.bak", "server.pem~", "#.pem", "server.key~", "credentials.json~",
     "credentials.json.orig", "service-account.json.tmp", "service_account.json", "bundle.p12.backup", "app.jks.temp",
@@ -93,7 +94,7 @@ SAFE_FORMS = (".env.{}", ".env-{}", ".env_{}", ".envrc.{}", ".envrc-{}", ".envrc
               "app.{}.env", "app-{}.env", "app_{}.env")
 # Clean to the scan and kept by the template.
 CLEAN_AND_KEPT = (
-    ".environment.ts", ".envoy.yaml", "report (1).pdf", "id_rsa.pub", "keys copy.txt",
+    ".environment.ts", ".envoy.yaml", ".environment-sample.env", "report (1).pdf", "id_rsa.pub", "keys copy.txt",
     "credentials.py", "credentials.json.ts", "level1.save",
 )
 # Clean to the scan, hidden as an ordinary backup.
