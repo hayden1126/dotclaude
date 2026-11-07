@@ -1,0 +1,160 @@
+"""Checks on the verify-app skill's own files: how it and its template trigger, that the folder stands
+alone, that the copied files match CHECKSUMS, and that no private name reaches this public repo
+(stdlib only, no browser, no model calls)."""
+import glob
+import hashlib
+import os
+import re
+import unittest
+
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SKILL = os.path.join(REPO, "skills", "verify-app")
+TEMPLATE = os.path.join(SKILL, "template")
+DENYLISTS = glob.glob(os.path.expanduser("~/scratch/*/denylist.txt"))
+EM_DASH = chr(0x2014)
+COPIED = ("verify.py", "browser.py", "LICENSE-pstack-claude", "CHECKSUMS")
+
+
+def read(path):
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
+def skill_files():
+    for root, dirs, files in os.walk(SKILL):
+        dirs[:] = [d for d in dirs if d != "__pycache__"]
+        for name in files:
+            yield os.path.join(root, name)
+
+
+def frontmatter(path):
+    match = re.match(r"---\n(.*?)\n---\n", read(path), re.S)
+    return match.group(1) if match else ""
+
+
+class Trigger(unittest.TestCase):
+    def test_it_loads_on_its_own(self):
+        for path in (os.path.join(SKILL, "SKILL.md"), os.path.join(TEMPLATE, "SKILL.md")):
+            with self.subTest(path=path):
+                self.assertNotIn("disable-model-invocation", frontmatter(path))
+
+    def test_the_description_names_triggers_and_near_misses(self):
+        text = frontmatter(os.path.join(SKILL, "SKILL.md"))
+        self.assertIn("name: verify-app", text)
+        for word in ("verify", "launches", "health check", "evidence", "cleans up", "MAINTAIN.md",
+                     "Not for unit tests", "test mocks", "/run"):
+            self.assertIn(word, text)
+
+    def test_the_generated_skill_says_launch_and_drive(self):
+        text = frontmatter(os.path.join(TEMPLATE, "SKILL.md"))
+        self.assertRegex(text, r"(?m)^name: verify$")
+        for word in ("Launch and drive", "run", "start", "commit"):
+            self.assertIn(word, text)
+
+    def test_the_descriptions_fit_the_limit(self):
+        for path in (os.path.join(SKILL, "SKILL.md"), os.path.join(TEMPLATE, "SKILL.md")):
+            with self.subTest(path=path):
+                self.assertLessEqual(len(frontmatter(path)), 1024)
+
+
+class Files(unittest.TestCase):
+    def test_what_the_skill_names_exists(self):
+        text = read(os.path.join(SKILL, "SKILL.md")) + read(os.path.join(SKILL, "MAINTAIN.md"))
+        named = re.findall(r"<skill dir>/([\w./-]+[\w])", text)
+        self.assertIn("template/", " ".join(named))
+        for path in named:
+            with self.subTest(path=path):
+                self.assertTrue(os.path.exists(os.path.join(SKILL, path)), path)
+
+    def test_the_skill_copies_exactly_the_checksummed_files(self):
+        text = read(os.path.join(SKILL, "SKILL.md"))
+        self.assertIn(", ".join(f"`{name}`" for name in COPIED[:3]) + " and `CHECKSUMS`", text)
+        self.assertIn("sha256sum -c CHECKSUMS", text)
+
+    def test_checksums_match_the_files(self):
+        rows = [line.split() for line in read(os.path.join(TEMPLATE, "CHECKSUMS")).splitlines()]
+        self.assertEqual(sorted(name for _, name in rows), sorted(COPIED[:3]))
+        for digest, name in rows:
+            with open(os.path.join(TEMPLATE, name), "rb") as f:
+                with self.subTest(name=name):
+                    self.assertEqual(hashlib.sha256(f.read()).hexdigest(), digest)
+
+    def test_retyped_files_are_ascii(self):
+        for name in COPIED + ("journeys.py", "SKILL.md"):
+            with self.subTest(name=name):
+                read(os.path.join(TEMPLATE, name)).encode("ascii")
+
+    def test_the_licence_is_the_pstack_claude_text(self):
+        source = os.path.join(REPO, "skills", "technical-writing", "LICENSE-pstack-claude")
+        self.assertEqual(read(os.path.join(TEMPLATE, "LICENSE-pstack-claude")), read(source))
+
+    def test_provenance_names_the_sources(self):
+        for path in (os.path.join(SKILL, "SKILL.md"), os.path.join(TEMPLATE, "SKILL.md")):
+            text = read(path)
+            for term in ("github.com/cursor/plugins", "Lauren Tan", "michael-denyer/pstack-claude",
+                         "Michael Denyer", "LICENSE-pstack-claude"):
+                with self.subTest(path=path, term=term):
+                    self.assertIn(term, text)
+        text = read(os.path.join(SKILL, "SKILL.md"))
+        for commit in ("3fe2823", "4612556", "79b36d9"):
+            self.assertIn(commit, text)
+
+    def test_the_template_carries_the_tiers_and_exit_codes(self):
+        recipe = read(os.path.join(TEMPLATE, "SKILL.md"))
+        for tier in ("full", "quick", "skip"):
+            self.assertRegex(recipe, rf"(?m)^\| {tier} \|")
+        for text in (recipe, read(os.path.join(TEMPLATE, "verify.py"))):
+            for code, meaning in ((0, "Proved"), (1, "The app failed"), (2, "Could not judge"),
+                                  (3, "Cleanup failed")):
+                self.assertRegex(text, rf"(?m)^\| {code} \| {meaning}")
+
+    def test_the_template_ships_with_fill_markers(self):
+        for name in ("journeys.py", "SKILL.md"):
+            with self.subTest(name=name):
+                self.assertIn("<fill: ", read(os.path.join(TEMPLATE, name)))
+        for name in COPIED:
+            with self.subTest(name=name):
+                self.assertNotIn("<fill: ", read(os.path.join(TEMPLATE, name)))
+
+    def test_the_folder_stands_alone(self):
+        for path in skill_files():
+            with self.subTest(path=path):
+                self.assertNotRegex(read(path), r"(?<!\.claude/)skills/(?!verify-app)[\w-]+/|\.\./")
+
+    def test_no_em_dashes(self):
+        for path in skill_files():
+            with self.subTest(path=path):
+                self.assertNotIn(EM_DASH, read(path))
+
+    def test_no_private_paths(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        paths = list(skill_files()) + glob.glob(os.path.join(here, "**", "*.py"), recursive=True)
+        for path in paths:
+            with self.subTest(path=path):
+                self.assertNotRegex(read(path), "|".join(("/" + "home/", "/" + "Users/", "~/" + "code/")))
+
+    def test_the_readme_lists_the_skill_and_its_tests(self):
+        lines = read(os.path.join(REPO, "README.md")).splitlines()
+        skill_rows = [line for line in lines if line.startswith("| `skills/` |")]
+        self.assertEqual(len(skill_rows), 1)
+        self.assertIn("`verify-app`", skill_rows[0])
+        self.assertTrue([line for line in lines if line.startswith("| `tests/verify_app/` |")])
+
+
+@unittest.skipUnless(DENYLISTS, "no private denylist on this machine")
+class PrivateNames(unittest.TestCase):
+    def test_no_denylisted_string_in_the_skill_or_its_tests(self):
+        terms = [t.strip().lower() for path in DENYLISTS for t in read(path).splitlines() if t.strip()]
+        here = os.path.dirname(os.path.abspath(__file__))
+        paths = list(skill_files()) + glob.glob(os.path.join(here, "**", "*.py"), recursive=True)
+        # The root license's copyright line is required and public; test_license_notices pins it.
+        header = "".join(f"# {line}".rstrip() + "\n" for line in read(os.path.join(REPO, "LICENSE")).splitlines())
+        for path in paths:
+            text = read(path).removeprefix(header).lower()
+            for term in terms:
+                with self.subTest(path=path, term="(private)"):
+                    self.assertNotIn(term, text)
+
+
+if __name__ == "__main__":
+    unittest.main()
