@@ -3,8 +3,13 @@
 .env.*
 .env-*
 .env_*
+.env *
 .envrc
 .envrc.*
+.envrc-*
+.envrc_*
+.envrc *
+*.env
 # The shape of the config, with no values: these are meant to be committed.
 !.env[._-]example
 !.env[._-]sample
@@ -12,18 +17,52 @@
 !.env[._-]dist
 !.env[._-]default
 !.env[._-]defaults
+!.envrc[._-]example
+!.envrc[._-]sample
+!.envrc[._-]template
+!.envrc[._-]dist
+!.envrc[._-]default
+!.envrc[._-]defaults
+!example.env
+!sample.env
+!template.env
+!dist.env
+!default.env
+!defaults.env
 *.pem
 # This also hides a Keynote deck. To keep one, add `!pitch.key` below it, and tell the scan with
 # `--allow-name pitch.key`, on the user's word.
 *.key
 *.p12
 *.pfx
+*.jks
+*.keystore
 id_rsa
 id_dsa
 id_ecdsa
 id_ed25519
 credentials.json
 service-account*.json
+.netrc
+.pgpass
+.htpasswd
+.git-credentials
+
+# Backups and swap files: a backup of a secret holds the secret. The scan also reads copies like
+# `credentials (1).json`, and `.save`, which no line here hides since a game may keep those.
+*~
+\#*\#
+[._]*.sw[a-p]
+*.bak
+*.back
+*.backup
+*.old
+*.ori
+*.orig
+*.original
+*.tmp
+*.temp
+*.temporary
 
 # Local to this machine
 .claude/settings.local.json
