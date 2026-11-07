@@ -246,10 +246,10 @@ Why it works this way:
   branch), it refuses rather than report a flag it can't judge. The lane has to run it, so the
   lead's gate stays the backstop. A lane notes a reason it can't fix in its State and tells the
   lead when asked. The lead takes the flag's current reason to Hayden. Once `handoff-check`
-  passes, his yes allows a plain `lane done` with the flag on (2026-11-06; the skill's step 5
-  lists his yes's other two cases): `done` never reads
+  passes, his yes allows a plain `lane done` with the flag on (2026-11-06): `done` never reads
   the flag, so that half of the gate is the skill's rule, and a flag that can't clear would
-  otherwise hold the lane open for good. It changes nothing for a merge order.
+  otherwise hold the lane open for good. Step 5 of the skill lists the two other cases his yes
+  covers. It changes nothing for a merge order.
 - **What it can't tell.** A write after the merge is taken as the after-merge handoff, so a lane
   that never heard of a GitHub merge, then wrote a routine update and exited, passes; the lead's
   message to a live lane covers that window. Whatever can't be read (gh, a `mergedAt`, a session
@@ -696,10 +696,13 @@ keeps every restore entry. On success, under the lanes lock, the flag is written
 removed.
 
 **The board.** A parked lane shows `parked` and never `orphan`; `--json` rows carry `parked`
-(the stamp, or null), `base_overlaps` (the files `main-touched` names) and `merges` (the lane's
-PRs' merge times, which the install line's `overdue` reads). With a lane parked or the cap passed, a `cap: N of M slots held (K
-parked)` line follows, with `, X over` past the cap. It counts the same records as `new`, twins included, by the same rule. The lead sends a parked lane no "main
-moved" message, since no session reads it: at the lane's turn the lead runs `lane open <id>` first
+(the stamp, or null), `base_overlaps` (every file the lane changes that main has changed since
+the lane last merged it, which lights `main-touched`; the `main:` line names up to five) and
+`merges` (the merge times of the lane's merged PRs, or null when gh can't list them; `handoff?`
+and the install line's `overdue` read them). With a lane parked or the cap passed, a `cap: N of
+M slots held (K parked)` line follows, with `, X over` past the cap. It counts the same records
+as `new`, twins included, by the same rule. The lead sends a parked lane no "main moved"
+message, since no session reads it: at the lane's turn the lead runs `lane open <id>` first
 (Merge turns). `lane trial` keeps merging parked lanes, which are live and will merge.
 
 ## Merge turns (lane lanes-turn, 2026-11-07)
