@@ -949,7 +949,8 @@ and status single-writer:
 - `lane ls` is the board, derived live from git, gh and the session files, down to each lane's
   tmux window, context (CTX: `312k*` past the auto-pass soft tier, `523k!` past hard) and
   state (STATE: busy, idle, waiting or shell). Its `overlap` flag marks two live lanes that
-  change the same file, committed or not, and the lines under the board name the files.
+  change the same file, committed or not, and the lines under the board name the files. Its
+  `main-touched` flag marks a lane that must merge main before its merge turn.
   `lane who 42` is the only answer to who owns #42.
 - `lane addr chart-fix` (or `lane addr lead`) prints `uds:<socket>`, the SendMessage address of
   that lane's live session. A session's ListAgents name is its tab title, which changes most

@@ -211,7 +211,9 @@ Why it works this way:
   for #99 the tab-bar lane ran `gh pr merge` itself. A merge made on GitHub and told to no
   session waits for the lead's next `lane ls`. With the lane's session gone, the lead runs the
   chain itself, and closes the lane only once the hand-back gate passes: a failing gate is then
-  the lead's ask, since no lane is left to make it. With the session live, the lead
+  the lead's ask, since no lane is left to make it. Hayden's yes lets the lead reopen the lane,
+  so a new session writes its own record, or, when the worktree is gone and the gate can never
+  pass, run a plain `lane done`, which archives the mirror's record (Hayden, 2026-11-07). With the session live, the lead
   asks the lane for its after-merge handoff first, since a lane that merged and is still writing
   `Keep open:` must not be closed under it. A merge watcher lost: one per ready PR has to be
   re-armed every 2 hours, and two that saw the same merge would run the chain twice (two
@@ -518,6 +520,10 @@ that names `suite`.
 2. It builds the merge with no worktree: from the lane's HEAD, `git merge-tree --write-tree`
    merges the base, then each other live lane's head by id, and `git commit-tree` turns each
    clean result into a dangling commit (a fixed `lane-trial` identity, unsigned; no ref moves).
+   Merge drivers stay off (`--attr-source=<empty tree>`, `core.attributesFile=/dev/null`): a
+   `merge=union` in the lane's `.gitattributes` made a bare merge-tree call clean a merge GitHub
+   refuses, which has no drivers. `<common>/info/attributes` still applies, since git has no
+   switch for it.
    When the lane's STATUS.md, else the base's (a lane that branched before the line), names the
    lead's branch (its `Lead branch:` line) and that branch holds one, every commit the trial
    merges or tries (this lane's HEAD, the base, each lane's head) first gets the lead branch's
@@ -690,8 +696,38 @@ removed.
 **The board.** A parked lane shows `parked` and never `orphan`; `--json` rows carry `parked`
 (the stamp, or null). With a lane parked or the cap passed, a `cap: N of M slots held (K
 parked)` line follows, with `, X over` past the cap. It counts the same records as `new`, twins included, by the same rule. The lead sends a parked lane no "main
-moved" message: its `rebase` flag carries that to its unpark. `lane trial` keeps merging parked
-lanes, which are live and will merge.
+moved" message, since no session reads it: at the lane's turn the lead runs `lane open <id>` first
+(Merge turns). `lane trial` keeps merging parked lanes, which are live and will merge.
+
+## Merge turns (lane lanes-turn, 2026-11-07)
+
+Two failures came from a lane not knowing where it stood in the merge order. Lanes merged main
+after every "main moved" message while they waited (another repo, 2026-10-25), and each merge
+reran their checks and lit `handoff?`. A lane sat idle about 50 minutes because its lead never
+told it its turn had come (another repo, 2026-11-03). So only the lane next in merge order merges
+main, and the lead tells that lane when its turn comes (`skills/lanes/SKILL.md`, The lead, steps 6
+and 7.6).
+
+**The `main-touched` flag.** One case can't wait for the turn: main changed a file the lane
+changes, so a conflict is growing. `lane ls` flags that lane and names the files:
+
+```
+main: changed hooks/stop-ring.sh, which lane lanes-turn changes too: merge origin/main now
+```
+
+The check intersects the lane's changed files (the `overlap` flag's set, uncommitted work
+included) with the three-dot diff from the lane to the base, so only main's commits since the
+lane last merged it count. It runs on each `ls`, and nothing is stored. `rebase` still lights
+whenever a lane is behind, but now means "merge at your turn". STATUS.md is left out, because a
+carry takes the lead's copy whole.
+
+The test is per file, not per conflict. A change elsewhere in the same file flags the lane, which
+costs one merge that wasn't needed. A change in another file that breaks the lane isn't flagged:
+`lane trial`, which merges origin/main onto the lane, finds it before ready.
+
+**A parked lane.** Hayden's pick: the lead runs `lane open <id>` at the lane's turn with no ask,
+since a message reaches no session. The lane opens in plan mode, so it stops for his plan approval
+before it merges.
 
 ## Bug reports from other repos (lane bug-route, 2026-10-18)
 

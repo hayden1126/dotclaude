@@ -1563,6 +1563,25 @@ def changed_files(repo: Repo, lane: dict, base: str, ref: str, lanes: list[dict]
     return files, "; ".join(unread) or None
 
 
+def main_touched(repo: Repo, base: str, ref: str, files: set[str]) -> tuple[list[str], str | None]:
+    """Which of a lane's changed files (changed_files') main has changed since the lane last
+    merged it, and why that went unread (None when it didn't): the one reason a lane waiting its
+    merge turn merges main early. The three-dot diff from ref to base reads objects only.
+    STATUS.md is left out: a carry takes the lead's copy whole, so it never needs an early merge."""
+    p, why = read_git(["diff", "--name-only", "-z", "--no-renames", "--no-ext-diff",
+                       "--end-of-options", f"{ref}...{base}", "--"], repo.toplevel,
+                      dict(OVERLAP_ENV))
+    if p is None:
+        return [], why
+    return sorted(files.intersection(filter(None, p.stdout.split("\0"))) - {"STATUS.md"}), None
+
+
+def some_files(names: list[str]) -> str:
+    """names, cut at OVERLAP_SHOWN, for a line under the board."""
+    more = f" (and {len(names) - OVERLAP_SHOWN} more)" if len(names) > OVERLAP_SHOWN else ""
+    return f"{', '.join(names[:OVERLAP_SHOWN])}{more}"
+
+
 def overlap_lines(rows: list[dict]) -> list[str]:
     """The board's line for each pair of lanes whose changed files overlap (board's overlaps),
     naming at most OVERLAP_SHOWN files, control characters masked: a lane names its own
@@ -1572,11 +1591,14 @@ def overlap_lines(rows: list[dict]) -> list[str]:
         for other, both in sorted(row["overlaps"].items()):
             if other < row["id"]:
                 continue  # each pair once, from its first lane
-            more = (f" (and {len(both) - OVERLAP_SHOWN} more)" if len(both) > OVERLAP_SHOWN
-                    else "")
-            out.append(shown(f"overlap: {row['id']} and {other} both change "
-                             f"{', '.join(both[:OVERLAP_SHOWN])}{more}"))
+            out.append(shown(f"overlap: {row['id']} and {other} both change {some_files(both)}"))
     return out
+
+
+def main_lines(rows: list[dict]) -> list[str]:
+    """The board's line for each lane main-touched flags, masked as overlap_lines' are."""
+    return [shown(f"main: changed {some_files(row['main_touched'])}, which lane {row['id']} "
+                  "changes too: merge origin/main now") for row in rows if row["main_touched"]]
 
 
 def parked_stamp(repo: Repo, lane: dict) -> str | None:
@@ -1671,6 +1693,13 @@ def board(repo: Repo) -> list[dict]:
             flags.append("stale")
         if row["behind"]:
             flags.append("rebase")
+        row["main_touched"] = []
+        if row["behind"] and lane["id"] in changed:  # a stale lane's files went unread
+            row["main_touched"], why = main_touched(repo, base, ref, changed[lane["id"]])
+            if why:
+                warn(shown(f"main-touched for lane {lane['id']} went unread: {why}"))
+        if row["main_touched"]:
+            flags.append("main-touched")
         if any(len(claimers.get(r, [])) > 1 for r in lane.get("claims", [])):
             flags.append("conflict")
         row["overlaps"] = overlaps.get(lane["id"], {})
@@ -1812,7 +1841,7 @@ def cmd_ls(args) -> int | None:
     for name in parse_locks(repo.config().get("locks", "")):
         if (holder := lock_holder(repo, name)) is not None:
             say(f"locks: {name} held by {holder}")
-    for line in overlap_lines(rows):
+    for line in overlap_lines(rows) + main_lines(rows):
         say(line)
     if line := cap_line(repo):
         say(line)
@@ -3204,10 +3233,18 @@ def merge_tree(repo: Repo, ours: str, theirs: str, label: str) -> tuple[str | No
     """(the merged tree, []) when commit theirs merges cleanly into ours, else (None, the paths
     git names as conflicted, which may be none). Writes objects only. Any other git outcome
     (unrelated histories, a bad commit) aborts, and a conflicted name that isn't UTF-8 stops
-    the trial naming label, so the lane needn't bisect for it."""
+    the trial naming label, so the lane needn't bisect for it.
+
+    Merge drivers are off, as the forge's merge has none: a `merge=union` in the lane's
+    .gitattributes or the user's global attributes file would pass a merge GitHub refuses.
+    limit: <common>/info/attributes still applies (git has no switch for it); only a lane that
+    writes there on purpose loses the check, and only for its own trial."""
+    empty_tree = trial_git(repo, ["hash-object", "-t", "tree", os.devnull]).stdout.strip()
     try:
-        p = trial_git(repo, ["merge-tree", "--write-tree", "-z", "--name-only", "--no-messages",
-                             "--end-of-options", ours, theirs], ok=(0, 1))
+        p = trial_git(repo, ["-c", f"core.attributesFile={os.devnull}",
+                             f"--attr-source={empty_tree}", "merge-tree", "--write-tree", "-z",
+                             "--name-only", "--no-messages", "--end-of-options", ours, theirs],
+                      ok=(0, 1))
     except NotUtf8:
         raise NotUtf8(shown(f"git merge-tree's output merging {label} isn't UTF-8 (a lane names "
                             "its own files), so the trial stopped; `lane trial <id> ...` with "

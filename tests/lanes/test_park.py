@@ -154,6 +154,18 @@ class Park(ParkBase):
         self.assertEqual(glob.glob(self.flag_glob()), [])
 
 
+class ParkedBoard(ParkBase):
+    def test_a_parked_lane_still_shows_main_touched(self):
+        # No session reads a message to a parked lane, so the board is what the lead reads.
+        self.commit("chart.txt", "axis\n", cwd=self.path)
+        self.flag()
+        self.commit("chart.txt", "main\n")
+        self.git("push", "-q", "origin", "main")
+        flags = self.row()["flags"]
+        self.assertIn("parked", flags)
+        self.assertIn("main-touched", flags)
+
+
 class ParkRefusals(ParkBase):
     """Each refusal comes before any signal: nothing is signalled and no flag is written."""
 

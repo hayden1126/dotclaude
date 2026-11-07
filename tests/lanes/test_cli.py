@@ -878,6 +878,26 @@ class Stale(LanesRepo):
         self.lane("done", "chart-fix", "--abandon")
         self.assertEqual([r["id"] for r in json.loads(self.lane("ls", "--json"))], ["api-docs"])
 
+    def test_a_merged_lane_whose_worktree_is_gone_closes_plainly(self):
+        # The lead's close on Hayden's yes (the lanes skill, The lead, step 5): no handoff-check
+        # can pass with no worktree, and it takes no --abandon. Its record comes from the mirror.
+        self.lane("new", "chart-fix")
+        path = self.lane_path("chart-fix")
+        self.commit("chart.txt", "axis\n", cwd=path)
+        self.git("push", "-q", "origin", "HEAD:main", cwd=path)
+        self.git("worktree", "remove", path)
+        self.lane("done", "chart-fix")
+        self.assertEqual(json.loads(self.lane("ls", "--json")), [])
+
+    def test_an_unmerged_lane_whose_worktree_is_gone_still_refuses(self):
+        self.lane("new", "chart-fix")
+        path = self.lane_path("chart-fix")
+        self.commit("chart.txt", "axis\n", cwd=path)
+        self.git("worktree", "remove", path)
+        p = self.run_lane("done", "chart-fix")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("not merged", p.stderr)
+
 
 class HandoffFlag(LanesRepo):
     """`ls`'s handoff? flag: lit when the record may be behind the lane's work (a newer commit, a
