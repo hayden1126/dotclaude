@@ -4759,5 +4759,47 @@ class DataLayerRule(TextBase):
                                         for line in s["content"].split("\n")))
 
 
+class DataLayerSkill(unittest.TestCase):
+    def read(self, name):
+        with open(os.path.join(DATA_LAYER, name)) as f:
+            return f.read()
+
+    def test_the_description_names_its_triggers_and_no_workflow(self):
+        head = self.read("SKILL.md").split("---")[1]
+        (description,) = re.findall(r"^description: (.*)$", head, re.M)
+        self.assertTrue(description.startswith("Use when"))
+        for word in ("migration", "column", "table", "Row Level Security", "raw SQL"):
+            self.assertIn(word, description)
+        self.assertNotIn("add-then-remove", description)
+
+    def test_the_core_rule_comes_before_the_gate_rule_and_the_lines_nothing_enforces(self):
+        body = self.read("SKILL.md")
+        order = [body.index(s) for s in ("## Core rule", "## Gate rule", "## Not enforced",
+                                         "## When the hook stops a migration")]
+        self.assertEqual(order, sorted(order))
+        self.assertIn(".claude/practices/data-layer.md", body)
+        self.assertIn("**Gate rule REL-31", body)
+        self.assertIn("[practices:L2:data-layer:REL-31", body)
+        self.assertLess(len(body.splitlines()), 50)
+
+    def test_every_rule_the_skill_names_is_in_the_spec_table(self):
+        spec = self.read("SPEC.md")
+        for rule in ("REL-31", "SEC-20", "SEC-24", "REL-32", "REL-20", "REL-23"):
+            with self.subTest(rule=rule):
+                self.assertIn(rule, self.read("SKILL.md"))
+                self.assertRegex(spec, rf"(?m)^\| {rule} \|")
+
+    def test_the_gate_line_and_the_spec_state_the_same_rule(self):
+        skill, _ = PC.load_skill(DATA_LAYER)
+        self.assertEqual(len(skill["gate"]), 1)
+        self.assertIn("REL-31", skill["gate"][0])
+        self.assertIn("## The L1 test", self.read("SPEC.md"))
+
+    def test_the_shipped_files_hold_no_em_dash(self):
+        for name in ("SKILL.md", "SPEC.md", "events.toml"):
+            with self.subTest(name=name):
+                self.assertNotIn(chr(0x2014), self.read(name))
+
+
 if __name__ == "__main__":
     unittest.main()
