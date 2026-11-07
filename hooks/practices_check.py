@@ -174,8 +174,8 @@ Each level reads commits, never the index or the working tree:
         prompt has that head's marker, `[practices:review:<sha12>]`, so a review clears only
         the commit it judged; the reason carries each skill's gate lines and the marker in one
         block to paste into a reviewer brief. A marker on a commit the head descends from
-        carries over: of the touched files, only one whose change the nearest such commit
-        didn't show counts (review_delta), the delta coming from git. None left keeps the
+        carries over: only a watched file whose PR change differs from the one the nearest
+        such commit showed counts (review_delta), the delta coming from git. None left keeps the
         clearance (logged as l3r-reuse); otherwise the block asks for that delta alone and
         suggests a smaller reviewer model. So a clean merge of the base is no delta, and a
         file resolved by hand, or kept over a fix on the base, is. The line-scoped and commit-time rules also run
@@ -2439,6 +2439,7 @@ REVIEW_NEEDLE = b"[practices:review:"
 REVIEW_MARK = re.compile(r"\[practices:review:([0-9a-f]{12})\]")
 REVIEW_MARKS_MAX = 4  # up to three git calls each, from a 2 s budget; an older mark only asks more
 REGULAR = ("100644", "100755")
+NO_FILE = "000000"  # the mode diff-tree gives a side a file is missing from
 
 
 def review_marker(head):
@@ -2592,9 +2593,11 @@ def review_delta(repo, touched, diff, prior, mb, base, events, cfg):
     of ends: the blob on the base and the blob on the branch. That pair is compared at the two
     commits, prior against the base it held and the head (diff) against mb, so any file whose
     pair differs is new work: edited since, kept over a fix on the base, dropped back to the
-    base's blob, deleted, moved or made a link. A file a clean merge took from the base has no
-    pair at either. A file counts as watched by any blob at either end, so one that's gone still
-    does. Prior sharing no history with the base shows nothing, so touched stands.
+    base's blob, deleted, moved, made a link or retargeted. A file a clean merge took from the
+    base has no pair at either. Touched files in that list stay as read, so a size cap on this
+    second read can't quiet one. Any other counts as watched by its path or by a blob at either
+    end, so one that's gone still does; past the caps, or not a regular file, only its path is
+    read. Prior sharing no history with the base shows nothing, so touched stands.
     Known limits: a marker names no base, so `gh pr create --base <older>` widens the diff with
     what the review never saw, and a merge of history the local base ref doesn't hold yet (an
     unfetched or other remote's main) reads as the branch's own. The gate denies once and the
@@ -2604,11 +2607,17 @@ def review_delta(repo, touched, diff, prior, mb, base, events, cfg):
         return touched
     was = {c[5]: c for c in repo.changes(held, prior)}
     now = {c[5]: c for c in diff}
-    new = [p for p in sorted(was.keys() | now.keys())
-           if (was[p][1:5] if p in was else None) != (now[p][1:5] if p in now else None)]
-    blobs = [(p, oid) for p in new for c in (now.get(p), was.get(p)) if c
-             for mode, oid in ((c[2], c[4]), (c[1], c[3])) if mode in REGULAR]
-    return watched(repo, blobs, events, cfg)
+    new = {p for p in was.keys() | now.keys()
+           if (was[p][1:5] if p in was else None) != (now[p][1:5] if p in now else None)}
+    out = {name: (s, kept) for name, (s, paths) in touched.items()
+           if (kept := [p for p in paths if p in new])}
+    known = {p for _, paths in out.values() for p in paths}
+    rest = [(p, oid if mode in REGULAR else None) for p in sorted(new - known)
+            for c in (now.get(p), was.get(p)) if c
+            for mode, oid in ((c[2], c[4]), (c[1], c[3])) if mode != NO_FILE]
+    for name, (s, paths) in watched(repo, rest, events, cfg).items():
+        out.setdefault(name, (s, []))[1].extend(paths)
+    return out
 
 
 def review_block(touched, mb, head, branch, shown=8, prior=None):

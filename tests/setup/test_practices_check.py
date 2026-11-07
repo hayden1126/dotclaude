@@ -3050,6 +3050,43 @@ class L3r(BashBase):
         self.assertIn("app/api/w/route.ts", reason)
         self.assertNotIn("app/api/x/route.ts", reason)
 
+    def test_a_file_watched_only_by_its_old_content_is_delta_when_gone(self):
+        # Its path fires nothing, so only reading the base's blob finds it.
+        start = self.off_history(self.base, **{"lib__act.ts": '"use server"\n'})
+        self.sh("update-ref", "refs/remotes/origin/main", start)
+        lane = self.off_history(start, **{"app__api__x__route.ts": "export const x = 1\n"})
+        self.sh("update-ref", "HEAD", lane)
+        self.sh("read-tree", "--reset", "-u", "HEAD")
+        self.review()
+        self.sh("rm", "-q", "lib/act.ts")
+        self.commit()
+        self.assertIn("lib/act.ts", self.pre("gh pr ready", session_id="s-content"))
+
+    def test_a_size_cap_on_the_second_read_quiets_no_touched_file(self):
+        # Review round 3, medium: the delta reads up to four blobs a file under the head pass's
+        # cap, so a file that fired there could read as empty here.
+        big = "x" * 60 + "\n"
+        self.commit(**{"a__big.txt": big})
+        self.review()
+        self.commit(**{"a__big.txt": "y" * 60 + "\n", "z__act.ts": '"use server"\n'})
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "START", time.monotonic()), \
+                mock.patch.object(PC, "BYTES_MAX", 130):  # in-process: run_hook's child can't see it
+            out = PC.pre_tool_use(self.event("gh pr ready", "PreToolUse", "b-cap", session_id="s-cap"))
+        PC.CRUMB.clear()
+        self.assertIn("z/act.ts", json.dumps(out))
+
+    def test_a_link_at_a_watched_path_retargeted_after_a_review_is_delta(self):
+        d = os.path.join(self.proj, "app", "api", "l")
+        os.makedirs(d)
+        os.symlink("one", os.path.join(d, "route.ts"))
+        self.commit()
+        self.review()
+        os.remove(os.path.join(d, "route.ts"))
+        os.symlink("two", os.path.join(d, "route.ts"))
+        self.commit()
+        self.assertIn("app/api/l/route.ts", self.pre("gh pr ready", session_id="s-link"))
+
     def test_the_only_watched_file_gone_after_a_review_is_delta(self):
         # Review round 2, low: no touched file left, so the delta never ran.
         self.review()
@@ -3059,7 +3096,8 @@ class L3r(BashBase):
 
     def test_a_review_of_history_apart_from_the_base_shows_nothing(self):
         lane = self.sh("rev-parse", "HEAD")
-        root = self.sh("commit-tree", self.sh("rev-parse", f"{self.base}^{{tree}}"), "-m", "apart")
+        # The lane's own tree, so only the guard, not a differing file, keeps the deny.
+        root = self.sh("commit-tree", self.sh("rev-parse", f"{lane}^{{tree}}"), "-m", "apart")
         self.merged(lane, lane, root)
         self.review(root)
         reason = self.pre("gh pr ready", session_id="s-apart")
