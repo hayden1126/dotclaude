@@ -166,6 +166,13 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     `skills/hackathon/templates/gitignore` covers them. Small, but it touches the hackathon
     skills, so it merges and installs before Nov 12. Lane env-names has it. Evidence: lane
     hackathon's closed record, `artifacts/smoke/cec4381/practices-review.md`.
+  - **Cheaper review before ready** (Hayden's picks, 2026-11-07; for lane practices' next PR,
+    `hooks/practices_check.py`'s ready gate): (1) a new head keeps the last review's clearance
+    when its changes since the reviewed head touch no file a skill watches (a STATUS carry, doc
+    edits); a watched-file change needs a review of only that delta; (2) brief that reviewer on
+    the delta alone and run it on a smaller model such as Sonnet. Not picked: a session-decided
+    skip, or a new off switch (`practices-gate` by Hayden's own `!` line stays the only one).
+    Lands after the Nov 12-15 freeze, so the event runs the gate the lanes already tested.
   - **Two gaps in the lead's close gate** (`skills/lanes/SKILL.md`, text already on main; found by
     lane merge-record, 2026-11-06). (1) A merged lane with no live session and a failing
     `handoff-check` has no written next step: the lead never respawns another lane's session, and
