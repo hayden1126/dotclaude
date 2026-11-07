@@ -1709,7 +1709,8 @@ def board(repo: Repo) -> list[dict]:
             flags.append("orphan")
         if stopped:
             flags.append("stopped")
-        row["handoff_why"] = handoff_why(repo, lane, ref, merges_of(repo, prs, lane, guess))
+        row["merges"] = merges_of(repo, prs, lane, guess)
+        row["handoff_why"] = handoff_why(repo, lane, ref, row["merges"])
         if row["handoff_why"]:
             flags.append("handoff?")
         row["flags"] = flags
@@ -1853,14 +1854,26 @@ def cmd_ls(args) -> int | None:
         warn(f"install hold unknown ({type(e).__name__}: {e})")
         held = []
     ids = {os.path.realpath(x["path"]): x["id"] for x in repo.lanes(shared=True)}
+    merges = {row["id"]: row["merges"] for row in rows}
     for h in held:
         who = f"lane {ids[h['root']]}" if h["root"] in ids else h["root"]
         n = len(h["links"])
+        late = ("; overdue: a PR of that lane merged after this install"
+                if reinstall_overdue(h, merges.get(ids.get(h["root"]))) else "")
         say(f"install: held by {who} (branch {h['branch']}, {n} link{'' if n == 1 else 's'}): "
-            f"the lead's ./setup.sh in {h['main']} releases it")
+            f"the lead's ./setup.sh in {h['main']} releases it{late}")
     # The DA15/DA16 tripwire: a warning like the lines above, so the exit stays 0.
     for reason in lanelib.repo_tamper(repo):
         say(f"git: {reason}")
+
+
+def reinstall_overdue(hold: dict, merges: list[float | None] | None) -> bool:
+    """Whether a PR of the lane holding the install merged after that install (install_state's
+    holders), so the lead's post-merge reinstall never ran. A merge older than the install is a
+    Keep-open lane's earlier PR. merges is merges_of's: unknown to gh, or a merge time it didn't
+    give, counts as no."""
+    since = hold["linked_at"]
+    return since is not None and any(m is not None and m > since for m in merges or [])
 
 
 def cap_line(repo: Repo) -> str | None:

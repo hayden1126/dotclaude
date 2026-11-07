@@ -1698,7 +1698,10 @@ copied as the link), and skips
     whole run, waits up to 5 minutes for another run, then stops before changing anything. It
     runs unlocked only where `flock` is missing or the state dir can't be made (macOS,
     git-bash); a lock file it can't open stops the run.
-  - **Seen elsewhere:** `lane ls` shows `install: held by lane <id>`. `lane done` refuses while
+  - **Seen elsewhere:** `lane ls` shows `install: held by lane <id>`, with `overdue` once a PR of
+    that lane merged after the install, which is when the lead's reinstall should have run. It
+    compares `mergedAt` with the oldest link's mtime, since `setup.sh` remakes every link: a
+    Keep-open lane's earlier PR predates its newer install and stays quiet. `lane done` refuses while
     any link, or setup-tmux.sh's `~/.tmux.conf` block, points into the lane, naming for each the
     installer that relinks it (`setup.sh`, `setup-tmux.sh`, or by hand).
   - **The plugin line:** `setup.sh` prints one line when a mod or plugin changed since the last

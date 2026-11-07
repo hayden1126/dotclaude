@@ -104,7 +104,8 @@ an unregistered worktree: `lane whoami` tells you which.
    setup.sh refuses to run from any other lane or clone until the lead's `./setup.sh` in the
    main checkout relinks everything after the next merge, whichever lane's it is (The lead,
    step 7.6 tells a lane whose install that released).
-   `lane ls` shows `install: held by lane <id>`. setup.sh also refuses a lane with no commit
+   `lane ls` shows `install: held by lane <id>`, and adds `overdue` once a PR of that lane has
+   merged after the install: the lead's reinstall (The lead, step 7.3) never ran. setup.sh also refuses a lane with no commit
    past `origin/main` (merged, or nothing committed yet): after the merge, install from the
    main checkout.
 6. **PR and merge**, each on Hayden's approval: the lane pushes, opens its PR as a draft, marks
@@ -458,7 +459,7 @@ resend passes.
 | Command | What it does |
 |---|---|
 | `lane whoami` | your lane id, `main`, `unregistered` or `plain` (`--json` for scripts) |
-| `lane ls` | the board: branch, ahead/behind, PR, port block, claims, live sessions, context (CTX: `312k*` past the auto-pass soft tier, `523k!` past hard), state (STATE: busy, idle, waiting, shell; message a lane idle past soft to run /pass), tmux window, flags; then any held locks, each pair of lanes whose changed files overlap (with the files), each lane main-touched flags (with the files), a main checkout with two or more live sessions (each one's window, the lead first) or a stopped lead (its window to `fg` it in), and the install hold |
+| `lane ls` | the board: branch, ahead/behind, PR, port block, claims, live sessions, context (CTX: `312k*` past the auto-pass soft tier, `523k!` past hard), state (STATE: busy, idle, waiting, shell; message a lane idle past soft to run /pass), tmux window, flags; then any held locks, each pair of lanes whose changed files overlap (with the files), each lane main-touched flags (with the files), a main checkout with two or more live sessions (each one's window, the lead first) or a stopped lead (its window to `fg` it in), and the install hold (`overdue` when the lead's reinstall is late) |
 | `lane ls --requests` | request to lane, from claims only |
 | `lane ls --check` | from a lane, bare: exit 0 when its row shows no `handoff?`, or exit 1 and the reason (the after-merge step before `merged #N`); it refuses outside a lane and when gh can't list the lane's merged PRs (sandboxed, offline, or a full list on one branch) |
 | `lane who 42` | the lane that claims #42, or "unclaimed" (with a warning while a left-out record may hold it) |
