@@ -127,9 +127,9 @@ Per run:
     connectors that load in some runs and not others (spike.md section 1). Each turn runs in
     its own process group with stdin, stdout and stderr on files, and PRACTICES_RUN=<uuid> in
     its env. When it exits, or times out, the whole group is killed, then any process of this
-    uid still carrying that marker (one that called setsid; each kill's pid and cmdline go in
-    `stray_kills`), so nothing the session started holds the run open or writes while the
-    oracle grades. The marker is the only proof of origin used: never a name, cwd or start time.
+    uid outside that group still carrying that marker (one that called setsid; each kill's pid
+    and cmdline go in `stray_kills`), so nothing the session started holds the run open or writes
+    while the oracle grades. The marker is the only proof of origin used: never a name, cwd or start time.
   - Ctrl-C: queued runs never start, running turns are killed with everything they started
     (by marker), and run.py exits 130. Finished rows are already in results.jsonl; the oracle
     and the harness's git run in their own sessions, so a grade in progress finishes and its
@@ -1449,10 +1449,18 @@ class Interrupted(Exception):
     pass
 
 
-def marked_processes(marker):
-    """Pids of this uid's processes whose environment carries PRACTICES_RUN=<marker> exactly.
-    The marker is the proof a process came from our session: never match by name, cwd or
-    start time (other Claude sessions run the same tools on this machine)."""
+def process_group(pid):
+    """`pid`'s process group, from /proc/<pid>/stat. A comm can hold spaces and parens, so the
+    fields are counted from its closing paren. Raises OSError once the process is gone."""
+    with open(f"/proc/{pid}/stat") as f:
+        return int(f.read().rsplit(")", 1)[1].split()[2])
+
+
+def marked_processes(marker, killed_group=None):
+    """Pids of this uid's processes whose environment carries PRACTICES_RUN=<marker> exactly,
+    leaving out the members of `killed_group`, a group already sent SIGKILL. The marker is the
+    proof a process came from our session: never match by name, cwd or start time (other Claude
+    sessions run the same tools on this machine)."""
     needle = f"{MARKER_VAR}={marker}".encode()
     uid, me, pids = os.getuid(), os.getpid(), []
     for name in os.listdir("/proc"):
@@ -1463,10 +1471,10 @@ def marked_processes(marker):
                 continue
             with open(f"/proc/{name}/environ", "rb") as f:
                 environ = f.read()
+            if needle in environ.split(b"\0") and process_group(name) != killed_group:
+                pids.append(int(name))
         except OSError:
             continue
-        if needle in environ.split(b"\0"):
-            pids.append(int(name))
     return pids
 
 
@@ -1478,21 +1486,23 @@ def _cmdline(pid):
         return ""
 
 
-def kill_marked(marker, grace=2.0):
+def kill_marked(marker, grace=2.0, killed_group=None):
     """SIGTERM every process carrying the marker, then SIGKILL any still carrying it after
     `grace` seconds (re-scanned, so a reused pid without the marker is never hit). Returns a
-    record of each one found: {pid, cmdline, signal}."""
-    found = {pid: _cmdline(pid) for pid in marked_processes(marker)}
+    record of each one found: {pid, cmdline, signal}. Members of `killed_group` are left out: a
+    process with SIGKILL pending still shows its environ here until it exits, and it can't
+    survive that signal, so it is no stray and waiting for it would only be a race."""
+    found = {pid: _cmdline(pid) for pid in marked_processes(marker, killed_group)}
     for pid in found:
         try:
             os.kill(pid, signal.SIGTERM)
         except (ProcessLookupError, PermissionError):
             pass
     deadline = time.monotonic() + grace
-    while found and time.monotonic() < deadline and marked_processes(marker):
+    while found and time.monotonic() < deadline and marked_processes(marker, killed_group):
         time.sleep(0.1)
     killed = set()
-    for pid in marked_processes(marker):
+    for pid in marked_processes(marker, killed_group):
         try:
             os.kill(pid, signal.SIGKILL)
             killed.add(pid)
@@ -1514,8 +1524,8 @@ def run_turn(cmd, prompt_file, cwd, stdout_path, stderr_path, timeout, marker=No
     """Runs one claude turn in its own session (process group), stdin from a file and stdout
     and stderr to files, so no pipe can hold the run open, with PRACTICES_RUN=<marker> in its
     env. When the turn ends, times out or STOP is set, the whole group is killed, then any
-    process still carrying the marker (a child that called setsid left the group): nothing
-    the session started outlives it or writes while the oracle grades.
+    process outside it still carrying the marker (a child that called setsid left the group):
+    nothing the session started outlives it or writes while the oracle grades.
     Returns (exit code or None, timed out, the strays killed by marker: [{pid, cmdline, signal}])."""
     marker = marker or uuid.uuid4().hex
     env = dict(os.environ, **{MARKER_VAR: marker})
@@ -1532,12 +1542,14 @@ def run_turn(cmd, prompt_file, cwd, stdout_path, stderr_path, timeout, marker=No
                 timed_out = True
                 break
             time.sleep(0.5)
+        killed_group = None  # only a group that took the signal is left to die
         try:
             os.killpg(p.pid, signal.SIGKILL)  # p is unreaped, so this pgid is still ours
+            killed_group = p.pid
         except (ProcessLookupError, PermissionError):
             pass
         code = p.wait()
-        strays = kill_marked(marker)
+        strays = kill_marked(marker, killed_group=killed_group)
     finally:
         with _active_lock:
             _active.pop(marker, None)

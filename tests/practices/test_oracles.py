@@ -38,6 +38,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import socket
 import stat
@@ -2778,6 +2779,34 @@ class RunHarness(unittest.TestCase):
                 return f.read().rsplit(")", 1)[1].split()[0] != "Z"
         except OSError:
             return False
+
+    def test_turn_counts_no_stray_for_a_group_member_still_dying(self):
+        # killpg is held back, which pins the moment it stands for: the SIGKILL is pending, and the
+        # process still shows its environ in /proc. It has taken the group kill, so it's no stray.
+        with tempfile.TemporaryDirectory(prefix="practices-turn-") as tmp:
+            tmp = Path(tmp)
+            pidfile = tmp / "member.pid"
+            (tmp / "prompt.txt").write_text("")
+            cmd = ["bash", "-c", f"sleep 60 </dev/null >/dev/null 2>&1 & echo $! > {pidfile}"]
+            try:
+                with unittest.mock.patch.object(run.os, "killpg"):
+                    _code, _timed_out, strays = run.run_turn(cmd, tmp / "prompt.txt", tmp, tmp / "out.txt",
+                                                             tmp / "err.txt", timeout=30)
+                self.assertEqual(strays, [])
+            finally:
+                os.kill(int(pidfile.read_text()), signal.SIGKILL)
+
+    def test_turn_keeps_hunting_the_group_when_its_kill_failed(self):
+        # Only a group that took the SIGKILL is left to die: one the kill never reached is a stray.
+        with tempfile.TemporaryDirectory(prefix="practices-turn-") as tmp:
+            tmp = Path(tmp)
+            pidfile = tmp / "member.pid"
+            (tmp / "prompt.txt").write_text("")
+            cmd = ["bash", "-c", f"sleep 60 </dev/null >/dev/null 2>&1 & echo $! > {pidfile}"]
+            with unittest.mock.patch.object(run.os, "killpg", side_effect=PermissionError):
+                _code, _timed_out, strays = run.run_turn(cmd, tmp / "prompt.txt", tmp, tmp / "out.txt",
+                                                         tmp / "err.txt", timeout=30)
+            self.assertEqual([s["pid"] for s in strays], [int(pidfile.read_text())])
 
     def test_turn_kills_a_setsid_escapee_by_marker(self):
         with tempfile.TemporaryDirectory(prefix="practices-turn-") as tmp:
