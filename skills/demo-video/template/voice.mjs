@@ -57,9 +57,13 @@ const RATE = 48000;
 const WINDOW_S = 0.05; // Speech is found in windows this long.
 const ABOVE_FLOOR_DB = 10; // Speech is this much louder than the room's own noise,
 const BELOW_LOUDEST_DB = 35; // and no quieter than this under the loudest window, in a silent room.
+const SOFT_ABOVE_FLOOR_DB = 4; // A soft sound joined to speech, such as a breathy opening, only clears these.
+const SOFT_BELOW_LOUDEST_DB = 50;
 const FLOOR_RANGE_DB = 16; // A file whose windows span less than this has no quiet part: it is all speech.
-const SPEECH_RUN = 4; // Loud windows in a row that start the speech. A click is shorter.
-const MARGIN_S = 0.1; // Kept around the speech, for a soft first or last sound.
+const START_RUN = 4; // Loud windows in a row that start the speech. A click spans at most 2.
+const END_RUN = 3; // Loud windows in a row that end it, so a short last word still counts.
+const MARGIN_S = 0.1; // Kept around the speech.
+const SIDECAR = /:Zone\.Identifier$/; // Windows writes one beside a downloaded file copied to a Linux disk.
 const FADE_S = 0.01; // Keeps a cut from clicking.
 const SLACK_S = 0.05;
 const LENGTH_SLACK_S = 0.1;
@@ -121,21 +125,29 @@ function speechIn(file) {
   const windows = windowsOf(file);
   const duration = windows.reduce((sum, window) => sum + window.Number_of_samples, 0) / RATE;
   if (!duration) throw new Error(`${shown(file)} has no audio in it`);
-  const peak = Math.max(...windows.map(window => window.Peak_level));
+  const peak = windows.reduce((most, window) => Math.max(most, window.Peak_level), -Infinity); // A spread fails past about an hour.
   if (peak < TOO_QUIET_DB) {
     throw new Error(`${shown(file)} is too quiet to be a voice (peak ${peak.toFixed(1)} dB): check the input device, its mute and its level`);
   }
   if (peak >= CLIPPED_DB) console.warn(`warning: ${shown(file)} clipped (peak ${peak.toFixed(1)} dB): turn the input down, or back off the microphone`);
   const levels = windows.map(window => window.RMS_level);
-  const heard = levels.filter(Number.isFinite).sort((one, other) => one - other);
-  const loudest = heard.at(-1);
-  const floor = heard[Math.floor(heard.length / 10)] ?? -Infinity;
-  const bar = loudest - floor < FLOOR_RANGE_DB ? loudest - BELOW_LOUDEST_DB
-    : Math.max(floor + ABOVE_FLOOR_DB, loudest - BELOW_LOUDEST_DB);
+  // Digital silence (-inf) counts toward the floor, or a silent room's floor lands on the quiet speech.
+  const sorted = [...levels].sort((one, other) => one - other);
+  const loudest = sorted.at(-1);
+  const floor = sorted[Math.floor(sorted.length / 10)];
+  const allSpeech = loudest - floor < FLOOR_RANGE_DB;
+  const bar = allSpeech ? loudest - BELOW_LOUDEST_DB : Math.max(floor + ABOVE_FLOOR_DB, loudest - BELOW_LOUDEST_DB);
+  const softBar = allSpeech ? loudest - SOFT_BELOW_LOUDEST_DB
+    : Math.max(floor + SOFT_ABOVE_FLOOR_DB, loudest - SOFT_BELOW_LOUDEST_DB);
   const loud = levels.map(level => level > bar);
-  const first = loud.findIndex((_, index) => index + SPEECH_RUN <= loud.length && loud.slice(index, index + SPEECH_RUN).every(Boolean));
+  const run = (index, length) => index >= 0 && index + length <= loud.length && loud.slice(index, index + length).every(Boolean);
+  let first = loud.findIndex((_, index) => run(index, START_RUN));
   if (first < 0) throw new Error(`${shown(file)} has no stretch of speech in it, only short sounds`);
-  const last = loud.lastIndexOf(true);
+  let last = loud.length - 1;
+  while (!run(last - END_RUN + 1, END_RUN)) last -= 1;
+  // Grow outwards over soft sound joined to the speech, which the bar alone would cut.
+  while (first > 0 && levels[first - 1] > softBar) first -= 1;
+  while (last < levels.length - 1 && levels[last + 1] > softBar) last += 1;
   return { from: Math.max(0, first * WINDOW_S - MARGIN_S), to: Math.min(duration, (last + 1) * WINDOW_S + MARGIN_S) };
 }
 
@@ -160,7 +172,11 @@ function readVoices(beats) {
   const names = fs.existsSync(dir) ? fs.readdirSync(dir, { withFileTypes: true }) : [];
   const voices = new Map();
   for (const entry of names) {
-    if (!entry.isFile() || entry.name.startsWith('.')) continue;
+    if (entry.name.startsWith('.') || SIDECAR.test(entry.name)) continue;
+    const stat = fs.statSync(path.join(dir, entry.name), { throwIfNoEntry: false }); // Follows a symlink.
+    if (!stat) throw new Error(`${entry.name} is a link to nothing`);
+    if (stat.isDirectory()) continue;
+    if (!stat.isFile()) throw new Error(`${entry.name} is not a file`);
     const found = FILE_NAME.exec(entry.name);
     if (!found) throw new Error(`${entry.name}: name it all.<ext> for a whole read, or <beat>.<ext> for one beat`);
     const key = found[1].toLowerCase() === 'all' ? 'all' : Number(found[1]);
@@ -218,8 +234,10 @@ function mux(parts, length) {
   const files = [...new Set(parts.map(part => part.voice.file))];
   const graph = parts.map(({ voice, from, to, at }, index) => {
     const spoken = to - from;
-    return `[${files.indexOf(voice.file) + 1}:a]atrim=start=${from}:end=${to},asetpts=PTS-STARTPTS,`
-      + 'aformat=sample_rates=48000:channel_layouts=mono,'
+    // Timed from the samples, as speechIn measured them, so a file whose clock starts late or skips
+    // still trims where its speech is.
+    return `[${files.indexOf(voice.file) + 1}:a]aformat=sample_rates=${RATE}:channel_layouts=mono,asetpts=N/SR/TB,`
+      + `atrim=start=${from}:end=${to},asetpts=PTS-STARTPTS,`
       + `afade=t=in:d=${FADE_S},afade=t=out:st=${Math.max(0, spoken - FADE_S)}:d=${FADE_S},`
       // After a trim, adelay hands amix times that leave a stream 8 ms long, far past the end of
       // the file (ffmpeg 6.1). Counting them again from the samples keeps every part on its time.

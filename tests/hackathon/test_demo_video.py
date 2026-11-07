@@ -132,17 +132,18 @@ def tone(path, seconds, lead=0.0, frequency=440, gain=4, rate=48000):
 
 
 def sequence(path, parts, rate=48000):
-    """A stand-in voice from parts in order: (frequency or None for silence, seconds, gain)."""
-    sources = []
+    """A stand-in voice from parts in order: (frequency or None for silence, seconds, gain).
+
+    One expression, so a part's level is exact however quiet (gain 1 is the sine source's default -18 dB).
+    """
+    terms, at = [], 0.0
     for frequency, seconds, *gain in parts:
         if frequency:
-            sources.append(f"sine=frequency={frequency}:sample_rate={rate}:duration={seconds},volume={gain[0] if gain else 4}")
-        else:
-            sources.append(f"anullsrc=r={rate}:cl=mono:d={seconds}")
-    inputs = [arg for source in sources for arg in ("-f", "lavfi", "-i", source)]
-    joined = "".join(f"[{i}:a]aformat=channel_layouts=mono[a{i}];" for i in range(len(sources)))
-    joined += "".join(f"[a{i}]" for i in range(len(sources))) + f"concat=n={len(sources)}:v=0:a=1"
-    subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", *inputs, "-filter_complex", joined, str(path)], check=True)
+            terms.append(f"{(gain[0] if gain else 4) / 8}*sin(2*PI*{frequency}*t)*between(t\\,{at:.6f}\\,{at + seconds - 1 / rate:.6f})")
+        at += seconds
+    expression = "+".join(terms) or "0"
+    subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "lavfi",
+                    "-i", f"aevalsrc={expression}:s={rate}:c=mono:d={at:.6f}", str(path)], check=True)
 
 
 def level(path, start, end, frequency=None):
@@ -1019,12 +1020,51 @@ class Voice(unittest.TestCase):
         self.built()
         self.assertGreater(level(self.result, 0.4, 0.6, 440), HEARD_DB)
 
-    def test_a_soft_first_sound_is_kept(self):
-        # About -48 dB: under the bar for speech, so only the margin keeps it.
-        sequence(self.voice_dir / "all.wav", [(None, 1.0), (440, 0.15, 0.032), (1000, 2)])
+    def test_a_faint_sound_just_before_speech_is_kept(self):
+        # About -64 dB: under even the soft bar, so only the margin keeps it.
+        sequence(self.voice_dir / "all.wav", [(None, 1.0), (440, 0.1, 0.005), (3000, 2)])
         self.built()
-        self.assertGreater(level(self.result, 0.2, 0.3, 440), -70, "the soft opening was cut")
-        self.assertGreater(level(self.result, 0.5, 2.0, 1000), HEARD_DB)
+        self.assertGreater(level(self.result, 0.2, 0.3, 440), -85, "the margin before the speech was cut")  # -70 kept, -91 cut
+        self.assertGreater(level(self.result, 0.5, 2.0, 3000), HEARD_DB)
+
+    def test_a_click_after_the_last_word_is_dropped(self):
+        tone(self.voice_dir / "all.wav", 7)
+        sequence(self.voice_dir / "2.wav", [(None, 0.5), (1000, 1.5), (None, 1.5), (2000, 0.05, 2)])
+        self.built()
+        self.assertLess(level(self.result, 3.0, 5.5, 2000), -50)
+
+    def test_a_long_soft_opening_is_kept(self):
+        # About -48 dB for 0.3 s: under the bar for speech, joined to it, so the speech grows over it.
+        sequence(self.voice_dir / "all.wav", [(None, 1.0), (440, 0.3, 0.032), (3000, 2)])
+        self.built()
+        self.assertGreater(level(self.result, 0.3, 0.45, 440), -58, "the start of a soft opening was cut")  # -52 kept, -66 cut
+
+    def test_a_file_whose_clock_jumps(self):
+        # Speech is found by counting samples, so the cut must count them too, not trust the file's clock.
+        even = self.root / "even.wav"
+        sequence(even, [(None, 1.0), (440, 1.0), (880, 2)])
+        subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(even), "-af",
+                        "asetpts=PTS+if(gte(N\\,48000)\\,72000\\,0)", "-c:a", "libopus",
+                        str(self.voice_dir / "all.mka")], check=True)
+        self.built()
+        self.assertGreater(level(self.result, 2.5, 3.0, 880), HEARD_DB, "the end of the read was cut")  # -9 kept, -91 cut
+
+    def test_a_linked_voice_file_counts(self):
+        tone(self.voice_dir / "all.wav", 7, frequency=440)
+        tone(self.root / "retake.wav", 2, frequency=1000)
+        (self.voice_dir / "2.wav").symlink_to(self.root / "retake.wav")
+        self.built()
+        self.assertGreater(level(self.result, 3.2, 4.9, 1000), HEARD_DB)
+
+    def test_a_link_to_nothing_is_refused(self):
+        tone(self.voice_dir / "all.wav", 2)
+        (self.voice_dir / "2.wav").symlink_to(self.root / "gone.wav")
+        self.assert_refused("2.wav")
+
+    def test_windows_download_sidecars_are_skipped(self):
+        tone(self.voice_dir / "all.wav", 2)
+        (self.voice_dir / "all.wav:Zone.Identifier").write_text("[ZoneTransfer]\nZoneId=3\n")
+        self.built()
 
     def test_silence_after_the_last_word_is_dropped(self):
         tone(self.voice_dir / "all.wav", 7, frequency=440)
