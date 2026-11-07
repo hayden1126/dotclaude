@@ -211,8 +211,8 @@ Why it works this way:
   for #99 the tab-bar lane ran `gh pr merge` itself. A merge made on GitHub and told to no
   session waits for the lead's next `lane ls`. With the lane's session gone, the lead runs the
   chain itself, and closes the lane only once the hand-back gate passes: a failing gate is then
-  the lead's ask, since no lane is left to make it. A lane that wrote its after-merge handoff
-  before its session ended passes, so it closes without one. With the session live, the lead
+  the lead's ask, since no lane is left to make it. A lane that wrote a complete after-merge
+  handoff before its session ended passes, so it closes without one. With the session live, the lead
   asks the lane for its after-merge handoff first, since a lane that merged and is still writing
   `Keep open:` must not be closed under it. A merge watcher lost: one per ready PR has to be
   re-armed every 2 hours, and two that saw the same merge would run the chain twice (two
