@@ -239,7 +239,9 @@ function buildControls() {
   controlGroup("Size", size);
   if (MODES.length > 1) controlGroup("Mode", segment(MODES, state.mode, (mode) => { state.mode = mode; update(); }));
   for (const c of CONTROLS) controlGroup(c.label, segment(c.options, state[c.label], (option) => { state[c.label] = option; update(); }));
-  controlGroup("Zoom", segment(["Fit", "100%"], state.zoom, (zoom) => { state.zoom = zoom; update(); }));
+  const zoom = segment(["Fit", "100%"], state.zoom, (option) => { state.zoom = option; update(); });
+  zoom.id = "c-zoom";
+  controlGroup("Zoom", zoom);
 }
 
 // One line, nothing past the row's right edge.

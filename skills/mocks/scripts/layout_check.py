@@ -42,7 +42,7 @@ INSTALL_HINT = ("Install one with: npx @puppeteer/browsers install chrome-headle
                 "--path ~/.cache/puppeteer, or set MOCK_CHROME to its path.")
 HOOKS = ("header.m-top", "header.m-top h1", ".m-bar", ".m-ctl", ".m-seg", ".m-main", ".m-stage",
          "#frame.m-frame", "#scaler.m-scaler", "iframe#app", "aside.m-panel", "#caption.m-caption",
-         "#c-frame button")
+         "#c-frame button", "#c-zoom button")
 CSS_VARIABLES = ("--m-panel-min", "--m-gap")
 
 # Runs in every frame before the page's own script, so a throw in render(), in a
@@ -118,10 +118,7 @@ MEASURE_JS = """(() => {
   };
 })()"""
 
-ZOOM_PICK_JS = """(() => {
-  const group = [...document.querySelectorAll(".m-ctl")].find((g) => g.querySelector("span")?.textContent === "Zoom");
-  [...group.querySelectorAll("button")].find((b) => b.textContent.trim() === "100%").click();
-})()"""
+ZOOM_PICK_JS = """[...document.querySelectorAll("#c-zoom button")].find((b) => b.textContent.trim() === "100%").click()"""
 
 # Scrolls the frame to its far corner: how much of the render that reached.
 ZOOM_REACH_JS = """(() => {
@@ -145,7 +142,7 @@ CLICK_JS = """(async (index) => {
   const app = document.getElementById("app");
   const button = document.querySelectorAll(".m-seg button")[index];
   const group = button.closest(".m-ctl")?.querySelector("span")?.textContent;
-  const expected = !button.closest("#c-frame") && group !== "Zoom" && button.getAttribute("aria-pressed") !== "true";
+  const expected = !button.closest("#c-frame, #c-zoom") && button.getAttribute("aria-pressed") !== "true";
   const live = () => app.contentDocument?.documentElement.outerHTML;
   const where = group || button.closest(".m-box")?.querySelector("h2")?.textContent;
   const label = `${button.textContent.trim()} (${where})`, before = app.srcdoc, liveBefore = live();

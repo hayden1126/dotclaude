@@ -362,6 +362,12 @@ class CleanPages(TemporaryPages):
         self.assertRegex(result.stdout, r"WARN controls: Compact \(Density\) changed nothing")
         self.assertEqual(result.stdout.splitlines()[-1], "LAYOUT_OK")
 
+    def test_a_mock_s_own_zoom_group_changes_nothing(self):
+        own = CONTROLS_OPEN + '  { label: "Zoom", options: ["Near", "Far"] },\n'
+        result = run_check(self.page([(CONTROLS_OPEN, own)]))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertRegex(result.stdout, r"WARN controls: Far \(Zoom\) changed nothing")
+
     def test_a_render_updated_in_place_does_not_warn(self):
         in_place = """function render(state) {
   window.page ??= draw(state);
@@ -515,11 +521,16 @@ class LivePage(TemporaryPages):
         self.assertEqual(layout_check.verdict(browser, caught.exception), 2)
 
     def test_a_closed_pipe_counts_as_a_dead_browser(self):
-        class Alive:
+        browser = layout_check.Browser(BROWSER)
+        self.addCleanup(browser.close)
+        browser.proc.kill()
+        with self.assertRaises(layout_check.Crashed) as caught:
+            browser.call("Browser.getVersion")
+
+        class StillRunning:
             def dead(self):
                 return False
-        gone = layout_check.Crashed("the browser exited")
-        self.assertEqual(layout_check.verdict(Alive(), gone), 2)
+        self.assertEqual(layout_check.verdict(StillRunning(), caught.exception), 2)
 
     def test_one_mode_hides_the_mode_buttons(self):
         groups = '[...document.querySelectorAll(".m-ctl > span")].map((s) => s.textContent)'
