@@ -194,8 +194,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     2026-11-07; lane practices owns the fix, in its next PR): `tests/practices/run.py`'s
     `run_turn` SIGKILLs the group and `kill_marked` scans /proc at once, so a process with
     SIGKILL pending reads as a stray. It fails `test_turn_kills_background_grandchildren` (3 of
-    80 turns idle, 151 of 192 under load, reproduced on main 87ab19f alone) and writes false
-    `stray_kills` rows into eval results. Evidence: lane license's
+    80 turns idle, 151 of 192 under load, reproduced on main 87ab19f alone) and could write false
+    `stray_kills` rows into eval results; none so far (lane practices: 2,060 stored rows, all 0
+    strays). The fix lands before that PR's sweep. Evidence: lane license's
     `.lane/artifacts/run-turn-race.md`.
   - **Teardown race in `tests/setup/test_tmux_hooks.py`** (low; found by lane license's trial,
     2026-11-07): `hooks/stop-ring.sh` logs `rang` and then plays the ring, whose detached test stub
