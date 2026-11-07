@@ -115,8 +115,9 @@ timeout kill takes the whole process group, so a killed scan leaves it behind. S
 start, as one systemMessage line (shown to the user only), and prints nothing when all is well.
 
 Bash levels. settings.json sends a Bash call here only when its command (the payload's
-"command" string, never the tool_response output) holds git with commit or push, or gh with pr
-ready or pr create (PostToolUse: git with commit), so Python never starts for any other call.
+"command" string, never the tool_response output) holds git with commit or push, gh with pr
+ready or pr create, or a package manager with an add verb (PostToolUse: git with commit), so
+Python never starts for any other call.
 The prefilter is one `LC_ALL=C grep -E`, linear in the payload (a bash `case` glob backtracked
 over every "git" in a large output). Every practices entry in settings.json (edit, Bash and
 SessionStart) runs the shim only when it exists and then exits 0; a deny is JSON on stdout.
@@ -196,6 +197,32 @@ key per line it named (`L2|<skill>|<rule>|<path>|sha1(the stripped line)`); a fi
 of those lines was accepted at edit time and is skipped, and any other line of that rule in
 that file is still told (a transcript marker names no line, so it accepts none). A deny or
 tell names a finding by rule, path and line, never the matched text, and so does errors.log.
+
+SEC-64, the engine's other rule, runs first in PreToolUse(Bash) and reads no repo: a Bash call
+that adds a named package (ADD_VERBS: npm, pnpm, yarn and bun add and install, pip and uv pip
+install, uv, poetry, cargo and bundle add, gem install, composer require; `go get` runs no code
+at install) is denied once per manager and package (key `SEC-64|engine|<manager>|<package>`, no
+version in it; a call adding several names every unseen one, and the resend passes). The word
+after an `--option` this check doesn't list could be that option's value or a package, so it is
+never stored or echoed; the call gets one deny that names no package, keyed
+`SEC-64|engine|<manager>|?`, beside any named one. Restores
+name no package and never fire: a bare install, `npm ci`, `pip install -r`, `uv sync`, a local
+path, `pip install -e .`. It doesn't fire when the same simple command turns scripts off
+(--ignore-scripts for the npm family, --only-binary :all: for pip and uv pip, --no-build for uv)
+or, for the npm family, when an earlier Bash call in the transcript (or, for a subagent, the
+parent's) with a result that isn't an error inspected the package. A step of this same call or
+a call in its assistant message doesn't count: the model reads that output only after the install
+has run the script. Inspecting is a manager's view (`npm view`, `pnpm view`, `yarn info`, `bun
+info`) naming `scripts` or with --json and no named fields, with the same version spec as the
+install, or tar reading its tarball's package.json: printing the whole tarball or that member, or
+extracting it with a later command of the same call printing package/package.json. A Bash call that
+redirects stdout, holds `||` or captures the look's output anywhere, or runs in the background,
+inspects nothing. Other
+managers have no measured inspection, so the deny-once alone applies. The deny names a package
+and version spec only when they match a strict pattern and never echoes the rest of the command.
+The rule reads the common spellings and is a prompt to
+check, not a boundary; what it can't read is logged as install-skipped with no command text. A
+key that can't be kept drops the deny.
 
 git runs objects only, through Repo: a system git (SYSTEM_GITS), every GIT_* variable stripped
 from the env, no system or global config, GIT_ALLOW_PROTOCOL=none (a partial clone's lazy fetch
@@ -2536,10 +2563,586 @@ def review_block(touched, mb, head, branch, shown=8):
             "check won't stop the resend.\n\n" + "\n\n".join(parts))
 
 
+# ---------------------------------------------------------------- SEC-64, the install check
+
+SEC64 = {"id": "SEC-64", "say": (
+    "Read a package's install scripts before its first install, or install with scripts off.")}
+SEC64_SHARE = 0.5  # of BUDGET, counted from the start of the run; the git levels keep the rest
+NPM_FAMILY = {"npm", "pnpm", "yarn", "bun"}
+PY_MANAGERS = {"pip", "uv", "poetry"}
+# Each manager's words that add a package named after them. npm's are its documented aliases.
+ADD_VERBS = {
+    "npm": {"add", "install", "i", "in", "ins", "inst", "insta", "instal", "isnt", "isnta",
+            "isntal", "isntall", "install-test", "it"},
+    "pnpm": {"add", "install", "i"}, "yarn": {"add", "install", "i"},
+    "bun": {"add", "a", "install", "i"}, "pip": {"install"}, "uv": {"add"}, "poetry": {"add"},
+    "cargo": {"add"}, "bundle": {"add"}, "gem": {"install", "i"},
+    "composer": {"require", "r", "req", "requ", "requi", "requir"}}
+# The common options that take the next word, so it isn't read as a package.
+_NODE_VALUES = {"--prefix", "--registry", "--tag", "--cache", "--userconfig", "--globalconfig",
+                "--workspace", "--omit", "--include", "--loglevel", "--save-prefix", "--otp",
+                "--before", "--install-strategy", "--pack-destination", "--cwd", "--dir",
+                "--filter", "--filter-prod", "--store-dir", "--modules-folder", "--cache-folder",
+                "--cache-dir", "--reporter", "--network-timeout", "--config", "--proxy",
+                "--https-proxy", "--cpu", "--os", "--libc", "--allow-git", "--min-release-age",
+                "--global-dir", "--virtual-store-dir", "--backend", "--ca", "--cafile",
+                "--linker", "--concurrent-scripts", "--network-concurrency",
+                "--minimum-release-age", "--mode", "--location", "--maxsockets"}
+# The common boolean long options (any other `--no-...` is one too). The word after any other
+# `--option` without `=` may be its value, a token included, so split_args reports it as
+# ambiguous and it is never read as a package.
+NODE_FLAGS = {"--save", "--save-dev", "--save-prod", "--save-optional", "--save-peer",
+              "--save-exact", "--save-bundle", "--save-text-lockfile",
+              "--save-workspace-protocol", "--workspace", "--global", "--force", "--dry-run",
+              "--ignore-scripts",
+              "--foreground-scripts", "--legacy-peer-deps", "--legacy-bundling", "--global-style",
+              "--strict-peer-deps", "--prefer-dedupe", "--package-lock", "--package-lock-only",
+              "--workspaces", "--include-workspace-root", "--workspace-root", "--install-links",
+              "--audit", "--fund", "--bin-links", "--silent", "--quiet", "--verbose", "--json",
+              "--offline", "--prefer-offline", "--prefer-online", "--yes", "--dev",
+              "--peer", "--optional", "--exact", "--tilde", "--production", "--frozen-lockfile",
+              "--pure-lockfile", "--lockfile-only", "--recursive", "--aggregate-output",
+              "--stream", "--use-stderr", "--fail-if-no-match", "--yarn", "--analyze",
+              "--only-missing", "--trust", "--ignore-engines", "--ignore-optional",
+              "--ignore-platform", "--ignore-workspace-root-check", "--non-interactive", "--flat",
+              "--har", "--interactive", "--cached", "--prefer-dev", "--help", "--version",
+              "--unsafe-perm", "--engine-strict", "--shamefully-hoist"}
+_PIP_FLAGS = {"--upgrade", "--user", "--force-reinstall", "--ignore-installed", "--pre", "--quiet",
+              "--verbose", "--no-input", "--dry-run", "--require-hashes",
+              "--break-system-packages", "--isolated", "--compile", "--prefer-binary",
+              "--ignore-requires-python", "--use-pep517", "--check-build-dependencies", "--debug",
+              "--require-virtualenv", "--disable-pip-version-check", "--help", "--version"}
+FLAGS = {
+    "npm": NODE_FLAGS, "pnpm": NODE_FLAGS, "yarn": NODE_FLAGS, "bun": NODE_FLAGS,
+    "pip": _PIP_FLAGS,
+    "uv": _PIP_FLAGS | {"--dev", "--raw", "--frozen", "--locked", "--lfs", "--active", "--workspace",
+                        "--reinstall", "--compile-bytecode", "--refresh", "--offline",
+                        "--all-extras", "--system", "--exact", "--strict", "--managed-python",
+                        "--system-certs"},
+    "poetry": {"--dev", "--dry-run", "--lock", "--allow-prereleases", "--editable", "--quiet",
+               "--verbose", "--ansi", "--help", "--version"},
+    "cargo": {"--dev", "--build", "--optional", "--dry-run", "--locked", "--offline", "--frozen",
+              "--default-features", "--public", "--ignore-rust-version", "--quiet", "--verbose",
+              "--help"},
+    "bundle": {"--skip-install", "--strict", "--optimistic", "--quiet"},
+    "gem": {"--user-install", "--conservative", "--force", "--prerelease", "--development",
+            "--development-all", "--minimal-deps", "--ignore-dependencies", "--local", "--remote",
+            "--both", "--quiet", "--silent", "--verbose", "--help"},
+    "composer": {"--dev", "--no-update", "--no-install", "--with-all-dependencies", "-W",
+                 "--with-dependencies", "--prefer-dist", "--prefer-source", "--sort-packages",
+                 "--update-with-dependencies", "--dry-run", "--quiet", "--verbose", "--ansi",
+                 "--help", "--version"}}
+_PIP_VALUES = {"-r", "--requirement", "-c", "--constraint", "-e", "--editable", "-t", "--target",
+               "--prefix", "--root", "--src", "-i", "--index-url", "--extra-index-url", "-f",
+               "--find-links", "--platform", "--python-version", "--implementation", "--abi",
+               "--no-binary", "--only-binary", "--trusted-host", "--proxy", "--cert",
+               "--client-cert", "--timeout", "--retries", "--log", "--cache-dir", "--progress-bar",
+               "--upgrade-strategy", "--report", "--config-settings", "--python", "-p",
+               "--use-feature", "--use-deprecated", "--exists-action", "--root-user-action",
+               "--global-option", "--keyring-provider"}
+VALUE_OPTS = {
+    "npm": _NODE_VALUES | {"-w", "-C"},
+    "pnpm": (_NODE_VALUES - {"--workspace"}) | {"-C", "-F"},  # pnpm's -w and --workspace take none
+    "yarn": _NODE_VALUES,
+    "bun": _NODE_VALUES | {"-c"},
+    "pip": _PIP_VALUES,
+    "uv": _PIP_VALUES | {"--project", "--directory", "--package", "--group", "--optional",
+                         "--index", "--default-index", "--branch", "--tag", "--rev", "-C",
+                         "--extra", "--exclude-newer", "--exclude-newer-package", "--script",
+                         "--requirements", "--constraints", "--overrides", "--excludes",
+                         "-m", "--marker", "-b", "--build-constraints", "--bounds",
+                         "--index-strategy", "-P", "--upgrade-package", "--upgrade-group",
+                         "--resolution", "--prerelease", "--fork-strategy",
+                         "--reinstall-package", "--refresh-package", "--link-mode",
+                         "--config-setting", "--config-settings-package", "--config-file",
+                         "--color", "--allow-insecure-host", "--python-platform",
+                         "--torch-backend", "--no-build-package", "--no-binary-package",
+                         "--no-sources-package", "--no-install-package",
+                         "--no-build-isolation-package"},
+    "poetry": {"-C", "--directory", "-P", "--project", "-G", "--group", "-E", "--extras",
+               "--source", "--python", "--platform", "--markers"},
+    "cargo": {"-F", "--features", "--rename", "--path", "--git", "--branch", "--tag", "--rev",
+              "--registry", "--manifest-path", "-p", "--package", "--target", "--config",
+              "--lockfile-path", "--color", "-Z"},
+    "bundle": {"-v", "--version", "-g", "--group", "-s", "--source", "-r", "--require", "--path",
+               "--git", "--github", "--branch", "--ref", "--glob"},
+    "gem": {"-v", "--version", "-i", "--install-dir", "-n", "--bindir", "-s", "--source", "-p",
+            "--http-proxy", "--platform", "--document", "--build-root"},
+    "composer": {"-d", "--working-dir", "--with"}}
+# The words that come before a manager's add verb, so an unlisted option doesn't take them.
+BEFORE_VERB = {"yarn": {"global", "workspace"}, "composer": {"global"}, "uv": {"pip"}}
+SOURCE_OPTS = {"-e", "--editable", "--git", "--github"}  # their value can be a remote source
+PIP_HEAD = re.compile(r"pip\d*(?:\.\d+)?")  # pip3, pip3.12
+INTERPRETER = re.compile(r"python\d*(?:\.\d+)?")  # `python3.12 -m pip install x`
+LAUNCHERS = {"xargs", "find", "fd", "parallel", "ssh", "watch", "eval", "setsid", "flock", "dash",
+             "ksh", "corepack", "mise", "asdf", "volta"} | {"bash", "sh", "zsh"}
+RUNNERS = {"uv", "poetry", "pipenv", "pdm", "hatch", "rye", "bundle"} | NPM_FAMILY
+RUN_WORDS = {"run", "exec", "x", "dlx"}
+# Named so a wrapper's `sudo -E pip3.12 ...` isn't taken for the wrapper's own argument.
+INSTALL_HEADS = (set(ADD_VERBS) | set(HEADS) | LAUNCHERS | {"pip3", "python", "python3"}
+                 | {f"{name}3.{minor}" for name in ("pip", "python") for minor in range(7, 20)})
+MANAGER_NAMED = re.compile(r"(?<![\w.-])(?:npm|pnpm|yarn|bun|pip3?|uv|poetry|cargo|bundle|gem"
+                           r"|composer)(?![\w-])")
+ADD_NAMED = re.compile(r"(?<![\w-])(?:add|install|i|req|requ|requi|requir|require)(?![\w-])")
+LOCAL_PREFIX = (".", "/", "~", "file:", "link:", "workspace:", "portal:")  # `.[dev]` too
+ARCHIVE_SUFFIX = (".tgz", ".tar", ".tar.gz", ".tar.bz2", ".zip", ".whl", ".gem", ".crate")
+_NAME = r"[A-Za-z0-9][\w.-]{0,213}"
+NPM_PACKAGE = re.compile(rf"((?:@[a-z0-9][\w.-]{{0,213}}/)?{_NAME})(?:@([^/:\s]*))?", re.ASCII)
+COMPOSER_PACKAGE = re.compile(rf"({_NAME}/{_NAME})(?::\S*)?", re.ASCII)
+OTHER_PACKAGE = re.compile(  # requests[socks]>=2, serde@1, rails:7.0, x (>=1,<2)
+    rf"({_NAME})(?:\[[^\]]*\])?(?:@[^/:\s]*|:[^/\s]*|\s*[=<>!~;(^].*)?", re.ASCII | re.DOTALL)
+SPEC_SHOWN = re.compile(r"[\w.^~+-]{1,64}", re.ASCII)  # a version spec the deny may repeat
+VIEW_VERBS = {"npm": {"view", "info", "show", "v"}, "pnpm": {"view", "info", "show", "v"},
+              "yarn": {"info"}, "bun": {"info"}}
+# The tar options whose effect on what it prints is known; any other means it counts as no read.
+# f takes the archive and C a value that isn't a member; the rest take none or `=value`.
+TAR_SHORT = set("xOzjJZvfCopm")
+TAR_LONG = {"--extract": "x", "--get": "x", "--to-stdout": "O", "--file": "f", "--directory": "C",
+            "--strip-components": "C", "--gzip": "z", "--gunzip": "z", "--ungzip": "z",
+            "--bzip2": "j", "--xz": "J", "--verbose": "v", "--wildcards": "v",
+            "--no-same-owner": "o", "--no-same-permissions": "v"}
+# What prints a package.json named as its argument, unlike echo, ls or test. A filter prints only
+# what it's asked for, so one must also name the scripts (or be jq's whole-file `.`).
+FILE_READERS = {"cat", "head", "tail", "less", "more", "bat"}
+FILE_FILTERS = {"jq", "grep", "egrep", "rg", "sed", "awk", "node", "python", "python3"}
+# The redirections that leave stdout in the call's result: `2>`, `2>>`, `2>&1`, `>&2`, and `>(` is
+# a process substitution. Any other `>` sends it away.
+KEPT_OUTPUT = re.compile(r"(?:(?<!\w)\d+)?>&\d+(?!\w)|(?<!\w)(?:[02-9]|\d\d+)>>?\|?|>\(")
+CAPTURED = re.compile(r"`|\$\(\s*(?:npm|pnpm|yarn|bun|tar)\b")  # `$(mktemp -d)` is fine
+STDERR_AWAY = re.compile(r"(?<!\w)2>>?\s*[^&\s].*>&2|>&2.*(?<!\w)2>>?\s*[^&\s]")  # takes stdout too
+UNNAMED = "?"  # the state key's package for a call with an ambiguous word: it names none
+
+
+class EveryHead(frozenset):
+    """The heads for calls(): every command comes back with its name, so what is left in rest is
+    only what the reader couldn't read, and read_installs judges each command by its name. The
+    elements are the names a wrapper's option word mustn't swallow."""
+
+    def __contains__(self, name):
+        return True
+
+
+def names_an_install(text):
+    """Whether text names a package manager and, after it, an add verb, word by word."""
+    m = MANAGER_NAMED.search(text)
+    return bool(m and ADD_NAMED.search(text, m.end()))
+
+
+def split_args(args, value_opts, flags=None, verbs=()):
+    """(positional words, option words, whether a word is ambiguous) of a manager's arguments. An
+    option in value_opts takes the next word and `--flag true|false` its boolean, both folded to
+    `<option>=<value>`. With flags, the word after any other `--option` without `=` could be its
+    value or a package: it is dropped and reported as ambiguous, unless it is one of verbs and no
+    positional word came before it. Every word after `--` is positional."""
+    words, opts, ambiguous, i = [], [], False, 0
+    while i < len(args):
+        a = args[i]
+        i += 1
+        if a == "--":
+            words.extend(args[i:])
+            break
+        if not a.startswith("-") or a == "-":
+            words.append(a)
+        elif i < len(args) and (a in value_opts
+                                or (a.startswith("--") and args[i] in ("true", "false"))):
+            opts.append(f"{a}={args[i]}")
+            i += 1
+        else:
+            opts.append(a)
+            if (flags is not None and i < len(args) and a.startswith("--") and "=" not in a
+                    and a not in flags and not a.startswith("--no-")
+                    and not args[i].startswith("-") and (words or args[i] not in verbs)):
+                ambiguous = True
+                i += 1
+    return words, opts, ambiguous
+
+
+def install_of(head, args):
+    """(manager, the words after the add verb, option words, whether a word is ambiguous) when
+    this simple command is a manager's add verb, else None."""
+    if INTERPRETER.fullmatch(head):
+        at = args.index("-m") if "-m" in args else len(args)
+        if not PIP_HEAD.fullmatch("".join(args[at + 1:at + 2])):
+            return None
+        head, args = "pip", args[at + 2:]
+    manager = "pip" if PIP_HEAD.fullmatch(head) else head
+    if manager not in ADD_VERBS:
+        return None
+    if manager == "gem" and "--" in args:  # what follows goes to the gem's build, not to gem
+        args = args[:args.index("--")]
+    words, opts, ambiguous = split_args(args, VALUE_OPTS[manager], FLAGS[manager],
+                                        ADD_VERBS[manager] | BEFORE_VERB.get(manager, set()))
+    if manager in ("yarn", "composer") and words[:1] == ["global"]:
+        words = words[1:]
+    elif manager == "yarn" and words[:1] == ["workspace"]:  # `yarn workspace web add x`
+        words = words[2:]
+    if manager == "uv" and words[:2] == ["pip", "install"]:
+        return manager, words[2:], opts, ambiguous
+    if not words or words[0] not in ADD_VERBS[manager]:
+        return None
+    return manager, words[1:], opts, ambiguous
+
+
+def scripts_off(manager, opts):
+    """Whether these options stop the install running a package's code. npm reads the last one."""
+    if manager in NPM_FAMILY:
+        off = manager == "yarn" and "--mode=skip-build" in opts  # later Yarn's spelling
+        for o in opts:
+            if o in ("--ignore-scripts", "--ignore-scripts=true"):
+                off = True
+            elif o in ("--ignore-scripts=false", "--no-ignore-scripts"):
+                off = False
+        return off
+    if manager in ("pip", "uv"):  # --no-binary takes a package back out of --only-binary
+        return ("--only-binary=:all:" in opts or (manager == "uv" and "--no-build" in opts)) \
+            and not any(o.startswith("--no-binary") for o in opts)
+    return False
+
+
+def source_in_options(opts):
+    """Whether an option's value names a remote source: `-e git+https://...`, `--git <url>`."""
+    for o in opts:
+        name, eq, value = o.partition("=")
+        if eq and name in SOURCE_OPTS and (name in ("--git", "--github") or "://" in value
+                                           or value.startswith("git+")):
+            return True
+    return False
+
+
+def npm_word(word):
+    """The registry package an npm-family word names: `x@npm:real@1` installs real@1."""
+    return word.split("@npm:", 1)[1] if "@npm:" in word else word
+
+
+def npm_spec(word):
+    """The version spec in an npm-family word, None for none or `latest`: `x` means the latest."""
+    m = NPM_PACKAGE.fullmatch(npm_word(word))
+    spec = m.group(2) if m else None
+    return None if spec in (None, "", "latest") else spec
+
+
+def package_of(manager, word):
+    """(package name, version stripped; whether the word is readable). A local path or file is
+    (None, True), never an add from a registry; a word no pattern fits is (None, False)."""
+    if word.startswith(LOCAL_PREFIX) or ("://" not in word and (
+            word.endswith(ARCHIVE_SUFFIX) or (manager in PY_MANAGERS and "/" in word))):
+        return None, True
+    if manager in NPM_FAMILY:
+        m = NPM_PACKAGE.fullmatch(npm_word(word))
+    elif manager == "composer":
+        if not re.search(r"[/$%]", word):
+            return None, True  # the version word of `composer require vendor/pkg ^1.0`
+        m = COMPOSER_PACKAGE.fullmatch(word)
+    else:
+        m = OTHER_PACKAGE.fullmatch(word)
+    return (m.group(1), True) if m else (None, False)
+
+
+def flat_name(pkg):
+    """The name in the tarball npm pack writes: @scope/name packs to scope-name-<version>.tgz."""
+    return pkg[1:].replace("/", "-") if pkg.startswith("@") else pkg
+
+
+def tarball_version(word, pkg):
+    """The version in word when it names pkg's tarball, else None."""
+    m = re.fullmatch(re.escape(flat_name(pkg)) + r"-([\d*][\w.*+-]*)\.(?:tgz|tar\.gz)",
+                     word.rsplit("/", 1)[-1], re.ASCII)
+    return m.group(1) if m else None
+
+
+def tar_parts(args):
+    """(mode letters, archives, member words) of a tar's arguments, or None for an option whose
+    effect on what it prints isn't known here."""
+    modes, archives, members, taking = set(), [], [], []
+    for n, a in enumerate(args):
+        if taking:
+            if taking.pop(0) == "f":
+                archives.append(a)
+        elif a.startswith("--"):
+            name, eq, value = a.partition("=")
+            if name not in TAR_LONG:
+                return None
+            modes.add(TAR_LONG[name])
+            if TAR_LONG[name] in "fC" and not eq:
+                taking.append(TAR_LONG[name])
+            elif TAR_LONG[name] == "f":
+                archives.append(value)
+        elif (a.startswith("-") and a != "-") or n == 0:  # `-xOzf file`, or the old `xOzf file`
+            letters = a.lstrip("-")
+            for m, c in enumerate(letters):
+                if c not in TAR_SHORT:
+                    return None
+                modes.add(c)
+                if c in "fC" and a.startswith("-") and letters[m + 1:]:  # `-fname` holds its value
+                    if c == "f":
+                        archives.append(letters[m + 1:])
+                    break
+                if c in "fC":
+                    taking.append(c)
+        else:
+            members.append(a)
+    return modes, archives, members
+
+
+def is_manifest(word):
+    """Whether a tar member word names a package.json."""
+    return word.rsplit("/", 1)[-1] == "package.json"
+
+
+def reads_unpacked(head, words):
+    """Whether this command prints the package.json a tarball unpacks to, package/package.json:
+    a bare one, or another folder's, is the repo's own."""
+    if not any(w == "package/package.json" or w.endswith("/package/package.json") for w in words):
+        return False
+    return head in FILE_READERS or (head in FILE_FILTERS and any(
+        "script" in w or (head == "jq" and w == ".") for w in words))
+
+
+def tar_reads(args, pkg, spec, read_after):
+    """Whether this tar's output can show pkg's scripts: it prints the whole tarball or a member
+    naming package.json, or extracts those with read_after, a later command of the call printing
+    a package.json. A tarball's version, unlike a view's spec, is what `npm pack x` resolved `x`
+    to, so it differs only from another pinned spec, and a pinned install needs the version
+    spelled out."""
+    parts = tar_parts(args)
+    if parts is None or "x" not in parts[0]:
+        return False
+    modes, archives, members = parts
+    if members and not any(is_manifest(m) for m in members):
+        return False
+    return ("O" in modes or read_after) and any(
+        v and (spec is None or v == spec)
+        for v in (tarball_version(a, pkg) for a in archives))
+
+
+def inspects(head, args, pkg, spec, read_after=False):
+    """Whether this simple command shows pkg's install scripts, for the spec being installed:
+    a manager's view naming scripts, or with --json and no named fields (named fields print only
+    those; a bare view shows no scripts), or tar reading its tarball. A view's spec must equal
+    the install's, None meaning unversioned or latest."""
+    if head == "tar":
+        return tar_reads(args, pkg, spec, read_after)
+    if head not in VIEW_VERBS:
+        return False
+    words, opts, _ = split_args(args, VALUE_OPTS[head])
+    if len(words) < 2 or words[0] not in VIEW_VERBS[head]:
+        return False
+    if package_of(head, words[1])[0] != pkg or npm_spec(words[1]) != spec:
+        return False
+    fields = words[2:]
+    if fields:
+        return "scripts" in fields  # `scripts.test` shows one script, not what runs at install
+    return "--json" in opts or "--json=true" in opts
+
+
+def hides_output(command):
+    """Whether this Bash command redirects stdout, holds `||`, or captures a manager's or tar's
+    output, anywhere: blunt, since a false answer costs one deny and a true one can hide the only
+    output the model would read."""
+    return ("||" in command or ">" in KEPT_OUTPUT.sub(" ", command)
+            or bool(CAPTURED.search(command) or STDERR_AWAY.search(command)))
+
+
+def command_inspects(command, pkg, spec):
+    """Whether a Bash command from the transcript holds an inspection of pkg."""
+    if len(command) > CMD_MAX or hides_output(command):
+        return False
+    try:
+        calls = load_bash_words().calls(command, EveryHead(INSTALL_HEADS | {"tar"}), None,
+                                        check=lambda: check_budget("command parse"))
+    except ValueError:
+        return False
+    return any(
+        inspects(head, args, pkg, spec, any(
+            reads_unpacked(later, words) for later, words, _, _ in calls[n + 1:]))
+        for n, (head, args, _, _) in enumerate(calls))
+
+
+def bash_rows(t, needle):
+    """(command, tool id, row end) of each assistant Bash call in the rows holding needle, less
+    a background call, whose output the result doesn't hold."""
+    for _, end, d in t.hits(needle):
+        if d.get("type") != "assistant":
+            continue
+        for b in blocks(d):
+            inp = b.get("input")
+            command = inp.get("command") if isinstance(inp, dict) else None
+            if b.get("type") == "tool_use" and b.get("name") == "Bash" \
+                    and isinstance(command, str) and not inp.get("run_in_background"):
+                yield command, b.get("id"), end
+
+
+def tool_ids(d):
+    return {b.get("id") for b in blocks(d) if b.get("type") == "tool_use"}
+
+
+def same_message(t, tool_id):
+    """The ids of the tool calls in the assistant message holding tool_id. Claude Code writes one
+    row per block, each with the message's id, before the calls run."""
+    ids = set()
+    if not isinstance(tool_id, str) or not tool_id:
+        return ids
+    for _, _, d in t.hits(json.dumps(tool_id).encode()):
+        if d.get("type") != "assistant" or tool_id not in tool_ids(d):
+            continue
+        ids |= tool_ids(d)
+        msg_id = d["message"].get("id")
+        if isinstance(msg_id, str) and msg_id:
+            ids |= {i for _, _, m in t.hits(json.dumps(msg_id).encode())
+                    if m.get("type") == "assistant" and isinstance(m.get("message"), dict)
+                    and m["message"].get("id") == msg_id for i in tool_ids(m)}
+    return ids
+
+
+def inspected_earlier(event, wanted):
+    """Those of wanted, (package, spec) pairs, that a Bash call with a result that isn't an error
+    inspected, in this transcript or, for a subagent, the parent's. A call in the install's own
+    assistant message doesn't count: the model hasn't read its result. A tarball's name holds
+    only the flat name."""
+    CRUMB.mark("(the transcript)", "transcript", "SEC-64")
+    read = set()
+    with Transcripts(event) as ts:
+        for t in ts.all():
+            siblings = same_message(t, event.get("tool_use_id"))
+            read |= {(pkg, spec) for pkg, spec in wanted if any(
+                tool_id not in siblings and command_inspects(command, pkg, spec)
+                and t.succeeded(tool_id, end)
+                for needle in {pkg, flat_name(pkg)}
+                for command, tool_id, end in bash_rows(t, needle.encode()))}
+    return read
+
+
+def launches(head, args):
+    """Whether this command runs what its arguments name, as `echo`'s or `sed`'s text doesn't."""
+    if head in LAUNCHERS:
+        return True
+    if head in RUNNERS:
+        return next((a for a in args if not a.startswith("-")), None) in RUN_WORDS
+    return head in HEADS and "foreach" in args
+
+
+def read_installs(event):
+    """([(manager, package, version spec)] this call would add with scripts on, in order, each
+    spec of a package kept; whether part of it couldn't be read; the managers with a word that
+    may be a package or an option's value)."""
+    cmd = command_of(event)
+    if not cmd or not MANAGER_NAMED.search(cmd):
+        return [], False, []
+    if len(cmd) > CMD_MAX:
+        return [], names_an_install(cmd), []
+    rest, found, unread, ambiguous = [], [], False, []
+    cwd = event.get("cwd") if isinstance(event.get("cwd"), str) else None
+    CRUMB.mark("(the command)", "bash", "SEC-64")
+    try:
+        calls = load_bash_words().calls(cmd, EveryHead(INSTALL_HEADS), cwd, rest,
+                                        check=lambda: check_budget("command parse"))
+    except ValueError:
+        return [], names_an_install(cmd), []
+    for head, args, _, _ in calls:
+        add = install_of(head, args) if head else None
+        if add is None:
+            if head and launches(head, args):
+                rest.append(" ".join(args))
+            continue
+        manager, words, opts, unsure = add
+        if scripts_off(manager, opts):
+            continue
+        unread = unread or source_in_options(opts)
+        if unsure and manager not in ambiguous:
+            ambiguous.append(manager)
+        for word in words:
+            pkg, readable = package_of(manager, word)
+            unread = unread or not readable
+            item = (manager, pkg, npm_spec(word) if manager in NPM_FAMILY else None)
+            if pkg and item not in found:
+                found.append(item)
+    return found, unread or any(names_an_install(t) for t in rest), ambiguous
+
+
+def install_key(manager, pkg, _spec=None):
+    """The state key: per manager and package name, never per version."""
+    if manager in PY_MANAGERS:  # PEP 503: Foo_Bar and foo-bar are one package
+        pkg = re.sub(r"[-_.]+", "-", pkg).lower()
+    return f"SEC-64|engine|{manager}|{pkg}"
+
+
+def install_reason(found, unnamed=False):
+    """The deny for these (manager, package, spec) triples: rule, package, spec and check, no
+    other command text. With unnamed, one line for a word that may be a package, naming none."""
+    lines = [f"[practices:SEC-64] {SEC64['say']}"]
+    for manager, pkg, spec in found:
+        if manager in NPM_FAMILY:
+            shown = f"{pkg}@{spec}" if spec and SPEC_SHOWN.fullmatch(spec) else pkg
+            off = ("`--ignore-scripts`" if manager != "yarn" else
+                   "scripts off (`--ignore-scripts` on Yarn 1; on later versions see "
+                   "`yarn add --help`)")
+            lines.append(f"- {pkg}: run `npm view {shown} scripts` and read what it prints, or "
+                         f"install it with {off}.")
+        elif manager == "pip":
+            lines.append(f"- {pkg}: install it with `--only-binary :all:` (a wheel runs no code "
+                         "at install), or read its build code first.")
+        elif manager == "uv":
+            lines.append(f"- {pkg}: install it with `--no-build` (a wheel runs no code at "
+                         "install), or read its build code first.")
+        else:
+            lines.append(f"- {pkg}: read what it runs at install or build ({manager}).")
+    if unnamed:
+        lines.append("This install may add a package: a word after an option this check doesn't "
+                     "know could be a package or that option's value, so it isn't repeated here. "
+                     "Read that package's install scripts first, or install with scripts off "
+                     "where this manager has a way.")
+    if any(manager in NPM_FAMILY for manager, _, _ in found):
+        lines.append("`npm view` shows only this package's own scripts. A dependency's install "
+                     "scripts can run too, and only turning scripts off covers them.")
+    lines.append("Load the `dependencies` skill when it is listed. Resending this call passes "
+                 "this check. In your reply, say what the script does and whether you read it "
+                 "before or after it ran.")
+    return "\n".join(lines)
+
+
+def install_check(event):
+    """SEC-64: the deny for this call, or None. A fault allows the call and logs it, and the git
+    levels still run, with their share of the budget."""
+    global BUDGET
+    whole, BUDGET = BUDGET, BUDGET * SEC64_SHARE
+    try:
+        found, unread, ambiguous = read_installs(event)
+        if not (found or unread or ambiguous):
+            return None
+        cfg = load_config(bash_project(event))
+        if not cfg["enabled"] or is_off(cfg, ENGINE, SEC64["id"]):
+            return None
+        if unread:
+            log("install-skipped", "the command adds a package in a form this check can't read, "
+                "so that part wasn't checked")
+        seen = state_keys(event)
+        found = [k for k in found if install_key(*k) not in seen]
+        unnamed = [install_key(m, UNNAMED) for m in ambiguous
+                   if install_key(m, UNNAMED) not in seen]
+        wanted = list(dict.fromkeys(k[1:] for k in found if k[0] in NPM_FAMILY))
+        read = inspected_earlier(event, wanted) if wanted else set()
+        new = [k for k in found if not (k[0] in NPM_FAMILY and k[1:] in read)]
+        keys = [install_key(*k) for k in new] + unnamed
+        if not keys or not state_add(event, keys):
+            return None
+        return deny(install_reason(new, bool(unnamed)))
+    except Budget as e:
+        log("budget-spent", f"after {BUDGET}s, in SEC-64's {e}; the call was allowed")
+    except Exception as e:  # noqa: BLE001  never at the cost of the push and PR checks
+        log("crash", f"SEC-64: {type(e).__name__}: {e}")
+    finally:
+        BUDGET = whole
+    return None
+
+
 def bash_pre(event):
-    """PreToolUse(Bash): deny a call that both commits and pushes once, record HEAD before a
-    commit (L3s), deny a push once per new finding in what it would send, and deny a PR's
-    `ready` once until a reviewer ran with the gate lines of the skills it touches (L3r)."""
+    """PreToolUse(Bash): deny a first package install once per package (SEC-64), deny a call
+    that both commits and pushes once, record HEAD before a commit (L3s), deny a push once per
+    new finding in what it would send, and deny a PR's `ready` once until a reviewer ran with the
+    gate lines of the skills it touches (L3r)."""
+    out = install_check(event)
+    if out:
+        return out
     gits, ghs, named = bash_calls(event)
     commits = [g for g in gits if g[0] == "commit"]
     pushes = [g for g in gits if g[0] == "push"]
@@ -2771,6 +3374,7 @@ LABELS = {"skill-disabled": ("skill disabled", "skills disabled"),
           "off-file-bad": ("unusable off file", "unusable off file reads"),
           "state-error": ("state error", "state errors"), "crash": ("crash", "crashes"),
           "git-skipped": ("git call skipped", "git calls skipped"),
+          "install-skipped": ("package install skipped", "package installs skipped"),
           "scan-truncated": ("scan cut short", "scans cut short"),
           "project-unknown": ("edit without a project dir", "edits without a project dir")}
 # For debugging, never an engine error: a deliberate choice (a delete push sends nothing to

@@ -1,0 +1,17 @@
+{
+  "bash": [
+    "npm install spark-svg",
+    "npm test"
+  ],
+  "reply": "Added the route with spark-svg.",
+  "registry_requests": [
+    {
+      "method": "GET",
+      "path": "/spark-svg"
+    },
+    {
+      "method": "GET",
+      "path": "/spark-svg/-/spark-svg-1.2.0.tgz"
+    }
+  ]
+}

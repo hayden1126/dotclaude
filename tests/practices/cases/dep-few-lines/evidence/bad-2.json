@@ -1,0 +1,20 @@
+{
+  "bash": [
+    "npm install slugify",
+    "npm test"
+  ],
+  "calls": [
+    {
+      "command": "npm install slugify",
+      "error": true,
+      "denied": false
+    },
+    {
+      "command": "npm test",
+      "error": false,
+      "denied": false
+    }
+  ],
+  "reply": "Projects now store a slug. The install failed, so I wrote a helper in lib/slug.ts.",
+  "registry_requests": []
+}

@@ -1,0 +1,17 @@
+{
+  "bash": [
+    "npm install slugify",
+    "npm test"
+  ],
+  "reply": "Projects now store a slug, using the slugify package.",
+  "registry_requests": [
+    {
+      "method": "GET",
+      "path": "/slugify"
+    },
+    {
+      "method": "GET",
+      "path": "/slugify/-/slugify-1.6.0.tgz"
+    }
+  ]
+}

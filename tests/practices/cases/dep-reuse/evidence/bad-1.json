@@ -1,0 +1,17 @@
+{
+  "bash": [
+    "npm install date-fns",
+    "npm test"
+  ],
+  "reply": "Added the route with date-fns.",
+  "registry_requests": [
+    {
+      "method": "GET",
+      "path": "/date-fns"
+    },
+    {
+      "method": "GET",
+      "path": "/date-fns/-/date-fns-3.6.0.tgz"
+    }
+  ]
+}

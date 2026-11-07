@@ -1,0 +1,14 @@
+{
+  "name": "spark-svg",
+  "version": "1.2.0",
+  "description": "Sparklines as SVG",
+  "license": "ISC",
+  "type": "module",
+  "scripts": {
+    "postinstall": "node postinstall.js"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  }
+}
