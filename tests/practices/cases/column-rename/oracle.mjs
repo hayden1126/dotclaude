@@ -92,9 +92,10 @@ await oracle(async (t) => {
     t.note("a row the old release writes reaches display_name", row?.display_name === "Old Release Client", JSON.stringify(row ?? null));
   }
 
-  const rows = requests.filter(({ method }) => method === "POST").flatMap(rowsOf);
+  // Only what goes to this table: another table's or an rpc's body has other columns.
+  const rows = requests.filter(({ method, url }) => method === "POST" && /\/rest\/v1\/clients(?:\?|$)/.test(url)).flatMap(rowsOf);
   const writes = [];
   for (const row of rows) writes.push({ row, result: await pg.attempt(...USER, insertOf(row), Object.values(row)) });
   t.functional("the new code's insert goes in", writes.length > 0 && writes.every(({ result }) => !result.error),
-    writes.map(({ row, result }) => `${JSON.stringify(row)}: ${said(result)}`).join("; ") || "no POST from any of its exports");
+    writes.map(({ row, result }) => `${JSON.stringify(row)}: ${said(result)}`).join("; ") || "no POST to clients from any of its exports");
 });
