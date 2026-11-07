@@ -91,7 +91,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
   - **Live lanes** (briefs in each record). Merge order: 1 license
-    (`chore/license`, opened 2026-11-06 on Hayden's pick; carries the lead's notes).
+    (`chore/license`, opened 2026-11-06 on Hayden's pick; carries the lead's notes), 2 mocks
+    (`feat/mocks-skill`, opened 2026-11-07 on Hayden's pick; by 2026-11-11; after license, since
+    both change README.md), 3 speed
+    (`feat/speed-skill`, opened 2026-11-07 on Hayden's pick; by 2026-11-11; after mocks, since all
+    three change README.md).
     **Install freeze on HAYPC, Nov 12 through Nov 15** (Hayden, 2026-11-05): no lane installs in
     that window, except fixes for lane hackathon, so the event runs what the dry run tested. The lead's
     reinstall after a merge counts as an install, so no other lane merges in that window.
@@ -164,6 +168,29 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     hackathon merges (it owns `skills/demo-video/` and its tests); lead's lean: after the event.
     Music and footage need a recorded source and licence per file (lane license's rule), and
     recording a voice from WSL needs the Windows microphone, still unprobed.
+  - **One-screen layout for clickable mocks** (Hayden, 2026-11-07, via a lane in another repo:
+    "This should be how mocks are made from now on"). On wide windows: no page scroll, one
+    control row, the render fit to the window and fixed in place, the questions column beside it
+    the only thing that scrolls, secondary notes at its foot; stacked below 1,101 px. Hayden picked a
+    new skill, built now by lane mocks (2026-11-07).
+    Reference template and a scripted check (not run yet): lane themes's
+    `.lane/mock/` in that repo, archived with the lane when it closes.
+  - **Faster work: parallel runs and stated skips** (Hayden, 2026-11-07, via lane themes in
+    another repo: "another skill for speeding up processes like running stuff in parallel etc,
+    for both during dev, spikes, verification, release checks, CI stuff etc, also smart thinking
+    about what we can skip or only looking at diff etc when appropriate"). Habits: before quoting
+    a duration, find what the job spends its time on (waits or CPU) and run independent parts at
+    once, keeping a signal that the load changed nothing; use lock and build waits to prepare the
+    next step; run only what a change can reach, reuse evidence that still holds, prove with the
+    cheapest test that hits the risk, order steps by what voids what. Guardrail: every skip is
+    written down (what didn't run, why it's safe, what would catch a problem), and never reads as
+    a pass. Hayden picked a new skill, built now by lane speed (2026-11-07).
+  - **Teardown race in `tests/setup/test_tmux_hooks.py`** (low; found by lane license's trial,
+    2026-11-07): `hooks/stop-ring.sh` logs `rang` and then plays the ring, whose detached test stub
+    appends to `calls.log` in the test's temp dir, while the test's `decided()` returns on the log
+    line alone, so the cleanup's `rmtree` can hit Errno 39. Failed once in
+    `test_an_unreadable_transcript_still_rings` with its assertions passing; 96 runs at 16 at
+    once didn't reproduce it. Likely fix: wait for the stub's line too.
   - **Secret-name follow-ups from lane env-names** (low, 2026-11-07): five notes on names the
     secret checks and ignore rules miss or wrongly flag, outside that lane's brief. Not picked
     yet. Evidence: lane env-names's closed record, Not mine
