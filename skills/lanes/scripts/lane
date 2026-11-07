@@ -100,8 +100,8 @@ proved. With nothing to end, a refused close leaves the lane as it was.
 its worktree, branch, record and claims. Its flag lives beside the config
 (lanelib.Repo.parked_path), where no lane's sandbox can write it. A lane holds a cap slot while
 its worktree exists, unless it is parked with no session in it (holds_slot); `new` counts slot
-holders, and `open` of a parked lane goes at most one lane over the cap, for its rebase and
-merge. It refuses before any signal, as `done` does, on a dirty tree, a HEAD that is neither
+holders, and `open` of a parked lane goes at most one lane over the cap, to merge main and its
+PR. It refuses before any signal, as `done` does, on a dirty tree, a HEAD that is neither
 on the remote branch nor an open PR's head, a failing plain handoff-check, the board's
 handoff?, a lock the lane holds, the install hold, a busy session or one waiting on Hayden,
 or anything in the lane nothing proves its own.
@@ -2234,16 +2234,16 @@ def cmd_open(args) -> None:
 
 def unpark_check(repo: Repo, lane: dict, live: list[dict] | None) -> str | None:
     """`open` of a parked lane: refuse while the other lanes' slot holders (holds_slot) pass the
-    cap, since at most one lane goes over, and only to rebase and merge (Hayden's pick,
+    cap, since at most one lane goes over, and only to merge main and its PR (Hayden's pick,
     2026-10-29). At the cap, the line that says it goes over; under it, None."""
     cap = int(repo.config().get("cap", DEFAULT_CAP))
     others = [x for x in held_lanes(repo) if x["id"] != lane["id"] and holds_slot(repo, x, live)]
     if len(others) > cap:
         raise LaneError(f"lane {lane['id']} is parked, and {len(others)} other lanes hold a slot, "
-                        f"over the cap of {cap} already: one lane may go over by one, for its "
-                        "rebase and merge. Park or close one first")
+                        f"over the cap of {cap} already: one lane may go over by one, to merge "
+                        "main and its PR. Park or close one first")
     if len(others) == cap:
-        return f"lane {lane['id']} is over the cap of {cap} by one: for its rebase and merge"
+        return f"lane {lane['id']} is over the cap of {cap} by one: to merge main and its PR"
     return None
 
 
@@ -3242,20 +3242,45 @@ def merged_in(repo: Repo, sha: str, cur: str) -> bool:
                      ok=(0, 1)).returncode == 0
 
 
+DRIVERS_OFF: dict[str, list[str]] = {}  # drivers_off's answer by repo, read once per command
+
+
+def git_version(text: str) -> tuple[int, ...] | None:
+    """`git version`'s numbers (`git version 2.43.0` gives (2, 43, 0)), or None."""
+    m = re.match(r"git version (\d+)\.(\d+)(?:\.(\d+))?", text)
+    return tuple(int(x) for x in m.groups() if x is not None) if m else None
+
+
+def drivers_off(repo: Repo) -> list[str]:
+    """git's global options that keep merge_tree's merges free of .gitattributes merge drivers:
+    no global attributes file, and attributes from the empty tree in place of the worktree's
+    and the index's. --attr-source came in git 2.41, and merge-tree could segfault on it until
+    2.43 (both releases' notes), so an older git keeps the worktree's drivers, and the trial
+    says so once. limit: <common>/info/attributes applies on any git, which has no switch for
+    it; only a lane that writes there on purpose loses the check, and only for its own trial."""
+    if repo.toplevel not in DRIVERS_OFF:
+        opts = ["-c", f"core.attributesFile={os.devnull}"]
+        if (git_version(trial_git(repo, ["version"]).stdout) or (0,)) >= (2, 43):
+            empty = trial_git(repo, ["hash-object", "-t", "tree", os.devnull]).stdout.strip()
+            opts.append(f"--attr-source={empty}")
+        else:
+            warn("git is older than 2.43, so a merge driver in the lane's "
+                 ".gitattributes still applies to the trial's merges; GitHub's merge has none")
+        DRIVERS_OFF[repo.toplevel] = opts
+    return DRIVERS_OFF[repo.toplevel]
+
+
 def merge_tree(repo: Repo, ours: str, theirs: str, label: str) -> tuple[str | None, list[str]]:
     """(the merged tree, []) when commit theirs merges cleanly into ours, else (None, the paths
     git names as conflicted, which may be none). Writes objects only. Any other git outcome
     (unrelated histories, a bad commit) aborts, and a conflicted name that isn't UTF-8 stops
     the trial naming label, so the lane needn't bisect for it.
 
-    Merge drivers are off, as the forge's merge has none: a `merge=union` in the lane's
-    .gitattributes or the user's global attributes file would pass a merge GitHub refuses.
-    limit: <common>/info/attributes still applies (git has no switch for it); only a lane that
-    writes there on purpose loses the check, and only for its own trial."""
-    empty_tree = trial_git(repo, ["hash-object", "-t", "tree", os.devnull]).stdout.strip()
+    Merge drivers are off (drivers_off), as the forge's merge has none: a `merge=union` in the
+    lane's .gitattributes or the user's global attributes file would pass a merge GitHub
+    refuses."""
     try:
-        p = trial_git(repo, ["-c", f"core.attributesFile={os.devnull}",
-                             f"--attr-source={empty_tree}", "merge-tree", "--write-tree", "-z",
+        p = trial_git(repo, [*drivers_off(repo), "merge-tree", "--write-tree", "-z",
                              "--name-only", "--no-messages", "--end-of-options", ours, theirs],
                       ok=(0, 1))
     except NotUtf8:

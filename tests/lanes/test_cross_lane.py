@@ -258,6 +258,48 @@ class MainTouched(LaneWork):
         self.assertNotIn("\x1b", line)
 
 
+class DriversOff(unittest.TestCase):
+    """merge_tree's switch for merge drivers, by git version: --attr-source came in 2.41, and
+    merge-tree could segfault on it until 2.43."""
+
+    def setUp(self):
+        self.mod = load_lane_script()
+
+    def opts(self, version):
+        repo = mock.Mock(toplevel=f"/r/{version}")
+        calls = []
+
+        def git(_repo, args, **_):
+            calls.append(args)
+            out = version if args == ["version"] else "4b825dc642cb6eb9a060e54bf8d69288fbee4904\n"
+            return subprocess.CompletedProcess(args, 0, out, "")
+
+        err = io.StringIO()
+        with mock.patch.object(self.mod, "trial_git", git), contextlib.redirect_stderr(err):
+            first = self.mod.drivers_off(repo)
+            self.assertEqual(self.mod.drivers_off(repo), first)  # read once per repo
+        self.assertEqual(calls.count(["version"]), 1)
+        return first, err.getvalue()
+
+    def test_git_243_turns_every_driver_source_off(self):
+        opts, err = self.opts("git version 2.43.0\n")
+        self.assertEqual(opts, ["-c", f"core.attributesFile={os.devnull}",
+                                "--attr-source=4b825dc642cb6eb9a060e54bf8d69288fbee4904"])
+        self.assertEqual(err, "")
+
+    def test_an_older_or_unreadable_git_keeps_them_and_says_so_once(self):
+        for version in ("git version 2.42.1\n", "git version 2.39.5 (Apple Git-154)\n", "huh\n"):
+            with self.subTest(version=version):
+                opts, err = self.opts(version)
+                self.assertEqual(opts, ["-c", f"core.attributesFile={os.devnull}"])
+                self.assertEqual(err.count("git is older than 2.43"), 1)
+
+    def test_git_version_reads_the_numbers(self):
+        self.assertEqual(self.mod.git_version("git version 2.43.0"), (2, 43, 0))
+        self.assertEqual(self.mod.git_version("git version 2.50.1.windows.1"), (2, 50, 1))
+        self.assertIsNone(self.mod.git_version("version 2"))
+
+
 class OverlapGuards(LaneWork):
     """The status `ls` runs in each lane, sandbox-off: nothing the lane can configure runs."""
 

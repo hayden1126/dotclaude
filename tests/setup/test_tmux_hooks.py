@@ -73,13 +73,28 @@ exec %s "$@"
 """
 
 
+def hold_children(testcase):
+    """The pass_fds for every hook a test runs, with a cleanup, added after the temp dir's (so it
+    runs first), that waits for what the hooks left running: stop-ring.sh detaches its ring and
+    its classifier, and both write under the temp dir after the log line a test waits on, so an
+    rmtree beside them fails with Errno 39. Each inherits the pipe's write end, so the read end
+    reads end of file once the last exits."""
+    read_end, write_end = os.pipe()
+
+    def gone():
+        os.close(write_end)
+        select.select([read_end], [], [], 15)
+        os.close(read_end)
+
+    testcase.addCleanup(gone)
+    return (write_end,)
+
+
 class Hooks(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tmp)
-        read_end, write_end = os.pipe()
-        self.held = (write_end,)  # pass_fds of every hook run: children_gone's end-of-file signal
-        self.addCleanup(self.children_gone, read_end, write_end)  # runs before the rmtree
+        self.held = hold_children(self)
         stubs = os.path.join(self.tmp, "bin")
         os.mkdir(stubs)
         for name, body in (("tmux", FAKE_TMUX), ("powershell.exe", STUB), ("wslpath", STUB)):
@@ -101,14 +116,6 @@ class Hooks(unittest.TestCase):
                         XDG_STATE_HOME=self.state, STUB_PANES="1 %1",
                         STUB_TMUX_STATE=self.tmux_state, HOME=os.path.join(self.tmp, "home"),
                         CLAUDE_CODE_SESSION_ID="abcdef12-0000", DOTCLAUDE_RING_SETTLE="0.3")
-
-    def children_gone(self, read_end, write_end):
-        """Wait for what the hooks left running: stop-ring.sh detaches its ring and its classifier,
-        and both write under self.tmp after the log line a test waits on, so an rmtree beside them
-        fails with Errno 39. Each inherits the pipe, which reads end of file once the last exits."""
-        os.close(write_end)
-        select.select([read_end], [], [], 15)
-        os.close(read_end)
 
     def run_hook(self, name, session, payload=None, args=(), wait=True):
         env = {**self.env, **session}
@@ -1436,6 +1443,7 @@ class RealTmux(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tmp)
+        self.held = hold_children(self)
         env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "TMUX"))}
         self.server = ["tmux", "-L", "glyph-test-%d" % os.getpid(), "-f", "/dev/null"]
         try:
@@ -1471,7 +1479,7 @@ class RealTmux(unittest.TestCase):
             payload["agent_id"] = agent
         p = subprocess.run(["bash", os.path.join(HOOKS, name)] + ([mode] if mode else []),
                            input=json.dumps(payload), capture_output=True, text=True,
-                           timeout=10, env=self.env)
+                           timeout=10, env=self.env, pass_fds=self.held)
         self.assertEqual((p.returncode, p.stderr), (0, ""))
 
     def glyph(self):

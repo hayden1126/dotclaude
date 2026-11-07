@@ -523,7 +523,8 @@ that names `suite`.
    Merge drivers stay off (`--attr-source=<empty tree>`, `core.attributesFile=/dev/null`): a
    `merge=union` in the lane's `.gitattributes` made a bare merge-tree call clean a merge GitHub
    refuses, which has no drivers. `<common>/info/attributes` still applies, since git has no
-   switch for it.
+   switch for it. `--attr-source` needs git 2.43, since `merge-tree` could segfault on it in
+   2.41 and 2.42: on an older git the trial warns that the drivers still apply.
    When the lane's STATUS.md, else the base's (a lane that branched before the line), names the
    lead's branch (its `Lead branch:` line) and that branch holds one, every commit the trial
    merges or tries (this lane's HEAD, the base, each lane's head) first gets the lead branch's
@@ -652,8 +653,8 @@ the slot again, so the count never trusts the flag alone; with session liveness 
 parked lane holds its slot too. `lane new` refuses at the cap, counted this way.
 
 **The over-cap rule.** `lane open` of a parked lane refuses while the other slot holders already
-pass the cap, and at the cap it opens and says `lane X is over the cap of N by one: for its
-rebase and merge` (Hayden's pick: a parked lane may unpark over a full cap to merge, at most one
+pass the cap, and at the cap it opens and says `lane X is over the cap of N by one: to merge
+main and its PR` (Hayden's pick: a parked lane may unpark over a full cap to merge, at most one
 lane over at a time). It clears the flag only once `tmux new-window` succeeds. `open --print`
 refuses a parked lane, since it would start a session the flag doesn't know of. One hold of
 the lanes lock spans the cap check, `tmux new-window` and the flag's removal, so a second
@@ -727,7 +728,9 @@ costs one merge that wasn't needed. A change in another file that breaks the lan
 
 **A parked lane.** Hayden's pick: the lead runs `lane open <id>` at the lane's turn with no ask,
 since a message reaches no session. The lane opens in plan mode, so it stops for his plan approval
-before it merges.
+before it merges. A parked lane flagged `main-touched` but not next stays parked until its turn
+(Hayden's pick, 2026-11-07): reopening it early would take the one over-cap slot another lane's
+turn may need.
 
 ## Bug reports from other repos (lane bug-route, 2026-10-18)
 

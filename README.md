@@ -990,7 +990,7 @@ and status single-writer:
 - `lane park chart-fix` frees a finished lane's cap slot while it waits its merge turn. It ends
   the lane's sessions the way `done` does and keeps the worktree, branch, record and claims. It
   refuses unless the work is pushed and handed off. `lane open chart-fix` unparks it, at most
-  one lane over the cap, for its rebase and merge.
+  one lane over the cap, to merge main and its PR.
 - An optional lead session triages requests into lanes, opens them on Hayden's approval and sets
   the merge order (the skill's "The lead"). After a lane's PR merges, the lane sends it
   `merged #N`, and the lead reinstalls and runs `lane done` on Hayden's standing approval. Each

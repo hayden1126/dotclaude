@@ -140,7 +140,8 @@ an unregistered worktree: `lane whoami` tells you which.
    (the trial holds it already), and never start a trial under that lock. Quote its last lines
    in the ask. Name in it the commit the last review saw and `git diff --stat <sha>..HEAD`, or say
    the change is fast-track with no review step. Anything past that commit beyond a carry of the
-   lead's notes, a clean merge of main or a version renumber gets reviewed again, any other
+   lead's notes, a clean merge of main (or of the lane ahead's pushed head, "Waiting your turn"
+   below) or a version renumber gets reviewed again, any other
    hand-resolved conflict included, since green tests aren't a verdict. A review that can't run keeps the gate
    closed (the `delegation` skill, section 3). The merge ask names the full commit
    (`git rev-parse HEAD`), and the merge runs `gh pr merge <n> --merge --match-head-commit <sha>`
@@ -175,8 +176,11 @@ an unregistered worktree: `lane whoami` tells you which.
    After a conflict-free merge of main, the gate is CI on the pushed head (dotclaude has none,
    so the full local suites). The forge decides whether a PR merges: `gh pr view <n> --json
    mergeable`, never a bare `git merge-tree`, which honours `.gitattributes` merge drivers that
-   GitHub ignores (`lane trial` turns them off). Optionally, the second lane in the order may
-   merge the first's pushed head to start its checks early, and it merges main again at its turn.
+   GitHub ignores (`lane trial` turns them off). Optionally, once the first lane in the order is
+   ready, the second may merge the first's pushed head to start its checks early, and it merges
+   main again at its turn. A clean merge of that head needs no new review, as a clean merge of
+   main doesn't. If the first lane then drops out unmerged, the second's PR carries its commits:
+   tell Hayden before any push, since taking them out means a revert or a force push.
 
    The lane that learns of the merge
    (it ran `gh pr merge`, or Hayden said "merged" in its window) writes the outcome into its
@@ -285,7 +289,7 @@ inherits the lead from it.
 4. **Cap.** The lanes config's `cap` (default 4, `lane init --cap`) limits the lanes that hold a
    slot: a live lane holds one unless it is parked with no session in it (a session started in
    a parked lane by hand holds it again). `lane new` refuses at the cap; `lane open` of a parked
-   lane goes over by one at most, for its rebase and merge, and the board's `cap:` line says
+   lane goes over by one at most, to merge main and its PR, and the board's `cap:` line says
    so. Requests beyond it wait in the project STATUS backlog.
 5. **Hand-back gate.** A lane is handed back only when `handoff-check -C <lane path>` passes and
    a bare `lane ls` shows no `handoff?` flag. The flag lights when the record may be behind the
@@ -361,9 +365,12 @@ inherits the lead from it.
         released your install: merge origin/main, then reinstall from your worktree before
         ready; renumber the version if taken", plus the carry when it is next.
       - **Flagged `main-touched`:** "main moved to `<sha>` and changed your files: merge
-        origin/main now".
-      - **Any other lane:** "main moved to `<sha>`: no merge until your turn". A parked one gets
-        no message, and its `rebase` flag waits for its turn.
+        origin/main now". A parked one waits for its turn like any other (Hayden's pick,
+        2026-11-07): it is pushed and handed off, so its side rarely moves, and `lane trial`
+        checks the bigger merge before ready.
+      - **Any other lane:** "main moved to `<sha>`: leave it until your turn, unless your work
+        needs something it gained". A parked one gets no message, and its `rebase` flag waits
+        for its turn.
 
       A pushed branch merges main rather than rebasing, which would need a force push.
    7. `lane done <id>` once the hand-back gate (step 5) passes, unless the lane's Next has a

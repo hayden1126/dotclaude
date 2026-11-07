@@ -366,7 +366,7 @@ class Cap(ParkBase):
         self.lane("new", "gamma")  # gamma holds the one slot
         self.tmux()
         out = self.lane("open", "chart-fix")
-        self.assertIn("lane chart-fix is over the cap of 1 by one: for its rebase and merge", out)
+        self.assertIn("lane chart-fix is over the cap of 1 by one: to merge main and its PR", out)
         self.assertEqual(glob.glob(self.flag_glob()), [])
         self.assertIn("cap: 2 of 1 slots held (1 parked), 1 over", self.lane("ls"))
         p = self.run_lane("open", "beta")
