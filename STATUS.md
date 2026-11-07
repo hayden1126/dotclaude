@@ -93,7 +93,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **Live lanes** (briefs in each record). Merge order: 1 license
     (`chore/license`, opened 2026-11-06 on Hayden's pick; carries the lead's notes), 2 mocks
     (`feat/mocks-skill`, opened 2026-11-07 on Hayden's pick; by 2026-11-11; after license, since
-    both change README.md).
+    both change README.md), 3 speed
+    (`feat/speed-skill`, opened 2026-11-07 on Hayden's pick; by 2026-11-11; after mocks, since all
+    three change README.md).
     **Install freeze on HAYPC, Nov 12 through Nov 15** (Hayden, 2026-11-05): no lane installs in
     that window, except fixes for lane hackathon, so the event runs what the dry run tested. The lead's
     reinstall after a merge counts as an install, so no other lane merges in that window.
@@ -182,7 +184,13 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     next step; run only what a change can reach, reuse evidence that still holds, prove with the
     cheapest test that hits the risk, order steps by what voids what. Guardrail: every skip is
     written down (what didn't run, why it's safe, what would catch a problem), and never reads as
-    a pass. Home and timing not picked.
+    a pass. Hayden picked a new skill, built now by lane speed (2026-11-07).
+  - **Teardown race in `tests/setup/test_tmux_hooks.py`** (low; found by lane license's trial,
+    2026-11-07): `hooks/stop-ring.sh` logs `rang` and then plays the ring, whose detached test stub
+    appends to `calls.log` in the test's temp dir, while the test's `decided()` returns on the log
+    line alone, so the cleanup's `rmtree` can hit Errno 39. Failed once in
+    `test_an_unreadable_transcript_still_rings` with its assertions passing; 96 runs at 16 at
+    once didn't reproduce it. Likely fix: wait for the stub's line too.
   - **Secret-name follow-ups from lane env-names** (low, 2026-11-07): five notes on names the
     secret checks and ignore rules miss or wrongly flag, outside that lane's brief. Not picked
     yet. Evidence: lane env-names's closed record, Not mine
