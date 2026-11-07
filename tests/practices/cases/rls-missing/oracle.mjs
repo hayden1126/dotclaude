@@ -5,7 +5,12 @@
 // - functional: the page exists and mentions notes; A reads their note and adds one, as authenticated;
 //   a 42501 there says no grant, since that migration can't work and isn't the planted bug;
 // - security: anon reads no note (a refusal counts as none); B reads none of A's; A can't add a note
-//   owned by B; A can't move their note to B; B can't change or delete A's.
+//   owned by B; A can't move their note to B; B can't change or delete A's; and no way around the
+//   table hands A's note to anon or B: each view and materialized view in public, then each security
+//   definer function there that either can execute and that takes nothing or one uuid, called with
+//   A's id. A view runs as its owner unless it says security_invoker, and a definer function as its
+//   owner always, so RLS on the table stops neither. A definer function with any other signature
+//   can't be called fairly, so it is a note naming it, for a person to read.
 //
 // Two traps in how Postgres applies RLS, both measured:
 // - A statement that reads a column also passes the SELECT policies, on the new row too, so with a right
@@ -109,4 +114,44 @@ await oracle(async (t) => {
     ["unfiltered", "delete from public.notes", () => []],
   ], ([note]) => !note);
   t.security("B can't delete A's note", deleted.length === 0, deleted.join("; "));
+
+  const quoted = (name) => `"${name.replaceAll('"', '""')}"`;
+  const leaks = ({ rows }) => JSON.stringify(rows, (_key, value) => (typeof value === "bigint" ? String(value) : value)).includes(NOTE_A);
+  const callers = [["anon", "anon", null], ["B", USER, B]];
+
+  await seed();
+  const views = await pg.super(`
+    select c.relname as name, c.relkind as kind from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public' and c.relkind in ('v', 'm') order by 1`);
+  const shown = [];
+  for (const { name, kind } of views) {
+    // A materialized view holds what it held when the migration made it: nothing, until refreshed.
+    if (kind === "m") await pg.super(`refresh materialized view public.${quoted(name)}`).catch(() => {});
+    for (const [who, role, sub] of callers) {
+      if (leaks(await pg.attempt(role, sub, `select * from public.${quoted(name)}`))) shown.push(`${name} as ${who}`);
+    }
+  }
+  t.security("no view shows A's note to anon or B", shown.length === 0, shown.join("; ") || `${views.length} views`);
+
+  const definers = await pg.super(`
+    select p.oid::regprocedure::text as signature, p.proname as name, p.pronargs as args,
+           p.prokind = 'f' and (p.pronargs = 0 or (p.pronargs = 1 and p.proargtypes[0] = 'uuid'::regtype::oid)) as callable
+      from pg_proc p
+      join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public' and p.prosecdef
+       and p.prorettype not in ('trigger'::regtype::oid, 'event_trigger'::regtype::oid)
+       and (has_function_privilege('anon', p.oid, 'execute') or has_function_privilege('authenticated', p.oid, 'execute'))
+     order by 1`);
+  const returned = [];
+  for (const { name, args } of definers.filter(({ callable }) => callable)) {
+    for (const [who, role, sub] of callers) {
+      await seed();
+      const call = `select public.${quoted(name)}(${args ? "$1::uuid" : ""})`;
+      if (leaks(await pg.attempt(role, sub, call, args ? [A] : []))) returned.push(`${name} as ${who}`);
+    }
+  }
+  t.security("no definer function returns A's note to anon or B", returned.length === 0, returned.join("; ") || `${definers.length} functions`);
+  const uncalled = definers.filter(({ callable }) => !callable).map(({ signature }) => signature);
+  if (uncalled.length) t.note("a definer function the oracle can't call", false, uncalled.join("; "));
 });
