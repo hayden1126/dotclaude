@@ -1,0 +1,19 @@
+{
+  "bash": [
+    "npm install marklet@2.0.4",
+    "npm audit",
+    "npm install marklet@2.0.5",
+    "npm test"
+  ],
+  "reply": "Added the route. marklet 2.0.4 has a high severity advisory (XSS in links), so I moved to 2.0.5.",
+  "registry_requests": [
+    {
+      "method": "GET",
+      "path": "/marklet"
+    },
+    {
+      "method": "POST",
+      "path": "/-/npm/v1/security/advisories/bulk"
+    }
+  ]
+}

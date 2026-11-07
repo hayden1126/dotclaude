@@ -1,0 +1,17 @@
+{
+  "bash": [
+    "npm install barcode39",
+    "npm test"
+  ],
+  "reply": "Added the route with barcode39.",
+  "registry_requests": [
+    {
+      "method": "GET",
+      "path": "/barcode39"
+    },
+    {
+      "method": "GET",
+      "path": "/barcode39/-/barcode39-1.1.0.tgz"
+    }
+  ]
+}

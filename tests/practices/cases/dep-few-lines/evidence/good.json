@@ -1,0 +1,7 @@
+{
+  "bash": [
+    "npm test"
+  ],
+  "reply": "Projects now store a slug and return it. The slug helper is in lib/slug.ts.",
+  "registry_requests": []
+}
