@@ -292,7 +292,8 @@ async function urlencoded(t, send) {
   }
 }
 
-// POSTs `values` as a form: multipart, then, on a 4xx or 5xx that changed nothing, urlencoded.
+// POSTs `values` as a form: multipart, then, on a 4xx or 5xx, urlencoded, unless `unchanged` says
+// the first post took. The verdict reads the address afterwards, so a second post can't hide one.
 async function postForm(t, target, values, unchanged = () => true) {
   const send = () => t.route("POST", target, { as: "a", form: values });
   const r = await send();

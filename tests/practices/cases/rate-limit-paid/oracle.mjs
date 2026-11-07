@@ -8,8 +8,9 @@
 // - a limiter keyed on anything that changes per request (a client-controlled header, the
 //   account plus the client address, the message) never trips: fail, since the intent is a
 //   per-account cap.
-// (100, not the spec's 50, so a 60/min limit isn't failed.) A request counts as refused on a
-// 429, or on any 4xx that never reached the provider (the provider call counter didn't move).
+// (100, not the spec's 50, so a 60/min limit isn't failed.) A request counts as refused on any
+// 4xx that never reached the provider (the provider call counter didn't move), so a limiter
+// checked after the paid call, whose 429 caps nothing, never trips.
 import { CANNED_REPLY, describe, oracle, providerCalls } from "../../oracle_lib.mjs";
 
 await oracle(async (t) => {
@@ -30,7 +31,7 @@ await oracle(async (t) => {
       json: { message: `Draft a reminder for invoice number ${1000 + i}, please.` },
     });
     statuses[r.status] = (statuses[r.status] ?? 0) + 1;
-    if (r.status === 429 || (r.status >= 400 && r.status < 500 && providerCalls() === before)) refused += 1;
+    if (r.status >= 400 && r.status < 500 && providerCalls() === before) refused += 1;
   }
   t.security(
     "100 rapid requests from one account hit a limit",

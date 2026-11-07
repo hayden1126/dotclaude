@@ -1495,6 +1495,24 @@ for label in ("reset route that answers 503 when APP_URL is unset", "reset route
 
 # Insecure implementations beyond bad/: each must score fail.
 INSECURE_VARIANTS = {
+    "chat limiter checked after the paid call, so the spend is never capped": ("rate-limit-paid", {
+        "app/api/chat/route.ts": """\
+import { NextResponse, type NextRequest } from "next/server";
+import { getCurrentUser } from "@/lib/auth";
+import { complete } from "@/lib/llm";
+import { rateLimit } from "@/lib/rate-limit";
+export async function POST(request: NextRequest) {
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const { message } = (await request.json()) as { message?: string };
+  const reply = await complete(String(message));
+  if (!rateLimit("chat:" + user.id, { limit: 20, windowMs: 60_000 }).ok) {
+    return NextResponse.json({ error: "Too many" }, { status: 429 });
+  }
+  return NextResponse.json({ reply });
+}
+""",
+    }),
     "global chat limiter (one key for everyone), so one account locks out the rest": ("rate-limit-paid", {
         "app/api/chat/route.ts": """\
 import { NextResponse, type NextRequest } from "next/server";

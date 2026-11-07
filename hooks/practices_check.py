@@ -174,11 +174,11 @@ Each level reads commits, never the index or the working tree:
         prompt has that head's marker, `[practices:review:<sha12>]`, so a review clears only
         the commit it judged; the reason carries each skill's gate lines and the marker in one
         block to paste into a reviewer brief. A marker on a commit the head descends from
-        carries over: only a touched file that also changed since the nearest such commit
-        counts, the delta coming from git. None left keeps the clearance (logged as l3r-reuse);
-        otherwise the block asks for that delta alone and suggests a smaller reviewer model. So
-        a clean merge of the base, whose files match the merge base, is no delta, and a file
-        resolved by hand is. The line-scoped and commit-time rules also run
+        carries over: of the touched files, only one whose change the nearest such commit
+        didn't show counts (review_delta), the delta coming from git. None left keeps the
+        clearance (logged as l3r-reuse); otherwise the block asks for that delta alone and
+        suggests a smaller reviewer model. So a clean merge of the base is no delta, and a
+        file resolved by hand, or kept over a fix on the base, is. The line-scoped and commit-time rules also run
         over every commit in the range.
 A scan runs every rule whose `at` has "commit" (L3r: or `scope = "line"`): `when` on each
 commit's added lines (lines its blob has that the parent's doesn't, by count and without a
@@ -2437,7 +2437,8 @@ def pr_ready(args):
 
 REVIEW_NEEDLE = b"[practices:review:"
 REVIEW_MARK = re.compile(r"\[practices:review:([0-9a-f]{12})\]")
-REVIEW_MARKS_MAX = 16
+REVIEW_MARKS_MAX = 4  # up to three git calls each, from a 2 s budget; an older mark only asks more
+REGULAR = ("100644", "100755")
 
 
 def review_marker(head):
@@ -2540,28 +2541,17 @@ def _l3r(event, ghs, skills, cfg, ts, ctx, bounds, first, blocks_, keys, found, 
         if not mb:
             log("git-skipped", "L3r: the branch shares no history with its base, unchecked")
             continue
-        files = [(c[5], c[4]) for c in repo.changes(mb, head)
-                 if c[0] in ("A", "M", "T") and c[2] in ("100644", "100755")]
-        blobs, _ = repo.blobs([oid for _, oid in files], FILE_MAX, BYTES_MAX)
-        touched = {}
+        diff = repo.changes(mb, head)
+        files = [(c[5], c[4]) for c in diff if c[0] in ("A", "M", "T") and c[2] in REGULAR]
         events = [(s, ev) for s in skills.values() for ev in s["events"]
                   if not is_off(cfg, s, ev["id"])]
-        for path, oid in files:
-            if time.monotonic() - START > BUDGET:  # keep what the files read so far have told
-                log("budget-spent", f"after {BUDGET}s, L3r stopped reading the changed files")
-                break
-            text = scan_text(text_of(blobs.get(oid)) or "")
-            for s, _ in run_patterns(events, lambda x: event_fires(x[1], path, text,
-                                                                  cfg["helpers"], CRUMB)):
-                touched.setdefault(s["name"], (s, []))[1].append(path)
+        touched = watched(repo, files, events, cfg)
         told = (len(blocks_), len(found))
         marks = review_marks(ts)
         if touched and head[:12] not in marks:
             prior = last_review(repo, marks, head)
-            if prior:  # only a file in the PR's diff and changed since the review is new work
-                since = {c[5] for c in repo.changes(prior, head)}
-                touched = {name: (s, kept) for name, (s, paths) in touched.items()
-                           if (kept := [p for p in paths if p in since])}
+            if prior:
+                touched = review_delta(repo, touched, diff, prior, head, mb, base, events, cfg)
                 if not touched:
                     log("l3r-reuse", f"L3r: {head[:12]} keeps the review of {prior[:12]}: "
                         "nothing a skill watches changed since")
@@ -2582,10 +2572,58 @@ def _l3r(event, ghs, skills, cfg, ts, ctx, bounds, first, blocks_, keys, found, 
             return
 
 
+def watched(repo, files, events, cfg):
+    """{skill name: (skill, its paths)} among files, a list of (path, blob), that fire an event."""
+    blobs, _ = repo.blobs([oid for _, oid in files], FILE_MAX, BYTES_MAX)
+    hits = {}
+    for path, oid in files:
+        if time.monotonic() - START > BUDGET:  # keep what the files read so far have told
+            log("budget-spent", f"after {BUDGET}s, L3r stopped reading the changed files")
+            break
+        text = scan_text(text_of(blobs.get(oid)) or "")
+        for s, _ in run_patterns(events, lambda x: event_fires(x[1], path, text,
+                                                              cfg["helpers"], CRUMB)):
+            hits.setdefault(s["name"], (s, []))[1].append(path)
+    return hits
+
+
+def review_delta(repo, touched, diff, prior, head, mb, base, events, cfg):
+    """touched cut to what a review of prior didn't see. The PR's change to a file runs from its
+    blob at the merge base to its blob at the head, so that change was reviewed only when both
+    ends are as they were: the head's unchanged since prior, and the base's unchanged since the
+    base prior held. So a merge keeping its own side over a fix on the base is new work, and a
+    file a clean merge took from the base is in no PR diff at all. A watched file gone since
+    prior as a regular file (deleted, moved, made a link) counts by its blob at prior, even one
+    the branch itself added, since other code may have leaned on it, unless the base removed it.
+    Known limit: `gh pr create --base <older>` widens the diff with what a review of the usual
+    base never saw, and the clearance holds, since a marker names no base; the head alone was
+    enough for that before this delta, too."""
+    moved = repo.changes(prior, head)
+    held = repo.run("merge-base", prior, base, ok=(0, 1)).decode().strip()
+    if not held:  # prior shares no history with the base: every file counts
+        return touched
+    on_base = {c[5] for c in repo.changes(held, mb)} if held != mb else set()
+    since = {c[5] for c in moved} | on_base
+    out = {name: (s, kept) for name, (s, paths) in touched.items()
+           if (kept := [p for p in paths if p in since])}
+    in_diff = {c[5] for c in diff}
+    gone = [(c[5], c[3]) for c in moved
+            if (c[0] == "D" or c[2] not in REGULAR) and c[1] in REGULAR
+            and (c[5] in in_diff or c[5] not in on_base)]
+    for name, (s, paths) in watched(repo, gone, events, cfg).items():
+        out.setdefault(name, (s, []))[1].extend(paths)
+    return out
+
+
 def review_block(touched, mb, head, branch, shown=8, prior=None):
-    """The deny's text. With prior, the commit last reviewed, it asks for the delta alone."""
+    """The deny's text. With prior, the commit last reviewed, it asks for the delta alone, naming
+    every file: the marker clears them all, so none may hide behind "and N more"."""
+    if prior:
+        shown = None
     check = ("Read its SKILL.md, check every must-hold line against the changed code, and report "
-             "each one that doesn't hold, with file and line.")
+             "each one that doesn't hold, with file and line. Try to disprove each finding before "
+             "you report it, and when one rests on a deployment fact you can't see, report it as "
+             "needs validation instead of guessing.")
     first = (f"Review only what changed in {branch} since its last review "
              f"({prior[:12]}..{head[:12]}), in the files listed below, against each practices "
              f"skill below. {check}" if prior else
@@ -2594,7 +2632,7 @@ def review_block(touched, mb, head, branch, shown=8, prior=None):
     parts = [f"{review_marker(head)} {first}"]
     for s, paths in touched:
         paths = list(dict.fromkeys(paths))
-        more = f", and {len(paths) - shown} more" if len(paths) > shown else ""
+        more = f", and {len(paths) - shown} more" if shown and len(paths) > shown else ""
         parts.append(f"{s['name']} ({os.path.join(s['dir'], 'SKILL.md')}), for "
                      f"{', '.join(paths[:shown])}{more}:" + "".join(
                          f"\n- {line}" for line in s["gate"]))

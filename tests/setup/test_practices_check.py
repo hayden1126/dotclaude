@@ -2835,11 +2835,14 @@ class L3r(BashBase):
         self.add(use(f"t-rev-{next(self.ids)}", "Agent", prompt=f"{self.marker(rev)} demo ..."))
 
     def off_history(self, parent, **files):
-        """A commit with these files on top of parent, on no branch, through the index alone, so
-        neither HEAD nor the worktree moves."""
+        """A commit with these files (None removes one) on top of parent, on no branch, through
+        the index alone, so neither HEAD nor the worktree moves."""
         blob = os.path.join(self.tmp, "blob")
         self.sh("read-tree", parent)
         for rel, content in files.items():
+            if content is None:
+                self.sh("update-index", "--force-remove", rel.replace("__", "/"))
+                continue
             with open(blob, "w") as f:
                 f.write(content)
             oid = self.sh("hash-object", "-w", blob)
@@ -2905,12 +2908,15 @@ class L3r(BashBase):
         first = self.sh("rev-parse", "HEAD")
         self.commit(**{"app__api__y__route.ts": "export const y = 1\n"})
         second = self.sh("rev-parse", "HEAD")
-        self.review(second)
-        self.review(first)  # the older one last, so the order of the markers can't decide
         self.commit(**{"app__api__z__route.ts": "export const z = 1\n"})
-        reason = self.pre("gh pr ready", session_id="s-near")
-        self.assertIn(f"{second[:12]}..", reason)
-        self.assertNotIn("app/api/y/route.ts", reason)
+        for n, order in enumerate(((first, second), (second, first))):
+            with self.subTest(n=n):  # neither order of the markers decides
+                self.rows([])
+                for rev in order:
+                    self.review(rev)
+                reason = self.pre("gh pr ready", session_id=f"s-near-{n}")
+                self.assertIn(f"{second[:12]}..", reason)
+                self.assertNotIn("app/api/y/route.ts", reason)
 
     def test_main_merged_in_after_a_review_is_no_delta(self):
         lane = self.sh("rev-parse", "HEAD")
@@ -2934,6 +2940,85 @@ class L3r(BashBase):
         self.assertIn("Review only what changed", reason)
         self.assertIn("app/api/x/route.ts", reason)
         self.assertNotIn("app/api/m/route.ts", reason)
+
+    def test_a_merge_keeping_ours_over_mains_fix_is_delta(self):
+        # Review round 1, high: the file equals the reviewed head, but the PR's change to it now
+        # undoes what main fixed, which no review saw.
+        lane = self.sh("rev-parse", "HEAD")
+        self.review()
+        main = self.off_history(self.base, **{"app__api__x__route.ts": "export const x = 2\n"})
+        self.sh("update-ref", "refs/remotes/origin/main", main)
+        self.merged(lane, lane, main)
+        reason = self.pre("gh pr ready", session_id="s-ours")
+        self.assertIn("Review only what changed", reason)
+        self.assertIn("app/api/x/route.ts", reason)
+
+    def test_a_review_before_the_merge_base_clears_no_revert_of_a_later_fix(self):
+        self.sh("update-ref", "HEAD", self.base)
+        self.sh("read-tree", "--reset", "-u", "HEAD")
+        self.commit(**{"app__api__x__route.ts": "export const x = 1\n"})
+        old = self.sh("rev-parse", "HEAD")  # on main, later fixed there
+        self.commit(**{"app__api__x__route.ts": "export const x = 2\n"})
+        fixed = self.sh("rev-parse", "HEAD")
+        self.sh("update-ref", "refs/remotes/origin/main", fixed)
+        self.commit(**{"app__api__x__route.ts": "export const x = 1\n"})  # the branch reverts it
+        self.review(old)
+        self.assertIn("app/api/x/route.ts", self.pre("gh pr ready", session_id="s-revert"))
+
+    def test_a_watched_file_gone_after_a_review_is_delta(self):
+        # Review round 1, medium: deleted, moved or made a link, it left the touched set, and
+        # the branch's other watched files kept the clearance.
+        self.commit(**{"app__api__w__route.ts": "export const w = 1\n"})
+        self.review()
+        reviewed = self.sh("rev-parse", "HEAD")
+        x = os.path.join(self.proj, "app", "api", "x", "route.ts")
+
+        def link():
+            os.remove(x)
+            os.symlink("/etc/hostname", x)
+
+        def moved():
+            os.rename(x, os.path.join(self.proj, "lib", "x.txt"))
+
+        for n, change in enumerate((lambda: os.remove(x), moved, link)):
+            with self.subTest(n=n):
+                self.sh("reset", "-q", "--hard", reviewed)
+                change()
+                self.commit()
+                reason = self.pre("gh pr ready", session_id=f"s-gone-{n}")
+                self.assertIn("Review only what changed", reason)
+                self.assertIn("app/api/x/route.ts", reason)
+                self.assertNotIn("app/api/w/route.ts", reason)
+
+    def test_a_watched_file_the_base_removed_is_no_delta(self):
+        w = {"app__api__w__route.ts": "export const w = 1\n"}
+        start = self.off_history(self.base, **w)
+        self.sh("update-ref", "refs/remotes/origin/main", start)
+        lane = self.off_history(start, **{"app__api__x__route.ts": "export const x = 1\n"})
+        self.sh("update-ref", "HEAD", lane)
+        self.sh("read-tree", "--reset", "-u", "HEAD")
+        self.review()
+        main = self.off_history(start, **{"app__api__w__route.ts": None})
+        self.sh("update-ref", "refs/remotes/origin/main", main)
+        self.merged(self.off_history(lane, **{"app__api__w__route.ts": None}), lane, main)
+        self.assertIsNone(self.pre("gh pr ready", session_id="s-mine"))
+
+    def test_a_delta_brief_names_every_file_it_clears(self):
+        # Review round 1, medium: it said "the files listed below" and listed eight.
+        self.review()
+        self.commit(**{f"app__api__n{i}__route.ts": "export const n = 1\n" for i in range(12)})
+        reason = self.pre("gh pr ready", session_id="s-many")
+        self.assertNotIn(" more:", reason)
+        for i in range(12):
+            self.assertIn(f"app/api/n{i}/route.ts", reason)
+
+    def test_the_brief_asks_the_reviewer_to_disprove_its_findings(self):
+        for sid, reason in (("s-full", self.pre("gh pr ready", session_id="s-full")),):
+            self.assertIn("Try to disprove each finding", reason, sid)
+            self.assertIn("needs validation", reason, sid)
+        self.review()
+        self.commit(**{"app__api__y__route.ts": "export const y = 1\n"})
+        self.assertIn("Try to disprove each finding", self.pre("gh pr ready", session_id="s-d"))
 
     def test_a_subagent_keeps_the_parents_clearance(self):
         agent = "a0123456789abcdef"
