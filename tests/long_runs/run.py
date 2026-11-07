@@ -10,8 +10,8 @@ and changes nothing.
 Arms: A no skill (behaviour cases only: with no skill nothing can load), B the skill as a project
 skill, C the skill plus CLAUDE.md's line in the project tier. User settings stay on, so the skill
 competes with the real skill list; `project,local` alone would overstate loading. The fixture
-turns hooks off, so a run can't touch session state, tabs or tmux.
-limit: real sessions also get the hooks' skill-first text, so load rates here may read low.
+turns hooks off, so a run can't touch session state, tabs or tmux. Real sessions also get the
+hooks' skill-first text, so load rates here may read low.
 
 Loading is counted from the stream. Behaviour replies are graded by reading, since regex grading
 of replies never settled in tests/practices: replies/ holds each one under a random id with no arm
