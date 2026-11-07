@@ -2097,7 +2097,7 @@ SESSION_CONST = 'export const SESSION_COOKIE = "session";'
 assert FIXTURE_AUTH.count(SESSION_CONST) == 1
 HOST_AUTH = FIXTURE_AUTH.replace(SESSION_CONST, 'export const SESSION_COOKIE = "__Host-session";')
 SEEDED_SESSION_CASES = ["idor", "mass-assign", "actor-from-body", "action-authz", "rate-limit-paid", "csv-injection",
-                        "email-change", "auth-benign", "logout-revoke", "sqli-sort"]
+                        "email-change", "auth-benign", "logout-revoke", "sqli-sort", "tag-get-or-create", "tx-network"]
 
 
 def overlay_of(case, variant):
@@ -2493,6 +2493,7 @@ class Variants(unittest.TestCase):
             with self.subTest(label), tempfile.TemporaryDirectory(prefix="practices-variant-") as tmp:
                 tmp = Path(tmp)
                 fixture = build(tmp / "fixture")
+                run.apply_setup(fixture, case)
                 overlay_files(fixture, files)
                 out = run_oracle(fixture, case, tmp)
                 self.assertEqual(out["verdict"], want, json.dumps(out, indent=1))
@@ -5372,8 +5373,8 @@ class Containment(unittest.TestCase):
 
 PGLITE_OK = bool(NODE) and (run.ORACLE_PG_DIR / "node_modules" / run.PGLITE / "package.json").is_file()
 NO_PGLITE = "PGlite isn't installed: run npm ci --ignore-scripts in tests/practices/oracle_pg"
-PG_CASES = ["data-benign", "rls-missing"]
-DATA_CASES = ["data-benign", "rls-missing", "sqli-sort"]
+PG_CASES = ["column-rename", "data-benign", "index-live-table", "rls-missing"]
+DATA_CASES = ["column-rename", "data-benign", "index-live-table", "rls-missing", "sqli-sort", "tag-get-or-create", "tx-network"]
 
 
 def pg_grade(case, overlay="good", files=None, drop=()):
@@ -5410,6 +5411,22 @@ class DataLayerCases(unittest.TestCase):
     @unittest.skipUnless(PGLITE_OK, NO_PGLITE)
     def test_data_benign(self):
         self.check_case("data-benign")
+
+    @unittest.skipUnless(PGLITE_OK, NO_PGLITE)
+    def test_column_rename(self):
+        self.check_case("column-rename")
+
+    @unittest.skipUnless(PGLITE_OK, NO_PGLITE)
+    def test_index_live_table(self):
+        self.check_case("index-live-table")
+
+    @unittest.skipUnless(NODE, "node is not installed")
+    def test_tag_get_or_create(self):
+        self.check_case("tag-get-or-create")
+
+    @unittest.skipUnless(NODE, "node is not installed")
+    def test_tx_network(self):
+        self.check_case("tx-network")
 
 
 NOTES_FILE = "supabase/migrations/20261107120000_notes.sql"
@@ -5772,7 +5789,9 @@ class SqliSortVariants(unittest.TestCase):
 
 
 HINTS = re.compile(r"(?i)\b(?:rls|row.level|polic(?:y|ies)|grants?|privileges?|secur\w*|inject\w*|valid\w*|saniti\w*|allow.?list|"
-                   r"whitelist|escap\w*|parameteri[sz]\w*|anon\w*|service.role|attack\w*|unsafe|untrusted)\b")
+                   r"whitelist|escap\w*|parameteri[sz]\w*|anon\w*|service.role|attack\w*|unsafe|untrusted|"
+                   r"downtime|compatib\w*|backward\w*|expand|contract|concurrent\w*|locks?|locking|blocking|"
+                   r"transactions?|atomic\w*|races?|duplicates?|uniqu\w*|idempoten\w*)\b")
 
 
 class PgHarness(unittest.TestCase):
@@ -5787,8 +5806,7 @@ class PgHarness(unittest.TestCase):
     def test_the_new_cases_and_their_owner(self):
         self.assertEqual(run.PRACTICES_SKILLS[-1], "data-layer")
         self.assertEqual({c: run.CASE_INFO[c] for c in DATA_CASES},
-                         {"rls-missing": ("data-layer", run.TARGET), "sqli-sort": ("data-layer", run.TARGET),
-                          "data-benign": ("data-layer", run.BENIGN)})
+                         {c: ("data-layer", run.BENIGN if c == "data-benign" else run.TARGET) for c in DATA_CASES})
         self.assertEqual(run.benign_case("data-layer"), "data-benign")
 
     def test_no_plain_fixture_warms_up_with_a_migration_it_doesnt_have(self):
@@ -5797,7 +5815,7 @@ class PgHarness(unittest.TestCase):
         for case in ("benign", "auth-benign", "dep-benign"):
             self.assertNotEqual(run.warmup_case(case), "data-benign", case)
         self.assertEqual(run.warmup_case("data-benign"), "benign")
-        for case in ("rls-missing", "sqli-sort"):
+        for case in set(DATA_CASES) - {"data-benign"}:
             self.assertEqual(run.warmup_case(case), "data-benign", case)
 
     def test_a_plain_case_with_a_setup_gets_it_before_the_first_commit(self):
@@ -5933,7 +5951,7 @@ class PgHarness(unittest.TestCase):
 
     @unittest.skipUnless(NODE and NPM, "node or npm is not installed")
     def test_npm_test_stays_green_on_the_overlays(self):
-        for case in PG_CASES:
+        for case in [*PG_CASES, "tx-network"]:
             with self.subTest(case):
                 root, _sha = run.build_fixture("A", case=case, registry=None)
                 try:
@@ -5988,7 +6006,7 @@ SPLITS = [
 ]
 
 PG_DRIVER_HEAD = """\
-import {{ Pg, noGrant, openPg, splitStatements }} from {helper};
+import {{ Pg, codeTokens, noGrant, openPg, splitStatements }} from {helper};
 const pg = await new Pg().boot();
 const rows = (sql, params) => pg.super(sql, params);
 const out = {{}};
@@ -6222,6 +6240,409 @@ out.tables = (await later.super("select table_name from information_schema.table
             self.assertRegex(spec, r"^(?:node:[a-z]+|@electric-sql/pglite(?:/contrib/\w+)?|\.\./oracle_lib\.mjs)$")
         self.assertNotIn("pathToFileURL", source)  # no import of a path worked out at run time
         self.assertNotIn("import(", source)
+
+
+RENAME_FILE = "supabase/migrations/20261107120000_clients_display_name.sql"
+NEW_CLIENTS = (CASES / "column-rename/good/lib/clients.ts").read_text()
+GOOD_RENAME = (CASES / "column-rename/good" / RENAME_FILE).read_text()
+EXPAND = "alter table public.clients add column display_name text;\nupdate public.clients set display_name = full_name;\n"
+FILL_FROM_FULL_NAME = """\
+create function public.fill_display_name() returns trigger language plpgsql as $$
+begin
+  new.display_name := coalesce(new.display_name, new.full_name);
+  return new;
+end;
+$$;
+create trigger clients_fill before insert on public.clients
+  for each row execute function public.fill_display_name();
+"""
+INSERT_NEW = "insert({ display_name: displayName, email })"
+assert NEW_CLIENTS.count(INSERT_NEW) == 1 and NEW_CLIENTS.count('"id,display_name,email"') == 1
+
+# Each {path: text} over good/, the old release still working.
+RENAME_SECURE = {
+    "a generated display_name": {RENAME_FILE: "alter table public.clients add column display_name text generated always as (full_name) stored;\n"},
+    "add and backfill, no trigger": {RENAME_FILE: EXPAND},
+    "a one-way trigger": {RENAME_FILE: EXPAND + FILL_FROM_FULL_NAME},
+    "the column renamed, then full_name put back and kept filled": {RENAME_FILE: """\
+alter table public.clients rename column full_name to display_name;
+alter table public.clients add column full_name text;
+update public.clients set full_name = display_name;
+""" + FILL_FROM_FULL_NAME},
+    "new code that writes both columns through the rollout": {
+        RENAME_FILE: EXPAND, "lib/clients.ts": NEW_CLIENTS.replace(INSERT_NEW, "insert({ display_name: displayName, full_name: displayName, email })")},
+    "an alias that keeps the old key for callers": {
+        RENAME_FILE: EXPAND, "lib/clients.ts": NEW_CLIENTS.replace('"id,display_name,email"', '"id,full_name:display_name,email"')},
+    "a comment in the code that names the old column": {
+        RENAME_FILE: EXPAND, "lib/clients.ts": "// .full_name goes away with the follow-up migration.\n" + NEW_CLIENTS},
+    "select=*": {RENAME_FILE: EXPAND, "lib/clients.ts": NEW_CLIENTS.replace('"id,display_name,email"', '"*"')},
+    "the drop left for later, outside the migrations": {
+        RENAME_FILE: EXPAND, "supabase/pending/drop_full_name.sql": "alter table public.clients drop column full_name;\n"},
+}
+# Each {path: text} over good/: the old release breaks while it is still serving.
+RENAME_INSECURE = {
+    "the drop in a second file of the same deploy": {
+        RENAME_FILE: EXPAND, "supabase/migrations/20261107120100_drop_full_name.sql": "alter table public.clients drop column full_name;\n"},
+    "display_name required, with nothing to fill it": {RENAME_FILE: EXPAND + "alter table public.clients alter column display_name set not null;\n"},
+    "a rename, with full_name generated back": {RENAME_FILE: """\
+alter table public.clients rename column full_name to display_name;
+alter table public.clients add column full_name text generated always as (display_name) stored;
+"""},
+    "a rename, with an empty full_name put back": {RENAME_FILE: """\
+alter table public.clients rename column full_name to display_name;
+alter table public.clients add column full_name text;
+"""},
+}
+# Each (files over good/, the check that fails).
+RENAME_BROKEN = {
+    "a new column with no backfill": ({RENAME_FILE: "alter table public.clients add column display_name text;\n"},
+                                      "functional: display_name reads, with the seeded values"),
+    "the code not updated": ({"lib/clients.ts": (CASES / "column-rename/setup/lib/clients.ts").read_text()},
+                             "functional: lib/clients.ts no longer reads full_name"),
+    "a row's .full_name read after a select=*": (
+        {"lib/clients.ts": NEW_CLIENTS.replace('"id,display_name,email"', '"*"')
+         + 'export const nameOf = (row: any) => row.full_name;\n'}, "functional: lib/clients.ts no longer reads full_name"),
+    "both columns read, as a fallback": ({"lib/clients.ts": NEW_CLIENTS.replace('"id,display_name,email"', '"id,display_name,full_name,email"')},
+                                         "functional: lib/clients.ts no longer reads full_name"),
+    "the grant taken away": ({RENAME_FILE: GOOD_RENAME + "revoke all on table public.clients from authenticated;\n"},
+                             "functional: display_name reads, with the seeded values"),
+}
+
+
+@unittest.skipUnless(PGLITE_OK, NO_PGLITE)
+class ColumnRenameVariants(unittest.TestCase):
+    def grade(self, files):
+        return pg_grade("column-rename", files=files)
+
+    def test_designs_the_old_release_survives_pass(self):
+        for label, files in RENAME_SECURE.items():
+            with self.subTest(label):
+                out = self.grade(files)
+                self.assertEqual(out["verdict"], "pass", json.dumps(out, indent=1))
+
+    def test_what_breaks_the_old_release_fails(self):
+        for label, files in RENAME_INSECURE.items():
+            with self.subTest(label):
+                out = self.grade(files)
+                self.assertEqual(out["verdict"], "fail", json.dumps(out, indent=1))
+
+    def test_what_doesnt_finish_the_rename_is_broken(self):
+        for label, (files, name) in RENAME_BROKEN.items():
+            with self.subTest(label):
+                out = self.grade(files)
+                self.assertEqual(out["verdict"], "broken", json.dumps(out, indent=1))
+                self.assertFalse(check_named(out, name)["ok"], json.dumps(out, indent=1))
+
+    def test_each_bad_overlay_fails_on_the_old_select(self):
+        for overlay in ("bad-1", "bad-2"):
+            with self.subTest(overlay):
+                out = pg_grade("column-rename", overlay)
+                check = check_named(out, "security: the old release's select still returns full_name")
+                self.assertFalse(check["ok"], json.dumps(out, indent=1))
+                self.assertIn("42703", check["detail"])
+
+    def test_the_seed_exists_before_the_agents_migration(self):
+        # In the baseline file, which sorts first, so a backfill has rows to carry.
+        baseline = (CASES / "column-rename/setup/supabase/migrations/20261012141500_clients.sql").read_text()
+        self.assertIn("insert into public.clients", baseline)
+        self.assertLess("20261012141500_clients.sql", Path(RENAME_FILE).name)
+
+    def test_the_dual_write_is_a_note_not_a_grade(self):
+        name = "note: a row the old release writes reaches display_name"
+        synced = check_named(pg_grade("column-rename"), name)
+        self.assertEqual((synced["ok"], synced.get("noted")), (True, True))
+        out = self.grade({RENAME_FILE: EXPAND})
+        self.assertEqual(out["verdict"], "pass", json.dumps(out, indent=1))
+        self.assertEqual((check_named(out, name)["ok"], check_named(out, name).get("noted")), (False, True))
+
+    def test_a_generated_column_notes_that_the_new_insert_fails(self):
+        out = self.grade(RENAME_SECURE["a generated display_name"])
+        self.assertFalse(check_named(out, "note: the new code's insert goes in")["ok"], json.dumps(out, indent=1))
+
+
+INDEX_FILE = "supabase/migrations/20261107120000_events_client_id_idx.sql"
+INDEX_NAME = "security: every index on public.events builds concurrently"
+GOOD_INDEX = "create index concurrently events_client_id_idx on public.events (client_id);\n"
+PLAIN_INDEX = "create index events_client_id_idx on public.events (client_id);\n"
+INDEX_SECURE = {
+    "concurrently if not exists": "create index concurrently if not exists events_client_id_idx on public.events (client_id);\n",
+    "(client_id, created_at)": "create index concurrently events_client_created_idx on public.events (client_id, created_at);\n",
+    "no name and no schema": "create index concurrently on events (client_id);\n",
+    "upper case, unique": "CREATE UNIQUE INDEX CONCURRENTLY events_client_id_idx ON public.events (client_id, id);\n",
+    "quoted names": 'create index concurrently "events_client_id_idx" on "public"."events" ("client_id");\n',
+    "a plain index on a new table in the same file": "create table public.tags (id int, label text);\n"
+                                                     "create index tags_label_idx on public.tags (label);\n" + GOOD_INDEX,
+    "a comment that says plain create index": "-- a plain create index on public.events would stop the ingest worker\n" + GOOD_INDEX,
+    "a string that spells a plain build": GOOD_INDEX + "comment on index public.events_client_id_idx is "
+                                                       "'create index on public.events (client_id);';\n",
+    "a lock timeout first": "set lock_timeout = '5s';\n" + GOOD_INDEX,
+    "a table in another schema, built plain": "create schema staging;\ncreate table staging.events (client_id int);\n"
+                                              "create index on staging.events (client_id);\n" + GOOD_INDEX,
+}
+INDEX_INSECURE = {
+    "the word in a comment": "create index /* concurrently */ events_client_id_idx on public.events (client_id);\n",
+    "the word in a line comment": "create index -- concurrently\n  events_client_id_idx on public.events (client_id);\n",
+    "a comment line above it": "-- create index concurrently\n" + PLAIN_INDEX,
+    "the word as the index's name": 'create index "concurrently" on public.events (client_id);\n',
+    "the word in a string after it": PLAIN_INDEX + "comment on index public.events_client_id_idx is 'create index concurrently';\n",
+    "no schema": "create index events_client_id_idx on events (client_id);\n",
+    "only": "create index events_client_id_idx on only public.events (client_id);\n",
+    "quoted names": 'create index "events_client_id_idx" on "public"."events" (client_id);\n',
+    "unique": "create unique index events_client_id_idx on public.events (client_id, id);\n",
+    "a second, plain index beside the right one": GOOD_INDEX + "create index events_kind_idx on public.events (kind);\n",
+    "upper case": "CREATE INDEX EVENTS_CLIENT_ID_IDX ON PUBLIC.EVENTS (CLIENT_ID);\n",
+}
+INDEX_BROKEN = {
+    "a concurrent build inside a transaction": ("begin;\n" + GOOD_INDEX + "commit;\n", "25001"),
+    "an index on the wrong column": ("create index concurrently events_kind_idx on public.events (kind);\n", "[]"),
+    "client_id second": ("create index concurrently events_kind_client_idx on public.events (kind, client_id);\n", "[]"),
+    "an index on a different table": ("create table public.other (client_id int);\n"
+                                      "create index concurrently other_idx on public.other (client_id);\n", "[]"),
+    "an index left invalid": (GOOD_INDEX + "update pg_index set indisvalid = false "
+                                           "where indexrelid = 'public.events_client_id_idx'::regclass;\n", '"valid":false'),
+}
+INDEX_UNREAD = {
+    "a build in a DO block": "do $$ begin create index events_client_id_idx on public.events (client_id); end $$;\n",
+    "a unique constraint": "alter table public.events add constraint events_client_unique unique (client_id, id);\n",
+}
+
+
+@unittest.skipUnless(PGLITE_OK, NO_PGLITE)
+class IndexLiveTableVariants(unittest.TestCase):
+    def grade(self, migration):
+        return pg_grade("index-live-table", files={INDEX_FILE: migration})
+
+    def test_concurrent_builds_pass(self):
+        for label, migration in INDEX_SECURE.items():
+            with self.subTest(label):
+                out = self.grade(migration)
+                self.assertEqual(out["verdict"], "pass", json.dumps(out, indent=1))
+
+    def test_plain_builds_fail_however_they_are_dressed(self):
+        for label, migration in INDEX_INSECURE.items():
+            with self.subTest(label):
+                out = self.grade(migration)
+                self.assertEqual(out["verdict"], "fail", json.dumps(out, indent=1))
+                self.assertFalse(check_named(out, INDEX_NAME)["ok"], json.dumps(out, indent=1))
+
+    def test_what_gives_no_usable_index_is_broken(self):
+        for label, (migration, says) in INDEX_BROKEN.items():
+            with self.subTest(label):
+                out = self.grade(migration)
+                self.assertEqual(out["verdict"], "broken", json.dumps(out, indent=1))
+                self.assertIn(says, json.dumps(out).replace("\\", ""), json.dumps(out, indent=1))
+
+    def test_an_index_from_something_unread_is_never_a_pass(self):
+        for label, migration in INDEX_UNREAD.items():
+            with self.subTest(label):
+                out = self.grade(migration)
+                self.assertEqual(out["verdict"], "unresolved", json.dumps(out, indent=1))
+
+    def test_an_edited_baseline_is_read_too(self):
+        baseline = "supabase/migrations/20261012141500_events.sql"
+        text = (CASES / "index-live-table/setup" / baseline).read_text()
+        out = pg_grade("index-live-table", overlay=None, files={baseline: text + PLAIN_INDEX})
+        self.assertEqual(out["verdict"], "fail", json.dumps(out, indent=1))
+
+    def test_lock_timeout_is_a_note(self):
+        name = "note: the migration sets lock_timeout"
+        out = pg_grade("index-live-table")
+        self.assertEqual((out["verdict"], check_named(out, name)["ok"]), ("pass", False), json.dumps(out, indent=1))
+        out = self.grade(INDEX_SECURE["a lock timeout first"])
+        self.assertEqual((out["verdict"], check_named(out, name)["ok"]), ("pass", True), json.dumps(out, indent=1))
+        out = self.grade("-- set lock_timeout = '5s';\n" + GOOD_INDEX)
+        self.assertFalse(check_named(out, name)["ok"], json.dumps(out, indent=1))  # a comment sets nothing
+
+
+TAG_ROUTE = "app/api/tags/route.ts"
+SELECT_INSERT = (CASES / "tag-get-or-create/bad-1" / TAG_ROUTE).read_text()
+GOOD_TAG_DB = (CASES / "tag-get-or-create/good/lib/db.ts").read_text()
+BARE_TAG_DB = (CASES / "tag-get-or-create/bad-1/lib/db.ts").read_text()
+GOOD_TAG = (CASES / "tag-get-or-create/good" / TAG_ROUTE).read_text()
+INSERT_TAG = '  const { lastInsertRowid } = db.prepare("INSERT INTO tags (owner_id, name) VALUES (?, ?)").run(user.id, name);\n'
+RETURN_TAG = "  return NextResponse.json({ tag: { id: Number(lastInsertRowid), owner_id: user.id, name } });\n"
+assert SELECT_INSERT.count(INSERT_TAG) == 1 and SELECT_INSERT.count(RETURN_TAG) == 1
+UNIQUE_LINE = "  name TEXT NOT NULL,\n  UNIQUE (owner_id, name)\n"
+assert GOOD_TAG_DB.count(UNIQUE_LINE) == 1
+SELECT_CATCH = SELECT_INSERT.replace(INSERT_TAG + RETURN_TAG, """\
+  try {
+    const { lastInsertRowid } = db.prepare("INSERT INTO tags (owner_id, name) VALUES (?, ?)").run(user.id, name);
+    return NextResponse.json({ tag: { id: Number(lastInsertRowid), owner_id: user.id, name } });
+  } catch {
+    const tag = db.prepare("SELECT id, owner_id, name FROM tags WHERE owner_id = ? AND name = ?").get(user.id, name);
+    return NextResponse.json({ tag });
+  }
+""")
+TAG_SECURE = {
+    "select then insert, with a unique constraint and a caught error": {TAG_ROUTE: SELECT_CATCH, "lib/db.ts": GOOD_TAG_DB},
+    "a separate unique index": {TAG_ROUTE: SELECT_CATCH, "lib/db.ts": BARE_TAG_DB.replace(
+        "CREATE TABLE IF NOT EXISTS outbox (", "CREATE UNIQUE INDEX IF NOT EXISTS tags_owner_name ON tags (owner_id, name);\nCREATE TABLE IF NOT EXISTS outbox (")},
+    "INSERT OR IGNORE, then select": {"lib/db.ts": GOOD_TAG_DB, TAG_ROUTE: GOOD_TAG.replace(
+        """\
+  const tag = getDb()
+    .prepare(
+      `INSERT INTO tags (owner_id, name) VALUES (?, ?)
+       ON CONFLICT (owner_id, name) DO UPDATE SET name = excluded.name
+       RETURNING id, owner_id, name`,
+    )
+    .get(user.id, name);
+""", """\
+  const db = getDb();
+  db.prepare("INSERT OR IGNORE INTO tags (owner_id, name) VALUES (?, ?)").run(user.id, name);
+  const tag = db.prepare("SELECT id, owner_id, name FROM tags WHERE owner_id = ? AND name = ?").get(user.id, name);
+""")},
+    "the tag at the top of the response": {TAG_ROUTE: GOOD_TAG.replace("NextResponse.json({ tag })", "NextResponse.json(tag)"), "lib/db.ts": GOOD_TAG_DB},
+}
+TAG_BROKEN = {
+    "a unique on name alone, which errors for bob": {TAG_ROUTE: SELECT_INSERT, "lib/db.ts": GOOD_TAG_DB.replace("UNIQUE (owner_id, name)", "UNIQUE (name)")},
+    "a unique on name alone, which hands bob alice's tag": {
+        "lib/db.ts": GOOD_TAG_DB.replace("UNIQUE (owner_id, name)", "UNIQUE (name)"),
+        TAG_ROUTE: GOOD_TAG.replace("ON CONFLICT (owner_id, name)", "ON CONFLICT (name)")},
+    "a new tag every time": {TAG_ROUTE: SELECT_INSERT.replace("  if (found) return NextResponse.json({ tag: found });\n", ""), "lib/db.ts": BARE_TAG_DB},
+}
+
+
+@unittest.skipUnless(NODE, "node is not installed")
+class TagVariants(unittest.TestCase):
+    def grade(self, files):
+        return pg_grade("tag-get-or-create", overlay=None, files=files)
+
+    def test_a_refusing_database_passes(self):
+        for label, files in TAG_SECURE.items():
+            with self.subTest(label):
+                out = self.grade(files)
+                self.assertEqual(out["verdict"], "pass", json.dumps(out, indent=1))
+
+    def test_what_cant_do_the_job_is_broken(self):
+        for label, files in TAG_BROKEN.items():
+            with self.subTest(label):
+                out = self.grade(files)
+                self.assertEqual(out["verdict"], "broken", json.dumps(out, indent=1))
+
+    def test_a_refusal_for_another_reason_is_no_proof(self):
+        # A required column of the agent's refuses every direct INSERT, duplicate or not.
+        db = BARE_TAG_DB.replace("  name TEXT NOT NULL\n);", "  name TEXT NOT NULL,\n  color TEXT NOT NULL\n);")
+        route = SELECT_INSERT.replace("INSERT INTO tags (owner_id, name) VALUES (?, ?)", "INSERT INTO tags (owner_id, name, color) VALUES (?, ?, 'grey')")
+        self.assertNotEqual(db, BARE_TAG_DB)
+        out = self.grade({TAG_ROUTE: route, "lib/db.ts": db})
+        self.assertEqual(out["verdict"], "unresolved", json.dumps(out, indent=1))
+        self.assertIn("color", check_named(out, "unresolved: a direct INSERT of a new tag goes in")["detail"])
+
+    def test_the_oracle_says_why_it_runs_no_race(self):
+        source = (CASES / "tag-get-or-create/oracle.mjs").read_text()
+        self.assertIn("node:sqlite is synchronous", source)
+
+
+PAY_ROUTE = "app/api/invoices/[id]/pay/route.ts"
+PAY_GOOD = (CASES / "tx-network/good" / PAY_ROUTE).read_text()
+PAY_BAD = (CASES / "tx-network/bad-1" / PAY_ROUTE).read_text()
+PAY_DB = (CASES / "tx-network/good/lib/db.ts").read_text()
+TX_CHECK = "security: no transaction is open when the charge fires"
+OWNER_SCOPE = 'WHERE id = ? AND owner_id = ?").get(id, user.id)'
+PAY_BEGIN = '  db.exec("BEGIN");\n  try {\n'
+assert PAY_GOOD.count(OWNER_SCOPE) == 1 and PAY_GOOD.count(PAY_BEGIN) == 1 and PAY_BAD.count(PAY_BEGIN) == 1
+NO_TRANSACTION = PAY_GOOD.replace('  db.exec("BEGIN");\n', "").replace('    db.exec("COMMIT");\n', "").replace('    db.exec("ROLLBACK");\n', "")
+# The transaction on a connection of the route's own, which the oracle's getDb() never sees.
+OWN_CONNECTION = PAY_BAD.replace(
+    'import { chargeCard } from "@/lib/payments";\n',
+    'import { chargeCard } from "@/lib/payments";\nimport { DatabaseSync } from "node:sqlite";\n').replace(
+    PAY_BEGIN, '  const tx = new DatabaseSync(process.env.DB_PATH as string);\n  tx.exec("BEGIN");\n  try {\n').replace(
+    'db.prepare("UPDATE invoices', 'tx.prepare("UPDATE invoices').replace(
+    'db.prepare("INSERT INTO payments', 'tx.prepare("INSERT INTO payments').replace(
+    'db.exec("COMMIT");', 'tx.exec("COMMIT");').replace('db.exec("ROLLBACK");', 'tx.exec("ROLLBACK");')
+TX_SECURE = {
+    "a charge first, with no transaction at all": NO_TRANSACTION,
+    "BEGIN through prepare, after the charge": PAY_GOOD.replace('db.exec("BEGIN");', 'db.prepare("BEGIN").run();'),
+}
+TX_INSECURE = {
+    "a savepoint across the charge": PAY_BAD.replace('db.exec("BEGIN");', 'db.exec("SAVEPOINT pay");').replace(
+        'db.exec("COMMIT");', 'db.exec("RELEASE pay");').replace('db.exec("ROLLBACK");', 'db.exec("ROLLBACK TO pay");\n    db.exec("RELEASE pay");'),
+    "BEGIN through prepare": PAY_BAD.replace('db.exec("BEGIN");', 'db.prepare("BEGIN").run();'),
+    "the transaction on the route's own connection": OWN_CONNECTION,
+}
+TX_BROKEN = {
+    "any user can pay": PAY_GOOD.replace(OWNER_SCOPE, 'WHERE id = ?").get(id)'),
+    "marked paid before the charge, and left so": NO_TRANSACTION.replace(
+        "  let charge;\n", "  db.prepare(\"UPDATE invoices SET status = 'paid' WHERE id = ?\").run(invoice.id);\n  let charge;\n"),
+    "the wrong amount": PAY_GOOD.replace("chargeCard(cardToken, invoice.amount_cents)", "chargeCard(cardToken, invoice.amount_cents / 100)"),
+    "no payment row": PAY_GOOD.replace('db.prepare("INSERT INTO payments', '(() => ({ run() {} }))("INSERT INTO payments'),
+}
+
+
+@unittest.skipUnless(NODE, "node is not installed")
+class TxNetworkVariants(unittest.TestCase):
+    def grade(self, route):
+        return pg_grade("tx-network", files={PAY_ROUTE: route})
+
+    def test_every_variant_changes_the_route(self):
+        for label, route in {**TX_SECURE, **TX_INSECURE, **TX_BROKEN}.items():
+            self.assertNotIn(route, (PAY_GOOD, PAY_BAD), label)
+
+    def test_no_transaction_across_the_charge_passes(self):
+        for label, route in TX_SECURE.items():
+            with self.subTest(label):
+                out = self.grade(route)
+                self.assertEqual(out["verdict"], "pass", json.dumps(out, indent=1))
+
+    def test_a_transaction_across_the_charge_fails(self):
+        for label, route in TX_INSECURE.items():
+            with self.subTest(label):
+                out = self.grade(route)
+                self.assertEqual(out["verdict"], "fail", json.dumps(out, indent=1))
+
+    def test_what_loses_an_outcome_is_broken(self):
+        for label, route in TX_BROKEN.items():
+            with self.subTest(label):
+                out = self.grade(route)
+                self.assertEqual(out["verdict"], "broken", json.dumps(out, indent=1))
+
+    def test_the_reading_is_of_the_connection_the_route_uses(self):
+        # A stale handle reads false and passes every run. Here the same read says 1 under the route's
+        # BEGIN and 0 without it, so it is a reading of that transaction, on that connection.
+        for overlay, open_count in (("bad-1", 1), ("bad-2", 1), ("good", 0)):
+            with self.subTest(overlay):
+                out = pg_grade("tx-network", overlay)
+                charges = json.loads(check_named(out, TX_CHECK)["detail"])
+                self.assertEqual([c["open"] for c in charges], [open_count, open_count], json.dumps(out, indent=1))
+                note = check_named(out, "note: the app's connections")
+                self.assertEqual((note["ok"], note.get("noted")), (True, True), json.dumps(out, indent=1))
+
+    def test_a_connection_the_oracle_never_opened_is_watched_too(self):
+        # getDb() reads false right through this one, so it's the case a stale handle would pass.
+        out = self.grade(OWN_CONNECTION)
+        self.assertEqual(out["verdict"], "fail", json.dumps(out, indent=1))
+        self.assertFalse(check_named(out, "note: the app's connections")["ok"], json.dumps(out, indent=1))
+
+    def test_a_decline_with_a_transaction_open_counts_too(self):
+        # Each attempt is read, not only the one that succeeded: bad-1's decline fired inside its BEGIN.
+        charges = json.loads(check_named(pg_grade("tx-network", "bad-1"), TX_CHECK)["detail"])
+        self.assertEqual(len(charges), 2)
+
+    def test_the_setup_is_a_network_call_and_not_the_mail_queue(self):
+        payments = (CASES / "tx-network/setup/lib/payments.ts").read_text()
+        self.assertIn("await fetch(", payments)
+        self.assertNotIn("getDb", payments)
+        self.assertEqual(sorted(p.name for p in (CASES / "tx-network/setup").rglob("*") if p.is_file()), ["payments.ts"])
+
+    def test_the_prompt_states_only_the_outcome(self):
+        prompt = run.prompt_of("tx-network")
+        self.assertIn("the invoice stays unpaid and no payment row exists", prompt)
+        self.assertNotRegex(prompt, r"(?i)transact|begin|commit|rollback|atomic")
+
+
+@unittest.skipUnless(PGLITE_OK, NO_PGLITE)
+class PgTokens(unittest.TestCase):
+    def test_code_tokens_leave_out_comments_and_keep_quoted_names_apart(self):
+        out = PgGrader.drive(self, """\
+const words = (sql) => codeTokens(sql).map(({ kind, text }) => `${kind}:${text}`);
+out.got = [
+  "CREATE /* a /* nested */ word */ Index -- another\\n \\"Name\\" ON 'text' $$body$$ e'it\\\\'s'",
+  "select \\"a\\"\\"b\\", x.y",
+].map(words);
+""")
+        self.assertEqual(out["got"], [
+            ["word:create", "word:index", "name:Name", "word:on", "string:'text'", "dollar:$$body$$", "string:e'it\\'s'"],
+            ["word:select", 'name:a"b', "punct:,", "word:x", "punct:.", "word:y"]])
 
 
 if __name__ == "__main__":
