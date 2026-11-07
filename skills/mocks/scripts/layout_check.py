@@ -4,13 +4,14 @@
 Usage: layout_check.py <page.html>
 
 Prints one line per assertion, `ok` or `FAIL` with the measured numbers. Exits 0
-with a last line of LAYOUT_OK. Exits 1 when the page is at fault: any FAIL, or a
-page that stops responding or breaks the check. Exits 2 when the check can't judge
-the page: the browser is missing or dies, the path is no HTML file, or the page
-lacks the template's hooks, because it isn't built from the template or its own
-script failed before they appeared. A WARN line names a control that changed
-nothing in the render; it doesn't fail. Fit is judged at the page's default Zoom.
-Python standard library only.
+with a last line of LAYOUT_OK. Exits 1 when the page is at fault: a finished run
+with any FAIL, or a page that stops responding or breaks the check. Exits 2 when
+the check can't judge the page: the browser is missing, never answers or dies (even
+after a FAIL line), the path is no HTML file, or the page lacks a template hook or a
+plain px value, as a page not built from the template does, or one whose script
+failed first. A WARN line names a control that changed nothing in the render; it
+doesn't fail. Fit is judged at the page's default Zoom. Python standard library
+only.
 """
 from __future__ import annotations
 
