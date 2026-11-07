@@ -30,6 +30,7 @@ WIDE = ((1905, 960), (1440, 800), (1280, 680), (1101, 700))
 STACKED = ((1100, 800), (900, 800), (1024, 768), (390, 844))
 RESIZE_FROM, RESIZE_TO = (1905, 960), (1280, 680)
 CONTROLS_SIZE = (1440, 800)
+ZOOM_SIZE = (1280, 680)
 EDGE, GAP, TOLERANCE, FIT_TOLERANCE, TOP_ROW_MAX = 16, 12, 1, 2, 56
 WHEEL_DELTA = 100000
 
@@ -117,6 +118,19 @@ MEASURE_JS = """(() => {
   };
 })()"""
 
+ZOOM_PICK_JS = """(() => {
+  const group = [...document.querySelectorAll(".m-ctl")].find((g) => g.querySelector("span")?.textContent === "Zoom");
+  [...group.querySelectorAll("button")].find((b) => b.textContent.trim() === "100%").click();
+})()"""
+
+# Scrolls the frame to its far corner: how much of the render that reached.
+ZOOM_REACH_JS = """(() => {
+  const frame = document.getElementById("frame"), app = document.getElementById("app");
+  frame.scrollTo(1e6, 1e6);
+  return { width: frame.clientWidth + frame.scrollLeft, height: frame.clientHeight + frame.scrollTop,
+           renderWidth: Number(app.width), renderHeight: Number(app.height) };
+})()"""
+
 SCROLL_RESET_JS = """(() => {
   for (let e = document.querySelector(".m-panel"); e; e = e.parentElement) e.scrollTop = 0;
 })()"""
@@ -151,7 +165,8 @@ class NoAnswer(BrowserError):
 
 
 class Crashed(BrowserError):
-    """The tab's render process died. Its commands would only time out, which reads as a stuck page."""
+    """The browser or the tab's render process died, which says nothing about the page.
+    A dead render process's commands would only time out, which reads as a stuck page."""
 
 
 class NoBrowser(BrowserError):
@@ -253,7 +268,7 @@ class Browser:
                 continue
             chunk = os.read(self._out_r, 1 << 20)
             if not chunk:
-                raise self._died("the browser exited")
+                raise self._died("the browser exited", Crashed)
             self._buf += chunk
         raw, self._buf = self._buf.split(b"\0", 1)
         return json.loads(raw)
@@ -274,7 +289,7 @@ class Browser:
             while data:
                 data = data[os.write(self._cmd_w, data):]
         except BrokenPipeError:
-            raise self._died("the browser exited") from None
+            raise self._died("the browser exited", Crashed) from None
         deadline = time.monotonic() + timeout
         while True:
             reply = self._message(deadline)
@@ -512,6 +527,27 @@ def check_resize(report: Report, browser: Browser, url: str):
     tab.close()
 
 
+def check_zoom(report: Report, browser: Browser, url: str):
+    """At 100% the render may pass the room it has, so all of it must be reachable.
+    Tries the scroll, since the sizes alone can't show a frame that clips."""
+    tab = Page(browser)
+    tab.open(url, *ZOOM_SIZE)
+    labels = tab.evaluate('[...document.querySelectorAll("#c-frame button")].map((b) => b.textContent.trim())')
+    for index, label in enumerate(labels):
+        scope = "zoom {}x{} {}".format(*ZOOM_SIZE, label)
+        tab.open(url, *ZOOM_SIZE)
+        tab.evaluate(f'document.querySelectorAll("#c-frame button")[{index}].click()')
+        tab.evaluate(ZOOM_PICK_JS)
+        check_settled(report, scope, tab.settle(*ZOOM_SIZE))
+        reach = tab.evaluate(ZOOM_REACH_JS)
+        report.check(scope, "zoom 100% scrolls",
+                     reach["width"] >= reach["renderWidth"] - TOLERANCE
+                     and reach["height"] >= reach["renderHeight"] - TOLERANCE,
+                     f"reaches {reach['width']:.0f} x {reach['height']:.0f} "
+                     f"of {reach['renderWidth']} x {reach['renderHeight']}")
+    tab.close()
+
+
 def check_controls(report: Report, browser: Browser, url: str):
     """Click each button on a fresh page, so each option runs from the defaults a
     viewer opens on, not after every earlier click. render() runs per click, so a
@@ -537,7 +573,7 @@ def preflight(browser: Browser, url: str) -> tuple[list[str], list[str]]:
     tab.load(url, *WIDE[0])
     missing = tab.evaluate(f"{json.dumps(HOOKS)}.filter((s) => !document.querySelector(s))")
     missing += tab.evaluate(f"""{json.dumps(CSS_VARIABLES)}.filter((v) =>
-      !(parseFloat(getComputedStyle(document.documentElement).getPropertyValue(v)) >= 0))""")
+      !/^\\s*[\\d.]+px\\s*$/.test(getComputedStyle(document.documentElement).getPropertyValue(v)))""")
     errors = tab.evaluate(READ_ERRORS_JS)
     tab.close()
     return missing, errors
@@ -554,6 +590,7 @@ def run(browser: Browser, url: str) -> int:
     for size in WIDE:
         for_each_frame(report, browser, url, "wide", size, check_wide)
     check_resize(report, browser, url)
+    check_zoom(report, browser, url)
     check_controls(report, browser, url)
     for size in STACKED:
         for_each_frame(report, browser, url, "stacked", size, check_stacked)

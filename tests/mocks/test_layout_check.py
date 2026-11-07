@@ -54,6 +54,7 @@ STACKED_WIDTH = ": frameEl.parentElement.clientWidth) - 1;"
 RENDER_END = "</main></body></html>`;"
 FRAME_HEIGHT = "scaler.style.height = frameEl.style.height = height;"
 MODES_LINE = 'const MODES = ["Light", "Dark"];'
+FRAME_OVERFLOW = ".m-frame { overflow: auto;"
 DENSITY_READ = 'compact = state.Density === "Compact"'
 PANEL_VARIABLE = "--m-panel-min: 340px; "
 FRAMES_BLOCK = """const FRAMES = [
@@ -147,6 +148,11 @@ MUTANTS = {
         "scope": "controls",
         "also": set(),
     },
+    "zoom_cannot_scroll": {
+        "edits": [(FRAME_OVERFLOW, ".m-frame { overflow: clip;")],
+        "kind": "zoom 100% scrolls",
+        "also": set(),
+    },
     "render_script_throws": {
         "edits": [(RENDER_END, """</main>${!pills && summary ? "<script>throw new Error('x')<\\/script>" : ""}</body></html>`;""")],
         "kind": "no script errors",
@@ -156,7 +162,7 @@ MUTANTS = {
     "frame_clips_render": {
         "edits": [(FRAME_HEIGHT, 'scaler.style.height = frameEl.style.height = Math.ceil(f.height * k / 2) + "px";')],
         "kind": "render fit",
-        "also": set(),
+        "also": {"zoom 100% scrolls"},
     },
     "stacked_two_columns": {
         "edits": [(STACKED_COLUMNS, ".m-main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);")],
@@ -328,6 +334,11 @@ class CleanPages(TemporaryPages):
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("--m-panel-min", result.stderr)
 
+    def test_a_css_variable_in_other_units_exits_2(self):
+        result = run_check(self.page([(PANEL_VARIABLE, "--m-panel-min: 20rem; ")]))
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("--m-panel-min", result.stderr)
+
     def test_a_file_that_is_not_a_page_exits_2(self):
         path = pathlib.Path(self.dir.name, "notes.pdf")
         path.write_text("x")
@@ -432,6 +443,9 @@ class Mutants(TemporaryPages):
     def test_option_throws_at_the_defaults_only(self):
         self.assert_mutant_fails("option_throws_at_the_defaults_only")
 
+    def test_zoom_cannot_scroll(self):
+        self.assert_mutant_fails("zoom_cannot_scroll")
+
     def test_render_script_throws(self):
         self.assert_mutant_fails("render_script_throws")
 
@@ -499,6 +513,13 @@ class LivePage(TemporaryPages):
         with self.assertRaises(layout_check.Crashed) as caught:
             tab.call("Page.crash")
         self.assertEqual(layout_check.verdict(browser, caught.exception), 2)
+
+    def test_a_closed_pipe_counts_as_a_dead_browser(self):
+        class Alive:
+            def dead(self):
+                return False
+        gone = layout_check.Crashed("the browser exited")
+        self.assertEqual(layout_check.verdict(Alive(), gone), 2)
 
     def test_one_mode_hides_the_mode_buttons(self):
         groups = '[...document.querySelectorAll(".m-ctl > span")].map((s) => s.textContent)'
