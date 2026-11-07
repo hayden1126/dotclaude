@@ -4538,13 +4538,16 @@ class SkillAdvice(unittest.TestCase):
             self.assertIn("new code", text)
             self.assertIn("after the migration commits", text)
             self.assertIn("in batches", text)
+            self.assertIn("large table", text)
             self.assertIn("stops using", text)
+        self.assertIn("small table", say)  # batching a few rows breeds backfills nothing can run
 
     def test_the_skill_covers_a_drop_a_table_and_the_contract_step(self):
         with open(os.path.join(DATA_LAYER, "SKILL.md")) as f:
             text = f.read()
         for words in ("nullable", "ignored_columns", "SeparateDatabaseAndState", "view",
-                      "IS DISTINCT FROM", "disable_ddl_transaction!", "before the new code serves"):
+                      "IS DISTINCT FROM", "disable_ddl_transaction!", "before the new code serves",
+                      "small table", "meta-command"):
             self.assertIn(words, text)
 
     def test_the_backfill_is_batched_after_the_sync_commits(self):
