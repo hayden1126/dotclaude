@@ -94,7 +94,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     (`feat/practices-dependencies`, its next PR, carries the lead's notes; live at the event, Hayden 2026-11-06, so it
     merges by 2026-11-11; hackathon mode has its install check off, through Hayden's own
     `practices-gate` line at kickoff, since no session may turn the gate off), 2 merge-record
-    (`fix/after-merge-record`, opened 2026-11-06 on Hayden's pick; by 2026-11-11), 3 license
+    (`fix/after-merge-record`, draft #170, parked 2026-11-07 on its ask; by 2026-11-11), 3 env-names
+    (`fix/secret-scan-env-names`, opened 2026-11-07 on Hayden's pick; by 2026-11-11), 4 license
     (`chore/license`, opened 2026-11-06 on Hayden's pick; last, since it and lane practices change
     README.md).
     **Install freeze on HAYPC, Nov 12 through Nov 15** (Hayden, 2026-11-05): no lane installs in
@@ -164,8 +165,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **secret-scan misses `.env~` and `.envrc-local`/`.envrc_local`** (low; the practices review
     before #168's ready, 2026-11-06): neither `secret-scan` nor
     `skills/hackathon/templates/gitignore` covers them. Small, but it touches the hackathon
-    skills, so it merges and installs before Nov 12. Evidence: lane hackathon's closed record,
-    `artifacts/smoke/cec4381/practices-review.md`.
+    skills, so it merges and installs before Nov 12. Lane env-names has it. Evidence: lane
+    hackathon's closed record, `artifacts/smoke/cec4381/practices-review.md`.
   - **Two gaps in the lead's close gate** (`skills/lanes/SKILL.md`, text already on main; found by
     lane merge-record, 2026-11-06). (1) A merged lane with no live session and a failing
     `handoff-check` has no written next step: the lead never respawns another lane's session, and
@@ -435,8 +436,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Live lanes: `lane ls`; state in their records (2026-11-07: practices' next PR, merge-record,
-     license; one slot free). #167 merged and is installed from main; lane
+  0. Live lanes: `lane ls`; state in their records (2026-11-07: practices' #169, env-names, license,
+     merge-record parked with #170). #167 merged and is installed from main; lane
      hackathon's dry run ran on it 2026-11-06 and is done, so installs may resume. Hayden's leftover asks from lane deny-rules
      (an overlay paste plus a setup rerun, probe leftovers, local tool cleanups): its closed
      record. Lanes practices and merge-record merge and install by Nov 11. Install freeze Nov 12 through Nov 15. A chain that
