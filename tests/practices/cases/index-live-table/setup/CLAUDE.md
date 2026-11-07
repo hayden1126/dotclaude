@@ -14,8 +14,8 @@ Small invoicing app: projects, invoices, and a chat assistant.
 
 ## Deploy
 
-`scripts/deploy.sh` applies each new migration file with `psql -f` (autocommit, one statement at a
-time) first, then the new code rolls out over about ten minutes while old instances keep serving.
+`scripts/deploy.sh` applies each new migration file with `psql -f` first, then the new code rolls out
+over about ten minutes while old instances keep serving.
 
 ## Data
 
