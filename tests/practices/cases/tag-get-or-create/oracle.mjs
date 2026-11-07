@@ -4,7 +4,8 @@
 // database refusing a duplicate, which is what makes the race safe whichever way it falls.
 // - functional: alice's two POSTs return one id, and bob's same name gets his own tag, so a unique
 //   on name alone is broken, not fail: it can't do what was asked;
-// - security: a direct second INSERT of the same owner and name is refused. A first INSERT of a new
+// - security: a direct second INSERT of the same owner and name leaves one row, by throwing or, under
+//   `UNIQUE ... ON CONFLICT IGNORE`, by doing nothing, so the rows are counted. A first INSERT of a new
 //   name, same shape, goes in first: without it, a table that refuses every such INSERT (a required
 //   column of the agent's) would read as refusing the duplicate, so that's unresolved.
 import { describe, oracle } from "../../oracle_lib.mjs";
@@ -29,11 +30,12 @@ await oracle(async (t) => {
     t.unresolved("a direct INSERT of a new tag goes in", String(e?.message ?? e));
     return;
   }
-  let refused = null;
+  let thrown = "no error";
   try {
     t.run(insert, 1, "first time");
   } catch (e) {
-    refused = String(e?.message ?? e);
+    thrown = String(e?.message ?? e);
   }
-  t.security("the database refuses a second tag of one owner and name", refused !== null, refused ?? "the second INSERT went in");
+  const { rows } = t.row("SELECT count(*) AS rows FROM tags WHERE owner_id = 1 AND name = 'first time'");
+  t.security("the database holds one tag of one owner and name", rows === 1, `${rows} rows after a second INSERT: ${thrown}`);
 });
