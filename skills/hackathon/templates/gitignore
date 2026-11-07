@@ -33,6 +33,12 @@
 !dist.env
 !default.env
 !defaults.env
+!*[._-]example.env
+!*[._-]sample.env
+!*[._-]template.env
+!*[._-]dist.env
+!*[._-]default.env
+!*[._-]defaults.env
 *.pem
 # This also hides a Keynote deck. To keep one, add `!pitch.key` below it, and tell the scan with
 # `--allow-name pitch.key`, on the user's word.

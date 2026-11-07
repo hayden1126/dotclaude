@@ -81,12 +81,16 @@ FLAGGED_NOT_IGNORED = (
     "credentials (1).json", "credentials(1).json", "credentials 2.json", "id_rsa 2", "id_rsa(1)",
     "credentials copy.json", "credentials copy 2.json",
     "credentials - Copy.json", "credentials - Copy (2).json", "credentials (copy).json",
-    "credentials (copy 2).json", "id_rsa copy", "id_rsa (1)", "id_rsa - Copy", "server.key.save",
+    "credentials (copy 2).json", "credentials (another copy).json", "credentials (3rd copy).json",
+    "id_rsa copy", "id_rsa (1)", "id_rsa - Copy", "server.key.save",
     "server.key.save.1", "credentials (conflicted copy 2018-04-10 093612).json",
     "credentials (someone's conflicted copy 2026-01-01).json",
     "credentials.sync-conflict-20260101-120000-ABCDEFG.json",
     "id_rsa.sync-conflict-20260101-120000-ABCDEFG",
 )
+# Each safe word in these forms is clean to the scan and kept by the template.
+SAFE_FORMS = (".env.{}", ".env-{}", ".env_{}", ".envrc.{}", ".envrc-{}", ".envrc_{}", "{}.env", ".{}.env",
+              "app.{}.env", "app-{}.env", "app_{}.env")
 # Clean to the scan and kept by the template.
 CLEAN_AND_KEPT = (
     ".environment.ts", ".envoy.yaml", "report (1).pdf", "id_rsa.pub", "keys copy.txt",
@@ -132,7 +136,7 @@ class ScanCase(unittest.TestCase):
         return self.git("rev-parse", "HEAD")
 
     def commit_names(self, names):
-        """One commit of empty-content files, so a single scan reads every name."""
+        """One commit of harmless files, so a single scan reads every name."""
         for name in names:
             path = os.path.join(self.work, name)
             os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -250,7 +254,7 @@ class Secrets(ScanCase):
 
     def test_the_example_names_pass(self):
         names = [form.format(word) for word in ("example", "sample", "template", "dist", "default", "defaults")
-                 for form in (".env.{}", ".env-{}", ".env_{}", ".envrc.{}", ".envrc-{}", ".envrc_{}", "{}.env")]
+                 for form in SAFE_FORMS]
         self.commit_names(names)
         p = self.scan()
         self.assertEqual(p.returncode, 0, p.stdout)
@@ -1251,7 +1255,7 @@ class TheKickoffFiles(unittest.TestCase):
         words = re.search(r'SAFE_WORDS = r"([a-z|?]+)"', scanner).group(1)
         safe = words.replace("defaults?", "default|defaults").split("|")
         safe_names = [form.format(w) for w in safe
-                      for form in (".env.{}", ".env-{}", ".env_{}", ".envrc.{}", ".envrc-{}", ".envrc_{}", "{}.env")]
+                      for form in SAFE_FORMS]
         with tempfile.TemporaryDirectory() as tmp:
             # Only the template applies: no global excludes, no outer repo.
             env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
