@@ -169,7 +169,8 @@ Each level reads commits, never the index or the working tree:
         says so in the deny, since it may be another branch's PR); each choice is logged. The
         files changed since the merge base with --base, else origin/HEAD, origin/main,
         origin/master (none: logged, allowed), are matched against every skill's L1 events
-        (paths, and content on the head blob). Denied once per touched skill and head unless
+        (paths, and content on the head blob, or the old blob of a file the PR removes). Denied
+        once per touched skill and head unless
         the transcript (or the parent's, for a subagent) holds an Agent or Task call whose
         prompt has that head's marker, `[practices:review:<sha12>]`, so a review clears only
         the commit it judged; the reason carries each skill's gate lines and the marker in one
@@ -2543,19 +2544,19 @@ def _l3r(event, ghs, skills, cfg, ts, ctx, bounds, first, blocks_, keys, found, 
             log("git-skipped", "L3r: the branch shares no history with its base, unchecked")
             continue
         diff = repo.changes(mb, head)
-        files = [(c[5], c[4]) for c in diff if c[0] in ("A", "M", "T") and c[2] in REGULAR]
+        # A file the PR removes is read at its old blob; a link or gitlink, by its path alone.
+        files = [(c[5], c[4] if c[2] in REGULAR else c[3] if c[1] in REGULAR else None)
+                 for c in diff]
         events = [(s, ev) for s in skills.values() for ev in s["events"]
                   if not is_off(cfg, s, ev["id"])]
         touched = watched(repo, files, events, cfg)
         told = (len(blocks_), len(found))
         marks = review_marks(ts)
         if head[:12] not in marks:
-            prior = last_review(repo, marks, head)
-            if prior:
-                touched = review_delta(repo, touched, diff, prior, mb, base, events, cfg)
-                if not touched:
-                    log("l3r-reuse", f"L3r: {head[:12]} keeps the review of {prior[:12]}: "
-                        "nothing a skill watches changed since")
+            touched, prior = carried_over(repo, marks, touched, diff, head, mb, base, events, cfg)
+            if prior and not touched:
+                log("l3r-reuse", f"L3r: {head[:12]} keeps the review of {prior[:12]}: "
+                    "nothing a skill watches changed since")
             new = [(s, paths) for s, paths in touched.values()
                    if (k := f"L3r|{s['name']}|review|-|{_sha1(head)}") not in state_keys(event)
                    and k not in keys]
@@ -2588,6 +2589,18 @@ def watched(repo, files, events, cfg):
     return hits
 
 
+def carried_over(repo, marks, touched, diff, head, mb, base, events, cfg):
+    """(what still needs a review, the commit last reviewed or None). A budget spent on the way
+    keeps touched whole, so what the head pass found still reaches the deny."""
+    try:
+        prior = last_review(repo, marks, head)
+        return (review_delta(repo, touched, diff, prior, mb, base, events, cfg), prior) \
+            if prior else (touched, None)
+    except Budget as e:
+        log("budget-spent", f"after {BUDGET}s, in the L3r {e}; asking for a whole review")
+        return touched, None
+
+
 def review_delta(repo, touched, diff, prior, mb, base, events, cfg):
     """What a review of prior didn't see, in watched()'s form. A PR's change to a file is its pair
     of ends: the blob on the base and the blob on the branch. That pair is compared at the two
@@ -2595,9 +2608,10 @@ def review_delta(repo, touched, diff, prior, mb, base, events, cfg):
     pair differs is new work: edited since, kept over a fix on the base, dropped back to the
     base's blob, deleted, moved, made a link or retargeted. A file a clean merge took from the
     base has no pair at either. Touched files in that list stay as read, so a size cap on this
-    second read can't quiet one. Any other counts as watched by its path or by a blob at either
-    end, so one that's gone still does; past the caps, or not a regular file, only its path is
-    read. Prior sharing no history with the base shows nothing, so touched stands.
+    second read can't quiet one. Every file in it is then read by its path and its blob at both
+    commits, so one that's gone since the review counts, and so does a skill that fires only on
+    what the review saw; past the caps, or not a regular file, only its path is read. Prior
+    sharing no history with the base shows nothing, so touched stands.
     Known limits: a marker names no base, so `gh pr create --base <older>` widens the diff with
     what the review never saw, and a merge of history the local base ref doesn't hold yet (an
     unfetched or other remote's main) reads as the branch's own. The gate denies once and the
@@ -2611,10 +2625,8 @@ def review_delta(repo, touched, diff, prior, mb, base, events, cfg):
            if (was[p][1:5] if p in was else None) != (now[p][1:5] if p in now else None)}
     out = {name: (s, kept) for name, (s, paths) in touched.items()
            if (kept := [p for p in paths if p in new])}
-    known = {p for _, paths in out.values() for p in paths}
-    rest = [(p, oid if mode in REGULAR else None) for p in sorted(new - known)
-            for c in (now.get(p), was.get(p)) if c
-            for mode, oid in ((c[2], c[4]), (c[1], c[3])) if mode != NO_FILE]
+    rest = [(p, c[4] if c[2] in REGULAR else None) for p in sorted(new)
+            for c in (now.get(p), was.get(p)) if c and c[2] != NO_FILE]
     for name, (s, paths) in watched(repo, rest, events, cfg).items():
         out.setdefault(name, (s, []))[1].extend(paths)
     return out

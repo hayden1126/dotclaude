@@ -3087,6 +3087,53 @@ class L3r(BashBase):
         self.commit()
         self.assertIn("app/api/l/route.ts", self.pre("gh pr ready", session_id="s-link"))
 
+    def test_a_pr_that_only_removes_a_watched_file_waits_for_a_review(self):
+        # Review round 4, medium: with no review to compare, nothing looked touched.
+        start = self.off_history(self.base, **{"app__api__w__route.ts": "export const w = 0\n",
+                                               "lib__act.ts": '"use server"\n'})
+        self.sh("update-ref", "refs/remotes/origin/main", start)
+        for n, gone in enumerate(("app__api__w__route.ts", "lib__act.ts")):
+            with self.subTest(gone=gone):
+                self.sh("update-ref", "HEAD", self.off_history(start, **{gone: None}))
+                self.sh("read-tree", "--reset", "-u", "HEAD")
+                reason = self.pre("gh pr ready", session_id=f"s-rm-{n}")
+                self.assertIn(gone.replace("__", "/"), reason)
+
+    def test_a_spent_budget_keeps_what_the_head_pass_found(self):
+        # Review round 4, medium: a Budget raised on the way to the delta dropped the deny.
+        self.review()
+        self.commit(**{"app__api__y__route.ts": "export const y = 1\n"})
+        for n, name in enumerate(("last_review", "review_delta")):
+            with self.subTest(name=name), mock.patch.dict(os.environ, self.env, clear=True), \
+                    mock.patch.object(PC, "START", time.monotonic()), \
+                    mock.patch.object(PC, name, side_effect=PC.Budget("x")):
+                out = PC.pre_tool_use(self.event("gh pr ready", "PreToolUse", f"b-spent-{n}",
+                                                 session_id=f"s-spent-{n}"))
+            PC.CRUMB.clear()
+            self.assertIn("app/api/y/route.ts", json.dumps(out))
+            self.assertIn("Review the changes of main", json.dumps(out))
+
+    def test_a_skill_that_fires_only_on_the_old_content_stays_in_the_brief(self):
+        # Review round 4, low: the path fired for one skill, so the file went unread for another.
+        self.skill("extra", 'skill = "extra"\ngate = ["Confirm the new address."]\n[[event]]\n'
+                   'id = "contact"\ncontent = [\'\'\'bumpQuota\\(\'\'\']\nlines = ["Confirm it."]\n')
+        self.commit(**{"app__api__x__route.ts": "bumpQuota(a)\n"})
+        self.review()
+        self.commit(**{"app__api__x__route.ts": "export const x = 2\n"})
+        reason = self.pre("gh pr ready", session_id="s-two")
+        self.assertIn("demo (", reason)
+        self.assertIn("extra (", reason)
+
+    def test_a_link_at_a_watched_path_removed_after_a_review_is_delta(self):
+        d = os.path.join(self.proj, "app", "api", "l")
+        os.makedirs(d)
+        os.symlink("one", os.path.join(d, "route.ts"))
+        self.commit()
+        self.review()
+        os.remove(os.path.join(d, "route.ts"))
+        self.commit()
+        self.assertIn("app/api/l/route.ts", self.pre("gh pr ready", session_id="s-unlink"))
+
     def test_the_only_watched_file_gone_after_a_review_is_delta(self):
         # Review round 2, low: no touched file left, so the delta never ran.
         self.review()
