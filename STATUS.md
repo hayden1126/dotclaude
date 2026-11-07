@@ -445,14 +445,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
      with Hayden (repeat them in each reply's Waiting list until answered): try `/interview` in
      the prep repo named in [[dotclaude-hackathon-mode]]; rehearse reaching this machine from another
      network by Nov 12; the event's local-lead email (not sent as of 2026-11-06); by Nov 12 who
-     presents (his teammates want the skills, 2026-11-06); hq's three questions and the SW13 fix for the hq
-     window. Before each post-merge chain, run DA15's
+     presents (his teammates want the skills, 2026-11-06). Before each post-merge chain, run DA15's
      pre-check from the private FINDINGS rows, and its added checks before any sandbox-off fetch
      in this repo. Since #161, `lane new` runs only with the sandbox off. Since #156's install, a lone
-     excluded call (gh, git push or fetch, lane) runs only from a repo's top. Running sessions took
-     #157's cache narrowing live at its install (2026-10-31 14:39 local): a session started
-     before it needs a `/pass` before a sandboxed uv, pip, pnpm, node-gyp, bun or Playwright run. Pending with Hayden, outside the lanes: `wsl --shutdown` at a break applies the
-     WSL memory cap in `.wslconfig`.
+     excluded call (gh, git push or fetch, lane) runs only from a repo's top.
      Before each lead STATUS commit, grep it against the exam-prep denylist
      ([[lead-status-denylist-check]]). After each reinstall,
      check `ls -la ~/.claude/CLAUDE.md` (the Watch item). Watch that push asks open with the
