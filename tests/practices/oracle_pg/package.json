@@ -1,0 +1,9 @@
+{
+  "name": "practices-oracle-pg",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The Postgres the data-layer oracles grade against. Install: npm ci --ignore-scripts",
+  "dependencies": {
+    "@electric-sql/pglite": "0.5.15"
+  }
+}
