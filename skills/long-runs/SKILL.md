@@ -28,9 +28,9 @@ A skip never reads as a pass: never write "all green" over a partial run. This s
 Answer these in order, in the plan itself.
 
 1. **Where does the time go?** Find each part's last measured time, and whether it waits or burns CPU (its log, the load average, cores and memory free). Parts that mostly wait stack well on one machine.
-2. **What can the change reach?** Read the diff, including what a rebase brought in. Run what it can reach, and count anything shared (a lockfile, build config, a common module) as reaching all it feeds. Rerun a baseline on main only where main changed what's measured. Prove each risk with the cheapest test that truly hits it.
+2. **What can the change reach?** Read the diff, including what a rebase brought in. Run what it can reach, and count anything shared (a lockfile, build config, a common module) as reaching all it feeds. Rerun a baseline on main only where main changed what's measured. Prove each risk with the cheapest test that truly hits it. Guard a computed test list: an empty one can run the whole suite.
 3. **What evidence still holds?** A past pass holds only for the same tree hash and the same inputs: dependencies, runtime, environment, services and data. `lane trial` merges other lanes' work, so its tree isn't your tree.
-4. **What runs at once?** Cheap checks first, so a broken build fails fast, then every independent long part together, as far as cores and memory allow. If you don't know whether two parts share a port, database, lock or output dir, find out: read the config, or try a small slice on throwaway state. Unknown is a question to answer, not a default to serial. If neither route can settle it, keep those parts apart and say so. Keep parts apart too when they do share state, or when a test depends on timing.
+4. **What runs at once?** Cheap checks first, so a broken build fails fast, then every independent long part together, as far as cores and memory allow. If you don't know whether two parts share a port, database, lock or output dir, find out: read the config, or try a small slice on throwaway state. Unknown is a question to answer, not a default to serial. If neither route can settle it, keep those parts apart and say so. Keep parts apart too when they do share state. Timing-sensitive checks go last, on their own, since load alone can fail them. Split a part further only with cores and memory to spare, and check the gain against a run.
 5. **What voids what?** Review before sweeps. The long matrix runs once, at the final head.
 
 Whatever step 2 drops is a skip, so it gets the block above. Past that, cutting a check comes last: try step 4 first, since it gives up no coverage.
@@ -47,7 +47,7 @@ Cite a measured run, or write "unmeasured". A parallel time stays unmeasured unt
 
 ## Example
 
-A browser sweep ran its parts one after another for hours, with the load under 1 on 12 cores: nearly all of it was waiting for pages to settle. The fix was every part at once in one lock hold, with each part's count of waits that gave up as the load signal.
+A browser sweep on 12 cores ran its parts one after another: 2 h 37 min for one engine, nearly all of it waiting for pages to settle. Every part at once, in one lock hold, took 40 min, and 0 of 1,537 waits gave up in each run, which was the load signal. Splitting each part again took 38 min at a load of 60 to 70, so it saved almost nothing.
 
 ## See also
 

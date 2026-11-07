@@ -93,6 +93,18 @@ class SkillFile(unittest.TestCase):
         self.assertIn("not a default to serial", skill_text())
         self.assertIn("If neither route can settle it, keep those parts apart", skill_text())
 
+    def test_the_measured_lessons_stay(self):
+        self.assertIn("Timing-sensitive checks go last, on their own", skill_text())
+        self.assertIn("Split a part further only with cores and memory to spare", skill_text())
+        self.assertIn("an empty one can run the whole suite", skill_text())
+
+    def test_the_example_quotes_only_measured_figures(self):
+        example = skill_text().split("## Example")[1].split("## See also")[0]
+        self.assertIn("2 h 37 min for one engine", example)
+        self.assertIn("took 40 min", example)
+        self.assertIn("0 of 1,537 waits", example)
+        self.assertNotIn("under 1", example)  # a load figure nobody measured
+
     def test_it_points_to_delegation_and_coding_practices_rather_than_repeating_them(self):
         self.assertIn("`delegation`", skill_text())
         self.assertIn("`coding-practices` rules 11 and 12", skill_text())
