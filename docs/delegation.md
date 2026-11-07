@@ -2013,8 +2013,9 @@ patterns from these:
 | openai/codex-plugin-cc `job-control.mjs` | Apache-2.0 | Phase inference from the event log | `codex-delegate status` |
 | obra/external-subagents | none (idea only) | A pending row before launch; idle minutes | `codex-delegate` |
 
-Apart from Parable, everything is reimplemented. dcg is out: its license rider excludes anyone
-acting for Anthropic or OpenAI.
+Parable is vendored and cc-safety-net's footers are reworded from its text, so both keep their
+licenses beside them (`LICENSE-parable`, `LICENSE-cc-safety-net`). Everything else is reimplemented.
+dcg is out: its license rider excludes anyone acting for Anthropic or OpenAI.
 
 ## Next
 

@@ -6,8 +6,7 @@ settings, and the plugins I install. Run `./setup.sh` on a fresh machine and end
 same setup.
 
 This is a deliberately lean, principle-driven config. It vendors only what Hayden and Friends wrote or curated,
-plus one pinned third-party file: Parable, the MIT bash parser the delegation policy uses
-(`skills/delegation/scripts/vendor/`).
+plus the third-party parts listed under [License](#license).
 Plugin-owned content (plugin skills, agents, hooks) is installed from the plugins' own
 marketplaces, not copied here, so it never goes stale.
 
@@ -1185,4 +1184,5 @@ These parts come from other projects, and their license texts stay beside them:
 | TeX Gyre fonts, used by a deck theme (no font file ships here) | [GUST](https://www.gust.org.pl/projects/e-foundry/tex-gyre) | GUST Font License | `skills/deck-production/themes/_licences/GUST-FONT-LICENSE.txt` |
 | Noto Sans CJK fonts, used by a deck theme (no font file ships here) | [notofonts/noto-cjk](https://github.com/notofonts/noto-cjk) | SIL OFL 1.1 | `skills/deck-production/themes/_licences/OFL-1.1.txt` |
 
-Ideas reimplemented without their text are credited in the code and in `docs/delegation.md`.
+Some code reimplements ideas from other projects without their text. `docs/delegation.md` lists the
+sources of the delegation tooling.

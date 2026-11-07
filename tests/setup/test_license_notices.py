@@ -1,13 +1,13 @@
-"""README's License section names every third-party license text in the repo, so a part added
-with its license can't go unlisted, and a listed text can't vanish while README still claims it.
-
-Dot directories hold lane state and scratch trees, not shipped files, so the walk skips them."""
+"""README's License table names exactly the third-party license texts git tracks, so a part
+added with its license can't go unlisted, and a row can't outlive or precede its file."""
 import os
 import re
+import subprocess
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-TEXT_NAME = re.compile(r"(LICENSE|NOTICE)([-.].*)?$")
+TEXT_NAME = re.compile(r"(^|[-_.])(licen[cs]e|copying|notice)([-_.]|$)", re.I)
+CODE = (".py", ".sh", ".js", ".mjs", ".ts")  # pass-notice.sh and this test are code, not texts
 
 
 def license_section():
@@ -17,30 +17,34 @@ def license_section():
     return re.search(r"^## License\n(.*?)(?=^## |\Z)", readme, re.M | re.S).group(1)
 
 
-def license_texts():
-    """Repo-relative paths of the third-party license texts, leaving out the root LICENSE."""
-    found = set()
-    for folder, dirs, files in os.walk(REPO):
-        dirs[:] = [d for d in dirs if not d.startswith(".") and d != "node_modules"]
-        for name in files:
-            path = os.path.relpath(os.path.join(folder, name), REPO)
-            if TEXT_NAME.fullmatch(name) or os.path.basename(folder) == "_licences":
-                found.add(path)
-    found.discard("LICENSE")
-    return found
+def listed_texts():
+    """The paths in the last column of the License table, below its header row."""
+    rows = [line for line in license_section().splitlines() if line.startswith("| ")]
+    return {path for row in rows[1:]
+            for path in re.findall(r"`([^`]+)`", row.rstrip(" |").rsplit("|", 1)[-1])}
+
+
+def tracked_texts():
+    """The paths git tracks that are named like a license text or sit in a _licences folder.
+    Git's list, not the disk's, because only tracked files ship."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    out = subprocess.run(["git", "ls-files", "-z"], cwd=REPO, env=env, check=True,
+                         capture_output=True, text=True).stdout
+    return {path for path in out.split("\0") if path
+            and (("/_licences/" in path)
+                 or (TEXT_NAME.search(os.path.basename(path)) and not path.endswith(CODE)))}
 
 
 class LicenseNotices(unittest.TestCase):
-    def test_readme_lists_every_license_text(self):
-        listed = set(re.findall(r"`([^`]+)`", license_section()))
-        self.assertEqual(license_texts() - listed, set())
+    def test_table_lists_exactly_the_tracked_texts(self):
+        self.assertTrue(listed_texts())
+        self.assertEqual(tracked_texts() - {"LICENSE"}, listed_texts())
 
-    def test_every_path_readme_lists_exists(self):
-        paths = [p for p in re.findall(r"`([^`]+)`", license_section()) if "/" in p]
-        self.assertTrue(paths)
-        self.assertEqual([p for p in paths if not os.path.exists(os.path.join(REPO, p))], [])
+    def test_every_listed_text_exists(self):
+        self.assertEqual([p for p in listed_texts() if not os.path.isfile(os.path.join(REPO, p))], [])
 
     def test_root_license_is_mit_and_readme_says_so(self):
+        self.assertIn("LICENSE", tracked_texts())
         with open(os.path.join(REPO, "LICENSE"), encoding="utf-8") as f:
             text = f.read()
         self.assertTrue(text.startswith("MIT License\n"))
