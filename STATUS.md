@@ -90,12 +90,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - #144 (exam-prep): rules public, evidence private (Hayden, 2026-10-20).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
-  - **Live lanes** (briefs in each record). Merge order: 1 license
-    (`chore/license`, opened 2026-11-06 on Hayden's pick; carries the lead's notes), 2 mocks
-    (`feat/mocks-skill`, opened 2026-11-07 on Hayden's pick; by 2026-11-11; after license, since
-    both change README.md), 3 speed
-    (`feat/speed-skill`, the `long-runs` skill plus one CLAUDE.md line, opened 2026-11-07 on Hayden's pick; by 2026-11-11; after mocks, since all
-    three change README.md).
+  - **Live lanes** (briefs in each record). Merge order: 1 mocks
+    (`feat/mocks-skill`, opened 2026-11-07 on Hayden's pick; carries the lead's notes; by
+    2026-11-11), 2 speed (`feat/speed-skill`, the `long-runs` skill plus one CLAUDE.md line,
+    opened 2026-11-07 on Hayden's pick; by 2026-11-11; after mocks, since both change README.md).
     **Install freeze on HAYPC, Nov 12 through Nov 15** (Hayden, 2026-11-05): no lane installs in
     that window, except fixes for lane hackathon, so the event runs what the dry run tested. The lead's
     reinstall after a merge counts as an install, so no other lane merges in that window.
@@ -123,6 +121,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     capella-studio lane artexport's report; a fork's hook output never reaches its model, so it
     knows its lane only from the parent's copied line, docs/lanes.md S5; the delegation canary
     checks the source enum; untried against lane practices' settings.json change),
+    license (#173, 2026-11-07, merge 54bf289: the MIT LICENSE, the licences of three adapted
+    sources carried beside them, README's third-party list and a test that keeps it complete;
+    installed from main),
     env-names (#171, 2026-11-07, merge 87ab19f: `secret-scan` and the hackathon gitignore
     template catch `.env~`, `.envrc-local` and other backup and copy names; installed from main),
     merge-record (#170, 2026-11-07, merge 20d8bcd: a lane writes its after-merge record only
@@ -156,12 +157,6 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
 
   Backlog:
-  - **License dotclaude under MIT, in a PR of its own** (Hayden's pick 2026-11-06, via lane
-    hackathon). README's License section already says MIT, but the repo has no LICENSE file.
-    First trace where everything came from: parts carry their own licences (frontend-motion's
-    two sources, interview's jmo origin, the deck fonts, vendored parable and reveal), and
-    anything ported without a licence comes out. Then a root LICENSE and the README line. Lane
-    license has it.
   - **demo-video upgrade** (Hayden, 2026-11-06: "at a later pass"): recorded voiceovers, music,
     transitions, and real camera footage cut in with the scripted take. Today the skill records
     one silent take and has one untested ffmpeg line for a voiceover. Starts after lane
@@ -484,11 +479,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Live lanes: `lane ls`; state in their records (2026-11-07: license,
-     practices kept open). #171 merged and is installed from main; lanes hackathon,
-     merge-record and env-names closed 2026-11-07. Hayden's leftover asks from lane deny-rules
+  0. Live lanes: `lane ls`; state in their records (2026-11-07: mocks, speed,
+     practices kept open). #173 merged and is installed from main; lanes hackathon,
+     merge-record, env-names and license closed 2026-11-07. Hayden's leftover asks from lane deny-rules
      (an overlay paste plus a setup rerun, probe leftovers, local tool cleanups): its closed
-     record. Lane license is next; a merge after Nov 11 waits for Nov 16. Install freeze Nov 12 through Nov 15. A chain that
+     record. Lanes mocks then speed merge and install by Nov 11; a merge after that waits for Nov 16. Install freeze Nov 12 through Nov 15. A chain that
      stops before its "main moved" step still tells the lanes, and arms a wake on the blocker
      (`skills/lanes/SKILL.md`). Open
      with Hayden (repeat them in each reply's Waiting list until answered): try `/interview` in
