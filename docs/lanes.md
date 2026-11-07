@@ -211,8 +211,7 @@ Why it works this way:
   for #99 the tab-bar lane ran `gh pr merge` itself. A merge made on GitHub and told to no
   session waits for the lead's next `lane ls`. With the lane's session gone, the lead runs the
   chain itself, and closes the lane only once the hand-back gate passes: a failing gate is then
-  the lead's ask, since no lane is left to make it. A lane that wrote its after-merge handoff
-  before its session ended passes, so it closes without one. With the session live, the lead
+  the lead's ask, since no lane is left to make it. With the session live, the lead
   asks the lane for its after-merge handoff first, since a lane that merged and is still writing
   `Keep open:` must not be closed under it. A merge watcher lost: one per ready PR has to be
   re-armed every 2 hours, and two that saw the same merge would run the chain twice (two
@@ -226,11 +225,28 @@ Why it works this way:
   for a follow-up PR leaves behind), even under a newer PR, and a fork's too: a lane may push to
   one, and a stranger's merge can only light the flag. An ended session lights it only when it
   started after the record's last write, so it never wrote it, and a newer commit still lights
-  it. The merge and session checks allow 10 s (`CLOCK_SLACK`; the commit check keeps its 1 s):
-  HAYPC's wall clock steps by about 5 s, and GitHub's clock is not the local one. On the 11
-  lanes merged and closed by 2026-10-14, the old rule flagged all 11 and this one none; 4 of
-  them wrote their after-merge record within 40 s of the merge, so a wider slack would cost
-  asks.
+  it. On the 11 lanes merged and closed by 2026-10-14, the session-end rule flagged all 11 and
+  this one none.
+- **The merge check allows 3 s** (`MERGE_SLACK`; Hayden, 2026-11-06). The session check allows
+  10 s (`CLOCK_SLACK`) and the commit check 1 s. The merge check also began at 10 s, for clock
+  swings of about 5 s that stopped when timesyncd was disabled on 2026-10-17: HAYPC's clock now
+  steps about 0.5 s every 30 s, and it read within 0.5 s of GitHub's on 2026-11-06. At 10 s the
+  line sat on normal behaviour: 13 of 37 closed lanes made their last write 9.8 to 13.3 s after
+  the merge, which is one model turn, and lane ports was sent back twice. Drift after a Windows
+  sleep is unmeasured. A clock over 3 s behind GitHub's makes a correct record read as old, which
+  costs one rewrite; one over 3 s ahead makes a write just before the merge read as after it.
+- **`lane ls --check` shows the lane the verdict** (Hayden, 2026-11-06). A lane writes its
+  after-merge record only after the merge command returns, then runs a bare `lane ls --check`
+  just before `handoff-check`, so a rewrite it asks for still gets checked. The check reads the lane's board row, so it can't disagree with
+  the lead's gate. It sits in `ls` because the verdict needs gh, which fails in the sandbox where
+  `handoff-check` runs, and because `lane ls *` is already an excluded command and an allow rule,
+  so it needed no new rule. With no list of merged PRs (sandboxed, offline, or a full list on one
+  branch), it refuses rather than report a flag it can't judge. The lane has to run it, so the
+  lead's gate stays the backstop. A lane notes a reason it can't fix in its State and tells the
+  lead when asked. The lead takes the flag's current reason to Hayden. Once `handoff-check`
+  passes, his yes allows a plain `lane done` with the flag on (2026-11-06): `done` never reads
+  the flag, so that half of the gate is the skill's rule, and a flag that can't clear would
+  otherwise hold the lane open for good. It changes nothing for a merge order.
 - **What it can't tell.** A write after the merge is taken as the after-merge handoff, so a lane
   that never heard of a GitHub merge, then wrote a routine update and exited, passes; the lead's
   message to a live lane covers that window. Whatever can't be read (gh, a `mergedAt`, a session

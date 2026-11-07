@@ -65,7 +65,7 @@ EXCLUDED = [
              ["lane new chart-fix --claim 42 --goal x"]),
     Excluded("lane adopt *", "registers a worktree in the state dir", ["lane adopt ../x"]),
     Excluded("lane ls", "asks gh for PR state and sees other sessions", ["lane ls"]),
-    Excluded("lane ls *", "asks gh for PR state and sees other sessions", ["lane ls --json"]),
+    Excluded("lane ls *", "asks gh for PR state and sees other sessions", ["lane ls --json", "lane ls --check"]),
     Excluded("lane port ls", "sees which processes listen on the lane's ports", ["lane port ls"]),
     Excluded("lane port ls *", "sees which processes listen on the lane's ports",
              ["lane port ls web"]),
