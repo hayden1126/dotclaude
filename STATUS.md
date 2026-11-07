@@ -91,7 +91,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
   - **Live lanes** (briefs in each record). Merge order: 1 license
-    (`chore/license`, opened 2026-11-06 on Hayden's pick; carries the lead's notes).
+    (`chore/license`, opened 2026-11-06 on Hayden's pick; carries the lead's notes), 2 mocks
+    (`feat/mocks-skill`, opened 2026-11-07 on Hayden's pick; by 2026-11-11; after license, since
+    both change README.md).
     **Install freeze on HAYPC, Nov 12 through Nov 15** (Hayden, 2026-11-05): no lane installs in
     that window, except fixes for lane hackathon, so the event runs what the dry run tested. The lead's
     reinstall after a merge counts as an install, so no other lane merges in that window.
@@ -167,8 +169,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **One-screen layout for clickable mocks** (Hayden, 2026-11-07, via a lane in another repo:
     "This should be how mocks are made from now on"). On wide windows: no page scroll, one
     control row, the render fit to the window and fixed in place, the questions column beside it
-    the only thing that scrolls, secondary notes at its foot; stacked below 1,101 px. No dotclaude
-    skill owns mocks yet (frontend-ui-discipline has one line), so it needs a home picked.
+    the only thing that scrolls, secondary notes at its foot; stacked below 1,101 px. Hayden picked a
+    new skill, built now by lane mocks (2026-11-07).
     Reference template and a scripted check (not run yet): lane themes's
     `.lane/mock/` in that repo, archived with the lane when it closes.
   - **Secret-name follow-ups from lane env-names** (low, 2026-11-07): five notes on names the
