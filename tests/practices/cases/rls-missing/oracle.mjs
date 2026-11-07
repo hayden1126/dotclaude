@@ -12,8 +12,8 @@
 //   SELECT policy `update ... where id = ...` is refused even under `with check (true)`, and a `delete
 //   ... where id = ...` finds nothing even under `using (true)`. The unfiltered statement reads nothing
 //   and goes through, and an attacker holding the key can send it, so each write is tried both ways.
-// - INSERT ... RETURNING passes them as well, which would hide a forged insert: it returns nothing, as
-//   PostgREST's return=minimal doesn't.
+// - INSERT ... RETURNING passes them as well, which would hide a forged insert, so the inserts here ask
+//   for nothing back, as PostgREST's return=minimal does.
 // A write counts by the state it leaves, read past RLS: a trigger that stamps the caller's id is safe.
 import { readFileSync } from "node:fs";
 import { findPage, Missing, oracle } from "../../oracle_lib.mjs";
