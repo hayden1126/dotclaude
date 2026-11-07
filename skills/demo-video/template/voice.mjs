@@ -55,13 +55,13 @@ const TOO_QUIET_DB = -25; // A real microphone gave -31 dB on a room with nobody
 const CLIPPED_DB = -0.1;
 const RATE = 48000;
 const WINDOW_S = 0.05; // Speech is found in windows this long.
-const ABOVE_FLOOR_DB = 10; // Speech is this much louder than the room's own noise,
+const ABOVE_FLOOR_DB = 10; // Speech is this much louder than the room's own noise, or half the way to the loudest,
 const BELOW_LOUDEST_DB = 35; // and no quieter than this under the loudest window, in a silent room.
 const SOFT_ABOVE_FLOOR_DB = 4; // A soft sound joined to speech, such as a breathy opening, only clears these.
 const SOFT_BELOW_LOUDEST_DB = 50;
-const FLOOR_RANGE_DB = 16; // A file whose windows span less than this has no quiet part: it is all speech.
-const START_RUN = 4; // Loud windows in a row that start the speech. A click spans at most 2.
-const END_RUN = 3; // Loud windows in a row that end it, so a short last word still counts.
+const ALL_SPEECH_DB = 6; // A file whose windows span less than this has no quiet part: it is all speech.
+const THIN_DB = 16; // A voice less than this over the room's noise is found, but only roughly.
+const RUN = 3; // Loud windows in a row that start or end the speech: a short word fills 3, a click under 0.05 s at most 2.
 const MARGIN_S = 0.1; // Kept around the speech.
 const SIDECAR = /:Zone\.Identifier$/; // Windows writes one beside a downloaded file copied to a Linux disk.
 const FADE_S = 0.01; // Keeps a cut from clicking.
@@ -131,20 +131,25 @@ function speechIn(file) {
   }
   if (peak >= CLIPPED_DB) console.warn(`warning: ${shown(file)} clipped (peak ${peak.toFixed(1)} dB): turn the input down, or back off the microphone`);
   const levels = windows.map(window => window.RMS_level);
-  // Digital silence (-inf) counts toward the floor, or a silent room's floor lands on the quiet speech.
-  const sorted = [...levels].sort((one, other) => one - other);
-  const loudest = sorted.at(-1);
-  const floor = sorted[Math.floor(sorted.length / 10)];
-  const allSpeech = loudest - floor < FLOOR_RANGE_DB;
-  const bar = allSpeech ? loudest - BELOW_LOUDEST_DB : Math.max(floor + ABOVE_FLOOR_DB, loudest - BELOW_LOUDEST_DB);
+  // The room's noise, from windows with any sound in them: a recorder's opening zeros (-inf) aren't the room.
+  const heard = levels.filter(Number.isFinite).sort((one, other) => one - other);
+  const loudest = heard.at(-1);
+  const floor = heard[Math.floor(heard.length / 10)];
+  const range = loudest - floor;
+  const allSpeech = range < ALL_SPEECH_DB;
+  if (!allSpeech && range < THIN_DB) {
+    console.warn(`warning: ${shown(file)}: the voice is only ${range.toFixed(0)} dB over the room's noise, so where it starts and ends is rough: listen to the result`);
+  }
+  const bar = allSpeech ? loudest - BELOW_LOUDEST_DB
+    : Math.max(floor + Math.min(ABOVE_FLOOR_DB, range / 2), loudest - BELOW_LOUDEST_DB);
   const softBar = allSpeech ? loudest - SOFT_BELOW_LOUDEST_DB
-    : Math.max(floor + SOFT_ABOVE_FLOOR_DB, loudest - SOFT_BELOW_LOUDEST_DB);
+    : Math.max(floor + Math.min(SOFT_ABOVE_FLOOR_DB, range / 4), loudest - SOFT_BELOW_LOUDEST_DB);
   const loud = levels.map(level => level > bar);
-  const run = (index, length) => index >= 0 && index + length <= loud.length && loud.slice(index, index + length).every(Boolean);
-  let first = loud.findIndex((_, index) => run(index, START_RUN));
+  const run = index => index >= 0 && index + RUN <= loud.length && loud.slice(index, index + RUN).every(Boolean);
+  let first = loud.findIndex((_, index) => run(index));
   if (first < 0) throw new Error(`${shown(file)} has no stretch of speech in it, only short sounds`);
   let last = loud.length - 1;
-  while (!run(last - END_RUN + 1, END_RUN)) last -= 1;
+  while (!run(last - RUN + 1)) last -= 1;
   // Grow outwards over soft sound joined to the speech, which the bar alone would cut.
   while (first > 0 && levels[first - 1] > softBar) first -= 1;
   while (last < levels.length - 1 && levels[last + 1] > softBar) last += 1;
@@ -163,7 +168,7 @@ function readTake() {
 function voiceDir() {
   if (process.env.VOICE) return path.resolve(process.env.VOICE);
   const name = path.basename(OUT);
-  if (!name.startsWith('out')) throw new Error(`OUT is ${shown(OUT)}, so set VOICE too: only an OUT named out... has a voice dir of its own`);
+  if (!/^out(?:$|[-_.\d])/.test(name)) throw new Error(`OUT is ${shown(OUT)}, so set VOICE too: only an OUT named out... has a voice dir of its own`);
   return path.join(path.dirname(OUT), 'voice' + name.slice('out'.length));
 }
 

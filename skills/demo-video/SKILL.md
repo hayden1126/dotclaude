@@ -102,6 +102,8 @@ A voice recording is personal data, so `demo/voice*/` stays out of git, whatever
 |---|---|
 | `too quiet to be a voice` | The recording has no voice in it: the wrong input device, a muted one, or nobody spoke. A room with nobody talking measured -31 dB. |
 | `clipped` | Not fatal, but listen to it. Turn the input down, or back off the microphone. |
+| `runs ... s past the end of the take` | The read is longer than the take. Read faster, or add waits to the beats in `beats.mjs` and retake. |
+| `only ... dB over the room's noise` | Not fatal, but the voice barely stands out, so its start and end are rough. Listen, and record somewhere quieter or closer to the microphone if it's off. |
 | `runs ... s, and beat N has ...` | The clip is longer than the room it has. Shorten it, or add a wait to that beat in `beats.mjs` and retake. |
 | `has no stretch of speech` | Only short sounds such as clicks, no voice. |
 | `name it all.<ext>` or `this take has beats` | A file in `demo/voice/` has a name this can't place. |

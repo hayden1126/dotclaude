@@ -131,12 +131,12 @@ def tone(path, seconds, lead=0.0, frequency=440, gain=4, rate=48000):
     subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i", graph, str(path)], check=True)
 
 
-def sequence(path, parts, rate=48000):
-    """A stand-in voice from parts in order: (frequency or None for silence, seconds, gain).
+def sequence(path, parts, rate=48000, noise=0.0):
+    """A stand-in voice from parts in order: (frequency or None for silence, seconds, gain), over room noise.
 
     One expression, so a part's level is exact however quiet (gain 1 is the sine source's default -18 dB).
     """
-    terms, at = [], 0.0
+    terms, at = [f"{noise}*(random(0)-0.5)"] if noise else [], 0.0
     for frequency, seconds, *gain in parts:
         if frequency:
             terms.append(f"{(gain[0] if gain else 4) / 8}*sin(2*PI*{frequency}*t)*between(t\\,{at:.6f}\\,{at + seconds - 1 / rate:.6f})")
@@ -1008,7 +1008,7 @@ class Voice(unittest.TestCase):
         self.assertLess(level(self.result, 3.6, 7.5), -60)
 
     def test_a_click_before_the_read_does_not_stop_the_trim(self):
-        sequence(self.voice_dir / "all.wav", [(None, 0.3), (2000, 0.08, 2), (None, 1.2), (440, 3)])
+        sequence(self.voice_dir / "all.wav", [(None, 0.3), (2000, 0.04, 2), (None, 1.2), (440, 3)])
         self.built()
         self.assertGreater(level(self.result, 0.35, 0.6, 440), HEARD_DB, "the read starts late, kept behind the click")
         self.assertLess(level(self.result, 0.0, 3.0, 2000), -50, "the click was kept")
@@ -1027,6 +1027,25 @@ class Voice(unittest.TestCase):
         self.assertGreater(level(self.result, 0.2, 0.3, 440), -85, "the margin before the speech was cut")  # -70 kept, -91 cut
         self.assertGreater(level(self.result, 0.5, 2.0, 3000), HEARD_DB)
 
+    def test_a_recorders_opening_zeros_are_not_the_room(self):
+        subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i",
+                        "aevalsrc=0.01*(random(0)-0.5)*gt(t\\,0.6)+0.5*sin(2*PI*440*t)*between(t\\,3\\,5):s=48000:d=5.5",
+                        str(self.voice_dir / "all.wav")], check=True)
+        self.built()
+        self.assertGreater(level(self.result, 0.4, 0.6, 440), HEARD_DB, "the room's noise before the read was kept")
+
+    def test_a_loud_room_still_trims_and_says_it_is_rough(self):
+        subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i",
+                        "aevalsrc=0.07*random(0)+0.3*sin(2*PI*440*t)*between(t\\,2\\,4):s=48000:d=6",
+                        str(self.voice_dir / "all.wav")], check=True)
+        self.assertIn("over the room's noise", self.built().stderr)
+        self.assertGreater(level(self.result, 0.4, 0.6, 440), HEARD_DB)
+
+    def test_a_short_first_word_is_kept(self):
+        sequence(self.voice_dir / "all.wav", [(None, 1.0), (440, 0.15), (None, 0.4), (3000, 2)])
+        self.built()
+        self.assertGreater(level(self.result, 0.3, 0.45, 440), HEARD_DB, "the first word was dropped")
+
     def test_a_click_after_the_last_word_is_dropped(self):
         tone(self.voice_dir / "all.wav", 7)
         sequence(self.voice_dir / "2.wav", [(None, 0.5), (1000, 1.5), (None, 1.5), (2000, 0.05, 2)])
@@ -1035,7 +1054,7 @@ class Voice(unittest.TestCase):
 
     def test_a_long_soft_opening_is_kept(self):
         # About -48 dB for 0.3 s: under the bar for speech, joined to it, so the speech grows over it.
-        sequence(self.voice_dir / "all.wav", [(None, 1.0), (440, 0.3, 0.032), (3000, 2)])
+        sequence(self.voice_dir / "all.wav", [(None, 1.0), (440, 0.3, 0.032), (3000, 2)], noise=0.001)  # A room at about -72 dB.
         self.built()
         self.assertGreater(level(self.result, 0.3, 0.45, 440), -58, "the start of a soft opening was cut")  # -52 kept, -66 cut
 
@@ -1274,11 +1293,13 @@ esac
         self.assertIn("voice-clip", refused.stderr)
 
     def test_an_out_with_another_name_needs_voice_named(self):
-        other = self.demo / "takes"
-        shutil.copytree(self.out, other)
-        result = self.run_voice("cues", OUT=str(other))
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("set VOICE", result.stderr)
+        for name in ("takes", "output"):
+            with self.subTest(name=name):
+                other = self.demo / name
+                shutil.copytree(self.out, other)
+                result = self.run_voice("cues", OUT=str(other))
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("set VOICE", result.stderr)
 
     def test_a_recording_line_survives_spaces_and_quotes_in_its_path(self):
         odd = self.root / "it's a voice"
