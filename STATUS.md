@@ -254,16 +254,6 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **A per-lane data dir or database name beside the port block in `lane new`** (Hayden's pick,
     2026-11-04, same review): ports isolate servers but not data. Lane-able after ports merges
     (`skills/lanes/scripts/lane`).
-  - **A hackathon mode and skill set** (Hayden, 2026-11-05). In lane hackathon. Opt-in per repo,
-    built on the video "The Claude Code workflow that helped me win 5 Hackathons in a Row" (a
-    sponsored video), jmo-skills and paradev.com; install none. New manual skills: `hackathon`,
-    `demo-first-scope`, `demo-video`, `pitch`. For both modes: `interview` (Hayden, a long vision chat with researched suggestions) and a `frontend-motion` skill from
-    `animate` and `better-ui` (MIT). After the event: a `public-ready` skill (Hayden's ask) that
-    cleans the repo for release. Hayden's picks: machine protection stays, plus an access list
-    approved at kickoff per project; pushes stay under CLAUDE.md's rule, approved at kickoff; a
-    public repo gets a secrets check before each push; sessions run on HAYPC with a laptop as the
-    remote. The skills stay plain folders others can copy. First step: a spike proving a scripted demo recording here.
-    Review and plan: `~/scratch/external-skills/hackathon-review-2026-11-05.md`.
   - **From the Claude Code changelog, 2.1.221 to 2.1.318** (lead's review, 2026-11-05;
     `~/scratch/external-skills/cc-updates-2026-11-05.md`). `onFailure: "block"` on the hooks with no
     fail-closed wrapper; `notify_when_idle` for lane waits; check idle compaction (2.1.299) against
