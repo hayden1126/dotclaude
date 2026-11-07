@@ -62,6 +62,46 @@ def private_key_line():
     return "-----BEGIN " + "RSA PRIVATE" + " KEY-----"
 
 
+# File names, shared by the scan's tests and the template's, and each table checked by both.
+# Flagged by the scan and hidden by the gitignore template.
+FLAGGED_AND_IGNORED = (
+    ".env", ".env.local", ".env-local", ".env_prod", ".envrc", ".envrc.local", ".envrc-local",
+    ".envrc_local", ".env copy", ".env (1)", ".env(1)", ".env - Copy", ".env 2", ".envrc copy", ".envrc (1)",
+    ".envrc(1)",
+    ".env~", ".envrc~", "#.env#", "#.envrc#", ".env.~1~", ".envrc.~1~", ".env.bak", ".env.save",
+    ".envrc.bak", ".env-local~", ".envrc-local~", ".env.example~", ".env.sample.bak",
+    "secrets.env", "prod.env", ".secrets.env", "prod.env~", "prod.env.bak", "deep/er/.env~",
+    ".env.local.default.env", ".env.example.env", ".envrc-sample.env", ".env(1).default.env",
+    ".envrc(1).example.env",
+    "id_rsa~", "#id_rsa#", "id_rsa.~1~", "id_rsa.bak", "id_rsa.bak~", "id_rsa~.bak", "id_rsa.old",
+    "server.pem.bak", "server.pem~", "#.pem", "server.key~", "credentials.json~",
+    "credentials.json.orig", "service-account.json.tmp", "service_account.json", "bundle.p12.backup", "app.jks.temp",
+    ".netrc", ".pgpass", ".htpasswd", ".git-credentials", "app.jks", "app.keystore",
+)
+# Flagged by the scan only: the template leaves `.save` and copies outside the env family to it.
+FLAGGED_NOT_IGNORED = (
+    "credentials (1).json", "credentials(1).json", "credentials 2.json", "id_rsa 2", "id_rsa(1)",
+    "credentials copy.json", "credentials copy 2.json",
+    "credentials - Copy.json", "credentials - Copy (2).json", "credentials (copy).json",
+    "credentials (copy 2).json", "credentials (another copy).json", "credentials (3rd copy).json",
+    "id_rsa copy", "id_rsa (1)", "id_rsa - Copy", "server.key.save",
+    "server.key.save.1", "credentials (conflicted copy 2018-04-10 093612).json",
+    "credentials (someone's conflicted copy 2026-01-01).json",
+    "credentials.sync-conflict-20260101-120000-ABCDEFG.json",
+    "id_rsa.sync-conflict-20260101-120000-ABCDEFG",
+)
+# Each safe word in these forms is clean to the scan and kept by the template.
+SAFE_FORMS = (".env.{}", ".env-{}", ".env_{}", ".envrc.{}", ".envrc-{}", ".envrc_{}", "{}.env", ".{}.env",
+              "app.{}.env", "app-{}.env", "app_{}.env")
+# Clean to the scan and kept by the template.
+CLEAN_AND_KEPT = (
+    ".environment.ts", ".envoy.yaml", ".environment-sample.env", "report (1).pdf", "id_rsa.pub", "keys copy.txt",
+    "credentials.py", "credentials.json.ts", "level1.save",
+)
+# Clean to the scan, hidden as an ordinary backup.
+CLEAN_AND_IGNORED = ("notes.bak", "draft~", "#draft#", "id_rsa.pub.bak", ".main.py.swp", "data.old")
+
+
 def read_skill(name):
     with open(os.path.join(REPO, "skills", name, "SKILL.md"), encoding="utf-8") as f:
         return f.read()
@@ -96,6 +136,16 @@ class ScanCase(unittest.TestCase):
         self.git("add", "-f", "--", name)
         self.git("commit", "-q", "-m", message)
         return self.git("rev-parse", "HEAD")
+
+    def commit_names(self, names):
+        """One commit of harmless files, so a single scan reads every name."""
+        for name in names:
+            path = os.path.join(self.work, name)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                f.write("nothing secret inside\n")
+        self.git("add", "-f", "--", *names)
+        self.git("commit", "-q", "-m", "names")
 
     def scan(self, *args, cwd=None, env=None):
         return subprocess.run([sys.executable, "-I", SCRIPT, *args], cwd=cwd or self.work,
@@ -190,6 +240,32 @@ class Secrets(ScanCase):
                 p = self.scan()
                 self.assertEqual(p.returncode, 1, p.stdout)
                 self.assertIn(f"{name}:- secret-file", p.stdout)
+
+    def test_each_family_name_is_flagged(self):
+        self.commit_names(FLAGGED_AND_IGNORED + FLAGGED_NOT_IGNORED)
+        p = self.scan()
+        self.assertEqual(p.returncode, 1, p.stdout)
+        for name in FLAGGED_AND_IGNORED + FLAGGED_NOT_IGNORED:
+            with self.subTest(name):
+                self.assertIn(f" {name}:- secret-file", p.stdout)
+
+    def test_a_name_with_no_secret_under_its_marks_is_clean(self):
+        self.commit_names(CLEAN_AND_KEPT + CLEAN_AND_IGNORED)
+        p = self.scan()
+        self.assertEqual(p.returncode, 0, p.stdout)
+
+    def test_the_example_names_pass(self):
+        names = [form.format(word) for word in ("example", "sample", "template", "dist", "default", "defaults")
+                 for form in SAFE_FORMS]
+        self.commit_names(names)
+        p = self.scan()
+        self.assertEqual(p.returncode, 0, p.stdout)
+
+    def test_a_backup_mark_on_a_name_git_quotes(self):
+        self.commit_names(['a"b.env~'])  # git quotes a path that holds a double quote
+        p = self.scan()
+        self.assertEqual(p.returncode, 1, p.stdout)
+        self.assertIn("secret-file", p.stdout)
 
     def test_a_binary_secret_file_is_caught_by_name(self):
         path = os.path.join(self.work, "bundle.p12")
@@ -333,6 +409,15 @@ class Clean(ScanCase):
         self.assertEqual(p.returncode, 1)
         self.assertIn(".env.example:1 assignment", p.stdout)
 
+    def test_an_example_envrc_passes_by_name_but_its_content_is_read(self):
+        self.commit(".envrc.example", "export API_KEY=\n")
+        self.assertEqual(self.scan().returncode, 0)
+        line, _ = planted()["assignment"]
+        self.commit(".envrc.example", line + "\n")
+        p = self.scan()
+        self.assertEqual(p.returncode, 1)
+        self.assertIn(".envrc.example:1 assignment", p.stdout)
+
     def test_deleting_a_secret_file_is_not_a_new_finding(self):
         self.commit(".env", "x\n")
         self.add_pushed_upstream()
@@ -413,6 +498,11 @@ class AllowName(ScanCase):
         self.assertNotIn("pitch.key:-", p.stdout)
         self.assertNotIn("demo.key:-", p.stdout)
         self.assertIn("2 file name(s) allowed", p.stdout)
+
+    def test_it_takes_the_name_as_committed_marks_included(self):
+        self.commit("id_rsa~", "x\n")
+        self.assertEqual(self.scan("--allow-name", "id_rsa~").returncode, 0)
+        self.assertEqual(self.scan("--allow-name", "id_rsa").returncode, 1)
 
     def test_it_excuses_the_name_not_the_content(self):
         line, _ = planted()["github-token"]
@@ -1162,10 +1252,12 @@ class TheKickoffFiles(unittest.TestCase):
         self.assertIn("plan ends Sat 17:00, demo path Sat 21:00, freeze Sun 07:30", text)
         self.assertIn("plan ends Sat 12:00, demo path Sat 14:30, freeze Sun 09:15", text)
 
-    def test_the_gitignore_hides_every_env_file_the_scan_flags(self):
+    def test_the_gitignore_matches_what_the_scan_flags(self):
         scanner = self.read("scripts", "secret-scan")
-        words = re.search(r"SAFE_FILE = re\.compile\(r\"\\\.env\[\._-\]\(\?:([a-z|?]+)\)", scanner).group(1)
-        safe = [w for w in words.replace("defaults?", "default|defaults").split("|")]
+        words = re.search(r'SAFE_WORDS = r"([a-z|?]+)"', scanner).group(1)
+        safe = words.replace("defaults?", "default|defaults").split("|")
+        safe_names = [form.format(w) for w in safe
+                      for form in SAFE_FORMS]
         with tempfile.TemporaryDirectory() as tmp:
             # Only the template applies: no global excludes, no outer repo.
             env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
@@ -1176,14 +1268,23 @@ class TheKickoffFiles(unittest.TestCase):
                 f.write(self.read("templates", "gitignore"))
 
             def ignored(name):
-                return subprocess.run(["git", "-C", repo, "check-ignore", "-q", name], env=env).returncode == 0
-            for name in (".env", ".env.local", ".env-local", ".env_prod", ".envrc", ".envrc.local"):
-                self.assertTrue(ignored(name), name)
-            for name in [".environment.ts"] + [f".env{sep}{w}" for sep in "._-" for w in safe]:
-                self.assertFalse(ignored(name), name)
+                return subprocess.run(["git", "-C", repo, "check-ignore", "-q", "--", name], env=env).returncode == 0
+            for name in FLAGGED_AND_IGNORED + CLEAN_AND_IGNORED:
+                with self.subTest(name):
+                    self.assertTrue(ignored(name), name)
+            for name in FLAGGED_NOT_IGNORED + CLEAN_AND_KEPT + tuple(safe_names):
+                with self.subTest(name):
+                    self.assertFalse(ignored(name), name)
 
     def test_the_gitignore_says_how_to_keep_a_keynote_deck(self):
         self.assertIn("!pitch.key", self.read("templates", "gitignore"))
+
+    def test_the_gitignore_says_how_to_keep_other_lookalike_files(self):
+        text = self.read("templates", "gitignore")
+        for line in ("!environment.env", "`--allow-name environment.env`", "!debug.keystore",
+                     "`--allow-name debug.keystore`"):
+            with self.subTest(line):
+                self.assertIn(line, text)
 
     def test_the_skill_describes_the_scan_as_it_now_works(self):
         text = self.read("SKILL.md")
