@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Orders page mock</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* One screen on a wide window: a top row of controls, the render at the size Fit gives it, and the
+   questions, which take every pixel left and are the only thing that scrolls. Under 1,101 px the
+   columns stack and the page scrolls. skills/mocks/scripts/layout_check.py proves all of this. */
+:root {
+  --bg: #f4f4f5; --card: #ffffff; --ink: #1d1d20; --muted: #5d5d66; --line: #d6d6dc; --chip: #e4e4e8;
+  --mark: #1d1d20; --mark-ink: #ffffff;
+  --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --m-panel-min: 340px; --m-gap: 12px;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #18181b; --card: #222226; --ink: #ececef; --muted: #a4a4ae; --line: #38383e; --chip: #2e2e33;
+  --mark: #ececef; --mark-ink: #18181b; color-scheme: dark;
+} }
+:root[data-theme="dark"] {
+  --bg: #18181b; --card: #222226; --ink: #ececef; --muted: #a4a4ae; --line: #38383e; --chip: #2e2e33;
+  --mark: #ececef; --mark-ink: #18181b; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 var(--font); padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 0 40px; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+h1 { font-size: 15px; line-height: 20px; font-weight: 650; margin: 0; white-space: nowrap; }
+.m-top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; display: flex; flex-wrap: wrap; gap: 6px 20px; align-items: center; padding: 6px 0; background: var(--bg); border-bottom: 1px solid var(--line); }
+.m-bar { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; min-width: 0; }
+.m-ctl { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.m-ctl > span { font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+.m-seg { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 2px; border-radius: 9px; background: var(--chip); }
+.m-seg button { font: inherit; font-size: 13px; font-weight: 600; border: 0; background: none; color: var(--ink); padding: 4px 10px; border-radius: 7px; cursor: pointer; min-height: 28px; white-space: nowrap; }
+.m-seg button[aria-pressed="true"] { background: var(--mark); color: var(--mark-ink); }
+button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.m-main { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--m-gap); margin-top: 10px; align-items: start; }
+.m-stage { min-width: 0; }
+.m-frame { overflow: auto; border-radius: 10px; box-shadow: 0 0 0 1px var(--line); background: var(--card); max-width: 100%; }
+/* A transform shrinks the paint, not the layout box, so the scaled iframe's full size would still be
+   scrollable overflow. #scaler takes the scaled size and clips; #frame then scrolls only at 100%. */
+.m-scaler { overflow: clip; }
+.m-scaler iframe { display: block; border: 0; background: var(--card); transform-origin: 0 0; }
+.m-panel { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.m-caption { margin: 0; color: var(--muted); font-size: 12.5px; }
+.m-box { background: var(--card); border-radius: 12px; padding: 12px 14px; box-shadow: 0 0 0 1px var(--line); }
+.m-box h2 { font-size: 14px; margin: 0 0 4px; }
+.m-box p { margin: 0 0 8px; color: var(--muted); font-size: 12.5px; }
+.m-box p:last-child { margin-bottom: 0; }
+.m-box .m-seg button { font-size: 12px; }
+#questions { display: contents; }
+@media (min-width: 1101px) {
+  html { overflow: hidden; }
+  body { display: flex; flex-direction: column; height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); padding-block: 0 12px; }
+  .m-top { position: static; flex: none; flex-wrap: nowrap; }
+  .m-bar { flex: 1 1 0; }
+  .m-ctl, .m-seg { flex: none; }
+  .m-top .m-seg { flex-wrap: nowrap; }
+  .m-main { flex: 1 1 0; min-height: 0; grid-template-columns: minmax(0, max-content) minmax(var(--m-panel-min), 1fr); grid-template-rows: minmax(0, 1fr); align-items: stretch; }
+  .m-stage { min-height: 0; }
+  .m-frame { max-height: 100%; }
+  .m-panel { min-height: 0; overflow-y: auto; padding: 1px; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+}
+/* Stacked, a scrollbar narrows the page, which lowers the scale and shortens the page, which removes
+   the scrollbar: at the right height that repeats every frame. A fixed gutter stops the width moving. */
+@media (width < 1101px) { html { scrollbar-gutter: stable; } }
+/* fitTop() adds these in order until the row fits on one line. */
+.m-fit-1 h1 { display: none; }
+.m-fit-2 .m-ctl > span { display: none; }
+.m-fit-3 .m-bar { column-gap: 8px; }
+.m-fit-3 .m-seg button { padding: 4px 6px; }
+</style>
+</head>
+<body>
+<header class="m-top">
+<h1 id="title"></h1>
+<div class="m-bar" id="bar" role="toolbar" aria-label="Mock controls"></div>
+</header>
+<div class="m-main">
+  <div class="m-stage">
+    <div class="m-frame" id="frame"><div class="m-scaler" id="scaler"><iframe id="app" title="The mock's render"></iframe></div></div>
+  </div>
+  <aside class="m-panel">
+    <p class="m-caption" id="caption"></p>
+    <div id="questions"></div>
+    <div class="m-box"><h2>About this mock</h2><p id="about"></p></div>
+  </aside>
+</div>
+<script>
+/* ==== MOCK CONFIG: the only part of this file a mock author edits. ==== */
+// FRAMES: the Size buttons. CONTROLS: extra button groups beside Size, Mode and Zoom. QUESTIONS: one
+// box each in the panel; options are optional and switch the render live. ABOUT: the note at the panel's foot.
+// render(state) returns the full HTML for the frame. It gets state.frame (a FRAMES entry), state.mode
+// ("Light" or "Dark"), state.zoom, one state[label] per CONTROLS group, and state.answers[i], the option
+// picked for QUESTIONS[i]. Its media queries see the frame's width, not the window's.
+const FRAMES = [
+  { label: "Laptop", width: 1440, height: 900 },
+  { label: "iPad", width: 1024, height: 768 },
+  { label: "Phone", width: 390, height: 844 },
+];
+const CONTROLS = [
+  { label: "Density", options: ["Comfortable", "Compact"] },
+];
+const QUESTIONS = [
+  { title: "How should an order's status read?", detail: "Pills stand out in a long list; plain text keeps the row quiet.", options: ["Pill", "Plain text"] },
+  { title: "Is the summary strip worth its height?", detail: "It answers the first question most people bring to this page, but it pushes the list down on a laptop.", options: ["Keep it", "Drop it"] },
+  { title: "Which order should the list open with?", detail: "Newest first suits a support desk. Oldest unshipped first suits the people packing boxes." },
+  { title: "Should a phone lose the customer's name?", detail: "The card has room for three lines. The total and the status are fixed, so the third line is the choice." },
+  { title: "Does the side menu need labels on an iPad?", detail: "Under 720 px of width the menu goes away. Between 720 and 1,100 px it could shrink to icons instead of keeping its labels." },
+  { title: "What should an empty list say?", detail: "A new shop sees this page before its first sale. It could point to the import step or stay blank." },
+  { title: "Who can refund from this page?", detail: "A refund button in the row is one click away for everyone who can open the page. It may belong one level down." },
+];
+const ABOUT = "A stand-in orders page with made-up data. Switch the size, mode and density in the top row, and try each question's options. Nothing here is saved.";
+
+function render(state) {
+  const dark = state.mode === "Dark", compact = state.Density === "Compact";
+  const pills = state.answers[0] === "Pill", summary = state.answers[1] === "Keep it";
+  const orders = [
+    ["#1048", "Ada Moreno", "12 Nov", "$84.00", "Shipped"], ["#1047", "Tom Becker", "12 Nov", "$19.50", "Packing"],
+    ["#1046", "Lena Fischer", "11 Nov", "$132.00", "Shipped"], ["#1045", "Sam Okafor", "11 Nov", "$47.25", "Refunded"],
+    ["#1044", "Noor Haddad", "10 Nov", "$66.00", "Shipped"], ["#1043", "Iris Lund", "10 Nov", "$210.75", "Packing"],
+  ];
+  const status = (s) => `<span class="${pills ? "pill" : ""} s-${s.toLowerCase()}">${s}</span>`;
+  const rows = orders.map(([id, who, date, total, s]) => `<tr><td class="id">${id}</td><td class="who">${who}</td><td class="date">${date}</td><td class="total">${total}</td><td class="status">${status(s)}</td></tr>`).join("");
+  const stat = (label, value) => `<div class="stat"><span>${label}</span><b>${value}</b></div>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><style>
+:root { color-scheme: ${dark ? "dark" : "light"}; --bg: ${dark ? "#141416" : "#fbfbfc"}; --card: ${dark ? "#1e1e22" : "#ffffff"}; --ink: ${dark ? "#ececef" : "#1d1d20"}; --muted: ${dark ? "#a4a4ae" : "#5d5d66"}; --line: ${dark ? "#333338" : "#e3e3e8"}; --pad: ${compact ? "7px" : "13px"}; }
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; display: grid; grid-template-columns: 200px minmax(0, 1fr); background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+nav { padding: 20px 14px; border-right: 1px solid var(--line); }
+nav b { display: block; margin: 0 8px 14px; }
+nav a { display: block; padding: 7px 8px; border-radius: 6px; color: var(--muted); }
+nav a.on { background: var(--line); color: var(--ink); font-weight: 600; }
+main { padding: 24px; min-width: 0; }
+h1 { font-size: 22px; margin: 0 0 16px; }
+.stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.stat { padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+.stat span { display: block; color: var(--muted); font-size: 12px; }
+.stat b { font-size: 20px; }
+table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); }
+th, td { padding: var(--pad) 14px; text-align: left; border-bottom: 1px solid var(--line); }
+th { color: var(--muted); font-size: 12px; font-weight: 600; }
+.total { font-variant-numeric: tabular-nums; }
+.pill { padding: 2px 8px; border-radius: 99px; background: var(--line); font-size: 12px; font-weight: 600; }
+.s-refunded { color: var(--muted); }
+@media (max-width: 720px) {
+  body { display: block; }
+  nav { display: none; }
+  main { padding: 16px; }
+  .stats { gap: 8px; }
+  .stat { padding: 8px 10px; }
+  .stat b { font-size: 16px; }
+  thead, .date { display: none; }
+  table, tbody { display: block; border: 0; background: none; }
+  tr { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 2px 12px; margin-bottom: 8px; padding: var(--pad) 12px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+  td { padding: 0; border: 0; }
+  .who { grid-row: 2; color: var(--muted); }
+  .status { grid-row: 2; grid-column: 2; }
+}
+</style></head><body>
+<nav><b>Corner Shop</b><a class="on">Orders</a><a>Products</a><a>Customers</a><a>Settings</a></nav>
+<main><h1>Orders</h1>
+${summary ? `<div class="stats">${stat("Today", "$103.50")}${stat("To pack", "2")}${stat("This week", "$559.50")}</div>` : ""}
+<table><thead><tr><th>Order</th><th>Customer</th><th>Date</th><th>Total</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>
+</main></body></html>`;
+}
+/* ==== END OF MOCK CONFIG. Everything below is the layout; leave it alone. ==== */
+
+const WIDE = "(min-width: 1101px)";
+const FIT_STEPS = ["m-fit-1", "m-fit-2", "m-fit-3"];
+const state = { frame: FRAMES[0], mode: "Light", zoom: "Fit", answers: QUESTIONS.map((q) => q.options?.[0]) };
+for (const c of CONTROLS) state[c.label] = c.options[0];
+
+const topRow = document.querySelector(".m-top"), main = document.querySelector(".m-main");
+const frameEl = document.getElementById("frame"), scaler = document.getElementById("scaler");
+const app = document.getElementById("app");
+
+// A group of buttons with aria-pressed; onPick runs after the pressed state moves.
+function segment(options, current, onPick) {
+  const seg = document.createElement("div");
+  seg.className = "m-seg";
+  options.forEach((option) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = option;
+    b.setAttribute("aria-pressed", String(option === current));
+    b.addEventListener("click", () => {
+      for (const other of seg.children) other.setAttribute("aria-pressed", String(other === b));
+      onPick(option);
+    });
+    seg.append(b);
+  });
+  return seg;
+}
+
+function controlGroup(label, seg) {
+  const group = document.createElement("div");
+  group.className = "m-ctl";
+  const name = document.createElement("span");
+  name.textContent = label;
+  group.append(name, seg);
+  document.getElementById("bar").append(group);
+}
+
+function update() {
+  const html = render(state);
+  if (app.srcdoc !== html) app.srcdoc = html;
+  app.width = state.frame.width;
+  app.height = state.frame.height;
+  refit();
+}
+
+function buildPanel() {
+  const holder = document.getElementById("questions");
+  QUESTIONS.forEach((q, i) => {
+    const box = document.createElement("div");
+    box.className = "m-box";
+    const title = document.createElement("h2");
+    title.textContent = `${i + 1}. ${q.title}`;
+    const detail = document.createElement("p");
+    detail.textContent = q.detail;
+    box.append(title, detail);
+    if (q.options) box.append(segment(q.options, state.answers[i], (option) => { state.answers[i] = option; update(); }));
+    holder.append(box);
+  });
+  document.getElementById("about").textContent = ABOUT;
+}
+
+function buildControls() {
+  document.getElementById("title").textContent = document.title;
+  const size = segment(FRAMES.map((f) => f.label), state.frame.label, (label) => {
+    state.frame = FRAMES.find((f) => f.label === label);
+    update();
+  });
+  size.id = "c-frame";
+  controlGroup("Size", size);
+  controlGroup("Mode", segment(["Light", "Dark"], state.mode, (mode) => { state.mode = mode; update(); }));
+  for (const c of CONTROLS) controlGroup(c.label, segment(c.options, state[c.label], (option) => { state[c.label] = option; update(); }));
+  controlGroup("Zoom", segment(["Fit", "100%"], state.zoom, (zoom) => { state.zoom = zoom; update(); }));
+}
+
+// One line, nothing past the row's right edge.
+function rowFits() {
+  const groups = [...topRow.querySelectorAll(".m-ctl")], first = groups[0];
+  return topRow.scrollWidth <= topRow.clientWidth && groups.every((g) => g.offsetTop < first.offsetTop + first.offsetHeight);
+}
+
+// Measured, not breakpoints: how much room the row needs depends on the mock's own controls.
+function fitTop() {
+  topRow.classList.remove(...FIT_STEPS);
+  if (!matchMedia(WIDE).matches) return;
+  for (const step of FIT_STEPS) {
+    if (rowFits()) return;
+    topRow.classList.add(step);
+  }
+}
+
+function scale() {
+  const f = state.frame;
+  const css = getComputedStyle(document.documentElement);
+  const panelMin = parseFloat(css.getPropertyValue("--m-panel-min")), gap = parseFloat(css.getPropertyValue("--m-gap"));
+  const wide = matchMedia(WIDE).matches, fit = state.zoom === "Fit";
+  // The 1 px pays for the frame's size rounding up below.
+  const widthLeft = (wide ? main.clientWidth - panelMin - gap : frameEl.parentElement.clientWidth) - 1;
+  const heightLeft = wide ? main.clientHeight - 1 : Infinity;
+  const k = fit ? Math.min(1, widthLeft / f.width, heightLeft / f.height) : 1;
+  const width = Math.ceil(f.width * k) + "px", height = Math.ceil(f.height * k) + "px";
+  app.style.transform = `scale(${k})`;
+  scaler.style.width = frameEl.style.width = width;
+  scaler.style.height = frameEl.style.height = height;
+  document.getElementById("caption").textContent = `${f.label}, ${f.width} x ${f.height}, shown at ${Math.round(k * 100)}%.`;
+}
+
+// fitTop first: the row's height sets what scale() has left.
+function refit() {
+  fitTop();
+  scale();
+}
+
+buildControls();
+buildPanel();
+update();
+addEventListener("resize", refit);
+new ResizeObserver(refit).observe(document.querySelector(".m-main"));
+document.fonts.ready.then(refit);
+</script>
+</body>
+</html>

@@ -8,7 +8,6 @@ instead of turning a mutant into a pass. Browser cases skip with the reason
 printed to stderr when no chrome-headless-shell is found.
 """
 import importlib.util
-import json
 import os
 import pathlib
 import re
@@ -37,6 +36,7 @@ LINE = re.compile(r"^(?P<result>ok  |FAIL) (?P<scope>[^:]+): (?P<kind>[^:]+): (?
 
 BODY_HEIGHT = ("height: calc(100dvh - env(safe-area-inset-top, 0px) "
                "- env(safe-area-inset-bottom, 0px)); ")
+MAIN_FLEX = ".m-main { flex: 1 1 0; min-height: 0;"
 PANEL_SCROLL = ".m-panel { min-height: 0; overflow-y: auto; padding: 1px;"
 FIT_MIN = "Math.min(1, widthLeft / f.width, heightLeft / f.height)"
 RESIZE_OBSERVER = 'new ResizeObserver(refit).observe(document.querySelector(".m-main"));\n'
@@ -65,10 +65,17 @@ def extra_groups(count: int) -> str:
 # that its break also trips by design (a panel that stops scrolling spills past
 # the page, so the page scrolls too).
 MUTANTS = {
-    "page_scrolls": {
+    # Without the body height, flex: 1 1 0 collapses .m-main to 0 px: nothing scrolls,
+    # the render just vanishes. Making the page scroll takes letting .m-main grow too.
+    "page_collapses": {
         "edits": [("html { overflow: hidden; }", ""), (BODY_HEIGHT, "")],
+        "kind": "render on screen",
+        "also": {"page settles", "questions scroll"},
+    },
+    "page_scrolls": {
+        "edits": [("html { overflow: hidden; }", ""), (BODY_HEIGHT, ""), (MAIN_FLEX, ".m-main { flex: none;")],
         "kind": "no page scroll",
-        "also": {"render on screen", "questions scroll"},
+        "also": {"page settles", "render on screen", "render stays", "width fill"},
     },
     "render_off_screen": {
         "edits": [(FIT_MIN, "Math.min(1, widthLeft / f.width)")],
@@ -89,7 +96,7 @@ MUTANTS = {
         "edits": [(PANEL_SCROLL, ".m-panel { min-height: 0; padding: 1px;"),
                   (MAIN_ROWS, "grid-template-rows: auto; overflow-y: auto; scrollbar-width: none;")],
         "kind": "render stays",
-        "also": set(),
+        "also": {"questions scroll"},
     },
     "no_refit": {
         "edits": [(RESIZE_OBSERVER, ""), (RESIZE_LISTENER, "")],
@@ -223,6 +230,9 @@ class Mutants(TemporaryPages):
         self.assertLessEqual({l["kind"] for l in failed}, {mutant["kind"]} | mutant["also"], out)
         self.assertRegex(result.stdout.splitlines()[-1], r"^\d+ of \d+ assertions FAILED$")
 
+    def test_page_collapses(self):
+        self.assert_mutant_fails("page_collapses")
+
     def test_page_scrolls(self):
         self.assert_mutant_fails("page_scrolls")
 
@@ -256,7 +266,9 @@ class LivePage(TemporaryPages):
 
     def test_fit_top_steps_fire_in_order_and_only_when_needed(self):
         steps = ["m-fit-1", "m-fit-2", "m-fit-3"]
-        page = self.page([(CONTROLS_OPEN, CONTROLS_OPEN + extra_groups(3))])
+        # Wide enough that every step fires between 1,905 and 1,101 px, and step 3 still fits at 1,101.
+        short_group = '  { label: "Short", options: ["One", "Two", "Three"] },\n'
+        page = self.page([(CONTROLS_OPEN, CONTROLS_OPEN + extra_groups(1) + short_group)])
         tab = self.open(page, 1905, 800)
         state = """(() => {
           const top = document.querySelector(".m-top");
@@ -286,13 +298,14 @@ class LivePage(TemporaryPages):
     def test_stacked_page_has_no_scrollbar_feedback_loop(self):
         """A short panel puts the page height where a scrollbar's width changes the
         scale enough to remove the scrollbar again, the worst case for that loop."""
-        short = apply_edits(self.template, [])
+        short = self.template
         start = short.index(QUESTIONS_OPEN) + len(QUESTIONS_OPEN)
         short = short[:start] + short[short.index(QUESTIONS_CLOSE):]
         page = pathlib.Path(self.dir.name, "short.html")
         page.write_text(short, encoding="utf-8")
         tab = self.open(page, 1024, 3000)
-        tall = tab.evaluate("document.documentElement.scrollHeight")
+        tall = round(tab.evaluate("document.body.getBoundingClientRect().bottom"))
+        self.assertLess(tall, 2000, "the short page must end above the window's bottom")
         watch = """new Promise((done) => {
           let changes = 0;
           const seen = new MutationObserver(() => { changes += 1; });
