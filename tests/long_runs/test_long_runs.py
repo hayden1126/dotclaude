@@ -105,21 +105,23 @@ class SkillFile(unittest.TestCase):
             "about 2 h 37 min for one engine",  # the start wasn't logged; one engine against two
             "at least six lock waits nobody timed",  # the serial time holds waiting
             "isn't all parallelism",
-            "about 1,500 page waits, not CPU",
-            "in both engines, in one lock hold, took 40 min",  # the sweep, 39 min 31 s
+            "waited on pages, not CPU",
+            "The same checks at once in both engines, in one lock hold, took 40 min",  # 39 min 31 s
             "in that sweep: 0 of 15,370",  # the slowest sweep only, all ten runs of it
             "also took 40 min",  # the split run's whole sweep, 40 min 29 s
             "mean load of 59 in its main phase against 32",  # 59 covers that phase alone
             "5 of 15,370 page waits gave up",  # the split run's signal moved
             "Two things changed",  # it split and it moved two checks: don't credit one
+            "it bought no time",  # 40 min 29 s against 39 min 31 s
             "At a load of 45",  # load has a cost, whatever the signal read
+            "failed twice, then passed five of five",
         ):
             self.assertIn(measured, example)
         for unmeasured in (
             "under 1",  # a load figure nobody measured
             "nearly all", "most of it",  # time shares nobody measured
             "38 min",  # the split run's first phase, not its sweep time
-            "1,537",  # one run of one sweep, read as the whole run's count
+            "1,537", "1,500",  # one run of one sweep: 15,370 is the count across a run
         ):
             self.assertNotIn(unmeasured, example)
 

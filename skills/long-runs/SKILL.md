@@ -47,7 +47,7 @@ Cite a measured run, or write "unmeasured". A parallel time stays unmeasured unt
 
 ## Example
 
-A browser sweep on 12 cores ran its jobs one at a time, each taking its own turn on a shared lock: about 2 h 37 min for one engine, including at least six lock waits nobody timed, so the gap below isn't all parallelism. Its slowest sweep was about 1,500 page waits, not CPU. The same checks at once in both engines, in one lock hold, took 40 min. The load signal was the count of page waits that gave up in that sweep: 0 of 15,370. A second run split that sweep further and moved two checks last. It also took 40 min, at a mean load of 59 in its main phase against 32, and 5 of 15,370 page waits gave up. Two things changed, so it can't say which did what, but it bought no time. At a load of 45, one timing-sensitive step failed twice, then passed five of five on a quieter machine.
+A browser sweep on 12 cores ran its jobs one at a time, each taking its own turn on a shared lock: about 2 h 37 min for one engine, including at least six lock waits nobody timed, so the gap below isn't all parallelism. Its slowest sweep waited on pages, not CPU. The same checks at once in both engines, in one lock hold, took 40 min. The load signal was the count of page waits that gave up in that sweep: 0 of 15,370. A second run split that sweep further and moved two checks last. It also took 40 min, at a mean load of 59 in its main phase against 32, and 5 of 15,370 page waits gave up. Two things changed, so it can't say which did what, but it bought no time. At a load of 45, one timing-sensitive step failed twice, then passed five of five on a quieter machine.
 
 ## See also
 
