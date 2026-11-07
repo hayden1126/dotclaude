@@ -7,9 +7,9 @@ import subprocess
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-TEXT_NAME = re.compile(r"(^|[-_.])(licen[cs]es?|unlicense|copying|copyright|notices?)([-_.]|$)", re.I)
+# Wide on purpose, over the whole path: a false match fails loudly, a miss passes silently.
+TEXT_PATH = re.compile(r"licen[cs]e|copying|copyright|notice", re.I)
 CODE = (".py", ".sh", ".js", ".mjs", ".ts")  # pass-notice.sh and this test are code, not texts
-NOT_TEXTS = ("bin/", "docs/")  # scripts with no suffix, and prose about licenses
 RECORDER = os.path.join(REPO, "skills", "demo-video", "template", "record.mjs")
 
 
@@ -31,15 +31,12 @@ def listed_texts():
 
 
 def tracked_texts():
-    """The paths git tracks that are named like a license text or sit in a _licences folder.
-    Git's list, not the disk's, because only tracked files ship."""
+    """The paths git tracks that look like a license text. Git's list, not the disk's, because
+    only tracked files ship."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     out = subprocess.run(["git", "ls-files", "-z"], cwd=REPO, env=env, check=True,
                          capture_output=True, text=True).stdout
-    return {path for path in out.split("\0") if path
-            and (("/_licences/" in path)
-                 or (TEXT_NAME.search(os.path.basename(path)) and not path.endswith(CODE)
-                     and not path.startswith(NOT_TEXTS)))}
+    return {path for path in out.split("\0") if TEXT_PATH.search(path) and not path.endswith(CODE)}
 
 
 class LicenseNotices(unittest.TestCase):
