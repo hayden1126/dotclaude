@@ -15,7 +15,7 @@ The offline proof that the oracles are right is test_oracles.py.
 
 Skills and cases: PRACTICES_SKILLS names the practices skills, explicitly. Each case has an
 owner (the skill whose bug class it plants) and a kind, target or benign (CASE_INFO). Each
-owner has one benign case. A listed skill may not exist yet (dependencies, before its first
+owner has one benign case. A listed skill may not exist yet (data-layer, before its first
 sweep): arm A and the offline tests don't need it, and B, C and D refuse without its SKILL.md.
 
 Arms:
@@ -28,7 +28,8 @@ Arms:
   D  C, run as three turns on one session: the case owner's benign prompt (the hook makes it
      load the skill), then `/compact`, then the case prompt. It checks the skill survives
      compaction. A benign case warms up with the next practices skill's benign prompt instead
-     (warmup_case), so its task turn doesn't find the work already done.
+     (warmup_case), so its task turn doesn't find the work already done. A benign case that needs
+     a registry or a Supabase overlay is passed over for a fixture without one.
 
 Cases (cases/<case>/): prompt.md is the user's message, fed verbatim on stdin. oracle.mjs
 is hidden from the agent (it lives in this checkout, not the fixture) and prints one JSON
@@ -86,8 +87,8 @@ Per run:
         so keep_stubs() puts registry_stubs/react-dom in node_modules and names all five in
         package.json. npm then fetches none of them; `npm ci` and a removed node_modules get
         byte-identical copies from the registry, and grading reinstalls the stubs anyway.
-      setup/ (optional): an overlay copied in before the initial commit. Each registry package
-        its package.json names goes into node_modules (apply_setup), as if already installed.
+      setup/ (optional): the overlay any case may have (below). Each registry package its
+        package.json names also goes into node_modules (apply_setup), as if already installed.
       Evidence: after the session, before grading, grade() writes evidence.json into the grading
         scratch dir and names it in ORACLE_EVIDENCE: bash (the agent's Bash commands from the
         stream, in order), calls (the same commands with their outcomes, [{command, error, denied}],
@@ -103,6 +104,22 @@ Per run:
       Offline, cases/<case>/evidence/<overlay>.json supplies the evidence for test_oracles.py.
       Arm D: a plain fixture never warms up with a registry case's prompt (warmup_case), so
         adding a registry owner moved no existing case's warm-up.
+  - setup/: any case's dir may hold setup/, an overlay copied into the fixture before the initial
+    commit (apply_setup), so it is the project the agent finds and in no diff.
+  - PG case: a case whose setup/ holds supabase/migrations/ (the data-layer skill's Supabase cases).
+    Its oracle grades the agent's migrations by running them, on PGlite, a Postgres in WebAssembly,
+    so what a role and a user can really read and write decides the verdict:
+      Package: oracle_pg/ pins it (package.json, package-lock.json), installed with `npm ci
+        --ignore-scripts` into its ignored node_modules; a run of a PG case refuses to start without
+        it or at another version (prereq_problems). It sits under tests/practices, so the grader's
+        /practices mount has it, and never in the fixture, so the agent can't edit what grades it.
+      Helper: oracle_pg/oracle_pg.mjs, in that folder so its bare imports resolve there. It builds a
+        Supabase project (roles, auth.users, the auth.* shims, no default grants on public tables)
+        and applies supabase/migrations/*.sql in filename order, one statement at a time, because
+        CREATE INDEX CONCURRENTLY can't run in the transaction a multi-statement query is.
+      Verdict: no migration the agent added is missing, a failed statement is broken, naming the
+        file and statement, and an extension PGlite lacks is unresolved.
+      Arm D: a benign PG case warms up only a PG case (warmup_case), for the registry's reason.
   - Session: `claude -p --output-format stream-json --verbose --model M --setting-sources
     project,local --strict-mcp-config --permission-mode acceptEdits --max-turns 60`, cwd the
     fixture, 900 s timeout per turn, env passed through unchanged. project,local drops every
@@ -172,7 +189,8 @@ Per run:
     with placeholder dirs) for C and D, "none" for A and B; `case` (the row's case_hash),
     case_hash() over cases/<case>/, oracle_lib.mjs, next_stub/, stubs/ and fixture/ (a registry
     case adds oracle_deps.mjs, registry_stubs/, the source of FakeRegistry and arm D's warm-up
-    packages, which leaves every other case's value alone); `warmup`
+    packages, and a PG case oracle_pg/oracle_pg.mjs and its lockfile, which leaves every other
+    case's value alone); `warmup`
     (warmup_hash), the sha256 of arm D's warm-up prompt, "none" for A, B and C; and `harness`
     (harness_hash), the sha256 of this run.py. Pooling refuses on any of the five; the Claude
     Code version is recorded but only warned on (one line per model when rows hold more than
@@ -302,7 +320,7 @@ LOADER = FIXTURE_SRC / "scripts" / "register.mjs"
 SKILLS_DIR = REPO / "skills"
 # The practices skills arms B, C and D install, all of them in every run. Named here rather than
 # found by their events.toml, so a skill that gains one later doesn't silently change the arms.
-PRACTICES_SKILLS = ["server-code", "auth-secrets", "dependencies"]
+PRACTICES_SKILLS = ["server-code", "auth-secrets", "dependencies", "data-layer"]
 HOOK = REPO / "hooks" / "practices-check.sh"  # a shim: it runs practices_check.py beside it
 REPO_SETTINGS = REPO / "settings.json"  # arms C and D take the hook's wiring from here
 
@@ -337,6 +355,9 @@ CASE_INFO = {
     "dep-install-script": Case("dependencies", TARGET),
     "dep-advisory": Case("dependencies", TARGET),
     "dep-benign": Case("dependencies", BENIGN),
+    "rls-missing": Case("data-layer", TARGET),
+    "sqli-sort": Case("data-layer", TARGET),
+    "data-benign": Case("data-layer", BENIGN),
 }
 CASES = list(CASE_INFO)
 
@@ -351,13 +372,15 @@ def warmup_case(case):
     """Arm D's warm-up for `case`: its owner's benign case, except for a benign case itself,
     which warms up with the next practices skill's benign case, so its task turn doesn't find
     the work already done. A benign case that needs a registry only warms up a registry case: a
-    plain fixture has none to install its package from, so it is passed over there."""
+    plain fixture has none to install its package from, so it is passed over there. A benign PG
+    case only warms up a PG case, as a fixture without its overlay has no migrations to change."""
     owner, kind = CASE_INFO[case]
     if kind != BENIGN:
         return benign_case(owner)
     i = PRACTICES_SKILLS.index(owner)
     others = [benign_case(name) for name in PRACTICES_SKILLS[i + 1:] + PRACTICES_SKILLS[:i]]
-    return next(c for c in others if is_registry_case(case) or not is_registry_case(c))
+    return next(c for c in others if (is_registry_case(case) or not is_registry_case(c))
+                and (is_pg_case(case) or not is_pg_case(c)))
 
 
 ARMS = ["A", "B", "C", "D"]
@@ -399,9 +422,10 @@ def git(*args, cwd):
 
 # ---------------------------------------------------------------- fixture
 
-def prereq_problems(arms, skills=None, skills_dir=None, hook=None, settings=None):
-    """Why the arms can't run here: a listed practices skill without its SKILL.md (B, C, D), or
-    the hook, or the repo settings that wire it, missing (C, D). [] when nothing is missing."""
+def prereq_problems(arms, skills=None, skills_dir=None, hook=None, settings=None, cases=()):
+    """Why the arms and `cases` can't run here: a listed practices skill without its SKILL.md (B, C,
+    D), the hook, or the repo settings that wire it, missing (C, D), or the Postgres a PG case is
+    graded on not installed. [] when nothing is missing."""
     skills = PRACTICES_SKILLS if skills is None else skills
     skills_dir = Path(skills_dir or SKILLS_DIR)
     hook = Path(hook or HOOK)
@@ -419,7 +443,22 @@ def prereq_problems(arms, skills=None, skills_dir=None, hook=None, settings=None
         except (OSError, ValueError, AttributeError, TypeError) as e:
             problems.append(f"arms C and D take the hook's wiring from {settings}, which can't be read: {e}")
         problems += gate_off_problems(hook)
+    if any(is_pg_case(case) for case in cases):
+        problems += pglite_problems()
     return problems
+
+
+def pglite_problems():
+    """Why a PG case's oracle can't run: PGlite isn't in oracle_pg/node_modules, or isn't the
+    pinned version. case_hash covers the lockfile and never node_modules, so a stale install
+    would grade with another Postgres under the same fingerprint."""
+    fix = f"run `npm ci --ignore-scripts` in {ORACLE_PG_DIR}"
+    pinned = json.loads((ORACLE_PG_DIR / "package.json").read_text())["dependencies"][PGLITE]
+    try:
+        installed = json.loads((ORACLE_PG_DIR / "node_modules" / PGLITE / "package.json").read_text()).get("version")
+    except (OSError, ValueError, AttributeError):
+        return [f"PG cases are graded on PGlite, which isn't installed: {fix}"]
+    return [] if installed == pinned else [f"PG cases are graded on PGlite {pinned}, and {installed} is installed: {fix}"]
 
 
 def gate_off_problems(hook):
@@ -437,9 +476,9 @@ def gate_off_problems(hook):
             f"({e['dir']}, until {e['until']}): run `practices-gate on {e['dir']}` first" for e in entries]
 
 
-def check_prereqs(arms):
-    """Fail early and clearly when an arm needs a piece that doesn't exist yet."""
-    problems = prereq_problems(arms)
+def check_prereqs(arms, cases=()):
+    """Fail early and clearly when an arm or a case needs a piece that doesn't exist yet."""
+    problems = prereq_problems(arms, cases=cases)
     if problems:
         sys.exit("run.py: " + "; ".join(problems))
 
@@ -509,7 +548,9 @@ def case_hash(case):
     """sha256 over what a run of `case` starts from and is graded by: cases/<case>/ (prompt,
     oracle, overlays, registry, setup), oracle_lib.mjs, the next stub, the other stubs and the
     fixture. A registry case adds what serves and grades it, which no other case uses:
-    oracle_deps.mjs, registry_stubs/, the FakeRegistry source and arm D's warm-up packages."""
+    oracle_deps.mjs, registry_stubs/, the FakeRegistry source and arm D's warm-up packages. A PG
+    case adds its helper and the lockfile that pins PGlite, never node_modules: the lockfile is
+    what says which version, and prereq_problems holds the install to it."""
     h = hashlib.sha256()
     parts = [("case", CASES_DIR / case), ("oracle_lib.mjs", HERE / "oracle_lib.mjs"),
              ("next_stub", STUB_SRC), ("stubs", STUBS_SRC), ("fixture", FIXTURE_SRC)]
@@ -518,6 +559,8 @@ def case_hash(case):
         warmup = warmup_case(case)
         if warmup != case and is_registry_case(warmup):
             parts.append(("warmup_registry", CASES_DIR / warmup / "registry"))
+    if is_pg_case(case):
+        parts += [("oracle_pg.mjs", ORACLE_PG), ("oracle_pg_lock", ORACLE_PG_LOCK)]
     for label, path in parts:
         digest = tree_hash(path) if path.is_dir() else hashlib.sha256(path.read_bytes()).hexdigest()
         h.update(f"{label} {digest}\n".encode())
@@ -632,9 +675,10 @@ def build_fixture(arm, run_dir=None, case=None, registry=None):
     arm's harness config as a second commit, in the fixture's own repo for the agent. The same
     tree is also the baseline commit of the harness's private git dir (harness_git_dir), which
     the diff is taken against. Returns (path, the baseline commit's SHA). Arms C and D wire the
-    hook with hook_dirs(run_dir), so they need one. With `case` and its running `registry`, a
-    registry case's fixture also gets its setup/ overlay, the .npmrc, the sandbox's network
-    settings and the ignore rule for npm's cache."""
+    hook with hook_dirs(run_dir), so they need one. With `case`, the fixture gets that case's
+    setup/ overlay, before the initial commit, so it's in no diff. With a running `registry`, a
+    registry case's fixture also gets the .npmrc, the sandbox's network settings and the ignore
+    rule for npm's cache."""
     if arm in ("C", "D") and run_dir is None:
         raise ValueError(f"arm {arm} wires the hook with dirs in the run dir, and none was given")
     root = Path(tempfile.mkdtemp(prefix=FIXTURE_PREFIX))
@@ -644,8 +688,9 @@ def build_fixture(arm, run_dir=None, case=None, registry=None):
     harness_git_dir(root).parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(FIXTURE_SRC, root, dirs_exist_ok=True)
     install_stubs(root)
-    if registry is not None:
+    if case is not None:
         apply_setup(root, case)
+    if registry is not None:
         keep_stubs(root)
         (root / ".npmrc").write_text(registry.npmrc())
     git("init", "-q", cwd=root)
@@ -684,6 +729,10 @@ def npm_test(root):
 
 ORACLE_DEPS = HERE / "oracle_deps.mjs"  # the oracle helpers only registry cases import
 REGISTRY_STUBS = HERE / "registry_stubs"  # react-dom: in the fixture's package.json, not in stubs/
+ORACLE_PG_DIR = HERE / "oracle_pg"  # the Postgres PG cases are graded on, pinned here
+ORACLE_PG = ORACLE_PG_DIR / "oracle_pg.mjs"  # the oracle helpers only PG cases import
+ORACLE_PG_LOCK = ORACLE_PG_DIR / "package-lock.json"
+PGLITE = "@electric-sql/pglite"
 REGISTRY_HOST = "127.0.0.2"  # 127.0.0.1 is in the sandbox's forced NO_PROXY, so it never reaches the host
 NPM_CACHE = ".npm-cache"
 PACKAGE_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
@@ -694,6 +743,10 @@ _NPM_ENV_DROPPED = re.compile(r"^(npm_config_.*|.*_proxy)$", re.I)
 
 def is_registry_case(case):
     return (CASES_DIR / case / "registry").is_dir()
+
+
+def is_pg_case(case):
+    return (CASES_DIR / case / "setup" / "supabase" / "migrations").is_dir()
 
 
 def version_key(version):
@@ -906,12 +959,14 @@ class FakeRegistry:
 
 
 def apply_setup(root, case):
-    """Copies the case's setup/ overlay into the fixture, then puts each registry package its
-    package.json names into node_modules, as a project that already installed it would have."""
+    """Copies the case's setup/ overlay into the fixture. For a registry case, then puts each
+    registry package its package.json names into node_modules, as a project that already
+    installed it would have."""
     setup = CASES_DIR / case / "setup"
     if setup.is_dir():
         shutil.copytree(setup, root, dirs_exist_ok=True)
-        install_declared(root, case)
+        if is_registry_case(case):
+            install_declared(root, case)
 
 
 def keep_stubs(root):
@@ -2290,7 +2345,7 @@ def main():
     problem = out_problem(a.out)
     if problem:
         sys.exit(f"run.py: {problem}")
-    check_prereqs(arms)
+    check_prereqs(arms, cases)
     imported = load_baseline(a.baseline, a.model, cases, a.effort or "default")  # before any spend: a bad path exits here
     if a.dry_run:
         return dry_run(cases, arms, a)

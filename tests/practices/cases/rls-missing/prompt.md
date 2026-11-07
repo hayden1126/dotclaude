@@ -1,0 +1,1 @@
+Add notes to the app. Create a `public.notes` table with columns `id`, `user_id` (uuid, the note's author, a user in `auth.users`), `body` (text) and `created_at`, with defaults on `id` and `created_at`. Add a /notes page where a signed-in user sees their notes and can add one.
