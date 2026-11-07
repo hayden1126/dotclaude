@@ -1,7 +1,8 @@
-"""Offline checks on the long-runs skill's eval harness (no model calls)."""
+"""Offline checks on the long-runs skill and its eval harness (no model calls)."""
 import importlib.util
 import json
 import os
+import re
 import tempfile
 import unittest
 
@@ -17,6 +18,21 @@ def load_harness():
 
 
 harness = load_harness()
+EM_DASH = chr(0x2014)
+DENYLISTS = ("~/scratch/hackathon/denylist.txt", "~/scratch/exam-prep/denylist.txt")
+
+
+def read(*parts):
+    with open(os.path.join(REPO, *parts), encoding="utf-8") as f:
+        return f.read()
+
+
+def skill_text():
+    return read("skills", "long-runs", "SKILL.md")
+
+
+def frontmatter():
+    return re.match(r"---\n(.*?)\n---\n", skill_text(), re.S).group(1)
 
 
 def stream(*tools, reply="done", cost=0.25, skills=("long-runs",)):
@@ -27,6 +43,79 @@ def stream(*tools, reply="done", cost=0.25, skills=("long-runs",)):
             {"type": "tool_use", "name": name, "input": inp} for name, inp in tools]}},
         {"type": "result", "total_cost_usd": cost, "num_turns": 2, "result": reply},
     ]
+
+
+class SkillFile(unittest.TestCase):
+    def test_it_loads_by_itself(self):
+        self.assertRegex(frontmatter(), r"(?m)^name: long-runs$")
+        self.assertRegex(frontmatter(), r"(?m)^description: Use when")
+        self.assertNotIn("disable-model-invocation", frontmatter())
+
+    def test_the_description_names_each_moment_and_fits(self):
+        description = re.search(r"(?m)^description: (.*)$", frontmatter()).group(1)
+        self.assertLess(len(description), 500)
+        for word in ("start, plan or rerun", "release check", "CI", "lighter set", "time cost",
+                     "after a rebase", "which checks ran", "Not for one quick command"):
+            with self.subTest(word):
+                self.assertIn(word, description)
+
+    def test_the_skip_record_is_a_fixed_block_with_its_three_fields(self):
+        # The guardrail: a skip is written down in these words, whoever reads it next.
+        block = re.search(r"```\n(Skipped:.*?)```", skill_text(), re.S).group(1)
+        self.assertEqual([line.split(":")[0] + ":" for line in block.splitlines()],
+                         list(harness.SKIP_LABELS))
+
+    def test_a_skip_never_reads_as_a_pass(self):
+        self.assertIn("A skip never reads as a pass", skill_text())
+        self.assertIn('"all green" covers only what ran', skill_text())
+
+    def test_required_gates_stay(self):
+        self.assertIn("drops no gate the repo or the user requires", skill_text())
+
+    def test_unknown_shared_state_is_answered_not_a_reason_to_stay_serial(self):
+        # The baseline's failure: "keep them serial unless you know".
+        self.assertIn("never a reason to stay serial", skill_text())
+
+    def test_it_points_to_delegation_and_coding_practices_rather_than_repeating_them(self):
+        self.assertIn("`delegation`", skill_text())
+        self.assertIn("`coding-practices` rules 11 and 12", skill_text())
+        rules = read("skills", "coding-practices", "SKILL.md")
+        self.assertIn("11. **Verify claims by experiment.**", rules)
+        self.assertIn("12. **Prove a change on the real path.**", rules)
+
+    def test_no_em_dashes(self):
+        self.assertNotIn(EM_DASH, skill_text())
+        self.assertNotIn(EM_DASH, harness.claude_md_line())
+
+    def test_no_private_name_in_what_this_lane_ships(self):
+        shipped = skill_text() + read("tests", "long_runs", "cases.json")
+        for path in DENYLISTS:
+            path = os.path.expanduser(path)
+            if not os.path.isfile(path):
+                continue
+            with open(path, encoding="utf-8") as f:
+                for word in f.read().split("\n"):
+                    if word.strip() and not word.startswith("#"):
+                        with self.subTest(path=path, word=word):
+                            self.assertNotIn(word.strip().lower(), shipped.lower())
+
+
+class Registered(unittest.TestCase):
+    def test_claude_md_holds_the_always_loaded_rule(self):
+        line = harness.claude_md_line()
+        self.assertIn("load the `long-runs` skill", line)
+        self.assertIn("Quote a time only from a measured run", line)
+        self.assertIn("say unmeasured", line)
+
+    def test_readme_lists_the_skill_and_its_tests(self):
+        rows = read("README.md").splitlines()
+        skills = next(line for line in rows if line.startswith("| `skills/` |"))
+        self.assertIn("`long-runs`", skills)
+        self.assertTrue(any(line.startswith("| `tests/long_runs/` |") for line in rows))
+
+    def test_it_stays_off_codex_list(self):
+        # CODEX_SKILLS is Hayden's list of portable skills, and this one names lanes.
+        self.assertNotRegex(read("setup.sh"), r"CODEX_SKILLS=\(.*long-runs")
 
 
 class Cases(unittest.TestCase):

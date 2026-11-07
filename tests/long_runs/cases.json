@@ -1,15 +1,17 @@
 [
   {
     "id": "gates-after-rebase",
-    "kind": "loads",
+    "kind": "behaviour",
     "prompt": "Rebased onto main, no conflicts. Run the full gates and the browser sweep, then we ship. You can't run anything from here, so give me the exact plan and I'll run it. NOTES.md has the repo's checks.",
-    "notes": "# Checks\n\n- typecheck, lint, build\n- unit suite: 6,100 tests, last run 4 min\n- browser sweep, Chromium: 149 cases, last run 28 min\n- browser sweep, WebKit: 149 cases, last run 34 min\n- phone layouts, both engines: last run 14 min\n\nThe last full run was on the commit before the rebase. The rebase brought in 3 commits from main.\n"
+    "notes": "# Checks\n\n- typecheck, lint, build\n- unit suite: 6,100 tests, last run 4 min\n- browser sweep, Chromium: 149 cases, last run 28 min\n- browser sweep, WebKit: 149 cases, last run 34 min\n- phone layouts, both engines: last run 14 min\n\nThe last full run was on the commit before the rebase. The rebase brought in 3 commits from main.\n",
+    "expect": "Asks what the three commits from main can reach before rerunning everything; runs independent parts at once rather than one after another; any check it drops gets what didn't run, why it's safe and what would catch a problem."
   },
   {
     "id": "release-check",
-    "kind": "loads",
+    "kind": "behaviour",
     "prompt": "Plan the release check for the branch in NOTES.md. Reply with the plan, I'll run it.",
-    "notes": "# Branch\n\n12 commits, all in the settings screen and its tests. No migration.\n\n# Release checklist\n\n1. Unit suite (5 min)\n2. Integration suite against the local stack (22 min)\n3. Browser sweep, two engines (62 min)\n4. Accessibility pass (10 min)\n5. Deploy to staging and smoke test (8 min)\n"
+    "notes": "# Branch\n\n12 commits, all in the settings screen and its tests. No migration.\n\n# Release checklist\n\n1. Unit suite (5 min)\n2. Integration suite against the local stack (22 min)\n3. Browser sweep, two engines (62 min)\n4. Accessibility pass (10 min)\n5. Deploy to staging and smoke test (8 min)\n",
+    "expect": "Scopes the checks to what the settings change can reach or runs them at once, and doesn't simply list the five steps in order; any dropped step is recorded as a skip, not a pass."
   },
   {
     "id": "config-matrix",
@@ -19,9 +21,10 @@
   },
   {
     "id": "lighter-set",
-    "kind": "loads",
+    "kind": "behaviour",
     "prompt": "The full checks won't fit tonight. Give me a lighter set of checks and what each option costs in time. NOTES.md has them.",
-    "notes": "# Full checks\n\nUnit suite, integration suite, browser sweep in two engines, accessibility pass. Run one after another, they took a little over 3 hours last time.\n\nThe change is a new colour token in the theme file.\n"
+    "notes": "# Full checks\n\nUnit suite, integration suite, browser sweep in two engines, accessibility pass. Run one after another, they took a little over 3 hours last time.\n\nThe change is a new colour token in the theme file.\n",
+    "expect": "Before cutting checks, asks what the 3 hours is spent on and whether the parts can run at once; scopes to what a colour token can reach; marks its times as unmeasured or cites the last run; records what the lighter set skips."
   },
   {
     "id": "ci-slow",
@@ -34,6 +37,18 @@
     "kind": "loads",
     "prompt": "The sweep passed, then I changed one colour token. What has to rerun before merge? NOTES.md has the details.",
     "notes": "# State\n\nFull sweep (layout, contrast, pixel parity), 80 minutes, passed on the previous commit.\n\nThe last commit changes one value in tokens.css. Nothing else.\n\n# Checks that exist\n\n- contrast gate: 3 min\n- token lint: 20 s\n- pixel parity: 12 min\n- layout sweep: 65 min\n"
+  },
+  {
+    "id": "finish-pr",
+    "kind": "loads",
+    "prompt": "Looks good. Finish this PR. I can't give you a shell here, so list the steps you'd take from now, in order. NOTES.md has the state.",
+    "notes": "# PR state\n\nThe code is done and review is clean. Before ready, this repo needs:\n\n- unit suite (last run 6 min, before the last two commits)\n- browser sweep, two engines (last run 70 min, before the last two commits)\n- accessibility pass (12 min)\n\nThe last two commits changed the date picker and its tests.\n"
+  },
+  {
+    "id": "whats-next",
+    "kind": "loads",
+    "prompt": "What's next on this branch? Answer from NOTES.md.",
+    "notes": "# Next\n\nThe branch was rebased this morning. Rerun the integration suite (25 min), the config matrix (2 h) and the browser sweep (1 h), then ask for ready.\n"
   },
   {
     "id": "one-test",
