@@ -133,7 +133,8 @@ CLICK_JS = """(async (index) => {
   const group = button.closest(".m-ctl")?.querySelector("span")?.textContent;
   const expected = !button.closest("#c-frame") && group !== "Zoom" && button.getAttribute("aria-pressed") !== "true";
   const live = () => app.contentDocument?.documentElement.outerHTML;
-  const label = button.textContent.trim(), before = app.srcdoc, liveBefore = live();
+  const where = group || button.closest(".m-box")?.querySelector("h2")?.textContent;
+  const label = `${button.textContent.trim()} (${where})`, before = app.srcdoc, liveBefore = live();
   const loaded = new Promise((done) => { app.addEventListener("load", done, { once: true }); setTimeout(done, 1000); });
   button.click();
   await (app.srcdoc === before ? new Promise(requestAnimationFrame) : loaded);
@@ -147,6 +148,10 @@ class BrowserError(Exception):
 
 class NoAnswer(BrowserError):
     """A command timed out: a live browser whose page is stuck."""
+
+
+class Crashed(BrowserError):
+    """The tab's render process died. Its commands would only time out, which reads as a stuck page."""
 
 
 class NoBrowser(BrowserError):
@@ -273,6 +278,8 @@ class Browser:
         deadline = time.monotonic() + timeout
         while True:
             reply = self._message(deadline)
+            if reply.get("method") == "Inspector.targetCrashed":
+                raise Crashed("the page's render process crashed")
             if reply.get("id") != mid:
                 continue                 # an event, or a reply nobody waits for
             if "error" in reply:
@@ -304,6 +311,7 @@ class Page:
         self.session = browser.call("Target.attachToTarget",
                                     {"targetId": self.target, "flatten": True})["sessionId"]
         self.call("Page.enable")
+        self.call("Inspector.enable")
         self.call("Page.addScriptToEvaluateOnNewDocument", {"source": ERRORS_JS})
 
     def call(self, method: str, params: dict | None = None) -> dict:
@@ -505,14 +513,20 @@ def check_resize(report: Report, browser: Browser, url: str):
 
 
 def check_controls(report: Report, browser: Browser, url: str):
-    """Click every button once. render() runs per click, so a throw on one option
-    shows only here."""
+    """Click each button on a fresh page, so each option runs from the defaults a
+    viewer opens on, not after every earlier click. render() runs per click, so a
+    throw on one option shows only here."""
     tab = Page(browser)
     tab.open(url, *CONTROLS_SIZE)
     count = tab.evaluate('document.querySelectorAll(".m-seg button").length')
-    unchanged = [tab.evaluate(f"{CLICK_JS}({index})") for index in range(count)]
-    check_errors(report, tab, "controls {}x{}, {} buttons".format(*CONTROLS_SIZE, count))
+    errors, unchanged = [], []
+    for index in range(count):
+        tab.open(url, *CONTROLS_SIZE)
+        unchanged.append(tab.evaluate(f"{CLICK_JS}({index})"))
+        errors += tab.evaluate(READ_ERRORS_JS)
     tab.close()
+    scope = "controls {}x{}, {} buttons".format(*CONTROLS_SIZE, count)
+    report.check(scope, "no script errors", not errors, "; ".join(errors[:2]) or "none")
     for label in filter(None, unchanged):
         print(f"WARN controls: {label} changed nothing in the render; fine if it only shows beside another option")
 
@@ -523,7 +537,7 @@ def preflight(browser: Browser, url: str) -> tuple[list[str], list[str]]:
     tab.load(url, *WIDE[0])
     missing = tab.evaluate(f"{json.dumps(HOOKS)}.filter((s) => !document.querySelector(s))")
     missing += tab.evaluate(f"""{json.dumps(CSS_VARIABLES)}.filter((v) =>
-      !getComputedStyle(document.documentElement).getPropertyValue(v).trim())""")
+      !(parseFloat(getComputedStyle(document.documentElement).getPropertyValue(v)) >= 0))""")
     errors = tab.evaluate(READ_ERRORS_JS)
     tab.close()
     return missing, errors
@@ -532,7 +546,7 @@ def preflight(browser: Browser, url: str) -> tuple[list[str], list[str]]:
 def run(browser: Browser, url: str) -> int:
     missing, errors = preflight(browser, url)
     if missing:
-        print(f"the page lacks required hooks: {', '.join(missing)}", file=sys.stderr)
+        print(f"the page lacks required hooks or a plain px value: {', '.join(missing)}", file=sys.stderr)
         for error in errors:
             print(f"its script failed: {error}", file=sys.stderr)
         return 2
@@ -550,12 +564,29 @@ def run(browser: Browser, url: str) -> int:
     return 0
 
 
+def verdict(browser: Browser, exc: BrowserError) -> int:
+    """Whose fault a run that stopped early was: the last line says, and so does the exit."""
+    if isinstance(exc, Crashed) or browser.dead():
+        print(exc, file=sys.stderr)
+        print("the browser died during the check, so this says nothing about the page: run it again; "
+              "if it repeats, look for runaway memory in the render", file=sys.stderr)
+        return 2
+    if isinstance(exc, NoAnswer):
+        print("FAIL the page stopped responding: look for a loop in render() or the render's own script")
+    else:
+        print(f"FAIL the page broke the check: {str(exc).splitlines()[0]}")
+    return 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Prove a mock page holds the one-screen layout.")
     parser.add_argument("page", type=pathlib.Path)
     page = parser.parse_args().page
     if not page.is_file():
         print(f"no such page: {page}", file=sys.stderr)
+        return 2
+    if page.suffix.lower() not in (".html", ".htm"):
+        print(f"not an HTML page: {page}", file=sys.stderr)
         return 2
     browser = None
     try:
@@ -571,16 +602,7 @@ def main() -> int:
     try:
         return run(browser, page.resolve().as_uri())
     except BrowserError as exc:
-        if browser.dead():
-            print(exc, file=sys.stderr)
-            print("the browser died during the check, so this says nothing about the page: run it again",
-                  file=sys.stderr)
-            return 2
-        if isinstance(exc, NoAnswer):
-            print("FAIL the page stopped responding: look for a loop in render() or the render's own script")
-        else:
-            print(f"FAIL the page broke the check: {str(exc).splitlines()[0]}")
-        return 1
+        return verdict(browser, exc)
     finally:
         browser.close()
 

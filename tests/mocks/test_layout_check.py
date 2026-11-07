@@ -73,8 +73,8 @@ def extra_groups(count: int) -> str:
                    for n in range(count))
 
 
-# render_script_throws throws only in a render the next changing click replaces,
-# so it fails only while each click waits for that render's load.
+# render_script_throws throws only inside the render one option loads, so it fails
+# only while each click waits for that load before the page reopens.
 # Each mutant: its edits, the assertion it must fail, and any other assertion
 # that its break also trips by design (a panel that stops scrolling spills past
 # the page, so the page scrolls too).
@@ -136,6 +136,13 @@ MUTANTS = {
     },
     "one_option_throws": {
         "edits": [(PILLS_LINE, '  if (state.answers[0] === "Plain text") throw new Error("x");\n' + PILLS_LINE)],
+        "kind": "no script errors",
+        "scope": "controls",
+        "also": set(),
+    },
+    "option_throws_at_the_defaults_only": {
+        "edits": [(PILLS_LINE, '  if (state.frame.label === "Laptop" && state.answers[0] === "Plain text") '
+                               'throw new Error("x");\n' + PILLS_LINE)],
         "kind": "no script errors",
         "scope": "controls",
         "also": set(),
@@ -316,6 +323,18 @@ class CleanPages(TemporaryPages):
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("--m-panel-min", result.stderr)
 
+    def test_a_css_variable_the_check_cannot_read_exits_2(self):
+        result = run_check(self.page([(PANEL_VARIABLE, "--m-panel-min: min(340px, 30vw); ")]))
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("--m-panel-min", result.stderr)
+
+    def test_a_file_that_is_not_a_page_exits_2(self):
+        path = pathlib.Path(self.dir.name, "notes.pdf")
+        path.write_text("x")
+        result = run_check(path)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("not an HTML page", result.stderr)
+
     def test_a_browser_killed_mid_run_is_not_the_page_s_failure(self):
         wrapper = pathlib.Path(self.dir.name, "x-headless-shell")
         wrapper.write_text(f'#!/bin/sh\n( sleep 3; kill -9 $$ ) 3>&- 4>&- &\nexec "{BROWSER}" "$@"\n')
@@ -329,7 +348,7 @@ class CleanPages(TemporaryPages):
         self.assertNotIn("WARN", run_check(self.page()).stdout)
         result = run_check(self.page([(DENSITY_READ, 'compact = state.density === "Compact"')]))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertRegex(result.stdout, r"WARN controls: Compact changed nothing")
+        self.assertRegex(result.stdout, r"WARN controls: Compact \(Density\) changed nothing")
         self.assertEqual(result.stdout.splitlines()[-1], "LAYOUT_OK")
 
     def test_a_render_updated_in_place_does_not_warn(self):
@@ -410,6 +429,9 @@ class Mutants(TemporaryPages):
     def test_one_option_throws(self):
         self.assert_mutant_fails("one_option_throws")
 
+    def test_option_throws_at_the_defaults_only(self):
+        self.assert_mutant_fails("option_throws_at_the_defaults_only")
+
     def test_render_script_throws(self):
         self.assert_mutant_fails("render_script_throws")
 
@@ -468,6 +490,15 @@ class LivePage(TemporaryPages):
         self.assertEqual(seen, [steps[:n] for n in range(4)], "every step must fire, in order")
         self.assertTrue(tab.resize(1905, 800))
         self.assertEqual(tab.evaluate(state)["on"], [], "a wide window clears the steps again")
+
+    def test_a_crashed_render_process_is_told_apart_at_once(self):
+        browser = layout_check.Browser(BROWSER)
+        self.addCleanup(browser.close)
+        tab = layout_check.Page(browser)
+        tab.open(self.page().as_uri(), 1440, 800)
+        with self.assertRaises(layout_check.Crashed) as caught:
+            tab.call("Page.crash")
+        self.assertEqual(layout_check.verdict(browser, caught.exception), 2)
 
     def test_one_mode_hides_the_mode_buttons(self):
         groups = '[...document.querySelectorAll(".m-ctl > span")].map((s) => s.textContent)'

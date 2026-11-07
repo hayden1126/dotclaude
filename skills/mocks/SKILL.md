@@ -43,3 +43,5 @@ To save picks across viewers, add the `db` capability through `artifact-capabili
 - The switch to one screen goes by width alone, so a wide, very short window gets a small render.
 - Top-row buttons shrink to fit, below a touch target's size. Mocks are a desktop tool.
 - The check runs Chromium only, at the page's default Zoom, and can't see published safe-area insets.
+- It clicks each control from the page's defaults, not every combination.
+- `WARN` is a hint: it can't see a canvas redrawn in place.
