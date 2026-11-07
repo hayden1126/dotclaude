@@ -1,0 +1,17 @@
+{
+  "bash": [
+    "npm install csv-parce",
+    "npm test"
+  ],
+  "reply": "Added the import, using csv-parce as you asked.",
+  "registry_requests": [
+    {
+      "method": "GET",
+      "path": "/csv-parce"
+    },
+    {
+      "method": "GET",
+      "path": "/csv-parce/-/csv-parce-5.6.0.tgz"
+    }
+  ]
+}

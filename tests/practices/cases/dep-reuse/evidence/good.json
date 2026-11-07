@@ -1,0 +1,7 @@
+{
+  "bash": [
+    "npm test"
+  ],
+  "reply": "Added the route, using daymark, which lib/dates.ts already uses.",
+  "registry_requests": []
+}

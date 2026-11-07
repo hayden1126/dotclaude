@@ -90,14 +90,13 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - #144 (exam-prep): rules public, evidence private (Hayden, 2026-10-20).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
-  - **Live lanes** (briefs in each record). Merge order: 1 hackathon (`feat/hackathon-mode`, carries the lead's notes; a
-    hackathon starts 2026-11-14, so it merges by 2026-11-11), 2 practices
-    (`feat/practices-dependencies`, its next PR; live at the event, Hayden 2026-11-06, so it
+  - **Live lanes** (briefs in each record). Merge order: 1 practices
+    (`feat/practices-dependencies`, its next PR, carries the lead's notes; live at the event, Hayden 2026-11-06, so it
     merges by 2026-11-11; hackathon mode has its install check off, through Hayden's own
-    `practices-gate` line at kickoff, since no session may turn the gate off), 3 merge-record
-    (`fix/after-merge-record`, opened 2026-11-06 on Hayden's pick; by 2026-11-11), 4 license
-    (`chore/license`, opened 2026-11-06 on Hayden's pick; last, since it and lanes hackathon and
-    practices change README.md).
+    `practices-gate` line at kickoff, since no session may turn the gate off), 2 merge-record
+    (`fix/after-merge-record`, opened 2026-11-06 on Hayden's pick; by 2026-11-11), 3 license
+    (`chore/license`, opened 2026-11-06 on Hayden's pick; last, since it and lane practices change
+    README.md).
     **Install freeze on HAYPC, Nov 12 through Nov 15** (Hayden, 2026-11-05): no lane installs in
     that window, except fixes for lane hackathon, so the event runs what the dry run tested. The lead's
     reinstall after a merge counts as an install, so no other lane merges in that window.
@@ -125,6 +124,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     capella-studio lane artexport's report; a fork's hook output never reaches its model, so it
     knows its lane only from the parent's copied line, docs/lanes.md S5; the delegation canary
     checks the source enum; untried against lane practices' settings.json change),
+    hackathon (#168, 2026-11-06, merge 18869e2: the hackathon mode skills, `interview`,
+    `frontend-motion`, `secret-scan`, the SEC-64 kickoff step; installed from main),
     deny-rules (#167, 2026-11-06: SW3, SW7, SW12, SW14, SW4, DA12 (a) and PG1; installed before
     lane hackathon's dry run on Hayden's pick; Hayden's leftover asks are in its closed record's
     Asks for Hayden, `.git/lanes/_closed/deny-rules-2026-11-06/`),
@@ -160,6 +161,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     hackathon merges (it owns `skills/demo-video/` and its tests); lead's lean: after the event.
     Music and footage need a recorded source and licence per file (lane license's rule), and
     recording a voice from WSL needs the Windows microphone, still unprobed.
+  - **secret-scan misses `.env~` and `.envrc-local`/`.envrc_local`** (low; the practices review
+    before #168's ready, 2026-11-06): neither `secret-scan` nor
+    `skills/hackathon/templates/gitignore` covers them. Small, but it touches the hackathon
+    skills, so it merges and installs before Nov 12. Evidence: lane hackathon's closed record,
+    `artifacts/smoke/cec4381/practices-review.md`.
   - **Two gaps in the lead's close gate** (`skills/lanes/SKILL.md`, text already on main; found by
     lane merge-record, 2026-11-06). (1) A merged lane with no live session and a failing
     `handoff-check` has no written next step: the lead never respawns another lane's session, and
@@ -429,25 +435,20 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Live lanes: `lane ls`; state in their records (2026-11-06: hackathon, practices' next PR;
-     merge-record, license; no slot free). #167 merged and is installed from main; lane
+  0. Live lanes: `lane ls`; state in their records (2026-11-07: practices' next PR, merge-record,
+     license; one slot free). #167 merged and is installed from main; lane
      hackathon's dry run ran on it 2026-11-06 and is done, so installs may resume. Hayden's leftover asks from lane deny-rules
      (an overlay paste plus a setup rerun, probe leftovers, local tool cleanups): its closed
-     record. Lane hackathon merges by Nov 11:
-     move it up if the queue threatens that. Install freeze Nov 12 through Nov 15. A chain that
+     record. Lanes practices and merge-record merge and install by Nov 11. Install freeze Nov 12 through Nov 15. A chain that
      stops before its "main moved" step still tells the lanes, and arms a wake on the blocker
      (`skills/lanes/SKILL.md`). Open
      with Hayden (repeat them in each reply's Waiting list until answered): try `/interview` in
      the prep repo named in [[dotclaude-hackathon-mode]]; rehearse reaching this machine from another
      network by Nov 12; the event's local-lead email (not sent as of 2026-11-06); by Nov 12 who
-     presents (his teammates want the skills, 2026-11-06); hq's three questions and the SW13 fix for the hq
-     window. Before each post-merge chain, run DA15's
+     presents (his teammates want the skills, 2026-11-06). Before each post-merge chain, run DA15's
      pre-check from the private FINDINGS rows, and its added checks before any sandbox-off fetch
      in this repo. Since #161, `lane new` runs only with the sandbox off. Since #156's install, a lone
-     excluded call (gh, git push or fetch, lane) runs only from a repo's top. Running sessions took
-     #157's cache narrowing live at its install (2026-10-31 14:39 local): a session started
-     before it needs a `/pass` before a sandboxed uv, pip, pnpm, node-gyp, bun or Playwright run. Pending with Hayden, outside the lanes: `wsl --shutdown` at a break applies the
-     WSL memory cap in `.wslconfig`.
+     excluded call (gh, git push or fetch, lane) runs only from a repo's top.
      Before each lead STATUS commit, grep it against the exam-prep denylist
      ([[lead-status-denylist-check]]). After each reinstall,
      check `ls -la ~/.claude/CLAUDE.md` (the Watch item). Watch that push asks open with the

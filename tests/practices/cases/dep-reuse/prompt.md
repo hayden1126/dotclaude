@@ -1,0 +1,1 @@
+The invoice page needs a due date. Invoices are due 30 days after `created_at`. Add GET /api/invoices/[id]/due for the invoice's owner, returning `{ "due": "Jan 3, 2027", "relative": "in 3 days" }`: the date in that format, and how far away it is.
