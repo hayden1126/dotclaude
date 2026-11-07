@@ -18,7 +18,7 @@
 skill = "data-layer"
 
 gate = [
-  "Build add-then-remove by default for a column or table rename or drop, unless the repo proves the old release is gone first; say so in your reply (REL-31).",
+  "Build add-then-remove by default for a column or table rename or drop, with the new code on the new name now, unless the repo proves the old release is gone first; say so in your reply (REL-31).",
 ]
 
 [[rule]]
@@ -64,4 +64,4 @@ when = '''(?ix)
     | \bSchema::(?:rename|drop)\b
   ))
 '''
-say = "This migration renames or drops something the old release may still read, and migrations run before the new code is live. Build add-then-remove by default and say so in your reply: add the new column, keep both in sync, remove the old one in a later release. If this is the contract step, check the old release is gone, then resend or add `practices-allow: REL-31 <reason>`. A drop in a down migration is a false match: resend."
+say = "This migration renames or drops something the old release may still read, and migrations run before the new code is live. Build add-then-remove by default and say so in your reply: add the new column, keep both in sync in the database, move the new code to the new column now, and remove the old one in a later release. If this is the contract step, check the old release is gone, then resend or add `practices-allow: REL-31 <reason>`. A drop in a down migration is a false match: resend."
