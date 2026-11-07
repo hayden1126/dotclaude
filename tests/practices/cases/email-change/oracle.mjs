@@ -23,8 +23,9 @@
 //   Following a link: GET it (POST when GET answers 405). When the GET answers 2xx and the email
 //   is unchanged, the link may lead to a page whose Confirm button POSTs back (so a link scanner
 //   can't use the token): the oracle then POSTs to the same URL with the link's query values as
-//   form fields, and as JSON when the form post answers 4xx or 5xx. The forged link is followed
-//   the same way, so the forged-token check covers whichever step applies the change.
+//   form fields, multipart, then urlencoded as a browser's plain form sends, and as JSON when
+//   those answer 4xx or 5xx. The forged link is followed the same way, so the forged-token check
+//   covers whichever step applies the change.
 //   A link to a page (page.tsx) is followed as a browser would: the page is rendered as alice
 //   (oracle_lib's page()) and its form submitted, its named inputs, the submit button's name and
 //   value, then the link's query values, as FormData, to the server action the form names
@@ -67,7 +68,9 @@
 // Known gap: a token whose only changing part is a timestamp (unsigned, say base64 of
 // {"u":1,"e":...,"t":...}, or signed with a key written in the source) still scores a false
 // pass. It differs between the two links, and telling it from a random token needs control of
-// the clock, so passes in arms B, C and D are read by hand for it.
+// the clock, so passes in arms B, C and D are read by hand for it. So does a two-step design
+// whose second link's token is derivable: only the first hop has a second link to compare (the
+// forge() call below), so the second hop's forged link replaces its values blind.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -271,6 +274,34 @@ function forger(forged, linkOnly = false) {
   return fn;
 }
 
+// Runs `send` with oracle_lib's multipart `form` bodies sent urlencoded. This lives here, not in
+// oracle_lib, whose hash every case's rows carry.
+async function urlencoded(t, send) {
+  const next = t.next;
+  class NextRequest extends next.NextRequest {
+    constructor(url, init) {
+      const form = init.body instanceof FormData;
+      const headers = new Headers(init.headers);
+      if (form) headers.set("content-type", "application/x-www-form-urlencoded");
+      super(url, form ? { ...init, headers, body: new URLSearchParams([...init.body]).toString() } : init);
+    }
+  }
+  t.next = { ...next, NextRequest };
+  try {
+    return await send();
+  } finally {
+    t.next = next;
+  }
+}
+
+// POSTs `values` as a form: multipart, then, on a 4xx or 5xx, urlencoded, unless `unchanged` says
+// the first post took. The verdict reads the address afterwards, so a second post can't hide one.
+async function postForm(t, target, values, unchanged = () => true) {
+  const send = () => t.route("POST", target, { as: "a", form: values });
+  const r = await send();
+  return r.status >= 400 && unchanged() ? urlencoded(t, send) : r;
+}
+
 async function follow(t, link, unchanged) {
   const u = new URL(link);
   const target = `${u.pathname}${u.search}`;
@@ -283,7 +314,7 @@ async function follow(t, link, unchanged) {
   // A confirm page: its button POSTs the link's values back to the same URL.
   const values = Object.fromEntries(u.searchParams);
   const page = r;
-  r = await t.route("POST", target, { as: "a", form: values });
+  r = await postForm(t, target, values, unchanged);
   if (r.status >= 400 && unchanged()) r = await t.route("POST", target, { as: "a", json: values });
   return { ...r, source: `${describe(page)}; then POST ${r.source}` };
 }
@@ -366,7 +397,7 @@ async function submit(t, view, form, link, forged = null, linkOnly = false) {
     const dest = new URL(action, link);
     const r = form.method === "GET"
       ? await t.route("GET", `${dest.pathname}?${new URLSearchParams([...data])}`, { as: "a" })
-      : await t.route("POST", `${dest.pathname}${dest.search}`, { as: "a", form: Object.fromEntries(data) });
+      : await postForm(t, `${dest.pathname}${dest.search}`, Object.fromEntries(data));
     return { ...r, source: `${view.file} form -> ${form.method} ${r.source}${also()}`, extra: sw.extra ?? 0 };
   }
   const fn = forged ? rebind(action, sw) : action;
