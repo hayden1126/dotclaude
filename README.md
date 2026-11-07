@@ -747,7 +747,8 @@ need nothing extra.
   - **L2b:** a rule can opt in to reading a Bash command's text, so a file written through Bash
     is seen before the commit. A rename or drop in a migration (`data-layer`'s REL-31) is denied
     once per matched line, and the resend passes. The check reads command text only and is blunt
-    on purpose: the levels below read what was committed.
+    on purpose: the levels below read what was committed. A rule's words must also be in the
+    `settings.json` filter, or its commands never reach the hook.
   - **L3s:** after a Bash call that made a commit, it scans what the new commits add against every
     rule tagged for commits (by default all of them), a set of key shapes and SEC-60 (a lockfile
     changed with no audit run), and tells Claude the findings so it can amend. At `git push` it

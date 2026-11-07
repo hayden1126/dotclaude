@@ -4,11 +4,13 @@
 # whose fix needs more than a deny line carries. A rename or a drop is a pattern, and REL-31's
 # deny carries the fix, so the rule alone is enough. SPEC.md has the test and what would revisit it.
 #
-# `when` works line by line, since the commit scan reads added lines one at a time, and it isn't
-# anchored, since a Bash call may hold the statement mid-line (printf '...' > "$f"). Known misses:
-# MySQL's `change a b`, and `drop a` alone on a continuation line (it reads like other statements
-# there). Accepted false matches, each costing one resend: a commented-out drop or `rename to`,
-# `alter index x rename to y`, a temporary table's drop, and a down migration's drop.
+# `when` works line by line, since the commit scan reads added lines one at a time. It skips a
+# line that starts as a comment, since the first step of an add-then-remove may say what a later
+# release drops, and otherwise matches anywhere on the line, since a Bash call may hold the
+# statement mid-line (printf '...' > "$f"). Known misses: MySQL's `change a b`, and `drop a` alone
+# on a continuation line (it reads like other statements there). Accepted false matches, each
+# costing one resend: a comment after a statement, `alter index x rename to y`, a temporary
+# table's drop, and a down migration's drop.
 # Samples for every form: tests/setup/practices_samples/data-layer.toml.
 
 skill = "data-layer"
@@ -30,22 +32,30 @@ at = ["edit", "commit", "bash"]
 # The Bash level has no path to match, so it reads these words in the command instead.
 command = '''(?i)migrat|alembic|drizzle'''
 when = '''(?ix)
-  \brename\s+(?:column|table|to)\b
-  | \bdrop\s+(?:column|table)\b
-  # ALTER TABLE names a column bare. Everything after the keyword that isn't a column stays out.
-  | \balter\s+table\b[^;\n]{0,200}?\brename\s+(?!constraint\b|index\b|key\b)
-  | \balter\s+table\b[^;\n]{0,200}?\bdrop\s+
-    (?!constraint\b|not\b|default\b|identity\b|expression\b|index\b|key\b|primary\b|foreign\b
-       |check\b|partition\b)
-  # `RENAME a TO b` alone on the line after ALTER TABLE. Anchored so a comment's prose passes.
-  | ^\s*rename\s+(?:"[^"\n]{1,128}"|`[^`\n]{1,128}`|\[[^\]\n]{1,128}\]|[\w$.]+)\s+to\b
-  # Rails, and Alembic and Sequel.
-  | \b(?:rename_column|remove_columns?|rename_table|drop_table|drop_column)\b
-  # Django.
-  | \b(?:RenameField|RemoveField|RenameModel|DeleteModel)\b
-  # Alembic's alter_column rename.
-  | \bnew_column_name\s*=
-  # Knex, TypeORM and Sequelize.
-  | \b(?:renameColumn|renameTable|removeColumn|dropColumns?|dropTable(?:IfExists)?)\b
+  ^(?![^\S\n]*(?:--|\#|//))[^\n]{0,4000}?
+  (?:
+    \brename\s+(?:column|table|to)\b
+    | \bdrop\s+(?:column|table)\b
+    # ALTER TABLE names a column bare. Everything after the keyword that isn't a column stays out.
+    | \balter\s+table\b[^;\n]{0,200}?\brename\s+(?!constraint\b|index\b|key\b)
+    | \balter\s+table\b[^;\n]{0,200}?\bdrop\s+
+      (?!constraint\b|not\b|default\b|identity\b|expression\b|index\b|key\b|primary\b|foreign\b
+         |check\b|partition\b)
+    # `RENAME a TO b` alone on the line after ALTER TABLE, so prose mid-line passes.
+    | ^[^\S\n]*rename\s+(?:"[^"\n]{1,128}"|`[^`\n]{1,128}`|\[[^\]\n]{1,128}\]|[\w$.]+)\s+to\b
+    # Rails, and Alembic and Sequel.
+    | \b(?:rename_column|remove_columns?|rename_table|drop_table|drop_column)\b
+    | \bremove_(?:references?|belongs_to)\b
+    # Rails inside a change_table block, whatever the block's variable is called.
+    | \.(?:remove|rename)[\s(]+:\w
+    # T-SQL.
+    | \bsp_rename\b
+    # Django.
+    | \b(?:RenameField|RemoveField|RenameModel|DeleteModel)\b
+    # Alembic's alter_column rename.
+    | \bnew_column_name\s*=
+    # Knex, TypeORM and Sequelize.
+    | \b(?:renameColumn|renameTable|removeColumn|dropColumns?|dropTable(?:IfExists)?)\b
+  )
 '''
 say = "This migration renames or drops something the old release may still read, and migrations run before the new code is live. Build add-then-remove by default and say so in your reply: add the new column, keep both in sync, remove the old one in a later release. If this is the contract step, check the old release is gone, then resend or add `practices-allow: REL-31 <reason>`. A drop in a down migration is a false match: resend."

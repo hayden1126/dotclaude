@@ -17,7 +17,8 @@ Each practices skill ships an events.toml beside its SKILL.md:
   unless = '''optional regex'''
   paths = ["optional globs"]
   at = ["edit", "commit"]   # optional: the levels it runs at, both by default; "bash" is opt-in
-  command = '''regex'''     # required with "bash": the path words a command must hold
+  command = '''regex'''     # required with "bash": the path words a command must hold; the
+                            # call reaches this only if settings.json's filter passes it too
   scope = "line"            # optional: judged line by line (default "file")
   say = "one line"
 
@@ -118,9 +119,9 @@ start, as one systemMessage line (shown to the user only), and prints nothing wh
 
 Bash levels. settings.json sends a Bash call here only when its command (the payload's
 "command" string, never the tool_response output) holds git with commit or push, gh with pr
-ready or pr create, a package manager with an add verb, or, in either order and any case, a
-path word and a rename or drop word for L2b (PostToolUse: git with commit), so Python never
-starts for any other call. A test ties L2b's rules to that filter by their samples.
+ready or pr create, a package manager with an add verb, or, in either order and in lower, Title
+or UPPER case, a path word and a rename or drop word for L2b (PostToolUse: git with commit), so
+Python never starts for any other call. A test ties L2b's rules to that filter by their samples.
 The prefilter is one `LC_ALL=C grep -E`, linear in the payload (a bash `case` glob backtracked
 over every "git" in a large output). Every practices entry in settings.json (edit, Bash and
 SessionStart) runs the shim only when it exists and then exits 0; a deny is JSON on stdout.
@@ -203,12 +204,15 @@ tell names a finding by rule, path and line, never the matched text, and so does
 
 L2b runs in PreToolUse(Bash) right after SEC-64 and reads no repo and no file. Its rule gives
 `command` in place of `paths`: a call is denied when `command` and `when` both match the raw
-command text and neither `unless` nor `practices-allow: <id>` is in it. It is blunt on purpose: a
-false match (a commit message that names a migration and a drop) costs one resend. Each matched
-line gets a key, `L2b|<skill>|<rule>|sha1(the stripped line)`, and the call is denied when any of
-its keys is new, so a resend passes and a different line is denied again. A line resent past
-L2b counts as accepted, as one past L2 does: a commit or push scan skips it, for any path, since
-the key names none. The deny's marker is
+command text, with each literal \\n or \\t read as the character, and neither `unless` nor
+`practices-allow: <id>` is in it. settings.json's filter names REL-31's words, so a rule with other
+words, a project's included, never starts Python until the filter gains them. It is blunt on
+purpose: a false match (a commit message that names a migration and a drop) costs one resend.
+Each matched line gets a key, `L2b|<skill>|<rule>|sha1(the stripped line)`, and the call is denied
+when any of its keys is new, so a resend passes and a different line is denied again. A line denied at L2b
+counts as accepted, as one at L2 does: a commit or push scan skips it, for any path, since the key
+names none. That needs the command's line to equal the file's, as a heredoc's does; a printf's
+first line holds the printf too, so its finding is still told. The deny's marker is
 `[practices:L2:<skill>:<rule>:bash]`, and it never echoes the matched text. A command over CMD_MAX
 is skipped. L2b shares SEC-64's part of the budget, fails the same way and reads the same off
 file. sed, a Python write or a name built from parts can still pass; L3s and push read those
@@ -3166,7 +3170,9 @@ def install_check(event):
 def bash_lines(rule, text, helpers=()):
     """The lines of a Bash command's scanned text that a "bash" rule flags: `command` and `when`
     both match, and neither `unless` nor `practices-allow: <id>` is in the text (for a
-    `scope = "line"` rule, on the flagged line)."""
+    `scope = "line"` rule, on the flagged line). A literal \\n or \\t in the text counts as the
+    character, since a printf writes it as one and `when` reads lines."""
+    text = text.replace("\\n", "\n").replace("\\t", "\t")
     if not guarded(rule["command"], text, helpers, rule["id"]):
         return []
     if rule.get("scope") != "line" and (allowed(rule["id"], text)
@@ -3213,8 +3219,6 @@ def text_check(event):
             return None
         pending = {(s["name"], r["id"]): (s, r) for s, r, _ in new}
         return deny(text_reason(pending.values()))
-    except Budget as e:
-        log("budget-spent", f"after {BUDGET}s, in L2b's {e}; the call was allowed")
     except Exception as e:  # noqa: BLE001  never at the cost of the push and PR checks
         log("crash", f"L2b: {type(e).__name__}: {e}")
     finally:

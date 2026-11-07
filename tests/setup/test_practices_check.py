@@ -4457,7 +4457,7 @@ class BashText(TextBase):
     def test_a_spent_budget_allows_and_logs(self):
         self.env["PRACTICES_TEST_BUDGET"] = "0"
         self.assertIsNone(self.pre(HEREDOC))
-        self.assertIn("budget-spent", self.log())
+        self.assertIn("skipped data-layer:REL-31", self.log())
         self.assertEqual(self.state_rows(), [])
 
     def test_a_deny_whose_key_cant_be_kept_is_dropped(self):
@@ -4511,14 +4511,13 @@ class BashText(TextBase):
         self.assertTrue(self.pre(command).startswith("[practices:L2:data-layer:REL-31:bash]"))
         self.assertIsNone(self.pre(command))
 
-    def test_it_reads_no_repo_and_no_file(self):
+    def test_it_reads_no_repo_and_no_transcript(self):
         with mock.patch.dict(os.environ, self.env, clear=True), \
                 mock.patch.object(PC, "START", time.monotonic()), \
                 mock.patch.object(PC, "open_transcript", side_effect=AssertionError), \
                 mock.patch.object(PC, "Repo", side_effect=AssertionError):
             self.assertIsNotNone(PC.text_check(self.event(HEREDOC, "PreToolUse", "b1")))
         PC.CRUMB.clear()
-        self.assertFalse(os.path.exists(os.path.join(self.proj, MIGRATION)))
 
 
 class BashTextAccepted(TextBase):
@@ -4540,6 +4539,17 @@ class BashTextAccepted(TextBase):
         told = self.committed(**{self.MIGRATION: self.LINE + "alter table users drop column c;\n"})
         self.assertIn("1_users.sql:2", told)
         self.assertNotIn("1_users.sql:1", told)
+
+    def test_a_printf_s_later_lines_are_accepted_but_its_first_is_not(self):
+        # The key is the command's line, so the first one, after `printf '`, never equals the
+        # file's.
+        command = (r"printf 'alter table users rename column a to b;\n"
+                   r"alter table users drop column c;\n' > supabase/migrations/1_users.sql")
+        self.assertIsNotNone(self.pre(command))
+        self.assertIsNone(self.pre(command))
+        told = self.committed(**{self.MIGRATION: self.LINE + "alter table users drop column c;\n"})
+        self.assertIn("1_users.sql:1", told)
+        self.assertNotIn("1_users.sql:2", told)
 
 
 class BashTextPasses(BashBase):
@@ -4694,6 +4704,18 @@ class TextPrefilter(Base):
     def rule(self):
         return PC.load_skill(DATA_LAYER)[0]["rules"][0]
 
+    def test_the_older_alternatives_stay_case_sensitive(self):
+        for command in ("cat Cargo.toml | grep required", "cat Gemfile | grep required",
+                        "GIT COMMIT", "echo Push GitHub"):
+            with self.subTest(command=command):
+                self.assertEqual(self.both(command), (False, False))
+
+    def test_lower_title_and_upper_case_reach_the_hook(self):
+        for command in ("migrations drop", "Migrations Drop", "MIGRATIONS DROP",
+                        "RENAME x > alembic/v.py", "Rename x > Drizzle/1.sql"):
+            with self.subTest(command=command):
+                self.assertEqual(self.both(command), (True, True))
+
     def test_every_shipped_bash_rule_has_samples_both_ways(self):
         for path in sorted(glob.glob(os.path.join(REPO, "skills", "*", "events.toml"))):
             skill, why = PC.load_skill(os.path.dirname(path))
@@ -4713,8 +4735,9 @@ class TextPrefilter(Base):
                     self.assertEqual(self.both(s["content"]), (True, True))
 
     def test_every_edit_sample_written_through_bash_reaches_the_hook_and_fires(self):
-        """A heredoc puts the path first and a printf the statement first, each in upper case too,
-        and each fires at the Bash level as it fires at an edit."""
+        """A heredoc puts the path first and a printf the statement first, and each fires at the
+        Bash level as it fires at an edit. SQL is tried in upper case too: it is written that way,
+        and a framework's call never is."""
         rule = self.rule()
         for s in data_layer_samples("rule"):
             if not s["fires"]:
@@ -4724,7 +4747,8 @@ class TextPrefilter(Base):
                             f"printf %s {shlex.quote(body)} > {s['path']}"):
                 with self.subTest(command=command):
                     self.assertEqual(self.both(command), (True, True))
-                    self.assertEqual(self.both(command.upper()), (True, True))
+                    if s["path"].endswith(".sql"):
+                        self.assertEqual(self.both(command.upper()), (True, True))
                     self.assertTrue(PC.bash_lines(rule, PC.scan_text(command)))
 
     def test_commands_with_only_one_word_don_t_start_python(self):

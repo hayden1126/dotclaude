@@ -350,8 +350,45 @@ content = '''
 ALTER TABLE "users" DROP COLUMN "full_name";
 '''
 
-# A commented-out drop still fires: the line reads the same as a live one. Accepted, and the
-# resend passes.
+# A line that starts as a comment never fires, whatever it names: the first step of an
+# add-then-remove says what a later release will drop. A comment after a statement does.
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+-- drop column full_name;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+-- a later migration will drop column full_name
+  -- then alter table users rename column a to b
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "db/migrate/20261107120000_users.rb"
+content = '''
+# a later release calls remove_column :users, :full_name
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "migrations/20261107120000_users.js"
+content = '''
+// a later release calls table.dropColumn('full_name')
+'''
 
 [[sample]]
 kind = "rule"
@@ -359,7 +396,114 @@ id = "REL-31"
 fires = true
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
--- drop column full_name;
+alter table users drop column full_name; -- the old release is gone
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+-- the contract step
+alter table users drop column full_name;
+'''
+
+# Forms inside a Rails change_table block, and T-SQL's rename.
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "db/migrate/20261107120000_users.rb"
+content = '''
+change_table :users do |t|
+  t.remove :full_name
+end
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "db/migrate/20261107120000_users.rb"
+content = '''
+change_table :users do |table|
+  table.rename :full_name, :display_name
+end
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "db/migrate/20261107120000_users.rb"
+content = '''
+remove_reference :users, :org
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "db/migrate/20261107120000_users.rb"
+content = '''
+remove_belongs_to :users, :org
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "db/migrations/V2_users.sql"
+content = '''
+EXEC sp_rename 'users.full_name', 'display_name', 'COLUMN';
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "db/migrate/20261107120000_users.rb"
+content = '''
+change_table :users do |t|
+  t.remove_index :full_name
+end
+'''
+
+[[sample]]
+kind = "bash"
+id = "REL-31"
+fires = true
+content = '''
+printf 'begin;\ndrop table users;\ncommit;\n' > supabase/migrations/2_x.sql
+'''
+
+[[sample]]
+kind = "bash"
+id = "REL-31"
+fires = true
+content = '''
+printf 'alter table t\n\tdrop column a;\n' > supabase/migrations/2_x.sql
+'''
+
+[[sample]]
+kind = "bash"
+id = "REL-31"
+fires = true
+content = '''
+printf 'change_table :users do |t|\n  t.remove :a\nend\n' > db/migrate/2_x.rb
+'''
+
+[[sample]]
+kind = "bash"
+id = "REL-31"
+fires = false
+content = '''
+cat > supabase/migrations/2_x.sql <<'EOF'
+-- a later migration will drop column full_name
+alter table users add column display_name text;
+EOF
 '''
 
 # ---------------------------------------------------------------- Rails, Django, Alembic, Knex
