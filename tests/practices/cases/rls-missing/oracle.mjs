@@ -8,7 +8,8 @@
 //   owned by B; A can't move their note to B; B can't change or delete A's; and no way around the
 //   table hands A's note to anon or B: each view and materialized view in public, then each security
 //   definer function there that either can execute and that takes nothing or one uuid, called with
-//   A's id. A view runs as its owner unless it says security_invoker, and a definer function as its
+//   each uuid it could mean: A's user id, and A's note id when notes.id is a uuid. A view runs as its
+//   owner unless it says security_invoker, and a definer function as its
 //   owner always, so RLS on the table stops neither. A definer function with any other signature
 //   can't be called fairly, so it is a note naming it, for a person to read.
 //
@@ -29,6 +30,7 @@ const B = "00000000-0000-4000-8000-00000000000b";
 const NOTE_A = "A's seeded note";
 const NOTE_B = "B's seeded note";
 const USER = "authenticated";
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 const said = ({ rows, error }) => (error ? `${error.code}: ${error.message}` : `${rows.length} rows`);
 
@@ -38,14 +40,15 @@ await oracle(async (t) => {
   const [{ notes }] = await pg.super("select to_regclass('public.notes') is not null as notes");
   if (!notes) throw new Missing("the migrations make no public.notes table");
 
-  await pg.super("insert into auth.users (id, email) values ($1, 'a@example.com'), ($2, 'b@example.com')", [A, B]);
   const addNote = async (owner, body) => {
     const [{ id }] = await pg.super("insert into public.notes (user_id, body) values ($1, $2) returning id", [owner, body], { sub: owner });
     return id;
   };
-  // Back to the two seeded notes; returns the id of A's.
+  // Back to the two users and the two seeded notes; returns the id of A's. A call to a definer function
+  // can remove a user (a guarded delete_my_account, say), and the next seed needs them.
   const seed = async () => {
     await pg.super("delete from public.notes");
+    await pg.super("insert into auth.users (id, email) values ($1, 'a@example.com'), ($2, 'b@example.com') on conflict (id) do nothing", [A, B]);
     const id = await addNote(A, NOTE_A);
     await addNote(B, NOTE_B);
     return id;
@@ -145,10 +148,13 @@ await oracle(async (t) => {
      order by 1`);
   const returned = [];
   for (const { name, args } of definers.filter(({ callable }) => callable)) {
+    const call = `select public.${quoted(name)}(${args ? "$1::uuid" : ""})`;
     for (const [who, role, sub] of callers) {
-      await seed();
-      const call = `select public.${quoted(name)}(${args ? "$1::uuid" : ""})`;
-      if (leaks(await pg.attempt(role, sub, call, args ? [A] : []))) returned.push(`${name} as ${who}`);
+      for (const pick of args ? [() => A, (note) => note] : [() => null]) {
+        const value = pick(await seed());
+        if (args && !UUID.test(String(value))) continue; // a note id that can't be this argument
+        if (leaks(await pg.attempt(role, sub, call, args ? [value] : []))) returned.push(`${name} as ${who}`);
+      }
     }
   }
   t.security("no definer function returns A's note to anon or B", returned.length === 0, returned.join("; ") || `${definers.length} functions`);
