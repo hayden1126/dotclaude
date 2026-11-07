@@ -34,13 +34,13 @@ L2b exists because a migration written by a heredoc or `printf` is a Bash call, 
 - **SQL:** `rename column`, `rename table`, `drop column`, `drop table`, `alter table x rename to y`, `alter table x rename a to b`, `alter table x drop a`, `rename to y` or `rename a to b` alone on the line after `alter table`, with `if exists`, `only`, and schema-qualified or quoted names.
 - **T-SQL:** `sp_rename`.
 - **Rails:** `rename_column`, `remove_column`, `remove_columns`, `remove_reference`, `remove_belongs_to`, `remove_timestamps`, `rename_table`, `drop_table`, `drop_join_table`, and `t.remove` and `t.rename` in a `change_table` block, with a symbol, or a string after a space. A string in parentheses is a known miss: it reads like `os.remove("x")`.
-- **Django:** `RenameField`, `RemoveField`, `RenameModel`, `DeleteModel`.
+- **Django:** `RenameField`, `RemoveField`, `RenameModel`, `DeleteModel`, `AlterModelTable`.
 - **Alembic:** `op.drop_column`, `op.drop_table`, `op.rename_table`, `new_column_name=`.
 - **Knex, TypeORM, Sequelize and Laravel:** `renameColumn`, `renameTable`, `removeColumn`, `dropColumn`, `dropColumns`, `dropTable`, `dropTableIfExists`, `dropIfExists`, `Schema::rename`, `Schema::drop`, and Laravel's column helpers `dropTimestamps`, `dropSoftDeletes` (each with `Tz`), `dropRememberToken`, `dropMorphs`, `dropNullableMorphs` and `dropConstrainedForeignId`.
 
 Never read as a match: `alter column x drop not null`, `alter column x drop default`, `drop constraint`, `rename constraint`, `add column`, `drop index`, `drop trigger`, `drop function`, `drop policy`, or a line that starts with `-- `, `#` or `//`. These leave the old release working, and the first step of an add-then-remove may well say in a comment what a later release drops.
 
-Accepted false matches, each costing one resend: a comment after a statement, a `/* */` comment, a `--` with no space after it, an edit of part of a comment, a down migration's drop, `alter index x rename to y`, a temporary table's drop, and at the Bash level a commit message that names a migration and a drop.
+Accepted false matches, each costing one resend: Django's state-only `RemoveField` inside `SeparateDatabaseAndState`, the first step of a drop, a comment after a statement, a `/* */` comment, a `--` with no space after it, an edit of part of a comment, a down migration's drop, `alter index x rename to y`, a temporary table's drop, and at the Bash level a commit message that names a migration and a drop.
 
 ## Per-repo layer
 

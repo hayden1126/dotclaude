@@ -499,6 +499,15 @@ content = '''
 $table->dropForeign(['org_id']);
 '''
 
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "users/migrations/0002_users.py"
+content = '''
+        migrations.AlterModelTable(name='user', table='members'),
+'''
+
 # A call that removes a file or a list item is no column change.
 
 [[sample]]
