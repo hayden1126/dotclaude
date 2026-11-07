@@ -2622,8 +2622,10 @@ def review_delta(repo, touched, diff, prior, mb, base, events, cfg):
     shows nothing, so touched stands.
     Known limits: a marker names no base, so `gh pr create --base <older>` widens the diff with
     what the review never saw, and a merge of history the local base ref doesn't hold yet (an
-    unfetched or other remote's main) reads as the branch's own. The gate denies once and the
-    resend passes, so either costs a prompt, not a boundary."""
+    unfetched or other remote's main) reads as the branch's own. A budget that ends during this
+    second read loses only versions the head pass never read, so the head's own watched code
+    still counts. The gate denies once and the resend passes, so each costs a prompt, not a
+    boundary."""
     held = repo.run("merge-base", prior, base, ok=(0, 1)).decode().strip()
     if not held:
         return touched
