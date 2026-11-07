@@ -2,7 +2,8 @@
 
 Each mutant is a temp copy of the template with a few exact string edits. It
 must fail the check on the assertion it targets, and only on the assertions it
-lists, so no assertion passes by being unable to fail. Every edit is matched
+lists, so no assertion passes by being unable to fail. A static test ties every
+assertion name in the check to a mutant. Every edit is matched
 against the template in a browser-free test, so renaming a rule fails loudly
 instead of turning a mutant into a pass. Browser cases skip with the reason
 printed to stderr when no chrome-headless-shell is found.
@@ -44,6 +45,12 @@ RESIZE_LISTENER = 'addEventListener("resize", refit);\n'
 PANEL_COLUMN = "minmax(var(--m-panel-min), 1fr)"
 MAIN_ROWS = "grid-template-rows: minmax(0, 1fr);"
 CONTROLS_OPEN = "const CONTROLS = [\n"
+RENDER_OPEN = "function render(state) {\n"
+PILLS_LINE = '  const pills = state.answers[0] === "Pill"'
+WIDE_OVERFLOW = "  html { overflow: hidden; }\n"
+GUTTER_RULE = "@media (width < 1101px) { html { scrollbar-gutter: stable; } }"
+STACKED_COLUMNS = ".m-main { display: grid; grid-template-columns: minmax(0, 1fr);"
+STACKED_WIDTH = ": frameEl.parentElement.clientWidth) - 1;"
 FRAMES_BLOCK = """const FRAMES = [
   { label: "Laptop", width: 1440, height: 900 },
   { label: "iPad", width: 1024, height: 768 },
@@ -70,17 +77,18 @@ MUTANTS = {
     "page_collapses": {
         "edits": [("html { overflow: hidden; }", ""), (BODY_HEIGHT, "")],
         "kind": "render on screen",
+        "must": {"page settles"},
         "also": {"page settles", "questions scroll"},
     },
     "page_scrolls": {
         "edits": [("html { overflow: hidden; }", ""), (BODY_HEIGHT, ""), (MAIN_FLEX, ".m-main { flex: none;")],
         "kind": "no page scroll",
-        "also": {"page settles", "render on screen", "render stays", "width fill"},
+        "also": {"page settles", "render fit", "render on screen", "render stays", "width fill"},
     },
     "render_off_screen": {
         "edits": [(FIT_MIN, "Math.min(1, widthLeft / f.width)")],
         "kind": "render on screen",
-        "also": set(),
+        "also": {"render fit"},
     },
     "too_many_controls": {
         "edits": [(CONTROLS_OPEN, CONTROLS_OPEN + extra_groups(9))],
@@ -102,11 +110,47 @@ MUTANTS = {
         "edits": [(RESIZE_OBSERVER, ""), (RESIZE_LISTENER, "")],
         "kind": "render on screen",
         "scope": "resize",
-        "also": set(),
+        "also": {"render fit"},
     },
     "columns_do_not_fill": {
         "edits": [(PANEL_COLUMN, "var(--m-panel-min)")],
         "kind": "width fill",
+        "also": set(),
+    },
+    "render_too_small": {
+        "edits": [(FIT_MIN, "Math.min(0.2, widthLeft / f.width, heightLeft / f.height)")],
+        "kind": "render fit",
+        "also": set(),
+    },
+    "render_throws": {
+        "edits": [(RENDER_OPEN, RENDER_OPEN + '  throw new Error("x");\n')],
+        "kind": "no script errors",
+        "also": {"render fit"},
+    },
+    "one_option_throws": {
+        "edits": [(PILLS_LINE, '  if (state.answers[0] === "Plain text") throw new Error("x");\n' + PILLS_LINE)],
+        "kind": "no script errors",
+        "scope": "controls",
+        "also": set(),
+    },
+    "stacked_two_columns": {
+        "edits": [(STACKED_COLUMNS, ".m-main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);")],
+        "kind": "one column",
+        "also": set(),
+    },
+    "stacked_sideways_scroll": {
+        "edits": [(GUTTER_RULE, GUTTER_RULE + "\n@media (width < 1101px) { .m-panel { min-width: 1400px; } }")],
+        "kind": "no sideways scroll",
+        "also": set(),
+    },
+    "stacked_render_too_wide": {
+        "edits": [(STACKED_WIDTH, ": 99999) - 1;")],
+        "kind": "render in width",
+        "also": {"render fit"},
+    },
+    "stacked_page_cannot_scroll": {
+        "edits": [(WIDE_OVERFLOW, ""), (GUTTER_RULE, GUTTER_RULE + "\nhtml { overflow: hidden; }")],
+        "kind": "page scrolls",
         "also": set(),
     },
 }
@@ -150,6 +194,14 @@ class StaticFiles(TemporaryPages):
                 apply_edits(self.template, mutant["edits"])
         apply_edits(self.template, [(FRAMES_BLOCK, ""), (FRAME_HOOK, 'id="x"'),
                                     (QUESTIONS_OPEN, ""), (QUESTIONS_CLOSE, "")])
+
+    def test_every_assertion_has_a_mutant(self):
+        source = CHECK.read_text(encoding="utf-8")
+        kinds = set(re.findall(r'report\.check\(\s*scope,\s*"([^"]+)"', source))
+        self.assertGreaterEqual(len(kinds), 12)
+        covered = {m["kind"] for m in MUTANTS.values()}
+        covered |= {kind for m in MUTANTS.values() for kind in m.get("must", ())}
+        self.assertEqual(kinds - covered, set())
 
     def test_no_em_dash_in_shipped_files(self):
         for path in (TEMPLATE, CHECK, pathlib.Path(__file__)):
@@ -199,8 +251,21 @@ class CleanPages(TemporaryPages):
         for size in ("1905x960", "1440x800", "1280x680", "1101x700"):
             for frame in ("Laptop", "iPad", "Phone"):
                 kinds = {l["kind"] for l in lines if l["scope"] == f"wide {size} {frame}"}
-                self.assertEqual(kinds, {"width fill", "render on screen", "no page scroll", "top row",
-                                         "questions scroll", "render stays"}, f"{size} {frame}")
+                self.assertEqual(kinds, {"width fill", "render on screen", "render fit", "no script errors",
+                                         "no page scroll", "top row", "questions scroll", "render stays"},
+                                 f"{size} {frame}")
+
+    def test_every_stacked_assertion_runs_for_every_frame(self):
+        lines = parsed(run_check(self.page()).stdout)
+        for size in ("1100x800", "900x800", "1024x768", "390x844"):
+            for frame in ("Laptop", "iPad", "Phone"):
+                kinds = {l["kind"] for l in lines if l["scope"] == f"stacked {size} {frame}"}
+                self.assertEqual(kinds, {"one column", "no sideways scroll", "render in width", "render fit",
+                                         "no script errors", "page scrolls"}, f"{size} {frame}")
+
+    def test_the_resize_goes_both_ways(self):
+        scopes = {l["scope"] for l in parsed(run_check(self.page()).stdout)}
+        self.assertLessEqual({"resize 1905x960 to 1280x680", "resize 1280x680 to 1905x960"}, scopes)
 
     def test_one_custom_frame_passes(self):
         kiosk = 'const FRAMES = [\n  { label: "Kiosk", width: 1080, height: 1920 },\n];\n'
@@ -215,6 +280,11 @@ class CleanPages(TemporaryPages):
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("#frame", result.stderr)
 
+    def test_a_broken_script_is_named_not_just_its_missing_hooks(self):
+        result = run_check(self.page([(RENDER_OPEN, RENDER_OPEN + "  const junk = `<script></scr" + "ipt>`;\n")]))
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("its script failed:", result.stderr)
+
 
 @unittest.skipUnless(BROWSER, SKIP_REASON or "browser found")
 class Mutants(TemporaryPages):
@@ -227,6 +297,7 @@ class Mutants(TemporaryPages):
         scope = mutant.get("scope", "")
         self.assertTrue([l for l in failed if l["kind"] == mutant["kind"] and l["scope"].startswith(scope)],
                         f"{mutant['kind']!r} did not fail:\n{out}")
+        self.assertLessEqual(mutant.get("must", set()), {l["kind"] for l in failed}, out)
         self.assertLessEqual({l["kind"] for l in failed}, {mutant["kind"]} | mutant["also"], out)
         self.assertRegex(result.stdout.splitlines()[-1], r"^\d+ of \d+ assertions FAILED$")
 
@@ -253,6 +324,27 @@ class Mutants(TemporaryPages):
 
     def test_columns_do_not_fill(self):
         self.assert_mutant_fails("columns_do_not_fill")
+
+    def test_render_too_small(self):
+        self.assert_mutant_fails("render_too_small")
+
+    def test_render_throws(self):
+        self.assert_mutant_fails("render_throws")
+
+    def test_one_option_throws(self):
+        self.assert_mutant_fails("one_option_throws")
+
+    def test_stacked_two_columns(self):
+        self.assert_mutant_fails("stacked_two_columns")
+
+    def test_stacked_sideways_scroll(self):
+        self.assert_mutant_fails("stacked_sideways_scroll")
+
+    def test_stacked_render_too_wide(self):
+        self.assert_mutant_fails("stacked_render_too_wide")
+
+    def test_stacked_page_cannot_scroll(self):
+        self.assert_mutant_fails("stacked_page_cannot_scroll")
 
 
 @unittest.skipUnless(BROWSER, SKIP_REASON or "browser found")
@@ -295,14 +387,13 @@ class LivePage(TemporaryPages):
         self.assertTrue(tab.resize(1905, 800))
         self.assertEqual(tab.evaluate(state)["on"], [], "a wide window clears the steps again")
 
-    def test_stacked_page_has_no_scrollbar_feedback_loop(self):
+    def worst_resizing(self, source: str) -> int:
         """A short panel puts the page height where a scrollbar's width changes the
         scale enough to remove the scrollbar again, the worst case for that loop."""
-        short = self.template
-        start = short.index(QUESTIONS_OPEN) + len(QUESTIONS_OPEN)
-        short = short[:start] + short[short.index(QUESTIONS_CLOSE):]
+        start = source.index(QUESTIONS_OPEN) + len(QUESTIONS_OPEN)
+        source = source[:start] + source[source.index(QUESTIONS_CLOSE):]
         page = pathlib.Path(self.dir.name, "short.html")
-        page.write_text(short, encoding="utf-8")
+        page.write_text(source, encoding="utf-8")
         tab = self.open(page, 1024, 3000)
         tall = round(tab.evaluate("document.body.getBoundingClientRect().bottom"))
         self.assertLess(tall, 2000, "the short page must end above the window's bottom")
@@ -312,9 +403,17 @@ class LivePage(TemporaryPages):
           seen.observe(document.getElementById("frame"), { attributes: true, attributeFilter: ["style"] });
           setTimeout(() => { seen.disconnect(); done(changes); }, 400);
         })"""
+        worst = 0
         for height in range(tall - 12, tall + 1, 2):
             tab.set_viewport(1024, height)
-            self.assertLessEqual(tab.evaluate(watch), 2, f"frame kept resizing at 1024x{height}")
+            worst = max(worst, tab.evaluate(watch))
+        return worst
+
+    def test_stacked_page_has_no_scrollbar_feedback_loop(self):
+        self.assertLessEqual(self.worst_resizing(self.template), 2)
+
+    def test_the_feedback_loop_shows_without_the_gutter(self):
+        self.assertGreater(self.worst_resizing(apply_edits(self.template, [(GUTTER_RULE, "")])), 2)
 
 
 if __name__ == "__main__":

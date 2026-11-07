@@ -88,9 +88,9 @@ button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
   </aside>
 </div>
 <script>
-/* ==== MOCK CONFIG: the only part of this file a mock author edits. ==== */
+/* ==== MOCK CONFIG: edit this block and the <title>, which the top row shows. ==== */
 // FRAMES: the Size buttons. CONTROLS: extra button groups beside Size, Mode and Zoom. QUESTIONS: one
-// box each in the panel; options are optional and switch the render live. ABOUT: the note at the panel's foot.
+// box each in the panel; options are optional and switch the render live. ABOUT: HTML for the panel's foot.
 // render(state) returns the full HTML for the frame. It gets state.frame (a FRAMES entry), state.mode
 // ("Light" or "Dark"), state.zoom, one state[label] per CONTROLS group, and state.answers[i], the option
 // picked for QUESTIONS[i]. Its media queries see the frame's width, not the window's.
@@ -225,7 +225,7 @@ function buildPanel() {
     if (q.options) box.append(segment(q.options, state.answers[i], (option) => { state.answers[i] = option; update(); }));
     holder.append(box);
   });
-  document.getElementById("about").textContent = ABOUT;
+  document.getElementById("about").innerHTML = ABOUT;
 }
 
 function buildControls() {

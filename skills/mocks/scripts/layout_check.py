@@ -1,11 +1,12 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Prove a mock page holds the one-screen layout, in a real headless browser.
 
 Usage: layout_check.py <page.html>
 
 Prints one line per assertion, `ok` or `FAIL` with the measured numbers. Exits 0
 with a last line of LAYOUT_OK, 1 on any FAIL, 2 when there is no browser or the
-page lacks a required hook. Python standard library only.
+page lacks a required hook. Fit is judged at the page's default Zoom. Python
+standard library only.
 """
 import argparse
 import fcntl
@@ -25,7 +26,8 @@ import time
 WIDE = ((1905, 960), (1440, 800), (1280, 680), (1101, 700))
 STACKED = ((1100, 800), (900, 800), (1024, 768), (390, 844))
 RESIZE_FROM, RESIZE_TO = (1905, 960), (1280, 680)
-EDGE, GAP, TOLERANCE, TOP_ROW_MAX = 16, 12, 1, 56
+CONTROLS_SIZE = (1440, 800)
+EDGE, GAP, TOLERANCE, FIT_TOLERANCE, TOP_ROW_MAX = 16, 12, 1, 2, 56
 WHEEL_DELTA = 100000
 
 CACHE_GLOBS = (
@@ -37,6 +39,18 @@ INSTALL_HINT = ("Install one with: npx @puppeteer/browsers install chrome-headle
 HOOKS = ("header.m-top", "header.m-top h1", ".m-bar", ".m-ctl", ".m-seg", ".m-main", ".m-stage",
          "#frame.m-frame", "#scaler.m-scaler", "iframe#app", "aside.m-panel", "#caption.m-caption",
          "#c-frame button")
+
+# Runs in every frame before the page's own script, so a throw in render(), in a
+# click handler or inside the render reaches the top window's list.
+ERRORS_JS = """(() => {
+  let sink;
+  try { sink = window.top.__mockErrors ||= []; } catch { sink = window.__mockErrors ||= []; }
+  // Chrome's ResizeObserver notice arrives as an error event but is no script failure.
+  addEventListener("error", (e) => { if (!e.message.startsWith("ResizeObserver loop")) sink.push(e.message); });
+  addEventListener("unhandledrejection", (e) => sink.push(String(e.reason)));
+})()"""
+
+READ_ERRORS_JS = "window.__mockErrors || []"
 
 LOADED_JS = "location.protocol !== 'about:' && document.readyState === 'complete'"
 
@@ -83,6 +97,8 @@ MEASURE_JS = """(() => {
   };
   const root = document.documentElement, frame = document.getElementById("frame");
   const panel = document.querySelector(".m-panel"), top = document.querySelector(".m-top");
+  const main = document.querySelector(".m-main"), app = document.getElementById("app");
+  const css = getComputedStyle(root);
   return {
     frame: box("#frame"), render: box("#app"), panel: box(".m-panel"), top: box(".m-top"),
     windowWidth: innerWidth, windowHeight: innerHeight,
@@ -90,12 +106,23 @@ MEASURE_JS = """(() => {
     frameScrollX: frame.scrollWidth - frame.clientWidth, frameScrollY: frame.scrollHeight - frame.clientHeight,
     panelOverflow: panel.scrollHeight - panel.clientHeight, panelScrollTop: panel.scrollTop,
     topOverflow: top.scrollWidth - top.clientWidth,
-    columns: getComputedStyle(document.querySelector(".m-main")).gridTemplateColumns.split(" ").length,
+    columns: getComputedStyle(main).gridTemplateColumns.split(" ").length,
+    renderWidth: Number(app.width), renderHeight: Number(app.height),
+    mainWidth: main.clientWidth, mainHeight: main.clientHeight, stageWidth: frame.parentElement.clientWidth,
+    panelMin: parseFloat(css.getPropertyValue("--m-panel-min")), gap: parseFloat(css.getPropertyValue("--m-gap")),
   };
 })()"""
 
 SCROLL_RESET_JS = """(() => {
   for (let e = document.querySelector(".m-panel"); e; e = e.parentElement) e.scrollTop = 0;
+})()"""
+
+CLICK_ALL_JS = """(async () => {
+  for (const button of document.querySelectorAll(".m-seg button")) {
+    button.click();
+    await new Promise(requestAnimationFrame);
+  }
+  return document.querySelectorAll(".m-seg button").length;
 })()"""
 
 
@@ -250,6 +277,8 @@ class Page:
         self.target = browser.call("Target.createTarget", {"url": "about:blank"})["targetId"]
         self.session = browser.call("Target.attachToTarget",
                                     {"targetId": self.target, "flatten": True})["sessionId"]
+        self.call("Page.enable")
+        self.call("Page.addScriptToEvaluateOnNewDocument", {"source": ERRORS_JS})
 
     def call(self, method: str, params: dict | None = None) -> dict:
         return self.browser.call(method, params, self.session)
@@ -335,6 +364,36 @@ def check_render_on_screen(report: Report, scope: str, m: dict):
                  f"frame overflow {m['frameScrollX']} x {m['frameScrollY']}")
 
 
+def check_fit(report: Report, scope: str, m: dict, wide: bool):
+    """Worked out here from the page's room, not read from its script. The panel's
+    1fr takes up any slack, so width fill alone can't see a render left too small."""
+    room_width = m["mainWidth"] - m["panelMin"] - m["gap"] if wide else m["stageWidth"]
+    room_height = m["mainHeight"] if wide else float("inf")
+    width, height = m["renderWidth"], m["renderHeight"]
+    if not width or not height:
+        report.check(scope, "render fit", False, "the render has no size, so render() never finished")
+        return
+    want = width * min(1, room_width / width, room_height / height)
+    got = m["render"]["right"] - m["render"]["left"]
+    report.check(scope, "render fit", abs(got - want) <= FIT_TOLERANCE, f"{got:.1f} px wide, room for {want:.1f}")
+
+
+def check_errors(report: Report, tab: Page, scope: str):
+    errors = tab.evaluate(READ_ERRORS_JS)
+    report.check(scope, "no script errors", not errors, "; ".join(errors[:2]) or "none")
+
+
+def check_page_scrolls(report: Report, tab: Page, scope: str, m: dict):
+    """A real wheel in the side gutter, off the render and the questions."""
+    if m["pageHeight"] <= m["windowHeight"]:
+        report.check(scope, "page scrolls", True, "fits, nothing to scroll")
+        return
+    tab.wheel(EDGE / 4, m["windowHeight"] / 2)
+    moved = tab.evaluate("scrollY")
+    tab.evaluate(SCROLL_RESET_JS)
+    report.check(scope, "page scrolls", moved > 0, f"scrolled {moved:.0f} of {m['pageHeight'] - m['windowHeight']} px")
+
+
 def check_scrolling(report: Report, tab: Page, scope: str, m: dict):
     """Wheel over the questions, then compare. An overflowing panel must scroll
     and the render must hold still whatever moved."""
@@ -364,6 +423,8 @@ def check_wide(report: Report, tab: Page, scope: str):
     m = tab.evaluate(MEASURE_JS)
     check_width_fill(report, scope, m)
     check_render_on_screen(report, scope, m)
+    check_fit(report, scope, m, wide=True)
+    check_errors(report, tab, scope)
     report.check(scope, "no page scroll", m["pageHeight"] <= m["windowHeight"],
                  f"page {m['pageHeight']} of {m['windowHeight']}")
     report.check(scope, "top row", m["top"]["height"] <= TOP_ROW_MAX and m["topOverflow"] <= 0,
@@ -381,6 +442,9 @@ def check_stacked(report: Report, tab: Page, scope: str):
     report.check(scope, "render in width",
                  frame["left"] >= EDGE - TOLERANCE and frame["right"] <= limit and render["right"] <= limit,
                  f"{frame['left']:.1f} to {frame['right']:.1f} of {m['clientWidth']}")
+    check_fit(report, scope, m, wide=False)
+    check_errors(report, tab, scope)
+    check_page_scrolls(report, tab, scope, m)
 
 
 def for_each_frame(report: Report, browser: Browser, url: str, mode: str, size: tuple[int, int], check):
@@ -398,33 +462,51 @@ def for_each_frame(report: Report, browser: Browser, url: str, mode: str, size: 
 
 
 def check_resize(report: Report, browser: Browser, url: str):
+    """Shrink, then grow back, with no reload: the render refits both ways."""
     tab = Page(browser)
-    scope = "resize {}x{} to {}x{}".format(*RESIZE_FROM, *RESIZE_TO)
     tab.open(url, *RESIZE_FROM)
-    check_settled(report, scope, tab.resize(*RESIZE_TO))
-    m = tab.evaluate(MEASURE_JS)
-    check_render_on_screen(report, scope, m)
-    check_width_fill(report, scope, m)
+    for start, end in ((RESIZE_FROM, RESIZE_TO), (RESIZE_TO, RESIZE_FROM)):
+        scope = "resize {}x{} to {}x{}".format(*start, *end)
+        check_settled(report, scope, tab.resize(*end))
+        m = tab.evaluate(MEASURE_JS)
+        check_render_on_screen(report, scope, m)
+        check_width_fill(report, scope, m)
+        check_fit(report, scope, m, wide=True)
     tab.close()
 
 
-def missing_hooks(browser: Browser, url: str) -> list[str]:
+def check_controls(report: Report, browser: Browser, url: str):
+    """Click every button once. render() runs per click, so a throw on one option
+    shows only here."""
+    tab = Page(browser)
+    tab.open(url, *CONTROLS_SIZE)
+    clicked = tab.evaluate(CLICK_ALL_JS)
+    check_errors(report, tab, "controls {}x{}, {} buttons".format(*CONTROLS_SIZE, clicked))
+    tab.close()
+
+
+def preflight(browser: Browser, url: str) -> tuple[list[str], list[str]]:
+    """The hooks the page lacks, and any script error, which is usually why."""
     tab = Page(browser)
     tab.load(url, *WIDE[0])
     missing = tab.evaluate(f"{json.dumps(HOOKS)}.filter((s) => !document.querySelector(s))")
+    errors = tab.evaluate(READ_ERRORS_JS)
     tab.close()
-    return missing
+    return missing, errors
 
 
 def run(browser: Browser, url: str) -> int:
-    missing = missing_hooks(browser, url)
+    missing, errors = preflight(browser, url)
     if missing:
         print(f"the page lacks required hooks: {', '.join(missing)}", file=sys.stderr)
+        for error in errors:
+            print(f"its script failed: {error}", file=sys.stderr)
         return 2
     report = Report()
     for size in WIDE:
         for_each_frame(report, browser, url, "wide", size, check_wide)
     check_resize(report, browser, url)
+    check_controls(report, browser, url)
     for size in STACKED:
         for_each_frame(report, browser, url, "stacked", size, check_stacked)
     if report.failed:

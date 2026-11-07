@@ -12,16 +12,16 @@ The shell is fixed. Design freedom goes into the render.
 ## Build a mock
 
 1. **Copy** `<skill dir>/template/mock.html` to the project: `.lane/mock/` in a lane, otherwise wherever the project keeps design work.
-2. **Fill in the config block** at the top of its script, the only part you edit:
+2. **Set the `<title>` and fill in the config block** at the top of its script. Leave everything else alone:
    - `render(state)` returns the full HTML of the screen, built from the project's own tokens, fonts and real screens.
    - `FRAMES` are the device sizes. The render sits in an iframe of that size, so its media queries see the frame's width.
    - `QUESTIONS` holds each decision the mock exists to settle, with `options` that switch the render live.
    - `CONTROLS` adds a button group to the top row for a choice that applies to the whole render.
-   - `ABOUT` holds the intro and any secondary notes.
-3. **Inline everything** the render needs. A published page can't reach localhost.
+   - `ABOUT` is HTML for the intro and any secondary notes, such as swatches.
+3. **Inline everything** the render needs. A published page can't reach localhost. Inside `render`'s string, write `<\/script>`: a plain closing tag ends the page's own script.
 4. **Run the check**, and fix what it reports until the last line is `LAYOUT_OK`:
    `python3 <skill dir>/scripts/layout_check.py <page>`
-   It runs inside the sandbox and needs headless Chromium; exit 2 prints how to install it. If the top row won't fit on one row, move a control into `QUESTIONS`.
+   It runs inside the sandbox, clicks every control, and needs headless Chromium; exit 2 prints how to install it. If the top row won't fit on one row, move a control into `QUESTIONS`.
 5. **Look at it** at laptop and phone frames before showing it. The check measures layout, not whether the render looks right.
 6. **Publish** it as a plain page: the Artifact tool's quickstart with intent `other`, then publish the file. Keep a local file only when asked to.
 

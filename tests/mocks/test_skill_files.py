@@ -64,9 +64,11 @@ class Files(unittest.TestCase):
         self.assertRegex(text, r"`mocks`")
 
     def test_the_readme_lists_the_skill_and_its_tests(self):
-        text = read(os.path.join(REPO, "README.md"))
-        self.assertIn("`mocks`", text)
-        self.assertIn("| `tests/mocks/` |", text)
+        lines = read(os.path.join(REPO, "README.md")).splitlines()
+        skill_rows = [line for line in lines if line.startswith("| `skills/` |")]
+        self.assertEqual(len(skill_rows), 1)
+        self.assertIn("`mocks`", skill_rows[0])
+        self.assertTrue([line for line in lines if line.startswith("| `tests/mocks/` |")])
 
 
 @unittest.skipUnless(DENYLISTS, "no private denylist on this machine")
