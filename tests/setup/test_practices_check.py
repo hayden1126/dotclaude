@@ -4520,6 +4520,25 @@ class BashText(TextBase):
         PC.CRUMB.clear()
 
 
+class SkillAdvice(unittest.TestCase):
+    """What the deny and the compaction line tell a model that may not have the skill loaded."""
+
+    def test_the_deny_and_gate_name_both_deploy_orders(self):
+        skill, _ = PC.load_skill(DATA_LAYER)
+        texts = [skill["rules"][0]["say"], " ".join(skill["gate"])]
+        for text in texts:
+            self.assertNotIn("migrations run before the new code is live", text)
+            self.assertNotIn("new name now", text)
+        say = texts[0]
+        self.assertIn("code first", say)
+        self.assertIn("migrations first", say)
+
+    def test_the_sync_comes_before_the_backfill(self):
+        with open(os.path.join(DATA_LAYER, "SKILL.md")) as f:
+            text = f.read()
+        self.assertLess(text.index("sync"), text.index("backfill"))
+
+
 class WhenLines(TextBase):
     """REL-31's `when` against what the scans feed it."""
 

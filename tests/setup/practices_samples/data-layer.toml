@@ -415,6 +415,60 @@ alter table users drop column username;
 kind = "rule"
 id = "REL-31"
 fires = true
+path = "database/migrations/2026_11_07_users.php"
+content = '''
+$table->dropTimestamps();
+'''
+
+[[sample]]
+kind = "bash"
+id = "REL-31"
+fires = true
+content = '''
+printf "  t.remove \"a\"\n" >> db/migrate/1.rb
+'''
+
+[[sample]]
+kind = "bash"
+id = "REL-31"
+fires = true
+content = '''
+printf '  t.remove '\''a'\''\n' >> db/migrate/1.rb
+'''
+
+# A call that removes a file or a list item is no column change.
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "users/migrations/0002_users.py"
+content = '''
+os.remove("x")
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "migrations/20261107_users.js"
+content = '''
+fs.rename('a', 'b')
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "migrations/20261107_users.js"
+content = '''
+names.remove("x")
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
 path = "db/migrate/20261107120000_users.rb"
 content = '''
 change_table :users do |t|

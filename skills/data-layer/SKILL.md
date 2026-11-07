@@ -12,10 +12,10 @@ A migration usually runs before the new code is live, and the old release keeps 
 Before a rename or a drop, read how this repo deploys: does the migration run before the new code, and do old instances keep serving during a rollout? The answer is in the CI workflow, the deploy script or the platform's config. Unless the repo proves otherwise, build add-then-remove by default and say so in your reply. Never offer it as an option, and never leave it as a risk for the user to decide on.
 
 Add-then-remove takes two steps:
-1. This release: the migration adds the new column, backfills it, and keeps both in sync in the database, since old instances still write only the old one. The new code reads and writes the new column, so the rename the user asked for is done: the migration has already run when that code goes live.
+1. This release: the migration adds the new column, then the sync in the database, since old instances still write only the old one, then backfills. In that order, a write that lands during the backfill isn't lost. The new code reads and writes the new column, so the rename the user asked for is done: the migration has already run when that code goes live.
 2. A later release, once the old one is gone: remove the old column and the sync. This is the contract step.
 
-When the repo deploys code before migrations, the order flips: the new code has to work before the column exists, so the migration ships a release ahead of it.
+When the repo deploys code before migrations, ship the column and the sync one release ahead of the code that uses them. That release's code still uses the old name, and the next one moves to the new.
 
 Example reply line: "The deploy runs migrations before the new code and old instances keep serving, so I added `handle` beside `username`, with a trigger keeping them equal, and the new code uses `handle`. A later migration removes `username` once this release is the oldest one running."
 
