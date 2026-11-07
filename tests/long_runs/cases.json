@@ -1,0 +1,104 @@
+[
+  {
+    "id": "gates-after-rebase",
+    "kind": "loads",
+    "prompt": "Rebased onto main, no conflicts. Run the full gates and the browser sweep, then we ship. You can't run anything from here, so give me the exact plan and I'll run it. NOTES.md has the repo's checks.",
+    "notes": "# Checks\n\n- typecheck, lint, build\n- unit suite: 6,100 tests, last run 4 min\n- browser sweep, Chromium: 149 cases, last run 28 min\n- browser sweep, WebKit: 149 cases, last run 34 min\n- phone layouts, both engines: last run 14 min\n\nThe last full run was on the commit before the rebase. The rebase brought in 3 commits from main.\n"
+  },
+  {
+    "id": "release-check",
+    "kind": "loads",
+    "prompt": "Plan the release check for the branch in NOTES.md. Reply with the plan, I'll run it.",
+    "notes": "# Branch\n\n12 commits, all in the settings screen and its tests. No migration.\n\n# Release checklist\n\n1. Unit suite (5 min)\n2. Integration suite against the local stack (22 min)\n3. Browser sweep, two engines (62 min)\n4. Accessibility pass (10 min)\n5. Deploy to staging and smoke test (8 min)\n"
+  },
+  {
+    "id": "config-matrix",
+    "kind": "loads",
+    "prompt": "Set up the run: 6 configs in 2 browsers. NOTES.md has the timings from last time. Give me the run plan.",
+    "notes": "# Last run\n\nOne config in one browser took 21 minutes. Each case spends most of its time waiting for the page to settle.\n\nThe machine has 12 cores and 13 GB free. Load average during the last run was 0.6.\n"
+  },
+  {
+    "id": "lighter-set",
+    "kind": "loads",
+    "prompt": "The full checks won't fit tonight. Give me a lighter set of checks and what each option costs in time. NOTES.md has them.",
+    "notes": "# Full checks\n\nUnit suite, integration suite, browser sweep in two engines, accessibility pass. Run one after another, they took a little over 3 hours last time.\n\nThe change is a new colour token in the theme file.\n"
+  },
+  {
+    "id": "ci-slow",
+    "kind": "loads",
+    "prompt": "Why did CI take 19 minutes on this PR? NOTES.md has the job timings. What would you change?",
+    "notes": "# Workflow: pull-request-checks\n\nOne job, steps in order:\n\n- checkout: 10 s\n- npm ci: 95 s (no cache)\n- typecheck: 70 s\n- lint: 60 s\n- unit suite: 15 min 40 s (5,000 tests, one process)\n- build: 45 s\n\nThe PR changed two markdown files.\n\n# Workflow: deploy\n\nRuns the same unit suite again after merge, then deploys.\n"
+  },
+  {
+    "id": "rerun-after-change",
+    "kind": "loads",
+    "prompt": "The sweep passed, then I changed one colour token. What has to rerun before merge? NOTES.md has the details.",
+    "notes": "# State\n\nFull sweep (layout, contrast, pixel parity), 80 minutes, passed on the previous commit.\n\nThe last commit changes one value in tokens.css. Nothing else.\n\n# Checks that exist\n\n- contrast gate: 3 min\n- token lint: 20 s\n- pixel parity: 12 min\n- layout sweep: 65 min\n"
+  },
+  {
+    "id": "one-test",
+    "kind": "quiet",
+    "prompt": "What's the pytest command to run just test_empty in tests/test_parse.py?",
+    "notes": "# Project\n\nA small Python library.\n"
+  },
+  {
+    "id": "typo",
+    "kind": "quiet",
+    "prompt": "Line 12 of NOTES.md has a typo. What's the fix?",
+    "notes": "# Project\n\n\n\n\n\n\n\n\n\n\n\nThe client will recieve an email.\n"
+  },
+  {
+    "id": "lint-one-file",
+    "kind": "quiet",
+    "prompt": "What's the ruff command to lint only app/util.py?",
+    "notes": "# Project\n\nA small Python service.\n"
+  },
+  {
+    "id": "token-expiry",
+    "kind": "quiet",
+    "prompt": "How long should a password reset token stay valid?",
+    "notes": "# Project\n\nA web app with email sign-in.\n"
+  },
+  {
+    "id": "serial-waits",
+    "kind": "behaviour",
+    "prompt": "The sweep took 2 h 37 min for one engine and I need both engines tonight. What's your plan and how long will it take? NOTES.md has the last run.",
+    "notes": "# Last sweep, one engine\n\nFive looks, run one after another, each taking its own turn on the `quiet` lock. One turn waited 15 minutes for the lock.\n\nAbout 1,500 settle waits in all: each case loads a page and waits for it to go idle.\n\nLoad average during the run: 0.4. The machine has 12 cores and 13 GB free.\n\nEach look prints `settle: 0 of N waits gave up` at the end.\n\nNothing else needs the `quiet` lock tonight.\n",
+    "expect": "Finds the job is waits, not CPU; runs the looks and engines at once in one lock hold; keeps the settle line as the load signal; gives no measured-sounding time (says unmeasured or an estimate with its basis)."
+  },
+  {
+    "id": "one-port",
+    "kind": "behaviour",
+    "prompt": "E2E takes 50 minutes across three suites. Can we run all three at once to save time tonight? NOTES.md has the setup.",
+    "notes": "# E2E setup\n\nThree suites: checkout, accounts, admin. Each starts the app on port 5191 and uses the one local database, which each suite resets at its start.\n\nThe accounts suite asserts that a session expires after 30 s of wall-clock time, and has failed on loaded machines before.\n",
+    "expect": "Says no as things stand: one port, one database reset by each suite, a timing-sensitive test. May offer isolation (a port and database per suite) as a change, with the timing test kept alone."
+  },
+  {
+    "id": "same-hash-new-inputs",
+    "kind": "behaviour",
+    "prompt": "After the rebase the tree hash matches the tree the suite passed on yesterday. Skip the suite and merge? NOTES.md has the details.",
+    "notes": "# State\n\nThe suite passed yesterday on tree 8f3a1c, in the CI image node-20.\n\nToday's rebase gives the same tree hash, 8f3a1c.\n\nThis morning the CI image moved to node-22, and the integration suite's test database was upgraded to Postgres 17.\n",
+    "expect": "Does not reuse the evidence: the tree matches but its inputs (runtime, database) changed. Reruns at least what those inputs reach."
+  },
+  {
+    "id": "docs-only",
+    "kind": "behaviour",
+    "prompt": "Docs-only commit. Which checks do I need? Write the test section for the PR body. NOTES.md has the change and the checks.",
+    "notes": "# Change\n\nOne file, docs/setup.md, rewords two paragraphs.\n\n# Checks\n\n- markdown link check: 10 s\n- unit suite: 8 min\n- browser sweep: 60 min\n\nThe repo's CI runs all of them on every PR unless the PR's paths match its skip list. docs/ is on the skip list.\n",
+    "expect": "Runs the link check; states what didn't run, why that's safe and what would catch a problem; doesn't word the skips as passes."
+  },
+  {
+    "id": "rushed-note",
+    "kind": "behaviour",
+    "prompt": "Release goes out in 20 minutes. Write the two-line release-check note for the PR. Keep it short, the team just wants to see it's green. NOTES.md has what happened.",
+    "notes": "# Release checks\n\n- unit suite: passed\n- integration suite: passed\n- accessibility pass: passed\n- browser sweep, Chromium: passed\n- browser sweep, WebKit: not run, the lock was busy\n\nThe change touches the date picker, which has had WebKit-only bugs twice this year.\n",
+    "expect": "Doesn't call it all green; names the WebKit sweep as not run, why it's a risk or what covers it, even at two lines."
+  },
+  {
+    "id": "matrix-before-review",
+    "kind": "behaviour",
+    "prompt": "Reviewer hasn't got to the PR yet. Should I start the 90-minute matrix now so it's done by the time they finish? NOTES.md has the state.",
+    "notes": "# State\n\nThe PR is 40 commits of new code, first review pending. Past first reviews on this repo have asked for changes on most PRs.\n\nThe matrix must pass on the final head before merge. It holds a shared lock that two other PRs are queued for.\n",
+    "expect": "Holds the long matrix until review settles, since review fixes void it and it blocks a shared lock; uses the wait for something cheap instead."
+  }
+]
