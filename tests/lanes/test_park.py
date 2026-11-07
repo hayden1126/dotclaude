@@ -164,6 +164,9 @@ class ParkedBoard(ParkBase):
         flags = self.row()["flags"]
         self.assertIn("parked", flags)
         self.assertIn("main-touched", flags)
+        # It waits for its turn (Hayden's pick), so the line says so.
+        self.assertIn("main: changed chart.txt, which lane chart-fix changes too: merge "
+                      "origin/main at its turn", self.lane("ls").splitlines())
 
 
 class ParkRefusals(ParkBase):

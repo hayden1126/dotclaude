@@ -485,7 +485,7 @@ resend passes.
 | `lane sync-main <n>` | merge merged PR #n into the main checkout's branch from hash-checked objects and commit it (The lead, step 7.1). Lead only: a call with no number, or from a lane, refuses (a lane whose install is live follows step 6). Refuses on uncommitted changes, a conflict, or a tripwire finding (`git:` lines on `lane ls`); it, `new` and `adopt` also refuse while an install's `.demote-pending` flag is in the verified dir (rerun the lead's `./setup.sh`; docs/lanes.md, Residuals). Bare |
 
 Board flags: `stale` (worktree gone; its claims are void), `rebase` (behind the base; act on it at your merge turn), `main-touched` (behind the base,
-and main changed a file the lane changes: merge main now; a line under the board names them),
+and main changed a file the lane changes: merge main now, or at its turn when parked; a line under the board names them),
 `conflict` (two live lanes claim one request), `overlap` (two live lanes change one file,
 committed or not, since each left the base; the lines under the board name them), `orphan` (no
 live session), `stopped` (a session

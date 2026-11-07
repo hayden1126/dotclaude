@@ -28,6 +28,9 @@ from test_cli import load_lane_script
 
 import lanelib  # on sys.path through _fixture
 
+OLD_GIT = (load_lane_script().git_version(subprocess.run(["git", "version"], capture_output=True,
+                                                         text=True).stdout) or (0,)) < (2, 43)
+
 OLD = 1577836800  # 2020-01-01: an mtime that leaves a tracked file stat-dirty in the index
 SUB = "vendored-mod"  # the planted submodule: a name no record names by accident
 
@@ -196,7 +199,7 @@ class MainTouched(LaneWork):
     def assertUntouched(self):
         row = self.rows()[0]["alpha"]
         self.assertNotIn("main-touched", row["flags"])
-        self.assertEqual(row["main_touched"], [])
+        self.assertEqual(row["base_overlaps"], [])
         self.assertEqual(self.board_lines(), [])
 
     def test_a_file_main_and_the_lane_both_changed_flags_it_and_the_line_names_it(self):
@@ -204,7 +207,7 @@ class MainTouched(LaneWork):
         row = self.rows()[0]["alpha"]
         self.assertIn("main-touched", row["flags"])
         self.assertIn("rebase", row["flags"])
-        self.assertEqual(row["main_touched"], ["a.txt"])
+        self.assertEqual(row["base_overlaps"], ["a.txt"])
         self.assertEqual(self.board_lines(), ["main: changed a.txt, which lane alpha changes too: "
                                               "merge origin/main now"])
 
@@ -223,7 +226,7 @@ class MainTouched(LaneWork):
     def test_an_uncommitted_file_counts(self):
         self.write(os.path.join(self.alpha, "wip.txt"), "wip\n")
         self.main_moves(["wip.txt"])
-        self.assertEqual(self.rows()[0]["alpha"]["main_touched"], ["wip.txt"])
+        self.assertEqual(self.rows()[0]["alpha"]["base_overlaps"], ["wip.txt"])
 
     def test_a_merge_of_main_clears_it(self):
         self.main_moves(["a.txt"])
@@ -248,7 +251,7 @@ class MainTouched(LaneWork):
     def test_a_stale_lane_is_left_out(self):
         self.main_moves(["a.txt"])
         self.git("worktree", "remove", "--force", self.alpha)
-        self.assertEqual(self.rows()[0]["alpha"]["main_touched"], [])
+        self.assertEqual(self.rows()[0]["alpha"]["base_overlaps"], [])
 
     def test_a_file_name_cant_steer_the_terminal(self):
         name = "evil\x1b[2J.txt"
@@ -857,6 +860,7 @@ class Trial(LaneWork):
         self.assertIn("FAILED: lane beta didn't merge", out)
         self.assertEqual(self.leftovers(), ([], []))
 
+    @unittest.skipIf(OLD_GIT, "drivers_off leaves merge drivers on before git 2.43")
     def test_a_merge_driver_in_the_lanes_attributes_hides_no_conflict(self):
         # GitHub ignores merge drivers, so a union driver the trial honoured would pass a merge
         # the forge then refuses. Worktree and committed attributes both.
@@ -873,6 +877,7 @@ class Trial(LaneWork):
         self.assertEqual(rc, 1, out + err)
         self.assertIn("lane trial: conflict with lane beta: shared.txt", out)
 
+    @unittest.skipIf(OLD_GIT, "drivers_off leaves merge drivers on before git 2.43")
     def test_a_merge_driver_in_the_global_attributes_hides_no_conflict(self):
         self.commit_files(self.beta, ["shared.txt"])
         self.commit_files(self.alpha, ["shared.txt"])

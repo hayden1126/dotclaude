@@ -1596,9 +1596,12 @@ def overlap_lines(rows: list[dict]) -> list[str]:
 
 
 def main_lines(rows: list[dict]) -> list[str]:
-    """The board's line for each lane main-touched flags, masked as overlap_lines' are."""
-    return [shown(f"main: changed {some_files(row['main_touched'])}, which lane {row['id']} "
-                  "changes too: merge origin/main now") for row in rows if row["main_touched"]]
+    """The board's line for each lane main-touched flags, masked as overlap_lines' are. A parked
+    lane merges at its turn, not now (Hayden's pick, 2026-11-07): unparking it early would take
+    the one over-cap slot another lane's turn may need."""
+    return [shown(f"main: changed {some_files(row['base_overlaps'])}, which lane {row['id']} "
+                  f"changes too: merge origin/main {'at its turn' if row['parked'] else 'now'}")
+            for row in rows if row["base_overlaps"]]
 
 
 def parked_stamp(repo: Repo, lane: dict) -> str | None:
@@ -1693,12 +1696,12 @@ def board(repo: Repo) -> list[dict]:
             flags.append("stale")
         if row["behind"]:
             flags.append("rebase")
-        row["main_touched"] = []
+        row["base_overlaps"] = []
         if row["behind"] and lane["id"] in changed:  # a stale lane's files went unread
-            row["main_touched"], why = main_touched(repo, base, ref, changed[lane["id"]])
+            row["base_overlaps"], why = main_touched(repo, base, ref, changed[lane["id"]])
             if why:
                 warn(shown(f"main-touched for lane {lane['id']} went unread: {why}"))
-        if row["main_touched"]:
+        if row["base_overlaps"]:
             flags.append("main-touched")
         if any(len(claimers.get(r, [])) > 1 for r in lane.get("claims", [])):
             flags.append("conflict")
@@ -3264,7 +3267,7 @@ def drivers_off(repo: Repo) -> list[str]:
             empty = trial_git(repo, ["hash-object", "-t", "tree", os.devnull]).stdout.strip()
             opts.append(f"--attr-source={empty}")
         else:
-            warn("git is older than 2.43, so a merge driver in the lane's "
+            warn("git is older than 2.43 or its version won't read, so a merge driver in the lane's "
                  ".gitattributes still applies to the trial's merges; GitHub's merge has none")
         DRIVERS_OFF[repo.toplevel] = opts
     return DRIVERS_OFF[repo.toplevel]
