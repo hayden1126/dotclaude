@@ -397,6 +397,12 @@ function draw(state) {
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("its script failed:", result.stderr)
 
+    def test_a_page_that_breaks_the_check_s_own_script_is_the_page_s_failure(self):
+        poison = RENDER_OPEN + '  document.querySelector = () => { throw new Error("poisoned"); };\n'
+        result = run_check(self.page([(RENDER_OPEN, poison)]))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("FAIL the page broke the check", result.stdout)
+
 
 @unittest.skipUnless(BROWSER, SKIP_REASON or "browser found")
 class Mutants(TemporaryPages):
