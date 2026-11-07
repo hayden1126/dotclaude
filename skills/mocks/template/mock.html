@@ -89,16 +89,17 @@ button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 </div>
 <script>
 /* ==== MOCK CONFIG: edit this block and the <title>, which the top row shows. ==== */
-// FRAMES: the Size buttons. CONTROLS: extra button groups beside Size, Mode and Zoom. QUESTIONS: one
+// FRAMES: the Size buttons. MODES: the Mode buttons; one entry hides the group. CONTROLS: extra button groups beside Size, Mode and Zoom. QUESTIONS: one
 // box each in the panel; options are optional and switch the render live. ABOUT: HTML for the panel's foot.
 // render(state) returns the full HTML for the frame. It gets state.frame (a FRAMES entry), state.mode
-// ("Light" or "Dark"), state.zoom, one state[label] per CONTROLS group, and state.answers[i], the option
+// (a MODES entry), state.zoom, one state[label] per CONTROLS group, and state.answers[i], the option
 // picked for QUESTIONS[i]. Its media queries see the frame's width, not the window's.
 const FRAMES = [
   { label: "Laptop", width: 1440, height: 900 },
   { label: "iPad", width: 1024, height: 768 },
   { label: "Phone", width: 390, height: 844 },
 ];
+const MODES = ["Light", "Dark"];
 const CONTROLS = [
   { label: "Density", options: ["Comfortable", "Compact"] },
 ];
@@ -170,7 +171,7 @@ ${summary ? `<div class="stats">${stat("Today", "$103.50")}${stat("To pack", "2"
 
 const WIDE = "(min-width: 1101px)";
 const FIT_STEPS = ["m-fit-1", "m-fit-2", "m-fit-3"];
-const state = { frame: FRAMES[0], mode: "Light", zoom: "Fit", answers: QUESTIONS.map((q) => q.options?.[0]) };
+const state = { frame: FRAMES[0], mode: MODES[0], zoom: "Fit", answers: QUESTIONS.map((q) => q.options?.[0]) };
 for (const c of CONTROLS) state[c.label] = c.options[0];
 
 const topRow = document.querySelector(".m-top"), main = document.querySelector(".m-main");
@@ -236,7 +237,7 @@ function buildControls() {
   });
   size.id = "c-frame";
   controlGroup("Size", size);
-  controlGroup("Mode", segment(["Light", "Dark"], state.mode, (mode) => { state.mode = mode; update(); }));
+  if (MODES.length > 1) controlGroup("Mode", segment(MODES, state.mode, (mode) => { state.mode = mode; update(); }));
   for (const c of CONTROLS) controlGroup(c.label, segment(c.options, state[c.label], (option) => { state[c.label] = option; update(); }));
   controlGroup("Zoom", segment(["Fit", "100%"], state.zoom, (zoom) => { state.zoom = zoom; update(); }));
 }

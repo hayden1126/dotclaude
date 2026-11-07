@@ -15,6 +15,7 @@ The shell is fixed. Design freedom goes into the render.
 2. **Set the `<title>` and fill in the config block** at the top of its script. Leave everything else alone:
    - `render(state)` returns the full HTML of the screen, built from the project's own tokens, fonts and real screens.
    - `FRAMES` are the device sizes. The render sits in an iframe of that size, so its media queries see the frame's width.
+   - `MODES` are the themes `render` honours through `state.mode`. One entry hides the Mode buttons.
    - `QUESTIONS` holds each decision the mock exists to settle, with `options` that switch the render live.
    - `CONTROLS` adds a button group to the top row for a choice that applies to the whole render.
    - `ABOUT` is HTML for the intro and any secondary notes, such as swatches.
@@ -23,7 +24,7 @@ The shell is fixed. Design freedom goes into the render.
    `python3 <skill dir>/scripts/layout_check.py <page>`
    It runs inside the sandbox, clicks every control, and needs headless Chromium; exit 2 prints how to install it. If the top row won't fit on one row, move a control into `QUESTIONS`.
 5. **Look at it** at laptop and phone frames before showing it. The check measures layout, not whether the render looks right.
-6. **Publish** it as a plain page: the Artifact tool's quickstart with intent `other`, then publish the file. Keep a local file only when asked to.
+6. **Publish** it as a plain page: the Artifact tool's quickstart with intent `other`, then publish the file. Skip this only when asked to. The local copy stays either way: it is the source for every change.
 
 ## With the Artifact tool and artifact-design
 

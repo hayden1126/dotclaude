@@ -4,8 +4,8 @@
 Usage: layout_check.py <page.html>
 
 Prints one line per assertion, `ok` or `FAIL` with the measured numbers. Exits 0
-with a last line of LAYOUT_OK, 1 on any FAIL, 2 when there is no browser or the
-page lacks a required hook. Fit is judged at the page's default Zoom. Python
+with a last line of LAYOUT_OK, 1 on any FAIL or a page that stops responding, 2
+when there is no browser or the page lacks a required hook. Fit is judged at the page's default Zoom. Python
 standard library only.
 """
 import argparse
@@ -117,10 +117,15 @@ SCROLL_RESET_JS = """(() => {
   for (let e = document.querySelector(".m-panel"); e; e = e.parentElement) e.scrollTop = 0;
 })()"""
 
+# A click that changes the render waits for its load: the next srcdoc change would
+# cancel a pending one, and any script inside that render with it.
 CLICK_ALL_JS = """(async () => {
+  const app = document.getElementById("app");
   for (const button of document.querySelectorAll(".m-seg button")) {
+    const before = app.srcdoc;
+    const loaded = new Promise((done) => { app.addEventListener("load", done, { once: true }); setTimeout(done, 1000); });
     button.click();
-    await new Promise(requestAnimationFrame);
+    await (app.srcdoc === before ? new Promise(requestAnimationFrame) : loaded);
   }
   return document.querySelectorAll(".m-seg button").length;
 })()"""
@@ -375,7 +380,10 @@ def check_fit(report: Report, scope: str, m: dict, wide: bool):
         return
     want = width * min(1, room_width / width, room_height / height)
     got = m["render"]["right"] - m["render"]["left"]
-    report.check(scope, "render fit", abs(got - want) <= FIT_TOLERANCE, f"{got:.1f} px wide, room for {want:.1f}")
+    # The frame clips what it can't hold without adding any scrollable overflow.
+    clipped = max(m["render"]["right"] - m["frame"]["right"], m["render"]["bottom"] - m["frame"]["bottom"])
+    report.check(scope, "render fit", abs(got - want) <= FIT_TOLERANCE and clipped <= FIT_TOLERANCE,
+                 f"{got:.1f} px wide, room for {want:.1f}, {max(clipped, 0):.1f} px clipped")
 
 
 def check_errors(report: Report, tab: Page, scope: str):
@@ -531,8 +539,9 @@ def main() -> int:
     try:
         return run(browser, page.resolve().as_uri())
     except BrowserError as exc:
-        print(exc, file=sys.stderr)
-        return 2
+        # The browser started, so a hang here is the page's: a loop in render(), say.
+        print(f"FAIL the page stopped responding: {str(exc).splitlines()[0]}")
+        return 1
     finally:
         browser.close()
 

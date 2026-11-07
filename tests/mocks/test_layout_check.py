@@ -51,6 +51,9 @@ WIDE_OVERFLOW = "  html { overflow: hidden; }\n"
 GUTTER_RULE = "@media (width < 1101px) { html { scrollbar-gutter: stable; } }"
 STACKED_COLUMNS = ".m-main { display: grid; grid-template-columns: minmax(0, 1fr);"
 STACKED_WIDTH = ": frameEl.parentElement.clientWidth) - 1;"
+RENDER_END = "</main></body></html>`;"
+FRAME_HEIGHT = "scaler.style.height = frameEl.style.height = height;"
+MODES_LINE = 'const MODES = ["Light", "Dark"];'
 FRAMES_BLOCK = """const FRAMES = [
   { label: "Laptop", width: 1440, height: 900 },
   { label: "iPad", width: 1024, height: 768 },
@@ -131,6 +134,17 @@ MUTANTS = {
         "edits": [(PILLS_LINE, '  if (state.answers[0] === "Plain text") throw new Error("x");\n' + PILLS_LINE)],
         "kind": "no script errors",
         "scope": "controls",
+        "also": set(),
+    },
+    "render_script_throws": {
+        "edits": [(RENDER_END, """</main>${summary ? "" : "<script>throw new Error('x')<\\/script>"}</body></html>`;""")],
+        "kind": "no script errors",
+        "scope": "controls",
+        "also": set(),
+    },
+    "frame_clips_render": {
+        "edits": [(FRAME_HEIGHT, 'scaler.style.height = frameEl.style.height = Math.ceil(f.height * k / 2) + "px";')],
+        "kind": "render fit",
         "also": set(),
     },
     "stacked_two_columns": {
@@ -280,6 +294,12 @@ class CleanPages(TemporaryPages):
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("#frame", result.stderr)
 
+    def test_a_hanging_page_is_the_page_s_failure(self):
+        hang = RENDER_OPEN + '  if (state.Density === "Compact") for (;;) {}\n'
+        result = run_check(self.page([(RENDER_OPEN, hang)]))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("FAIL the page stopped responding", result.stdout)
+
     def test_a_broken_script_is_named_not_just_its_missing_hooks(self):
         result = run_check(self.page([(RENDER_OPEN, RENDER_OPEN + "  const junk = `<script></scr" + "ipt>`;\n")]))
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
@@ -334,6 +354,12 @@ class Mutants(TemporaryPages):
     def test_one_option_throws(self):
         self.assert_mutant_fails("one_option_throws")
 
+    def test_render_script_throws(self):
+        self.assert_mutant_fails("render_script_throws")
+
+    def test_frame_clips_render(self):
+        self.assert_mutant_fails("frame_clips_render")
+
     def test_stacked_two_columns(self):
         self.assert_mutant_fails("stacked_two_columns")
 
@@ -386,6 +412,13 @@ class LivePage(TemporaryPages):
         self.assertEqual(seen, [steps[:n] for n in range(4)], "every step must fire, in order")
         self.assertTrue(tab.resize(1905, 800))
         self.assertEqual(tab.evaluate(state)["on"], [], "a wide window clears the steps again")
+
+    def test_one_mode_hides_the_mode_buttons(self):
+        groups = '[...document.querySelectorAll(".m-ctl > span")].map((s) => s.textContent)'
+        self.assertIn("Mode", self.open(self.page(), 1440, 800).evaluate(groups))
+        page = self.page([(MODES_LINE, 'const MODES = ["Light"];')])
+        self.assertNotIn("Mode", self.open(page, 1440, 800).evaluate(groups))
+        self.assertEqual(run_check(page).returncode, 0)
 
     def worst_resizing(self, source: str) -> int:
         """A short panel puts the page height where a scrollbar's width changes the
