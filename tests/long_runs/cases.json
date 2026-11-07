@@ -22,7 +22,7 @@
   {
     "id": "lighter-set",
     "kind": "behaviour",
-    "prompt": "The full checks won't fit tonight. Give me a lighter set of checks and what each option costs in time. NOTES.md has them.",
+    "prompt": "The full checks won't fit tonight. What can we drop, and what does each option cost in time? NOTES.md has them.",
     "notes": "# Full checks\n\nUnit suite, integration suite, browser sweep in two engines, accessibility pass. Run one after another, they took a little over 3 hours last time.\n\nThe change is a new colour token in the theme file.\n",
     "expect": "Tries running parts at once before cutting coverage. Scopes what a colour token can reach. Marks its times as unmeasured or cites the last run. Records what a lighter set skips, with what would catch a problem."
   },
@@ -89,9 +89,9 @@
   {
     "id": "serial-waits",
     "kind": "behaviour",
-    "prompt": "The sweep took about 2.5 hours for one engine and I need both engines tonight. What's your plan and how long will it take? NOTES.md has the last run.",
-    "notes": "# Last sweep, one engine\n\nFive looks, run one after another, each taking its own turn on the `browser` lock. One turn waited 15 minutes for the lock.\n\nAbout 1,500 settle waits in all: each case loads a page and waits for it to go idle.\n\nLoad average during the run: 0.4. The machine has 12 cores and 13 GB free.\n\nEach look prints `waits timed out: 0 of N` at the end.\n\nNothing else needs the `browser` lock tonight.\n",
-    "expect": "Finds the job is waits, not CPU. Runs the looks and engines at once in one lock hold. Keeps the timed-out count as the load signal. Marks its time as unmeasured or an estimate with its basis."
+    "prompt": "The nightly export took about 2.5 hours and tonight I need it run twice, once per data set. What's your plan and how long will it take? NOTES.md has the last run.",
+    "notes": "# Last run\n\n40 regions, one after another. For each region the job asks the vendor's API for an export, polls until it's ready, then downloads it.\n\n```\n01:02:10 eu-1 requested\n01:05:48 eu-1 ready, 41 MB\n01:05:52 eu-2 requested\n01:09:31 eu-2 ready, 38 MB\n```\n\nThe job's process used 2% of one core. The vendor allows 20 export requests at a time per account.\n",
+    "expect": "Finds the job is polling, not CPU. Runs regions at once within the vendor's limit of 20. Proposes its own signal beyond a pass that the load changed nothing, such as failed or retried requests or sizes against the last run. Marks its time as unmeasured or an estimate with its basis."
   },
   {
     "id": "one-port",
@@ -99,6 +99,13 @@
     "prompt": "E2E takes 50 minutes across three suites. Can we run all three at once to save time tonight? NOTES.md has the setup.",
     "notes": "# E2E setup\n\nThree suites: checkout, accounts, admin. Each starts the app on port 5191 and uses the one local database, which each suite resets at its start.\n\nThe accounts suite asserts that a session expires after 30 s of wall-clock time, and has failed on loaded machines before.\n",
     "expect": "Says no as things stand: one port, one database reset by each suite, a timing-sensitive test. May offer isolation (a port and database per suite) as a change, with the timing test kept alone."
+  },
+  {
+    "id": "shared-staging",
+    "kind": "behaviour",
+    "prompt": "Two suites take 40 minutes each and both run against staging. Run them at the same time tonight? NOTES.md is all I have.",
+    "notes": "# Suites\n\nThe orders suite and the billing suite both run against the one staging environment. Their test config lives in another team's repo, which we can't read. There's no second environment, and nobody from that team is around tonight.\n",
+    "expect": "Can't settle whether they collide, and has no throwaway state to try it on, so keeps them apart and says why, or says what would have to be true to run them together."
   },
   {
     "id": "same-hash-new-inputs",

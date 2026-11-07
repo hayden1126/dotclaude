@@ -34,6 +34,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
@@ -129,7 +130,7 @@ def child_env(env):
 
 def skip_fields(text):
     """How many of the skip record's three labels a reply holds, markdown bold allowed."""
-    return sum(bool(re.search(rf"^[\s>*_-]*{re.escape(label)}", text, re.M | re.I))
+    return sum(bool(re.search(rf"^[\s>*_-]*{re.escape(label[:-1])}[*_]*:", text, re.M | re.I))
                for label in SKIP_LABELS)
 
 
@@ -176,10 +177,16 @@ class Budget:
             self.room.notify_all()
 
 
+def reply_text(case, reply):
+    """What a grader reads. It takes no arm and no load result, so it can't show them."""
+    return (f"Prompt: {case['prompt']}\n\nNotes:\n\n{case['notes']}\n"
+            f"Expect: {case['expect']}\n\n---\n\n{reply}\n")
+
+
 def run_one(run, out, skill_dir, line):
     case, arm, model, rep = run["case"], run["arm"], run["model"], run["rep"]
     name = f"{case['id']}-{arm}-{model}-{rep}-{run['fingerprint']}"
-    reply_id = hashlib.sha256(name.encode()).hexdigest()[:10]
+    reply_id = uuid.uuid4().hex[:10]
     stream_path = os.path.join(out, "streams", name + ".jsonl")
     root = tempfile.mkdtemp(prefix="wk-", dir="/tmp")
     work = os.path.join(root, "proj")
@@ -205,8 +212,7 @@ def run_one(run, out, skill_dir, line):
                seconds=round(time.monotonic() - start, 1))
     if case["kind"] == "behaviour":
         with open(os.path.join(out, "replies", reply_id + ".md"), "w") as f:
-            f.write(f"Prompt: {case['prompt']}\n\nNotes:\n\n{case['notes']}\n"
-                    f"Expect: {case['expect']}\n\n---\n\n{row['reply']}\n")
+            f.write(reply_text(case, row["reply"]))
     return row
 
 
@@ -218,6 +224,20 @@ def read_rows(out):
         return [json.loads(line) for line in f if line.strip()]
 
 
+def done_keys(rows):
+    """Rows resume can trust: a broken or contaminated row runs again."""
+    return {(r["case"], r["arm"], r["model"], r["rep"], r["fingerprint"]) for r in rows
+            if not (r.get("broken") or r.get("contaminated"))}
+
+
+def parse_arms(text):
+    """`--arms BC` or `--arms B,C`. Anything else is an error, not a paid run in no arm."""
+    arms = text.replace(",", "")
+    if not arms or set(arms) - set("ABC"):
+        raise ValueError(f"arms are A, B and C, not {text!r}")
+    return arms
+
+
 def read_grades(out):
     path = os.path.join(out, "grades.json")
     if not os.path.isfile(path):
@@ -227,21 +247,24 @@ def read_grades(out):
 
 
 def report(rows, current, grades=None):
-    """One line per case, arm and model over rows of `current` fingerprints: loads, then graded
-    passes. Spend over every row comes last, since a voided row still cost money."""
+    """One line per case, arm and model over rows of `current` fingerprints: loads, graded passes
+    and replies with all three skip fields. Spend over every row comes last, since a voided row
+    still cost money."""
     cells = {}
     for row in rows:
         if row.get("broken") or row.get("contaminated") or row["fingerprint"] not in current:
             continue
-        cell = cells.setdefault((row["kind"], row["case"], row["arm"], row["model"]), [0, 0, 0, 0])
+        cell = cells.setdefault((row["kind"], row["case"], row["arm"], row["model"]), [0, 0, 0, 0, 0])
         cell[0] += bool(row.get("loaded"))
         cell[1] += 1
         grade = (grades or {}).get(row.get("reply_id"))
         cell[2] += grade == "pass"
         cell[3] += grade is not None
-    lines = ["kind       case                  arm model   loaded graded-pass"]
-    for (kind, case, arm, model), (hits, total, passes, graded) in sorted(cells.items()):
-        lines.append(f"{kind:10} {case:21} {arm:3} {model:7} {hits}/{total}    {passes}/{graded}")
+        cell[4] += row.get("skip_fields") == len(SKIP_LABELS)
+    lines = ["kind       case                  arm model   loaded graded-pass skip-block"]
+    for (kind, case, arm, model), (hits, total, passes, graded, full) in sorted(cells.items()):
+        lines.append(f"{kind:10} {case:21} {arm:3} {model:7} {hits}/{total}    {passes}/{graded}    "
+                     f"{full}/{total}")
     bad = sum(bool(r.get("broken") or r.get("contaminated")) for r in rows)
     lines.append(f"rows {len(rows)}, broken or contaminated {bad}, "
                  f"spent ${sum(r.get('cost', 0) for r in rows):.2f}")
@@ -256,7 +279,7 @@ def main():
     parser.add_argument("--reps", type=int, default=5)
     parser.add_argument("--cases", help="comma-separated case ids; default all")
     parser.add_argument("--kinds", help="comma-separated kinds; default all")
-    parser.add_argument("--cap", type=float, default=5.0, help="USD ceiling over all of --out")
+    parser.add_argument("--cap", type=float, default=5.0, help="USD ceiling over the rows in --out only")
     parser.add_argument("--per-run", type=float, default=RUN_BUDGET_USD,
                         help="USD reserved per run in flight")
     parser.add_argument("--jobs", type=int, default=6)
@@ -282,9 +305,8 @@ def main():
         cases = [c for c in cases if c["id"] in args.cases.split(",")]
     if args.kinds:
         cases = [c for c in cases if c["kind"] in args.kinds.split(",")]
-    done = {(r["case"], r["arm"], r["model"], r["rep"], r["fingerprint"]) for r in rows
-            if not (r.get("broken") or r.get("contaminated"))}
-    runs = plan_runs(cases, args.arms, args.models.split(","), args.reps, stamp, done)
+    runs = plan_runs(cases, parse_arms(args.arms), args.models.split(","), args.reps, stamp,
+                     done_keys(rows))
     budget = Budget(args.cap, sum(r.get("cost", 0) for r in rows), args.per_run)
     write_lock = threading.Lock()
 

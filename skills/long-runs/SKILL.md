@@ -7,7 +7,7 @@ description: Use when about to start, plan or rerun a long or multi-part job (te
 
 A job takes as long as its slowest chain, not the sum of its parts. Work that out before starting, and afterwards state exactly what ran.
 
-This applies to starting or rerunning a job of about 15 minutes or more, or several checks together.
+This applies to a job of about 15 minutes or more, several checks together, or a rerun of either after a change, from planning it to writing up what ran.
 
 ## Say what didn't run
 
@@ -21,7 +21,7 @@ Caught by: <what would catch a problem>
 
 When you can't show it's safe, say so: `Safe because: not shown`, `Caught by: nothing yet`, and name the risk. Never invent a reason to fill the block.
 
-A skip never reads as a pass: "all green" covers only what ran. This skill drops no gate the repo or the user requires, such as `lane trial` before ready, a review or an install smoke test.
+A skip never reads as a pass: never write "all green" over a partial run. This skill drops no gate the repo or the user requires, such as `lane trial` before ready, a review or an install smoke test.
 
 ## Plan the run
 
@@ -29,11 +29,11 @@ Answer these in order, in the plan itself.
 
 1. **Where does the time go?** Find each part's last measured time, and whether it waits or burns CPU (its log, the load average, cores and memory free). Parts that mostly wait stack well on one machine.
 2. **What can the change reach?** Read the diff, including what a rebase brought in. Run what it can reach, and count anything shared (a lockfile, build config, a common module) as reaching all it feeds. Rerun a baseline on main only where main changed what's measured. Prove each risk with the cheapest test that truly hits it.
-3. **What evidence still holds?** A past pass holds only for the same tree hash and the same inputs: dependencies, runtime, services and data. `lane trial` merges other lanes' work, so its tree isn't your tree.
-4. **What runs at once?** Cheap checks first, so a broken build fails fast, then every independent long part together, as far as cores and memory allow. If you don't know whether two parts share a port, database, lock or output dir, find out: read the config, or try a small slice on throwaway state. Unknown is a question to answer, never a reason to stay serial. Keep parts apart when they do share state, or when a test depends on timing.
+3. **What evidence still holds?** A past pass holds only for the same tree hash and the same inputs: dependencies, runtime, environment, services and data. `lane trial` merges other lanes' work, so its tree isn't your tree.
+4. **What runs at once?** Cheap checks first, so a broken build fails fast, then every independent long part together, as far as cores and memory allow. If you don't know whether two parts share a port, database, lock or output dir, find out: read the config, or try a small slice on throwaway state. Unknown is a question to answer, not a default to serial. If neither route can settle it, keep those parts apart and say so. Keep parts apart too when they do share state, or when a test depends on timing.
 5. **What voids what?** Review before sweeps. The long matrix runs once, at the final head.
 
-Cutting a check comes last: try step 4 first, since it gives up no coverage. Whatever step 2 drops is a skip, so it gets the block above.
+Whatever step 2 drops is a skip, so it gets the block above. Past that, cutting a check comes last: try step 4 first, since it gives up no coverage.
 
 Keep a signal that the load changed nothing, beyond the pass itself: a line each part prints, such as how many waits gave up or tests retried, or time per case against the last run.
 

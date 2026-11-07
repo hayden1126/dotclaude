@@ -69,7 +69,7 @@ class SkillFile(unittest.TestCase):
 
     def test_a_skip_never_reads_as_a_pass(self):
         self.assertIn("A skip never reads as a pass", skill_text())
-        self.assertIn('"all green" covers only what ran', skill_text())
+        self.assertIn('never write "all green" over a partial run', skill_text())
 
     def test_an_unsafe_skip_says_so_instead_of_inventing_a_reason(self):
         self.assertIn("`Safe because: not shown`", skill_text())
@@ -87,9 +87,11 @@ class SkillFile(unittest.TestCase):
     def test_required_gates_stay(self):
         self.assertIn("drops no gate the repo or the user requires", skill_text())
 
-    def test_unknown_shared_state_is_answered_not_a_reason_to_stay_serial(self):
-        # The baseline's failure: "keep them serial unless you know".
-        self.assertIn("never a reason to stay serial", skill_text())
+    def test_unknown_shared_state_is_answered_and_stays_apart_only_if_it_cant_be(self):
+        # The baseline's failure: "keep them serial unless you know". The limit: with no way to
+        # find out, parts that may share state must not run together.
+        self.assertIn("not a default to serial", skill_text())
+        self.assertIn("If neither route can settle it, keep those parts apart", skill_text())
 
     def test_it_points_to_delegation_and_coding_practices_rather_than_repeating_them(self):
         self.assertIn("`delegation`", skill_text())
@@ -169,6 +171,19 @@ class Plan(unittest.TestCase):
         # A stop at the cap must leave every arm covered, not the last arm empty.
         runs = harness.plan_runs(self.CASES, "BC", ["opus"], 2)
         self.assertEqual({r["rep"] for r in runs[:6]}, {0})
+
+    def test_broken_and_contaminated_rows_run_again(self):
+        row = {"case": "b", "arm": "A", "model": "opus", "rep": 0, "fingerprint": ""}
+        self.assertEqual(harness.done_keys([row]), {("b", "A", "opus", 0, "")})
+        self.assertEqual(harness.done_keys([{**row, "broken": True}]), set())
+        self.assertEqual(harness.done_keys([{**row, "contaminated": True}]), set())
+
+    def test_arms_take_either_spelling_and_nothing_else(self):
+        self.assertEqual(harness.parse_arms("B,C"), "BC")
+        self.assertEqual(harness.parse_arms("ABC"), "ABC")
+        for bad in ("", "D", "B;C"):
+            with self.subTest(bad), self.assertRaises(ValueError):
+                harness.parse_arms(bad)
 
     def test_counts_reps_and_models(self):
         self.assertEqual(len(harness.plan_runs(self.CASES, "B", ["opus", "sonnet"], 5)), 30)
@@ -298,6 +313,7 @@ class Summary(unittest.TestCase):
         self.assertEqual(harness.skip_fields(text), 3)
         self.assertEqual(harness.skip_fields("Skipped: the sweep\n"), 1)
         self.assertEqual(harness.skip_fields("all green"), 0)
+        self.assertEqual(harness.skip_fields("**Skipped**: x\n**Safe because:** y\n"), 2)
 
 
 class Budget(unittest.TestCase):
@@ -341,17 +357,18 @@ class Report(unittest.TestCase):
     def test_grades_join_back_by_reply_id(self):
         rows = [self.row(reply_id="x"), self.row(reply_id="y"), self.row(reply_id="z")]
         line = harness.report(rows, {"now"}, {"x": "pass", "y": "fail"})[1]
-        self.assertTrue(line.endswith("3/3    1/2"), line)
+        self.assertIn("3/3    1/2", line)
+
+    def test_shows_how_many_replies_held_the_whole_skip_block(self):
+        rows = [self.row(skip_fields=3), self.row(skip_fields=2)]
+        self.assertTrue(harness.report(rows, {"now"})[1].endswith("1/2"))
 
 
 class Blinding(unittest.TestCase):
-    def test_a_reply_file_shows_neither_arm_nor_load_result(self):
-        with open(os.path.join(HERE, "run.py")) as f:
-            source = f.read()
-        block = source[source.index('os.path.join(out, "replies", reply_id'):]
-        block = block[:block.index("return row")]
-        self.assertNotIn("loaded", block)
-        self.assertNotIn("arm", block)
+    def test_a_grader_gets_the_case_and_reply_only(self):
+        case = {"prompt": "p", "notes": "n", "expect": "e"}
+        self.assertEqual(harness.reply_text(case, "the reply"),
+                         "Prompt: p\n\nNotes:\n\nn\nExpect: e\n\n---\n\nthe reply\n")
 
 
 if __name__ == "__main__":
