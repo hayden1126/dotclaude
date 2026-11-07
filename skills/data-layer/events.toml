@@ -19,7 +19,7 @@
 skill = "data-layer"
 
 gate = [
-  "Build add-then-remove by default for a column or table rename or drop: check the deploy order, keep the old release working, and remove the old name only once it is gone; say so in your reply (REL-31).",
+  "Build add-then-remove by default for a column or table rename or drop: a new column with a two-way sync and a backfill, the new code moved to it (now when migrations deploy first, a release later when code does), the old name removed once the old release is gone; say so in your reply (REL-31).",
 ]
 
 [[rule]]
@@ -60,10 +60,13 @@ when = '''(?ix)
     # Alembic's alter_column rename.
     | \bnew_column_name\s*=
     # Knex, TypeORM, Sequelize and Laravel.
-    | \b(?:renameColumn|renameTable|removeColumn|dropColumns?|dropTable(?:IfExists)?|dropTimestamps)\b
+    | \b(?:renameColumn|renameTable|removeColumn|dropColumns?|dropTable(?:IfExists)?)\b
+    # Laravel's column helpers. dropForeign drops a constraint only, so it stays out.
+    | \bdrop(?:Timestamps|SoftDeletes)(?:Tz)?\b
+    | \bdrop(?:RememberToken|Morphs|NullableMorphs|ConstrainedForeignId(?:For)?)\b
     # Laravel.
     | \bdropIfExists\b
     | \bSchema::(?:rename|drop)\b
   ))
 '''
-say = "This migration renames or drops something the old release may still read. Build add-then-remove by default and say so in your reply. Check how the repo deploys. With migrations first: add the new column with a sync in the database, move the new code to it now, and remove the old one in a later release. With code first: ship the column and the sync a release before the code that uses it. If this is the contract step, check the old release is gone, then resend or add `practices-allow: REL-31 <reason>`. A drop in a down migration is a false match: resend."
+say = "This migration renames or drops something the old release may still read. Build add-then-remove by default and say so in your reply. Check how the repo deploys. With migrations first: add the new column with a two-way sync in the database and backfill it, move the new code to it now, and remove the old one in a later release. With code first: ship the column, the sync and the backfill a release before the new code that uses it. If this is the contract step, check the old release is gone, then resend or add `practices-allow: REL-31 <reason>`. A drop in a down migration is a false match: resend."

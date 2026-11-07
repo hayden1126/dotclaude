@@ -4532,6 +4532,16 @@ class SkillAdvice(unittest.TestCase):
         say = texts[0]
         self.assertIn("code first", say)
         self.assertIn("migrations first", say)
+        for text in texts:  # each stands alone for a model that never loaded the skill
+            self.assertIn("two-way sync", text)
+            self.assertIn("backfill", text)
+            self.assertIn("new code", text)
+
+    def test_the_backfill_is_batched_after_the_sync_commits(self):
+        with open(os.path.join(DATA_LAYER, "SKILL.md")) as f:
+            text = f.read()
+        self.assertIn("in batches", text)
+        self.assertIn("two-way", text)
 
     def test_the_sync_comes_before_the_backfill(self):
         with open(os.path.join(DATA_LAYER, "SKILL.md")) as f:

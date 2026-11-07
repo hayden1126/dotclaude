@@ -436,6 +436,69 @@ content = '''
 printf '  t.remove '\''a'\''\n' >> db/migrate/1.rb
 '''
 
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "database/migrations/2026_11_07_users.php"
+content = '''
+$table->dropTimestampsTz();
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "database/migrations/2026_11_07_users.php"
+content = '''
+$table->dropSoftDeletes();
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "database/migrations/2026_11_07_users.php"
+content = '''
+$table->dropSoftDeletesTz();
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "database/migrations/2026_11_07_users.php"
+content = '''
+$table->dropRememberToken();
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "database/migrations/2026_11_07_users.php"
+content = '''
+$table->dropMorphs('taggable');
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "database/migrations/2026_11_07_users.php"
+content = '''
+$table->dropConstrainedForeignId('org_id');
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "database/migrations/2026_11_07_users.php"
+content = '''
+$table->dropForeign(['org_id']);
+'''
+
 # A call that removes a file or a list item is no column change.
 
 [[sample]]

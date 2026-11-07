@@ -36,7 +36,7 @@ L2b exists because a migration written by a heredoc or `printf` is a Bash call, 
 - **Rails:** `rename_column`, `remove_column`, `remove_columns`, `remove_reference`, `remove_belongs_to`, `remove_timestamps`, `rename_table`, `drop_table`, `drop_join_table`, and `t.remove` and `t.rename` in a `change_table` block, with a symbol, or a string after a space. A string in parentheses is a known miss: it reads like `os.remove("x")`.
 - **Django:** `RenameField`, `RemoveField`, `RenameModel`, `DeleteModel`.
 - **Alembic:** `op.drop_column`, `op.drop_table`, `op.rename_table`, `new_column_name=`.
-- **Knex, TypeORM, Sequelize and Laravel:** `renameColumn`, `renameTable`, `removeColumn`, `dropColumn`, `dropColumns`, `dropTable`, `dropTableIfExists`, `dropIfExists`, `dropTimestamps`, `Schema::rename`, `Schema::drop`.
+- **Knex, TypeORM, Sequelize and Laravel:** `renameColumn`, `renameTable`, `removeColumn`, `dropColumn`, `dropColumns`, `dropTable`, `dropTableIfExists`, `dropIfExists`, `Schema::rename`, `Schema::drop`, and Laravel's column helpers `dropTimestamps`, `dropSoftDeletes` (each with `Tz`), `dropRememberToken`, `dropMorphs`, `dropNullableMorphs` and `dropConstrainedForeignId`.
 
 Never read as a match: `alter column x drop not null`, `alter column x drop default`, `drop constraint`, `rename constraint`, `add column`, `drop index`, `drop trigger`, `drop function`, `drop policy`, or a line that starts with `-- `, `#` or `//`. These leave the old release working, and the first step of an add-then-remove may well say in a comment what a later release drops.
 
