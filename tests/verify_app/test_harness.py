@@ -381,6 +381,7 @@ class Cleanup(Case):
         self.assertEqual(code, 0)
         self.assertTrue(gone(self.child_pid()))
         self.assertIs(manifest["sigkill_used"], False)
+        self.assertEqual(manifest["swept"], [], "the group signal must end it, not the sweep")
         self.assert_clean(manifest)
 
     def test_a_setsid_child_in_the_repo_is_swept(self):
@@ -395,6 +396,7 @@ class Cleanup(Case):
         self.assertEqual(code, 0)
         self.assertTrue(gone(self.child_pid()))
         self.assertIs(manifest["sigkill_used"], True)
+        self.assertEqual(manifest["swept"], [], "the group's SIGKILL must end it, not the sweep")
         self.assert_clean(manifest)
 
     def test_a_token_carrier_outside_the_repo_is_named_and_never_signalled(self):
@@ -418,16 +420,16 @@ class Cleanup(Case):
     def test_a_zombie_with_the_token_does_not_count_as_left(self):
         verify = load(TEMPLATE / "verify.py")
         env = {**os.environ, verify.TOKEN_VAR: "zombie-token"}
-        sleeper = subprocess.Popen(["sleep", "30"], env=env, cwd=self.repo)
+        sleeper = subprocess.Popen(["sleep", "30"], env=env, cwd=self.repo, start_new_session=True)
         self.addCleanup(sleeper.wait)
         self.addCleanup(sleeper.kill)
         deadline = time.monotonic() + 3
-        while not verify.carriers("zombie-token", None, str(self.repo))[0]:
+        while not verify.carriers("zombie-token", sleeper.pid, str(self.repo))[0]:
             self.assertLess(time.monotonic(), deadline, "the scan never saw the live sleeper")
             time.sleep(0.02)
-        sleeper.send_signal(signal.SIGKILL)  # not reaped: it stays in /proc as state Z
+        sleeper.send_signal(signal.SIGKILL)  # not reaped: it stays in /proc as state Z, in its group
         self.assertTrue(gone(sleeper.pid))
-        self.assertEqual(verify.carriers("zombie-token", None, str(self.repo)), ([], []))
+        self.assertEqual(verify.carriers("zombie-token", sleeper.pid, str(self.repo)), ([], []))
 
 
 class Interrupts(Case):
@@ -451,9 +453,7 @@ class Interrupts(Case):
         self.interrupted(signal.SIGINT)
 
     def test_a_killed_harness_leaves_the_manifest_running(self):
-        proc = self.start_and_wait({"journeys": ["wait_here"]})
-        manifest = self.manifest()
-        self.addCleanup(lambda: gone(manifest["app_pid"], 0) or os.killpg(manifest["app_pid"], signal.SIGKILL))
+        proc = self.start_and_wait({"preflight": "wait"})
         proc.kill()
         proc.wait()
         self.assertEqual(self.manifest()["outcome"], "running")
@@ -518,6 +518,8 @@ class RealBrowser(Case):
         proc.send_signal(signal.SIGTERM)
         self.assertEqual(proc.wait(timeout=30), 2)
         self.assertTrue(gone(browser_pid))
+        self.assertFalse(pathlib.Path((self.state / "browser.profile").read_text()).exists(),
+                         "Browser.close removes its profile; the pipe closing at exit would not")
         self.assert_clean(self.manifest())
 
 

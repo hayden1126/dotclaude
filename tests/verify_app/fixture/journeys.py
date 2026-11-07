@@ -24,6 +24,8 @@ FORBIDDEN_REQUESTS = [("POST", "/paid")]
 def preflight(root):
     if CONFIG.get("preflight") == "raise":
         raise OSError("preflight blew up")
+    if CONFIG.get("preflight") == "wait":
+        wait_here(None)
     return CONFIG.get("preflight")
 
 
@@ -67,6 +69,8 @@ def click_and_download(ctx):
     page.click("#save")
     saved = page.download()
     ctx.check(saved.read_bytes() == b"exported bytes", "the download holds the export")
+    page.goto("/file.bin")
+    ctx.check(page.download().read_bytes() == b"file bytes", "a link straight to a file downloads it")
     ctx.fact("download", saved.name)
 
 
@@ -101,6 +105,7 @@ def kill_browser_quietly(ctx):
 def wait_in_browser(ctx):
     ctx.page.goto("/")
     (STATE / "browser.pid").write_text(str(ctx.page.browser.proc.pid), encoding="utf-8")
+    (STATE / "browser.profile").write_text(ctx.page.browser.profile, encoding="utf-8")
     wait_here(ctx)
 
 

@@ -60,6 +60,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.reply(200, b"ok")
         elif self.path == "/moved":
             self.reply(302, b"", (("Location", "/elsewhere"),))
+        elif self.path == "/file.bin":
+            self.reply(200, b"file bytes", (("Content-Disposition", 'attachment; filename="file.bin"'),))
         elif self.path == "/crash":
             os._exit(7)
         else:

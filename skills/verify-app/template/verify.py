@@ -373,8 +373,6 @@ class Run:
         self.write()
         if self.exited(0.5 if error else 0) is not None:
             raise AppFailed("the app exited during a journey")
-        if self.browser and self.browser.proc.poll() is not None:
-            raise self.browser_mod.BrowserError("the browser process died during a journey")
         if row["outcome"] == "not judged":
             raise Refused(f"journey {name}: {row['detail']}")
 
@@ -475,7 +473,7 @@ class Run:
 def main(argv: list) -> int:
     for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, on_signal)
-    parser = argparse.ArgumentParser(add_help=False)  # --help would exit 0, which means proved
+    parser = argparse.ArgumentParser()
     tier = parser.add_mutually_exclusive_group()
     tier.add_argument("--quick", action="store_true")
     tier.add_argument("--journey")
@@ -492,7 +490,7 @@ def main(argv: list) -> int:
 if __name__ == "__main__":
     try:
         code = main(sys.argv[1:])
-    except SystemExit:  # argparse's usage error
+    except SystemExit:  # argparse: a usage error, or --help, which must not read as proved
         code = 2
     except BaseException:
         traceback.print_exc()
