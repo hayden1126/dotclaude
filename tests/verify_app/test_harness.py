@@ -20,6 +20,7 @@ EXITS = {0: "proved", 1: "app failed", 2: "could not judge", 3: "cleanup failed"
 
 
 def load(path: pathlib.Path):
+    sys.dont_write_bytecode = True  # no __pycache__ in the template folder that gets copied
     spec = importlib.util.spec_from_file_location(path.stem, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
