@@ -5,9 +5,12 @@ Usage: layout_check.py <page.html>
 
 Prints one line per assertion, `ok` or `FAIL` with the measured numbers. Exits 0
 with a last line of LAYOUT_OK, 1 on any FAIL or a page that stops responding, 2
-when there is no browser or the page lacks a required hook. Fit is judged at the page's default Zoom. Python
+when the browser is missing or dies, or the page isn't built from the template.
+A WARN line names a control that changed nothing in the render; it doesn't fail. Fit is judged at the page's default Zoom. Python
 standard library only.
 """
+from __future__ import annotations
+
 import argparse
 import fcntl
 import glob
@@ -39,6 +42,7 @@ INSTALL_HINT = ("Install one with: npx @puppeteer/browsers install chrome-headle
 HOOKS = ("header.m-top", "header.m-top h1", ".m-bar", ".m-ctl", ".m-seg", ".m-main", ".m-stage",
          "#frame.m-frame", "#scaler.m-scaler", "iframe#app", "aside.m-panel", "#caption.m-caption",
          "#c-frame button")
+CSS_VARIABLES = ("--m-panel-min", "--m-gap")
 
 # Runs in every frame before the page's own script, so a throw in render(), in a
 # click handler or inside the render reaches the top window's list.
@@ -118,21 +122,31 @@ SCROLL_RESET_JS = """(() => {
 })()"""
 
 # A click that changes the render waits for its load: the next srcdoc change would
-# cancel a pending one, and any script inside that render with it.
-CLICK_ALL_JS = """(async () => {
+# cancel a pending one, and any script inside that render with it. Returns the
+# button's label when a choice that should reach the render left it unchanged.
+# Size and Zoom act on the frame, so they never need to. The live DOM counts as well
+# as srcdoc: a mock may keep one loaded page and flip attributes on it, to hold its
+# scroll position between looks.
+CLICK_JS = """(async (index) => {
   const app = document.getElementById("app");
-  for (const button of document.querySelectorAll(".m-seg button")) {
-    const before = app.srcdoc;
-    const loaded = new Promise((done) => { app.addEventListener("load", done, { once: true }); setTimeout(done, 1000); });
-    button.click();
-    await (app.srcdoc === before ? new Promise(requestAnimationFrame) : loaded);
-  }
-  return document.querySelectorAll(".m-seg button").length;
-})()"""
+  const button = document.querySelectorAll(".m-seg button")[index];
+  const group = button.closest(".m-ctl")?.querySelector("span")?.textContent;
+  const expected = !button.closest("#c-frame") && group !== "Zoom" && button.getAttribute("aria-pressed") !== "true";
+  const live = () => app.contentDocument?.documentElement.outerHTML;
+  const label = button.textContent.trim(), before = app.srcdoc, liveBefore = live();
+  const loaded = new Promise((done) => { app.addEventListener("load", done, { once: true }); setTimeout(done, 1000); });
+  button.click();
+  await (app.srcdoc === before ? new Promise(requestAnimationFrame) : loaded);
+  return expected && app.srcdoc === before && live() === liveBefore ? label : null;
+})"""
 
 
 class BrowserError(Exception):
-    """The browser could not start, or stopped answering."""
+    """The browser could not start, or a command to it failed."""
+
+
+class NoAnswer(BrowserError):
+    """A command timed out: a live browser whose page is stuck."""
 
 
 class NoBrowser(BrowserError):
@@ -211,17 +225,24 @@ class Browser:
         self._log.close()
         shutil.rmtree(self.profile, ignore_errors=True)
 
-    def _died(self, what: str) -> BrowserError:
+    def dead(self) -> bool:
+        try:
+            self.proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            return False
+        return True
+
+    def _died(self, what: str, kind: type = BrowserError) -> BrowserError:
         self._log.flush()
         text = pathlib.Path(self.profile, "stderr.log").read_text(errors="replace")
         tail = "\n".join(text.strip().splitlines()[-5:])
-        return BrowserError(what + (f":\n{tail}" if tail else ""))
+        return kind(what + (f":\n{tail}" if tail else ""))
 
     def _message(self, deadline: float) -> dict:
         while b"\0" not in self._buf:
             left = deadline - time.monotonic()
             if left <= 0:
-                raise self._died("the browser stopped answering")
+                raise self._died("the browser stopped answering", NoAnswer)
             ready, _, _ = select.select([self._out_r], [], [], left)
             if not ready:
                 continue
@@ -488,9 +509,12 @@ def check_controls(report: Report, browser: Browser, url: str):
     shows only here."""
     tab = Page(browser)
     tab.open(url, *CONTROLS_SIZE)
-    clicked = tab.evaluate(CLICK_ALL_JS)
-    check_errors(report, tab, "controls {}x{}, {} buttons".format(*CONTROLS_SIZE, clicked))
+    count = tab.evaluate('document.querySelectorAll(".m-seg button").length')
+    unchanged = [tab.evaluate(f"{CLICK_JS}({index})") for index in range(count)]
+    check_errors(report, tab, "controls {}x{}, {} buttons".format(*CONTROLS_SIZE, count))
     tab.close()
+    for label in filter(None, unchanged):
+        print(f"WARN controls: {label} changed nothing in the render; fine if it only shows beside another option")
 
 
 def preflight(browser: Browser, url: str) -> tuple[list[str], list[str]]:
@@ -498,6 +522,8 @@ def preflight(browser: Browser, url: str) -> tuple[list[str], list[str]]:
     tab = Page(browser)
     tab.load(url, *WIDE[0])
     missing = tab.evaluate(f"{json.dumps(HOOKS)}.filter((s) => !document.querySelector(s))")
+    missing += tab.evaluate(f"""{json.dumps(CSS_VARIABLES)}.filter((v) =>
+      !getComputedStyle(document.documentElement).getPropertyValue(v).trim())""")
     errors = tab.evaluate(READ_ERRORS_JS)
     tab.close()
     return missing, errors
@@ -539,12 +565,21 @@ def main() -> int:
         print(exc, file=sys.stderr)
         if browser:
             browser.close()
+        if not isinstance(exc, NoBrowser):
+            print(INSTALL_HINT, file=sys.stderr)
         return 2
     try:
         return run(browser, page.resolve().as_uri())
     except BrowserError as exc:
-        # The browser answered above, so a hang here is the page's: a loop in render(), say.
-        print(f"FAIL the page stopped responding: {str(exc).splitlines()[0]}")
+        if browser.dead():
+            print(exc, file=sys.stderr)
+            print("the browser died during the check, so this says nothing about the page: run it again",
+                  file=sys.stderr)
+            return 2
+        if isinstance(exc, NoAnswer):
+            print("FAIL the page stopped responding: look for a loop in render() or the render's own script")
+        else:
+            print(f"FAIL the page broke the check: {str(exc).splitlines()[0]}")
         return 1
     finally:
         browser.close()

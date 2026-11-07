@@ -54,6 +54,8 @@ STACKED_WIDTH = ": frameEl.parentElement.clientWidth) - 1;"
 RENDER_END = "</main></body></html>`;"
 FRAME_HEIGHT = "scaler.style.height = frameEl.style.height = height;"
 MODES_LINE = 'const MODES = ["Light", "Dark"];'
+DENSITY_READ = 'compact = state.Density === "Compact"'
+PANEL_VARIABLE = "--m-panel-min: 340px; "
 FRAMES_BLOCK = """const FRAMES = [
   { label: "Laptop", width: 1440, height: 900 },
   { label: "iPad", width: 1024, height: 768 },
@@ -249,6 +251,13 @@ class MissingInputs(TemporaryPages):
         result = run_check(self.page(), env)
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertNotIn("stopped responding", result.stdout)
+        self.assertIn("npx", result.stderr.splitlines()[-1])
+
+    def test_no_browser_anywhere_exits_2_with_a_hint(self):
+        env = {"HOME": self.dir.name, "PATH": self.dir.name}
+        result = run_check(self.page(), env)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("npx", result.stderr)
 
     def test_missing_page_exits_2(self):
         result = run_check(pathlib.Path(self.dir.name, "absent.html"))
@@ -301,6 +310,45 @@ class CleanPages(TemporaryPages):
         result = run_check(self.page([(FRAME_HOOK, 'id="not-frame"')]))
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("#frame", result.stderr)
+
+    def test_a_missing_css_variable_exits_2_and_names_it(self):
+        result = run_check(self.page([(PANEL_VARIABLE, "")]))
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("--m-panel-min", result.stderr)
+
+    def test_a_browser_killed_mid_run_is_not_the_page_s_failure(self):
+        wrapper = pathlib.Path(self.dir.name, "x-headless-shell")
+        wrapper.write_text(f'#!/bin/sh\n( sleep 3; kill -9 $$ ) 3>&- 4>&- &\nexec "{BROWSER}" "$@"\n')
+        wrapper.chmod(0o755)
+        result = run_check(self.page(), {**os.environ, "MOCK_CHROME": str(wrapper)})
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertNotIn("FAIL the page", result.stdout)
+        self.assertIn("says nothing about the page", result.stderr)
+
+    def test_a_dead_control_warns_and_a_live_one_does_not(self):
+        self.assertNotIn("WARN", run_check(self.page()).stdout)
+        result = run_check(self.page([(DENSITY_READ, 'compact = state.density === "Compact"')]))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertRegex(result.stdout, r"WARN controls: Compact changed nothing")
+        self.assertEqual(result.stdout.splitlines()[-1], "LAYOUT_OK")
+
+    def test_a_render_updated_in_place_does_not_warn(self):
+        in_place = """function render(state) {
+  window.page ??= draw(state);
+  const look = JSON.stringify([state.mode, state.Density, state.answers]);
+  document.getElementById("app").contentDocument?.documentElement.setAttribute("data-look", look);
+  return window.page;
+}
+function draw(state) {
+"""
+        result = run_check(self.page([(RENDER_OPEN, in_place)]))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("WARN", result.stdout)
+
+    def test_a_page_hanging_at_load_is_the_page_s_failure(self):
+        result = run_check(self.page([(RENDER_OPEN, RENDER_OPEN + "  for (;;) {}\n")]))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("FAIL the page stopped responding", result.stdout)
 
     def test_a_hanging_page_is_the_page_s_failure(self):
         hang = RENDER_OPEN + '  if (state.Density === "Compact") for (;;) {}\n'
