@@ -24,7 +24,7 @@
 // line never costs a new take. It records nothing: any recorder's file works.
 //
 //   node demo/voice.mjs                builds demo/out/demo-voice.mp4 from the files in demo/voice/
-//   node demo/voice.mjs cues           lists the beats and a line to record each one
+//   node demo/voice.mjs cues           lists each part to record and for how long
 //   node demo/voice.mjs add <part> <file>   copies a recording in as all or beat N, checking it first
 //   node demo/voice.mjs check <file>   compares an editor's export with the take
 //
@@ -69,7 +69,7 @@ const FADE_S = 0.01; // Keeps a cut from clicking.
 const SLACK_S = 0.05;
 const LENGTH_SLACK_S = 0.1;
 const LEAD_IN_S = 3; // Spare time in a recording line, to get ready after pressing Enter.
-const LONG_LINE_S = 110; // A line typed at Claude Code's prompt may be stopped at 2 minutes.
+const LONG_LINE_S = 110; // A recording line typed at Claude Code's prompt may be stopped at 2 minutes.
 const CUT_OFF_S = 0.15; // Speech this close to a file's end may have been cut off.
 const RATE_SLACK = 0.1; // An editor's 29.97 is close enough to 30.
 
@@ -166,6 +166,8 @@ function readTake() {
   if (!fs.existsSync(TAKE) || !fs.existsSync(STEPS)) throw new Error(`no take in ${shown(OUT)}: run record.mjs first`);
   const { steps, trim } = JSON.parse(fs.readFileSync(STEPS, 'utf8'));
   if (!Array.isArray(steps) || !steps.length) throw new Error(`${shown(STEPS)} lists no beats`);
+  const times = [trim, ...steps.flatMap(step => [step?.start, step?.end])];
+  if (!times.every(Number.isFinite)) throw new Error(`${shown(STEPS)} has a time that isn't a number: run record.mjs again`);
   // steps.json counts from before the trim, as captions.srt doesn't.
   const beats = steps.map(({ caption, start, end }) => ({ caption, start: start - trim, end: end - trim }));
   return { beats, length: probe(TAKE).duration };
@@ -283,26 +285,26 @@ async function build() {
   console.log(`${shown(RESULT)}: ${[...voices.values()].map(voice => voice.name).join(', ')} on ${length.toFixed(1)} s of take`);
 }
 
-// The line runs outside the sandbox, so it writes only into a folder it has just made under /tmp,
-// which the sandbox can't write. Anything in the voice dir could be a link that redirects a write.
-const recordLine = (seconds, part) => 'd=$(mktemp -d /tmp/voice.XXXXXX) && ffmpeg -nostdin -hide_banner -loglevel error '
-  + `-f pulse -i RDPSource -t ${Math.ceil(seconds + LEAD_IN_S)} -ac 1 -c:a pcm_s16le "$d/${part}.wav" && echo "$d/${part}.wav"`;
+// The app writes steps.json, so a caption is printed with no control characters: it can't move the
+// cursor, clear a line or start a line that passes for something else.
+const plain = text => String(text).replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ');
 
+// Prints no shell command. The person speaking runs the recording line outside the sandbox, and this
+// file sits in the project, where the sandboxed session or the app could change it, so the line lives
+// in the skill's own SKILL.md; only the part and the seconds below go into it.
 function cues() {
   const { beats, length } = readTake();
   console.log(`${shown(TAKE)}: ${length.toFixed(1)} s, ${beats.length} beats\n`);
-  beats.forEach(({ caption, start, end }, index) => {
-    console.log(`  ${index + 1}. at ${start.toFixed(1)} s, ${(end - start).toFixed(1)} s long: ${caption}`);
-  });
-  console.log('\nRecord with any app, then add the file as one part: the whole read or one beat.');
-  console.log('Under WSLg, the speaker can type one of these. It stops by itself and prints where the file is:\n');
-  const line = (label, seconds, part) => {
-    console.log(`  ${label}: ${recordLine(seconds, part)}`);
-    if (seconds + LEAD_IN_S > LONG_LINE_S) console.log('    (over 2 minutes: run it in your own terminal, since a ! line may be stopped at 2 minutes)');
+  const part = (name, seconds, what) => {
+    const record = Math.ceil(seconds + LEAD_IN_S);
+    console.log(`  part ${name}: record ${record} s. ${what}`);
+    if (record > LONG_LINE_S) console.log('    (over 2 minutes: run its line in your own terminal, since a ! line may be stopped at 2 minutes)');
   };
-  line('whole read', length, 'all');
-  beats.forEach(({ start, end }, index) => line(`beat ${index + 1}`, end - start, String(index + 1)));
-  console.log(`\nThen: node ${shown(fileURLToPath(import.meta.url))} add <all or beat> <file>`);
+  part('all', length, 'The whole read.');
+  beats.forEach(({ caption, start, end }, index) => {
+    part(String(index + 1), end - start, `At ${start.toFixed(1)} s, ${(end - start).toFixed(1)} s long: ${plain(caption)}`);
+  });
+  console.log('\nRecord each part with any app, or with the recording line in the demo-video skill, then give the file\'s path to Claude to add.');
 }
 
 // Copies a recording in, from inside the sandbox, so a link in the voice dir can only redirect a write
@@ -317,14 +319,16 @@ function add(part, file) {
   const extension = path.extname(file).toLowerCase();
   if (!extension) throw new Error(`${file} has no extension, so its format can't be told from its name`);
   speechIn(path.resolve(file)); // Refuses a silent file now, not at the build.
+  const sound = fs.readFileSync(file); // Read first: the file may be the one about to move aside.
   const dir = voiceDir();
   fs.mkdirSync(dir, { recursive: true });
   for (const entry of fs.readdirSync(dir)) {
     const found = FILE_NAME.exec(entry);
-    if (found && found[1].toLowerCase() === String(key)) fs.renameSync(path.join(dir, entry), path.join(dir, `.${entry}.prev`));
+    const same = found && (found[1].toLowerCase() === 'all' ? 'all' : Number(found[1])) === key; // 02.wav is beat 2.
+    if (same) fs.renameSync(path.join(dir, entry), path.join(dir, `.${entry}.prev`));
   }
   const target = path.join(dir, `${key}${extension}`);
-  fs.copyFileSync(file, target);
+  fs.writeFileSync(target, sound);
   console.log(`${shown(target)}: added, from ${file}`);
 }
 
