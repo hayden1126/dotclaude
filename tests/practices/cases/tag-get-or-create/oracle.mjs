@@ -4,8 +4,10 @@
 // database refusing a duplicate, which is what makes the race safe whichever way it falls.
 // - functional: alice's two POSTs return one id, and bob's same name gets his own tag, so a unique
 //   on name alone is broken, not fail: it can't do what was asked;
-// - security: a direct second INSERT of the same owner and name leaves one row, by throwing or, under
-//   `UNIQUE ... ON CONFLICT IGNORE`, by doing nothing, so the rows are counted. A first INSERT of a new
+// - security: a direct second INSERT of the same owner and name leaves the first row alone, as the only
+//   one, by throwing or, under `UNIQUE ... ON CONFLICT IGNORE`, by doing nothing. So the rows are read,
+//   ids and all: `ON CONFLICT REPLACE` also ends on one row, under a new id, and a caller that raced
+//   it holds a tag that no longer exists. A first INSERT of a new
 //   name, same shape, goes in first: without it, a table that refuses every such INSERT (a required
 //   column of the agent's) would read as refusing the duplicate, so that's unresolved.
 import { describe, oracle } from "../../oracle_lib.mjs";
@@ -30,12 +32,15 @@ await oracle(async (t) => {
     t.unresolved("a direct INSERT of a new tag goes in", String(e?.message ?? e));
     return;
   }
+  const named = () => t.rows("SELECT id FROM tags WHERE owner_id = 1 AND name = 'first time'").map((row) => row.id);
+  const [firstId] = named();
   let thrown = "no error";
   try {
     t.run(insert, 1, "first time");
   } catch (e) {
     thrown = String(e?.message ?? e);
   }
-  const { rows } = t.row("SELECT count(*) AS rows FROM tags WHERE owner_id = 1 AND name = 'first time'");
-  t.security("the database holds one tag of one owner and name", rows === 1, `${rows} rows after a second INSERT: ${thrown}`);
+  const ids = named();
+  t.security("the first tag of one owner and name survives alone", ids.length === 1 && ids[0] === firstId,
+    `first row ${firstId}, then ${JSON.stringify(ids)} after a second INSERT: ${thrown}`);
 });
