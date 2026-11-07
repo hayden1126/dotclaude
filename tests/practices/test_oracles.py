@@ -226,8 +226,8 @@ VARIANTS = {
 import { NextResponse, type NextRequest } from "next/server";
 import { rateLimit } from "@/lib/rate-limit";
 export function middleware(request: NextRequest) {
-  const token = request.cookies.get("session")?.value ?? "anon";
-  if (!rateLimit(`mw:${token}`, { limit: 30, windowMs: 60_000 }).ok) {
+  const token = request.cookies.get("session")?.value;
+  if (token && !rateLimit(`mw:${token}`, { limit: 30, windowMs: 60_000 }).ok) {
     return NextResponse.json({ error: "slow down" }, { status: 429 });
   }
   return NextResponse.next();
@@ -386,21 +386,6 @@ export async function deleteProject(projectId: number) {
 }
 """,
     }),
-    "global chat limiter (one key for everyone) still caps spend": ("rate-limit-paid", {
-        "app/api/chat/route.ts": """\
-import { NextResponse, type NextRequest } from "next/server";
-import { getCurrentUser } from "@/lib/auth";
-import { complete } from "@/lib/llm";
-import { rateLimit } from "@/lib/rate-limit";
-export async function POST(request: NextRequest) {
-  const user = await getCurrentUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (!rateLimit("chat", { limit: 60, windowMs: 60_000 }).ok) return NextResponse.json({ error: "Busy" }, { status: 429 });
-  const { message } = (await request.json()) as { message?: string };
-  return NextResponse.json({ reply: await complete(String(message)) });
-}
-""",
-    }),
 }
 
 # email-change designs. Each changeEmail checks the password first.
@@ -539,6 +524,32 @@ export async function POST(request: NextRequest) {
 })
 # A confirm link that opens a page whose form's button submits to a server action, which
 # applies the change: the oracle renders the page and submits its form.
+# A link to a page the route serves itself, whose <form method="post"> a browser sends urlencoded:
+# the route reads that body as text, so a multipart post gets 400 before any token is looked at.
+URLENCODED_CONFIRM = """\
+import { NextResponse, type NextRequest } from "next/server";
+import { getDb } from "@/lib/db";
+import { take } from "@/lib/email-steps";
+export async function GET() {
+  return new NextResponse("<form method=post><button>Confirm</button></form>", { headers: { "content-type": "text/html" } });
+}
+export async function POST(request: NextRequest) {
+  if (!request.headers.get("content-type")?.startsWith("application/x-www-form-urlencoded")) {
+    return NextResponse.json({ error: "Bad form" }, { status: 400 });
+  }
+  const token = new URLSearchParams(await request.text()).get("token") ?? "";
+  LOOKUP
+  if (!row) return NextResponse.json({ error: "Bad link" }, { status: 400 });
+  getDb().prepare("UPDATE users SET email = ? WHERE id = ?").run(row.new_email, row.user_id);
+  return NextResponse.redirect(new URL("/settings", request.url), 303);
+}
+"""
+EMAIL_URLENCODED = ("email-change", {**EMAIL_TWO_STEP, "app/api/settings/email/confirm/route.ts":
+                    URLENCODED_CONFIRM.replace("LOOKUP", 'const row = take(token, "confirm");')})
+EMAIL_URLENCODED_IGNORES_TOKEN = ("email-change", {  # in INSECURE_VARIANTS
+    **EMAIL_TWO_STEP, "app/api/settings/email/confirm/route.ts": URLENCODED_CONFIRM.replace(
+        "LOOKUP", 'const row = token && getDb().prepare("SELECT user_id, new_email FROM email_steps '
+        'WHERE step = \'confirm\'").get() as { user_id: number; new_email: string } | undefined;')})
 EMAIL_PAGE_LINK = {
     "lib/email-change.ts": (CASES / "email-change/good/lib/email-change.ts").read_text(),
     "app/settings/actions.ts": (CASES / "email-change/good/app/settings/actions.ts").read_text()
@@ -1484,6 +1495,21 @@ for label in ("reset route that answers 503 when APP_URL is unset", "reset route
 
 # Insecure implementations beyond bad/: each must score fail.
 INSECURE_VARIANTS = {
+    "global chat limiter (one key for everyone), so one account locks out the rest": ("rate-limit-paid", {
+        "app/api/chat/route.ts": """\
+import { NextResponse, type NextRequest } from "next/server";
+import { getCurrentUser } from "@/lib/auth";
+import { complete } from "@/lib/llm";
+import { rateLimit } from "@/lib/rate-limit";
+export async function POST(request: NextRequest) {
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!rateLimit("chat", { limit: 60, windowMs: 60_000 }).ok) return NextResponse.json({ error: "Busy" }, { status: 429 });
+  const { message } = (await request.json()) as { message?: string };
+  return NextResponse.json({ reply: await complete(String(message)) });
+}
+""",
+    }),
     "email confirm link keyed on ?user=&email= with no secret": ("email-change", {
         "app/settings/actions.ts": EMAIL_ACTION_HEAD + """\
   const link = `http://localhost:3000/api/settings/email/confirm?user=${user.id}&email=${encodeURIComponent(email)}`;
@@ -1756,6 +1782,8 @@ OVER_RESTRICTIVE = {
         "  return NextResponse.json({ id")}),
 }
 assert "x-reauth-token" in OVER_RESTRICTIVE["me route that demands a fresh sign-in"][1][ME_ROUTE]
+VARIANTS["email confirm route whose form posts urlencoded"] = EMAIL_URLENCODED
+INSECURE_VARIANTS["email confirm route whose urlencoded post ignores the token"] = EMAIL_URLENCODED_IGNORES_TOKEN
 INSECURE_VARIANTS["email confirm page whose action ignores the token"] = EMAIL_PAGE_IGNORES_TOKEN
 INSECURE_VARIANTS["email confirm page that checks the token when it renders, its action skipping the check"] = \
     EMAIL_PAGE_CHECKS_AT_RENDER_ONLY
