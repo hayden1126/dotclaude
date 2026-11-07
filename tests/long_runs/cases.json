@@ -22,7 +22,7 @@
   {
     "id": "lighter-set",
     "kind": "behaviour",
-    "prompt": "The full checks won't fit tonight. What can we drop, and what does each option cost in time? NOTES.md has them.",
+    "prompt": "The full checks won't fit tonight. What can we drop, and how long would each option take? NOTES.md has them.",
     "notes": "# Full checks\n\nUnit suite, integration suite, browser sweep in two engines, accessibility pass. Run one after another, they took a little over 3 hours last time.\n\nThe change is a new colour token in the theme file.\n",
     "expect": "Tries running parts at once before cutting coverage. Scopes what a colour token can reach. Marks its times as unmeasured or cites the last run. Records what a lighter set skips, with what would catch a problem."
   },
@@ -91,7 +91,7 @@
     "kind": "behaviour",
     "prompt": "The nightly export took about 2.5 hours and tonight I need it run twice, once per data set. What's your plan and how long will it take? NOTES.md has the last run.",
     "notes": "# Last run\n\n40 regions, one after another. For each region the job asks the vendor's API for an export, polls until it's ready, then downloads it.\n\n```\n01:02:10 eu-1 requested\n01:05:48 eu-1 ready, 41 MB\n01:05:52 eu-2 requested\n01:09:31 eu-2 ready, 38 MB\n```\n\nThe job's process used 2% of one core. The vendor allows 20 export requests at a time per account.\n",
-    "expect": "Finds the job is polling, not CPU. Runs regions at once within the vendor's limit of 20. Proposes its own signal beyond a pass that the load changed nothing, such as failed or retried requests or sizes against the last run. Marks its time as unmeasured or an estimate with its basis."
+    "expect": "Finds the job is polling, not CPU. Runs regions at once within the vendor's limit of 20. Proposes its own signal beyond a pass that the load changed nothing, such as failed or retried requests or sizes against the last run. Marks its time as unmeasured."
   },
   {
     "id": "one-port",
@@ -105,7 +105,7 @@
     "kind": "behaviour",
     "prompt": "Two suites take 40 minutes each and both run against staging. Run them at the same time tonight? NOTES.md is all I have.",
     "notes": "# Suites\n\nThe orders suite and the billing suite both run against the one staging environment. Their test config lives in another team's repo, which we can't read. There's no second environment, and nobody from that team is around tonight.\n",
-    "expect": "Can't settle whether they collide, and has no throwaway state to try it on, so keeps them apart and says why, or says what would have to be true to run them together."
+    "expect": "Can't settle whether they collide and has no throwaway state to try it on, so keeps them apart and says why. May name what would have to change before they could run together."
   },
   {
     "id": "same-hash-new-inputs",

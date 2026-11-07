@@ -177,6 +177,11 @@ class Budget:
             self.room.notify_all()
 
 
+def new_reply_id():
+    """Random, so a file name says nothing and a rerun can't inherit an old row's grade."""
+    return uuid.uuid4().hex[:10]
+
+
 def reply_text(case, reply):
     """What a grader reads. It takes no arm and no load result, so it can't show them."""
     return (f"Prompt: {case['prompt']}\n\nNotes:\n\n{case['notes']}\n"
@@ -186,7 +191,7 @@ def reply_text(case, reply):
 def run_one(run, out, skill_dir, line):
     case, arm, model, rep = run["case"], run["arm"], run["model"], run["rep"]
     name = f"{case['id']}-{arm}-{model}-{rep}-{run['fingerprint']}"
-    reply_id = uuid.uuid4().hex[:10]
+    reply_id = new_reply_id()
     stream_path = os.path.join(out, "streams", name + ".jsonl")
     root = tempfile.mkdtemp(prefix="wk-", dir="/tmp")
     work = os.path.join(root, "proj")
@@ -226,14 +231,14 @@ def read_rows(out):
 
 def done_keys(rows):
     """Rows resume can trust: a broken or contaminated row runs again."""
-    return {(r["case"], r["arm"], r["model"], r["rep"], r["fingerprint"]) for r in rows
+    return {(r["case"], r["arm"], r["model"], r["rep"], r.get("fingerprint")) for r in rows
             if not (r.get("broken") or r.get("contaminated"))}
 
 
 def parse_arms(text):
     """`--arms BC` or `--arms B,C`. Anything else is an error, not a paid run in no arm."""
     arms = text.replace(",", "")
-    if not arms or set(arms) - set("ABC"):
+    if not arms or set(arms) - set("ABC") or len(set(arms)) != len(arms):
         raise ValueError(f"arms are A, B and C, not {text!r}")
     return arms
 
@@ -252,7 +257,7 @@ def report(rows, current, grades=None):
     still cost money."""
     cells = {}
     for row in rows:
-        if row.get("broken") or row.get("contaminated") or row["fingerprint"] not in current:
+        if row.get("broken") or row.get("contaminated") or row.get("fingerprint") not in current:
             continue
         cell = cells.setdefault((row["kind"], row["case"], row["arm"], row["model"]), [0, 0, 0, 0, 0])
         cell[0] += bool(row.get("loaded"))

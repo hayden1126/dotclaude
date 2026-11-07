@@ -172,6 +172,17 @@ class Plan(unittest.TestCase):
         runs = harness.plan_runs(self.CASES, "BC", ["opus"], 2)
         self.assertEqual({r["rep"] for r in runs[:6]}, {0})
 
+    def test_a_row_of_older_inputs_runs_again(self):
+        done = {("b", "A", "opus", 0, "old")}
+        runs = harness.plan_runs(self.CASES, "A", ["opus"], 1, lambda case, arm: "new", done)
+        self.assertEqual([r["fingerprint"] for r in runs], ["new"])
+
+    def test_a_row_from_before_fingerprints_never_counts(self):
+        row = {"case": "b", "arm": "A", "model": "opus", "rep": 0, "skill_hash": "h"}
+        runs = harness.plan_runs(self.CASES, "A", ["opus"], 1, lambda case, arm: "new",
+                                 harness.done_keys([row]))
+        self.assertEqual(len(runs), 1)
+
     def test_broken_and_contaminated_rows_run_again(self):
         row = {"case": "b", "arm": "A", "model": "opus", "rep": 0, "fingerprint": ""}
         self.assertEqual(harness.done_keys([row]), {("b", "A", "opus", 0, "")})
@@ -181,7 +192,7 @@ class Plan(unittest.TestCase):
     def test_arms_take_either_spelling_and_nothing_else(self):
         self.assertEqual(harness.parse_arms("B,C"), "BC")
         self.assertEqual(harness.parse_arms("ABC"), "ABC")
-        for bad in ("", "D", "B;C"):
+        for bad in ("", "D", "B;C", "BB"):
             with self.subTest(bad), self.assertRaises(ValueError):
                 harness.parse_arms(bad)
 
@@ -345,6 +356,10 @@ class Report(unittest.TestCase):
         return {"case": "a", "kind": "loads", "arm": "B", "model": "opus", "loaded": True,
                 "cost": 0.5, "fingerprint": mark, "reply_id": "r", **extra}
 
+    def test_a_row_from_before_fingerprints_is_left_out(self):
+        rows = [{k: v for k, v in self.row().items() if k != "fingerprint"}]
+        self.assertEqual(len(harness.report(rows, {"now"})), 2)  # the header and the spend
+
     def test_counts_only_current_rows_that_ran_cleanly(self):
         rows = [self.row(), self.row(loaded=False), self.row("old"), self.row(broken=True),
                 self.row(contaminated=True)]
@@ -365,6 +380,9 @@ class Report(unittest.TestCase):
 
 
 class Blinding(unittest.TestCase):
+    def test_reply_ids_are_random(self):
+        self.assertNotEqual(harness.new_reply_id(), harness.new_reply_id())
+
     def test_a_grader_gets_the_case_and_reply_only(self):
         case = {"prompt": "p", "notes": "n", "expect": "e"}
         self.assertEqual(harness.reply_text(case, "the reply"),
