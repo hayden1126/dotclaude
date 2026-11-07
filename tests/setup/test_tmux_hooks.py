@@ -14,6 +14,7 @@ The real-tmux tests repeat the glyph sequences on a tmux server when one can sta
 import importlib.util
 import json
 import os
+import select
 import shutil
 import subprocess
 import sys
@@ -76,6 +77,9 @@ class Hooks(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tmp)
+        read_end, write_end = os.pipe()
+        self.held = (write_end,)  # pass_fds of every hook run: children_gone's end-of-file signal
+        self.addCleanup(self.children_gone, read_end, write_end)  # runs before the rmtree
         stubs = os.path.join(self.tmp, "bin")
         os.mkdir(stubs)
         for name, body in (("tmux", FAKE_TMUX), ("powershell.exe", STUB), ("wslpath", STUB)):
@@ -98,6 +102,14 @@ class Hooks(unittest.TestCase):
                         STUB_TMUX_STATE=self.tmux_state, HOME=os.path.join(self.tmp, "home"),
                         CLAUDE_CODE_SESSION_ID="abcdef12-0000", DOTCLAUDE_RING_SETTLE="0.3")
 
+    def children_gone(self, read_end, write_end):
+        """Wait for what the hooks left running: stop-ring.sh detaches its ring and its classifier,
+        and both write under self.tmp after the log line a test waits on, so an rmtree beside them
+        fails with Errno 39. Each inherits the pipe, which reads end of file once the last exits."""
+        os.close(write_end)
+        select.select([read_end], [], [], 15)
+        os.close(read_end)
+
     def run_hook(self, name, session, payload=None, args=(), wait=True):
         env = {**self.env, **session}
         # Every event carries the session's id; the map is keyed by it.
@@ -105,7 +117,7 @@ class Hooks(unittest.TestCase):
         self.logged_before = len(self.ring_log())
         p = subprocess.run(["bash", os.path.join(HOOKS, name), *args],
                            input=json.dumps(payload), capture_output=True, text=True,
-                           timeout=10, env=env)
+                           timeout=10, env=env, pass_fds=self.held)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(p.stderr, "")
         if name == "stop-ring.sh" and wait:
@@ -1020,7 +1032,8 @@ class Hooks(unittest.TestCase):
         self.logged_before = len(self.ring_log())
         p = subprocess.run(["bash", os.path.join(hooks, "stop-ring.sh")],
                            input=json.dumps({"session_id": "abcdef12-0000"}),
-                           capture_output=True, text=True, timeout=10, env={**self.env, **TAB})
+                           capture_output=True, text=True, timeout=10, env={**self.env, **TAB},
+                           pass_fds=self.held)
         self.assertEqual((p.returncode, p.stderr), (0, ""))
         self.decided()
         self.assertTrue(self.rang())
@@ -1042,7 +1055,7 @@ class Hooks(unittest.TestCase):
         body = json.dumps({"session_id": "abcdef12-0000", "prompt_id": "p1",
                            "last_assistant_message": "caf" + chr(0x00E9)}, ensure_ascii=False)
         p = subprocess.run(["bash", os.path.join(HOOKS, "stop-ring.sh")], input=body.encode(),
-                           capture_output=True, timeout=10,
+                           capture_output=True, timeout=10, pass_fds=self.held,
                            env={**self.env, **TAB, **ASCII_LOCALE})
         self.assertEqual((p.returncode, p.stderr), (0, b""))
         self.decided()
@@ -1065,7 +1078,7 @@ class Hooks(unittest.TestCase):
         p = subprocess.run(["bash", os.path.join(HOOKS, "stop-ring.sh")],
                            input='{"session_id": "abcdef12-0000", "prompt_id": "p9", '
                                  '"last_assistant_message": "x\\ud800y"}',
-                           capture_output=True, text=True, timeout=10,
+                           capture_output=True, text=True, timeout=10, pass_fds=self.held,
                            env={**self.env, **TAB})
         self.assertEqual(p.returncode, 0)
         self.decided()
@@ -1355,7 +1368,8 @@ class Hooks(unittest.TestCase):
         self.logged_before = len(self.ring_log())
         p = subprocess.run(["bash", os.path.join(hooks, "notify.sh")],
                            input=json.dumps({"session_id": "abcdef12-0000", "message": "m"}),
-                           capture_output=True, text=True, timeout=10, env={**self.env, **TAB})
+                           capture_output=True, text=True, timeout=10, env={**self.env, **TAB},
+                           pass_fds=self.held)
         self.assertEqual((p.returncode, p.stderr), (0, ""))
         self.assertTrue(self.rang())
         self.assertEqual(self.toasts(), ["-Message m"])
@@ -1369,7 +1383,8 @@ class Hooks(unittest.TestCase):
         self.set_mute({"sound": self.ON, "toast": self.ON})
         p = subprocess.run(["bash", os.path.join(hooks, "notify.sh")],
                            input=json.dumps({"session_id": "abcdef12-0000", "message": "m"}),
-                           capture_output=True, text=True, timeout=10, env={**self.env, **TAB})
+                           capture_output=True, text=True, timeout=10, env={**self.env, **TAB},
+                           pass_fds=self.held)
         self.assertEqual((p.returncode, p.stderr), (0, ""))
         self.assertTrue(self.toasted())
         self.assertEqual(self.toasts(), ["-Message m"])
