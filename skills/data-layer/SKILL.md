@@ -16,7 +16,7 @@ Add-then-remove takes three steps:
 2. The next release: read the new column only.
 3. A later release, once the old one is gone: remove the old column. This is the contract step.
 
-Example reply line: "The deploy runs migrations before the new code and old instances keep serving, so I added `display_name` beside `full_name` and write both. A later migration removes `full_name` once this release is the oldest one running."
+Example reply line: "The deploy runs migrations before the new code and old instances keep serving, so I added `handle` beside `username` and write both. A later migration removes `username` once this release is the oldest one running."
 
 If `.claude/practices/data-layer.md` exists in the repo, read it first. Its repo rules (how it deploys, its migration tool, its role names) win over the defaults here.
 

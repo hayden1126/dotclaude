@@ -12,7 +12,7 @@ id = "REL-31"
 fires = true
 path = "src/main/resources/db/migration/V2__users.sql"
 content = '''
-alter table users rename column full_name to display_name;
+alter table users rename column username to handle;
 '''
 
 [[sample]]
@@ -21,7 +21,7 @@ id = "REL-31"
 fires = true
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
-alter table users rename column full_name to display_name;
+alter table users rename column username to handle;
 '''
 
 [[sample]]
@@ -30,7 +30,7 @@ id = "REL-31"
 fires = true
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
-ALTER TABLE users RENAME COLUMN full_name TO display_name;
+ALTER TABLE users RENAME COLUMN username TO handle;
 '''
 
 [[sample]]
@@ -39,7 +39,7 @@ id = "REL-31"
 fires = true
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
-alter table users drop column full_name;
+alter table users drop column username;
 '''
 
 [[sample]]
@@ -48,7 +48,7 @@ id = "REL-31"
 fires = true
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
-ALTER TABLE users DROP COLUMN full_name;
+ALTER TABLE users DROP COLUMN username;
 '''
 
 [[sample]]
@@ -102,7 +102,7 @@ id = "REL-31"
 fires = true
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
-alter table users rename full_name to display_name;
+alter table users rename username to handle;
 '''
 
 [[sample]]
@@ -111,7 +111,7 @@ id = "REL-31"
 fires = true
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
-alter table users drop full_name;
+alter table users drop username;
 '''
 
 [[sample]]
@@ -120,7 +120,7 @@ id = "REL-31"
 fires = true
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
-ALTER TABLE users DROP full_name;
+ALTER TABLE users DROP username;
 '''
 
 [[sample]]
@@ -158,7 +158,7 @@ fires = true
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
 ALTER TABLE users
-  RENAME full_name TO display_name;
+  RENAME username TO handle;
 '''
 
 [[sample]]
@@ -221,7 +221,7 @@ id = "REL-31"
 fires = true
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
-alter table if exists users drop full_name;
+alter table if exists users drop username;
 '''
 
 [[sample]]
@@ -230,7 +230,7 @@ id = "REL-31"
 fires = true
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
-alter table only users drop full_name;
+alter table only users drop username;
 '''
 
 [[sample]]
@@ -239,7 +239,7 @@ id = "REL-31"
 fires = true
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
-alter table only public."users" drop "full_name";
+alter table only public."users" drop "username";
 '''
 
 [[sample]]
@@ -248,7 +248,7 @@ id = "REL-31"
 fires = true
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
-alter table users drop if exists full_name;
+alter table users drop if exists username;
 '''
 
 [[sample]]
@@ -257,7 +257,7 @@ id = "REL-31"
 fires = true
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
-alter table only users drop column if exists full_name;
+alter table only users drop column if exists username;
 '''
 
 [[sample]]
@@ -266,7 +266,7 @@ id = "REL-31"
 fires = true
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
-alter table users add column display_name text, drop full_name;
+alter table users add column handle text, drop username;
 '''
 
 [[sample]]
@@ -275,7 +275,7 @@ id = "REL-31"
 fires = true
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
-alter table users add column display_name text,drop full_name;
+alter table users add column handle text,drop username;
 '''
 
 [[sample]]
@@ -293,7 +293,7 @@ id = "REL-31"
 fires = true
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
-alter table `users` rename `full_name` to `display_name`;
+alter table `users` rename `username` to `handle`;
 '''
 
 [[sample]]
@@ -302,7 +302,7 @@ id = "REL-31"
 fires = true
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
-execute "alter table users rename column full_name to display_name"
+execute "alter table users rename column username to handle"
 '''
 
 [[sample]]
@@ -311,7 +311,7 @@ id = "REL-31"
 fires = true
 path = "migrations/0002_users.sql"
 content = '''
-alter table users drop column full_name;
+alter table users drop column username;
 '''
 
 [[sample]]
@@ -320,7 +320,7 @@ id = "REL-31"
 fires = true
 path = "packages/db/migrations/0002_users.sql"
 content = '''
-alter table users drop column full_name;
+alter table users drop column username;
 '''
 
 [[sample]]
@@ -329,7 +329,7 @@ id = "REL-31"
 fires = true
 path = "prisma/migrations/20261107_users/migration.sql"
 content = '''
-ALTER TABLE "users" DROP COLUMN "full_name";
+ALTER TABLE "users" DROP COLUMN "username";
 '''
 
 [[sample]]
@@ -338,7 +338,7 @@ id = "REL-31"
 fires = true
 path = "drizzle/0003_users.sql"
 content = '''
-ALTER TABLE "users" RENAME COLUMN "full_name" TO "display_name";
+ALTER TABLE "users" RENAME COLUMN "username" TO "handle";
 '''
 
 [[sample]]
@@ -347,7 +347,7 @@ id = "REL-31"
 fires = true
 path = "apps/web/drizzle/0003_users.sql"
 content = '''
-ALTER TABLE "users" DROP COLUMN "full_name";
+ALTER TABLE "users" DROP COLUMN "username";
 '''
 
 # A line that starts as a comment never fires, whatever it names: the first step of an
@@ -359,7 +359,7 @@ id = "REL-31"
 fires = false
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
--- drop column full_name;
+-- drop column username;
 '''
 
 [[sample]]
@@ -368,7 +368,7 @@ id = "REL-31"
 fires = false
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
--- a later migration will drop column full_name
+-- a later migration will drop column username
   -- then alter table users rename column a to b
 '''
 
@@ -378,7 +378,7 @@ id = "REL-31"
 fires = false
 path = "db/migrate/20261107120000_users.rb"
 content = '''
-# a later release calls remove_column :users, :full_name
+# a later release calls remove_column :users, :username
 '''
 
 [[sample]]
@@ -387,7 +387,7 @@ id = "REL-31"
 fires = false
 path = "migrations/20261107120000_users.js"
 content = '''
-// a later release calls table.dropColumn('full_name')
+// a later release calls table.dropColumn('username')
 '''
 
 [[sample]]
@@ -396,7 +396,7 @@ id = "REL-31"
 fires = true
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
-alter table users drop column full_name; -- the old release is gone
+alter table users drop column username; -- the old release is gone
 '''
 
 [[sample]]
@@ -406,7 +406,7 @@ fires = true
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
 -- the contract step
-alter table users drop column full_name;
+alter table users drop column username;
 '''
 
 # Forms inside a Rails change_table block, and T-SQL's rename.
@@ -418,7 +418,7 @@ fires = true
 path = "db/migrate/20261107120000_users.rb"
 content = '''
 change_table :users do |t|
-  t.remove "full_name"
+  t.remove "username"
 end
 '''
 
@@ -485,7 +485,7 @@ fires = true
 path = "db/migrate/20261107120000_users.rb"
 content = '''
 change_table :users do |t|
-  t.remove :full_name
+  t.remove :username
 end
 '''
 
@@ -496,7 +496,7 @@ fires = true
 path = "db/migrate/20261107120000_users.rb"
 content = '''
 change_table :users do |table|
-  table.rename :full_name, :display_name
+  table.rename :username, :handle
 end
 '''
 
@@ -524,7 +524,7 @@ id = "REL-31"
 fires = true
 path = "db/migrations/V2_users.sql"
 content = '''
-EXEC sp_rename 'users.full_name', 'display_name', 'COLUMN';
+EXEC sp_rename 'users.username', 'handle', 'COLUMN';
 '''
 
 [[sample]]
@@ -534,7 +534,7 @@ fires = false
 path = "db/migrate/20261107120000_users.rb"
 content = '''
 change_table :users do |t|
-  t.remove_index :full_name
+  t.remove_index :username
 end
 '''
 
@@ -568,8 +568,8 @@ id = "REL-31"
 fires = false
 content = '''
 cat > supabase/migrations/2_x.sql <<'EOF'
--- a later migration will drop column full_name
-alter table users add column display_name text;
+-- a later migration will drop column username
+alter table users add column handle text;
 EOF
 '''
 
@@ -581,7 +581,7 @@ id = "REL-31"
 fires = true
 path = "db/migrate/20261107120000_users.rb"
 content = '''
-rename_column :users, :full_name, :display_name
+rename_column :users, :username, :handle
 '''
 
 [[sample]]
@@ -590,7 +590,7 @@ id = "REL-31"
 fires = true
 path = "db/migrate/20261107120000_users.rb"
 content = '''
-remove_column :users, :full_name
+remove_column :users, :username
 '''
 
 [[sample]]
@@ -599,7 +599,7 @@ id = "REL-31"
 fires = true
 path = "db/migrate/20261107120000_users.rb"
 content = '''
-remove_columns :users, :full_name, :nickname
+remove_columns :users, :username, :nickname
 '''
 
 [[sample]]
@@ -626,7 +626,7 @@ id = "REL-31"
 fires = true
 path = "db/migrate/20261107120000_users.rb"
 content = '''
-    t.remove_column :full_name
+    t.remove_column :username
 '''
 
 [[sample]]
@@ -635,7 +635,7 @@ id = "REL-31"
 fires = true
 path = "users/migrations/0002_users.py"
 content = '''
-        migrations.RenameField(model_name='user', old_name='full_name', new_name='display_name'),
+        migrations.RenameField(model_name='user', old_name='username', new_name='handle'),
 '''
 
 [[sample]]
@@ -644,7 +644,7 @@ id = "REL-31"
 fires = true
 path = "users/migrations/0002_users.py"
 content = '''
-        migrations.RemoveField(model_name='user', name='full_name'),
+        migrations.RemoveField(model_name='user', name='username'),
 '''
 
 [[sample]]
@@ -671,7 +671,7 @@ id = "REL-31"
 fires = true
 path = "alembic/versions/3f2a_users.py"
 content = '''
-    op.drop_column('users', 'full_name')
+    op.drop_column('users', 'username')
 '''
 
 [[sample]]
@@ -698,7 +698,7 @@ id = "REL-31"
 fires = true
 path = "alembic/versions/3f2a_users.py"
 content = '''
-    op.alter_column('users', 'full_name', new_column_name='display_name')
+    op.alter_column('users', 'username', new_column_name='handle')
 '''
 
 [[sample]]
@@ -707,7 +707,7 @@ id = "REL-31"
 fires = true
 path = "alembic/versions/3f2a_users.py"
 content = '''
-        batch_op.drop_column('full_name')
+        batch_op.drop_column('username')
 '''
 
 [[sample]]
@@ -716,7 +716,7 @@ id = "REL-31"
 fires = true
 path = "alembic/versions/3f2a_users.py"
 content = '''
-        new_column_name = 'display_name',
+        new_column_name = 'handle',
 '''
 
 [[sample]]
@@ -725,7 +725,7 @@ id = "REL-31"
 fires = true
 path = "services/api/alembic/versions/3f2a_users.py"
 content = '''
-    op.drop_column('users', 'full_name')
+    op.drop_column('users', 'username')
 '''
 
 [[sample]]
@@ -734,7 +734,7 @@ id = "REL-31"
 fires = true
 path = "migrations/20261107_users.js"
 content = '''
-    table.renameColumn('full_name', 'display_name');
+    table.renameColumn('username', 'handle');
 '''
 
 [[sample]]
@@ -743,7 +743,7 @@ id = "REL-31"
 fires = true
 path = "migrations/20261107_users.js"
 content = '''
-    table.dropColumn('full_name');
+    table.dropColumn('username');
 '''
 
 [[sample]]
@@ -752,7 +752,7 @@ id = "REL-31"
 fires = true
 path = "migrations/20261107_users.js"
 content = '''
-    table.dropColumns('full_name', 'nickname');
+    table.dropColumns('username', 'nickname');
 '''
 
 [[sample]]
@@ -788,7 +788,7 @@ id = "REL-31"
 fires = true
 path = "migrations/20261107_users.js"
 content = '''
-  await queryInterface.removeColumn('users', 'full_name');
+  await queryInterface.removeColumn('users', 'username');
 '''
 
 # ---------------------------------------------------------------- near misses in a migration: these keep the old release working
@@ -799,7 +799,7 @@ id = "REL-31"
 fires = false
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
-alter table users alter column full_name drop not null;
+alter table users alter column username drop not null;
 '''
 
 [[sample]]
@@ -808,7 +808,7 @@ id = "REL-31"
 fires = false
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
-ALTER TABLE users ALTER COLUMN full_name DROP NOT NULL;
+ALTER TABLE users ALTER COLUMN username DROP NOT NULL;
 '''
 
 [[sample]]
@@ -817,7 +817,7 @@ id = "REL-31"
 fires = false
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
-alter table users alter column full_name drop default;
+alter table users alter column username drop default;
 '''
 
 [[sample]]
@@ -826,7 +826,7 @@ id = "REL-31"
 fires = false
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
-alter table users alter full_name drop not null;
+alter table users alter username drop not null;
 '''
 
 [[sample]]
@@ -835,7 +835,7 @@ id = "REL-31"
 fires = false
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
-alter table users alter full_name drop default;
+alter table users alter username drop default;
 '''
 
 [[sample]]
@@ -862,7 +862,7 @@ id = "REL-31"
 fires = false
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
-alter table users drop constraint users_full_name_key;
+alter table users drop constraint users_username_key;
 '''
 
 [[sample]]
@@ -871,7 +871,7 @@ id = "REL-31"
 fires = false
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
-ALTER TABLE users DROP CONSTRAINT IF EXISTS users_full_name_key;
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_username_key;
 '''
 
 [[sample]]
@@ -889,7 +889,7 @@ id = "REL-31"
 fires = false
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
-alter table users add column display_name text;
+alter table users add column handle text;
 '''
 
 [[sample]]
@@ -907,7 +907,7 @@ id = "REL-31"
 fires = false
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
-alter table users add column display_name text; drop index users_name_idx;
+alter table users add column handle text; drop index users_name_idx;
 '''
 
 [[sample]]
@@ -1006,7 +1006,7 @@ id = "REL-31"
 fires = false
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
--- A later migration drops full_name.
+-- A later migration drops username.
 '''
 
 [[sample]]
@@ -1015,7 +1015,7 @@ id = "REL-31"
 fires = false
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
--- a later migration drops full_name once every instance reads display_name
+-- a later migration drops username once every instance reads handle
 '''
 
 [[sample]]
@@ -1024,7 +1024,7 @@ id = "REL-31"
 fires = false
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
--- Step 1 of 3: add display_name. full_name stays until the old release is gone.
+-- Step 1 of 3: add handle. username stays until the old release is gone.
 '''
 
 [[sample]]
@@ -1033,7 +1033,7 @@ id = "REL-31"
 fires = false
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
-create table users (id bigint primary key, full_name text);
+create table users (id bigint primary key, username text);
 '''
 
 [[sample]]
@@ -1042,7 +1042,7 @@ id = "REL-31"
 fires = false
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
-update users set display_name = full_name where display_name is null;
+update users set handle = username where handle is null;
 '''
 
 [[sample]]
@@ -1051,7 +1051,7 @@ id = "REL-31"
 fires = false
 path = "db/migrate/20261107120000_users.rb"
 content = '''
-add_column :users, :display_name, :string
+add_column :users, :handle, :string
 '''
 
 [[sample]]
@@ -1060,7 +1060,7 @@ id = "REL-31"
 fires = false
 path = "db/migrate/20261107120000_users.rb"
 content = '''
-remove_index :users, :full_name
+remove_index :users, :username
 '''
 
 [[sample]]
@@ -1078,7 +1078,7 @@ id = "REL-31"
 fires = false
 path = "users/migrations/0002_users.py"
 content = '''
-        migrations.AddField(model_name='user', name='display_name', field=models.TextField()),
+        migrations.AddField(model_name='user', name='handle', field=models.TextField()),
 '''
 
 [[sample]]
@@ -1105,7 +1105,7 @@ id = "REL-31"
 fires = false
 path = "alembic/versions/3f2a_users.py"
 content = '''
-    op.add_column('users', sa.Column('display_name', sa.Text()))
+    op.add_column('users', sa.Column('handle', sa.Text()))
 '''
 
 [[sample]]
@@ -1114,7 +1114,7 @@ id = "REL-31"
 fires = false
 path = "alembic/versions/3f2a_users.py"
 content = '''
-    op.drop_index('ix_users_full_name')
+    op.drop_index('ix_users_username')
 '''
 
 [[sample]]
@@ -1132,7 +1132,7 @@ id = "REL-31"
 fires = false
 path = "migrations/20261107_users.js"
 content = '''
-    table.string('display_name');
+    table.string('handle');
 '''
 
 [[sample]]
@@ -1141,7 +1141,7 @@ id = "REL-31"
 fires = false
 path = "migrations/20261107_users.js"
 content = '''
-    table.dropIndex(['full_name']);
+    table.dropIndex(['username']);
 '''
 
 [[sample]]
@@ -1161,7 +1161,7 @@ id = "REL-31"
 fires = false
 path = "lib/db/schema.sql"
 content = '''
-alter table users rename column full_name to display_name;
+alter table users rename column username to handle;
 '''
 
 [[sample]]
@@ -1170,7 +1170,7 @@ id = "REL-31"
 fires = false
 path = "src/queries/users.ts"
 content = '''
-alter table users rename column full_name to display_name;
+alter table users rename column username to handle;
 '''
 
 [[sample]]
@@ -1179,7 +1179,7 @@ id = "REL-31"
 fires = false
 path = "docs/upgrading.md"
 content = '''
-alter table users rename column full_name to display_name;
+alter table users rename column username to handle;
 '''
 
 [[sample]]
@@ -1188,7 +1188,7 @@ id = "REL-31"
 fires = false
 path = "schema.sql"
 content = '''
-alter table users rename column full_name to display_name;
+alter table users rename column username to handle;
 '''
 
 [[sample]]
@@ -1197,7 +1197,7 @@ id = "REL-31"
 fires = false
 path = "src/migration_notes.ts"
 content = '''
-alter table users rename column full_name to display_name;
+alter table users rename column username to handle;
 '''
 
 [[sample]]
@@ -1207,7 +1207,7 @@ fires = false
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
 -- practices-allow: REL-31 contract step, the old release left on 2026-11-01
-alter table users drop column full_name;
+alter table users drop column username;
 '''
 
 # ---------------------------------------------------------------- Bash commands that must fire
@@ -1218,7 +1218,7 @@ id = "REL-31"
 fires = true
 content = '''
 cat > supabase/migrations/20261107120000_users.sql <<'EOF'
-alter table users rename column full_name to display_name;
+alter table users rename column username to handle;
 EOF
 '''
 
@@ -1243,7 +1243,7 @@ kind = "bash"
 id = "REL-31"
 fires = true
 content = '''
-echo 'ALTER TABLE users DROP COLUMN full_name;' >> MIGRATIONS/0002_users.sql
+echo 'ALTER TABLE users DROP COLUMN username;' >> MIGRATIONS/0002_users.sql
 '''
 
 [[sample]]
@@ -1264,7 +1264,7 @@ content = '''
 cat > db/migrate/20261107120000_users.rb <<'RUBY'
 class UsersStep < ActiveRecord::Migration[7.1]
   def change
-    rename_column :users, :full_name, :display_name
+    rename_column :users, :username, :handle
   end
 end
 RUBY
@@ -1275,7 +1275,7 @@ kind = "bash"
 id = "REL-31"
 fires = true
 content = '''
-printf "  remove_column :users, :full_name\n" >> db/migrate/20261107120000_users.rb
+printf "  remove_column :users, :username\n" >> db/migrate/20261107120000_users.rb
 '''
 
 [[sample]]
@@ -1327,7 +1327,7 @@ fires = true
 content = '''
 cat > alembic/versions/3f2a_users.py <<'PY'
 def upgrade():
-    op.alter_column("users", "full_name", new_column_name="display_name")
+    op.alter_column("users", "username", new_column_name="handle")
 PY
 '''
 
@@ -1336,7 +1336,7 @@ kind = "bash"
 id = "REL-31"
 fires = true
 content = '''
-printf "table.dropColumn('full_name');\n" >> migrations/20261107_users.js
+printf "table.dropColumn('username');\n" >> migrations/20261107_users.js
 '''
 
 # ---------------------------------------------------------------- Bash commands that must not
@@ -1363,7 +1363,7 @@ id = "REL-31"
 fires = false
 content = '''
 cat > supabase/migrations/20261107120000_users.sql <<'EOF'
-alter table users add column display_name text;
+alter table users add column handle text;
 EOF
 '''
 
@@ -1373,8 +1373,8 @@ id = "REL-31"
 fires = false
 content = '''
 cat > supabase/migrations/20261107120000_users.sql <<'EOF'
-alter table users alter column full_name drop not null;
--- a later migration drops full_name
+alter table users alter column username drop not null;
+-- a later migration drops username
 EOF
 '''
 
@@ -1385,7 +1385,7 @@ fires = false
 content = '''
 cat > supabase/migrations/20261107120000_users.sql <<'EOF'
 -- practices-allow: REL-31 contract step, the old release left on 2026-11-01
-alter table users drop column full_name;
+alter table users drop column username;
 EOF
 '''
 

@@ -4348,7 +4348,7 @@ class DependenciesSkill(unittest.TestCase):
 DATA_LAYER = os.path.join(REPO, "skills", "data-layer")
 MIGRATION = "supabase/migrations/20261107120000_users.sql"
 HEREDOC = (f"cat > {MIGRATION} <<'EOF'\n"
-           "alter table users rename column full_name to display_name;\nEOF\n")
+           "alter table users rename column username to handle;\nEOF\n")
 PRINTF = f"f={MIGRATION}; printf 'alter table t rename column a to b;\\n' > \"$f\""
 # A rule with its own words, so a test can say what a pass runs without the shipped pattern.
 WORDS_RULE = """
@@ -4402,7 +4402,7 @@ class BashText(TextBase):
     def test_a_second_different_rename_is_denied_again(self):
         self.assertIsNotNone(self.pre(HEREDOC))
         self.assertIsNone(self.pre(HEREDOC))
-        other = HEREDOC.replace("full_name to display_name", "nick to handle")
+        other = HEREDOC.replace("username to handle", "nick to handle")
         self.assertIsNotNone(self.pre(other))
         self.assertIsNone(self.pre(other))
 
@@ -4420,7 +4420,7 @@ class BashText(TextBase):
 
     def test_the_key_is_the_skill_the_rule_and_the_line_s_hash(self):
         self.pre(HEREDOC)
-        line = "alter table users rename column full_name to display_name;"
+        line = "alter table users rename column username to handle;"
         self.assertEqual(self.state_rows(), [
             f"L2b|data-layer|REL-31|{hashlib.sha1(line.encode()).hexdigest()}"])
 
@@ -4439,7 +4439,7 @@ class BashText(TextBase):
         self.assertIn(skill["rules"][0]["say"], reason)
         self.assertIn("reads command text only", reason)
         self.assertIn("resend", reason.rsplit("\n", 1)[-1].lower())
-        for word in ("full_name", "display_name", "supabase", "cat >"):
+        for word in ("username", "handle", "supabase", "cat >"):
             self.assertNotIn(word, reason)
 
     def test_practices_allow_in_the_command_passes_with_no_key(self):
@@ -4807,7 +4807,7 @@ class DataLayerRule(TextBase):
             self.assertIn(word, rule["say"])
 
     def test_an_edit_is_denied_once_for_the_file(self):
-        statement = "alter table users drop column full_name;\n"
+        statement = "alter table users drop column username;\n"
         self.assertIn(f"[practices:L2:data-layer:REL-31:{MIGRATION}]",
                       self.fire(MIGRATION, statement))
         self.assertIsNone(self.fire(MIGRATION, statement))
