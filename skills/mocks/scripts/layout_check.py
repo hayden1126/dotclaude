@@ -9,9 +9,9 @@ with any FAIL, or a page that stops responding or breaks the check. Exits 2 when
 the check can't judge the page: the browser is missing, never answers or dies (even
 after a FAIL line), the path is no HTML file, or the page lacks a template hook or a
 plain px value, as a page not built from the template does, or one whose script
-failed first. A WARN line names a control that changed nothing in the render; it
-doesn't fail. Fit is judged at the page's default Zoom. Python standard library
-only.
+failed before the hooks appeared. A WARN line names a control that changed nothing
+in the render; it doesn't fail. Fit is judged at the page's default Zoom. Python
+standard library only.
 """
 from __future__ import annotations
 
