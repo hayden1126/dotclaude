@@ -190,6 +190,13 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     2026-10-25), and a lane sat idle about 50 minutes because its lead never told it its turn had
     come (another repo, 2026-11-03). Lead and lanes-skill matters: a turn notice from the lead's
     post-merge step, and no re-merge of main while waiting unless main changed the lane's files.
+  - **`run_turn` counts dying processes as strays** (medium; found by lane license's trial,
+    2026-11-07; lane practices owns the fix, in its next PR): `tests/practices/run.py`'s
+    `run_turn` SIGKILLs the group and `kill_marked` scans /proc at once, so a process with
+    SIGKILL pending reads as a stray. It fails `test_turn_kills_background_grandchildren` (3 of
+    80 turns idle, 151 of 192 under load, reproduced on main 87ab19f alone) and writes false
+    `stray_kills` rows into eval results. Evidence: lane license's
+    `.lane/artifacts/run-turn-race.md`.
   - **Teardown race in `tests/setup/test_tmux_hooks.py`** (low; found by lane license's trial,
     2026-11-07): `hooks/stop-ring.sh` logs `rang` and then plays the ring, whose detached test stub
     appends to `calls.log` in the test's temp dir, while the test's `decided()` returns on the log
