@@ -3103,7 +3103,7 @@ class L3r(BashBase):
         # Review round 4, medium: a Budget raised on the way to the delta dropped the deny.
         self.review()
         self.commit(**{"app__api__y__route.ts": "export const y = 1\n"})
-        for n, name in enumerate(("last_review", "review_delta")):
+        for n, name in enumerate(("review_marks", "last_review", "review_delta")):
             with self.subTest(name=name), mock.patch.dict(os.environ, self.env, clear=True), \
                     mock.patch.object(PC, "START", time.monotonic()), \
                     mock.patch.object(PC, name, side_effect=PC.Budget("x")):
@@ -3133,6 +3133,73 @@ class L3r(BashBase):
         os.remove(os.path.join(d, "route.ts"))
         self.commit()
         self.assertIn("app/api/l/route.ts", self.pre("gh pr ready", session_id="s-unlink"))
+
+    def base_with_action(self):
+        """origin/main holds lib/act.ts, a file only its content watches; HEAD is a branch off it
+        that adds a route. Returns the base commit."""
+        start = self.off_history(self.base, **{"lib__act.ts": '"use server"\n'})
+        self.sh("update-ref", "refs/remotes/origin/main", start)
+        lane = self.off_history(start, **{"app__api__x__route.ts": "export const x = 1\n"})
+        self.sh("update-ref", "HEAD", lane)
+        self.sh("read-tree", "--reset", "-u", "HEAD")
+        return start
+
+    def test_watched_content_stripped_after_a_review_is_delta(self):
+        # Review round 5, medium: only the head's blob was read, and it no longer fires.
+        self.base_with_action()
+        self.review()
+        self.commit(**{"lib__act.ts": "x\n"})
+        self.assertIn("lib/act.ts", self.pre("gh pr ready", session_id="s-strip"))
+
+    def test_watched_content_stripped_by_a_pr_waits_for_a_review(self):
+        self.base_with_action()
+        self.commit(**{"lib__act.ts": "x\n"})
+        self.assertIn("lib/act.ts", self.pre("gh pr ready", session_id="s-strip2"))
+
+    def test_a_deleted_base_file_restored_after_a_review_is_delta(self):
+        # Review round 5, medium: at the review it was deleted, so that side has no new blob, and
+        # at the head it's in no diff.
+        w = {"app__api__w__route.ts": "export const w = 0\n"}
+        start = self.off_history(self.base, **w)
+        self.sh("update-ref", "refs/remotes/origin/main", start)
+        lane = self.off_history(start, **{"app__api__w__route.ts": None,
+                                          "app__api__x__route.ts": "export const x = 1\n"})
+        self.sh("update-ref", "HEAD", lane)
+        self.sh("read-tree", "--reset", "-u", "HEAD")
+        self.review()
+        self.commit(**w)
+        reason = self.pre("gh pr ready", session_id="s-back2")
+        self.assertIn("app/api/w/route.ts", reason)
+        self.assertNotIn("app/api/x/route.ts", reason)
+
+    def test_a_big_removal_leaves_the_size_cap_to_the_old_blobs(self):
+        # Review round 5, low: removed blobs took the cap in path order, ahead of new code.
+        self.commit(**{"a__big.txt": "x" * 60 + "\n"})
+        self.sh("update-ref", "refs/remotes/origin/main", self.sh("rev-parse", "HEAD"))
+        self.sh("rm", "-q", "a/big.txt")
+        self.commit(**{"z__act.ts": '"use server"\n'})
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "START", time.monotonic()), \
+                mock.patch.object(PC, "BYTES_MAX", 65):
+            out = PC.pre_tool_use(self.event("gh pr ready", "PreToolUse", "b-rm", session_id="s-rm"))
+        PC.CRUMB.clear()
+        self.assertIn("z/act.ts", json.dumps(out))
+
+    def test_a_links_target_is_not_read_as_code(self):
+        self.sh("update-ref", "refs/remotes/origin/main", self.sh("rev-parse", "HEAD"))
+        os.symlink('"use server"', os.path.join(self.proj, "lib", "l.ts"))
+        self.commit()
+        self.assertIsNone(self.pre("gh pr ready", session_id="s-target"))
+
+    def test_a_review_of_the_head_clears_it_past_the_mark_cap(self):
+        older = []
+        for i in range(PC.REVIEW_MARKS_MAX + 1):
+            older.append(self.sh("rev-parse", "HEAD"))
+            self.commit(**{f"app__api__c{i}__route.ts": "export const c = 1\n"})
+        self.review()
+        for rev in older:  # newer in the transcript, so the head's mark falls past the cap
+            self.review(rev)
+        self.assertIsNone(self.pre("gh pr ready", session_id="s-cap-marks"))
 
     def test_the_only_watched_file_gone_after_a_review_is_delta(self):
         # Review round 2, low: no touched file left, so the delta never ran.
