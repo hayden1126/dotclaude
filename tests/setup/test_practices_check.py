@@ -2831,6 +2831,119 @@ class L3r(BashBase):
         self.add(use("t-old", "Agent", prompt="[practices:review] the old, bare marker"))
         self.assertIsNotNone(self.pre("gh pr ready", session_id="s-bare"))
 
+    def review(self, rev="HEAD"):
+        self.add(use(f"t-rev-{next(self.ids)}", "Agent", prompt=f"{self.marker(rev)} demo ..."))
+
+    def off_history(self, parent, **files):
+        """A commit with these files on top of parent, on no branch, through the index alone, so
+        neither HEAD nor the worktree moves."""
+        blob = os.path.join(self.tmp, "blob")
+        self.sh("read-tree", parent)
+        for rel, content in files.items():
+            with open(blob, "w") as f:
+                f.write(content)
+            oid = self.sh("hash-object", "-w", blob)
+            self.sh("update-index", "--add", "--cacheinfo",
+                    f"100644,{oid},{rel.replace('__', '/')}")
+        side = self.sh("commit-tree", self.sh("write-tree"), "-p", parent,
+                       "-m", f"side {next(self.ids)}")
+        self.sh("read-tree", "HEAD")
+        return side
+
+    def merged(self, tree_of, *parents):
+        """HEAD becomes a merge of parents holding tree_of's tree."""
+        tree = self.sh("rev-parse", f"{tree_of}^{{tree}}")
+        args = [x for p in parents for x in ("-p", p)]
+        self.sh("update-ref", "HEAD", self.sh("commit-tree", tree, *args, "-m", "merge"))
+        self.sh("read-tree", "HEAD")
+
+    def test_a_later_commit_outside_the_watched_files_keeps_the_clearance(self):
+        self.review()
+        self.commit(**{"STATUS.md": "carried\n", "lib__v.ts": "2\n"})
+        self.assertIsNone(self.pre("gh pr ready", session_id="s-carry"))
+        self.assertIn("l3r-reuse", self.log())
+        self.assertNotIn("l3r", (self.start("startup") or {}).get("systemMessage", ""))
+
+    def test_a_watched_change_after_a_review_asks_for_the_delta_alone(self):
+        prior = self.sh("rev-parse", "HEAD")
+        self.review()
+        self.commit(**{"app__api__y__route.ts": "export const y = 1\n", "lib__v.ts": "2\n"})
+        head = self.sh("rev-parse", "HEAD")
+        reason = self.pre("gh pr ready", session_id="s-delta")
+        self.assertIn(f"{self.marker()} Review only what changed", reason)
+        self.assertIn(f"{prior[:12]}..{head[:12]}", reason)
+        self.assertIn("app/api/y/route.ts", reason)
+        self.assertNotIn("app/api/x/route.ts", reason)
+        self.assertIn("such as Sonnet", reason)
+        self.assertIsNone(self.pre("gh pr ready", session_id="s-delta"))  # the resend
+        self.review()
+        self.commit(**{"STATUS.md": "carried\n"})  # the delta's review clears in turn
+        self.assertIsNone(self.pre("gh pr ready", session_id="s-chain"))
+
+    def test_a_first_review_still_asks_for_the_whole_branch(self):
+        reason = self.pre("gh pr ready", session_id="s-whole")
+        self.assertIn("Review the changes of main", reason)
+        self.assertNotIn("such as Sonnet", reason)
+
+    def test_a_review_of_a_commit_off_the_heads_history_clears_nothing(self):
+        # The forged clearance: a marker naming a commit that holds the same watched file, but
+        # that the head doesn't descend from. A rebase leaves the old head the same way.
+        side = self.off_history(self.base, **{"app__api__x__route.ts": "export const x = 1\n"})
+        self.review(side)
+        self.add(use("t-nowhere", "Agent", prompt="[practices:review:0123456789ab] demo ..."))
+        reason = self.pre("gh pr ready", session_id="s-forged")
+        self.assertIn(f"{self.marker()} Review the changes of main", reason)
+        self.assertIn("app/api/x/route.ts", reason)
+
+    def test_a_marker_outside_an_agent_prompt_keeps_no_clearance(self):
+        self.add(text(f"{self.marker()} in prose"),
+                 use("t-b", "Bash", command=f"echo '{self.marker()}'"))
+        self.commit(**{"STATUS.md": "carried\n"})
+        self.assertIn("Review the changes of main", self.pre("gh pr ready", session_id="s-prose"))
+
+    def test_the_nearest_reviewed_ancestor_sets_the_delta(self):
+        first = self.sh("rev-parse", "HEAD")
+        self.commit(**{"app__api__y__route.ts": "export const y = 1\n"})
+        second = self.sh("rev-parse", "HEAD")
+        self.review(second)
+        self.review(first)  # the older one last, so the order of the markers can't decide
+        self.commit(**{"app__api__z__route.ts": "export const z = 1\n"})
+        reason = self.pre("gh pr ready", session_id="s-near")
+        self.assertIn(f"{second[:12]}..", reason)
+        self.assertNotIn("app/api/y/route.ts", reason)
+
+    def test_main_merged_in_after_a_review_is_no_delta(self):
+        lane = self.sh("rev-parse", "HEAD")
+        self.review()
+        main = self.off_history(self.base, **{"app__api__m__route.ts": "export const m = 1\n"})
+        self.sh("update-ref", "refs/remotes/origin/main", main)
+        both = self.off_history(lane, **{"app__api__m__route.ts": "export const m = 1\n"})
+        self.merged(both, lane, main)
+        self.assertIsNone(self.pre("gh pr ready", session_id="s-main"))
+
+    def test_a_conflict_resolved_by_hand_after_a_review_is_delta(self):
+        lane = self.sh("rev-parse", "HEAD")
+        self.review()
+        main = self.off_history(self.base, **{"app__api__x__route.ts": "export const x = 2\n",
+                                              "app__api__m__route.ts": "export const m = 1\n"})
+        self.sh("update-ref", "refs/remotes/origin/main", main)
+        both = self.off_history(lane, **{"app__api__x__route.ts": "export const x = 3\n",
+                                         "app__api__m__route.ts": "export const m = 1\n"})
+        self.merged(both, lane, main)
+        reason = self.pre("gh pr ready", session_id="s-conflict")
+        self.assertIn("Review only what changed", reason)
+        self.assertIn("app/api/x/route.ts", reason)
+        self.assertNotIn("app/api/m/route.ts", reason)
+
+    def test_a_subagent_keeps_the_parents_clearance(self):
+        agent = "a0123456789abcdef"
+        d = os.path.join(self.transcript[:-len(".jsonl")], "subagents")
+        os.makedirs(d)
+        self.rows([], path=os.path.join(d, f"agent-{agent}.jsonl"))
+        self.review()
+        self.commit(**{"STATUS.md": "carried\n"})
+        self.assertIsNone(self.pre("gh pr ready", agent_id=agent, session_id="s-sub"))
+
     def test_a_named_branch_is_judged_and_a_pr_number_says_what_was(self):
         # Review round 1: L3r judged local HEAD whatever PR the call named.
         self.sh("branch", "clean", self.base)  # a branch with nothing a skill owns

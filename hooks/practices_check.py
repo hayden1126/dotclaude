@@ -173,7 +173,12 @@ Each level reads commits, never the index or the working tree:
         the transcript (or the parent's, for a subagent) holds an Agent or Task call whose
         prompt has that head's marker, `[practices:review:<sha12>]`, so a review clears only
         the commit it judged; the reason carries each skill's gate lines and the marker in one
-        block to paste into a reviewer brief. The line-scoped and commit-time rules also run
+        block to paste into a reviewer brief. A marker on a commit the head descends from
+        carries over: only a touched file that also changed since the nearest such commit
+        counts, the delta coming from git. None left keeps the clearance (logged as l3r-reuse);
+        otherwise the block asks for that delta alone and suggests a smaller reviewer model. So
+        a clean merge of the base, whose files match the merge base, is no delta, and a file
+        resolved by hand is. The line-scoped and commit-time rules also run
         over every commit in the range.
 A scan runs every rule whose `at` has "commit" (L3r: or `scope = "line"`): `when` on each
 commit's added lines (lines its blob has that the parent's doesn't, by count and without a
@@ -2430,15 +2435,37 @@ def pr_ready(args):
     return out
 
 
+REVIEW_NEEDLE = b"[practices:review:"
+REVIEW_MARK = re.compile(r"\[practices:review:([0-9a-f]{12})\]")
+REVIEW_MARKS_MAX = 16
+
+
 def review_marker(head):
     """The marker a reviewer's brief carries for the commit it judges."""
     return f"[practices:review:{head[:12]}]"
 
 
-def reviewed(ts, marker):
-    """Whether an Agent or Task call in the transcripts carries this review marker."""
-    return any(isinstance(inp.get("prompt"), str) and marker in inp["prompt"]
-               for t in ts.all() for inp in tool_uses(t, marker.encode(), ("Agent", "Task")))
+def review_marks(ts):
+    """The sha12 of each review marker in an Agent or Task prompt in the transcripts."""
+    return [m for t in ts.all() for inp in tool_uses(t, REVIEW_NEEDLE, ("Agent", "Task"))
+            if isinstance(inp.get("prompt"), str) for m in REVIEW_MARK.findall(inp["prompt"])]
+
+
+def last_review(repo, marks, head):
+    """The nearest of the marked commits that head descends from, or None. A commit the head
+    doesn't descend from (a rebased head, a forged marker) clears nothing, and a mark that names
+    no commit here is skipped. Only the newest REVIEW_MARKS_MAX distinct marks are tried, each at
+    a cost of git calls from the budget."""
+    best = None
+    for mark in list(dict.fromkeys(reversed(marks)))[:REVIEW_MARKS_MAX]:
+        oid = repo.rev(mark)
+        if oid and is_ancestor(repo, oid, head) and (best is None or is_ancestor(repo, best, oid)):
+            best = oid
+    return best
+
+
+def is_ancestor(repo, old, new):
+    return repo.run("merge-base", old, new, ok=(0, 1)).decode().strip() == old
 
 
 def pr_head(repo, pr):
@@ -2528,13 +2555,22 @@ def _l3r(event, ghs, skills, cfg, ts, ctx, bounds, first, blocks_, keys, found, 
                                                                   cfg["helpers"], CRUMB)):
                 touched.setdefault(s["name"], (s, []))[1].append(path)
         told = (len(blocks_), len(found))
-        if touched and not reviewed(ts, review_marker(head)):
+        marks = review_marks(ts)
+        if touched and head[:12] not in marks:
+            prior = last_review(repo, marks, head)
+            if prior:  # only a file in the PR's diff and changed since the review is new work
+                since = {c[5] for c in repo.changes(prior, head)}
+                touched = {name: (s, kept) for name, (s, paths) in touched.items()
+                           if (kept := [p for p in paths if p in since])}
+                if not touched:
+                    log("l3r-reuse", f"L3r: {head[:12]} keeps the review of {prior[:12]}: "
+                        "nothing a skill watches changed since")
             new = [(s, paths) for s, paths in touched.values()
                    if (k := f"L3r|{s['name']}|review|-|{_sha1(head)}") not in state_keys(event)
                    and k not in keys]
             if new:
                 keys += [f"L3r|{s['name']}|review|-|{_sha1(head)}" for s, _ in new]
-                blocks_.append(review_block(new, mb, head, branch))
+                blocks_.append(review_block(new, mb, head, branch, prior=prior))
         rules = commit_rules(skills, cfg, line_only=True)
         got, cut = scan(repo, [head, "--not", mb], rules, "L3r", ctx, lockfiles=False)
         found += fresh(got, event, repo, ctx["project"])
@@ -2546,21 +2582,31 @@ def _l3r(event, ghs, skills, cfg, ts, ctx, bounds, first, blocks_, keys, found, 
             return
 
 
-def review_block(touched, mb, head, branch, shown=8):
-    parts = [f"{review_marker(head)} Review the changes of {branch} ({mb[:12]}..{head[:12]}) "
-             "against each practices skill below. Read its SKILL.md, check every must-hold "
-             "line against the changed code, and report each one that doesn't hold, with file "
-             "and line."]
+def review_block(touched, mb, head, branch, shown=8, prior=None):
+    """The deny's text. With prior, the commit last reviewed, it asks for the delta alone."""
+    check = ("Read its SKILL.md, check every must-hold line against the changed code, and report "
+             "each one that doesn't hold, with file and line.")
+    first = (f"Review only what changed in {branch} since its last review "
+             f"({prior[:12]}..{head[:12]}), in the files listed below, against each practices "
+             f"skill below. {check}" if prior else
+             f"Review the changes of {branch} ({mb[:12]}..{head[:12]}) against each practices "
+             f"skill below. {check}")
+    parts = [f"{review_marker(head)} {first}"]
     for s, paths in touched:
         paths = list(dict.fromkeys(paths))
         more = f", and {len(paths) - shown} more" if len(paths) > shown else ""
         parts.append(f"{s['name']} ({os.path.join(s['dir'], 'SKILL.md')}), for "
                      f"{', '.join(paths[:shown])}{more}:" + "".join(
                          f"\n- {line}" for line in s["gate"]))
-    return ("[practices:L3r] This PR changes code that practices skills own, and no reviewer "
+    lead = ("[practices:L3r] This PR changed code that practices skills own since its last "
+            "review. Start a reviewer (the Agent tool) with the block below in its prompt; a "
+            "smaller model such as Sonnet is enough for a delta. Fix what it reports, then "
+            "resend; this check won't stop the resend." if prior else
+            "[practices:L3r] This PR changes code that practices skills own, and no reviewer "
             "agent has checked it against them in this session. Start a reviewer (the Agent "
             "tool) with the block below in its prompt, fix what it reports, then resend; this "
-            "check won't stop the resend.\n\n" + "\n\n".join(parts))
+            "check won't stop the resend.")
+    return lead + "\n\n" + "\n\n".join(parts)
 
 
 # ---------------------------------------------------------------- SEC-64, the install check
@@ -3379,7 +3425,7 @@ LABELS = {"skill-disabled": ("skill disabled", "skills disabled"),
           "project-unknown": ("edit without a project dir", "edits without a project dir")}
 # For debugging, never an engine error: a deliberate choice (a delete push sends nothing to
 # scan), not a check that failed open.
-QUIET = {"fragment-only", "bash-unparsed", "l3r-target", "push-unscanned"}
+QUIET = {"fragment-only", "bash-unparsed", "l3r-target", "l3r-reuse", "push-unscanned"}
 
 
 def new_errors(d):
