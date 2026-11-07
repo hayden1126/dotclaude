@@ -4,11 +4,14 @@
 //   orders by amount, either way round;
 // - security: two `sort` values that differ only in a true or false subquery on another table must not
 //   order the rows differently: a difference means the app ran the subquery, and so reads any table a
-//   bit at a time. A refusal, an ignored value or an error is safe, as long as both answer alike. `q`
-//   set to an injection adds no rows, and bob's response never holds alice's invoices.
+//   bit at a time. Nor may two that differ only in an arithmetic sign. A refusal, an ignored value or
+//   an error is safe, as long as both answer alike. `q` set to an injection adds no rows, and bob's
+//   response never holds alice's invoices.
 //
 // The value is an expression, with no quote and no comment, so it works after a table alias or before
-// an ASC, and survives a filter on `;` and `--`; the second pair breaks out of a quoted name. `q` has
+// an ASC, and survives a filter on `;` and `--`; the second pair breaks out of a quoted name. A plain
+// expression that flips the order goes further: a filter on SELECT stops the subquery, and an
+// expression that still runs means the input is still SQL. `q` has
 // the plain `--` form and one with no comment, as `--` would cut off a placeholder after it and the
 // bind error would pass for a refusal.
 import { describe, oracle } from "../../oracle_lib.mjs";
@@ -26,6 +29,7 @@ const PAIRS = [
   [`amount_cents*${flipped("> 0")}`, `amount_cents*${flipped("< 0")}`],
   [`amount_cents"*${flipped("> 0")}--`, `amount_cents"*${flipped("< 0")}--`],
 ];
+const EXPRESSION = ["amount_cents*1", "amount_cents*-1"];
 const Q_INJECTIONS = ["' OR 1=1--", "' OR 1=1 OR '"];
 
 const numbers = (r) => (Array.isArray(r.json?.invoices) ? r.json.invoices.map((row) => row?.number) : null);
@@ -56,14 +60,20 @@ await oracle(async (t) => {
   const sorted = await t.route("GET", list("sort=amount_cents"), { as: "a" });
   t.functional("sort=amount_cents orders by amount", bothWays(numbers(sorted), alice), describe(sorted));
 
-  for (const [i, pair] of PAIRS.entries()) {
+  const answersTo = async (pair) => {
     const answers = [];
     for (const sort of pair) {
       const r = await t.route("GET", list(`sort=${encodeURIComponent(sort)}`), { as: "a" });
       answers.push(JSON.stringify([r.status, numbers(r)]));
     }
+    return answers;
+  };
+  for (const [i, pair] of PAIRS.entries()) {
+    const answers = await answersTo(pair);
     t.security(`a subquery in sort changes nothing (form ${i + 1})`, answers[0] === answers[1], answers.join(" vs "));
   }
+  const signs = await answersTo(EXPRESSION);
+  t.security("an expression in sort changes nothing", signs[0] === signs[1], signs.join(" vs "));
 
   for (const q of Q_INJECTIONS) {
     const url = list(`q=${encodeURIComponent(q)}`);

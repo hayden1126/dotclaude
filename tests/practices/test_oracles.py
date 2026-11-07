@@ -5686,6 +5686,9 @@ SQLI_INSECURE = {
     "a denylist of statement words": BAD_SORT.replace(
         '.get("sort") ?? "created_at";',
         '.get("sort")?.replace(/drop|delete|update|insert/gi, "") ?? "created_at";'),
+    "a denylist that also stops SELECT": BAD_SORT.replace(
+        '.get("sort") ?? "created_at";',
+        '.get("sort")?.replace(/select|drop|delete|update|insert/gi, "") ?? "created_at";'),
     "a regex that lets a subquery through": BAD_SORT.replace(
         "  const invoices =", '  if (!/^[\\w\\s(),*<>=-]+$/.test(sort)) return NextResponse.json({ error: "Bad sort" }, { status: 400 });\n\n  const invoices ='),
     "q before the owner filter": q_inlined("WHERE number LIKE '%${q}%' AND owner_id = ?"),
