@@ -1168,5 +1168,21 @@ never touches it. The status line is one row: the session summary that once fill
 
 ## License
 
-MIT for the configuration and scripts in this repo. Plugin licenses are governed by their
-upstream projects.
+dotclaude is MIT licensed: see [LICENSE](LICENSE). Plugins are installed from their marketplaces
+and keep their upstream licenses.
+
+These parts come from other projects, and their license texts stay beside them:
+
+| Part | Source | License | Text |
+|---|---|---|---|
+| Parable bash parser, vendored verbatim | [ldayton/Parable](https://github.com/ldayton/Parable) | MIT | `skills/delegation/scripts/vendor/LICENSE-parable` |
+| Subagent policy intents, footers and rule table | [kenryu42/cc-safety-net](https://github.com/kenryu42/cc-safety-net) | MIT | `skills/delegation/LICENSE-cc-safety-net` |
+| `technical-writing` literal-prose rules | [michael-denyer/pstack-claude](https://github.com/michael-denyer/pstack-claude) | MIT | `skills/technical-writing/LICENSE-pstack-claude` |
+| `quality-lens` skill | [cursor/plugins](https://github.com/cursor/plugins) | MIT | `skills/quality-lens/LICENSE-cursor` |
+| `frontend-motion` skill | [emilkowalski/skills](https://github.com/emilkowalski/skills), [jakubkrehel/skills](https://github.com/jakubkrehel/skills) | MIT | `skills/frontend-motion/NOTICE`, `skills/frontend-motion/LICENSE-animate`, `skills/frontend-motion/LICENSE-better-ui` |
+| `interview` skill | [23jmo/jmo-skills](https://github.com/23jmo/jmo-skills) | MIT | `skills/interview/LICENSE` |
+| reveal.js, in a test fixture | [hakimel/reveal.js](https://github.com/hakimel/reveal.js) | MIT | `tests/deck_production/fixtures/geodeck/vendor/reveal/LICENSE` |
+| TeX Gyre fonts, used by a deck theme (no font file ships here) | [GUST](https://www.gust.org.pl/projects/e-foundry/tex-gyre) | GUST Font License | `skills/deck-production/themes/_licences/GUST-FONT-LICENSE.txt` |
+| Noto Sans CJK fonts, used by a deck theme (no font file ships here) | [notofonts/noto-cjk](https://github.com/notofonts/noto-cjk) | SIL OFL 1.1 | `skills/deck-production/themes/_licences/OFL-1.1.txt` |
+
+Ideas reimplemented without their text are credited in the code and in `docs/delegation.md`.
