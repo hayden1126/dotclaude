@@ -10,6 +10,15 @@
 kind = "rule"
 id = "REL-31"
 fires = true
+path = "src/main/resources/db/migration/V2__users.sql"
+content = '''
+alter table users rename column full_name to display_name;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
 path = "supabase/migrations/20261107120000_users.sql"
 content = '''
 alter table users rename column full_name to display_name;

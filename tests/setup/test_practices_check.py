@@ -4521,6 +4521,27 @@ class BashText(TextBase):
         self.assertFalse(os.path.exists(os.path.join(self.proj, MIGRATION)))
 
 
+class BashTextAccepted(TextBase):
+    """A line resent past L2b was accepted, as a line resent past L2 is: the commit and the push
+    don't raise it again, and any other line of that rule still gets told."""
+
+    MIGRATION = "supabase__migrations__1_users.sql"
+    LINE = "alter table users rename column a to b;\n"
+
+    def test_a_line_resent_past_l2b_isnt_told_at_the_commit(self):
+        command = f"cat > supabase/migrations/1_users.sql <<'EOF'\n{self.LINE}EOF"
+        self.assertIn("[practices:L2:data-layer:REL-31:bash]", self.pre(command))
+        self.assertIsNone(self.pre(command))
+        self.assertIsNone(self.committed(**{self.MIGRATION: self.LINE}))
+
+    def test_a_line_l2b_never_saw_is_still_told_at_the_commit(self):
+        command = f"cat > supabase/migrations/1_users.sql <<'EOF'\n{self.LINE}EOF"
+        self.assertIsNotNone(self.pre(command))
+        told = self.committed(**{self.MIGRATION: self.LINE + "alter table users drop column c;\n"})
+        self.assertIn("1_users.sql:2", told)
+        self.assertNotIn("1_users.sql:1", told)
+
+
 class BashTextPasses(BashBase):
     """Installed rules first, then a project's, and a project's pattern can't cost the call."""
 

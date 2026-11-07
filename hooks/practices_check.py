@@ -206,7 +206,9 @@ L2b runs in PreToolUse(Bash) right after SEC-64 and reads no repo and no file. I
 command text and neither `unless` nor `practices-allow: <id>` is in it. It is blunt on purpose: a
 false match (a commit message that names a migration and a drop) costs one resend. Each matched
 line gets a key, `L2b|<skill>|<rule>|sha1(the stripped line)`, and the call is denied when any of
-its keys is new, so a resend passes and a different line is denied again. The deny's marker is
+its keys is new, so a resend passes and a different line is denied again. A line resent past
+L2b counts as accepted, as one past L2 does: a commit or push scan skips it, for any path, since
+the key names none. The deny's marker is
 `[practices:L2:<skill>:<rule>:bash]`, and it never echoes the matched text. A command over CMD_MAX
 is skipped. L2b shares SEC-64's part of the budget, fails the same way and reads the same off
 file. sed, a Python write or a name built from parts can still pass; L3s and push read those
@@ -2114,7 +2116,7 @@ def _scan(repo, commits, more, rules, level, ctx, lockfiles, found):
 def fresh(findings, event, repo, project):
     """The findings whose key is new for this session and agent, less those on a line L2
     already denied for that file and rule (its path relative to project, the Bash levels'
-    project dir, as L2 keyed it); one per key."""
+    project dir, as L2 keyed it) or L2b already denied for that rule; one per key."""
     seen = state_keys(event)
     l2_keys = accepted_at_l2(event)
     out, keys = [], set()
@@ -2123,7 +2125,8 @@ def fresh(findings, event, repo, project):
             continue
         if f.skill is not ENGINE:
             rel = relative(os.path.join(repo.top or repo.cwd, f.path), project)
-            if f"L2|{f.skill['name']}|{f.rule['id']}|{rel}|{f.line_hash}" in l2_keys:
+            if f"L2|{f.skill['name']}|{f.rule['id']}|{rel}|{f.line_hash}" in l2_keys \
+                    or f"L2b|{f.skill['name']}|{f.rule['id']}|{f.line_hash}" in l2_keys:
                 continue
         keys.add(f.key)
         out.append(f)

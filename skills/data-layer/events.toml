@@ -21,6 +21,7 @@ gate = [
 id = "REL-31"
 paths = [
   "**/migrations/**",
+  "**/migration/**",
   "**/migrate/**",
   "**/alembic/versions/**",
   "**/drizzle/**",
