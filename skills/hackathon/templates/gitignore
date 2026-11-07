@@ -4,11 +4,15 @@
 .env-*
 .env_*
 .env *
+.env(*
 .envrc
 .envrc.*
 .envrc-*
 .envrc_*
 .envrc *
+.envrc(*
+# This also hides Babylon.js's environment texture. To keep one, add `!environment.env` below the
+# safe names, and tell the scan with `--allow-name environment.env`, on the user's word.
 *.env
 # The shape of the config, with no values: these are meant to be committed.
 !.env[._-]example
@@ -36,6 +40,8 @@
 *.p12
 *.pfx
 *.jks
+# This also hides React Native's `debug.keystore`. To keep it, add `!debug.keystore` below it, and
+# tell the scan with `--allow-name debug.keystore`, on the user's word.
 *.keystore
 id_rsa
 id_dsa
@@ -43,6 +49,7 @@ id_ecdsa
 id_ed25519
 credentials.json
 service-account*.json
+service_account*.json
 .netrc
 .pgpass
 .htpasswd

@@ -62,22 +62,24 @@ def private_key_line():
     return "-----BEGIN " + "RSA PRIVATE" + " KEY-----"
 
 
-# File names, shared by the scan's tests and the template's so the two can't drift apart.
+# File names, shared by the scan's tests and the template's, and each table checked by both.
 # Flagged by the scan and hidden by the gitignore template.
 FLAGGED_AND_IGNORED = (
     ".env", ".env.local", ".env-local", ".env_prod", ".envrc", ".envrc.local", ".envrc-local",
-    ".envrc_local", ".env copy", ".env (1)", ".env - Copy", ".envrc copy", ".envrc (1)",
+    ".envrc_local", ".env copy", ".env (1)", ".env(1)", ".env - Copy", ".env 2", ".envrc copy", ".envrc (1)",
+    ".envrc(1)",
     ".env~", ".envrc~", "#.env#", "#.envrc#", ".env.~1~", ".envrc.~1~", ".env.bak", ".env.save",
     ".envrc.bak", ".env-local~", ".envrc-local~", ".env.example~", ".env.sample.bak",
     "secrets.env", "prod.env", ".secrets.env", "prod.env~", "prod.env.bak", "deep/er/.env~",
     "id_rsa~", "#id_rsa#", "id_rsa.~1~", "id_rsa.bak", "id_rsa.bak~", "id_rsa~.bak", "id_rsa.old",
     "server.pem.bak", "server.pem~", "#.pem", "server.key~", "credentials.json~",
-    "credentials.json.orig", "service-account.json.tmp", "bundle.p12.backup", "app.jks.temp",
+    "credentials.json.orig", "service-account.json.tmp", "service_account.json", "bundle.p12.backup", "app.jks.temp",
     ".netrc", ".pgpass", ".htpasswd", ".git-credentials", "app.jks", "app.keystore",
 )
-# Flagged by the scan only: no gitignore line can hold these without hiding ordinary files.
+# Flagged by the scan only: the template leaves `.save` and copies outside the env family to it.
 FLAGGED_NOT_IGNORED = (
-    "credentials (1).json", "credentials copy.json", "credentials copy 2.json",
+    "credentials (1).json", "credentials(1).json", "credentials 2.json", "id_rsa 2", "id_rsa(1)",
+    "credentials copy.json", "credentials copy 2.json",
     "credentials - Copy.json", "credentials - Copy (2).json", "credentials (copy).json",
     "credentials (copy 2).json", "id_rsa copy", "id_rsa (1)", "id_rsa - Copy", "server.key.save",
     "server.key.save.1", "credentials (conflicted copy 2018-04-10 093612).json",
@@ -254,8 +256,7 @@ class Secrets(ScanCase):
         self.assertEqual(p.returncode, 0, p.stdout)
 
     def test_a_backup_mark_on_a_name_git_quotes(self):
-        name = "caf\u00e9.env~"
-        self.commit_names([name])
+        self.commit_names(['a"b.env~'])  # git quotes a path that holds a double quote
         p = self.scan()
         self.assertEqual(p.returncode, 1, p.stdout)
         self.assertIn("secret-file", p.stdout)
@@ -1265,12 +1266,19 @@ class TheKickoffFiles(unittest.TestCase):
             for name in FLAGGED_AND_IGNORED + CLEAN_AND_IGNORED:
                 with self.subTest(name):
                     self.assertTrue(ignored(name), name)
-            for name in CLEAN_AND_KEPT + tuple(safe_names):
+            for name in FLAGGED_NOT_IGNORED + CLEAN_AND_KEPT + tuple(safe_names):
                 with self.subTest(name):
                     self.assertFalse(ignored(name), name)
 
     def test_the_gitignore_says_how_to_keep_a_keynote_deck(self):
         self.assertIn("!pitch.key", self.read("templates", "gitignore"))
+
+    def test_the_gitignore_says_how_to_keep_other_lookalike_files(self):
+        text = self.read("templates", "gitignore")
+        for line in ("!environment.env", "`--allow-name environment.env`", "!debug.keystore",
+                     "`--allow-name debug.keystore`"):
+            with self.subTest(line):
+                self.assertIn(line, text)
 
     def test_the_skill_describes_the_scan_as_it_now_works(self):
         text = self.read("SKILL.md")
