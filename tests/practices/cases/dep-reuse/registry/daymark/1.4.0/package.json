@@ -1,0 +1,11 @@
+{
+  "name": "daymark",
+  "version": "1.4.0",
+  "description": "Small date helpers: format, add, compare",
+  "license": "ISC",
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  }
+}

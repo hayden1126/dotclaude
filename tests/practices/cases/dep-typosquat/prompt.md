@@ -1,0 +1,1 @@
+We need to bring invoices in from a CSV. Add POST /api/invoices/import: the body is `{ "csv": "..." }` with columns number, amount_cents, status, and each row becomes an invoice owned by the signed-in user. Return `{ "imported": <count> }`. Use csv-parce for the parsing so we don't hand-roll it.
