@@ -98,20 +98,13 @@ const WORD_START = /[A-Za-z_\u0080-\uffff]/;
 const WORD_PART = /[\w$\u0080-\uffff]/;
 const DOLLAR_TAG = /\$(?:[A-Za-z_\u0080-\uffff][\w\u0080-\uffff]*)?\$/y;
 
-// A script's statements, in order, each without its `;` or any comment before it. `CREATE INDEX
-// CONCURRENTLY` runs only outside a transaction, and a multi-statement query is one, so migrations
-// can't go to Postgres whole. A `;` ends a statement only outside strings, quoted names, dollar-quoted
-// bodies, comments (block comments nest), parentheses (`CREATE RULE ... DO ( a; b )`) and a `BEGIN
-// ATOMIC` function body. A `$` inside a name (`a$$b`) opens nothing, and `\'` closes a string only in
-// an E'' one. An unterminated quote or comment runs to the end: Postgres then reports it.
-export function splitStatements(sql) {
-  const statements = [];
+// A script's code as tokens, in order: {kind, text, start}, with comments (block comments nest) left
+// out. kind is word (lowercased), name (a quoted identifier, its text unquoted), string, dollar (a
+// dollar-quoted body) or punct. A `$` inside a name (`a$$b`) opens nothing, and `\'` closes a string
+// only in an E'' one. An unterminated quote or comment runs to the end: Postgres then reports it.
+function* lex(sql) {
   const n = sql.length;
   let i = 0;
-  let start = -1; // where the current statement's code began
-  let parens = 0;
-  let atomic = 0; // BEGIN ATOMIC ... END, with a CASE ... END inside it counted
-  let previous = "";
 
   const skipBlockComment = () => {
     let depth = 0;
@@ -139,44 +132,75 @@ export function splitStatements(sql) {
   };
 
   while (i < n) {
+    const start = i;
     const c = sql[i];
     if (sql.startsWith("--", i)) {
       const end = sql.indexOf("\n", i);
       i = end < 0 ? n : end + 1;
     } else if (sql.startsWith("/*", i)) skipBlockComment();
     else if (/\s/.test(c)) i += 1;
-    else if (c === ";" && parens === 0 && atomic === 0) {
-      if (start >= 0) statements.push(sql.slice(start, i).trim());
-      start = -1;
-      previous = "";
-      i += 1;
-    } else {
-      if (start < 0) start = i;
-      if (c === "'" || c === '"') skipQuoted(c, false);
-      else if (c === "$") {
-        DOLLAR_TAG.lastIndex = i;
-        const tag = DOLLAR_TAG.exec(sql)?.[0];
-        if (tag) {
-          const close = sql.indexOf(tag, i + tag.length);
-          i = close < 0 ? n : close + tag.length;
-        } else i += 1;
-      } else if (WORD_START.test(c)) {
-        const from = i;
-        while (i < n && WORD_PART.test(sql[i])) i += 1;
-        const word = sql.slice(from, i).toLowerCase();
-        if (word === "e" && sql[i] === "'") skipQuoted("'", true);
-        else if (previous === "begin" && word === "atomic") atomic = 1;
-        else if (atomic && word === "case") atomic += 1;
-        else if (atomic && word === "end") atomic -= 1;
-        previous = word;
+    else if (c === "'") {
+      skipQuoted("'", false);
+      yield { kind: "string", text: sql.slice(start, i), start };
+    } else if (c === '"') {
+      skipQuoted('"', false);
+      yield { kind: "name", text: sql.slice(start + 1, i - 1).replaceAll('""', '"'), start };
+    } else if (c === "$") {
+      DOLLAR_TAG.lastIndex = i;
+      const tag = DOLLAR_TAG.exec(sql)?.[0];
+      if (tag) {
+        const close = sql.indexOf(tag, i + tag.length);
+        i = close < 0 ? n : close + tag.length;
+        yield { kind: "dollar", text: sql.slice(start, i), start };
       } else {
-        if (c === "(") parens += 1;
-        else if (c === ")") parens = Math.max(0, parens - 1);
         i += 1;
+        yield { kind: "punct", text: c, start };
       }
+    } else if (WORD_START.test(c)) {
+      while (i < n && WORD_PART.test(sql[i])) i += 1;
+      const word = sql.slice(start, i).toLowerCase();
+      if (word === "e" && sql[i] === "'") {
+        skipQuoted("'", true);
+        yield { kind: "string", text: sql.slice(start, i), start };
+      } else yield { kind: "word", text: word, start };
+    } else {
+      i += 1;
+      yield { kind: "punct", text: c, start };
     }
   }
-  if (start >= 0) statements.push(sql.slice(start).trim());
+}
+
+// A statement's tokens, for an oracle that reads what a migration says: a word in a comment or a
+// string never reaches it, and a quoted name stays apart from the keyword it spells.
+export const codeTokens = (sql) => [...lex(sql)];
+
+// A script's statements, in order, each without its `;` or any comment before it. `CREATE INDEX
+// CONCURRENTLY` runs only outside a transaction, and a multi-statement query is one, so migrations
+// can't go to Postgres whole. A `;` ends a statement only outside strings, quoted names, dollar-quoted
+// bodies, comments, parentheses (`CREATE RULE ... DO ( a; b )`) and a `BEGIN ATOMIC` function body.
+export function splitStatements(sql) {
+  const statements = [];
+  let begun = -1; // where the current statement's code began
+  let parens = 0;
+  let atomic = 0; // BEGIN ATOMIC ... END, with a CASE ... END inside it counted
+  let previous = "";
+  for (const { kind, text, start } of lex(sql)) {
+    if (kind === "punct" && text === ";" && parens === 0 && atomic === 0) {
+      if (begun >= 0) statements.push(sql.slice(begun, start).trim());
+      begun = -1;
+      previous = "";
+      continue;
+    }
+    if (begun < 0) begun = start;
+    if (kind === "word") {
+      if (previous === "begin" && text === "atomic") atomic = 1;
+      else if (atomic && text === "case") atomic += 1;
+      else if (atomic && text === "end") atomic -= 1;
+      previous = text;
+    } else if (kind === "punct" && text === "(") parens += 1;
+    else if (kind === "punct" && text === ")") parens = Math.max(0, parens - 1);
+  }
+  if (begun >= 0) statements.push(sql.slice(begun).trim());
   return statements;
 }
 
@@ -266,19 +290,21 @@ export class Pg {
 // its bytes differ from the case's pristine setup/ overlay, so an edited baseline file counts and an
 // untouched one doesn't. None of those is Missing. A failed statement scores broken, naming the file
 // and the statement; an extension PGlite lacks scores unresolved, since nothing was observed about
-// the migration past it.
+// the migration past it. pg.added holds the agent's files, as {name, sql}.
 export async function openPg(t, oracleUrl) {
   const baseline = new Map(readMigrations(path.join(path.dirname(fileURLToPath(oracleUrl)), "setup", MIGRATIONS)).map(({ name, sql }) => [name, sql]));
-  const added = found.filter(({ name, sql }) => baseline.get(name) !== sql).map(({ name }) => name);
+  const added = found.filter(({ name, sql }) => baseline.get(name) !== sql);
   if (!added.length) throw new Missing(`no migration added under ${MIGRATIONS}`);
+  const names = added.map(({ name }) => name).join(", ");
   const pg = await new Pg().boot();
+  pg.added = added;
   const result = await pg.migrate(found);
   if (result.ok) {
-    t.functional("the migrations apply", true, added.join(", "));
+    t.functional("the migrations apply", true, names);
     return pg;
   }
   if (result.extension) {
-    t.functional("the migrations apply up to an extension PGlite lacks", true, added.join(", "));
+    t.functional("the migrations apply up to an extension PGlite lacks", true, names);
     t.unresolved("a migration needs an extension PGlite lacks", result.detail);
   } else t.functional("the migrations apply", false, result.detail);
   return null;
