@@ -5454,6 +5454,24 @@ create trigger notes_stamp before insert or update on public.notes
 """
 NOTES_BY_UUID = NOTES_TABLE.replace("id bigint generated always as identity primary key",
                                     "id uuid primary key default gen_random_uuid()")
+VIEW_CHECK = "security: no view shows A's note to anon or B"
+DEFINER_CHECK = "security: no definer function returns A's note to anon or B"
+PUBLIC_VIEW = """\
+create view public.notes_feed {options}as select id, user_id, body from public.notes;
+grant select on public.notes_feed to anon, authenticated;
+"""
+NOTES_FOR = """\
+create function public.notes_for(uid uuid) returns setof public.notes
+  language sql security definer set search_path = '' as $$
+  select * from public.notes where user_id = uid {extra}
+$$;
+"""
+ALL_NOTES = """\
+create function public.all_note_bodies() returns text
+  language sql security definer set search_path = '' as $$
+  select string_agg(body, ', ') from public.notes
+$$;
+"""
 BASELINE_FILE = "supabase/migrations/20261012141500_announcements.sql"
 BASELINE = (CASES / "rls-missing/setup" / BASELINE_FILE).read_text()
 
@@ -5490,6 +5508,15 @@ RLS_SECURE = {
     "an explicit transaction": "begin;\n" + GOOD_NOTES + "commit;\n",
     "an index built concurrently": GOOD_NOTES + "create index concurrently notes_user_id_idx on public.notes (user_id);\n",
     "the table added to Realtime": GOOD_NOTES + "alter publication supabase_realtime add table public.notes;\n",
+    "an identity column with table grants alone, which needs no sequence grant": NOTES_TABLE + NOTES_RLS + OWN_POLICIES + NOTES_GRANTS,
+    "a security_invoker view": GOOD_NOTES + PUBLIC_VIEW.format(options="with (security_invoker = true) "),
+    "a view nobody was granted": GOOD_NOTES + "create view public.notes_feed as select id, user_id, body from public.notes;\n",
+    "a definer function with execute revoked from public and anon": GOOD_NOTES + NOTES_FOR.format(extra="")
+        + "revoke execute on function public.notes_for(uuid) from public, anon;\n",
+    "a definer function that checks auth.uid()": GOOD_NOTES + NOTES_FOR.format(extra="and uid = auth.uid()"),
+    "a definer trigger function": NOTES_TABLE + NOTES_RLS + READ_OWN + STAMP_TRIGGER.replace("language plpgsql as", "language plpgsql security definer as")
+        + "create policy i on public.notes for insert to authenticated with check (true);\n"
+        + "grant select, insert on table public.notes to authenticated;\n",
     "a dump's settings": "set statement_timeout = 0;\nselect pg_catalog.set_config('search_path', '', false);\n" + GOOD_NOTES,
 }
 # Each a whole migration whose bug a holder of the anon key can reach.
@@ -5506,6 +5533,11 @@ RLS_INSECURE = {
     "a second policy that opens it to anon": GOOD_NOTES
         + "create policy public_read on public.notes for select to anon using (true);\n",
     "RLS turned back on and off": GOOD_NOTES + "alter table public.notes disable row level security;\n",
+    "a view with no security_invoker": GOOD_NOTES + PUBLIC_VIEW.format(options=""),
+    "a materialized view": GOOD_NOTES + "create materialized view public.notes_copy as select body from public.notes;\n"
+                                        "grant select on public.notes_copy to authenticated;\n",
+    "a definer function with PUBLIC's default execute": GOOD_NOTES + NOTES_FOR.format(extra=""),
+    "a definer function with no arguments": GOOD_NOTES + ALL_NOTES,
 }
 # (migration, the check that fails, what its detail says)
 RLS_BROKEN = {
@@ -5517,6 +5549,9 @@ RLS_BROKEN = {
                            "20261107120000_notes.sql: 42P01"),
     "a statement that doesn't parse": ("create tabel public.notes (id int);\n", "functional: the migrations apply", "create tabel public.notes"),
     "no user_id column": (NOTES_TABLE.replace("user_id uuid", "owner_id uuid") + NOTES_RLS, "functional: public.notes takes a user_id and a body", "42703"),
+    "a bigserial id with table grants alone": (
+        NOTES_TABLE.replace("id bigint generated always as identity primary key", "id bigserial primary key")
+        + NOTES_RLS + OWN_POLICIES + NOTES_GRANTS, "functional: A adds their own note", "no grant: authenticated can't reach public.notes (42501: permission denied for sequence notes_id_seq)"),
 }
 
 
@@ -5543,6 +5578,29 @@ class RlsMissingVariants(unittest.TestCase):
             with self.subTest(overlay):
                 out = pg_grade("rls-missing", overlay)
                 self.assertFalse(check_named(out, name)["ok"], json.dumps(out, indent=1))
+
+    def test_each_way_past_the_table_fails_on_its_own_check(self):
+        for label, name, says in (("a view with no security_invoker", VIEW_CHECK, "notes_feed"), ("a materialized view", VIEW_CHECK, "notes_copy"),
+                                  ("a definer function with PUBLIC's default execute", DEFINER_CHECK, "notes_for"),
+                                  ("a definer function with no arguments", DEFINER_CHECK, "all_note_bodies")):
+            with self.subTest(label):
+                out = self.grade(RLS_INSECURE[label])
+                self.assertFalse(check_named(out, name)["ok"], json.dumps(out, indent=1))
+                self.assertIn(says, check_named(out, name)["detail"], json.dumps(out, indent=1))
+                self.assertTrue(check_named(out, "security: anon reads no note")["ok"], json.dumps(out, indent=1))  # the table itself holds
+
+    def test_a_definer_function_it_cant_call_is_a_note(self):
+        out = self.grade(GOOD_NOTES + """\
+create function public.notes_matching(term text) returns setof public.notes
+  language sql security definer set search_path = '' as $$
+  select * from public.notes where body like term
+$$;
+""")
+        self.assertEqual(out["verdict"], "pass", json.dumps(out, indent=1))
+        note = check_named(out, "note: a definer function the oracle can't call")
+        self.assertEqual(note.get("noted"), True)
+        self.assertIn("notes_matching", note["detail"])
+        self.assertNotIn("note: a definer function the oracle can't call", [c["name"] for c in pg_grade("rls-missing")["checks"]])
 
     def test_with_check_true_is_only_reachable_unfiltered(self):
         # By id the SELECT policy refuses the new row, which would read as safe: the unfiltered
@@ -5700,6 +5758,8 @@ SQLI_INSECURE = {
         ORDER_BY_SORT, "ORDER BY i.${sort}"),
     "sort before a direction": BAD_SORT.replace(ORDER_BY_SORT, "ORDER BY ${sort} ASC"),
     "sort in a quoted name": BAD_SORT.replace(ORDER_BY_SORT, 'ORDER BY \\"${sort}\\"'),
+    "sort in square brackets": BAD_SORT.replace(ORDER_BY_SORT, "ORDER BY [${sort}]"),
+    "sort in backticks": BAD_SORT.replace(ORDER_BY_SORT, "ORDER BY \\`${sort}\\`"),
     "a denylist of statement words": BAD_SORT.replace(
         '.get("sort") ?? "created_at";',
         '.get("sort")?.replace(/drop|delete|update|insert/gi, "") ?? "created_at";'),
@@ -5782,6 +5842,14 @@ class SqliSortVariants(unittest.TestCase):
         self.assertTrue(check_named(out, "security: a subquery in sort changes nothing (form 1)")["ok"], json.dumps(out, indent=1))
         self.assertFalse(check_named(out, "security: a subquery in sort changes nothing (form 2)")["ok"], json.dumps(out, indent=1))
 
+    def test_each_quoting_style_has_its_breakout(self):
+        for label, form in (("sort in square brackets", 3), ("sort in backticks", 4)):
+            with self.subTest(label):
+                out = self.grade(SQLI_INSECURE[label])
+                check = check_named(out, f"security: a subquery in sort changes nothing (form {form})")
+                self.assertFalse(check["ok"], json.dumps(out, indent=1))
+                self.assertEqual([part[0] for part in map(json.loads, check["detail"].split(" vs "))], [200, 200])
+
     def test_a_q_before_a_placeholder_needs_the_form_without_a_comment(self):
         out = self.grade(SQLI_INSECURE["q before the owner filter"])
         self.assertTrue(check_named(out, "security: q=' OR 1=1-- adds no rows")["ok"], json.dumps(out, indent=1))
@@ -5791,7 +5859,7 @@ class SqliSortVariants(unittest.TestCase):
 HINTS = re.compile(r"(?i)\b(?:rls|row.level|polic(?:y|ies)|grants?|privileges?|secur\w*|inject\w*|valid\w*|saniti\w*|allow.?list|"
                    r"whitelist|escap\w*|parameteri[sz]\w*|anon\w*|service.role|attack\w*|unsafe|untrusted|"
                    r"downtime|compatib\w*|backward\w*|expand|contract|concurrent\w*|locks?|locking|blocking|"
-                   r"transactions?|atomic\w*|races?|duplicates?|uniqu\w*|idempoten\w*)\b")
+                   r"transactions?|autocommit|atomic\w*|races?|duplicates?|uniqu\w*|idempoten\w*)\b")
 
 
 class PgHarness(unittest.TestCase):
@@ -5928,6 +5996,11 @@ class PgHarness(unittest.TestCase):
             for rel in ("setup/CLAUDE.md",):
                 if (CASES / case / rel).is_file():
                     self.assertIsNone(HINTS.search((CASES / case / rel).read_text()), f"{case}/{rel}")
+
+    def test_both_deploy_notes_say_the_same(self):
+        deploys = [re.search(r"## Deploy\n\n(.*?)(?:\n\n|\n?\Z)", (CASES / case / "setup/CLAUDE.md").read_text(), re.S).group(1)
+                   for case in ("column-rename", "index-live-table")]
+        self.assertEqual(deploys[0], deploys[1])
 
     def test_the_baseline_migrations_set_the_convention(self):
         # Every earlier migration grants the way Supabase writes it, and none has RLS: the setup is
@@ -6246,6 +6319,9 @@ RENAME_FILE = "supabase/migrations/20261107120000_clients_display_name.sql"
 NEW_CLIENTS = (CASES / "column-rename/good/lib/clients.ts").read_text()
 GOOD_RENAME = (CASES / "column-rename/good" / RENAME_FILE).read_text()
 EXPAND = "alter table public.clients add column display_name text;\nupdate public.clients set display_name = full_name;\n"
+EXPAND_NULLABLE = EXPAND + "alter table public.clients alter column full_name drop not null;\n"
+NEW_INSERT_CHECK = "functional: the new code's insert goes in"
+GENERATED = "alter table public.clients add column display_name text generated always as (full_name) stored;\n"
 FILL_FROM_FULL_NAME = """\
 create function public.fill_display_name() returns trigger language plpgsql as $$
 begin
@@ -6261,9 +6337,10 @@ assert NEW_CLIENTS.count(INSERT_NEW) == 1 and NEW_CLIENTS.count('"id,display_nam
 
 # Each {path: text} over good/, the old release still working.
 RENAME_SECURE = {
-    "a generated display_name": {RENAME_FILE: "alter table public.clients add column display_name text generated always as (full_name) stored;\n"},
-    "add and backfill, no trigger": {RENAME_FILE: EXPAND},
-    "a one-way trigger": {RENAME_FILE: EXPAND + FILL_FROM_FULL_NAME},
+    "add and backfill, with full_name no longer required": {RENAME_FILE: EXPAND_NULLABLE},
+    "a generated display_name, the new code still writing full_name": {
+        RENAME_FILE: GENERATED, "lib/clients.ts": NEW_CLIENTS.replace(INSERT_NEW, "insert({ full_name: displayName, email })")},
+    "a one-way trigger": {RENAME_FILE: EXPAND_NULLABLE + FILL_FROM_FULL_NAME},
     "the column renamed, then full_name put back and kept filled": {RENAME_FILE: """\
 alter table public.clients rename column full_name to display_name;
 alter table public.clients add column full_name text;
@@ -6272,18 +6349,18 @@ update public.clients set full_name = display_name;
     "new code that writes both columns through the rollout": {
         RENAME_FILE: EXPAND, "lib/clients.ts": NEW_CLIENTS.replace(INSERT_NEW, "insert({ display_name: displayName, full_name: displayName, email })")},
     "an alias that keeps the old key for callers": {
-        RENAME_FILE: EXPAND, "lib/clients.ts": NEW_CLIENTS.replace('"id,display_name,email"', '"id,full_name:display_name,email"')},
+        RENAME_FILE: EXPAND_NULLABLE, "lib/clients.ts": NEW_CLIENTS.replace('"id,display_name,email"', '"id,full_name:display_name,email"')},
     "a comment in the code that names the old column": {
-        RENAME_FILE: EXPAND, "lib/clients.ts": "// .full_name goes away with the follow-up migration.\n" + NEW_CLIENTS},
-    "select=*": {RENAME_FILE: EXPAND, "lib/clients.ts": NEW_CLIENTS.replace('"id,display_name,email"', '"*"')},
+        RENAME_FILE: EXPAND_NULLABLE, "lib/clients.ts": "// .full_name goes away with the follow-up migration.\n" + NEW_CLIENTS},
+    "select=*": {RENAME_FILE: EXPAND_NULLABLE, "lib/clients.ts": NEW_CLIENTS.replace('"id,display_name,email"', '"*"')},
     "the drop left for later, outside the migrations": {
-        RENAME_FILE: EXPAND, "supabase/pending/drop_full_name.sql": "alter table public.clients drop column full_name;\n"},
+        RENAME_FILE: EXPAND_NULLABLE, "supabase/pending/drop_full_name.sql": "alter table public.clients drop column full_name;\n"},
 }
 # Each {path: text} over good/: the old release breaks while it is still serving.
 RENAME_INSECURE = {
     "the drop in a second file of the same deploy": {
         RENAME_FILE: EXPAND, "supabase/migrations/20261107120100_drop_full_name.sql": "alter table public.clients drop column full_name;\n"},
-    "display_name required, with nothing to fill it": {RENAME_FILE: EXPAND + "alter table public.clients alter column display_name set not null;\n"},
+    "display_name required, with nothing to fill it": {RENAME_FILE: EXPAND_NULLABLE + "alter table public.clients alter column display_name set not null;\n"},
     "a rename, with full_name generated back": {RENAME_FILE: """\
 alter table public.clients rename column full_name to display_name;
 alter table public.clients add column full_name text generated always as (display_name) stored;
@@ -6306,6 +6383,7 @@ RENAME_BROKEN = {
                                          "functional: lib/clients.ts no longer reads full_name"),
     "the grant taken away": ({RENAME_FILE: GOOD_RENAME + "revoke all on table public.clients from authenticated;\n"},
                              "functional: display_name reads, with the seeded values"),
+    "no export that writes": ({"lib/clients.ts": NEW_CLIENTS[:NEW_CLIENTS.index("export async function addClient")]}, NEW_INSERT_CHECK),
 }
 
 
@@ -6351,13 +6429,25 @@ class ColumnRenameVariants(unittest.TestCase):
         name = "note: a row the old release writes reaches display_name"
         synced = check_named(pg_grade("column-rename"), name)
         self.assertEqual((synced["ok"], synced.get("noted")), (True, True))
-        out = self.grade({RENAME_FILE: EXPAND})
+        out = self.grade({RENAME_FILE: EXPAND_NULLABLE})
         self.assertEqual(out["verdict"], "pass", json.dumps(out, indent=1))
         self.assertEqual((check_named(out, name)["ok"], check_named(out, name).get("noted")), (False, True))
 
-    def test_a_generated_column_notes_that_the_new_insert_fails(self):
-        out = self.grade(RENAME_SECURE["a generated display_name"])
-        self.assertFalse(check_named(out, "note: the new code's insert goes in")["ok"], json.dumps(out, indent=1))
+    def test_a_new_release_that_cant_write_is_broken(self):
+        # What addClient really sends goes in as sent, so a required full_name refuses the new code.
+        for label, migration, code in (("full_name still required", EXPAND, "23502"), ("display_name generated", GENERATED, "428C9")):
+            with self.subTest(label):
+                out = self.grade({RENAME_FILE: migration})
+                self.assertEqual(out["verdict"], "broken", json.dumps(out, indent=1))
+                self.assertIn(code, check_named(out, NEW_INSERT_CHECK)["detail"], json.dumps(out, indent=1))
+
+    def test_the_insert_replayed_is_the_one_the_code_sends(self):
+        # Raw SQL on display_name alone would refuse this: the new code fills both columns.
+        dual = RENAME_SECURE["new code that writes both columns through the rollout"]
+        self.assertEqual(dual[RENAME_FILE], EXPAND)
+        out = self.grade(dual)
+        self.assertEqual(out["verdict"], "pass", json.dumps(out, indent=1))
+        self.assertIn("full_name", check_named(out, NEW_INSERT_CHECK)["detail"], json.dumps(out, indent=1))
 
 
 INDEX_FILE = "supabase/migrations/20261107120000_events_client_id_idx.sql"
@@ -6491,6 +6581,8 @@ TAG_SECURE = {
   db.prepare("INSERT OR IGNORE INTO tags (owner_id, name) VALUES (?, ?)").run(user.id, name);
   const tag = db.prepare("SELECT id, owner_id, name FROM tags WHERE owner_id = ? AND name = ?").get(user.id, name);
 """)},
+    "a constraint that ignores the second row": {
+        TAG_ROUTE: SELECT_INSERT, "lib/db.ts": GOOD_TAG_DB.replace("UNIQUE (owner_id, name)", "UNIQUE (owner_id, name) ON CONFLICT IGNORE")},
     "the tag at the top of the response": {TAG_ROUTE: GOOD_TAG.replace("NextResponse.json({ tag })", "NextResponse.json(tag)"), "lib/db.ts": GOOD_TAG_DB},
 }
 TAG_BROKEN = {
