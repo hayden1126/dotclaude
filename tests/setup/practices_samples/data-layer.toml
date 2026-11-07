@@ -1,0 +1,980 @@
+# Samples for skills/data-layer/events.toml: for REL-31, migrations that must fire and near
+# misses that must not. The practices engine test runs each one. kind = "rule" is an edit to
+# `path` that writes `content`; kind = "bash" is a Bash call whose command is `content`.
+
+# ---------------------------------------------------------------- SQL that must fire
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table users rename column full_name to display_name;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+ALTER TABLE users RENAME COLUMN full_name TO display_name;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table users drop column full_name;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+ALTER TABLE users DROP COLUMN full_name;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+drop table legacy_users;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+DROP TABLE legacy_users;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+drop table if exists public.legacy_users cascade;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table users rename to people;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+ALTER TABLE users RENAME TO people;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table users rename full_name to display_name;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table users drop full_name;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+ALTER TABLE users DROP full_name;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+  RENAME TO people;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+  rename to people;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+ALTER TABLE users
+  RENAME TO people;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+ALTER TABLE users
+  RENAME full_name TO display_name;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table if exists users rename to people;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table only users rename to people;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table if exists only public.users rename to people;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table "public"."users" rename to "people";
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table public."Users" rename "fullName" to "displayName";
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+ALTER TABLE ONLY "public"."users" RENAME "full name" TO "display name";
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table if exists users drop full_name;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table only users drop full_name;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table only public."users" drop "full_name";
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table users drop if exists full_name;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table only users drop column if exists full_name;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table users add column display_name text, drop full_name;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table users add column display_name text,drop full_name;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+RENAME TABLE users TO people;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table `users` rename `full_name` to `display_name`;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+execute "alter table users rename column full_name to display_name"
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "migrations/0002_users.sql"
+content = '''
+alter table users drop column full_name;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "packages/db/migrations/0002_users.sql"
+content = '''
+alter table users drop column full_name;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "prisma/migrations/20261107_users/migration.sql"
+content = '''
+ALTER TABLE "users" DROP COLUMN "full_name";
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "drizzle/0003_users.sql"
+content = '''
+ALTER TABLE "users" RENAME COLUMN "full_name" TO "display_name";
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "apps/web/drizzle/0003_users.sql"
+content = '''
+ALTER TABLE "users" DROP COLUMN "full_name";
+'''
+
+# A commented-out drop still fires: the line reads the same as a live one. Accepted, and the
+# resend passes.
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+-- drop column full_name;
+'''
+
+# ---------------------------------------------------------------- Rails, Django, Alembic, Knex
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "db/migrate/20261107120000_rename_users.rb"
+content = '''
+rename_column :users, :full_name, :display_name
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "db/migrate/20261107120000_rename_users.rb"
+content = '''
+remove_column :users, :full_name
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "db/migrate/20261107120000_rename_users.rb"
+content = '''
+remove_columns :users, :full_name, :nickname
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "db/migrate/20261107120000_rename_users.rb"
+content = '''
+rename_table :users, :people
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "db/migrate/20261107120000_rename_users.rb"
+content = '''
+drop_table :legacy_users
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "db/migrate/20261107120000_rename_users.rb"
+content = '''
+    t.remove_column :full_name
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "users/migrations/0002_rename.py"
+content = '''
+        migrations.RenameField(model_name='user', old_name='full_name', new_name='display_name'),
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "users/migrations/0002_rename.py"
+content = '''
+        migrations.RemoveField(model_name='user', name='full_name'),
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "users/migrations/0002_rename.py"
+content = '''
+        migrations.RenameModel(old_name='User', new_name='Person'),
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "users/migrations/0002_rename.py"
+content = '''
+        migrations.DeleteModel(name='LegacyUser'),
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "alembic/versions/3f2a_rename.py"
+content = '''
+    op.drop_column('users', 'full_name')
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "alembic/versions/3f2a_rename.py"
+content = '''
+    op.drop_table('legacy_users')
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "alembic/versions/3f2a_rename.py"
+content = '''
+    op.rename_table('users', 'people')
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "alembic/versions/3f2a_rename.py"
+content = '''
+    op.alter_column('users', 'full_name', new_column_name='display_name')
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "alembic/versions/3f2a_rename.py"
+content = '''
+        batch_op.drop_column('full_name')
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "alembic/versions/3f2a_rename.py"
+content = '''
+        new_column_name = 'display_name',
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "services/api/alembic/versions/3f2a_rename.py"
+content = '''
+    op.drop_column('users', 'full_name')
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "migrations/20261107_users.js"
+content = '''
+    table.renameColumn('full_name', 'display_name');
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "migrations/20261107_users.js"
+content = '''
+    table.dropColumn('full_name');
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "migrations/20261107_users.js"
+content = '''
+    table.dropColumns('full_name', 'nickname');
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "migrations/20261107_users.js"
+content = '''
+  await knex.schema.renameTable('users', 'people');
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "migrations/20261107_users.js"
+content = '''
+  await knex.schema.dropTable('legacy_users');
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "migrations/20261107_users.js"
+content = '''
+  await knex.schema.dropTableIfExists('legacy_users');
+'''
+
+# ---------------------------------------------------------------- near misses in a migration: these keep the old release working
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table users alter column full_name drop not null;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+ALTER TABLE users ALTER COLUMN full_name DROP NOT NULL;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table users alter column full_name drop default;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table users alter full_name drop not null;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table users alter full_name drop default;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table users alter column id drop identity if exists;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table users alter column slug drop expression;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table users drop constraint users_full_name_key;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_full_name_key;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table users rename constraint users_a_key to users_b_key;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table users add column display_name text;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table users add column rename_count int, add column drop_reason text;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table users add column display_name text; drop index users_name_idx;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table users drop primary key;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table users drop foreign key users_org_fk;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table users drop index users_name_idx;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table users rename index users_a_idx to users_b_idx;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+alter table users drop check users_age_check;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+drop index users_name_idx;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+drop index concurrently if exists users_name_idx;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+drop trigger users_sync on users;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+drop function users_sync();
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+drop policy users_read on users;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+-- A later migration drops full_name.
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+-- a later migration drops full_name once every instance reads display_name
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+-- Step 1 of 3: add display_name. full_name stays until the old release is gone.
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+create table users (id bigint primary key, full_name text);
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+update users set display_name = full_name where display_name is null;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "db/migrate/20261107120000_rename_users.rb"
+content = '''
+add_column :users, :display_name, :string
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "db/migrate/20261107120000_rename_users.rb"
+content = '''
+remove_index :users, :full_name
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "db/migrate/20261107120000_rename_users.rb"
+content = '''
+rename_index :users, :old_idx, :new_idx
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "users/migrations/0002_rename.py"
+content = '''
+        migrations.AddField(model_name='user', name='display_name', field=models.TextField()),
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "users/migrations/0002_rename.py"
+content = '''
+        migrations.RemoveConstraint(model_name='user', name='user_key'),
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "users/migrations/0002_rename.py"
+content = '''
+        migrations.RenameIndex(model_name='user', new_name='a', old_name='b'),
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "alembic/versions/3f2a_rename.py"
+content = '''
+    op.add_column('users', sa.Column('display_name', sa.Text()))
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "alembic/versions/3f2a_rename.py"
+content = '''
+    op.drop_index('ix_users_full_name')
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "alembic/versions/3f2a_rename.py"
+content = '''
+    op.drop_constraint('users_key', 'users')
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "migrations/20261107_users.js"
+content = '''
+    table.string('display_name');
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "migrations/20261107_users.js"
+content = '''
+    table.dropIndex(['full_name']);
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "migrations/20261107_users.js"
+content = '''
+    table.dropForeign('org_id');
+'''
+
+# ---------------------------------------------------------------- not a migration, or allowed
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "lib/db/schema.sql"
+content = '''
+alter table users rename column full_name to display_name;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "src/queries/users.ts"
+content = '''
+alter table users rename column full_name to display_name;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "docs/upgrading.md"
+content = '''
+alter table users rename column full_name to display_name;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "schema.sql"
+content = '''
+alter table users rename column full_name to display_name;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "src/migration_notes.ts"
+content = '''
+alter table users rename column full_name to display_name;
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = false
+path = "supabase/migrations/20261107120000_users.sql"
+content = '''
+-- practices-allow: REL-31 contract step, the old release left on 2026-11-01
+alter table users drop column full_name;
+'''

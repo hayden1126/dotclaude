@@ -1,0 +1,48 @@
+# data-layer: the skill's entry for the practices hook (hooks/practices_check.py).
+#
+# No [[event]]: an L1 event is for a measured failure that is an absence no pattern can see and
+# whose fix needs more than a deny line carries. A rename or a drop is a pattern, and REL-31's
+# deny carries the fix, so the rule alone is enough. SPEC.md has the test and what would revisit it.
+#
+# `when` works line by line, since the commit scan reads added lines one at a time, and it isn't
+# anchored, since a Bash call may hold the statement mid-line (printf '...' > "$f"). Known misses:
+# MySQL's `change a b`, and `drop a` alone on a continuation line (it reads like other statements
+# there). Accepted false matches, each costing one resend: a commented-out drop or `rename to`,
+# `alter index x rename to y`, a temporary table's drop, and a down migration's drop.
+# Samples for every form: tests/setup/practices_samples/data-layer.toml.
+
+skill = "data-layer"
+
+gate = [
+  "Build add-then-remove by default for a column or table rename or drop, unless the repo proves the old release is gone first; say so in your reply (REL-31).",
+]
+
+[[rule]]
+id = "REL-31"
+paths = [
+  "**/migrations/**",
+  "**/migrate/**",
+  "**/alembic/versions/**",
+  "**/drizzle/**",
+]
+at = ["edit", "commit"]
+when = '''(?ix)
+  \brename\s+(?:column|table|to)\b
+  | \bdrop\s+(?:column|table)\b
+  # ALTER TABLE names a column bare. Everything after the keyword that isn't a column stays out.
+  | \balter\s+table\b[^;\n]{0,200}?\brename\s+(?!constraint\b|index\b|key\b)
+  | \balter\s+table\b[^;\n]{0,200}?\bdrop\s+
+    (?!constraint\b|not\b|default\b|identity\b|expression\b|index\b|key\b|primary\b|foreign\b
+       |check\b|partition\b)
+  # `RENAME a TO b` alone on the line after ALTER TABLE. Anchored so a comment's prose passes.
+  | ^\s*rename\s+(?:"[^"\n]{1,128}"|`[^`\n]{1,128}`|\[[^\]\n]{1,128}\]|[\w$.]+)\s+to\b
+  # Rails, and Alembic and Sequel.
+  | \b(?:rename_column|remove_columns?|rename_table|drop_table|drop_column)\b
+  # Django.
+  | \b(?:RenameField|RemoveField|RenameModel|DeleteModel)\b
+  # Alembic's alter_column rename.
+  | \bnew_column_name\s*=
+  # Knex and TypeORM.
+  | \b(?:renameColumn|renameTable|dropColumns?|dropTable(?:IfExists)?)\b
+'''
+say = "This migration renames or drops something the old release may still read, and migrations run before the new code is live. Build add-then-remove by default and say so in your reply: add the new column, keep both in sync, remove the old one in a later release. If this is the contract step, check the old release is gone, then resend or add `practices-allow: REL-31 <reason>`. A drop in a down migration is a false match: resend."
