@@ -418,6 +418,73 @@ fires = true
 path = "db/migrate/20261107120000_users.rb"
 content = '''
 change_table :users do |t|
+  t.remove "full_name"
+end
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "db/migrate/20261107120000_users.rb"
+content = '''
+change_table :users do |t|
+  t.rename 'a', 'b'
+end
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "db/migrate/20261107120000_users.rb"
+content = '''
+drop_join_table :users, :orgs
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "db/migrate/20261107120000_users.rb"
+content = '''
+remove_timestamps :users
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "database/migrations/2026_11_07_users.php"
+content = '''
+Schema::dropIfExists('users');
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "database/migrations/2026_11_07_users.php"
+content = '''
+Schema::rename('users', 'members');
+'''
+
+[[sample]]
+kind = "bash"
+id = "REL-31"
+fires = true
+content = '''
+sed -i \
+  --expression='s/x/drop column a/' supabase/migrations/1.sql
+'''
+
+[[sample]]
+kind = "rule"
+id = "REL-31"
+fires = true
+path = "db/migrate/20261107120000_users.rb"
+content = '''
+change_table :users do |t|
   t.remove :full_name
 end
 '''

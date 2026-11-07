@@ -3167,12 +3167,17 @@ def install_check(event):
 
 # ---------------------------------------------------------------- L2b, a command's text
 
+def bash_text(cmd):
+    """A Bash command as L2b reads it: a literal \\n or \\t is the character, since a printf writes
+    it as one and `when` reads lines. That comes before the line cap, so a one-line printf's lines
+    each get their own."""
+    return scan_text(cmd.replace("\\n", "\n").replace("\\t", "\t"))
+
+
 def bash_lines(rule, text, helpers=()):
     """The lines of a Bash command's scanned text that a "bash" rule flags: `command` and `when`
     both match, and neither `unless` nor `practices-allow: <id>` is in the text (for a
-    `scope = "line"` rule, on the flagged line). A literal \\n or \\t in the text counts as the
-    character, since a printf writes it as one and `when` reads lines."""
-    text = text.replace("\\n", "\n").replace("\\t", "\t")
+    `scope = "line"` rule, on the flagged line)."""
     if not guarded(rule["command"], text, helpers, rule["id"]):
         return []
     if rule.get("scope") != "line" and (allowed(rule["id"], text)
@@ -3203,7 +3208,7 @@ def text_check(event):
             return None
         rules = [(s, r) for s in discover(project).values() for r in s["rules"]
                  if "bash" in r.get("at", AT) and not is_off(cfg, s, r["id"])]
-        text, found = scan_text(cmd), []
+        text, found = bash_text(cmd), []
 
         def hits(item):
             s, r = item

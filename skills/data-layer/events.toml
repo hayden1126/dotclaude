@@ -5,12 +5,14 @@
 # deny carries the fix, so the rule alone is enough. SPEC.md has the test and what would revisit it.
 #
 # `when` works line by line, since the commit scan reads added lines one at a time. It skips a
-# line that starts as a comment, since the first step of an add-then-remove may say what a later
-# release drops, and otherwise matches anywhere on the line, since a Bash call may hold the
-# statement mid-line (printf '...' > "$f"). Known misses: MySQL's `change a b`, and `drop a` alone
-# on a continuation line (it reads like other statements there). Accepted false matches, each
-# costing one resend: a comment after a statement, `alter index x rename to y`, a temporary
-# table's drop, and a down migration's drop.
+# line that starts with `-- `, `#` or `//`, since the first step of an add-then-remove may say what
+# a later release drops, and otherwise matches anywhere on the line, since a Bash call may hold the
+# statement mid-line (printf '...' > "$f"). It is a lookahead from the line's start, so a match
+# that runs onto the next line leaves that line its own turn. Known misses: MySQL's `change a b`,
+# and `drop a` alone on a continuation line (it reads like other statements there). Accepted false
+# matches, each costing one resend: a comment after a statement, a `/* */` comment, a `--` with no
+# space after it, an edit of part of a comment, `alter index x rename to y`, a temporary table's
+# drop, and a down migration's drop.
 # Samples for every form: tests/setup/practices_samples/data-layer.toml.
 
 skill = "data-layer"
@@ -32,7 +34,8 @@ at = ["edit", "commit", "bash"]
 # The Bash level has no path to match, so it reads these words in the command instead.
 command = '''(?i)migrat|alembic|drizzle'''
 when = '''(?ix)
-  ^(?![^\S\n]*(?:--|\#|//))[^\n]{0,4000}?
+  ^(?![^\S\n]*(?:--(?:\s|$)|\#|//))
+  (?=[^\n]{0,4000}?
   (?:
     \brename\s+(?:column|table|to)\b
     | \bdrop\s+(?:column|table)\b
@@ -44,18 +47,21 @@ when = '''(?ix)
     # `RENAME a TO b` alone on the line after ALTER TABLE, so prose mid-line passes.
     | ^[^\S\n]*rename\s+(?:"[^"\n]{1,128}"|`[^`\n]{1,128}`|\[[^\]\n]{1,128}\]|[\w$.]+)\s+to\b
     # Rails, and Alembic and Sequel.
-    | \b(?:rename_column|remove_columns?|rename_table|drop_table|drop_column)\b
-    | \bremove_(?:references?|belongs_to)\b
+    | \b(?:rename_column|remove_columns?|rename_table|drop_table|drop_join_table|drop_column)\b
+    | \bremove_(?:references?|belongs_to|timestamps)\b
     # Rails inside a change_table block, whatever the block's variable is called.
-    | \.(?:remove|rename)[\s(]+:\w
+    | \.(?:remove|rename)[\s(]+[:"']+\w
     # T-SQL.
     | \bsp_rename\b
     # Django.
     | \b(?:RenameField|RemoveField|RenameModel|DeleteModel)\b
     # Alembic's alter_column rename.
     | \bnew_column_name\s*=
-    # Knex, TypeORM and Sequelize.
+    # Knex, TypeORM, Sequelize and Laravel.
     | \b(?:renameColumn|renameTable|removeColumn|dropColumns?|dropTable(?:IfExists)?)\b
-  )
+    # Laravel.
+    | \bdropIfExists\b
+    | \bSchema::(?:rename|drop)\b
+  ))
 '''
 say = "This migration renames or drops something the old release may still read, and migrations run before the new code is live. Build add-then-remove by default and say so in your reply: add the new column, keep both in sync, remove the old one in a later release. If this is the contract step, check the old release is gone, then resend or add `practices-allow: REL-31 <reason>`. A drop in a down migration is a false match: resend."

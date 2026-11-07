@@ -1493,7 +1493,7 @@ def check_samples(sample_file, skill_dir):
             wrong.append(f"{s['kind']} {s['id']}: no key shape {e}")
             continue
         if s["kind"] == "bash":
-            got = bool(PC.bash_lines(item, PC.scan_text(content)))
+            got = bool(PC.bash_lines(item, PC.bash_text(content)))
         else:
             fn = PC.event_fires if s["kind"] == "event" else PC.rule_fires
             got = fn(item, s["path"], PC.scan_text(content))
@@ -4520,6 +4520,30 @@ class BashText(TextBase):
         PC.CRUMB.clear()
 
 
+class WhenLines(TextBase):
+    """REL-31's `when` against what the scans feed it."""
+
+    def rule(self):
+        return PC.load_skill(DATA_LAYER)[0]["rules"][0]
+
+    def test_a_match_across_lines_leaves_the_next_line_flagged(self):
+        lines = ["alter table a", "  rename", "  to b; drop table c;"]
+        hits = PC.when_lines(self.rule(), list(enumerate(lines, 1)), ())
+        self.assertEqual([n for n, _ in hits], [2, 3])
+
+    def test_a_printf_s_lines_each_get_the_line_cap(self):
+        # The cap is per line, so a one-line printf can't run its whole file into one budget.
+        command = ("printf '" + "x" * (PC.LINE_MAX + 100)
+                   + r"\ndrop table users;\n' > migrations/1.sql")
+        self.assertTrue(PC.bash_lines(self.rule(), PC.bash_text(command)))
+
+    def test_a_shell_long_flag_isn_t_a_comment_but_a_dash_dash_comment_is(self):
+        rule = self.rule()
+        self.assertTrue(PC.rule_fires(rule, "migrations/1.sql", PC.scan_text("--x; drop table c;")))
+        self.assertFalse(PC.rule_fires(rule, "migrations/1.sql", PC.scan_text("-- drop table c;")))
+        self.assertFalse(PC.rule_fires(rule, "migrations/1.sql", PC.scan_text("--\n")))
+
+
 class BashTextAccepted(TextBase):
     """A line resent past L2b was accepted, as a line resent past L2 is: the commit and the push
     don't raise it again, and any other line of that rule still gets told."""
@@ -4749,7 +4773,7 @@ class TextPrefilter(Base):
                     self.assertEqual(self.both(command), (True, True))
                     if s["path"].endswith(".sql"):
                         self.assertEqual(self.both(command.upper()), (True, True))
-                    self.assertTrue(PC.bash_lines(rule, PC.scan_text(command)))
+                    self.assertTrue(PC.bash_lines(rule, PC.bash_text(command)))
 
     def test_commands_with_only_one_word_don_t_start_python(self):
         for command in ("ls", "git status", "npm test", "ls migrations", "npm run migrate",

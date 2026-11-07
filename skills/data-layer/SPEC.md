@@ -30,17 +30,17 @@ Why it comes first: a plain rename looks finished. The tests pass, because they 
 
 L2b exists because a migration written by a heredoc or `printf` is a Bash call, which L2 never sees. It reads command text only, so it is blunt on purpose: a false match costs one resend, and L3s and push read the commits behind it.
 
-`when` matches line by line. It skips a line that starts as a comment (`--`, `#` or `//`), and otherwise matches anywhere on the line. At the Bash level it reads a literal `\n` or `\t` as the character. It reads these forms, in any case:
+`when` matches line by line. It skips a line that starts with `-- `, `#` or `//`, and otherwise matches anywhere on the line. At the Bash level it reads a literal `\n` or `\t` as the character. It reads these forms, in any case at an edit or a commit. The Bash filter passes SQL in lower, Title or UPPER case and a framework's call as that framework spells it:
 - **SQL:** `rename column`, `rename table`, `drop column`, `drop table`, `alter table x rename to y`, `alter table x rename a to b`, `alter table x drop a`, `rename to y` or `rename a to b` alone on the line after `alter table`, with `if exists`, `only`, and schema-qualified or quoted names.
 - **T-SQL:** `sp_rename`.
-- **Rails:** `rename_column`, `remove_column`, `remove_columns`, `remove_reference`, `remove_belongs_to`, `rename_table`, `drop_table`, and `t.remove` and `t.rename` in a `change_table` block.
+- **Rails:** `rename_column`, `remove_column`, `remove_columns`, `remove_reference`, `remove_belongs_to`, `remove_timestamps`, `rename_table`, `drop_table`, `drop_join_table`, and `t.remove` and `t.rename` in a `change_table` block, with a symbol or a string.
 - **Django:** `RenameField`, `RemoveField`, `RenameModel`, `DeleteModel`.
 - **Alembic:** `op.drop_column`, `op.drop_table`, `op.rename_table`, `new_column_name=`.
-- **Knex, TypeORM and Sequelize:** `renameColumn`, `renameTable`, `removeColumn`, `dropColumn`, `dropColumns`, `dropTable`, `dropTableIfExists`.
+- **Knex, TypeORM, Sequelize and Laravel:** `renameColumn`, `renameTable`, `removeColumn`, `dropColumn`, `dropColumns`, `dropTable`, `dropTableIfExists`, `dropIfExists`, `Schema::rename`, `Schema::drop`.
 
-Never read as a match: `alter column x drop not null`, `alter column x drop default`, `drop constraint`, `rename constraint`, `add column`, `drop index`, `drop trigger`, `drop function`, `drop policy`, or any line that starts as a comment. These leave the old release working, and the first step of an add-then-remove may well say in a comment what a later release drops.
+Never read as a match: `alter column x drop not null`, `alter column x drop default`, `drop constraint`, `rename constraint`, `add column`, `drop index`, `drop trigger`, `drop function`, `drop policy`, or a line that starts with `-- `, `#` or `//`. These leave the old release working, and the first step of an add-then-remove may well say in a comment what a later release drops.
 
-Accepted false matches, each costing one resend: a comment after a statement, a down migration's drop, `alter index x rename to y`, a temporary table's drop, and at the Bash level a commit message that names a migration and a drop.
+Accepted false matches, each costing one resend: a comment after a statement, a `/* */` comment, a `--` with no space after it, an edit of part of a comment, a down migration's drop, `alter index x rename to y`, a temporary table's drop, and at the Bash level a commit message that names a migration and a drop.
 
 ## Per-repo layer
 
