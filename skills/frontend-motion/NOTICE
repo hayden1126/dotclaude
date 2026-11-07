@@ -1,0 +1,34 @@
+frontend-motion adapts and merges two MIT-licensed skills. Their licenses are
+kept byte for byte in LICENSE-animate and LICENSE-better-ui.
+
+animate
+  By Emil Kowalski, github.com/emilkowalski/skills
+  at e8a175de22ae1e49370fc144c1f3bb9aeedf988d
+  Used: the build sequence that forms the backbone of SKILL.md (should it
+  animate, purpose, tool, properties, easing and duration, interruption and
+  exit, reduced motion and pointer gating), the animation recipes in
+  references/recipes.md, and part of the "Never ship" table.
+
+better-ui
+  By Jakub Krehel, github.com/jakubkrehel/skills
+  at d574cc8a576dc24256ad38268b8d03d86724a1b3
+  Used: the surface and icon rules with their exact values, the press, enter,
+  exit, reduced-motion, theme-switch and performance recipes, the icon and
+  surface recipes in references/recipes.md, and part of the "Never ship" table.
+
+Both were read through github.com/23jmo/jmo-skills at 6082bf2c.
+
+Adapted: the two sources are merged into one set of values, and where they
+disagreed one value was chosen. Prose was rewritten and shortened, and recipes
+were changed to match the chosen values.
+
+Dropped from animate: the rule against presenting motion options, the canned
+initial response, the output format, promotional lines, and its links to
+companion skills.
+
+Dropped from better-ui: the severity and verdict reporting format, the optical
+alignment recipes (one summary rule is kept), agent metadata, and its links to
+companion skills.
+
+Where a companion skill carried a rule worth keeping, the rule is stated
+directly instead.
