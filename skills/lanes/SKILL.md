@@ -168,10 +168,14 @@ an unregistered worktree: `lane whoami` tells you which.
 
    The lane that learns of the merge
    (it ran `gh pr merge`, or Hayden said "merged" in its window) writes the outcome into its
-   record, starts its Next with `Keep open: <why>` on one line if more PRs will follow, and
-   finishes its handoff. Then, as its last act (the lead's `lane done` ends its session), it
-   sends the lead `merged #N`, to what a bare `lane addr lead` prints. It says nothing more about
-   the merge to Hayden and never proposes `lane done`: the lead runs the rest (The lead, step 7).
+   record only after the merge command returns (a write within 3 s of the merge reads as older
+   than it), starts its Next with `Keep open: <why>` on one line if more PRs will follow, and
+   finishes its handoff. Just before `handoff-check`, it runs a bare `lane ls --check`, which
+   exits 1 and names the reason when its row shows `handoff?`: it fixes that and reruns it. A
+   refusal, or a reason it can't fix, goes in its record's State, and it goes on. Then, as its
+   last act (the lead's `lane done` ends its session), it sends the lead `merged #N`, to what a
+   bare `lane addr lead` prints. It says nothing more about the merge to Hayden and never
+   proposes `lane done`: the lead runs the rest (The lead, step 7).
    When `lane addr lead` refuses (no lead running, several sessions and none picked, or the
    lead stopped), it tells Hayden once that #N merged, with the refusal's way to pick the lead
    or the stopped lead's window if it gives one.
@@ -275,13 +279,16 @@ inherits the lead from it.
    a bare `lane ls` shows no `handoff?` flag. The flag lights when the record may be behind the
    lane's work: a PR from the lane's branches merged after the record's last write, a commit is
    newer than it, or a session that started after it has ended, so that session never wrote it
-   (both times within 10 s count as after, for the clock's steps). It stays on whenever any of
+   (a merge within 3 s and a session start within 10 s of the write count as after, for the clock's steps). It stays on whenever any of
    that can't be read (gh, a `mergedAt`, the record, a session stamp, the last commit). Once
    gh's list holds its full 200 PRs, a lane older than the oldest, adopted, made with
    `new --reuse-branch` or switched to another branch gets one more gh call per branch for its
    merged PRs, and a full answer there keeps the flag on too. Until then, message the lane; if
-   its session is gone, add it to Hayden's asks. Never order a merge or close a lane before the
-   gate passes.
+   its session is gone, or it answers that it can't fix the reason, add it to Hayden's asks with
+   that reason (a bare `lane ls --json` gives it as `handoff_why`). Never order a merge or close
+   a lane before the gate passes. The one exception is the flag alone, on a merged lane: once
+   Hayden has seen its reason and `handoff-check` passes, his yes lets the lead run a plain
+   `lane done` with the flag on, which the standing approval doesn't cover.
 6. **Watch and order.** Watch `lane ls`. Keep the merge order in the project STATUS. A lane
    whose install is live can't merge main sandboxed: its own hooks, skills and tests are
    write-protected then (`docs/lanes.md` S3). It asks the lead to reinstall from main, which
@@ -332,12 +339,12 @@ inherits the lead from it.
       lane gets no message: no session reads it, and its `rebase` flag carries it to its
       unpark.
    7. `lane done <id>` once the hand-back gate (step 5) passes, unless the lane's Next has a
-      `Keep open:` line: then leave it open. A merged lane with no live session passes when its
-      record was written after the merge (its after-merge handoff), so it closes without an
-      ask. A gate that fails on a lane with no live session is the lead's one ask to Hayden,
-      since no lane is left to ask: its record is older than the merge, so it may have stopped
-      before writing `Keep open:`, or its last session ended without writing it. Never
-      `--abandon` here.
+      `Keep open:` line: then leave it open. A merged lane with no live session closes without
+      an ask when that gate passes. A gate that
+      fails on a lane with no live session is the lead's one ask to Hayden,
+      since no lane is left to ask (step 5 says what his yes allows). A record older than the
+      merge means the lane may have stopped before writing `Keep open:`, or its last session
+      ended without writing it. Never `--abandon` here.
 
    Then tell Hayden one line ("#42 merged: installed, lane chart-fix closed, api-docs nudged"),
    or the step that failed. A failed step stops the chain. A chain stopped on something that can
@@ -387,6 +394,7 @@ what").
 | A new-lane table, the merge order | the lead | its window |
 | The post-merge chain (The lead, step 7) | the lead | standing approval: no ask, one line or the failed step |
 | `lane done` after a merge | the lead | standing approval once the hand-back gate passes, unless the lane's Next has `Keep open:` |
+| `lane done` with `handoff?` still lit | the lead | asks Hayden each time, with the reason (The lead, step 5) |
 | `lane done --abandon` | the lead | asks Hayden every time (an ask rule) |
 | `lane park` of a lane waiting its merge turn | the lead | on the lane's `park me`, no ask: `lane open` undoes it |
 | More PRs to come on the lane | the lane | `Keep open: <why>` at the top of its Next |
@@ -420,6 +428,7 @@ resend passes.
 | `lane whoami` | your lane id, `main`, `unregistered` or `plain` (`--json` for scripts) |
 | `lane ls` | the board: branch, ahead/behind, PR, port block, claims, live sessions, context (CTX: `312k*` past the auto-pass soft tier, `523k!` past hard), state (STATE: busy, idle, waiting, shell; message a lane idle past soft to run /pass), tmux window, flags; then any held locks, each pair of lanes whose changed files overlap (with the files), a main checkout with two or more live sessions (each one's window, the lead first) or a stopped lead (its window to `fg` it in), and the install hold |
 | `lane ls --requests` | request to lane, from claims only |
+| `lane ls --check` | from a lane, bare: exit 0 when its row shows no `handoff?`, or exit 1 and the reason (the after-merge step before `merged #N`); it refuses outside a lane and when gh can't list the lane's merged PRs (sandboxed, offline, or a full list on one branch) |
 | `lane who 42` | the lane that claims #42, or "unclaimed" (with a warning while a left-out record may hold it) |
 | `lane claim 42` / `lane release 42` | claim or drop a request for your lane |
 | `lane note "<text>"` | append a timestamped line to your record's State |
