@@ -71,6 +71,8 @@ def extra_groups(count: int) -> str:
                    for n in range(count))
 
 
+# render_script_throws throws only in a render the next changing click replaces,
+# so it fails only while each click waits for that render's load.
 # Each mutant: its edits, the assertion it must fail, and any other assertion
 # that its break also trips by design (a panel that stops scrolling spills past
 # the page, so the page scrolls too).
@@ -137,7 +139,7 @@ MUTANTS = {
         "also": set(),
     },
     "render_script_throws": {
-        "edits": [(RENDER_END, """</main>${summary ? "" : "<script>throw new Error('x')<\\/script>"}</body></html>`;""")],
+        "edits": [(RENDER_END, """</main>${!pills && summary ? "<script>throw new Error('x')<\\/script>" : ""}</body></html>`;""")],
         "kind": "no script errors",
         "scope": "controls",
         "also": set(),
@@ -241,6 +243,12 @@ class MissingInputs(TemporaryPages):
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("MOCK_CHROME", result.stderr)
         self.assertIn("npx", result.stderr)
+
+    def test_a_browser_that_never_answers_exits_2(self):
+        env = {**os.environ, "MOCK_CHROME": "/bin/false"}
+        result = run_check(self.page(), env)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertNotIn("stopped responding", result.stdout)
 
     def test_missing_page_exits_2(self):
         result = run_check(pathlib.Path(self.dir.name, "absent.html"))

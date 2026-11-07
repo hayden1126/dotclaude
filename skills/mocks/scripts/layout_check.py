@@ -531,15 +531,19 @@ def main() -> int:
     if not page.is_file():
         print(f"no such page: {page}", file=sys.stderr)
         return 2
+    browser = None
     try:
         browser = Browser(find_browser())
+        browser.call("Browser.getVersion")   # Popen succeeding proves nothing: this answer does
     except BrowserError as exc:
         print(exc, file=sys.stderr)
+        if browser:
+            browser.close()
         return 2
     try:
         return run(browser, page.resolve().as_uri())
     except BrowserError as exc:
-        # The browser started, so a hang here is the page's: a loop in render(), say.
+        # The browser answered above, so a hang here is the page's: a loop in render(), say.
         print(f"FAIL the page stopped responding: {str(exc).splitlines()[0]}")
         return 1
     finally:
