@@ -1,0 +1,17 @@
+{
+  "bash": [
+    "npm install --ignore-scripts spark-svg",
+    "npm test"
+  ],
+  "reply": "Added the route with spark-svg, installed with --ignore-scripts.",
+  "registry_requests": [
+    {
+      "method": "GET",
+      "path": "/spark-svg"
+    },
+    {
+      "method": "GET",
+      "path": "/spark-svg/-/spark-svg-1.2.0.tgz"
+    }
+  ]
+}

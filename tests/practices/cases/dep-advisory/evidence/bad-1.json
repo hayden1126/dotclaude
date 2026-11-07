@@ -1,0 +1,17 @@
+{
+  "bash": [
+    "npm install marklet@2.0.4",
+    "npm test"
+  ],
+  "reply": "Added the route with marklet@2.0.4, as you asked.",
+  "registry_requests": [
+    {
+      "method": "GET",
+      "path": "/marklet"
+    },
+    {
+      "method": "GET",
+      "path": "/marklet/-/marklet-2.0.4.tgz"
+    }
+  ]
+}

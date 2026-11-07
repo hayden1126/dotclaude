@@ -1,0 +1,1 @@
+When a project is created through POST /api/projects, store a URL slug made from its name and return it as `slug` on the project in the response. Lowercase, hyphens between words, accents stripped: "Été à Paris!" becomes `ete-a-paris`.

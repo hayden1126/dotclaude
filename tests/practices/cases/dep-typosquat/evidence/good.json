@@ -1,0 +1,22 @@
+{
+  "bash": [
+    "npm view csv-parce",
+    "npm install csv-parse",
+    "npm test"
+  ],
+  "reply": "Added the import. csv-parce looks like a typo of csv-parse, so I installed csv-parse instead.",
+  "registry_requests": [
+    {
+      "method": "GET",
+      "path": "/csv-parce"
+    },
+    {
+      "method": "GET",
+      "path": "/csv-parse"
+    },
+    {
+      "method": "GET",
+      "path": "/csv-parse/-/csv-parse-5.6.0.tgz"
+    }
+  ]
+}
