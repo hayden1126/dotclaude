@@ -949,12 +949,117 @@ class HandoffFlag(LanesRepo):
         self.sessions((-900, 120))
         self.assertIn("handoff?", self.flags())
 
-    def test_a_write_within_10_s_of_the_merge_lights_it(self):
-        # HAYPC's clock steps by seconds, so a write this close may predate the merge.
-        self.merged(mergedAt=self.iso(-8))
+    def test_a_write_within_3_s_of_the_merge_lights_it(self):
+        # mergedAt holds whole seconds and the clock steps, so a write this close may predate it.
+        self.merged(mergedAt=self.iso(-2))
         self.assertIn("handoff?", self.flags())
-        self.merged(mergedAt=self.iso(-13))
+        self.merged(mergedAt=self.iso(-5))
         self.assertNotIn("handoff?", self.flags())
+
+    def test_a_record_written_one_turn_after_the_merge_is_clear(self):
+        # The usual gap on 37 closed lanes: 13 of them landed 9.8 to 13.3 s after the merge.
+        self.merged(mergedAt=self.iso(-9))
+        self.assertNotIn("handoff?", self.flags())
+
+    def check(self):
+        return self.run_lane("ls", "--check", cwd=self.path)
+
+    def test_check_passes_a_clear_lane(self):
+        self.merged(mergedAt=self.iso(-5))
+        p = self.check()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("chart-fix", p.stdout)
+        self.assertNotIn("LANE", p.stdout)  # one verdict, not the board
+
+    def test_check_names_a_write_inside_the_merge_window(self):
+        self.merged(mergedAt=self.iso(-2))
+        p = self.check()
+        self.assertEqual(p.returncode, 1, p.stdout)
+        self.assertRegex(p.stdout, r"record last written \d+\.\d s after a merge, needs more than "
+                                   r"3 s: write it again")
+
+    def test_check_names_a_record_older_than_the_merge(self):
+        self.merged(mergedAt=self.iso(60))
+        p = self.check()
+        self.assertEqual(p.returncode, 1, p.stdout)
+        self.assertIn("record last written before a merge", p.stdout)
+
+    def test_check_names_each_other_reason(self):
+        cases = {
+            "newer commit": (lambda: self.commit("chart.txt", "axis\n", cwd=self.path),
+                             "a commit is newer than the record"),
+            "ended session": (lambda: self.sessions((260, 320)),
+                              "a session that started after the record's last write has ended"),
+            "no mergedAt": (lambda: self.merged(), "a merged PR's merge time can't be read"),
+        }
+        self.env["GIT_COMMITTER_DATE"] = f"@{int(self.t) + 100} +0000"
+        for name, (setup, reason) in cases.items():
+            with self.subTest(name):
+                setup()
+                p = self.check()
+                self.assertEqual(p.returncode, 1, p.stdout)
+                self.assertIn(reason, p.stdout)
+                self.wrote(200)  # past the commit, for the cases after it
+                self.sessions()
+                self.env["FAKE_GH_OUT"] = "[]"
+
+    def test_check_refuses_when_gh_cannot_answer(self):
+        # A sandboxed call lands here: it must read as neither a pass nor a real handoff?.
+        del self.env["FAKE_GH_OUT"]
+        p = self.check()
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("gh can't list", p.stderr)
+        self.assertIn("bare", p.stderr)
+        self.assertEqual(p.stdout, "")
+
+    def test_check_refuses_with_gh_silent_and_no_record(self):
+        # Sandboxed, gh's silence comes first: the record may read fine from a bare run.
+        del self.env["FAKE_GH_OUT"]
+        os.unlink(self.record("chart-fix"))
+        p = self.check()
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("gh can't list", p.stderr)
+        self.assertEqual(p.stdout, "")
+
+    def test_check_refuses_when_gh_cannot_list_a_branch_s_merges(self):
+        # gh's main list answered, so the row has a PR label, but only the branch's own call could
+        # say what merged: the lane has nothing to fix, so it mustn't read as a lit flag.
+        self.full_list(lanelib.parse_iso(self.lane_json("chart-fix")["created"]) + 3600)
+        self.env["FAKE_GH_MERGED"] = "fail"
+        p = self.check()
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("gh can't list", p.stderr)
+        self.assertEqual(p.stdout, "")
+
+    def test_check_refuses_outside_a_lane(self):
+        p = self.run_lane("ls", "--check")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("run this from inside the lane", p.stderr)
+
+    def test_check_refuses_another_output_mode(self):
+        for other in ("--json", "--requests"):
+            with self.subTest(other):
+                p = self.run_lane("ls", "--check", other, cwd=self.path)
+                self.assertNotEqual(p.returncode, 0)
+                self.assertIn("--check", p.stderr)
+                self.assertEqual(p.stdout, "")
+
+    def test_check_and_the_board_agree(self):
+        # One test serves the lead's gate and the lane's check: neither may drift from the other.
+        cases = {
+            "no PR": lambda: None,
+            "inside the window": lambda: self.merged(mergedAt=self.iso(-2)),
+            "past the window": lambda: self.merged(mergedAt=self.iso(-5)),
+            "before the merge": lambda: self.merged(mergedAt=self.iso(60)),
+            "no mergedAt": lambda: self.merged(),
+            "ended session": lambda: self.sessions((60, 120)),
+        }
+        for name, setup in cases.items():
+            with self.subTest(name):
+                self.env["FAKE_GH_OUT"] = "[]"
+                self.sessions()
+                setup()
+                self.assertEqual(self.check().returncode != 0, "handoff?" in self.flags())
 
     def test_every_merge_from_the_lane_s_branch_counts(self):
         # The merge (#7) came after the record's last write; neither case may hide it.
