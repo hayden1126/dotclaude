@@ -90,9 +90,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - #144 (exam-prep): rules public, evidence private (Hayden, 2026-10-20).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
-  - **Live lanes** (briefs in each record). Merge order: 1 env-names
-    (`fix/secret-scan-env-names`, #171, carries the lead's notes; by 2026-11-11), 2 license
-    (`chore/license`, opened 2026-11-06 on Hayden's pick; last).
+  - **Live lanes** (briefs in each record). Merge order: 1 license
+    (`chore/license`, opened 2026-11-06 on Hayden's pick; carries the lead's notes), 2 mocks
+    (`feat/mocks-skill`, opened 2026-11-07 on Hayden's pick; by 2026-11-11; after license, since
+    both change README.md), 3 speed
+    (`feat/speed-skill`, the `long-runs` skill plus one CLAUDE.md line, opened 2026-11-07 on Hayden's pick; by 2026-11-11; after mocks, since all
+    three change README.md).
     **Install freeze on HAYPC, Nov 12 through Nov 15** (Hayden, 2026-11-05): no lane installs in
     that window, except fixes for lane hackathon, so the event runs what the dry run tested. The lead's
     reinstall after a merge counts as an install, so no other lane merges in that window.
@@ -120,6 +123,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     capella-studio lane artexport's report; a fork's hook output never reaches its model, so it
     knows its lane only from the parent's copied line, docs/lanes.md S5; the delegation canary
     checks the source enum; untried against lane practices' settings.json change),
+    env-names (#171, 2026-11-07, merge 87ab19f: `secret-scan` and the hackathon gitignore
+    template catch `.env~`, `.envrc-local` and other backup and copy names; installed from main),
     merge-record (#170, 2026-11-07, merge 20d8bcd: a lane writes its after-merge record only
     after the merge command returns, and `lane ls --check` shows the gate's reason; installed
     from main),
@@ -163,11 +168,46 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     hackathon merges (it owns `skills/demo-video/` and its tests); lead's lean: after the event.
     Music and footage need a recorded source and licence per file (lane license's rule), and
     recording a voice from WSL needs the Windows microphone, still unprobed.
-  - **secret-scan misses `.env~` and `.envrc-local`/`.envrc_local`** (low; the practices review
-    before #168's ready, 2026-11-06): neither `secret-scan` nor
-    `skills/hackathon/templates/gitignore` covers them. Small, but it touches the hackathon
-    skills, so it merges and installs before Nov 12. Lane env-names has it. Evidence: lane
-    hackathon's closed record, `artifacts/smoke/cec4381/practices-review.md`.
+  - **One-screen layout for clickable mocks** (Hayden, 2026-11-07, via a lane in another repo:
+    "This should be how mocks are made from now on"). On wide windows: no page scroll, one
+    control row, the render fit to the window and fixed in place, the questions column beside it
+    the only thing that scrolls, secondary notes at its foot; stacked below 1,101 px. Hayden picked a
+    new skill, built now by lane mocks (2026-11-07).
+    Reference template and a scripted check (not run yet): lane themes's
+    `.lane/mock/` in that repo, archived with the lane when it closes.
+  - **Faster work: parallel runs and stated skips** (Hayden, 2026-11-07, via lane themes in
+    another repo: "another skill for speeding up processes like running stuff in parallel etc,
+    for both during dev, spikes, verification, release checks, CI stuff etc, also smart thinking
+    about what we can skip or only looking at diff etc when appropriate"). Habits: before quoting
+    a duration, find what the job spends its time on (waits or CPU) and run independent parts at
+    once, keeping a signal that the load changed nothing; use lock and build waits to prepare the
+    next step; run only what a change can reach, reuse evidence that still holds, prove with the
+    cheapest test that hits the risk, order steps by what voids what. Guardrail: every skip is
+    written down (what didn't run, why it's safe, what would catch a problem), and never reads as
+    a pass. Hayden picked a new skill, built now by lane speed (2026-11-07).
+  - **Lanes waiting their merge turn** (from lane speed's transcript survey, 2026-11-07; kept out
+    of its skill by Hayden): lanes rebased again and again while waiting their turn (another repo,
+    2026-10-25), and a lane sat idle about 50 minutes because its lead never told it its turn had
+    come (another repo, 2026-11-03). Lead and lanes-skill matters: a turn notice from the lead's
+    post-merge step, and no re-merge of main while waiting unless main changed the lane's files.
+  - **`run_turn` counts dying processes as strays** (medium; found by lane license's trial,
+    2026-11-07; lane practices owns the fix, in its next PR): `tests/practices/run.py`'s
+    `run_turn` SIGKILLs the group and `kill_marked` scans /proc at once, so a process with
+    SIGKILL pending reads as a stray. It fails `test_turn_kills_background_grandchildren` (3 of
+    80 turns idle, 151 of 192 under load, reproduced on main 87ab19f alone) and could write false
+    `stray_kills` rows into eval results; none so far (lane practices: 2,060 stored rows, all 0
+    strays). The fix lands before that PR's sweep. Evidence: lane license's
+    `.lane/artifacts/run-turn-race.md`.
+  - **Teardown race in `tests/setup/test_tmux_hooks.py`** (low; found by lane license's trial,
+    2026-11-07): `hooks/stop-ring.sh` logs `rang` and then plays the ring, whose detached test stub
+    appends to `calls.log` in the test's temp dir, while the test's `decided()` returns on the log
+    line alone, so the cleanup's `rmtree` can hit Errno 39. Failed once in
+    `test_an_unreadable_transcript_still_rings` with its assertions passing; 96 runs at 16 at
+    once didn't reproduce it. Likely fix: wait for the stub's line too.
+  - **Secret-name follow-ups from lane env-names** (low, 2026-11-07): five notes on names the
+    secret checks and ignore rules miss or wrongly flag, outside that lane's brief. Not picked
+    yet. Evidence: lane env-names's closed record, Not mine
+    (`.git/lanes/_closed/env-names-2026-11-06/`).
   - **Cheaper review before ready** (Hayden's picks, 2026-11-07; for lane practices' next PR,
     `hooks/practices_check.py`'s ready gate): (1) a new head keeps the last review's clearance
     when its changes since the reviewed head touch no file a skill watches (a STATUS carry, doc
@@ -444,11 +484,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Live lanes: `lane ls`; state in their records (2026-11-07: env-names with #171,
-     license, practices kept open). #170 merged and is installed from main; lanes hackathon
-     and merge-record closed 2026-11-07. Hayden's leftover asks from lane deny-rules
+  0. Live lanes: `lane ls`; state in their records (2026-11-07: license,
+     practices kept open). #171 merged and is installed from main; lanes hackathon,
+     merge-record and env-names closed 2026-11-07. Hayden's leftover asks from lane deny-rules
      (an overlay paste plus a setup rerun, probe leftovers, local tool cleanups): its closed
-     record. Lane env-names merges and installs by Nov 11. Install freeze Nov 12 through Nov 15. A chain that
+     record. Lane license is next; a merge after Nov 11 waits for Nov 16. Install freeze Nov 12 through Nov 15. A chain that
      stops before its "main moved" step still tells the lanes, and arms a wake on the blocker
      (`skills/lanes/SKILL.md`). Open
      with Hayden (repeat them in each reply's Waiting list until answered): try `/interview` in

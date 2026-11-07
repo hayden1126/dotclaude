@@ -45,4 +45,5 @@ Each finding must hold up:
 - No taste, no renames, no "consider".
 
 <!-- The lens adapts Cursor's thermo-nuclear-code-quality-review (github.com/cursor/plugins,
-MIT, Copyright (c) 2026 Cursor), without its approval bar or its 1k-line rule. -->
+MIT, Copyright (c) 2026 Cursor, text in LICENSE-cursor), without its approval bar or its 1k-line
+rule. -->
