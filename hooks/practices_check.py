@@ -2548,10 +2548,10 @@ def _l3r(event, ghs, skills, cfg, ts, ctx, bounds, first, blocks_, keys, found, 
         touched = watched(repo, files, events, cfg)
         told = (len(blocks_), len(found))
         marks = review_marks(ts)
-        if touched and head[:12] not in marks:
+        if head[:12] not in marks:
             prior = last_review(repo, marks, head)
             if prior:
-                touched = review_delta(repo, touched, diff, prior, head, mb, base, events, cfg)
+                touched = review_delta(repo, touched, diff, prior, mb, base, events, cfg)
                 if not touched:
                     log("l3r-reuse", f"L3r: {head[:12]} keeps the review of {prior[:12]}: "
                         "nothing a skill watches changed since")
@@ -2587,32 +2587,28 @@ def watched(repo, files, events, cfg):
     return hits
 
 
-def review_delta(repo, touched, diff, prior, head, mb, base, events, cfg):
-    """touched cut to what a review of prior didn't see. The PR's change to a file runs from its
-    blob at the merge base to its blob at the head, so that change was reviewed only when both
-    ends are as they were: the head's unchanged since prior, and the base's unchanged since the
-    base prior held. So a merge keeping its own side over a fix on the base is new work, and a
-    file a clean merge took from the base is in no PR diff at all. A watched file gone since
-    prior as a regular file (deleted, moved, made a link) counts by its blob at prior, even one
-    the branch itself added, since other code may have leaned on it, unless the base removed it.
-    Known limit: `gh pr create --base <older>` widens the diff with what a review of the usual
-    base never saw, and the clearance holds, since a marker names no base; the head alone was
-    enough for that before this delta, too."""
-    moved = repo.changes(prior, head)
+def review_delta(repo, touched, diff, prior, mb, base, events, cfg):
+    """What a review of prior didn't see, in watched()'s form. A PR's change to a file is its pair
+    of ends: the blob on the base and the blob on the branch. That pair is compared at the two
+    commits, prior against the base it held and the head (diff) against mb, so any file whose
+    pair differs is new work: edited since, kept over a fix on the base, dropped back to the
+    base's blob, deleted, moved or made a link. A file a clean merge took from the base has no
+    pair at either. A file counts as watched by any blob at either end, so one that's gone still
+    does. Prior sharing no history with the base shows nothing, so touched stands.
+    Known limits: a marker names no base, so `gh pr create --base <older>` widens the diff with
+    what the review never saw, and a merge of history the local base ref doesn't hold yet (an
+    unfetched or other remote's main) reads as the branch's own. The gate denies once and the
+    resend passes, so either costs a prompt, not a boundary."""
     held = repo.run("merge-base", prior, base, ok=(0, 1)).decode().strip()
-    if not held:  # prior shares no history with the base: every file counts
+    if not held:
         return touched
-    on_base = {c[5] for c in repo.changes(held, mb)} if held != mb else set()
-    since = {c[5] for c in moved} | on_base
-    out = {name: (s, kept) for name, (s, paths) in touched.items()
-           if (kept := [p for p in paths if p in since])}
-    in_diff = {c[5] for c in diff}
-    gone = [(c[5], c[3]) for c in moved
-            if (c[0] == "D" or c[2] not in REGULAR) and c[1] in REGULAR
-            and (c[5] in in_diff or c[5] not in on_base)]
-    for name, (s, paths) in watched(repo, gone, events, cfg).items():
-        out.setdefault(name, (s, []))[1].extend(paths)
-    return out
+    was = {c[5]: c for c in repo.changes(held, prior)}
+    now = {c[5]: c for c in diff}
+    new = [p for p in sorted(was.keys() | now.keys())
+           if (was[p][1:5] if p in was else None) != (now[p][1:5] if p in now else None)]
+    blobs = [(p, oid) for p in new for c in (now.get(p), was.get(p)) if c
+             for mode, oid in ((c[2], c[4]), (c[1], c[3])) if mode in REGULAR]
+    return watched(repo, blobs, events, cfg)
 
 
 def review_block(touched, mb, head, branch, shown=8, prior=None):
@@ -2624,9 +2620,9 @@ def review_block(touched, mb, head, branch, shown=8, prior=None):
              "each one that doesn't hold, with file and line. Try to disprove each finding before "
              "you report it, and when one rests on a deployment fact you can't see, report it as "
              "needs validation instead of guessing.")
-    first = (f"Review only what changed in {branch} since its last review "
-             f"({prior[:12]}..{head[:12]}), in the files listed below, against each practices "
-             f"skill below. {check}" if prior else
+    first = (f"Review only what changed in {branch} since its last review at {prior[:12]}: the "
+             f"files listed below, comparing each at that commit, on the base ({mb[:12]}) and at "
+             f"the head ({head[:12]}), against each practices skill below. {check}" if prior else
              f"Review the changes of {branch} ({mb[:12]}..{head[:12]}) against each practices "
              f"skill below. {check}")
     parts = [f"{review_marker(head)} {first}"]

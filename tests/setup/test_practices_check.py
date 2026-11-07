@@ -2874,7 +2874,8 @@ class L3r(BashBase):
         head = self.sh("rev-parse", "HEAD")
         reason = self.pre("gh pr ready", session_id="s-delta")
         self.assertIn(f"{self.marker()} Review only what changed", reason)
-        self.assertIn(f"{prior[:12]}..{head[:12]}", reason)
+        self.assertIn(f"since its last review at {prior[:12]}", reason)
+        self.assertIn(f"at the head ({head[:12]})", reason)
         self.assertIn("app/api/y/route.ts", reason)
         self.assertNotIn("app/api/x/route.ts", reason)
         self.assertIn("such as Sonnet", reason)
@@ -2915,7 +2916,7 @@ class L3r(BashBase):
                 for rev in order:
                     self.review(rev)
                 reason = self.pre("gh pr ready", session_id=f"s-near-{n}")
-                self.assertIn(f"{second[:12]}..", reason)
+                self.assertIn(f"last review at {second[:12]}", reason)
                 self.assertNotIn("app/api/y/route.ts", reason)
 
     def test_main_merged_in_after_a_review_is_no_delta(self):
@@ -2952,6 +2953,9 @@ class L3r(BashBase):
         reason = self.pre("gh pr ready", session_id="s-ours")
         self.assertIn("Review only what changed", reason)
         self.assertIn("app/api/x/route.ts", reason)
+        # Review round 2, medium: the head's tree equals the reviewed tree, so a brief naming only
+        # that range would show the reviewer nothing. The base's end is where the change is.
+        self.assertIn(f"on the base ({main[:12]})", reason)
 
     def test_a_review_before_the_merge_base_clears_no_revert_of_a_later_fix(self):
         self.sh("update-ref", "HEAD", self.base)
@@ -3002,6 +3006,64 @@ class L3r(BashBase):
         self.sh("update-ref", "refs/remotes/origin/main", main)
         self.merged(self.off_history(lane, **{"app__api__w__route.ts": None}), lane, main)
         self.assertIsNone(self.pre("gh pr ready", session_id="s-mine"))
+
+    def on_top_of_a_shared_file(self):
+        """HEAD becomes a branch off a base holding w: it changes w and adds x, and is reviewed.
+        Returns (the base commit, the reviewed commit)."""
+        start = self.off_history(self.base, **{"app__api__w__route.ts": "export const w = 0\n"})
+        self.sh("update-ref", "refs/remotes/origin/main", start)
+        lane = self.off_history(start, **{"app__api__w__route.ts": "export const w = 1\n",
+                                          "app__api__x__route.ts": "export const x = 1\n"})
+        self.sh("update-ref", "HEAD", lane)
+        self.sh("read-tree", "--reset", "-u", "HEAD")
+        self.review()
+        return start, lane
+
+    def test_a_change_dropped_back_to_the_base_is_delta(self):
+        # Review round 2, high: the file left the PR's diff, so no file looked touched.
+        self.on_top_of_a_shared_file()
+        self.commit(**{"app__api__w__route.ts": "export const w = 0\n"})
+        reason = self.pre("gh pr ready", session_id="s-back")
+        self.assertIn("app/api/w/route.ts", reason)
+        self.assertNotIn("app/api/x/route.ts", reason)
+
+    def test_a_file_the_base_edited_and_the_branch_deleted_is_delta(self):
+        start, lane = self.on_top_of_a_shared_file()
+        main = self.off_history(start, **{"app__api__w__route.ts": "export const w = 2\n"})
+        self.sh("update-ref", "refs/remotes/origin/main", main)
+        self.merged(self.off_history(lane, **{"app__api__w__route.ts": None}), lane, main)
+        reason = self.pre("gh pr ready", session_id="s-del")
+        self.assertIn("app/api/w/route.ts", reason)
+        self.assertNotIn("app/api/x/route.ts", reason)
+
+    def test_a_base_file_the_branch_deleted_after_a_review_is_delta(self):
+        # Only the base's end of the pair holds this file, so that blob must be read.
+        start = self.off_history(self.base, **{"app__api__w__route.ts": "export const w = 0\n"})
+        self.sh("update-ref", "refs/remotes/origin/main", start)
+        lane = self.off_history(start, **{"app__api__x__route.ts": "export const x = 1\n"})
+        self.sh("update-ref", "HEAD", lane)
+        self.sh("read-tree", "--reset", "-u", "HEAD")
+        self.review()
+        self.sh("rm", "-q", "app/api/w/route.ts")
+        self.commit()
+        reason = self.pre("gh pr ready", session_id="s-basefile")
+        self.assertIn("app/api/w/route.ts", reason)
+        self.assertNotIn("app/api/x/route.ts", reason)
+
+    def test_the_only_watched_file_gone_after_a_review_is_delta(self):
+        # Review round 2, low: no touched file left, so the delta never ran.
+        self.review()
+        self.sh("rm", "-q", "app/api/x/route.ts")
+        self.commit()
+        self.assertIn("app/api/x/route.ts", self.pre("gh pr ready", session_id="s-only"))
+
+    def test_a_review_of_history_apart_from_the_base_shows_nothing(self):
+        lane = self.sh("rev-parse", "HEAD")
+        root = self.sh("commit-tree", self.sh("rev-parse", f"{self.base}^{{tree}}"), "-m", "apart")
+        self.merged(lane, lane, root)
+        self.review(root)
+        reason = self.pre("gh pr ready", session_id="s-apart")
+        self.assertIn("app/api/x/route.ts", reason)
 
     def test_a_delta_brief_names_every_file_it_clears(self):
         # Review round 1, medium: it said "the files listed below" and listed eight.
