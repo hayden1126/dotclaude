@@ -108,6 +108,8 @@ class SkillFile(unittest.TestCase):
         self.assertIn("took 40 min", example)
         self.assertIn("0 of 1,537", example)
         self.assertIn("At a load of 45", example)  # load has a cost, whatever the signal read
+        self.assertIn("also took 40 min", example)  # the split run's whole sweep, 40 min 29 s
+        self.assertNotIn("38 min", example)  # that run's first phase, not its sweep time
         self.assertNotIn("under 1", example)  # a load figure nobody measured
 
     def test_it_points_to_delegation_and_coding_practices_rather_than_repeating_them(self):

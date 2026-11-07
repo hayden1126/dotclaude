@@ -47,7 +47,7 @@ Cite a measured run, or write "unmeasured". A parallel time stays unmeasured unt
 
 ## Example
 
-A browser sweep on 12 cores ran its parts one after another: 2 h 37 min for one engine, including a 15-minute wait for a lock, and most of it waiting for pages to settle. Every part at once in both engines, holding that lock once for all of them, took 40 min. The load signal was the count of waits that gave up: 0 of 1,537 in each run. Splitting each part again took 38 min at a load of 60 to 70, so it saved almost nothing. At a load of 45, one timing-sensitive step failed twice, then passed five of five on a quieter machine.
+A browser sweep on 12 cores ran its parts one after another: 2 h 37 min for one engine, including a 15-minute wait for a lock, and most of it waiting for pages to settle. Every part at once in both engines, holding that lock once for all of them, took 40 min. The load signal was the count of waits that gave up: 0 of 1,537 in each run. Splitting each part again also took 40 min, at a mean load of 59 against 32, so it saved nothing. At a load of 45, one timing-sensitive step failed twice, then passed five of five on a quieter machine.
 
 ## See also
 
