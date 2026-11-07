@@ -90,11 +90,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - #144 (exam-prep): rules public, evidence private (Hayden, 2026-10-20).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
-  - **Live lanes** (briefs in each record). Merge order: 1 mocks
-    (`feat/mocks-skill`, opened 2026-11-07 on Hayden's pick; carries the lead's notes; by
-    2026-11-11), 2 speed (`feat/speed-skill`, draft #174, the `long-runs` skill plus one CLAUDE.md
-    line, opened 2026-11-07 on Hayden's pick; parked 2026-11-07 at its ask, so the lead runs
-    `lane open speed` once lane mocks's post-merge chain ends; by 2026-11-11; after mocks, since both change README.md).
+  - **Live lanes** (briefs in each record). Merge order: 1 speed
+    (`feat/speed-skill`, draft #174, the `long-runs` skill plus one CLAUDE.md line, opened
+    2026-11-07 on Hayden's pick; carries the lead's notes; resolves the README.md `skills/` row
+    that conflicts with #175, keeping both entries; by 2026-11-11).
     **Install freeze on HAYPC, Nov 12 through Nov 15** (Hayden, 2026-11-05): no lane installs in
     that window, except fixes for lane hackathon, so the event runs what the dry run tested. The lead's
     reinstall after a merge counts as an install, so no other lane merges in that window.
@@ -122,6 +121,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     capella-studio lane artexport's report; a fork's hook output never reaches its model, so it
     knows its lane only from the parent's copied line, docs/lanes.md S5; the delegation canary
     checks the source enum; untried against lane practices' settings.json change),
+    mocks (#175, 2026-11-07, merge dfb7219: the `mocks` skill for one-screen clickable design
+    mocks, its template and a stdlib layout check, plus a pointer in `frontend-ui-discipline`;
+    installed from main),
     license (#173, 2026-11-07, merge 54bf289: the MIT LICENSE, the licences of three adapted
     sources carried beside them, README's third-party list and a test that keeps it complete;
     installed from main),
@@ -164,13 +166,6 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     hackathon merges (it owns `skills/demo-video/` and its tests); lead's lean: after the event.
     Music and footage need a recorded source and licence per file (lane license's rule), and
     recording a voice from WSL needs the Windows microphone, still unprobed.
-  - **One-screen layout for clickable mocks** (Hayden, 2026-11-07, via a lane in another repo:
-    "This should be how mocks are made from now on"). On wide windows: no page scroll, one
-    control row, the render fit to the window and fixed in place, the questions column beside it
-    the only thing that scrolls, secondary notes at its foot; stacked below 1,101 px. Hayden picked a
-    new skill, built now by lane mocks (2026-11-07).
-    Reference template and a scripted check (not run yet): lane themes's
-    `.lane/mock/` in that repo, archived with the lane when it closes.
   - **Faster work: parallel runs and stated skips** (Hayden, 2026-11-07, via lane themes in
     another repo: "another skill for speeding up processes like running stuff in parallel etc,
     for both during dev, spikes, verification, release checks, CI stuff etc, also smart thinking
@@ -480,11 +475,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Live lanes: `lane ls`; state in their records (2026-11-07: mocks, speed,
-     practices kept open). #173 merged and is installed from main; lanes hackathon,
-     merge-record, env-names and license closed 2026-11-07. Hayden's leftover asks from lane deny-rules
+  0. Live lanes: `lane ls`; state in their records (2026-11-07: speed,
+     practices kept open). #175 merged and is installed from main; lanes hackathon,
+     merge-record, env-names, license and mocks closed 2026-11-07. Hayden's leftover asks from lane deny-rules
      (an overlay paste plus a setup rerun, probe leftovers, local tool cleanups): its closed
-     record. Lanes mocks then speed merge and install by Nov 11; a merge after that waits for Nov 16. Install freeze Nov 12 through Nov 15. A chain that
+     record. Lane speed merges and installs by Nov 11; a merge after that waits for Nov 16. Install freeze Nov 12 through Nov 15. A chain that
      stops before its "main moved" step still tells the lanes, and arms a wake on the blocker
      (`skills/lanes/SKILL.md`). Open
      with Hayden (repeat them in each reply's Waiting list until answered): try `/interview` in
