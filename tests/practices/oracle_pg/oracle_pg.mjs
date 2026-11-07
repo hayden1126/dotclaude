@@ -30,6 +30,9 @@ const SESSION = `reset role; reset all; set search_path to "$user", public, exte
 // looked at, so a blanket grant here would pass a migration that can't work on the real thing. That
 // goes for sequences too: the change's opt-in statements also revoke `usage, select` on them, so a
 // bigserial needs a grant of its own, and an identity column, which needs no sequence grant, doesn't.
+// Functions differ: Supabase's setting revokes role grants on them, and PUBLIC's default EXECUTE stays
+// (github.com/orgs/supabase/discussions/52759), so a new function is callable through PUBLIC here as
+// there, and `revoke ... from public` means the same.
 // The auth.* bodies are Supabase's: the claims PostgREST sets, and the older per-claim settings.
 // pgcrypto and uuid-ossp come enabled on a new project, so `uuid_generate_v4()` works with no line of
 // its own, and so does the publication behind Realtime. The other three roles are never graded: a
