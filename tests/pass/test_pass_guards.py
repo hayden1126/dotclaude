@@ -772,19 +772,20 @@ class CompactDrops(Plain):
 class Approval(Plain):
     def test_a_future_marker_is_unapproved_at_act_time(self):
         plan = self.plan()
-        future = t.TODAY + datetime.timedelta(days=1)
+        # Two days on: past the act-time check's today on either side of a midnight the run crosses.
+        future = self.day + datetime.timedelta(days=2)
         self.write(os.path.join(self.main, "STATUS.md"), t.marked(t.GOOD, future))
         self.assertFalse(self.mod.approved_now(plan, {"startedAt": int(self.started * 1000)}))
 
     def test_a_future_marker_fails_the_gate(self):
-        self.commit("STATUS.md", t.marked(t.GOOD, t.TODAY + datetime.timedelta(days=2)),
+        self.commit("STATUS.md", t.marked(t.GOOD, self.day + datetime.timedelta(days=2)),
                     msg="Handoff")
         code, out = self.run_pass("--print")
         self.assertEqual(code, 1, out)
         self.assertIn("approval marker is dated in the future", out)
 
     def test_a_marker_with_an_unknown_session_start_is_unapproved(self):
-        self.commit("STATUS.md", t.APPROVED, msg="Handoff")
+        self.commit("STATUS.md", self.approved, msg="Handoff")
         plan = self.plan()
         self.assertFalse(self.mod.approved_now(plan, {"startedAt": None}))
         self.assertFalse(self.mod.approved_now(plan, None))
