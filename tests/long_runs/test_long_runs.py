@@ -101,8 +101,9 @@ class SkillFile(unittest.TestCase):
     def test_the_example_quotes_only_measured_figures(self):
         example = skill_text().split("## Example")[1].split("## See also")[0]
         self.assertIn("2 h 37 min for one engine", example)
+        self.assertIn("in both engines", example)  # the serial time is one engine's: say so
         self.assertIn("took 40 min", example)
-        self.assertIn("0 of 1,537 waits", example)
+        self.assertIn("0 of 1,537", example)
         self.assertNotIn("under 1", example)  # a load figure nobody measured
 
     def test_it_points_to_delegation_and_coding_practices_rather_than_repeating_them(self):
