@@ -25,6 +25,7 @@
 //
 //   node demo/voice.mjs                builds demo/out/demo-voice.mp4 from the files in demo/voice/
 //   node demo/voice.mjs cues           lists the beats and a line to record each one
+//   node demo/voice.mjs add <part> <file>   copies a recording in as all or beat N, checking it first
 //   node demo/voice.mjs check <file>   compares an editor's export with the take
 //
 // demo/voice/ holds any mix of all.<ext>, one continuous read, and <N>.<ext>, a clip for beat N. A clip
@@ -68,6 +69,8 @@ const FADE_S = 0.01; // Keeps a cut from clicking.
 const SLACK_S = 0.05;
 const LENGTH_SLACK_S = 0.1;
 const LEAD_IN_S = 3; // Spare time in a recording line, to get ready after pressing Enter.
+const LONG_LINE_S = 110; // A line typed at Claude Code's prompt may be stopped at 2 minutes.
+const CUT_OFF_S = 0.15; // Speech this close to a file's end may have been cut off.
 const RATE_SLACK = 0.1; // An editor's 29.97 is close enough to 30.
 
 const shown = file => path.relative(process.cwd(), file) || '.';
@@ -153,6 +156,9 @@ function speechIn(file) {
   // Grow outwards over soft sound joined to the speech, which the bar alone would cut.
   while (first > 0 && levels[first - 1] > softBar) first -= 1;
   while (last < levels.length - 1 && levels[last + 1] > softBar) last += 1;
+  if ((last + 1) * WINDOW_S >= duration - CUT_OFF_S) {
+    console.warn(`warning: ${shown(file)} ends while the voice is still going: if the recording was cut off, record it again`);
+  }
   return { from: Math.max(0, first * WINDOW_S - MARGIN_S), to: Math.min(duration, (last + 1) * WINDOW_S + MARGIN_S) };
 }
 
@@ -277,24 +283,49 @@ async function build() {
   console.log(`${shown(RESULT)}: ${[...voices.values()].map(voice => voice.name).join(', ')} on ${length.toFixed(1)} s of take`);
 }
 
-const quoted = text => (/^[\w@%+=:,./-]+$/.test(text) ? text : `'${text.replaceAll("'", "'\\''")}'`);
-const recordLine = (seconds, file) => 'ffmpeg -nostdin -hide_banner -loglevel error -f pulse -i RDPSource '
-  + `-t ${Math.ceil(seconds + LEAD_IN_S)} -ac 1 -c:a pcm_s16le -y ${quoted(shown(file))}`;
+// The line runs outside the sandbox, so it writes only into a folder it has just made under /tmp,
+// which the sandbox can't write. Anything in the voice dir could be a link that redirects a write.
+const recordLine = (seconds, part) => 'd=$(mktemp -d /tmp/voice.XXXXXX) && ffmpeg -nostdin -hide_banner -loglevel error '
+  + `-f pulse -i RDPSource -t ${Math.ceil(seconds + LEAD_IN_S)} -ac 1 -c:a pcm_s16le "$d/${part}.wav" && echo "$d/${part}.wav"`;
 
 function cues() {
   const { beats, length } = readTake();
-  const dir = voiceDir();
-  fs.mkdirSync(dir, { recursive: true });
   console.log(`${shown(TAKE)}: ${length.toFixed(1)} s, ${beats.length} beats\n`);
   beats.forEach(({ caption, start, end }, index) => {
     console.log(`  ${index + 1}. at ${start.toFixed(1)} s, ${(end - start).toFixed(1)} s long: ${caption}`);
   });
-  console.log(`\nSave a recording from any app in ${shown(dir)}, as all.<ext> or <beat>.<ext>.`);
-  console.log('Under WSLg, the speaker can type one of these. It stops by itself, and spare silence is dropped:\n');
-  console.log(`  whole read: ${recordLine(length, path.join(dir, 'all.wav'))}`);
-  beats.forEach(({ start, end }, index) => {
-    console.log(`  beat ${index + 1}: ${recordLine(end - start, path.join(dir, `${index + 1}.wav`))}`);
-  });
+  console.log('\nRecord with any app, then add the file as one part: the whole read or one beat.');
+  console.log('Under WSLg, the speaker can type one of these. It stops by itself and prints where the file is:\n');
+  const line = (label, seconds, part) => {
+    console.log(`  ${label}: ${recordLine(seconds, part)}`);
+    if (seconds + LEAD_IN_S > LONG_LINE_S) console.log('    (over 2 minutes: run it in your own terminal, since a ! line may be stopped at 2 minutes)');
+  };
+  line('whole read', length, 'all');
+  beats.forEach(({ start, end }, index) => line(`beat ${index + 1}`, end - start, String(index + 1)));
+  console.log(`\nThen: node ${shown(fileURLToPath(import.meta.url))} add <all or beat> <file>`);
+}
+
+// Copies a recording in, from inside the sandbox, so a link in the voice dir can only redirect a write
+// the sandbox allows anyway. The part's last file stays beside it, hidden, until the next add.
+function add(part, file) {
+  if (!part || !file) throw new Error('add needs a part and a file: node demo/voice.mjs add <all or beat> <file>');
+  const { beats } = readTake();
+  const key = part.toLowerCase() === 'all' ? 'all' : /^\d+$/.test(part) ? Number(part) : null;
+  if (key === null || (key !== 'all' && (key < 1 || key > beats.length))) {
+    throw new Error(`part is all, or a beat from 1 to ${beats.length}, not "${part}"`);
+  }
+  const extension = path.extname(file).toLowerCase();
+  if (!extension) throw new Error(`${file} has no extension, so its format can't be told from its name`);
+  speechIn(path.resolve(file)); // Refuses a silent file now, not at the build.
+  const dir = voiceDir();
+  fs.mkdirSync(dir, { recursive: true });
+  for (const entry of fs.readdirSync(dir)) {
+    const found = FILE_NAME.exec(entry);
+    if (found && found[1].toLowerCase() === String(key)) fs.renameSync(path.join(dir, entry), path.join(dir, `.${entry}.prev`));
+  }
+  const target = path.join(dir, `${key}${extension}`);
+  fs.copyFileSync(file, target);
+  console.log(`${shown(target)}: added, from ${file}`);
 }
 
 function check(file) {
@@ -310,7 +341,7 @@ function check(file) {
     if (size !== wanted) problems.push(`size is ${size}, the take is ${wanted}`);
     const rate = rateOf(edit.video.avg_frame_rate);
     const wantedRate = rateOf(take.video.avg_frame_rate);
-    if (Math.abs(rate - wantedRate) > RATE_SLACK) problems.push(`frame rate is ${rate.toFixed(2)}, the take is ${wantedRate.toFixed(2)}`);
+    if (!(Math.abs(rate - wantedRate) <= RATE_SLACK)) problems.push(`frame rate is ${rate.toFixed(2)}, the take is ${wantedRate.toFixed(2)}`);
     if (edit.video.codec_name !== take.video.codec_name) problems.push(`video is ${edit.video.codec_name}, the take is ${take.video.codec_name}`);
   }
   if (!edit.audio) problems.push('no audio');
@@ -331,8 +362,9 @@ const [command, ...rest] = process.argv.slice(2);
 try {
   if (!command) await build();
   else if (command === 'cues') cues();
+  else if (command === 'add') add(rest[0], rest[1]);
   else if (command === 'check') check(rest[0]);
-  else throw new Error(`unknown command "${command}": use no command, cues, or check <file>`);
+  else throw new Error(`unknown command "${command}": use no command, cues, add <part> <file>, or check <file>`);
 } catch (e) {
   console.error('voice failed:', e.message);
   if (!command && fs.existsSync(RESULT)) console.error(`this build failed: ${shown(RESULT)} is the last good one, unchanged`);

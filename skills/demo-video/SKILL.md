@@ -84,7 +84,7 @@ Read the exit message. A broken step gets fixed in the app. A step that's genuin
 
 A take has no sound. The voice goes on afterwards, so a fluffed line never costs a new take. Make it only from a take you've looked at, since a new take moves `demo-voice.mp4` aside and the voice has to be built again.
 
-`node demo/voice.mjs cues` lists each beat's time, length and caption, and a line to record each part. Read from that. Save recordings in `demo/voice/`, in any format ffmpeg reads, from any recorder:
+`node demo/voice.mjs cues` lists each beat's time, length and caption, and a line to record each part. Read from that. Record with any app, in any format ffmpeg reads, then add each recording with `node demo/voice.mjs add <all or N> <file>`. It checks the file, names it, and puts it in `demo/voice/`, keeping that part's last file hidden beside it:
 
 | File | Does |
 |---|---|
@@ -92,9 +92,9 @@ A take has no sound. The voice goes on afterwards, so a fluffed line never costs
 | `<N>.<ext>` | A clip for beat N, counted in this take, which starts on that beat |
 | both | The clip replaces the read across beat N, which is how one part of a read is redone |
 
-Silence and room noise before the first word and after the last are dropped, so a late start costs nothing. Then `node demo/voice.mjs` builds `demo/out/demo-voice.mp4`: the take's picture, copied untouched, with the voice at the take's exact length. For a clip take, set `OUT` to its dir: its voice files then go in the matching dir, `demo/voice-clip/` for `demo/out-clip/`, since beat numbers count within one take. `VOICE` names another voice dir, so a second read can sit beside the first. A good build moves the last one to `demo-voice.prev.mp4`, and a failed one leaves it in place.
+Silence and room noise before the first word and after the last are dropped, so a late start costs nothing. A longer sound before the first word, such as a rustle or someone talking nearby, counts as its start: listen, and trim it in an editor or record that part again. Then `node demo/voice.mjs` builds `demo/out/demo-voice.mp4`: the take's picture, copied untouched, with the voice at the take's exact length. For a clip take, set `OUT` to its dir: its voice files then go in the matching dir, `demo/voice-clip/` for `demo/out-clip/`, since beat numbers count within one take. `VOICE` names another voice dir, so a second read can sit beside the first. A good build moves the last one to `demo-voice.prev.mp4`, and a failed one leaves it in place.
 
-**Who records.** The person speaking does. Recording under WSLg needs the Windows microphone, which a command sandbox can't reach, so they type the `ffmpeg` line from `cues` themselves: at the Claude Code prompt with a leading `!`, or in their own terminal. That runs only ffmpeg, for a fixed length. Never run it for them with the sandbox off, and never run `voice.mjs` with the sandbox off either, since `demo/` is writable by this session. If they aren't at the machine with the microphone, any phone or laptop recorder works: they send the file, and it goes in `demo/voice/`. Under WSLg, the microphone must be the Windows default input.
+**Who records.** The person speaking does. Recording under WSLg needs the Windows microphone, which a command sandbox can't reach, so they type the line from `cues` themselves: at the Claude Code prompt with a leading `!`, or in their own terminal for a line over 2 minutes, since a `!` line may be stopped there. The line runs only ffmpeg, for a fixed length, and writes only into a folder it has just made under `/tmp`, then prints the file's path. Then run `add` with that path. The line never writes into `demo/`: this session can write there, so a link planted there could turn the unsandboxed write onto any file the user owns. Never run the line for them with the sandbox off, and never run `voice.mjs` with the sandbox off either. If they aren't at the machine with the microphone, any phone or laptop recorder works: they send the file, and `add` takes it. Under WSLg, the microphone must be the Windows default input.
 
 A voice recording is personal data, so `demo/voice*/` stays out of git, whatever the event's rules say about `demo/`.
 
@@ -102,6 +102,7 @@ A voice recording is personal data, so `demo/voice*/` stays out of git, whatever
 |---|---|
 | `too quiet to be a voice` | The recording has no voice in it: the wrong input device, a muted one, or nobody spoke. A room with nobody talking measured -31 dB. |
 | `clipped` | Not fatal, but listen to it. Turn the input down, or back off the microphone. |
+| `ends while the voice is still going` | Not fatal: the recording may have stopped early, for example a `!` line stopped at 2 minutes. Listen to its end. |
 | `runs ... s past the end of the take` | The read is longer than the take. Read faster, or add waits to the beats in `beats.mjs` and retake. |
 | `only ... dB over the room's noise` | Not fatal, but the voice barely stands out, so its start and end are rough. Listen, and record somewhere quieter or closer to the microphone if it's off. |
 | `runs ... s, and beat N has ...` | The clip is longer than the room it has. Shorten it, or add a wait to that beat in `beats.mjs` and retake. |

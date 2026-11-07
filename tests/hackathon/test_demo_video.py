@@ -280,7 +280,7 @@ class TemplateOffline(unittest.TestCase):
     def test_a_voice_recording_stays_out_of_git_and_out_of_an_agents_hands(self):
         text = (SKILL / "SKILL.md").read_text()
         self.assertIn("`demo/voice*/` and `demo/node_modules/`", text)
-        self.assertIn("Never run it for them with the sandbox off", text)
+        self.assertIn("Never run the line for them with the sandbox off", text)
         self.assertIn("never run `voice.mjs` with the sandbox off", text)
         self.assertNotIn("RDPSource", (TEMPLATE / "record.mjs").read_text())
 
@@ -1285,9 +1285,12 @@ esac
         other = self.demo / "out-clip"
         shutil.copytree(self.out, other)
         tone(self.voice_dir / "1.wav", 1)
-        result = self.run_voice("cues", OUT=str(other))
-        self.assertIn("demo/voice-clip/1.wav", result.stdout)
-        self.assertNotIn("demo/voice/1.wav", result.stdout)
+        tone(self.root / "line.wav", 1)
+        added = self.run_voice("add", "1", str(self.root / "line.wav"), OUT=str(other))
+        self.assertEqual(added.returncode, 0, added.stderr)
+        self.assertTrue((self.demo / "voice-clip" / "1.wav").exists())
+        self.assertEqual(sorted(p.name for p in self.voice_dir.iterdir()), ["1.wav"], "the full take's voice was touched")
+        (self.demo / "voice-clip" / "1.wav").unlink()
         refused = self.run_voice(OUT=str(other))
         self.assertEqual(refused.returncode, 1)
         self.assertIn("voice-clip", refused.stderr)
@@ -1297,32 +1300,111 @@ esac
             with self.subTest(name=name):
                 other = self.demo / name
                 shutil.copytree(self.out, other)
-                result = self.run_voice("cues", OUT=str(other))
-                self.assertEqual(result.returncode, 1)
-                self.assertIn("set VOICE", result.stderr)
+                tone(self.root / "line.wav", 1)
+                for args in ((), ("add", "1", str(self.root / "line.wav"))):
+                    result = self.run_voice(*args, OUT=str(other))
+                    self.assertEqual(result.returncode, 1, args)
+                    self.assertIn("set VOICE", result.stderr)
 
-    def test_a_recording_line_survives_spaces_and_quotes_in_its_path(self):
-        odd = self.root / "it's a voice"
-        result = self.run_voice("cues", VOICE=str(odd))
+    def recording_line(self, part):
+        result = self.run_voice("cues")
         self.assertEqual(result.returncode, 0, result.stderr)
-        line = next(l for l in result.stdout.splitlines() if "beat 2:" in l).split("beat 2: ", 1)[1]
-        import shlex
-        self.assertEqual(Path(self.root, shlex.split(line)[-1]).resolve(), (odd / "2.wav").resolve())
+        label = "whole read" if part == "all" else f"beat {part}"
+        return next(l for l in result.stdout.splitlines() if l.strip().startswith(label + ":")).split(": ", 1)[1]
+
+    def run_line(self, line):
+        """Runs a printed recording line as the speaker would, and returns the file it says it made.
+
+        The line's temp dir moves from /tmp, which the sandbox can't write, into this test's own dir, and
+        a stand-in replaces the microphone. Nothing here deletes: the test dir goes with the test.
+        """
+        self.assertIn("mktemp -d /tmp/voice.XXXXXX", line)
+        line = line.replace("/tmp/voice.", f"{self.root}/voice.")
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        shim = bin_dir / "ffmpeg"
+        shim.write_text(f"""#!/bin/sh
+for last; do :; done
+exec {shutil.which("ffmpeg")} -nostdin -v error -f lavfi -i sine=frequency=440:duration=1 -ac 1 "$last"
+""")
+        shim.chmod(0o755)
+        result = subprocess.run(["sh", "-c", line], capture_output=True, text=True, timeout=60,
+                                env={**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        made = Path(result.stdout.strip())
+        self.assertTrue(result.stdout.strip(), "the line printed no path")
+        self.assertEqual(made.parent.parent, self.root, f"the line wrote outside its own new dir: {made}")
+        self.assertTrue(made.parent.name.startswith("voice."))
+        return made
+
+    def test_a_recording_line_writes_only_a_new_private_file(self):
+        target = self.root / "precious"
+        target.write_text("keep")
+        (self.voice_dir / "2.wav").symlink_to(target)  # Planted where an unsandboxed write could follow it.
+        made = self.run_line(self.recording_line("2"))
+        self.assertEqual(target.read_text(), "keep")
+        self.assertEqual(made.name, "2.wav")
+        self.assertEqual(stream_codecs(made), ["pcm_s16le"])
+
+    def test_a_recording_goes_in_with_add(self):
+        made = self.run_line(self.recording_line("all"))
+        added = self.run_voice("add", "all", str(made))
+        self.assertEqual(added.returncode, 0, added.stderr)
+        self.assertEqual((self.voice_dir / "all.wav").read_bytes(), made.read_bytes())
+
+    def test_add_keeps_the_parts_last_file_out_of_the_build(self):
+        tone(self.voice_dir / "2.m4a", 1, frequency=440)
+        tone(self.root / "retake.wav", 1, frequency=1000)
+        added = self.run_voice("add", "2", str(self.root / "retake.wav"))
+        self.assertEqual(added.returncode, 0, added.stderr)
+        self.assertEqual(sorted(p.name for p in self.voice_dir.iterdir()), [".2.m4a.prev", "2.wav"])
+        self.built()
+        self.assertGreater(level(self.result, 3.1, 3.9, 1000), HEARD_DB)
+
+    def test_add_refuses_a_silent_file_and_a_part_the_take_lacks(self):
+        tone(self.root / "quiet.wav", 2, gain=0.15)
+        tone(self.root / "fine.wav", 2)
+        for args, expected in ((("all", str(self.root / "quiet.wav")), "too quiet"),
+                               (("4", str(self.root / "fine.wav")), "1 to 3"),
+                               (("intro", str(self.root / "fine.wav")), "1 to 3"),
+                               (("all",), "needs a part and a file")):
+            with self.subTest(args=args):
+                result = self.run_voice("add", *args)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(expected, result.stderr)
+        self.assertEqual(list(self.voice_dir.iterdir()), [])
+
+    def test_a_long_line_says_to_use_your_own_terminal(self):
+        steps = json.loads((self.out / "steps.json").read_text())
+        steps["steps"][-1]["end"] = 200
+        (self.out / "steps.json").write_text(json.dumps(steps))
+        self.assertIn("your own terminal", self.run_voice("cues").stdout)
+
+    def test_a_recording_that_stops_mid_speech_warns(self):
+        tone(self.voice_dir / "all.wav", 2)
+        self.assertIn("still going", self.built().stderr)
+        sequence(self.voice_dir / "all.wav", [(440, 2), (None, 0.5)])
+        self.assertNotIn("still going", self.built().stderr)
+
+    def test_a_clip_takes_steps_start_at_its_first_beat(self):
+        # A BEATS=2-3 take trims to its first beat, so that beat starts at 0.
+        steps = [{"caption": "Two", "start": 4.0, "end": 6.5}, {"caption": "Three", "start": 6.5, "end": 9.0}]
+        (self.out / "steps.json").write_text(json.dumps({"lead": 0.6, "trim": 4.0, "steps": steps, "warnings": []}))
+        tone(self.voice_dir / "2.wav", 1, lead=0.5)
+        self.built()
+        self.assertGreater(level(self.result, 2.55, 3.3), HEARD_DB)
+        self.assertLess(level(self.result, 0.0, 2.4), -60)
 
     def test_cues_list_each_beat_and_a_line_to_record_it(self):
         result = self.run_voice("cues")
         self.assertEqual(result.returncode, 0, result.stderr)
         for caption in ("Beat 1", "Beat 2", "Beat 3"):
             self.assertIn(caption, result.stdout)
-        self.assertIn("demo/voice/all.wav", result.stdout)
-        self.assertIn("demo/voice/2.wav", result.stdout)
+        self.assertIn('"$d/all.wav"', result.stdout)
+        self.assertIn('"$d/2.wav"', result.stdout)
         self.assertIn("-nostdin", result.stdout)
         self.assertRegex(result.stdout, r"-t \d+")
-
-    def test_cues_make_the_voice_dir(self):
-        self.voice_dir.rmdir()
-        self.assertEqual(self.run_voice("cues").returncode, 0)
-        self.assertTrue(self.voice_dir.is_dir())
+        self.assertNotIn("demo/voice", result.stdout.split("Then:")[0], "a recording line must not write into demo/")
 
     def test_check_passes_an_export_in_the_takes_format(self):
         tone(self.voice_dir / "all.wav", 2)
