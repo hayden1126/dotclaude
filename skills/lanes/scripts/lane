@@ -7,7 +7,7 @@
   lane new <id> [--branch B] [--reuse-branch] [--claim N ...] [--goal T] [--files T]
                [--overlaps T] [--done-when T] [--constraints T]
   lane adopt <path> [--id SLUG]
-  lane ls [--json] [--requests]
+  lane ls [--json] [--requests] | lane ls --check
   lane open <id> [--focus] [--print] [--model M] [--effort E] [prompt]
   lane addr [--repo PATH] <id> | lane addr [--repo PATH] lead
   lane lead
@@ -29,7 +29,7 @@ liveness, flags) are derived on each `ls`, never stored. skills/lanes/SKILL.md i
 docs/lanes.md the design. Run `init`, `new`, `adopt`, `ls`, `port ls`, `port who`, `open`, `done`, `park`, `sync-main`, `addr` and `lead` bare,
 so their excludedCommands entries take them out of the sandbox: `new`, `ls`, `done` and `park` need the
 network and the GitHub credential (`new` refuses without them; `ls` and `done` say what they
-skipped; `park` refuses), `ls`, `port`, `open`, `done`, `park`, `addr` and `lead` need to see other
+skipped; `ls --check` and `park` refuse), `ls`, `port`, `open`, `done`, `park`, `addr` and `lead` need to see other
 processes, and `lead` writes the lead record in the state dir, as `park` does its flag. Every other subcommand runs sandboxed; `lock` and `trial`
 must, so the commands they run stay sandboxed too. `serve` is the one exception with no
 excludedCommands entry: it refuses in the sandbox (whose own network and pids hide listeners)
@@ -148,7 +148,11 @@ PROBE_GRACE = 0.05  # secs `lane lock` waits out a `lane ls` probe before it rep
 HOLDER_CMD_MAX = 120  # chars of the wrapped command kept in a lock's holder line
 RECORD_READ = 1 << 20  # bytes of a lane's STATUS.md read by `ls` and `done`
 PR_LIMIT = 200  # PRs `ls` lists in its one gh call, newest first
-CLOCK_SLACK = 10  # secs: HAYPC's wall clock steps by about 5 s, and GitHub keeps another clock
+CLOCK_SLACK = 10  # secs: HAYPC's wall clock steps, and GitHub keeps another clock
+# secs past mergedAt a record must land to count as after the merge: the clock's 0.5 s steps, and
+# mergedAt's whole seconds. Well under a turn's 10 s, or a prompt after-merge write reads as older.
+MERGE_SLACK = 3
+NO_MERGE_LIST = "gh can't list the lane's merged PRs"  # handoff_why's reason; `ls --check` refuses
 TEE_GRACE = 10.0  # secs run_child keeps reading a teed pipe once its child exits
 TRIAL_GIT_WAIT = 120  # secs each git call of `lane trial` may take
 HANDED_GIT_WAIT = 10  # secs the git `addr --repo` runs may take: a FIFO include would hold it
@@ -1676,7 +1680,8 @@ def board(repo: Repo) -> list[dict]:
             flags.append("orphan")
         if stopped:
             flags.append("stopped")
-        if needs_handoff(repo, lane, ref, merges_of(repo, prs, lane, guess)):
+        row["handoff_why"] = handoff_why(repo, lane, ref, merges_of(repo, prs, lane, guess))
+        if row["handoff_why"]:
             flags.append("handoff?")
         row["flags"] = flags
         rows.append(row)
@@ -1709,33 +1714,44 @@ def record_text(repo: Repo, lane: dict) -> tuple[str | None, float | None]:
     return None, None
 
 
-def needs_handoff(repo: Repo, lane: dict, ref: str, merges: list[float | None] | None) -> bool:
-    """Whether the lane's record may be behind its work: a PR from its branches merged and the
-    record isn't newer than mergedAt + CLOCK_SLACK (the lane never did its after-merge handoff);
-    the last commit at `ref` (lane_head's) is newer; or a session ended that started after the
-    record's last write, so it never wrote it. A session's end alone proves nothing: every
-    session ends after its own last write, a /pass's too. merges is merges_of's. Anything it
-    can't read lights the flag: the hand-back gate fails closed."""
+def handoff_why(repo: Repo, lane: dict, ref: str, merges: list[float | None] | None) -> str | None:
+    """Why the lane's record may be behind its work, or None: a PR from its branches merged and
+    the record isn't newer than mergedAt + MERGE_SLACK (the lane never did its after-merge
+    handoff); the last commit at `ref` (lane_head's) is newer; or a session ended that started
+    after the record's last write, so it never wrote it. A session's end alone proves nothing:
+    every session ends after its own last write, a /pass's too. merges is merges_of's. Anything
+    it can't read gives a reason too: the hand-back gate fails closed."""
     _, mtime = record_text(repo, lane)
-    if mtime is None or merges is None:
-        return True
-    if any(m is None or mtime <= m + CLOCK_SLACK for m in merges):
-        return True
+    if merges is None:
+        return NO_MERGE_LIST
+    if mtime is None:
+        return "the record can't be read"
+    if None in merges:
+        return "a merged PR's merge time can't be read"
+    if merges and mtime <= (newest := max(merges)) + MERGE_SLACK:
+        if mtime < newest:
+            return "record last written before a merge: write it again"
+        return (f"record last written {mtime - newest:.1f} s after a merge, needs more than "
+                f"{MERGE_SLACK} s: write it again")
     p = git(["log", "-1", "--format=%ct", "--end-of-options", ref], repo.toplevel)
     try:
         last = float(p.stdout) if p.returncode == 0 else None
     except ValueError:
         last = None
-    if last is None or last > mtime + 1:
-        return True
+    if last is None:
+        return "the last commit can't be read"
+    if last > mtime + 1:
+        return "a commit is newer than the record: write it again"
     for s in lane.get("sessions", []):
         if not s.get("endedAt"):
             continue  # live, or ended unstamped
         start, end = lanelib.parse_iso(s.get("startedAt")), lanelib.parse_iso(s["endedAt"])
+        if start is None or end is None:
+            return "a session's start or end can't be read"
         # One local clock, but it steps by seconds: a start this close may follow the write.
-        if start is None or end is None or start > mtime - CLOCK_SLACK:
-            return True
-    return False
+        if start > mtime - CLOCK_SLACK:
+            return "a session that started after the record's last write has ended"
+    return None
 
 
 def warn_left_out(repo: Repo) -> None:
@@ -1746,8 +1762,29 @@ def warn_left_out(repo: Repo) -> None:
              "record the CLI didn't write is never acted on; look at it before removing it")
 
 
-def cmd_ls(args) -> None:
+def check_own_lane(repo: Repo) -> int:
+    """`ls --check`: the board's handoff? verdict on the caller's lane, read from its row so the
+    lane and the lead's gate can't disagree. 1 when it's lit. With no list of merged PRs (the
+    sandbox lights every lane this way) it refuses: the lane has nothing to fix."""
+    lane_id = own_lane(repo)["id"]
+    row = next(r for r in board(repo) if r["id"] == lane_id)
+    if row["handoff_why"] == NO_MERGE_LIST:
+        raise LaneError(f"gh can't list lane {lane_id}'s merged PRs (no network or credential, "
+                        f"the sandbox, or {PR_LIMIT} on one branch), so its handoff? can't be "
+                        "judged: run `lane ls --check` bare")
+    if row["handoff_why"]:
+        say(f"lane {lane_id}: handoff? {row['handoff_why']}")
+        return 1
+    say(f"lane {lane_id}: handoff? clear")
+    return 0
+
+
+def cmd_ls(args) -> int | None:
     repo = lanes_repo()
+    if args.check:
+        if args.json or args.requests:
+            raise LaneError("--check prints one verdict: drop --json and --requests")
+        return check_own_lane(repo)
     if args.requests:
         reqs = {}
         for lane in filter(lanelib.is_live, repo.lanes(shared=True)):  # stale: claims void
@@ -5468,7 +5505,7 @@ def park_gates(repo: Repo, lane: dict, path: str, here: list[dict]) -> None:
     if prs is None:
         raise LaneError(f"gh can't answer (no network or credential), so lane {lane_id}'s handoff? "
                         f"can't clear: rerun `lane park {lane_id}` once it can")
-    if needs_handoff(repo, lane, ref, merges_of(repo, prs, lane, branch)):
+    if handoff_why(repo, lane, ref, merges_of(repo, prs, lane, branch)):
         raise LaneError(f"lane {lane_id}'s record may be behind its work (the board's handoff?): "
                         "a commit, a merge or a session ended after its last write. Hand it off "
                         f"from the lane's own session, then rerun `lane park {lane_id}`")
@@ -6867,6 +6904,8 @@ def parser() -> argparse.ArgumentParser:
     p = sub.add_parser("ls", help="the board (derived live)")
     p.add_argument("--json", action="store_true")
     p.add_argument("--requests", action="store_true", help="request -> lane, from claims only")
+    p.add_argument("--check", action="store_true",
+                   help="from a lane: exit 1 and say why if its row shows handoff?; run it bare")
     p = sub.add_parser("open", help="start a lane's session in a new tmux window, in plan mode")
     p.add_argument("id")
     p.add_argument("--focus", action="store_true",
@@ -7025,7 +7064,7 @@ def main(argv=None) -> int:
         take_lead()
     if rc and rc < 0:  # a command died of signal -rc, or a Ctrl-C hit `lane` itself
         return die_of(-rc)  # only now: the lock's holder line is cleared and the lock let go
-    return rc or 0  # only `lock` (its command's) and `trial` return a code
+    return rc or 0  # only `lock` (its command's), `trial` and `ls --check` return a code
 
 
 if __name__ == "__main__":
