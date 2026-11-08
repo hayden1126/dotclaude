@@ -348,22 +348,24 @@ class Files(unittest.TestCase):
         flat = " ".join(read(os.path.join(SKILL, "MAINTAIN.md")).split())
         step6 = flat[flat.index("6. **Finish.**"):flat.index("## Commit")]
         self.assertIn("Ask these in order and stop at the first that applies", step6)
-        order = [step6.index(p) for p in ("**Clean?**", "**Blocked?**", "**Changed.**", "Raise `ready_timeout`",
-                                          "The final runs, on the final files", "Write the Measured line",
+        order = [step6.index(p) for p in ("**Clean?**", "**Blocked?**", "**Changed.**",
+                                          "The final runs, on the final files", "Check `ready_timeout`",
+                                          "Write the Measured line",
                                           "commit only with the user's say")]
         self.assertEqual(order, sorted(order))
         for phrase in ("Nothing was edited or replaced, the last full run passed", "edit nothing, and stop",
-                       "no full run can be made to pass (the app is broken, it never became ready, or the failure "
-                       "can't be traced)",
+                       "step 5 found a failure it can't fix (the app is broken, or the cause can't be traced)",
                        "a changed check can't be proved",
                        "Make no more runs, write no Measured line, commit nothing",
                        "list every file changed or replaced, and stop: the user decides what to keep",
                        "Stop at the first failure: a failed run, or a screenshot or evidence file that is missing or "
                        "shows the wrong thing",
                        "An exit 3 goes straight to question 2, with no rerun",
-                       "A launch refused for a held port, with no exit 3 before it, gets one rerun",
-                       "(one exists, or question 2 would have stopped the pass)",
-                       "Doing this before the final runs means they prove it",
+                       "A launch refused for a held port, with no exit 3 before it, repeats that one run once in the "
+                       "whole pass; a second refusal is question 2",
+                       "One exists now, since the final full run passed, and it never changes once set",
+                       "raise it (never lower it from a run of this pass, which may have been warm) and repeat the "
+                       "final full run once on the raised file",
                        "every file changed or replaced, then commit only with the user's say",
                        "It records the final runs, so it is the one edit made after them"):
             with self.subTest(phrase=phrase):
@@ -584,7 +586,7 @@ class UpkeepRunFindings(unittest.TestCase):
             "widening: widening is raising it to rescue a failing run with no measurement behind it",
             "The comment beside `ready_timeout` carries the numbers it came from",
             "never lower it from a run of this pass, which may have been warm"))
-        self.assertIn("Raise `ready_timeout` if the section 3 rule gives more for the first ready run's",
+        self.assertIn("Check `ready_timeout` by the skill's section 3 rule against the first ready run's",
                       maintain_step(6))
         self.assertIn("in a comment beside it that carries the numbers it came from", self.generator)
 
@@ -593,10 +595,12 @@ class UpkeepRunFindings(unittest.TestCase):
         step6 = maintain_step(6)
         self.assert_phrases(step6, (
             "Write the Measured line, the only step that writes it, whole: the template's lead-in",
-            "the final full run's `duration_seconds` and the final quick run's",
+            "the last full run's `duration_seconds` and the final quick run's",
             "The final runs, on the final files: one full run, then one `--quick` run",
             "`full 12.0, quick 7.7`"))
         self.assertNotIn("as the cold one", self.maintain)
+        self.assertIn("the app is broken, a failure can't be traced, a run exited 3, or a changed check can't be "
+                      "proved", " ".join(self.maintain.split()))
         self.assertIn("(normally the first ready run)", maintain_step(1))
         recipe = read(os.path.join(TEMPLATE, "SKILL.md"))
         self.assertRegex(recipe, r"(?m)^Measured `duration_seconds`, warm \(a new skill adds its cold first run in parentheses\): ")

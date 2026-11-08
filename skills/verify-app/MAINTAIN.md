@@ -11,10 +11,9 @@ End with exactly one, and say which:
 
 - **clean:** every feature was read and driven live, and nothing needs changing. No commit.
 - **changed:** proven corrections to the verify skill, a refresh from the template included,
-  committed
-  only with the user's say.
-- **blocked:** the pass stopped in step 1, no full run can be made to pass, or a changed check
-  can't be proved. Say exactly what blocked it.
+  committed only with the user's say.
+- **blocked:** the pass stopped in step 1, the app is broken, a failure can't be traced, a run
+  exited 3, or a changed check can't be proved. Say exactly what blocked it.
 
 Two terms, used the same way everywhere below:
 
@@ -123,26 +122,26 @@ takes the file for binary (ugrep can) prints no matches and no error.
    1. **Clean?** Nothing was edited or replaced, the last full run passed, and the skill's section
       3 rule wouldn't raise `ready_timeout` for the first ready run's `ready_seconds`. Report every
       feature's result and this pass's times, edit nothing, and stop.
-   2. **Blocked?** Step 1 stopped; or no full run can be made to pass (the app is broken, it never
-      became ready, or the failure can't be traced); or a run exited 3 (cleanup failed: name each
-      process in `processes_left`, and never signal one marked `outside_repo`); or a changed check
-      can't be proved. Make no more runs, write no Measured line, commit nothing. Report what
-      stopped it and its manifest, list every file changed or replaced, and stop: the user decides
-      what to keep.
+   2. **Blocked?** Step 1 stopped; or step 5 found a failure it can't fix (the app is broken, or
+      the cause can't be traced); or a run exited 3 (cleanup failed: name each process in
+      `processes_left`, and never signal one marked `outside_repo`); or a changed check can't be
+      proved. Make no more runs, write no Measured line, commit nothing. Report what stopped it and
+      its manifest, list every file changed or replaced, and stop: the user decides what to keep.
    3. **Changed.** Everything else. In order:
-      1. Raise `ready_timeout` if the section 3 rule gives more for the first ready run's
-         `ready_seconds` (one exists, or question 2 would have stopped the pass); never lower it
-         from a run of this pass, which may have been warm. Doing this before the final runs means
-         they prove it.
-      2. The final runs, on the final files: one full run, then one `--quick` run, then open the
+      1. The final runs, on the final files: one full run, then one `--quick` run, then open the
          full run's screenshots and confirm its evidence survived cleanup. Stop at the first
          failure: a failed run, or a screenshot or evidence file that is missing or shows the wrong
          thing. An exit 3 goes straight to question 2, with no rerun. A launch refused for a held
-         port, with no exit 3 before it, gets one rerun. A failure with a new fix to make goes back
-         to step 5. Anything else is question 2: blocked, and the report names the failure as it
-         was.
+         port, with no exit 3 before it, repeats that one run once in the whole pass; a second
+         refusal is question 2. A failure with a new fix to make goes back to step 5. Anything else
+         is question 2: blocked, and the report names the failure as it was.
+      2. Check `ready_timeout` by the skill's section 3 rule against the first ready run's
+         `ready_seconds`. One exists now, since the final full run passed, and it never changes
+         once set, so the rule gives the same answer every time it is asked. If it gives more,
+         raise it (never lower it from a run of this pass, which may have been warm) and repeat the
+         final full run once on the raised file, under the same stop rules as step 6.3.1.
       3. Write the Measured line, the only step that writes it, whole: the template's lead-in, then
-         the final full run's `duration_seconds` and the final quick run's. So
+         the last full run's `duration_seconds` and the final quick run's. So
          `full 12.0, quick 7.7`. It records the final runs, so it is the one edit made after them.
       4. Report the outcome, every feature's result and every file changed or replaced, then
          commit only with the user's say.
