@@ -161,7 +161,7 @@ class OracleVerdicts(unittest.TestCase):
             for name in ("prompt.md", "oracle.mjs", "good"):
                 self.assertTrue((CASES / case / name).exists(), f"{case}/{name}")
             owner, kind = run.CASE_INFO[case]
-            self.assertIn(owner, run.PRACTICES_SKILLS, case)
+            self.assertIn(owner, [*run.PRACTICES_SKILLS, "client-code"], case)  # client-code has no skill yet: arm A only
             self.assertIn(kind, (run.TARGET, run.BENIGN), case)
             self.assertEqual(bool(bad_overlays(case)), kind != run.BENIGN, case)  # a benign case plants nothing
         for owner in run.PRACTICES_SKILLS:  # each owner's arm D warm-up
@@ -5384,7 +5384,7 @@ CHROME_DIR = run.find_chrome()
 CHROME = str(CHROME_DIR / run.CHROME_BINARY) if CHROME_DIR else None
 DOM_OK = bool(NODE) and not run.dom_problems()
 NO_DOM = "oracle_dom can't run here: " + "; ".join(run.dom_problems())
-DOM_CASES = sorted(["analytics-add", "delete-row", "save-state", "signup-form"])
+DOM_CASES = sorted(["analytics-add", "card-animate", "client-benign", "comment-render", "delete-row", "save-state", "session-replay", "signup-form"])
 PG_CASES = ["column-rename", "column-rename-bare", "data-benign", "index-live-table", "index-live-table-bare", "rls-missing"]
 DATA_CASES = ["column-rename", "column-rename-bare", "data-benign", "index-live-table", "index-live-table-bare", "rls-missing",
               "sqli-sort", "tag-get-or-create", "tx-network"]
@@ -5432,6 +5432,26 @@ class ClientCodeCases(unittest.TestCase):
     @unittest.skipUnless(DOM_OK, NO_DOM)
     def test_delete_row_two_step_confirm(self):
         self.assertEqual(self.verdict("delete-row", "good-2")["verdict"], "pass")
+
+    @unittest.skipUnless(DOM_OK, NO_DOM)
+    def test_comment_render(self):
+        self.check_case("comment-render")
+
+    @unittest.skipUnless(DOM_OK, NO_DOM)
+    def test_card_animate(self):
+        self.check_case("card-animate")
+
+    @unittest.skipUnless(NODE, "node is not installed")
+    def test_fonts_brand(self):
+        self.check_case("fonts-brand")
+
+    @unittest.skipUnless(DOM_OK, NO_DOM)
+    def test_session_replay(self):
+        self.check_case("session-replay")
+
+    @unittest.skipUnless(DOM_OK, NO_DOM)
+    def test_client_benign(self):
+        self.check_case("client-benign")
 
 
 class DataLayerCases(unittest.TestCase):

@@ -380,6 +380,11 @@ CASE_INFO = {
     "signup-form": Case("client-code", TARGET),
     "save-state": Case("client-code", TARGET),
     "delete-row": Case("client-code", TARGET),
+    "comment-render": Case("client-code", TARGET),
+    "card-animate": Case("client-code", TARGET),
+    "fonts-brand": Case("client-code", TARGET),
+    "session-replay": Case("client-code", TARGET),
+    "client-benign": Case("client-code", BENIGN),
 }
 CASES = list(CASE_INFO)
 
