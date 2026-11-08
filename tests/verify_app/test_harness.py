@@ -56,7 +56,8 @@ SLOTS = {
 # click_text targets on the fixture's /svg and /targets pages: (row, path, text, expected). expected
 # is the #result text the one matching control sets, or (exit code, the count the error names).
 # Rows marked * fail on 5eb0a9d's harness: an SVG element's innerText is undefined, so the filter
-# threw on every poll, and innerText alone missed the source text under text-transform.
+# threw on every poll, and innerText alone missed the source text under text-transform. Rows marked +
+# fail on a6c5997's harness, which took either text at once, so a hidden span's words matched too.
 CLICK_TARGETS = (
     ("* HTML button beside an SVG <a> and an SVG role=button", "/svg", "Plain", "plain"),
     ("* SVG role=button by its textContent", "/svg", "Svg button", "svg button"),
@@ -66,13 +67,22 @@ CLICK_TARGETS = (
     ("two block children as one line", "/targets", "A B", "stacked"),
     ("two equal matches", "/targets", "Twin", (1, 2)),
     ("zero matches", "/targets", "Nobody", (1, 0)),
+    ("+ rendered text beats the source text of a button with a hidden span", "/targets", "Save draft",
+     "save draft"),
+    ("rendered text leaves out a hidden span", "/targets", "Save", "save"),
 )
 # Page.evaluate results: (row, expression, expected). expected is the value, or (JourneyError, text
 # its message names). Rows marked * changed from 5eb0a9d's harness, which checked only the top level
 # and trusted CDP's subtype. Deliberate gaps: NaN, Infinity, -0 and a BigInt at the top come back as
 # None (CDP sends them as unserializableValue); a getter that throws is a PageError, the page's own
-# error; a Proxy whose getPrototypeOf trap lies about a non-plain target is copied by its own keys.
+# error; a Proxy whose getPrototypeOf trap lies about a non-plain target is copied by its own keys; a
+# page that replaced Object.keys or Object.getPrototypeOf before the call can fool the walk. Rows
+# marked + fail on a6c5997's harness. Each row runs on a fresh page, so a row that replaces a builtin
+# leaves the next one alone.
 UNRETURNABLE = "JourneyError"
+NESTED_297 = 1
+for _ in range(297):
+    NESTED_297 = [NESTED_297]
 EVALUATE_ROWS = (
     ("boolean", "true", True),
     ("number", "3", 3),
@@ -99,6 +109,20 @@ EVALUATE_ROWS = (
     ("* Proxy over a plain object, nested", "({p: new Proxy({a: [1]}, {})})", {"p": {"a": [1]}}),
     ("* Proxy over an array", "new Proxy([1, 2], {})", [1, 2]),
     ("Proxy over a DOM node", "new Proxy(document.body, {})", (UNRETURNABLE, "a HTMLBodyElement")),
+    ("+ 20,000 levels deep", "(() => { let o = null; for (let i = 0; i < 20000; i++) o = {n: o}; return o })()",
+     (UNRETURNABLE, "a value nested more than 297 levels deep")),
+    ("297 levels deep", "(() => { let o = 1; for (let i = 0; i < 297; i++) o = [o]; return o })()", NESTED_297),
+    ("+ 298 levels deep", "(() => { let o = 1; for (let i = 0; i < 298; i++) o = [o]; return o })()",
+     (UNRETURNABLE, "a value nested more than 297 levels deep")),
+    ("+ plain object from a same-origin iframe",
+     "(() => { const f = document.createElement('iframe'); document.body.append(f); "
+     "return f.contentWindow.JSON.parse('{\"a\":1}') })()", {"a": 1}),
+    ("+ class instance", "new (class Point { constructor(){ this.x = 1 } })()",
+     (UNRETURNABLE, "a Point instance, not a plain object")),
+    ("+ DOM node in an array, with Array.from and map replaced",
+     "(() => { Array.from = () => [{}]; Array.prototype.map = () => []; return [document.body] })()",
+     (UNRETURNABLE, "a HTMLBodyElement at [0]")),
+    ("a key named __proto__", """JSON.parse('{"__proto__": 1}')""", {"__proto__": 1}),
 )
 
 
@@ -845,7 +869,13 @@ class RealBrowser(Case):
         self.assertEqual(code, 0, output)
         self.assertEqual(manifest["journeys"][0]["outcome"], "passed", manifest["journeys"][0]["detail"])
         self.assertTrue((self.run_dir() / "after-wipe.png").stat().st_size)
+        self.assertEqual((self.run_dir() / "downloads" / "file.bin").read_bytes(), b"file bytes")
         self.assertTrue(json.loads((self.run_dir() / "network.json").read_text(encoding="utf-8")))
+
+    def test_a_run_folder_deleted_mid_run_gets_its_downloads_folder_back_at_the_next_save(self):
+        code, manifest, output = self.run_harness(journeys=["wipe_evidence_with_a_browser_open"], browser=True)
+        self.assertEqual(code, 0, output)
+        self.assertTrue((self.run_dir() / "downloads").is_dir())
 
     def test_clicks_wait_out_a_smooth_scroll(self):
         code, manifest, output = self.run_harness(journeys=["smooth_click", "smooth_click_text"], browser=True)
@@ -917,7 +947,9 @@ class EvaluateTable(unittest.TestCase):
         cls.top = pathlib.Path(tempfile.mkdtemp(prefix="verify-app-evaluate-")).resolve()
         cls.browser = cls.browser_mod.Browser(binary, cls.top, cls.top)
         cls.page = cls.browser_mod.Page(cls.browser, "about:blank")
-        cls.page.goto("data:text/html,<p>one</p><p>two</p>")
+
+    def fresh(self):
+        self.page.goto("data:text/html,<p>one</p><p>two</p>")
 
     @classmethod
     def tearDownClass(cls):
@@ -927,6 +959,7 @@ class EvaluateTable(unittest.TestCase):
     def test_every_row(self):
         for row, expression, expected in EVALUATE_ROWS:
             with self.subTest(row=row):
+                self.fresh()
                 if isinstance(expected, tuple) and expected[0] == UNRETURNABLE:
                     with self.assertRaises(self.browser_mod.JourneyError) as caught:
                         self.page.evaluate(expression)
@@ -936,23 +969,32 @@ class EvaluateTable(unittest.TestCase):
                     self.assertEqual(self.page.evaluate(expression), expected)
 
     def test_the_handle_is_released_on_every_path(self):
-        """A kept handle pins its object in the page for the tab's life."""
-        released = []
+        """A kept handle pins its object in the page for the tab's life: every result and every
+        thrown exception CDP hands back by reference is released, a page's own throw included."""
+        handed, released = [], []
         real = self.page.call
 
         def spy(method, params=None, timeout=30.0):
             if method == "Runtime.releaseObject":
                 released.append(params["objectId"])
-            return real(method, params, timeout)
+            reply = real(method, params, timeout)
+            if method in ("Runtime.evaluate", "Runtime.callFunctionOn"):
+                for found in (reply.get("result", {}), reply.get("exceptionDetails", {}).get("exception", {})):
+                    if "objectId" in found:
+                        handed.append(found["objectId"])
+            return reply
 
-        with mock.patch.object(self.page, "call", spy):
-            for _, expression, expected in EVALUATE_ROWS:
+        throws = ("(() => { throw new Error('the page threw') })()",
+                  "({get a() { throw new Error('a getter threw') }})")
+        for expression in [row[1] for row in EVALUATE_ROWS] + list(throws):
+            self.fresh()
+            with mock.patch.object(self.page, "call", spy):
                 try:
                     self.page.evaluate(expression)
-                except self.browser_mod.JourneyError:
+                except (self.browser_mod.JourneyError, self.browser_mod.PageError):
                     pass
-        by_reference = [row for row in EVALUATE_ROWS if row[1] not in ("true", "3", '"s"', "null", "undefined")]
-        self.assertEqual(len(released), len(by_reference))
+        self.assertGreater(len(handed), len(EVALUATE_ROWS))
+        self.assertEqual(sorted(released), sorted(handed))
 
 
 if __name__ == "__main__":

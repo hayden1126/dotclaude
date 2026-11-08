@@ -146,8 +146,18 @@ def wipe_evidence(ctx):
 def wipe_evidence_in_browser(ctx):
     ctx.page.goto("/")
     shutil.rmtree(ctx.evidence)
+    ctx.page.goto("/file.bin")
+    saved = ctx.page.download()
+    ctx.check(saved.read_bytes() == b"file bytes", "the download after the wipe was saved")
     shot = ctx.page.screenshot("after-wipe")
     ctx.check(shot.stat().st_size > 0, "the screenshot after the wipe was saved")
+
+
+def wipe_evidence_with_a_browser_open(ctx):
+    """No screenshot or download after the wipe: only the manifest's save makes the folder again."""
+    ctx.page.goto("/")
+    shutil.rmtree(ctx.evidence)
+    ctx.check(not ctx.evidence.exists(), "the run's folder is gone")
 
 
 def click_text_only(ctx):

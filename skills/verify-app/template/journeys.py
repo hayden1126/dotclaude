@@ -7,22 +7,25 @@ A journey is a function taking ctx. It drives the real user path, then checks th
   ctx.evidence        this run's evidence folder, a pathlib.Path
   ctx.get(path)       a GET that follows no redirect: .status, .headers, .text
   ctx.page            a browser tab, opened on first use (Page in browser.py): goto, click,
-                      click_text (by rendered or source text), fill, wait_for, evaluate,
-                      screenshot, download, network
+                      click_text (by rendered text, else source text), fill, wait_for,
+                      evaluate, screenshot, download, network
   ctx.check(ok, msg)  fails the journey with msg unless ok
   ctx.fact(key, val)  records a fact in the manifest
 
 Selectors: an id, an ARIA label or a data attribute first. A control with none of those is clicked
 by its visible text, ctx.page.click_text("Export SVG"), which fails unless exactly one visible
 button, link or role=button matches. An element matches when the text equals its rendered text
-(innerText, which applies CSS such as text-transform) or its source text (textContent), each with
-every whitespace run collapsed to one space and the ends trimmed, case-sensitive. So a big "A"
-above a small "Single letter" is "A Single letter", and "Export SVG" in the source still matches
-under text-transform: uppercase. Never by position alone.
+(innerText, which applies CSS such as text-transform and leaves out a hidden span), with every
+whitespace run collapsed to one space and the ends trimmed, case-sensitive. Only when no element's
+rendered text matches does it fall back to the source text (textContent, collapsed the same way).
+So a big "A" above a small "Single letter" is "A Single letter", "Export SVG" in the source still
+matches under text-transform: uppercase, and "Save draft" never picks a "Save" button with a
+hidden " draft" over one showing "Save draft". Never by position alone.
 
 evaluate and wait_for return only a boolean, number, string or None, or a plain array or object
-holding only those. An expression whose result is or holds a DOM node, a function, a Map or a
-cycle is a journey bug (exit 2): return !!el or el.textContent instead.
+holding only those, nested at most 297 deep. An expression whose result is or holds a DOM node,
+a function, a Map, a class instance or a cycle is a journey bug (exit 2): return !!el or
+el.textContent instead.
 """
 
 APP = {

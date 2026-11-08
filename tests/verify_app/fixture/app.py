@@ -42,7 +42,9 @@ TARGETS = ("""<!doctype html><title>targets</title><p id="result">idle</p>
 <button style="text-transform: uppercase" %s>Export svg</button>
 <button %s><span style="display:block">A</span><span style="display:block">B</span></button>
 <button %s>Twin</button><button %s>Twin</button>
-""" % (SET % "plain", SET % "transformed", SET % "stacked", SET % "twin 1", SET % "twin 2")).encode()
+<button %s>Save<span style="display:none"> draft</span></button><button %s>Save draft</button>
+""" % (SET % "plain", SET % "transformed", SET % "stacked", SET % "twin 1", SET % "twin 2", SET % "save",
+       SET % "save draft")).encode()
 # innerText is undefined on SVG elements, and the default selector matches an SVG <a> and role=button.
 SVG = ("""<!doctype html><title>svg</title><p id="result">idle</p>
 <svg width="300" height="50"><a href="#" onclick="event.preventDefault()"><text x="10" y="30">Svg link</text></a>

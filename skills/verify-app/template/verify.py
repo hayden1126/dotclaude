@@ -307,8 +307,11 @@ class Run:
 
     def save(self, name: str, text: str):
         """Write one evidence file in one step. The run's folder is made again first: a test runner
-        a journey starts may empty the folder it sits in, and the verdict must still be written."""
+        a journey starts may empty the folder it sits in, and the verdict must still be written. With
+        a browser open its downloads folder is made again too, for a download still to come."""
         self.dir.mkdir(parents=True, exist_ok=True)
+        if self.browser is not None:
+            (self.dir / "downloads").mkdir(exist_ok=True)
         temp = self.dir / f"{name}.tmp"
         temp.write_text(text, encoding="utf-8")
         os.replace(temp, self.dir / name)

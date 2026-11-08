@@ -76,10 +76,12 @@ names what a run must never send (a paid API, an email, a publish); a hit fails 
 Find a control by its id, ARIA label or a data attribute. One with none of those is clicked by its
 visible text with `ctx.page.click_text`, which fails unless exactly one visible element matches. An
 element matches when the text equals its rendered text (`innerText`, which applies CSS such as
-`text-transform`) or its source text (`textContent`), each with every whitespace run collapsed to
-one space and the ends trimmed, case-sensitive. Never by position alone. Before the first click, wait with `ctx.page.wait_for` for a sign the client is
-live (a request the client makes, or a value only client code sets): `goto` waits for the load
-event, and on a server-rendered page a click before hydration is lost without an error.
+`text-transform` and leaves out a hidden span), with every whitespace run collapsed to one space and
+the ends trimmed, case-sensitive. Only when no element's rendered text matches does it fall back to
+the source text (`textContent`, collapsed the same way). Never by position alone. Before the first
+click, wait with `ctx.page.wait_for` for a sign the client is live (a request the client makes, or
+a value only client code sets): `goto` waits for the load event, and on a server-rendered page a
+click before hydration is lost without an error.
 
 ## Evidence
 
@@ -125,7 +127,8 @@ manifest's `token`. Evidence is never deleted by cleanup.
   never be a test runner's output folder (Playwright's `test-results/` or `playwright-report/`,
   Cypress's `cypress/screenshots` or `cypress/videos`): the runner empties it at the start of each
   run, a spec a journey runs included. Under `node_modules/.cache/` it is lost on a fresh `npm ci`.
-  A run folder deleted mid-run is made again at the next write, but what it held is gone.
+  A run folder deleted mid-run is made again, with its `downloads/`, at the next write, but what
+  it held is gone, and so is the app's later output: it goes on into the deleted `app.log`.
 - <fill: app-specific edges, such as a lock file left after a SIGKILL, or "none">
 
 <!-- Adapted from pstack's create-verification-skill and maintain-verification-skill

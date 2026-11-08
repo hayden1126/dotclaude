@@ -60,11 +60,14 @@ CLICK_TEXT_JS = """(() => {
   const text = %s;
   // innerText is undefined on an SVG element, which still has textContent.
   const squash = value => String(value ?? "").replace(/\\s+/g, " ").trim();
-  const found = [...document.querySelectorAll(%s)].filter(el => {
+  const shown = [...document.querySelectorAll(%s)].filter(el => {
     const r = el.getBoundingClientRect();
-    return r.width && r.height && getComputedStyle(el).visibility !== "hidden"
-      && (squash(el.innerText) === text || squash(el.textContent) === text);
+    return r.width && r.height && getComputedStyle(el).visibility !== "hidden";
   });
+  // Rendered text first, so the words of a hidden span never make a second match. The source text
+  // only when no element renders the text: an SVG element, or a button under text-transform.
+  let found = shown.filter(el => squash(el.innerText) === text);
+  if (!found.length) found = shown.filter(el => squash(el.textContent) === text);
   if (found.length !== 1 || found[0].disabled) return {count: found.length, point: null};
   found[0].scrollIntoView({block: "center", behavior: "instant"});
   const r = found[0].getBoundingClientRect();
@@ -91,33 +94,68 @@ class JourneyError(Exception):
 # Runs in the page with the result as this, and returns a plain copy of it for the by-value fetch.
 # It throws, with UNRETURNABLE first in the message, on anything that fetch would mangle at any
 # depth: a DOM node, the window or a Map comes back as {}, a function or symbol is dropped, a cycle
-# is refused. Only a plain object (its prototype Object.prototype or null) or an array, holding
-# primitives or more of those, goes through. It walks the value rather than trusting CDP's subtype:
-# a NodeList can be labelled an array, and a reactive Proxy over a plain object (Vue, MobX) is
-# labelled proxy. It returns the copy, not this, because CDP sends a Proxy by value as {}; and the
-# copy holds exactly what the walk read, so a getter can't hand the fetch something else.
+# is refused, and more than DEPTH_LIMIT arrays and objects nested in each other pass CDP's own
+# limit. Only a plain object or an array, holding primitives or more of those, goes through. A plain
+# object's prototype is Object.prototype, null, or another realm's Object.prototype (from an
+# iframe's JSON.parse): one whose own prototype is null and whose constructor is named Object. It walks the value rather than
+# trusting CDP's subtype: a NodeList can be labelled an array, and a reactive Proxy over a plain
+# object (Vue, MobX) is labelled proxy. It returns the copy, not this, because CDP sends a Proxy by
+# value as {}; and the copy holds exactly what the walk read, so a getter can't hand the fetch
+# something else. It walks with plain index and key loops and takes the builtins it needs before
+# reading the value, so a page that replaced Array.from or Array.prototype.map, or a getter that
+# replaces Object.keys mid-walk, can't change what it checks. Known limit: a page that replaced
+# Object.keys or Object.getPrototypeOf before the call still could.
 UNRETURNABLE = "verify-unreturnable:"
+# CDP's message encoder refuses a reply nested too deep ("CBOR: stack limit exceeded"). Measured on
+# chrome-headless-shell, 297 arrays or objects nested in each other come back by value and 298 don't.
+# The walk stops there, before the 20,000 levels that overflow its own stack.
+DEPTH_LIMIT = 297
 WALK_JS = """function () {
   "use strict";
-  const open = new Set();
+  const protoOf = Object.getPrototypeOf, keysOf = Object.keys, isArray = Array.isArray;
+  const own = Object.getOwnPropertyDescriptor, apply = Reflect.apply, create = Object.create;
+  const objectProto = Object.prototype, tagOf = Object.prototype.toString;
+  const open = [];  // the containers on the path to the value being walked
   const fail = (what, path) => { throw new Error(MARK + what + (path ? " at " + path : "")); };
-  const walk = (value, path) => {
+  const named = proto => {
+    const ctor = proto === null ? undefined : own(proto, "constructor");
+    return ctor && typeof ctor.value === "function" ? String(ctor.value.name) : "";
+  };
+  const plain = value => {
+    const proto = protoOf(value);
+    return proto === objectProto || proto === null || (protoOf(proto) === null && named(proto) === "Object");
+  };
+  const walk = (value, path, depth) => {
     const kind = typeof value;
-    if (value === null || ["undefined", "boolean", "number", "string"].includes(kind)) return value;
+    if (value === null || kind === "undefined" || kind === "boolean" || kind === "number"
+        || kind === "string") return value;
     if (kind !== "object") fail("a " + kind, path);
-    if (open.has(value)) fail("a cycle", path);
-    const array = Array.isArray(value);
-    if (!array && ![Object.prototype, null].includes(Object.getPrototypeOf(value))) {
-      fail("a " + Object.prototype.toString.call(value).slice(8, -1), path);
+    for (let i = 0; i < open.length; i++) if (open[i] === value) fail("a cycle", path);
+    if (depth >= LIMIT) fail("a value nested more than " + LIMIT + " levels deep", "");
+    const array = isArray(value);
+    if (!array && !plain(value)) {
+      const tag = apply(tagOf, value, []);
+      if (tag !== "[object Object]") fail("a " + tag.substring(8, tag.length - 1), path);
+      const name = named(protoOf(value));
+      fail((name ? "a " + name + " instance" : "an object with its own prototype") + ", not a plain object", path);
     }
-    open.add(value);
-    const copy = array ? Array.from(value, (item, i) => walk(item, path + "[" + i + "]"))
-      : Object.fromEntries(Object.keys(value).map(key => [key, walk(value[key], path + "." + key)]));
-    open.delete(value);
+    open[open.length] = value;
+    let copy;
+    if (array) {
+      copy = [];
+      for (let i = 0; i < value.length; i++) copy[i] = walk(value[i], path + "[" + i + "]", depth + 1);
+    } else {
+      copy = create(null);  // so a key named __proto__ stays a key
+      const keys = keysOf(value);
+      for (let i = 0; i < keys.length; i++) {
+        copy[keys[i]] = walk(value[keys[i]], path + "." + keys[i], depth + 1);
+      }
+    }
+    open.length -= 1;
     return copy;
   };
-  return walk(this, "");
-}""".replace("MARK", json.dumps(UNRETURNABLE))
+  return walk(this, "", 0);
+}""".replace("MARK", json.dumps(UNRETURNABLE)).replace("LIMIT", str(DEPTH_LIMIT))
 
 
 def thrown(details: dict) -> str:
@@ -301,13 +339,15 @@ class Page:
 
     def evaluate(self, expression: str):
         """The expression's value, awaited: a boolean, number, string or None, or a plain array or
-        object holding only those, at any depth. Anything else, at the top or nested (a DOM node, a
-        function, a Map, a cycle), is a JourneyError at once. Asked for by value, CDP sends a DOM
-        node or a Map as {}, which reads as false at the top, so a wait_for on one would only time
-        out, and nested it hides in a value that looks fine. So the result is kept by reference and
-        WALK_JS checks it in the page before the by-value fetch."""
+        object holding only those, nested at most DEPTH_LIMIT deep. Anything else, at the top or
+        nested (a DOM node, a function, a Map, a class instance, a cycle), is a JourneyError at
+        once. Asked for by value, CDP sends a DOM node or a Map as {}, which reads as false at the
+        top, so a wait_for on one would only time out, and nested it hides in a value that looks
+        fine. So the result is kept by reference and WALK_JS checks it in the page before the
+        by-value fetch."""
         result = self.call("Runtime.evaluate", {"expression": expression, "awaitPromise": True})
         if "exceptionDetails" in result:
+            self.release_thrown(result)
             raise PageError(thrown(result["exceptionDetails"]))
         found = result["result"]
         if "objectId" not in found:  # a primitive, undefined or null: it came with its value
@@ -317,19 +357,31 @@ class Page:
                 reply = self.call("Runtime.callFunctionOn", {"functionDeclaration": WALK_JS,
                                                              "objectId": found["objectId"], "returnByValue": True})
             except PageError as exc:  # a value the walk passed yet CDP refused; anything else (a navigation) stays a PageError
-                if "reference chain" in str(exc) or "by value" in str(exc):
+                if any(why in str(exc) for why in ("reference chain", "by value", "stack limit")):
                     raise unreturnable(expression, f"a {found.get('className') or 'object'}") from None
                 raise
             if "exceptionDetails" in reply:
+                self.release_thrown(reply)
                 text = thrown(reply["exceptionDetails"])
                 if UNRETURNABLE not in text:  # the page's own code threw, such as a getter
                     raise PageError(text)
                 raise unreturnable(expression, text.split(UNRETURNABLE, 1)[1].splitlines()[0])
             return reply["result"].get("value")
         finally:
+            self.release(found["objectId"])
+
+    def release_thrown(self, reply: dict):
+        """A reply that threw holds two handles to what was thrown: its result and its exception."""
+        self.release(reply.get("result", {}).get("objectId"))
+        self.release(reply["exceptionDetails"].get("exception", {}).get("objectId"))
+
+    def release(self, object_id: str | None):
+        """Drop a handle CDP keeps, for a result or a thrown exception, so a long wait_for doesn't
+        pin one per poll for the tab's life. Best effort: a page that is gone took it along."""
+        if object_id:
             try:
-                self.call("Runtime.releaseObject", {"objectId": found["objectId"]})
-            except PageError:  # its page is gone, and the handle with it
+                self.call("Runtime.releaseObject", {"objectId": object_id})
+            except PageError:
                 pass
 
     def wait_for(self, expression: str, timeout: float = 30.0, what: str | None = None):
@@ -354,12 +406,15 @@ class Page:
     def click_text(self, text: str, selector: str = "button, a, [role=button]", timeout: float = 30.0):
         """Click the one visible element matching selector whose text is exactly text, for a control
         with no id, ARIA label or data attribute. An element matches when text equals its rendered
-        text (innerText, which applies CSS such as text-transform) or its source text (textContent,
-        which an SVG element has and innerText lacks), each with every whitespace run collapsed to
-        one space and the ends trimmed, compared case-sensitively. So a button showing a big "A"
-        above a small "Single letter" is "A Single letter", and one whose source says "Export svg"
-        under text-transform: uppercase matches "Export svg" and "EXPORT SVG". Zero matches,
-        several, or one that stays disabled until the timeout is a PageError naming the count."""
+        text (innerText, which applies CSS such as text-transform and leaves out a display: none
+        span), with every whitespace run collapsed to one space and the ends trimmed, compared
+        case-sensitively. Only when no element's rendered text matches does it fall back to the
+        source text (textContent, collapsed the same way), which an SVG element has and innerText
+        lacks. So a button showing a big "A" above a small "Single letter" is "A Single letter"; one
+        whose source says "Export svg" under text-transform: uppercase matches "EXPORT SVG" and, by
+        the fallback, "Export svg"; and "Save draft" picks the button showing that over one showing
+        "Save" beside a hidden " draft". Zero matches, several, or one that stays disabled until the
+        timeout is a PageError naming the count."""
         script = CLICK_TEXT_JS % (json.dumps(text), json.dumps(selector))
         deadline = time.monotonic() + timeout
         found, last = None, ""
@@ -392,15 +447,17 @@ class Page:
     def screenshot(self, name: str, timeout: float = 30.0) -> pathlib.Path:
         """Save <name>.png in the run's evidence folder and return its path. Anything in name outside
         letters, digits, dot, dash and underscore becomes _, so a JOURNEYS key like "a/b" is safe. A
-        run folder deleted mid-run is made again."""
+        run folder deleted mid-run is made again, with its downloads folder."""
         shot = self.call("Page.captureScreenshot", {"format": "png"}, timeout)
         path = self.browser.out_dir / (re.sub(r"[^A-Za-z0-9._-]", "_", name) + ".png")
-        path.parent.mkdir(parents=True, exist_ok=True)
+        (self.browser.out_dir / "downloads").mkdir(parents=True, exist_ok=True)
         path.write_bytes(base64.b64decode(shot["data"]))
         return path
 
     def download(self, timeout: float = 30.0) -> pathlib.Path:
-        """Wait for the next finished download and return its file."""
+        """Wait for the next finished download and return its file. A downloads folder deleted
+        mid-run is made again first, for a download that starts after this call."""
+        (self.browser.out_dir / "downloads").mkdir(parents=True, exist_ok=True)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             names = {e["params"]["guid"]: e["params"]["suggestedFilename"] for e in self.browser.events

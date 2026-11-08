@@ -58,13 +58,15 @@ The harness goes in a repo folder, because sandboxed Bash can write there and ca
    relative to the repo root. The recipe's Measured line says `not measured yet`, which is not a
    marker: section 3 replaces it.
 3. Selectors: an id, an ARIA label or a data attribute first. A control with none is clicked by its
-   visible text with `ctx.page.click_text`. It matches when the text equals either the rendered
-   text (`innerText`, which applies CSS such as `text-transform`) or the source text
-   (`textContent`), each with every whitespace run collapsed to one space and the ends trimmed,
-   case-sensitive, and it needs exactly one visible match. So a button showing a big "A" above a
-   small "Single letter" is `"A Single letter"`, and one whose source says "Export svg" under
-   `text-transform: uppercase` matches `"Export svg"` and `"EXPORT SVG"`. Never by position alone,
-   not even with a text check.
+   visible text with `ctx.page.click_text`. It matches when the text equals the rendered text
+   (`innerText`, which applies CSS such as `text-transform` and leaves out a hidden span), with
+   every whitespace run collapsed to one space and the ends trimmed, case-sensitive. Only when no
+   element's rendered text matches does it fall back to the source text (`textContent`, collapsed
+   the same way). It needs exactly one visible match. So a button showing a big "A" above a small
+   "Single letter" is `"A Single letter"`; one whose source says "Export svg" under
+   `text-transform: uppercase` matches `"EXPORT SVG"` and, by the fallback, `"Export svg"`; and
+   `"Save draft"` clicks the button showing that, not one showing "Save" beside a hidden
+   " draft". Never by position alone, not even with a text check.
    Adding attributes to product code is out of scope here: note the gap for the user instead.
 4. Before a journey's first click, wait for a sign the client is live with `ctx.page.wait_for`: a
    request the client makes (`performance.getEntriesByName(...)`), or a value only client code
@@ -86,10 +88,14 @@ The harness goes in a repo folder, because sandboxed Bash can write there and ca
    - Never a test runner's output folder: Playwright's `test-results/` (its default `outputDir`) or
      `playwright-report/`, Cypress's `cypress/screenshots` or `cypress/videos`.
 
-   Check git with `git check-ignore -q <dir>/probe` (exit 0 means ignored). If it isn't ignored and
-   `git diff --quiet HEAD -- .gitignore` exits 0 (no uncommitted changes there), add one line to
-   `.gitignore` and tell the user. If `.gitignore` has uncommitted changes, don't edit it: tell the
-   user the line to add, and leave `.gitignore` out of the commit.
+   Never put it under the harness folder: the commit takes that whole folder. Check git with
+   `git check-ignore -q <dir>/probe` (exit 0 means ignored). If it isn't ignored and
+   `git status --porcelain -- .gitignore` prints nothing (no untracked, unstaged or staged change
+   there), add one line to `.gitignore` and tell the user. If it prints anything, don't edit
+   `.gitignore`, since the commit would sweep in the user's own changes: add the line to the repo's
+   local exclude file, the path `git rev-parse --git-path info/exclude` prints (right in a worktree
+   too), tell the user the line to add to `.gitignore` later, and leave `.gitignore` out of the
+   commit.
 
 ## 3. Prove it once
 
@@ -131,11 +137,12 @@ git commit --only -m "<message>" -- .claude/skills/verify <harness> .gitignore
 git diff --cached --name-status | diff "$TMPDIR/staged-before" -
 ```
 
-Drop `.gitignore` from both lines when section 2 left it unchanged, and when
-`git diff HEAD -- .gitignore` shows any change beyond the one line it added: `git add` stages the
+Drop `.gitignore` from both lines when section 2 left it unchanged (an exclude-file line
+included), and when it now holds any change beyond the one line section 2 added:
+`git diff HEAD -- .gitignore` shows that for a tracked file, and for one
+`git status --porcelain -- .gitignore` marks untracked (`??`), read the file. `git add` stages the
 whole file, so it would sweep the user's own edits into this commit. The last line prints nothing
-when the staged set is unchanged. For upkeep later, follow
-`<skill dir>/MAINTAIN.md`.
+when the staged set is unchanged. For upkeep later, follow `<skill dir>/MAINTAIN.md`.
 
 <!-- Adapts pstack's create-verification-skill and maintain-verification-skill
 (github.com/cursor/plugins, plugins/pstack @ 3fe2823, and its feature-map example @ 4612556,

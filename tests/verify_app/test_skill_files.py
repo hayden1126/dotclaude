@@ -186,7 +186,9 @@ class Files(unittest.TestCase):
         recipe = " ".join(read(os.path.join(TEMPLATE, "SKILL.md")).split())
         for phrase in ("The evidence dir must be outside the dev server's file watcher as well as git-ignored",
                        "never be a test runner's output folder (Playwright's `test-results/`",
-                       "the runner empties it at the start of each run", "lost on a fresh `npm ci`"):
+                       "the runner empties it at the start of each run", "lost on a fresh `npm ci`",
+                       "A run folder deleted mid-run is made again, with its `downloads/`, at the next write",
+                       "so is the app's later output: it goes on into the deleted `app.log`"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, recipe)
 
@@ -200,13 +202,27 @@ class Files(unittest.TestCase):
     def test_the_ignore_line_never_sweeps_the_users_gitignore_edits(self):
         """git add .gitignore stages the whole file, so only a clean one is edited and committed."""
         generator = " ".join(read(os.path.join(SKILL, "SKILL.md")).split())
-        for phrase in ("If it isn't ignored and `git diff --quiet HEAD -- .gitignore` exits 0 (no uncommitted "
-                       "changes there), add one line to `.gitignore` and tell the user",
-                       "If `.gitignore` has uncommitted changes, don't edit it: tell the user the line to add, "
+        for phrase in ("If it isn't ignored and `git status --porcelain -- .gitignore` prints nothing (no "
+                       "untracked, unstaged or staged change there), add one line to `.gitignore` and tell the user",
+                       "If it prints anything, don't edit `.gitignore`",
                        "and leave `.gitignore` out of the commit",
-                       "and when `git diff HEAD -- .gitignore` shows any change beyond the one line it added"):
+                       "and when it now holds any change beyond the one line section 2 added",
+                       "for one `git status --porcelain -- .gitignore` marks untracked (`??`), read the file"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, generator)
+        # git diff --quiet exits 0 for an untracked file, so it can't be the clean check.
+        self.assertNotIn("git diff --quiet HEAD -- .gitignore", generator)
+
+    def test_a_dirty_gitignore_still_leaves_the_evidence_ignored(self):
+        """Without an ignore line the evidence shows as untracked, and the harness folder is committed whole."""
+        generator = " ".join(read(os.path.join(SKILL, "SKILL.md")).split())
+        for phrase in ("add the line to the repo's local exclude file, the path "
+                       "`git rev-parse --git-path info/exclude` prints (right in a worktree too)",
+                       "tell the user the line to add to `.gitignore` later",
+                       "Never put it under the harness folder: the commit takes that whole folder"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, generator)
+        self.assertNotIn(".git/info/exclude", generator, "a worktree's .git is a file: ask git for the path")
 
     def test_the_measured_line_waits_for_the_first_run_without_a_marker(self):
         """verify.py refuses while any marker remains, and the times only exist after a run."""
@@ -222,11 +238,14 @@ class Files(unittest.TestCase):
                       "`duration_seconds`", generator)
         self.assertIn("`not measured yet`, which is not a marker", generator)
 
-    def test_click_text_is_documented_as_the_rendered_or_source_text(self):
-        """innerText applies text-transform and is undefined on SVG; textContent covers both."""
+    def test_click_text_is_documented_as_the_rendered_text_then_the_source_text(self):
+        """innerText applies text-transform and leaves out a hidden span, and is undefined on SVG;
+        textContent covers SVG, so it is the fallback when no rendered text matches."""
         browser = read(os.path.join(TEMPLATE, "browser.py"))
         script = re.search(r'CLICK_TEXT_JS = """(.*?)"""', browser, re.S).group(1)
-        self.assertIn("squash(el.innerText) === text || squash(el.textContent) === text", script)
+        self.assertIn("let found = shown.filter(el => squash(el.innerText) === text);", script)
+        self.assertIn("if (!found.length) found = shown.filter(el => squash(el.textContent) === text);", script)
+        self.assertNotIn("innerText) === text ||", script, "either text at once lets a hidden span's words match")
         self.assertNotIn("el.innerText.", script, "innerText read without a guard throws on SVG")
         for name, text in (("browser.py", browser), ("journeys.py", read(os.path.join(TEMPLATE, "journeys.py"))),
                            ("generator", read(os.path.join(SKILL, "SKILL.md"))),
@@ -234,9 +253,10 @@ class Files(unittest.TestCase):
             flat = " ".join(text.split())
             with self.subTest(name=name):
                 for phrase in ("rendered text", "innerText", "source text", "textContent", "text-transform",
-                               "case-sensitive"):
+                               "case-sensitive", "hidden span"):
                     self.assertIn(phrase, flat)
                 self.assertRegex(flat, r"whitespace run collapsed to one space and the ends trimmed")
+                self.assertRegex(flat, r"[Oo]nly when no element's rendered text matches does it fall back")
 
     def test_the_recipe_covers_a_change_no_journey_covers(self):
         recipe = " ".join(read(os.path.join(TEMPLATE, "SKILL.md")).split())
