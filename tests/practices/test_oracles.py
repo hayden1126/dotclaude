@@ -7217,6 +7217,23 @@ class DomHarness(unittest.TestCase):
     def test_a_beacon_does_not_stall_settle(self):
         self.assert_verdict(self.dom_run("beacon"), "pass")
 
+    def test_dialogs_are_answered_and_logged(self):
+        self.assert_verdict(self.dom_run("dialogs"), "pass")
+
+    def test_wildcard_modes_results_and_crashed(self):
+        self.assert_verdict(self.dom_run("action-wild"), "pass")
+
+    def test_settle_ignores_timers_and_wait_does_not(self):
+        self.assert_verdict(self.dom_run("timers"), "pass")
+
+    def test_storage_is_set_before_the_first_render(self):
+        self.assert_verdict(self.dom_run("storage"), "pass")
+
+    def test_a_hook_with_no_directive_is_missing(self):
+        out = self.dom_run("no-directive")
+        self.assert_verdict(out, "broken")
+        self.assertIn("Next refuses to build this", self.check(out, "missing")["detail"])
+
     def test_prototype_hooks_cannot_drop_an_action(self):
         for variant in ("bad-tojson", "bad-array-setter", "bad-hasinstance"):
             with self.subTest(variant=variant):
