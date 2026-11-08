@@ -7183,7 +7183,31 @@ class DomHarness(unittest.TestCase):
         self.assertIn(self.TAMPERED, [c["name"] for c in out["checks"]])
 
     def test_a_page_cannot_switch_an_action_mode_back(self):
-        self.assert_verdict(self.dom_run("save-fail", "good-mode-forge"), "pass")
+        # The page tries the control object and answers the action with a request of its own;
+        # the oracle holds the mode, so the save still fails, and the stray request is tampering.
+        out = self.dom_run("save-fail", "good-mode-forge")
+        self.assert_verdict(out, "unresolved")
+        self.assertTrue(self.check(out, "security: a failed save keeps the typed text")["ok"], json.dumps(out, indent=1))
+        self.assertTrue(self.check(out, "security: a failed save shows an error")["ok"], json.dumps(out, indent=1))
+        self.assertIn(self.TAMPERED, [c["name"] for c in out["checks"]])
+
+    def test_prototype_hooks_cannot_drop_an_action(self):
+        for variant in ("bad-tojson", "bad-array-setter", "bad-hasinstance"):
+            with self.subTest(variant=variant):
+                out = self.dom_run("double-submit", variant)
+                self.assert_verdict(out, "fail")
+                self.assertEqual(self.check(out, "security: a double click sends one action")["detail"], "2 sent")
+
+    def test_image_imports_carry_real_dimensions(self):
+        self.assert_verdict(self.dom_run("assets-dims"), "pass")
+
+    def test_css_comments_and_paths_outside_the_project(self):
+        self.assert_verdict(self.dom_run("css-edges"), "pass")
+
+    def test_a_css_package_import_is_unresolved(self):
+        out = self.dom_run("css-package")
+        self.assert_verdict(out, "unresolved")
+        self.assertIn("doesn't resolve CSS packages", json.dumps(out))
 
     def test_a_forged_mount_status_still_scores_the_render(self):
         out = self.dom_run("mount-forge")

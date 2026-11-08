@@ -8,6 +8,8 @@ const PAGES = [
   ["app/dom/server/page.tsx", "#q", "hi|a,b", "q=hi&tag=a&tag=b"],
   ["app/dom/sync/page.tsx", "#sync", "abc", ""],
   ["app/dom/inherited/page.tsx", "#sp", '{"constructor":"1","toString":"x"}', "constructor=1&toString=x"],
+  ["app/dom/status-use/page.tsx", "#status", "open", "status=open"],
+  ["app/dom/status-sync/page.tsx", "#status", "undefined", "status=open"],
 ];
 
 await oracle(async (t) => {

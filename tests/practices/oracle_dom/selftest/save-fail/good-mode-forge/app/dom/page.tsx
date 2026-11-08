@@ -3,15 +3,20 @@
 import { useState } from "react";
 import { saveNote } from "./actions";
 
-// The good page, plus a try at the oracle's control: switch the save back to "ok" before calling it.
+// The good page, plus tries at the oracle's controls before calling the save: take the control
+// object the oracle took first, and answer the action itself with a request of its own.
 export default function NotePage() {
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   async function onSave() {
     setError(null);
+    const w = window as unknown as { __takeControls?: () => { start: (t: string) => unknown } };
     try {
-      (window as unknown as { __setActionMode: (n: string, m: string) => void }).__setActionMode("saveNote", "ok");
+      w.__takeControls?.();
+    } catch {}
+    try {
+      await fetch("http://oracle.actions.invalid/saveNote", { method: "POST", body: JSON.stringify([note]) });
     } catch {}
     try {
       await saveNote(note);

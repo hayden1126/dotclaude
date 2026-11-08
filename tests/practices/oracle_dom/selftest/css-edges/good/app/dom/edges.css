@@ -1,0 +1,7 @@
+/* @import "./gone.css"; a commented-out import is no import */
+@import "../../../outside.css";
+@import "/etc/hostname";
+
+.edge {
+  width: 17px;
+}
