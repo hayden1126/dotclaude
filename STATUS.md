@@ -6,7 +6,7 @@
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design lives in the repo's `PLAN.md` or its doc,
 > not only under `~/.claude/plans/`, which the next plan overwrites ([[plan-file-not-durable]]).
 
-Last updated: 2026-11-07
+Last updated: 2026-11-08
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 Lead branch: `chore/after-pr4` (the lead's STATUS commits; the lane next in merge order carries
@@ -91,12 +91,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
   - **Live lanes** (briefs in each record). Merge order (Hayden's picks,
-    2026-11-07 and 2026-11-08): 1 demo-av's invideo PR (`feat/demo-voiceover`, an "Edit in
-    invideo" section in `demo-video`, allow rules only as a per-machine setup step; merged and
-    installed by Nov 11, else after Nov 15; carries the lead's notes). After Nov 15: 2 practices
-    (Keep open, its next PR), 3 verify-app (`feat/verify-app`, the launch-and-check skill
-    template, proved on shodo), 4 demo-av's music, transitions and footage PR. All change
-    README.md or may.
+    2026-11-07 and 2026-11-08): 0 demo-av PR 4 (demo content planning in `demo-first-scope`,
+    captions on by default, `demo-video` no longer manual-only; merged and installed by Nov 11,
+    else after Nov 15; carries the lead's notes). After Nov 15: 1 practices (Keep open, its next
+    PR; carries the lead's notes, told when), 2 verify-app (`feat/verify-app`, the
+    launch-and-check skill template, proved on shodo), 3 demo-av's music, transitions and
+    footage PR (its PR 3). All change README.md or may.
     The backlog items these lanes took keep their full text in `git show 617d244:STATUS.md`.
     **Install freeze on HAYPC, Nov 12 through Nov 15** (Hayden, 2026-11-05): no lane installs in
     that window, except fixes for lane hackathon, so the event runs what the dry run tested. The lead's
@@ -125,6 +125,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     capella-studio lane artexport's report; a fork's hook output never reaches its model, so it
     knows its lane only from the parent's copied line, docs/lanes.md S5; the delegation canary
     checks the source enum; untried against lane practices' settings.json change),
+    demo-av PR 2 (#178, 2026-11-08, merge 6d79a4b: an "Edit in invideo" section in
+    `demo-video`; the invideo allow rules live only in the machine overlay, added by Hayden
+    before the freeze; installed from main; the lane stays open for PR 3),
     lanes-turn (#177, 2026-11-08, merge ad66361: merge turns, so only the lane next in merge
     order merges main, the lead tells a lane its turn, and a waiting lane merges early only on
     the `main-touched` board flag; `lane trial` ignores merge drivers on git 2.43+; the close
@@ -178,6 +181,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
 
   Backlog:
+  - **Tray** (Hayden, 2026-11-08): a Claude Code mod pane beside each session holding what
+    waits on Hayden and the info to act on it (copy a file's contents or a note, a check Claude
+    runs at its next wake), sorted by step, kept by Claude, surviving `/pass`, so replies stop
+    reprinting the "Waiting on you" list. Interview ended 2026-11-08; its VISION.md (v1 and v2
+    scope, open problems) is private, in Hayden's scratch (`session-panel`). Next: a lane after
+    Nov 16, opening with a spike of the mod pane; v1 runs in the lead's tab first.
   - **demo-video upgrade:** in lane demo-av (2026-11-07).
   - **`run_turn` counts dying processes as strays** (medium; found by lane license's trial,
     2026-11-07; lane practices owns the fix, in its next PR): `tests/practices/run.py`'s
@@ -426,13 +435,24 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Live lanes: `lane ls`; state in their records (2026-11-07:
-     practices and demo-av kept open, verify-app). #177 merged and is installed from main; lanes hackathon,
+  - Start a new `/interview` with Hayden in this tab: more things he wants to add (approved by
+    Hayden 2026-11-08: "as the lead session we go through another interview with some more things
+    I want to add"). Ask him the topic first. It gets its own VISION.md, outside the public repo
+    (ask where); the tray interview has ended (`~/scratch/session-panel/VISION.md`, built after
+    the hackathon, the Backlog's Tray item).
+  0. Live lanes: `lane ls`; state in their records (2026-11-08: practices and demo-av kept open,
+     verify-app parked until practices merges; unpark it then to merge main and rerun its trial). #178 merged and is installed from main; lanes hackathon,
      merge-record, env-names, license, mocks and speed closed 2026-11-07. Hayden's leftover asks from lane deny-rules
      (an overlay paste plus a setup rerun, probe leftovers, local tool cleanups): its closed
-     record. Demo-av's invideo PR merges and installs by Nov 11, else after Nov 15; nothing else before Nov 16. Install freeze Nov 12 through Nov 15. A chain that
+     record. Demo-av PR 4 merges and installs by Nov 11, else after Nov 15; nothing else before Nov 16. Install freeze Nov 12 through Nov 15. A chain that
      stops before its "main moved" step still tells the lanes, and arms a wake on the blocker
-     (`skills/lanes/SKILL.md`). Open
+     (`skills/lanes/SKILL.md`). Demo-av PR 4 (demo content planning, captions, `demo-video` no longer manual-only):
+     captions drop out if not reviewed clean by midday Nov 10; Hayden let captions change
+     `record.mjs` (lead's disagreement logged: riskiest change before the event); a fresh Shodo
+     demo test runs after its install, before Nov 12. The empty read-only `.git/config.lock`
+     seen 2026-11-08 00:35 is the known sandbox placeholder (see the note below on config
+     rewrites); verify-app's `--set-upstream-to` failed on it, nothing else needs a config write
+     before Nov 16. Open
      with Hayden (repeat them in each reply's Waiting list until answered): try `/interview` in
      the prep repo named in [[dotclaude-hackathon-mode]]; rehearse reaching this machine from another
      network by Nov 12; the event's local-lead email (not sent as of 2026-11-06); by Nov 12 who
