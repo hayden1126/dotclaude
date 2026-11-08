@@ -246,7 +246,7 @@
     } else {
       element = React.createElement(Entry, props);
     }
-    var root = client.createRoot(getById("root"), {
+    var root = client.createRoot(config.onDocument ? document : getById("root"), {
       onUncaughtError: function (e) {
         push(errors, describe(e));
       },

@@ -5384,7 +5384,7 @@ CHROME_DIR = run.find_chrome()
 CHROME = str(CHROME_DIR / run.CHROME_BINARY) if CHROME_DIR else None
 DOM_OK = bool(NODE) and not run.dom_problems()
 NO_DOM = "oracle_dom can't run here: " + "; ".join(run.dom_problems())
-DOM_CASES = []
+DOM_CASES = sorted(["analytics-add", "delete-row", "save-state", "signup-form"])
 PG_CASES = ["column-rename", "column-rename-bare", "data-benign", "index-live-table", "index-live-table-bare", "rls-missing"]
 DATA_CASES = ["column-rename", "column-rename-bare", "data-benign", "index-live-table", "index-live-table-bare", "rls-missing",
               "sqli-sort", "tag-get-or-create", "tx-network"]
@@ -5407,6 +5407,31 @@ def pg_grade(case, overlay="good", files=None, drop=()):
 
 def check_named(out, name):
     return next(c for c in out["checks"] if c["name"] == name)
+
+
+class ClientCodeCases(unittest.TestCase):
+    verdict = OracleVerdicts.verdict
+    check_case = OracleVerdicts.check_case
+
+    @unittest.skipUnless(DOM_OK, NO_DOM)
+    def test_analytics_add(self):
+        self.check_case("analytics-add")
+
+    @unittest.skipUnless(DOM_OK, NO_DOM)
+    def test_signup_form(self):
+        self.check_case("signup-form")
+
+    @unittest.skipUnless(DOM_OK, NO_DOM)
+    def test_save_state(self):
+        self.check_case("save-state")
+
+    @unittest.skipUnless(DOM_OK, NO_DOM)
+    def test_delete_row(self):
+        self.check_case("delete-row")
+
+    @unittest.skipUnless(DOM_OK, NO_DOM)
+    def test_delete_row_two_step_confirm(self):
+        self.assertEqual(self.verdict("delete-row", "good-2")["verdict"], "pass")
 
 
 class DataLayerCases(unittest.TestCase):

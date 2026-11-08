@@ -1154,7 +1154,7 @@ class DomSession {
   // True when an uncaught render error unmounted the root: errors() non-empty and #root empty.
   // A page the stub's contract broke (a throw it had no boundary for) can score unresolved.
   crashed() {
-    return this.eval("window.__errors.length > 0 && !document.getElementById('root')?.hasChildNodes()");
+    return this.eval("window.__errors.length > 0 && !document.getElementById('root').hasChildNodes()");
   }
 
   // A CSS path to the first visible element matching `tag` whose text, aria-label, value or title
@@ -1357,6 +1357,9 @@ export async function openDom(t, oracleUrl, opts) {
   const config = {
     bundle: "bundle.js",
     ...ids,
+    // a layout renders <html> and <body>: mounted on the document, as Next does, so React's
+    // click listeners sit on a node that stays in the page
+    onDocument: /^layout\.[jt]sx?$/.test(path.basename(entryFile)),
     props: opts.props ?? {},
     pathname: opts.pathname ?? "/",
     search: opts.search ?? "",

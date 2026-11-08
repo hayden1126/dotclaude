@@ -376,6 +376,10 @@ CASE_INFO = {
     "index-live-table-bare": Case("data-layer", TARGET),
     "tag-get-or-create": Case("data-layer", TARGET),
     "tx-network": Case("data-layer", TARGET),
+    "analytics-add": Case("client-code", TARGET),
+    "signup-form": Case("client-code", TARGET),
+    "save-state": Case("client-code", TARGET),
+    "delete-row": Case("client-code", TARGET),
 }
 CASES = list(CASE_INFO)
 
