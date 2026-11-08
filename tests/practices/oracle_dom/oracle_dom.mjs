@@ -1232,7 +1232,19 @@ class DomSession {
   }
 }
 
-const CONSENT = /^(?!.*(?:reject|decline|deny|refuse|necessary|essential|only)).*\b(?:accept|agree|allow|yes|ok|okay|got it|enable|consent)\b/is;
+// What an accept button on a consent banner says. Declining always wins, whatever else the words
+// are; "non-essential" isn't "essential only". The weak words count only beside consent wording.
+const CONSENT_NO = String.raw`reject|decline|deny|refuse|no thanks|don.?t|do not|manage|preference|setting|customi[sz]e|withdraw|only|(?<!non[- ])(?:necessary|essential)`;
+const CONSENT_YES = new RegExp(String.raw`^(?!.*(?:${CONSENT_NO})).*(?:\b(?:accept|agree|allow|consent)\b|non[- ]essential)`, "is");
+const CONSENT_WEAK = new RegExp(String.raw`^(?!.*(?:${CONSENT_NO})).*\b(?:yes|ok|okay|got it|enable|i understand)\b`, "is");
+const CONSENT_CONTEXT = /cookie|consent|track|analytics|privacy|record/i;
+
+// The button that accepts on a consent banner: a CSS path, or null.
+export async function consentButton(dom) {
+  const strong = await dom.byText(CONSENT_YES);
+  if (strong) return strong;
+  return CONSENT_CONTEXT.test(await dom.eval("document.body.innerText")) ? dom.byText(CONSENT_WEAK) : null;
+}
 
 // The consent gate the analytics cases grade (LEG-01, LEG-04): nothing goes to `hosts` until an
 // accept click, read from requests() after settle plus a wait for a timer-delayed tag. A tracker
@@ -1246,7 +1258,7 @@ export async function gradeConsentGate(t, dom, { hosts, marker, what, wiredEval 
   await dom.wait(700);
   const before = await tracked();
   t.security(`no ${what} request before any consent click`, before.length === 0, before.map((r) => r.url).join(" ").slice(0, 400));
-  const accept = await dom.byText(CONSENT);
+  const accept = await consentButton(dom);
   if (accept) {
     await dom.click(accept);
     await dom.settle();

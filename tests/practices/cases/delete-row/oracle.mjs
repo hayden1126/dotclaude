@@ -5,39 +5,53 @@
 import { Missing } from "../../oracle_lib.mjs";
 import { domOracle, openDom } from "../../oracle_dom/oracle_dom.mjs";
 
-const OPTS = { entry: "app/clients/ClientsTable.tsx", props: { clients: [{ id: 7, name: "Northwind Studio" }, { id: 9, name: "Bluebird Press" }] } };
+const NAME = "Northwind Studio";
+const OPTS = { entry: "app/clients/ClientsTable.tsx", props: { clients: [{ id: 7, name: NAME }, { id: 9, name: "Bluebird Press" }] } };
 const DELETE = /delete|remove/i;
-const CONFIRM = /confirm|yes|delete|remove/i;
+const CONFIRM = /confirm|yes|delete|remove|ok|okay|continue|sure/i;
+const NOT_CONFIRM = /\b(?:cancel|close|no|not now|back|dismiss|keep|never ?mind)\b|^[×✕x]$/i;
 const UNDO_WINDOW_MS = 11000; // past a 10 s toast; the oracle's whole budget is 60 s
+const CONTROLS = "button, [role=button], input[type=submit], input[type=button]";
+const MARK = "data-oracle-confirm";
+const LABEL = '(el) => (el.textContent.trim() || el.getAttribute("aria-label") || el.value || "")';
 
-const buttons = (dom) => dom.eval(`[...document.querySelectorAll("button, [role=button]")].filter((el) => el.getClientRects().length > 0)
-  .map((el) => el.textContent.trim() || el.getAttribute("aria-label") || "")`);
-const modalOpen = (dom) => dom.eval(`Boolean(document.querySelector("dialog[open], [role=dialog], [role=alertdialog]"))`);
-const undoShown = async (dom) => /\bundo\b/i.test(await dom.eval("document.body.innerText"));
+// "can't undo this" warns; it doesn't offer one. "be undone" isn't the word undo at all.
+const undoShown = async (dom) => /(?<!(?:can.?t|cannot|can not|won.?t|not)\s+(?:be\s+)?)\bundo\b/i.test(await dom.eval("document.body.innerText"));
 
 const sent = (actions) => actions.length === 1 && actions[0].name === "deleteClient" && actions[0].args[0] === 7;
 
-// A session clicked into its confirm step: the button that confirms, if any. A button whose words
-// are new, inside a modal first; else a matching button when a new Cancel/No sits beside it.
-async function confirmButton(dom, before) {
-  const seen = new Set(before);
-  const fresh = (await buttons(dom)).filter((text) => !seen.has(text));
-  const scope = (await modalOpen(dom)) ? "dialog[open] button, [role=dialog] button, [role=alertdialog] button" : "button, [role=button]";
-  const exact = fresh.find((text) => CONFIRM.test(text));
-  if (exact) return dom.byText(new RegExp(`^\\s*${exact.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`, "i"), { tag: scope });
-  if (await modalOpen(dom)) return dom.byText(CONFIRM, { tag: scope });
-  return fresh.length ? dom.byText(CONFIRM, { tag: scope }) : null;
-}
+// Every control on the page and the one about to be clicked, by element: a confirm step is told
+// from the rest of the table by what wasn't there, or now says something else.
+const remember = (dom, clicked) => dom.call(`(clicked, controls, label) => {
+  window.oracleButtons = new Map([...document.querySelectorAll(controls)].map((el) => [el, (${LABEL})(el)]));
+  window.oracleClicked = document.querySelector(clicked);
+}`, clicked, CONTROLS);
+
+// Marks the control that confirms and says whether there is one. A control that's new or
+// relabelled and isn't a way out is a candidate, whatever its words: role-less modals and an "OK"
+// count. With only a Cancel new beside it, the button just clicked is the one that confirms.
+const markConfirm = (dom) => dom.call(`(controls, confirm, notConfirm, mark) => {
+  const seen = window.oracleButtons;
+  const label = ${LABEL};
+  const fresh = [...document.querySelectorAll(controls)].filter((el) => el.getClientRects().length > 0 && (!seen.has(el) || seen.get(el) !== label(el)));
+  const out = new RegExp(notConfirm, "i");
+  const candidates = fresh.filter((el) => !out.test(label(el)));
+  const yes = new RegExp(confirm, "i");
+  const pick = candidates.find((el) => yes.test(label(el))) ?? candidates.find((el) => label(el)) ?? (fresh.length ? window.oracleClicked : null);
+  if (!pick) return false;
+  pick.setAttribute(mark, "");
+  return true;
+}`, CONTROLS, CONFIRM.source, NOT_CONFIRM.source, MARK);
 
 await domOracle(async (t) => {
   const dom = await openDom(t, import.meta.url, OPTS);
   if (!dom) return;
-  let needsDialogAccept = false;
+  let promptShown = null; // null when no confirm or prompt dialog opened
   try {
     await dom.settle();
     const del = await dom.byText(DELETE);
     if (!del) throw new Missing("no row has a Delete button");
-    const before = await buttons(dom);
+    await remember(dom, del);
     await dom.click(del);
     await dom.settle();
     await dom.wait(200);
@@ -45,7 +59,7 @@ await domOracle(async (t) => {
     let actions = await dom.actions();
     if (confirmDialogs.length) {
       t.security("dismissing the dialog sends no action", actions.length === 0, JSON.stringify(actions).slice(0, 300));
-      needsDialogAccept = true;
+      promptShown = confirmDialogs.some((d) => d.type === "prompt");
     } else if (actions.length === 0 && await undoShown(dom)) {
       await dom.wait(UNDO_WINDOW_MS);
       actions = await dom.actions();
@@ -53,11 +67,10 @@ await domOracle(async (t) => {
       if (sent(actions)) t.functional("the delete reaches the action after the undo window", true);
       else t.unresolved("an undo is offered but no delete arrived inside the window", JSON.stringify(actions));
     } else if (actions.length === 0) {
-      const confirm = await confirmButton(dom, before);
-      if (!confirm) {
+      if (!(await markConfirm(dom))) {
         t.functional("a click on Delete does something", false, "no dialog, no confirm step, no undo and no action");
       } else {
-        await dom.click(confirm);
+        await dom.click(`[${MARK}]`);
         await dom.settle();
         await dom.wait(200);
         actions = await dom.actions();
@@ -73,17 +86,22 @@ await domOracle(async (t) => {
     await dom.close();
   }
 
-  if (!needsDialogAccept) return;
-  const accept = await openDom(t, import.meta.url, { ...OPTS, dialogMode: "accept" });
-  if (!accept) return;
-  try {
-    await accept.settle();
-    await accept.click(await accept.byText(DELETE));
-    await accept.settle();
-    await accept.wait(200);
-    const actions = await accept.actions();
-    t.functional("accepting the dialog sends deleteClient for the row", sent(actions), JSON.stringify(actions).slice(0, 300));
-  } finally {
-    await accept.close();
+  if (promptShown === null) return;
+  // A prompt wants a typed answer: the row's name, or the word DELETE when that didn't do it.
+  let last = [];
+  for (const promptText of promptShown ? [NAME, "DELETE"] : [undefined]) {
+    const accept = await openDom(t, import.meta.url, { ...OPTS, dialogMode: "accept", promptText });
+    if (!accept) return;
+    try {
+      await accept.settle();
+      await accept.click(await accept.byText(DELETE));
+      await accept.settle();
+      await accept.wait(200);
+      last = await accept.actions();
+    } finally {
+      await accept.close();
+    }
+    if (sent(last)) break;
   }
+  t.functional("accepting the dialog sends deleteClient for the row", sent(last), JSON.stringify(last).slice(0, 300));
 });

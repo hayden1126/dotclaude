@@ -202,6 +202,25 @@
 
   var REACT_WRAPPERS = [Symbol.for("react.memo"), Symbol.for("react.forward_ref")];
 
+  // React builds a <script> through innerHTML, so the ones in its first render never run, where a
+  // server-rendered page's do: run those once, as copies beside the originals React still owns.
+  // Only what React made: a script an effect inserted has run already, and it carries no React
+  // fiber key. A later render's scripts stay inert, as in Next. async ones React loads itself.
+  function runFirstRenderScripts() {
+    var scripts = slice((config.onDocument ? document : getById("root")).querySelectorAll("script:not([async])"));
+    for (var i = 0; i < scripts.length; i++) {
+      var original = scripts[i];
+      var names = keys(original);
+      var byReact = false;
+      for (var j = 0; j < names.length; j++) byReact = byReact || names[j].indexOf("reactFiber$") === 2;
+      if (!byReact) continue;
+      var copy = createElement("script");
+      for (var k = 0; k < original.attributes.length; k++) copy.setAttribute(original.attributes[k].name, original.attributes[k].value);
+      copy.text = original.text;
+      original.parentNode.insertBefore(copy, original.nextSibling);
+    }
+  }
+
   function loadBundle(src) {
     return new NativePromise(function (resolve, reject) {
       var script = createElement("script");
@@ -257,6 +276,7 @@
     });
     await wait(0);
     if (errors.length > before) return { status: "error", detail: join(slice(errors, before), "\n") };
+    runFirstRenderScripts();
     return { status: "ok" };
   }
 

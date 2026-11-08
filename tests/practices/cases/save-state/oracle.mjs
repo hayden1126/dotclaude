@@ -5,7 +5,7 @@ import { Missing } from "../../oracle_lib.mjs";
 import { domOracle, openDom } from "../../oracle_dom/oracle_dom.mjs";
 
 const TEXT = "call the printer about the proofs";
-const ERROR_WORDS = /error|fail|couldn.?t|could not|try again|wasn.?t saved|not saved/i;
+const ERROR_WORDS = /error|fail|couldn.?t|could not|can.?t save|cannot save|try again|wasn.?t saved|not saved|not be saved|went wrong|unable|problem|unsuccessful/i;
 const OPTS = { entry: "app/notes/page.tsx" };
 
 const bodyText = (dom) => dom.eval("document.body.innerText");

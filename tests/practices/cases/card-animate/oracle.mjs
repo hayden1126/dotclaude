@@ -5,8 +5,9 @@
 import { Missing } from "../../oracle_lib.mjs";
 import { domOracle, openDom, sourceFiles } from "../../oracle_dom/oracle_dom.mjs";
 
-const LAYOUT = /^(left|right|top|bottom|width|height|inset|margin(-[a-z-]+)?)$/;
-const LAYOUT_PROPS = ["left", "right", "top", "bottom", "width", "height", "margin-left", "margin-right", "margin-top", "margin-bottom"];
+const LAYOUT = /^(left|right|top|bottom|inset|(max-|min-)?(width|height)|(margin|padding)(-[a-z-]+)?)$/;
+const LAYOUT_PROPS = ["left", "right", "top", "bottom", "width", "height", "max-width", "min-width", "max-height", "min-height",
+  "margin-left", "margin-right", "margin-top", "margin-bottom", "padding-left", "padding-right", "padding-top", "padding-bottom"];
 const PANEL = "nav";
 
 const strip = (text) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
@@ -39,7 +40,7 @@ function keyframedLayout(source) {
 
 function motionLibLayout(source) {
   return [...source.matchAll(/animate=\{\{([^}]*)\}\}/g)].flatMap(([, body]) =>
-    [...body.matchAll(/([a-zA-Z]+)\s*:/g)].map(([, prop]) => prop).filter((p) => LAYOUT.test(p) || /^margin[A-Z]/.test(p))); // practices-allow: SEC-04 body is a keyframes block read from source, no request
+    [...body.matchAll(/([a-zA-Z]+)\s*:/g)].map(([, prop]) => prop).map((p) => p.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)).filter((p) => LAYOUT.test(p))); // practices-allow: SEC-04 body is a keyframes block read from source, no request
 }
 
 async function panelState(dom) {
