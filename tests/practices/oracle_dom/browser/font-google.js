@@ -5,7 +5,7 @@ function font(name) {
   return (options = {}) => {
     const family = name.replace(/_/g, " ");
     const slug = name.toLowerCase();
-    window.__fonts.push({ family, source: "google", options });
+    window.__oracleLog("font", { family, source: "google", options });
     return { className: `__font_${slug}`, variable: options.variable ?? `--font-${slug}`, style: { fontFamily: `'${family}'` } };
   };
 }

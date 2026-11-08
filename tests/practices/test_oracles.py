@@ -7123,7 +7123,7 @@ class DomHarness(unittest.TestCase):
     def test_server_page_on_next_headers_is_unresolved(self):
         out = self.dom_run("server-auth")
         self.assert_verdict(out, "unresolved")
-        self.assertIn("next/headers", json.dumps(out))
+        self.assertIn("lib/auth.ts imports", json.dumps(out))  # its first server-only import (node:crypto) stops it
 
     def test_search_params_effect_runs_once(self):
         self.assert_verdict(self.dom_run("search-effect"), "pass")

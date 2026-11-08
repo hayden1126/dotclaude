@@ -1,7 +1,9 @@
-// next/navigation in the browser bundle: inert hooks. A router call goes on window.__navigations
-// and goes nowhere; the path and search come from openDom's opts (default "/" and empty).
+// next/navigation in the browser bundle: inert hooks. A router call is logged as a navigation
+// (window.__navigations) and goes nowhere; the path, search and params come from openDom's opts
+// (default "/", empty, {}). Each hook returns the same object on every render, as Next's do for
+// one URL, so an effect keyed on one runs once.
 const navigate = (kind) => (href) => {
-  window.__navigations.push({ kind, href: href === undefined ? null : String(href) });
+  window.__oracleLog("navigation", { kind, href: href === undefined ? null : String(href) });
 };
 
 const router = {
@@ -13,6 +15,8 @@ const router = {
   prefetch: () => {},
 };
 
+let searchParams = null;
+
 export function useRouter() {
   return router;
 }
@@ -22,7 +26,8 @@ export function usePathname() {
 }
 
 export function useSearchParams() {
-  return new URLSearchParams(window.__config.search);
+  searchParams ??= new URLSearchParams(window.__config.search);
+  return searchParams;
 }
 
 export function useParams() {

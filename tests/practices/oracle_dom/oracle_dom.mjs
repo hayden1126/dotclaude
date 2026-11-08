@@ -13,7 +13,7 @@
 // practices-allow: SEC-13 Runtime.evaluate runs the oracle's own probes in its test page; arguments go in as JSON
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { builtinModules, createRequire } from "node:module";
+import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Missing } from "../oracle_lib.mjs";
@@ -38,11 +38,20 @@ const PACKAGES = {
   "next/script": path.join(BROWSER, "script.js"),
   "next/font/google": path.join(BROWSER, "font-google.js"),
   "next/font/local": path.join(BROWSER, "font-local.js"),
+  "next/dynamic": path.join(BROWSER, "dynamic.js"),
+  "next/form": path.join(BROWSER, "form.js"),
 };
 const EMPTY = new Set(["client-only"]);
 // Code that only runs on a server: Next refuses it in a client bundle, and a server component
-// that reaches it can't run in the browser.
-const SERVER_ONLY = new Set(["server-only", ...builtinModules, ...builtinModules.map((m) => `node:${m}`)]);
+// that reaches it can't run in the browser. Every Node builtin counts (isBuiltin, so node:sqlite
+// and the other node:-only ones too), bar POLYFILLED in a client component.
+const SERVER_ONLY = new Set(["server-only", "next/headers", "next/cache", "next/server"]);
+// The builtins Next's client build swaps for a browser polyfill (its webpack resolve.fallback),
+// so a client component may import them; the oracle has no polyfills, so that's unresolved.
+// Taken from memory of Next 15's webpack-config, not read from 15.1.6's source.
+const POLYFILLED = new Set(["assert", "buffer", "constants", "crypto", "domain", "events", "http", "https", "os",
+  "path", "process", "punycode", "querystring", "stream", "string_decoder", "sys", "timers", "tty", "url",
+  "util", "vm", "zlib"].flatMap((m) => [m, `node:${m}`]));
 
 const CLIENT = /^(?:\s|\/\/[^\n]*\n|\/\*[\s\S]*?\*\/)*["']use client["']/;
 const MODES = new Set(["ok", "fail", "hang"]);
@@ -51,7 +60,9 @@ const STEP_MS = 5000; // the cap on any one wait; the whole oracle gets 60 s (ru
 const CHROME_FLAGS = [
   "--headless", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--remote-debugging-pipe",
   "--no-first-run", "--no-default-browser-check", "--no-proxy-server", "--host-resolver-rules=MAP * ~NOTFOUND",
-  "--allow-file-access-from-files",
+  // WebRTC talks UDP to IP literals, which no resolver rule stops: no unproxied UDP, so (with no
+  // proxy) no ICE candidate at all, and no mDNS names hiding the host ones.
+  "--force-webrtc-ip-handling-policy=disable_non_proxied_udp", "--disable-features=WebRtcHideLocalIpsWithMdns",
 ];
 
 const rel = (file) => path.relative(FIXTURE, file);
@@ -64,10 +75,13 @@ function isFile(p) {
   }
 }
 
-// register.mjs's rules, plus .tsx and .jsx: the file `base` names, or null.
+// register.mjs's rules, plus .tsx and .jsx (./x.js naming x.tsx too): the file `base` names, or null.
 function findFile(base) {
   if (isFile(base)) return base;
-  if (base.endsWith(".js") && isFile(`${base.slice(0, -3)}.ts`)) return `${base.slice(0, -3)}.ts`;
+  if (base.endsWith(".js")) {
+    const named = [".ts", ".tsx", ".jsx"].map((ext) => `${base.slice(0, -3)}${ext}`).find(isFile);
+    if (named) return named;
+  }
   const tries = [`${base}.ts`, `${base}.tsx`, path.join(base, "index.ts"), path.join(base, "index.tsx"),
     `${base}.js`, `${base}.jsx`, path.join(base, "index.js"), path.join(base, "index.jsx")];
   return tries.find(isFile) ?? null;
@@ -167,19 +181,51 @@ class Bundle {
       const base = spec.startsWith("@/") ? path.join(FIXTURE, spec.slice(2)) : path.resolve(path.dirname(from), spec);
       const found = findFile(base);
       if (!found) throw new Missing(`${rel(from)} imports ${spec}, which doesn't exist`);
+      if (/\.(css|json)$/.test(found)) return this.asset(found);
       return found.startsWith(MODULES + path.sep) || found.startsWith(BROWSER + path.sep) ? this.package(found) : this.local(found, client);
     }
     if (PACKAGES[spec]) return this.package(PACKAGES[spec]);
     if (EMPTY.has(spec)) return this.add(`empty:${spec}`, spec, () => ({ code: "", deps: {} }));
-    if (SERVER_ONLY.has(spec)) {
+    if (client && POLYFILLED.has(spec)) {
+      return this.unloadable("polyfill", spec, `${rel(from)} imports ${spec}, which Next's client build polyfills and the oracle doesn't polyfill ${spec.replace(/^node:/, "")}`);
+    }
+    if (SERVER_ONLY.has(spec) || isBuiltin(spec)) {
       if (client) throw new Missing(`${rel(from)} imports ${spec} into a client component, which Next refuses to build`);
-      const message = JSON.stringify(`${rel(from)} imports ${spec}, server-only code the browser can't run`);
-      return this.add(`server-only:${spec}:${from}`, spec, () => ({
-        code: `throw Object.assign(new Error(${message}), { serverOnly: true });`,
-        deps: {},
-      }));
+      return this.unloadable("server", spec, `${rel(from)} imports ${spec}, server-only code the browser can't run`);
     }
     throw new Missing(`${rel(from)} imports ${spec}, a package the oracle doesn't provide`);
+  }
+
+  // A module that throws when required: what reaches it scores unresolved, `kind` saying why.
+  unloadable(kind, spec, message) {
+    return this.add(`${kind}:${spec}:${message}`, spec, () => ({
+      code: `throw Object.assign(new Error(${JSON.stringify(message)}), { unresolved: ${JSON.stringify(kind)} });`,
+      deps: {},
+    }));
+  }
+
+  // A stylesheet is injected as a <style> when its module loads, so computed styles hold; a CSS
+  // module maps each class name to itself, so its selectors match. JSON is its parsed value.
+  // limit: no :global(), composes or url() rewriting; a case grading those needs a CSS loader.
+  asset(file) {
+    return this.add(file, rel(file), () => {
+      const text = readFileSync(file, "utf8");
+      if (file.endsWith(".json")) {
+        let value;
+        try {
+          value = JSON.parse(text);
+        } catch (e) {
+          throw new Missing(`${rel(file)} isn't JSON: ${e.message}`);
+        }
+        return { code: `module.exports = ${JSON.stringify(value)};`, deps: {} };
+      }
+      const inject = `var style = document.createElement("style");\nstyle.dataset.file = ${JSON.stringify(rel(file))};\n` +
+        `style.textContent = ${JSON.stringify(text)};\ndocument.head.appendChild(style);`;
+      const classes = file.endsWith(".module.css")
+        ? `\nmodule.exports = new Proxy({}, { get: function (_, key) { return typeof key === "string" && key !== "__esModule" && key !== "then" ? key : undefined; } });`
+        : "";
+      return { code: inject + classes, deps: {} };
+    });
   }
 
   // The loader and every module, as one classic script defining window.__require(id). Cycles go
@@ -208,7 +254,7 @@ class Bundle {
     }
     return module.exports;
   }
-  window.__require = load;
+  Object.defineProperty(window, "__require", { value: load, writable: false, configurable: false });
 })([
 ${defs.join(",\n")}
 ]);
@@ -347,10 +393,13 @@ class Chrome {
 }
 
 // What the page script's selector helpers run: the element, or null when nothing matches.
+const BINDING = "__oracleRecord"; // page.js takes it off window before any agent code runs
 const PICK = "(sel) => document.querySelector(sel)";
 
 class DomSession {
   #requests = [];
+  // what the page reported through the binding, counted here, where page code can't reach
+  #log = { action: [], fetch: [], font: [], navigation: [] };
   #byId = new Map();
 
   constructor(chrome, sessionId) {
@@ -359,6 +408,11 @@ class DomSession {
     this.sessionId = sessionId;
     this.cdp.on(({ method, params, sessionId: from }) => {
       if (from !== sessionId) return;
+      if (method === "Runtime.bindingCalled" && params.name === BINDING) {
+        const { kind, entry } = JSON.parse(params.payload);
+        this.#log[kind]?.push(entry);
+        return;
+      }
       if (method === "Network.requestWillBeSent") {
         const entry = { url: params.request.url, method: params.request.method, type: params.type ?? null, status: null, failed: false, error: null, done: false };
         this.#requests.push(entry);
@@ -403,7 +457,12 @@ class DomSession {
     for (;;) {
       const state = await this.eval("window.__quiet()");
       const inFlight = this.#requests.some((r) => !r.done && /^https?:/.test(r.url));
-      if (!state.pending && !inFlight && state.quietMs >= quiet) return true;
+      if (!state.pending && !inFlight && state.quietMs >= quiet) {
+        // one more frame, then the same test again: a commit in that frame restarts the wait
+        await this.eval("new Promise((resolve) => requestAnimationFrame(() => resolve(true)))");
+        const after = await this.eval("window.__quiet()");
+        if (!after.pending && after.quietMs >= quiet) return true;
+      }
       if (performance.now() >= deadline) return false;
       await sleep(25);
     }
@@ -470,20 +529,20 @@ class DomSession {
     return this.#requests.filter((r) => /^https?:/.test(r.url)).map(({ done, ...r }) => r);
   }
 
-  actions() {
-    return this.eval("window.__actions");
+  async actions() {
+    return structuredClone(this.#log.action);
   }
 
-  fetches() {
-    return this.eval("window.__fetches");
+  async fetches() {
+    return structuredClone(this.#log.fetch);
   }
 
-  fonts() {
-    return this.eval("window.__fonts");
+  async fonts() {
+    return structuredClone(this.#log.font);
   }
 
-  navigations() {
-    return this.eval("window.__navigations");
+  async navigations() {
+    return structuredClone(this.#log.navigation);
   }
 
   errors() {
@@ -492,13 +551,13 @@ class DomSession {
 
   async actionMode(name, mode) {
     if (!MODES.has(mode)) throw new Error(`actionMode: ${mode} is not one of ${[...MODES].join(", ")}`);
-    await this.call("(name, mode) => { window.__actionModes[name] = mode; }", name, mode);
+    await this.call("(name, mode) => window.__setActionMode(name, mode)", name, mode);
   }
 
   // Fetches whose URL contains `match` (a string) or matches it (a RegExp) answer by `spec`:
   // {status, json}, "fail" (a TypeError, as offline) or "hang". Rules apply in the order set.
   async fetchMode(match, spec) {
-    await this.call("(rule) => { window.__fetchModes.push(rule); }", fetchRule(match, spec));
+    await this.call("(rule) => window.__addFetchRule(rule)", fetchRule(match, spec));
   }
 
   close() {
@@ -530,7 +589,8 @@ function bundleFor(entryFile) {
 // render scores broken; an async server component that reaches server-only code, or throws when
 // awaited, scores unresolved. `oracleUrl` (the oracle's import.meta.url) names the scratch dir.
 // Options: props, actionModes {name: mode}, actionResults {name: value}, fetchModes [[match, spec]],
-// pathname, search and params for next/navigation. The caller closes the session; an exit
+// pathname, search and params for next/navigation and the page's props, delayMs for a stubbed
+// round trip (default DELAY_MS). The caller closes the session; an exit
 // without that still kills Chrome. ORACLE_CHROME names the headless shell.
 export async function openDom(t, oracleUrl, opts) {
   const entryFile = findFile(path.join(FIXTURE, opts.entry));
@@ -550,7 +610,7 @@ export async function openDom(t, oracleUrl, opts) {
     actionModes: opts.actionModes ?? {},
     actionResults: opts.actionResults ?? {},
     fetchModes: (opts.fetchModes ?? []).map(([match, spec]) => fetchRule(match, spec)),
-    delayMs: DELAY_MS,
+    delayMs: opts.delayMs ?? DELAY_MS,
     pathname: opts.pathname ?? "/",
     search: opts.search ?? "",
     params: opts.params ?? {},
@@ -574,6 +634,7 @@ export async function openDom(t, oracleUrl, opts) {
     const { sessionId } = await cdp.send("Target.attachToTarget", { targetId: await created, flatten: true });
     const session = new DomSession(chrome, sessionId);
     await Promise.all([session.send("Page.enable"), session.send("Runtime.enable"), session.send("Network.enable")]);
+    await session.send("Runtime.addBinding", { name: BINDING });
     const loaded = cdp.waitFor("load event", ({ method, sessionId: from }) => (method === "Page.loadEventFired" && from === sessionId ? true : undefined));
     await session.send("Page.navigate", { url: pathToFileURL(path.join(dir, "index.html")).href });
     await loaded;
@@ -584,9 +645,10 @@ export async function openDom(t, oracleUrl, opts) {
       return session;
     }
     if (mounted.status === "no-default") throw new Missing(`${what} has no default export to render (${mounted.detail})`);
-    if (mounted.status === "server") {
+    if (mounted.status === "unresolved") {
       t.functional(`${what} bundles`, true);
-      t.unresolved(`${what} is a server component the browser can't run`, mounted.detail);
+      const why = mounted.kind === "polyfill" ? "imports a Node builtin the oracle doesn't polyfill" : "is a server component the browser can't run";
+      t.unresolved(`${what} ${why}`, mounted.detail);
     } else t.functional(`${what} renders`, false, mounted.detail.slice(0, 1500));
     await chrome.close();
     return null;
