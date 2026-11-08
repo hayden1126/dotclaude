@@ -136,7 +136,7 @@ takes the file for binary (ugrep can) prints no matches and no error.
       2. The final runs, on the final files, in this order: one full run; then, if step 6.3.1 had
          no first ready run to check, this full run is it, so check `ready_timeout` against it now
          by the same rule, and on a raise repeat the full run once on the raised file; then one
-         `--quick` run; then open the full run's screenshots and confirm its evidence survived
+         `--quick` run; then open the last full run's screenshots and confirm its evidence survived
          cleanup. The first ready run never changes once set, so the check can't raise twice.
 
          Every run here stops the sequence at its first failure: a failed run, or a screenshot or

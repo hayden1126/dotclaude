@@ -352,7 +352,7 @@ class Files(unittest.TestCase):
                                           "If a first ready run exists already, check `ready_timeout`",
                                           "one full run; then, if step 6.3.1 had no first ready run",
                                           "repeat the full run once on the raised file; then one `--quick` run",
-                                          "then open the full run's screenshots",
+                                          "then open the last full run's screenshots",
                                           "Write the Measured line",
                                           "commit only with the user's say")]
         self.assertEqual(order, sorted(order))
@@ -368,7 +368,8 @@ class Files(unittest.TestCase):
                        "A launch refused for a held port, with no exit 3 before it, repeats that one run once in the "
                        "whole pass; a second refusal is question 2",
                        "The final runs then prove the raise",
-                       "Every run here stops the sequence at its first failure",
+                       "check `ready_timeout` against it now by the same rule, and on a raise repeat the full run once "
+                       "on the raised file",
                        "The first ready run never changes once set, so the check can't raise twice",
                        "every file changed or replaced, then commit only with the user's say",
                        "It records the final runs, so it is the one edit made after them"):
@@ -382,7 +383,7 @@ class Files(unittest.TestCase):
                      "**First ready run:** the first full run of this pass whose manifest has `ready` true",
                      "or a run exited 3 (cleanup failed: name each process in `processes_left`, and never signal "
                      "one marked `outside_repo`)",
-                     "then open the full run's screenshots and confirm its evidence survived cleanup",
+                     "then open the last full run's screenshots and confirm its evidence survived cleanup",
                      "stop, and the pass ends blocked (step 6's question 2: step 1 stopped)",
                      "Each stop in this step ends the pass blocked (step 6's question 2)",
                      "A run exited 3 (cleanup failed): go straight to step 6's question 2. Don't rerun or signal "
