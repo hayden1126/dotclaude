@@ -2908,9 +2908,17 @@ class SkippedLine(BashBase):
                     '/usr/bin/env > "$d/env"\n[ -f "$d/slow" ] && exec /bin/sleep 20\n'
                     '[ -f "$d/fail" ] && exit 1\n/bin/cat "$d/out"\n')
         os.chmod(gh, 0o755)
-        self.env["PRACTICES_TEST_GH"] = gh
+        self.gh = gh
         self.body("no such line\n")
         self.n = iter(range(1, 1 << 30))
+
+    def run_hook(self, event, stdin=None):
+        driver = DRIVER.replace("m.passwd_home = lambda: sys.argv[2]", "m.GH_PATHS = (sys.argv[2],)")
+        p = subprocess.run([sys.executable, "-I", "-c", driver, ENGINE, self.gh],
+                           input=stdin if stdin is not None else json.dumps(event),
+                           capture_output=True, text=True, env=self.env, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return json.loads(p.stdout) if p.stdout.strip() else None
 
     def body(self, text):
         with open(os.path.join(self.stub, "out"), "w") as f:
@@ -3033,6 +3041,40 @@ class SkippedLine(BashBase):
             with self.subTest(command=command):
                 self.assertIn(self.REFUSED, self.ready(command))
         self.assertIsNone(self.ran())
+
+    def test_a_body_it_cannot_see_is_allowed_and_logged(self):
+        for command in ('gh pr create -t x --body "$(cat body.md)"', 'gh pr create -t x --body "$B"',
+                        "gh pr create -t x --web", "gh pr create -t x -w"):
+            with self.subTest(command=command):
+                self.assertIsNone(self.ready(command))
+        self.assertIn("skipped-line", self.log())
+
+    def test_a_heredoc_body_with_no_line_is_refused(self):
+        self.assertIn(self.REFUSED, self.ready(
+            "gh pr create -t x --body \"$(cat <<'EOF'\nno line\nEOF\n)\""))
+
+    def test_help_is_left_alone(self):
+        for command in ("gh pr create --help", "gh pr ready --help", "gh pr ready -h"):
+            with self.subTest(command=command):
+                self.assertIsNone(self.ready(command))
+        self.assertIsNone(self.ran())
+
+    def test_no_environment_variable_picks_the_binary(self):
+        with open(ENGINE) as f:
+            self.assertNotIn("PRACTICES_TEST_GH", f.read())
+
+    def test_the_line_needs_no_python_3_11_syntax(self):
+        # The module still has to import on older versions, for its startup health line.
+        self.assertNotIn("?+", PC.SKIPPED_LINE.pattern)
+
+    def test_a_config_of_blank_lines_stays_fast(self):
+        path = os.path.join(self.proj, ".git", "config")
+        with open(path, "w") as f:
+            f.write("\n" * 60000)
+        repo = mock.Mock(common_dir=os.path.join(self.proj, ".git"))
+        began = time.monotonic()
+        self.assertIsNone(PC.origin_name(repo))
+        self.assertLess(time.monotonic() - began, 0.5)
 
     def test_create_reads_a_body_file_inside_the_project(self):
         path = os.path.join(self.proj, "body.md")

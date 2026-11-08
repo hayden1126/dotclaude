@@ -583,7 +583,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "i=$(cat); { printf '%s' \"$i\" | LC_ALL=C grep -qE '\"command\"[[:space:]]*:[[:space:]]*\"([^\"\\\\]|\\\\.)*(lane([^\"\\\\]|\\\\.)*(trial|lock)|pytest|unittest|vitest|jest|playwright|tox|nox|rspec|(npm|pnpm|yarn|bun|cargo|go|gradle|gradlew|mvn|make)([^\"\\\\]|\\\\.)*(test|check|[[:space:]]t))' || grep -qs '^\\[long_runs\\]' \"${CLAUDE_PROJECT_DIR:-/nonexistent}/.claude/practices/config.toml\"; } && [ -f \"$HOME/.claude/hooks/long-runs-check.sh\" ] && printf '%s' \"$i\" | bash \"$HOME/.claude/hooks/long-runs-check.sh\"; exit 0",
+            "command": "i=$(cat); { printf '%s' \"$i\" | LC_ALL=C grep -qE '\"command\"[[:space:]]*:[[:space:]]*\"([^\"\\\\]|\\\\.)*(lane([^\"\\\\]|\\\\.)*(trial|lock)|pytest|unittest|vitest|jest|playwright|tox|nox|rspec|(npm|pnpm|yarn|bun|cargo|go|gradle|gradlew|mvn|make)([^\"\\\\]|\\\\.)*(test|check|[[:space:]]t))' || { c=\"${CLAUDE_PROJECT_DIR:-/nonexistent}/.claude/practices/config.toml\"; [ -f \"$c\" ] && grep -qs '^\\[long_runs\\]' \"$c\"; }; } && [ -f \"$HOME/.claude/hooks/long-runs-check.sh\" ] && printf '%s' \"$i\" | bash \"$HOME/.claude/hooks/long-runs-check.sh\"; exit 0",
             "timeout": 5
           }
         ]

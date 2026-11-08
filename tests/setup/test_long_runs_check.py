@@ -90,7 +90,7 @@ class HeavyGates(Base):
 
     def test_other_locks_and_lookups_never_deny(self):
         for command in ("lane lock install -- ./setup.sh", "lane lock quiet -- ./run.sh",
-                        "lane lock --help", "lane ls",
+                        "lane lock --help", "lane ls", "lane trial --help", "lane trial -h",
                         "lane note 'ran lane trial'", "grep 'lane trial' docs/lanes.md",
                         "echo pytest", "git log --grep pytest"):
             with self.subTest(command=command):
@@ -152,6 +152,12 @@ class GenericSuites(Base):
         for command in (SUITE, SUITE, SUITE + " -x", SUITE + " -v -q"):
             with self.subTest(command=command):
                 self.assertIsNone(self.pre(command))
+
+    def test_a_look_at_the_runner_is_no_suite(self):
+        for command in ("pytest --version", "pytest --collect-only", "pytest --lf", "pytest -h"):
+            with self.subTest(command=command):
+                self.assertIsNone(self.pre(command))
+        self.assertIsNone(self.pre("pytest"))
 
     def test_two_suites_in_one_call_deny(self):
         self.assertIn("long-runs", self.pre(f"{SUITE} && {OTHER}"))
@@ -297,6 +303,16 @@ class Wiring(unittest.TestCase):
         with open(os.path.join(proj, ".claude", "practices", "config.toml"), "w") as f:
             f.write('[long_runs]\ngates = ["./gate.sh"]\n')
         self.assertTrue(self.run_entry("./gate.sh", {"CLAUDE_PROJECT_DIR": proj}))
+
+    def test_a_config_that_never_ends_does_not_hang_the_filter(self):
+        for make in (lambda p: os.symlink("/dev/zero", p), os.mkfifo):
+            proj = tempfile.mkdtemp(prefix="long-runs-proj-")
+            self.addCleanup(shutil.rmtree, proj, ignore_errors=True)
+            os.makedirs(os.path.join(proj, ".claude", "practices"))
+            make(os.path.join(proj, ".claude", "practices", "config.toml"))
+            began = time.monotonic()
+            self.assertFalse(self.run_entry("ls -la", {"CLAUDE_PROJECT_DIR": proj}))
+            self.assertLess(time.monotonic() - began, 3)
 
     def test_the_timeout_is_set(self):
         self.assertEqual(self.entry()["timeout"], 5)

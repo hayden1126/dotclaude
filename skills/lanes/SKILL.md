@@ -201,8 +201,9 @@ an unregistered worktree: `lane whoami` tells you which.
    or the stopped lead's window if it gives one.
    The lead's `lane done` ends a lane with no `Keep open:` line. A lane with one would stop
    idle, so when the lead's "#N chain done: run /pass" arrives it runs the `pass` skill, and its
-   fresh session starts on the lead's reinstall. After a refusal no message will come: it runs
-   the skill straight after telling Hayden.
+   fresh session starts on the lead's reinstall. If another message drops the pass (a `[pass]`
+   notice), it runs the skill again once that message is dealt with. After a refusal no message
+   will come: it runs the skill straight after telling Hayden.
 7. **Close:** `lane done <id>` refuses an unmerged branch, a lane made by `lane new` with no
    commits past its base, and, while its worktree exists, a lane whose record's Next has a
    `Keep open:` line (one inside a comment counts too) or whose record has an unclosed `<!--` or a stray `-->` (it names the line), live session or not (pass `--abandon` to close any of them anyway; it
@@ -379,10 +380,12 @@ inherits the lead from it.
       - **Any other lane:** "main moved to `<sha>`: leave it until your turn, unless your work
         needs something it gained". A parked one gets no message, and its `rebase` flag waits
         for its turn.
-      - **Merged with `Keep open:` in its Next:** "#N chain done: run /pass", beside any line
-        above it gets. It goes after step 3's reinstall, so the lane's fresh session starts on
-        the new install, and it starts the lane's turn, so no other message can drop the pass.
-        A stalled chain sends it too and names what stalled, except one citing DA15/DA16.
+      - **Merged with `Keep open:` in its Next:** one message, the chain's last to that lane:
+        any line above it gets, then "#N chain done: run /pass". Two messages would race, since
+        one landing during the pass drops it. It goes after step 3's reinstall, so the lane's
+        fresh session starts on the new install. A chain stopped before step 3 names the stall,
+        adds "hold your pass", and sends the pass line once the reinstall has run. A stop after
+        step 3 sends it with the stall named; one citing DA15/DA16 sends nothing.
 
       A pushed branch merges main rather than rebasing, which would need a force push.
    7. `lane done <id>` once the hand-back gate (step 5) passes, unless the lane's Next has a

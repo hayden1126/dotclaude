@@ -269,8 +269,6 @@ try:  # tests only: a tiny budget proves the skip path without a slow pattern. O
 except ValueError:
     pass
 GH_PATHS = ("/usr/bin/gh", "/usr/local/bin/gh", "/opt/homebrew/bin/gh")
-if os.environ.get("CLAUDE_CONFIG_DIR") and os.environ.get("PRACTICES_TEST_GH"):  # tests only, as above
-    GH_PATHS = (os.environ["PRACTICES_TEST_GH"],)
 CONTENT_MAX = 256 << 10
 FILE_MAX = 1 << 20  # bytes of the current file read to apply an Edit; scans still cap at CONTENT_MAX
 LINE_MAX = 4000
@@ -2578,8 +2576,7 @@ def review_block(touched, mb, head, branch, shown=8):
 # The Skipped line: a PR marked ready, or opened as one, says what didn't run.
 
 SKIPPED_ID = "SKIPPED-LINE"
-SKIPPED_LINE = re.compile(r"^[ \t]*(?:[-*+][ \t]+)?(?:\*\*|__)?+Skipped(?:\*\*|__)?+:"
-                          r"(?:\*\*|__)?+[ \t]*\S", re.M)
+SKIPPED_LINE = re.compile(r"^[ \t]*(?:[-*+][ \t]+)?(?:\*\*|__)?Skipped(?:\*\*|__)?:(.*)$", re.M)
 GH_SHARE = 1.5  # of BUDGET, counted from the start of the run; under settings.json's 5 s kill
 REPO_NAME = re.compile(r"[A-Za-z0-9][\w.-]*/[\w.][\w.-]*", re.A)
 PR_SELECTOR = re.compile(r"\w[\w./-]*", re.A)
@@ -2592,6 +2589,11 @@ SKIPPED_REASON = (
     "create`), then resend:\n\nSkipped: <what didn't run, or `nothing`>\nSafe because: <why>\n"
     "Caught by: <what would catch a problem>\n\nWhen every check ran, `Skipped: nothing` is "
     "enough. This check refuses every resend until the line is there.")
+
+
+def has_skipped_line(text):
+    """Whether a line of text starts `Skipped:` (a bullet or bold allowed) with something after it."""
+    return any(m.group(1).strip().lstrip("*_").strip() for m in SKIPPED_LINE.finditer(text))
 
 
 def flag_values(args, short, long_):
@@ -2614,10 +2616,15 @@ def origin_name(repo):
             "utf-8", "replace")
     except OSError:
         return None
-    section = re.search(r'^\s*\[remote "origin"\]\s*$(.*?)(?=^\s*\[|\Z)', text, re.M | re.S)
-    url = section and re.search(r"^\s*url\s*=\s*(\S+)", section.group(1), re.M)
-    match = url and ORIGIN_URL.fullmatch(url.group(1))
-    return match.group(1) if match else None
+    inside = False
+    for line in text.splitlines():  # by line: a regex over a repo-written file can go quadratic
+        line = line.strip()
+        if line.startswith("["):
+            inside = line == '[remote "origin"]'
+        elif inside and line.partition("=")[0].strip() == "url":
+            match = ORIGIN_URL.fullmatch(line.partition("=")[2].strip())
+            return match.group(1) if match else None
+    return None
 
 
 def start_body_read(args, cwd, pr, bounds):
@@ -2667,17 +2674,22 @@ def create_has_line(event, args, cwd, bounds):
     """Whether a `gh pr create`'s body has the Skipped line: read from the command's own text
     (a heredoc body too), its --body, or a --body-file inside the project. None (logged) when
     the file can't be read."""
-    if any(SKIPPED_LINE.search(t) for t in (command_of(event), *flag_values(args, "-b", "--body"))):
+    command, bodies = command_of(event), list(flag_values(args, "-b", "--body"))
+    if any(has_skipped_line(t) for t in (command, *bodies)):
         return True
     files = list(flag_values(args, "-F", "--body-file"))
     if not files:
+        # A body built by an expansion can't be read here, unless a heredoc wrote it out above.
+        if "<<" not in command and any("%SUBST%" in b or "$" in b for b in bodies):
+            log("skipped-line", "a --body built by an expansion, so the PR went unchecked")
+            return None
         return False
     path = os.path.join(cwd, files[-1]) if cwd else None
     if files[-1] == "-" or path is None or bounds is None or not bounds.allows(path):
         log("skipped-line", "a --body-file this check can't read, so the PR went unchecked")
         return None
     try:
-        return bool(SKIPPED_LINE.search(read_plain(path, FILE_MAX).decode("utf-8", "replace")))
+        return has_skipped_line(read_plain(path, FILE_MAX).decode("utf-8", "replace"))
     except OSError as e:
         log("skipped-line", f"a --body-file didn't read ({type(e).__name__}), so the PR went "
             "unchecked")
@@ -2690,6 +2702,11 @@ def skipped_checks(event, ghs, cfg, bounds):
         return []
     out = []
     for args, cwd in ghs:
+        if "--help" in args or "-h" in args:
+            continue
+        if "--web" in args or "-w" in args:
+            log("skipped-line", "a PR body typed in the browser, so the PR went unchecked")
+            continue
         try:
             out.append(start_body_read(args, cwd, pr_ready(args), bounds)
                        if without_repo(args)[1] == "ready"
@@ -2717,7 +2734,7 @@ def body_has_line(proc):
     if not isinstance(body, str):
         log("skipped-line", f"gh exited {proc.returncode} with no PR body, so the PR went unchecked")
         return None
-    return bool(SKIPPED_LINE.search(body))
+    return has_skipped_line(body)
 
 
 def skipped_reasons(checks):

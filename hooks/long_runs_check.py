@@ -57,6 +57,8 @@ GATE_LEN_MAX = 200
 SOURCE_FILE = re.compile(r"\.(py|ts|tsx|js|jsx|mjs|cjs|rb|rs|go|java|kt)(:\d+)?$")
 NOISE = {"-x", "-v", "-vv", "-vvv", "-q", "-qq", "-f", "-b", "--verbose", "--quiet", "--failfast",
          "--buffer", "--exitfirst", "--no-cov"}
+NOT_A_RUN = {"--version", "-V", "--help", "-h", "--collect-only", "--co", "--lf", "--last-failed",
+             "--list", "--listTests", "--list-tests"}
 NOISE_PREFIX = ("--tb=", "--maxfail=", "--color=", "--reporter=", "--durations=")
 REASON = (
     "[long-runs] This command starts a heavy gate or a second test suite, and the long-runs "
@@ -69,7 +71,7 @@ def narrowed(args, flags=()):
     """Whether a test runner's arguments pick out part of a suite."""
     for a in args:
         head = a.split("=", 1)[0]
-        if head in flags or (a.startswith("-k") and not a.startswith("--") and len(a) > 2):
+        if a in NOT_A_RUN or head in flags or (a.startswith("-k") and not a.startswith("--") and len(a) > 2):
             return True
         if a in ("-k", "--keyword"):
             return True
@@ -138,7 +140,7 @@ def is_heavy(name, args, gates):
     """Whether a simple command is a named heavy gate."""
     if name == "lane":
         if args[:1] == ["trial"]:
-            return "--help" not in args
+            return not {"--help", "-h"} & set(args)
         if args[:1] == ["lock"] and "--" in args:
             lock, i, before = None, 0, args[1:args.index("--")]
             while i < len(before):
