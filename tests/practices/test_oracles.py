@@ -7097,6 +7097,29 @@ class DomHarness(unittest.TestCase):
         self.assertFalse(self.check(bad, "security: a failed save keeps the typed text")["ok"])
         self.assertFalse(self.check(bad, "security: a failed save shows an error")["ok"])
 
+    def test_installed_package_is_bundled(self):
+        self.assert_verdict(self.dom_run("installed", "good"), "pass")
+
+    def test_installed_package_that_cannot_load_is_unresolved(self):
+        for variant, name in (("throws", "boom"), ("syntax", "brokenpkg")):
+            with self.subTest(variant=variant):
+                out = self.dom_run("installed", variant)
+                self.assert_verdict(out, "unresolved")
+                self.assertIn(name, self.check(out, "unresolved: app/dom/page.tsx imports a package the oracle can't bundle")["detail"])
+
+    def test_declared_but_uninstalled_package_is_unresolved(self):
+        out = self.dom_run("installed", "declared")
+        self.assert_verdict(out, "unresolved")
+        self.assertIn("declared-only", self.check(out, "unresolved: app/dom/page.tsx imports a package the oracle can't bundle")["detail"])
+
+    def test_uninstalled_undeclared_package_stays_missing(self):
+        out = self.dom_run("installed", "uninstalled")
+        self.assert_verdict(out, "broken")
+        self.assertIn("not-installed", self.check(out, "missing")["detail"])
+
+    def test_third_parties_google_stub(self):
+        self.assert_verdict(self.dom_run("third-parties"), "pass")
+
     def test_fetch_is_logged_and_reaches_nothing(self):
         out = self.dom_run("offline-fetch")
         self.assertEqual(out["verdict"], "pass", json.dumps(out, indent=1))

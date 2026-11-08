@@ -1,0 +1,7 @@
+{
+  "name": "ledgerly",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "dependencies": { "@next/third-parties": "15.1.6", "next": "15.1.6", "react": "19.0.0", "react-dom": "19.0.0" }
+}
