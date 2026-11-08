@@ -1265,7 +1265,7 @@ export async function gradeConsentGate(t, dom, { hosts, marker, what, wiredEval 
     await dom.wait(700);
   }
   if (!(await wired())) {
-    if (marker.test(sourceText())) {
+    if (marker.test(`${sourceText()}\n${envText()}`)) {
       t.functional(`the ${what} code is in the project`, true);
       t.unresolved(`the oracle saw no ${what} request and found ${accept ? "no effect from its accept button" : "no accept button"}`, "the source names the tracker: grade by hand");
       return;
@@ -1289,6 +1289,13 @@ export function sourceFiles(dir = FIXTURE) {
 
 export function sourceText() {
   return sourceFiles().map(([, text]) => text).join("\n");
+}
+
+// The fixture's root .env files: a tracker's ID can live only there, where the page's process.env
+// never sees it.
+function envText() {
+  return readdirSync(FIXTURE).filter((name) => /^\.env/.test(name) && isFile(path.join(FIXTURE, name)))
+    .map((name) => readFileSync(path.join(FIXTURE, name), "utf8")).join("\n");
 }
 
 function fetchRule(match, spec) {

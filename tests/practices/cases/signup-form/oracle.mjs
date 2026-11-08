@@ -21,11 +21,17 @@ async function submitOf(dom) {
     ?? (await dom.byText(/sign\s*up|create|register|submit|join|get started/i, { tag: "button" }));
 }
 
+// Fields are re-read each step, and the submit taken after this returns: a selector is a path, so
+// a hint inserted as the user types moves whatever comes after it.
 async function fill(dom) {
-  for (const field of await dom.fields()) {
+  const count = (await dom.fields()).length;
+  for (let i = 0; i < count; i++) {
+    const field = (await dom.fields())[i];
+    if (!field) break;
     if (typable(field)) await dom.type(field.selector, VALUES[kindOf(field)]);
     else if (field.type === "checkbox") await dom.click(field.selector); // a required terms box
   }
+  await dom.settle();
 }
 
 await domOracle(async (t) => {
@@ -47,7 +53,7 @@ await domOracle(async (t) => {
     t.security("the email and password inputs have autocomplete", noAutocomplete.length === 0, `without: ${noAutocomplete.join(", ")}`);
 
     await fill(dom);
-    await dom.click(submit);
+    await dom.click(await submitOf(dom));
     await dom.settle();
     const actions = await dom.actions();
     t.functional("a click sends one signup action carrying the email",

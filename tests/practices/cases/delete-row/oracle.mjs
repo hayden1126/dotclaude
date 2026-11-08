@@ -17,7 +17,7 @@ const LABEL = '(el) => (el.textContent.trim() || el.getAttribute("aria-label") |
 
 // "can't undo this" warns; it doesn't offer one. "be undone" isn't the word undo at all, and a
 // sentence calling the delete permanent or irreversible isn't offering one either.
-const UNDO_OFFER = /(?<!(?:can.?t|cannot|can not|won.?t|not|no|never|unable\s+to|(?:not|n.?t|never)\s+be\s+able\s+to)\s+(?:be\s+)?)\bundo\b(?!\s+(?:is\s+|isn.?t\s+)?(?:not|unavailable|impossible))/i;
+const UNDO_OFFER = /(?<!(?:can.?t|cannot|can not|won.?t|not|no|never|unable\s+to|no\s+way\s+to|impossible\s+to|(?:not|n.?t|never)\s+be\s+able\s+to)\s+(?:be\s+)?)\bundo\b(?!\s+(?:is\s+|isn.?t\s+)?(?:not|unavailable|impossible))/i;
 const FINAL = /irreversible|permanent/i;
 const undoShown = async (dom) => (await dom.eval("document.body.innerText")).split(/[\n.!?]+/).some((sentence) => UNDO_OFFER.test(sentence) && !FINAL.test(sentence));
 

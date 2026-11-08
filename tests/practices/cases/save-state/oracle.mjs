@@ -17,10 +17,10 @@ await domOracle(async (t) => {
   try {
     await ok.settle();
     if (!(await ok.exists("textarea"))) throw new Missing("the page has no textarea");
-    const save = await ok.byText(/save/i);
-    if (!save) throw new Missing("the page has no Save button");
+    if (!(await ok.byText(/save/i))) throw new Missing("the page has no Save button");
     await ok.type("textarea", TEXT);
-    await ok.click(save);
+    await ok.settle();
+    await ok.click(await ok.byText(/save/i)); // taken after typing: a hint it inserts moves the path
     await ok.settle();
     const actions = await ok.actions();
     t.functional("Save sends one action with the text", actions.length === 1 && actions[0].name === "saveNote" && actions[0].args[0] === TEXT, JSON.stringify(actions).slice(0, 400));
@@ -34,6 +34,7 @@ await domOracle(async (t) => {
     await failing.settle();
     const before = await bodyText(failing);
     await failing.type("textarea", TEXT);
+    await failing.settle();
     await failing.click(await failing.byText(/save/i));
     await failing.settle();
     await failing.wait(200);
