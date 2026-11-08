@@ -12,20 +12,18 @@ End with exactly one, and say which:
 - **clean:** every feature was read and driven live, and nothing needs changing. No commit.
 - **changed:** proven corrections to the verify skill, a refresh from the template included, committed
   only with the user's say.
-- **blocked:** the pass stopped in step 1, the app is broken, or an edit is not proved. Say exactly
-  what blocked it.
+- **blocked:** the pass stopped in step 1, no full run can be made to pass, or a changed check
+  can't be proved. Say exactly what blocked it.
 
-Three terms, used the same way everywhere below:
+Two terms, used the same way everywhere below:
 
-- **Proved:** a changed `ctx.check` is proved when one planted wrong value fails the run with that
-  check's own message, and the revert passes. Any other result (exit 0, or exit 1 with another
-  message, such as an earlier step timing out) leaves it unproved. An edit with no check to plant
-  (a refresh's copies, a selector fix, a recipe line) is proved by the final runs passing.
-- **Final runs:** the last full run and the last `--quick` run of the pass, both on the files as
-  they will be committed. An earlier failure whose cause was understood and fixed, or was
-  transient (a port held at launch), doesn't count against the pass once a later run passes.
-- **Broken app:** a failure step 5's triage traces to the app itself, with nothing in the skill to
-  fix.
+- **Proved:** a changed `ctx.check` is proved when a planted wrong value fails the run with that
+  check's own message, and the revert passes. When the plant run fails for another reason (an
+  earlier step timing out), fix that and plant again, as the skill's section 3 does. Edits with no
+  check to plant (a refresh's copies, a selector fix, a recipe line) are proved by step 6's final
+  runs passing.
+- **First run:** the first full run of this pass that got past launch (its manifest has a
+  `ready_seconds`). A run refused before launch, such as a held port, doesn't count.
 
 ## Edit scope
 
@@ -79,10 +77,11 @@ takes the file for binary (ugrep can) prints no matches and no error.
       covers the same cause as a repo edge, merge the two into one. Keep the repo's specific facts
       (paths, counts, file names), take the template's general wording, and drop the duplicate.
    3. After steps 1.1 and 1.2, re-prove on the new harness, as the skill's section 3 does: a full
-      run (the first run of this pass), one planted wrong value in a `ctx.check` (exit 1 with its
+      run (normally the first run), one planted wrong value in a `ctx.check` (exit 1 with its
       message) and its revert (exit 0), and a `--quick` run. A failed run goes through step 5's
-      triage like any other: drift and harness gaps get fixed there. A planted value that doesn't
-      fail with its own message leaves the refresh unproved. Keep each run's manifest path for
+      triage like any other: drift and harness gaps get fixed there. A planted value that still
+      won't fail with its own message, after the plant-again rule in Proved, means the new harness
+      can't prove anything: blocked. Keep each run's manifest path for
       step 6. When the full run's `app.log` shows reload or rebuild lines (search it with `grep -a`),
       run the skill's section 3 reload check: confirm the trigger with the dev tool's debug output,
       set through `APP["env"]` for one run (for Vite, `{"DEBUG": "vite:hmr"}`), then take the
@@ -96,8 +95,8 @@ takes the file for binary (ugrep can) prints no matches and no error.
    name it in the report. Add a journey for it only with the user's say.
 4. **Live.** Run the full tier over every journey, even when the source looks clean: a clean read
    proves nothing about the running app. Then read the manifest and open each screenshot. After a
-   failed run, run again only once the cause is understood. With no refresh, this is the first run
-   of this pass, and the same reload check as step 1.3 applies to its `app.log`.
+   failed run, run again only once the cause is understood. With no refresh, this is normally the
+   first run, and the same reload check as step 1.3 applies to its `app.log`.
 5. **Triage.**
    - The recipe or a journey describes the app wrongly: drift. Fix it, then plant one wrong
      expected value in the changed `ctx.check` and see exit 1 with its message before reverting it.
@@ -110,28 +109,27 @@ takes the file for binary (ugrep can) prints no matches and no error.
      user with the log line from `app.log`, and record it as an app-specific Known edge if it
      recurs across runs. Never fail a run on it, and never hide it: not from the report, and not by
      filtering the log.
-6. **Finish.** Every pass ends in one row of this table: take the first row that matches, top to
-   bottom, before doing anything else.
-
-   | Where the pass stands | What step 6 does | Outcome |
-   |---|---|---|
-   | Step 1 stopped; or a broken app; or an edit that is not proved | No more runs, no Measured line, no commit. Report what stopped it and its manifest, and list every file changed or replaced; the user decides what to keep | blocked |
-   | Nothing edited, the last full run passed, and the timeout check below raises nothing | Report every feature's result and this pass's times; edit nothing | clean |
-   | Something edited (a refresh, a fix, a Not covered row, a timeout raise) | The steps below, in order | changed |
-
-   For changed:
-   1. Check `ready_timeout` by the skill's section 3 rule against the first run of this pass's
-      `ready_seconds`: raise it when the rule gives more, never lower it from a run of this pass,
-      which may have been warm. (On a pass with nothing else edited, do this check first: a raise
-      moves it from clean to changed.)
-   2. Run the final runs: the full tier once more and one `--quick` run, on the final files, and confirm the
-      evidence survived cleanup. On a failure, go back to step 5 only when it has a new fix to make;
-      otherwise the pass is blocked (the table's first row).
-   3. Write the Measured line, the only step that writes it, whole: the template's lead-in, then
-      step 6.2's full run's `duration_seconds`, with the first run of this pass's in parentheses,
-      labelled `first`, not `cold`: the dev server's caches may have been warm. Then step 6.2's
-      quick run's. So `full 12.0 (first 29.3), quick 7.7`.
-   4. Report the outcome with every feature's result, then commit only with the user's say.
+6. **Finish.** Ask these in order and stop at the first that applies:
+   1. **Clean?** Nothing was edited, the last full run passed, and the skill's section 3 rule
+      wouldn't raise `ready_timeout` for the first run's `ready_seconds`. Report every feature's
+      result and this pass's times, edit nothing, and stop.
+   2. **Blocked?** Step 1 stopped; or no full run can be made to pass (the app is broken, or the
+      failure can't be traced); or a changed check can't be proved. Make no more runs, write no
+      Measured line, commit nothing. Report what stopped it and its manifest, list every file
+      changed or replaced, and stop: the user decides what to keep.
+   3. **Changed.** Everything else. In order:
+      1. Raise `ready_timeout` if the section 3 rule gives more for the first run's
+         `ready_seconds`; never lower it from a run of this pass, which may have been warm.
+      2. The final runs: one full run and one `--quick` run on the final files. A failure with a
+         new fix to make goes back to step 5. A transient one (a held port) gets one rerun. Any
+         other failure is question 2's "no full run can be made to pass": blocked.
+      3. Write the Measured line, the only step that writes it, whole: the template's lead-in,
+         then the final full run's `duration_seconds`, the first run's in parentheses labelled
+         `first`, not `cold` (the dev server's caches may have been warm), then the final quick
+         run's. So `full 12.0 (first 29.3), quick 7.7`. This line is the one edit made after the
+         final runs.
+      4. Report the outcome, every feature's result and every file changed or replaced, then
+         commit only with the user's say.
 
 ## Commit
 
