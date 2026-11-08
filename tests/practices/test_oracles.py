@@ -7234,6 +7234,36 @@ class DomHarness(unittest.TestCase):
         self.assert_verdict(out, "broken")
         self.assertIn("Next refuses to build this", self.check(out, "missing")["detail"])
 
+    def test_an_answer_waits_for_its_click(self):
+        out = self.dom_run("double-fast")
+        self.assert_verdict(out, "pass")
+        self.assertEqual(self.check(out, "security: a double click sends one action")["detail"], "1 sent")
+
+    def test_a_chrome_that_never_answers_is_unresolved(self):
+        with tempfile.TemporaryDirectory(prefix="practices-chrome-") as tmp:
+            script = Path(tmp) / "chrome"
+            script.write_text("#!/bin/sh\nexec sleep 30\n")
+            script.chmod(0o755)
+            out = self.dom_run("memo-entry", env={"ORACLE_CHROME": str(script)})
+        self.assert_verdict(out, "unresolved")
+        self.assertTrue(any(c["name"].startswith("unresolved: Chrome stalled") for c in out["checks"]), json.dumps(out, indent=1))
+
+    def test_agent_code_that_never_returns_is_broken(self):
+        self.assert_verdict(self.dom_run("wedged"), "broken")
+
+    def test_chrome_stopping_mid_oracle_is_unresolved(self):
+        out = self.dom_run("stall-after-mount")
+        self.assert_verdict(out, "unresolved")
+        self.assertTrue(any(c["name"].startswith("unresolved: Chrome stalled") for c in out["checks"]), json.dumps(out, indent=1))
+
+    def test_a_react_dom_hook_with_no_directive_is_missing(self):
+        out = self.dom_run("no-directive-form")
+        self.assert_verdict(out, "broken")
+        self.assertIn("Next refuses to build this", self.check(out, "missing")["detail"])
+
+    def test_a_non_page_entry_starts_in_the_client_graph(self):
+        self.assert_verdict(self.dom_run("entry-child"), "pass")
+
     def test_prototype_hooks_cannot_drop_an_action(self):
         for variant in ("bad-tojson", "bad-array-setter", "bad-hasinstance"):
             with self.subTest(variant=variant):
