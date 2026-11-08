@@ -315,12 +315,14 @@ class Chrome {
     });
     this.exited = new Promise((resolve) => this.child.once("exit", resolve));
     this.spawned = new Promise((resolve, reject) => {
-      this.child.once("spawn", resolve);
+      this.child.once("spawn", () => {
+        process.stderr.write(`oracle_dom: chrome pid ${this.child.pid}\n`);
+        resolve();
+      });
       this.child.once("error", reject);
     });
     this.onExit = () => this.kill();
     process.on("exit", this.onExit);
-    process.stderr.write(`oracle_dom: chrome pid ${this.child.pid}\n`);
     this.cdp = new Cdp(this.child.stdio[3], this.child.stdio[4]);
   }
 

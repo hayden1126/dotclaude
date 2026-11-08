@@ -6915,8 +6915,10 @@ class DomHarness(unittest.TestCase):
         return next(c for c in out["checks"] if c["name"] == name)
 
     def test_double_click_sends_one_action(self):
-        good = self.dom_run("double-submit", "good")
-        self.assertEqual(good["verdict"], "pass", json.dumps(good, indent=1))
+        for variant in ("good", "good-form-status"):  # its own pending state; React 19's useFormStatus
+            with self.subTest(variant=variant):
+                good = self.dom_run("double-submit", variant)
+                self.assertEqual(good["verdict"], "pass", json.dumps(good, indent=1))
         bad = self.dom_run("double-submit", "bad")
         self.assertEqual(bad["verdict"], "fail", json.dumps(bad, indent=1))
         self.assertEqual(self.check(bad, "security: a double click sends one action")["detail"], "2 sent")
