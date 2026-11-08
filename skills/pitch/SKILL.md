@@ -35,7 +35,7 @@ Give each part a time. The parts fill the slot and don't overrun. If it runs lon
 
 ## Video only
 
-The video is the pitch, so effort goes there: ask the user to type `/demo-video`, and fit it to the length and format in `EVENT.md`. Skip the rest of this skill, keeping Q&A and slides only if the event has them.
+The video is the pitch, so effort goes there: load `/demo-video`, and fit it to the length and format in `EVENT.md`. Skip the rest of this skill, keeping Q&A and slides only if the event has them.
 
 ## Q&A and slides
 

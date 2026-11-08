@@ -36,7 +36,7 @@ Read `EVENT.md` at the project root: whether video is required, its length and f
 
 | `DEMO.md` now | Do |
 |---|---|
-| No script at all | Ask the user for the script, or to type `/demo-first-scope`, and write what they give into `DEMO.md`. Don't invent one. |
+| No script at all | Ask the user for the script, or to type `/demo-first-scope`, write what they give into `DEMO.md`, and take the table again. Don't invent one. |
 | The user said to skip this check, for a reason they gave | Write the beats, and note the reason in `DEMO.md`. |
 | A script, but a beat has neither a said line nor a silent mark | Stop, and ask the user to type `/demo-first-scope before recording`, or to say why not. Don't write the lines yourself. |
 | A script, but no audience and coverage section (who judges, and what the demo must cover, each item mapped to a beat or a written field, or marked dropped) | The same stop. |
@@ -44,7 +44,7 @@ Read `EVENT.md` at the project root: whether video is required, its length and f
 | Every piece is there, but the product moved | The same stop. |
 | Every piece is there, and the product hasn't moved | Write the beats. |
 
-If `/demo-first-scope` isn't installed, ask the user who judges, what the demo must cover, and any missing said lines, commit any product changes with their OK, write the answers and a line `Checked before recording: <date and time>, at commit <hash>` into `DEMO.md`, with the hash from `git rev-parse --short HEAD`, and take the table again.
+If `/demo-first-scope` isn't installed, ask the user who judges, what the demo must cover, and any missing said lines, commit any product changes with their OK, write the answers and a line `Checked before recording: <date and time>, at commit <hash>`, replacing any earlier one, into `DEMO.md`, with the hash from `git rev-parse --short HEAD`, and take the table again.
 
 - End each action by waiting for what the viewer should see, such as `await page.getByText('Saved').waitFor()`. A wait that fails is what makes a broken take fail loud. Locators can't see the caption or the cursor, so a wait only ever matches the app.
 - Make the start state repeatable. `app.cmd` should reset or seed the data, or the second take will differ from the first.
