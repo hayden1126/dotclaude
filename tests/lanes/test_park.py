@@ -154,6 +154,21 @@ class Park(ParkBase):
         self.assertEqual(glob.glob(self.flag_glob()), [])
 
 
+class ParkedBoard(ParkBase):
+    def test_a_parked_lane_still_shows_main_touched(self):
+        # No session reads a message to a parked lane, so the board is what the lead reads.
+        self.commit("chart.txt", "axis\n", cwd=self.path)
+        self.flag()
+        self.commit("chart.txt", "main\n")
+        self.git("push", "-q", "origin", "main")
+        flags = self.row()["flags"]
+        self.assertIn("parked", flags)
+        self.assertIn("main-touched", flags)
+        # It waits for its turn (Hayden's pick), so the line says so.
+        self.assertIn("main: changed chart.txt, which lane chart-fix changes too: merge "
+                      "origin/main at its turn", self.lane("ls").splitlines())
+
+
 class ParkRefusals(ParkBase):
     """Each refusal comes before any signal: nothing is signalled and no flag is written."""
 
@@ -354,7 +369,7 @@ class Cap(ParkBase):
         self.lane("new", "gamma")  # gamma holds the one slot
         self.tmux()
         out = self.lane("open", "chart-fix")
-        self.assertIn("lane chart-fix is over the cap of 1 by one: for its rebase and merge", out)
+        self.assertIn("lane chart-fix is over the cap of 1 by one: to merge main and its PR", out)
         self.assertEqual(glob.glob(self.flag_glob()), [])
         self.assertIn("cap: 2 of 1 slots held (1 parked), 1 over", self.lane("ls"))
         p = self.run_lane("open", "beta")

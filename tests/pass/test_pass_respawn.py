@@ -154,7 +154,6 @@ WINPATH = r"C:\fake\notify-toast.ps1"
 WHERE = "$2 3 [repo] chart work"  # the pane's session id, window index and window name
 CLIENTS = "/dev/pts/7\n/dev/pts/9"  # the clients attached to that session
 
-TODAY = datetime.date.today()
 GOOD = """# STATUS: chart work
 
 ## Direction
@@ -166,12 +165,11 @@ GOOD = """# STATUS: chart work
 FIRST = "- Run the chart tests, then open the PR for #42."
 
 
-def marked(text, day=TODAY):
+def marked(text, day):
     """text with an approval marker dated day on the Next block's first item."""
     return text.replace(FIRST, f"{FIRST[:-1]} (approved by Hayden {day}).")
 
 
-APPROVED = marked(GOOD)
 # An unapproved compact resume prompt's tail when the stop record can't say whether an agent runs.
 UNSURE = (" Call EnterPlanMode first, unless a background agent is still running: then plan in "
           "chat and call it only after it hands back.")
@@ -254,6 +252,10 @@ class Base(LanesRepo):
         self.state = os.path.join(self.env["XDG_STATE_HOME"], "dotclaude")  # the fixture's pick
         self.sessions = os.path.join(self.home, ".claude", "sessions")
         self.started = time.time() - 60  # wall clock
+        # Marker dates count from the session's start date, as handoff-check's do: never from a
+        # date the module read, which is yesterday's once a run crosses midnight.
+        self.day = datetime.date.fromtimestamp(self.started)
+        self.approved = marked(GOOD, self.day)
         self.session_cwd = self.main
         self.script = ["busy", "idle"]
         self.stop_waits = []
@@ -537,26 +539,26 @@ class Plain(Base):
         self.assertFalse(os.path.exists(self.carry_marker()))
 
     def test_approved_resumes_in_the_default_mode(self):
-        self.commit("STATUS.md", APPROVED, msg="Handoff")
+        self.commit("STATUS.md", self.approved, msg="Handoff")
         code, out = self.run_pass("--print")
         self.assertEqual(code, 0, out)
         self.assertIn("mode: plain (default)", out)
         self.assertIn(shlex.join(self.respawn(prompt=self.GO)), out.splitlines())
 
     def test_a_marker_on_the_second_item_resumes_in_plan_mode(self):
-        self.commit("STATUS.md", GOOD + f"- Then merge it (approved by Hayden {TODAY}).\n",
+        self.commit("STATUS.md", GOOD + f"- Then merge it (approved by Hayden {self.day}).\n",
                     msg="Handoff")
         code, out = self.run_pass("--print")
         self.assertEqual(code, 0, out)
         self.assertIn("mode: plain (plan)", out)
 
     def test_a_stale_dated_marker_refuses_and_reads_as_unapproved(self):
-        self.commit("STATUS.md", marked(GOOD, TODAY - datetime.timedelta(days=1)), msg="Handoff")
+        self.commit("STATUS.md", marked(GOOD, self.day - datetime.timedelta(days=1)), msg="Handoff")
         code, out = self.run_pass("--print")
         self.assertEqual(code, 1, out)
         self.assertIn("approval marker predates this session", out)
         # Past the gate (which fails it) the waiter's own read still says unapproved.
-        self.commit("STATUS.md", APPROVED, msg="Handoff")
+        self.commit("STATUS.md", self.approved, msg="Handoff")
         plan = self.plan()
         later = {"startedAt": int((time.time() + 2 * 86400) * 1000)}  # wall clock
         self.assertFalse(self.mod.approved_now(plan, later))
@@ -567,7 +569,7 @@ class Plain(Base):
         # The approval is gone by the time the turn ends: plan mode, though it was approved at
         # the call. STATUS.md names itself, so the uncommitted edit passes the gate.
         note = "- STATUS.md edits after the handoff stay uncommitted.\n"
-        self.commit("STATUS.md", APPROVED + note, msg="Handoff")
+        self.commit("STATUS.md", self.approved + note, msg="Handoff")
         plan = self.plan()
         self.write(os.path.join(self.main, "STATUS.md"), GOOD + note)
         self.assertEqual(self.mod.wait_and_act(plan, table), "respawn")
@@ -575,7 +577,7 @@ class Plain(Base):
         self.assertEqual(respawn[1:], self.respawn("--permission-mode", "plan")[1:])
 
     def test_an_approved_waiter_respawns_in_the_default_mode(self):
-        self.commit("STATUS.md", APPROVED, msg="Handoff")
+        self.commit("STATUS.md", self.approved, msg="Handoff")
         code, out = self.run_pass("--foreground")
         self.assertEqual(code, 0, out)
         (respawn,) = self.calls("tmux", "respawn-pane")
@@ -602,7 +604,7 @@ class Plain(Base):
             self.assertIn(shlex.join([self.tmux, *argv]), lines)
 
     def test_approved_compact_skips_plan_mode(self):
-        self.commit("STATUS.md", APPROVED, msg="Handoff")
+        self.commit("STATUS.md", self.approved, msg="Handoff")
         code, out = self.run_pass("--compact", "--print")
         self.assertEqual(code, 0, out)
         self.assertIn("mode: compact (default)", out)
@@ -1030,7 +1032,7 @@ class Plain(Base):
         self.assertEqual(self.typed_prompt(), self.PROMPT + UNSURE)
 
     def test_an_approved_compact_pass_with_a_live_agent_just_continues(self):
-        self.commit("STATUS.md", APPROVED, msg="Handoff")
+        self.commit("STATUS.md", self.approved, msg="Handoff")
         self.stop_waits = ["subagent"]
         self.stop_tasks = [{"label": "subagent", "id": "a1"}]
         prompt = self.typed_prompt()
@@ -1280,7 +1282,7 @@ class Plain(Base):
         self.assertEqual(len(self.calls("tmux", "send-keys")), 4)
 
     def test_an_approved_detached_waiter_respawns(self):
-        self.commit("STATUS.md", APPROVED, msg="Handoff")
+        self.commit("STATUS.md", self.approved, msg="Handoff")
         code, out = self.run_pass()
         self.assertEqual(code, 0, out)
         for _ in range(200):
@@ -2576,7 +2578,7 @@ class Lane(Base):
 
     def test_an_approved_lane_respawns_in_the_default_mode(self):
         self.write(self.record("chart-fix"), self.body.replace(
-            "then run it.", f"then run it (approved by Hayden {TODAY})."))
+            "then run it.", f"then run it (approved by Hayden {self.day})."))
         code, out = self.run_pass("--foreground", cwd=self.path)
         self.assertEqual(code, 0, out)
         (respawn,) = self.calls("tmux", "respawn-pane")

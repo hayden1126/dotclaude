@@ -366,9 +366,22 @@ def ours(wt: Worktree, run: Run) -> bool:
                                        and dotclaude(wt.root))
 
 
+def oldest_link(held: list[Link]) -> float | None:
+    """The oldest mtime among the links; a link gone since the scan is left out."""
+    times = []
+    for link in held:
+        try:
+            times.append(os.lstat(link.path).st_mtime)
+        except OSError:
+            continue
+    return min(times, default=None)
+
+
 def holders(repo_dir: str, env=None) -> list[dict]:
     """Each live lane other than repo_dir that managed links point into, by root: {"root",
-    "main", "branch", "links"}, links as `~/.claude/hooks/x.sh -> <target>`. A lane is a linked
+    "main", "branch", "links", "linked_at"}, links as `~/.claude/hooks/x.sh -> <target>` and
+    linked_at the oldest link's mtime (setup.sh makes every link anew, so that dates the install;
+    None if no link could be read). A lane is a linked
     worktree of this repo, or a dotclaude checkout's (both DOTCLAUDE files at its root), so a
     plain clone elsewhere is still refused while the real repo's lane holds. Another project's
     worktree never holds, nor does one inside repo_dir's main checkout. A holder this repo's own
@@ -387,9 +400,10 @@ def holders(repo_dir: str, env=None) -> list[dict]:
             wt = Worktree(wt.root, run.main, run.registered[wt.root])
         elif under_lanes(wt, run):
             wt = Worktree(wt.root, run.main, wt.admin)
-        found.setdefault(wt, []).append(show(link, p))
-    return [{"root": wt.root, "main": wt.main, "branch": branch(wt), "links": shown}
-            for wt, shown in sorted(found.items())]
+        found.setdefault(wt, []).append(link)
+    return [{"root": wt.root, "main": wt.main, "branch": branch(wt),
+             "links": [show(link, p) for link in held], "linked_at": oldest_link(held)}
+            for wt, held in sorted(found.items())]
 
 
 def hold(repo_dir: str, env=None) -> tuple[list[dict], list[dict]]:

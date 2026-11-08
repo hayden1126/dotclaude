@@ -17,6 +17,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 import fg_pane
 
@@ -1523,6 +1524,24 @@ class Saved(unittest.TestCase):
 
     def test_the_script_is_executable(self):
         self.assertTrue(os.access(SCRIPT, os.X_OK))
+
+
+class Pane(unittest.TestCase):
+    def test_a_job_that_execs_before_the_pane_sets_its_group_still_comes_up(self):
+        # setpgid fails with EACCES on a child that has exec'd, the order a loaded machine picks
+        # (4 of 400 runs at 16 at once), and that killed the pane's stand-in for its shell.
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        real = os.setpgid
+
+        def late(pid, pgid):
+            if pid:  # the pane's call; the job's own passes 0
+                time.sleep(0.2)
+            real(pid, pgid)
+
+        with mock.patch.object(os, "setpgid", late):
+            pane, job = fg_pane.spawn(self, fg_pane.link(tmp, "claude", "versions", "2.1.303"))
+        self.assertNotEqual(pane, job)
 
 
 class Wiring(unittest.TestCase):
