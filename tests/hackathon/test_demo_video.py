@@ -305,6 +305,27 @@ class TemplateOffline(unittest.TestCase):
         for needed in ("EVENT.md", "submission asset, a stage backup or both", "may not apply", "BEATS="):
             self.assertIn(needed, text)
 
+    def test_invideo_allows_only_the_calls_its_steps_name(self):
+        # The block is pasted into settings files, so it must parse as JSON list entries, and every
+        # entry lets a call run with no prompt: it must equal this list, so adding a call (a
+        # generation call included) takes an edit here too.
+        section = (SKILL / "SKILL.md").read_text().split("## Edit in invideo\n")[1].split("\n## ")[0]
+        block = re.search(r"```json\n(.*?)```", section, re.S).group(1)
+        rules = json.loads("[" + block.strip() + "]")
+        calls = ("current_user", "new_project", "register", "new_timeline", "start_upload", "add_media",
+                 "timeline_history", "edit_timeline", "search_library", "export", "leave_timeline",
+                 "get_timeline", "timeline_catalog", "read", "status")
+        self.assertEqual(rules, [f"mcp__claude_ai_invideo_Editor__{call}" for call in calls])
+        # The steps after the setup must use each call; the setup's own warnings don't count.
+        steps = section.split("**Before uploading,**")[1]
+        for call in calls:
+            with self.subTest(call):
+                self.assertIn(f"`{call}`", steps)
+        for needed in ("never inside an install freeze", "never in a file", "Ask the user before each one",
+                       "no setting enforces them", "remove the rules", "delete the project", "iv-prod-pro-uploads.s3.amazonaws.com",
+                       "m.invideo.io", "node demo/voice.mjs check <export>", "Third-party material"):
+            self.assertIn(needed, section)
+
     def test_machinery_keeps_no_project_specifics(self):
         for name in ("record.mjs", "voice.mjs"):
             text = (TEMPLATE / name).read_text()

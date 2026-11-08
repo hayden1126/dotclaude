@@ -91,10 +91,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
   - **Live lanes** (briefs in each record). Merge order (Hayden's picks,
-    2026-11-07): 1 lanes-turn (`fix/lanes-turn`, six small lanes and test fixes, by Nov 11 if
-    ready, else after Nov 15; carries the lead's notes). After Nov 15: practices (Keep open, its next
-    PR), verify-app (`feat/verify-app`, the launch-and-check skill template, proved on shodo),
-    demo-av PR 2 (music, transitions, footage). All four change README.md.
+    2026-11-07 and 2026-11-08): 1 demo-av's invideo PR (`feat/demo-voiceover`, an "Edit in
+    invideo" section in `demo-video`, allow rules only as a per-machine setup step; merged and
+    installed by Nov 11, else after Nov 15; carries the lead's notes). After Nov 15: 2 practices
+    (Keep open, its next PR), 3 verify-app (`feat/verify-app`, the launch-and-check skill
+    template, proved on shodo), 4 demo-av's music, transitions and footage PR. All change
+    README.md or may.
     The backlog items these lanes took keep their full text in `git show 617d244:STATUS.md`.
     **Install freeze on HAYPC, Nov 12 through Nov 15** (Hayden, 2026-11-05): no lane installs in
     that window, except fixes for lane hackathon, so the event runs what the dry run tested. The lead's
@@ -123,6 +125,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     capella-studio lane artexport's report; a fork's hook output never reaches its model, so it
     knows its lane only from the parent's copied line, docs/lanes.md S5; the delegation canary
     checks the source enum; untried against lane practices' settings.json change),
+    lanes-turn (#177, 2026-11-08, merge ad66361: merge turns, so only the lane next in merge
+    order merges main, the lead tells a lane its turn, and a waiting lane merges early only on
+    the `main-touched` board flag; `lane trial` ignores merge drivers on git 2.43+; the close
+    gate's two missing cases; `install: held by` adds `overdue`; three test flakes fixed
+    (`fg_pane` setpgid, the tmux hooks teardown race, approval-marker dates read at import);
+    installed from main; closed),
     demo-av PR 1 (#176, 2026-11-08, merge cf9edc9: a voiceover step in `demo-video`,
     `voice.mjs` builds `demo-voice.mp4` from one read or per-beat clips at the take's exact
     length, with `cues`, `add` and `check`; `record.mjs` moves a stale voice aside on a new
@@ -171,8 +179,6 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
   Backlog:
   - **demo-video upgrade:** in lane demo-av (2026-11-07).
-  - **Possible flake in `tests/lanes`:** in lane lanes-turn (2026-11-07).
-  - **Lanes waiting their merge turn:** in lane lanes-turn (2026-11-07).
   - **`run_turn` counts dying processes as strays** (medium; found by lane license's trial,
     2026-11-07; lane practices owns the fix, in its next PR): `tests/practices/run.py`'s
     `run_turn` SIGKILLs the group and `kill_marked` scans /proc at once, so a process with
@@ -181,7 +187,6 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     `stray_kills` rows into eval results; none so far (lane practices: 2,060 stored rows, all 0
     strays). The fix lands before that PR's sweep. Evidence: lane license's
     `.lane/artifacts/run-turn-race.md`.
-  - **Teardown race in `tests/setup/test_tmux_hooks.py`:** in lane lanes-turn (2026-11-07).
   - **Secret-name follow-ups from lane env-names** (low, 2026-11-07): five notes on names the
     secret checks and ignore rules miss or wrongly flag, outside that lane's brief. Not picked
     yet. Evidence: lane env-names's closed record, Not mine
@@ -193,7 +198,6 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     the delta alone and run it on a smaller model such as Sonnet. Not picked: a session-decided
     skip, or a new off switch (`practices-gate` by Hayden's own `!` line stays the only one).
     Lands after the Nov 12-15 freeze, so the event runs the gate the lanes already tested.
-  - **Two gaps in the lead's close gate:** in lane lanes-turn (2026-11-07).
   - **Fix lanes from lane design-audit** (Hayden's picks, 2026-11-01). Private: sandbox-audit
     FINDINGS, "Design-decision audit, 2026-11", one row per id with the detail. Most severe first:
     1. DA15 with DA16 (high): done in #161 (lane ports, 2026-11-04), with LR1 to LR7. The lead
@@ -244,7 +248,6 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     hooks and notifiers lean on WSL. Pairs with [[hayden-new-device-goal]]. After lane hackathon.
   - **A README paragraph against the gaps-by-id rule** (lane deny-rules' reviewer, 2026-11-05).
     Private: sandbox-audit FINDINGS, PG8. For lane practices, in its next PR.
-  - **`lane ls` names an overdue reinstall:** in lane lanes-turn (2026-11-07).
   - **Next lane when a slot frees (Hayden's pick):** the serve jail (it closes live private
     rows), shared lane locks or structured `Keep open`, all on the lane CLI files, free now
     that lane ports has merged.
@@ -303,7 +306,6 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     holder and read the lock as free. Lane-able (`lane`,
     `lanelib.py`, `tests/lanes`, `docs/lanes.md`), after ports. Tell the
     capella-studio lead when it lands.
-  - **Approval-marker tests flake at midnight:** in lane lanes-turn (2026-11-07).
   - **Store `Keep open` as structured state** (Hayden's pick, 2026-10-29, via lane lane-fixes).
     `lane keep "<why>"` / `lane keep --off` write it to lane.json, `lane done` reads the field,
     the record's `Keep open:` line is for people, and handoff-check warns when the two disagree.
@@ -320,7 +322,6 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     `tests/lanes`). Scope widened (Hayden, 2026-10-31, via lane cache-gaps): the jail also wraps
     project hooks, and the lane closes the whole family of private rows that share one root
     (DS1, H1, N1 to N3) in one mechanism rather than per-tool fixes.
-  - **Lanes skill: rebase only at your turn:** in lane lanes-turn (2026-11-07).
   - **Practices suite input: dependency lifecycle** (capella-studio's lead, 2026-10-25; for
     lane practices at resume). SEC-60 covers only adding a dependency. Proposed: a
     per-dependency ledger kept in step by a test, an admission checklist, a production audit in
@@ -426,10 +427,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 ## Notes for next session
 - **Next (lead, main checkout):**
   0. Live lanes: `lane ls`; state in their records (2026-11-07:
-     practices and demo-av kept open, verify-app, lanes-turn). #176 merged and is installed from main; lanes hackathon,
+     practices and demo-av kept open, verify-app). #177 merged and is installed from main; lanes hackathon,
      merge-record, env-names, license, mocks and speed closed 2026-11-07. Hayden's leftover asks from lane deny-rules
      (an overlay paste plus a setup rerun, probe leftovers, local tool cleanups): its closed
-     record. Lanes-turn, if ready, merges by Nov 11; a merge after that waits for Nov 16. Install freeze Nov 12 through Nov 15. A chain that
+     record. Demo-av's invideo PR merges and installs by Nov 11, else after Nov 15; nothing else before Nov 16. Install freeze Nov 12 through Nov 15. A chain that
      stops before its "main moved" step still tells the lanes, and arms a wake on the blocker
      (`skills/lanes/SKILL.md`). Open
      with Hayden (repeat them in each reply's Waiting list until answered): try `/interview` in
