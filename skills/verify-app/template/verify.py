@@ -60,7 +60,7 @@ import urllib.request
 
 HERE = pathlib.Path(__file__).resolve().parent
 TOKEN_VAR = "VERIFY_RUN_TOKEN"
-# Raised by one on any change to verify.py or browser.py. MAINTAIN.md orders a repo's copy against the
+# Raised by one on any change to a file CHECKSUMS lists. MAINTAIN.md orders a repo's copy against the
 # template by it; a copy without this line predates it and is the older.
 HARNESS_VERSION = 2
 OUTCOMES = {0: "proved", 1: "app failed", 2: "could not judge", 3: "cleanup failed"}

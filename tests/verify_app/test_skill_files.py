@@ -327,17 +327,23 @@ class Files(unittest.TestCase):
                 self.assertIn(phrase, generator)
 
     def test_harness_version_moves_with_the_harness(self):
-        """MAINTAIN.md orders a copy against the template by HARNESS_VERSION, so any change to verify.py
-        or browser.py must raise it. On a failure: raise HARNESS_VERSION by one, then set PIN to the
-        version and the digest this test prints."""
-        PIN = (2, "de2541072a00c02ca8ba6a10308ae5c9520218fedec6909b1a31ae6dd158e54d")
+        """MAINTAIN.md orders a copy against the template by HARNESS_VERSION, so any change to a file
+        CHECKSUMS lists must raise it. On a failure: raise HARNESS_VERSION by one and add a new
+        HISTORY entry with the digest this test prints. Never edit an earlier entry."""
+        HISTORY = {2: "d974ed7f2608b3d403c29def5d4b445e48083b178c5a5f104cb00e269cd0ea2c"}
         text = read(os.path.join(TEMPLATE, "verify.py"))
         found = re.findall(r"(?m)^HARNESS_VERSION = (\d+)$", text)
         self.assertEqual(len(found), 1, "verify.py carries exactly one HARNESS_VERSION line")
-        strip = lambda t: re.sub(r"(?m)^HARNESS_VERSION = \d+\n", "", t)
-        digest = hashlib.sha256((strip(text) + strip(read(os.path.join(TEMPLATE, "browser.py")))).encode()).hexdigest()
-        self.assertEqual((int(found[0]), digest), PIN,
-                         "the harness changed: raise HARNESS_VERSION and update PIN to the new pair")
+        version = int(found[0])
+        digest = hashlib.sha256()
+        for name in ("verify.py", "browser.py", "LICENSE-pstack-claude"):  # bytes, so line endings count
+            with open(os.path.join(TEMPLATE, name), "rb") as f:
+                data = re.sub(rb"(?m)^HARNESS_VERSION = \d+$", b"HARNESS_VERSION = N", f.read())
+            digest.update(name.encode() + b"\0" + str(len(data)).encode() + b"\0" + data)
+        self.assertEqual(version, max(HISTORY), "HARNESS_VERSION must be the newest HISTORY entry")
+        self.assertEqual(len(set(HISTORY.values())), len(HISTORY), "each version names different files")
+        self.assertEqual(digest.hexdigest(), HISTORY[version],
+                         f"the harness changed: raise HARNESS_VERSION and add {version + 1}: {digest.hexdigest()!r}")
 
     def test_no_step_moves_the_sessions_working_directory(self):
         """A bare cd in a main session moves its cwd for every later call, breaking root-relative paths."""
