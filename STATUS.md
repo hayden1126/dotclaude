@@ -90,10 +90,13 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - #144 (exam-prep): rules public, evidence private (Hayden, 2026-10-20).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
-  - **Live lanes** (briefs in each record). Merge order: 1 speed
-    (`feat/speed-skill`, draft #174, the `long-runs` skill plus one CLAUDE.md line, opened
-    2026-11-07 on Hayden's pick; carries the lead's notes; resolves the README.md `skills/` row
-    that conflicts with #175, keeping both entries; by 2026-11-11).
+  - **Live lanes** (briefs in each record). Merge order (Hayden's picks,
+    2026-11-07): 1 demo-av PR 1 (`feat/demo-voiceover`, the voiceover in `demo-video`, by
+    Nov 11; carries the lead's notes), 2 lanes-turn (`fix/lanes-turn`, six small lanes and test
+    fixes, by Nov 11 if ready, else after Nov 15). After Nov 15: practices (Keep open, its next
+    PR), verify-app (`feat/verify-app`, the launch-and-check skill template, proved on shodo),
+    demo-av PR 2 (music, transitions, footage). All four change README.md.
+    The backlog items these lanes took keep their full text in `git show 617d244:STATUS.md`.
     **Install freeze on HAYPC, Nov 12 through Nov 15** (Hayden, 2026-11-05): no lane installs in
     that window, except fixes for lane hackathon, so the event runs what the dry run tested. The lead's
     reinstall after a merge counts as an install, so no other lane merges in that window.
@@ -121,6 +124,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     capella-studio lane artexport's report; a fork's hook output never reaches its model, so it
     knows its lane only from the parent's copied line, docs/lanes.md S5; the delegation canary
     checks the source enum; untried against lane practices' settings.json change),
+    speed (#174, 2026-11-07, merge 400fe32: the `long-runs` skill, for planning long or
+    multi-part jobs and writing down each skip, plus one CLAUDE.md line to load it and quote
+    only measured times; running sessions get the line at their next start or `/pass`;
+    installed from main),
     mocks (#175, 2026-11-07, merge dfb7219: the `mocks` skill for one-screen clickable design
     mocks, its template and a stdlib layout check, plus a pointer in `frontend-ui-discipline`;
     installed from main),
@@ -160,27 +167,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
 
   Backlog:
-  - **demo-video upgrade** (Hayden, 2026-11-06: "at a later pass"): recorded voiceovers, music,
-    transitions, and real camera footage cut in with the scripted take. Today the skill records
-    one silent take and has one untested ffmpeg line for a voiceover. Starts after lane
-    hackathon merges (it owns `skills/demo-video/` and its tests); lead's lean: after the event.
-    Music and footage need a recorded source and licence per file (lane license's rule), and
-    recording a voice from WSL needs the Windows microphone, still unprobed.
-  - **Faster work: parallel runs and stated skips** (Hayden, 2026-11-07, via lane themes in
-    another repo: "another skill for speeding up processes like running stuff in parallel etc,
-    for both during dev, spikes, verification, release checks, CI stuff etc, also smart thinking
-    about what we can skip or only looking at diff etc when appropriate"). Habits: before quoting
-    a duration, find what the job spends its time on (waits or CPU) and run independent parts at
-    once, keeping a signal that the load changed nothing; use lock and build waits to prepare the
-    next step; run only what a change can reach, reuse evidence that still holds, prove with the
-    cheapest test that hits the risk, order steps by what voids what. Guardrail: every skip is
-    written down (what didn't run, why it's safe, what would catch a problem), and never reads as
-    a pass. Hayden picked a new skill, built now by lane speed (2026-11-07).
-  - **Lanes waiting their merge turn** (from lane speed's transcript survey, 2026-11-07; kept out
-    of its skill by Hayden): lanes rebased again and again while waiting their turn (another repo,
-    2026-10-25), and a lane sat idle about 50 minutes because its lead never told it its turn had
-    come (another repo, 2026-11-03). Lead and lanes-skill matters: a turn notice from the lead's
-    post-merge step, and no re-merge of main while waiting unless main changed the lane's files.
+  - **demo-video upgrade:** in lane demo-av (2026-11-07).
+  - **Possible flake in `tests/lanes`:** in lane lanes-turn (2026-11-07).
+  - **Lanes waiting their merge turn:** in lane lanes-turn (2026-11-07).
   - **`run_turn` counts dying processes as strays** (medium; found by lane license's trial,
     2026-11-07; lane practices owns the fix, in its next PR): `tests/practices/run.py`'s
     `run_turn` SIGKILLs the group and `kill_marked` scans /proc at once, so a process with
@@ -189,12 +178,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     `stray_kills` rows into eval results; none so far (lane practices: 2,060 stored rows, all 0
     strays). The fix lands before that PR's sweep. Evidence: lane license's
     `.lane/artifacts/run-turn-race.md`.
-  - **Teardown race in `tests/setup/test_tmux_hooks.py`** (low; found by lane license's trial,
-    2026-11-07): `hooks/stop-ring.sh` logs `rang` and then plays the ring, whose detached test stub
-    appends to `calls.log` in the test's temp dir, while the test's `decided()` returns on the log
-    line alone, so the cleanup's `rmtree` can hit Errno 39. Failed once in
-    `test_an_unreadable_transcript_still_rings` with its assertions passing; 96 runs at 16 at
-    once didn't reproduce it. Likely fix: wait for the stub's line too.
+  - **Teardown race in `tests/setup/test_tmux_hooks.py`:** in lane lanes-turn (2026-11-07).
   - **Secret-name follow-ups from lane env-names** (low, 2026-11-07): five notes on names the
     secret checks and ignore rules miss or wrongly flag, outside that lane's brief. Not picked
     yet. Evidence: lane env-names's closed record, Not mine
@@ -206,13 +190,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     the delta alone and run it on a smaller model such as Sonnet. Not picked: a session-decided
     skip, or a new off switch (`practices-gate` by Hayden's own `!` line stays the only one).
     Lands after the Nov 12-15 freeze, so the event runs the gate the lanes already tested.
-  - **Two gaps in the lead's close gate** (`skills/lanes/SKILL.md`, text already on main; found by
-    lane merge-record, 2026-11-06). (1) A merged lane with no live session and a failing
-    `handoff-check` has no written next step: the lead never respawns another lane's session, and
-    Hayden's yes lifts only the `handoff?` flag. (2) A merged lane whose worktree is gone can't
-    pass `handoff-check`, yet `lane open`'s refusal says `lane done` closes it. Evidence: lane
-    merge-record's record, Not mine, and its `.lane/artifacts/gate-table.md` rows 7 and 13. Fits a
-    lanes-skill lane after merge-record merges.
+  - **Two gaps in the lead's close gate:** in lane lanes-turn (2026-11-07).
   - **Fix lanes from lane design-audit** (Hayden's picks, 2026-11-01). Private: sandbox-audit
     FINDINGS, "Design-decision audit, 2026-11", one row per id with the detail. Most severe first:
     1. DA15 with DA16 (high): done in #161 (lane ports, 2026-11-04), with LR1 to LR7. The lead
@@ -250,24 +228,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     row), SW11 (recheck after a uv upgrade). By hand when convenient, details in the rows and
     lane sweep's closed record: SW10, SW9, SW3, and the elevated scheduled-task listing the
     sweep could not inventory.
-  - **A verify-app skill template for app repos** (Hayden's pick, 2026-11-04, via lane dev-cycle's
-    reels review, `~/scratch/external-skills/reels-review-2026-11-04.md`). Adapted from pstack's
-    create-verification-skill and maintain-verification-skill (MIT): launch, a read-only health
-    check, drive, evidence, cleanup; it must run once before it counts. Its own lane, proven on a
-    real app repo, since dotclaude has no running app.
+  - **A verify-app skill template for app repos:** in lane verify-app (2026-11-07).
   - **A per-lane data dir or database name beside the port block in `lane new`** (Hayden's pick,
     2026-11-04, same review): ports isolate servers but not data. Lane-able after ports merges
     (`skills/lanes/scripts/lane`).
-  - **A hackathon mode and skill set** (Hayden, 2026-11-05). In lane hackathon. Opt-in per repo,
-    built on the video "The Claude Code workflow that helped me win 5 Hackathons in a Row" (a
-    sponsored video), jmo-skills and paradev.com; install none. New manual skills: `hackathon`,
-    `demo-first-scope`, `demo-video`, `pitch`. For both modes: `interview` (Hayden, a long vision chat with researched suggestions) and a `frontend-motion` skill from
-    `animate` and `better-ui` (MIT). After the event: a `public-ready` skill (Hayden's ask) that
-    cleans the repo for release. Hayden's picks: machine protection stays, plus an access list
-    approved at kickoff per project; pushes stay under CLAUDE.md's rule, approved at kickoff; a
-    public repo gets a secrets check before each push; sessions run on HAYPC with a laptop as the
-    remote. The skills stay plain folders others can copy. First step: a spike proving a scripted demo recording here.
-    Review and plan: `~/scratch/external-skills/hackathon-review-2026-11-05.md`.
   - **From the Claude Code changelog, 2.1.221 to 2.1.318** (lead's review, 2026-11-05;
     `~/scratch/external-skills/cc-updates-2026-11-05.md`). `onFailure: "block"` on the hooks with no
     fail-closed wrapper; `notify_when_idle` for lane waits; check idle compaction (2.1.299) against
@@ -277,10 +241,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     hooks and notifiers lean on WSL. Pairs with [[hayden-new-device-goal]]. After lane hackathon.
   - **A README paragraph against the gaps-by-id rule** (lane deny-rules' reviewer, 2026-11-05).
     Private: sandbox-audit FINDINGS, PG8. For lane practices, in its next PR.
-  - **`lane ls` names an overdue reinstall** (Hayden's pick, 2026-11-04; after #163's chain
-    stalled). When the lane holding the install has a merged PR, the `install: held by` line says
-    the lead's reinstall is overdue. Derived on each call, no new state. Lane-able after ports
-    merges (`skills/lanes/scripts/lane`, `tests/lanes`).
+  - **`lane ls` names an overdue reinstall:** in lane lanes-turn (2026-11-07).
   - **Next lane when a slot frees (Hayden's pick):** the serve jail (it closes live private
     rows), shared lane locks or structured `Keep open`, all on the lane CLI files, free now
     that lane ports has merged.
@@ -339,12 +300,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     holder and read the lock as free. Lane-able (`lane`,
     `lanelib.py`, `tests/lanes`, `docs/lanes.md`), after ports. Tell the
     capella-studio lead when it lands.
-  - **Approval-marker tests flake at midnight** (low; lane park, 2026-10-30). Two
-    `tests/lanes/test_handoff_check.py` PlainRepo tests (a dated marker passes, a future one fails)
-    failed once in a full `tests/lanes` run that crossed local midnight, then passed on rerun.
-    Cause: the module's `TODAY` is computed at import, so after midnight it is yesterday while
-    handoff-check reads the real date. Fix: compute it per test, or pin the clock in the check's
-    env. Rides with lane ports.
+  - **Approval-marker tests flake at midnight:** in lane lanes-turn (2026-11-07).
   - **Store `Keep open` as structured state** (Hayden's pick, 2026-10-29, via lane lane-fixes).
     `lane keep "<why>"` / `lane keep --off` write it to lane.json, `lane done` reads the field,
     the record's `Keep open:` line is for people, and handoff-check warns when the two disagree.
@@ -361,16 +317,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     `tests/lanes`). Scope widened (Hayden, 2026-10-31, via lane cache-gaps): the jail also wraps
     project hooks, and the lane closes the whole family of private rows that share one root
     (DS1, H1, N1 to N3) in one mechanism rather than per-tool fixes.
-  - **Lanes skill: rebase only at your turn** (capella-studio lead, session 80ab3852, 2026-10-25;
-    Hayden picked all three in capella's window). (A) The lead, step 7.6: only the lane next in
-    merge order merges or rebases origin/main; the others get "main moved", check conflicts, and
-    update at their turn. (B) After a conflict-free update, CI on the pushed head is the gate
-    (dotclaude has no CI, so here that's the full local suites). (C) Optional train note: the
-    second ready PR rebases onto the first's pushed head. Correction to (A): `git merge-tree`
-    honours `.gitattributes` merge drivers and GitHub doesn't; ask the forge
-    (`gh pr view N --json mergeable`) or use `git --attr-source=<empty tree> merge-tree
-    --write-tree --name-only` (git 2.40+). `lane trial`'s `merge_tree` shares the blind spot.
-    Lane-able (`skills/lanes/SKILL.md`, `docs/lanes.md`, `lane trial`).
+  - **Lanes skill: rebase only at your turn:** in lane lanes-turn (2026-11-07).
   - **Practices suite input: dependency lifecycle** (capella-studio's lead, 2026-10-25; for
     lane practices at resume). SEC-60 covers only adding a dependency. Proposed: a
     per-dependency ledger kept in step by a test, an admission checklist, a production audit in
@@ -475,11 +422,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Live lanes: `lane ls`; state in their records (2026-11-07: speed,
-     practices kept open). #175 merged and is installed from main; lanes hackathon,
-     merge-record, env-names, license and mocks closed 2026-11-07. Hayden's leftover asks from lane deny-rules
+  0. Live lanes: `lane ls`; state in their records (2026-11-07:
+     practices kept open, demo-av, verify-app, lanes-turn). #174 merged and is installed from main; lanes hackathon,
+     merge-record, env-names, license, mocks and speed closed 2026-11-07. Hayden's leftover asks from lane deny-rules
      (an overlay paste plus a setup rerun, probe leftovers, local tool cleanups): its closed
-     record. Lane speed merges and installs by Nov 11; a merge after that waits for Nov 16. Install freeze Nov 12 through Nov 15. A chain that
+     record. Demo-av PR 1, then lanes-turn if ready, merge by Nov 11; a merge after that waits for Nov 16. Install freeze Nov 12 through Nov 15. A chain that
      stops before its "main moved" step still tells the lanes, and arms a wake on the blocker
      (`skills/lanes/SKILL.md`). Open
      with Hayden (repeat them in each reply's Waiting list until answered): try `/interview` in
