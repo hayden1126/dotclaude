@@ -113,6 +113,8 @@ takes the file for binary (ugrep can) prints no matches and no error.
    - The app itself is broken: report it to the user with the manifest path; the pass ends blocked.
      Never write around it
      in the recipe or the journey.
+   - A run exited 3 (cleanup failed): go straight to step 6's question 2. Don't rerun or signal
+     anything first, since a process left behind may hold the port and may not be the run's own.
    - The app works but logs errors, such as a hydration mismatch: an app warning. Report it to the
      user with the log line from `app.log`, and record it as an app-specific Known edge if it
      recurs across runs. Never fail a run on it, and never hide it: not from the report, and not by
@@ -124,21 +126,23 @@ takes the file for binary (ugrep can) prints no matches and no error.
    2. **Blocked?** Step 1 stopped; or no full run can be made to pass (the app is broken, or the
       failure can't be traced); or a run exited 3 (cleanup failed: name each process in
       `processes_left`, and never signal one marked `outside_repo`); or a changed check can't be
-      proved. Make no more runs, write no
-      Measured line, commit nothing. Report what stopped it and its manifest, list every file
-      changed or replaced, and stop: the user decides what to keep.
+      proved. Make no more runs, write no Measured line, commit nothing. Report what stopped it and
+      its manifest, list every file changed or replaced, and stop: the user decides what to keep.
    3. **Changed.** Everything else. In order:
-      1. Raise `ready_timeout` if the section 3 rule gives more for the first run's
-         `ready_seconds`; never lower it from a run of this pass, which may have been warm.
-      2. The final runs: one full run and one `--quick` run on the final files, then open the full
-         run's screenshots and confirm its evidence survived cleanup. A failure with a
-         new fix to make goes back to step 5. A transient one (a held port) gets one rerun. Any
-         other failure is question 2's "no full run can be made to pass": blocked.
+      1. The final runs: one full run and one `--quick` run on the final files, then open the full
+         run's screenshots and confirm its evidence survived cleanup. A failed run, or a screenshot
+         or evidence file that is missing or shows the wrong thing, is a failure here: one with a
+         new fix to make goes back to step 5, a transient one (a held port) gets one rerun, and any
+         other is question 2's "no full run can be made to pass": blocked.
+      2. Raise `ready_timeout` if the section 3 rule gives more for the first run's
+         `ready_seconds` (a first run exists now: the final full run passed); never lower it from a
+         run of this pass, which may have been warm. A raise only gives the app longer to start,
+         so it can't turn the passing final runs into failing ones and needs no rerun.
       3. Write the Measured line, the only step that writes it, whole: the template's lead-in,
          then the final full run's `duration_seconds`, the first run's in parentheses labelled
          `first`, not `cold` (the dev server's caches may have been warm), then the final quick
-         run's. So `full 12.0 (first 29.3), quick 7.7`. This line is the one edit made after the
-         final runs.
+         run's. So `full 12.0 (first 29.3), quick 7.7`. This line and a timeout raise are the
+         only edits made after the final runs.
       4. Report the outcome, every feature's result and every file changed or replaced, then
          commit only with the user's say.
 

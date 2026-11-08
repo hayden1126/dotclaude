@@ -348,8 +348,8 @@ class Files(unittest.TestCase):
         flat = " ".join(read(os.path.join(SKILL, "MAINTAIN.md")).split())
         step6 = flat[flat.index("6. **Finish.**"):flat.index("## Commit")]
         self.assertIn("Ask these in order and stop at the first that applies", step6)
-        order = [step6.index(p) for p in ("**Clean?**", "**Blocked?**", "**Changed.**", "Raise `ready_timeout`",
-                                          "The final runs:", "Write the Measured line",
+        order = [step6.index(p) for p in ("**Clean?**", "**Blocked?**", "**Changed.**", "The final runs:",
+                                          "Raise `ready_timeout`", "Write the Measured line",
                                           "commit only with the user's say")]
         self.assertEqual(order, sorted(order))
         for phrase in ("Nothing was edited, the last full run passed", "edit nothing, and stop",
@@ -357,10 +357,13 @@ class Files(unittest.TestCase):
                        "a changed check can't be proved",
                        "Make no more runs, write no Measured line, commit nothing",
                        "list every file changed or replaced, and stop: the user decides what to keep",
-                       "A failure with a new fix to make goes back to step 5. A transient one (a held port) gets "
-                       "one rerun. Any other failure is question 2's",
+                       "A failed run, or a screenshot or evidence file that is missing or shows the wrong thing, is "
+                       "a failure here",
+                       "a transient one (a held port) gets one rerun, and any other is question 2's",
+                       "(a first run exists now: the final full run passed)",
+                       "so it can't turn the passing final runs into failing ones and needs no rerun",
                        "every file changed or replaced, then commit only with the user's say",
-                       "This line is the one edit made after the final runs"):
+                       "This line and a timeout raise are the only edits made after the final runs"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, step6)
         for term in ("**Proved:** a changed `ctx.check` is proved when a planted wrong value fails the run with "
@@ -374,6 +377,8 @@ class Files(unittest.TestCase):
                      "then open the full run's screenshots and confirm its evidence survived cleanup",
                      "stop, and the pass ends blocked (step 6's question 2: step 1 stopped)",
                      "Each stop in this step ends the pass blocked (step 6's question 2)",
+                     "A run exited 3 (cleanup failed): go straight to step 6's question 2. Don't rerun or signal "
+                     "anything first",
                      "A failed run goes through step 5's triage like any other",
                      "Each stop in this step ends the pass blocked",
                      "report it to the user with the manifest path; the pass ends blocked",
