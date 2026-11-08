@@ -15,15 +15,19 @@ const CONTROLS = "button, [role=button], input[type=submit], input[type=button]"
 const MARK = "data-oracle-confirm";
 const LABEL = '(el) => (el.textContent.trim() || el.getAttribute("aria-label") || el.value || "")';
 
-// "can't undo this" warns; it doesn't offer one. "be undone" isn't the word undo at all.
-const undoShown = async (dom) => /(?<!(?:can.?t|cannot|can not|won.?t|not)\s+(?:be\s+)?)\bundo\b/i.test(await dom.eval("document.body.innerText"));
+// "can't undo this" warns; it doesn't offer one. "be undone" isn't the word undo at all, and a
+// sentence calling the delete permanent or irreversible isn't offering one either.
+const UNDO_OFFER = /(?<!(?:can.?t|cannot|can not|won.?t|not|no|never|unable\s+to|(?:not|n.?t|never)\s+be\s+able\s+to)\s+(?:be\s+)?)\bundo\b(?!\s+(?:is\s+|isn.?t\s+)?(?:not|unavailable|impossible))/i;
+const FINAL = /irreversible|permanent/i;
+const undoShown = async (dom) => (await dom.eval("document.body.innerText")).split(/[\n.!?]+/).some((sentence) => UNDO_OFFER.test(sentence) && !FINAL.test(sentence));
 
 const sent = (actions) => actions.length === 1 && actions[0].name === "deleteClient" && actions[0].args[0] === 7;
 
-// Every control on the page and the one about to be clicked, by element: a confirm step is told
-// from the rest of the table by what wasn't there, or now says something else.
+// Every visible control and the one about to be clicked, by element: a confirm step is told from
+// the rest of the table by what wasn't showing, or now says something else. Only rendered ones, so
+// a closed <dialog> or a hidden modal's buttons count as new once shown.
 const remember = (dom, clicked) => dom.call(`(clicked, controls, label) => {
-  window.oracleButtons = new Map([...document.querySelectorAll(controls)].map((el) => [el, (${LABEL})(el)]));
+  window.oracleButtons = new Map([...document.querySelectorAll(controls)].filter((el) => el.getClientRects().length > 0).map((el) => [el, (${LABEL})(el)]));
   window.oracleClicked = document.querySelector(clicked);
 }`, clicked, CONTROLS);
 

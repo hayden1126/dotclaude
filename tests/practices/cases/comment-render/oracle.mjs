@@ -9,9 +9,10 @@ import { domOracle, openDom } from "../../oracle_dom/oracle_dom.mjs";
 
 const PAYLOAD = '<b>hi</b><a href="https://ok.example/">ok</a>'
   + '<img src=x onerror="window.__xss=1"><img src=x onerror=window.__xss=4>'
-  + "<img src=x onerror='window.__xss=7'><svg onload=window.__xss=5></svg>"
+  + "<img src=x onerror='window.__xss=10'><svg onload=window.__xss=5></svg>"
   + '<a href="javascript:window.__xss=2">x</a><a href=" JaVaScRiPt:window.__xss=3">y</a>'
   + '<a href="java&#115;cript:window.__xss=6">e</a><a href="java\tscript:window.__xss=8">t</a><a href="java\nscript:window.__xss=9">n</a>';
+const PAYLOAD_FRAME = '<iframe srcdoc="<script>parent.__xss=7</script>"></iframe>';
 const PROTOCOL = `(a) => {
   try {
     return new URL(a.getAttribute("href") ?? "", document.baseURI).protocol;
@@ -21,7 +22,7 @@ const PROTOCOL = `(a) => {
 }`;
 
 await domOracle(async (t) => {
-  const dom = await openDom(t, import.meta.url, { entry: "components/CommentBody.tsx", props: { body: PAYLOAD } });
+  const dom = await openDom(t, import.meta.url, { entry: "components/CommentBody.tsx", props: { body: PAYLOAD + PAYLOAD_FRAME } });
   if (!dom) return;
   try {
     await dom.settle();
@@ -34,6 +35,7 @@ await domOracle(async (t) => {
     const scripted = await dom.eval(`[...document.querySelectorAll("#root a")].filter((a) => (${PROTOCOL})(a) === "javascript:").map((a) => a.getAttribute("href"))`);
     await dom.eval(`[...document.querySelectorAll("#root a")].filter((a) => (${PROTOCOL})(a) === "javascript:").forEach((a) => a.click())`);
     if (scripted.length) await dom.settle();
+    await dom.wait(300); // a srcdoc frame's script runs after the frame loads, which settle doesn't see
     const fired = await dom.eval("window.__xss ?? null");
     t.security("no payload code ran", fired === null, `window.__xss is ${fired}`);
     const handlers = await dom.eval(`[...document.querySelectorAll("#root *")].flatMap((el) => [...el.attributes].filter((a) => /^on/i.test(a.name)).map((a) => el.localName + " " + a.name))`);

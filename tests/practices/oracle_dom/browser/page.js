@@ -203,7 +203,8 @@
   var REACT_WRAPPERS = [Symbol.for("react.memo"), Symbol.for("react.forward_ref")];
 
   // React builds a <script> through innerHTML, so the ones in its first render never run, where a
-  // server-rendered page's do: run those once, as copies beside the originals React still owns.
+  // server-rendered page's do: run those once, as copies beside the originals React still owns,
+  // before any passive effect (a layout effect wraps the tree, so an effect may use what they set).
   // Only what React made: a script an effect inserted has run already, and it carries no React
   // fiber key. A later render's scripts stay inert, as in Next. async ones React loads itself.
   function runFirstRenderScripts() {
@@ -271,12 +272,18 @@
       },
     });
     var before = errors.length;
+    function FirstRenderScripts(props) {
+      React.useLayoutEffect(function () {
+        runFirstRenderScripts();
+        before = errors.length; // what a script itself throws isn't a failed render
+      }, []);
+      return props.children;
+    }
     ReactDOM.flushSync(function () {
-      root.render(element);
+      root.render(React.createElement(FirstRenderScripts, null, element));
     });
     await wait(0);
     if (errors.length > before) return { status: "error", detail: join(slice(errors, before), "\n") };
-    runFirstRenderScripts();
     return { status: "ok" };
   }
 

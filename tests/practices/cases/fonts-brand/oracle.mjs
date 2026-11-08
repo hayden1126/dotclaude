@@ -72,6 +72,12 @@ function resolvesLocally(cssFile, url) {
   return isFile(clean.startsWith("/") ? path.join(FIXTURE, "public", clean) : path.resolve(path.dirname(cssFile), clean));
 }
 
+// A next/font/local call whose src file exists, relative to the importing file, as Next resolves it.
+function localFontLoads(file, text) {
+  if (!/next\/font\/local/.test(text) || !/\binter\b/i.test(text)) return false;
+  return [...text.matchAll(/["'`]([^"'`\n]+\.(?:woff2?|ttf|otf|eot))["'`]/gi)].some(([, rel]) => isFile(path.resolve(path.dirname(file), rel)));
+}
+
 // Every third-party font source in a file: a remote @import, a stylesheet or font <link>, or a
 // remote @font-face URL. The fixture has no other remote stylesheet, so any of these is the font.
 function remoteSources(file, text) {
@@ -105,7 +111,7 @@ await oracle(async (t) => {
   const files = walk(FIXTURE);
   const joined = files.map(([, text]) => text).join("\n");
   const nextGoogle = /import\s*\{[^}]*\bInter\b[^}]*\}\s*from\s*["']next\/font\/google["']/.test(joined);
-  const nextLocal = /next\/font\/local/.test(joined) && /inter[^"']*\.(?:woff2?|ttf|otf)/i.test(joined);
+  const nextLocal = files.some(([file, text]) => localFontLoads(file, text));
   const localFace = files.some(([file, text]) => facesIn(text).some((face) => namesInter(face) && urlsIn(face).some((url) => !REMOTE.test(url) && resolvesLocally(file, url))));
   const packages = [...new Set(files.flatMap(([, text]) => fontPackages(text)))];
   const installed = packages.filter((name) => isFile(path.join(FIXTURE, "node_modules", name, "package.json")));
