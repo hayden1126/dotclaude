@@ -3002,7 +3002,9 @@ class SkippedLine(BashBase):
                 ("gh pr ready 3 -R=a/b", "pr view 3 --repo a/b --json body"),
                 ("GH_REPO=a/b gh pr ready 3", "pr view 3 --repo a/b --json body"),
                 ("GH_REPO=a/b gh pr ready 3 --repo c/d", "pr view 3 --repo c/d --json body"),
-                ("GH_REPO=x/y gh pr view 5 && gh pr ready 3", "pr view 3 --repo o/r --json body")):
+                ("GH_REPO=x/y gh pr view 5 && gh pr ready 3", "pr view 3 --repo o/r --json body"),
+                ("GH_REPO=a/b; gh pr ready 3", "pr view 3 --repo o/r --json body"),
+                ("env GH_REPO=a/b gh pr ready 3", "pr view 3 --repo a/b --json body")):
             with self.subTest(command=command):
                 self.ready(command)
                 self.assertEqual(self.ran(), want)

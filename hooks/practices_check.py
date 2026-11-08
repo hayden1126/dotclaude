@@ -2585,7 +2585,6 @@ PR_URL = re.compile(r"https://github\.com/([^/\s]+/[^/\s]+)/pull/(\d+)(?:[/?#]\S
 ORIGIN_URL = re.compile(r"(?:https://(?:[^/@\s]+@)?|ssh://git@|git@)github\.com[:/]"
                         r"([^/\s]+/[^/\s]+?)(?:\.git)?/?")
 HEREDOC_BODY = re.compile(r"(?:--body[= ]|-b[ =]?)\s*\"?\$\(\s*cat\s+<<-?\s*(['\"\\\\]?)([\w.-]+)")
-GH_REPO_PREFIX = re.compile(r"(?:^|[\s;&|(])GH_REPO=(\S+)[ \t]+gh[ \t][^\n;&|]*\bpr[ \t]+ready\b")
 EXPANSION = re.compile(r"\$[A-Za-z_{(]")  # known limit: a single-quoted `$X` reads as one, and goes unchecked
 SKIPPED_REASON = (
     "[practices:skipped] This PR's body has no `Skipped:` line, so it can't be marked ready. Add "
@@ -2654,6 +2653,19 @@ def base_repo_name(repo):
     return None
 
 
+def gh_repo_prefix(event, args):
+    """The GH_REPO=... set on this gh call itself, from the command parser, or None."""
+    bash_words = load_bash_words()
+    try:
+        for words in bash_words.segments(command_of(event)):
+            name, found, prefix = bash_words.command_words(words, {"gh"})
+            if name == "gh" and found == args:
+                return dict(prefix).get("GH_REPO")
+    except (ValueError, IndexError, RecursionError):
+        pass
+    return None
+
+
 def start_body_read(event, args, cwd, pr, bounds):
     """A running `gh pr view` of the PR a `ready` call names, or None (logged) when it can't be
     named. It starts here and is read last, so its network wait doesn't spend the budget of the
@@ -2673,9 +2685,7 @@ def start_body_read(event, args, cwd, pr, bounds):
     repos = list(flag_values(args, "-R", "--repo"))
     if repos and name is None:
         name = repos[-1]
-    prefixed = GH_REPO_PREFIX.search(command_of(event))
-    if prefixed and name is None:
-        name = prefixed.group(1).strip("'\"")
+    name = name or gh_repo_prefix(event, args)
     if name is None or target is None:
         repo = open_repo({"cwd": cwd, "git_dir": None, "work_tree": None}, "skipped-line", bounds)
         if repo is None:
