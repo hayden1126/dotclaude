@@ -32,19 +32,19 @@ Read `EVENT.md` at the project root: whether video is required, its length and f
 
 `demo/beats.mjs` is the only file to edit. `demo/record.mjs` is the machinery. Set `app.cmd` and `app.url`. For an app already running elsewhere (deployed, on a board or a LAN address), set `app.cmd` to `''`: the take neither starts nor stops it, and the start state is yours to reset. Only the browser reaches it. A sandboxed shell has its own network, so an app in another terminal on this machine isn't reachable: start it through `app.cmd` instead. A remote or LAN host must be on the project's allowed list in `.claude/settings.local.json` (an IP address there is untested), and so must every outside host the page loads, images included. When a host is missing, ask the user to add it, add a row for it to `ACCESS.md` if that file exists, and rerun. Don't get past a missing host by handing the take to the user's terminal: the host stays missing for the app and every later command. When a host on the list still fails, read which side failed. `request failed: <url> (net::ERR_TUNNEL_CONNECTION_FAILED)` is the browser: check the host's spelling in the list, that it's in `.claude/settings.local.json`, and whether the URL redirects to another host. `HTTP 5xx` on the app's own URL, with a connection error in the app's output, is the app's server ignoring the proxy settings (Node's `fetch` needs `NODE_USE_ENV_PROXY=1`, from Node 24): fix that inside the sandbox. If the take still fails, tell the user, and offer no route around the sandbox. Export `ignoreHTTPSErrors = true` for a self-signed certificate. Then turn the script in `DEMO.md` into beats, one caption plus one action each.
 
-**Check the script first.** Before writing a beat, read `DEMO.md` and take the first row that fits. "Moved" means `git diff --stat <hash> HEAD` (the hash from the `Checked before recording:` line) or `git status --short` lists anything beyond `demo/`, `DEMO.md`, `.gitignore`, the README, `EVENT.md`, `PITCH.md` and `ACCESS.md`.
+**Check the script first.** Before writing a beat, read `DEMO.md` and take the first row that fits. "Moved" means `git diff --stat <hash> HEAD` (the hash from the `Checked before recording:` line) or `git status --short` lists anything beyond `demo/`, `DEMO.md`, `.gitignore`, the README, `EVENT.md`, `PITCH.md`, `ACCESS.md`, `CLAUDE.md`, `VISION.md`, and empty stub files a command sandbox puts at the repo root.
 
 | `DEMO.md` now | Do |
 |---|---|
+| No script at all | Ask the user for the script, or to type `/demo-first-scope`, and write what they give into `DEMO.md`. Don't invent one. |
 | The user said to skip this check, for a reason they gave | Write the beats, and note the reason in `DEMO.md`. |
-| No script at all | Ask the user for the script, or to type `/demo-first-scope`. Don't invent one. |
 | A script, but a beat has neither a said line nor a silent mark | Stop, and ask the user to type `/demo-first-scope before recording`, or to say why not. Don't write the lines yourself. |
-| A script, but no audience and coverage section (who judges, and what the demo must cover, each item mapped to a beat or a written field) | The same stop. |
+| A script, but no audience and coverage section (who judges, and what the demo must cover, each item mapped to a beat or a written field, or marked dropped) | The same stop. |
 | A script, but no `Checked before recording:` line | The same stop. |
 | Every piece is there, but the product moved | The same stop. |
 | Every piece is there, and the product hasn't moved | Write the beats. |
 
-If `/demo-first-scope` isn't installed, ask the user who judges, what the demo must cover, and any missing said lines, write the answers and a `Checked before recording:` line into `DEMO.md`, and take the table again.
+If `/demo-first-scope` isn't installed, ask the user who judges, what the demo must cover, and any missing said lines, commit any product changes with their OK, write the answers and a line `Checked before recording: <date and time>, at commit <hash>` into `DEMO.md`, with the hash from `git rev-parse --short HEAD`, and take the table again.
 
 - End each action by waiting for what the viewer should see, such as `await page.getByText('Saved').waitFor()`. A wait that fails is what makes a broken take fail loud. Locators can't see the caption or the cursor, so a wait only ever matches the app.
 - Make the start state repeatable. `app.cmd` should reset or seed the data, or the second take will differ from the first.
