@@ -149,9 +149,27 @@ class GenericSuites(Base):
         self.assertIn("long-runs", self.pre(OTHER))
 
     def test_a_rerun_never_counts(self):
-        for command in (SUITE, SUITE, SUITE + " -x", SUITE + " -v -q"):
+        for command in (SUITE, SUITE, SUITE + " -x", SUITE + " -v -q", SUITE + " -xq",
+                        SUITE + " -xvs", SUITE + " -ra", SUITE + " -n auto", SUITE + " --tb short",
+                        "pytest"):
             with self.subTest(command=command):
                 self.assertIsNone(self.pre(command))
+
+    def test_flags_that_change_nothing_on_other_runners(self):
+        for first, second in (("go test ./...", "go test -count=1 ./..."),
+                              ("make test", "make -j8 test")):
+            with self.subTest(first=first):
+                self.assertIsNone(self.pre(first, session=first))
+                self.assertIsNone(self.pre(second, session=first))
+
+    def test_different_scripts_are_different_suites(self):
+        self.assertIsNone(self.pre("npm run test:unit"))
+        self.assertIn("long-runs", self.pre("npm run test:e2e"))
+
+    def test_a_suite_in_another_dir_is_another_suite(self):
+        self.assertIsNone(self.pre("cd a && pytest"))
+        self.assertIsNone(self.pre("cd a && pytest -x"))
+        self.assertIn("long-runs", self.pre("cd b && pytest"))
 
     def test_a_look_at_the_runner_is_no_suite(self):
         for command in ("pytest --version", "pytest --collect-only", "pytest --lf", "pytest -h"):
@@ -180,7 +198,9 @@ class GenericSuites(Base):
                                      "pnpm test", "yarn test", "bun test", "npx vitest run",
                                      "npx jest", "npx playwright test", "cargo test",
                                      "go test ./...", "make test", "make check", "tox", "nox",
-                                     "python3 -m unittest discover", "npm t")):
+                                     "python3 -m unittest discover", "npm t", "pnpm test:unit",
+                                     "uv run pytest", "poetry run python -m pytest",
+                                     "python3 -m unittest discover -s tests -p test_*.py")):
             with self.subTest(command=command):
                 self.assertIsNone(self.pre(command, session=f"w{n}"))
                 other = "nox -s other" if command == "tox" else "tox -e other"
@@ -217,8 +237,9 @@ class RepoList(Base):
         for text in ("[long_runs\n", "[long_runs]\ngates = 3\n", '[long_runs]\ngates = [1]\n'):
             with self.subTest(text=text):
                 self.config_toml(text)
+                shutil.rmtree(self.state, ignore_errors=True)
                 self.assertIn("long-runs", self.pre("lane trial --run x", session=text))
-                self.assertIn("long-runs", self.log())
+                self.assertIn("long-runs-config", self.log())
 
 
 class OffSwitch(Base):
@@ -243,6 +264,21 @@ class OffSwitch(Base):
                     mock.patch.object(L.PC, "load_config", return_value=cfg):
                 shutil.rmtree(self.state, ignore_errors=True)
                 self.assertEqual(L.check(event) is not None, denied)
+
+
+class Pruning(Base):
+    def test_a_session_start_prunes_old_state(self):
+        d = os.path.join(self.state, "dotclaude", "practices", "long-runs")
+        os.makedirs(d)
+        old = os.path.join(d, "old.json")
+        open(old, "w").close()
+        os.utime(old, (1, 1))
+        hook = os.path.join(REPO, "hooks", "practices-check.sh")
+        subprocess.run(["bash", hook], text=True, env=self.env, capture_output=True, timeout=30,
+                       input=json.dumps({"session_id": SID, "transcript_path": self.transcript,
+                                         "cwd": self.proj, "hook_event_name": "SessionStart",
+                                         "source": "startup"}))
+        self.assertFalse(os.path.exists(old))
 
 
 class Failures(Base):

@@ -55,11 +55,10 @@ RULE_ID = "LONG-RUNS"
 GATES_MAX = 50
 GATE_LEN_MAX = 200
 SOURCE_FILE = re.compile(r"\.(py|ts|tsx|js|jsx|mjs|cjs|rb|rs|go|java|kt)(:\d+)?$")
-NOISE = {"-x", "-v", "-vv", "-vvv", "-q", "-qq", "-f", "-b", "--verbose", "--quiet", "--failfast",
-         "--buffer", "--exitfirst", "--no-cov"}
+VALUE_FLAGS = {"-n", "--numprocesses", "--tb", "--maxfail", "-p", "--pattern", "--color", "--reporter",
+               "--durations", "--workers", "-j", "-count", "-timeout", "--timeout"}
 NOT_A_RUN = {"--version", "-V", "--help", "-h", "--collect-only", "--co", "--lf", "--last-failed",
              "--list", "--listTests", "--list-tests"}
-NOISE_PREFIX = ("--tb=", "--maxfail=", "--color=", "--reporter=", "--durations=")
 REASON = (
     "[long-runs] This command starts a heavy gate or a second test suite, and the long-runs "
     "skill isn't loaded in this context. Load it (the Skill tool, skill \"long-runs\"), work out "
@@ -75,13 +74,18 @@ def narrowed(args, flags=()):
             return True
         if a in ("-k", "--keyword"):
             return True
-        if not a.startswith("-") and ("::" in a or SOURCE_FILE.search(a)):
+        if not a.startswith("-") and "*" not in a and ("::" in a or SOURCE_FILE.search(a)):
             return True
     return False
 
 
 def unwrap(name, args):
     """(the runner, its arguments), through python -m, npx and exec; None when it isn't one."""
+    if name in ("uv", "poetry", "hatch", "pdm") and args[:1] == ["run"]:
+        rest = [a for a in args[1:] if not a.startswith("-")]
+        if not rest:
+            return None
+        return unwrap(os.path.basename(rest[0]), args[args.index(rest[0], 1) + 1:])
     if re.fullmatch(r"python[\d.]*", name):
         return (args[1], args[2:]) if len(args) > 1 and args[0] == "-m" else None
     if name in ("npx", "bunx"):
@@ -113,7 +117,9 @@ def suite_args(name, args):
         if args[:1] in (["test"], ["t"]):
             rest = args[1:]
         elif args[:1] in (["run"], ["run-script"]) and len(args) > 1 and args[1].startswith("test"):
-            rest = args[2:]
+            rest = ([] if args[1] == "test" else [args[1]]) + args[2:]  # the script names the suite
+        elif name in ("pnpm", "yarn") and args and args[0].startswith("test:"):
+            rest = args
         else:
             return None
         return None if narrowed(rest, ("-t", "--grep", "--testNamePattern")) else rest
@@ -129,11 +135,18 @@ def suite_args(name, args):
     return None
 
 
-def suite_key(name, args, rest):
-    """A hash naming the suite, the same across verbosity and fail-fast flags."""
-    pair = unwrap(name, args)
-    kept = [a for a in rest if a not in NOISE and not a.startswith(NOISE_PREFIX)]
-    return hashlib.sha256(json.dumps([pair[0], kept]).encode()).hexdigest()[:32]
+def suite_key(name, args, rest, where):
+    """A hash naming the suite: the runner, the dir it runs in and its non-flag words, so a rerun
+    with other verbosity, fail-fast or parallel flags stays the same suite."""
+    kept, skip = [], False
+    for a in rest:
+        if skip:
+            skip = False
+        elif a.startswith("-"):
+            skip = a in VALUE_FLAGS
+        else:
+            kept.append(a)
+    return hashlib.sha256(json.dumps([unwrap(name, args)[0], where, kept]).encode()).hexdigest()[:32]
 
 
 def is_heavy(name, args, gates):
@@ -238,8 +251,12 @@ def check(event):
         return None
     project = PC.bash_project(event)
     gates = repo_gates(project)
-    suites = {suite_key(n, a, rest) for n, a in commands if n
-              and (rest := suite_args(n, a)) is not None}
+    suites, where = set(), event.get("cwd") if isinstance(event.get("cwd"), str) else ""
+    for n, a in commands:
+        if n == "cd" and a:
+            where = os.path.normpath(os.path.join(where, a[-1]))
+        elif n and (rest := suite_args(n, a)) is not None:
+            suites.add(suite_key(n, a, rest, where))
     heavy = any(n and is_heavy(n, a, gates) for n, a in commands)
     if not (heavy or suites) or may_be_denied_elsewhere(cmd, parsed):
         return None

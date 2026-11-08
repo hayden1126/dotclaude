@@ -2750,8 +2750,21 @@ class Push(BashBase):
         self.assertIsNone(self.pre(command, session_id="s-chain"))
 
 
+def hook_with_gh(case, event, stdin, paths):
+    """The engine with GH_PATHS replaced, so a test never reaches the real gh or GitHub."""
+    driver = DRIVER.replace("m.passwd_home = lambda: sys.argv[2]", f"m.GH_PATHS = {paths!r}")
+    p = subprocess.run([sys.executable, "-I", "-c", driver, ENGINE, "-"],
+                       input=stdin if stdin is not None else json.dumps(event),
+                       capture_output=True, text=True, env=case.env, timeout=30)
+    case.assertEqual(p.returncode, 0, p.stderr)
+    return json.loads(p.stdout) if p.stdout.strip() else None
+
+
 class L3r(BashBase):
     """gh pr ready, and gh pr create without --draft, wait for a briefed reviewer."""
+
+    def run_hook(self, event, stdin=None):
+        return hook_with_gh(self, event, stdin, ())
 
     def setUp(self):
         super().setUp()
@@ -2913,12 +2926,7 @@ class SkippedLine(BashBase):
         self.n = iter(range(1, 1 << 30))
 
     def run_hook(self, event, stdin=None):
-        driver = DRIVER.replace("m.passwd_home = lambda: sys.argv[2]", "m.GH_PATHS = (sys.argv[2],)")
-        p = subprocess.run([sys.executable, "-I", "-c", driver, ENGINE, self.gh],
-                           input=stdin if stdin is not None else json.dumps(event),
-                           capture_output=True, text=True, env=self.env, timeout=30)
-        self.assertEqual(p.returncode, 0, p.stderr)
-        return json.loads(p.stdout) if p.stdout.strip() else None
+        return hook_with_gh(self, event, stdin, (self.gh,))
 
     def body(self, text):
         with open(os.path.join(self.stub, "out"), "w") as f:
@@ -3044,7 +3052,9 @@ class SkippedLine(BashBase):
 
     def test_a_body_it_cannot_see_is_allowed_and_logged(self):
         for command in ('gh pr create -t x --body "$(cat body.md)"', 'gh pr create -t x --body "$B"',
-                        "gh pr create -t x --web", "gh pr create -t x -w"):
+                        "gh pr create -t x --web", "gh pr create -t x -w",
+                        'cat <<EOF > log\nhi\nEOF\ngh pr create -t x --body "$(cat body.md)"',
+                        'cat <<< hi; gh pr create -t x --body "$B"'):
             with self.subTest(command=command):
                 self.assertIsNone(self.ready(command))
         self.assertIn("skipped-line", self.log())

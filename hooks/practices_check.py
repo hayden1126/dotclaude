@@ -2583,6 +2583,7 @@ PR_SELECTOR = re.compile(r"\w[\w./-]*", re.A)
 PR_URL = re.compile(r"https://github\.com/([^/\s]+/[^/\s]+)/pull/(\d+)(?:[/?#]\S*)?")
 ORIGIN_URL = re.compile(r"(?:https://(?:[^/@\s]+@)?|ssh://git@|git@)github\.com[:/]"
                         r"([^/\s]+/[^/\s]+?)(?:\.git)?/?")
+HEREDOC_BODY = re.compile(r"(?:--body[= ]|-b[ =]?)\s*\"?\$\(\s*cat\s+<<-?[^<]")
 SKIPPED_REASON = (
     "[practices:skipped] This PR's body has no `Skipped:` line, so it can't be marked ready. Add "
     "this block to the body (`gh pr edit <n> --body-file <file>`, or the --body of `gh pr "
@@ -2680,7 +2681,7 @@ def create_has_line(event, args, cwd, bounds):
     files = list(flag_values(args, "-F", "--body-file"))
     if not files:
         # A body built by an expansion can't be read here, unless a heredoc wrote it out above.
-        if "<<" not in command and any("%SUBST%" in b or "$" in b for b in bodies):
+        if not HEREDOC_BODY.search(command) and any("%SUBST%" in b or "$" in b for b in bodies):
             log("skipped-line", "a --body built by an expansion, so the PR went unchecked")
             return None
         return False
@@ -3544,6 +3545,7 @@ def health(event):
     prune(os.path.join(d, "denies"), now)
     prune(os.path.join(d, "heads"), now)
     prune(os.path.join(d, "sessions"), now)
+    prune(os.path.join(d, "long-runs"), now)  # hooks/long_runs_check.py's state
     if not problems:
         return None
     return {"systemMessage": "practices hooks: " + "; ".join(problems)}
