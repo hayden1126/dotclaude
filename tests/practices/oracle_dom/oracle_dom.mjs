@@ -17,7 +17,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statS
 import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Missing } from "../oracle_lib.mjs";
+import { Missing, oracle } from "../oracle_lib.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ts = createRequire(import.meta.url)("typescript");
@@ -56,14 +56,20 @@ const POLYFILLED = new Set(["assert", "buffer", "constants", "crypto", "domain",
 
 const IMAGE = /\.(png|jpe?g|gif|webp|avif|ico|svg)$/i;
 const CLIENT = /^(?:\s|\/\/[^\n]*\n|\/\*[\s\S]*?\*\/)*["']use client["']/;
-// The React APIs Next refuses in a module with no "use client" above it, from memory of its
-// build rule (react_server_components in SWC), not read from its source, which isn't in this tree.
-const CLIENT_ONLY_REACT = new Set(["useState", "useEffect", "useLayoutEffect", "useInsertionEffect", "useReducer",
-  "useRef", "useImperativeHandle", "useDeferredValue", "useTransition", "useSyncExternalStore", "useOptimistic",
-  "useActionState", "createContext", "Component", "PureComponent"]);
+// The client-only APIs Next refuses in a module with no "use client" above it, by the module they
+// come from: from memory of its build rule (react_server_components in SWC), not read from its
+// source, which isn't in this tree.
+const CLIENT_ONLY = {
+  react: new Set(["useState", "useEffect", "useLayoutEffect", "useInsertionEffect", "useReducer", "useRef",
+    "useImperativeHandle", "useDeferredValue", "useTransition", "useSyncExternalStore", "useOptimistic",
+    "useActionState", "createContext", "Component", "PureComponent"]),
+  "react-dom": new Set(["useFormStatus", "useFormState", "flushSync"]),
+  "next/navigation": new Set(["useRouter", "usePathname", "useSearchParams", "useParams", "useSelectedLayoutSegment",
+    "useSelectedLayoutSegments"]),
+};
 const MODES = new Set(["ok", "fail", "hang"]);
 const DIALOG_MODES = new Set(["accept", "dismiss"]);
-const DELAY_MS = 300; // a stubbed action's or fetch's round trip: long enough to see a pending state
+const DELAY_MS = 300; // a stubbed action's or fetch's round trip; click() holds it past its last press
 const STEP_MS = 5000; // the cap on any one wait; the whole oracle gets 60 s (run.py ORACLE_TIMEOUT)
 const WAIT_CAP_MS = 20000; // dom.wait(): room for an undo window, inside that budget
 const CHROME_FLAGS = [
@@ -224,16 +230,17 @@ function exportNames(file, src) {
   return names;
 }
 
-// The first client-only React API `src` imports by name, or null.
+// The first client-only API `src` imports by name, as "name from module", or null.
 // limit: a namespace import (React.useState) isn't seen, so such a page renders where Next refuses it.
 function clientOnlyImport(file, src) {
   const sf = ts.createSourceFile(file, src, ts.ScriptTarget.ES2020, false, file.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
   for (const s of sf.statements) {
-    if (!ts.isImportDeclaration(s) || s.moduleSpecifier.text !== "react" || s.importClause?.isTypeOnly) continue;
+    if (!ts.isImportDeclaration(s) || s.importClause?.isTypeOnly || !Object.hasOwn(CLIENT_ONLY, s.moduleSpecifier.text)) continue;
     const named = s.importClause?.namedBindings;
     if (!named || !ts.isNamedImports(named)) continue;
-    const hit = named.elements.find((e) => !e.isTypeOnly && CLIENT_ONLY_REACT.has((e.propertyName ?? e.name).text));
-    if (hit) return (hit.propertyName ?? hit.name).text;
+    const refused = CLIENT_ONLY[s.moduleSpecifier.text];
+    const hit = named.elements.find((e) => !e.isTypeOnly && refused.has((e.propertyName ?? e.name).text));
+    if (hit) return `${(hit.propertyName ?? hit.name).text} from ${s.moduleSpecifier.text}`;
   }
   return null;
 }
@@ -293,7 +300,7 @@ class Bundle {
     }
     const inClient = client || CLIENT.test(src);
     const refused = inClient ? null : clientOnlyImport(file, src);
-    if (refused) throw new Missing(`${rel(file)} imports ${refused} from react with no "use client" above it: Next refuses to build this`);
+    if (refused) throw new Missing(`${rel(file)} imports ${refused} with no "use client" above it: Next refuses to build this`);
     return this.add(`${inClient ? "client" : "server"}:${file}`, rel(file),
       () => this.scanned(transpile(file, src), (spec) => this.resolve(spec, file, inClient)));
   }
@@ -405,6 +412,12 @@ ${defs.join(",\n")}
   }
 }
 
+// A CDP step Chrome didn't answer in its cap, or the pipe going away under one.
+class NoAnswer extends Error {}
+
+// Chrome itself stopped answering, which is the machine's doing and not the agent's (domOracle).
+export class ChromeStalled extends Error {}
+
 // A message pipe to Chrome: JSON plus a NUL each way. Every call is capped at STEP_MS.
 class Cdp {
   #next = 1;
@@ -425,7 +438,7 @@ class Cdp {
         this.#dispatch(message);
       }
     });
-    output.on("close", () => this.#fail(new Error("Chrome closed its DevTools pipe")));
+    output.on("close", () => this.#fail(new NoAnswer("Chrome closed its DevTools pipe")));
     input.on("error", (e) => this.#fail(e));
   }
 
@@ -450,14 +463,14 @@ class Cdp {
     else call.resolve(message.result);
   }
 
-  send(method, params = {}, sessionId = undefined) {
+  send(method, params = {}, sessionId = undefined, capMs = STEP_MS) {
     if (this.#closed) return Promise.reject(this.#closed);
     const id = this.#next++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.#calls.delete(id);
-        reject(new Error(`${method}: no answer from Chrome in ${STEP_MS} ms`));
-      }, STEP_MS);
+        reject(new NoAnswer(`${method}: no answer from Chrome in ${capMs} ms`));
+      }, capMs);
       this.#calls.set(id, { resolve, reject, method, timer });
       this.input.write(`${JSON.stringify({ id, method, params, sessionId })}\0`);
     });
@@ -473,7 +486,7 @@ class Cdp {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         off();
-        reject(new Error(`no ${what} from Chrome in ${STEP_MS} ms`));
+        reject(new NoAnswer(`no ${what} from Chrome in ${STEP_MS} ms`));
       }, STEP_MS);
       const off = this.on((message) => {
         const value = pick(message);
@@ -603,6 +616,8 @@ class DomSession {
   #internal = []; // requests the oracle itself couldn't answer: its bug, not the page's
   #loaded = false; // the first document has been served
   #dialogs = [];
+  #holds = 0; // click() calls in progress: no answer goes out during one
+  #held = []; // answers whose delay is up, waiting for the click to return
   #received = 0; // page.js's own requests that have reached the pause
   #modeRules = []; // actionMode(RegExp), newest first
 
@@ -649,8 +664,24 @@ class DomSession {
     });
   }
 
-  send(method, params = {}) {
-    return this.cdp.send(method, params, this.sessionId);
+  // One step on the page's session. No answer means agent code has the renderer (a plain error,
+  // broken) if the browser process still answers, and a stalled Chrome if it doesn't.
+  async send(method, params = {}) {
+    try {
+      return await this.cdp.send(method, params, this.sessionId);
+    } catch (e) {
+      if (e instanceof NoAnswer && !(await this.#browserAnswers())) throw new ChromeStalled(e.message);
+      throw e;
+    }
+  }
+
+  async #browserAnswers() {
+    try {
+      await this.cdp.send("Browser.getVersion", {}, undefined, 1000);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   #fulfill(requestId, status, body, headers = []) {
@@ -659,15 +690,18 @@ class DomSession {
     });
   }
 
-  // An answer after the stubbed round trip; settle() waits for it, and its quiet clock starts
-  // again when the last one goes out.
+  // An answer after the stubbed round trip and after any click() in progress returns, so the
+  // second click of a double click always lands while the first call is pending, whatever the
+  // timing. settle() waits for it, and its quiet clock starts again when the last one goes out.
   #later(answer) {
     this.#pending++;
+    const send = () => answer().catch((e) => this.#failed(e, null)).finally(() => {
+      this.#pending--;
+      this.#lastAnswer = performance.now();
+    });
     setTimeout(() => {
-      answer().catch((e) => this.#failed(e, null)).finally(() => {
-        this.#pending--;
-        this.#lastAnswer = performance.now();
-      });
+      if (this.#holds) this.#held.push(send);
+      else send();
     }, this.delayMs);
   }
 
@@ -865,11 +899,17 @@ class DomSession {
       return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
     }`);
     if (!point) throw new Missing(`nothing on the page matches ${sel}`);
-    await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
-    for (let clickCount = 1; clickCount <= count; clickCount++) {
-      if (clickCount > 1) await sleep(interval);
-      await this.send("Input.dispatchMouseEvent", { type: "mousePressed", ...point, button: "left", buttons: 1, clickCount });
-      await this.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...point, button: "left", buttons: 0, clickCount });
+    this.#holds++;
+    try {
+      await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
+      for (let clickCount = 1; clickCount <= count; clickCount++) {
+        if (clickCount > 1) await sleep(interval);
+        await this.send("Input.dispatchMouseEvent", { type: "mousePressed", ...point, button: "left", buttons: 1, clickCount });
+        await this.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...point, button: "left", buttons: 0, clickCount });
+      }
+    } finally {
+      this.#holds--;
+      if (!this.#holds) for (const send of this.#held.splice(0)) send();
     }
   }
 
@@ -994,7 +1034,9 @@ function fetchRule(match, spec) {
 function bundleFor(entryFile, dir) {
   const bundle = new Bundle(dir);
   const ids = {
-    entry: bundle.local(entryFile, false),
+    // only an App Router page or layout is a server component by its name; any other entry is a
+    // component a case pinned, which its parent's "use client" may cover in the app
+    entry: bundle.local(entryFile, !/^(page|layout)\.[jt]sx?$/.test(path.basename(entryFile))),
     react: bundle.package(PACKAGES.react),
     reactDom: bundle.package(PACKAGES["react-dom"]),
     reactDomClient: bundle.package(PACKAGES["react-dom/client"]),
@@ -1008,11 +1050,26 @@ const UNRESOLVED_WHY = {
   css: "imports CSS the oracle can't build",
 };
 
+// oracle() for a DOM case: Chrome going quiet partway through the body scores unresolved, where
+// oracle() alone scores any throw broken, a verdict run.py reserves for the agent. A renderer
+// wedged by agent code still throws a plain error, and stays broken.
+export function domOracle(body) {
+  return oracle(async (t) => {
+    try {
+      await body(t);
+    } catch (e) {
+      if (!(e instanceof ChromeStalled)) throw e;
+      t.unresolved(`Chrome stalled: ${e.message}`, "the browser process stopped answering");
+    }
+  });
+}
+
 // The page for `opts.entry` (fixture-relative) rendered in headless Chrome, as a DomSession, or
 // null when the verdict is already in (as openPg). An entry that won't compile, imports what
 // doesn't exist or has no default export throws Missing (broken); one that throws on its first
 // render scores broken; an async server component that reaches server-only code, or throws when
-// awaited, scores unresolved. `oracleUrl` (the oracle's import.meta.url) names the scratch dir.
+// awaited, scores unresolved, as does a Chrome that stalls before any agent code ran.
+// `oracleUrl` (the oracle's import.meta.url) names the scratch dir.
 // Options: props, actionModes {name: mode}, actionResults {name: value} (key "*" in either applies
 // to any name without its own entry), fetchModes [[match, spec]], pathname, search and params for
 // next/navigation and the page's props, delayMs for a stubbed round trip (default DELAY_MS),
@@ -1062,6 +1119,7 @@ export async function openDom(t, oracleUrl, opts) {
   ]);
   mkdirSync(path.join(dir, "chrome-profile"));
   const chrome = new Chrome(binary, path.join(dir, "chrome-profile"));
+  let started = false; // the bundle (the agent's code) has been asked to load
   try {
     await chrome.spawned;
     const { cdp } = chrome;
@@ -1090,6 +1148,7 @@ export async function openDom(t, oracleUrl, opts) {
     // The control, taken while only config.js and page.js have run; start loads the bundle.
     const { result } = await session.send("Runtime.evaluate", { expression: "window.__takeControls()" });
     session.controls = result.objectId;
+    started = true;
     const mounted = await session.start();
     if (mounted.status === "ok") {
       t.functional(`${what} renders`, true);
@@ -1105,6 +1164,11 @@ export async function openDom(t, oracleUrl, opts) {
   } catch (e) {
     await chrome.close();
     if (e instanceof Missing) throw e;
+    if (!started || e instanceof ChromeStalled) { // no agent code ran, or Chrome itself went quiet
+      t.functional(`${what} bundles`, true);
+      t.unresolved(`Chrome stalled: ${e.message}`, chrome.stderr.slice(-600));
+      return null;
+    }
     throw new Error(`${e.message}${chrome.stderr ? `\nchrome stderr: ${chrome.stderr.slice(-600)}` : ""}`);
   }
 }
