@@ -46,6 +46,7 @@
 // With `labels = 'after'` in beats.mjs, the page shows no caption box: captions.mjs draws each
 // caption as a label on the finished video instead. Each step still records its caption either way.
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
@@ -290,13 +291,17 @@ async function stopApp() {
   appProcess = null;
 }
 
+// What a beat did, so captions.mjs can tell when beats.mjs no longer matches this take. Captions can't:
+// they may be blank or repeat. captions.mjs computes the same print.
+const actionPrint = act => createHash('sha256').update(String(act)).digest('hex').slice(0, 16);
+
 const srtTime = seconds => new Date(Math.max(0, seconds) * 1000).toISOString().slice(11, 23).replace('.', ',');
 
-function writeSidecars(steps, lead, trim, first, labels, warnings) {
+function writeSidecars(steps, lead, trim, first, total, labels, warnings) {
   const cues = steps.filter(step => step.caption);
   const srt = cues.map((step, i) => `${i + 1}\n${srtTime(step.start - trim)} --> ${srtTime(step.end - trim)}\n${step.caption}\n`);
   fs.writeFileSync(path.join(stage, 'captions.srt'), srt.join('\n'));
-  fs.writeFileSync(path.join(stage, 'steps.json'), JSON.stringify({ lead, trim, first, labels, steps, warnings }, null, 1));
+  fs.writeFileSync(path.join(stage, 'steps.json'), JSON.stringify({ lead, trim, first, total, labels, steps, warnings }, null, 1));
 }
 
 function encode(webm, trim, fps, expected) {
@@ -445,7 +450,7 @@ async function record() {
         throw new Error(`beat "${caption}": ${[...troubles(), e.message].join('; ')}`);
       }
       if (troubles().length) throw new Error(`beat "${caption}": ${troubles().join('; ')}`);
-      if (index + 1 >= firstBeat) steps.push({ caption, start, end: elapsed() });
+      if (index + 1 >= firstBeat) steps.push({ caption, action: actionPrint(act), start, end: elapsed() });
     }
 
     const webm = await page.video().path();
@@ -454,7 +459,7 @@ async function record() {
     if (troubles().length) throw new Error(troubles().join('; '));
 
     const trim = firstBeat > 1 ? steps[0].start : Math.max(0, lead - 0.2);
-    writeSidecars(steps, lead, trim, firstBeat, labels, warnings);
+    writeSidecars(steps, lead, trim, firstBeat, project.beats.length, labels, warnings);
     encode(webm, trim, fps, steps.at(-1).end - trim);
     // spawnSync holds back a signal's handler until the encode ends, so this is where it counts.
     await new Promise(resolve => setImmediate(resolve));

@@ -4,6 +4,7 @@ The end-to-end cases run only with HACKATHON_PLAYWRIGHT set to a dir holding
 node_modules/playwright, whose browser build is installed or cached. They install nothing.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -1022,6 +1023,9 @@ class Takes(unittest.TestCase):
         self.assertGreater(min(at_second), 200, "a caption box was drawn in the page")
         steps = json.loads((project.out / "steps.json").read_text())
         self.assertEqual((steps["first"], steps["labels"]), (1, "after"))
+        self.assertEqual(steps["total"], len(steps["steps"]))
+        for step in steps["steps"]:
+            self.assertRegex(step["action"], r"^[0-9a-f]{16}$")
         self.assertEqual([step["caption"] for step in steps["steps"]], ["Wiped", "Not in the picture"])
         self.assertIn("Not in the picture", (project.out / "captions.srt").read_text())
 
@@ -1821,7 +1825,7 @@ class Captions(unittest.TestCase):
         self.write_beats([{"caption": f"Beat {i}", "say": f"Line {i}"} for i in range(1, 6)], labels="after")
         self.write_steps(captions=("Beat 3", "Beat 4"), first=3)
         out = self.run_captions("lines").stdout
-        for needed in ("beat 3: at 0.2 s", "Line 3", "beat 4: at 3.0 s", "Line 4"):
+        for needed in ("beat 3 (voice part 1 of this clip): at 0.2 s", "Line 3", "beat 4 (voice part 2 of this clip): at 3.0 s", "Line 4"):
             self.assertIn(needed, out)
         self.assertNotIn("Line 1", out)
         self.built()
@@ -1853,6 +1857,50 @@ class Captions(unittest.TestCase):
         self.write_beats([{"caption": "Beat 1", "say": "New words"}, {"caption": "Beat 2"}, {"caption": "Beat 3"}], labels="after")
         self.built()
         self.assertIn("New words", (self.out / "subtitles.srt").read_text())
+
+    ACTS = ("async () => { /* one */ }", "async () => { /* two */ }", "async () => { /* three */ }")
+
+    def acted_take(self, sources):
+        """A take of three blank-captioned beats with fingerprints, then beats.mjs holding `sources`."""
+        self.write_steps(("", "", ""), total=3)
+        data = json.loads((self.out / "steps.json").read_text())
+        for step, source in zip(data["steps"], self.ACTS):
+            step["action"] = hashlib.sha256(source.encode()).hexdigest()[:16]
+        (self.out / "steps.json").write_text(json.dumps(data))
+        body = ", ".join(f"{{ caption: '', say: 'Line {i}', act: {source} }}" for i, source in enumerate(sources))
+        (self.demo / "beats.mjs").write_text(f"export const labels = 'after';\nexport const beats = [{body}];\n")
+
+    def test_blank_captions_still_match_the_take_by_their_actions(self):
+        self.acted_take(self.ACTS)
+        self.built()
+
+    def test_beats_swapped_since_the_take_are_refused_even_with_blank_captions(self):
+        self.acted_take((self.ACTS[1], self.ACTS[0], self.ACTS[2]))
+        self.assert_refused("beat 1's action changed")
+
+    def test_a_beat_added_since_the_take_is_refused(self):
+        self.acted_take((*self.ACTS, "async () => { /* four */ }"))
+        self.assert_refused("beats.mjs has 4 beats, but this take was made from 3")
+
+    def test_a_take_with_no_fingerprints_is_still_checked_by_its_captions(self):
+        self.write_steps(("", "", ""))
+        self.write_beats([{"caption": "", "say": f"Line {i}"} for i in range(3)], labels="after")
+        self.built()
+
+    def test_no_font_to_draw_with_fails_loud(self):
+        # libass with no font draws nothing, not even the box, and ffmpeg still exits 0.
+        self.built()
+        (self.root / "no-fonts").mkdir()
+        conf = self.root / "none.conf"
+        conf.write_text(f'<?xml version="1.0"?><fontconfig><dir>{self.root}/no-fonts</dir><cachedir>{self.root}/cache</cachedir></fontconfig>')
+        self.assert_refused("drew nothing", FONTCONFIG_FILE=str(conf))
+
+    def test_a_clips_lines_name_the_part_voice_add_takes(self):
+        self.write_steps(("Beat 2", "Beat 3"), first=2)
+        self.write_beats([{"caption": f"Beat {i}", "say": "Words."} for i in range(1, 4)], labels="after")
+        out = self.run_captions("lines").stdout
+        self.assertIn("beat 2 (voice part 1 of this clip):", out)
+        self.assertIn("beat 3 (voice part 2 of this clip):", out)
 
     def test_bad_fields_are_refused(self):
         cases = [
@@ -1957,10 +2005,13 @@ class Captions(unittest.TestCase):
         log = self.root / "ffmpeg.args"
         self.built(PATH=self.shim(f'printf "%s\\n" "$@" >> "{log}"'))
         args = log.read_text().splitlines()
-        filters = [args[index + 1] for index, arg in enumerate(args) if arg == "-vf"]
+        every = [args[index + 1] for index, arg in enumerate(args) if arg == "-vf"]
+        self.assertEqual(len(every), 2, "the font test line, then the build")
+        for text in every:
+            self.assertNotIn("marker", text)
+        filters = [text for text in every if "signalstats" not in text]
         self.assertEqual(len(filters), 1)
         self.assertRegex(filters[0], r"^ass=filename=[A-Za-z0-9_./-]+$")
-        self.assertNotIn("marker", filters[0])
         self.assertFalse(Path(filters[0].split("=", 2)[2]).parent.exists(), "the build's temp dir stayed behind")
 
     def test_a_temp_dir_ffmpeg_would_misread_is_refused(self):

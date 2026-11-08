@@ -42,6 +42,7 @@
 // stays where its beat is. Glyphs come from the machine's fonts through fontconfig, so CJK text needs a
 // CJK font installed.
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -70,6 +71,10 @@ const NOTE_PLACES = ['top-left', 'top', 'top-right', 'left', 'center', 'right', 
 const ANCHOR = { 'bottom-left': 1, bottom: 2, 'bottom-right': 3, left: 4, center: 5, right: 6, 'top-left': 7, top: 8, 'top-right': 9 };
 const SAFE_PATH = /^[A-Za-z0-9_./-]+$/; // Nothing ffmpeg's filter syntax reads: no : , ; ' \ [ ] = or space.
 const WORD_JOINER = String.fromCharCode(0x2060);
+const DRAWN_BELOW = 200; // Luma: a white test frame reads 235 with nothing on it, and about 70 under a caption box.
+
+// As record.mjs computes it: what a beat did, so swapped or edited beats can't pass for the take's.
+const actionPrint = act => createHash('sha256').update(String(act)).digest('hex').slice(0, 16);
 
 let scratch = null;
 
@@ -158,12 +163,19 @@ async function readProject() {
   if (wanted !== labels) {
     console.warn(`warning: beats.mjs says labels '${wanted}', but this take was made with '${labels}', and the captions follow the take: retake to change it`);
   }
+  if (take.total !== undefined && project.beats.length !== take.total) {
+    throw new Error(`beats.mjs has ${project.beats.length} beats, but this take was made from ${plain(JSON.stringify(take.total))}: beats.mjs changed since the take. Take it again, or put the beats back`);
+  }
   const beats = steps.map((step, index) => {
     const number = first + index;
     const beat = project.beats[number - 1];
     if (!beat || beat.caption !== step.caption) {
       const now = beat ? `has the caption "${plain(beat.caption)}"` : 'is gone';
       throw new Error(`beat ${number} ${now} in beats.mjs, but the take recorded "${plain(step.caption)}": beats.mjs changed since the take. Take it again, or put the beat back`);
+    }
+    // A take from before fingerprints has none, and is checked by its captions alone.
+    if (step.action !== undefined && actionPrint(beat.act) !== step.action) {
+      throw new Error(`beat ${number}'s action changed in beats.mjs since the take, so its text would land on the wrong picture. Take it again, or put the beat back`);
     }
     return { number, start: step.start - trim, end: step.end - trim, label: beat.caption, say: beat.say ?? '', note: beat.note };
   });
@@ -173,9 +185,11 @@ async function readProject() {
 function lines(beats, labels) {
   console.log(`${shown(STEPS)}: ${beats.length} beats, labels drawn ${labels === 'after' ? 'by captions.mjs' : 'in the page'}\n`);
   let crowded = 0;
-  for (const beat of beats) {
+  for (const [index, beat] of beats.entries()) {
     const seconds = beat.end - beat.start;
-    console.log(`beat ${beat.number}: at ${beat.start.toFixed(1)} s, ${seconds.toFixed(1)} s long`);
+    // voice.mjs counts a clip's beats from 1, so its add takes this number, not the beat's own.
+    const part = beat.number === index + 1 ? '' : ` (voice part ${index + 1} of this clip)`;
+    console.log(`beat ${beat.number}${part}: at ${beat.start.toFixed(1)} s, ${seconds.toFixed(1)} s long`);
     const labelWords = words(beat.label).length;
     const long = labelWords > LABEL_WORDS ? `   (${labelWords} words: keep a label to ${LABEL_WORDS})` : '';
     console.log(`  label: ${plain(beat.label) || '(none)'}${long}`);
@@ -247,6 +261,19 @@ function probe(file) {
   };
 }
 
+// With no font it can find, libass draws nothing, not even the box, and ffmpeg still exits 0. So draw
+// one line on a white frame first and see that it left a mark.
+function checkDrawing(dir) {
+  const script = path.join(dir, 'probe.ass');
+  fs.writeFileSync(script, assScript([{ number: 1, start: 0, end: 2, label: '', say: 'Hg', note: undefined }], 'after', 320, 180));
+  const result = spawnSync('ffmpeg', ['-nostdin', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=white:s=320x180:r=1:d=1',
+    '-vf', `ass=filename=${script},signalstats,metadata=print:file=-`, '-frames:v', '1', '-f', 'null', '-'], { encoding: 'utf8' });
+  const darkest = Number(/YMIN=(\d+)/.exec(result.stdout ?? '')?.[1] ?? NaN);
+  if (result.status !== 0 || !(darkest < DRAWN_BELOW)) {
+    throw new Error(`a test line drew nothing, so captions would come out blank: ${result.status === 0 ? 'install a font libass can find (on Debian or Ubuntu, fonts-dejavu-core)' : result.error?.message || result.stderr.trim()}`);
+  }
+}
+
 function checkFfmpeg() {
   const result = spawnSync('ffmpeg', ['-hide_banner', '-filters'], { encoding: 'utf8' });
   if (result.status !== 0) throw new Error(`ffmpeg won't run: ${result.error?.message || result.stderr.trim()}`);
@@ -269,6 +296,7 @@ async function build(beats, labels) {
   if (!SAFE_PATH.test(script)) {
     throw new Error(`the temp dir ${plain(script)} has characters ffmpeg's filter syntax would read: set TMPDIR to a path of only letters, digits, dots, dashes, underscores and slashes`);
   }
+  checkDrawing(scratch);
   fs.writeFileSync(script, assScript(beats, labels, input.video.width, input.video.height));
   fs.writeFileSync(SUBTITLES_BUILDING, srt(beats));
   const result = spawnSync('ffmpeg', ['-nostdin', '-y', '-loglevel', 'error', '-i', source, '-vf', `ass=filename=${script}`,

@@ -64,7 +64,7 @@ One manual skill can't load another, and you don't replicate one. Ask the user t
 |---|---|---|
 | After kickoff | `/interview` | `VISION.md` already holds the vision |
 | Before plan ends | `/demo-first-scope` | never |
-| At feature freeze, before any recording | `/demo-first-scope` again, for its Before recording pass | `EVENT.md` wants no video, no talk and no table |
+| At feature freeze, before any recording | `/demo-first-scope before recording` | `EVENT.md` wants no video, no talk and no table |
 | At feature freeze | `/demo-video` | `EVENT.md` wants no video and no backup |
 | Before the rehearsal, or before slides are due if that comes first | `/pitch` | `EVENT.md` has no talk, no table and no slides |
 | Before submitting or going public, and after judging | `/public-ready` | never |

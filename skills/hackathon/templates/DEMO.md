@@ -24,7 +24,7 @@ Which skill to ask the user to type, and when. Filled in at kickoff from the clo
 |---|---|---|
 | `/interview` | | |
 | `/demo-first-scope` | | |
-| `/demo-first-scope` again, before recording | | |
+| `/demo-first-scope before recording` | | |
 | `/demo-video` | | |
 | `/pitch` | | |
 | `/public-ready` before submitting | | |

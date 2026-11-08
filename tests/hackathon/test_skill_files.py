@@ -114,14 +114,18 @@ class EventProfile(unittest.TestCase):
         for needle in ("## Audience and coverage", "**Who judges.**", "**What the demo must cover.**",
                        "how it was built", "the difficulties", "| Must cover | Asked by | Beat or written field |",
                        "2 to 2.3 words a second", "| Time | On screen | Said | Words | Label | Real or seeded |",
-                       "6 words or fewer", "## Before recording"):
+                       "6 words or fewer", "## Before recording", "`/demo-first-scope before recording`",
+                       "do only the Before recording section", "Don't reopen the idea", "`Checked before recording: <date and time>, at commit <hash>`"):
             with self.subTest(needle):
                 self.assertIn(needle, scope)
         video = read(skill_path("demo-video", "SKILL.md"))
         self.assertIn("**Check the script first.**", video)
-        self.assertIn("type `/demo-first-scope` for its Before recording pass", video)
+        self.assertIn("type `/demo-first-scope before recording`", video)
+        self.assertIn("`Checked before recording:` line", video)
+        self.assertIn("or the beat marked silent", video)
+        self.assertIn("If there's no script at all, ask the user for it.", video)
         hackathon = read(skill_path("hackathon", "SKILL.md"))
-        self.assertLess(hackathon.index("`/demo-first-scope` again"), hackathon.index("| At feature freeze | `/demo-video`"))
+        self.assertLess(hackathon.index("`/demo-first-scope before recording`"), hackathon.index("| At feature freeze | `/demo-video`"))
 
     def test_the_live_capability_check_is_where_a_live_demo_is_planned(self):
         for name in ("demo-first-scope", "pitch"):

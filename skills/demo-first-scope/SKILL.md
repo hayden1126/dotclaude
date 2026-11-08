@@ -1,7 +1,7 @@
 ---
 name: demo-first-scope
 description: "Scope a hackathon build backward from the win: judging criteria, who judges and what the video must cover, the moment that decided it, the craziest idea cut down to the coolest feasible one, then a timed demo script with its words and captions and a cut list in DEMO.md. Run it again before recording."
-argument-hint: "[idea or topic]"
+argument-hint: "[idea or topic, or: before recording]"
 disable-model-invocation: true
 ---
 
@@ -10,6 +10,8 @@ disable-model-invocation: true
 Idea from the user: $ARGUMENTS
 
 Plan backward from what the judges see. Everything not on the demo path has to earn its hours. The result goes in `DEMO.md`. The user decides; you bring numbers and disagree when you have grounds.
+
+**Rerun at freeze.** If the argument above says `before recording`, or `DEMO.md` already has a script and the user says the product is frozen, read `EVENT.md` and `DEMO.md`, do only the Before recording section, and stop. A frozen scope doesn't reopen.
 
 ## Start
 
@@ -80,7 +82,13 @@ Give every decision a review time, so a seeded part can become real, or a real o
 
 ## Before recording
 
-At feature freeze, before any video or rehearsal, run this skill again with the product in front of you: who judges, what must be covered, and whether each beat still shows what the frozen product does. Recount the words against each beat. Then suggest `/demo-video` for the user to type, or for you to load when they ask for the video.
+At feature freeze, before any video or rehearsal, the user types `/demo-first-scope before recording`. Do only this pass, with the product in front of you:
+
+1. Fill in or update Audience and coverage. A `DEMO.md` from before that section gets it now.
+2. Check that each beat still shows what the frozen product does, and add the Words and Label columns if the script lacks them.
+3. Recount the words against each beat, and fix a line over budget.
+
+Don't reopen the idea, the feasibility or the cut list. A problem that needs a product change goes to the user as a choice. When it's done, add one line under the script: `Checked before recording: <date and time>, at commit <hash>`, with the hash from `git rev-parse --short HEAD`. `/demo-video` reads that line to see that the product hasn't moved since. Then suggest `/demo-video` for the user to type, or load it when they ask for the video.
 
 ## Never fake silently
 
