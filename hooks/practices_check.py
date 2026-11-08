@@ -62,7 +62,7 @@ Levels:
       `unless` and the allow all on the one line, so an allow covers only its own line.
   L2b a rule with "bash" in `at`, read against a Bash call's raw command, below.
   L3s, push and L3r: the Bash levels, below.
-  L4  SessionStart(compact): a digest (under DIGEST_MAX characters, shared among the skills
+  L4  SessionStart(compact): a digest (under DIGEST_MAX UTF-16 units, shared among the skills
       and cut only between lines) naming the practices skills loaded since the previous
       compaction, with their gate lines, plus reloadSkills: true.
 Deny-once has two signs, and either lets the call through (an edit level denies only when
@@ -296,7 +296,13 @@ WS_RUN = re.compile(r"\s{%d,}" % (WS_RUN_MAX + 1))
 LINE_START_WS = re.compile(r"(?<![\\\[])\^(\(\?!)?\\s\*")
 PARSE_MAX = 1 << 20  # transcript rows bigger than this are never a load or a deny
 LOG_MAX = 64 << 10
-DIGEST_MAX = 2000
+# Claude Code turns a hook string over 10,000 characters into a file path plus a 2,000-character
+# preview, and doesn't ask Claude to read the file. The four shipped skills' whole gates take about
+# 2,800 with their titles, so 6,000 holds about four more at that size; tests/setup pins that every
+# shipped gate fits and caps each skill's gate. CONTEXT_MAX bounds the digest plus the session
+# start's notes, which share one additionalContext string.
+DIGEST_MAX = 6000
+CONTEXT_MAX = 9500
 STALE_CRUMB = 10  # seconds: a live scan ends within the 5 s kill
 KEEP_MAX = 500  # preserved uuids looked up per compaction boundary
 STATE_DAYS = 7
@@ -3329,16 +3335,16 @@ def deny(reason):
 # ---------------------------------------------------------------- SessionStart
 
 def digest(names, skills):
-    """The L4 digest, under DIGEST_MAX characters: a head naming the skills, then each one's
-    SKILL.md path and gate lines. The room after the head is shared among the skills (one that
+    """The L4 digest, under DIGEST_MAX UTF-16 units (see units()): a head naming the skills, then
+    each one's SKILL.md path and gate lines. The room after the head is shared among the skills (one that
     needs less than its share passes the rest on), so a long gate never crowds out the next
     skill, and a skill's lines are cut only between lines, with a note of how many it left
     out."""
     head = "Practices skills loaded before this compaction: " + ", ".join(names) + "."
     blocks = [(f"\n{n} ({os.path.join(skills[n]['dir'], 'SKILL.md')}), its must-hold lines:",
                [f"\n- {line}" for line in skills[n]["gate"]]) for n in names]
-    need = [len(title) + sum(map(len, lines)) for title, lines in blocks]
-    room, share, left = DIGEST_MAX - 1 - len(head), {}, list(range(len(blocks)))
+    need = [units(title) + sum(map(units, lines)) for title, lines in blocks]
+    room, share, left = DIGEST_MAX - 1 - units(head), {}, list(range(len(blocks)))
     while left:  # each skill's share: what it needs, or an even split of what is left
         fair = max(room, 0) // len(left)
         fits = [k for k in left if need[k] <= fair]
@@ -3353,17 +3359,17 @@ def digest(names, skills):
         if need[k] <= share[k]:
             out += title + "".join(lines)
             continue
-        kept, used = [], len(title)
+        kept, used = [], units(title)
         for line in lines:
             note = f"\n- ({len(lines) - len(kept) - 1} more in its SKILL.md)"
-            if used + len(line) + len(note) > share[k]:
+            if used + units(line) + units(note) > share[k]:
                 break
             kept.append(line)
-            used += len(line)
+            used += units(line)
         note = f"\n- ({len(lines) - len(kept)} more in its SKILL.md)"
-        if used + len(note) <= share[k]:
+        if used + units(note) <= share[k]:
             out += title + "".join(kept) + note
-    return out[:DIGEST_MAX - 1]  # only a head naming dozens of skills reaches this cap
+    return cut_units(out, DIGEST_MAX - 1)  # only a head naming dozens of skills reaches this cap
 
 
 def compact(event):
@@ -3460,7 +3466,10 @@ def health(event):
     prune(os.path.join(d, "sessions"), now)
     if not problems:
         return None
-    return {"systemMessage": "practices hooks: " + "; ".join(problems)}
+    # Half the cap, so the session start's own notes still fit after it (with_notes).
+    return {"systemMessage": fit_joined("practices hooks:", problems, " ", "; ",
+                                        lambda n: f"and {n} more (practices hooks)",
+                                        CONTEXT_MAX // 2)}
 
 
 LABELS = {"skill-disabled": ("skill disabled", "skills disabled"),
@@ -3563,14 +3572,55 @@ def with_notes(out, event):
         return out
     out = dict(out or {})
     if lines:
-        note = "practices hooks: " + "; ".join(lines)
-        out["systemMessage"] = f"{out['systemMessage']}; {'; '.join(lines)}" \
-            if out.get("systemMessage") else note
+        sm = out.get("systemMessage")
+        out["systemMessage"] = fit_joined(sm or "practices hooks:", lines, "; " if sm else " ", "; ",
+                                          lambda n: f"and {n} more (practices hooks)")
     if context:
         spec = out.setdefault("hookSpecificOutput", {"hookEventName": "SessionStart"})
-        spec["additionalContext"] = (spec["additionalContext"] + "\n" + context
-                                     if spec.get("additionalContext") else context)
+        spec["additionalContext"] = fit_context(spec.get("additionalContext"), context.split("\n"))
     return out
+
+
+def fit_context(first, notes):
+    """first (the digest, under DIGEST_MAX, or None) whole, then each note while the string stays
+    under CONTEXT_MAX, then a count of the notes left out. A project can add any number of
+    copies, and past Claude Code's cap the model would see only a preview."""
+    return fit_joined(first or "", notes, "\n" if first else "", "\n", lambda n: (
+        f"({n} more notes on this project's copies of practices skills are left out here; "
+        "the user sees them at session start.)"))
+
+
+def fit_joined(first, items, lead, sep, tail, cap=None):
+    """first whole, then lead and items joined by sep while the string stays under cap
+    (CONTEXT_MAX by default: Claude Code files a longer hook string away), then tail(how many
+    were left out). Its callers keep first short (a digest under DIGEST_MAX, health's message
+    under half the cap), so the first item's check leaves room for the tail. Lengths count
+    UTF-16 units, as a JavaScript string does, so astral characters can't slip past."""
+    cap = CONTEXT_MAX if cap is None else cap
+    out, room = first + lead, units(sep) + units(tail(len(items)))
+    for k, item in enumerate(items):
+        piece = (sep if k else "") + item
+        if units(out) + units(piece) + room >= cap:
+            return out + (sep if k else "") + tail(len(items) - k)
+        out += piece
+    return out
+
+
+def units(s):
+    """s's length in UTF-16 units: a character past U+FFFF counts two."""
+    return len(s.encode("utf-16-le", "surrogatepass")) // 2
+
+
+def cut_units(s, n):
+    """s's longest prefix of at most n UTF-16 units, never splitting a character."""
+    if units(s) <= n:
+        return s
+    used = 0
+    for i, c in enumerate(s):
+        used += 2 if ord(c) > 0xFFFF else 1
+        if used > n:
+            return s[:i]
+    return s
 
 
 def two_passes(level, event):

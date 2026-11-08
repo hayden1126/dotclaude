@@ -19,6 +19,7 @@ import hashlib
 import importlib.machinery
 import importlib.util
 import io
+import itertools
 import json
 import os
 import pwd
@@ -680,24 +681,25 @@ class L4(Base):
         self.rows([use("t1", "Skill", skill="lanes"), text()])
         self.assertIsNone(self.digest())
 
-    def test_a_long_digest_stays_under_2000_characters(self):
+    def test_a_long_digest_stays_under_the_cap(self):
+        self.assertLess(PC.DIGEST_MAX, 10000)  # Claude Code files a longer hook string away
         self.skill("demo", 'skill = "demo"\ngate = [' + ", ".join(
-            [json.dumps("x" * 400)] * 6) + "]\n")
+            [json.dumps("x" * 1200)] * 6) + "]\n")
         self.loaded()
         ctx = self.digest()
-        self.assertLess(len(ctx), 2000)
+        self.assertLess(len(ctx), PC.DIGEST_MAX)
         self.assertTrue(ctx.startswith("Practices skills loaded before this compaction: demo."))
 
     def test_each_loaded_skill_gets_its_share_cut_only_between_lines(self):
-        # A long gate no longer crowds out the next skill: the 2,000 characters are shared
-        # per skill, and a skill's lines are cut only between lines, never mid-line.
-        long_ = [f"Alpha line {n}: " + "a" * 150 for n in range(12)]
+        # A long gate no longer crowds out the next skill: DIGEST_MAX is shared per skill, and
+        # a skill's lines are cut only between lines, never mid-line.
+        long_ = [f"Alpha line {n}: " + "a" * 530 for n in range(12)]
         self.skill("alpha", 'skill = "alpha"\ngate = ' + json.dumps(long_) + "\n")
         self.skill("beta", 'skill = "beta"\ngate = ["Beta one.", "Beta two."]\n')
         self.rows([*load("t1", "Skill", skill="alpha"), *load("t2", "Skill", skill="beta"),
                    text()])
         ctx = self.digest()
-        self.assertLess(len(ctx), 2000)
+        self.assertLess(len(ctx), PC.DIGEST_MAX)
         self.assertIn("\n- Beta one.\n- Beta two.", ctx)
         self.assertIn(f"\n- {long_[0]}\n", ctx)
         for line in (x[2:] for x in ctx.split("\n") if x.startswith("- ")):
@@ -1584,20 +1586,108 @@ class Shipped(unittest.TestCase):
                     for g in item.get("paths", []):
                         PC.re.compile(PC.glob_regex(g))
 
-    def test_a_digest_of_every_shipped_skill_keeps_a_full_line_of_each(self):
-        # As installed: each skill's SKILL.md path under ~/.claude/skills.
+    GATE_BUDGET = 1000  # characters of gate lines per skill, so no one gate takes the room
+
+    def shipped(self, home):
         skills = {}
         for f in sorted(glob.glob(os.path.join(REPO, "skills", "*", "events.toml"))):
             skill, why = PC.load_skill(os.path.dirname(f))
             self.assertIsNone(why)
-            skill["dir"] = os.path.join(os.path.expanduser("~"), ".claude", "skills",
-                                        os.path.basename(os.path.dirname(f)))
+            skill["dir"] = os.path.join(home, ".claude", "skills", skill["name"])
             skills[skill["name"]] = skill
+        return skills
+
+    def test_a_digest_of_every_shipped_skill_keeps_every_line(self):
+        # A skill over its share loses whole lines from the end, silently to the model, so the
+        # whole suite must fit, from a home longer than most.
+        skills = self.shipped("/home/a-longer-user-name")
         ctx = PC.digest(sorted(skills), skills)
-        self.assertLess(len(ctx), 2000)
+        self.assertLess(len(ctx), PC.DIGEST_MAX)
+        self.assertNotIn("more in its SKILL.md", ctx)
         for name, skill in skills.items():
+            for line in skill["gate"]:
+                with self.subTest(skill=name, line=line[:30]):
+                    self.assertIn(f"\n- {line}", ctx)
+
+    def test_each_shipped_gate_stays_inside_its_budget(self):
+        # The cap no longer forces terse gates, so this does, per skill; the whole suite fitting
+        # is pinned above, and a new skill that breaks it is a choice to make, not a silent cut.
+        for name, skill in self.shipped(os.path.expanduser("~")).items():
             with self.subTest(skill=name):
-                self.assertTrue(any(f"\n- {line}\n" in ctx + "\n" for line in skill["gate"]))
+                self.assertLessEqual(sum(map(len, skill["gate"])), self.GATE_BUDGET)
+
+    def test_a_digest_that_fit_under_2000_is_unchanged(self):
+        # The raise from 2,000 changes nothing for a digest that wasn't cut, which is every
+        # recorded eval compaction but one, so their rows still describe what the hook sends.
+        skills, compared = self.shipped(os.path.expanduser("~")), 0
+        for k in range(1, len(skills) + 1):
+            for names in itertools.combinations(sorted(skills), k):
+                with mock.patch.object(PC, "DIGEST_MAX", 2000):
+                    old = PC.digest(list(names), skills)
+                if "more in its SKILL.md" in old:
+                    continue
+                compared += 1
+                with self.subTest(names=names):
+                    self.assertEqual(PC.digest(list(names), skills), old)
+        self.assertGreaterEqual(compared, len(skills))  # every skill alone fits, at least
+
+    def test_the_session_start_notes_never_push_the_context_past_the_cap(self):
+        # A project can add any number of copies; past Claude Code's 10,000 the model would see
+        # only a preview, and the digest's lines after it would be gone.
+        self.assertLess(PC.CONTEXT_MAX, 10000)
+        self.assertLess(PC.DIGEST_MAX + 200, PC.CONTEXT_MAX)
+        digest, note = "D" * (PC.DIGEST_MAX - 1), "N" * 450
+        for first in (digest, None):
+            for n in (0, 1, 7, 40):
+                with self.subTest(first=bool(first), n=n):
+                    out = PC.fit_context(first, [f"{note}{i}" for i in range(n)])
+                    self.assertLess(len(out), PC.CONTEXT_MAX)
+                    if first:
+                        self.assertTrue(out.startswith(digest))
+                    kept = sum(1 for i in range(n) if f"{note}{i}\n" in out + "\n")
+                    if kept < n:
+                        self.assertIn(f"({n - kept} more notes", out)
+                    else:
+                        self.assertNotIn("more notes", out)
+        self.assertEqual(PC.fit_context("a", ["b", "c"]), "a\nb\nc")
+        self.assertEqual(PC.fit_context(None, ["b", "c"]), "b\nc")
+        for size in range(9300, 9500, 7):  # the tail's own length counts, at the edge too
+            with self.subTest(size=size):
+                self.assertLess(len(PC.fit_context(None, ["x" * size, "y", "z"])), PC.CONTEXT_MAX)
+
+    def test_the_session_start_output_stays_under_the_cap_with_many_copies(self):
+        # Through with_notes, so the wiring counts: both strings Claude Code caps at 10,000.
+        lines = [f"this project has its own copy of the skill s{i}; both run" for i in range(400)]
+        notes = "\n".join(f"This project has its own copy of the installed practices skill s{i}: "
+                          + "x" * 400 for i in range(40))
+        digest = {"hookSpecificOutput": {"hookEventName": "SessionStart", "reloadSkills": True,
+                                         "additionalContext": "D" * (PC.DIGEST_MAX - 1)}}
+        for start in (None, digest, {"systemMessage": "engine note"}):
+            with self.subTest(start=bool(start)), \
+                    mock.patch.object(PC, "start_notes", return_value=(lines, notes)):
+                out = PC.with_notes(start, {})
+                self.assertLess(len(out["systemMessage"]), PC.CONTEXT_MAX)
+                self.assertIn("more (practices hooks)", out["systemMessage"])
+                ctx = out["hookSpecificOutput"]["additionalContext"]
+                self.assertLess(len(ctx), PC.CONTEXT_MAX)
+                self.assertIn("more notes on this project's copies", ctx)
+        lock = chr(0x1F512)  # two UTF-16 units, as Claude Code counts a string
+        heavy = PC.digest(["x"], {"x": {"dir": "/p/.claude/skills/x", "gate": [lock * 1000] * 5}})
+        self.assertLess(PC.units(heavy), PC.DIGEST_MAX)
+        self.assertIn("more in its SKILL.md", heavy)
+        self.assertEqual(PC.units(PC.cut_units(lock * 10, 5)), 4)
+        astral = [f"note {i} " + chr(0x1F600) * 250 for i in range(40)]  # two units each
+        out = PC.fit_context("D" * (PC.DIGEST_MAX - 1), astral)
+        self.assertLess(len(out.encode("utf-16-le")) // 2, PC.CONTEXT_MAX)
+        many = [f"crumb {i} " + "p" * 200 for i in range(200)]
+        with mock.patch.object(PC, "start_notes", return_value=(lines, notes)):
+            out = PC.with_notes({"systemMessage": PC.fit_joined(
+                "practices hooks:", many, " ", "; ", lambda n: f"and {n} more",
+                PC.CONTEXT_MAX // 2)}, {})
+            self.assertLess(len(out["systemMessage"]), PC.CONTEXT_MAX)
+        with mock.patch.object(PC, "start_notes", return_value=(["a", "b"], None)):
+            self.assertEqual(PC.with_notes(None, {})["systemMessage"], "practices hooks: a; b")
+            self.assertEqual(PC.with_notes({"systemMessage": "x"}, {})["systemMessage"], "x; a; b")
 
     def test_the_lint(self):
         for bad in ("(a+)+", "(a*)*", "(.*)+", r"(?:\s*,\s*\w+)*", "(ab|ab)*", "("):
@@ -4538,16 +4628,62 @@ class SkillAdvice(unittest.TestCase):
             self.assertIn("new code", text)
             self.assertIn("after the migration commits", text)
             self.assertIn("in batches", text)
-            self.assertIn("large table", text)
             self.assertIn("stops using", text)
-        self.assertIn("small table", say)  # batching a few rows breeds backfills nothing can run
+
+    def backfill_texts(self):
+        skill, _ = PC.load_skill(DATA_LAYER)
+        with open(os.path.join(DATA_LAYER, "SKILL.md")) as f:
+            step = next(line for line in f if line.startswith("1. This release"))
+        return {"say": skill["rules"][0]["say"], "gate": " ".join(skill["gate"]), "SKILL.md": step}
+
+    def test_only_a_known_small_table_backfills_in_the_same_migration(self):
+        # A seed shows nothing about production's size: a wrong "small" holds ADD COLUMN's lock
+        # through the whole UPDATE, so the batches are the default when the size is unknown.
+        for name, text in self.backfill_texts().items():
+            with self.subTest(text=name):
+                clauses = re.split(r"[.;:]\s", text)
+                same = [c for c in clauses if "same migration" in c]
+                self.assertTrue(same)
+                for c in map(str.lower, same):
+                    for word in ("only", "known", "small"):
+                        self.assertIn(word, c)
+                    self.assertNotIn("large", c)
+                batches = [c for c in clauses if "in batches" in c]
+                self.assertTrue(batches)
+                for c in batches:
+                    self.assertNotIn("small", c)
+        self.assertIn("a seed", self.backfill_texts()["SKILL.md"])
+
+    def test_a_four_skill_digest_keeps_the_backfill_rule(self):
+        # The digest cuts whole gate lines from the end when a skill overruns its share, so the
+        # first line carries the backfill rule alone. A longer home than most leaves a margin.
+        skills = {}
+        for f in sorted(glob.glob(os.path.join(REPO, "skills", "*", "events.toml"))):
+            skill, why = PC.load_skill(os.path.dirname(f))
+            self.assertIsNone(why)
+            skill["dir"] = os.path.join("/home/a-longer-user-name/.claude/skills", skill["name"])
+            skills[skill["name"]] = skill
+        ctx = PC.digest(sorted(skills), skills)
+        kept = ctx.split("\ndata-layer (", 1)[1].split("\ndependencies (", 1)[0]
+        for words in ("add-then-remove", "in batches", "after the migration commits",
+                      "known to be small", "stops using", "Say so in your reply"):
+            self.assertIn(words, kept)
+
+    def test_each_text_bars_the_backfills_nothing_can_run(self):
+        # Round 5's unconditional batches broke 3 of 45 runs: a COMMIT inside the migration's
+        # transaction, a psql meta-command, a file nothing applied. The gate is all a model has
+        # after a compaction, and the say all it has at a deny, so each carries the guard.
+        for name, text in self.backfill_texts().items():
+            with self.subTest(text=name):
+                for words in ("no commit", "meta-command", "nothing applies", "transaction off"):
+                    self.assertIn(words, text.lower())
 
     def test_the_skill_covers_a_drop_a_table_and_the_contract_step(self):
         with open(os.path.join(DATA_LAYER, "SKILL.md")) as f:
             text = f.read()
         for words in ("nullable", "ignored_columns", "SeparateDatabaseAndState", "view",
                       "IS DISTINCT FROM", "disable_ddl_transaction!", "before the new code serves",
-                      "small table", "meta-command"):
+                      "atomic = False", "no such switch"):
             self.assertIn(words, text)
 
     def test_the_backfill_is_batched_after_the_sync_commits(self):
@@ -4902,8 +5038,11 @@ class DataLayerSkill(unittest.TestCase):
 
     def test_the_gate_line_and_the_spec_state_the_same_rule(self):
         skill, _ = PC.load_skill(DATA_LAYER)
-        self.assertEqual(len(skill["gate"]), 1)
-        self.assertIn("REL-31", skill["gate"][0])
+        # Two lines, the core one first: a digest short of room cuts whole lines from the end.
+        self.assertEqual(len(skill["gate"]), 2)
+        self.assertIn("add-then-remove", skill["gate"][0])
+        for line in skill["gate"]:
+            self.assertIn("REL-31", line)
         self.assertIn("## The L1 test", self.read("SPEC.md"))
 
     def test_the_shipped_files_hold_no_em_dash(self):
