@@ -58,7 +58,7 @@ takes the file for binary (ugrep can) prints no matches and no error.
    2. Re-check `journeys.py` against `<skill dir>/template/journeys.py`, and the recipe against
       `<skill dir>/template/SKILL.md`, for what the template gained since this harness was copied:
       new `APP` keys (such as `APP["env"]`), new sections, new Known edges, changed wording in the
-      parts the repo never fills. Bring each in, and keep the repo's own fills: commands, ports,
+      parts the repo never fills (except the Measured line, which step 6 writes whole). Bring each in, and keep the repo's own fills: commands, ports,
       selectors, journeys, Features rows, Not covered rows, skip paths and app-specific edges.
       Anything new that carries a `<fill: ...>` is filled from the repo, as the skill's section 2
       does; `verify.py` exits 2 while one remains. One Known edge per cause: when a template edge
@@ -93,14 +93,19 @@ takes the file for binary (ugrep can) prints no matches and no error.
      user with the log line from `app.log`, and record it as an app-specific Known edge if it
      recurs across runs. Never fail a run on it, and never hide it: not from the report, and not by
      filtering the log.
-6. **Finish.** Rerun the full tier after the last fix and confirm the evidence survived cleanup.
-   When the outcome is changed, also update the Measured line, the only step that writes it; a
-   clean pass reports its times without editing the recipe, since clean means no commit. The line: a later full run's `duration_seconds`,
-   with the first run of this pass's in parentheses, labelled `first`, not `cold`: the dev
-   server's caches may have been warm. Then a quick run's. So `full 12.0 (first 29.3), quick 7.7`.
-   Then check `ready_timeout` by the skill's section 3 rule against the first run of this pass's
-   `ready_seconds`: raise it when the rule gives more, but never lower it from a run of this pass,
-   which may have been warm. Report the outcome with every feature's result.
+6. **Finish.** In this order:
+   1. Check `ready_timeout` by the skill's section 3 rule against the first run of this pass's
+      `ready_seconds`: raise it when the rule gives more, never lower it from a run of this pass,
+      which may have been warm. A raise is an edit, so the pass is changed.
+   2. If the outcome is clean, report every feature's result and this pass's times, and stop. Clean
+      edits nothing and commits nothing, so the Measured line stays as it is.
+   3. If changed, run the full tier once more and one `--quick` run, on the final files, and
+      confirm the evidence survived cleanup. A failure here sends the pass back to step 5.
+   4. Write the Measured line, the only step that writes it, whole: the template's lead-in, then
+      step 6.3's full run's `duration_seconds`, with the first run of this pass's in parentheses,
+      labelled `first`, not `cold`: the dev server's caches may have been warm. Then step 6.3's
+      quick run's. So `full 12.0 (first 29.3), quick 7.7`.
+   5. Report the outcome with every feature's result.
 
 ## Commit
 

@@ -346,8 +346,13 @@ class Files(unittest.TestCase):
     def test_a_clean_pass_edits_nothing(self):
         """Clean means no commit, so a clean pass can't leave the Measured line edited and uncommitted."""
         flat = " ".join(read(os.path.join(SKILL, "MAINTAIN.md")).split())
-        self.assertIn("When the outcome is changed, also update the Measured line", flat)
-        self.assertIn("a clean pass reports its times without editing the recipe", flat)
+        self.assertIn("If the outcome is clean, report every feature's result and this pass's times, and "
+                      "stop. Clean edits nothing and commits nothing", flat)
+        self.assertIn("(except the Measured line, which step 6 writes whole)", flat)
+        step6 = flat[flat.index("6. **Finish.**"):flat.index("## Commit")]
+        order = [step6.index(p) for p in ("Check `ready_timeout`", "If the outcome is clean",
+                                          "If changed, run the full tier", "Write the Measured line")]
+        self.assertEqual(order, sorted(order), "timeout first, then the outcome, then the runs, then the line")
 
     def test_no_step_moves_the_sessions_working_directory(self):
         """A bare cd in a main session moves its cwd for every later call, breaking root-relative paths."""
@@ -544,16 +549,17 @@ class UpkeepRunFindings(unittest.TestCase):
             "widening: widening is raising it to rescue a failing run with no measurement behind it",
             "The comment beside `ready_timeout` carries the numbers it came from",
             "never lower it from a run of this pass, which may have been warm"))
-        self.assertIn("check `ready_timeout` by the skill's section 3 rule", maintain_step(6))
+        self.assertIn("Check `ready_timeout` by the skill's section 3 rule", maintain_step(6))
         self.assertIn("in a comment beside it that carries the numbers it came from", self.generator)
 
     def test_the_measured_line_is_written_once_in_step_6(self):
-        self.assertNotIn("Measured line", maintain_step(1))
+        self.assertNotRegex(maintain_step(1), r"(?i)(update|write)s? the Measured line")
         step6 = maintain_step(6)
         self.assert_phrases(step6, (
-            "update the Measured line, the only step that writes it",
+            "Write the Measured line, the only step that writes it, whole: the template's lead-in",
             "with the first run of this pass's in parentheses, labelled `first`, not `cold`: the dev "
             "server's caches may have been warm",
+            "If changed, run the full tier once more and one `--quick` run, on the final files",
             "`full 12.0 (first 29.3), quick 7.7`"))
         self.assertNotIn("as the cold one", self.maintain)
         self.assertIn("the first run of this pass", maintain_step(1))
