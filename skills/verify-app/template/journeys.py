@@ -1,24 +1,29 @@
-"""What verify.py needs from this app, and the only file an app edits. Replace every <fill: ...>:
-verify.py exits 2 while any remain. Keep it plain data and small functions.
+"""What verify.py needs from this app, and the only file an app edits. Replace every fill slot
+below: verify.py exits 2 while any remain. Keep it plain data and small functions.
 
 A journey is a function taking ctx. It drives the real user path, then checks the result:
 
   ctx.url             the app's base URL
   ctx.evidence        this run's evidence folder, a pathlib.Path
   ctx.get(path)       a GET that follows no redirect: .status, .headers, .text
-  ctx.page            a browser tab, opened on first use (Page in browser.py): goto, click, fill,
-                      wait_for, evaluate, screenshot, download, network
+  ctx.page            a browser tab, opened on first use (Page in browser.py): goto, click, click_text,
+                      fill, wait_for, evaluate, screenshot, download, network
   ctx.check(ok, msg)  fails the journey with msg unless ok
   ctx.fact(key, val)  records a fact in the manifest
+
+Selectors: an id, an ARIA label or a data attribute first. A control with none of those is clicked
+by its visible text, ctx.page.click_text("Export SVG"), which fails unless exactly one visible
+button, link or role=button says it. Never by position alone.
 """
 
 APP = {
     "cmd": ["<fill: the repo's own dev command, one string per word>"],
     "port": "<fill: the port it listens on, as an int>",
     "host": "127.0.0.1",  # "[::1]" if the app binds IPv6 only
-    "ready_timeout": 90,  # seconds for every DOCTOR row to pass
+    "cwd": ".",  # where cmd runs, relative to the repo root: a package folder in a monorepo
+    "ready_timeout": 300,  # seconds for every DOCTOR row to pass; lower it from a measured ready_seconds
     "stop_timeout": 10,  # seconds between SIGTERM and SIGKILL
-    "evidence_dir": "<fill: a folder the repo ignores>",
+    "evidence_dir": "<fill: a folder the repo ignores, relative to the repo root>",
     "browser": True,  # False if every journey uses ctx.get only
 }
 
@@ -40,6 +45,10 @@ def preflight(root):
 def main_journey(ctx):
     """<fill: what a user does and what proves it worked>"""
     ctx.page.goto("/")
+    # goto waits for the load event, not for client code: on a server-rendered page a click before
+    # hydration is lost without an error. Wait for a sign the client is live first, such as a
+    # request only the client makes: performance.getEntriesByName(location.origin + "/api/x").length
+    ctx.page.wait_for("<fill: a JS expression true once the client is live>", what="the client to start")
     ctx.page.click("<fill: a stable selector>")
     ctx.check(ctx.page.wait_for("<fill: a JS expression for the result>"), "the action changed the page")
     ctx.page.screenshot("main")

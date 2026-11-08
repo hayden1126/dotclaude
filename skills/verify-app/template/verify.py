@@ -21,11 +21,13 @@
 # SOFTWARE.
 
 """Launch the app, check it, drive it, save evidence and clean up, all in one command. Edit
-journeys.py, not this file.
+journeys.py beside this file, not this file.
 
-    python3 -B .claude/skills/verify/verify.py [--quick] [--journey NAME]
+    python3 -B <harness folder>/verify.py [--quick] [--journey NAME]
 
---quick is launch and doctor with no browser. The default runs every journey.
+--quick is launch and doctor with no browser. The default runs every journey. -B keeps bytecode out
+of the repo. It runs from any folder: the repo root is the git top level of this file's folder, so
+the harness can sit at any depth. The recipe is <root>/.claude/skills/verify/SKILL.md.
 
 Exit codes, closed. Every path ends in exactly one of them:
 
@@ -57,13 +59,13 @@ import urllib.parse
 import urllib.request
 
 HERE = pathlib.Path(__file__).resolve().parent
-ROOT = HERE.parents[2]  # <root>/.claude/skills/verify
 TOKEN_VAR = "VERIFY_RUN_TOKEN"
 OUTCOMES = {0: "proved", 1: "app failed", 2: "could not judge", 3: "cleanup failed"}
 PORT_SCOPE = ("Seen only from this run's own network namespace: in a sandbox a free port here says "
               "nothing about a server in another namespace, and no later command can check it.")
 NO_ANSWER = (OSError, http.client.HTTPException)
 SIGNALS = {"armed": True, "seen": None}
+MARKER = re.compile(r"<fill:[^>]*>")
 Reply = collections.namedtuple("Reply", "status headers text")
 
 
@@ -114,14 +116,24 @@ def load(path: pathlib.Path):
     return module
 
 
-def git(*args: str) -> str | None:
+def git(*args: str, cwd: pathlib.Path | None = None) -> str | None:
+    """Run git with no GIT_ variable from the caller's environment, which could point it elsewhere."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     try:
-        done = subprocess.run(["git", "--no-optional-locks", *args], cwd=ROOT, env=env,
+        done = subprocess.run(["git", "--no-optional-locks", *args], cwd=cwd or ROOT, env=env,
                               capture_output=True, text=True)
     except OSError:
         return None
     return done.stdout.strip() if done.returncode == 0 else None
+
+
+def toplevel() -> pathlib.Path | None:
+    """The git top level of this file's folder, or None when it is not in a work tree."""
+    found = git("rev-parse", "--show-toplevel", cwd=HERE)
+    return pathlib.Path(found).resolve() if found else None
+
+
+ROOT = toplevel()
 
 
 def fetch(url: str, timeout: float) -> Reply:
@@ -183,19 +195,24 @@ def settled(scan, seconds: float) -> list:
 
 def load_spec(journey: str | None):
     """Load journeys.py and browser.py, refusing unfilled markers and any shape they don't allow."""
-    markers = [m for path in (HERE / "journeys.py", HERE / "SKILL.md") if path.exists()
-               for m in re.findall(r"<fill:[^>]*>", path.read_text(encoding="utf-8"))]
+    recipe = ROOT / ".claude" / "skills" / "verify" / "SKILL.md"
+    markers = [m for path in (HERE / "journeys.py", recipe) if path.exists()
+               for m in MARKER.findall(path.read_text(encoding="utf-8"))]
     if markers:
         raise Refused(f"unfilled markers: {', '.join(markers)}")
     try:
         spec, browser = load(HERE / "journeys.py"), load(HERE / "browser.py")
         app, evidence = spec.APP, pathlib.PurePath(spec.APP["evidence_dir"])
+        cwd = app.setdefault("cwd", ".")
         problems = [text for ok, text in (
             (isinstance(app.get("cmd"), list) and app["cmd"] and all(isinstance(a, str) for a in app["cmd"]),
              "APP cmd must be a list of strings"),
             (isinstance(app.get("port"), int), "APP port must be an int"),
             (isinstance(app.get("ready_timeout"), (int, float)), "APP ready_timeout must be a number"),
             (not evidence.is_absolute() and ".." not in evidence.parts, "APP evidence_dir must stay in the repo"),
+            (isinstance(cwd, str) and not pathlib.PurePath(cwd).is_absolute()
+             and ".." not in pathlib.PurePath(cwd).parts and (ROOT / cwd).is_dir(),
+             "APP cwd must be a folder in the repo, relative to its root"),
             (isinstance(app.get("browser"), bool), "APP browser must be True or False"),
             (spec.DOCTOR and all(len(row) == 3 and row[0].startswith("/") and isinstance(row[1], int)
                                  and isinstance(row[2], str) for row in spec.DOCTOR),
@@ -291,7 +308,8 @@ class Run:
         self.launched = True
         with open(self.dir / "app.log", "wb") as log:
             try:
-                self.app = subprocess.Popen(self.spec.APP["cmd"], cwd=ROOT, stdin=subprocess.DEVNULL,
+                self.app = subprocess.Popen(self.spec.APP["cmd"], cwd=ROOT / self.spec.APP["cwd"],
+                                            stdin=subprocess.DEVNULL,
                                             stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             except OSError as exc:
                 raise Refused(f"the app's command cannot start: {exc}") from None
@@ -478,6 +496,9 @@ def main(argv: list) -> int:
     tier.add_argument("--quick", action="store_true")
     tier.add_argument("--journey")
     args = parser.parse_args(argv)
+    if ROOT is None:
+        say(f"could not judge (exit 2): {HERE} is not inside a git work tree, so there is no repo root")
+        return 2
     try:
         spec, browser = load_spec(args.journey)
         run = Run(spec, browser, args)

@@ -6,8 +6,10 @@ description: Launch and drive <fill: app name>, the <fill: surface, such as web 
 # Verify <fill: app name>
 
 `verify.py` starts the app, checks it, drives it like a user, saves evidence and tears it all down,
-inside one command. Edit `journeys.py` only. `verify.py`, `browser.py`, `LICENSE-pstack-claude` and
-`CHECKSUMS` are copies: `sha256sum -c CHECKSUMS` from this folder shows whether they still match.
+inside one command. The harness lives in `<fill: harness folder>/`, outside `.claude/` so sandboxed
+Bash can write it; this file is the only part kept here. Edit `journeys.py` there and this file only.
+`verify.py`, `browser.py`, `LICENSE-pstack-claude` and `CHECKSUMS` are copies:
+`sha256sum -c CHECKSUMS` from the harness folder shows whether they still match.
 
 ## When to run
 
@@ -30,16 +32,16 @@ this file's frontmatter.
 ## Launch
 
 ```
-python3 -B .claude/skills/verify/verify.py                 # full: every journey
-python3 -B .claude/skills/verify/verify.py --journey NAME  # full: one journey
-python3 -B .claude/skills/verify/verify.py --quick         # quick: launch and doctor, no browser
+python3 -B <fill: harness folder>/verify.py                 # full: every journey
+python3 -B <fill: harness folder>/verify.py --journey NAME  # full: one journey
+python3 -B <fill: harness folder>/verify.py --quick         # quick: launch and doctor, no browser
 ```
 
-Run it from the repo root as one Bash call. **Why one command:** each sandboxed Bash call gets its own
-network and pid namespace, so a server started in one call is invisible to the next. Nothing checked
-from a later call proves anything: the port always looks free and the process group always looks
-empty. The harness records those facts itself, in the manifest. `-B` because this folder is
-write-protected in the sandbox.
+Run it as one Bash call, from any folder: the harness finds the repo root itself. **Why one
+command:** each sandboxed Bash call gets its own network and pid namespace, so a server started in
+one call is invisible to the next. Nothing checked from a later call proves anything: the port
+always looks free and the process group always looks empty. The harness records those facts itself,
+in the manifest. `-B` keeps bytecode out of the repo.
 
 Measured: full <fill: seconds from a manifest's duration_seconds>, quick <fill: seconds>.
 
@@ -61,6 +63,12 @@ just that a process answers.
 Journeys use the real user path: the clicks and fields a person uses, never a test-only endpoint or
 an internal setter. A journey that runs no `ctx.check` is not judged (exit 2). `FORBIDDEN_REQUESTS`
 names what a run must never send (a paid API, an email, a publish); a hit fails the journey.
+
+Find a control by its id, ARIA label or a data attribute. One with none of those is clicked by its
+visible text with `ctx.page.click_text`, which fails unless exactly one visible match says it. Never
+by position alone. Before the first click, wait with `ctx.page.wait_for` for a sign the client is
+live (a request the client makes, or a value only client code sets): `goto` waits for the load
+event, and on a server-rendered page a click before hydration is lost without an error.
 
 ## Evidence
 
@@ -98,11 +106,11 @@ manifest's `token`. Evidence is never deleted by cleanup.
 - `FORBIDDEN_REQUESTS` detects a hit after the fact, from this tab's network log. It can't block it,
   and it doesn't see calls the server makes, popups or workers' own requests.
 - A process that clears its environment escapes the token sweep once it leaves the process group.
-- Needs Python 3.10 or later, and `chrome-headless-shell` for browser journeys (`VERIFY_CHROME` names
-  one).
+- Needs Python 3.10 or later, git, and `chrome-headless-shell` for browser journeys (`VERIFY_CHROME`
+  names one).
 - <fill: app-specific edges, such as a lock file left after a SIGKILL, or "none">
 
 <!-- Adapted from pstack's create-verification-skill and maintain-verification-skill
 (github.com/cursor/plugins, MIT, Copyright (c) 2026 Lauren Tan, via
 github.com/michael-denyer/pstack-claude, MIT, Copyright (c) 2026 Michael Denyer), text in
-LICENSE-pstack-claude. -->
+LICENSE-pstack-claude in the harness folder. -->

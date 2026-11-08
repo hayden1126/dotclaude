@@ -53,6 +53,18 @@ CLICK_JS = """(() => {
   const r = el.getBoundingClientRect();
   return r.width && r.height ? [r.x + r.width / 2, r.y + r.height / 2] : null;
 })()"""
+CLICK_TEXT_JS = """(() => {
+  const text = %s;
+  const found = [...document.querySelectorAll(%s)].filter(el => {
+    const r = el.getBoundingClientRect();
+    return r.width && r.height && getComputedStyle(el).visibility !== "hidden"
+      && el.textContent.trim() === text;
+  });
+  if (found.length !== 1 || found[0].disabled) return {count: found.length, point: null};
+  found[0].scrollIntoView({block: "center"});
+  const r = found[0].getBoundingClientRect();
+  return {count: 1, point: [r.x + r.width / 2, r.y + r.height / 2]};
+})()"""
 
 
 class BrowserError(Exception):
@@ -244,7 +256,31 @@ class Page:
 
     def click(self, selector: str, timeout: float = 30.0):
         """A real mouse click on the element's centre, once it exists and is enabled."""
-        x, y = self.wait_for(CLICK_JS % json.dumps(selector), timeout, f"{selector} to be clickable")
+        self.press(*self.wait_for(CLICK_JS % json.dumps(selector), timeout, f"{selector} to be clickable"))
+
+    def click_text(self, text: str, selector: str = "button, a, [role=button]", timeout: float = 30.0):
+        """Click the one visible element matching selector whose trimmed text is exactly text, for a
+        control with no id, ARIA label or data attribute. Zero matches, several, or one that stays
+        disabled until the timeout is a PageError naming the count."""
+        script = CLICK_TEXT_JS % (json.dumps(text), json.dumps(selector))
+        deadline = time.monotonic() + timeout
+        found, last = None, ""
+        while True:
+            try:
+                found = self.evaluate(script)
+            except PageError as exc:  # a navigation can destroy the context mid-poll
+                last = f" (last error: {exc})"
+            if found and found["point"]:
+                return self.press(*found["point"])
+            if time.monotonic() >= deadline:
+                count = found["count"] if found else 0
+                state = " and it is disabled" if count == 1 else ""
+                raise PageError(f"{count} visible elements matching {selector!r} say {text!r}{state}: "
+                                f"click_text needs exactly one enabled{last}")
+            time.sleep(0.1)
+
+    def press(self, x: float, y: float):
+        """A left mouse press and release at a point in the viewport."""
         for kind in ("mousePressed", "mouseReleased"):
             self.call("Input.dispatchMouseEvent",
                       {"type": kind, "x": x, "y": y, "button": "left", "clickCount": 1})

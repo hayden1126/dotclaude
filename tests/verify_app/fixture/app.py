@@ -18,6 +18,11 @@ HOME = b"""<!doctype html><title>fixture home</title><h1>fixture home</h1>
   document.getElementById('paid').textContent = 'paid'})">Pay</button>
 <p id="paid">unpaid</p>
 <form method="post" action="/export"><button id="save">Save</button></form>
+<button onclick="document.getElementById('result').textContent = 'by text'">  Export
+</button>
+<button onclick="document.getElementById('result').textContent = 'wrong'">Export all</button>
+<a href="#" role="button">Copy</a><button>Copy</button>
+<button hidden onclick="document.getElementById('result').textContent = 'hidden'">Secret</button>
 """
 
 
@@ -78,6 +83,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 def main():
     print("fixture starting", MODE, flush=True)
+    with open(os.path.join(STATE, "cwd"), "w", encoding="utf-8") as f:
+        f.write(os.getcwd())
     if MODE == "boot_crash":
         sys.exit(3)
     if MODE == "never_ready":

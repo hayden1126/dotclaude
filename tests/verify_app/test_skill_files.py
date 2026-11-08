@@ -79,7 +79,7 @@ class Files(unittest.TestCase):
                 with self.subTest(name=name):
                     self.assertEqual(hashlib.sha256(f.read()).hexdigest(), digest)
 
-    def test_retyped_files_are_ascii(self):
+    def test_template_files_are_ascii(self):
         for name in COPIED + ("journeys.py", "SKILL.md"):
             with self.subTest(name=name):
                 read(os.path.join(TEMPLATE, name)).encode("ascii")
@@ -115,6 +115,59 @@ class Files(unittest.TestCase):
         for name in COPIED:
             with self.subTest(name=name):
                 self.assertNotIn("<fill: ", read(os.path.join(TEMPLATE, name)))
+
+    def test_every_run_command_uses_the_harness_folder_and_no_bytecode(self):
+        texts = {name: read(os.path.join(SKILL, name)) for name in ("SKILL.md", "MAINTAIN.md")}
+        texts.update({f"template/{name}": read(os.path.join(TEMPLATE, name))
+                      for name in ("SKILL.md", "verify.py", "journeys.py")})
+        runs = [(name, run) for name, text in texts.items()
+                for run in re.findall(r"python3[^\n`]*verify\.py", text)]
+        self.assertGreaterEqual(len(runs), 5)
+        for name, run in runs:
+            with self.subTest(name=name, run=run):
+                self.assertRegex(run, r"^python3 -B <(harness|fill: harness folder|harness folder)>/verify\.py$")
+        for name, text in texts.items():
+            with self.subTest(name=name):
+                self.assertNotRegex(text, r"\.claude/skills/verify/(verify|browser|journeys)\.py")
+
+    def test_the_generator_places_the_harness_and_copies_it_once(self):
+        text = read(os.path.join(SKILL, "SKILL.md"))
+        for phrase in ("`scripts/verify/`", "`tools/verify/`", "one sandboxed `cp`",
+                       "cp <skill dir>/template/{verify.py,browser.py,LICENSE-pstack-claude,CHECKSUMS} <harness>/",
+                       "cd <harness> && sha256sum -c CHECKSUMS", "git add .claude/skills/verify <harness>"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, text)
+        maintain = read(os.path.join(SKILL, "MAINTAIN.md"))
+        self.assertIn("Edit only two places: `journeys.py` in the harness folder, and "
+                      "`.claude/skills/verify/SKILL.md`", maintain)
+
+    def test_the_generator_never_launches_the_app_by_hand(self):
+        text = read(os.path.join(SKILL, "SKILL.md"))
+        self.assertNotIn("Measure how long", text)
+        self.assertNotIn("doesn't start as it is", text)
+        for phrase in ("Don't start the app by", "is the measurement", "`ready_seconds`", "`app.log`",
+                       "`ready_timeout` from the measured"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, text)
+
+    def test_the_selector_and_hydration_rules_agree(self):
+        generator = read(os.path.join(SKILL, "SKILL.md"))
+        for name, text in (("generator", generator), ("recipe", read(os.path.join(TEMPLATE, "SKILL.md"))),
+                           ("journeys", read(os.path.join(TEMPLATE, "journeys.py")))):
+            with self.subTest(name=name):
+                self.assertIn("click_text", text)
+                self.assertRegex(text, r"[Nn]ever\s+by\s+position\s+alone")
+                self.assertIn("hydration", text)
+                self.assertIn("wait_for", text)
+        self.assertIn("Adding attributes to product code is out of scope", generator)
+        self.assertNotIn("over position or text", generator)
+
+    def test_the_generator_reports_and_plants_by_the_manifest(self):
+        text = " ".join(read(os.path.join(SKILL, "SKILL.md")).split())
+        self.assertIn("see exit 1, with that check's message in the manifest", text)
+        self.assertIn("Report the files written, the paths the recipe lists as skip-safe, both measured "
+                      "times and the manifest path", text)
+        self.assertNotIn("tier table", text)
 
     def test_the_folder_stands_alone(self):
         for path in skill_files():

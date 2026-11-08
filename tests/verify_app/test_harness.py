@@ -1,5 +1,6 @@
 """The verify harness against a fixture app: one planted break per promise. Each test builds a temp
-git repo holding the template's files, picks a free port and runs verify.py as a subprocess. Signal
+git repo laid out as the generator leaves an app repo (the harness in tools/verify/, the recipe in
+.claude/skills/verify/), picks a free port and runs verify.py as a subprocess. Signal
 tests use Popen on the pid directly, never a shell's `&`, which makes children ignore SIGINT."""
 import importlib.util
 import json
@@ -17,6 +18,36 @@ import unittest
 HERE = pathlib.Path(__file__).resolve().parent
 TEMPLATE = HERE.parents[1] / "skills" / "verify-app" / "template"
 EXITS = {0: "proved", 1: "app failed", 2: "could not judge", 3: "cleanup failed"}
+# Every slot the generator fills, per template file. A literal marker anywhere else (a docstring
+# that quotes one) would keep a fully filled file at exit 2.
+SLOTS = {
+    "journeys.py": (
+        "<fill: the repo's own dev command, one string per word>",
+        "<fill: the port it listens on, as an int>",
+        "<fill: a folder the repo ignores, relative to the repo root>",
+        "<fill: a path>",
+        "<fill: text only a working page shows>",
+        "<fill: a path that costs money or sends, or empty this list>",
+        "<fill: what a user does and what proves it worked>",
+        "<fill: a JS expression true once the client is live>",
+        "<fill: a stable selector>",
+        "<fill: a JS expression for the result>",
+        "<fill: feature name>",
+    ),
+    "SKILL.md": (
+        "<fill: app name>",
+        "<fill: surface, such as web app or API>",
+        "<fill: harness folder>",
+        '<fill: paths or globs, such as docs/ and *.md, or "none">',
+        "<fill: seconds from a manifest's duration_seconds>",
+        "<fill: seconds>",
+        "<fill: feature>",
+        "<fill: JOURNEYS key>",
+        "<fill: route and clicks>",
+        "<fill: observable end state>",
+        '<fill: app-specific edges, such as a lock file left after a SIGKILL, or "none">',
+    ),
+}
 
 
 def load(path: pathlib.Path):
@@ -63,15 +94,20 @@ class Case(unittest.TestCase):
         self.state.mkdir()
         self.outside.mkdir()
         self.skill.mkdir(parents=True)
-        for name in ("verify.py", "browser.py"):
-            shutil.copy(TEMPLATE / name, self.skill / name)
-        shutil.copy(HERE / "fixture" / "journeys.py", self.skill / "journeys.py")
+        self.place_harness(self.repo / "tools" / "verify")
         (self.repo / ".gitignore").write_text("evidence/\n__pycache__/\n", encoding="utf-8")
         git(self.repo, "init", "-q")
         git(self.repo, "add", "-A")
         git(self.repo, "commit", "-q", "-m", "start")
         self.port = free_port()
         self.addCleanup(self.reap_child)
+
+    def place_harness(self, folder: pathlib.Path):
+        folder.mkdir(parents=True, exist_ok=True)
+        for name in ("verify.py", "browser.py"):
+            shutil.copy(TEMPLATE / name, folder / name)
+        shutil.copy(HERE / "fixture" / "journeys.py", folder / "journeys.py")
+        self.harness = folder
 
     def reap_child(self):
         """End a sleeper a test left alive on purpose; its pid file is this test's own record."""
@@ -89,7 +125,7 @@ class Case(unittest.TestCase):
                 "FIXTURE_CONFIG": json.dumps(config)}
 
     def command(self, args: tuple = (), flags: tuple = ("-B",)) -> list:
-        return [sys.executable, *flags, str(self.skill / "verify.py"), *args]
+        return [sys.executable, *flags, str(self.harness / "verify.py"), *args]
 
     def run_harness(self, mode: str = "normal",
         args: tuple = (),
@@ -187,11 +223,31 @@ class Proved(Case):
     def test_python_isolated_mode_works(self):
         code, _, output = self.run_harness(flags=("-I", "-B"))
         self.assertEqual(code, 0, output)
-        self.assertFalse((self.skill / "__pycache__").exists())
+        self.assertFalse((self.harness / "__pycache__").exists())
 
     def test_it_runs_from_any_directory(self):
         code, _, output = self.run_harness(cwd=self.outside)
         self.assertEqual(code, 0, output)
+
+    def test_the_root_is_the_git_top_level_at_any_depth(self):
+        self.place_harness(self.repo / "packages" / "web" / "scripts" / "verify")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "deeper")
+        code, manifest, output = self.run_harness(cwd=self.outside)
+        self.assertEqual(code, 0, output)
+        self.assertEqual(self.run_dir().parents[1], self.repo, "evidence_dir is relative to the top level")
+        self.assertEqual((self.state / "cwd").read_text(encoding="utf-8"), str(self.repo))
+        self.assertIs(manifest["dirty"], False)
+
+    def test_app_cwd_starts_the_app_in_a_package_folder(self):
+        (self.repo / "packages" / "web").mkdir(parents=True)
+        code, manifest, output = self.run_harness("setsid", app={"cwd": "packages/web"})
+        self.assertEqual(code, 0, output)
+        self.assertEqual((self.state / "cwd").read_text(encoding="utf-8"), str(self.repo / "packages" / "web"))
+        self.assertEqual(self.run_dir().parents[1], self.repo)
+        self.assertEqual([p["pid"] for p in manifest["swept"]], [self.child_pid()],
+                         "a carrier in the package folder is still inside the repo")
+        self.assert_clean(manifest)
 
     def test_quick_is_launch_and_doctor_with_no_browser(self):
         stub = self.outside / "stub-chrome"
@@ -263,8 +319,21 @@ class AppFailed(Case):
 
 
 class NoVerdict(Case):
+    def test_a_filled_template_clears_the_marker_scan(self):
+        for name, folder in (("journeys.py", self.harness), ("SKILL.md", self.skill)):
+            text = (TEMPLATE / name).read_text(encoding="utf-8")
+            for slot in SLOTS[name]:
+                self.assertIn(slot, text, name)
+                text = text.replace(slot, "filled")
+            (folder / name).write_text(text, encoding="utf-8")
+        code, manifest, output = self.run_harness()
+        self.assertEqual(code, 2)
+        self.assertNotIn("unfilled markers", output)
+        self.assertIn("APP port must be an int", output, "the scan passed and the config was read")
+        self.assertIsNone(manifest)
+
     def test_unfilled_markers_exit_2_naming_them(self):
-        shutil.copy(TEMPLATE / "journeys.py", self.skill / "journeys.py")
+        shutil.copy(TEMPLATE / "journeys.py", self.harness / "journeys.py")
         code, manifest, output = self.run_harness()
         self.assertEqual(code, 2)
         self.assertIn("<fill:", output)
@@ -275,6 +344,17 @@ class NoVerdict(Case):
         code, _, output = self.run_harness()
         self.assertEqual(code, 2)
         self.assertIn("<fill: paths>", output)
+
+    def test_a_harness_outside_a_git_work_tree_exits_2(self):
+        if subprocess.run(["git", "-C", str(self.outside), "rev-parse"], capture_output=True).returncode == 0:
+            self.skipTest("the temp folder is inside a git work tree here")
+        self.place_harness(self.outside / "verify")
+        code, manifest, output = self.run_harness()
+        self.assertEqual(code, 2)
+        self.assertIn("git work tree", output)
+        self.assertIsNone(manifest)
+        self.assertFalse((self.outside / "evidence").exists())
+        self.assertEqual(self.requests(), [])
 
     def test_an_unknown_journey_exits_2(self):
         code, _, output = self.run_harness(args=("--journey", "nope"))
@@ -300,13 +380,16 @@ class NoVerdict(Case):
         for name, config in (("cmd", {"app": {"cmd": "python3 app.py"}}),
                              ("port", {"app": {"port": "5180"}}),
                              ("evidence", {"app": {"evidence_dir": "../outside"}}),
+                             ("cwd outside", {"app": {"cwd": "../outside"}}),
+                             ("cwd absolute", {"app": {"cwd": "/"}}),
+                             ("cwd missing", {"app": {"cwd": "nowhere"}}),
                              ("doctor", {"doctor": []}),
                              ("journeys", {"journeys": []})):
             with self.subTest(name=name):
                 self.assertEqual(self.run_harness(**config)[0], 2)
 
     def test_a_missing_journeys_file_exits_2(self):
-        (self.skill / "journeys.py").unlink()
+        (self.harness / "journeys.py").unlink()
         self.assertEqual(self.run_harness()[0], 2)
 
     def test_a_command_that_cannot_start_exits_2(self):
@@ -481,6 +564,21 @@ class RealBrowser(Case):
         network = json.loads((self.run_dir() / "network.json").read_text(encoding="utf-8"))
         self.assertIn("/export", " ".join(row["url"] for row in network))
         self.assert_clean(manifest)
+
+    def test_click_text_clicks_the_one_exact_visible_match(self):
+        code, manifest, output = self.run_harness(journeys=["click_by_text"], browser=True)
+        self.assertEqual(code, 0, output)
+        self.assertEqual(manifest["facts"], {"result": "by text"})
+
+    def test_click_text_fails_naming_the_count_unless_exactly_one_matches(self):
+        for text, count in (("Nope", 0), ("Secret", 0), ("Copy", 2)):
+            with self.subTest(text=text):
+                shutil.rmtree(self.repo / "evidence", ignore_errors=True)
+                code, manifest, _ = self.run_harness(journeys=["click_text_only"], browser=True, text=text)
+                self.assertEqual(code, 1)
+                detail = manifest["journeys"][0]["detail"]
+                self.assertIn(f"{count} visible", detail)
+                self.assertIn(repr(text), detail)
 
     def test_a_forbidden_request_fails_the_journey(self):
         code, manifest, _ = self.run_harness(journeys=["hits_forbidden"], browser=True)

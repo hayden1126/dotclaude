@@ -74,6 +74,21 @@ def click_and_download(ctx):
     ctx.fact("download", saved.name)
 
 
+def click_by_text(ctx):
+    ctx.page.goto("/")
+    ctx.page.click_text("Export", timeout=5)
+    result = ctx.page.wait_for("document.getElementById('result').textContent !== 'idle' &&"
+                               " document.getElementById('result').textContent", what="the click to land")
+    ctx.check(result == "by text", f"the trimmed exact match was clicked, not {result!r}")
+    ctx.fact("result", result)
+
+
+def click_text_only(ctx):
+    ctx.page.goto("/")
+    ctx.page.click_text(CONFIG["text"], timeout=0.5)
+    ctx.check(True, "unreachable unless exactly one control matched")
+
+
 def hits_forbidden(ctx):
     page = ctx.page
     page.goto("/")
