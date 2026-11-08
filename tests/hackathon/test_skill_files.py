@@ -6,8 +6,10 @@ import re
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-MANUAL = ("interview", "hackathon", "demo-first-scope", "demo-video", "pitch", "public-ready")
-AUTO = ("frontend-motion",)
+# demo-video loads by itself: a plain "make a demo video" once went off-skill and offered
+# recording routes outside the sandbox (Shodo test, 2026-11-08).
+MANUAL = ("interview", "hackathon", "demo-first-scope", "pitch", "public-ready")
+AUTO = ("frontend-motion", "demo-video")
 READS_THE_PROFILE = ("demo-first-scope", "demo-video", "pitch", "public-ready")
 DENYLIST = os.path.expanduser("~/scratch/hackathon/denylist.txt")
 EM_DASH = chr(0x2014)
@@ -41,6 +43,11 @@ class Triggers(unittest.TestCase):
             with self.subTest(name):
                 self.assertRegex(frontmatter(name), r"(?m)^disable-model-invocation: true$")
                 self.assertRegex(frontmatter(name), rf"(?m)^name: {name}$")
+
+    def test_demo_video_triggers_on_a_demo_video_not_on_any_demo(self):
+        description = re.search(r"(?m)^description: (.*)$", frontmatter("demo-video")).group(1)
+        self.assertIn("demo video", description)
+        self.assertRegex(description, r"Not for a live demo, a pitch, or writing a demo script or DEMO\.md\.$")
 
     def test_frontend_motion_fires_by_itself_in_any_mode(self):
         for name in AUTO:
@@ -99,6 +106,22 @@ class EventProfile(unittest.TestCase):
         for name in READS_THE_PROFILE:
             with self.subTest(name):
                 self.assertIn("EVENT.md", read(skill_path(name, "SKILL.md")))
+
+    def test_the_script_is_planned_for_its_audience_and_checked_before_recording(self):
+        # The Shodo test (2026-11-08) filmed a DEMO.md word for word: nothing asked who judges or
+        # what the video had to cover, and one line ran longer than its beat.
+        scope = read(skill_path("demo-first-scope", "SKILL.md"))
+        for needle in ("## Audience and coverage", "**Who judges.**", "**What the demo must cover.**",
+                       "how it was built", "the difficulties", "| Must cover | Asked by | Beat or written field |",
+                       "2 to 2.3 words a second", "| Time | On screen | Said | Words | Label | Real or seeded |",
+                       "6 words or fewer", "## Before recording"):
+            with self.subTest(needle):
+                self.assertIn(needle, scope)
+        video = read(skill_path("demo-video", "SKILL.md"))
+        self.assertIn("**Check the script first.**", video)
+        self.assertIn("type `/demo-first-scope` for its Before recording pass", video)
+        hackathon = read(skill_path("hackathon", "SKILL.md"))
+        self.assertLess(hackathon.index("`/demo-first-scope` again"), hackathon.index("| At feature freeze | `/demo-video`"))
 
     def test_the_live_capability_check_is_where_a_live_demo_is_planned(self):
         for name in ("demo-first-scope", "pitch"):

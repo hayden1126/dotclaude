@@ -1,6 +1,6 @@
 ---
 name: demo-first-scope
-description: "Scope a hackathon build backward from the win: judging criteria, the moment that decided it, the craziest idea cut down to the coolest feasible one, then a timed demo script and a cut list in DEMO.md."
+description: "Scope a hackathon build backward from the win: judging criteria, who judges and what the video must cover, the moment that decided it, the craziest idea cut down to the coolest feasible one, then a timed demo script with its words and captions and a cut list in DEMO.md. Run it again before recording."
 argument-hint: "[idea or topic]"
 disable-model-invocation: true
 ---
@@ -24,18 +24,30 @@ If the event forbids work before its start and it hasn't started, this is design
 Do these in order. Write each result to `DEMO.md` before moving on.
 
 1. **Criteria and slot.** List the judging criteria as published, with weights if given, plus the format and length.
-2. **Imagine you won.** Write the moment as a judge would retell it: what they saw, and which criterion it decided. One or two sentences.
-3. **The craziest idea.** Start from the version that wins with no limits, not the safe one. Cutting comes next.
-4. **Feasibility, with real numbers.**
+2. **Audience and coverage.** See below.
+3. **Imagine you won.** Write the moment as a judge would retell it: what they saw, and which criterion it decided. One or two sentences.
+4. **The craziest idea.** Start from the version that wins with no limits, not the safe one. Cutting comes next.
+5. **Feasibility, with real numbers.**
    - Data and access: where it comes from, whether you can get it today, its size, rate limits, cost, any sign-up wait.
    - What must be true: each assumption, and the quickest way to test it.
    - Time: add up the hours left in the working blocks up to the earliest deadline, not wall-clock hours. Take out rehearsal, recording and submission. Estimate each piece of the build against what remains.
-5. **The coolest feasible one.** When a check fails, cut or seed the smallest piece that fixes it and re-check. Don't retreat to the safe idea. Keep going until one step cooler would fail a check, then let the user call it.
-6. **Live-capability check.** See below.
-7. **Demo script.** See below.
-8. **Cut list.** See below.
+6. **The coolest feasible one.** When a check fails, cut or seed the smallest piece that fixes it and re-check. Don't retreat to the safe idea. Keep going until one step cooler would fail a check, then let the user call it.
+7. **Live-capability check.** See below.
+8. **Demo script.** See below.
+9. **Cut list.** See below.
 
 If this scope and `VISION.md` disagree, name it: what each says, and which call you'd make. The user picks, and `DEMO.md` records it. Don't quietly follow either one.
+
+## Audience and coverage
+
+**Who judges.** From the event page, `EVENT.md` and the user: the judges' names and backgrounds if published, whether they're technical, and how well they know the product's field. Unknown is a stated guess, marked as one. The answer sets the script's level: a judge new to the field needs the problem shown before the product, and a technical one wants to see what's hard about it.
+
+**What the demo must cover.** List each thing the rules, the judging criteria and the submission form ask the team to show or explain. Common ones: what it does and for whom, how it was built, the most impressive features, the difficulties and how the team got past them, what's next, and anything seeded or recorded. Map each to a beat, or to the written submission when the form has a field for it:
+
+| Must cover | Asked by | Beat or written field |
+|---|---|---|
+
+An item with neither is a gap: the user decides whether it gets a beat, goes in the write-up, or is dropped.
 
 ## Live-capability check
 
@@ -51,10 +63,13 @@ Then note how services stay warm, the spend cap on each paid key, and when the t
 
 Fit it to the format in `EVENT.md`. With no length known, say so and use a stated guess (2 to 3 minutes is common). Live or video: beats that add up to under the slot. Expo table: a short loop a visitor can walk into, which restarts cleanly, plus a longer cut for a judge who stays. Both: one script for each.
 
-| Time | On screen | Said | Real or seeded |
-|---|---|---|---|
+| Time | On screen | Said | Words | Label | Real or seeded |
+|---|---|---|---|---|---|
 
 The winning moment gets the most time. A feature with no beat is cut by default.
+
+- **Words.** Speech over a demo runs about 2 to 2.3 words a second, slower than talk, since the viewer is also watching. Count each line against its beat's length: at most one sentence a beat, two at the most, and some beats stay silent so an action can land. A line over budget is cut, or its beat gets longer.
+- **Captions,** on by default, since judges often watch muted. Subtitles repeat the said line word for word, so none needs writing. A label is 6 words or fewer and adds only what speech carries badly: a number, a name, "Recorded AI result". A note box carries extra detail only where the frame has room and the voice pauses, since nobody reads one sentence while hearing another. Write labels and notes into the script.
 
 ## Cut list
 
@@ -62,6 +77,10 @@ The winning moment gets the most time. A feature with no beat is cut by default.
 |---|---|---|---|
 
 Give every decision a review time, so a seeded part can become real, or a real one can get cut, on purpose.
+
+## Before recording
+
+At feature freeze, before any video or rehearsal, run this skill again with the product in front of you: who judges, what must be covered, and whether each beat still shows what the frozen product does. Recount the words against each beat. Then suggest `/demo-video` for the user to type, or for you to load when they ask for the video.
 
 ## Never fake silently
 
@@ -78,3 +97,5 @@ Read back the idea in a sentence, the winning moment, the hours budget and what'
 | Starting from the safe idea | Start crazy, then cut against numbers. |
 | "Should be feasible" | Name the number, or the test that gets it. |
 | A seeded part with no mark | Mark it and decide what the team says. |
+| A script written without its audience | Name who judges and what they must see first. |
+| A line longer than its beat | Cut words, or give the beat more time. |

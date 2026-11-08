@@ -253,11 +253,11 @@ CAPTION_BEATS = (
 
 
 class TemplateOffline(unittest.TestCase):
-    def test_skill_is_manual_and_named(self):
+    def test_skill_loads_by_itself_and_is_named(self):
         text = (SKILL / "SKILL.md").read_text()
         head = text.split("---")[1]
         self.assertIn("name: demo-video", head)
-        self.assertIn("disable-model-invocation: true", head)
+        self.assertNotIn("disable-model-invocation", head)
 
     def test_ffmpeg_cannot_read_a_keypress_from_the_terminal(self):
         self.assertIn("'-nostdin'", (TEMPLATE / "record.mjs").read_text())
