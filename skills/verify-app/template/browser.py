@@ -58,10 +58,12 @@ CLICK_JS = """(() => {
 })()"""
 CLICK_TEXT_JS = """(() => {
   const text = %s;
+  // innerText is undefined on an SVG element, which still has textContent.
+  const squash = value => String(value ?? "").replace(/\\s+/g, " ").trim();
   const found = [...document.querySelectorAll(%s)].filter(el => {
     const r = el.getBoundingClientRect();
     return r.width && r.height && getComputedStyle(el).visibility !== "hidden"
-      && el.innerText.replace(/\\s+/g, " ").trim() === text;
+      && (squash(el.innerText) === text || squash(el.textContent) === text);
   });
   if (found.length !== 1 || found[0].disabled) return {count: found.length, point: null};
   found[0].scrollIntoView({block: "center", behavior: "instant"});
@@ -86,10 +88,48 @@ class JourneyError(Exception):
     """The journey is wrong whatever the page does. Not a PageError, so no poll waits it out."""
 
 
+# Runs in the page with the result as this, and returns a plain copy of it for the by-value fetch.
+# It throws, with UNRETURNABLE first in the message, on anything that fetch would mangle at any
+# depth: a DOM node, the window or a Map comes back as {}, a function or symbol is dropped, a cycle
+# is refused. Only a plain object (its prototype Object.prototype or null) or an array, holding
+# primitives or more of those, goes through. It walks the value rather than trusting CDP's subtype:
+# a NodeList can be labelled an array, and a reactive Proxy over a plain object (Vue, MobX) is
+# labelled proxy. It returns the copy, not this, because CDP sends a Proxy by value as {}; and the
+# copy holds exactly what the walk read, so a getter can't hand the fetch something else.
+UNRETURNABLE = "verify-unreturnable:"
+WALK_JS = """function () {
+  "use strict";
+  const open = new Set();
+  const fail = (what, path) => { throw new Error(MARK + what + (path ? " at " + path : "")); };
+  const walk = (value, path) => {
+    const kind = typeof value;
+    if (value === null || ["undefined", "boolean", "number", "string"].includes(kind)) return value;
+    if (kind !== "object") fail("a " + kind, path);
+    if (open.has(value)) fail("a cycle", path);
+    const array = Array.isArray(value);
+    if (!array && ![Object.prototype, null].includes(Object.getPrototypeOf(value))) {
+      fail("a " + Object.prototype.toString.call(value).slice(8, -1), path);
+    }
+    open.add(value);
+    const copy = array ? Array.from(value, (item, i) => walk(item, path + "[" + i + "]"))
+      : Object.fromEntries(Object.keys(value).map(key => [key, walk(value[key], path + "." + key)]));
+    open.delete(value);
+    return copy;
+  };
+  return walk(this, "");
+}""".replace("MARK", json.dumps(UNRETURNABLE))
+
+
+def thrown(details: dict) -> str:
+    """What a page exception says, from CDP's exceptionDetails."""
+    return details.get("exception", {}).get("description") or details.get("text") or "an exception"
+
+
 def unreturnable(expression: str, kind: str) -> JourneyError:
     shown = expression if len(expression) <= 80 else expression[:77] + "..."
-    return JourneyError(f"{shown!r} returned a {kind}, which the browser can't send back as a value: "
-                        "return a boolean, number or string from it instead (such as !!el or el.textContent)")
+    return JourneyError(f"{shown!r} returned {kind}, which the browser can't send back as a value: "
+                        "return a boolean, number or string from it instead (such as !!el or el.textContent), "
+                        "or a plain array or object holding only those")
 
 
 def find_browser() -> str:
@@ -261,26 +301,30 @@ class Page:
 
     def evaluate(self, expression: str):
         """The expression's value, awaited: a boolean, number, string or None, or a plain array or
-        object of those. Anything else is a JourneyError at once. Asked for by value, CDP sends a DOM
-        node, a function or a Map as {}, which reads as false, so a wait_for on one would only time
-        out; asked by reference first, it says what the result is."""
+        object holding only those, at any depth. Anything else, at the top or nested (a DOM node, a
+        function, a Map, a cycle), is a JourneyError at once. Asked for by value, CDP sends a DOM
+        node or a Map as {}, which reads as false at the top, so a wait_for on one would only time
+        out, and nested it hides in a value that looks fine. So the result is kept by reference and
+        WALK_JS checks it in the page before the by-value fetch."""
         result = self.call("Runtime.evaluate", {"expression": expression, "awaitPromise": True})
         if "exceptionDetails" in result:
-            details = result["exceptionDetails"]
-            raise PageError(details.get("exception", {}).get("description") or details.get("text"))
+            raise PageError(thrown(result["exceptionDetails"]))
         found = result["result"]
         if "objectId" not in found:  # a primitive, undefined or null: it came with its value
             return found.get("value")
         try:
-            if found["type"] != "object" or found.get("subtype") not in (None, "array"):
-                raise unreturnable(expression, found.get("className") or found.get("subtype") or found["type"])
             try:
-                reply = self.call("Runtime.callFunctionOn", {"functionDeclaration": "function () { return this }",
+                reply = self.call("Runtime.callFunctionOn", {"functionDeclaration": WALK_JS,
                                                              "objectId": found["objectId"], "returnByValue": True})
-            except PageError as exc:  # the window, or a cycle; anything else (a navigation) stays a PageError
+            except PageError as exc:  # a value the walk passed yet CDP refused; anything else (a navigation) stays a PageError
                 if "reference chain" in str(exc) or "by value" in str(exc):
-                    raise unreturnable(expression, found.get("className") or "object") from None
+                    raise unreturnable(expression, f"a {found.get('className') or 'object'}") from None
                 raise
+            if "exceptionDetails" in reply:
+                text = thrown(reply["exceptionDetails"])
+                if UNRETURNABLE not in text:  # the page's own code threw, such as a getter
+                    raise PageError(text)
+                raise unreturnable(expression, text.split(UNRETURNABLE, 1)[1].splitlines()[0])
             return reply["result"].get("value")
         finally:
             try:
@@ -308,11 +352,14 @@ class Page:
         self.press(*self.wait_for(CLICK_JS % json.dumps(selector), timeout, f"{selector} to be clickable"))
 
     def click_text(self, text: str, selector: str = "button, a, [role=button]", timeout: float = 30.0):
-        """Click the one visible element matching selector whose rendered text is exactly text, for a
-        control with no id, ARIA label or data attribute. Rendered text is innerText with each whitespace
-        run collapsed to one space and the ends trimmed, so a button showing a big "A" above a
-        small "Single letter" is "A Single letter". Zero matches, several, or one that stays disabled
-        until the timeout is a PageError naming the count."""
+        """Click the one visible element matching selector whose text is exactly text, for a control
+        with no id, ARIA label or data attribute. An element matches when text equals its rendered
+        text (innerText, which applies CSS such as text-transform) or its source text (textContent,
+        which an SVG element has and innerText lacks), each with every whitespace run collapsed to
+        one space and the ends trimmed, compared case-sensitively. So a button showing a big "A"
+        above a small "Single letter" is "A Single letter", and one whose source says "Export svg"
+        under text-transform: uppercase matches "Export svg" and "EXPORT SVG". Zero matches,
+        several, or one that stays disabled until the timeout is a PageError naming the count."""
         script = CLICK_TEXT_JS % (json.dumps(text), json.dumps(selector))
         deadline = time.monotonic() + timeout
         found, last = None, ""
@@ -344,9 +391,11 @@ class Page:
 
     def screenshot(self, name: str, timeout: float = 30.0) -> pathlib.Path:
         """Save <name>.png in the run's evidence folder and return its path. Anything in name outside
-        letters, digits, dot, dash and underscore becomes _, so a JOURNEYS key like "a/b" is safe."""
+        letters, digits, dot, dash and underscore becomes _, so a JOURNEYS key like "a/b" is safe. A
+        run folder deleted mid-run is made again."""
         shot = self.call("Page.captureScreenshot", {"format": "png"}, timeout)
         path = self.browser.out_dir / (re.sub(r"[^A-Za-z0-9._-]", "_", name) + ".png")
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(base64.b64decode(shot["data"]))
         return path
 

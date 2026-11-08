@@ -2,6 +2,7 @@
 import json
 import os
 import pathlib
+import shutil
 import sys
 import time
 
@@ -119,6 +120,34 @@ def smooth_click_text(ctx):
     result = ctx.page.wait_for("document.getElementById('result').textContent !== 'idle' &&"
                                " document.getElementById('result').textContent", 3, "the click to land")
     ctx.check(result == "far text", f"the click hit the text, not {result!r}")
+
+
+def click_target(ctx):
+    """One row of the click_text target table: CONFIG names the page, the text and what it sets."""
+    ctx.page.goto(CONFIG["path"])
+    ctx.page.click_text(CONFIG["text"], timeout=CONFIG["timeout"])
+    result = ctx.page.wait_for("document.getElementById('result').textContent !== 'idle' &&"
+                               " document.getElementById('result').textContent", 3, "the click to land")
+    ctx.check(result == CONFIG["expect"], f"the click set {result!r}")
+
+
+def evaluate_nested(ctx):
+    ctx.page.goto("/")
+    ctx.page.evaluate("[document.body]")
+    ctx.check(True, "unreachable: a DOM node inside an array can't come back by value")
+
+
+def wipe_evidence(ctx):
+    """What a test runner a journey starts may do to the folder it writes into."""
+    shutil.rmtree(ctx.evidence)
+    ctx.check(not ctx.evidence.exists(), "the run's folder is gone")
+
+
+def wipe_evidence_in_browser(ctx):
+    ctx.page.goto("/")
+    shutil.rmtree(ctx.evidence)
+    shot = ctx.page.screenshot("after-wipe")
+    ctx.check(shot.stat().st_size > 0, "the screenshot after the wipe was saved")
 
 
 def click_text_only(ctx):

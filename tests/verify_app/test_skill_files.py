@@ -166,18 +166,47 @@ class Files(unittest.TestCase):
             with self.subTest(line=line):
                 self.assertRegex(text, rf"(?m)^{re.escape(line)}$")
 
-    def test_the_evidence_dir_is_outside_the_dev_servers_watcher(self):
+    def test_the_evidence_dir_is_outside_the_watcher_and_every_test_runners_output(self):
+        """Playwright empties test-results/ at the start of each run, a spec a journey runs included."""
         generator = " ".join(read(os.path.join(SKILL, "SKILL.md")).split())
-        for phrase in ("git-ignored and not watched by the dev server",
-                       "Prefer a folder the dev tool ignores by default: for Vite, `test-results/`",
-                       "`**/test-results/**`", "ask the user before changing app config",
+        for phrase in ("git-ignored, not watched by the dev server, and no test runner's output folder",
+                       "In a repo with `node_modules`, use `node_modules/.cache/verify`",
+                       "outside every common dev-server watcher and Tailwind's source scan",
+                       "untouched by test runners", "A fresh `npm ci` deletes it",
+                       "Otherwise pick a git-ignored folder the dev server doesn't watch",
+                       "ask the user before changing app config",
+                       "Never a test runner's output folder: Playwright's `test-results/`",
+                       "`playwright-report/`", "`cypress/screenshots`", "`cypress/videos`",
                        "Read the first run's `app.log` for reload or rebuild lines",
                        "that start when the journey writes evidence", "move it by section 2's step 6"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, generator)
+        self.assertNotIn("Prefer a folder the dev tool ignores by default", generator)
+        self.assertNotIn("`**/test-results/**`", generator)
         recipe = " ".join(read(os.path.join(TEMPLATE, "SKILL.md")).split())
-        self.assertIn("The evidence dir must be outside the dev server's file watcher as well as git-ignored",
-                      recipe)
+        for phrase in ("The evidence dir must be outside the dev server's file watcher as well as git-ignored",
+                       "never be a test runner's output folder (Playwright's `test-results/`",
+                       "the runner empties it at the start of each run", "lost on a fresh `npm ci`"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, recipe)
+
+    def test_the_tier_source_covers_commit_all(self):
+        """git commit -a takes the working tree's tracked changes, which --cached doesn't show."""
+        recipe = " ".join(read(os.path.join(TEMPLATE, "SKILL.md")).split())
+        self.assertIn("For `git commit -a`, which also takes every tracked change in the working tree, use "
+                      "`git diff HEAD --name-only` instead", recipe)
+        self.assertIn("Otherwise not from `git diff` or `git status`", recipe)
+
+    def test_the_ignore_line_never_sweeps_the_users_gitignore_edits(self):
+        """git add .gitignore stages the whole file, so only a clean one is edited and committed."""
+        generator = " ".join(read(os.path.join(SKILL, "SKILL.md")).split())
+        for phrase in ("If it isn't ignored and `git diff --quiet HEAD -- .gitignore` exits 0 (no uncommitted "
+                       "changes there), add one line to `.gitignore` and tell the user",
+                       "If `.gitignore` has uncommitted changes, don't edit it: tell the user the line to add, "
+                       "and leave `.gitignore` out of the commit",
+                       "and when `git diff HEAD -- .gitignore` shows any change beyond the one line it added"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, generator)
 
     def test_the_measured_line_waits_for_the_first_run_without_a_marker(self):
         """verify.py refuses while any marker remains, and the times only exist after a run."""
@@ -193,18 +222,20 @@ class Files(unittest.TestCase):
                       "`duration_seconds`", generator)
         self.assertIn("`not measured yet`, which is not a marker", generator)
 
-    def test_click_text_is_documented_as_the_rendered_text(self):
+    def test_click_text_is_documented_as_the_rendered_or_source_text(self):
+        """innerText applies text-transform and is undefined on SVG; textContent covers both."""
         browser = read(os.path.join(TEMPLATE, "browser.py"))
         script = re.search(r'CLICK_TEXT_JS = """(.*?)"""', browser, re.S).group(1)
-        self.assertIn("innerText", script)
-        self.assertNotIn("textContent", script)
+        self.assertIn("squash(el.innerText) === text || squash(el.textContent) === text", script)
+        self.assertNotIn("el.innerText.", script, "innerText read without a guard throws on SVG")
         for name, text in (("browser.py", browser), ("journeys.py", read(os.path.join(TEMPLATE, "journeys.py"))),
                            ("generator", read(os.path.join(SKILL, "SKILL.md"))),
                            ("recipe", read(os.path.join(TEMPLATE, "SKILL.md")))):
             flat = " ".join(text.split())
             with self.subTest(name=name):
-                self.assertIn("rendered text", flat)
-                self.assertIn("innerText", flat)
+                for phrase in ("rendered text", "innerText", "source text", "textContent", "text-transform",
+                               "case-sensitive"):
+                    self.assertIn(phrase, flat)
                 self.assertRegex(flat, r"whitespace run collapsed to one space and the ends trimmed")
 
     def test_the_recipe_covers_a_change_no_journey_covers(self):

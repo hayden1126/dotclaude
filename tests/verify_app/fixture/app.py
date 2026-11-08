@@ -35,6 +35,21 @@ SMOOTH = b"""<!doctype html><title>smooth</title><style>html{scroll-behavior:smo
 <div style="height:4000px">spacer</div>
 <button onclick="document.getElementById('result').textContent = 'far text'">Far text</button>
 """
+# click_text targets. Each control sets #result, so a test can tell which one the click hit.
+SET = "onclick=\"document.getElementById('result').textContent = '%s'\""
+TARGETS = ("""<!doctype html><title>targets</title><p id="result">idle</p>
+<button %s>Plain</button>
+<button style="text-transform: uppercase" %s>Export svg</button>
+<button %s><span style="display:block">A</span><span style="display:block">B</span></button>
+<button %s>Twin</button><button %s>Twin</button>
+""" % (SET % "plain", SET % "transformed", SET % "stacked", SET % "twin 1", SET % "twin 2")).encode()
+# innerText is undefined on SVG elements, and the default selector matches an SVG <a> and role=button.
+SVG = ("""<!doctype html><title>svg</title><p id="result">idle</p>
+<svg width="300" height="50"><a href="#" onclick="event.preventDefault()"><text x="10" y="30">Svg link</text></a>
+<g role="button" %s><rect x="150" y="5" width="140" height="40" fill="#ccc"/>
+<text x="160" y="30">Svg button</text></g></svg>
+<button %s>Plain</button>
+""" % (SET % "svg button", SET % "plain")).encode()
 
 
 def spawn(handler: str = "signal.SIG_DFL",
@@ -74,8 +89,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.note()
         if self.path == "/":
             self.reply(500 if MODE == "bad_doctor" else 200, HOME, (("Content-Type", "text/html"),))
-        elif self.path == "/smooth":
-            self.reply(200, SMOOTH, (("Content-Type", "text/html"),))
+        elif self.path in ("/smooth", "/targets", "/svg"):
+            page = {"/smooth": SMOOTH, "/targets": TARGETS, "/svg": SVG}[self.path]
+            self.reply(200, page, (("Content-Type", "text/html"),))
         elif self.path == "/health":
             self.reply(200, b"ok")
         elif self.path == "/moved":

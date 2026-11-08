@@ -305,11 +305,17 @@ class Run:
         }
         self.write()
 
+    def save(self, name: str, text: str):
+        """Write one evidence file in one step. The run's folder is made again first: a test runner
+        a journey starts may empty the folder it sits in, and the verdict must still be written."""
+        self.dir.mkdir(parents=True, exist_ok=True)
+        temp = self.dir / f"{name}.tmp"
+        temp.write_text(text, encoding="utf-8")
+        os.replace(temp, self.dir / name)
+
     def write(self):
         """Replace the manifest in one step, so a killed run leaves a whole file saying "running"."""
-        temp = self.dir / "manifest.json.tmp"
-        temp.write_text(json.dumps(self.manifest, indent=2, default=str) + "\n", encoding="utf-8")
-        os.replace(temp, self.dir / "manifest.json")
+        self.save("manifest.json", json.dumps(self.manifest, indent=2, default=str) + "\n")
 
     def exited(self, wait: float = 0) -> int | None:
         """The app's exit status once it has exited."""
@@ -401,7 +407,7 @@ class Run:
             except (self.browser_mod.BrowserError, self.browser_mod.PageError) as exc:
                 error = error or exc
             self.network += ctx.tab.network()
-            (self.dir / "network.json").write_text(json.dumps(self.network, indent=2) + "\n", encoding="utf-8")
+            self.save("network.json", json.dumps(self.network, indent=2) + "\n")
         if hits or isinstance(error, (JourneyFailed, self.browser_mod.PageError)):
             detail = f"forbidden request: {', '.join(hits)}" if hits else str(error)
             row.update(outcome="failed", detail=detail)

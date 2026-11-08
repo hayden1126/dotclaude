@@ -53,6 +53,55 @@ SLOTS = {
 }
 
 
+# click_text targets on the fixture's /svg and /targets pages: (row, path, text, expected). expected
+# is the #result text the one matching control sets, or (exit code, the count the error names).
+# Rows marked * fail on 5eb0a9d's harness: an SVG element's innerText is undefined, so the filter
+# threw on every poll, and innerText alone missed the source text under text-transform.
+CLICK_TARGETS = (
+    ("* HTML button beside an SVG <a> and an SVG role=button", "/svg", "Plain", "plain"),
+    ("* SVG role=button by its textContent", "/svg", "Svg button", "svg button"),
+    ("* text-transform: uppercase button by its source text", "/targets", "Export svg", "transformed"),
+    ("text-transform: uppercase button by its rendered text", "/targets", "EXPORT SVG", "transformed"),
+    ("case-sensitive: neither rendered nor source text", "/targets", "export svg", (1, 0)),
+    ("two block children as one line", "/targets", "A B", "stacked"),
+    ("two equal matches", "/targets", "Twin", (1, 2)),
+    ("zero matches", "/targets", "Nobody", (1, 0)),
+)
+# Page.evaluate results: (row, expression, expected). expected is the value, or (JourneyError, text
+# its message names). Rows marked * changed from 5eb0a9d's harness, which checked only the top level
+# and trusted CDP's subtype. Deliberate gaps: NaN, Infinity, -0 and a BigInt at the top come back as
+# None (CDP sends them as unserializableValue); a getter that throws is a PageError, the page's own
+# error; a Proxy whose getPrototypeOf trap lies about a non-plain target is copied by its own keys.
+UNRETURNABLE = "JourneyError"
+EVALUATE_ROWS = (
+    ("boolean", "true", True),
+    ("number", "3", 3),
+    ("string", '"s"', "s"),
+    ("null", "null", None),
+    ("undefined", "undefined", None),
+    ("array of primitives", '[1, "a"]', [1, "a"]),
+    ("plain object", "({a: 1})", {"a": 1}),
+    ("nested plain object", "({a: {b: [1, {c: null}]}})", {"a": {"b": [1, {"c": None}]}}),
+    ("object with no prototype", "Object.assign(Object.create(null), {a: 1})", {"a": 1}),
+    ("promise of a plain value", "new Promise(done => setTimeout(() => done({a: 1}), 10))", {"a": 1}),
+    ("DOM node", "document.body", (UNRETURNABLE, "a HTMLBodyElement")),
+    ("* DOM node in an array", "[document.body]", (UNRETURNABLE, "a HTMLBodyElement at [0]")),
+    ("* DOM node in an object", "({el: document.body})", (UNRETURNABLE, "a HTMLBodyElement at .el")),
+    ("* NodeList", 'document.querySelectorAll("p")', (UNRETURNABLE, "a NodeList")),
+    ("function", "() => 1", (UNRETURNABLE, "a function")),
+    ("* function in an object", "({f: () => 1})", (UNRETURNABLE, "a function at .f")),
+    ("symbol", "Symbol('s')", (UNRETURNABLE, "a symbol")),
+    ("Map", "new Map([[1, 2]])", (UNRETURNABLE, "a Map")),
+    ("* Date in an array", "[new Date(0)]", (UNRETURNABLE, "a Date at [0]")),
+    ("window", "window", (UNRETURNABLE, "a Window")),
+    ("cyclic object", "(() => { const o = {a: 1}; o.self = o; return o })()", (UNRETURNABLE, "a cycle at .self")),
+    ("* Proxy over a plain object", "new Proxy({a: 1}, {})", {"a": 1}),
+    ("* Proxy over a plain object, nested", "({p: new Proxy({a: [1]}, {})})", {"p": {"a": [1]}}),
+    ("* Proxy over an array", "new Proxy([1, 2], {})", [1, 2]),
+    ("Proxy over a DOM node", "new Proxy(document.body, {})", (UNRETURNABLE, "a HTMLBodyElement")),
+)
+
+
 def load(path: pathlib.Path):
     sys.dont_write_bytecode = True  # no __pycache__ in the template folder that gets copied
     spec = importlib.util.spec_from_file_location(path.stem, path)
@@ -303,6 +352,14 @@ class Proved(Case):
                                              journeys=["home", "wrong_expectation"])
         self.assertEqual(code, 0)
         self.assertEqual([j["name"] for j in manifest["journeys"]], ["home"])
+
+    def test_a_run_folder_deleted_mid_run_is_made_again(self):
+        """A Playwright spec a journey runs empties its output folder: the verdict must still land."""
+        code, manifest, output = self.run_harness(journeys=["wipe_evidence"])
+        self.assertEqual(code, 0, output)
+        self.assertEqual([(j["name"], j["outcome"]) for j in manifest["journeys"]], [("wipe_evidence", "passed")])
+        self.assertEqual(manifest["verdict"], {"outcome": "proved", "exit_code": 0})
+        self.assert_clean(manifest)
 
     def test_doctor_does_not_follow_a_redirect(self):
         code, manifest, _ = self.run_harness(doctor=[["/moved", 302, ""]])
@@ -751,7 +808,7 @@ class RealBrowser(Case):
     def test_an_expression_the_browser_cannot_return_fails_fast_with_exit_2(self):
         """A DOM node comes back by value as {}, which reads as false, so wait_for used to time out
         and blame the app (exit 1). The journey is what is wrong."""
-        for journey in ("wait_node", "evaluate_window"):
+        for journey in ("wait_node", "evaluate_window", "evaluate_nested"):
             with self.subTest(journey=journey):
                 shutil.rmtree(self.repo / "evidence", ignore_errors=True)
                 code, manifest, output = self.run_harness(journeys=[journey], browser=True)
@@ -763,6 +820,32 @@ class RealBrowser(Case):
                 self.assertLess(row["seconds"], 10, "it must fail at once, not wait out wait_for's 30 s")
                 self.assertIn("boolean, number or string", manifest["failure"])
                 self.assert_clean(manifest)
+
+    def test_click_text_target_table(self):
+        """Every row of CLICK_TARGETS through the whole harness, so a failure shows its exit code."""
+        for row, path, text, expected in CLICK_TARGETS:
+            with self.subTest(row=row):
+                shutil.rmtree(self.repo / "evidence", ignore_errors=True)
+                code, manifest, output = self.run_harness(
+                    journeys=["click_target"], browser=True, path=path, text=text,
+                    expect=expected if isinstance(expected, str) else None,
+                    timeout=5 if isinstance(expected, str) else 0.5)
+                journey = manifest["journeys"][0]
+                if isinstance(expected, str):
+                    self.assertEqual((code, journey["outcome"]), (0, "passed"), journey["detail"] or output)
+                else:
+                    exit_code, count = expected
+                    self.assertEqual((code, journey["outcome"]), (exit_code, "failed"), output)
+                    self.assertIn(f"{count} visible elements", journey["detail"])
+                    self.assertIn(repr(text), journey["detail"])
+                self.assert_clean(manifest)
+
+    def test_a_run_folder_deleted_mid_run_is_made_again_for_a_screenshot(self):
+        code, manifest, output = self.run_harness(journeys=["wipe_evidence_in_browser"], browser=True)
+        self.assertEqual(code, 0, output)
+        self.assertEqual(manifest["journeys"][0]["outcome"], "passed", manifest["journeys"][0]["detail"])
+        self.assertTrue((self.run_dir() / "after-wipe.png").stat().st_size)
+        self.assertTrue(json.loads((self.run_dir() / "network.json").read_text(encoding="utf-8")))
 
     def test_clicks_wait_out_a_smooth_scroll(self):
         code, manifest, output = self.run_harness(journeys=["smooth_click", "smooth_click_text"], browser=True)
@@ -817,6 +900,59 @@ class RealBrowser(Case):
         self.assertFalse(pathlib.Path((self.state / "browser.profile").read_text()).exists(),
                          "Browser.close removes its profile; the pipe closing at exit would not")
         self.assert_clean(self.manifest())
+
+
+class EvaluateTable(unittest.TestCase):
+    """Every row of EVALUATE_ROWS in one real browser tab. How a JourneyError reaches exit 2 is
+    test_an_expression_the_browser_cannot_return_fails_fast_with_exit_2's part."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.browser_mod = load(TEMPLATE / "browser.py")
+        try:
+            binary = cls.browser_mod.find_browser()
+        except cls.browser_mod.NoBrowser as exc:
+            print(f"verify_app: skipping browser cases: {exc}", file=sys.stderr)
+            raise unittest.SkipTest(str(exc))
+        cls.top = pathlib.Path(tempfile.mkdtemp(prefix="verify-app-evaluate-")).resolve()
+        cls.browser = cls.browser_mod.Browser(binary, cls.top, cls.top)
+        cls.page = cls.browser_mod.Page(cls.browser, "about:blank")
+        cls.page.goto("data:text/html,<p>one</p><p>two</p>")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.browser.close()
+        shutil.rmtree(cls.top, ignore_errors=True)
+
+    def test_every_row(self):
+        for row, expression, expected in EVALUATE_ROWS:
+            with self.subTest(row=row):
+                if isinstance(expected, tuple) and expected[0] == UNRETURNABLE:
+                    with self.assertRaises(self.browser_mod.JourneyError) as caught:
+                        self.page.evaluate(expression)
+                    self.assertIn(f"returned {expected[1]},", str(caught.exception))
+                    self.assertIn("return a boolean, number or string", str(caught.exception))
+                else:
+                    self.assertEqual(self.page.evaluate(expression), expected)
+
+    def test_the_handle_is_released_on_every_path(self):
+        """A kept handle pins its object in the page for the tab's life."""
+        released = []
+        real = self.page.call
+
+        def spy(method, params=None, timeout=30.0):
+            if method == "Runtime.releaseObject":
+                released.append(params["objectId"])
+            return real(method, params, timeout)
+
+        with mock.patch.object(self.page, "call", spy):
+            for _, expression, expected in EVALUATE_ROWS:
+                try:
+                    self.page.evaluate(expression)
+                except self.browser_mod.JourneyError:
+                    pass
+        by_reference = [row for row in EVALUATE_ROWS if row[1] not in ("true", "3", '"s"', "null", "undefined")]
+        self.assertEqual(len(released), len(by_reference))
 
 
 if __name__ == "__main__":

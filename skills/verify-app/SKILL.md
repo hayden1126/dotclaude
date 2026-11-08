@@ -58,25 +58,38 @@ The harness goes in a repo folder, because sandboxed Bash can write there and ca
    relative to the repo root. The recipe's Measured line says `not measured yet`, which is not a
    marker: section 3 replaces it.
 3. Selectors: an id, an ARIA label or a data attribute first. A control with none is clicked by its
-   visible text with `ctx.page.click_text`, which compares the rendered text: `innerText` with each
-   whitespace run collapsed to one space and the ends trimmed, so a button showing a big "A" above
-   a small "Single letter" is `"A Single letter"`. Never by position alone, not even with a text
-   check.
+   visible text with `ctx.page.click_text`. It matches when the text equals either the rendered
+   text (`innerText`, which applies CSS such as `text-transform`) or the source text
+   (`textContent`), each with every whitespace run collapsed to one space and the ends trimmed,
+   case-sensitive, and it needs exactly one visible match. So a button showing a big "A" above a
+   small "Single letter" is `"A Single letter"`, and one whose source says "Export svg" under
+   `text-transform: uppercase` matches `"Export svg"` and `"EXPORT SVG"`. Never by position alone,
+   not even with a text check.
    Adding attributes to product code is out of scope here: note the gap for the user instead.
 4. Before a journey's first click, wait for a sign the client is live with `ctx.page.wait_for`: a
    request the client makes (`performance.getEntriesByName(...)`), or a value only client code
    sets. On a server-rendered page a click before hydration is lost without an error. The
-   expression returns a boolean, number or string (`!!el`, not `el`): one returning a DOM node is a
-   journey bug, exit 2.
+   expression returns a boolean, number or string (`!!el`, not `el`): one returning a DOM node, at
+   the top or inside an array or object, is a journey bug, exit 2.
 5. Leave `ready_timeout` generous (the template's 300) for the first run, so a slow cold boot is
    measured rather than failed.
-6. Pick an evidence dir that is git-ignored and not watched by the dev server. Evidence written
-   where the watcher looks sets off reloads that slow the run and flood `app.log`. Prefer a folder
-   the dev tool ignores by default: for Vite, `test-results/` (its default watcher skips
-   `**/test-results/**`, as Playwright setups do). Otherwise name the watcher config (such as
-   `server.watch.ignored` in `vite.config.ts`) and ask the user before changing app config. Check
-   git with `git check-ignore -q <dir>/probe` (exit 0 means ignored); if it isn't, add one line to
-   `.gitignore` and tell the user.
+6. Pick an evidence dir that is git-ignored, not watched by the dev server, and no test runner's
+   output folder. Evidence written where the watcher looks sets off reloads that slow the run and
+   flood `app.log`. A test runner empties its output folder at the start of each run, which loses
+   past evidence and, when a journey runs a spec, the current run's.
+   - In a repo with `node_modules`, use `node_modules/.cache/verify`: git-ignored, outside every
+     common dev-server watcher and Tailwind's source scan, and untouched by test runners. A fresh
+     `npm ci` deletes it, which is fine for evidence.
+   - Otherwise pick a git-ignored folder the dev server doesn't watch. If every candidate is
+     watched, name the watcher config (such as `server.watch.ignored` in `vite.config.ts`) and ask
+     the user before changing app config.
+   - Never a test runner's output folder: Playwright's `test-results/` (its default `outputDir`) or
+     `playwright-report/`, Cypress's `cypress/screenshots` or `cypress/videos`.
+
+   Check git with `git check-ignore -q <dir>/probe` (exit 0 means ignored). If it isn't ignored and
+   `git diff --quiet HEAD -- .gitignore` exits 0 (no uncommitted changes there), add one line to
+   `.gitignore` and tell the user. If `.gitignore` has uncommitted changes, don't edit it: tell the
+   user the line to add, and leave `.gitignore` out of the commit.
 
 ## 3. Prove it once
 
@@ -118,7 +131,9 @@ git commit --only -m "<message>" -- .claude/skills/verify <harness> .gitignore
 git diff --cached --name-status | diff "$TMPDIR/staged-before" -
 ```
 
-Drop `.gitignore` from both lines when section 2 left it unchanged. The last line prints nothing
+Drop `.gitignore` from both lines when section 2 left it unchanged, and when
+`git diff HEAD -- .gitignore` shows any change beyond the one line it added: `git add` stages the
+whole file, so it would sweep the user's own edits into this commit. The last line prints nothing
 when the staged set is unchanged. For upkeep later, follow
 `<skill dir>/MAINTAIN.md`.
 

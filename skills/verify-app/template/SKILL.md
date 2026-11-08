@@ -14,8 +14,9 @@ Bash can write it; this file is the only part kept here. Edit `journeys.py` ther
 ## When to run
 
 Choose the tier from the paths this commit will contain: `git diff --cached --name-only`, plus any
-paths named on the commit. Not from `git diff` or `git status`, which show the working tree, and not
-from the whole index.
+paths named on the commit. For `git commit -a`, which also takes every tracked change in the working
+tree, use `git diff HEAD --name-only` instead. Otherwise not from `git diff` or `git status`, which
+show the working tree, and not from the whole index.
 
 | Tier | When | What runs |
 |---|---|---|
@@ -73,10 +74,10 @@ an internal setter. A journey that runs no `ctx.check` is not judged (exit 2). `
 names what a run must never send (a paid API, an email, a publish); a hit fails the journey.
 
 Find a control by its id, ARIA label or a data attribute. One with none of those is clicked by its
-visible text with `ctx.page.click_text`, which fails unless exactly one visible match says it. The
-text it compares is the rendered text: `innerText` with each whitespace run collapsed to one space
-and the ends trimmed. Never
-by position alone. Before the first click, wait with `ctx.page.wait_for` for a sign the client is
+visible text with `ctx.page.click_text`, which fails unless exactly one visible element matches. An
+element matches when the text equals its rendered text (`innerText`, which applies CSS such as
+`text-transform`) or its source text (`textContent`), each with every whitespace run collapsed to
+one space and the ends trimmed, case-sensitive. Never by position alone. Before the first click, wait with `ctx.page.wait_for` for a sign the client is
 live (a request the client makes, or a value only client code sets): `goto` waits for the load
 event, and on a server-rendered page a click before hydration is lost without an error.
 
@@ -120,7 +121,11 @@ manifest's `token`. Evidence is never deleted by cleanup.
 - Needs Python 3.10 or later, git, and `chrome-headless-shell` for browser journeys (`VERIFY_CHROME`
   names one).
 - The evidence dir must be outside the dev server's file watcher as well as git-ignored: evidence
-  written where the watcher looks sets off reloads that slow the run and flood `app.log`.
+  written where the watcher looks sets off reloads that slow the run and flood `app.log`. It must
+  never be a test runner's output folder (Playwright's `test-results/` or `playwright-report/`,
+  Cypress's `cypress/screenshots` or `cypress/videos`): the runner empties it at the start of each
+  run, a spec a journey runs included. Under `node_modules/.cache/` it is lost on a fresh `npm ci`.
+  A run folder deleted mid-run is made again at the next write, but what it held is gone.
 - <fill: app-specific edges, such as a lock file left after a SIGKILL, or "none">
 
 <!-- Adapted from pstack's create-verification-skill and maintain-verification-skill
