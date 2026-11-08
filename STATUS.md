@@ -181,11 +181,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
 
   Backlog:
-  - **Session panel (name TBD)** (Hayden, 2026-11-08): a live, persistent panel beside each
-    session with what waits on Hayden and reference items (paths, notes to send), ticked by him
-    and kept by Claude, surviving `/pass` and handoffs, so replies stop reprinting the "Waiting
-    on you" list. Design interview in progress; its VISION.md is private, in Hayden's scratch
-    (`session-panel`).
+  - **Tray** (Hayden, 2026-11-08): a Claude Code mod pane beside each session holding what
+    waits on Hayden and the info to act on it (copy a file's contents or a note, a check Claude
+    runs at its next wake), sorted by step, kept by Claude, surviving `/pass`, so replies stop
+    reprinting the "Waiting on you" list. Interview ended 2026-11-08; its VISION.md (v1 and v2
+    scope, open problems) is private, in Hayden's scratch (`session-panel`). Next: a lane after
+    Nov 16, opening with a spike of the mod pane; v1 runs in the lead's tab first.
   - **demo-video upgrade:** in lane demo-av (2026-11-07).
   - **`run_turn` counts dying processes as strays** (medium; found by lane license's trial,
     2026-11-07; lane practices owns the fix, in its next PR): `tests/practices/run.py`'s
