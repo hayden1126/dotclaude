@@ -2,12 +2,14 @@
 """PreToolUse(Bash): deny a heavy gate once until the long-runs skill is loaded.
 
 Sessions skip that skill and plan long runs without it. A deny at the command is the one point
-every such session passes, but a deny that fires in most sessions gets ignored: "the second
-suite of a session", counted over 45 days of transcripts, would have fired in 1,821 of 2,549
-sessions that ran a gate or a PR command. So it fires only on:
+every such session passes, but a deny that fires in most sessions gets ignored. Replayed over
+45 days of transcripts, the triggers below fire in 161 of 443 real sessions that ran a gate or a
+PR command (.lane/artifacts/replay.py in the guards lane). It fires only on:
 
-  - heavy gates, at first use: `lane trial`, `lane lock <name> --` for any name but install (the
-    lead's post-merge install is no test run), and the repo's own list;
+  - heavy gates, at first use: `lane trial`, `lane lock suite` or `gate`, and the repo's own
+    list. Other locks count only when a repo lists them (`lane lock quiet`, say): every lock
+    but install would have fired in 296 of 443 real sessions, and the lock name doesn't say
+    whether the run is long;
   - a second DIFFERENT whole suite in a session, from the generic table below. A rerun never
     counts, nor does a narrowed run (one test file, `::`, a name filter).
 
@@ -48,6 +50,7 @@ FROM_PRACTICES = ("ADD_VERBS", "Budget", "CMD_MAX", "CONFIG_MAX", "Transcripts",
                   "load_config", "log", "names_a_call", "read_toml", "state_dir")
 
 SKILL = "long-runs"
+LOCKS = ("suite", "gate")
 RULE_ID = "LONG-RUNS"
 GATES_MAX = 50
 GATE_LEN_MAX = 200
@@ -146,7 +149,8 @@ def is_heavy(name, args, gates):
                     lock = before[i]
                     break
                 i += 1
-            return lock not in (None, "install")
+            if lock in LOCKS:
+                return True
     return any(name == os.path.basename(g[0]) and args[:len(g) - 1] == g[1:] for g in gates)
 
 

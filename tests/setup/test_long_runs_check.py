@@ -6,7 +6,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+from unittest import mock
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HOOK = os.path.join(REPO, "hooks", "long-runs-check.sh")
@@ -80,14 +82,15 @@ class HeavyGates(Base):
         for n, command in enumerate((
                 'lane trial --run "python3 -m unittest"', "lane lock suite -- ./gate.sh",
                 "lane lock --wait 30 gate -- ./gate.sh", "timeout 900 lane trial --run x",
-                "cd sub && lane lock e2e -- npm run e2e")):
+                "cd sub && lane lock suite -- npm run e2e")):
             with self.subTest(command=command):
                 reason = self.pre(command, session=f"s{n}")
                 self.assertIn("long-runs", reason)
                 self.assertIn("Skill tool", reason)
 
-    def test_the_install_lock_and_lookups_never_deny(self):
-        for command in ("lane lock install -- ./setup.sh", "lane lock --help", "lane ls",
+    def test_other_locks_and_lookups_never_deny(self):
+        for command in ("lane lock install -- ./setup.sh", "lane lock quiet -- ./run.sh",
+                        "lane lock --help", "lane ls",
                         "lane note 'ran lane trial'", "grep 'lane trial' docs/lanes.md",
                         "echo pytest", "git log --grep pytest"):
             with self.subTest(command=command):
@@ -121,6 +124,11 @@ class HeavyGates(Base):
         self.assertIsNone(self.pre("lane trial --run x"))
 
     def test_a_subagent_is_left_alone(self):
+        # With its own transcript present, so only the subagent rule can allow this.
+        path = self.transcript[:-len(".jsonl")] + "/subagents/agent-agent-1.jsonl"
+        os.makedirs(os.path.dirname(path))
+        with open(path, "w") as f:
+            f.write(json.dumps({"type": "permission-mode", "permissionMode": "default"}) + "\n")
         self.assertIsNone(self.pre("lane trial --run x", agent_id="agent-1"))
 
     def test_no_skill_installed_means_no_deny(self):
@@ -187,6 +195,10 @@ class RepoList(Base):
         self.assertIn("long-runs", self.pre("uv run nightly", session="b"))
         self.assertIsNone(self.pre("uv run other", session="c"))
 
+    def test_a_repo_can_list_one_of_its_locks(self):
+        self.config_toml('[long_runs]\ngates = ["lane lock quiet"]\n')
+        self.assertIn("long-runs", self.pre("lane lock quiet -- ./run.sh"))
+
     def test_the_list_only_adds(self):
         self.config_toml('[long_runs]\ngates = []\n')
         self.assertIn("long-runs", self.pre("lane trial --run x"))
@@ -207,6 +219,24 @@ class OffSwitch(Base):
     def test_a_project_config_cannot_turn_it_off(self):
         self.config_toml('enabled = false\ndisable = ["LONG-RUNS"]\n')
         self.assertIn("long-runs", self.pre("lane trial --run x"))
+
+
+    def test_the_practices_off_switch_covers_it(self):
+        sys.path.insert(0, os.path.join(REPO, "hooks"))
+        self.addCleanup(sys.path.remove, os.path.join(REPO, "hooks"))
+        import long_runs_check as L  # noqa: PLC0415
+        event = {"session_id": SID, "transcript_path": self.transcript, "cwd": self.proj,
+                 "hook_event_name": "PreToolUse", "tool_name": "Bash",
+                 "tool_input": {"command": "lane trial --run x"}, "tool_use_id": "b-now"}
+        base = {"enabled": True, "disable": set(), "helpers": ()}
+        for cfg, denied in ((base, True), ({**base, "enabled": False}, False),
+                            ({**base, "disable": {"LONG-RUNS"}}, False),
+                            ({**base, "disable": {"long-runs:LONG-RUNS"}}, False)):
+            with self.subTest(cfg=cfg), mock.patch.dict(os.environ, self.env, clear=True), \
+                    mock.patch.object(L.PC, "START", time.monotonic()), \
+                    mock.patch.object(L.PC, "load_config", return_value=cfg):
+                shutil.rmtree(self.state, ignore_errors=True)
+                self.assertEqual(L.check(event) is not None, denied)
 
 
 class Failures(Base):
