@@ -49,7 +49,7 @@ Measured: full <fill: seconds from a manifest's duration_seconds>, quick <fill: 
 |---|---|
 | 0 | Proved |
 | 1 | The app failed: boot crash, ready timeout, doctor failure, journey failure |
-| 2 | Could not judge: no browser, port held, preflight refused, bad config, the browser process itself died, or the run was interrupted. A boot crash is never exit 2 |
+| 2 | Could not judge: no browser, port held, preflight refused, bad config, the browser itself died or never opened a tab, or the run was interrupted. A boot crash is never exit 2 |
 | 3 | Cleanup failed. Wins over 0, 1 and 2; the manifest keeps both results |
 
 ## Doctor

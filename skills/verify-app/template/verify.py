@@ -459,7 +459,7 @@ class Run:
                 self.manifest["sigkill_used"] = sig == signal.SIGKILL
                 try:
                     os.killpg(group, sig)
-                except ProcessLookupError:
+                except (ProcessLookupError, PermissionError):  # gone, or not ours to signal: the scan below lists it
                     pass
                 settled(members, grace)
         self.manifest["swept"] = strays()
@@ -468,7 +468,7 @@ class Run:
                 self.manifest["sigkill_used"] |= sig == signal.SIGKILL
                 try:
                     os.kill(process["pid"], sig)
-                except ProcessLookupError:
+                except (ProcessLookupError, PermissionError):  # gone, or not ours to signal: the scan below lists it
                     pass
             settled(strays, grace)
         self.exited()

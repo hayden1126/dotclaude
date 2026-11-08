@@ -2,6 +2,7 @@
 git repo laid out as the generator leaves an app repo (the harness in tools/verify/, the recipe in
 .claude/skills/verify/), picks a free port and runs verify.py as a subprocess. Signal
 tests use Popen on the pid directly, never a shell's `&`, which makes children ignore SIGINT."""
+import itertools
 import importlib.util
 import json
 import os
@@ -35,7 +36,7 @@ SLOTS = {
         "<fill: a stable selector>",
         "<fill: a JS expression true once the result shows>",
         "<fill: a JS expression for an exact value, such as a row count>",
-        "<fill: the exact value it must equal, such as 3>",
+        "<fill: the exact value it must equal; a number replaces the quotes too, such as 3>",
         "<fill: feature name>",
     ),
     "SKILL.md": (
@@ -595,11 +596,12 @@ class Cleanup(Case):
         self.assert_clean(manifest)
 
     def test_a_process_gone_before_its_signal_does_not_stop_cleanup(self):
-        """os.kill and os.killpg raise ProcessLookupError for a target that exited after the scan."""
+        """os.kill and os.killpg raise ProcessLookupError for a target that exited after the scan, and
+        PermissionError for one another user owns (a setuid helper in the group): cleanup goes on."""
         verify = load(TEMPLATE / "verify.py")
         ghost = {"pid": 1 << 30, "name": "ghost", "cwd": str(self.repo), "outside_repo": False}
-        for where in ("group", "stray"):
-            with self.subTest(where=where):
+        for where, error in itertools.product(("group", "stray"), (ProcessLookupError, PermissionError)):
+            with self.subTest(where=where, error=error.__name__):
                 scans = []
 
                 def scan(token, group, root):
@@ -610,7 +612,7 @@ class Cleanup(Case):
                 run.spec = types.SimpleNamespace(APP={"stop_timeout": 0.2})
                 run.app = types.SimpleNamespace(pid=1 << 30, wait=lambda timeout: 0) if where == "group" else None
                 run.token, run.port, run.manifest = "ghost-token", self.port, {"sigkill_used": False}
-                gone_error = mock.Mock(side_effect=ProcessLookupError)
+                gone_error = mock.Mock(side_effect=error)
                 with mock.patch.object(verify, "carriers", scan), \
                         mock.patch.object(verify.os, "kill", gone_error), \
                         mock.patch.object(verify.os, "killpg", gone_error):

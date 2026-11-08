@@ -107,6 +107,9 @@ class Files(unittest.TestCase):
             for code, meaning in ((0, "Proved"), (1, "The app failed"), (2, "Could not judge"),
                                   (3, "Cleanup failed")):
                 self.assertRegex(text, rf"(?m)^\| {code} \| {meaning}")
+        rows = [re.findall(r"(?m)^\| [0-3] \|.*$", text)
+                for text in (recipe, read(os.path.join(TEMPLATE, "verify.py")))]
+        self.assertEqual(rows[0], rows[1], "the recipe's exit table must match verify.py's word for word")
 
     def test_the_template_ships_with_fill_markers(self):
         for name in ("journeys.py", "SKILL.md"):
