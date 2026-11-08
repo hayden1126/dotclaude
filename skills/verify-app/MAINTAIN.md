@@ -12,7 +12,8 @@ End with exactly one, and say which:
 - **clean:** every feature was read and driven live, and nothing needs changing. No commit.
 - **changed:** proven corrections to the verify skill, a refresh from the template included, committed
   only with the user's say.
-- **blocked:** the pass could not finish, or a fix could not be proved. Say exactly what blocked it.
+- **blocked:** the pass stopped in step 1, a run failed that no fix of the skill can clear (the app
+  is broken), or a fix or refresh could not be proved. Say exactly what blocked it.
 
 ## Edit scope
 
@@ -33,7 +34,8 @@ takes the file for binary (ugrep can) prints no matches and no error.
 1. **Copies.** The harness folder is the one the recipe's Launch commands name. Run
    `(cd <harness> && sha256sum -c CHECKSUMS)`, in a subshell so the session's working directory
    stays at the repo root: a bare `cd` moves it for every later call, and every path in this pass is
-   root-relative. A file that no longer matches its own list was edited by hand: report it and stop,
+   root-relative. Each stop in this step ends the pass blocked (step 6's first row). A file that no
+   longer matches its own list was edited by hand: report it and stop,
    since the refresh would overwrite the edit. Then compare `CHECKSUMS` with
    `<skill dir>/template/CHECKSUMS`. A list that differs means one side is newer, and
    `HARNESS_VERSION` says which:
@@ -53,7 +55,7 @@ takes the file for binary (ugrep can) prints no matches and no error.
       (cd <harness> && sha256sum -c CHECKSUMS)
       ```
 
-      On a mismatch, stop and report it. If the permission check reads the `cp` as a write to the
+      On a mismatch, stop and report it, naming the four files already replaced. If the permission check reads the `cp` as a write to the
       skill folder, copy each file with `cat <skill dir>/template/<file> > <harness>/<file>`.
    2. Re-check `journeys.py` against `<skill dir>/template/journeys.py`, and the recipe against
       `<skill dir>/template/SKILL.md`, for what the template gained since this harness was copied:
@@ -66,8 +68,9 @@ takes the file for binary (ugrep can) prints no matches and no error.
       (paths, counts, file names), take the template's general wording, and drop the duplicate.
    3. After steps 1.1 and 1.2, re-prove on the new harness, as the skill's section 3 does: a full
       run (the first run of this pass), one planted wrong value in a `ctx.check` (exit 1 with its
-      message) and its revert (exit 0), and a `--quick` run. Keep each run's manifest path for
-      step 6. When the full run's `app.log` shows reload or rebuild lines (search it with `grep -a`),
+      message) and its revert (exit 0), and a `--quick` run. If any of these differs (the planted
+      value exits 0, or a run fails), the refresh is unproved: go to step 6, where it ends blocked.
+      Keep each run's manifest path for step 6. When the full run's `app.log` shows reload or rebuild lines (search it with `grep -a`),
       run the skill's section 3 reload check: confirm the trigger with the dev tool's debug output,
       set through `APP["env"]` for one run (for Vite, `{"DEBUG": "vite:hmr"}`), then take the
       setting out again, and move nothing before the trigger is known. Then go on with step 2.
@@ -87,18 +90,20 @@ takes the file for binary (ugrep can) prints no matches and no error.
      expected value in the changed `ctx.check` and see exit 1 with its message before reverting it.
    - The app works but the journey can't drive it: a harness gap. Fix the journey, by the
      selector rule in the skill's section 2.
-   - The app itself is broken: report it to the user with the manifest path. Never write around it
+   - The app itself is broken: report it to the user with the manifest path; the pass ends blocked.
+     Never write around it
      in the recipe or the journey.
    - The app works but logs errors, such as a hydration mismatch: an app warning. Report it to the
      user with the log line from `app.log`, and record it as an app-specific Known edge if it
      recurs across runs. Never fail a run on it, and never hide it: not from the report, and not by
      filtering the log.
-6. **Finish.** Every pass ends in one row of this table; find yours before doing anything else.
+6. **Finish.** Every pass ends in one row of this table: take the first row that matches, top to
+   bottom, before doing anything else.
 
    | Where the pass stands | What step 6 does | Outcome |
    |---|---|---|
-   | A run failed and step 5 has nothing to fix (the app is broken), or a fix could not be proved | No more runs, no Measured line, no commit. Report the failing manifest and list every uncommitted edit; the user decides what to keep | blocked |
-   | Nothing edited, and the timeout check below raises nothing | Report every feature's result and this pass's times; edit nothing | clean |
+   | Step 1 stopped; or a run failed and step 5 has nothing to fix (the app is broken); or a fix or refresh could not be proved (its planted value never exited 1) | No more runs, no Measured line, no commit. Report what stopped it and its manifest, and list every file changed or replaced; the user decides what to keep | blocked |
+   | Nothing edited, every run passed, and the timeout check below raises nothing | Report every feature's result and this pass's times; edit nothing | clean |
    | Something edited (a refresh, a fix, a Not covered row, a timeout raise) | The steps below, in order | changed |
 
    For changed:

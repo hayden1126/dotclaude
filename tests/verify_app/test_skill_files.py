@@ -346,8 +346,8 @@ class Files(unittest.TestCase):
     def test_a_clean_pass_edits_nothing(self):
         """Clean means no commit, so a clean pass can't leave the Measured line edited and uncommitted."""
         flat = " ".join(read(os.path.join(SKILL, "MAINTAIN.md")).split())
-        self.assertIn("| Nothing edited, and the timeout check below raises nothing | Report every feature's "
-                      "result and this pass's times; edit nothing | clean |", flat)
+        self.assertIn("| Nothing edited, every run passed, and the timeout check below raises nothing | Report "
+                      "every feature's result and this pass's times; edit nothing | clean |", flat)
         self.assertIn("(except the Measured line, which step 6 writes whole)", flat)
         step6 = flat[flat.index("6. **Finish.**"):flat.index("## Commit")]
         order = [step6.index(p) for p in ("Check `ready_timeout`", "Run the full tier once more",
@@ -361,7 +361,13 @@ class Files(unittest.TestCase):
         rows = re.findall(r"\| ([^|]+) \| ([^|]+) \| (blocked|clean|changed) \|", step6)
         self.assertEqual([r[2] for r in rows], ["blocked", "clean", "changed"])
         self.assertIn("No more runs, no Measured line, no commit", rows[0][1])
-        self.assertIn("list every uncommitted edit; the user decides what to keep", rows[0][1])
+        self.assertIn("list every file changed or replaced; the user decides what to keep", rows[0][1])
+        for stop in ("Step 1 stopped", "the app is broken", "a fix or refresh could not be proved"):
+            self.assertIn(stop, rows[0][0])
+        self.assertIn("take the first row that matches, top to bottom", step6)
+        self.assertIn("Each stop in this step ends the pass blocked", flat)
+        self.assertIn("the refresh is unproved: go to step 6, where it ends blocked", flat)
+        self.assertIn("report it to the user with the manifest path; the pass ends blocked", flat)
         self.assertIn("go back to step 5 only when it has a new fix to make; otherwise the pass is blocked", step6)
 
     def test_no_step_moves_the_sessions_working_directory(self):
