@@ -350,8 +350,9 @@ class Files(unittest.TestCase):
         self.assertIn("Ask these in order and stop at the first that applies", step6)
         order = [step6.index(p) for p in ("**Clean?**", "**Blocked?**", "**Changed.**",
                                           "If a first ready run exists already, check `ready_timeout`",
-                                          "The final runs, on the final files",
-                                          "If no first ready run existed at step 6.3.1",
+                                          "one full run; then, if step 6.3.1 had no first ready run",
+                                          "repeat the full run once on the raised file; then one `--quick` run",
+                                          "then open the full run's screenshots",
                                           "Write the Measured line",
                                           "commit only with the user's say")]
         self.assertEqual(order, sorted(order))
@@ -361,13 +362,13 @@ class Files(unittest.TestCase):
                        "a changed check can't be proved",
                        "Make no more runs, write no Measured line, commit nothing",
                        "list every file changed or replaced, and stop: the user decides what to keep",
-                       "Stop at the first failure: a failed run, or a screenshot or evidence file that is missing or "
-                       "shows the wrong thing",
+                       "Every run here stops the sequence at its first failure: a failed run, or a screenshot or "
+                       "evidence file that is missing or shows the wrong thing",
                        "An exit 3 goes straight to question 2, with no rerun",
                        "A launch refused for a held port, with no exit 3 before it, repeats that one run once in the "
                        "whole pass; a second refusal is question 2",
                        "The final runs then prove the raise",
-                       "On a raise, repeat the final full run once on the raised file, under step 6.3.2's stop rules",
+                       "Every run here stops the sequence at its first failure",
                        "The first ready run never changes once set, so the check can't raise twice",
                        "every file changed or replaced, then commit only with the user's say",
                        "It records the final runs, so it is the one edit made after them"):
@@ -599,7 +600,7 @@ class UpkeepRunFindings(unittest.TestCase):
         self.assert_phrases(step6, (
             "Write the Measured line, the only step that writes it, whole: the template's lead-in",
             "the last full run's `duration_seconds` and the final quick run's",
-            "The final runs, on the final files: one full run, then one `--quick` run",
+            "The final runs, on the final files, in this order: one full run;",
             "`full 12.0, quick 7.7`"))
         self.assertNotIn("as the cold one", self.maintain)
         self.assertIn("the app is broken, a failure can't be traced, a run exited 3, a changed check can't be "
