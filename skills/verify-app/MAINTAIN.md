@@ -93,8 +93,9 @@ takes the file for binary (ugrep can) prints no matches and no error.
      user with the log line from `app.log`, and record it as an app-specific Known edge if it
      recurs across runs. Never fail a run on it, and never hide it: not from the report, and not by
      filtering the log.
-6. **Finish.** Rerun the full tier after the last fix, confirm the evidence survived cleanup, and
-   update the Measured line, the only step that writes it: a later full run's `duration_seconds`,
+6. **Finish.** Rerun the full tier after the last fix and confirm the evidence survived cleanup.
+   When the outcome is changed, also update the Measured line, the only step that writes it; a
+   clean pass reports its times without editing the recipe, since clean means no commit. The line: a later full run's `duration_seconds`,
    with the first run of this pass's in parentheses, labelled `first`, not `cold`: the dev
    server's caches may have been warm. Then a quick run's. So `full 12.0 (first 29.3), quick 7.7`.
    Then check `ready_timeout` by the skill's section 3 rule against the first run of this pass's

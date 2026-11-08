@@ -343,6 +343,12 @@ class Files(unittest.TestCase):
         self.assertEqual(digest.hexdigest(), HISTORY[version],
                          f"the harness changed: raise HARNESS_VERSION and add {version + 1}: {digest.hexdigest()!r}")
 
+    def test_a_clean_pass_edits_nothing(self):
+        """Clean means no commit, so a clean pass can't leave the Measured line edited and uncommitted."""
+        flat = " ".join(read(os.path.join(SKILL, "MAINTAIN.md")).split())
+        self.assertIn("When the outcome is changed, also update the Measured line", flat)
+        self.assertIn("a clean pass reports its times without editing the recipe", flat)
+
     def test_no_step_moves_the_sessions_working_directory(self):
         """A bare cd in a main session moves its cwd for every later call, breaking root-relative paths."""
         for name in ("SKILL.md", "MAINTAIN.md"):
