@@ -197,7 +197,11 @@ class GenericSuites(Base):
         self.assertIsNone(self.pre("pytest"))
 
     def test_short_flags_with_several_meanings_stay_out_of_the_suite(self):
-        for first, second in (("rspec", "rspec -c"), ("vitest", "vitest -w"), ("jest", "jest -w=4")):
+        for first, second in (("rspec", "rspec -c"), ("vitest", "vitest -w"), ("jest", "jest -w=4"), ("jest", "jest -w 4"),
+                              ("go test ./...", "go test -parallel 4 ./..."),
+                              ("cargo test", "cargo test --jobs 4"),
+                              ("pytest", "pytest --log-level DEBUG"),
+                              ("pytest tests/", "pytest tests")):
             with self.subTest(first=first):
                 self.assertIsNone(self.pre(first, session=first))
                 self.assertIsNone(self.pre(second, session=first))

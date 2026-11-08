@@ -56,8 +56,8 @@ GATES_MAX = 50
 GATE_LEN_MAX = 200
 SOURCE_FILE = re.compile(r"\.(py|ts|tsx|js|jsx|mjs|cjs|rb|rs|go|java|kt)(:\d+)?$")
 VALUE_FLAGS = {"-n", "--numprocesses", "--tb", "--maxfail", "-p", "--pattern", "--color", "--reporter",
-               "--durations", "--workers", "-j", "-count", "-timeout", "--timeout", "--cov",
-               "--cov-report"}
+               "--durations", "--workers", "-j", "--jobs", "-count", "-parallel", "-timeout",
+               "--timeout", "--cov", "--cov-report", "--log-level", "-w"}
 NOT_A_RUN = {"--version", "--help", "-h", "--collect-only", "--co", "--lf", "--last-failed",
              "--list", "--listTests", "--list-tests", "--no-run"}
 NOT_A_RUN_FOR = {"make": {"-n", "--dry-run", "--just-print"}, "tox": {"-l", "-a", "--listenvs"},
@@ -156,7 +156,7 @@ def suite_key(name, args, rest):
         elif a.startswith("-"):
             skip = a in VALUE_FLAGS
         else:
-            kept.append(a)
+            kept.append(a.rstrip("/") or a)
     return hashlib.sha256(json.dumps([unwrap(name, args)[0], kept]).encode()).hexdigest()[:32]
 
 

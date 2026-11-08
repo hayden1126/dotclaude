@@ -2959,8 +2959,14 @@ class SkippedLine(BashBase):
             self.assertIn("Safe because:", reason)
             self.assertIn("Caught by:", reason)
             self.assertIn("gh pr edit", reason)
+            self.assertIn("a Bash call of its own", reason)
         self.body("## Verification\nSkipped: nothing\n")
         self.assertIsNone(self.pre("gh pr ready 12"))
+
+    def test_a_fix_chained_with_the_ready_is_refused_and_told_why(self):
+        reason = self.ready("gh pr edit 12 --body 'Skipped: nothing' && gh pr ready 12")
+        self.assertIn(self.REFUSED, reason)
+        self.assertIn("a Bash call of its own", reason)
 
     def test_which_lines_count(self):
         for text in ("Skipped: nothing", "Skipped: the browser sweep\nSafe because: x",

@@ -2588,7 +2588,8 @@ EXPANSION = re.compile(r"\$[A-Za-z_{(]")  # known limit: a single-quoted `$X` re
 SKIPPED_REASON = (
     "[practices:skipped] This PR's body has no `Skipped:` line, so it can't be marked ready. Add "
     "this block to the body (`gh pr edit <n> --body-file <file>`, or the --body of `gh pr "
-    "create`), then resend:\n\nSkipped: <what didn't run, or `nothing`>\nSafe because: <why>\n"
+    "create`). Make that change in a Bash call of its own, since this check reads the body "
+    "before a command runs and a refusal cancels all of it, then resend:\n\nSkipped: <what didn't run, or `nothing`>\nSafe because: <why>\n"
     "Caught by: <what would catch a problem>\n\nWhen every check ran, `Skipped: nothing` is "
     "enough. This check refuses every resend until the line is there.")
 
