@@ -7104,12 +7104,56 @@ class DomHarness(unittest.TestCase):
         self.assertEqual(out["verdict"], "unresolved", json.dumps(out, indent=1))
         self.assertIn("server-only", self.check(out, "unresolved: app/dom/page.tsx is a server component the browser can't run")["detail"])
 
-    def test_thrown_body_leaves_no_chrome(self):
-        # dom_run asserts nothing outlived the oracle; the body throws without closing its session
+    def test_thrown_body_leaves_no_process(self):
+        # dom_run asserts nothing outlived the oracle; the body throws without closing its session.
+        # Two safeguards fire at the same moment here, as oracle() ends in process.exit: Chrome
+        # exits when its DevTools pipe closes (the main one), and openDom's exit hook kills it, so
+        # this proves the outcome, not which of the two did it.
         out = self.dom_run("thrown-body")
         self.assertEqual(out["verdict"], "broken", json.dumps(out, indent=1))
         self.assertIn("matches #nothing", self.check(out, "missing")["detail"])
         self.assertEqual(len(out["chrome_pids"]), 1)
+
+    def assert_verdict(self, out, want):
+        self.assertEqual(out["verdict"], want, json.dumps(out, indent=1))
+
+    def test_page_props_are_promises(self):
+        self.assert_verdict(self.dom_run("page-props"), "pass")
+
+    def test_server_page_on_next_headers_is_unresolved(self):
+        out = self.dom_run("server-auth")
+        self.assert_verdict(out, "unresolved")
+        self.assertIn("next/headers", json.dumps(out))
+
+    def test_search_params_effect_runs_once(self):
+        self.assert_verdict(self.dom_run("search-effect"), "pass")
+
+    def test_memo_entry_renders(self):
+        self.assert_verdict(self.dom_run("memo-entry"), "pass")
+
+    def test_css_json_js_extension_dynamic_and_form(self):
+        self.assert_verdict(self.dom_run("resolution"), "pass")
+
+    def test_settle_waits_for_the_commit(self):
+        self.assert_verdict(self.dom_run("settle-race"), "pass")
+
+    def test_polyfilled_builtin_in_a_client_component_is_unresolved(self):
+        out = self.dom_run("builtin-polyfilled")
+        self.assert_verdict(out, "unresolved")
+        self.assertIn("doesn't polyfill path", json.dumps(out))
+
+    def test_fs_in_a_client_component_is_missing(self):
+        out = self.dom_run("builtin-fs")
+        self.assert_verdict(out, "broken")
+        self.assertIn("imports fs into a client component", self.check(out, "missing")["detail"])
+
+    def test_webrtc_gathers_no_candidates(self):
+        self.assert_verdict(self.dom_run("webrtc"), "pass")
+
+    def test_a_page_cannot_rewrite_the_action_log(self):
+        out = self.dom_run("double-submit", "bad-forged")
+        self.assert_verdict(out, "fail")
+        self.assertEqual(self.check(out, "security: a double click sends one action")["detail"], "2 sent")
 
 
 if __name__ == "__main__":
