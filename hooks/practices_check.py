@@ -179,7 +179,7 @@ Each level reads commits, never the index or the working tree:
         line (`Skipped: nothing` passes; rule id SKIPPED-LINE for the off switch). A `ready` reads
         the body with `gh pr view`, outside the repo and with a bare environment, started first
         and read last so its network wait spends no scan budget; a create reads its own command
-        or a --body-file inside the project. What can't be read is allowed and logged as
+        or its --body-file. What can't be read is allowed and logged as
         skipped-line. It shares L3r's one deny, because when two hooks deny one call Claude Code
         shows only the reason of the last to finish (2.1.319, measured), and L3r's fires once.
         It proves the line is there, not that it is true, and a ready on GitHub's site never
@@ -2681,10 +2681,12 @@ def start_body_read(args, cwd, pr, bounds):
         return None
 
 
-def create_has_line(event, args, cwd, bounds):
+def create_has_line(event, args, cwd):
     """Whether a `gh pr create`'s body has the Skipped line: read from the command's own text
-    (a heredoc body too), its --body, or a --body-file inside the project. None (logged) when
-    the file can't be read."""
+    (a heredoc body too), its --body, or its --body-file. None (logged) when the file can't be
+    read. The file may sit anywhere: gh reads the same path outside the sandbox and posts it, so
+    this answer tells the session nothing it couldn't learn. read_plain refuses anything but a
+    regular file, so a FIFO can't block it."""
     command, bodies = command_of(event), list(flag_values(args, "-b", "--body"))
     if any(has_skipped_line(t) for t in (command, *bodies)):
         return True
@@ -2695,7 +2697,7 @@ def create_has_line(event, args, cwd, bounds):
             return None
         return False
     path = os.path.join(cwd, files[-1]) if cwd else None
-    if files[-1] == "-" or path is None or bounds is None or not bounds.allows(path):
+    if files[-1] == "-" or path is None:
         log("skipped-line", "a --body-file this check can't read, so the PR went unchecked")
         return None
     try:
@@ -2720,7 +2722,7 @@ def skipped_checks(event, ghs, cfg, bounds):
         try:
             out.append(start_body_read(args, cwd, pr_ready(args), bounds)
                        if without_repo(args)[1] == "ready"
-                       else create_has_line(event, args, cwd, bounds))
+                       else create_has_line(event, args, cwd))
         except (Budget, GitError) as e:
             log("skipped-line", f"{type(e).__name__}, so the PR went unchecked")
     return out

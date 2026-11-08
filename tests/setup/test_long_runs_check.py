@@ -182,6 +182,12 @@ class GenericSuites(Base):
         self.assertIsNone(self.pre("pytest --cov src"))
         self.assertIsNone(self.pre("pytest --cov=src"))
 
+    def test_the_sessions_own_directory_is_not_part_of_a_suite(self):
+        self.assertIsNone(self.pre("pytest"))
+        self.proj_was, self.proj = self.proj, self.proj + "-elsewhere"
+        os.makedirs(self.proj)
+        self.assertIsNone(self.pre("pytest"))
+
     def test_different_scripts_are_different_suites(self):
         self.assertIsNone(self.pre("npm run test:unit"))
         self.assertIn("long-runs", self.pre("npm run test:e2e"))

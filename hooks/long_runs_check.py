@@ -3,7 +3,7 @@
 
 Sessions skip that skill and plan long runs without it. A deny at the command is the one point
 every such session passes, but a deny that fires in most sessions gets ignored. Replayed over
-45 days of transcripts, the triggers below fire in 171 of 444 real sessions that ran a gate or a
+45 days of transcripts, the triggers below fire in 163 of 444 real sessions that ran a gate or a
 PR command (.lane/artifacts/replay.py in the guards lane). It fires only on:
 
   - heavy gates, at first use: `lane trial`, `lane lock suite` or `gate`, and the repo's own
@@ -143,7 +143,7 @@ def suite_args(name, args):
 
 
 def suite_key(name, args, rest, where):
-    """A hash naming the suite: the runner, the dir it runs in and its non-flag words, so a rerun
+    """A hash naming the suite: the runner, any dir this command cd'd to and its non-flag words, so a rerun
     with other verbosity, fail-fast or parallel flags stays the same suite."""
     kept, skip = [], False
     for a in rest:
@@ -260,7 +260,7 @@ def check(event):
         return None
     project = PC.bash_project(event)
     gates = repo_gates(project)
-    suites, where = set(), event.get("cwd") if isinstance(event.get("cwd"), str) else ""
+    suites, where = set(), ""  # a cd in this command only: a session's cwd moves between runs
     for n, a in commands:
         if n == "cd" and a:
             where = os.path.normpath(os.path.join(where, a[-1]))

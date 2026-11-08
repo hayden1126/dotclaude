@@ -3105,12 +3105,21 @@ class SkippedLine(BashBase):
             f.write("no line\n")
         self.assertIn(self.REFUSED, self.ready("gh pr create -t x --body-file=body.md"))
 
-    def test_a_body_file_it_cannot_read_is_allowed_and_logged(self):
+    def test_a_body_file_outside_the_project_is_read(self):
+        # The usual form: gh pr create --body-file /tmp/...
         outside = os.path.join(self.tmp, "outside.md")
         with open(outside, "w") as f:
             f.write("no line\n")
+        self.assertIn(self.REFUSED, self.ready(f"gh pr create -t x --body-file {outside}"))
+        with open(outside, "w") as f:
+            f.write("Skipped: nothing\n")
+        self.assertIsNone(self.ready(f"gh pr create -t x --body-file {outside}"))
+
+    def test_a_body_file_it_cannot_read_is_allowed_and_logged(self):
+        zero = os.path.join(self.tmp, "zero.md")
+        os.symlink("/dev/zero", zero)
         for command in ("gh pr create -t x -F missing.md", "gh pr create -t x -F -",
-                        f"gh pr create -t x --body-file {outside}"):
+                        f"gh pr create -t x --body-file {zero}"):
             with self.subTest(command=command):
                 self.assertIsNone(self.ready(command))
         self.assertIn("skipped-line", self.log())
