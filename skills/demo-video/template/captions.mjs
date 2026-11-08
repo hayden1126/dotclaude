@@ -73,7 +73,8 @@ const SAFE_PATH = /^[A-Za-z0-9_./-]+$/; // Nothing ffmpeg's filter syntax reads:
 const WORD_JOINER = String.fromCharCode(0x2060);
 const DRAWN_BELOW = 200; // Luma: a white test frame reads 235 with nothing on it, and about 70 under a caption box.
 
-// As record.mjs computes it: what a beat did, so swapped or edited beats can't pass for the take's.
+// As record.mjs computes it: what a beat did, so a swapped or rewritten beat can't pass for the take's.
+// It reads the action's source, so an action made by a helper reads the same whatever the helper was given.
 const actionPrint = act => createHash('sha256').update(String(act)).digest('hex').slice(0, 16);
 
 let scratch = null;
@@ -169,7 +170,9 @@ async function readProject() {
   const beats = steps.map((step, index) => {
     const number = first + index;
     const beat = project.beats[number - 1];
-    if (!beat || beat.caption !== step.caption) {
+    // A label drawn only here can be fixed with no retake, once the action shows it's the same beat.
+    const free = labels === 'after' && step.action !== undefined;
+    if (!beat || (beat.caption !== step.caption && !free)) {
       const now = beat ? `has the caption "${plain(beat.caption)}"` : 'is gone';
       throw new Error(`beat ${number} ${now} in beats.mjs, but the take recorded "${plain(step.caption)}": beats.mjs changed since the take. Take it again, or put the beat back`);
     }
@@ -278,7 +281,7 @@ function checkFfmpeg() {
   const result = spawnSync('ffmpeg', ['-hide_banner', '-filters'], { encoding: 'utf8' });
   if (result.status !== 0) throw new Error(`ffmpeg won't run: ${result.error?.message || result.stderr.trim()}`);
   if (!/^\s*\S+\s+ass\s/m.test(result.stdout)) {
-    throw new Error('this ffmpeg has no ass filter: captions need ffmpeg built with libass (Homebrew\'s ffmpeg and Debian\'s and Ubuntu\'s ffmpeg package have it)');
+    throw new Error('this ffmpeg has no ass filter: captions need ffmpeg built with libass (Debian\'s and Ubuntu\'s ffmpeg package have it; on a Mac, Homebrew\'s ffmpeg-full does and its plain ffmpeg doesn\'t)');
   }
 }
 

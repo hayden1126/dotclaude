@@ -1860,19 +1860,28 @@ class Captions(unittest.TestCase):
 
     ACTS = ("async () => { /* one */ }", "async () => { /* two */ }", "async () => { /* three */ }")
 
-    def acted_take(self, sources):
+    def acted_take(self, sources, caption="", labels="after"):
         """A take of three blank-captioned beats with fingerprints, then beats.mjs holding `sources`."""
-        self.write_steps(("", "", ""), total=3)
+        self.write_steps(("", "", ""), total=3, labels=labels)
         data = json.loads((self.out / "steps.json").read_text())
         for step, source in zip(data["steps"], self.ACTS):
             step["action"] = hashlib.sha256(source.encode()).hexdigest()[:16]
         (self.out / "steps.json").write_text(json.dumps(data))
-        body = ", ".join(f"{{ caption: '', say: 'Line {i}', act: {source} }}" for i, source in enumerate(sources))
-        (self.demo / "beats.mjs").write_text(f"export const labels = 'after';\nexport const beats = [{body}];\n")
+        body = ", ".join(f"{{ caption: '{caption}', say: 'Line {i}', act: {source} }}" for i, source in enumerate(sources))
+        (self.demo / "beats.mjs").write_text(f"export const labels = '{labels}';\nexport const beats = [{body}];\n")
 
     def test_blank_captions_still_match_the_take_by_their_actions(self):
         self.acted_take(self.ACTS)
         self.built()
+
+    def test_a_fixed_label_needs_no_retake_when_the_take_drew_none(self):
+        self.acted_take(self.ACTS, caption="Fixed label")
+        self.built()
+        self.assertIn("label: Fixed label", self.run_captions("lines").stdout)
+
+    def test_a_changed_caption_is_refused_when_the_page_drew_it(self):
+        self.acted_take(self.ACTS, caption="Fixed label", labels="page")
+        self.assert_refused("beats.mjs changed since the take")
 
     def test_beats_swapped_since_the_take_are_refused_even_with_blank_captions(self):
         self.acted_take((self.ACTS[1], self.ACTS[0], self.ACTS[2]))

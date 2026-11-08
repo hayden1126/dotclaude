@@ -88,7 +88,7 @@ At feature freeze, before any video or rehearsal, the user types `/demo-first-sc
 2. Check that each beat still shows what the frozen product does, and add the Words and Label columns if the script lacks them.
 3. Recount the words against each beat, and fix a line over budget.
 
-Don't reopen the idea, the feasibility or the cut list. A problem that needs a product change goes to the user as a choice. When it's done, add one line under the script: `Checked before recording: <date and time>, at commit <hash>`, with the hash from `git rev-parse --short HEAD`. `/demo-video` reads that line to see that the product hasn't moved since. Then suggest `/demo-video` for the user to type, or load it when they ask for the video.
+Don't reopen the idea, the feasibility or the cut list. A problem that needs a product change goes to the user as a choice. When it's done, commit any product changes, with the user's OK, so the hash names what's frozen. Then add one line under the script: `Checked before recording: <date and time>, at commit <hash>`, with the hash from `git rev-parse --short HEAD`. `/demo-video` reads that line to see that the product hasn't moved since. Then suggest `/demo-video` for the user to type, or load it when they ask for the video.
 
 ## Never fake silently
 
