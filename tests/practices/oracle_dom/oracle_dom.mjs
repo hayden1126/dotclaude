@@ -12,7 +12,7 @@
 // (--host-resolver-rules), so no request leaves the machine; requests() still lists each one.
 // practices-allow: SEC-13 Runtime.evaluate runs the oracle's own probes in its test page; arguments go in as JSON
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -53,16 +53,24 @@ const POLYFILLED = new Set(["assert", "buffer", "constants", "crypto", "domain",
   "path", "process", "punycode", "querystring", "stream", "string_decoder", "sys", "timers", "tty", "url",
   "util", "vm", "zlib"].flatMap((m) => [m, `node:${m}`]));
 
+const IMAGE = /\.(png|jpe?g|gif|webp|avif|ico|svg)$/i;
 const CLIENT = /^(?:\s|\/\/[^\n]*\n|\/\*[\s\S]*?\*\/)*["']use client["']/;
 const MODES = new Set(["ok", "fail", "hang"]);
 const DELAY_MS = 300; // a stubbed action's or fetch's round trip: long enough to see a pending state
 const STEP_MS = 5000; // the cap on any one wait; the whole oracle gets 60 s (run.py ORACLE_TIMEOUT)
 const CHROME_FLAGS = [
   "--headless", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--remote-debugging-pipe",
-  "--no-first-run", "--no-default-browser-check", "--no-proxy-server", "--host-resolver-rules=MAP * ~NOTFOUND",
-  // WebRTC talks UDP to IP literals, which no resolver rule stops: no unproxied UDP, so (with no
-  // proxy) no ICE candidate at all, and no mDNS names hiding the host ones.
-  "--force-webrtc-ip-handling-policy=disable_non_proxied_udp", "--disable-features=WebRtcHideLocalIpsWithMdns",
+  "--no-first-run", "--no-default-browser-check", "--host-resolver-rules=MAP * ~NOTFOUND",
+  // The resolver rule covers IP literals too for page requests (a fetch to http://127.0.0.2
+  // fails ERR_NAME_NOT_RESOLVED, measured), but WebRTC opens its own sockets. So every
+  // connection also goes through a proxy whose name doesn't resolve, loopback included (Chrome
+  // bypasses loopback unless told <-loopback>), and WebRTC sends no UDP but through that proxy:
+  // no ICE candidate, and TURN over TCP goes to the dead proxy. Local IPs need a media
+  // permission, and no mDNS names hide host candidates. Switch names from Chromium's
+  // content_switches and net/docs/proxy.md, from memory, not read from this build's source.
+  "--proxy-server=http://oracle-proxy.invalid:1", "--proxy-bypass-list=<-loopback>",
+  "--force-webrtc-ip-handling-policy=disable_non_proxied_udp", "--enforce-webrtc-ip-permission-check",
+  "--disable-features=WebRtcHideLocalIpsWithMdns",
 ];
 
 const rel = (file) => path.relative(FIXTURE, file);
@@ -104,6 +112,35 @@ function transpile(file, src) {
   return out.outputText;
 }
 
+// An image's width and height from its header: PNG and GIF; 0 and 0 for the rest.
+function imageSize(bytes) {
+  if (bytes.length >= 24 && bytes.readUInt32BE(0) === 0x89504e47) return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+  if (bytes.length >= 10 && bytes.toString("latin1", 0, 4) === "GIF8") return { width: bytes.readUInt16LE(6), height: bytes.readUInt16LE(8) };
+  return { width: 0, height: 0 };
+}
+
+const CSS_IMPORT = /@import\s+(?:url\(\s*)?(["'])([^"']+)\1\s*\)?[^;]*;/g;
+
+// A stylesheet with its relative @imports inlined from the fixture, each file once (a cycle
+// stops at a file already in), and its URL @imports moved to the top, where CSS keeps them
+// (offline they fail). A relative @import naming no file is Missing, as Next's build fails.
+// limit: an @import's media or layer condition is dropped with it.
+function inlineCss(file, seen = new Set()) {
+  seen.add(file);
+  const urls = [];
+  const body = readFileSync(file, "utf8").replace(CSS_IMPORT, (whole, quote, spec) => {
+    if (/^([a-z][a-z0-9+.-]*:|\/\/)/i.test(spec)) {
+      urls.push(whole);
+      return "";
+    }
+    const target = path.resolve(path.dirname(file), spec);
+    if (seen.has(target)) return `/* ${spec}: already in */`;
+    if (!isFile(target)) throw new Missing(`${rel(file)} imports ${spec}, which doesn't exist`);
+    return inlineCss(target, seen);
+  });
+  return [...urls, body].join("\n");
+}
+
 // The names a "use server" module exports, from its syntax: the module itself never runs here.
 function exportNames(file, src) {
   const sf = ts.createSourceFile(file, src, ts.ScriptTarget.ES2020, true, file.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
@@ -134,6 +171,10 @@ function isUseServer(file, src) {
 class Bundle {
   mods = [];
   keys = new Map();
+
+  constructor(dir) {
+    this.dir = dir; // the page's scratch dir, where image imports are copied
+  }
 
   add(key, name, make) {
     if (this.keys.has(key)) return this.keys.get(key);
@@ -181,7 +222,7 @@ class Bundle {
       const base = spec.startsWith("@/") ? path.join(FIXTURE, spec.slice(2)) : path.resolve(path.dirname(from), spec);
       const found = findFile(base);
       if (!found) throw new Missing(`${rel(from)} imports ${spec}, which doesn't exist`);
-      if (/\.(css|json)$/.test(found)) return this.asset(found);
+      if (/\.(css|json)$/.test(found) || IMAGE.test(found)) return this.asset(found);
       return found.startsWith(MODULES + path.sep) || found.startsWith(BROWSER + path.sep) ? this.package(found) : this.local(found, client);
     }
     if (PACKAGES[spec]) return this.package(PACKAGES[spec]);
@@ -204,12 +245,20 @@ class Bundle {
     }));
   }
 
-  // A stylesheet is injected as a <style> when its module loads, so computed styles hold; a CSS
-  // module maps each class name to itself, so its selectors match. JSON is its parsed value.
+  // A stylesheet is injected as a <style> when its module loads, so computed styles hold, its
+  // relative @imports inlined (inlineCss); a CSS module maps each class name to itself, so its
+  // selectors match. JSON is its parsed value. An image is Next's static import, {src, width,
+  // height}, the file copied beside the page.
   // limit: no :global(), composes or url() rewriting; a case grading those needs a CSS loader.
   asset(file) {
     return this.add(file, rel(file), () => {
-      const text = readFileSync(file, "utf8");
+      if (IMAGE.test(file)) {
+        const name = `asset-${this.mods.length}-${path.basename(file)}`;
+        copyFileSync(file, path.join(this.dir, name));
+        const image = { src: pathToFileURL(path.join(this.dir, name)).href, ...imageSize(readFileSync(file)) };
+        return { code: `module.exports = ${JSON.stringify(image)};`, deps: {} };
+      }
+      const text = file.endsWith(".css") ? inlineCss(file) : readFileSync(file, "utf8");
       if (file.endsWith(".json")) {
         let value;
         try {
@@ -399,21 +448,33 @@ const PICK = "(sel) => document.querySelector(sel)";
 class DomSession {
   #requests = [];
   // what the page reported through the binding, counted here, where page code can't reach
-  #log = { action: [], fetch: [], font: [], navigation: [] };
+  #log = { action: [], fetch: [], font: [], navigation: [], unresolved: [] };
+  // binding calls that weren't page.js's: another frame's, or not a log entry
+  #tamper = [];
+  #reported = new Set();
+  #mainContext = null;
   #byId = new Map();
 
-  constructor(chrome, sessionId) {
+  constructor(chrome, sessionId, targetId, t, what) {
     this.chrome = chrome;
     this.cdp = chrome.cdp;
     this.sessionId = sessionId;
+    this.t = t;
+    this.what = what;
     this.cdp.on(({ method, params, sessionId: from }) => {
       if (from !== sessionId) return;
+      if (method === "Runtime.executionContextCreated") {
+        const aux = params.context.auxData ?? {};
+        if (aux.frameId === targetId && aux.isDefault) this.#mainContext = params.context.id;
+        return;
+      }
       if (method === "Runtime.bindingCalled" && params.name === BINDING) {
-        const { kind, entry } = JSON.parse(params.payload);
-        this.#log[kind]?.push(entry);
+        this.#binding(params);
         return;
       }
       if (method === "Network.requestWillBeSent") {
+        const redirected = params.redirectResponse && this.#byId.get(params.requestId);
+        if (redirected) Object.assign(redirected, { status: params.redirectResponse.status, done: true });
         const entry = { url: params.request.url, method: params.request.method, type: params.type ?? null, status: null, failed: false, error: null, done: false };
         this.#requests.push(entry);
         this.#byId.set(params.requestId, entry);
@@ -432,6 +493,56 @@ class DomSession {
 
   send(method, params = {}) {
     return this.cdp.send(method, params, this.sessionId);
+  }
+
+  // One binding call: a log entry from page.js in the main world, or tampering (another frame's
+  // call, or a payload that isn't {kind, entry} for a log this session keeps).
+  #binding({ executionContextId, payload }) {
+    const tamper = (why) => this.#tamper.push({ why, payload: String(payload).slice(0, 200) });
+    if (executionContextId !== this.#mainContext) return tamper(`a call from context ${executionContextId}, not the page's`);
+    let message;
+    try {
+      message = JSON.parse(payload);
+    } catch {
+      return tamper("not JSON");
+    }
+    if (!message || typeof message !== "object" || !Object.hasOwn(this.#log, message.kind)) return tamper("no such log");
+    this.#log[message.kind].push(message.entry);
+  }
+
+  // Records, once each, what makes the run unresolved whatever the oracle checks: tampering with
+  // the log, and code next/dynamic couldn't load.
+  #report() {
+    if (this.#tamper.length && !this.#reported.has("tamper")) {
+      this.#reported.add("tamper");
+      this.t.unresolved("page tampered with the oracle's log", JSON.stringify(this.#tamper).slice(0, 600));
+    }
+    if (this.#log.unresolved.length && !this.#reported.has("unresolved")) {
+      this.#reported.add("unresolved");
+      this.t.unresolved(`${this.what} loads code the browser can't run`, this.#log.unresolved.map((u) => u.detail).join("; "));
+    }
+  }
+
+  // A log as the oracle has it, after a round trip to the page, so every binding call the page
+  // made before this read has arrived.
+  async #read(kind) {
+    await this.eval("0");
+    this.#report();
+    return structuredClone(this.#log[kind]);
+  }
+
+  // One of page.js's controls (start, setActionMode, addFetchRule), on the object the oracle
+  // took before any agent code loaded.
+  async control(op, ...args) {
+    const { result, exceptionDetails } = await this.send("Runtime.callFunctionOn", {
+      objectId: this.controls,
+      functionDeclaration: "function (op, ...args) { return this[op](...args); }",
+      arguments: [{ value: op }, ...args.map((value) => ({ value }))],
+      returnByValue: true,
+      awaitPromise: true,
+    });
+    if (exceptionDetails) throw new Error(`page control ${op} threw: ${exceptionDetails.exception?.description ?? exceptionDetails.text}`);
+    return result.value;
   }
 
   // eval(expr) for an oracle's own probe: the value, awaited, as JSON carries it.
@@ -530,19 +641,19 @@ class DomSession {
   }
 
   async actions() {
-    return structuredClone(this.#log.action);
+    return this.#read("action");
   }
 
   async fetches() {
-    return structuredClone(this.#log.fetch);
+    return this.#read("fetch");
   }
 
   async fonts() {
-    return structuredClone(this.#log.font);
+    return this.#read("font");
   }
 
   async navigations() {
-    return structuredClone(this.#log.navigation);
+    return this.#read("navigation");
   }
 
   errors() {
@@ -551,16 +662,17 @@ class DomSession {
 
   async actionMode(name, mode) {
     if (!MODES.has(mode)) throw new Error(`actionMode: ${mode} is not one of ${[...MODES].join(", ")}`);
-    await this.call("(name, mode) => window.__setActionMode(name, mode)", name, mode);
+    await this.control("setActionMode", name, mode);
   }
 
   // Fetches whose URL contains `match` (a string) or matches it (a RegExp) answer by `spec`:
   // {status, json}, "fail" (a TypeError, as offline) or "hang". Rules apply in the order set.
   async fetchMode(match, spec) {
-    await this.call("(rule) => window.__addFetchRule(rule)", fetchRule(match, spec));
+    await this.control("addFetchRule", fetchRule(match, spec));
   }
 
   close() {
+    this.#report();
     return this.chrome.close();
   }
 }
@@ -572,8 +684,8 @@ function fetchRule(match, spec) {
   return match instanceof RegExp ? { regex: match.source, flags: match.flags, spec } : { match: String(match), spec };
 }
 
-function bundleFor(entryFile) {
-  const bundle = new Bundle();
+function bundleFor(entryFile, dir) {
+  const bundle = new Bundle(dir);
   const ids = {
     entry: bundle.local(entryFile, false),
     react: bundle.package(PACKAGES.react),
@@ -595,7 +707,6 @@ function bundleFor(entryFile) {
 export async function openDom(t, oracleUrl, opts) {
   const entryFile = findFile(path.join(FIXTURE, opts.entry));
   if (!entryFile) throw new Missing(`no ${opts.entry}`);
-  const { ids, script } = bundleFor(entryFile);
   const binary = process.env.ORACLE_CHROME;
   if (!binary) throw new Error("ORACLE_CHROME is not set: it names the headless Chrome the client-code oracles run");
   for (const mode of Object.values(opts.actionModes ?? {})) {
@@ -604,7 +715,10 @@ export async function openDom(t, oracleUrl, opts) {
 
   const caseName = path.basename(path.dirname(fileURLToPath(oracleUrl)));
   const dir = mkdtempSync(path.join(process.env.TMPDIR ?? FIXTURE, `oracle-dom-${caseName}-`));
+  const { ids, script } = bundleFor(entryFile, dir);
+  const what = rel(entryFile);
   const config = {
+    bundle: "bundle.js",
     ...ids,
     props: opts.props ?? {},
     actionModes: opts.actionModes ?? {},
@@ -620,8 +734,7 @@ export async function openDom(t, oracleUrl, opts) {
   const page = pathToFileURL(path.join(BROWSER, "page.js")).href;
   writeFileSync(path.join(dir, "index.html"),
     `<!doctype html>\n<html><head><meta charset="utf-8"><title>oracle</title></head><body><div id="root"></div>\n` +
-    `<script src="config.js"></script>\n<script src="${page}"></script>\n<script src="bundle.js"></script>\n` +
-    `<script>window.__mounted = window.__mount();</script>\n</body></html>\n`);
+    `<script src="config.js"></script>\n<script src="${page}"></script>\n</body></html>\n`);
 
   mkdirSync(path.join(dir, "chrome-profile"));
   const chrome = new Chrome(binary, path.join(dir, "chrome-profile"));
@@ -631,15 +744,18 @@ export async function openDom(t, oracleUrl, opts) {
     const created = cdp.waitFor("page target", ({ method, params }) =>
       method === "Target.targetCreated" && params.targetInfo.type === "page" ? params.targetInfo.targetId : undefined);
     await cdp.send("Target.setDiscoverTargets", { discover: true });
-    const { sessionId } = await cdp.send("Target.attachToTarget", { targetId: await created, flatten: true });
-    const session = new DomSession(chrome, sessionId);
+    const targetId = await created;
+    const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+    const session = new DomSession(chrome, sessionId, targetId, t, what);
     await Promise.all([session.send("Page.enable"), session.send("Runtime.enable"), session.send("Network.enable")]);
     await session.send("Runtime.addBinding", { name: BINDING });
     const loaded = cdp.waitFor("load event", ({ method, sessionId: from }) => (method === "Page.loadEventFired" && from === sessionId ? true : undefined));
     await session.send("Page.navigate", { url: pathToFileURL(path.join(dir, "index.html")).href });
     await loaded;
-    const mounted = await session.eval("window.__mounted");
-    const what = rel(entryFile);
+    // The controls, taken while only config.js and page.js have run; then the bundle loads.
+    const { result } = await session.send("Runtime.evaluate", { expression: "window.__takeControls()" });
+    session.controls = result.objectId;
+    const mounted = await session.control("start");
     if (mounted.status === "ok") {
       t.functional(`${what} renders`, true);
       return session;

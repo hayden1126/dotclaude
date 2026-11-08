@@ -16,6 +16,7 @@ await oracle(async (t) => {
     }
     t.functional("the page finished trying", state !== "trying", state);
     t.note("what the page gathered", true, state);
+    t.note("what the page requested", true, JSON.stringify(await dom.requests()));
   } finally {
     await dom.close();
   }

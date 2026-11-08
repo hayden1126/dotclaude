@@ -1480,8 +1480,13 @@ def agent_diff(fixture, base, text=False):
 
 
 # Words in the agent's added lines that could forge the oracle's verdict from inside its
-# process (the agent's code runs there): a tripwire, the diff review is the backstop.
-SUSPECT_WORDS = ("verdict", "stepResult", 'process.on("exit"', "process.on('exit'", "writeSync(1", "process.stdout.write")
+# process (the agent's code runs there): a tripwire, the diff review is the backstop. A DOM
+# case's oracle reads the page oracle_dom builds, so the globals its page.js and loader define
+# (and the ones they used to) are suspect too: app code has no reason to name them.
+SUSPECT_WORDS = ("verdict", "stepResult", 'process.on("exit"', "process.on('exit'", "writeSync(1", "process.stdout.write",
+                 "__oracleRecord", "__oracleLog", "__takeControls", "__actions", "__fetches", "__fonts", "__navigations",
+                 "__errors", "__quiet", "__config", "__require", "__serverAction", "__mounted", "__mount", "__setActionMode",
+                 "__addFetchRule")
 
 
 def suspect_words(diff):

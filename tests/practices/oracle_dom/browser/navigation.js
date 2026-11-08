@@ -1,7 +1,8 @@
 // next/navigation in the browser bundle: inert hooks. A router call is logged as a navigation
 // (window.__navigations) and goes nowhere; the path, search and params come from openDom's opts
 // (default "/", empty, {}). Each hook returns the same object on every render, as Next's do for
-// one URL, so an effect keyed on one runs once.
+// one URL, so an effect keyed on one runs once, and the search params are read-only, as Next's
+// ReadonlyURLSearchParams.
 const navigate = (kind) => (href) => {
   window.__oracleLog("navigation", { kind, href: href === undefined ? null : String(href) });
 };
@@ -15,6 +16,24 @@ const router = {
   prefetch: () => {},
 };
 
+class ReadonlyURLSearchParams extends URLSearchParams {
+  append() {
+    throw new Error("ReadonlyURLSearchParams: append isn't allowed; build a new URLSearchParams");
+  }
+
+  delete() {
+    throw new Error("ReadonlyURLSearchParams: delete isn't allowed; build a new URLSearchParams");
+  }
+
+  set() {
+    throw new Error("ReadonlyURLSearchParams: set isn't allowed; build a new URLSearchParams");
+  }
+
+  sort() {
+    throw new Error("ReadonlyURLSearchParams: sort isn't allowed; build a new URLSearchParams");
+  }
+}
+
 let searchParams = null;
 
 export function useRouter() {
@@ -26,7 +45,7 @@ export function usePathname() {
 }
 
 export function useSearchParams() {
-  searchParams ??= new URLSearchParams(window.__config.search);
+  searchParams ??= new ReadonlyURLSearchParams(window.__config.search);
   return searchParams;
 }
 
