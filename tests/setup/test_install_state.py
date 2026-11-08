@@ -255,6 +255,9 @@ class Hold(Machine):
         self.forge_admin(self.a)
         (h,) = install_state.holders(self.main, self.env)
         self.assertEqual((h["root"], h["main"], h["branch"]), (self.a, self.main, "a"))
+        self.assertEqual(h["linked_at"], min(os.lstat(x.path).st_mtime for x in
+                                             install_state.links(install_state.places(self.env))
+                                             if x.target.startswith(self.a + os.sep)))
         r = self.cli("hold", self.main)
         self.assertEqual((r.returncode, r.stderr), (0, ""))
         self.assertIn(f"releases the install held by {self.a} (branch a, 12 links)", r.stdout)

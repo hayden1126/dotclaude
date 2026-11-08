@@ -40,6 +40,7 @@
 // and moved in only once it is whole. A failed take leaves the previous good one in OUT, since that
 // may be the only backup there is, and says so, so a stale video can't pass for this one. A good
 // take moves the set it replaces to demo.prev.mp4, captions.prev.srt and steps.prev.json.
+// demo-voice.mp4, which voice.mjs made for the old take, moves aside too.
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
@@ -307,6 +308,12 @@ function publish() {
   for (const name of OUTPUTS) fs.renameSync(path.join(stage, name), path.join(OUT, name));
   fs.rmSync(stage, { recursive: true, force: true });
   stage = null;
+  // A voice was timed to the take just replaced, so it must not pass for this one.
+  const voiced = path.join(OUT, 'demo-voice.mp4');
+  if (fs.existsSync(voiced)) {
+    fs.renameSync(voiced, path.join(OUT, 'demo-voice.prev.mp4'));
+    console.warn('this take replaced the one the voice was made for: moved it to demo-voice.prev.mp4. Run voice.mjs again: it says which recordings no longer fit');
+  }
 }
 
 async function record() {

@@ -211,7 +211,9 @@ Why it works this way:
   for #99 the tab-bar lane ran `gh pr merge` itself. A merge made on GitHub and told to no
   session waits for the lead's next `lane ls`. With the lane's session gone, the lead runs the
   chain itself, and closes the lane only once the hand-back gate passes: a failing gate is then
-  the lead's ask, since no lane is left to make it. With the session live, the lead
+  the lead's ask, since no lane is left to make it. Hayden's yes lets the lead reopen the lane,
+  so a new session writes its own record, or, when the worktree is gone and the gate can never
+  pass, run a plain `lane done`, which archives the mirror's record (Hayden, 2026-11-07). With the session live, the lead
   asks the lane for its after-merge handoff first, since a lane that merged and is still writing
   `Keep open:` must not be closed under it. A merge watcher lost: one per ready PR has to be
   re-armed every 2 hours, and two that saw the same merge would run the chain twice (two
@@ -246,7 +248,8 @@ Why it works this way:
   lead when asked. The lead takes the flag's current reason to Hayden. Once `handoff-check`
   passes, his yes allows a plain `lane done` with the flag on (2026-11-06): `done` never reads
   the flag, so that half of the gate is the skill's rule, and a flag that can't clear would
-  otherwise hold the lane open for good. It changes nothing for a merge order.
+  otherwise hold the lane open for good. Step 5 of the skill lists the two other cases his yes
+  covers. It changes nothing for a merge order.
 - **What it can't tell.** A write after the merge is taken as the after-merge handoff, so a lane
   that never heard of a GitHub merge, then wrote a routine update and exited, passes; the lead's
   message to a live lane covers that window. Whatever can't be read (gh, a `mergedAt`, a session
@@ -518,6 +521,11 @@ that names `suite`.
 2. It builds the merge with no worktree: from the lane's HEAD, `git merge-tree --write-tree`
    merges the base, then each other live lane's head by id, and `git commit-tree` turns each
    clean result into a dangling commit (a fixed `lane-trial` identity, unsigned; no ref moves).
+   Merge drivers stay off (`--attr-source=<empty tree>`, `core.attributesFile=/dev/null`): a
+   `merge=union` in the lane's `.gitattributes` made a bare merge-tree call clean a merge GitHub
+   refuses, which has no drivers. `<common>/info/attributes` still applies, since git has no
+   switch for it. `--attr-source` needs git 2.43, since `merge-tree` could segfault on it in
+   2.41 and 2.42: on an older git the trial warns that the drivers still apply.
    When the lane's STATUS.md, else the base's (a lane that branched before the line), names the
    lead's branch (its `Lead branch:` line) and that branch holds one, every commit the trial
    merges or tries (this lane's HEAD, the base, each lane's head) first gets the lead branch's
@@ -646,8 +654,8 @@ the slot again, so the count never trusts the flag alone; with session liveness 
 parked lane holds its slot too. `lane new` refuses at the cap, counted this way.
 
 **The over-cap rule.** `lane open` of a parked lane refuses while the other slot holders already
-pass the cap, and at the cap it opens and says `lane X is over the cap of N by one: for its
-rebase and merge` (Hayden's pick: a parked lane may unpark over a full cap to merge, at most one
+pass the cap, and at the cap it opens and says `lane X is over the cap of N by one: to merge
+main and its PR` (Hayden's pick: a parked lane may unpark over a full cap to merge, at most one
 lane over at a time). It clears the flag only once `tmux new-window` succeeds. `open --print`
 refuses a parked lane, since it would start a session the flag doesn't know of. One hold of
 the lanes lock spans the cap check, `tmux new-window` and the flag's removal, so a second
@@ -688,10 +696,46 @@ keeps every restore entry. On success, under the lanes lock, the flag is written
 removed.
 
 **The board.** A parked lane shows `parked` and never `orphan`; `--json` rows carry `parked`
-(the stamp, or null). With a lane parked or the cap passed, a `cap: N of M slots held (K
-parked)` line follows, with `, X over` past the cap. It counts the same records as `new`, twins included, by the same rule. The lead sends a parked lane no "main
-moved" message: its `rebase` flag carries that to its unpark. `lane trial` keeps merging parked
-lanes, which are live and will merge.
+(the stamp, or null), `base_overlaps` (every file the lane changes that main has changed since
+the lane last merged it, which lights `main-touched`; the `main:` line names up to five) and
+`merges` (the merge times of the lane's merged PRs, or null when gh can't list them; `handoff?`
+and the install line's `overdue` read them). With a lane parked or the cap passed, a `cap: N of
+M slots held (K parked)` line follows, with `, X over` past the cap. It counts the same records
+as `new`, twins included, by the same rule. The lead sends a parked lane no "main moved"
+message, since no session reads it: at the lane's turn the lead runs `lane open <id>` first
+(Merge turns). `lane trial` keeps merging parked lanes, which are live and will merge.
+
+## Merge turns (lane lanes-turn, 2026-11-07)
+
+Two failures came from a lane not knowing where it stood in the merge order. Lanes merged main
+after every "main moved" message while they waited (another repo, 2026-10-25), and each merge
+reran their checks and lit `handoff?`. A lane sat idle about 50 minutes because its lead never
+told it its turn had come (another repo, 2026-11-03). So only the lane next in merge order merges
+main, and the lead tells that lane when its turn comes (`skills/lanes/SKILL.md`, The lead, steps 6
+and 7.6).
+
+**The `main-touched` flag.** One case can't wait for the turn: main changed a file the lane
+changes, so a conflict is growing. `lane ls` flags that lane and names the files:
+
+```
+main: changed hooks/stop-ring.sh, which lane lanes-turn changes too: merge origin/main now
+```
+
+The check intersects the lane's changed files (the `overlap` flag's set, uncommitted work
+included) with the three-dot diff from the lane to the base, so only main's commits since the
+lane last merged it count. It runs on each `ls`, and nothing is stored. `rebase` still lights
+whenever a lane is behind, but now means "merge at your turn". STATUS.md is left out, because a
+carry takes the lead's copy whole.
+
+The test is per file, not per conflict. A change elsewhere in the same file flags the lane, which
+costs one merge that wasn't needed. A change in another file that breaks the lane isn't flagged:
+`lane trial`, which merges origin/main onto the lane, finds it before ready.
+
+**A parked lane.** Hayden's pick: the lead runs `lane open <id>` at the lane's turn with no ask,
+since a message reaches no session. The lane opens in plan mode, so it stops for his plan approval
+before it merges. A parked lane flagged `main-touched` but not next stays parked until its turn
+(Hayden's pick, 2026-11-07): reopening it early would take the one over-cap slot another lane's
+turn may need.
 
 ## Bug reports from other repos (lane bug-route, 2026-10-18)
 
@@ -1396,8 +1440,10 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   `idle`, `waiting`, or `shell` while a background shell runs at the prompt), as `states` in
   `--json`. A stopped session (Ctrl+Z) drives none of these columns: its lane gets the `stopped`
   flag (beside `orphan` when no session runs), and `--json` lists it in `stopped_sessions`. The lead messages a lane that sits idle past soft: "context N k, run /pass". It does this by hand for now; no code
-  sends that message. The lead never respawns another lane's pane, since only that lane holds
-  the context its handoff needs.
+  sends that message. The lead never respawns another lane's pane for a pass, since only that
+  lane holds the context its handoff needs; it reopens a lane only in the two cases the skill
+  names (a parked lane at its merge turn, and on Hayden's yes a merged lane whose gate fails with
+  no session left).
 - **`lane lock <name> -- <cmd>`** serializes shared gates with a flock on
   `<common-dir>/lanes/_locks/<name>`, apart from the CLI's own `.lock`. The name must be listed in
   the config's `locks`, since a typo would split the mutual exclusion. Once it holds the lock, it
@@ -1662,7 +1708,10 @@ copied as the link), and skips
     whole run, waits up to 5 minutes for another run, then stops before changing anything. It
     runs unlocked only where `flock` is missing or the state dir can't be made (macOS,
     git-bash); a lock file it can't open stops the run.
-  - **Seen elsewhere:** `lane ls` shows `install: held by lane <id>`. `lane done` refuses while
+  - **Seen elsewhere:** `lane ls` shows `install: held by lane <id>`, with `overdue` once a PR of
+    that lane merged after the install, which is when the lead's reinstall should have run. It
+    compares `mergedAt` with the oldest link's mtime, since `setup.sh` remakes every link: a
+    Keep-open lane's earlier PR predates its newer install and stays quiet. `lane done` refuses while
     any link, or setup-tmux.sh's `~/.tmux.conf` block, points into the lane, naming for each the
     installer that relinks it (`setup.sh`, `setup-tmux.sh`, or by hand).
   - **The plugin line:** `setup.sh` prints one line when a mod or plugin changed since the last

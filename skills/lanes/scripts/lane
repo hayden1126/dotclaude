@@ -100,8 +100,8 @@ proved. With nothing to end, a refused close leaves the lane as it was.
 its worktree, branch, record and claims. Its flag lives beside the config
 (lanelib.Repo.parked_path), where no lane's sandbox can write it. A lane holds a cap slot while
 its worktree exists, unless it is parked with no session in it (holds_slot); `new` counts slot
-holders, and `open` of a parked lane goes at most one lane over the cap, for its rebase and
-merge. It refuses before any signal, as `done` does, on a dirty tree, a HEAD that is neither
+holders, and `open` of a parked lane goes at most one lane over the cap, to merge main and its
+PR. It refuses before any signal, as `done` does, on a dirty tree, a HEAD that is neither
 on the remote branch nor an open PR's head, a failing plain handoff-check, the board's
 handoff?, a lock the lane holds, the install hold, a busy session or one waiting on Hayden,
 or anything in the lane nothing proves its own.
@@ -1507,10 +1507,10 @@ def per_worktree_config(repo: Repo) -> bool | None:
 
 def changed_files(repo: Repo, lane: dict, base: str, ref: str, lanes: list[dict],
                   per_worktree: bool | None) -> tuple[set[str], str | None]:
-    """The files a live lane's work changes, for the board's overlap flag, and why part of them
-    went unread (None when nothing did). Committed: the three-dot diff from base to ref
-    (lane_head's), so main's later commits and a merged lane's work drop out; it reads objects
-    only. Uncommitted: modified, staged and untracked files, from `git status` in the lane.
+    """The files a live lane's work changes, for the board's overlap and main-touched flags, and
+    why part of them went unread (None when nothing did). Committed: the three-dot diff from base
+    to ref (lane_head's), so main's later commits and a merged lane's work drop out; it reads
+    objects only. Uncommitted: modified, staged and untracked files, from `git status` in the lane.
 
     That status is the first git `ls` runs in a lane, sandbox-off, so it runs only once each
     gate passes, else the lane keeps its committed set and `ls` warns. lanes is every record
@@ -1563,6 +1563,25 @@ def changed_files(repo: Repo, lane: dict, base: str, ref: str, lanes: list[dict]
     return files, "; ".join(unread) or None
 
 
+def main_touched(repo: Repo, base: str, ref: str, files: set[str]) -> tuple[list[str], str | None]:
+    """Which of a lane's changed files (changed_files') main has changed since the lane last
+    merged it, and why that went unread (None when it didn't): the one reason a lane waiting its
+    merge turn merges main early. The three-dot diff from ref to base reads objects only.
+    STATUS.md is left out: a carry takes the lead's copy whole, so it never needs an early merge."""
+    p, why = read_git(["diff", "--name-only", "-z", "--no-renames", "--no-ext-diff",
+                       "--end-of-options", f"{ref}...{base}", "--"], repo.toplevel,
+                      dict(OVERLAP_ENV))
+    if p is None:
+        return [], why
+    return sorted(files.intersection(filter(None, p.stdout.split("\0"))) - {"STATUS.md"}), None
+
+
+def some_files(names: list[str]) -> str:
+    """names, cut at OVERLAP_SHOWN, for a line under the board."""
+    more = f" (and {len(names) - OVERLAP_SHOWN} more)" if len(names) > OVERLAP_SHOWN else ""
+    return f"{', '.join(names[:OVERLAP_SHOWN])}{more}"
+
+
 def overlap_lines(rows: list[dict]) -> list[str]:
     """The board's line for each pair of lanes whose changed files overlap (board's overlaps),
     naming at most OVERLAP_SHOWN files, control characters masked: a lane names its own
@@ -1572,11 +1591,17 @@ def overlap_lines(rows: list[dict]) -> list[str]:
         for other, both in sorted(row["overlaps"].items()):
             if other < row["id"]:
                 continue  # each pair once, from its first lane
-            more = (f" (and {len(both) - OVERLAP_SHOWN} more)" if len(both) > OVERLAP_SHOWN
-                    else "")
-            out.append(shown(f"overlap: {row['id']} and {other} both change "
-                             f"{', '.join(both[:OVERLAP_SHOWN])}{more}"))
+            out.append(shown(f"overlap: {row['id']} and {other} both change {some_files(both)}"))
     return out
+
+
+def main_lines(rows: list[dict]) -> list[str]:
+    """The board's line for each lane main-touched flags, masked as overlap_lines' are. A parked
+    lane merges at its turn, not now (Hayden's pick, 2026-11-07): unparking it early would take
+    the one over-cap slot another lane's turn may need."""
+    return [shown(f"main: changed {some_files(row['base_overlaps'])}, which lane {row['id']} "
+                  f"changes too: merge origin/main {'at its turn' if row['parked'] else 'now'}")
+            for row in rows if row["base_overlaps"]]
 
 
 def parked_stamp(repo: Repo, lane: dict) -> str | None:
@@ -1671,6 +1696,13 @@ def board(repo: Repo) -> list[dict]:
             flags.append("stale")
         if row["behind"]:
             flags.append("rebase")
+        row["base_overlaps"] = []
+        if row["behind"] and lane["id"] in changed:  # a stale lane's files went unread
+            row["base_overlaps"], why = main_touched(repo, base, ref, changed[lane["id"]])
+            if why:
+                warn(shown(f"main-touched for lane {lane['id']} went unread: {why}"))
+        if row["base_overlaps"]:
+            flags.append("main-touched")
         if any(len(claimers.get(r, [])) > 1 for r in lane.get("claims", [])):
             flags.append("conflict")
         row["overlaps"] = overlaps.get(lane["id"], {})
@@ -1680,7 +1712,8 @@ def board(repo: Repo) -> list[dict]:
             flags.append("orphan")
         if stopped:
             flags.append("stopped")
-        row["handoff_why"] = handoff_why(repo, lane, ref, merges_of(repo, prs, lane, guess))
+        row["merges"] = merges_of(repo, prs, lane, guess)
+        row["handoff_why"] = handoff_why(repo, lane, ref, row["merges"])
         if row["handoff_why"]:
             flags.append("handoff?")
         row["flags"] = flags
@@ -1812,7 +1845,7 @@ def cmd_ls(args) -> int | None:
     for name in parse_locks(repo.config().get("locks", "")):
         if (holder := lock_holder(repo, name)) is not None:
             say(f"locks: {name} held by {holder}")
-    for line in overlap_lines(rows):
+    for line in overlap_lines(rows) + main_lines(rows):
         say(line)
     if line := cap_line(repo):
         say(line)
@@ -1824,14 +1857,26 @@ def cmd_ls(args) -> int | None:
         warn(f"install hold unknown ({type(e).__name__}: {e})")
         held = []
     ids = {os.path.realpath(x["path"]): x["id"] for x in repo.lanes(shared=True)}
+    merges = {row["id"]: row["merges"] for row in rows}
     for h in held:
         who = f"lane {ids[h['root']]}" if h["root"] in ids else h["root"]
         n = len(h["links"])
+        late = ("; overdue: a PR of that lane merged after this install"
+                if reinstall_overdue(h, merges.get(ids.get(h["root"]))) else "")
         say(f"install: held by {who} (branch {h['branch']}, {n} link{'' if n == 1 else 's'}): "
-            f"the lead's ./setup.sh in {h['main']} releases it")
+            f"the lead's ./setup.sh in {h['main']} releases it{late}")
     # The DA15/DA16 tripwire: a warning like the lines above, so the exit stays 0.
     for reason in lanelib.repo_tamper(repo):
         say(f"git: {reason}")
+
+
+def reinstall_overdue(hold: dict, merges: list[float | None] | None) -> bool:
+    """Whether a PR of the lane holding the install merged after that install (install_state's
+    holders), so the lead's post-merge reinstall never ran. A merge older than the install is a
+    Keep-open lane's earlier PR. merges is merges_of's: unknown to gh, or a merge time it didn't
+    give, counts as no."""
+    since = hold["linked_at"]
+    return since is not None and any(m is not None and m > since for m in merges or [])
 
 
 def cap_line(repo: Repo) -> str | None:
@@ -2192,16 +2237,16 @@ def cmd_open(args) -> None:
 
 def unpark_check(repo: Repo, lane: dict, live: list[dict] | None) -> str | None:
     """`open` of a parked lane: refuse while the other lanes' slot holders (holds_slot) pass the
-    cap, since at most one lane goes over, and only to rebase and merge (Hayden's pick,
+    cap, since at most one lane goes over, and only to merge main and its PR (Hayden's pick,
     2026-10-29). At the cap, the line that says it goes over; under it, None."""
     cap = int(repo.config().get("cap", DEFAULT_CAP))
     others = [x for x in held_lanes(repo) if x["id"] != lane["id"] and holds_slot(repo, x, live)]
     if len(others) > cap:
         raise LaneError(f"lane {lane['id']} is parked, and {len(others)} other lanes hold a slot, "
-                        f"over the cap of {cap} already: one lane may go over by one, for its "
-                        "rebase and merge. Park or close one first")
+                        f"over the cap of {cap} already: one lane may go over by one, to merge "
+                        "main and its PR. Park or close one first")
     if len(others) == cap:
-        return f"lane {lane['id']} is over the cap of {cap} by one: for its rebase and merge"
+        return f"lane {lane['id']} is over the cap of {cap} by one: to merge main and its PR"
     return None
 
 
@@ -3200,14 +3245,47 @@ def merged_in(repo: Repo, sha: str, cur: str) -> bool:
                      ok=(0, 1)).returncode == 0
 
 
+DRIVERS_OFF: dict[str, list[str]] = {}  # drivers_off's answer by repo, read once per command
+
+
+def git_version(text: str) -> tuple[int, ...] | None:
+    """`git version`'s numbers (`git version 2.43.0` gives (2, 43, 0)), or None."""
+    m = re.match(r"git version (\d+)\.(\d+)(?:\.(\d+))?", text)
+    return tuple(int(x) for x in m.groups() if x is not None) if m else None
+
+
+def drivers_off(repo: Repo) -> list[str]:
+    """git's global options that keep merge_tree's merges free of .gitattributes merge drivers:
+    no global attributes file, and attributes from the empty tree in place of the worktree's
+    and the index's. --attr-source came in git 2.41, and merge-tree could segfault on it until
+    2.43 (both releases' notes), so an older git keeps the worktree's drivers, and the trial
+    says so once. limit: <common>/info/attributes applies on any git, which has no switch for
+    it; only a lane that writes there on purpose loses the check, and only for its own trial."""
+    if repo.toplevel not in DRIVERS_OFF:
+        opts = ["-c", f"core.attributesFile={os.devnull}"]
+        if (git_version(trial_git(repo, ["version"]).stdout) or (0,)) >= (2, 43):
+            empty = trial_git(repo, ["hash-object", "-t", "tree", os.devnull]).stdout.strip()
+            opts.append(f"--attr-source={empty}")
+        else:
+            warn("git is older than 2.43 or its version won't read, so a merge driver in the lane's "
+                 ".gitattributes still applies to the trial's merges; GitHub's merge has none")
+        DRIVERS_OFF[repo.toplevel] = opts
+    return DRIVERS_OFF[repo.toplevel]
+
+
 def merge_tree(repo: Repo, ours: str, theirs: str, label: str) -> tuple[str | None, list[str]]:
     """(the merged tree, []) when commit theirs merges cleanly into ours, else (None, the paths
     git names as conflicted, which may be none). Writes objects only. Any other git outcome
     (unrelated histories, a bad commit) aborts, and a conflicted name that isn't UTF-8 stops
-    the trial naming label, so the lane needn't bisect for it."""
+    the trial naming label, so the lane needn't bisect for it.
+
+    Merge drivers are off (drivers_off), as the forge's merge has none: a `merge=union` in the
+    lane's .gitattributes or the user's global attributes file would pass a merge GitHub
+    refuses."""
     try:
-        p = trial_git(repo, ["merge-tree", "--write-tree", "-z", "--name-only", "--no-messages",
-                             "--end-of-options", ours, theirs], ok=(0, 1))
+        p = trial_git(repo, [*drivers_off(repo), "merge-tree", "--write-tree", "-z",
+                             "--name-only", "--no-messages", "--end-of-options", ours, theirs],
+                      ok=(0, 1))
     except NotUtf8:
         raise NotUtf8(shown(f"git merge-tree's output merging {label} isn't UTF-8 (a lane names "
                             "its own files), so the trial stopped; `lane trial <id> ...` with "

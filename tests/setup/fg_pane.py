@@ -25,7 +25,10 @@ def spawn(testcase, argv0, args=("60",), exe=None, cwd=None):
                 if cwd:
                     os.chdir(cwd)
                 os.execv(exe or argv0, [argv0, *args])
-            os.setpgid(job, job)
+            try:
+                os.setpgid(job, job)
+            except PermissionError:  # the job has exec'd, so its own setpgid already ran
+                pass
             os.tcsetpgrp(0, job)
             os.execv("/bin/sleep", ["sleep", "60"])
         finally:

@@ -28,6 +28,9 @@ from test_cli import load_lane_script
 
 import lanelib  # on sys.path through _fixture
 
+OLD_GIT = (load_lane_script().git_version(subprocess.run(["git", "version"], capture_output=True,
+                                                         text=True).stdout) or (0,)) < (2, 43)
+
 OLD = 1577836800  # 2020-01-01: an mtime that leaves a tracked file stat-dirty in the index
 SUB = "vendored-mod"  # the planted submodule: a name no record names by accident
 
@@ -173,6 +176,131 @@ class Overlap(LaneWork):
         self.assertEqual(rows["beta"]["overlaps"], {})  # all its work is in origin/main
         self.assertEqual(rows["alpha"]["overlaps"], {})  # never touched later.txt
         self.assertEqual(rows["gamma"]["overlaps"], {})
+
+
+class MainTouched(LaneWork):
+    """The board's main-touched flag: a lane behind the base whose files main changed since it
+    branched, the one reason a lane waiting its merge turn merges main before that turn."""
+
+    def setUp(self):
+        super().setUp()
+        self.alpha = self.new("alpha")
+        self.commit_files(self.alpha, ["a.txt", "STATUS.md"])
+
+    def main_moves(self, names):
+        self.commit_files(self.main, names)
+        self.git("push", "-q", "origin", "main")
+
+    def board_lines(self):
+        p = self.run_lane("ls")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        return [line for line in p.stdout.splitlines() if line.startswith("main: ")]
+
+    def assertUntouched(self):
+        row = self.rows()[0]["alpha"]
+        self.assertNotIn("main-touched", row["flags"])
+        self.assertEqual(row["base_overlaps"], [])
+        self.assertEqual(self.board_lines(), [])
+
+    def test_a_file_main_and_the_lane_both_changed_flags_it_and_the_line_names_it(self):
+        self.main_moves(["a.txt", "other.txt"])
+        row = self.rows()[0]["alpha"]
+        self.assertIn("main-touched", row["flags"])
+        self.assertIn("rebase", row["flags"])
+        self.assertEqual(row["base_overlaps"], ["a.txt"])
+        self.assertEqual(self.board_lines(), ["main: changed a.txt, which lane alpha changes too: "
+                                              "merge origin/main now"])
+
+    def test_main_moving_elsewhere_leaves_only_rebase(self):
+        self.main_moves(["other.txt"])
+        self.assertUntouched()
+        self.assertIn("rebase", self.rows()[0]["alpha"]["flags"])
+
+    def test_a_lane_not_behind_main_is_never_flagged(self):
+        self.assertUntouched()
+
+    def test_status_alone_doesnt_count_since_a_carry_overwrites_it(self):
+        self.main_moves(["STATUS.md"])
+        self.assertUntouched()
+
+    def test_an_uncommitted_file_counts(self):
+        self.write(os.path.join(self.alpha, "wip.txt"), "wip\n")
+        self.main_moves(["wip.txt"])
+        self.assertEqual(self.rows()[0]["alpha"]["base_overlaps"], ["wip.txt"])
+
+    def test_a_merge_of_main_clears_it(self):
+        self.main_moves(["a.txt"])
+        self.git("fetch", "-q", "origin", cwd=self.alpha)
+        self.git("merge", "-q", "-X", "ours", "--no-edit", "origin/main", cwd=self.alpha)
+        self.assertUntouched()
+
+    def test_only_commits_since_the_lanes_last_merge_of_main_count(self):
+        self.main_moves(["a.txt"])
+        self.git("merge", "-q", "-X", "ours", "--no-edit", "origin/main", cwd=self.alpha)
+        self.main_moves(["other.txt"])
+        self.assertUntouched()
+
+    def test_the_line_stops_at_the_overlap_limit(self):
+        names = [f"f{i}.txt" for i in range(7)]
+        self.commit_files(self.alpha, names)
+        self.main_moves(names)
+        self.assertEqual(self.board_lines(), ["main: changed f0.txt, f1.txt, f2.txt, f3.txt, "
+                                              "f4.txt (and 2 more), which lane alpha changes too: "
+                                              "merge origin/main now"])
+
+    def test_a_stale_lane_is_left_out(self):
+        self.main_moves(["a.txt"])
+        self.git("worktree", "remove", "--force", self.alpha)
+        self.assertEqual(self.rows()[0]["alpha"]["base_overlaps"], [])
+
+    def test_a_file_name_cant_steer_the_terminal(self):
+        name = "evil\x1b[2J.txt"
+        self.commit_files(self.alpha, [name])
+        self.main_moves([name])
+        (line,) = self.board_lines()
+        self.assertNotIn("\x1b", line)
+
+
+class DriversOff(unittest.TestCase):
+    """merge_tree's switch for merge drivers, by git version: --attr-source came in 2.41, and
+    merge-tree could segfault on it until 2.43."""
+
+    def setUp(self):
+        self.mod = load_lane_script()
+
+    def opts(self, version):
+        repo = mock.Mock(toplevel=f"/r/{version}")
+        calls = []
+
+        def git(_repo, args, **_):
+            calls.append(args)
+            out = version if args == ["version"] else "4b825dc642cb6eb9a060e54bf8d69288fbee4904\n"
+            return subprocess.CompletedProcess(args, 0, out, "")
+
+        err = io.StringIO()
+        with mock.patch.object(self.mod, "trial_git", git), contextlib.redirect_stderr(err):
+            first = self.mod.drivers_off(repo)
+            self.assertEqual(self.mod.drivers_off(repo), first)  # read once per repo
+        self.assertEqual(calls.count(["version"]), 1)
+        return first, err.getvalue()
+
+    def test_git_243_turns_every_driver_source_off(self):
+        opts, err = self.opts("git version 2.43.0\n")
+        self.assertEqual(opts, ["-c", f"core.attributesFile={os.devnull}",
+                                "--attr-source=4b825dc642cb6eb9a060e54bf8d69288fbee4904"])
+        self.assertEqual(err, "")
+
+    def test_an_older_or_unreadable_git_keeps_them_and_says_so_once(self):
+        for version in ("git version 2.42.1\n", "git version 2.39.5 (Apple Git-154)\n", "huh\n"):
+            with self.subTest(version=version):
+                opts, err = self.opts(version)
+                self.assertEqual(opts, ["-c", f"core.attributesFile={os.devnull}"])
+                self.assertEqual(err.count("git is older than 2.43"), 1)
+
+    def test_git_version_reads_the_numbers(self):
+        self.assertEqual(self.mod.git_version("git version 2.43.0"), (2, 43, 0))
+        self.assertEqual(self.mod.git_version("git version 2.50.1.windows.1"), (2, 50, 1))
+        self.assertIsNone(self.mod.git_version("version 2"))
 
 
 class OverlapGuards(LaneWork):
@@ -731,6 +859,33 @@ class Trial(LaneWork):
         self.assertIn("suite 1 (test -f c.txt && test ! -f b.txt): ok", out)  # gamma went on
         self.assertIn("FAILED: lane beta didn't merge", out)
         self.assertEqual(self.leftovers(), ([], []))
+
+    @unittest.skipIf(OLD_GIT, "drivers_off leaves merge drivers on before git 2.43")
+    def test_a_merge_driver_in_the_lanes_attributes_hides_no_conflict(self):
+        # GitHub ignores merge drivers, so a union driver the trial honoured would pass a merge
+        # the forge then refuses. Worktree and committed attributes both.
+        self.commit_files(self.beta, ["shared.txt"])
+        self.write(os.path.join(self.alpha, ".gitattributes"), "shared.txt merge=union\n")
+        self.commit_files(self.alpha, ["shared.txt"])
+        rc, out, err = self.trial("--run", "true")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("lane trial: conflict with lane beta: shared.txt", out)
+        self.commit_files(self.alpha, [".gitattributes"])
+        self.write(os.path.join(self.alpha, ".gitattributes"), "shared.txt merge=union\n")
+        self.git("commit", "-q", "-am", "attributes", cwd=self.alpha)
+        rc, out, err = self.trial("--run", "true")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("lane trial: conflict with lane beta: shared.txt", out)
+
+    @unittest.skipIf(OLD_GIT, "drivers_off leaves merge drivers on before git 2.43")
+    def test_a_merge_driver_in_the_global_attributes_hides_no_conflict(self):
+        self.commit_files(self.beta, ["shared.txt"])
+        self.commit_files(self.alpha, ["shared.txt"])
+        self.write(os.path.join(self.home, ".config", "git", "attributes"),
+                   "shared.txt merge=union\n")
+        rc, out, err = self.trial("--run", "true")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("lane trial: conflict with lane beta: shared.txt", out)
 
     def test_a_conflict_between_two_other_lanes_names_them_not_this_lane(self):
         # beta and gamma change one file alpha never touches: gamma conflicts with beta (merged
