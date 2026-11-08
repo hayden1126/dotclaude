@@ -3090,10 +3090,22 @@ class SkippedLine(BashBase):
             "gh pr create -t x --body \"$(cat <<'EOF'\nno line\nEOF\n)\""))
 
     def test_help_is_left_alone(self):
-        for command in ("gh pr create --help", "gh pr ready --help", "gh pr ready -h"):
+        for command in ("gh pr create --help", "gh pr ready --help", "gh pr ready -h",
+                        "gh pr create -t x --body y --dry-run"):
             with self.subTest(command=command):
                 self.assertIsNone(self.ready(command))
         self.assertIsNone(self.ran())
+
+    def test_the_wait_counts_from_the_process_not_the_pass(self):
+        proc = subprocess.Popen(["/bin/sleep", "20"], stdout=subprocess.PIPE)
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.kill)
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "PROCESS_START", time.monotonic() - 100), \
+                mock.patch.object(PC, "START", time.monotonic()):
+            began = time.monotonic()
+            self.assertIsNone(PC.body_has_line(proc))
+        self.assertLess(time.monotonic() - began, 1)
 
     def test_no_environment_variable_picks_the_binary(self):
         with open(ENGINE) as f:

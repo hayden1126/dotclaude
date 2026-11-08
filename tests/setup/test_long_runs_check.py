@@ -138,7 +138,11 @@ class HeavyGates(Base):
     def test_a_call_the_practices_hook_may_deny_is_left_to_it(self):
         # Two hooks denying one call show one reason only, so this one yields.
         for command in ("lane trial --run x && git push", "lane trial --run x; git commit -m y",
-                        "lane trial --run x && gh pr ready 3", "lane lock suite -- npm i acme"):
+                        "lane trial --run x && gh pr ready 3", "lane lock suite -- npm i acme",
+                        "pip3 install foo && lane trial --run x",
+                        "npm --prefix web install x && lane trial --run x",
+                        "yarn workspace web add x && lane trial --run x",
+                        "python3 -m pip install foo && lane trial --run x"):
             with self.subTest(command=command):
                 self.assertIsNone(self.pre(command))
 

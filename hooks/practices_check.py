@@ -256,6 +256,7 @@ import sys
 import time
 
 START = time.monotonic()
+PROCESS_START = START  # two_passes resets START; the 5 s kill counts from here
 try:
     import tomllib
 except ImportError:  # python3 < 3.11: reported by the startup health check
@@ -2577,7 +2578,7 @@ def review_block(touched, mb, head, branch, shown=8):
 
 SKIPPED_ID = "SKIPPED-LINE"
 SKIPPED_LINE = re.compile(r"^[ \t]*(?:[-*+][ \t]+)?(?:\*\*|__)?Skipped(?:\*\*|__)?:(.*)$", re.M)
-GH_SHARE = 1.5  # of BUDGET, counted from the start of the run; under settings.json's 5 s kill
+GH_SHARE = 1.5  # of BUDGET, from the process's start, so both passes fit settings.json's 5 s kill
 REPO_NAME = re.compile(r"[A-Za-z0-9][\w.-]*/[\w.][\w.-]*", re.A)
 PR_SELECTOR = re.compile(r"\w[\w./-]*", re.A)
 PR_URL = re.compile(r"https://github\.com/([^/\s]+/[^/\s]+)/pull/(\d+)(?:[/?#]\S*)?")
@@ -2720,7 +2721,7 @@ def skipped_checks(event, ghs, cfg, bounds):
         return []
     out = []
     for args, cwd in ghs:
-        if "--help" in args or "-h" in args:
+        if "--help" in args or "-h" in args or "--dry-run" in args:
             continue
         if "--web" in args or "-w" in args:
             log("skipped-line", "a PR body typed in the browser, so the PR went unchecked")
@@ -2739,7 +2740,8 @@ def body_has_line(proc):
     this stops accidents and a GitHub outage shouldn't stop work."""
     import subprocess  # noqa: PLC0415 (only the Bash levels pay for it)
     try:
-        out, _ = proc.communicate(timeout=max(0.0, START + GH_SHARE * BUDGET - time.monotonic()))
+        out, _ = proc.communicate(
+            timeout=max(0.0, PROCESS_START + GH_SHARE * BUDGET - time.monotonic()))
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.communicate()

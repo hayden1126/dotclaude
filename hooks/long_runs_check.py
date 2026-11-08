@@ -45,7 +45,7 @@ PC = importlib.util.module_from_spec(_spec)
 sys.modules.setdefault("practices_check", PC)
 _spec.loader.exec_module(PC)
 
-FROM_PRACTICES = ("ADD_VERBS", "Budget", "CMD_MAX", "CONFIG_MAX", "Transcripts", "bash_project",
+FROM_PRACTICES = ("install_of", "Budget", "CMD_MAX", "CONFIG_MAX", "Transcripts", "bash_project",
                   "command_of", "config_home", "is_loaded", "is_off", "l1_window", "load_bash_words",
                   "load_config", "log", "names_a_call", "read_toml", "state_dir")
 
@@ -209,12 +209,18 @@ def repo_gates(project):
     return out
 
 
-def may_be_denied_elsewhere(cmd, parsed):
-    """Whether the practices hook could deny this call: see the module docstring."""
+def may_be_denied_elsewhere(cmd, commands):
+    """Whether the practices hook could deny this call: see the module docstring. Installs go
+    through that hook's own reader, so the two can't disagree on what an install is."""
     if PC.names_a_call(cmd):
         return True
-    return any(os.path.basename(w) in PC.ADD_VERBS and nxt in PC.ADD_VERBS[os.path.basename(w)]
-               for words in parsed for w, nxt in zip(words, words[1:]))
+    for n, a in commands:
+        if n == "lane" and "--" in a and a.index("--") + 1 < len(a):  # what `lane lock` wraps
+            inner = a[a.index("--") + 1:]
+            n, a = os.path.basename(inner[0]), inner[1:]
+        if n and PC.install_of(n, a):
+            return True
+    return False
 
 
 def state_path(event):
@@ -265,7 +271,7 @@ def check(event):
     suites = {suite_key(n, a, rest) for n, a in commands if n
               and (rest := suite_args(n, a)) is not None}
     heavy = any(n and is_heavy(n, a, gates) for n, a in commands)
-    if not (heavy or suites) or may_be_denied_elsewhere(cmd, parsed):
+    if not (heavy or suites) or may_be_denied_elsewhere(cmd, commands):
         return None
     cfg = PC.load_config(project)
     skill_dir = os.path.join(PC.config_home(), "skills", SKILL)
