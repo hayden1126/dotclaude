@@ -20,7 +20,7 @@ Why it comes first: in the repo's eval, the two commonest auth failures were an 
 
 A no-skill run found a third bug most models make: a remembered session whose only expiry is the cookie's Max-Age, so the server honours a copied cookie forever. So SEC-33 sits third in the gate, with server-side lifetime in its line. The gate order is SEC-37, SEC-39, SEC-33, SEC-36, SEC-41.
 
-The gate lines total 604 characters. The post-compaction digest holds every loaded skill's gate in 6,000 characters (2,000 before the data-layer PR), and tests/setup pins that every shipped skill's whole gate fits.
+The gate lines total 604 characters. The post-compaction digest holds every loaded skill's gate within DIGEST_MAX (hooks/practices_check.py), and tests/setup pins that every shipped skill's whole gate fits.
 
 ## Description check
 

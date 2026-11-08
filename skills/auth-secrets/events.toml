@@ -20,7 +20,7 @@
 skill = "auth-secrets"
 
 # The gate lines stay near 600 characters in all: the post-compaction digest holds every
-# loaded skill's gate in DIGEST_MAX (6,000) characters, and tests/setup caps each skill's at 1,000.
+# loaded skill's gate within DIGEST_MAX, and tests/setup caps each skill's gate (GATE_BUDGET).
 gate = [
   "Build email or phone changes as pending until a hashed single-use link to the NEW address is followed (SEC-37).",
   "Build a same-origin check on each redirect param: strings only, no backslash or control character, stored paths start with exactly one / (SEC-39).",
