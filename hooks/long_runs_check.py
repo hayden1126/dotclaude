@@ -3,7 +3,7 @@
 
 Sessions skip that skill and plan long runs without it. A deny at the command is the one point
 every such session passes, but a deny that fires in most sessions gets ignored. Replayed over
-45 days of transcripts, the triggers below fire in 163 of 446 real sessions that ran a gate or a
+45 days of transcripts, the triggers below fire in 162 of 446 real sessions that ran a gate or a
 PR command (.lane/artifacts/replay.py in the guards lane). It fires only on:
 
   - heavy gates, at first use: `lane trial`, `lane lock suite` or `gate`, and the repo's own
@@ -45,7 +45,7 @@ PC = importlib.util.module_from_spec(_spec)
 sys.modules.setdefault("practices_check", PC)
 _spec.loader.exec_module(PC)
 
-FROM_PRACTICES = ("install_of", "Budget", "CMD_MAX", "CONFIG_MAX", "Transcripts", "bash_project",
+FROM_PRACTICES = ("ADD_VERBS", "PIP_HEAD", "Budget", "CMD_MAX", "CONFIG_MAX", "Transcripts", "bash_project",
                   "command_of", "config_home", "is_loaded", "is_off", "l1_window", "load_bash_words",
                   "load_config", "log", "names_a_call", "read_toml", "state_dir")
 
@@ -209,16 +209,16 @@ def repo_gates(project):
     return out
 
 
-def may_be_denied_elsewhere(cmd, commands):
-    """Whether the practices hook could deny this call: see the module docstring. Installs go
-    through that hook's own reader, so the two can't disagree on what an install is."""
+def may_be_denied_elsewhere(cmd):
+    """Whether the practices hook could deny this call: see the module docstring. Read as plain
+    text, wherever the words sit (`bash -c`, `sudo -E`, a substitution, what `lane lock` wraps),
+    since that hook reads more places than this one parses. A false match only skips a deny."""
     if PC.names_a_call(cmd):
         return True
-    for n, a in commands:
-        if n == "lane" and "--" in a and a.index("--") + 1 < len(a):  # what `lane lock` wraps
-            inner = a[a.index("--") + 1:]
-            n, a = os.path.basename(inner[0]), inner[1:]
-        if n and PC.install_of(n, a):
+    words = re.findall(r"[\w.+-]+", cmd)
+    for i, word in enumerate(words):
+        manager = "pip" if PC.PIP_HEAD.fullmatch(word) else word
+        if manager in PC.ADD_VERBS and PC.ADD_VERBS[manager] & set(words[i + 1:]):
             return True
     return False
 
@@ -271,7 +271,7 @@ def check(event):
     suites = {suite_key(n, a, rest) for n, a in commands if n
               and (rest := suite_args(n, a)) is not None}
     heavy = any(n and is_heavy(n, a, gates) for n, a in commands)
-    if not (heavy or suites) or may_be_denied_elsewhere(cmd, commands):
+    if not (heavy or suites) or may_be_denied_elsewhere(cmd):
         return None
     cfg = PC.load_config(project)
     skill_dir = os.path.join(PC.config_home(), "skills", SKILL)

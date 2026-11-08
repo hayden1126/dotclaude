@@ -2999,7 +2999,9 @@ class SkippedLine(BashBase):
                 ("gh -R a/b pr ready 3", "pr view 3 --repo a/b --json body"),
                 ("gh pr ready 3 --repo a/b", "pr view 3 --repo a/b --json body"),
                 ("gh pr ready 3 --repo=a/b", "pr view 3 --repo a/b --json body"),
-                ("gh pr ready 3 -R=a/b", "pr view 3 --repo a/b --json body")):
+                ("gh pr ready 3 -R=a/b", "pr view 3 --repo a/b --json body"),
+                ("GH_REPO=a/b gh pr ready 3", "pr view 3 --repo a/b --json body"),
+                ("GH_REPO=a/b gh pr ready 3 --repo c/d", "pr view 3 --repo c/d --json body")):
             with self.subTest(command=command):
                 self.ready(command)
                 self.assertEqual(self.ran(), want)
@@ -3011,6 +3013,17 @@ class SkippedLine(BashBase):
                 self.sh("remote", "set-url", "origin", url)
                 self.ready()
                 self.assertEqual(self.ran(), "pr view 12 --repo o/r --json body")
+
+    def test_a_fork_clone_reads_the_repo_gh_would(self):
+        self.sh("remote", "add", "upstream", "https://github.com/up/stream.git")
+        self.ready()
+        self.assertEqual(self.ran(), "pr view 12 --repo up/stream --json body")
+        self.sh("config", "remote.origin.gh-resolved", "base")
+        self.ready()
+        self.assertEqual(self.ran(), "pr view 12 --repo o/r --json body")
+        self.sh("config", "remote.origin.gh-resolved", "x/y")
+        self.ready()
+        self.assertEqual(self.ran(), "pr view 12 --repo x/y --json body")
 
     def test_what_it_cannot_read_is_allowed_and_logged(self):
         self.flag("fail")
@@ -3121,7 +3134,7 @@ class SkippedLine(BashBase):
             f.write("\n" * 60000)
         repo = mock.Mock(common_dir=os.path.join(self.proj, ".git"))
         began = time.monotonic()
-        self.assertIsNone(PC.origin_name(repo))
+        self.assertIsNone(PC.base_repo_name(repo))
         self.assertLess(time.monotonic() - began, 0.5)
 
     def test_create_reads_a_body_file_inside_the_project(self):

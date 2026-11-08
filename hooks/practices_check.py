@@ -2585,6 +2585,7 @@ PR_URL = re.compile(r"https://github\.com/([^/\s]+/[^/\s]+)/pull/(\d+)(?:[/?#]\S
 ORIGIN_URL = re.compile(r"(?:https://(?:[^/@\s]+@)?|ssh://git@|git@)github\.com[:/]"
                         r"([^/\s]+/[^/\s]+?)(?:\.git)?/?")
 HEREDOC_BODY = re.compile(r"(?:--body[= ]|-b[ =]?)\s*\"?\$\(\s*cat\s+<<-?\s*(['\"\\\\]?)([\w.-]+)")
+GH_REPO_PREFIX = re.compile(r"(?:^|[\s;&|(])GH_REPO=(\S+)")
 EXPANSION = re.compile(r"\$[A-Za-z_{(]")  # known limit: a single-quoted `$X` reads as one, and goes unchecked
 SKIPPED_REASON = (
     "[practices:skipped] This PR's body has no `Skipped:` line, so it can't be marked ready. Add "
@@ -2624,26 +2625,36 @@ def flag_values(args, short, long_):
             yield a[2:].removeprefix("=")  # gh's flag parser takes -b=value as well as -bvalue
 
 
-def origin_name(repo):
-    """The owner/name of the repo's origin on github.com, or None. Read from its config file as
-    text, so no program that config names runs."""
+def base_repo_name(repo):
+    """The owner/name gh would use on github.com, or None: the remote `gh repo set-default`
+    marked, else upstream, github, origin, in gh's order. Read from the config file as text, so
+    no program that config names runs."""
     try:
         text = read_plain(os.path.join(repo.common_dir, "config"), CONFIG_MAX).decode(
             "utf-8", "replace")
     except OSError:
         return None
-    inside = False
+    remotes, current = {}, None
     for line in text.splitlines():  # by line: a regex over a repo-written file can go quadratic
         line = line.strip()
         if line.startswith("["):
-            inside = line == '[remote "origin"]'
-        elif inside and line.partition("=")[0].strip() == "url":
-            match = ORIGIN_URL.fullmatch(line.partition("=")[2].strip())
+            head = re.fullmatch(r'\[remote "([^"]+)"\]', line)
+            current = remotes.setdefault(head.group(1), {}) if head else None
+        elif current is not None:
+            key, _, value = line.partition("=")
+            current.setdefault(key.strip(), value.strip())
+    marked = [r["gh-resolved"] for r in remotes.values() if "gh-resolved" in r]
+    if marked and marked[0] != "base":  # `set-default` on another repo stores its name
+        return marked[0]
+    order = [n for n, r in remotes.items() if r.get("gh-resolved") == "base"]
+    for name in (*order, "upstream", "github", "origin"):
+        if name in remotes:
+            match = ORIGIN_URL.fullmatch(remotes[name].get("url", ""))
             return match.group(1) if match else None
     return None
 
 
-def start_body_read(args, cwd, pr, bounds):
+def start_body_read(event, args, cwd, pr, bounds):
     """A running `gh pr view` of the PR a `ready` call names, or None (logged) when it can't be
     named. It starts here and is read last, so its network wait doesn't spend the budget of the
     checks that run beside it. gh runs outside the repo (cwd /, a --repo and a selector, so it
@@ -2662,11 +2673,14 @@ def start_body_read(args, cwd, pr, bounds):
     repos = list(flag_values(args, "-R", "--repo"))
     if repos and name is None:
         name = repos[-1]
+    prefixed = GH_REPO_PREFIX.search(command_of(event))
+    if prefixed and name is None:
+        name = prefixed.group(1).strip("'\"")
     if name is None or target is None:
         repo = open_repo({"cwd": cwd, "git_dir": None, "work_tree": None}, "skipped-line", bounds)
         if repo is None:
             return None
-        name = name or origin_name(repo)
+        name = name or base_repo_name(repo)
         if target is None:
             target = repo.run("rev-parse", "--abbrev-ref", "HEAD").decode(
                 "utf-8", "surrogateescape").strip()
@@ -2727,7 +2741,7 @@ def skipped_checks(event, ghs, cfg, bounds):
             log("skipped-line", "a PR body typed in the browser, so the PR went unchecked")
             continue
         try:
-            out.append(start_body_read(args, cwd, pr_ready(args), bounds)
+            out.append(start_body_read(event, args, cwd, pr_ready(args), bounds)
                        if without_repo(args)[1] == "ready"
                        else create_has_line(event, args, cwd))
         except (Budget, GitError) as e:

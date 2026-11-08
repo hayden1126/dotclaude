@@ -142,7 +142,10 @@ class HeavyGates(Base):
                         "pip3 install foo && lane trial --run x",
                         "npm --prefix web install x && lane trial --run x",
                         "yarn workspace web add x && lane trial --run x",
-                        "python3 -m pip install foo && lane trial --run x"):
+                        "python3 -m pip install foo && lane trial --run x",
+                        "lane trial --run x && bash -c 'npm install left-pad'",
+                        "lane trial --run x && echo $(npm i y)",
+                        "sudo -E npm i x && lane trial --run x"):
             with self.subTest(command=command):
                 self.assertIsNone(self.pre(command))
 
