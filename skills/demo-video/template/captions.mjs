@@ -76,7 +76,7 @@ let scratch = null;
 const shown = file => path.relative(process.cwd(), file) || '.';
 const rateOf = text => { const [top, bottom] = String(text).split('/').map(Number); return top / (bottom || 1); };
 const words = text => String(text ?? '').trim().split(/\s+/).filter(Boolean);
-const srtTime = seconds => new Date(Math.max(0, seconds) * 1000).toISOString().slice(11, 23).replace('.', ',');
+const srtTime = seconds => new Date(Math.round(Math.max(0, seconds) * 1000)).toISOString().slice(11, 23).replace('.', ',');
 
 // beats.mjs and steps.json come from the project, so text is printed with no control, line-separator
 // or direction characters: it can't move the cursor, clear a line, reorder text or start a line that
@@ -207,16 +207,19 @@ const assTime = seconds => {
 export function assScript(beats, labels, width, height) {
   const size = share => Math.max(8, Math.round(height * share));
   const margin = size(0.04);
+  const pad = size(0.012);
   // With labels in the page, the page's caption box holds the bottom edge, so subtitles sit above it.
   const subtitleMargin = labels === 'page' ? PAGE_BOX_PX + size(0.015) : margin;
   const style = (name, fontSize, bold, alignment, marginV) => `Style: ${name},sans-serif,${fontSize},&H00FFFFFF,&H00FFFFFF,`
-    + `${BOX},${BOX},${bold},0,0,0,100,100,0,0,3,${size(0.012)},0,${alignment},${margin},${margin},${marginV},1`;
+    + `${BOX},${BOX},${bold},0,0,0,100,100,0,0,3,${pad},0,${alignment},${margin},${margin},${marginV},1`;
   const events = [];
-  const event = (start, end, name, text) => events.push(`Dialogue: 0,${assTime(start)},${assTime(end)},${name},,0,0,0,,${text}`);
+  // Boxes are padded sideways only: each line gets its own box, and a vertical pad would overlap the
+  // next line's box in a darker band.
+  const event = (start, end, name, text, tags = '') => events.push(`Dialogue: 0,${assTime(start)},${assTime(end)},${name},,0,0,0,,{\\xbord${pad}\\ybord0${tags}}${text}`);
   for (const beat of beats) {
     for (const cue of subtitleCues(beat.say, beat.start, beat.end)) event(cue.start, cue.end, 'Subtitle', cue.lines.map(assText).join('\\N'));
     if (labels === 'after' && words(beat.label).length) event(beat.start, beat.end, 'Label', assText(beat.label));
-    if (beat.note) event(beat.start, beat.end, 'Note', `{\\an${ANCHOR[beat.note.at]}}${wrap(beat.note.text, NOTE_CHARS).map(assText).join('\\N')}`);
+    if (beat.note) event(beat.start, beat.end, 'Note', wrap(beat.note.text, NOTE_CHARS).map(assText).join('\\N'), `\\an${ANCHOR[beat.note.at]}`);
   }
   return [
     '[Script Info]', 'ScriptType: v4.00+', `PlayResX: ${width}`, `PlayResY: ${height}`, 'WrapStyle: 0', 'ScaledBorderAndShadow: yes', '',
