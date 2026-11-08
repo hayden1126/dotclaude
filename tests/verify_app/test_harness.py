@@ -48,6 +48,7 @@ SLOTS = {
         "<fill: JOURNEYS key>",
         "<fill: route and clicks>",
         "<fill: observable end state>",
+        '<fill: each surface no journey covers, with its source path, or "none">',
         '<fill: app-specific edges, such as a lock file left after a SIGKILL, or "none">',
     ),
 }

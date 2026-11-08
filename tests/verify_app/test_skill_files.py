@@ -288,10 +288,8 @@ class Files(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, generator)
         recipe = read(os.path.join(TEMPLATE, "SKILL.md"))
-        self.assertRegex(recipe, r"(?m)^Measured `duration_seconds`, warm \(the cold first run in parentheses\): ")
-        maintain = " ".join(read(os.path.join(SKILL, "MAINTAIN.md")).split())
-        self.assertIn("a warm full run's and a quick run's `duration_seconds`, with this pass's first full run "
-                      "in parentheses as the cold one", maintain)
+        # The generator's first run is cold; an upkeep pass's may not be (UpkeepRunFindings).
+        self.assertRegex(recipe, r"(?m)^Measured `duration_seconds`, warm \(the first run in parentheses\): ")
 
     def test_every_text_searches_evidence_with_grep_a(self):
         """ugrep took a dev server's app.log for binary and printed no matches and no error."""
@@ -373,9 +371,9 @@ class Files(unittest.TestCase):
                        "`<skill dir>/template/SKILL.md`",
                        'new `APP` keys (such as `APP["env"]`), new sections, new Known edges',
                        "keep the repo's own fills",
-                       "After a refresh, re-prove on the new harness",
-                       "a full run, one planted wrong value in a `ctx.check` (exit 1 with its message) and its "
-                       "revert (exit 0), a `--quick` run, and new measured times on the Measured line",
+                       "After steps 1.1 and 1.2, re-prove on the new harness",
+                       "a full run (the first run of this pass), one planted wrong value in a `ctx.check` (exit 1 "
+                       "with its message) and its revert (exit 0), and a `--quick` run",
                        "only the harness folder and the recipe",
                        "The refresh in step 1 also replaces the four copied files from the template"):
             with self.subTest(phrase=phrase):
@@ -488,6 +486,131 @@ class Files(unittest.TestCase):
         self.assertEqual(len(skill_rows), 1)
         self.assertIn("`verify-app`", skill_rows[0])
         self.assertTrue([line for line in lines if line.startswith("| `tests/verify_app/` |")])
+
+
+def flat(path):
+    return " ".join(read(path).split())
+
+
+def maintain_step(number):
+    """One numbered step of MAINTAIN.md's Pass, flattened: from its number to the next one's."""
+    text = read(os.path.join(SKILL, "MAINTAIN.md"))
+    match = re.search(rf"(?ms)^{number}\. \*\*.*?(?=^{number + 1}\. \*\*|^## )", text)
+    return " ".join(match.group(0).split())
+
+
+def commit_section(name):
+    """The generator's Hand over section or MAINTAIN.md's Commit section."""
+    heading = {"SKILL.md": "## 4. Hand over", "MAINTAIN.md": "## Commit"}[name]
+    return read(os.path.join(SKILL, name)).split(heading, 1)[1]
+
+
+def before_the_snippet(text):
+    """A commit section's prose up to its staged-set snippet."""
+    return " ".join(text[:text.index("before=$(mktemp)")].split())
+
+
+class UpkeepRunFindings(unittest.TestCase):
+    """The first real MAINTAIN.md pass, in a Next.js-style app, found these gaps in the texts."""
+
+    def setUp(self):
+        self.maintain = flat(os.path.join(SKILL, "MAINTAIN.md"))
+        self.generator = flat(os.path.join(SKILL, "SKILL.md"))
+        self.recipe = flat(os.path.join(TEMPLATE, "SKILL.md"))
+
+    def assert_phrases(self, text, phrases):
+        for phrase in phrases:
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, text)
+
+    def test_a_refresh_runs_1_1_then_1_2_then_1_3(self):
+        """1.2 edits journeys.py and the recipe, so the re-proof in 1.3 has to come after it."""
+        self.assert_phrases(maintain_step(1), (
+            "refresh it before anything below, in this order: step 1.1, then 1.2, then 1.3",
+            "since 1.2 edits `journeys.py` and the recipe, and the re-proof has to cover those edits",
+            "With no refresh, run step 1.2 only, then go on with step 2",
+            "After steps 1.1 and 1.2, re-prove on the new harness"))
+        self.assertNotIn("with steps 1.1 and 1.3", self.maintain)
+
+    def test_re_deriving_ready_timeout_is_not_widening(self):
+        self.assert_phrases(self.maintain, (
+            "Setting `ready_timeout` again from a new measurement, by the skill's section 3 rule, is not "
+            "widening: widening is raising it to rescue a failing run with no measurement behind it",
+            "The comment beside `ready_timeout` carries the numbers it came from",
+            "never lower it from a run of this pass, which may have been warm"))
+        self.assertIn("check `ready_timeout` by the skill's section 3 rule", maintain_step(6))
+        self.assertIn("in a comment beside it that carries the numbers it came from", self.generator)
+
+    def test_the_measured_line_is_written_once_in_step_6(self):
+        self.assertNotIn("Measured line", maintain_step(1))
+        step6 = maintain_step(6)
+        self.assert_phrases(step6, (
+            "update the Measured line, the only step that writes it",
+            "with the first run of this pass's in parentheses, labelled `first`, not `cold`: the dev "
+            "server's caches may have been warm",
+            "`full 12.0 (first 29.3), quick 7.7`"))
+        self.assertNotIn("as the cold one", self.maintain)
+        self.assertIn("the first run of this pass", maintain_step(1))
+        recipe = read(os.path.join(TEMPLATE, "SKILL.md"))
+        self.assertRegex(recipe, r"(?m)^Measured `duration_seconds`, warm \(the first run in parentheses\): ")
+        self.assertIn("the cold run, with the dev server's caches empty", self.generator, "a new skill's rule stays")
+
+    def test_a_surface_no_journey_covers_goes_under_not_covered(self):
+        recipe = read(os.path.join(TEMPLATE, "SKILL.md"))
+        headings = re.findall(r"(?m)^## (.+)$", recipe)
+        self.assertEqual(headings[headings.index("Features") + 1:headings.index("Known edges")], ["Not covered"])
+        section = " ".join(recipe.split("## Not covered", 1)[1].split("## Known edges", 1)[0].split())
+        self.assert_phrases(section, (
+            "User-facing surfaces no journey covers, each with the source path that shows it",
+            "Add a journey for one only with the user's say",
+            "<fill: each surface no journey covers, with its source path, or \"none\">"))
+        self.assert_phrases(self.generator, (
+            "Fill the recipe's Not covered list from the interview: each user-facing surface no journey "
+            "covers, with its source path, or `none`",))
+        self.assert_phrases(maintain_step(3), (
+            "add it to the recipe's Not covered list with that path and name it in the report",
+            "Add a journey for it only with the user's say"))
+
+    def test_overlapping_known_edges_keep_one_per_cause(self):
+        self.assert_phrases(maintain_step(1), (
+            "One Known edge per cause",
+            "Keep the repo's specific facts (paths, counts, file names), take the template's general "
+            "wording, and drop the duplicate"))
+
+    def test_the_re_proof_runs_the_reload_check(self):
+        self.assert_phrases(maintain_step(1), (
+            "When the full run's `app.log` shows reload or rebuild lines (search it with `grep -a`), run the "
+            "skill's section 3 reload check",
+            "confirm the trigger with the dev tool's debug output, set through `APP[\"env\"]` for one run",
+            "take the setting out again, and move nothing before the trigger is known"))
+        self.assertIn("the same reload check as step 1.3", maintain_step(4))
+
+    def test_a_working_app_that_logs_errors_is_reported_not_failed(self):
+        self.assert_phrases(maintain_step(5), (
+            "The app works but logs errors, such as a hydration mismatch: an app warning",
+            "Report it to the user with the log line",
+            "record it as an app-specific Known edge if it recurs",
+            "Never fail a run on it, and never hide it"))
+
+    def test_the_commit_lists_untracked_files_first(self):
+        """git add <harness> took an empty .claude/.cc-writes/ a sandbox left; with a file in it, it commits."""
+        for name in ("SKILL.md", "MAINTAIN.md"):
+            prose = before_the_snippet(commit_section(name))
+            with self.subTest(name=name):
+                self.assertIn("`git status --porcelain --untracked-files=all -- .claude/skills/verify <harness>`",
+                              prose)
+                self.assertIn("If it lists anything beyond the skill's own files", prose)
+                self.assertIn("stop and ask", prose)
+                text = flat(os.path.join(SKILL, name))
+                self.assertIn("If `git commit` fails after the `git add`, stop and report the staged-set diff "
+                              "the `diff` line prints; do not try to undo it", text)
+
+    def test_the_commit_asks_before_landing_on_the_default_branch(self):
+        for name in ("SKILL.md", "MAINTAIN.md"):
+            prose = before_the_snippet(commit_section(name))
+            with self.subTest(name=name):
+                self.assertIn("If the checked-out branch is the repo's default branch and the user hasn't said "
+                              "where to commit, ask whether to branch first", prose)
 
 
 @unittest.skipUnless(DENYLISTS, "no private denylist on this machine")

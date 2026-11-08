@@ -20,7 +20,10 @@ Edit only two places: `journeys.py` in the harness folder, and `.claude/skills/v
 the Write or Edit tool, since sandboxed Bash can't write under `.claude/skills`). The refresh in
 step 1 also replaces the four copied files from the template; that is a copy, never a hand edit.
 Never edit product code in this pass. Never weaken a check, widen a timeout or drop a journey to
-make a run pass.
+make a run pass. Setting `ready_timeout` again from a new measurement, by the skill's section 3 rule,
+is not widening: widening is raising it to rescue a failing run with no measurement behind it. The
+comment beside `ready_timeout` carries the numbers it came from: the `ready_seconds` measured and the
+headroom applied.
 
 Search `app.log` and other evidence with `grep -a`, or read it in Python: without `-a`, a grep that
 takes the file for binary (ugrep can) prints no matches and no error.
@@ -38,9 +41,11 @@ takes the file for binary (ugrep can) prints no matches and no error.
    such line predates the number and is the older. If the template's number is lower, the installed
    verify-app skill is the older one: stop and say to update it first. If the numbers are equal,
    stop and report it, since the template changed without raising the number. If the repo's is
-   lower, the harness is older: refresh it before anything below with steps 1.1 and 1.3.
-   Step 1.2 runs on every pass, even when the lists match, since a template change to `journeys.py`
-   or the recipe alone leaves `CHECKSUMS` the same.
+   lower, the harness is older: refresh it before anything below, in this order: step 1.1, then
+   1.2, then 1.3, since 1.2 edits `journeys.py` and the recipe, and the re-proof has to cover those
+   edits. Step 1.2 runs on every pass, even when the lists match, since a template change to
+   `journeys.py` or the recipe alone leaves `CHECKSUMS` the same. With no refresh, run step 1.2
+   only, then go on with step 2: steps 4 to 6 prove its edits.
    1. Re-copy the four fixed files with one sandboxed `cp`, then check them from the harness folder:
 
       ```
@@ -54,21 +59,29 @@ takes the file for binary (ugrep can) prints no matches and no error.
       `<skill dir>/template/SKILL.md`, for what the template gained since this harness was copied:
       new `APP` keys (such as `APP["env"]`), new sections, new Known edges, changed wording in the
       parts the repo never fills. Bring each in, and keep the repo's own fills: commands, ports,
-      selectors, journeys, Features rows, skip paths and app-specific edges. Anything new that
-      carries a `<fill: ...>` is filled from the repo, as the skill's section 2 does; `verify.py`
-      exits 2 while one remains.
-   3. After a refresh, re-prove on the new harness, as the skill's section 3 does: a full run, one planted wrong
-      value in a `ctx.check` (exit 1 with its message) and its revert (exit 0), a `--quick` run,
-      and new measured times on the Measured line. Then go on with step 2.
+      selectors, journeys, Features rows, Not covered rows, skip paths and app-specific edges.
+      Anything new that carries a `<fill: ...>` is filled from the repo, as the skill's section 2
+      does; `verify.py` exits 2 while one remains. One Known edge per cause: when a template edge
+      covers the same cause as a repo edge, merge the two into one. Keep the repo's specific facts
+      (paths, counts, file names), take the template's general wording, and drop the duplicate.
+   3. After steps 1.1 and 1.2, re-prove on the new harness, as the skill's section 3 does: a full
+      run (the first run of this pass), one planted wrong value in a `ctx.check` (exit 1 with its
+      message) and its revert (exit 0), and a `--quick` run. Keep each run's manifest path for
+      step 6. When the full run's `app.log` shows reload or rebuild lines (search it with `grep -a`),
+      run the skill's section 3 reload check: confirm the trigger with the dev tool's debug output,
+      set through `APP["env"]` for one run (for Vite, `{"DEBUG": "vite:hmr"}`), then take the
+      setting out again, and move nothing before the trigger is known. Then go on with step 2.
 2. **Index.** Compare the recipe's Features table with `JOURNEYS`: every row has a journey, every
    journey has a row.
 3. **Source.** For each feature, read the code behind it: its route, its components, the requests
    it makes. Note where the recipe or the journey now disagrees with the code, citing the file.
    Look through recent commits for a user-facing surface the table lacks; call one missing only with
-   a source path.
+   a source path. When one is missing, add it to the recipe's Not covered list with that path and
+   name it in the report. Add a journey for it only with the user's say.
 4. **Live.** Run the full tier over every journey, even when the source looks clean: a clean read
    proves nothing about the running app. Then read the manifest and open each screenshot. After a
-   failed run, run again only once the cause is understood.
+   failed run, run again only once the cause is understood. With no refresh, this is the first run
+   of this pass, and the same reload check as step 1.3 applies to its `app.log`.
 5. **Triage.**
    - The recipe or a journey describes the app wrongly: drift. Fix it, then plant one wrong
      expected value in the changed `ctx.check` and see exit 1 with its message before reverting it.
@@ -76,15 +89,32 @@ takes the file for binary (ugrep can) prints no matches and no error.
      selector rule in the skill's section 2.
    - The app itself is broken: report it to the user with the manifest path. Never write around it
      in the recipe or the journey.
-6. **Finish.** Rerun the full tier after the last fix, confirm the evidence survived cleanup,
-   update the Measured line (a warm full run's and a quick run's `duration_seconds`, with this
-   pass's first full run in parentheses as the cold one), and report the outcome with every
-   feature's result.
+   - The app works but logs errors, such as a hydration mismatch: an app warning. Report it to the
+     user with the log line from `app.log`, and record it as an app-specific Known edge if it
+     recurs across runs. Never fail a run on it, and never hide it: not from the report, and not by
+     filtering the log.
+6. **Finish.** Rerun the full tier after the last fix, confirm the evidence survived cleanup, and
+   update the Measured line, the only step that writes it: a later full run's `duration_seconds`,
+   with the first run of this pass's in parentheses, labelled `first`, not `cold`: the dev
+   server's caches may have been warm. Then a quick run's. So `full 12.0 (first 29.3), quick 7.7`.
+   Then check `ready_timeout` by the skill's section 3 rule against the first run of this pass's
+   `ready_seconds`: raise it when the rule gives more, but never lower it from a run of this pass,
+   which may have been warm. Report the outcome with every feature's result.
 
 ## Commit
 
 Only with the user's say, and only the harness folder and the recipe, whatever else the index
-holds. Run it as one Bash call: `$before` lives only in that shell, and `mktemp` gives it a name no
+holds. First:
+
+- If the checked-out branch is the repo's default branch and the user hasn't said where to commit,
+  ask whether to branch first.
+- List what `git add` would take:
+  `git status --porcelain --untracked-files=all -- .claude/skills/verify <harness>`. If it lists
+  anything beyond the skill's own files (the recipe, `journeys.py` and the four copied files), such
+  as a file under a `.claude/.cc-writes/` a sandbox left in the harness folder, stop and ask:
+  `git add <harness>` takes every untracked file there.
+
+Run it as one Bash call: `$before` lives only in that shell, and `mktemp` gives it a name no
 other session on the machine can share.
 
 ```
@@ -96,4 +126,5 @@ git diff --cached --name-status | diff "$before" -
 rm "$before"
 ```
 
-The `diff` line prints nothing when the staged set is unchanged.
+The `diff` line prints nothing when the staged set is unchanged. If `git commit` fails after the
+`git add`, stop and report the staged-set diff the `diff` line prints; do not try to undo it.

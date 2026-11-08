@@ -61,7 +61,8 @@ The harness goes in a repo folder, because sandboxed Bash can write there and ca
    command only (not for journeys or the browser). It can't set `VERIFY_RUN_TOKEN`, and any other
    shape exits 2. Never a secret: `journeys.py` is committed, so the app keeps reading its own env
    files. The recipe's Measured line says `not measured yet`, which is not a marker: section 3
-   replaces it.
+   replaces it. Fill the recipe's Not covered list from the interview: each user-facing surface no
+   journey covers, with its source path, or `none`.
 3. Selectors: an id, an ARIA label or a data attribute first. A control with none is clicked by its
    visible text with `ctx.page.click_text`. It matches when the text equals the rendered text
    (`innerText`, which applies CSS such as `text-transform` and leaves out a hidden span), with
@@ -130,7 +131,8 @@ reads as "not there".
    evidence. Fixing it is app config (the watcher's ignore list) and the user's call: name it in
    the hand-over and in the recipe's app-specific Known edges, and leave the config alone.
 5. Set `ready_timeout` from the measured `ready_seconds` of the cold first run (step 1's) with
-   headroom (about double, and at least 30), and say so in a comment beside it. A warm run boots
+   headroom (about double, and at least 30), and say so in a comment beside it that carries the
+   numbers it came from (the measured `ready_seconds` and the headroom). A warm run boots
    faster, so a timeout set from one fails the next cold start.
 6. Open the screenshot and look at it: does it show what the journey claims?
 7. Plant one wrong expected value in a journey's `ctx.check`, the exact value it compares against
@@ -150,7 +152,17 @@ user; never signal a process marked `outside_repo`.
 Report the files written, the paths the recipe lists as skip-safe, both measured times and the
 manifest path. Commit or push nothing without the user's say. When they say commit and the index
 holds anything else, commit only the skill, its harness and, when section 2 added an ignore line,
-`.gitignore`:
+`.gitignore`. First:
+
+- If the checked-out branch is the repo's default branch and the user hasn't said where to commit,
+  ask whether to branch first.
+- List what `git add` would take:
+  `git status --porcelain --untracked-files=all -- .claude/skills/verify <harness>`. If it lists
+  anything beyond the skill's own files (`SKILL.md`, `journeys.py` and the four copied files), such
+  as a file under a `.claude/.cc-writes/` a sandbox left in the harness folder, stop and ask:
+  `git add <harness>` takes every untracked file there.
+
+Then:
 
 ```
 before=$(mktemp)
@@ -170,7 +182,9 @@ included), and when it now holds any change beyond the one line section 2 added:
 `git status --porcelain --untracked-files=normal -- .gitignore` marks untracked (`??`), read the
 file. `git add` stages the
 whole file, so it would sweep the user's own edits into this commit. The `diff` line prints nothing
-when the staged set is unchanged. For upkeep later, follow `<skill dir>/MAINTAIN.md`.
+when the staged set is unchanged. If `git commit` fails after the `git add`, stop and report the
+staged-set diff the `diff` line prints; do not try to undo it. For upkeep later, follow
+`<skill dir>/MAINTAIN.md`.
 
 <!-- Adapts pstack's create-verification-skill and maintain-verification-skill
 (github.com/cursor/plugins, plugins/pstack @ 3fe2823, and its feature-map example @ 4612556,
