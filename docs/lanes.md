@@ -196,6 +196,11 @@ it too. No doc said which window owns which ask.
 - A lane with more PRs to come starts its Next with `Keep open: <why>`, and `lane done` refuses
   it (a commented-out flag too), as it does a record with an unclosed `<!--`. `--abandon` closes
   it anyway and stays an ask rule (Hayden, 2026-10-14).
+- A merged lane with `Keep open:` runs the `pass` skill on the lead's "#N chain done: run /pass",
+  so it doesn't stop idle (Hayden, 2026-11-08). The message goes after the reinstall: CLAUDE.md
+  loads only at session start, so a pass straight after `merged #N` could start on the old
+  install, and a message landing during a pass's wait would drop the pass. With no lead to
+  answer, the lane passes straight after telling Hayden.
 - Lanes report their own state and asks, never the lead's messages.
 - Before an act whose effect leaves its worktree (an install from the lane, a cap slot), and
   with anything the lead must run, a lane messages the lead, never Hayden (Hayden, 2026-10-19).
