@@ -878,6 +878,88 @@ class Stale(LanesRepo):
         self.lane("done", "chart-fix", "--abandon")
         self.assertEqual([r["id"] for r in json.loads(self.lane("ls", "--json"))], ["api-docs"])
 
+    def test_a_merged_lane_whose_worktree_is_gone_closes_plainly(self):
+        # The lead's close on Hayden's yes (the lanes skill, The lead, step 5): no handoff-check
+        # can pass with no worktree, and it takes no --abandon. Its record comes from the mirror.
+        self.lane("new", "chart-fix")
+        path = self.lane_path("chart-fix")
+        self.commit("chart.txt", "axis\n", cwd=path)
+        self.git("push", "-q", "origin", "HEAD:main", cwd=path)
+        self.git("worktree", "remove", path)
+        self.lane("done", "chart-fix")
+        self.assertEqual(json.loads(self.lane("ls", "--json")), [])
+
+    def test_an_unmerged_lane_whose_worktree_is_gone_still_refuses(self):
+        self.lane("new", "chart-fix")
+        path = self.lane_path("chart-fix")
+        self.commit("chart.txt", "axis\n", cwd=path)
+        self.git("worktree", "remove", path)
+        p = self.run_lane("done", "chart-fix")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("not merged", p.stderr)
+
+
+class OverdueReinstall(LanesRepo):
+    """`ls`'s install line says the lead's reinstall is overdue once a PR of the lane holding the
+    install merged after that install: a stalled post-merge chain (#163's). Times are seconds
+    from self.t."""
+
+    def setUp(self):
+        super().setUp()
+        self.lane("new", "chart-fix")
+        self.t = time.time()  # wall clock
+        hooks = os.path.join(self.home, ".claude", "hooks")
+        os.makedirs(hooks)
+        self.links = [os.path.join(hooks, name) for name in ("lane-identity.sh", "lane-guard.sh")]
+        for link in self.links:
+            os.symlink(os.path.join(self.lane_path("chart-fix"), "hooks", os.path.basename(link)),
+                       link)
+
+    def iso(self, offset):
+        return datetime.datetime.fromtimestamp(
+            self.t + offset, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def installed(self, *offsets):
+        for link, offset in zip(self.links, offsets):
+            os.utime(link, (self.t + offset,) * 2, follow_symlinks=False)
+
+    def merged(self, offset):
+        self.env["FAKE_GH_OUT"] = json.dumps([{
+            "number": 7, "state": "MERGED", "headRefName": "chart-fix", "createdAt": self.iso(-900),
+            "mergedAt": self.iso(offset) if offset is not None else None}])
+
+    def line(self):
+        (line,) = [x for x in self.lane("ls").splitlines() if x.startswith("install: ")]
+        return line
+
+    def test_a_merge_after_the_install_is_overdue(self):
+        self.installed(-300, -300)
+        self.merged(-60)
+        self.assertIn("releases it; overdue: a PR of that lane merged after this install",
+                      self.line())
+
+    def test_an_install_after_the_merge_isnt(self):
+        # A Keep-open lane, installing for its next PR after the lead's reinstall.
+        self.installed(-30, -30)
+        self.merged(-60)
+        self.assertNotIn("overdue", self.line())
+
+    def test_a_link_from_before_the_merge_keeps_it_overdue(self):
+        # A later commit's install added a link; the older one still shows the stall.
+        self.installed(-300, -30)
+        self.merged(-60)
+        self.assertIn("overdue", self.line())
+
+    def test_no_merged_pr_isnt_overdue(self):
+        self.env["FAKE_GH_OUT"] = "[]"
+        self.assertNotIn("overdue", self.line())
+
+    def test_gh_failing_or_no_merge_time_says_nothing(self):
+        self.installed(-300, -300)
+        self.assertNotIn("overdue", self.line())  # the fixture's gh fails
+        self.merged(None)
+        self.assertNotIn("overdue", self.line())
+
 
 class HandoffFlag(LanesRepo):
     """`ls`'s handoff? flag: lit when the record may be behind the lane's work (a newer commit, a

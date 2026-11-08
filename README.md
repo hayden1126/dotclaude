@@ -949,7 +949,8 @@ and status single-writer:
 - `lane ls` is the board, derived live from git, gh and the session files, down to each lane's
   tmux window, context (CTX: `312k*` past the auto-pass soft tier, `523k!` past hard) and
   state (STATE: busy, idle, waiting or shell). Its `overlap` flag marks two live lanes that
-  change the same file, committed or not, and the lines under the board name the files.
+  change the same file, committed or not, and the lines under the board name the files. Its
+  `main-touched` flag marks a lane that must merge main before its merge turn.
   `lane who 42` is the only answer to who owns #42.
 - `lane addr chart-fix` (or `lane addr lead`) prints `uds:<socket>`, the SendMessage address of
   that lane's live session. A session's ListAgents name is its tab title, which changes most
@@ -989,7 +990,7 @@ and status single-writer:
 - `lane park chart-fix` frees a finished lane's cap slot while it waits its merge turn. It ends
   the lane's sessions the way `done` does and keeps the worktree, branch, record and claims. It
   refuses unless the work is pushed and handed off. `lane open chart-fix` unparks it, at most
-  one lane over the cap, for its rebase and merge.
+  one lane over the cap, to merge main and its PR.
 - An optional lead session triages requests into lanes, opens them on Hayden's approval and sets
   the merge order (the skill's "The lead"). After a lane's PR merges, the lane sends it
   `merged #N`, and the lead reinstalls and runs `lane done` on Hayden's standing approval. Each
