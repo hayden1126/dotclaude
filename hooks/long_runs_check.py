@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """PreToolUse(Bash): deny a heavy gate once until the long-runs skill is loaded.
 
 Sessions skip that skill and plan long runs without it. A deny at the command is the one point

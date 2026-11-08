@@ -11,6 +11,6 @@ src=$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null) || exit 0
 python3 -I "${src%/*}/long_runs_check.py" 2>/dev/null
 rc=$?
 if [ "$rc" -ne 0 ]; then
-  printf '{"systemMessage":"long-runs check is down: python3 exited %s running long_runs_check.py; heavy gates are not checked"}\n' "$rc"
+  printf '{"systemMessage":"long-runs check is down (exit %s); heavy gates are not checked"}\n' "$rc"
 fi
 exit 0
