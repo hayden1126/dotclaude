@@ -10,7 +10,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 # Wide on purpose, over the whole path: a false match fails loudly, a miss passes silently.
 TEXT_PATH = re.compile(r"licen[cs]e|copying|copyright|notice", re.I)
 CODE = (".py", ".sh", ".js", ".mjs", ".ts")  # pass-notice.sh and this test are code, not texts
-RECORDERS = [os.path.join(REPO, "skills", "demo-video", "template", name) for name in ("record.mjs", "voice.mjs")]
+RECORDERS = [os.path.join(REPO, "skills", "demo-video", "template", name) for name in ("record.mjs", "voice.mjs", "captions.mjs")]
 
 
 def license_section():

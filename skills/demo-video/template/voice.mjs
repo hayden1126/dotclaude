@@ -51,6 +51,8 @@ const STEPS = path.join(OUT, 'steps.json');
 const RESULT = path.join(OUT, 'demo-voice.mp4');
 const PREVIOUS = path.join(OUT, 'demo-voice.prev.mp4');
 const BUILDING = path.join(OUT, `.demo-voice.${process.pid}.mp4`);
+const CAPTIONED = path.join(OUT, 'demo-captioned.mp4');
+const CAPTIONED_PREVIOUS = path.join(OUT, 'demo-captioned.prev.mp4');
 const FILE_NAME = /^(all|\d+)\.[^.]+$/i;
 const TOO_QUIET_DB = -25; // A real microphone gave -31 dB on a room with nobody talking, and 0 dB on a voice.
 const CLIPPED_DB = -0.1;
@@ -321,6 +323,11 @@ async function build() {
   await new Promise(resolve => setImmediate(resolve));
   if (fs.existsSync(RESULT)) fs.copyFileSync(RESULT, PREVIOUS);
   fs.renameSync(BUILDING, RESULT);
+  // Captions were burned into the old voice, so that file no longer matches this one.
+  if (fs.existsSync(CAPTIONED)) {
+    fs.renameSync(CAPTIONED, CAPTIONED_PREVIOUS);
+    console.warn('this build replaced the voice demo-captioned.mp4 was made from: moved it to demo-captioned.prev.mp4. Run captions.mjs again');
+  }
   console.log(`${shown(RESULT)}: ${[...voices.values()].map(voice => voice.name).join(', ')} on ${length.toFixed(1)} s of take`);
 }
 

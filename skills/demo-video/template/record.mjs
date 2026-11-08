@@ -40,7 +40,11 @@
 // and moved in only once it is whole. A failed take leaves the previous good one in OUT, since that
 // may be the only backup there is, and says so, so a stale video can't pass for this one. A good
 // take moves the set it replaces to demo.prev.mp4, captions.prev.srt and steps.prev.json.
-// demo-voice.mp4, which voice.mjs made for the old take, moves aside too.
+// demo-voice.mp4, which voice.mjs made for the old take, moves aside too, and so do
+// demo-captioned.mp4 and subtitles.srt, which captions.mjs made from it.
+//
+// With `labels = 'after'` in beats.mjs, the page shows no caption box: captions.mjs draws each
+// caption as a label on the finished video instead. Each step still records its caption either way.
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
@@ -58,6 +62,10 @@ const APP_WAIT_MS = 60000;
 const FIRST_LOAD_MS = 60000; // A dev server's first browser load can compile for a while.
 const SHORT_VIDEO_S = 1; // The recorder pads the end, so a healthy video is never this far under the beats.
 const HOLD_MS = 900; // Each caption stays up this long after its action, so a viewer can read the result.
+const LABELS = ['page', 'after'];
+const NOTE_PLACES = ['top-left', 'top', 'top-right', 'left', 'center', 'right', 'bottom-left', 'bottom', 'bottom-right'];
+// Made by captions.mjs from a take, so a new take moves them aside.
+const CAPTIONED = [['demo-captioned.mp4', 'demo-captioned.prev.mp4'], ['subtitles.srt', 'subtitles.prev.srt']];
 
 let appProcess = null;
 let appExit = null;
@@ -166,11 +174,19 @@ function checkBeats(project) {
   const { app, beats } = project;
   if (typeof app?.cmd !== 'string' || typeof app?.url !== 'string') throw new Error('beats.mjs must export app = { cmd, url }');
   if (!Array.isArray(beats) || !beats.length) throw new Error('beats.mjs must export a non-empty beats list');
-  for (const beat of beats) {
+  for (const [index, beat] of beats.entries()) {
     if (typeof beat?.caption !== 'string' || typeof beat?.act !== 'function') {
       throw new Error('every beat needs a caption string and an act function: ' + JSON.stringify(beat));
     }
+    if (beat.say !== undefined && typeof beat.say !== 'string') throw new Error(`beat ${index + 1}: say must be a string`);
+    const { note } = beat;
+    if (note !== undefined && (typeof note?.text !== 'string' || !note.text.trim() || !NOTE_PLACES.includes(note.at))) {
+      throw new Error(`beat ${index + 1}: note must be { text, at }, with text a string and at one of ${NOTE_PLACES.join(', ')}`);
+    }
   }
+  const labels = project.labels ?? 'page';
+  if (!LABELS.includes(labels)) throw new Error(`beats.mjs: labels must be 'page' or 'after', got ${JSON.stringify(labels)}`);
+  return labels;
 }
 
 async function loadChromium() {
@@ -276,11 +292,11 @@ async function stopApp() {
 
 const srtTime = seconds => new Date(Math.max(0, seconds) * 1000).toISOString().slice(11, 23).replace('.', ',');
 
-function writeSidecars(steps, lead, trim, warnings) {
+function writeSidecars(steps, lead, trim, first, labels, warnings) {
   const cues = steps.filter(step => step.caption);
   const srt = cues.map((step, i) => `${i + 1}\n${srtTime(step.start - trim)} --> ${srtTime(step.end - trim)}\n${step.caption}\n`);
   fs.writeFileSync(path.join(stage, 'captions.srt'), srt.join('\n'));
-  fs.writeFileSync(path.join(stage, 'steps.json'), JSON.stringify({ lead, trim, steps, warnings }, null, 1));
+  fs.writeFileSync(path.join(stage, 'steps.json'), JSON.stringify({ lead, trim, first, labels, steps, warnings }, null, 1));
 }
 
 function encode(webm, trim, fps, expected) {
@@ -314,11 +330,16 @@ function publish() {
     fs.renameSync(voiced, path.join(OUT, 'demo-voice.prev.mp4'));
     console.warn('this take replaced the one the voice was made for: moved it to demo-voice.prev.mp4. Run voice.mjs again: it says which recordings no longer fit');
   }
+  for (const [name, prev] of CAPTIONED) {
+    if (!fs.existsSync(path.join(OUT, name))) continue;
+    fs.renameSync(path.join(OUT, name), path.join(OUT, prev));
+    console.warn(`this take replaced the one ${name} was made from: moved it to ${prev}. Run captions.mjs again`);
+  }
 }
 
 async function record() {
   const project = await import(new URL('./beats.mjs', import.meta.url));
-  checkBeats(project);
+  const labels = checkBeats(project);
   const size = parseSize(process.env.SIZE || project.size || '1920x1080');
   const fps = parseFps(process.env.FPS || String(project.fps ?? '30'));
   const [firstBeat, lastBeat] = parseBeatRange(process.env.BEATS, project.beats.length);
@@ -416,7 +437,7 @@ async function record() {
       try {
         // The caption is inside the limit too: a page the last beat wedged never answers it.
         await withLimit((async () => {
-          await setCaption(page, caption);
+          await setCaption(page, labels === 'after' ? '' : caption);
           await act(kit);
           await page.waitForTimeout(HOLD_MS);
         })(), limit * 1000, `ran past its ${limit} s limit`);
@@ -433,7 +454,7 @@ async function record() {
     if (troubles().length) throw new Error(troubles().join('; '));
 
     const trim = firstBeat > 1 ? steps[0].start : Math.max(0, lead - 0.2);
-    writeSidecars(steps, lead, trim, warnings);
+    writeSidecars(steps, lead, trim, firstBeat, labels, warnings);
     encode(webm, trim, fps, steps.at(-1).end - trim);
     // spawnSync holds back a signal's handler until the encode ends, so this is where it counts.
     await new Promise(resolve => setImmediate(resolve));
