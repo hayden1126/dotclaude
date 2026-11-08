@@ -421,13 +421,16 @@ class NoVerdict(Case):
             with self.subTest(name=name):
                 self.assertEqual(self.run_harness(**config)[0], 2)
 
-    def test_a_bad_stop_timeout_exits_2_unlaunched(self):
-        for value in ("10", 0, -1, True, None):
-            with self.subTest(value=value):
+    def test_a_bad_timeout_or_port_exits_2_unlaunched(self):
+        cases = [(key, value) for key in ("stop_timeout", "ready_timeout")
+                 for value in ("10", 0, -1, True, None, float("nan"))]
+        cases += [("port", value) for value in (True, 0, 70000)]
+        for key, value in cases:
+            with self.subTest(key=key, value=value):
                 shutil.rmtree(self.repo / "evidence", ignore_errors=True)
-                code, manifest, output = self.run_harness(app={"stop_timeout": value})
+                code, manifest, output = self.run_harness(app={key: value})
                 self.assertEqual(code, 2, output)
-                self.assertIn("stop_timeout", output)
+                self.assertIn(key, output)
                 self.assertIsNone(manifest)
                 self.assertEqual(self.requests(), [])
 

@@ -203,6 +203,11 @@ def settled(scan, seconds: float) -> list:
     return found
 
 
+def seconds(value) -> bool:
+    """A positive, finite number of seconds; a bool is not one."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and 0 < value < float("inf")
+
+
 def load_spec(journey: str | None):
     """Load journeys.py and browser.py, refusing unfilled markers and any shape they don't allow."""
     recipe = ROOT / ".claude" / "skills" / "verify" / "SKILL.md"
@@ -217,10 +222,10 @@ def load_spec(journey: str | None):
         problems = [text for ok, text in (
             (isinstance(app.get("cmd"), list) and app["cmd"] and all(isinstance(a, str) for a in app["cmd"]),
              "APP cmd must be a list of strings"),
-            (isinstance(app.get("port"), int), "APP port must be an int"),
-            (isinstance(app.get("ready_timeout"), (int, float)), "APP ready_timeout must be a number"),
-            (isinstance(stop, (int, float)) and not isinstance(stop, bool) and 0 < stop < float("inf"),
-             "APP stop_timeout must be a positive number of seconds"),
+            (isinstance(app.get("port"), int) and not isinstance(app["port"], bool) and 0 < app["port"] < 65536,
+             "APP port must be an int from 1 to 65535"),
+            (seconds(app.get("ready_timeout")), "APP ready_timeout must be a positive number of seconds"),
+            (seconds(stop), "APP stop_timeout must be a positive number of seconds"),
             (not evidence.is_absolute() and ".." not in evidence.parts, "APP evidence_dir must stay in the repo"),
             (isinstance(cwd, str) and not pathlib.PurePath(cwd).is_absolute()
              and ".." not in pathlib.PurePath(cwd).parts and (ROOT / cwd).is_dir(),
