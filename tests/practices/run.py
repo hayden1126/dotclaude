@@ -332,7 +332,7 @@ LOADER = FIXTURE_SRC / "scripts" / "register.mjs"
 SKILLS_DIR = REPO / "skills"
 # The practices skills arms B, C and D install, all of them in every run. Named here rather than
 # found by their events.toml, so a skill that gains one later doesn't silently change the arms.
-PRACTICES_SKILLS = ["server-code", "auth-secrets", "dependencies", "data-layer"]
+PRACTICES_SKILLS = ["server-code", "auth-secrets", "dependencies", "data-layer", "client-code"]
 HOOK = REPO / "hooks" / "practices-check.sh"  # a shim: it runs practices_check.py beside it
 REPO_SETTINGS = REPO / "settings.json"  # arms C and D take the hook's wiring from here
 

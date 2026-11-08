@@ -1,5 +1,5 @@
-"""Offline checks for the practices eval, its server-code, auth-secrets, dependencies and data-layer
-cases (no model calls).
+"""Offline checks for the practices eval, its server-code, auth-secrets, dependencies, data-layer and
+client-code cases (no model calls).
 
 For every case in cases/: the known-good overlay scores `pass`, the known-bad overlay scores
 `fail` (benign has none), and the pristine fixture, where nothing was written, scores
@@ -161,7 +161,7 @@ class OracleVerdicts(unittest.TestCase):
             for name in ("prompt.md", "oracle.mjs", "good"):
                 self.assertTrue((CASES / case / name).exists(), f"{case}/{name}")
             owner, kind = run.CASE_INFO[case]
-            self.assertIn(owner, [*run.PRACTICES_SKILLS, "client-code"], case)  # client-code has no skill yet: arm A only
+            self.assertIn(owner, run.PRACTICES_SKILLS, case)
             self.assertIn(kind, (run.TARGET, run.BENIGN), case)
             self.assertEqual(bool(bad_overlays(case)), kind != run.BENIGN, case)  # a benign case plants nothing
         for owner in run.PRACTICES_SKILLS:  # each owner's arm D warm-up
@@ -3062,7 +3062,7 @@ class RunHarness(unittest.TestCase):
                 self.assertEqual(r.CASE_INFO[r.warmup_case(case)].kind, r.BENIGN, case)
         self.assertEqual(r.turns_for("email-change", "D", "m")[0][1], r.prompt_of("auth-benign"))
         self.assertEqual(r.turns_for("idor", "D", "m")[0][1], r.prompt_of("benign"))
-        self.assertEqual(r.turns_for("auth-benign", "D", "m")[0][1], r.prompt_of("benign"))
+        self.assertEqual(r.turns_for("auth-benign", "D", "m")[0][1], r.prompt_of("client-benign"))
         self.assertEqual(r.turns_for("benign", "D", "m")[0][1], r.prompt_of("auth-benign"))
 
     def test_stream_summary_and_denials(self):
@@ -5041,8 +5041,8 @@ class RegistryFixture(unittest.TestCase):
 
     def test_warm_ups(self):
         self.assertEqual(run.warmup_case("benign"), "auth-benign")
-        self.assertEqual(run.warmup_case("auth-benign"), "benign")  # never a registry case in a plain fixture
-        self.assertEqual(run.warmup_case("dep-benign"), "benign")
+        self.assertEqual(run.warmup_case("auth-benign"), "client-benign")  # never a registry case in a plain fixture
+        self.assertEqual(run.warmup_case("dep-benign"), "client-benign")
         for case in DEP_CASES[:-1]:
             self.assertEqual(run.warmup_case(case), "dep-benign", case)
 
@@ -6052,7 +6052,7 @@ class PgHarness(unittest.TestCase):
         self.assertFalse(run.is_pg_case("idor"))
 
     def test_the_new_cases_and_their_owner(self):
-        self.assertEqual(run.PRACTICES_SKILLS[-1], "data-layer")
+        self.assertEqual(run.PRACTICES_SKILLS[-2:], ["data-layer", "client-code"])
         self.assertEqual({c: run.CASE_INFO[c] for c in DATA_CASES},
                          {c: ("data-layer", run.BENIGN if c == "data-benign" else run.TARGET) for c in DATA_CASES})
         self.assertEqual(run.benign_case("data-layer"), "data-benign")
@@ -6062,7 +6062,8 @@ class PgHarness(unittest.TestCase):
         # send auth-benign's and dep-benign's warm-ups at a table the fixture lacks.
         for case in ("benign", "auth-benign", "dep-benign"):
             self.assertNotEqual(run.warmup_case(case), "data-benign", case)
-        self.assertEqual(run.warmup_case("data-benign"), "benign")
+        self.assertEqual(run.warmup_case("data-benign"), "client-benign")
+        self.assertEqual(run.warmup_case("client-benign"), "benign")
         for case in set(DATA_CASES) - {"data-benign"}:
             self.assertEqual(run.warmup_case(case), "data-benign", case)
 
