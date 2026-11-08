@@ -1134,6 +1134,27 @@ class Voice(unittest.TestCase):
         self.built()
         self.assertGreater(level(self.result, 5.6, 5.9), HEARD_DB)
 
+    def test_no_tick_of_the_read_between_clips_a_millisecond_apart(self):
+        steps = json.loads((self.out / "steps.json").read_text())
+        steps["steps"][1]["start"] = steps["steps"][0]["end"] + 0.002  # record.mjs stamps in whole milliseconds.
+        (self.out / "steps.json").write_text(json.dumps(steps))
+        tone(self.voice_dir / "all.wav", 7, frequency=440)
+        tone(self.voice_dir / "1.wav", 2.7, frequency=1000)
+        tone(self.voice_dir / "2.wav", 2, frequency=1000)
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir()
+        calls = self.root / "calls.log"
+        shim = bin_dir / "ffmpeg"
+        shim.write_text(f"""#!/bin/sh
+printf '%s\\n' "$*" >> {calls}
+exec {shutil.which("ffmpeg")} "$@"
+""")
+        shim.chmod(0o755)
+        result = self.run_voice(PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        graph = next(line for line in calls.read_text().splitlines() if "-filter_complex" in line)
+        self.assertEqual(graph.count("atrim="), 3, "two clips and the read after them, and no sliver of read between")
+
     def test_two_retakes_side_by_side(self):
         tone(self.voice_dir / "all.wav", 7, frequency=440)
         tone(self.voice_dir / "1.wav", 2, frequency=1000)

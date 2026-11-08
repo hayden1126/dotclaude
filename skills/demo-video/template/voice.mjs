@@ -271,7 +271,8 @@ function placeVoices(voices, beats, length) {
   if (closing > at) spans.push([at, closing]);
   for (const [start, end] of spans) {
     const stop = Math.min(end, closing);
-    if (stop <= start) continue;
+    // Beats can sit a millisecond apart, which would let a tick of the read play between two clips.
+    if (stop - start < 2 * FADE_S) continue;
     parts.push({ voice: read, from: read.from + start - opening, to: read.from + stop - opening, at: start });
   }
   const last = Math.max(...parts.map(part => part.at + part.to - part.from));
