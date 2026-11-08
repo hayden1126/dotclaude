@@ -131,6 +131,10 @@ an unregistered worktree: `lane whoami` tells you which.
       `git add PLAN.md`) and, if anything is staged, commit it alone as
       `STATUS: the lead's notes through <sha>`.
 
+   The PR body carries the `long-runs` skill's `Skipped:` block, or `Skipped: nothing` when every
+   check ran: write it with the body, since `gh pr ready` is refused without the line (the
+   practices hook, rule SKIPPED-LINE).
+
    Before the ask for ready, run `lane trial --run "<suite>" ...` from the lane, one `--run` per
    suite your Done when names, in the background (it takes as long as the suites, longer when
    one fails). It merges origin/main and every other live lane's commits onto your HEAD in a
