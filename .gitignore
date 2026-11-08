@@ -47,3 +47,5 @@ __pycache__/
 
 # PGlite for the data-layer oracles: installed from the committed lockfile, never committed (27 MB)
 /tests/practices/oracle_pg/node_modules/
+# React, react-dom and TypeScript for the client-code oracles: the same, from their lockfile (29 MB)
+/tests/practices/oracle_dom/node_modules/
