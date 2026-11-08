@@ -455,9 +455,8 @@ class Page:
         return path
 
     def download(self, timeout: float = 30.0) -> pathlib.Path:
-        """Wait for the next finished download and return its file. A downloads folder deleted
-        mid-run is made again first, for a download that starts after this call."""
-        (self.browser.out_dir / "downloads").mkdir(parents=True, exist_ok=True)
+        """Wait for the next finished download and return its file. Chrome writes a download even
+        when a mid-run wipe took its folder (measured), so this makes no folder itself."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             names = {e["params"]["guid"]: e["params"]["suggestedFilename"] for e in self.browser.events

@@ -202,22 +202,28 @@ class Files(unittest.TestCase):
     def test_the_ignore_line_never_sweeps_the_users_gitignore_edits(self):
         """git add .gitignore stages the whole file, so only a clean one is edited and committed."""
         generator = " ".join(read(os.path.join(SKILL, "SKILL.md")).split())
-        for phrase in ("If it isn't ignored and `git status --porcelain -- .gitignore` prints nothing (no "
-                       "untracked, unstaged or staged change there), add one line to `.gitignore` and tell the user",
+        for phrase in ("If it isn't ignored and `git status --porcelain --untracked-files=normal -- .gitignore` "
+                       "prints nothing (no untracked, unstaged or staged change there; the flag beats a "
+                       "`status.showUntrackedFiles=no` setting",
+                       "add one line to `.gitignore` and tell the user",
                        "If it prints anything, don't edit `.gitignore`",
                        "and leave `.gitignore` out of the commit",
                        "and when it now holds any change beyond the one line section 2 added",
-                       "for one `git status --porcelain -- .gitignore` marks untracked (`??`), read the file"):
+                       "for one `git status --porcelain --untracked-files=normal -- .gitignore` marks untracked "
+                       "(`??`), read the file"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, generator)
         # git diff --quiet exits 0 for an untracked file, so it can't be the clean check.
         self.assertNotIn("git diff --quiet HEAD -- .gitignore", generator)
+        # Without the flag, status.showUntrackedFiles=no hides an untracked .gitignore.
+        self.assertNotIn("git status --porcelain -- .gitignore", generator)
 
     def test_a_dirty_gitignore_still_leaves_the_evidence_ignored(self):
         """Without an ignore line the evidence shows as untracked, and the harness folder is committed whole."""
         generator = " ".join(read(os.path.join(SKILL, "SKILL.md")).split())
         for phrase in ("add the line to the repo's local exclude file, the path "
-                       "`git rev-parse --git-path info/exclude` prints (right in a worktree too)",
+                       "`git rev-parse --git-path info/exclude` prints (right in a worktree too; make its "
+                       "folder first, since a repo made with `git init --template=` has none)",
                        "tell the user the line to add to `.gitignore` later",
                        "Never put it under the harness folder: the commit takes that whole folder"):
             with self.subTest(phrase=phrase):

@@ -90,11 +90,12 @@ The harness goes in a repo folder, because sandboxed Bash can write there and ca
 
    Never put it under the harness folder: the commit takes that whole folder. Check git with
    `git check-ignore -q <dir>/probe` (exit 0 means ignored). If it isn't ignored and
-   `git status --porcelain -- .gitignore` prints nothing (no untracked, unstaged or staged change
-   there), add one line to `.gitignore` and tell the user. If it prints anything, don't edit
+   `git status --porcelain --untracked-files=normal -- .gitignore` prints nothing (no untracked,
+   unstaged or staged change there; the flag beats a `status.showUntrackedFiles=no` setting that
+   would hide an untracked file), add one line to `.gitignore` and tell the user. If it prints anything, don't edit
    `.gitignore`, since the commit would sweep in the user's own changes: add the line to the repo's
    local exclude file, the path `git rev-parse --git-path info/exclude` prints (right in a worktree
-   too), tell the user the line to add to `.gitignore` later, and leave `.gitignore` out of the
+   too; make its folder first, since a repo made with `git init --template=` has none), tell the user the line to add to `.gitignore` later, and leave `.gitignore` out of the
    commit.
 
 ## 3. Prove it once
@@ -140,7 +141,8 @@ git diff --cached --name-status | diff "$TMPDIR/staged-before" -
 Drop `.gitignore` from both lines when section 2 left it unchanged (an exclude-file line
 included), and when it now holds any change beyond the one line section 2 added:
 `git diff HEAD -- .gitignore` shows that for a tracked file, and for one
-`git status --porcelain -- .gitignore` marks untracked (`??`), read the file. `git add` stages the
+`git status --porcelain --untracked-files=normal -- .gitignore` marks untracked (`??`), read the
+file. `git add` stages the
 whole file, so it would sweep the user's own edits into this commit. The last line prints nothing
 when the staged set is unchanged. For upkeep later, follow `<skill dir>/MAINTAIN.md`.
 
