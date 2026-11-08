@@ -10,7 +10,8 @@ proves the fix. The unit of care is the feature: every feature gets a source rea
 End with exactly one, and say which:
 
 - **clean:** every feature was read and driven live, and nothing needs changing. No commit.
-- **changed:** proven corrections to the verify skill, a refresh from the template included, committed
+- **changed:** proven corrections to the verify skill, a refresh from the template included,
+  committed
   only with the user's say.
 - **blocked:** the pass stopped in step 1, no full run can be made to pass, or a changed check
   can't be proved. Say exactly what blocked it.
@@ -22,18 +23,22 @@ Two terms, used the same way everywhere below:
   earlier step timing out), fix that and plant again, as the skill's section 3 does. Edits with no
   check to plant (a refresh's copies, a selector fix, a recipe line) are proved by step 6's final
   runs passing.
-- **First run:** the first full run of this pass that got past launch (its manifest has a
-  `ready_seconds`). A run refused before launch, such as a held port, doesn't count.
+- **First run:** the first full run of this pass whose manifest has `outcome` `proved`. A run
+  refused before launch (a held port) or failed partway doesn't count, since its times measure
+  nothing whole.
 
 ## Edit scope
 
-Edit only two places: `journeys.py` in the harness folder, and `.claude/skills/verify/SKILL.md` (with
+Edit only two places: `journeys.py` in the harness folder, and `.claude/skills/verify/SKILL.md`
+(with
 the Write or Edit tool, since sandboxed Bash can't write under `.claude/skills`). The refresh in
 step 1 also replaces the four copied files from the template; that is a copy, never a hand edit.
 Never edit product code in this pass. Never weaken a check, widen a timeout or drop a journey to
-make a run pass. Setting `ready_timeout` again from a new measurement, by the skill's section 3 rule,
+make a run pass. Setting `ready_timeout` again from a new measurement, by the skill's section 3
+rule,
 is not widening: widening is raising it to rescue a failing run with no measurement behind it. The
-comment beside `ready_timeout` carries the numbers it came from: the `ready_seconds` measured and the
+comment beside `ready_timeout` carries the numbers it came from: the `ready_seconds` measured and
+the
 headroom applied.
 
 Search `app.log` and other evidence with `grep -a`, or read it in Python: without `-a`, a grep that
@@ -44,7 +49,7 @@ takes the file for binary (ugrep can) prints no matches and no error.
 1. **Copies.** The harness folder is the one the recipe's Launch commands name. Run
    `(cd <harness> && sha256sum -c CHECKSUMS)`, in a subshell so the session's working directory
    stays at the repo root: a bare `cd` moves it for every later call, and every path in this pass is
-   root-relative. Each stop in this step ends the pass blocked (step 6's first row). A file that no
+   root-relative. Each stop in this step ends the pass blocked (step 6's question 2). A file that no
    longer matches its own list was edited by hand: report it and stop,
    since the refresh would overwrite the edit. Then compare `CHECKSUMS` with
    `<skill dir>/template/CHECKSUMS`. A list that differs means one side is newer, and
@@ -65,27 +70,30 @@ takes the file for binary (ugrep can) prints no matches and no error.
       (cd <harness> && sha256sum -c CHECKSUMS)
       ```
 
-      On a mismatch, stop and report it, naming the four files already replaced. If the permission check reads the `cp` as a write to the
-      skill folder, copy each file with `cat <skill dir>/template/<file> > <harness>/<file>`.
+      On a mismatch, stop and report it, naming the four files already replaced. If the permission
+      check reads the `cp` as a write to the skill folder, copy each file with
+      `cat <skill dir>/template/<file> > <harness>/<file>`.
    2. Re-check `journeys.py` against `<skill dir>/template/journeys.py`, and the recipe against
       `<skill dir>/template/SKILL.md`, for what the template gained since this harness was copied:
       new `APP` keys (such as `APP["env"]`), new sections, new Known edges, changed wording in the
-      parts the repo never fills (except the Measured line, which step 6 writes whole). Bring each in, and keep the repo's own fills: commands, ports,
-      selectors, journeys, Features rows, Not covered rows, skip paths and app-specific edges.
-      Anything new that carries a `<fill: ...>` is filled from the repo, as the skill's section 2
-      does; `verify.py` exits 2 while one remains. One Known edge per cause: when a template edge
-      covers the same cause as a repo edge, merge the two into one. Keep the repo's specific facts
-      (paths, counts, file names), take the template's general wording, and drop the duplicate.
+      parts the repo never fills (except the Measured line, which step 6 writes whole). Bring each
+      in, and keep the repo's own fills: commands, ports, selectors, journeys, Features rows, Not
+      covered rows, skip paths and app-specific edges. Anything new that carries a `<fill: ...>` is
+      filled from the repo, as the skill's section 2 does; `verify.py` exits 2 while one remains.
+      One Known edge per cause: when a template edge covers the same cause as a repo edge, merge the
+      two into one. Keep the repo's specific facts (paths, counts, file names), take the template's
+      general wording, and drop the duplicate.
    3. After steps 1.1 and 1.2, re-prove on the new harness, as the skill's section 3 does: a full
       run (normally the first run), one planted wrong value in a `ctx.check` (exit 1 with its
       message) and its revert (exit 0), and a `--quick` run. A failed run goes through step 5's
       triage like any other: drift and harness gaps get fixed there. A planted value that still
       won't fail with its own message, after the plant-again rule in Proved, means the new harness
-      can't prove anything: blocked. Keep each run's manifest path for
-      step 6. When the full run's `app.log` shows reload or rebuild lines (search it with `grep -a`),
-      run the skill's section 3 reload check: confirm the trigger with the dev tool's debug output,
-      set through `APP["env"]` for one run (for Vite, `{"DEBUG": "vite:hmr"}`), then take the
-      setting out again, and move nothing before the trigger is known. Then go on with step 2.
+      can't prove anything: stop, and the pass ends blocked (step 6's question 2: step 1 stopped).
+      Keep each run's manifest path for step 6. When the full run's `app.log` shows reload or
+      rebuild lines (search it with `grep -a`), run the skill's section 3 reload check: confirm the
+      trigger with the dev tool's debug output, set through `APP["env"]` for one run (for Vite,
+      `{"DEBUG": "vite:hmr"}`), then take the setting out again, and move nothing before the trigger
+      is known. Then go on with step 2.
 2. **Index.** Compare the recipe's Features table with `JOURNEYS`: every row has a journey, every
    journey has a row.
 3. **Source.** For each feature, read the code behind it: its route, its components, the requests
@@ -114,13 +122,16 @@ takes the file for binary (ugrep can) prints no matches and no error.
       wouldn't raise `ready_timeout` for the first run's `ready_seconds`. Report every feature's
       result and this pass's times, edit nothing, and stop.
    2. **Blocked?** Step 1 stopped; or no full run can be made to pass (the app is broken, or the
-      failure can't be traced); or a changed check can't be proved. Make no more runs, write no
+      failure can't be traced); or a run exited 3 (cleanup failed: name each process in
+      `processes_left`, and never signal one marked `outside_repo`); or a changed check can't be
+      proved. Make no more runs, write no
       Measured line, commit nothing. Report what stopped it and its manifest, list every file
       changed or replaced, and stop: the user decides what to keep.
    3. **Changed.** Everything else. In order:
       1. Raise `ready_timeout` if the section 3 rule gives more for the first run's
          `ready_seconds`; never lower it from a run of this pass, which may have been warm.
-      2. The final runs: one full run and one `--quick` run on the final files. A failure with a
+      2. The final runs: one full run and one `--quick` run on the final files, then open the full
+         run's screenshots and confirm its evidence survived cleanup. A failure with a
          new fix to make goes back to step 5. A transient one (a held port) gets one rerun. Any
          other failure is question 2's "no full run can be made to pass": blocked.
       3. Write the Measured line, the only step that writes it, whole: the template's lead-in,

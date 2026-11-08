@@ -368,8 +368,12 @@ class Files(unittest.TestCase):
                      "When the plant run fails for another reason (an earlier step timing out), fix that and plant "
                      "again",
                      "are proved by step 6's final runs passing",
-                     "**First run:** the first full run of this pass that got past launch (its manifest has a "
-                     "`ready_seconds`)",
+                     "**First run:** the first full run of this pass whose manifest has `outcome` `proved`",
+                     "or a run exited 3 (cleanup failed: name each process in `processes_left`, and never signal "
+                     "one marked `outside_repo`)",
+                     "then open the full run's screenshots and confirm its evidence survived cleanup",
+                     "stop, and the pass ends blocked (step 6's question 2: step 1 stopped)",
+                     "Each stop in this step ends the pass blocked (step 6's question 2)",
                      "A failed run goes through step 5's triage like any other",
                      "Each stop in this step ends the pass blocked",
                      "report it to the user with the manifest path; the pass ends blocked",
