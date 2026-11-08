@@ -21,6 +21,10 @@ proxy, so they never reach the public one.
 A PG case (run.py, "PG case") grades on PGlite, in the oracle's own process. Its tests skip without
 it, naming the install line, and a run that skipped them proved nothing about those oracles.
 
+A DOM case (run.py, "DOM case") renders in headless Chrome. DomHarness grades oracle_dom/selftest/
+and skips without oracle_dom's packages or a chrome-headless-shell (run.find_chrome); DomGrade's
+contained test skips where bwrap can't start.
+
 Skips when node (or npm, for the npm test) is absent. Fixtures go to TMPDIR.
 """
 import argparse
@@ -5375,21 +5379,12 @@ PGLITE_OK = bool(NODE) and (run.ORACLE_PG_DIR / "node_modules" / run.PGLITE / "p
 NO_PGLITE = "PGlite isn't installed: run npm ci --ignore-scripts in tests/practices/oracle_pg"
 
 
-def find_chrome():
-    """The headless shell the client-code oracles run: ORACLE_CHROME, else the newest Playwright
-    chromium_headless_shell build in the user's cache, else None."""
-    if os.environ.get("ORACLE_CHROME"):
-        return os.environ["ORACLE_CHROME"]
-    builds = sorted(Path.home().glob(".cache/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell"))
-    return str(builds[-1]) if builds else None
-
-
-ORACLE_DOM_DIR = HERE / "oracle_dom"
-CHROME = find_chrome()
-DOM_OK = (bool(NODE) and bool(CHROME)
-          and all((ORACLE_DOM_DIR / "node_modules" / pkg / "package.json").is_file() for pkg in ("react", "react-dom", "typescript")))
-NO_DOM = ("oracle_dom can't run: it needs node, its packages (npm ci --ignore-scripts in tests/practices/oracle_dom) "
-          "and a headless Chrome (ORACLE_CHROME, or Playwright's chromium_headless_shell)")
+ORACLE_DOM_DIR = run.ORACLE_DOM_DIR
+CHROME_DIR = run.find_chrome()
+CHROME = str(CHROME_DIR / run.CHROME_BINARY) if CHROME_DIR else None
+DOM_OK = bool(NODE) and not run.dom_problems()
+NO_DOM = "oracle_dom can't run here: " + "; ".join(run.dom_problems())
+DOM_CASES = []
 PG_CASES = ["column-rename", "column-rename-bare", "data-benign", "index-live-table", "index-live-table-bare", "rls-missing"]
 DATA_CASES = ["column-rename", "column-rename-bare", "data-benign", "index-live-table", "index-live-table-bare", "rls-missing",
               "sqli-sort", "tag-get-or-create", "tx-network"]
@@ -6870,6 +6865,161 @@ def session_members(sid):
         if int(fields[3]) == sid and fields[0] != "Z":
             found.append((int(d.name), name))
     return found
+
+
+def group_members(pgid):
+    """The live processes in process group `pgid`, as (pid, name)."""
+    found = []
+    for d in Path("/proc").iterdir():
+        if not d.name.isdigit():
+            continue
+        try:
+            stat = (d / "stat").read_text()
+        except OSError:  # gone since the listing
+            continue
+        name, rest = stat.split(" (", 1)[1].rsplit(")", 1)
+        fields = rest.split()
+        if int(fields[2]) == pgid and fields[0] != "Z":
+            found.append((int(d.name), name))
+    return found
+
+
+SELFTEST = ORACLE_DOM_DIR / "selftest"
+GRADE_OUT = '{"verdict":"pass","checks":[]}\n'
+
+
+class DomGrade(unittest.TestCase):
+    """run.py's side of a DOM case: which cases are, the Chrome lookup, the prerequisites, the
+    hash, the grader's command and env, and the timeout's cleanup. A selftest case stands in for
+    a DOM case by pointing run.CASES_DIR at oracle_dom/selftest/."""
+
+    def test_a_dom_case_is_one_whose_oracle_imports_the_helper(self):
+        self.assertEqual([c for c in case_names() if run.is_dom_case(c)], DOM_CASES)
+        self.assertEqual([c for c in case_names() if "oracle_dom.mjs" in (CASES / c / "oracle.mjs").read_text()], DOM_CASES)
+        self.assertFalse(run.is_dom_case("idor"))
+        with mock.patch.object(run, "CASES_DIR", SELFTEST):
+            self.assertTrue(run.is_dom_case("double-submit"))
+
+    @staticmethod
+    def shell(d):
+        d.mkdir(parents=True)
+        (d / run.CHROME_BINARY).write_text("")
+        return d
+
+    def test_find_chrome_takes_oracle_chrome_dir_first(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            chosen = self.shell(tmp / "mine")
+            self.shell(tmp / "home/.cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux64")
+            self.assertEqual(run.find_chrome({"ORACLE_CHROME_DIR": str(chosen)}, tmp / "home"), chosen)
+            # one set without the binary finds none, rather than falling back to the cache
+            (tmp / "empty").mkdir()
+            self.assertIsNone(run.find_chrome({"ORACLE_CHROME_DIR": str(tmp / "empty")}, tmp / "home"))
+
+    def test_find_chrome_picks_the_highest_build_number(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / ".cache/ms-playwright"
+            for build in ("999", "1248", "10000"):
+                self.shell(cache / f"chromium_headless_shell-{build}/chrome-headless-shell-linux64")
+            (cache / "chromium_headless_shell-20000/chrome-headless-shell-linux64").mkdir(parents=True)  # no binary
+            (cache / "chromium-30000").mkdir()  # full Chrome: not the shell
+            self.assertEqual(run.find_chrome({}, tmp), cache / "chromium_headless_shell-10000/chrome-headless-shell-linux64")
+
+    def test_no_chrome_is_a_dom_problem(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(run.find_chrome({}, tmp))
+            problems = [p for p in run.dom_problems({}, tmp) if run.CHROME_BINARY in p]
+            self.assertEqual(len(problems), 1, run.dom_problems({}, tmp))
+            self.assertIn("ORACLE_CHROME_DIR", problems[0])
+
+    def test_prereqs_check_dom_only_for_a_dom_case(self):
+        with mock.patch.object(run, "dom_problems", return_value=["no chrome"]):
+            self.assertNotIn("no chrome", run.prereq_problems(["A"], cases=["idor"]))
+            with mock.patch.object(run, "CASES_DIR", SELFTEST):
+                self.assertIn("no chrome", run.prereq_problems(["A"], cases=["double-submit"]))
+
+    def test_case_hash_covers_the_browser_stubs_for_a_dom_case_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            for name, text in (("dom", 'import { openDom } from "../../oracle_dom/oracle_dom.mjs";\n'), ("plain", "\n")):
+                (tmp / "cases" / name).mkdir(parents=True)
+                (tmp / "cases" / name / "oracle.mjs").write_text(text)
+            browser = tmp / "browser"
+            shutil.copytree(run.ORACLE_DOM_BROWSER, browser)
+            with mock.patch.object(run, "CASES_DIR", tmp / "cases"), mock.patch.object(run, "ORACLE_DOM_BROWSER", browser):
+                before = {c: run.case_hash(c) for c in ("dom", "plain")}
+                (browser / "link.js").write_text("// edited\n")
+                after = {c: run.case_hash(c) for c in ("dom", "plain")}
+        self.assertNotEqual(before["dom"], after["dom"])
+        self.assertEqual(before["plain"], after["plain"])
+
+    def graded_command(self, case, contain, cases_dir=CASES):
+        """grade()'s (cmd, env, scratch) for `case`, with Popen faked to answer a pass."""
+        with tempfile.TemporaryDirectory(prefix="practices-cmd-") as tmp:
+            fixture = build(Path(tmp) / "fixture")
+            fake = mock.MagicMock()
+            fake.return_value.communicate.return_value = (GRADE_OUT, "")
+            fake.return_value.pid = 1 << 30
+            with mock.patch.object(run, "CASES_DIR", cases_dir), mock.patch.object(run.subprocess, "Popen", fake):
+                out = run.grade(fixture, case, Path(tmp) / "grade", contain=contain)
+            self.assertEqual(out["verdict"], "pass")
+            (cmd,), kwargs = fake.call_args
+            env = kwargs["env"]
+            return cmd, env, Path(env["HOME"]).parent, fixture
+
+    def test_a_plain_case_grades_with_todays_command_and_env(self):
+        for contain in (False, True):
+            with self.subTest(contain=contain):
+                cmd, env, scratch, fixture = self.graded_command("idor", contain)
+                self.assertEqual(env, run.grade_env(fixture, scratch))
+                self.assertNotIn("ORACLE_CHROME", env)
+                if contain:
+                    inside = Path(run.PRACTICES_MOUNT)
+                    want = run.contained([run.node_binary(), "--import", (inside / run.LOADER.relative_to(HERE)).as_uri(),
+                                          str(inside / "cases/idor/oracle.mjs")],
+                                         writable=[fixture, scratch], readable={HERE: run.PRACTICES_MOUNT}, cwd=fixture)
+                else:
+                    want = [run.node_binary(), "--import", run.LOADER.as_uri(), str(CASES / "idor/oracle.mjs")]
+                self.assertEqual(cmd, want)
+
+    def test_a_dom_case_gets_chrome(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            chrome = self.shell(Path(tmp) / "shell")
+            with mock.patch.object(run, "find_chrome", return_value=chrome):
+                cmd, env, _, _ = self.graded_command("double-submit", False, SELFTEST)
+                self.assertEqual(env["ORACLE_CHROME"], str(chrome / run.CHROME_BINARY))
+                self.assertEqual(cmd[-1], str(SELFTEST / "double-submit/oracle.mjs"))
+                cmd, env, _, _ = self.graded_command("double-submit", True, SELFTEST)
+                self.assertEqual(env["ORACLE_CHROME"], f"{run.CHROME_MOUNT}/{run.CHROME_BINARY}")
+                i = cmd.index(str(chrome))
+                self.assertEqual(cmd[i - 1:i + 2], ["--ro-bind", str(chrome), run.CHROME_MOUNT])
+                self.assertEqual(cmd[-1], f"{run.PRACTICES_MOUNT}/oracle_dom/selftest/double-submit/oracle.mjs")
+
+    @unittest.skipUnless(DOM_OK, NO_DOM)
+    def test_a_timed_out_grade_leaves_nothing_running(self):
+        # The oracle opens a page, plants `sleep 300` and hangs; it recorded its process group,
+        # and once grade() returns nothing in that group may live.
+        with tempfile.TemporaryDirectory(prefix="practices-dom-") as tmp:
+            fixture = build(Path(tmp) / "fixture")
+            shutil.copytree(SELFTEST / "timeout/good", fixture, dirs_exist_ok=True)
+            with mock.patch.object(run, "CASES_DIR", SELFTEST), mock.patch.object(run, "ORACLE_TIMEOUT", 8):
+                out = run.grade(fixture, "timeout", Path(tmp) / "grade", contain=False)
+            self.assertEqual(out["verdict"], "broken", json.dumps(out, indent=1))
+            pids = json.loads((fixture / "oracle-pids.json").read_text())
+            self.assertEqual(pids["group"], pids["oracle"])  # the oracle leads its own group
+            deadline = time.monotonic() + 3
+            while group_members(pids["group"]) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertEqual(group_members(pids["group"]), [], pids)
+
+    @unittest.skipUnless(DOM_OK and run.bwrap_usable(), "bwrap can't start here (inside Claude Code's sandbox, say)")
+    def test_a_contained_grade_of_a_selftest_case(self):
+        with tempfile.TemporaryDirectory(prefix="practices-dom-") as tmp:
+            fixture = build(Path(tmp) / "fixture")
+            shutil.copytree(SELFTEST / "double-submit/good", fixture, dirs_exist_ok=True)
+            with mock.patch.object(run, "CASES_DIR", SELFTEST):
+                out = run.grade(fixture, "double-submit", Path(tmp) / "grade", contain=True)
+            self.assertEqual(out["verdict"], "pass", json.dumps(out, indent=1))
 
 
 @unittest.skipUnless(DOM_OK, NO_DOM)
