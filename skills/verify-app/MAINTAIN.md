@@ -32,10 +32,13 @@ takes the file for binary (ugrep can) prints no matches and no error.
    stays at the repo root: a bare `cd` moves it for every later call, and every path in this pass is
    root-relative. A file that no longer matches its own list was edited by hand: report it and stop,
    since the refresh would overwrite the edit. Then compare `CHECKSUMS` with
-   `<skill dir>/template/CHECKSUMS`. A list that differs can mean either side is newer: diff the
-   repo's `verify.py` against the template's, and if the repo's has code the template lacks, the
-   installed verify-app skill is the older one: stop and say to update it first. A list that
-   differs is otherwise an older harness; refresh it before anything below with steps 1.1 and 1.3.
+   `<skill dir>/template/CHECKSUMS`. A list that differs means one side is newer, and
+   `HARNESS_VERSION` says which:
+   `grep -a '^HARNESS_VERSION' <harness>/verify.py <skill dir>/template/verify.py`. A copy with no
+   such line predates the number and is the older. If the template's number is lower, the installed
+   verify-app skill is the older one: stop and say to update it first. If the numbers are equal,
+   stop and report it, since the template changed without raising the number. If the repo's is
+   lower, the harness is older: refresh it before anything below with steps 1.1 and 1.3.
    Step 1.2 runs on every pass, even when the lists match, since a template change to `journeys.py`
    or the recipe alone leaves `CHECKSUMS` the same.
    1. Re-copy the four fixed files with one sandboxed `cp`, then check them from the harness folder:

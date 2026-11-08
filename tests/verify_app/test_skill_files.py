@@ -326,6 +326,19 @@ class Files(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, generator)
 
+    def test_harness_version_moves_with_the_harness(self):
+        """MAINTAIN.md orders a copy against the template by HARNESS_VERSION, so any change to verify.py
+        or browser.py must raise it. On a failure: raise HARNESS_VERSION by one, then set PIN to the
+        version and the digest this test prints."""
+        PIN = (2, "de2541072a00c02ca8ba6a10308ae5c9520218fedec6909b1a31ae6dd158e54d")
+        text = read(os.path.join(TEMPLATE, "verify.py"))
+        found = re.findall(r"(?m)^HARNESS_VERSION = (\d+)$", text)
+        self.assertEqual(len(found), 1, "verify.py carries exactly one HARNESS_VERSION line")
+        strip = lambda t: re.sub(r"(?m)^HARNESS_VERSION = \d+\n", "", t)
+        digest = hashlib.sha256((strip(text) + strip(read(os.path.join(TEMPLATE, "browser.py")))).encode()).hexdigest()
+        self.assertEqual((int(found[0]), digest), PIN,
+                         "the harness changed: raise HARNESS_VERSION and update PIN to the new pair")
+
     def test_no_step_moves_the_sessions_working_directory(self):
         """A bare cd in a main session moves its cwd for every later call, breaking root-relative paths."""
         for name in ("SKILL.md", "MAINTAIN.md"):
@@ -342,8 +355,10 @@ class Files(unittest.TestCase):
             with self.subTest(line=line):
                 self.assertRegex(text, rf"(?m)^ *{re.escape(line)}$")
         for phrase in ("The harness folder is the one the recipe's Launch commands name",
-                       "A list that differs is otherwise an older harness; refresh it before anything below",
-                       "if the repo's has code the template lacks, the installed verify-app skill is the older one",
+                       "A list that differs means one side is newer, and `HARNESS_VERSION` says which",
+                       "A copy with no such line predates the number and is the older",
+                       "If the template's number is lower, the installed verify-app skill is the older one",
+                       "If the repo's is lower, the harness is older: refresh it before anything below",
                        "Step 1.2 runs on every pass, even when the lists match",
                        "a refresh from the template included, committed only with the user's say",
                        "Re-copy the four fixed files with one sandboxed `cp`",
