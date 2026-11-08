@@ -1,118 +1,150 @@
-// The page side of oracle_dom.mjs, loaded before the bundle: the server-action proxies' backend,
-// the fetch stub, the logs, and the mount, which loads the bundle and renders the entry. Plain
-// script, no modules. Nothing the oracle relies on is reachable from page code:
-// - every builtin used after start-up is captured here first, so a page swapping JSON.stringify
-//   or Array.prototype.push changes nothing;
-// - the logs live in this closure and reach the oracle through a CDP binding (__oracleRecord,
-//   taken off window here), which is where the oracle counts them; window.__actions and the
-//   other log getters are read-only copies;
-// - the oracle's controls (modes, fetch rules, the mount and its status) are one object it takes
-//   through __takeControls, once, before the bundle (the agent's code) is even loaded;
-// - config is a deep copy, and window.__config a frozen one, for the next/* stubs.
+// The page side of oracle_dom.mjs: the server-action proxies, the reports the next/* stubs make,
+// and the mount, which loads the bundle and renders the entry. Plain script, no modules.
+// Nothing here counts anything. An action call is a request (POST to oracle.actions.invalid),
+// and a font, navigation or unresolved import a report (POST to oracle.log.invalid), both sent
+// with the native fetch captured below, under a token only start() hands in; the oracle sees
+// each one paused in CDP's Fetch domain, counts it there and answers it by the mode it holds.
+// The agent's own fetches go out as they are, to the same pause. So what a page does to its
+// globals or prototypes can't change a count or an answer, short of not making the call.
 // practices-allow: SEC-08 a test page in headless Chrome; its stacks go to the grading oracle only
 (function () {
   "use strict";
   var uncurry = Function.prototype.bind.bind(Function.prototype.call);
+  var nativeFetch = fetch.bind(window);
   var stringify = JSON.stringify;
   var parse = JSON.parse;
   var push = uncurry(Array.prototype.push);
   var slice = uncurry(Array.prototype.slice);
-  var map = uncurry(Array.prototype.map);
-  var find = uncurry(Array.prototype.find);
-  var indexOf = uncurry(Array.prototype.indexOf);
   var join = uncurry(Array.prototype.join);
+  var indexOf = uncurry(Array.prototype.indexOf);
   var isArray = Array.isArray;
   var keys = Object.keys;
   var assign = Object.assign;
   var create = Object.create;
   var freeze = Object.freeze;
   var hasOwn = uncurry(Object.prototype.hasOwnProperty);
+  var isPrototypeOf = uncurry(Object.prototype.isPrototypeOf);
   var defineProperty = Object.defineProperty;
   var then = uncurry(Promise.prototype.then);
-  var promiseFinally = uncurry(Promise.prototype.finally);
+  var promiseCatch = uncurry(Promise.prototype.catch);
   var resolved = Promise.resolve.bind(Promise);
   var NativePromise = Promise;
   var setTimer = setTimeout.bind(window);
   var now = performance.now.bind(performance);
-  var clone = structuredClone;
-  var NativeURL = URL;
-  var NativeURLSearchParams = URLSearchParams;
+  var responseJson = uncurry(Response.prototype.json);
+  var responseStatus = uncurry(Object.getOwnPropertyDescriptor(Response.prototype, "status").get);
   var forEachParam = uncurry(URLSearchParams.prototype.forEach);
   var forEachForm = uncurry(FormData.prototype.forEach);
-  var NativeResponse = Response;
-  var NativeRequest = Request;
-  var NativeFile = File;
-  var NativeFormData = FormData;
-  var NativeDate = Date;
+  var NativeURLSearchParams = URLSearchParams;
+  var FileProto = File.prototype;
+  var FormDataProto = FormData.prototype;
+  var DateProto = Date.prototype;
   var toISOString = uncurry(Date.prototype.toISOString);
   var NativeError = Error;
-  var NativeTypeError = TypeError;
-  var RegExpOf = RegExp;
-  var test = uncurry(RegExp.prototype.test);
-  var strIndexOf = uncurry(String.prototype.indexOf);
-  var toUpperCase = uncurry(String.prototype.toUpperCase);
+  var encode = encodeURIComponent;
   var appendChild = uncurry(Node.prototype.appendChild);
   var createElement = Document.prototype.createElement.bind(document);
   var addEventListener = EventTarget.prototype.addEventListener;
   var getById = Document.prototype.getElementById.bind(document);
   var NativeString = String;
+  var ACTIONS = "http://oracle.actions.invalid/";
+  var LOG = "http://oracle.log.invalid/";
 
   var config = parse(stringify(window.__config));
-  var send = window.__oracleRecord;
-  delete window.__oracleRecord;
-  var pending = 0;
+  var token = null;
   var lastChange = now();
-  var logs = { action: [], fetch: [], font: [], navigation: [], unresolved: [], error: [] };
-  var actionModes = assign(create(null), config.actionModes);
-  var fetchModes = slice(config.fetchModes);
+  var errors = [];
   var mountStatus = null;
 
   function deepFreeze(value) {
     if (value && typeof value === "object") {
       freeze(value);
-      map(keys(value), function (k) { deepFreeze(value[k]); });
+      var names = keys(value);
+      for (var i = 0; i < names.length; i++) deepFreeze(value[names[i]]);
     }
     return value;
   }
   defineProperty(window, "__config", { value: deepFreeze(parse(stringify(config))), writable: false, configurable: false });
+  defineProperty(window, "process", { value: { env: { NODE_ENV: "production" } }, writable: true, configurable: true });
 
   function expose(name, value) {
     defineProperty(window, name, { value: value, writable: false, configurable: false, enumerable: false });
   }
-  function copy(value) {
-    return parse(stringify(value));
+
+  // A value as null-prototype data the captured stringify carries with no toJSON on the way:
+  // an array as {"@array": length, 0: ..., 1: ...}, FormData as its entries, a File by name,
+  // size and type. Anything that throws while being read (a hooked getter) reads as a marker.
+  function plain(value, depth) {
+    if (depth > 6) return "[deep]";
+    if (typeof value === "function") return "[function]";
+    if (value === undefined) return null;
+    if (!value || typeof value !== "object") return value;
+    var out = create(null);
+    if (isPrototypeOf(FileProto, value)) {
+      out.file = NativeString(value.name);
+      out.size = Number(value.size);
+      out.type = NativeString(value.type);
+      return out;
+    }
+    if (isPrototypeOf(FormDataProto, value)) {
+      var entries = create(null);
+      var n = 0;
+      forEachForm(value, function (v, k) {
+        var pair = create(null);
+        pair["@array"] = 2;
+        pair[0] = NativeString(k);
+        pair[1] = plain(v, depth + 1);
+        entries[n++] = pair;
+      });
+      entries["@array"] = n;
+      out.formData = entries;
+      return out;
+    }
+    if (isPrototypeOf(DateProto, value)) return toISOString(value);
+    if (isArray(value)) {
+      out["@array"] = value.length;
+      for (var i = 0; i < value.length; i++) out[i] = plain(value[i], depth + 1);
+      return out;
+    }
+    var names = keys(value);
+    for (var j = 0; j < names.length; j++) out[names[j]] = plain(value[names[j]], depth + 1);
+    return out;
   }
-  function record(kind, entry) {
-    push(logs[kind], entry);
-    send(stringify({ kind: kind, entry: entry }));
+  function body(value) {
+    try {
+      return stringify(plain(value, 0));
+    } catch (e) {
+      return stringify("[unreadable]");
+    }
+  }
+  function post(url, text) {
+    var init = create(null);
+    init.method = "POST";
+    init.body = text;
+    return nativeFetch(url, init);
   }
 
-  defineProperty(window, "process", { value: { env: { NODE_ENV: "production" } }, writable: true, configurable: true });
-  map(["action", "fetch", "font", "navigation", "error"], function (kind) {
-    var name = kind === "fetch" ? "__fetches" : "__" + kind + "s";
-    defineProperty(window, name, { get: function () { return copy(logs[kind]); }, configurable: false, enumerable: false });
-  });
   // For the next/* stubs in the bundle: a font, a navigation, or code the browser can't run
-  // (next/dynamic's import), nothing that grades an action or a fetch.
+  // (next/dynamic's import), sent like an action, so the oracle counts it out of the page's reach.
   expose("__oracleLog", function (kind, entry) {
-    if (kind !== "font" && kind !== "navigation" && kind !== "unresolved") throw new NativeError("__oracleLog takes font, navigation or unresolved");
-    record(kind, copy(entry));
+    if (token === null) return;
+    promiseCatch(post(LOG + token + "/" + encode(kind), body(entry)), function () {});
   });
 
   function describe(e) {
     return NativeString((e && e.stack) || e);
   }
   addEventListener.call(window, "error", function (e) {
-    push(logs.error, describe(e.error || e.message));
+    push(errors, describe(e.error || e.message));
   });
   addEventListener.call(window, "unhandledrejection", function (e) {
-    push(logs.error, "unhandled rejection: " + describe(e.reason));
+    push(errors, "unhandled rejection: " + describe(e.reason));
   });
+  defineProperty(window, "__errors", { get: function () { return parse(stringify(errors)); }, configurable: false, enumerable: false });
 
-  // What settle() waits on: calls in flight (a hanging one excluded, as it never ends) and the
-  // time since the DOM last changed.
+  // What settle() reads here: the time since the DOM last changed. What's in flight it knows itself.
   expose("__quiet", function () {
-    return { pending: pending, quietMs: now() - lastChange };
+    return { quietMs: now() - lastChange };
   });
   new MutationObserver(function () {
     lastChange = now();
@@ -123,81 +155,17 @@
       setTimer(resolve, ms);
     });
   }
-  // The last call ending restarts the quiet clock: its result commits in a later task (React's
-  // scheduler, a body read), so quiet counted from an older mutation would end too soon.
-  function track(promise) {
-    pending++;
-    return promiseFinally(promise, function () {
-      pending--;
-      if (pending === 0) lastChange = now();
-    });
-  }
-  function hang() {
-    return new NativePromise(function () {});
-  }
 
-  // An argument as JSON can carry it: FormData as its entries, a File by name, size and type.
-  function plain(value, depth) {
-    if (depth > 6) return "[deep]";
-    if (value instanceof NativeFile) return { file: value.name, size: value.size, type: value.type };
-    if (value instanceof NativeFormData) {
-      var entries = [];
-      forEachForm(value, function (v, k) {
-        push(entries, [k, plain(v, depth + 1)]);
-      });
-      return { formData: entries };
-    }
-    if (value instanceof NativeDate) return toISOString(value);
-    if (isArray(value)) return map(value, function (v) { return plain(v, depth + 1); });
-    if (value && typeof value === "object") {
-      var out = {};
-      map(keys(value), function (k) {
-        out[k] = plain(value[k], depth + 1);
-      });
-      return out;
-    }
-    if (typeof value === "function") return "[function]";
-    return value === undefined ? null : value;
-  }
-
-  // One export of a "use server" module: the call is logged, then answered after a round trip's
-  // delay by the mode the oracle set for its name.
+  // One export of a "use server" module: a request the oracle answers. 200 carries {value},
+  // anything else is the server error the oracle's "fail" mode means.
   expose("__serverAction", function (name) {
     return async function () {
-      var args = slice(arguments);
-      record("action", { name: name, args: map(args, function (a) { return plain(a, 0); }), t: now() });
-      var mode = actionModes[name] || "ok";
-      if (mode === "hang") return hang();
-      return track(then(wait(config.delayMs), function () {
-        if (mode === "fail") throw new NativeError("server error");
-        var result = config.actionResults[name];
-        return result === undefined ? undefined : clone(result);
-      }));
+      var response = await post(ACTIONS + token + "/" + encode(name), body(slice(arguments)));
+      if (responseStatus(response) !== 200) throw new NativeError("server error");
+      var answer = await responseJson(response);
+      return answer.value;
     };
   });
-
-  function matches(rule, url) {
-    return rule.regex ? test(new RegExpOf(rule.regex, rule.flags), url) : strIndexOf(url, rule.match) !== -1;
-  }
-
-  var realFetch = window.fetch.bind(window);
-  window.fetch = function (input, init) {
-    var raw = typeof input === "string" ? input : input instanceof NativeURL ? input.href : input.url;
-    var url = new NativeURL(raw, location.href).href;
-    var method = (init && init.method) || (input instanceof NativeRequest ? input.method : "GET");
-    var body = init && typeof init.body === "string" ? init.body : null;
-    var rule = find(fetchModes, function (r) { return matches(r, url); });
-    record("fetch", { url: url, method: toUpperCase(method), body: body, stubbed: Boolean(rule), t: now() });
-    if (!rule) return track(realFetch(input, init));
-    if (rule.spec === "hang") return hang();
-    return track(then(wait(config.delayMs), function () {
-      if (rule.spec === "fail") throw new NativeTypeError("Failed to fetch");
-      return new NativeResponse(stringify(rule.spec.json === undefined ? null : rule.spec.json), {
-        status: rule.spec.status || 200,
-        headers: { "content-type": "application/json" },
-      });
-    }));
-  };
 
   // searchParams as Next builds it: a repeated key is an array of its values, and a key that
   // names an Object.prototype member is a plain key.
@@ -208,14 +176,21 @@
     });
     return out;
   }
-  // Next 15's page props: a Promise, which also carries the values for a synchronous read (the
-  // deprecated form), bar a name the Promise already has (then, constructor, toString...), as
-  // Next skips those too.
+  // Next 15's page props: a Promise that also carries the values for a synchronous read (the
+  // deprecated form). Next skips its well-known names when it copies them on, so a key named
+  // like a thenable field doesn't break use(): from memory of Next 15's reflect-utils
+  // (wellKnownProperties), not read from its source, which isn't in this tree: then, status,
+  // value, reason, displayName, toJSON, $$typeof, __esModule, and every Promise and
+  // Object.prototype member (catch, finally, constructor, hasOwnProperty, isPrototypeOf,
+  // propertyIsEnumerable, toString, toLocaleString, valueOf), which `k in promise` covers.
+  var WELL_KNOWN = ["then", "status", "value", "reason", "displayName", "toJSON", "$$typeof", "__esModule"];
   function pageProp(value) {
     var promise = resolved(value);
-    map(keys(value), function (k) {
-      if (!(k in promise)) promise[k] = value[k];
-    });
+    var names = keys(value);
+    for (var i = 0; i < names.length; i++) {
+      var k = names[i];
+      if (indexOf(WELL_KNOWN, k) === -1 && !(k in promise)) promise[k] = value[k];
+    }
     return promise;
   }
 
@@ -235,7 +210,7 @@
   // props are Next 15's (params and searchParams as pageProp), unless the oracle's props set
   // them. An async default export is a server component: it is awaited with the props first and
   // what it returns is rendered. A module that can't load here says why ({unresolved: "server" |
-  // "polyfill"}).
+  // "polyfill" | "css"}).
   // limit: only the entry is awaited; an async server component nested inside it fails to render.
   async function mount() {
     await loadBundle(config.bundle);
@@ -267,28 +242,27 @@
     }
     var root = client.createRoot(getById("root"), {
       onUncaughtError: function (e) {
-        push(logs.error, describe(e));
+        push(errors, describe(e));
       },
     });
-    var before = logs.error.length;
+    var before = errors.length;
     ReactDOM.flushSync(function () {
       root.render(element);
     });
     await wait(0);
-    if (logs.error.length > before) return { status: "error", detail: join(slice(logs.error, before), "\n") };
+    if (errors.length > before) return { status: "error", detail: join(slice(errors, before), "\n") };
     return { status: "ok" };
   }
 
+  // The one control: the oracle takes this object before the bundle loads and calls start once,
+  // handing in the token its requests carry.
   var controls = freeze({
-    start: function () {
-      if (!mountStatus) mountStatus = mount();
+    start: function (oracleToken) {
+      if (!mountStatus) {
+        token = NativeString(oracleToken);
+        mountStatus = mount();
+      }
       return mountStatus;
-    },
-    setActionMode: function (name, mode) {
-      actionModes[name] = mode;
-    },
-    addFetchRule: function (rule) {
-      push(fetchModes, rule);
     },
   });
   defineProperty(window, "__takeControls", {

@@ -3,8 +3,8 @@
 import { useEffect, useState } from "react";
 import { subscribe } from "./actions";
 
-// Planted twice: nothing stops a second submit, and an iframe sends the oracle's binding
-// payloads that aren't a log entry: not JSON, a __proto__ kind, a kind with no log.
+// Planted twice: nothing stops a second submit, and an iframe sends the oracle's report
+// endpoint bodies that aren't a report: not JSON, a __proto__ kind, a kind with no log.
 export default function SignupPage() {
   const [done, setDone] = useState(0);
 
@@ -18,9 +18,9 @@ export default function SignupPage() {
     if (done !== 1) return;
     const frame = document.createElement("iframe");
     frame.srcdoc = `<script>
-      window.__oracleRecord("not json");
-      window.__oracleRecord('{"kind": "__proto__", "entry": {"polluted": true}}');
-      window.__oracleRecord('{"kind": "nothing", "entry": {}}');
+      for (const [path, body] of [["x/font", "not json"], ["x/__proto__", '{"polluted": true}'], ["x/nothing", "{}"]]) {
+        fetch("http://oracle.log.invalid/" + path, { method: "POST", body });
+      }
     </script>`;
     document.body.appendChild(frame);
   }, [done]);

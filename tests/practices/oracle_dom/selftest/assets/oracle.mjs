@@ -9,7 +9,7 @@ await oracle(async (t) => {
   if (!dom) return;
   try {
     await dom.settle();
-    t.functional("image imports carry their dimensions", (await dom.text("#dims")) === "3x2 5x4 0x0", await dom.text("#dims"));
+    t.functional("image imports carry their dimensions", (await dom.text("#dims")) === "3x2 5x4 8x8", await dom.text("#dims"));
     const loaded = await dom.eval("document.querySelector('#hero').complete && document.querySelector('#hero').naturalWidth");
     t.functional("an imported image's src loads", loaded === 3, `${await dom.attr("#hero", "src")}: ${loaded}`);
     t.functional("a relative @import is inlined", (await dom.style("#base", "width")) === "42px", await dom.style("#base", "width"));

@@ -12,10 +12,11 @@
 // (--host-resolver-rules), so no request leaves the machine; requests() still lists each one.
 // practices-allow: SEC-13 Runtime.evaluate runs the oracle's own probes in its test page; arguments go in as JSON
 import { spawn } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { Missing } from "../oracle_lib.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -112,33 +113,87 @@ function transpile(file, src) {
   return out.outputText;
 }
 
-// An image's width and height from its header: PNG and GIF; 0 and 0 for the rest.
+const JPEG_SOF = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
+
+// An image's width and height from its header, as Next's static import reports them: PNG's
+// IHDR, GIF's screen, JPEG's start-of-frame marker (baseline or progressive), WebP's VP8, VP8L
+// or VP8X chunk, AVIF's ispe box, SVG's width and height, else its viewBox. 0 and 0 when none
+// reads.
 function imageSize(bytes) {
+  const none = { width: 0, height: 0 };
   if (bytes.length >= 24 && bytes.readUInt32BE(0) === 0x89504e47) return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
   if (bytes.length >= 10 && bytes.toString("latin1", 0, 4) === "GIF8") return { width: bytes.readUInt16LE(6), height: bytes.readUInt16LE(8) };
-  return { width: 0, height: 0 };
+  if (bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    for (let i = 2; i + 9 < bytes.length;) {
+      if (bytes[i] !== 0xff) {
+        i++;
+        continue;
+      }
+      const marker = bytes[i + 1];
+      if (JPEG_SOF.has(marker)) return { width: bytes.readUInt16BE(i + 7), height: bytes.readUInt16BE(i + 5) };
+      if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7) || marker === 0xff) i += marker === 0xff ? 1 : 2;
+      else i += 2 + bytes.readUInt16BE(i + 2);
+    }
+    return none;
+  }
+  if (bytes.length >= 30 && bytes.toString("latin1", 0, 4) === "RIFF" && bytes.toString("latin1", 8, 12) === "WEBP") {
+    const chunk = bytes.toString("latin1", 12, 16);
+    if (chunk === "VP8 ") return { width: bytes.readUInt16LE(26) & 0x3fff, height: bytes.readUInt16LE(28) & 0x3fff };
+    if (chunk === "VP8L") {
+      const bits = bytes.readUInt32LE(21);
+      return { width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 };
+    }
+    if (chunk === "VP8X") return { width: bytes.readUIntLE(24, 3) + 1, height: bytes.readUIntLE(27, 3) + 1 };
+    return none;
+  }
+  const ispe = bytes.length >= 12 && bytes.toString("latin1", 4, 8) === "ftyp" ? bytes.indexOf("ispe", 0, "latin1") : -1;
+  if (ispe !== -1 && ispe + 16 <= bytes.length) return { width: bytes.readUInt32BE(ispe + 8), height: bytes.readUInt32BE(ispe + 12) };
+  const svg = /<svg\b[^>]*>/i.exec(bytes.toString("utf8", 0, Math.min(bytes.length, 4096)));
+  if (svg) {
+    const attr = (name) => new RegExp(`\\s${name}\\s*=\\s*["']\\s*([\\d.]+)(px)?\\s*["']`, "i").exec(svg[0]);
+    const width = attr("width");
+    const height = attr("height");
+    if (width && height) return { width: Math.round(Number(width[1])), height: Math.round(Number(height[1])) };
+    const box = /\sviewBox\s*=\s*["']\s*[-\d.]+[\s,]+[-\d.]+[\s,]+([\d.]+)[\s,]+([\d.]+)\s*["']/i.exec(svg[0]);
+    if (box) return { width: Math.round(Number(box[1])), height: Math.round(Number(box[2])) };
+  }
+  return none;
 }
 
 const CSS_IMPORT = /@import\s+(?:url\(\s*)?(["'])([^"']+)\1\s*\)?[^;]*;/g;
 
 // A stylesheet with its relative @imports inlined from the fixture, each file once (a cycle
 // stops at a file already in), and its URL @imports moved to the top, where CSS keeps them
-// (offline they fail). A relative @import naming no file is Missing, as Next's build fails.
+// (offline they fail). Comments go first, so a commented-out @import is none. A relative
+// @import naming no file is Missing, as Next's build fails; one that leaves the project (an
+// absolute path, ../ past its root, a symlink out) is left out unread, with a note. A bare
+// specifier (a package such as tailwindcss) goes in `packages`, for the caller to score
+// unresolved: the oracle doesn't resolve CSS packages.
 // limit: an @import's media or layer condition is dropped with it.
-function inlineCss(file, seen = new Set()) {
+function inlineCss(file, seen = new Set(), packages = []) {
   seen.add(file);
+  const root = realpathSync(FIXTURE);
   const urls = [];
-  const body = readFileSync(file, "utf8").replace(CSS_IMPORT, (whole, quote, spec) => {
+  const text = readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const body = text.replace(CSS_IMPORT, (whole, quote, spec) => {
     if (/^([a-z][a-z0-9+.-]*:|\/\/)/i.test(spec)) {
       urls.push(whole);
       return "";
     }
+    if (!/^[./]/.test(spec)) {
+      packages.push(spec);
+      return `/* ${spec}: a CSS package, not resolved */`;
+    }
     const target = path.resolve(path.dirname(file), spec);
-    if (seen.has(target)) return `/* ${spec}: already in */`;
+    const inside = (p) => p === root || p.startsWith(root + path.sep);
+    if (!inside(target)) return `/* ${spec}: left out, outside the project */`;
     if (!isFile(target)) throw new Missing(`${rel(file)} imports ${spec}, which doesn't exist`);
-    return inlineCss(target, seen);
+    const real = realpathSync(target);
+    if (!inside(real)) return `/* ${spec}: left out, outside the project */`;
+    if (seen.has(real)) return `/* ${spec}: already in */`;
+    return inlineCss(real, seen, packages).css;
   });
-  return [...urls, body].join("\n");
+  return { css: [...urls, body].join("\n"), packages };
 }
 
 // The names a "use server" module exports, from its syntax: the module itself never runs here.
@@ -255,10 +310,18 @@ class Bundle {
       if (IMAGE.test(file)) {
         const name = `asset-${this.mods.length}-${path.basename(file)}`;
         copyFileSync(file, path.join(this.dir, name));
-        const image = { src: pathToFileURL(path.join(this.dir, name)).href, ...imageSize(readFileSync(file)) };
+        const image = { src: `${PAGE_ORIGIN}/${encodeURIComponent(name)}`, ...imageSize(readFileSync(file)) };
         return { code: `module.exports = ${JSON.stringify(image)};`, deps: {} };
       }
-      const text = file.endsWith(".css") ? inlineCss(file) : readFileSync(file, "utf8");
+      if (file.endsWith(".css")) {
+        const { css, packages } = inlineCss(realpathSync(file));
+        if (packages.length) {
+          const message = `${rel(file)} imports ${packages.join(", ")}: the oracle doesn't resolve CSS packages`;
+          return { code: `throw Object.assign(new Error(${JSON.stringify(message)}), { unresolved: "css" });`, deps: {} };
+        }
+        return this.stylesheet(file, css);
+      }
+      const text = readFileSync(file, "utf8");
       if (file.endsWith(".json")) {
         let value;
         try {
@@ -268,13 +331,17 @@ class Bundle {
         }
         return { code: `module.exports = ${JSON.stringify(value)};`, deps: {} };
       }
-      const inject = `var style = document.createElement("style");\nstyle.dataset.file = ${JSON.stringify(rel(file))};\n` +
-        `style.textContent = ${JSON.stringify(text)};\ndocument.head.appendChild(style);`;
-      const classes = file.endsWith(".module.css")
-        ? `\nmodule.exports = new Proxy({}, { get: function (_, key) { return typeof key === "string" && key !== "__esModule" && key !== "then" ? key : undefined; } });`
-        : "";
-      return { code: inject + classes, deps: {} };
+      throw new Missing(`${rel(file)}: the oracle loads no asset of this kind`);
     });
+  }
+
+  stylesheet(file, css) {
+    const inject = `var style = document.createElement("style");\nstyle.dataset.file = ${JSON.stringify(rel(file))};\n` +
+      `style.textContent = ${JSON.stringify(css)};\ndocument.head.appendChild(style);`;
+    const classes = file.endsWith(".module.css")
+      ? `\nmodule.exports = new Proxy({}, { get: function (_, key) { return typeof key === "string" && key !== "__esModule" && key !== "then" ? key : undefined; } });`
+      : "";
+    return { code: inject + classes, deps: {} };
   }
 
   // The loader and every module, as one classic script defining window.__require(id). Cycles go
@@ -442,40 +509,69 @@ class Chrome {
 }
 
 // What the page script's selector helpers run: the element, or null when nothing matches.
-const BINDING = "__oracleRecord"; // page.js takes it off window before any agent code runs
+// The page and the oracle's own endpoints, all answered from the Fetch domain: none resolves.
+// practices-allow: SEC-13 Runtime.evaluate runs the oracle's own probes in its test page; arguments go in as JSON
+const PAGE_ORIGIN = "http://oracle.page.invalid";
+const ACTIONS_HOST = "oracle.actions.invalid";
+const LOG_HOST = "oracle.log.invalid";
+const ORACLE_HOSTS = new Set([new URL(PAGE_ORIGIN).hostname, ACTIONS_HOST, LOG_HOST]);
+const CONTENT_TYPES = {
+  ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".avif": "image/avif", ".ico": "image/x-icon",
+  ".svg": "image/svg+xml",
+};
+const CORS = [{ name: "Access-Control-Allow-Origin", value: "*" }, { name: "Access-Control-Allow-Headers", value: "*" },
+  { name: "Access-Control-Allow-Methods", value: "*" }];
 const PICK = "(sel) => document.querySelector(sel)";
+
+function hostOf(url) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "";
+  }
+}
+
+// Page data sent as page.js's plain(): arrays come as {"@array": length, 0: ...}.
+function decode(value) {
+  if (!value || typeof value !== "object") return value;
+  if (Object.hasOwn(value, "@array")) return Array.from({ length: Math.min(Number(value["@array"]) || 0, 1000) }, (_, i) => decode(value[i]));
+  return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, decode(v)]));
+}
 
 class DomSession {
   #requests = [];
-  // what the page reported through the binding, counted here, where page code can't reach
+  #byId = new Map();
+  // what the oracle counted from the paused requests, where page code can't reach
   #log = { action: [], fetch: [], font: [], navigation: [], unresolved: [] };
-  // binding calls that weren't page.js's: another frame's, or not a log entry
+  // requests to the oracle's endpoints that weren't page.js's: no token, another frame's, bad data
   #tamper = [];
   #reported = new Set();
-  #mainContext = null;
-  #byId = new Map();
+  #pending = 0; // answers scheduled and not yet sent
+  #lastAnswer = performance.now();
+  #hung = new Set(); // network ids of requests "hang" never answers
 
-  constructor(chrome, sessionId, targetId, t, what) {
+  constructor(chrome, sessionId, { targetId, token, dir, opts, t, what }) {
     this.chrome = chrome;
     this.cdp = chrome.cdp;
     this.sessionId = sessionId;
+    this.targetId = targetId;
+    this.token = token;
+    this.dir = dir;
     this.t = t;
     this.what = what;
+    this.actionModes = { ...(opts.actionModes ?? {}) };
+    this.actionResults = opts.actionResults ?? {};
+    this.fetchRules = (opts.fetchModes ?? []).map(([match, spec]) => fetchRule(match, spec));
+    this.delayMs = opts.delayMs ?? DELAY_MS;
     this.cdp.on(({ method, params, sessionId: from }) => {
       if (from !== sessionId) return;
-      if (method === "Runtime.executionContextCreated") {
-        const aux = params.context.auxData ?? {};
-        if (aux.frameId === targetId && aux.isDefault) this.#mainContext = params.context.id;
-        return;
-      }
-      if (method === "Runtime.bindingCalled" && params.name === BINDING) {
-        this.#binding(params);
-        return;
-      }
-      if (method === "Network.requestWillBeSent") {
+      if (method === "Fetch.requestPaused") {
+        this.#paused(params).catch((e) => this.#tamper.push({ why: `answering failed: ${e.message}`, url: params.request.url }));
+      } else if (method === "Network.requestWillBeSent") {
         const redirected = params.redirectResponse && this.#byId.get(params.requestId);
         if (redirected) Object.assign(redirected, { status: params.redirectResponse.status, done: true });
-        const entry = { url: params.request.url, method: params.request.method, type: params.type ?? null, status: null, failed: false, error: null, done: false };
+        const entry = { id: params.requestId, url: params.request.url, method: params.request.method, type: params.type ?? null, status: null, failed: false, error: null, done: false };
         this.#requests.push(entry);
         this.#byId.set(params.requestId, entry);
       } else if (method === "Network.responseReceived") {
@@ -495,23 +591,75 @@ class DomSession {
     return this.cdp.send(method, params, this.sessionId);
   }
 
-  // One binding call: a log entry from page.js in the main world, or tampering (another frame's
-  // call, or a payload that isn't {kind, entry} for a log this session keeps).
-  #binding({ executionContextId, payload }) {
-    const tamper = (why) => this.#tamper.push({ why, payload: String(payload).slice(0, 200) });
-    if (executionContextId !== this.#mainContext) return tamper(`a call from context ${executionContextId}, not the page's`);
-    let message;
-    try {
-      message = JSON.parse(payload);
-    } catch {
-      return tamper("not JSON");
+  #fulfill(requestId, status, body, headers = []) {
+    return this.send("Fetch.fulfillRequest", {
+      requestId, responseCode: status, responseHeaders: headers, body: Buffer.from(body).toString("base64"),
+    });
+  }
+
+  // An answer after the stubbed round trip; settle() waits for it, and its quiet clock starts
+  // again when the last one goes out.
+  #later(answer) {
+    this.#pending++;
+    setTimeout(() => {
+      answer().catch(() => {}).finally(() => {
+        this.#pending--;
+        this.#lastAnswer = performance.now();
+      });
+    }, this.delayMs);
+  }
+
+  // Every request the page makes, paused before it goes anywhere: the page's own files, served;
+  // an action or a report to the oracle's endpoints, counted and answered; anything else, the
+  // agent's, logged and answered by the fetch rules, or failed as offline.
+  async #paused({ requestId, request, frameId, resourceType, networkId }) {
+    const url = new URL(request.url);
+    if (request.method === "OPTIONS") return this.#fulfill(requestId, 204, "", CORS);
+    if (url.origin === PAGE_ORIGIN) {
+      const name = path.basename(decodeURIComponent(url.pathname));
+      const file = name === "page.js" ? path.join(BROWSER, "page.js") : path.join(this.dir, name);
+      if (!isFile(file)) return this.#fulfill(requestId, 404, "");
+      const type = CONTENT_TYPES[path.extname(name).toLowerCase()] ?? "application/octet-stream";
+      return this.#fulfill(requestId, 200, readFileSync(file), [{ name: "Content-Type", value: type }]);
     }
-    if (!message || typeof message !== "object" || !Object.hasOwn(this.#log, message.kind)) return tamper("no such log");
-    this.#log[message.kind].push(message.entry);
+    if (url.hostname === ACTIONS_HOST || url.hostname === LOG_HOST) {
+      const [token, kind, ...rest] = url.pathname.split("/").slice(1).map(decodeURIComponent);
+      const tamper = (why) => {
+        this.#tamper.push({ why, url: request.url.slice(0, 200) });
+        return this.send("Fetch.failRequest", { requestId, errorReason: "NameNotResolved" });
+      };
+      if (token !== this.token || rest.length || !kind) return tamper("not page.js's request: no token");
+      if (frameId !== this.targetId) return tamper(`a request from frame ${frameId}, not the page's`);
+      let data;
+      try {
+        data = decode(JSON.parse(request.postData ?? "null"));
+      } catch {
+        return tamper("a body that isn't JSON");
+      }
+      if (url.hostname === LOG_HOST) {
+        if (!Object.hasOwn(this.#log, kind) || kind === "action" || kind === "fetch") return tamper(`no such report: ${kind}`);
+        this.#log[kind].push(data);
+        return this.#fulfill(requestId, 204, "", CORS);
+      }
+      this.#log.action.push({ name: kind, args: data, t: performance.now() });
+      const mode = this.actionModes[kind] ?? "ok";
+      if (mode === "hang") return this.#hung.add(networkId);
+      return this.#later(() => (mode === "fail"
+        ? this.#fulfill(requestId, 500, "server error", CORS)
+        : this.#fulfill(requestId, 200, JSON.stringify({ value: this.actionResults[kind] ?? null }), [...CORS, { name: "Content-Type", value: "application/json" }])));
+    }
+    const rule = this.fetchRules.find((r) => (r.regex ? new RegExp(r.regex, r.flags).test(request.url) : request.url.includes(r.match)));
+    this.#log.fetch.push({ url: request.url, method: request.method, body: request.postData ?? null, stubbed: Boolean(rule), type: resourceType, t: performance.now() });
+    if (!rule) return this.send("Fetch.failRequest", { requestId, errorReason: "NameNotResolved" });
+    if (rule.spec === "hang") return this.#hung.add(networkId);
+    return this.#later(() => (rule.spec === "fail"
+      ? this.send("Fetch.failRequest", { requestId, errorReason: "Failed" })
+      : this.#fulfill(requestId, rule.spec.status ?? 200, JSON.stringify(rule.spec.json === undefined ? null : rule.spec.json),
+        [...CORS, { name: "Content-Type", value: "application/json" }])));
   }
 
   // Records, once each, what makes the run unresolved whatever the oracle checks: tampering with
-  // the log, and code next/dynamic couldn't load.
+  // the oracle's endpoints, and code next/dynamic couldn't load.
   #report() {
     if (this.#tamper.length && !this.#reported.has("tamper")) {
       this.#reported.add("tamper");
@@ -519,29 +667,28 @@ class DomSession {
     }
     if (this.#log.unresolved.length && !this.#reported.has("unresolved")) {
       this.#reported.add("unresolved");
-      this.t.unresolved(`${this.what} loads code the browser can't run`, this.#log.unresolved.map((u) => u.detail).join("; "));
+      this.t.unresolved(`${this.what} loads code the browser can't run`, this.#log.unresolved.map((u) => u?.detail).join("; "));
     }
   }
 
-  // A log as the oracle has it, after a round trip to the page, so every binding call the page
-  // made before this read has arrived.
+  // A log as the oracle has it, after a round trip to the page.
   async #read(kind) {
     await this.eval("0");
     this.#report();
     return structuredClone(this.#log[kind]);
   }
 
-  // One of page.js's controls (start, setActionMode, addFetchRule), on the object the oracle
-  // took before any agent code loaded.
-  async control(op, ...args) {
+  // The page's one control, on the object the oracle took before any agent code loaded: start,
+  // with the token, which loads the bundle and mounts the entry. Fixed arguments, no spread.
+  async start() {
     const { result, exceptionDetails } = await this.send("Runtime.callFunctionOn", {
       objectId: this.controls,
-      functionDeclaration: "function (op, ...args) { return this[op](...args); }",
-      arguments: [{ value: op }, ...args.map((value) => ({ value }))],
+      functionDeclaration: "function (token) { return this.start(token); }",
+      arguments: [{ value: this.token }],
       returnByValue: true,
       awaitPromise: true,
     });
-    if (exceptionDetails) throw new Error(`page control ${op} threw: ${exceptionDetails.exception?.description ?? exceptionDetails.text}`);
+    if (exceptionDetails) throw new Error(`page start threw: ${exceptionDetails.exception?.description ?? exceptionDetails.text}`);
     return result.value;
   }
 
@@ -561,18 +708,20 @@ class DomSession {
     return this.call(`(sel) => { const el = (${PICK})(sel); return el ? (${body})(el) : null; }`, sel);
   }
 
-  // Until no action or fetch is in flight (page side or network) and the DOM has been still for
-  // `quiet` ms, capped at `ms`. True when it settled.
+  // Until no answer is due and no request in flight (a hanging one excluded, as it never ends),
+  // and the DOM has been still, and no answer has gone out, for `quiet` ms; then one more frame
+  // and the same test. Capped at `ms`. True when it settled.
   async settle({ ms = STEP_MS, quiet = 100 } = {}) {
     const deadline = performance.now() + Math.min(ms, STEP_MS);
+    const still = async () => {
+      const { quietMs } = await this.eval("window.__quiet()");
+      const inFlight = this.#requests.some((r) => !r.done && /^https?:/.test(r.url) && !this.#hung.has(r.id));
+      return !this.#pending && !inFlight && quietMs >= quiet && performance.now() - this.#lastAnswer >= quiet;
+    };
     for (;;) {
-      const state = await this.eval("window.__quiet()");
-      const inFlight = this.#requests.some((r) => !r.done && /^https?:/.test(r.url));
-      if (!state.pending && !inFlight && state.quietMs >= quiet) {
-        // one more frame, then the same test again: a commit in that frame restarts the wait
+      if (await still()) {
         await this.eval("new Promise((resolve) => requestAnimationFrame(() => resolve(true)))");
-        const after = await this.eval("window.__quiet()");
-        if (!after.pending && after.quietMs >= quiet) return true;
+        if (await still()) return true;
       }
       if (performance.now() >= deadline) return false;
       await sleep(25);
@@ -635,24 +784,29 @@ class DomSession {
     return this.eval("document.documentElement.outerHTML");
   }
 
-  // Every http(s) request the page made, failed ones included: {url, method, type, status, failed, error}.
+  // Every http(s) request the page made bar the oracle's own (its files, actions, reports),
+  // failed ones included: {url, method, type, status, failed, error}.
   async requests() {
-    return this.#requests.filter((r) => /^https?:/.test(r.url)).map(({ done, ...r }) => r);
+    await this.eval("0");
+    return this.#requests.filter((r) => /^https?:/.test(r.url) && !ORACLE_HOSTS.has(hostOf(r.url)))
+      .map(({ id, done, ...r }) => r);
   }
 
-  async actions() {
+  // Every server action call, in the order its request arrived: {name, args, t}.
+  actions() {
     return this.#read("action");
   }
 
+  // The page's fetch() and XHR calls: {url, method, body, stubbed, type, t}.
   async fetches() {
-    return this.#read("fetch");
+    return (await this.#read("fetch")).filter((f) => f.type === "Fetch" || f.type === "XHR");
   }
 
-  async fonts() {
+  fonts() {
     return this.#read("font");
   }
 
-  async navigations() {
+  navigations() {
     return this.#read("navigation");
   }
 
@@ -660,15 +814,16 @@ class DomSession {
     return this.eval("window.__errors");
   }
 
+  // Server action `name` answers by `mode` from now on; the oracle holds it, not the page.
   async actionMode(name, mode) {
     if (!MODES.has(mode)) throw new Error(`actionMode: ${mode} is not one of ${[...MODES].join(", ")}`);
-    await this.control("setActionMode", name, mode);
+    this.actionModes[name] = mode;
   }
 
-  // Fetches whose URL contains `match` (a string) or matches it (a RegExp) answer by `spec`:
-  // {status, json}, "fail" (a TypeError, as offline) or "hang". Rules apply in the order set.
+  // Requests whose URL contains `match` (a string) or matches it (a RegExp) answer by `spec`:
+  // {status, json}, "fail" (a network error, as offline) or "hang". Rules apply in the order set.
   async fetchMode(match, spec) {
-    await this.control("addFetchRule", fetchRule(match, spec));
+    this.fetchRules.push(fetchRule(match, spec));
   }
 
   close() {
@@ -695,6 +850,12 @@ function bundleFor(entryFile, dir) {
   return { ids, script: bundle.emit() };
 }
 
+const UNRESOLVED_WHY = {
+  server: "is a server component the browser can't run",
+  polyfill: "imports a Node builtin the oracle doesn't polyfill",
+  css: "imports CSS the oracle can't build",
+};
+
 // The page for `opts.entry` (fixture-relative) rendered in headless Chrome, as a DomSession, or
 // null when the verdict is already in (as openPg). An entry that won't compile, imports what
 // doesn't exist or has no default export throws Missing (broken); one that throws on its first
@@ -702,8 +863,8 @@ function bundleFor(entryFile, dir) {
 // awaited, scores unresolved. `oracleUrl` (the oracle's import.meta.url) names the scratch dir.
 // Options: props, actionModes {name: mode}, actionResults {name: value}, fetchModes [[match, spec]],
 // pathname, search and params for next/navigation and the page's props, delayMs for a stubbed
-// round trip (default DELAY_MS). The caller closes the session; an exit
-// without that still kills Chrome. ORACLE_CHROME names the headless shell.
+// round trip (default DELAY_MS). The caller closes the session; an exit without that still
+// kills Chrome. ORACLE_CHROME names the headless shell.
 export async function openDom(t, oracleUrl, opts) {
   const entryFile = findFile(path.join(FIXTURE, opts.entry));
   if (!entryFile) throw new Missing(`no ${opts.entry}`);
@@ -721,20 +882,15 @@ export async function openDom(t, oracleUrl, opts) {
     bundle: "bundle.js",
     ...ids,
     props: opts.props ?? {},
-    actionModes: opts.actionModes ?? {},
-    actionResults: opts.actionResults ?? {},
-    fetchModes: (opts.fetchModes ?? []).map(([match, spec]) => fetchRule(match, spec)),
-    delayMs: opts.delayMs ?? DELAY_MS,
     pathname: opts.pathname ?? "/",
     search: opts.search ?? "",
     params: opts.params ?? {},
   };
   writeFileSync(path.join(dir, "config.js"), `window.__config = ${JSON.stringify(config)};\n`);
   writeFileSync(path.join(dir, "bundle.js"), script);
-  const page = pathToFileURL(path.join(BROWSER, "page.js")).href;
   writeFileSync(path.join(dir, "index.html"),
     `<!doctype html>\n<html><head><meta charset="utf-8"><title>oracle</title></head><body><div id="root"></div>\n` +
-    `<script src="config.js"></script>\n<script src="${page}"></script>\n</body></html>\n`);
+    `<script src="config.js"></script>\n<script src="page.js"></script>\n</body></html>\n`);
 
   mkdirSync(path.join(dir, "chrome-profile"));
   const chrome = new Chrome(binary, path.join(dir, "chrome-profile"));
@@ -746,16 +902,18 @@ export async function openDom(t, oracleUrl, opts) {
     await cdp.send("Target.setDiscoverTargets", { discover: true });
     const targetId = await created;
     const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
-    const session = new DomSession(chrome, sessionId, targetId, t, what);
+    // the run's capability: page.js gets it through start(), never from anything the page can read
+    const token = randomBytes(32).toString("base64url");
+    const session = new DomSession(chrome, sessionId, { targetId, token, dir, opts, t, what });
     await Promise.all([session.send("Page.enable"), session.send("Runtime.enable"), session.send("Network.enable")]);
-    await session.send("Runtime.addBinding", { name: BINDING });
+    await session.send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] });
     const loaded = cdp.waitFor("load event", ({ method, sessionId: from }) => (method === "Page.loadEventFired" && from === sessionId ? true : undefined));
-    await session.send("Page.navigate", { url: pathToFileURL(path.join(dir, "index.html")).href });
+    await session.send("Page.navigate", { url: `${PAGE_ORIGIN}/index.html` });
     await loaded;
-    // The controls, taken while only config.js and page.js have run; then the bundle loads.
+    // The control, taken while only config.js and page.js have run; start loads the bundle.
     const { result } = await session.send("Runtime.evaluate", { expression: "window.__takeControls()" });
     session.controls = result.objectId;
-    const mounted = await session.control("start");
+    const mounted = await session.start();
     if (mounted.status === "ok") {
       t.functional(`${what} renders`, true);
       return session;
@@ -763,8 +921,7 @@ export async function openDom(t, oracleUrl, opts) {
     if (mounted.status === "no-default") throw new Missing(`${what} has no default export to render (${mounted.detail})`);
     if (mounted.status === "unresolved") {
       t.functional(`${what} bundles`, true);
-      const why = mounted.kind === "polyfill" ? "imports a Node builtin the oracle doesn't polyfill" : "is a server component the browser can't run";
-      t.unresolved(`${what} ${why}`, mounted.detail);
+      t.unresolved(`${what} ${UNRESOLVED_WHY[mounted.kind] ?? UNRESOLVED_WHY.server}`, mounted.detail);
     } else t.functional(`${what} renders`, false, mounted.detail.slice(0, 1500));
     await chrome.close();
     return null;

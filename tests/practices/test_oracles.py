@@ -7099,8 +7099,8 @@ class DomHarness(unittest.TestCase):
         self.assertEqual(out["verdict"], "pass", json.dumps(out, indent=1))
         hit = json.loads(self.check(out, "functional: it failed")["detail"])
         self.assertEqual((hit["failed"], hit["status"]), (True, None))
-        # every connection goes to a proxy whose name doesn't resolve, so the request never left
-        self.assertEqual(hit["error"], "net::ERR_PROXY_CONNECTION_FAILED")
+        # the oracle pauses every request and fails an unmatched one as offline: it never left
+        self.assertEqual(hit["error"], "net::ERR_NAME_NOT_RESOLVED")
 
     def test_syntax_error_is_missing(self):
         out = self.dom_run("syntax-error")
