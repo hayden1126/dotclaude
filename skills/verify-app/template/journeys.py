@@ -50,7 +50,11 @@ def main_journey(ctx):
     # request only the client makes: performance.getEntriesByName(location.origin + "/api/x").length
     ctx.page.wait_for("<fill: a JS expression true once the client is live>", what="the client to start")
     ctx.page.click("<fill: a stable selector>")
-    ctx.check(ctx.page.wait_for("<fill: a JS expression for the result>"), "the action changed the page")
+    # wait_for returns something truthy or raises a timeout, so it can't be the check. Wait for the
+    # result to show, then check an exact value read from the page, so a wrong one fails with msg.
+    ctx.page.wait_for("<fill: a JS expression true once the result shows>", what="the result")
+    value = ctx.page.evaluate("<fill: a JS expression for an exact value, such as a row count>")
+    ctx.check(value == "<fill: the exact value it must equal, such as 3>", f"the result reads {value!r}")
     ctx.page.screenshot("main")
 
 

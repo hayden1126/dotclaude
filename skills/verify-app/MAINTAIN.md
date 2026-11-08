@@ -37,7 +37,7 @@ code in this pass. Never weaken a check, widen a timeout or drop a journey to ma
    failed run, run again only once the cause is understood.
 5. **Triage.**
    - The recipe or a journey describes the app wrongly: drift. Fix it, then plant one wrong
-     expectation in the changed check and see exit 1 before reverting it.
+     expected value in the changed `ctx.check` and see exit 1 with its message before reverting it.
    - The app works but the journey can't drive it: a harness gap. Fix the journey, by the
      selector rule in the skill's section 2.
    - The app itself is broken: report it to the user with the manifest path. Never write around it

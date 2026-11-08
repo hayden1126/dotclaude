@@ -83,6 +83,22 @@ def click_by_text(ctx):
     ctx.fact("result", result)
 
 
+def smooth_click(ctx):
+    ctx.page.goto("/smooth")
+    ctx.page.click("#far", timeout=5)
+    result = ctx.page.wait_for("document.getElementById('result').textContent !== 'idle' &&"
+                               " document.getElementById('result').textContent", 3, "the click to land")
+    ctx.check(result == "far", f"the click hit #far, not {result!r}")
+
+
+def smooth_click_text(ctx):
+    ctx.page.goto("/smooth")
+    ctx.page.click_text("Far text", timeout=5)
+    result = ctx.page.wait_for("document.getElementById('result').textContent !== 'idle' &&"
+                               " document.getElementById('result').textContent", 3, "the click to land")
+    ctx.check(result == "far text", f"the click hit the text, not {result!r}")
+
+
 def click_text_only(ctx):
     ctx.page.goto("/")
     ctx.page.click_text(CONFIG["text"], timeout=0.5)
@@ -125,3 +141,4 @@ def wait_in_browser(ctx):
 
 
 JOURNEYS = {name: globals()[name] for name in CONFIG.get("journeys", ["home"])}
+JOURNEYS.update({key: globals()[name] for key, name in CONFIG.get("named", {}).items()})

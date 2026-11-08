@@ -78,8 +78,9 @@ screenshots, `network.json` and `downloads/`. Read the manifest, not the console
 - Capture the action and its result, not just a final screen.
 - Check side effects (a downloaded file, a written row) as well as what is visible.
 - Open the screenshot and look at it before calling a run proved.
-- A check that can't fail proves nothing. After changing a journey, plant one wrong expectation, see
-  exit 1, then revert it.
+- A check that can't fail proves nothing. After changing a journey, plant one wrong expected value
+  in a `ctx.check` (not in a `wait_for`, which only times out), see exit 1 with that check's
+  message, then revert it.
 
 ## Cleanup
 

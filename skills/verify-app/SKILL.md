@@ -79,9 +79,9 @@ The harness goes in a repo folder, because sandboxed Bash can write there and ca
 4. Set `ready_timeout` from the measured `ready_seconds` with headroom (about double, and at least
    30), and say so in a comment beside it.
 5. Open the screenshot and look at it: does it show what the journey claims?
-6. Plant one wrong expectation in a journey's `ctx.check`, run again and see exit 1, with that
-   check's message in the manifest. Revert it and see exit 0 again. A check that can't fail proves
-   nothing.
+6. Plant one wrong expected value in a journey's `ctx.check`, the exact value it compares against
+   (not in a `wait_for`, which only times out), run again and see exit 1, with that check's message
+   in the manifest. Revert it and see exit 0 again. A check that can't fail proves nothing.
 7. After cleanup, confirm the evidence is still there.
 8. Run `--quick` once, and put both measured `duration_seconds` in the recipe.
 

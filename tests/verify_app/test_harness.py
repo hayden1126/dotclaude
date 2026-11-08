@@ -13,7 +13,9 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 import unittest
+from unittest import mock
 
 HERE = pathlib.Path(__file__).resolve().parent
 TEMPLATE = HERE.parents[1] / "skills" / "verify-app" / "template"
@@ -31,7 +33,9 @@ SLOTS = {
         "<fill: what a user does and what proves it worked>",
         "<fill: a JS expression true once the client is live>",
         "<fill: a stable selector>",
-        "<fill: a JS expression for the result>",
+        "<fill: a JS expression true once the result shows>",
+        "<fill: a JS expression for an exact value, such as a row count>",
+        "<fill: the exact value it must equal, such as 3>",
         "<fill: feature name>",
     ),
     "SKILL.md": (
@@ -173,6 +177,20 @@ class Case(unittest.TestCase):
         self.assertIsNone(manifest["port_free_after"])
         self.assertEqual(self.requests(), [])
 
+    def stub_chrome(self, mode: str) -> tuple:
+        """A fake browser that breaks in mode: (its path, the file it records profile and pid in)."""
+        record = self.state / f"stub-{mode}"
+        path = self.outside / f"stub-chrome-{mode}"
+        path.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{HERE / "fixture" / "stub_chrome.py"}" '
+                        f'"{mode}" "{record}" "$@"\n', encoding="utf-8")
+        path.chmod(0o755)
+        return path, record
+
+    def assert_stub_gone(self, record: pathlib.Path):
+        profile, pid = record.read_text(encoding="utf-8").split()
+        self.assertTrue(gone(int(pid)), "the browser process must be ended")
+        self.assertFalse(pathlib.Path(profile).exists(), "the throwaway profile must be removed")
+
     def start_and_wait(self, config: dict) -> subprocess.Popen:
         """Start verify.py and return once a journey has reached its wait."""
         proc = subprocess.Popen(self.command(), cwd=self.repo, env=self.env("normal", config),
@@ -219,6 +237,21 @@ class Proved(Case):
         code, manifest, _ = self.run_harness(env={"GIT_DIR": str(self.outside), "GIT_WORK_TREE": "/"})
         self.assertEqual(code, 0)
         self.assertEqual(manifest["commit"], git(self.repo, "rev-parse", "HEAD"))
+
+    def test_git_never_sees_the_run_token(self):
+        """A daemon git starts (fsmonitor) would carry the token and be swept or reported."""
+        fake = self.outside / "bin"
+        fake.mkdir()
+        (fake / "git").write_text(f'#!/bin/sh\nenv >> "{self.state}/git.env"\nexec "{shutil.which("git")}" "$@"\n',
+                                  encoding="utf-8")
+        (fake / "git").chmod(0o755)
+        code, manifest, output = self.run_harness(env={"PATH": f"{fake}{os.pathsep}{os.environ['PATH']}"})
+        self.assertEqual(code, 0, output)
+        self.assertEqual(manifest["commit"], git(self.repo, "rev-parse", "HEAD"), "git ran through the fake")
+        seen = (self.state / "git.env").read_text(encoding="utf-8").splitlines()
+        self.assertTrue([line for line in seen if line.startswith("FIXTURE_DIR=")], "the fake saw git's env")
+        # A short message: the dumped env holds the caller's proxy settings, never print it.
+        self.assertFalse([line for line in seen if line.startswith("VERIFY_RUN_TOKEN=")], "git got the token")
 
     def test_python_isolated_mode_works(self):
         code, _, output = self.run_harness(flags=("-I", "-B"))
@@ -388,6 +421,31 @@ class NoVerdict(Case):
             with self.subTest(name=name):
                 self.assertEqual(self.run_harness(**config)[0], 2)
 
+    def test_a_bad_stop_timeout_exits_2_unlaunched(self):
+        for value in ("10", 0, -1, True, None):
+            with self.subTest(value=value):
+                shutil.rmtree(self.repo / "evidence", ignore_errors=True)
+                code, manifest, output = self.run_harness(app={"stop_timeout": value})
+                self.assertEqual(code, 2, output)
+                self.assertIn("stop_timeout", output)
+                self.assertIsNone(manifest)
+                self.assertEqual(self.requests(), [])
+
+    def test_a_browser_that_fails_setup_exits_2_and_leaves_nothing(self):
+        """Before the tab is ready the app has not been judged, so no setup step's error is exit 1."""
+        for method in ("Browser.setDownloadBehavior", "Target.createTarget", "Target.attachToTarget",
+                       "Page.enable", "Emulation.setDeviceMetricsOverride"):
+            with self.subTest(method=method):
+                shutil.rmtree(self.repo / "evidence", ignore_errors=True)
+                stub, record = self.stub_chrome(method)
+                code, manifest, output = self.run_harness(journeys=["page_stuck"], browser=True,
+                                                          env={"VERIFY_CHROME": str(stub)})
+                self.assertEqual(code, 2, output)
+                self.assertEqual(manifest["journeys"][0]["outcome"], "not judged")
+                self.assertIn(method, manifest["failure"])
+                self.assert_stub_gone(record)
+                self.assert_clean(manifest)
+
     def test_a_missing_journeys_file_exits_2(self):
         (self.harness / "journeys.py").unlink()
         self.assertEqual(self.run_harness()[0], 2)
@@ -516,6 +574,80 @@ class Cleanup(Case):
         self.assertEqual(verify.carriers("zombie-token", sleeper.pid, str(self.repo)), ([], []))
 
 
+    def test_a_group_member_with_an_unreadable_environ_is_still_ended(self):
+        probe = subprocess.Popen([sys.executable, "-c", "import ctypes, time\nctypes.CDLL(None).prctl(4, 0)\n"
+                                  "time.sleep(5)"], stdout=subprocess.PIPE)
+        self.addCleanup(probe.wait)
+        self.addCleanup(probe.kill)
+        time.sleep(0.3)
+        try:
+            pathlib.Path(f"/proc/{probe.pid}/environ").read_bytes()
+            self.skipTest("a non-dumpable process's environ is readable here (root, or CAP_SYS_PTRACE)")
+        except PermissionError:
+            pass
+        code, manifest, output = self.run_harness("undumpable")
+        self.assertTrue(gone(self.child_pid()), "stat shows it in the group, so it is ours to end")
+        self.assertEqual(code, 0, output)
+        self.assertIs(manifest["sigkill_used"], True)
+        self.assert_clean(manifest)
+
+    def test_a_process_gone_before_its_signal_does_not_stop_cleanup(self):
+        """os.kill and os.killpg raise ProcessLookupError for a target that exited after the scan."""
+        verify = load(TEMPLATE / "verify.py")
+        ghost = {"pid": 1 << 30, "name": "ghost", "cwd": str(self.repo), "outside_repo": False}
+        for where in ("group", "stray"):
+            with self.subTest(where=where):
+                scans = []
+
+                def scan(token, group, root):
+                    scans.append(token)
+                    return ([ghost], []) if len(scans) <= 2 else ([], [])
+
+                run = object.__new__(verify.Run)
+                run.spec = types.SimpleNamespace(APP={"stop_timeout": 0.2})
+                run.app = types.SimpleNamespace(pid=1 << 30, wait=lambda timeout: 0) if where == "group" else None
+                run.token, run.port, run.manifest = "ghost-token", self.port, {"sigkill_used": False}
+                gone_error = mock.Mock(side_effect=ProcessLookupError)
+                with mock.patch.object(verify, "carriers", scan), \
+                        mock.patch.object(verify.os, "kill", gone_error), \
+                        mock.patch.object(verify.os, "killpg", gone_error):
+                    run.stop()
+                self.assertTrue(gone_error.called)
+                self.assertEqual(run.manifest["processes_left"], [])
+                self.assertIs(run.manifest["port_free_after"], True)
+
+
+class Units(Case):
+    def test_the_newest_cached_build_wins(self):
+        browser = load(TEMPLATE / "browser.py")
+        for kind, names, newest in (
+                ("puppeteer", ("linux-131.0.6778.85", "linux-130.0.6779.0", "linux-9.0.1.1"),
+                 "linux-131.0.6778.85"),
+                ("playwright", ("1148", "1200", "999"), "chromium_headless_shell-1200")):
+            with self.subTest(kind=kind):
+                home = self.top / f"home-{kind}"
+                pattern = browser.CACHE_GLOBS[0 if kind == "puppeteer" else 1].removeprefix("~/")
+                for name in names:
+                    path = home / pattern.replace("*", name, 1).replace("*", "linux64")
+                    path.parent.mkdir(parents=True)
+                    path.write_text("", encoding="utf-8")
+                    path.chmod(0o755)
+                with mock.patch.dict(os.environ, {"HOME": str(home)}):
+                    os.environ.pop("VERIFY_CHROME", None)
+                    self.assertEqual(pathlib.Path(browser.find_browser()).parts[-3], newest)
+
+    def test_a_browser_that_never_answers_is_a_browser_error_and_leaves_nothing(self):
+        browser = load(TEMPLATE / "browser.py")
+        stub, record = self.stub_chrome("hang")
+        out = self.top / "out"
+        out.mkdir()
+        started = time.monotonic()
+        with self.assertRaises(browser.BrowserError):
+            browser.Browser(str(stub), out, self.top, timeout=1)
+        self.assertLess(time.monotonic() - started, 10)
+        self.assert_stub_gone(record)
+
+
 class Interrupts(Case):
     def interrupted(self, signum: int):
         proc = self.start_and_wait({"journeys": ["wait_here"]})
@@ -579,6 +711,19 @@ class RealBrowser(Case):
                 detail = manifest["journeys"][0]["detail"]
                 self.assertIn(f"{count} visible", detail)
                 self.assertIn(repr(text), detail)
+
+    def test_clicks_wait_out_a_smooth_scroll(self):
+        code, manifest, output = self.run_harness(journeys=["smooth_click", "smooth_click_text"], browser=True)
+        self.assertEqual([(j["name"], j["outcome"], j["detail"]) for j in manifest["journeys"]],
+                         [("smooth_click", "passed", None), ("smooth_click_text", "passed", None)], output)
+        self.assertEqual(code, 0, output)
+
+    def test_a_journey_key_with_a_slash_still_saves_its_failure_screenshot(self):
+        code, manifest, output = self.run_harness(journeys=[], named={"pages/stuck one": "page_stuck"},
+                                                  browser=True)
+        self.assertEqual(code, 1, output)
+        self.assertEqual(manifest["journeys"][0]["outcome"], "failed")
+        self.assertTrue((self.run_dir() / "pages_stuck_one-failure.png").stat().st_size)
 
     def test_a_forbidden_request_fails_the_journey(self):
         code, manifest, _ = self.run_harness(journeys=["hits_forbidden"], browser=True)

@@ -35,7 +35,7 @@ Exit codes, closed. Every path ends in exactly one of them:
 |---|---|
 | 0 | Proved |
 | 1 | The app failed: boot crash, ready timeout, doctor failure, journey failure |
-| 2 | Could not judge: no browser, port held, preflight refused, bad config, the browser process itself died, or the run was interrupted. A boot crash is never exit 2 |
+| 2 | Could not judge: no browser, port held, preflight refused, bad config, the browser itself died or never opened a tab, or the run was interrupted. A boot crash is never exit 2 |
 | 3 | Cleanup failed. Wins over 0, 1 and 2; the manifest keeps both results |
 """
 import argparse
@@ -117,8 +117,9 @@ def load(path: pathlib.Path):
 
 
 def git(*args: str, cwd: pathlib.Path | None = None) -> str | None:
-    """Run git with no GIT_ variable from the caller's environment, which could point it elsewhere."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    """Run git with no GIT_ variable from the caller's environment, which could point it elsewhere,
+    and without the run token, which a daemon git starts (fsmonitor) would carry past the run."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k != TOKEN_VAR}
     try:
         done = subprocess.run(["git", "--no-optional-locks", *args], cwd=cwd or ROOT, env=env,
                               capture_output=True, text=True)
@@ -162,7 +163,10 @@ def port_held(port: int) -> bool:
 def carriers(token: str | None, group: int | None, root: str) -> tuple:
     """This run's live processes: (ours, outside). Ours are the app's group and token carriers in
     the repo; outside are token carriers elsewhere, which may be a shared daemon and are only ever
-    named. State Z or X has exited: a dead process can stay in /proc with a readable environ."""
+    named. State Z or X has exited: a dead process can stay in /proc with a readable environ.
+
+    stat is world-readable, so it alone decides group membership. environ and cwd are not readable
+    for a non-dumpable process or another user's, and a group member stays ours without them."""
     needle = f"{TOKEN_VAR}={token}".encode()
     ours, outside = [], []
     for entry in os.scandir("/proc"):
@@ -170,16 +174,22 @@ def carriers(token: str | None, group: int | None, root: str) -> tuple:
             continue
         try:
             name, rest = pathlib.Path(entry.path, "stat").read_text(errors="replace").split("(", 1)[1].rsplit(")", 1)
-            state, _, pgrp = rest.split()[:3]
-            if state in "ZX":
-                continue
-            in_group = int(pgrp) == group
-            carrier = needle in pathlib.Path(entry.path, "environ").read_bytes().split(b"\0")
-            cwd = os.readlink(f"{entry.path}/cwd")
-        except OSError:  # it exited, or it is another user's
+        except OSError:  # it exited
             continue
+        state, _, pgrp = rest.split()[:3]
+        if state in "ZX":
+            continue
+        in_group = int(pgrp) == group
+        try:
+            carrier = needle in pathlib.Path(entry.path, "environ").read_bytes().split(b"\0")
+        except OSError:
+            carrier = False
+        try:
+            cwd = os.readlink(f"{entry.path}/cwd")
+        except OSError:
+            cwd = None
         if in_group or carrier:
-            mine = in_group or cwd == root or cwd.startswith(root + os.sep)
+            mine = in_group or (cwd is not None and (cwd == root or cwd.startswith(root + os.sep)))
             (ours if mine else outside).append({"pid": int(entry.name), "name": name, "cwd": cwd,
                                                 "outside_repo": not mine})
     return ours, outside
@@ -203,12 +213,14 @@ def load_spec(journey: str | None):
     try:
         spec, browser = load(HERE / "journeys.py"), load(HERE / "browser.py")
         app, evidence = spec.APP, pathlib.PurePath(spec.APP["evidence_dir"])
-        cwd = app.setdefault("cwd", ".")
+        cwd, stop = app.setdefault("cwd", "."), app.setdefault("stop_timeout", 10)
         problems = [text for ok, text in (
             (isinstance(app.get("cmd"), list) and app["cmd"] and all(isinstance(a, str) for a in app["cmd"]),
              "APP cmd must be a list of strings"),
             (isinstance(app.get("port"), int), "APP port must be an int"),
             (isinstance(app.get("ready_timeout"), (int, float)), "APP ready_timeout must be a number"),
+            (isinstance(stop, (int, float)) and not isinstance(stop, bool) and 0 < stop < float("inf"),
+             "APP stop_timeout must be a positive number of seconds"),
             (not evidence.is_absolute() and ".." not in evidence.parts, "APP evidence_dir must stay in the repo"),
             (isinstance(cwd, str) and not pathlib.PurePath(cwd).is_absolute()
              and ".." not in pathlib.PurePath(cwd).parts and (ROOT / cwd).is_dir(),
@@ -430,8 +442,9 @@ class Run:
 
     def stop(self):
         """End the app's group, then sweep for token carriers that left it (a setsid child). Each
-        step re-polls, because a process signalled a moment ago can still look alive."""
-        grace = self.spec.APP.get("stop_timeout", 10)
+        step re-polls, because a process signalled a moment ago can still look alive. A target that
+        exits between the scan and its signal is already where this wants it, so that never stops it."""
+        grace = self.spec.APP["stop_timeout"]
         group = self.app.pid if self.app else None
         root = str(ROOT)
         members = lambda: carriers(None, group, root)[0]
@@ -439,13 +452,19 @@ class Run:
         for sig in (signal.SIGTERM, signal.SIGKILL):
             if group and members():
                 self.manifest["sigkill_used"] = sig == signal.SIGKILL
-                os.killpg(group, sig)
+                try:
+                    os.killpg(group, sig)
+                except ProcessLookupError:
+                    pass
                 settled(members, grace)
         self.manifest["swept"] = strays()
         for sig in (signal.SIGTERM, signal.SIGKILL):
             for process in strays():
                 self.manifest["sigkill_used"] |= sig == signal.SIGKILL
-                os.kill(process["pid"], sig)
+                try:
+                    os.kill(process["pid"], sig)
+                except ProcessLookupError:
+                    pass
             settled(strays, grace)
         self.exited()
         self.manifest["processes_left"] = settled(lambda: sum(carriers(self.token, group, root), []), 2)

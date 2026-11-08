@@ -168,6 +168,25 @@ class Files(unittest.TestCase):
         self.assertIn("Report the files written, the paths the recipe lists as skip-safe, both measured "
                       "times and the manifest path", text)
         self.assertNotIn("tier table", text)
+        self.assertIn("Plant one wrong expected value in a journey's `ctx.check`", text)
+        self.assertIn("not in a `wait_for`, which only times out", text)
+        recipe = " ".join(read(os.path.join(TEMPLATE, "SKILL.md")).split())
+        self.assertIn("plant one wrong expected value in a `ctx.check`", recipe)
+
+    def test_the_template_check_can_fail(self):
+        """wait_for returns truthy or raises, so ctx.check around it can never fail with its message."""
+        text = read(os.path.join(TEMPLATE, "journeys.py"))
+        self.assertNotRegex(text, r"ctx\.check\(\s*ctx\.page\.wait_for")
+        self.assertRegex(text, r"value = ctx\.page\.evaluate\(")
+        self.assertRegex(text, r"ctx\.check\(value == ")
+
+    def test_clicks_scroll_instantly(self):
+        """A smooth scroll moves the element after the rect is read, so the press misses."""
+        text = read(os.path.join(TEMPLATE, "browser.py"))
+        scrolls = re.findall(r"scrollIntoView\(([^)]*)\)", text)
+        self.assertEqual(len(scrolls), 2)
+        for args in scrolls:
+            self.assertIn('behavior: "instant"', args)
 
     def test_the_folder_stands_alone(self):
         for path in skill_files():

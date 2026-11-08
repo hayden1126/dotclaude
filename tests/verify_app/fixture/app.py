@@ -11,6 +11,7 @@ PORT = int(os.environ["FIXTURE_PORT"])
 STATE = os.environ["FIXTURE_DIR"]
 OUTSIDE = os.environ["FIXTURE_OUTSIDE"]
 SLEEPER = "import signal, time\nsignal.signal(15, %s)\ntime.sleep(45)\n"
+UNDUMPABLE = "import ctypes\nctypes.CDLL(None).prctl(4, 0)  # PR_SET_DUMPABLE: environ and cwd unreadable\n"
 HOME = b"""<!doctype html><title>fixture home</title><h1>fixture home</h1>
 <button id="go" onclick="document.getElementById('result').textContent = 'clicked'">Go</button>
 <p id="result">idle</p>
@@ -24,15 +25,24 @@ HOME = b"""<!doctype html><title>fixture home</title><h1>fixture home</h1>
 <a href="#" role="button">Copy</a><button>Copy</button>
 <button hidden onclick="document.getElementById('result').textContent = 'hidden'">Secret</button>
 """
+# Smooth scrolling animates scrollIntoView, so a rect read straight after it is the old spot.
+SMOOTH = b"""<!doctype html><title>smooth</title><style>html{scroll-behavior:smooth}</style>
+<p id="result">idle</p><div style="height:4000px">spacer</div>
+<button id="far" onclick="document.getElementById('result').textContent = 'far'">Far</button>
+<div style="height:4000px">spacer</div>
+<button onclick="document.getElementById('result').textContent = 'far text'">Far text</button>
+"""
 
 
 def spawn(handler: str = "signal.SIG_DFL",
     cwd: str | None = None,
     new_session: bool = False,
     keep: tuple = (),
+    undumpable: bool = False,
 ) -> None:
     """Start a sleeper the harness must deal with, and leave its pid for the test."""
-    child = subprocess.Popen([sys.executable, "-c", SLEEPER % handler], cwd=cwd, pass_fds=keep,
+    code = (UNDUMPABLE if undumpable else "") + SLEEPER % handler
+    child = subprocess.Popen([sys.executable, "-c", code], cwd=cwd, pass_fds=keep,
                              start_new_session=new_session, stdin=subprocess.DEVNULL)
     path = os.path.join(STATE, "child.pid")
     with open(path + ".tmp", "w", encoding="utf-8") as f:
@@ -61,6 +71,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.note()
         if self.path == "/":
             self.reply(500 if MODE == "bad_doctor" else 200, HOME, (("Content-Type", "text/html"),))
+        elif self.path == "/smooth":
+            self.reply(200, SMOOTH, (("Content-Type", "text/html"),))
         elif self.path == "/health":
             self.reply(200, b"ok")
         elif self.path == "/moved":
@@ -98,6 +110,8 @@ def main():
         spawn(new_session=True)
     elif MODE == "ignore_term":
         spawn(handler="signal.SIG_IGN")
+    elif MODE == "undumpable":
+        spawn(handler="signal.SIG_IGN", undumpable=True)
     elif MODE == "outside":
         spawn(cwd=OUTSIDE, new_session=True)
     elif MODE == "outside_port":
