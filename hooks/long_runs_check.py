@@ -3,7 +3,7 @@
 
 Sessions skip that skill and plan long runs without it. A deny at the command is the one point
 every such session passes, but a deny that fires in most sessions gets ignored. Replayed over
-45 days of transcripts, the triggers below fire in 163 of 444 real sessions that ran a gate or a
+45 days of transcripts, the triggers below fire in 163 of 446 real sessions that ran a gate or a
 PR command (.lane/artifacts/replay.py in the guards lane). It fires only on:
 
   - heavy gates, at first use: `lane trial`, `lane lock suite` or `gate`, and the repo's own
@@ -58,11 +58,11 @@ SOURCE_FILE = re.compile(r"\.(py|ts|tsx|js|jsx|mjs|cjs|rb|rs|go|java|kt)(:\d+)?$
 VALUE_FLAGS = {"-n", "--numprocesses", "--tb", "--maxfail", "-p", "--pattern", "--color", "--reporter",
                "--durations", "--workers", "-j", "-count", "-timeout", "--timeout", "--cov",
                "--cov-report"}
-NOT_A_RUN = {"--version", "-V", "--help", "-h", "--collect-only", "--co", "--lf", "--last-failed",
+NOT_A_RUN = {"--version", "--help", "-h", "--collect-only", "--co", "--lf", "--last-failed",
              "--list", "--listTests", "--list-tests", "--no-run"}
 NOT_A_RUN_FOR = {"make": {"-n", "--dry-run", "--just-print"}, "tox": {"-l", "-a", "--listenvs"},
                  "go": {"-list"}}
-SUITE_FLAGS = {"--project", "--workspace", "--filter", "--config", "-c", "-w"}  # name the suite
+SUITE_FLAGS = {"--project", "--workspace", "--filter", "--config"}  # long forms mean one thing
 REASON = (
     "[long-runs] This command starts a heavy gate or a second test suite, and the long-runs "
     "skill isn't loaded in this context. Load it (the Skill tool, skill \"long-runs\"), work out "
@@ -106,7 +106,7 @@ def suite_args(name, args):
     if pair is None:
         return None
     name, args = pair
-    heads = {a.split("=", 1)[0] for a in args}
+    heads = {a.split("=", 1)[0] for a in (args[:args.index("--")] if "--" in args else args)}
     if heads & (NOT_A_RUN | NOT_A_RUN_FOR.get(name, set())):
         return None
     if name == "pytest" or name in ("tox", "nox", "rspec"):
@@ -142,9 +142,11 @@ def suite_args(name, args):
     return None
 
 
-def suite_key(name, args, rest, where):
-    """A hash naming the suite: the runner, any dir this command cd'd to and its non-flag words, so a rerun
-    with other verbosity, fail-fast or parallel flags stays the same suite."""
+def suite_key(name, args, rest):
+    """A hash naming the suite: the runner and its non-flag words, so a rerun with other
+    verbosity, fail-fast or parallel flags stays the same suite. Known limit: the same words in
+    two dirs read as one suite, so that second suite gets no deny. A wrong deny on a rerun costs
+    more than a miss here, and neither a session's cwd nor a cd tells the two apart reliably."""
     kept, skip = [], False
     for a in rest:
         if skip:
@@ -155,7 +157,7 @@ def suite_key(name, args, rest, where):
             skip = a in VALUE_FLAGS
         else:
             kept.append(a)
-    return hashlib.sha256(json.dumps([unwrap(name, args)[0], where, kept]).encode()).hexdigest()[:32]
+    return hashlib.sha256(json.dumps([unwrap(name, args)[0], kept]).encode()).hexdigest()[:32]
 
 
 def is_heavy(name, args, gates):
@@ -260,12 +262,8 @@ def check(event):
         return None
     project = PC.bash_project(event)
     gates = repo_gates(project)
-    suites, where = set(), ""  # a cd in this command only: a session's cwd moves between runs
-    for n, a in commands:
-        if n == "cd" and a:
-            where = os.path.normpath(os.path.join(where, a[-1]))
-        elif n and (rest := suite_args(n, a)) is not None:
-            suites.add(suite_key(n, a, rest, where))
+    suites = {suite_key(n, a, rest) for n, a in commands if n
+              and (rest := suite_args(n, a)) is not None}
     heavy = any(n and is_heavy(n, a, gates) for n, a in commands)
     if not (heavy or suites) or may_be_denied_elsewhere(cmd, parsed):
         return None
@@ -273,21 +271,25 @@ def check(event):
     skill_dir = os.path.join(PC.config_home(), "skills", SKILL)
     if not cfg["enabled"] or PC.is_off(cfg, {"name": SKILL}, RULE_ID) or not os.path.isdir(skill_dir):
         return None
-    path, state = state_path(event), None
+    path = state_path(event)
     state = read_state(path)
-    seen = set(state.get("suites") or []) | suites
-    if suites and not write_state(path, {**state, "suites": sorted(seen)}):
+    known = set(state.get("suites") or [])
+    seen, told = known | suites, state.get("told") or []
+    keep = {"suites": sorted(seen), "told": told}
+    if not (heavy or (len(seen) >= 2 and suites - known)):  # a rerun never counts
+        if suites:
+            write_state(path, keep)
         return None
-    if not (heavy or (len(seen) >= 2 and suites - set(state.get("suites") or []))):
-        return None  # only a suite not seen before counts: a rerun never does
+    # Nothing is saved until the transcript is read, so a budget spent there retries next time.
     with PC.Transcripts(event) as ts:
         if ts.own is None:
             return None
         window, boundary = PC.l1_window(ts.own)
         if PC.is_loaded({"name": SKILL, "dir": skill_dir}, window.loads()):
+            write_state(path, keep)
             return None
-    told = state.get("told") or []
-    if boundary in told or not write_state(path, {"suites": sorted(seen), "told": [*told, boundary]}):
+    if boundary in told or not write_state(path, {**keep, "told": [*told, boundary]}):
+        write_state(path, keep)
         return None
     return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                    "permissionDecisionReason": REASON}}

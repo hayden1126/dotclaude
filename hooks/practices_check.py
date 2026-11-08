@@ -2583,8 +2583,8 @@ PR_SELECTOR = re.compile(r"\w[\w./-]*", re.A)
 PR_URL = re.compile(r"https://github\.com/([^/\s]+/[^/\s]+)/pull/(\d+)(?:[/?#]\S*)?")
 ORIGIN_URL = re.compile(r"(?:https://(?:[^/@\s]+@)?|ssh://git@|git@)github\.com[:/]"
                         r"([^/\s]+/[^/\s]+?)(?:\.git)?/?")
-HEREDOC_BODY = re.compile(r"(?:--body[= ]|-b[ =]?)\s*\"?\$\(\s*cat\s+<<-?\s*(['\"]?)[^<]")
-EXPANSION = re.compile(r"%[A-Z]+%|\$[A-Za-z_{(]")  # a parser placeholder, or a shell expansion
+HEREDOC_BODY = re.compile(r"(?:--body[= ]|-b[ =]?)\s*\"?\$\(\s*cat\s+<<-?\s*(['\"\\\\]?)([\w.-]+)")
+EXPANSION = re.compile(r"\$[A-Za-z_{(]")  # known limit: a single-quoted `$X` reads as one, and goes unchecked
 SKIPPED_REASON = (
     "[practices:skipped] This PR's body has no `Skipped:` line, so it can't be marked ready. Add "
     "this block to the body (`gh pr edit <n> --body-file <file>`, or the --body of `gh pr "
@@ -2600,11 +2600,14 @@ def has_skipped_line(text):
 
 def body_unseen(command, bodies):
     """Whether a --body is built by an expansion, so this check can't read it. A heredoc written
-    out in the command can be read, unless its delimiter is unquoted and it expands something."""
+    out in the command can be read, unless its delimiter is unquoted and its own text expands
+    something."""
     heredoc = HEREDOC_BODY.search(command)
     if heredoc:
-        return not heredoc.group(1) and bool(EXPANSION.search(command, heredoc.end()))
-    return any(EXPANSION.search(b) for b in bodies)
+        end = re.compile(r"\n[ \t]*" + re.escape(heredoc.group(2)) + r"\b").search(command, heredoc.end())
+        text = command[heredoc.end():end.start() if end else len(command)]
+        return not heredoc.group(1) and bool(EXPANSION.search(text))
+    return any(EXPANSION.search(b) or "%SUBST%" in b or "%ANSI%" in b for b in bodies)
 
 
 def flag_values(args, short, long_):

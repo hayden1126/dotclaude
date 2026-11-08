@@ -3064,6 +3064,15 @@ class SkippedLine(BashBase):
     def test_a_literal_dollar_is_a_readable_body(self):
         self.assertIn(self.REFUSED, self.ready("gh pr create -t x --body 'costs $5, no line'"))
 
+    def test_only_the_heredocs_own_text_can_make_it_unreadable(self):
+        for command in ('gh pr create -t x --body "$(cat <<EOF\nno line\nEOF\n)" --base "$BASE"',
+                        'gh pr create -t x --body "$(cat <<\\EOF\ncosts $X\nEOF\n)"'):
+            with self.subTest(command=command):
+                self.assertIn(self.REFUSED, self.ready(command))
+
+    def test_percent_words_in_a_body_are_readable(self):
+        self.assertIn(self.REFUSED, self.ready("gh pr create -t x --body 'Set %PATH% first'"))
+
     def test_a_quoted_heredoc_does_not_expand(self):
         self.assertIn(self.REFUSED, self.ready(
             "gh pr create -t x --body \"$(cat <<'EOF'\n$(not run)\nEOF\n)\""))

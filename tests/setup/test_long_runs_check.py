@@ -192,10 +192,34 @@ class GenericSuites(Base):
         self.assertIsNone(self.pre("npm run test:unit"))
         self.assertIn("long-runs", self.pre("npm run test:e2e"))
 
-    def test_a_suite_in_another_dir_is_another_suite(self):
-        self.assertIsNone(self.pre("cd a && pytest"))
-        self.assertIsNone(self.pre("cd a && pytest -x"))
-        self.assertIn("long-runs", self.pre("cd b && pytest"))
+    def test_a_cd_does_not_make_a_rerun_a_new_suite(self):
+        self.assertIsNone(self.pre("cd /x && pytest"))
+        self.assertIsNone(self.pre("pytest"))
+
+    def test_short_flags_with_several_meanings_stay_out_of_the_suite(self):
+        for first, second in (("rspec", "rspec -c"), ("vitest", "vitest -w"), ("jest", "jest -w=4")):
+            with self.subTest(first=first):
+                self.assertIsNone(self.pre(first, session=first))
+                self.assertIsNone(self.pre(second, session=first))
+
+    def test_words_after_a_double_dash_are_the_inner_tools(self):
+        self.assertIsNone(self.pre("tox -- -l"))
+        self.assertIn("long-runs", self.pre("npm test"))
+
+    def test_a_spent_budget_saves_nothing_so_the_deny_can_come_later(self):
+        sys.path.insert(0, os.path.join(REPO, "hooks"))
+        self.addCleanup(sys.path.remove, os.path.join(REPO, "hooks"))
+        import long_runs_check as L  # noqa: PLC0415
+        self.assertIsNone(self.pre(SUITE))
+        event = {"session_id": SID, "transcript_path": self.transcript, "cwd": self.proj,
+                 "hook_event_name": "PreToolUse", "tool_name": "Bash",
+                 "tool_input": {"command": OTHER}, "tool_use_id": "b-now"}
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(L.PC, "START", time.monotonic()), \
+                mock.patch.object(L.PC, "l1_window", side_effect=L.PC.Budget("x")), \
+                self.assertRaises(L.PC.Budget):
+            L.check(event)
+        self.assertIn("long-runs", self.pre(OTHER))
 
     def test_a_look_at_the_runner_is_no_suite(self):
         for command in ("pytest --version", "pytest --collect-only", "pytest --lf", "pytest -h",
