@@ -175,7 +175,7 @@ class GenericSuites(Base):
         for command in ("pytest --version", "pytest --collect-only", "pytest --lf", "pytest -h"):
             with self.subTest(command=command):
                 self.assertIsNone(self.pre(command))
-        self.assertIsNone(self.pre("pytest"))
+        self.assertIsNone(self.pre("npm test"))  # the looks above counted as no suite
 
     def test_two_suites_in_one_call_deny(self):
         self.assertIn("long-runs", self.pre(f"{SUITE} && {OTHER}"))
