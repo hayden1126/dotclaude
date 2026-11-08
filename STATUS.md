@@ -6,7 +6,7 @@
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design lives in the repo's `PLAN.md` or its doc,
 > not only under `~/.claude/plans/`, which the next plan overwrites ([[plan-file-not-durable]]).
 
-Last updated: 2026-11-07
+Last updated: 2026-11-08
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 Lead branch: `chore/after-pr4` (the lead's STATUS commits; the lane next in merge order carries
@@ -435,13 +435,24 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Live lanes: `lane ls`; state in their records (2026-11-07:
-     practices and demo-av kept open, verify-app). #178 merged and is installed from main; lanes hackathon,
+  - Start a new `/interview` with Hayden in this tab: more things he wants to add (approved by
+    Hayden 2026-11-08: "as the lead session we go through another interview with some more things
+    I want to add"). Ask him the topic first. It gets its own VISION.md, outside the public repo
+    (ask where); the tray interview has ended (`~/scratch/session-panel/VISION.md`, built after
+    the hackathon, the Backlog's Tray item).
+  0. Live lanes: `lane ls`; state in their records (2026-11-08: practices and demo-av kept open,
+     verify-app parked until practices merges; unpark it then to merge main and rerun its trial). #178 merged and is installed from main; lanes hackathon,
      merge-record, env-names, license, mocks and speed closed 2026-11-07. Hayden's leftover asks from lane deny-rules
      (an overlay paste plus a setup rerun, probe leftovers, local tool cleanups): its closed
      record. Demo-av PR 4 merges and installs by Nov 11, else after Nov 15; nothing else before Nov 16. Install freeze Nov 12 through Nov 15. A chain that
      stops before its "main moved" step still tells the lanes, and arms a wake on the blocker
-     (`skills/lanes/SKILL.md`). Open
+     (`skills/lanes/SKILL.md`). Demo-av PR 4 (demo content planning, captions, `demo-video` no longer manual-only):
+     captions drop out if not reviewed clean by midday Nov 10; Hayden let captions change
+     `record.mjs` (lead's disagreement logged: riskiest change before the event); a fresh Shodo
+     demo test runs after its install, before Nov 12. The empty read-only `.git/config.lock`
+     seen 2026-11-08 00:35 is the known sandbox placeholder (see the note below on config
+     rewrites); verify-app's `--set-upstream-to` failed on it, nothing else needs a config write
+     before Nov 16. Open
      with Hayden (repeat them in each reply's Waiting list until answered): try `/interview` in
      the prep repo named in [[dotclaude-hackathon-mode]]; rehearse reaching this machine from another
      network by Nov 12; the event's local-lead email (not sent as of 2026-11-06); by Nov 12 who
