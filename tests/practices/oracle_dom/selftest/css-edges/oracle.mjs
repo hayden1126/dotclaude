@@ -8,6 +8,8 @@ await oracle(async (t) => {
   if (!dom) return;
   try {
     t.functional("the sheet applies", (await dom.style("#edge", "width")) === "17px", await dom.style("#edge", "width"));
+    t.functional("an unquoted url() import is inlined", (await dom.style("#edge", "height")) === "19px", await dom.style("#edge", "height"));
+    t.functional("a bare name that is a sibling file is inlined", (await dom.style("#edge", "margin-top")) === "23px", await dom.style("#edge", "margin-top"));
     const css = await dom.eval("[...document.querySelectorAll('style')].map((s) => s.textContent).join('\\n')");
     t.functional("an import outside the project is left out with a note", (css.match(/left out/g) ?? []).length === 2, css.slice(0, 600));
   } finally {

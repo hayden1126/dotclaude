@@ -6938,7 +6938,10 @@ class DomGrade(unittest.TestCase):
             self.assertIn(name, run.SUSPECT_WORDS)
         self.assertEqual(run.suspect_words("+++ b/app/x.tsx\n+  (window as any).__actions.length = 1;\n"), ["__actions"])
         # no legitimate row trips them: not the fixture, and not any case's good/ overlay
-        words = [w for w in run.SUSPECT_WORDS if w.startswith("__")]
+        hosts = ["oracle.page.invalid", "oracle.actions.invalid", "oracle.log.invalid"]
+        for host in hosts:
+            self.assertIn(host, run.SUSPECT_WORDS)
+        words = [w for w in run.SUSPECT_WORDS if w.startswith("__") or w in hosts]
         files = [f for f in FIXTURE.rglob("*") if f.is_file()]
         files += [f for case in case_names() for f in (CASES / case / "good").rglob("*") if f.is_file()]
         for f in files:
@@ -7190,6 +7193,29 @@ class DomHarness(unittest.TestCase):
         self.assertTrue(self.check(out, "security: a failed save keeps the typed text")["ok"], json.dumps(out, indent=1))
         self.assertTrue(self.check(out, "security: a failed save shows an error")["ok"], json.dumps(out, indent=1))
         self.assertIn(self.TAMPERED, [c["name"] for c in out["checks"]])
+
+    def assert_no_tamper(self, out):
+        self.assertNotIn(self.TAMPERED, [c["name"] for c in out["checks"]], json.dumps(out, indent=1))
+
+    def test_relative_fetches_and_blob_images(self):
+        self.assert_verdict(self.dom_run("same-origin"), "pass")
+
+    def test_the_page_is_a_secure_context(self):
+        self.assert_verdict(self.dom_run("secure-context"), "pass")
+
+    def test_aborted_requests_are_not_tampering(self):
+        out = self.dom_run("abort-storm")
+        self.assert_verdict(out, "pass")
+        self.assert_no_tamper(out)
+
+    def test_credentialed_cross_origin_stub(self):
+        self.assert_verdict(self.dom_run("cors"), "pass")
+
+    def test_links_and_form_posts_stay_on_the_page(self):
+        self.assert_verdict(self.dom_run("nav-document"), "pass")
+
+    def test_a_beacon_does_not_stall_settle(self):
+        self.assert_verdict(self.dom_run("beacon"), "pass")
 
     def test_prototype_hooks_cannot_drop_an_action(self):
         for variant in ("bad-tojson", "bad-array-setter", "bad-hasinstance"):
