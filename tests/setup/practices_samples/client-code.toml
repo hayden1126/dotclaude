@@ -397,3 +397,59 @@ content = '''
 // practices-allow: UX-63 the row is a draft that only this tab holds
 removeDraft(id);
 '''
+
+# ---------------------------------------------------------------- other file types and by-name handlers
+
+[[sample]]
+kind = "rule"
+id = "LEG-01"
+fires = true
+path = "public/index.html"
+content = '''
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-1"></script>
+'''
+
+[[sample]]
+kind = "rule"
+id = "LEG-01"
+fires = true
+path = "src/App.vue"
+content = '''
+useHead({ script: [{ src: "https://static.hotjar.com/c/hotjar-1.js" }] })
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = true
+path = "src/routes/Row.svelte"
+content = '''
+<button on:click={() => deleteClient(id)}>Delete</button>
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = true
+path = "app/clients/DeleteForm.tsx"
+content = '''
+<form action={deleteClient}><button>Delete</button></form>
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = true
+path = "app/clients/Row.tsx"
+content = '''
+<button onClick={removeRow}>Remove</button>
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = false
+path = "app/clients/Row.tsx"
+content = '''
+<button onClick={openDeleteDialog}>Delete</button>
+'''

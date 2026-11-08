@@ -9,14 +9,12 @@
 # another file costs one resend. `paths` can't exclude, so a test file is in scope.
 #
 # LEG-01. Known misses: a file that holds the word consent or accept for another reason, Consent
-# Mode included (its tag has already loaded); a tracker in an .html, .vue or .svelte file; any
-# vendor not named here. Cookieless Plausible stays out on purpose. Accepted false matches, each
+# Mode included (its tag has already loaded); any vendor not named here. Cookieless Plausible stays out on purpose. Accepted false matches, each
 # costing one resend: a gate in a parent or sibling file, a test or a comment naming a tracker.
 #
 # UX-63. Known misses: a bare `.delete(`, left out because Map, Set and URLSearchParams use it
-# (axios.delete too); a handler passed by name, `onClick={deleteClient}` or
-# `action={deleteClient}`; a helper under another name (`onDelete(id)`, `mutate(id)`); a
-# delete in an .html, .vue or .svelte file or in a .ts helper; a file that holds a guard word for
+# (axios.delete too); a helper under another name (`onDelete(id)`, `mutate(id)`); a delete in
+# a .ts helper; a file that holds a guard word for
 # another reason (`confirmPassword`). Accepted false matches, each costing one resend: a confirm
 # in an imported component, a function's own definition, a cart's `removeItem`-style bare call,
 # `removeListener` and similar cleanup calls.
@@ -31,7 +29,7 @@ gate = [
 
 [[rule]]
 id = "LEG-01"
-paths = ["**/*.js", "**/*.jsx", "**/*.ts", "**/*.tsx"]
+paths = ["**/*.js", "**/*.jsx", "**/*.ts", "**/*.tsx", "**/*.html", "**/*.vue", "**/*.svelte"]
 at = ["edit", "commit"]
 when = '''(?x)
   googletagmanager\.com | \bgtag\(
@@ -48,12 +46,14 @@ say = "This adds a tracker to a file with no consent gate. Build the gate by def
 
 [[rule]]
 id = "UX-63"
-paths = ["**/*.tsx", "**/*.jsx"]
+paths = ["**/*.tsx", "**/*.jsx", "**/*.vue", "**/*.svelte"]
 at = ["edit", "commit"]
 when = '''(?x)
   (?<![.\w])(?:delete|remove|destroy)[A-Z]\w*\s*\(
   # A method on something, with the browser's own cleanup calls left out.
   | \.(?:delete|remove|destroy)(?!Item|EventListener|Child|Attribute|Property)[A-Z]\w*\s*\(
+  # A handler passed by name: React's onClick, action and formAction.
+  | \b(?:onClick|action|formAction)\s*=\s*\{\s*(?:delete|remove|destroy)[A-Z]\w*\s*\}
   # A fetch that sends DELETE, inline or on its own line.
   | \bmethod\s*:\s*["'](?i:delete)["']
 '''

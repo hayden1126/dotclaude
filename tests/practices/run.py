@@ -15,7 +15,7 @@ The offline proof that the oracles are right is test_oracles.py.
 
 Skills and cases: PRACTICES_SKILLS names the practices skills, explicitly. Each case has an
 owner (the skill whose bug class it plants) and a kind, target or benign (CASE_INFO). Each
-owner has one benign case. A listed skill may not exist yet (data-layer, before its first
+owner has one benign case. A listed skill may not exist yet (one listed before its first
 sweep): arm A and the offline tests don't need it, and B, C and D refuse without its SKILL.md.
 
 Arms:
