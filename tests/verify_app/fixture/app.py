@@ -24,6 +24,9 @@ HOME = b"""<!doctype html><title>fixture home</title><h1>fixture home</h1>
 <button onclick="document.getElementById('result').textContent = 'wrong'">Export all</button>
 <a href="#" role="button">Copy</a><button>Copy</button>
 <button hidden onclick="document.getElementById('result').textContent = 'hidden'">Secret</button>
+<button onclick="document.getElementById('result').textContent = 'stacked'"><span
+  style="display:block; font-size:40px">Big</span><span style="display:block">Small
+  text</span></button>
 """
 # Smooth scrolling animates scrollIntoView, so a rect read straight after it is the old spot.
 SMOOTH = b"""<!doctype html><title>smooth</title><style>html{scroll-behavior:smooth}</style>

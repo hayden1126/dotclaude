@@ -83,6 +83,28 @@ def click_by_text(ctx):
     ctx.fact("result", result)
 
 
+def click_stacked(ctx):
+    """Two block children render as two lines: the rendered text is "Big Small text", while the
+    raw textContent runs the two together as "BigSmall" and keeps the source's line break."""
+    ctx.page.goto("/")
+    ctx.page.click_text("Big Small text", timeout=5)
+    result = ctx.page.wait_for("document.getElementById('result').textContent !== 'idle' &&"
+                               " document.getElementById('result').textContent", what="the click to land")
+    ctx.check(result == "stacked", f"the stacked button was clicked, not {result!r}")
+
+
+def wait_node(ctx):
+    ctx.page.goto("/")
+    ctx.page.wait_for("document.body", what="the body")
+    ctx.check(True, "unreachable: a DOM node can't come back by value")
+
+
+def evaluate_window(ctx):
+    ctx.page.goto("/")
+    ctx.page.evaluate("window")
+    ctx.check(True, "unreachable: the window can't come back by value")
+
+
 def smooth_click(ctx):
     ctx.page.goto("/smooth")
     ctx.page.click("#far", timeout=5)

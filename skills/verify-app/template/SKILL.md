@@ -13,8 +13,9 @@ Bash can write it; this file is the only part kept here. Edit `journeys.py` ther
 
 ## When to run
 
-Decide from the paths this commit will contain (`git diff --cached --name-only`, plus any paths
-named on the commit), not from the whole index.
+Choose the tier from the paths this commit will contain: `git diff --cached --name-only`, plus any
+paths named on the commit. Not from `git diff` or `git status`, which show the working tree, and not
+from the whole index.
 
 | Tier | When | What runs |
 |---|---|---|
@@ -23,6 +24,13 @@ named on the commit), not from the whole index.
 | skip | Only paths listed below as unable to reach the app; a conflict-free merge; a pre-launch blocker (exit 2); or the user says skip | nothing |
 
 Paths that cannot reach the app: <fill: paths or globs, such as docs/ and *.md, or "none">.
+
+When no journey covers the change, say so in the reply, then do one of two things and report which:
+
+- Extend a journey or add one. Plant a wrong expected value in its new `ctx.check` and see exit 1
+  first, then revert the value. Keep the journey when the feature matters to users.
+- Run a temporary check under the same rule (plant a wrong value, see exit 1, revert), then remove
+  it, so the commit holds only the change.
 
 A skip or a quick run is never silent: the reply says which tier ran and why. A boot crash is exit 1
 and never a reason to skip. A full run comes before any push and before a PR goes ready, whatever the
@@ -43,13 +51,13 @@ one call is invisible to the next. Nothing checked from a later call proves anyt
 always looks free and the process group always looks empty. The harness records those facts itself,
 in the manifest. `-B` keeps bytecode out of the repo.
 
-Measured: full <fill: seconds from a manifest's duration_seconds>, quick <fill: seconds>.
+Measured `duration_seconds`: full not measured yet, quick not measured yet.
 
 | Exit | Meaning |
 |---|---|
 | 0 | Proved |
 | 1 | The app failed: boot crash, ready timeout, doctor failure, journey failure |
-| 2 | Could not judge: no browser, port held, preflight refused, bad config, the browser itself died or never opened a tab, or the run was interrupted. A boot crash is never exit 2 |
+| 2 | Could not judge: no browser, port held, preflight refused, bad config or a missing recipe, a journey bug (its own error, a result the browser can't send back, or no check), the browser itself died or never opened a tab, or the run was interrupted. A boot crash is never exit 2 |
 | 3 | Cleanup failed. Wins over 0, 1 and 2; the manifest keeps both results |
 
 ## Doctor
@@ -65,7 +73,9 @@ an internal setter. A journey that runs no `ctx.check` is not judged (exit 2). `
 names what a run must never send (a paid API, an email, a publish); a hit fails the journey.
 
 Find a control by its id, ARIA label or a data attribute. One with none of those is clicked by its
-visible text with `ctx.page.click_text`, which fails unless exactly one visible match says it. Never
+visible text with `ctx.page.click_text`, which fails unless exactly one visible match says it. The
+text it compares is the rendered text: `innerText` with each whitespace run collapsed to one space
+and the ends trimmed. Never
 by position alone. Before the first click, wait with `ctx.page.wait_for` for a sign the client is
 live (a request the client makes, or a value only client code sets): `goto` waits for the load
 event, and on a server-rendered page a click before hydration is lost without an error.
@@ -109,6 +119,8 @@ manifest's `token`. Evidence is never deleted by cleanup.
 - A process that clears its environment escapes the token sweep once it leaves the process group.
 - Needs Python 3.10 or later, git, and `chrome-headless-shell` for browser journeys (`VERIFY_CHROME`
   names one).
+- The evidence dir must be outside the dev server's file watcher as well as git-ignored: evidence
+  written where the watcher looks sets off reloads that slow the run and flood `app.log`.
 - <fill: app-specific edges, such as a lock file left after a SIGKILL, or "none">
 
 <!-- Adapted from pstack's create-verification-skill and maintain-verification-skill

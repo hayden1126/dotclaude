@@ -44,8 +44,6 @@ SLOTS = {
         "<fill: surface, such as web app or API>",
         "<fill: harness folder>",
         '<fill: paths or globs, such as docs/ and *.md, or "none">',
-        "<fill: seconds from a manifest's duration_seconds>",
-        "<fill: seconds>",
         "<fill: feature>",
         "<fill: JOURNEYS key>",
         "<fill: route and clicks>",
@@ -100,6 +98,9 @@ class Case(unittest.TestCase):
         self.outside.mkdir()
         self.skill.mkdir(parents=True)
         self.place_harness(self.repo / "tools" / "verify")
+        self.recipe = self.skill / "SKILL.md"
+        self.recipe.write_text("# Verify the fixture\n\nA filled recipe: the harness scans it for markers.\n",
+                               encoding="utf-8")
         (self.repo / ".gitignore").write_text("evidence/\n__pycache__/\n", encoding="utf-8")
         git(self.repo, "init", "-q")
         git(self.repo, "add", "-A")
@@ -378,6 +379,30 @@ class NoVerdict(Case):
         code, _, output = self.run_harness()
         self.assertEqual(code, 2)
         self.assertIn("<fill: paths>", output)
+
+    def test_a_missing_or_unreadable_recipe_exits_2_naming_it(self):
+        """In a sandbox an unwritten .claude/skills file can show as a /dev/null mount: never scan it as clean."""
+        for kind in ("missing", "empty", "blank", "dev null", "a folder"):
+            with self.subTest(kind=kind):
+                shutil.rmtree(self.repo / "evidence", ignore_errors=True)
+                if self.recipe.is_dir() and not self.recipe.is_symlink():
+                    self.recipe.rmdir()
+                else:
+                    self.recipe.unlink(missing_ok=True)
+                if kind == "empty":
+                    self.recipe.write_text("", encoding="utf-8")
+                elif kind == "blank":
+                    self.recipe.write_text("\n  \n", encoding="utf-8")
+                elif kind == "dev null":
+                    self.recipe.symlink_to(os.devnull)
+                elif kind == "a folder":
+                    self.recipe.mkdir()
+                code, manifest, output = self.run_harness()
+                self.assertEqual(code, 2, output)
+                self.assertIn(str(self.recipe), output)
+                self.assertIn("empty" if kind in ("empty", "blank") else "missing or not a regular file", output)
+                self.assertIsNone(manifest)
+                self.assertEqual(self.requests(), [])
 
     def test_a_harness_outside_a_git_work_tree_exits_2(self):
         if subprocess.run(["git", "-C", str(self.outside), "rev-parse"], capture_output=True).returncode == 0:
@@ -716,6 +741,28 @@ class RealBrowser(Case):
                 detail = manifest["journeys"][0]["detail"]
                 self.assertIn(f"{count} visible", detail)
                 self.assertIn(repr(text), detail)
+
+    def test_click_text_matches_the_rendered_text(self):
+        """A big word above a small line renders as two lines; raw textContent runs them together."""
+        code, manifest, output = self.run_harness(journeys=["click_stacked"], browser=True)
+        self.assertEqual(code, 0, output)
+        self.assertEqual(manifest["journeys"][0]["outcome"], "passed", manifest["journeys"][0]["detail"])
+
+    def test_an_expression_the_browser_cannot_return_fails_fast_with_exit_2(self):
+        """A DOM node comes back by value as {}, which reads as false, so wait_for used to time out
+        and blame the app (exit 1). The journey is what is wrong."""
+        for journey in ("wait_node", "evaluate_window"):
+            with self.subTest(journey=journey):
+                shutil.rmtree(self.repo / "evidence", ignore_errors=True)
+                code, manifest, output = self.run_harness(journeys=[journey], browser=True)
+                self.assertEqual(code, 2, output)
+                row = manifest["journeys"][0]
+                self.assertEqual(row["outcome"], "not judged")
+                self.assertIn("JourneyError", row["detail"])
+                self.assertIn("return a boolean, number or string", row["detail"])
+                self.assertLess(row["seconds"], 10, "it must fail at once, not wait out wait_for's 30 s")
+                self.assertIn("boolean, number or string", manifest["failure"])
+                self.assert_clean(manifest)
 
     def test_clicks_wait_out_a_smooth_scroll(self):
         code, manifest, output = self.run_harness(journeys=["smooth_click", "smooth_click_text"], browser=True)

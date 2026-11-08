@@ -6,14 +6,21 @@ A journey is a function taking ctx. It drives the real user path, then checks th
   ctx.url             the app's base URL
   ctx.evidence        this run's evidence folder, a pathlib.Path
   ctx.get(path)       a GET that follows no redirect: .status, .headers, .text
-  ctx.page            a browser tab, opened on first use (Page in browser.py): goto, click, click_text,
-                      fill, wait_for, evaluate, screenshot, download, network
+  ctx.page            a browser tab, opened on first use (Page in browser.py): goto, click,
+                      click_text (by rendered text), fill, wait_for, evaluate, screenshot,
+                      download, network
   ctx.check(ok, msg)  fails the journey with msg unless ok
   ctx.fact(key, val)  records a fact in the manifest
 
 Selectors: an id, an ARIA label or a data attribute first. A control with none of those is clicked
 by its visible text, ctx.page.click_text("Export SVG"), which fails unless exactly one visible
-button, link or role=button says it. Never by position alone.
+button, link or role=button says it. It compares the rendered text: innerText with each whitespace
+run collapsed to one space and the ends trimmed, so a big "A" above a small "Single letter" is
+"A Single letter". Never by position alone.
+
+evaluate and wait_for return only a boolean, number, string or None, or a plain array or object of
+those. An expression that returns a DOM node, a function or a Map is a journey bug (exit 2): return
+!!el or el.textContent instead.
 """
 
 APP = {

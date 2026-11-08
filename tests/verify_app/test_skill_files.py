@@ -144,6 +144,80 @@ class Files(unittest.TestCase):
         self.assertIn("Edit only two places: `journeys.py` in the harness folder, and "
                       "`.claude/skills/verify/SKILL.md`", maintain)
 
+    def test_the_template_folder_holds_exactly_its_files(self):
+        """A stray entry fails here, such as the empty .claude/.cc-writes/ a sandbox once left."""
+        found = set()
+        for root, dirs, files in os.walk(TEMPLATE):
+            dirs[:] = [d for d in dirs if d != "__pycache__"]
+            where = os.path.relpath(root, TEMPLATE)
+            found.update(os.path.normpath(os.path.join(where, name)) for name in dirs + files)
+        self.assertEqual(found, set(COPIED + ("journeys.py", "SKILL.md")))
+
+    def test_the_commit_step_names_the_gitignore_it_may_have_changed(self):
+        text = read(os.path.join(SKILL, "SKILL.md"))
+        flat = " ".join(text.split())
+        self.assertIn("add one line to `.gitignore`", flat, "the step that changes it")
+        self.assertIn("when section 2 added an ignore line, `.gitignore`", flat)
+        self.assertIn("Drop `.gitignore` from both lines when section 2 left it unchanged", flat)
+        for line in ('git diff --cached --name-status > "$TMPDIR/staged-before"',
+                     "git add .claude/skills/verify <harness> .gitignore",
+                     'git commit --only -m "<message>" -- .claude/skills/verify <harness> .gitignore',
+                     'git diff --cached --name-status | diff "$TMPDIR/staged-before" -'):
+            with self.subTest(line=line):
+                self.assertRegex(text, rf"(?m)^{re.escape(line)}$")
+
+    def test_the_evidence_dir_is_outside_the_dev_servers_watcher(self):
+        generator = " ".join(read(os.path.join(SKILL, "SKILL.md")).split())
+        for phrase in ("git-ignored and not watched by the dev server",
+                       "Prefer a folder the dev tool ignores by default: for Vite, `test-results/`",
+                       "`**/test-results/**`", "ask the user before changing app config",
+                       "Read the first run's `app.log` for reload or rebuild lines",
+                       "that start when the journey writes evidence", "move it by section 2's step 6"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, generator)
+        recipe = " ".join(read(os.path.join(TEMPLATE, "SKILL.md")).split())
+        self.assertIn("The evidence dir must be outside the dev server's file watcher as well as git-ignored",
+                      recipe)
+
+    def test_the_measured_line_waits_for_the_first_run_without_a_marker(self):
+        """verify.py refuses while any marker remains, and the times only exist after a run."""
+        lines = [line for line in read(os.path.join(TEMPLATE, "SKILL.md")).splitlines()
+                 if line.startswith("Measured")]
+        self.assertEqual(len(lines), 1)
+        self.assertNotIn("<fill:", lines[0])
+        self.assertEqual(lines[0].count("not measured yet"), 2)
+        self.assertIn("full", lines[0])
+        self.assertIn("quick", lines[0])
+        generator = " ".join(read(os.path.join(SKILL, "SKILL.md")).split())
+        self.assertIn("replace each `not measured yet` on the recipe's Measured line with the measured "
+                      "`duration_seconds`", generator)
+        self.assertIn("`not measured yet`, which is not a marker", generator)
+
+    def test_click_text_is_documented_as_the_rendered_text(self):
+        browser = read(os.path.join(TEMPLATE, "browser.py"))
+        script = re.search(r'CLICK_TEXT_JS = """(.*?)"""', browser, re.S).group(1)
+        self.assertIn("innerText", script)
+        self.assertNotIn("textContent", script)
+        for name, text in (("browser.py", browser), ("journeys.py", read(os.path.join(TEMPLATE, "journeys.py"))),
+                           ("generator", read(os.path.join(SKILL, "SKILL.md"))),
+                           ("recipe", read(os.path.join(TEMPLATE, "SKILL.md")))):
+            flat = " ".join(text.split())
+            with self.subTest(name=name):
+                self.assertIn("rendered text", flat)
+                self.assertIn("innerText", flat)
+                self.assertRegex(flat, r"whitespace run collapsed to one space and the ends trimmed")
+
+    def test_the_recipe_covers_a_change_no_journey_covers(self):
+        recipe = " ".join(read(os.path.join(TEMPLATE, "SKILL.md")).split())
+        for phrase in ("Choose the tier from the paths this commit will contain: `git diff --cached --name-only`",
+                       "When no journey covers the change, say so in the reply",
+                       "do one of two things and report which", "Extend a journey or add one",
+                       "Plant a wrong expected value in its new `ctx.check` and see exit 1 first",
+                       "Keep the journey when the feature matters to users",
+                       "Run a temporary check under the same rule", "then remove it"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, recipe)
+
     def test_the_generator_never_launches_the_app_by_hand(self):
         text = read(os.path.join(SKILL, "SKILL.md"))
         self.assertNotIn("Measure how long", text)

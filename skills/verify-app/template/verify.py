@@ -35,7 +35,7 @@ Exit codes, closed. Every path ends in exactly one of them:
 |---|---|
 | 0 | Proved |
 | 1 | The app failed: boot crash, ready timeout, doctor failure, journey failure |
-| 2 | Could not judge: no browser, port held, preflight refused, bad config, the browser itself died or never opened a tab, or the run was interrupted. A boot crash is never exit 2 |
+| 2 | Could not judge: no browser, port held, preflight refused, bad config or a missing recipe, a journey bug (its own error, a result the browser can't send back, or no check), the browser itself died or never opened a tab, or the run was interrupted. A boot crash is never exit 2 |
 | 3 | Cleanup failed. Wins over 0, 1 and 2; the manifest keeps both results |
 """
 import argparse
@@ -211,6 +211,12 @@ def seconds(value) -> bool:
 def load_spec(journey: str | None):
     """Load journeys.py and browser.py, refusing unfilled markers and any shape they don't allow."""
     recipe = ROOT / ".claude" / "skills" / "verify" / "SKILL.md"
+    # Never skip the recipe's scan: in a sandbox a file not yet written under .claude/skills can show
+    # as an empty /dev/null mount, which would scan clean.
+    if not recipe.is_file():
+        raise Refused(f"the recipe {recipe} is missing or not a regular file: write it from the template")
+    if not recipe.read_text(encoding="utf-8").strip():
+        raise Refused(f"the recipe {recipe} is empty: write it from the template")
     markers = [m for path in (HERE / "journeys.py", recipe) if path.exists()
                for m in MARKER.findall(path.read_text(encoding="utf-8"))]
     if markers:

@@ -52,19 +52,31 @@ The harness goes in a repo folder, because sandboxed Bash can write there and ca
    each file with `cat <skill dir>/template/<file> > <harness>/<file>` instead.
 2. Write `<harness>/journeys.py` and `.claude/skills/verify/SKILL.md` from the template's, with the
    Write tool, from what the interview found: real commands, real selectors, real paths. Replace
-   every `<fill: ...>`; `verify.py` exits 2 while any remain in either file. `<fill: harness folder>`
-   is the harness path from the repo root, such as `tools/verify`. In a monorepo, set `APP["cwd"]`
-   to the app's package folder; `evidence_dir` stays relative to the repo root.
+   every `<fill: ...>`; `verify.py` exits 2 while any remain in either file, and while the recipe is
+   missing or empty. `<fill: harness folder>` is the harness path from the repo root, such as
+   `tools/verify`. In a monorepo, set `APP["cwd"]` to the app's package folder; `evidence_dir` stays
+   relative to the repo root. The recipe's Measured line says `not measured yet`, which is not a
+   marker: section 3 replaces it.
 3. Selectors: an id, an ARIA label or a data attribute first. A control with none is clicked by its
-   visible text with `ctx.page.click_text`. Never by position alone, not even with a text check.
+   visible text with `ctx.page.click_text`, which compares the rendered text: `innerText` with each
+   whitespace run collapsed to one space and the ends trimmed, so a button showing a big "A" above
+   a small "Single letter" is `"A Single letter"`. Never by position alone, not even with a text
+   check.
    Adding attributes to product code is out of scope here: note the gap for the user instead.
 4. Before a journey's first click, wait for a sign the client is live with `ctx.page.wait_for`: a
    request the client makes (`performance.getEntriesByName(...)`), or a value only client code
-   sets. On a server-rendered page a click before hydration is lost without an error.
+   sets. On a server-rendered page a click before hydration is lost without an error. The
+   expression returns a boolean, number or string (`!!el`, not `el`): one returning a DOM node is a
+   journey bug, exit 2.
 5. Leave `ready_timeout` generous (the template's 300) for the first run, so a slow cold boot is
    measured rather than failed.
-6. Pick an evidence dir the repo already ignores. Check with `git check-ignore -q <dir>/probe` (exit 0
-   means ignored). If none fits, add one line to `.gitignore` and tell the user.
+6. Pick an evidence dir that is git-ignored and not watched by the dev server. Evidence written
+   where the watcher looks sets off reloads that slow the run and flood `app.log`. Prefer a folder
+   the dev tool ignores by default: for Vite, `test-results/` (its default watcher skips
+   `**/test-results/**`, as Playwright setups do). Otherwise name the watcher config (such as
+   `server.watch.ignored` in `vite.config.ts`) and ask the user before changing app config. Check
+   git with `git check-ignore -q <dir>/probe` (exit 0 means ignored); if it isn't, add one line to
+   `.gitignore` and tell the user.
 
 ## 3. Prove it once
 
@@ -76,14 +88,18 @@ The harness goes in a repo folder, because sandboxed Bash can write there and ca
    doctor row that answers wrongly is the recipe's to fix.
 3. Expect exit 0. Read the run's `manifest.json`: `outcome` is `proved`, `port_free_after` is true,
    `processes_left` is empty, every journey `passed`. Note the `dirty` flag and `ready_seconds`.
-4. Set `ready_timeout` from the measured `ready_seconds` with headroom (about double, and at least
+4. Read the first run's `app.log` for reload or rebuild lines (a page reload, an HMR update, a
+   recompile) that start when the journey writes evidence. If there are any, the watcher sees the
+   evidence dir: move it by section 2's step 6 and run again.
+5. Set `ready_timeout` from the measured `ready_seconds` with headroom (about double, and at least
    30), and say so in a comment beside it.
-5. Open the screenshot and look at it: does it show what the journey claims?
-6. Plant one wrong expected value in a journey's `ctx.check`, the exact value it compares against
+6. Open the screenshot and look at it: does it show what the journey claims?
+7. Plant one wrong expected value in a journey's `ctx.check`, the exact value it compares against
    (not in a `wait_for`, which only times out), run again and see exit 1, with that check's message
    in the manifest. Revert it and see exit 0 again. A check that can't fail proves nothing.
-7. After cleanup, confirm the evidence is still there.
-8. Run `--quick` once, and put both measured `duration_seconds` in the recipe.
+8. After cleanup, confirm the evidence is still there.
+9. Run `--quick` once, and replace each `not measured yet` on the recipe's Measured line with the
+   measured `duration_seconds` of the full and the quick run.
 
 On any other result, fix the recipe and run again. On exit 3, read `processes_left` and tell the
 user; never signal a process marked `outside_repo`.
@@ -92,16 +108,18 @@ user; never signal a process marked `outside_repo`.
 
 Report the files written, the paths the recipe lists as skip-safe, both measured times and the
 manifest path. Commit or push nothing without the user's say. When they say commit and the index
-holds anything else, commit only the skill and its harness:
+holds anything else, commit only the skill, its harness and, when section 2 added an ignore line,
+`.gitignore`:
 
 ```
 git diff --cached --name-status > "$TMPDIR/staged-before"
-git add .claude/skills/verify <harness>
-git commit --only -m "<message>" -- .claude/skills/verify <harness>
+git add .claude/skills/verify <harness> .gitignore
+git commit --only -m "<message>" -- .claude/skills/verify <harness> .gitignore
 git diff --cached --name-status | diff "$TMPDIR/staged-before" -
 ```
 
-The last line prints nothing when the staged set is unchanged. For upkeep later, follow
+Drop `.gitignore` from both lines when section 2 left it unchanged. The last line prints nothing
+when the staged set is unchanged. For upkeep later, follow
 `<skill dir>/MAINTAIN.md`.
 
 <!-- Adapts pstack's create-verification-skill and maintain-verification-skill
