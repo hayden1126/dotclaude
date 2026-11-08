@@ -1,6 +1,6 @@
 ---
 name: frontend-ui-discipline
-description: Hayden's discipline for building web UIs that work on mobile and desktop without the usual bugs. Use when writing or reviewing HTML/CSS/JS for a site or dashboard, styling layout (sticky/fixed headers, flex/grid, overlays), adding search/filter/highlight, i18n/language toggles, or any touch-vs-desktop interaction. Covers verify-in-real-browser-at-both-widths, measure-don't-assume, sticky/scroll-margin math, touch :hover pitfalls, single-source-of-truth state, overlays, highlight, and i18n.
+description: Hayden's discipline for building web UIs that work on mobile and desktop without the usual bugs. Use when writing or reviewing HTML/CSS/JS for a site or dashboard, styling layout (sticky/fixed headers, flex/grid, overlays), adding search/filter/highlight, i18n/language toggles, or any touch-vs-desktop interaction. Covers verify-in-real-browser-at-both-widths, measure-don't-assume, sticky/scroll-margin math, single-source-of-truth state, overlays, highlight, and i18n.
 ---
 
 # Frontend UI discipline
@@ -25,14 +25,11 @@ Build web UIs that work on mobile and desktop the first time. Each rule is a sca
 - **A layout bug's cause is a hypothesis until you measure it.** Flex/grid/sticky/overflow behaviour is emergent: unreadable from the source, and agreeing code-readers (or subagents) just share one blind spot. Reproduce in the runtime and measure (heights, computed styles) before naming the mechanism. Scar: a table that "disappeared after continue" read as scroll-off in the code; measuring showed it collapsed 389px→0px, because a scroll-container flex item (`.p-table`, `overflow-x:auto`) has `min-height:auto = 0` and caves in when its flex parent overflows.
 
 ## Touch is not hover — design for the finger first
-- **`:hover` latches on touch:** it stays applied after a tap until you tap elsewhere. Drop hover colour changes or gate them in `@media (hover:hover)`.
-- **`font-size:16px` on every text input**, or iOS zooms the page on focus.
-- **≥44px tap targets** — small padding on a 13px button is not tappable. Lean on native `type="search"` for the clear affordance.
-- **Off-canvas drawers need focus trap + Escape + backdrop close + body scroll-lock**, and restore focus to the opener on close.
+- **Hover latch, 16px inputs, 44px targets and drawer focus handling** are in `client-code`.
 
 ## One source of truth for state
 - **Compose filters; don't stomp them.** A row is visible only if it passes ALL active filters; funnel every change through one apply path that also re-runs dependent effects (re-highlight). Two paths writing the same DOM state will fight.
-- **Reference/always-on sections opt out of generic hide-empty logic** and show an inline empty-state — never let filtering produce a blank void.
+- **Empty states when filtering** are in `client-code`.
 - **Controls duplicated across breakpoints wire by class, not id**, and sync through that one apply path so the copies never diverge.
 - **Edit copy, not identifiers:** when rewording, change only reader-visible strings; leave JSON keys, CSS classes, HTML ids, and function names alone so anchors, search, and highlight keep working.
 
@@ -42,10 +39,9 @@ Build web UIs that work on mobile and desktop the first time. Each rule is a sca
 - **i18n swaps text in place:** ship both languages inline, swap `textContent` + `placeholder` + `document.title` + SVG `<text>`, persist in `localStorage`, fall back to English, then **re-run search/highlight** — the swap replaced the nodes the ranges pointed into. Keep numbers, IDs, and brand names language-neutral; a single-label toggle shows the language you'd switch TO.
 
 ## Robustness the reader never notices
-- **Never encode meaning by colour alone:** triple-encode status (colour + glyph + word); render a warning as a box treatment (border + corner glyph), not a pill, so flagging a card never reflows it.
+- **Colour alone and keyboard parity** are in `client-code`.
 - **Don't depend on assets the viewer might lack:** inline SVG beats an emoji that renders as tofu; add an `@supports not (backdrop-filter…)` solid fallback; ship a `<noscript>` fallback and `noindex` private pages.
 - **Hide text from sight without hiding it from screen readers:** clip it (off-screen / `clip-path`), never `display:none` — clipped text is still announced (e.g. a badge showing only its glyph on mobile).
-- **Keyboard parity:** non-interactive cards get `tabindex="0"` so `:focus-within` reveals what hover does; `/` focuses search.
 - **Wire with `addEventListener`, never inline `on*`** (CSP); prototype visual variants live (inject CSS, screenshot) so the human picks from real renders.
 
 ## Responsive specifics
