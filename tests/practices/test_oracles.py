@@ -5373,6 +5373,23 @@ class Containment(unittest.TestCase):
 
 PGLITE_OK = bool(NODE) and (run.ORACLE_PG_DIR / "node_modules" / run.PGLITE / "package.json").is_file()
 NO_PGLITE = "PGlite isn't installed: run npm ci --ignore-scripts in tests/practices/oracle_pg"
+
+
+def find_chrome():
+    """The headless shell the client-code oracles run: ORACLE_CHROME, else the newest Playwright
+    chromium_headless_shell build in the user's cache, else None."""
+    if os.environ.get("ORACLE_CHROME"):
+        return os.environ["ORACLE_CHROME"]
+    builds = sorted(Path.home().glob(".cache/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell"))
+    return str(builds[-1]) if builds else None
+
+
+ORACLE_DOM_DIR = HERE / "oracle_dom"
+CHROME = find_chrome()
+DOM_OK = (bool(NODE) and bool(CHROME)
+          and all((ORACLE_DOM_DIR / "node_modules" / pkg / "package.json").is_file() for pkg in ("react", "react-dom", "typescript")))
+NO_DOM = ("oracle_dom can't run: it needs node, its packages (npm ci --ignore-scripts in tests/practices/oracle_dom) "
+          "and a headless Chrome (ORACLE_CHROME, or Playwright's chromium_headless_shell)")
 PG_CASES = ["column-rename", "column-rename-bare", "data-benign", "index-live-table", "index-live-table-bare", "rls-missing"]
 DATA_CASES = ["column-rename", "column-rename-bare", "data-benign", "index-live-table", "index-live-table-bare", "rls-missing",
               "sqli-sort", "tag-get-or-create", "tx-network"]
@@ -6835,6 +6852,114 @@ out.got = [
         self.assertEqual(out["got"], [
             ["word:create", "word:index", "name:Name", "word:on", "string:'text'", "dollar:$$body$$", "string:e'it\\'s'"],
             ["word:select", 'name:a"b', "punct:,", "word:x", "punct:.", "word:y"]])
+
+
+def session_members(sid):
+    """The live processes in session `sid`, as (pid, name). Chrome's renderers and zygote stay in
+    the session of the oracle that started it, so this sees every process an oracle left."""
+    found = []
+    for d in Path("/proc").iterdir():
+        if not d.name.isdigit():
+            continue
+        try:
+            stat = (d / "stat").read_text()
+        except OSError:  # gone since the listing
+            continue
+        name, rest = stat.split(" (", 1)[1].rsplit(")", 1)
+        fields = rest.split()
+        if int(fields[3]) == sid and fields[0] != "Z":
+            found.append((int(d.name), name))
+    return found
+
+
+@unittest.skipUnless(DOM_OK, NO_DOM)
+class DomHarness(unittest.TestCase):
+    """oracle_dom.mjs on its selftest/: tiny overlays on the fixture and their oracles, run as
+    run.grade runs one uncontained, plus ORACLE_CHROME."""
+
+    def dom_run(self, name, variant="good"):
+        """The verdict of selftest/<name>/oracle.mjs on the fixture with selftest/<name>/<variant>
+        over it, after checking the run left no process behind."""
+        with tempfile.TemporaryDirectory(prefix="practices-dom-") as tmp:
+            tmp = Path(tmp)
+            fixture = build(tmp / "fixture")
+            shutil.copytree(ORACLE_DOM_DIR / "selftest" / name / variant, fixture, dirs_exist_ok=True)
+            env = {**run.grade_env(fixture, tmp / "scratch"), "ORACLE_CHROME": CHROME}
+            cmd = [run.node_binary(), "--import", LOADER.as_uri(), str(ORACLE_DOM_DIR / "selftest" / name / "oracle.mjs")]
+            p = subprocess.Popen(cmd, cwd=fixture, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 text=True, start_new_session=True)
+            try:
+                stdout, stderr = p.communicate(timeout=run.ORACLE_TIMEOUT)
+            finally:
+                if p.poll() is None:
+                    os.killpg(p.pid, signal.SIGKILL)  # the session this test started, by its pid
+                    p.wait()
+            deadline = time.monotonic() + 3
+            while session_members(p.pid) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertEqual(session_members(p.pid), [], f"left running after {name}/{variant}")
+            chrome = [int(m) for m in re.findall(r"^oracle_dom: chrome pid (\d+)$", stderr, re.M)]
+            for pid in chrome:  # by the pid the oracle printed, in case Chrome ever leaves the session
+                try:
+                    state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+                except OSError:
+                    continue
+                self.assertEqual(state, "Z", f"chrome {pid} outlived its oracle")
+            line = next((l for l in reversed(stdout.splitlines()) if l.startswith('{"verdict"')), None)
+            self.assertIsNotNone(line, stderr[-2000:])
+            out = json.loads(line)
+            out["chrome_pids"] = chrome
+            return out
+
+    def check(self, out, name):
+        return next(c for c in out["checks"] if c["name"] == name)
+
+    def test_double_click_sends_one_action(self):
+        for variant in ("good", "good-form-status"):  # its own pending state; React 19's useFormStatus
+            with self.subTest(variant=variant):
+                good = self.dom_run("double-submit", variant)
+                self.assertEqual(good["verdict"], "pass", json.dumps(good, indent=1))
+        bad = self.dom_run("double-submit", "bad")
+        self.assertEqual(bad["verdict"], "fail", json.dumps(bad, indent=1))
+        self.assertEqual(self.check(bad, "security: a double click sends one action")["detail"], "2 sent")
+
+    def test_failed_save_keeps_input(self):
+        good = self.dom_run("save-fail", "good")
+        self.assertEqual(good["verdict"], "pass", json.dumps(good, indent=1))
+        bad = self.dom_run("save-fail", "bad")
+        self.assertEqual(bad["verdict"], "fail", json.dumps(bad, indent=1))
+        self.assertFalse(self.check(bad, "security: a failed save keeps the typed text")["ok"])
+        self.assertFalse(self.check(bad, "security: a failed save shows an error")["ok"])
+
+    def test_fetch_is_logged_and_reaches_nothing(self):
+        out = self.dom_run("offline-fetch")
+        self.assertEqual(out["verdict"], "pass", json.dumps(out, indent=1))
+        hit = json.loads(self.check(out, "functional: it failed")["detail"])
+        self.assertEqual((hit["failed"], hit["status"]), (True, None))
+        # every host fails to resolve, so the request never left the machine
+        self.assertEqual(hit["error"], "net::ERR_NAME_NOT_RESOLVED")
+
+    def test_syntax_error_is_missing(self):
+        out = self.dom_run("syntax-error")
+        self.assertEqual(out["verdict"], "broken", json.dumps(out, indent=1))
+        self.assertIn("doesn't compile", self.check(out, "missing")["detail"])
+        self.assertEqual(out["chrome_pids"], [])  # failed at the bundle, before any Chrome
+
+    def test_next_script_and_image(self):
+        out = self.dom_run("next-tags")
+        self.assertEqual(out["verdict"], "pass", json.dumps(out, indent=1))
+
+    def test_server_only_server_component_is_unresolved(self):
+        out = self.dom_run("server-only")
+        self.assertEqual(out["verdict"], "unresolved", json.dumps(out, indent=1))
+        self.assertIn("server-only", self.check(out, "unresolved: app/dom/page.tsx is a server component the browser can't run")["detail"])
+
+    def test_thrown_body_leaves_no_chrome(self):
+        # dom_run asserts nothing outlived the oracle; the body throws without closing its session
+        out = self.dom_run("thrown-body")
+        self.assertEqual(out["verdict"], "broken", json.dumps(out, indent=1))
+        self.assertIn("matches #nothing", self.check(out, "missing")["detail"])
+        self.assertEqual(len(out["chrome_pids"]), 1)
 
 
 if __name__ == "__main__":
