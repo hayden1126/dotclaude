@@ -91,9 +91,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
   - **Live lanes** (briefs in each record). Merge order (Hayden's picks,
-    2026-11-07): 1 demo-av PR 1 (`feat/demo-voiceover`, the voiceover in `demo-video`, by
-    Nov 11; carries the lead's notes), 2 lanes-turn (`fix/lanes-turn`, six small lanes and test
-    fixes, by Nov 11 if ready, else after Nov 15). After Nov 15: practices (Keep open, its next
+    2026-11-07): 1 lanes-turn (`fix/lanes-turn`, six small lanes and test fixes, by Nov 11 if
+    ready, else after Nov 15; carries the lead's notes). After Nov 15: practices (Keep open, its next
     PR), verify-app (`feat/verify-app`, the launch-and-check skill template, proved on shodo),
     demo-av PR 2 (music, transitions, footage). All four change README.md.
     The backlog items these lanes took keep their full text in `git show 617d244:STATUS.md`.
@@ -124,6 +123,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     capella-studio lane artexport's report; a fork's hook output never reaches its model, so it
     knows its lane only from the parent's copied line, docs/lanes.md S5; the delegation canary
     checks the source enum; untried against lane practices' settings.json change),
+    demo-av PR 1 (#176, 2026-11-08, merge cf9edc9: a voiceover step in `demo-video`,
+    `voice.mjs` builds `demo-voice.mp4` from one read or per-beat clips at the take's exact
+    length, with `cues`, `add` and `check`; `record.mjs` moves a stale voice aside on a new
+    take; installed from main; the lane stays open for PR 2),
     speed (#174, 2026-11-07, merge 400fe32: the `long-runs` skill, for planning long or
     multi-part jobs and writing down each skip, plus one CLAUDE.md line to load it and quote
     only measured times; running sessions get the line at their next start or `/pass`;
@@ -423,10 +426,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 ## Notes for next session
 - **Next (lead, main checkout):**
   0. Live lanes: `lane ls`; state in their records (2026-11-07:
-     practices kept open, demo-av, verify-app, lanes-turn). #174 merged and is installed from main; lanes hackathon,
+     practices and demo-av kept open, verify-app, lanes-turn). #176 merged and is installed from main; lanes hackathon,
      merge-record, env-names, license, mocks and speed closed 2026-11-07. Hayden's leftover asks from lane deny-rules
      (an overlay paste plus a setup rerun, probe leftovers, local tool cleanups): its closed
-     record. Demo-av PR 1, then lanes-turn if ready, merge by Nov 11; a merge after that waits for Nov 16. Install freeze Nov 12 through Nov 15. A chain that
+     record. Lanes-turn, if ready, merges by Nov 11; a merge after that waits for Nov 16. Install freeze Nov 12 through Nov 15. A chain that
      stops before its "main moved" step still tells the lanes, and arms a wake on the blocker
      (`skills/lanes/SKILL.md`). Open
      with Hayden (repeat them in each reply's Waiting list until answered): try `/interview` in
