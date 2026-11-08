@@ -719,7 +719,7 @@ class Cleanup(Case):
 
     def test_a_group_member_with_an_unreadable_environ_is_still_ended(self):
         probe = subprocess.Popen([sys.executable, "-c", "import ctypes, time\nctypes.CDLL(None).prctl(4, 0)\n"
-                                  "time.sleep(5)"], stdout=subprocess.PIPE)
+                                  "time.sleep(5)"], stdout=subprocess.DEVNULL)
         self.addCleanup(probe.wait)
         self.addCleanup(probe.kill)
         time.sleep(0.3)
