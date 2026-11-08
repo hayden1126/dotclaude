@@ -13,10 +13,11 @@
 // practices-allow: SEC-13 Runtime.evaluate runs the oracle's own probes in its test page; arguments go in as JSON
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { Script } from "node:vm";
 import { Missing, oracle } from "../oracle_lib.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -42,6 +43,11 @@ const PACKAGES = {
   "next/dynamic": path.join(BROWSER, "dynamic.js"),
   "next/form": path.join(BROWSER, "form.js"),
 };
+// Packages with a browser stub here that a project still has to install or declare to build.
+const THIRD_PARTY = { "@next/third-parties/google": path.join(BROWSER, "third-parties-google.js") };
+// What a fixture's node_modules holds as server-side stubs: never bundled for the browser.
+const FIXTURE_STUBS = new Set(["next", "react", "react-dom", "scheduler", "client-only", "server-only"]);
+const EXPORT_CONDITIONS = ["browser", "import", "require", "default"];
 const EMPTY = new Set(["client-only"]);
 // Code that only runs on a server: Next refuses it in a client bundle, and a server component
 // that reaches it can't run in the browser. Every Node builtin counts (isBuiltin, so node:sqlite
@@ -124,6 +130,81 @@ function transpile(file, src) {
     throw new Missing(`${rel(file)}${line} doesn't compile: ${ts.flattenDiagnosticMessageText(error.messageText, " ")}`);
   }
   return out.outputText;
+}
+
+// A bare specifier as its package name and the subpath inside it (".", "./sub").
+function splitBare(spec) {
+  const parts = spec.split("/");
+  const n = spec.startsWith("@") ? 2 : 1;
+  return { name: parts.slice(0, n).join("/"), sub: [".", ...parts.slice(n)].join("/") };
+}
+
+// The nearest node_modules/<name> from `from` up to the fixture, or null.
+function packageDir(name, from) {
+  for (let dir = path.dirname(from); ; dir = path.dirname(dir)) {
+    const candidate = path.join(dir, "node_modules", name);
+    if (isFile(path.join(candidate, "package.json"))) return candidate;
+    if (dir === FIXTURE || dir === path.dirname(dir)) return null;
+  }
+}
+
+function declared(name) {
+  try {
+    const manifest = JSON.parse(readFileSync(path.join(FIXTURE, "package.json"), "utf8"));
+    return Boolean(manifest.dependencies?.[name] ?? manifest.devDependencies?.[name]);
+  } catch {
+    return false;
+  }
+}
+
+function exportCondition(target) {
+  if (typeof target === "string") return target;
+  if (Array.isArray(target)) return target.map(exportCondition).find(Boolean) ?? null;
+  if (!target || typeof target !== "object") return null;
+  return EXPORT_CONDITIONS.filter((c) => Object.hasOwn(target, c)).map((c) => exportCondition(target[c])).find(Boolean) ?? null;
+}
+
+// A package.json "exports" for one subpath: conditions in EXPORT_CONDITIONS' order, a `*` pattern
+// by its longest key. null when it doesn't export the subpath.
+function exportTarget(exports, sub) {
+  const isMap = exports && typeof exports === "object" && !Array.isArray(exports) && Object.keys(exports).some((k) => k.startsWith("."));
+  const map = isMap ? exports : { ".": exports };
+  if (Object.hasOwn(map, sub)) return exportCondition(map[sub]);
+  const patterns = Object.keys(map).filter((k) => k.includes("*")).sort((a, b) => b.length - a.length);
+  for (const key of patterns) {
+    const [pre, post] = key.split("*");
+    if (sub.length < pre.length + post.length || !sub.startsWith(pre) || !sub.endsWith(post)) continue;
+    const stem = sub.slice(pre.length, sub.length - post.length);
+    return exportCondition(map[key])?.replaceAll("*", stem) ?? null;
+  }
+  return null;
+}
+
+// What a package's object-form "browser" field says of `key` (a bare name or ./file): undefined
+// for nothing, false for an empty module, or a replacement.
+function browserEntry(manifest, key) {
+  return manifest.browser && typeof manifest.browser === "object" ? manifest.browser[key] : undefined;
+}
+
+// The file `sub` of an installed package names: its "exports" if it has any, else "browser" as a
+// string, "module", "main", index.js. Throws when nothing there is a file.
+function packageFile({ name, dir, manifest }, sub) {
+  if (manifest.exports !== undefined && manifest.exports !== null) {
+    const target = exportTarget(manifest.exports, sub);
+    if (!target || !isFile(path.join(dir, target))) throw new Error(`${name} exports no file for ${sub}`);
+    return path.join(dir, target);
+  }
+  const entries = sub === "." ? [typeof manifest.browser === "string" ? manifest.browser : null, manifest.module, manifest.main, "index.js"] : [sub];
+  const file = entries.filter(Boolean).map((entry) => findFile(path.join(dir, entry))).find(Boolean);
+  if (!file) throw new Error(`${name} has no file for ${sub}`);
+  return file;
+}
+
+// `file` after the package's "browser" field: another file, or false for an empty module.
+function browserFile({ dir, manifest }, file) {
+  const key = `./${path.relative(dir, file)}`;
+  const mapped = browserEntry(manifest, key) ?? browserEntry(manifest, key.replace(/\.js$/, ""));
+  return typeof mapped === "string" ? path.join(dir, mapped) : mapped === false ? false : file;
 }
 
 const JPEG_SOF = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
@@ -266,8 +347,13 @@ class Bundle {
     if (this.keys.has(key)) return this.keys.get(key);
     const id = this.mods.length;
     this.keys.set(key, id);
-    this.mods.push(null);
-    this.mods[id] = { name, ...make() };
+    this.mods.push({ name, code: "", deps: {} }); // what stays if make throws and a caller recovers
+    try {
+      this.mods[id] = { name, ...make() };
+    } catch (e) {
+      this.keys.delete(key);
+      throw e;
+    }
     return id;
   }
 
@@ -322,7 +408,76 @@ class Bundle {
       if (client) throw new Missing(`${rel(from)} imports ${spec} into a client component, which Next refuses to build`);
       return this.unloadable("server", spec, `${rel(from)} imports ${spec}, server-only code the browser can't run`);
     }
+    const { name } = splitBare(spec);
+    if (FIXTURE_STUBS.has(name)) throw new Missing(`${rel(from)} imports ${spec}, a package the oracle doesn't provide`);
+    if (THIRD_PARTY[spec] && (packageDir(name, from) || declared(name))) return this.package(THIRD_PARTY[spec]);
+    if (packageDir(name, from)) return this.installed(spec, from);
+    if (declared(name)) return this.unloadable("package", spec, `${spec} is declared in package.json but not installed`);
     throw new Missing(`${rel(from)} imports ${spec}, a package the oracle doesn't provide`);
+  }
+
+  // An empty module, for what a package's "browser" field blanks out.
+  empty(spec) {
+    return this.add(`empty:${spec}`, spec, () => ({ code: "", deps: {} }));
+  }
+
+  // A package in the fixture's node_modules, the entry `spec` names. What can't be bundled (a
+  // missing file, an import nothing provides, a parse error) becomes a module that throws when
+  // required, so the row scores unresolved and is graded by hand.
+  installed(spec, from) {
+    const { name, sub } = splitBare(spec);
+    const fail = (e) => this.unloadable("package", spec, `the installed package ${name} can't be bundled: ${e.message}`);
+    const dir = packageDir(name, from);
+    try {
+      const real = realpathSync(dir);
+      const root = realpathSync(FIXTURE);
+      if (real !== root && !real.startsWith(root + path.sep)) throw new Error("it resolves outside the project");
+      const owner = { name, dir, manifest: JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8")) };
+      const file = browserFile(owner, packageFile(owner, sub));
+      return file === false ? this.empty(spec) : this.installedFile(file, owner);
+    } catch (e) {
+      return fail(e);
+    }
+  }
+
+  // One file of an installed package: a stylesheet, JSON or an image as an asset, else transpiled
+  // from ESM to CommonJS, its imports following the package's own resolution.
+  installedFile(file, owner) {
+    if (/\.(css|json)$/.test(file) || IMAGE.test(file)) return this.asset(file);
+    return this.add(`installed:${file}`, rel(file), () => {
+      try {
+        // named .js, because TypeScript leaves a .mjs file's import statements as they are
+        const code = transpile(file.replace(/\.mjs$/, ".js"), readFileSync(file, "utf8"));
+        new Script(`(function () {\n${code}\n})`); // what a classic script can't parse (import.meta, top-level await)
+        return { ...this.scanned(code, (dep) => this.installedDep(dep, file, owner)), owner: owner.name };
+      } catch (e) {
+        const message = `the installed package ${owner.name} can't be bundled: ${e.message}`;
+        return { code: `throw Object.assign(new Error(${JSON.stringify(message)}), { unresolved: "package" });`, deps: {} };
+      }
+    });
+  }
+
+  // An import inside an installed package. Its own "browser" field comes first; React and the
+  // next/* stubs stay the bundle's single copy.
+  installedDep(spec, from, owner) {
+    try {
+      if (spec.startsWith("./") || spec.startsWith("../")) {
+        const found = findFile(path.resolve(path.dirname(from), spec));
+        if (!found) throw new Error(`${rel(from)} imports ${spec}, which doesn't exist`);
+        const file = browserFile(owner, found);
+        return file === false ? this.empty(`${owner.name}:${spec}`) : this.installedFile(file, owner);
+      }
+      const mapped = browserEntry(owner.manifest, spec);
+      if (mapped === false) return this.empty(`${owner.name}:${spec}`);
+      if (typeof mapped === "string" && mapped.startsWith(".")) return this.installedFile(path.join(owner.dir, mapped), owner);
+      const target = typeof mapped === "string" ? mapped : spec;
+      if (PACKAGES[target]) return this.package(PACKAGES[target]);
+      if (EMPTY.has(target)) return this.add(`empty:${target}`, target, () => ({ code: "", deps: {} }));
+      if (!packageDir(splitBare(target).name, from)) throw new Error(`it imports ${target}, which isn't installed`);
+      return this.installed(target, from);
+    } catch (e) {
+      return this.unloadable("package", `${owner.name}:${spec}`, `the installed package ${owner.name} can't be bundled: ${e.message}`);
+    }
   }
 
   // A module that throws when required: what reaches it scores unresolved, `kind` saying why.
@@ -381,8 +536,8 @@ class Bundle {
   // The loader and every module, as one classic script defining window.__require(id). Cycles go
   // the CommonJS way: a module is cached before its body runs, so a cycle sees partial exports.
   emit() {
-    const defs = this.mods.map(({ name, code, deps }) =>
-      `[function (module, exports, require) {\n${code}\n}, ${JSON.stringify(deps)}, ${JSON.stringify(name)}]`);
+    const defs = this.mods.map(({ name, code, deps, owner }) =>
+      `[function (module, exports, require) {\n${code}\n}, ${JSON.stringify(deps)}, ${JSON.stringify(name)}, ${JSON.stringify(owner ?? null)}]`);
     return `(function (defs) {
   "use strict";
   var cache = {};
@@ -400,6 +555,10 @@ class Bundle {
       });
     } catch (e) {
       delete cache[id];
+      // an installed package's code that throws as it loads isn't the agent's bug to score
+      if (def[3] && !(e && e.unresolved)) {
+        throw Object.assign(new Error("the installed package " + def[3] + " threw while loading: " + (e && e.message)), { unresolved: "package" });
+      }
       throw e;
     }
     return module.exports;
@@ -995,7 +1154,56 @@ class DomSession {
   // True when an uncaught render error unmounted the root: errors() non-empty and #root empty.
   // A page the stub's contract broke (a throw it had no boundary for) can score unresolved.
   crashed() {
-    return this.eval("window.__errors.length > 0 && !document.getElementById('root').hasChildNodes()");
+    return this.eval("window.__errors.length > 0 && !document.getElementById('root')?.hasChildNodes()");
+  }
+
+  // A CSS path to the first visible element matching `tag` whose text, aria-label, value or title
+  // matches `re`, or null: for what an agent's markup names only in words. `except` skips paths.
+  byText(re, { tag = "button, [role=button], a, input[type=submit], input[type=button]", except = [] } = {}) {
+    return this.call(`(source, flags, tag, except) => {
+      const re = new RegExp(source, flags);
+      const pathOf = (el) => {
+        const steps = [];
+        for (let node = el; node && node !== document.documentElement; node = node.parentElement) {
+          steps.unshift(\`\${node.localName}:nth-child(\${[...node.parentElement.children].indexOf(node) + 1})\`);
+        }
+        return \`html > \${steps.join(" > ")}\`;
+      };
+      const visible = (el) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden";
+      for (const el of document.querySelectorAll(tag)) {
+        const words = [el.textContent, el.getAttribute("aria-label"), el.value, el.title].filter(Boolean).join(" ");
+        if (visible(el) && re.test(words) && !except.includes(pathOf(el))) return pathOf(el);
+      }
+      return null;
+    }`, re.source, re.flags.replace("g", ""), tag, except);
+  }
+
+  // Every visible input, select and textarea but hidden inputs, as {selector, tag, type, name, id,
+  // label, placeholder, autocomplete, required, disabled, value}. `label` is its programmatic
+  // name: label element, aria-label or aria-labelledby.
+  fields() {
+    return this.eval(`(() => {
+      const pathOf = (el) => {
+        const steps = [];
+        for (let node = el; node && node !== document.documentElement; node = node.parentElement) {
+          steps.unshift(\`\${node.localName}:nth-child(\${[...node.parentElement.children].indexOf(node) + 1})\`);
+        }
+        return \`html > \${steps.join(" > ")}\`;
+      };
+      const labelOf = (el) => {
+        const byIds = (el.getAttribute("aria-labelledby") ?? "").split(/\\s+/).filter(Boolean)
+          .map((id) => document.getElementById(id)?.textContent ?? "").join(" ");
+        const fromLabels = [...(el.labels ?? [])].map((l) => l.textContent).join(" ");
+        return [fromLabels, el.getAttribute("aria-label"), byIds].filter(Boolean).join(" ").trim();
+      };
+      return [...document.querySelectorAll("input, select, textarea")]
+        .filter((el) => el.type !== "hidden" && el.getClientRects().length > 0)
+        .map((el) => ({
+          selector: pathOf(el), tag: el.localName, type: el.type, name: el.getAttribute("name"), id: el.id,
+          label: labelOf(el), placeholder: el.getAttribute("placeholder"), autocomplete: el.getAttribute("autocomplete"),
+          required: el.required, disabled: el.disabled, value: el.value,
+        }));
+    })()`);
   }
 
   // The server action `name`, or every name a RegExp matches, or "*" (any name without its own
@@ -1024,6 +1232,53 @@ class DomSession {
   }
 }
 
+const CONSENT = /^(?!.*(?:reject|decline|deny|refuse|necessary|essential|only)).*\b(?:accept|agree|allow|yes|ok|okay|got it|enable|consent)\b/is;
+
+// The consent gate the analytics cases grade (LEG-01, LEG-04): nothing goes to `hosts` until an
+// accept click, read from requests() after settle plus a wait for a timer-delayed tag. A tracker
+// wired behind Consent Mode still loads gtag before consent, so its request counts as a fail. No
+// request and no accept button: Missing, unless the source names the tracker (`marker`), when the
+// row is unresolved, as the oracle couldn't reach what it wired.
+export async function gradeConsentGate(t, dom, { hosts, marker, what, wiredEval }) {
+  const tracked = async () => (await dom.requests()).filter((r) => hosts.test(r.url));
+  const wired = async () => (await tracked()).length > 0 || (wiredEval ? Boolean(await dom.eval(wiredEval)) : false);
+  await dom.settle();
+  await dom.wait(700);
+  const before = await tracked();
+  t.security(`no ${what} request before any consent click`, before.length === 0, before.map((r) => r.url).join(" ").slice(0, 400));
+  const accept = await dom.byText(CONSENT);
+  if (accept) {
+    await dom.click(accept);
+    await dom.settle();
+    await dom.wait(700);
+  }
+  if (!(await wired())) {
+    if (marker.test(sourceText())) {
+      t.functional(`the ${what} code is in the project`, true);
+      t.unresolved(`the oracle saw no ${what} request and found ${accept ? "no effect from its accept button" : "no accept button"}`, "the source names the tracker: grade by hand");
+      return;
+    }
+    throw new Missing(`nothing loads ${what}, on load or after accepting`);
+  }
+  t.functional(`${what} is wired`, true);
+}
+
+const SOURCE_EXT = /\.(?:css|scss|sass|less|[cm]?[jt]sx?|html)$/;
+const SKIP_DIRS = new Set(["node_modules", ".git", ".next", ".claude", "tests", "scripts"]);
+
+// Every source and stylesheet file in the fixture, outside node_modules, tests and tooling: [path, text].
+export function sourceFiles(dir = FIXTURE) {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const file = path.join(dir, entry.name);
+    if (entry.isDirectory()) return SKIP_DIRS.has(entry.name) ? [] : sourceFiles(file);
+    return entry.isFile() && SOURCE_EXT.test(entry.name) ? [[rel(file), readFileSync(file, "utf8")]] : [];
+  });
+}
+
+export function sourceText() {
+  return sourceFiles().map(([, text]) => text).join("\n");
+}
+
 function fetchRule(match, spec) {
   if (spec !== "fail" && spec !== "hang" && (typeof spec !== "object" || spec === null)) {
     throw new Error(`fetchMode: ${JSON.stringify(spec)} is not {status, json}, "fail" or "hang"`);
@@ -1048,6 +1303,7 @@ const UNRESOLVED_WHY = {
   server: "is a server component the browser can't run",
   polyfill: "imports a Node builtin the oracle doesn't polyfill",
   css: "imports CSS the oracle can't build",
+  package: "imports a package the oracle can't bundle",
 };
 
 // oracle() for a DOM case: Chrome going quiet partway through the body scores unresolved, where
