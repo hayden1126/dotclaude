@@ -14,10 +14,10 @@
 #
 # UX-63. Known misses: a bare `.delete(`, left out because Map, Set and URLSearchParams use it
 # (axios.delete too); a helper under another name (`onDelete(id)`, `mutate(id)`); a delete in
-# a .ts helper; a file that holds a guard word for
+# an .html file or a .ts helper; a file that holds a guard word for
 # another reason (`confirmPassword`). Accepted false matches, each costing one resend: a confirm
 # in an imported component, a function's own definition, a cart's `removeItem`-style bare call,
-# `removeListener` and similar cleanup calls.
+# `removeListener` and similar cleanup calls, a cart's `removeItemFromCart`.
 # Samples for every form: tests/setup/practices_samples/client-code.toml.
 
 skill = "client-code"
@@ -38,6 +38,8 @@ when = '''(?x)
   | connect\.facebook\.net | \bfbq\(
   | cdn\.segment\.com
   | posthog\.init
+  # A vendor's npm package, with no URL on the line.
+  | \bHotjar\.init\( | \bReactGA\.initialize\(
   # The @next/third-parties components have no URL on the line.
   | <GoogleAnalytics\b | <GoogleTagManager\b
 '''
@@ -51,11 +53,13 @@ at = ["edit", "commit"]
 when = '''(?x)
   (?<![.\w])(?:delete|remove|destroy)[A-Z]\w*\s*\(
   # A method on something, with the browser's own cleanup calls left out.
-  | \.(?:delete|remove|destroy)(?!Item|EventListener|Child|Attribute|Property)[A-Z]\w*\s*\(
-  # A handler passed by name: React's onClick, action and formAction.
-  | \b(?:onClick|action|formAction)\s*=\s*\{\s*(?:delete|remove|destroy)[A-Z]\w*\s*\}
+  | \.(?!(?:removeItem|removeEventListener|removeChild|removeAttribute|removeProperty)\b)(?:delete|remove|destroy)[A-Z]\w*\s*\(
+  # A handler passed by name: React's onClick, action and formAction, Svelte's on:click and
+  # onclick, Vue's @click.
+  | \b(?:on[Cc]lick|on:click|action|formAction)\s*=\s*\{\s*(?:delete|remove|destroy)[A-Z]\w*\s*\}
+  | @click\s*=\s*["'](?:delete|remove|destroy)[A-Z]\w*["']
   # A fetch that sends DELETE, inline or on its own line.
   | \bmethod\s*:\s*["'](?i:delete)["']
 '''
-unless = '''(?i)confirm|undo|alertdialog|<dialog|showModal'''
+unless = '''(?i)confirm|undo(?!ne)|alertdialog|<dialog|showModal'''
 say = "This component deletes with no confirm or undo in the file, so one click destroys it. Build a confirm naming what goes, or an undo window, by default and say so in your reply, even when the request names only the button. If this flow already asks first, here or in another file, resend or add `practices-allow: UX-63 <reason>`. A call that deletes nothing a user would miss is a false match: resend."

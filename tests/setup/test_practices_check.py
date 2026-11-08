@@ -5101,28 +5101,27 @@ class ClientCodeSkill(unittest.TestCase):
         head = self.read("SKILL.md").split("---")[1]
         (description,) = re.findall(r"^description: (.*)$", head, re.M)
         self.assertTrue(description.startswith("Use when"))
-        for word in ("analytics", "tracking pixel", "session replay", "delete", "client components",
-                     "React"):
+        for word in ("analytics", "tracking pixel", "session replay", "delete", "React"):
             self.assertIn(word, description)
+        self.assertNotIn("client components", description)  # one-line edits shouldn't load it
         self.assertNotIn("confirm", description)
         self.assertNotIn("consent", description)
 
     def test_the_sections_come_in_order_and_the_skill_stays_short(self):
         body = self.read("SKILL.md")
-        order = [body.index(s) for s in ("## Core rule", "## Gate rule", "## Not enforced",
-                                         "## When the hook stops a")]
+        order = [body.index(s) for s in ("## Core rule", "## Gate rule", "## When the hook stops a")]
         self.assertEqual(order, sorted(order))
         self.assertIn(".claude/practices/client-code.md", body)
         for marker in ("**Gate rule LEG-01", "**Gate rule UX-63",
                        "[practices:L2:client-code:LEG-01", "[practices:L2:client-code:UX-63",
                        "practices-allow: <id> <reason>"):
             self.assertIn(marker, body)
-        self.assertEqual(body.count("(not enforced).**"), 7)
+        self.assertNotIn("(not enforced)", body)
         self.assertLess(len(body.encode()), 5000)
 
     def test_every_rule_the_skill_names_is_in_the_spec_table(self):
         spec = self.read("SPEC.md")
-        for rule in ("LEG-01", "LEG-04", "UX-63", "UX-51", "UX-03", "UX-44"):
+        for rule in ("LEG-01", "LEG-04", "UX-63"):
             with self.subTest(rule=rule):
                 self.assertIn(rule, self.read("SKILL.md"))
                 self.assertRegex(spec, rf"(?m)^\| {rule} \|")

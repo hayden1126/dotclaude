@@ -1,6 +1,6 @@
 ---
 name: client-code
-description: Use when adding analytics, a tracking pixel, session replay or any third-party tracker, when adding a delete, remove or destroy action to a UI, or when building or changing client components, forms and interaction handlers, however small the change. Applies to React, Next.js, Vue, Svelte and similar.
+description: Use when adding analytics, a tracking pixel, session replay or any third-party tracker, or when adding a delete, remove or destroy action to a UI, however small the change. Applies to React, Next.js, Vue, Svelte and similar.
 ---
 
 # Client code
@@ -32,18 +32,6 @@ If `.claude/practices/client-code.md` exists in the repo, read it first. Its rep
 - **Gate rule UX-63: a destructive action never runs on one click.**
 
 The engine denies each at the edit, once per file, tells you at the commit, and denies the push.
-
-## Not enforced: do these too
-
-No hook checks these lines. They apply all the same.
-
-- **Gate `:hover` in `@media (hover: hover)` (not enforced).** On touch it latches after a tap until the next tap elsewhere.
-- **UX-51: `font-size: 16px` on every text input (not enforced).** Below that, iOS zooms the page on focus.
-- **UX-51: tap targets of at least 44px (not enforced).** Small padding on a 13px button is not tappable.
-- **An off-canvas drawer traps focus (not enforced).** Escape and a backdrop click close it, the body stops scrolling, and focus returns to the opener.
-- **UX-03: filtering never leaves a blank void (not enforced).** Show an inline empty state, and exempt always-on sections from hide-when-empty logic.
-- **UX-44: never encode meaning by colour alone (not enforced).** Pair it with a glyph or a word.
-- **Keyboard parity (not enforced).** What hover reveals, focus reveals too: `tabindex="0"` on a non-interactive card, with `:focus-within`.
 
 ## When the hook stops a tracker or a delete
 

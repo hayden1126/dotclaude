@@ -453,3 +453,95 @@ path = "app/clients/Row.tsx"
 content = '''
 <button onClick={openDeleteDialog}>Delete</button>
 '''
+
+# ---------------------------------------------------------------- review round 1
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = true
+path = "app/items/Row.tsx"
+content = '''
+<button onClick={() => api.deleteItem(id)}>Delete</button>
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = true
+path = "app/items/Bulk.tsx"
+content = '''
+await items.deleteItems(ids)
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = true
+path = "src/Row.vue"
+content = '''
+<button @click="deleteClient">Delete</button>
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = true
+path = "src/Row.svelte"
+content = '''
+<button on:click={deleteClient}>Delete</button>
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = true
+path = "src/Row5.svelte"
+content = '''
+<button onclick={deleteClient}>Delete</button>
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = true
+path = "app/Row.tsx"
+content = '''
+<p>This can't be undone</p><button onClick={() => deleteRow(id)}>x</button>
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = false
+path = "app/Row.tsx"
+content = '''
+<button onClick={() => deleteRow(id)}>x</button><Toast action="Undo" />
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = false
+path = "app/Row.tsx"
+content = '''
+sessionStorage.removeItem("draft")
+'''
+
+[[sample]]
+kind = "rule"
+id = "LEG-01"
+fires = true
+path = "lib/track.ts"
+content = '''
+Hotjar.init(1234567, 6)
+'''
+
+[[sample]]
+kind = "rule"
+id = "LEG-01"
+fires = true
+path = "lib/track.ts"
+content = '''
+ReactGA.initialize("G-1")
+'''

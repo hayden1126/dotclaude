@@ -4,10 +4,10 @@ The public spec for the `client-code` skill: what it covers, the two rules it en
 
 ## Scope
 
-The skill covers third-party trackers and destructive actions in a UI, plus seven short interaction lines. It owns LEG-01 (with LEG-04) and UX-63, both enforced. The seven lines are stated and no hook checks them. Layout and responsive technique stay in `frontend-ui-discipline`, and motion in `frontend-motion`.
+The skill covers third-party trackers and destructive actions in a UI. It owns LEG-01 (with LEG-04) and UX-63, both enforced. Interaction, layout and responsive rules stay in `frontend-ui-discipline`, and motion in `frontend-motion`.
 
 Files:
-- `SKILL.md`: the core rule, the gate rules, the lines nothing enforces, then what to do when the hook stops an edit.
+- `SKILL.md`: the core rule, the gate rules, then what to do when the hook stops an edit.
 - `events.toml`: the two rules and the gate lines for the post-compaction digest. It has no event: see the L1 test below.
 - Samples for every form the rules read: `tests/setup/practices_samples/client-code.toml`.
 
@@ -29,15 +29,15 @@ A repo that says nothing about its audience gets the gate. The gate costs a bann
 | push | The same scan on what a push would send, denied once per new finding | before the push |
 | L4 | The gate lines after a compaction, when the skill was loaded | SessionStart(compact) |
 
-**LEG-01** reads `.js`, `.jsx`, `.ts` and `.tsx`: `googletagmanager.com`, `gtag(`, `static.hotjar.com`, `hj(`, `clarity.ms`, `connect.facebook.net`, `fbq(`, `cdn.segment.com`, `posthog.init`, `<GoogleAnalytics` and `<GoogleTagManager`. `consent` or a word starting `accept`, in any case, anywhere in the file, excuses it. Cookieless Plausible is left out on purpose.
+**LEG-01** reads `.js`, `.jsx`, `.ts`, `.tsx`, `.html`, `.vue` and `.svelte`: `googletagmanager.com`, `gtag(`, `static.hotjar.com`, `hj(`, `clarity.ms`, `connect.facebook.net`, `fbq(`, `cdn.segment.com`, `posthog.init`, `Hotjar.init(`, `ReactGA.initialize(`, `<GoogleAnalytics` and `<GoogleTagManager`. `consent` or a word starting `accept`, in any case, anywhere in the file, excuses it. Cookieless Plausible is left out on purpose.
 
-**UX-63** reads `.tsx` and `.jsx`: a bare or dotted call whose name starts `delete`, `remove` or `destroy` and an upper-case letter, and `method: "DELETE"` in either quote. `.removeItem`, `.removeEventListener`, `.removeChild`, `.removeAttribute` and `.removeProperty` are left out, since they clean up the browser and delete nothing a user owns. `confirm`, `undo`, `alertdialog`, `<dialog` or `showModal`, in any case, anywhere in the file, excuses it.
+**UX-63** reads `.tsx`, `.jsx`, `.vue` and `.svelte`: a bare or dotted call whose name starts `delete`, `remove` or `destroy` and an upper-case letter, the same name passed as a click or form handler, and `method: "DELETE"` in either quote. `.removeItem`, `.removeEventListener`, `.removeChild`, `.removeAttribute` and `.removeProperty` are left out, since they clean up the browser and delete nothing a user owns. `confirm`, `undo` (not `undone`), `alertdialog`, `<dialog` or `showModal`, in any case, anywhere in the file, excuses it.
 
 Known misses:
-- **LEG-01:** a file holding `consent` or `accept` for another reason, Consent Mode included, whose tag has already loaded; a tracker in an `.html`, `.vue` or `.svelte` file; a vendor not listed.
-- **UX-63:** a bare `.delete(`, since `Map`, `Set` and `URLSearchParams` use it, and with it `axios.delete(`; a handler passed by name (`onClick={deleteClient}`); a delete under another name (`onDelete(id)`, `mutate(id)`); a delete in an `.html`, `.vue`, `.svelte` or `.ts` file; a guard word used for something else (`confirmPassword`).
+- **LEG-01:** a file holding `consent` or `accept` for another reason, Consent Mode included, whose tag has already loaded; a vendor not listed.
+- **UX-63:** a bare `.delete(`, since `Map`, `Set` and `URLSearchParams` use it, and with it `axios.delete(`; a delete under another name (`onDelete(id)`, `mutate(id)`); a delete in an `.html` or `.ts` file; a guard word used for something else (`confirmPassword`).
 
-Accepted false matches, each costing one resend: a gate or confirm in another file or in words the pattern misses, a test file (a glob can't exclude), a comment naming a tracker, a function's own definition, and a cart's bare `removeItem(id)`-style call or `removeListener` cleanup.
+Accepted false matches, each costing one resend: a gate or confirm in another file or in words the pattern misses, a test file (a glob can't exclude), a comment naming a tracker, a function's own definition, and a cart's bare `removeItem(id)`-style call, `removeItemFromCart`, or `removeListener` cleanup.
 
 ## Per-repo layer
 
@@ -51,16 +51,10 @@ Accepted false matches, each costing one resend: a gate or confirm in another fi
 | LEG-01 | Gate every non-essential tracker behind prior opt-in for EU and UK users. | no tracker request before accept, in a real browser | L2, L3s, push | [ePrivacy 5(3)]; [EDPB consent] |
 | LEG-04 | Session replay and heatmaps need the same consent, with inputs masked. | no replay script or global before accept | through LEG-01 | [ePrivacy 5(3)] |
 | UX-63 | Give a destructive action a confirm naming what goes, or an undo window. | one click sends nothing, and the confirm or undo path sends it | L2, L3s, push | [NN/g confirmation]; [WCAG 3.3.4] |
-| UX-51 | Touch targets of at least 44px, and 16px text in touch inputs. | computed size in a browser | none | [WCAG 2.5.5] |
-| UX-03 | A filtered or empty path shows an empty state, never a blank area. | a test filters to no rows | none | [NN/g empty states] |
-| UX-44 | Never carry meaning by colour alone. | status reads with colour removed | none | [WCAG 1.4.1] |
-| no id | `:hover` gated in `@media (hover: hover)`. | a tap leaves no stuck hover style | none | [MDN hover] |
-| no id | An off-canvas drawer traps focus, closes on Escape and backdrop, locks body scroll and restores focus. | keyboard probe | none | [APG dialog] |
-| no id | What hover reveals, keyboard focus reveals too. | Tab reaches what hover shows | none | [WCAG 2.1.1] |
 
 ## Why it is slim
 
-Two enforced rules, two gate lines, no event. Earlier skills in this suite measured that each extra piece of advice makes weaker models build more and break more, so a client skill that tried to hold every UI rule would do harm. The seven interaction lines moved from `frontend-ui-discipline` so each has one home, and they stay as text: a pattern can't judge a tap target or a drawer's focus handling from a line of source.
+Two enforced rules, two gate lines, no event. Earlier skills in this suite measured that each extra piece of advice makes weaker models build more and break more, so a client skill that tried to hold every UI rule would do harm. The interaction rules stay in `frontend-ui-discipline`, which loads for the CSS and plain-site work they apply to and also ships to Codex. No sweep measured a failure on them.
 
 ## The L1 test
 
@@ -84,10 +78,4 @@ What would revisit it: an eval of this skill where the deny arrives and the mode
 - [ePrivacy 5(3)]: Directive 2002/58/EC, Article 5(3), https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:32002L0058
 - [EDPB consent]: European Data Protection Board, Guidelines 05/2020 on consent, https://www.edpb.europa.eu/our-work-tools/our-documents/guidelines/guidelines-052020-consent-under-regulation-2016679_en
 - [NN/g confirmation]: Nielsen Norman Group, Confirmation Dialogs Can Prevent User Errors, https://www.nngroup.com/articles/confirmation-dialog/
-- [NN/g empty states]: Nielsen Norman Group, Designing Empty States in Complex Applications, https://www.nngroup.com/articles/empty-state-interface-design/
 - [WCAG 3.3.4]: WCAG 2.2, Error Prevention (Legal, Financial, Data), https://www.w3.org/WAI/WCAG22/Understanding/error-prevention-legal-financial-data.html
-- [WCAG 2.5.5]: WCAG 2.2, Target Size (Enhanced), https://www.w3.org/WAI/WCAG22/Understanding/target-size-enhanced.html
-- [WCAG 1.4.1]: WCAG 2.2, Use of Color, https://www.w3.org/WAI/WCAG22/Understanding/use-of-color.html
-- [WCAG 2.1.1]: WCAG 2.2, Keyboard, https://www.w3.org/WAI/WCAG22/Understanding/keyboard.html
-- [APG dialog]: WAI-ARIA Authoring Practices, Dialog (Modal) Pattern, https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/
-- [MDN hover]: MDN, the hover media feature, https://developer.mozilla.org/en-US/docs/Web/CSS/@media/hover
