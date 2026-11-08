@@ -1,5 +1,6 @@
 // next/link in the browser bundle: a plain <a>, its href as Next would print it, with no
-// prefetch or client-side navigation (a click follows the link, which an oracle can watch).
+// prefetch or client-side navigation: a click is a document request, which the oracle records in
+// navigations() and answers 204, so the page stays.
 import { createElement } from "react";
 
 function hrefOf(href) {

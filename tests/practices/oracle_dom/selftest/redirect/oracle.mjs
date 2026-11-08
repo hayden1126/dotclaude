@@ -12,7 +12,7 @@ await oracle(async (t) => {
     const requests = await dom.requests();
     // Under the Fetch-domain pause the request is answered before Chrome would redirect it; a
     // redirect it does follow marks the first leg done, so either way nothing stays in flight.
-    t.functional("the request ended", requests.some((r) => r.url === "http://x.dev/a.png" && (r.status === 307 || r.failed)), JSON.stringify(requests));
+    t.functional("the request ended", requests.some((r) => r.url.endsWith("x.dev/a.png") && (r.status === 307 || r.failed)), JSON.stringify(requests));
     t.functional("settle() returned true soon", settled && ms < 2500, `${settled} after ${ms} ms`);
   } finally {
     await dom.close();

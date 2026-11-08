@@ -10,6 +10,7 @@ export default function CorsPage() {
       .then((r) => r.json())
       .then((j) => setState(String(j.name)))
       .catch((e) => setState(`error ${e}`));
+    fetch("https://api.example/options", { method: "OPTIONS" }).catch(() => undefined);
   }, []);
   return <p id="state">{state}</p>;
 }

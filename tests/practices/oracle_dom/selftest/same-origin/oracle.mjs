@@ -17,6 +17,8 @@ await oracle(async (t) => {
     t.functional("requests() has the failed one", requests.some((r) => r.url === "/api/none" && r.failed), JSON.stringify(requests));
     const width = await dom.eval("document.querySelector('#preview')?.naturalWidth ?? null");
     t.functional("a blob: image renders", width === 3, String(width));
+    const inline = await dom.eval("document.querySelector('#inline').naturalWidth");
+    t.functional("a data: image renders", inline === 3, String(inline));
   } finally {
     await dom.close();
   }

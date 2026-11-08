@@ -160,14 +160,14 @@ function imageSize(bytes) {
   return none;
 }
 
-const CSS_IMPORT = /@import\s+(?:url\(\s*)?(["'])([^"']+)\1\s*\)?[^;]*;/g;
+const CSS_IMPORT = /@import\s+(?:url\(\s*(?:(["'])([^"')]+)\1|([^"')\s]+))\s*\)|(["'])([^"']+)\4)[^;]*;/g;
 
 // A stylesheet with its relative @imports inlined from the fixture, each file once (a cycle
 // stops at a file already in), and its URL @imports moved to the top, where CSS keeps them
 // (offline they fail). Comments go first, so a commented-out @import is none. A relative
 // @import naming no file is Missing, as Next's build fails; one that leaves the project (an
 // absolute path, ../ past its root, a symlink out) is left out unread, with a note. A bare
-// specifier (a package such as tailwindcss) goes in `packages`, for the caller to score
+// specifier that isn't a sibling file (a package such as tailwindcss) goes in `packages`, for the caller to score
 // unresolved: the oracle doesn't resolve CSS packages.
 // limit: an @import's media or layer condition is dropped with it.
 function inlineCss(file, seen = new Set(), packages = []) {
@@ -175,12 +175,14 @@ function inlineCss(file, seen = new Set(), packages = []) {
   const root = realpathSync(FIXTURE);
   const urls = [];
   const text = readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
-  const body = text.replace(CSS_IMPORT, (whole, quote, spec) => {
+  const body = text.replace(CSS_IMPORT, (whole, q1, inUrlQuoted, inUrl, q2, quoted) => {
+    const spec = inUrlQuoted ?? inUrl ?? quoted;
     if (/^([a-z][a-z0-9+.-]*:|\/\/)/i.test(spec)) {
       urls.push(whole);
       return "";
     }
-    if (!/^[./]/.test(spec)) {
+    // css-loader tries a bare name as a sibling file first, then as a package
+    if (!/^[./]/.test(spec) && !isFile(path.resolve(path.dirname(file), spec))) {
       packages.push(spec);
       return `/* ${spec}: a CSS package, not resolved */`;
     }
@@ -226,6 +228,7 @@ function isUseServer(file, src) {
 class Bundle {
   mods = [];
   keys = new Map();
+  images = []; // the file names of image imports, copied into the page's dir
 
   constructor(dir) {
     this.dir = dir; // the page's scratch dir, where image imports are copied
@@ -310,6 +313,7 @@ class Bundle {
       if (IMAGE.test(file)) {
         const name = `asset-${this.mods.length}-${path.basename(file)}`;
         copyFileSync(file, path.join(this.dir, name));
+        this.images.push(name);
         const image = { src: `${PAGE_ORIGIN}/${encodeURIComponent(name)}`, ...imageSize(readFileSync(file)) };
         return { code: `module.exports = ${JSON.stringify(image)};`, deps: {} };
       }
@@ -511,25 +515,48 @@ class Chrome {
 // What the page script's selector helpers run: the element, or null when nothing matches.
 // The page and the oracle's own endpoints, all answered from the Fetch domain: none resolves.
 // practices-allow: SEC-13 Runtime.evaluate runs the oracle's own probes in its test page; arguments go in as JSON
-const PAGE_ORIGIN = "http://oracle.page.invalid";
+// https, so the page is a secure context (crypto.subtle, crypto.randomUUID, navigator.clipboard):
+// the Fetch domain answers before any connection, so no certificate is involved.
+const PAGE_ORIGIN = "https://oracle.page.invalid";
 const ACTIONS_HOST = "oracle.actions.invalid";
 const LOG_HOST = "oracle.log.invalid";
-const ORACLE_HOSTS = new Set([new URL(PAGE_ORIGIN).hostname, ACTIONS_HOST, LOG_HOST]);
+// a rejected answer for a request that's already gone (aborted, or the page or Chrome went away)
+const GONE = /Invalid InterceptionId|closed its DevTools pipe|Session with given id not found/;
 const CONTENT_TYPES = {
   ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".avif": "image/avif", ".ico": "image/x-icon",
   ".svg": "image/svg+xml",
 };
-const CORS = [{ name: "Access-Control-Allow-Origin", value: "*" }, { name: "Access-Control-Allow-Headers", value: "*" },
-  { name: "Access-Control-Allow-Methods", value: "*" }];
 const PICK = "(sel) => document.querySelector(sel)";
 
-function hostOf(url) {
+function header(request, name) {
+  const key = Object.keys(request.headers ?? {}).find((k) => k.toLowerCase() === name);
+  return key === undefined ? undefined : request.headers[key];
+}
+
+// A response any caller can read, a credentialed one included: `*` doesn't count for those.
+function cors(request) {
+  return [{ name: "Access-Control-Allow-Origin", value: header(request, "origin") ?? PAGE_ORIGIN },
+    { name: "Access-Control-Allow-Credentials", value: "true" }, { name: "Vary", value: "Origin" }];
+}
+
+function preflightHeaders(request) {
+  const requested = header(request, "access-control-request-headers");
+  return [...cors(request), { name: "Access-Control-Allow-Methods", value: header(request, "access-control-request-method") },
+    ...(requested ? [{ name: "Access-Control-Allow-Headers", value: requested }] : [])];
+}
+
+function safeDecode(text) {
   try {
-    return new URL(url).hostname;
+    return decodeURIComponent(text);
   } catch {
-    return "";
+    return null;
   }
+}
+
+// A URL as the page wrote it: same-origin ones as their path, what rules and oracles match on.
+function shown(url) {
+  return url.origin === PAGE_ORIGIN ? `${url.pathname}${url.search}` : url.href;
 }
 
 // Page data sent as page.js's plain(): arrays come as {"@array": length, 0: ...}.
@@ -550,14 +577,16 @@ class DomSession {
   #pending = 0; // answers scheduled and not yet sent
   #lastAnswer = performance.now();
   #hung = new Set(); // network ids of requests "hang" never answers
+  #internal = []; // requests the oracle itself couldn't answer: its bug, not the page's
+  #loaded = false; // the first document has been served
 
-  constructor(chrome, sessionId, { targetId, token, dir, opts, t, what }) {
+  constructor(chrome, sessionId, { targetId, token, served, opts, t, what }) {
     this.chrome = chrome;
     this.cdp = chrome.cdp;
     this.sessionId = sessionId;
     this.targetId = targetId;
     this.token = token;
-    this.dir = dir;
+    this.served = served; // URL path -> file: the only page-origin paths the oracle answers itself
     this.t = t;
     this.what = what;
     this.actionModes = { ...(opts.actionModes ?? {}) };
@@ -567,7 +596,7 @@ class DomSession {
     this.cdp.on(({ method, params, sessionId: from }) => {
       if (from !== sessionId) return;
       if (method === "Fetch.requestPaused") {
-        this.#paused(params).catch((e) => this.#tamper.push({ why: `answering failed: ${e.message}`, url: params.request.url }));
+        this.#paused(params);
       } else if (method === "Network.requestWillBeSent") {
         const redirected = params.redirectResponse && this.#byId.get(params.requestId);
         if (redirected) Object.assign(redirected, { status: params.redirectResponse.status, done: true });
@@ -602,28 +631,55 @@ class DomSession {
   #later(answer) {
     this.#pending++;
     setTimeout(() => {
-      answer().catch(() => {}).finally(() => {
+      answer().catch((e) => this.#failed(e, null)).finally(() => {
         this.#pending--;
         this.#lastAnswer = performance.now();
       });
     }, this.delayMs);
   }
 
+  // An answer that failed: nothing to do when the request is gone; otherwise the oracle's own
+  // bug, noted for the reader, and the request (when there is one to fail) never left paused.
+  async #failed(e, request) {
+    if (GONE.test(e.message)) return;
+    this.#internal.push(`${request ? `${request.request.url.slice(0, 200)}: ` : ""}${e.message}`);
+    if (request) await this.send("Fetch.failRequest", { requestId: request.requestId, errorReason: "Failed" }).catch(() => {});
+  }
+
+  async #paused(params) {
+    try {
+      await this.#answer(params);
+    } catch (e) {
+      await this.#failed(e, params);
+    }
+  }
+
   // Every request the page makes, paused before it goes anywhere: the page's own files, served;
-  // an action or a report to the oracle's endpoints, counted and answered; anything else, the
-  // agent's, logged and answered by the fetch rules, or failed as offline.
-  async #paused({ requestId, request, frameId, resourceType, networkId }) {
+  // a later main-frame document (a followed link, a form post), recorded and answered 204, so
+  // the current document stays; an action or a report to the oracle's endpoints, counted and
+  // answered; anything else, the agent's, logged and answered by the fetch rules, or failed as
+  // offline. blob: and data: URLs never reach this pause (measured), so an image preview just works.
+  // A real preflight is told from a page's own OPTIONS by its Access-Control-Request-Method, a
+  // header a page can't set; this build reports a preflight's resourceType as XHR, not Preflight.
+  async #answer({ requestId, request, frameId, resourceType, networkId }) {
     const url = new URL(request.url);
-    if (request.method === "OPTIONS") return this.#fulfill(requestId, 204, "", CORS);
-    if (url.origin === PAGE_ORIGIN) {
-      const name = path.basename(decodeURIComponent(url.pathname));
-      const file = name === "page.js" ? path.join(BROWSER, "page.js") : path.join(this.dir, name);
-      if (!isFile(file)) return this.#fulfill(requestId, 404, "");
-      const type = CONTENT_TYPES[path.extname(name).toLowerCase()] ?? "application/octet-stream";
+    if (request.method === "OPTIONS" && header(request, "access-control-request-method")) {
+      return this.#fulfill(requestId, 204, "", preflightHeaders(request));
+    }
+    if (resourceType === "Document" && frameId === this.targetId) {
+      if (this.#loaded) {
+        this.#log.navigation.push({ kind: "document", url: shown(url), method: request.method });
+        return this.#fulfill(requestId, 204, "");
+      }
+      this.#loaded = true;
+    }
+    const file = url.origin === PAGE_ORIGIN ? this.served.get(url.pathname) : undefined;
+    if (file) {
+      const type = CONTENT_TYPES[path.extname(file).toLowerCase()] ?? "application/octet-stream";
       return this.#fulfill(requestId, 200, readFileSync(file), [{ name: "Content-Type", value: type }]);
     }
     if (url.hostname === ACTIONS_HOST || url.hostname === LOG_HOST) {
-      const [token, kind, ...rest] = url.pathname.split("/").slice(1).map(decodeURIComponent);
+      const [token, kind, ...rest] = url.pathname.split("/").slice(1).map(safeDecode);
       const tamper = (why) => {
         this.#tamper.push({ why, url: request.url.slice(0, 200) });
         return this.send("Fetch.failRequest", { requestId, errorReason: "NameNotResolved" });
@@ -639,23 +695,24 @@ class DomSession {
       if (url.hostname === LOG_HOST) {
         if (!Object.hasOwn(this.#log, kind) || kind === "action" || kind === "fetch") return tamper(`no such report: ${kind}`);
         this.#log[kind].push(data);
-        return this.#fulfill(requestId, 204, "", CORS);
+        return this.#fulfill(requestId, 204, "", cors(request));
       }
       this.#log.action.push({ name: kind, args: data, t: performance.now() });
       const mode = this.actionModes[kind] ?? "ok";
       if (mode === "hang") return this.#hung.add(networkId);
       return this.#later(() => (mode === "fail"
-        ? this.#fulfill(requestId, 500, "server error", CORS)
-        : this.#fulfill(requestId, 200, JSON.stringify({ value: this.actionResults[kind] ?? null }), [...CORS, { name: "Content-Type", value: "application/json" }])));
+        ? this.#fulfill(requestId, 500, "server error", cors(request))
+        : this.#fulfill(requestId, 200, JSON.stringify({ value: this.actionResults[kind] ?? null }), [...cors(request), { name: "Content-Type", value: "application/json" }])));
     }
-    const rule = this.fetchRules.find((r) => (r.regex ? new RegExp(r.regex, r.flags).test(request.url) : request.url.includes(r.match)));
-    this.#log.fetch.push({ url: request.url, method: request.method, body: request.postData ?? null, stubbed: Boolean(rule), type: resourceType, t: performance.now() });
+    const target = shown(url);
+    const rule = this.fetchRules.find((r) => (r.regex ? new RegExp(r.regex, r.flags).test(target) : target.includes(r.match)));
+    this.#log.fetch.push({ url: target, method: request.method, body: request.postData ?? null, stubbed: Boolean(rule), type: resourceType, t: performance.now() });
     if (!rule) return this.send("Fetch.failRequest", { requestId, errorReason: "NameNotResolved" });
     if (rule.spec === "hang") return this.#hung.add(networkId);
     return this.#later(() => (rule.spec === "fail"
       ? this.send("Fetch.failRequest", { requestId, errorReason: "Failed" })
       : this.#fulfill(requestId, rule.spec.status ?? 200, JSON.stringify(rule.spec.json === undefined ? null : rule.spec.json),
-        [...CORS, { name: "Content-Type", value: "application/json" }])));
+        [...cors(request), { name: "Content-Type", value: "application/json" }])));
   }
 
   // Records, once each, what makes the run unresolved whatever the oracle checks: tampering with
@@ -668,6 +725,10 @@ class DomSession {
     if (this.#log.unresolved.length && !this.#reported.has("unresolved")) {
       this.#reported.add("unresolved");
       this.t.unresolved(`${this.what} loads code the browser can't run`, this.#log.unresolved.map((u) => u?.detail).join("; "));
+    }
+    if (this.#internal.length && !this.#reported.has("internal")) {
+      this.#reported.add("internal");
+      this.t.note("a paused request couldn't be answered", false, this.#internal.join("; ").slice(0, 600));
     }
   }
 
@@ -785,11 +846,15 @@ class DomSession {
   }
 
   // Every http(s) request the page made bar the oracle's own (its files, actions, reports),
-  // failed ones included: {url, method, type, status, failed, error}.
+  // failed ones included: {url, method, type, status, failed, error}; a same-origin url as its path.
   async requests() {
     await this.eval("0");
-    return this.#requests.filter((r) => /^https?:/.test(r.url) && !ORACLE_HOSTS.has(hostOf(r.url)))
-      .map(({ id, done, ...r }) => r);
+    return this.#requests.filter((r) => /^https?:/.test(r.url) && !this.#oracleOwn(new URL(r.url)))
+      .map(({ id, done, ...r }) => ({ ...r, url: shown(new URL(r.url)) }));
+  }
+
+  #oracleOwn(url) {
+    return url.hostname === ACTIONS_HOST || url.hostname === LOG_HOST || (url.origin === PAGE_ORIGIN && this.served.has(url.pathname));
   }
 
   // Every server action call, in the order its request arrived: {name, args, t}.
@@ -847,7 +912,7 @@ function bundleFor(entryFile, dir) {
     reactDom: bundle.package(PACKAGES["react-dom"]),
     reactDomClient: bundle.package(PACKAGES["react-dom/client"]),
   };
-  return { ids, script: bundle.emit() };
+  return { ids, script: bundle.emit(), images: bundle.images };
 }
 
 const UNRESOLVED_WHY = {
@@ -876,7 +941,7 @@ export async function openDom(t, oracleUrl, opts) {
 
   const caseName = path.basename(path.dirname(fileURLToPath(oracleUrl)));
   const dir = mkdtempSync(path.join(process.env.TMPDIR ?? FIXTURE, `oracle-dom-${caseName}-`));
-  const { ids, script } = bundleFor(entryFile, dir);
+  const { ids, script, images } = bundleFor(entryFile, dir);
   const what = rel(entryFile);
   const config = {
     bundle: "bundle.js",
@@ -892,6 +957,11 @@ export async function openDom(t, oracleUrl, opts) {
     `<!doctype html>\n<html><head><meta charset="utf-8"><title>oracle</title></head><body><div id="root"></div>\n` +
     `<script src="config.js"></script>\n<script src="page.js"></script>\n</body></html>\n`);
 
+  const served = new Map([
+    ["/index.html", path.join(dir, "index.html")], ["/config.js", path.join(dir, "config.js")],
+    ["/bundle.js", path.join(dir, "bundle.js")], ["/page.js", path.join(BROWSER, "page.js")],
+    ...images.map((name) => [`/${encodeURIComponent(name)}`, path.join(dir, name)]),
+  ]);
   mkdirSync(path.join(dir, "chrome-profile"));
   const chrome = new Chrome(binary, path.join(dir, "chrome-profile"));
   try {
@@ -902,9 +972,12 @@ export async function openDom(t, oracleUrl, opts) {
     await cdp.send("Target.setDiscoverTargets", { discover: true });
     const targetId = await created;
     const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
-    // the run's capability: page.js gets it through start(), never from anything the page can read
+    // What the token holds against: page.js gets it through start(), so a stray fetch to the
+    // endpoints is flagged. A page that goes looking can read it, from
+    // performance.getEntriesByType("resource"), but all it can do with it is add entries, never
+    // lower a count, and a forged report is sabotage the diff shows (run.py's SUSPECT_WORDS).
     const token = randomBytes(32).toString("base64url");
-    const session = new DomSession(chrome, sessionId, { targetId, token, dir, opts, t, what });
+    const session = new DomSession(chrome, sessionId, { targetId, token, served, opts, t, what });
     await Promise.all([session.send("Page.enable"), session.send("Runtime.enable"), session.send("Network.enable")]);
     await session.send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] });
     const loaded = cdp.waitFor("load event", ({ method, sessionId: from }) => (method === "Page.loadEventFired" && from === sessionId ? true : undefined));

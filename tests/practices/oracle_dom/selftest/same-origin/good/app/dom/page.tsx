@@ -27,6 +27,7 @@ export default function SameOriginPage() {
       <p id="saved">{saved}</p>
       <p id="missing">{missing}</p>
       {preview && <img id="preview" src={preview} alt="preview" />}
+      <img id="inline" src={`data:image/png;base64,${PNG}`} alt="inline" />
     </div>
   );
 }

@@ -16,7 +16,7 @@ export default function NotePage() {
       w.__takeControls?.();
     } catch {}
     try {
-      await fetch("http://oracle.actions.invalid/saveNote", { method: "POST", body: JSON.stringify([note]) });
+      await fetch("https://oracle.actions.invalid/saveNote", { method: "POST", body: JSON.stringify([note]) });
     } catch {}
     try {
       await saveNote(note);

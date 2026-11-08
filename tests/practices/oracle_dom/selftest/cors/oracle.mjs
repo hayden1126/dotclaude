@@ -10,7 +10,8 @@ await oracle(async (t) => {
     await dom.settle();
     t.functional("the credentialed fetch gets its stub", (await dom.text("#state")) === "Ada", await dom.text("#state"));
     const fetches = await dom.fetches();
-    t.functional("it counts once", fetches.length === 1 && fetches[0].method === "GET", JSON.stringify(fetches));
+    t.functional("it counts once, its preflight not at all", fetches.filter((f) => f.url === "https://api.example/me").length === 1, JSON.stringify(fetches));
+    t.functional("a page's own OPTIONS is a fetch", fetches.some((f) => f.url === "https://api.example/options" && f.method === "OPTIONS"), JSON.stringify(fetches));
   } finally {
     await dom.close();
   }

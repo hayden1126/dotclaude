@@ -47,8 +47,8 @@
   var addEventListener = EventTarget.prototype.addEventListener;
   var getById = Document.prototype.getElementById.bind(document);
   var NativeString = String;
-  var ACTIONS = "http://oracle.actions.invalid/";
-  var LOG = "http://oracle.log.invalid/";
+  var ACTIONS = "https://oracle.actions.invalid/";
+  var LOG = "https://oracle.log.invalid/";
 
   var config = parse(stringify(window.__config));
   var token = null;
