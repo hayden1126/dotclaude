@@ -20,7 +20,7 @@ Never offer it as an option, and never leave it as a risk for the user to decide
 
 The one exception: the repo says it has no EU or UK users, in its notes or in `.claude/practices/client-code.md`. A repo that says nothing gets the gate. The reply says the gate was built and how to drop it if the audience is elsewhere.
 
-**A destructive action** (deleting or removing something a user would miss, not a filter chip or a draft row): a confirm naming what goes, or an undo window. This holds when the request says only "a Delete button that calls X".
+**A destructive action** (deleting or removing something a user would miss, not a filter chip or an unsaved draft): a confirm naming what goes, or an undo window. This holds when the request says only "a Delete button that calls X".
 
 Example reply line: "Analytics load only after a visitor clicks Accept, and the choice is stored. Nothing here says where your users are, so I built the gate; if none are in the EU or UK, remove `ConsentBanner` and render the script directly. Delete asks 'Delete invoice 1042?' before it calls `deleteInvoice`."
 

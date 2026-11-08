@@ -60,9 +60,9 @@ when = '''(?x)
   | \bon:(?:click|submit)(?:\|\w{1,20}){0,4}\s*=\s*\{\s*(?:delete|remove|destroy)[A-Z]\w*\s*\}
   | (?:@|\bv-on:)(?:click|submit)(?:\.\w{1,20}){0,4}\s*=\s*["'](?:delete|remove|destroy)[A-Z]\w*["']
   # A server action given its row id.
-  | \b(?:delete|remove|destroy)[A-Z]\w*\.bind\(
+  | \b(?!(?:removeItem|removeEventListener|removeChild|removeAttribute|removeProperty)\b)(?:delete|remove|destroy)[A-Z]\w*\.bind\(
   # A fetch that sends DELETE, inline or on its own line.
   | \bmethod\s*:\s*["'](?i:delete)["']
 '''
-unless = '''(?i)confirm|\bundo(?!ne)|undo\b|alertdialog|<dialog|showModal'''
+unless = '''(?i)confirm|(?-i:\bundo|Undo|\bUNDO)(?![nN][eE])|alertdialog|<dialog|showModal'''
 say = "This component deletes with no confirm or undo in the file, so one click destroys it. Build a confirm naming what goes, or an undo window, by default and say so in your reply, even when the request names only the button. If this flow already asks first, here or in another file, resend or add `practices-allow: UX-63 <reason>`. A call that deletes nothing a user would miss is a false match: resend."

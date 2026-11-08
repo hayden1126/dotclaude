@@ -646,3 +646,41 @@ path = "a.ts"
 content = '''
 Clarity.init("abc")
 '''
+
+# ---------------------------------------------------------------- review round 3
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = false
+path = "a.tsx"
+content = '''
+deleteRow(id); showUndoToast(id)
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = true
+path = "a.tsx"
+content = '''
+deleteRow(id); <p>This can't be UNDONE</p>
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = false
+path = "a.tsx"
+content = '''
+const off = el.removeEventListener.bind(el)
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = true
+path = "a.tsx"
+content = '''
+<form action={actions.deleteClient.bind(null, id)}><button>Delete</button></form>
+'''
