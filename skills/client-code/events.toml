@@ -1,0 +1,61 @@
+# client-code: the skill's entry for the practices hook (hooks/practices_check.py).
+#
+# No [[event]]: an L1 event is for a measured failure that is an absence no pattern can see and
+# whose fix needs more than a deny line carries. A tracker and a delete call are text a pattern
+# sees, and each deny carries the fix, so the rules alone are enough. SPEC.md has the test.
+#
+# Both rules read `when` on the new text at an edit and on each added line at a commit, and
+# `unless` on the whole file at both. So a guard anywhere in the file excuses it, and a guard in
+# another file costs one resend. `paths` can't exclude, so a test file is in scope.
+#
+# LEG-01. Known misses: a file that holds the word consent or accept for another reason, Consent
+# Mode included (its tag has already loaded); a tracker in an .html, .vue or .svelte file; any
+# vendor not named here. Cookieless Plausible stays out on purpose. Accepted false matches, each
+# costing one resend: a gate in a parent or sibling file, a test or a comment naming a tracker.
+#
+# UX-63. Known misses: a bare `.delete(`, left out because Map, Set and URLSearchParams use it
+# (axios.delete too); a handler passed by name, `onClick={deleteClient}` or
+# `action={deleteClient}`; a helper under another name (`onDelete(id)`, `mutate(id)`); a
+# delete in an .html, .vue or .svelte file or in a .ts helper; a file that holds a guard word for
+# another reason (`confirmPassword`). Accepted false matches, each costing one resend: a confirm
+# in an imported component, a function's own definition, a cart's `removeItem`-style bare call,
+# `removeListener` and similar cleanup calls.
+# Samples for every form: tests/setup/practices_samples/client-code.toml.
+
+skill = "client-code"
+
+gate = [
+  "Build a consent gate by default for any tracker, unless the repo says it has no EU or UK users: nothing loads and no cookie is set before a stored accept, no choice and a reject leave it off, Accept and Reject are equally easy, session replay masks inputs; say so in your reply (LEG-01).",
+  "Build a confirm naming what goes, or an undo window, by default for any delete, remove or destroy action, even when the request names only the button; say so in your reply (UX-63).",
+]
+
+[[rule]]
+id = "LEG-01"
+paths = ["**/*.js", "**/*.jsx", "**/*.ts", "**/*.tsx"]
+at = ["edit", "commit"]
+when = '''(?x)
+  googletagmanager\.com | \bgtag\(
+  | static\.hotjar\.com | \bhj\(
+  | clarity\.ms
+  | connect\.facebook\.net | \bfbq\(
+  | cdn\.segment\.com
+  | posthog\.init
+  # The @next/third-parties components have no URL on the line.
+  | <GoogleAnalytics\b | <GoogleTagManager\b
+'''
+unless = '''(?i)consent|\baccept'''
+say = "This adds a tracker to a file with no consent gate. Build the gate by default and say so in your reply: nothing loads and no cookie is set until the visitor accepts, the choice is stored, no choice and a reject both leave it off, and Accept and Reject are equally easy. Session replay also masks inputs. Skip the gate only if the repo says it has no EU or UK users. If the gate is in another file, resend or add `practices-allow: LEG-01 <reason>`. A test or comment naming a tracker is a false match: resend."
+
+[[rule]]
+id = "UX-63"
+paths = ["**/*.tsx", "**/*.jsx"]
+at = ["edit", "commit"]
+when = '''(?x)
+  (?<![.\w])(?:delete|remove|destroy)[A-Z]\w*\s*\(
+  # A method on something, with the browser's own cleanup calls left out.
+  | \.(?:delete|remove|destroy)(?!Item|EventListener|Child|Attribute|Property)[A-Z]\w*\s*\(
+  # A fetch that sends DELETE, inline or on its own line.
+  | \bmethod\s*:\s*["'](?i:delete)["']
+'''
+unless = '''(?i)confirm|undo|alertdialog|<dialog|showModal'''
+say = "This component deletes with no confirm or undo in the file, so one click destroys it. Build a confirm naming what goes, or an undo window, by default and say so in your reply, even when the request names only the button. If this flow already asks first, here or in another file, resend or add `practices-allow: UX-63 <reason>`. A call that deletes nothing a user would miss is a false match: resend."

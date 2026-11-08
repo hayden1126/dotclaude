@@ -5002,5 +5002,147 @@ class DataLayerSkill(unittest.TestCase):
                 self.assertNotIn(chr(0x2014), self.read(name))
 
 
+CLIENT_CODE = os.path.join(REPO, "skills", "client-code")
+
+
+def client_code_samples():
+    with open(os.path.join(SAMPLES, "client-code.toml"), "rb") as f:
+        return tomllib.load(f)["sample"]
+
+
+class ClientCodeRules(BashBase):
+    """LEG-01 and UX-63 as shipped: each sample against the rule, and both through the hook."""
+
+    GATED = 'const key = "analytics-consent";\ngtag("config", "G-1");\n'
+    TRACKER = 'gtag("config", "G-1");\n'
+    DELETE = "<button onClick={() => deleteClient(id)}>Delete</button>\n"
+
+    def setUp(self):
+        super().setUp()
+        with open(os.path.join(CLIENT_CODE, "events.toml")) as f:
+            self.skill("client-code", f.read(), where="user")
+
+    @staticmethod
+    def rule(rule_id):
+        return next(r for r in PC.load_skill(CLIENT_CODE)[0]["rules"] if r["id"] == rule_id)
+
+    def test_the_skill_is_two_rules_at_edit_and_commit_with_no_event(self):
+        skill, why = PC.load_skill(CLIENT_CODE)
+        self.assertIsNone(why)
+        self.assertEqual(skill["events"], [])
+        self.assertEqual([r["id"] for r in skill["rules"]], ["LEG-01", "UX-63"])
+        for rule in skill["rules"]:
+            with self.subTest(rule=rule["id"]):
+                self.assertEqual(rule["at"], ["edit", "commit"])
+                for word in ("by default", "say so in your reply",
+                             f"practices-allow: {rule['id']}"):
+                    self.assertIn(word, rule["say"])
+
+    def test_every_sample_fires_or_passes_as_it_says(self):
+        for s in client_code_samples():
+            with self.subTest(id=s["id"], path=s["path"], content=s["content"]):
+                self.assertEqual(PC.rule_fires(self.rule(s["id"]), s["path"], s["content"]),
+                                 s["fires"])
+
+    def test_every_form_that_fires_matches_on_one_line(self):
+        # The commit scan reads added lines one at a time.
+        for s in client_code_samples():
+            if s["fires"]:
+                with self.subTest(content=s["content"]):
+                    self.assertTrue(any(PC.search(self.rule(s["id"])["when"], line)
+                                        for line in s["content"].split("\n")))
+
+    def test_both_rules_have_samples_both_ways(self):
+        samples = client_code_samples()
+        for rule_id in ("LEG-01", "UX-63"):
+            for fires in (True, False):
+                with self.subTest(rule=rule_id, fires=fires):
+                    self.assertTrue([s for s in samples if s["id"] == rule_id
+                                     and s["fires"] is fires])
+
+    def test_an_edit_is_denied_once_for_the_file(self):
+        for rel, rule_id, content in (("app/layout.tsx", "LEG-01", self.TRACKER),
+                                      ("app/Row.tsx", "UX-63", self.DELETE)):
+            with self.subTest(rule=rule_id):
+                self.assertIn(f"[practices:L2:client-code:{rule_id}:{rel}]",
+                              self.fire(rel, content))
+                self.assertIsNone(self.fire(rel, content))
+
+    def test_a_guard_elsewhere_in_the_file_excuses_an_edit(self):
+        path = os.path.join(self.proj, "app", "Row.tsx")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write('const ask = () => window.confirm("Delete it?");\nSLOT\n')
+        self.assertIsNone(self.fire("app/Row.tsx", self.DELETE, tool="Edit", old="SLOT"))
+
+    def test_a_commit_is_told(self):
+        for rel, rule_id, content in (("app/layout.tsx", "LEG-01", self.TRACKER),
+                                      ("app/Row.tsx", "UX-63", self.DELETE)):
+            with self.subTest(rule=rule_id):
+                self.assertIn(f"{rule_id} (client-code) at {rel}:1",
+                              self.committed(**{rel: content}))
+
+    def test_a_guard_in_the_committed_file_excuses_it(self):
+        self.assertIsNone(self.committed(**{"app/a.tsx": self.GATED}))
+        self.assertIsNone(self.committed(
+            **{"app/Row.tsx": 'if (confirm("Delete it?")) {\n  deleteClient(id);\n}\n'}))
+
+    def test_a_ts_file_is_a_tracker_path_and_not_a_delete_path(self):
+        self.assertIn("LEG-01 (client-code)", self.committed(**{"lib/a.ts": self.TRACKER}))
+        self.assertIsNone(self.committed(**{"lib/b.ts": "api.deleteClient(id);\n"}))
+
+
+class ClientCodeSkill(unittest.TestCase):
+    def read(self, name):
+        with open(os.path.join(CLIENT_CODE, name)) as f:
+            return f.read()
+
+    def test_the_description_names_its_triggers_and_no_workflow(self):
+        head = self.read("SKILL.md").split("---")[1]
+        (description,) = re.findall(r"^description: (.*)$", head, re.M)
+        self.assertTrue(description.startswith("Use when"))
+        for word in ("analytics", "tracking pixel", "session replay", "delete", "client components",
+                     "React"):
+            self.assertIn(word, description)
+        self.assertNotIn("confirm", description)
+        self.assertNotIn("consent", description)
+
+    def test_the_sections_come_in_order_and_the_skill_stays_short(self):
+        body = self.read("SKILL.md")
+        order = [body.index(s) for s in ("## Core rule", "## Gate rule", "## Not enforced",
+                                         "## When the hook stops a")]
+        self.assertEqual(order, sorted(order))
+        self.assertIn(".claude/practices/client-code.md", body)
+        for marker in ("**Gate rule LEG-01", "**Gate rule UX-63",
+                       "[practices:L2:client-code:LEG-01", "[practices:L2:client-code:UX-63",
+                       "practices-allow: <id> <reason>"):
+            self.assertIn(marker, body)
+        self.assertEqual(body.count("(not enforced).**"), 7)
+        self.assertLess(len(body.encode()), 5000)
+
+    def test_every_rule_the_skill_names_is_in_the_spec_table(self):
+        spec = self.read("SPEC.md")
+        for rule in ("LEG-01", "LEG-04", "UX-63", "UX-51", "UX-03", "UX-44"):
+            with self.subTest(rule=rule):
+                self.assertIn(rule, self.read("SKILL.md"))
+                self.assertRegex(spec, rf"(?m)^\| {rule} \|")
+
+    def test_the_gate_names_both_rules_and_the_spec_has_the_load_test(self):
+        skill, _ = PC.load_skill(CLIENT_CODE)
+        self.assertIn("LEG-01", skill["gate"][0])
+        self.assertIn("UX-63", skill["gate"][1])
+        self.assertIn("## The L1 test", self.read("SPEC.md"))
+
+    def test_the_shipped_files_hold_no_em_dash(self):
+        for name in ("SKILL.md", "SPEC.md", "events.toml"):
+            with self.subTest(name=name):
+                self.assertNotIn(chr(0x2014), self.read(name))
+
+    def test_the_gate_and_digest_tests_read_this_skill(self):
+        # Those tests glob skills/*/events.toml; this fails if the skill stops being one they find.
+        self.assertIn(os.path.join(CLIENT_CODE, "events.toml"),
+                      glob.glob(os.path.join(REPO, "skills", "*", "events.toml")))
+
+
 if __name__ == "__main__":
     unittest.main()

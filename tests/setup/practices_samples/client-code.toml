@@ -1,0 +1,399 @@
+# Samples for skills/client-code/events.toml: for LEG-01 and UX-63, code that must fire and near
+# misses that must not. The practices engine test runs each one. kind = "rule" is an edit to
+# `path` that writes `content`.
+
+# ---------------------------------------------------------------- LEG-01: trackers that must fire
+
+[[sample]]
+kind = "rule"
+id = "LEG-01"
+fires = true
+path = "app/layout.tsx"
+content = '''
+<script dangerouslySetInnerHTML={{ __html: "window.dataLayer=[];function g(){};gtag('config','G-1');" }} />
+'''
+
+[[sample]]
+kind = "rule"
+id = "LEG-01"
+fires = true
+path = "app/layout.tsx"
+content = '''
+import Script from "next/script";
+<Script src="https://www.googletagmanager.com/gtag/js?id=G-1" />
+'''
+
+[[sample]]
+kind = "rule"
+id = "LEG-01"
+fires = true
+path = "components/Pageview.jsx"
+content = '''
+gtag("event", "page_view");
+'''
+
+[[sample]]
+kind = "rule"
+id = "LEG-01"
+fires = true
+path = "app/layout.tsx"
+content = '''
+import Script from "next/script";
+<Script id="hotjar">{`(function(h){h._hjSettings={hjid:1};a.src="https://static.hotjar.com/c/hotjar-1.js"})(window)`}</Script>
+'''
+
+[[sample]]
+kind = "rule"
+id = "LEG-01"
+fires = true
+path = "components/Replay.tsx"
+content = '''
+hj("identify", user.id);
+'''
+
+[[sample]]
+kind = "rule"
+id = "LEG-01"
+fires = true
+path = "public/track.js"
+content = '''
+t.src = "https://www.clarity.ms/tag/" + id;
+'''
+
+[[sample]]
+kind = "rule"
+id = "LEG-01"
+fires = true
+path = "app/layout.tsx"
+content = '''
+<Script src="https://connect.facebook.net/en_US/fbevents.js" />
+'''
+
+[[sample]]
+kind = "rule"
+id = "LEG-01"
+fires = true
+path = "components/Pixel.tsx"
+content = '''
+fbq("track", "PageView");
+'''
+
+[[sample]]
+kind = "rule"
+id = "LEG-01"
+fires = true
+path = "app/layout.tsx"
+content = '''
+<Script src="https://cdn.segment.com/analytics.js/v1/KEY/analytics.min.js" />
+'''
+
+[[sample]]
+kind = "rule"
+id = "LEG-01"
+fires = true
+path = "lib/posthog.ts"
+content = '''
+posthog.init(process.env.NEXT_PUBLIC_POSTHOG_KEY!);
+'''
+
+[[sample]]
+kind = "rule"
+id = "LEG-01"
+fires = true
+path = "app/layout.tsx"
+content = '''
+import { GoogleAnalytics } from "@next/third-parties/google";
+<GoogleAnalytics gaId="G-1" />
+'''
+
+[[sample]]
+kind = "rule"
+id = "LEG-01"
+fires = true
+path = "app/layout.tsx"
+content = '''
+<GoogleTagManager gtmId="GTM-1" />
+'''
+
+# The tracker in a plain .ts helper, at the repo's root too.
+
+[[sample]]
+kind = "rule"
+id = "LEG-01"
+fires = true
+path = "lib/analytics.ts"
+content = '''
+const s = document.createElement("script");
+s.src = "https://www.googletagmanager.com/gtag/js?id=G-1";
+'''
+
+[[sample]]
+kind = "rule"
+id = "LEG-01"
+fires = true
+path = "analytics.ts"
+content = '''
+gtag("config", "G-1");
+'''
+
+# ---------------------------------------------------------------- LEG-01: near misses
+
+[[sample]]
+kind = "rule"
+id = "LEG-01"
+fires = false
+path = "components/AnalyticsConsent.tsx"
+content = '''
+const KEY = "analytics-consent";
+if (choice === "granted") return <Script src="https://www.googletagmanager.com/gtag/js?id=G-1" />;
+'''
+
+[[sample]]
+kind = "rule"
+id = "LEG-01"
+fires = false
+path = "components/Banner.tsx"
+content = '''
+if (stored === "yes") loadHotjar("https://static.hotjar.com/c/hotjar-1.js");
+<button onClick={accept}>Accept</button>
+'''
+
+[[sample]]
+kind = "rule"
+id = "LEG-01"
+fires = false
+path = "app/layout.tsx"
+content = '''
+<Script defer data-domain="example.com" src="https://plausible.io/js/script.js" />
+'''
+
+[[sample]]
+kind = "rule"
+id = "LEG-01"
+fires = false
+path = "lib/tracking.ts"
+content = '''
+useGtag(config);
+mygtag("x");
+ohj("x");
+'''
+
+[[sample]]
+kind = "rule"
+id = "LEG-01"
+fires = false
+path = "server/report.py"
+content = '''
+gtag("config", "G-1")
+'''
+
+[[sample]]
+kind = "rule"
+id = "LEG-01"
+fires = false
+path = "app/layout.tsx"
+content = '''
+// practices-allow: LEG-01 the gate is in ConsentProvider
+<GoogleAnalytics gaId="G-1" />
+'''
+
+# ---------------------------------------------------------------- UX-63: delete calls that must fire
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = true
+path = "app/clients/ClientsTable.tsx"
+content = '''
+<button onClick={() => deleteClient(client.id)}>Delete</button>
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = true
+path = "app/clients/ClientsTable.tsx"
+content = '''
+<button onClick={() => api.deleteClient(client.id)}>Delete</button>
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = true
+path = "components/Members.jsx"
+content = '''
+<button onClick={() => removeMember(m.id)}>Remove</button>
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = true
+path = "components/Project.tsx"
+content = '''
+await destroyProject(project.id);
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = true
+path = "components/Project.tsx"
+content = '''
+await client.projects.destroyAll();
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = true
+path = "components/Row.tsx"
+content = '''
+await fetch(url, {method: "DELETE"});
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = true
+path = "components/Row.tsx"
+content = '''
+await fetch(`/api/rows/${id}`, { method: 'DELETE' });
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = true
+path = "components/Row.jsx"
+content = '''
+await fetch(url, {
+  method: "DELETE",
+});
+'''
+
+# ---------------------------------------------------------------- UX-63: near misses
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = false
+path = "app/clients/ClientsTable.tsx"
+content = '''
+if (window.confirm(`Delete ${client.name}?`)) deleteClient(client.id);
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = false
+path = "components/Row.tsx"
+content = '''
+toast("Deleted", { action: { label: "Undo", onClick: restore } });
+setTimeout(() => deleteRow(id), 8000);
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = false
+path = "components/Row.tsx"
+content = '''
+<AlertDialogAction onClick={() => deleteRow(id)}>Delete</AlertDialogAction>
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = false
+path = "components/Row.tsx"
+content = '''
+<dialog ref={ref}><button onClick={() => deleteRow(id)}>Delete</button></dialog>
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = false
+path = "components/Row.tsx"
+content = '''
+ref.current.showModal();
+await removeRow(id);
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = false
+path = "components/Prefs.tsx"
+content = '''
+localStorage.removeItem("theme");
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = false
+path = "components/Resize.tsx"
+content = '''
+return () => el.removeEventListener("resize", onResize);
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = false
+path = "components/Dom.tsx"
+content = '''
+root.removeChild(node);
+el.removeAttribute("hidden");
+el.style.removeProperty("top");
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = false
+path = "components/Query.tsx"
+content = '''
+params.delete("page");
+seen.delete(id);
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = false
+path = "lib/clients.ts"
+content = '''
+export const purge = (id: number) => api.deleteClient(id);
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = false
+path = "components/Row.tsx"
+content = '''
+await fetch(url, { method: "POST" });
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = false
+path = "components/Row.tsx"
+content = '''
+const gone = undeleteRow(id) || isdeleted(id);
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = false
+path = "components/Row.tsx"
+content = '''
+// practices-allow: UX-63 the row is a draft that only this tab holds
+removeDraft(id);
+'''
