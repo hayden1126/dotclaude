@@ -2992,7 +2992,8 @@ class SkippedLine(BashBase):
                 ("gh pr ready https://github.com/a/b/pull/9", "pr view 9 --repo a/b --json body"),
                 ("gh -R a/b pr ready 3", "pr view 3 --repo a/b --json body"),
                 ("gh pr ready 3 --repo a/b", "pr view 3 --repo a/b --json body"),
-                ("gh pr ready 3 --repo=a/b", "pr view 3 --repo a/b --json body")):
+                ("gh pr ready 3 --repo=a/b", "pr view 3 --repo a/b --json body"),
+                ("gh pr ready 3 -R=a/b", "pr view 3 --repo a/b --json body")):
             with self.subTest(command=command):
                 self.ready(command)
                 self.assertEqual(self.ran(), want)
@@ -3041,6 +3042,7 @@ class SkippedLine(BashBase):
         for command in ("gh pr create -t x --body 'Skipped: nothing'",
                         "gh pr create -t x -b 'Skipped: nothing'",
                         "gh pr create -t x --body='Skipped: y'",
+                        "gh pr create -t x -b='Skipped: nothing'",
                         "gh pr create -t x --body \"$(cat <<'EOF'\n## Why\nSkipped: nothing\nEOF\n)\""):
             with self.subTest(command=command):
                 self.assertIsNone(self.ready(command))

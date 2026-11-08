@@ -2619,7 +2619,7 @@ def flag_values(args, short, long_):
         elif a.startswith(long_ + "="):
             yield a.split("=", 1)[1]
         elif a.startswith(short) and not a.startswith("--") and len(a) > 2:
-            yield a[2:]
+            yield a[2:].removeprefix("=")  # gh's flag parser takes -b=value as well as -bvalue
 
 
 def origin_name(repo):
@@ -2646,7 +2646,9 @@ def start_body_read(args, cwd, pr, bounds):
     named. It starts here and is read last, so its network wait doesn't spend the budget of the
     checks that run beside it. gh runs outside the repo (cwd /, a --repo and a selector, so it
     never reads local git) with a bare environment, since a project's settings can set a hook's;
-    both names are checked first, so neither can be read as an option."""
+    both names are checked first, so neither can be read as an option. Known limit: where gh's
+    token lives in a keyring, or GH_CONFIG_DIR or XDG_CONFIG_HOME moves its config, this gh fails
+    and every ready goes unchecked, logged."""
     import subprocess  # noqa: PLC0415 (only the Bash levels pay for it)
     target, name = pr["pr"] or pr["branch"], None
     if pr["pr"] and pr["pr"].startswith("http"):
