@@ -1,6 +1,7 @@
 """README's License table names exactly the third-party license texts git tracks, so a part
 added with its license can't go unlisted, and a row can't outlive or precede its file. The demo
-recorder and the verify harness are copied into other repos, so each carries the root license itself."""
+recorder's scripts and the verify harness are copied into other repos, so each carries the root license
+itself."""
 import os
 import re
 import subprocess
@@ -12,6 +13,7 @@ TEXT_PATH = re.compile(r"licen[cs]e|copying|copyright|notice", re.I)
 CODE = (".py", ".sh", ".js", ".mjs", ".ts")  # pass-notice.sh and this test are code, not texts
 RECORDERS = {  # file copied into other repos: the comment prefix its license header uses
     os.path.join(REPO, "skills", "demo-video", "template", "record.mjs"): "// ",
+    os.path.join(REPO, "skills", "demo-video", "template", "voice.mjs"): "// ",
     os.path.join(REPO, "skills", "verify-app", "template", "verify.py"): "# ",
     os.path.join(REPO, "skills", "verify-app", "template", "browser.py"): "# ",
 }
