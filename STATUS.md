@@ -91,10 +91,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
   - **Live lanes** (briefs in each record). Merge order (Hayden's picks,
-    2026-11-07): no merge before Nov 16. Then 1 practices (Keep open, its next PR; carries the
-    lead's notes, told when), 2 verify-app (`feat/verify-app`, the launch-and-check skill
-    template, proved on shodo), 3 demo-av PR 2 (music, transitions, footage). All three change
-    README.md.
+    2026-11-07 and 2026-11-08): 1 demo-av's invideo PR (`feat/demo-voiceover`, an "Edit in
+    invideo" section in `demo-video`, allow rules only as a per-machine setup step; merged and
+    installed by Nov 11, else after Nov 15; carries the lead's notes). After Nov 15: 2 practices
+    (Keep open, its next PR), 3 verify-app (`feat/verify-app`, the launch-and-check skill
+    template, proved on shodo), 4 demo-av's music, transitions and footage PR. All change
+    README.md or may.
     The backlog items these lanes took keep their full text in `git show 617d244:STATUS.md`.
     **Install freeze on HAYPC, Nov 12 through Nov 15** (Hayden, 2026-11-05): no lane installs in
     that window, except fixes for lane hackathon, so the event runs what the dry run tested. The lead's
@@ -428,7 +430,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
      practices and demo-av kept open, verify-app). #177 merged and is installed from main; lanes hackathon,
      merge-record, env-names, license, mocks and speed closed 2026-11-07. Hayden's leftover asks from lane deny-rules
      (an overlay paste plus a setup rerun, probe leftovers, local tool cleanups): its closed
-     record. No merge or install before Nov 16. Install freeze Nov 12 through Nov 15. A chain that
+     record. Demo-av's invideo PR merges and installs by Nov 11, else after Nov 15; nothing else before Nov 16. Install freeze Nov 12 through Nov 15. A chain that
      stops before its "main moved" step still tells the lanes, and arms a wake on the blocker
      (`skills/lanes/SKILL.md`). Open
      with Hayden (repeat them in each reply's Waiting list until answered): try `/interview` in
