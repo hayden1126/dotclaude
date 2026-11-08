@@ -93,19 +93,27 @@ takes the file for binary (ugrep can) prints no matches and no error.
      user with the log line from `app.log`, and record it as an app-specific Known edge if it
      recurs across runs. Never fail a run on it, and never hide it: not from the report, and not by
      filtering the log.
-6. **Finish.** In this order:
+6. **Finish.** Every pass ends in one row of this table; find yours before doing anything else.
+
+   | Where the pass stands | What step 6 does | Outcome |
+   |---|---|---|
+   | A run failed and step 5 has nothing to fix (the app is broken), or a fix could not be proved | No more runs, no Measured line, no commit. Report the failing manifest and list every uncommitted edit; the user decides what to keep | blocked |
+   | Nothing edited, and the timeout check below raises nothing | Report every feature's result and this pass's times; edit nothing | clean |
+   | Something edited (a refresh, a fix, a Not covered row, a timeout raise) | The steps below, in order | changed |
+
+   For changed:
    1. Check `ready_timeout` by the skill's section 3 rule against the first run of this pass's
       `ready_seconds`: raise it when the rule gives more, never lower it from a run of this pass,
-      which may have been warm. A raise is an edit, so the pass is changed.
-   2. If the outcome is clean, report every feature's result and this pass's times, and stop. Clean
-      edits nothing and commits nothing, so the Measured line stays as it is.
-   3. If changed, run the full tier once more and one `--quick` run, on the final files, and
-      confirm the evidence survived cleanup. A failure here sends the pass back to step 5.
-   4. Write the Measured line, the only step that writes it, whole: the template's lead-in, then
-      step 6.3's full run's `duration_seconds`, with the first run of this pass's in parentheses,
-      labelled `first`, not `cold`: the dev server's caches may have been warm. Then step 6.3's
+      which may have been warm. (On a pass with nothing else edited, do this check first: a raise
+      moves it from clean to changed.)
+   2. Run the full tier once more and one `--quick` run, on the final files, and confirm the
+      evidence survived cleanup. On a failure, go back to step 5 only when it has a new fix to make;
+      otherwise the pass is blocked (the table's first row).
+   3. Write the Measured line, the only step that writes it, whole: the template's lead-in, then
+      step 6.2's full run's `duration_seconds`, with the first run of this pass's in parentheses,
+      labelled `first`, not `cold`: the dev server's caches may have been warm. Then step 6.2's
       quick run's. So `full 12.0 (first 29.3), quick 7.7`.
-   5. Report the outcome with every feature's result.
+   4. Report the outcome with every feature's result, then commit only with the user's say.
 
 ## Commit
 
