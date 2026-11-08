@@ -5442,12 +5442,23 @@ class ClientCodeCases(unittest.TestCase):
     @unittest.skipUnless(DOM_OK, NO_DOM)
     def test_delete_row_other_confirm_shapes(self):
         self.assert_overlays("delete-row", "pass", "good-plain-modal", "good-continue", "good-negated-undo", "good-prompt-name", "good-prompt-delete",
-                             "good-native-dialog", "good-hidden-attr", "good-not-able-to-undo")
+                             "good-native-dialog", "good-hidden-attr", "good-not-able-to-undo", "good-no-way-to-undo")
         self.assert_overlays("delete-row", "broken", "broken-native-dialog")  # the confirm's own button has to send it
 
     @unittest.skipUnless(DOM_OK, NO_DOM)
     def test_save_state_other_error_shapes(self):
-        self.assert_overlays("save-state", "pass", "good-went-wrong", "good-alert")
+        self.assert_overlays("save-state", "pass", "good-went-wrong", "good-alert", "good-hint")
+
+    @unittest.skipUnless(DOM_OK, NO_DOM)
+    def test_signup_form_sibling_inserted_while_typing(self):
+        self.assert_overlays("signup-form", "pass", "good-hint")
+
+    @unittest.skipUnless(DOM_OK, NO_DOM)
+    def test_analytics_add_id_only_in_env_is_unresolved(self):
+        # the root .gitignore keeps .env files out of the repo, so the test writes this one
+        with_env = pg_grade("analytics-add", "unresolved-env", files={".env.local": "NEXT_PUBLIC_GA_ID=G-ABC123XYZ\n"})
+        self.assertEqual(with_env["verdict"], "unresolved", json.dumps(with_env, indent=1))
+        self.assertEqual(pg_grade("analytics-add", "unresolved-env")["verdict"], "broken")  # nothing names the tracker
 
     @unittest.skipUnless(NODE, "node is not installed")
     def test_fonts_brand_loaders(self):
