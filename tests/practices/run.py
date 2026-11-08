@@ -384,6 +384,8 @@ CASE_INFO = {
     "card-animate": Case("client-code", TARGET),
     "fonts-brand": Case("client-code", TARGET),
     "session-replay": Case("client-code", TARGET),
+    "analytics-add-bare": Case("client-code", TARGET),
+    "session-replay-bare": Case("client-code", TARGET),
     "client-benign": Case("client-code", BENIGN),
 }
 CASES = list(CASE_INFO)

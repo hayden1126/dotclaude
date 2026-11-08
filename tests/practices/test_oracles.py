@@ -5384,7 +5384,7 @@ CHROME_DIR = run.find_chrome()
 CHROME = str(CHROME_DIR / run.CHROME_BINARY) if CHROME_DIR else None
 DOM_OK = bool(NODE) and not run.dom_problems()
 NO_DOM = "oracle_dom can't run here: " + "; ".join(run.dom_problems())
-DOM_CASES = sorted(["analytics-add", "card-animate", "client-benign", "comment-render", "delete-row", "save-state", "session-replay", "signup-form"])
+DOM_CASES = sorted(["analytics-add", "analytics-add-bare", "session-replay-bare", "card-animate", "client-benign", "comment-render", "delete-row", "save-state", "session-replay", "signup-form"])
 PG_CASES = ["column-rename", "column-rename-bare", "data-benign", "index-live-table", "index-live-table-bare", "rls-missing"]
 DATA_CASES = ["column-rename", "column-rename-bare", "data-benign", "index-live-table", "index-live-table-bare", "rls-missing",
               "sqli-sort", "tag-get-or-create", "tx-network"]
@@ -5485,6 +5485,14 @@ class ClientCodeCases(unittest.TestCase):
     @unittest.skipUnless(DOM_OK, NO_DOM)
     def test_session_replay(self):
         self.check_case("session-replay")
+
+    @unittest.skipUnless(DOM_OK, NO_DOM)
+    def test_analytics_add_bare(self):
+        self.check_case("analytics-add-bare")
+
+    @unittest.skipUnless(DOM_OK, NO_DOM)
+    def test_session_replay_bare(self):
+        self.check_case("session-replay-bare")
 
     @unittest.skipUnless(DOM_OK, NO_DOM)
     def test_client_benign(self):
@@ -6001,7 +6009,9 @@ HINTS = re.compile(r"(?i)\b(?:rls|row.level|polic(?:y|ies)|grants?|privileges?|s
 # Each bare case and the sentence its notes lack: the fact that makes the rule apply, stated outright
 # in the original. What a bare case measures is whether a model acts without being told.
 BARE_CASES = {"column-rename-bare": ("column-rename", "old instances keep serving"),
-              "index-live-table-bare": ("index-live-table", "180M rows")}
+              "index-live-table-bare": ("index-live-table", "180M rows"),
+              "analytics-add-bare": ("analytics-add", "EU and UK"),
+              "session-replay-bare": ("session-replay", "EU and UK")}
 
 
 class BareCases(unittest.TestCase):
