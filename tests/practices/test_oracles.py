@@ -5433,6 +5433,30 @@ class ClientCodeCases(unittest.TestCase):
     def test_delete_row_two_step_confirm(self):
         self.assertEqual(self.verdict("delete-row", "good-2")["verdict"], "pass")
 
+    def assert_overlays(self, case, want, *overlays):
+        for overlay in overlays:
+            with self.subTest(overlay=overlay):
+                out = self.verdict(case, overlay)
+                self.assertEqual(out["verdict"], want, json.dumps(out, indent=1))
+
+    @unittest.skipUnless(DOM_OK, NO_DOM)
+    def test_delete_row_other_confirm_shapes(self):
+        self.assert_overlays("delete-row", "pass", "good-plain-modal", "good-continue", "good-negated-undo", "good-prompt-name", "good-prompt-delete")
+
+    @unittest.skipUnless(DOM_OK, NO_DOM)
+    def test_save_state_other_error_shapes(self):
+        self.assert_overlays("save-state", "pass", "good-went-wrong", "good-alert")
+
+    @unittest.skipUnless(NODE, "node is not installed")
+    def test_fonts_brand_loaders(self):
+        self.assert_overlays("fonts-brand", "pass", "good-local", "good-trailing-comment")
+        self.assert_overlays("fonts-brand", "broken", "broken-bare", "broken-no-file")
+
+    def test_fonts_brand_prompt_names_no_file(self):
+        self.assertEqual((CASES / "fonts-brand/prompt.md").read_text().strip(), "Use Inter as the app's font.")
+        self.assertIn("EU and UK", (CASES / "fonts-brand/setup/CLAUDE.md").read_text())
+        self.assertTrue((CASES / "fonts-brand/setup/app/globals.css").is_file())
+
     @unittest.skipUnless(DOM_OK, NO_DOM)
     def test_comment_render(self):
         self.check_case("comment-render")
@@ -7164,6 +7188,14 @@ class DomHarness(unittest.TestCase):
 
     def test_third_parties_google_stub(self):
         self.assert_verdict(self.dom_run("third-parties"), "pass")
+
+    def test_inline_scripts_run_once_on_the_first_render_only(self):
+        self.assert_verdict(self.dom_run("inline-script"), "pass")
+
+    def test_consent_labels(self):
+        for variant in ("good-understand", "good-non-essential", "good-enable", "good-yes", "good-decline-only", "good-no-context"):
+            with self.subTest(variant=variant):
+                self.assert_verdict(self.dom_run("consent-labels", variant), "pass")
 
     def test_fetch_is_logged_and_reaches_nothing(self):
         out = self.dom_run("offline-fetch")
