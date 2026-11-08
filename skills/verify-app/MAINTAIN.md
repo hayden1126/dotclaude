@@ -12,8 +12,20 @@ End with exactly one, and say which:
 - **clean:** every feature was read and driven live, and nothing needs changing. No commit.
 - **changed:** proven corrections to the verify skill, a refresh from the template included, committed
   only with the user's say.
-- **blocked:** the pass stopped in step 1, a run failed that no fix of the skill can clear (the app
-  is broken), or a fix or refresh could not be proved. Say exactly what blocked it.
+- **blocked:** the pass stopped in step 1, the app is broken, or an edit is not proved. Say exactly
+  what blocked it.
+
+Three terms, used the same way everywhere below:
+
+- **Proved:** a changed `ctx.check` is proved when one planted wrong value fails the run with that
+  check's own message, and the revert passes. Any other result (exit 0, or exit 1 with another
+  message, such as an earlier step timing out) leaves it unproved. An edit with no check to plant
+  (a refresh's copies, a selector fix, a recipe line) is proved by the final runs passing.
+- **Final runs:** the last full run and the last `--quick` run of the pass, both on the files as
+  they will be committed. An earlier failure whose cause was understood and fixed, or was
+  transient (a port held at launch), doesn't count against the pass once a later run passes.
+- **Broken app:** a failure step 5's triage traces to the app itself, with nothing in the skill to
+  fix.
 
 ## Edit scope
 
@@ -68,9 +80,10 @@ takes the file for binary (ugrep can) prints no matches and no error.
       (paths, counts, file names), take the template's general wording, and drop the duplicate.
    3. After steps 1.1 and 1.2, re-prove on the new harness, as the skill's section 3 does: a full
       run (the first run of this pass), one planted wrong value in a `ctx.check` (exit 1 with its
-      message) and its revert (exit 0), and a `--quick` run. If any of these differs (the planted
-      value exits 0, or a run fails), the refresh is unproved: go to step 6, where it ends blocked.
-      Keep each run's manifest path for step 6. When the full run's `app.log` shows reload or rebuild lines (search it with `grep -a`),
+      message) and its revert (exit 0), and a `--quick` run. A failed run goes through step 5's
+      triage like any other: drift and harness gaps get fixed there. A planted value that doesn't
+      fail with its own message leaves the refresh unproved. Keep each run's manifest path for
+      step 6. When the full run's `app.log` shows reload or rebuild lines (search it with `grep -a`),
       run the skill's section 3 reload check: confirm the trigger with the dev tool's debug output,
       set through `APP["env"]` for one run (for Vite, `{"DEBUG": "vite:hmr"}`), then take the
       setting out again, and move nothing before the trigger is known. Then go on with step 2.
@@ -102,8 +115,8 @@ takes the file for binary (ugrep can) prints no matches and no error.
 
    | Where the pass stands | What step 6 does | Outcome |
    |---|---|---|
-   | Step 1 stopped; or a run failed and step 5 has nothing to fix (the app is broken); or a fix or refresh could not be proved (its planted value never exited 1) | No more runs, no Measured line, no commit. Report what stopped it and its manifest, and list every file changed or replaced; the user decides what to keep | blocked |
-   | Nothing edited, every run passed, and the timeout check below raises nothing | Report every feature's result and this pass's times; edit nothing | clean |
+   | Step 1 stopped; or a broken app; or an edit that is not proved | No more runs, no Measured line, no commit. Report what stopped it and its manifest, and list every file changed or replaced; the user decides what to keep | blocked |
+   | Nothing edited, the last full run passed, and the timeout check below raises nothing | Report every feature's result and this pass's times; edit nothing | clean |
    | Something edited (a refresh, a fix, a Not covered row, a timeout raise) | The steps below, in order | changed |
 
    For changed:
@@ -111,7 +124,7 @@ takes the file for binary (ugrep can) prints no matches and no error.
       `ready_seconds`: raise it when the rule gives more, never lower it from a run of this pass,
       which may have been warm. (On a pass with nothing else edited, do this check first: a raise
       moves it from clean to changed.)
-   2. Run the full tier once more and one `--quick` run, on the final files, and confirm the
+   2. Run the final runs: the full tier once more and one `--quick` run, on the final files, and confirm the
       evidence survived cleanup. On a failure, go back to step 5 only when it has a new fix to make;
       otherwise the pass is blocked (the table's first row).
    3. Write the Measured line, the only step that writes it, whole: the template's lead-in, then

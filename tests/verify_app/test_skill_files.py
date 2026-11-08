@@ -346,11 +346,11 @@ class Files(unittest.TestCase):
     def test_a_clean_pass_edits_nothing(self):
         """Clean means no commit, so a clean pass can't leave the Measured line edited and uncommitted."""
         flat = " ".join(read(os.path.join(SKILL, "MAINTAIN.md")).split())
-        self.assertIn("| Nothing edited, every run passed, and the timeout check below raises nothing | Report "
-                      "every feature's result and this pass's times; edit nothing | clean |", flat)
+        self.assertIn("| Nothing edited, the last full run passed, and the timeout check below raises nothing | "
+                      "Report every feature's result and this pass's times; edit nothing | clean |", flat)
         self.assertIn("(except the Measured line, which step 6 writes whole)", flat)
         step6 = flat[flat.index("6. **Finish.**"):flat.index("## Commit")]
-        order = [step6.index(p) for p in ("Check `ready_timeout`", "Run the full tier once more",
+        order = [step6.index(p) for p in ("Check `ready_timeout`", "Run the final runs",
                                           "Write the Measured line", "commit only with the user's say")]
         self.assertEqual(order, sorted(order), "timeout first, then the runs, then the line, then the commit")
 
@@ -362,11 +362,19 @@ class Files(unittest.TestCase):
         self.assertEqual([r[2] for r in rows], ["blocked", "clean", "changed"])
         self.assertIn("No more runs, no Measured line, no commit", rows[0][1])
         self.assertIn("list every file changed or replaced; the user decides what to keep", rows[0][1])
-        for stop in ("Step 1 stopped", "the app is broken", "a fix or refresh could not be proved"):
+        for stop in ("Step 1 stopped", "a broken app", "an edit that is not proved"):
             self.assertIn(stop, rows[0][0])
+        for term in ("**Proved:** a changed `ctx.check` is proved when one planted wrong value fails the run "
+                     "with that check's own message, and the revert passes",
+                     "An edit with no check to plant (a refresh's copies, a selector fix, a recipe line) is proved "
+                     "by the final runs passing",
+                     "**Final runs:** the last full run and the last `--quick` run of the pass",
+                     "doesn't count against the pass once a later run passes",
+                     "**Broken app:** a failure step 5's triage traces to the app itself"):
+            self.assertIn(term, flat)
+        self.assertIn("A failed run goes through step 5's triage like any other", flat)
         self.assertIn("take the first row that matches, top to bottom", step6)
         self.assertIn("Each stop in this step ends the pass blocked", flat)
-        self.assertIn("the refresh is unproved: go to step 6, where it ends blocked", flat)
         self.assertIn("report it to the user with the manifest path; the pass ends blocked", flat)
         self.assertIn("go back to step 5 only when it has a new fix to make; otherwise the pass is blocked", step6)
 
@@ -575,7 +583,7 @@ class UpkeepRunFindings(unittest.TestCase):
             "Write the Measured line, the only step that writes it, whole: the template's lead-in",
             "with the first run of this pass's in parentheses, labelled `first`, not `cold`: the dev "
             "server's caches may have been warm",
-            "Run the full tier once more and one `--quick` run, on the final files",
+            "Run the final runs: the full tier once more and one `--quick` run, on the final files",
             "`full 12.0 (first 29.3), quick 7.7`"))
         self.assertNotIn("as the cold one", self.maintain)
         self.assertIn("the first run of this pass", maintain_step(1))
