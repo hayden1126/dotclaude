@@ -55,8 +55,12 @@ The harness goes in a repo folder, because sandboxed Bash can write there and ca
    every `<fill: ...>`; `verify.py` exits 2 while any remain in either file, and while the recipe is
    missing or empty. `<fill: harness folder>` is the harness path from the repo root, such as
    `tools/verify`. In a monorepo, set `APP["cwd"]` to the app's package folder; `evidence_dir` stays
-   relative to the repo root. The recipe's Measured line says `not measured yet`, which is not a
-   marker: section 3 replaces it.
+   relative to the repo root. Variables the app's command needs beyond what it inherits go in the
+   optional `APP["env"]`, a dict of names to strings set over the inherited environment for that
+   command only (not for journeys or the browser). It can't set `VERIFY_RUN_TOKEN`, and any other
+   shape exits 2. Never a secret: `journeys.py` is committed, so the app keeps reading its own env
+   files. The recipe's Measured line says `not measured yet`, which is not a marker: section 3
+   replaces it.
 3. Selectors: an id, an ARIA label or a data attribute first. A control with none is clicked by its
    visible text with `ctx.page.click_text`. It matches when the text equals the rendered text
    (`innerText`, which applies CSS such as `text-transform` and leaves out a hidden span), with
@@ -100,8 +104,13 @@ The harness goes in a repo folder, because sandboxed Bash can write there and ca
 
 ## 3. Prove it once
 
+Search `app.log` and other evidence with `grep -a`, or read it in Python: without `-a`, a grep that
+takes the file for binary (ugrep did, on a dev server's log) prints no matches and no error, which
+reads as "not there".
+
 1. Run `python3 -B <harness>/verify.py` as one Bash call. It finds the repo root itself (the git top
-   level of its folder), so any working folder does. This first run is the launch measurement.
+   level of its folder), so any working folder does. This first run is the launch measurement: the
+   cold run, with the dev server's caches empty, and so the slow case.
 2. If it exits 1 with `ready` false and a `failure` saying the app exited or was never ready (a boot
    crash, or nothing answering by the timeout), stop and report what `app.log` shows: don't template
    a repo that doesn't start, since a recipe written against a broken base teaches wrong steps. A
@@ -109,17 +118,28 @@ The harness goes in a repo folder, because sandboxed Bash can write there and ca
 3. Expect exit 0. Read the run's `manifest.json`: `outcome` is `proved`, `port_free_after` is true,
    `processes_left` is empty, every journey `passed`. Note the `dirty` flag and `ready_seconds`.
 4. Read the first run's `app.log` for reload or rebuild lines (a page reload, an HMR update, a
-   recompile) that start when the journey writes evidence. If there are any, the watcher sees the
-   evidence dir: move it by section 2's step 6 and run again.
-5. Set `ready_timeout` from the measured `ready_seconds` with headroom (about double, and at least
-   30), and say so in a comment beside it.
+   recompile). They are a signal, not a diagnosis: confirm what triggers them before changing
+   anything. For Vite, run once with `APP["env"]` set to `{"DEBUG": "vite:hmr"}`, which logs the
+   file behind each update, search that run's `app.log` with `grep -a`, then take the setting out.
+   Move the evidence dir by section 2's step 6, and run again, only if the triggers are under it.
+   A known source that needs no change to the skill: in the Claude Code sandbox, sandboxed Bash
+   mounts `/dev/null` over protected dotfiles at the repo root (`.bashrc`, `.gitconfig`,
+   `.claude/settings.json` and others), and a watcher that scans the repo, such as Tailwind's
+   source scan, sees them. Its flood starts at the first CSS compile, not when the journey writes
+   evidence. Fixing it is app config (the watcher's ignore list) and the user's call: name it in
+   the hand-over and in the recipe's app-specific Known edges, and leave the config alone.
+5. Set `ready_timeout` from the measured `ready_seconds` of the cold first run (step 1's) with
+   headroom (about double, and at least 30), and say so in a comment beside it. A warm run boots
+   faster, so a timeout set from one fails the next cold start.
 6. Open the screenshot and look at it: does it show what the journey claims?
 7. Plant one wrong expected value in a journey's `ctx.check`, the exact value it compares against
    (not in a `wait_for`, which only times out), run again and see exit 1, with that check's message
    in the manifest. Revert it and see exit 0 again. A check that can't fail proves nothing.
 8. After cleanup, confirm the evidence is still there.
 9. Run `--quick` once, and replace each `not measured yet` on the recipe's Measured line with the
-   measured `duration_seconds` of the full and the quick run.
+   measured `duration_seconds`: for full, a warm full run's (any after the first, such as step 7's
+   revert run), with the cold first run's in parentheses; for quick, that quick run's. So
+   `full 41.2 (cold 88.0), quick 12.3`.
 
 On any other result, fix the recipe and run again. On exit 3, read `processes_left` and tell the
 user; never signal a process marked `outside_repo`.
@@ -132,18 +152,23 @@ holds anything else, commit only the skill, its harness and, when section 2 adde
 `.gitignore`:
 
 ```
-git diff --cached --name-status > "$TMPDIR/staged-before"
+before=$(mktemp)
+git diff --cached --name-status > "$before"
 git add .claude/skills/verify <harness> .gitignore
 git commit --only -m "<message>" -- .claude/skills/verify <harness> .gitignore
-git diff --cached --name-status | diff "$TMPDIR/staged-before" -
+git diff --cached --name-status | diff "$before" -
+rm "$before"
 ```
+
+Run it as one Bash call: `$before` lives only in that shell, and `mktemp` gives it a name no other
+session on the machine can share, which a fixed name in a shared `$TMPDIR` can't promise.
 
 Drop `.gitignore` from both lines when section 2 left it unchanged (an exclude-file line
 included), and when it now holds any change beyond the one line section 2 added:
 `git diff HEAD -- .gitignore` shows that for a tracked file, and for one
 `git status --porcelain --untracked-files=normal -- .gitignore` marks untracked (`??`), read the
 file. `git add` stages the
-whole file, so it would sweep the user's own edits into this commit. The last line prints nothing
+whole file, so it would sweep the user's own edits into this commit. The `diff` line prints nothing
 when the staged set is unchanged. For upkeep later, follow `<skill dir>/MAINTAIN.md`.
 
 <!-- Adapts pstack's create-verification-skill and maintain-verification-skill

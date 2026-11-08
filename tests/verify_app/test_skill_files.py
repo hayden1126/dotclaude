@@ -13,6 +13,9 @@ TEMPLATE = os.path.join(SKILL, "template")
 DENYLISTS = glob.glob(os.path.expanduser("~/scratch/*/denylist.txt"))
 EM_DASH = chr(0x2014)
 COPIED = ("verify.py", "browser.py", "LICENSE-pstack-claude", "CHECKSUMS")
+# The staged-set check around the generator's and the upkeep pass's commit, minus the add and commit.
+COMMIT_LINES = ("before=$(mktemp)", 'git diff --cached --name-status > "$before"',
+                'git diff --cached --name-status | diff "$before" -', 'rm "$before"')
 
 
 def read(path):
@@ -159,12 +162,22 @@ class Files(unittest.TestCase):
         self.assertIn("add one line to `.gitignore`", flat, "the step that changes it")
         self.assertIn("when section 2 added an ignore line, `.gitignore`", flat)
         self.assertIn("Drop `.gitignore` from both lines when section 2 left it unchanged", flat)
-        for line in ('git diff --cached --name-status > "$TMPDIR/staged-before"',
-                     "git add .claude/skills/verify <harness> .gitignore",
-                     'git commit --only -m "<message>" -- .claude/skills/verify <harness> .gitignore',
-                     'git diff --cached --name-status | diff "$TMPDIR/staged-before" -'):
+        for line in COMMIT_LINES[:2] + ("git add .claude/skills/verify <harness> .gitignore",
+                                         'git commit --only -m "<message>" -- .claude/skills/verify <harness> .gitignore'
+                                         ) + COMMIT_LINES[2:]:
             with self.subTest(line=line):
                 self.assertRegex(text, rf"(?m)^{re.escape(line)}$")
+
+    def test_the_staged_set_check_uses_a_temp_file_of_its_own(self):
+        """A fixed name in $TMPDIR collides when other sessions on the machine share that folder."""
+        for name in ("SKILL.md", "MAINTAIN.md"):
+            text = read(os.path.join(SKILL, name))
+            with self.subTest(name=name):
+                self.assertNotRegex(text, r"\$TMPDIR/[\w.-]+", "a fixed temp name")
+                self.assertNotIn("staged-before", text)
+                for line in COMMIT_LINES:
+                    self.assertRegex(text, rf"(?m)^{re.escape(line)}$")
+                self.assertIn("Run it as one Bash call: `$before` lives only in that shell", " ".join(text.split()))
 
     def test_the_evidence_dir_is_outside_the_watcher_and_every_test_runners_output(self):
         """Playwright empties test-results/ at the start of each run, a spec a journey runs included."""
@@ -178,7 +191,7 @@ class Files(unittest.TestCase):
                        "Never a test runner's output folder: Playwright's `test-results/`",
                        "`playwright-report/`", "`cypress/screenshots`", "`cypress/videos`",
                        "Read the first run's `app.log` for reload or rebuild lines",
-                       "that start when the journey writes evidence", "move it by section 2's step 6"):
+                       "Move the evidence dir by section 2's step 6"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, generator)
         self.assertNotIn("Prefer a folder the dev tool ignores by default", generator)
@@ -243,6 +256,105 @@ class Files(unittest.TestCase):
         self.assertIn("replace each `not measured yet` on the recipe's Measured line with the measured "
                       "`duration_seconds`", generator)
         self.assertIn("`not measured yet`, which is not a marker", generator)
+
+    def test_reload_lines_are_a_signal_and_the_sandbox_mounts_a_known_source(self):
+        """In the final real-app run every HMR trigger was a sandbox /dev/null mount over a repo-root
+        dotfile, seen by Tailwind's source scan, and none was the evidence dir."""
+        generator = " ".join(read(os.path.join(SKILL, "SKILL.md")).split())
+        recipe = " ".join(read(os.path.join(TEMPLATE, "SKILL.md")).split())
+        shared = ("a signal, not a diagnosis", '`APP["env"]` set to `{"DEBUG": "vite:hmr"}`',
+                  "only if the triggers are under it", "mounts `/dev/null` over protected dotfiles at the repo root",
+                  "(`.bashrc`, `.gitconfig`, `.claude/settings.json` and others)", "Tailwind's source scan",
+                  "first CSS compile", "app config (the watcher's ignore list) and the user's call")
+        for name, text in (("generator", generator), ("recipe", recipe)):
+            for phrase in shared:
+                with self.subTest(name=name, phrase=phrase):
+                    self.assertIn(phrase, text)
+        self.assertIn("confirm what triggers them before changing anything", generator)
+        self.assertIn("A known source that needs no change to the skill", generator)
+        self.assertIn("not when the journey writes evidence", generator)
+        self.assertIn("That needs no change here", recipe)
+        self.assertNotIn("that start when the journey writes evidence", generator)
+        self.assertNotIn("the watcher sees the evidence dir: move it", generator)
+
+    def test_the_timeout_comes_from_the_cold_run_and_the_times_from_warm_ones(self):
+        generator = " ".join(read(os.path.join(SKILL, "SKILL.md")).split())
+        for phrase in ("the cold run, with the dev server's caches empty, and so the slow case",
+                       "Set `ready_timeout` from the measured `ready_seconds` of the cold first run (step 1's) "
+                       "with headroom",
+                       "for full, a warm full run's (any after the first, such as step 7's revert run), with the "
+                       "cold first run's in parentheses; for quick, that quick run's",
+                       "`full 41.2 (cold 88.0), quick 12.3`"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, generator)
+        recipe = read(os.path.join(TEMPLATE, "SKILL.md"))
+        self.assertRegex(recipe, r"(?m)^Measured `duration_seconds`, warm \(the cold first run in parentheses\): ")
+        maintain = " ".join(read(os.path.join(SKILL, "MAINTAIN.md")).split())
+        self.assertIn("a warm full run's and a quick run's `duration_seconds`, with this pass's first full run "
+                      "in parentheses as the cold one", maintain)
+
+    def test_every_text_searches_evidence_with_grep_a(self):
+        """ugrep took a dev server's app.log for binary and printed no matches and no error."""
+        texts = {name: read(os.path.join(SKILL, name)) for name in ("SKILL.md", "MAINTAIN.md")}
+        texts["template/SKILL.md"] = read(os.path.join(TEMPLATE, "SKILL.md"))
+        for name, text in texts.items():
+            flat = " ".join(text.split())
+            with self.subTest(name=name):
+                self.assertIn("Search `app.log` and other evidence with `grep -a`, or read it in Python", flat)
+                self.assertIn("prints no matches and no error", flat)
+                fences = re.findall(r"(?ms)^ *```\n(.*?)^ *```$", text)
+                spans = re.findall(r"`([^`]*)`", re.sub(r"(?ms)^ *```\n.*?^ *```$", "", text))
+                self.assertGreater(len(spans), 10, "the spans were found")
+                for command in spans + fences:
+                    self.assertNotRegex(command, r"\bgrep (?!-a)", "a grep command without -a")
+
+    def test_app_env_is_documented_without_a_marker(self):
+        journeys = read(os.path.join(TEMPLATE, "journeys.py"))
+        block = re.search(r"(?ms)^APP = \{$(.*?)^\}$", journeys).group(1)
+        env_lines = [line for line in block.splitlines() if "env" in line]
+        self.assertIn('    # "env": {"DEBUG": "vite:hmr"},', env_lines)
+        self.assertFalse([line for line in env_lines if "<fill:" in line])
+        flat = " ".join(block.split())
+        for phrase in ("set over the inherited environment for cmd only", "Never a secret",
+                       "can't set VERIFY_RUN_TOKEN"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, flat)
+        generator = " ".join(read(os.path.join(SKILL, "SKILL.md")).split())
+        for phrase in ('the optional `APP["env"]`, a dict of names to strings set over the inherited environment '
+                       "for that command only", "It can't set `VERIFY_RUN_TOKEN`, and any other shape exits 2",
+                       "Never a secret: `journeys.py` is committed"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, generator)
+
+    def test_maintain_refreshes_an_older_harness_from_the_template(self):
+        """The next upkeep pass in an app repo brings its copied harness up to this template."""
+        text = read(os.path.join(SKILL, "MAINTAIN.md"))
+        flat = " ".join(text.split())
+        for line in ("cp <skill dir>/template/{verify.py,browser.py,LICENSE-pstack-claude,CHECKSUMS} <harness>/",
+                     "cd <harness> && sha256sum -c CHECKSUMS"):
+            with self.subTest(line=line):
+                self.assertRegex(text, rf"(?m)^ *{re.escape(line)}$")
+        for phrase in ("The harness folder is the one the recipe's Launch commands name",
+                       "A list that differs is an older harness; refresh it before anything below",
+                       "Re-copy the four fixed files with one sandboxed `cp`",
+                       "On a mismatch, stop and report it",
+                       "Re-check `journeys.py` against `<skill dir>/template/journeys.py`, and the recipe against "
+                       "`<skill dir>/template/SKILL.md`",
+                       'new `APP` keys (such as `APP["env"]`), new sections, new Known edges',
+                       "keep the repo's own fills",
+                       "Re-prove on the new harness",
+                       "a full run, one planted wrong value in a `ctx.check` (exit 1 with its message) and its "
+                       "revert (exit 0), a `--quick` run, and new measured times on the Measured line",
+                       "only the harness folder and the recipe",
+                       "The refresh in step 1 also replaces the four copied files from the template"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, flat)
+        for line in COMMIT_LINES[:2] + ("git add .claude/skills/verify <harness>",
+                                         'git commit --only -m "<message>" -- .claude/skills/verify <harness>'
+                                         ) + COMMIT_LINES[2:]:
+            with self.subTest(line=line):
+                self.assertRegex(text, rf"(?m)^{re.escape(line)}$")
+        self.assertNotIn(".gitignore", text, "an upkeep pass commits only the harness folder and the recipe")
 
     def test_click_text_is_documented_as_the_rendered_text_then_the_source_text(self):
         """innerText applies text-transform and leaves out a hidden span, and is undefined on SVG;

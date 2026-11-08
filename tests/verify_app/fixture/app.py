@@ -96,6 +96,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.reply(200, page, (("Content-Type", "text/html"),))
         elif self.path == "/health":
             self.reply(200, b"ok")
+        elif self.path == "/env":
+            # FIXTURE_ECHO is a value the test set; the token is named only as set or unset, never echoed.
+            token = "set" if os.environ.get("VERIFY_RUN_TOKEN") else "unset"
+            self.reply(200, f"FIXTURE_ECHO={os.environ.get('FIXTURE_ECHO', '(unset)')}; token={token}".encode())
         elif self.path == "/moved":
             self.reply(302, b"", (("Location", "/elsewhere"),))
         elif self.path == "/file.bin":

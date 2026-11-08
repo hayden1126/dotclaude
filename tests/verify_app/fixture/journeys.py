@@ -42,6 +42,13 @@ def home(ctx):
     ctx.fact("health", reply.text)
 
 
+def echo_env(ctx):
+    """What the app's environment held, by the fixture's /env route, and what the harness's own held."""
+    text = ctx.get("/env").text
+    ctx.check(text == CONFIG["expect"], f"/env said {text!r}")
+    ctx.check(os.environ.get("FIXTURE_ECHO") == CONFIG["journey_echo"], "APP env reached the harness itself")
+
+
 def wrong_expectation(ctx):
     ctx.check(ctx.get("/health").text == "not what it says", "/health text is wrong on purpose")
 

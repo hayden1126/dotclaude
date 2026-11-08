@@ -33,6 +33,9 @@ APP = {
     "port": "<fill: the port it listens on, as an int>",
     "host": "127.0.0.1",  # "[::1]" if the app binds IPv6 only
     "cwd": ".",  # where cmd runs, relative to the repo root: a package folder in a monorepo
+    # Optional: names to strings, set over the inherited environment for cmd only. Never a secret:
+    # this file is committed. It can't set VERIFY_RUN_TOKEN, which the run sets.
+    # "env": {"DEBUG": "vite:hmr"},
     "ready_timeout": 300,  # seconds for every DOCTOR row to pass; lower it from a measured ready_seconds
     "stop_timeout": 10,  # seconds between SIGTERM and SIGKILL
     "evidence_dir": "<fill: a folder the repo ignores, relative to the repo root>",

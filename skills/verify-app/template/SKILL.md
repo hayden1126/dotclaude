@@ -52,7 +52,7 @@ one call is invisible to the next. Nothing checked from a later call proves anyt
 always looks free and the process group always looks empty. The harness records those facts itself,
 in the manifest. `-B` keeps bytecode out of the repo.
 
-Measured `duration_seconds`: full not measured yet, quick not measured yet.
+Measured `duration_seconds`, warm (the cold first run in parentheses): full not measured yet, quick not measured yet.
 
 | Exit | Meaning |
 |---|---|
@@ -86,7 +86,9 @@ click before hydration is lost without an error.
 ## Evidence
 
 Each run writes `<evidence_dir>/<UTC stamp>-<tier>-<random>/`: `manifest.json`, `app.log`,
-screenshots, `network.json` and `downloads/`. Read the manifest, not the console. Proof rules:
+screenshots, `network.json` and `downloads/`. Read the manifest, not the console. Search `app.log`
+and other evidence with `grep -a`, or read it in Python: a grep that takes the file for binary
+(ugrep can) prints no matches and no error. Proof rules:
 
 - Capture the action and its result, not just a final screen.
 - Check side effects (a downloaded file, a written row) as well as what is visible.
@@ -129,6 +131,13 @@ manifest's `token`. Evidence is never deleted by cleanup.
   run, a spec a journey runs included. Under `node_modules/.cache/` it is lost on a fresh `npm ci`.
   A run folder deleted mid-run is made again, with its `downloads/`, at the next write, but what
   it held is gone, and so is the app's later output: it goes on into the deleted `app.log`.
+- Reload or rebuild lines in `app.log` are a signal, not a diagnosis. Confirm the trigger before
+  moving anything: for Vite, one run with `APP["env"]` set to `{"DEBUG": "vite:hmr"}` logs the file
+  behind each update. Move the evidence dir only if the triggers are under it. A known source: in
+  the Claude Code sandbox, sandboxed Bash mounts `/dev/null` over protected dotfiles at the repo
+  root (`.bashrc`, `.gitconfig`, `.claude/settings.json` and others), which a watcher that scans
+  the repo, such as Tailwind's source scan, sees from the first CSS compile on. That needs no change
+  here: fixing it is app config (the watcher's ignore list) and the user's call.
 - <fill: app-specific edges, such as a lock file left after a SIGKILL, or "none">
 
 <!-- Adapted from pstack's create-verification-skill and maintain-verification-skill

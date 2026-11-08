@@ -357,6 +357,17 @@ class Proved(Case):
                          "a carrier in the package folder is still inside the repo")
         self.assert_clean(manifest)
 
+    def test_app_env_reaches_the_app_over_the_inherited_env_and_keeps_the_token(self):
+        """APP env is merged over what the harness inherited, for the app's command only. Fails on
+        db435f5, which had no env key: the app saw the caller's value."""
+        code, manifest, output = self.run_harness(app={"env": {"FIXTURE_ECHO": "from APP"}}, journeys=["echo_env"],
+                                                  expect="FIXTURE_ECHO=from APP; token=set",
+                                                  journey_echo="from the caller",
+                                                  env={"FIXTURE_ECHO": "from the caller"})
+        self.assertEqual(code, 0, output)
+        self.assertEqual([(j["name"], j["outcome"]) for j in manifest["journeys"]], [("echo_env", "passed")])
+        self.assert_clean(manifest)
+
     def test_quick_is_launch_and_doctor_with_no_browser(self):
         stub = self.outside / "stub-chrome"
         stub.write_text(f"#!/bin/sh\ntouch {self.state}/browser-started\n", encoding="utf-8")
@@ -527,6 +538,27 @@ class NoVerdict(Case):
                              ("journeys", {"journeys": []})):
             with self.subTest(name=name):
                 self.assertEqual(self.run_harness(**config)[0], 2)
+
+    def test_a_bad_app_env_exits_2_unlaunched(self):
+        """Fails on db435f5, which ignored the key and proved."""
+        for value in ("FOO=1", ["FOO=1"], None, {"FOO": 1}, {"FOO": None}, {"": "x"}, {"A=B": "x"},
+                      {"FOO": "a\0b"}):
+            with self.subTest(value=value):
+                shutil.rmtree(self.repo / "evidence", ignore_errors=True)
+                code, manifest, output = self.run_harness(app={"env": value})
+                self.assertEqual(code, 2, output)
+                self.assertIn("APP env must", output)
+                self.assertIsNone(manifest)
+                self.assertEqual(self.requests(), [])
+
+    def test_app_env_cannot_set_the_run_token(self):
+        """The sweep finds the app's processes by the token, so a journey's config must not replace it.
+        Fails on db435f5, which ignored the key and proved."""
+        code, manifest, output = self.run_harness(app={"env": {"VERIFY_RUN_TOKEN": "mine"}})
+        self.assertEqual(code, 2, output)
+        self.assertIn("APP env can't set VERIFY_RUN_TOKEN", output)
+        self.assertIsNone(manifest)
+        self.assertEqual(self.requests(), [])
 
     def test_a_bad_timeout_or_port_exits_2_unlaunched(self):
         cases = [(key, value) for key in ("stop_timeout", "ready_timeout")

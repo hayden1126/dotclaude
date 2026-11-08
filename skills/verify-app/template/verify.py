@@ -225,6 +225,7 @@ def load_spec(journey: str | None):
         spec, browser = load(HERE / "journeys.py"), load(HERE / "browser.py")
         app, evidence = spec.APP, pathlib.PurePath(spec.APP["evidence_dir"])
         cwd, stop = app.setdefault("cwd", "."), app.setdefault("stop_timeout", 10)
+        env = app.setdefault("env", {})
         problems = [text for ok, text in (
             (isinstance(app.get("cmd"), list) and app["cmd"] and all(isinstance(a, str) for a in app["cmd"]),
              "APP cmd must be a list of strings"),
@@ -237,6 +238,10 @@ def load_spec(journey: str | None):
              and ".." not in pathlib.PurePath(cwd).parts and (ROOT / cwd).is_dir(),
              "APP cwd must be a folder in the repo, relative to its root"),
             (isinstance(app.get("browser"), bool), "APP browser must be True or False"),
+            (isinstance(env, dict) and all(isinstance(k, str) and isinstance(v, str) and k and "=" not in k
+                                           and "\0" not in k + v for k, v in env.items()),
+             "APP env must be a dict of variable names to strings"),
+            (not isinstance(env, dict) or TOKEN_VAR not in env, f"APP env can't set {TOKEN_VAR}: the run sets it"),
             (spec.DOCTOR and all(len(row) == 3 and row[0].startswith("/") and isinstance(row[1], int)
                                  and isinstance(row[2], str) for row in spec.DOCTOR),
              "DOCTOR must list (path, status, text) rows, GET only"),
@@ -340,8 +345,9 @@ class Run:
         self.launched = True
         with open(self.dir / "app.log", "wb") as log:
             try:
+                # APP env goes over the inherited environment, the run token included, which it can't set.
                 self.app = subprocess.Popen(self.spec.APP["cmd"], cwd=ROOT / self.spec.APP["cwd"],
-                                            stdin=subprocess.DEVNULL,
+                                            env={**os.environ, **self.spec.APP["env"]}, stdin=subprocess.DEVNULL,
                                             stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             except OSError as exc:
                 raise Refused(f"the app's command cannot start: {exc}") from None
