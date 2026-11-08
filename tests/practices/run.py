@@ -400,12 +400,14 @@ def warmup_case(case):
     which warms up with the next practices skill's benign case, so its task turn doesn't find
     the work already done. A benign case that needs a registry only warms up a registry case: a
     plain fixture has none to install its package from, so it is passed over there. A benign PG
-    case only warms up a PG case, as a fixture without its overlay has no migrations to change."""
+    case only warms up a PG case, as a fixture without its overlay has no migrations to change.
+    An owner not in PRACTICES_SKILLS yet (a skill whose cases are swept before it exists) starts
+    from the first practices skill: every row calls this, arm A's too."""
     owner, kind = CASE_INFO[case]
     if kind != BENIGN:
         return benign_case(owner)
-    i = PRACTICES_SKILLS.index(owner)
-    others = [benign_case(name) for name in PRACTICES_SKILLS[i + 1:] + PRACTICES_SKILLS[:i]]
+    i = PRACTICES_SKILLS.index(owner) if owner in PRACTICES_SKILLS else -1
+    others = [benign_case(name) for name in PRACTICES_SKILLS[i + 1:] + PRACTICES_SKILLS[:max(i, 0)]]
     return next(c for c in others if (is_registry_case(case) or not is_registry_case(c))
                 and (is_pg_case(case) or not is_pg_case(c)))
 
