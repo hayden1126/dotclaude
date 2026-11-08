@@ -1,0 +1,6 @@
+@import "./base.css";
+@import url("https://fonts.example/x.css");
+
+main {
+  padding-top: 3px;
+}

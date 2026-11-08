@@ -9,6 +9,7 @@ await oracle(async (t) => {
     await dom.settle({ ms: 2000 });
     const fetches = await dom.fetches();
     t.functional("the effect fetched exactly once", fetches.length === 1, `${fetches.length} fetches`);
+    t.functional("set() on the search params throws", (await dom.text("#ro")) === "threw", await dom.text("#ro"));
   } finally {
     await dom.close();
   }

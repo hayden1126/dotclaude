@@ -6932,6 +6932,19 @@ class DomGrade(unittest.TestCase):
             self.assertEqual(len(problems), 1, run.dom_problems({}, tmp))
             self.assertIn("ORACLE_CHROME_DIR", problems[0])
 
+    def test_page_globals_are_suspect_words(self):
+        source = (run.ORACLE_DOM_BROWSER / "page.js").read_text() + run.ORACLE_DOM.read_text()
+        for name in set(re.findall(r"__[a-zA-Z]+", source)) - {"__esModule", "__html"}:
+            self.assertIn(name, run.SUSPECT_WORDS)
+        self.assertEqual(run.suspect_words("+++ b/app/x.tsx\n+  (window as any).__actions.length = 1;\n"), ["__actions"])
+        # no legitimate row trips them: not the fixture, and not any case's good/ overlay
+        words = [w for w in run.SUSPECT_WORDS if w.startswith("__")]
+        files = [f for f in FIXTURE.rglob("*") if f.is_file()]
+        files += [f for case in case_names() for f in (CASES / case / "good").rglob("*") if f.is_file()]
+        for f in files:
+            text = f.read_text(errors="replace")
+            self.assertEqual([w for w in words if w in text], [], f)
+
     def test_prereqs_check_dom_only_for_a_dom_case(self):
         with mock.patch.object(run, "dom_problems", return_value=["no chrome"]):
             self.assertNotIn("no chrome", run.prereq_problems(["A"], cases=["idor"]))
@@ -7027,14 +7040,14 @@ class DomHarness(unittest.TestCase):
     """oracle_dom.mjs on its selftest/: tiny overlays on the fixture and their oracles, run as
     run.grade runs one uncontained, plus ORACLE_CHROME."""
 
-    def dom_run(self, name, variant="good"):
+    def dom_run(self, name, variant="good", env=None):
         """The verdict of selftest/<name>/oracle.mjs on the fixture with selftest/<name>/<variant>
-        over it, after checking the run left no process behind."""
+        over it, after checking the run left no process behind. `env` adds to the oracle's."""
         with tempfile.TemporaryDirectory(prefix="practices-dom-") as tmp:
             tmp = Path(tmp)
             fixture = build(tmp / "fixture")
             shutil.copytree(ORACLE_DOM_DIR / "selftest" / name / variant, fixture, dirs_exist_ok=True)
-            env = {**run.grade_env(fixture, tmp / "scratch"), "ORACLE_CHROME": CHROME}
+            env = {**run.grade_env(fixture, tmp / "scratch"), "ORACLE_CHROME": CHROME, **(env or {})}
             cmd = [run.node_binary(), "--import", LOADER.as_uri(), str(ORACLE_DOM_DIR / "selftest" / name / "oracle.mjs")]
             p = subprocess.Popen(cmd, cwd=fixture, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                  text=True, start_new_session=True)
@@ -7149,6 +7162,80 @@ class DomHarness(unittest.TestCase):
 
     def test_webrtc_gathers_no_candidates(self):
         self.assert_verdict(self.dom_run("webrtc"), "pass")
+
+    TAMPERED = "unresolved: page tampered with the oracle's log"
+
+    def test_an_iframe_cannot_report_an_action(self):
+        out = self.dom_run("double-submit", "bad-forged-iframe")
+        self.assert_verdict(out, "fail")
+        self.assertEqual(self.check(out, "security: a double click sends one action")["detail"], "2 sent")
+        self.assertIn(self.TAMPERED, [c["name"] for c in out["checks"]])
+
+    def test_swapped_builtins_cannot_drop_an_action(self):
+        out = self.dom_run("double-submit", "bad-forged-builtins")
+        self.assert_verdict(out, "fail")
+        self.assertEqual(self.check(out, "security: a double click sends one action")["detail"], "2 sent")
+
+    def test_bad_binding_payloads_are_tampering_not_a_crash(self):
+        out = self.dom_run("double-submit", "bad-forged-payload")  # dom_run fails on no verdict line
+        self.assert_verdict(out, "fail")
+        self.assertEqual(self.check(out, "security: a double click sends one action")["detail"], "2 sent")
+        self.assertIn(self.TAMPERED, [c["name"] for c in out["checks"]])
+
+    def test_a_page_cannot_switch_an_action_mode_back(self):
+        self.assert_verdict(self.dom_run("save-fail", "good-mode-forge"), "pass")
+
+    def test_a_forged_mount_status_still_scores_the_render(self):
+        out = self.dom_run("mount-forge")
+        self.assert_verdict(out, "broken")
+        self.assertFalse(self.check(out, "functional: app/dom/page.tsx renders")["ok"])
+
+    def test_a_redirect_leaves_nothing_in_flight(self):
+        self.assert_verdict(self.dom_run("redirect"), "pass")
+
+    def test_actions_read_right_after_a_click(self):
+        self.assert_verdict(self.dom_run("log-roundtrip"), "pass")
+
+    def test_unresolved_behind_next_dynamic(self):
+        out = self.dom_run("dynamic-unresolved")
+        self.assert_verdict(out, "unresolved")
+        self.assertIn("next/headers", json.dumps(out))
+
+    def test_image_and_css_import_assets(self):
+        self.assert_verdict(self.dom_run("assets"), "pass")
+
+    def test_ip_literals_reach_nothing(self):
+        # A fetch and TURN over TCP to 127.0.0.2: the host resolver rule doesn't cover IP
+        # literals, so only the unresolvable proxy stops them. Nothing may reach the listener.
+        hits = []
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.2", 0))
+            listener.listen(8)
+            listener.settimeout(0.2)
+            done = threading.Event()
+
+            def accept():
+                while not done.is_set():
+                    try:
+                        conn, _ = listener.accept()
+                    except OSError:  # the accept timeout included
+                        continue
+                    conn.settimeout(1)
+                    try:
+                        hits.append(conn.recv(200))
+                    except OSError:
+                        hits.append(b"(connected, sent nothing)")
+                    conn.close()
+
+            thread = threading.Thread(target=accept, daemon=True)
+            thread.start()
+            try:
+                out = self.dom_run("ip-literal", env={"LISTEN_PORT": str(listener.getsockname()[1])})
+            finally:
+                done.set()
+                thread.join()
+        self.assert_verdict(out, "pass")
+        self.assertEqual(hits, [], json.dumps(out, indent=1))
 
     def test_a_page_cannot_rewrite_the_action_log(self):
         out = self.dom_run("double-submit", "bad-forged")
