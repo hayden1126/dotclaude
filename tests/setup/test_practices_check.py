@@ -3001,7 +3001,8 @@ class SkippedLine(BashBase):
                 ("gh pr ready 3 --repo=a/b", "pr view 3 --repo a/b --json body"),
                 ("gh pr ready 3 -R=a/b", "pr view 3 --repo a/b --json body"),
                 ("GH_REPO=a/b gh pr ready 3", "pr view 3 --repo a/b --json body"),
-                ("GH_REPO=a/b gh pr ready 3 --repo c/d", "pr view 3 --repo c/d --json body")):
+                ("GH_REPO=a/b gh pr ready 3 --repo c/d", "pr view 3 --repo c/d --json body"),
+                ("GH_REPO=x/y gh pr view 5 && gh pr ready 3", "pr view 3 --repo o/r --json body")):
             with self.subTest(command=command):
                 self.ready(command)
                 self.assertEqual(self.ran(), want)
@@ -3024,6 +3025,11 @@ class SkippedLine(BashBase):
         self.sh("config", "remote.origin.gh-resolved", "x/y")
         self.ready()
         self.assertEqual(self.ran(), "pr view 12 --repo x/y --json body")
+
+    def test_a_remote_on_another_host_is_passed_over(self):
+        self.sh("remote", "add", "upstream", "https://gitlab.com/up/stream.git")
+        self.ready()
+        self.assertEqual(self.ran(), "pr view 12 --repo o/r --json body")
 
     def test_what_it_cannot_read_is_allowed_and_logged(self):
         self.flag("fail")

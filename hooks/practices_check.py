@@ -2585,7 +2585,7 @@ PR_URL = re.compile(r"https://github\.com/([^/\s]+/[^/\s]+)/pull/(\d+)(?:[/?#]\S
 ORIGIN_URL = re.compile(r"(?:https://(?:[^/@\s]+@)?|ssh://git@|git@)github\.com[:/]"
                         r"([^/\s]+/[^/\s]+?)(?:\.git)?/?")
 HEREDOC_BODY = re.compile(r"(?:--body[= ]|-b[ =]?)\s*\"?\$\(\s*cat\s+<<-?\s*(['\"\\\\]?)([\w.-]+)")
-GH_REPO_PREFIX = re.compile(r"(?:^|[\s;&|(])GH_REPO=(\S+)")
+GH_REPO_PREFIX = re.compile(r"(?:^|[\s;&|(])GH_REPO=(\S+)[ \t]+gh[ \t][^\n;&|]*\bpr[ \t]+ready\b")
 EXPANSION = re.compile(r"\$[A-Za-z_{(]")  # known limit: a single-quoted `$X` reads as one, and goes unchecked
 SKIPPED_REASON = (
     "[practices:skipped] This PR's body has no `Skipped:` line, so it can't be marked ready. Add "
@@ -2648,9 +2648,9 @@ def base_repo_name(repo):
         return marked[0]
     order = [n for n, r in remotes.items() if r.get("gh-resolved") == "base"]
     for name in (*order, "upstream", "github", "origin"):
-        if name in remotes:
-            match = ORIGIN_URL.fullmatch(remotes[name].get("url", ""))
-            return match.group(1) if match else None
+        match = ORIGIN_URL.fullmatch(remotes.get(name, {}).get("url", ""))
+        if match:  # gh skips a remote on another host
+            return match.group(1)
     return None
 
 
