@@ -23,9 +23,9 @@ Two terms, used the same way everywhere below:
   earlier step timing out), fix that and plant again, as the skill's section 3 does. Edits with no
   check to plant (a refresh's copies, a selector fix, a recipe line) are proved by step 6's final
   runs passing.
-- **First run:** the first full run of this pass whose manifest has `outcome` `proved`. A run
-  refused before launch (a held port) or failed partway doesn't count, since its times measure
-  nothing whole.
+- **First ready run:** the first full run of this pass whose manifest has `ready` true: the app
+  came up, whatever its journeys did later. Its `ready_seconds` is the boot time the timeout rule
+  reads. A run refused before launch (a held port) never got there and doesn't count.
 
 ## Edit scope
 
@@ -84,7 +84,7 @@ takes the file for binary (ugrep can) prints no matches and no error.
       two into one. Keep the repo's specific facts (paths, counts, file names), take the template's
       general wording, and drop the duplicate.
    3. After steps 1.1 and 1.2, re-prove on the new harness, as the skill's section 3 does: a full
-      run (normally the first run), one planted wrong value in a `ctx.check` (exit 1 with its
+      run (normally the first ready run), one planted wrong value in a `ctx.check` (exit 1 with its
       message) and its revert (exit 0), and a `--quick` run. A failed run goes through step 5's
       triage like any other: drift and harness gaps get fixed there. A planted value that still
       won't fail with its own message, after the plant-again rule in Proved, means the new harness
@@ -104,7 +104,7 @@ takes the file for binary (ugrep can) prints no matches and no error.
 4. **Live.** Run the full tier over every journey, even when the source looks clean: a clean read
    proves nothing about the running app. Then read the manifest and open each screenshot. After a
    failed run, run again only once the cause is understood. With no refresh, this is normally the
-   first run, and the same reload check as step 1.3 applies to its `app.log`.
+   first ready run, and the same reload check as step 1.3 applies to its `app.log`.
 5. **Triage.**
    - The recipe or a journey describes the app wrongly: drift. Fix it, then plant one wrong
      expected value in the changed `ctx.check` and see exit 1 with its message before reverting it.
@@ -120,29 +120,30 @@ takes the file for binary (ugrep can) prints no matches and no error.
      recurs across runs. Never fail a run on it, and never hide it: not from the report, and not by
      filtering the log.
 6. **Finish.** Ask these in order and stop at the first that applies:
-   1. **Clean?** Nothing was edited, the last full run passed, and the skill's section 3 rule
-      wouldn't raise `ready_timeout` for the first run's `ready_seconds`. Report every feature's
-      result and this pass's times, edit nothing, and stop.
-   2. **Blocked?** Step 1 stopped; or no full run can be made to pass (the app is broken, or the
-      failure can't be traced); or a run exited 3 (cleanup failed: name each process in
-      `processes_left`, and never signal one marked `outside_repo`); or a changed check can't be
-      proved. Make no more runs, write no Measured line, commit nothing. Report what stopped it and
-      its manifest, list every file changed or replaced, and stop: the user decides what to keep.
+   1. **Clean?** Nothing was edited or replaced, the last full run passed, and the skill's section
+      3 rule wouldn't raise `ready_timeout` for the first ready run's `ready_seconds`. Report every
+      feature's result and this pass's times, edit nothing, and stop.
+   2. **Blocked?** Step 1 stopped; or no full run can be made to pass (the app is broken, it never
+      became ready, or the failure can't be traced); or a run exited 3 (cleanup failed: name each
+      process in `processes_left`, and never signal one marked `outside_repo`); or a changed check
+      can't be proved. Make no more runs, write no Measured line, commit nothing. Report what
+      stopped it and its manifest, list every file changed or replaced, and stop: the user decides
+      what to keep.
    3. **Changed.** Everything else. In order:
-      1. The final runs: one full run and one `--quick` run on the final files, then open the full
-         run's screenshots and confirm its evidence survived cleanup. A failed run, or a screenshot
-         or evidence file that is missing or shows the wrong thing, is a failure here: one with a
-         new fix to make goes back to step 5, a transient one (a held port) gets one rerun, and any
-         other is question 2's "no full run can be made to pass": blocked.
-      2. Raise `ready_timeout` if the section 3 rule gives more for the first run's
-         `ready_seconds` (a first run exists now: the final full run passed); never lower it from a
-         run of this pass, which may have been warm. A raise only gives the app longer to start,
-         so it can't turn the passing final runs into failing ones and needs no rerun.
-      3. Write the Measured line, the only step that writes it, whole: the template's lead-in,
-         then the final full run's `duration_seconds`, the first run's in parentheses labelled
-         `first`, not `cold` (the dev server's caches may have been warm), then the final quick
-         run's. So `full 12.0 (first 29.3), quick 7.7`. This line and a timeout raise are the
-         only edits made after the final runs.
+      1. Raise `ready_timeout` if the section 3 rule gives more for the first ready run's
+         `ready_seconds` (one exists, or question 2 would have stopped the pass); never lower it
+         from a run of this pass, which may have been warm. Doing this before the final runs means
+         they prove it.
+      2. The final runs, on the final files: one full run, then one `--quick` run, then open the
+         full run's screenshots and confirm its evidence survived cleanup. Stop at the first
+         failure: a failed run, or a screenshot or evidence file that is missing or shows the wrong
+         thing. An exit 3 goes straight to question 2, with no rerun. A launch refused for a held
+         port, with no exit 3 before it, gets one rerun. A failure with a new fix to make goes back
+         to step 5. Anything else is question 2: blocked, and the report names the failure as it
+         was.
+      3. Write the Measured line, the only step that writes it, whole: the template's lead-in, then
+         the final full run's `duration_seconds` and the final quick run's. So
+         `full 12.0, quick 7.7`. It records the final runs, so it is the one edit made after them.
       4. Report the outcome, every feature's result and every file changed or replaced, then
          commit only with the user's say.
 

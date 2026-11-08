@@ -52,7 +52,7 @@ one call is invisible to the next. Nothing checked from a later call proves anyt
 always looks free and the process group always looks empty. The harness records those facts itself,
 in the manifest. `-B` keeps bytecode out of the repo.
 
-Measured `duration_seconds`, warm (the first run in parentheses): full not measured yet, quick not measured yet.
+Measured `duration_seconds`, warm (a new skill adds its cold first run in parentheses): full not measured yet, quick not measured yet.
 
 | Exit | Meaning |
 |---|---|

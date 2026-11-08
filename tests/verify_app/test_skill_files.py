@@ -289,7 +289,7 @@ class Files(unittest.TestCase):
                 self.assertIn(phrase, generator)
         recipe = read(os.path.join(TEMPLATE, "SKILL.md"))
         # The generator's first run is cold; an upkeep pass's may not be (UpkeepRunFindings).
-        self.assertRegex(recipe, r"(?m)^Measured `duration_seconds`, warm \(the first run in parentheses\): ")
+        self.assertRegex(recipe, r"(?m)^Measured `duration_seconds`, warm \(a new skill adds its cold first run in parentheses\): ")
 
     def test_every_text_searches_evidence_with_grep_a(self):
         """ugrep took a dev server's app.log for binary and printed no matches and no error."""
@@ -348,22 +348,24 @@ class Files(unittest.TestCase):
         flat = " ".join(read(os.path.join(SKILL, "MAINTAIN.md")).split())
         step6 = flat[flat.index("6. **Finish.**"):flat.index("## Commit")]
         self.assertIn("Ask these in order and stop at the first that applies", step6)
-        order = [step6.index(p) for p in ("**Clean?**", "**Blocked?**", "**Changed.**", "The final runs:",
-                                          "Raise `ready_timeout`", "Write the Measured line",
+        order = [step6.index(p) for p in ("**Clean?**", "**Blocked?**", "**Changed.**", "Raise `ready_timeout`",
+                                          "The final runs, on the final files", "Write the Measured line",
                                           "commit only with the user's say")]
         self.assertEqual(order, sorted(order))
-        for phrase in ("Nothing was edited, the last full run passed", "edit nothing, and stop",
-                       "no full run can be made to pass (the app is broken, or the failure can't be traced)",
+        for phrase in ("Nothing was edited or replaced, the last full run passed", "edit nothing, and stop",
+                       "no full run can be made to pass (the app is broken, it never became ready, or the failure "
+                       "can't be traced)",
                        "a changed check can't be proved",
                        "Make no more runs, write no Measured line, commit nothing",
                        "list every file changed or replaced, and stop: the user decides what to keep",
-                       "A failed run, or a screenshot or evidence file that is missing or shows the wrong thing, is "
-                       "a failure here",
-                       "a transient one (a held port) gets one rerun, and any other is question 2's",
-                       "(a first run exists now: the final full run passed)",
-                       "so it can't turn the passing final runs into failing ones and needs no rerun",
+                       "Stop at the first failure: a failed run, or a screenshot or evidence file that is missing or "
+                       "shows the wrong thing",
+                       "An exit 3 goes straight to question 2, with no rerun",
+                       "A launch refused for a held port, with no exit 3 before it, gets one rerun",
+                       "(one exists, or question 2 would have stopped the pass)",
+                       "Doing this before the final runs means they prove it",
                        "every file changed or replaced, then commit only with the user's say",
-                       "This line and a timeout raise are the only edits made after the final runs"):
+                       "It records the final runs, so it is the one edit made after them"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, step6)
         for term in ("**Proved:** a changed `ctx.check` is proved when a planted wrong value fails the run with "
@@ -371,7 +373,7 @@ class Files(unittest.TestCase):
                      "When the plant run fails for another reason (an earlier step timing out), fix that and plant "
                      "again",
                      "are proved by step 6's final runs passing",
-                     "**First run:** the first full run of this pass whose manifest has `outcome` `proved`",
+                     "**First ready run:** the first full run of this pass whose manifest has `ready` true",
                      "or a run exited 3 (cleanup failed: name each process in `processes_left`, and never signal "
                      "one marked `outside_repo`)",
                      "then open the full run's screenshots and confirm its evidence survived cleanup",
@@ -416,7 +418,7 @@ class Files(unittest.TestCase):
                        'new `APP` keys (such as `APP["env"]`), new sections, new Known edges',
                        "keep the repo's own fills",
                        "After steps 1.1 and 1.2, re-prove on the new harness",
-                       "a full run (normally the first run), one planted wrong value in a `ctx.check` (exit 1 "
+                       "a full run (normally the first ready run), one planted wrong value in a `ctx.check` (exit 1 "
                        "with its message) and its revert (exit 0), and a `--quick` run",
                        "only the harness folder and the recipe",
                        "The refresh in step 1 also replaces the four copied files from the template"):
@@ -582,7 +584,8 @@ class UpkeepRunFindings(unittest.TestCase):
             "widening: widening is raising it to rescue a failing run with no measurement behind it",
             "The comment beside `ready_timeout` carries the numbers it came from",
             "never lower it from a run of this pass, which may have been warm"))
-        self.assertIn("Raise `ready_timeout` if the section 3 rule gives more for the first run's", maintain_step(6))
+        self.assertIn("Raise `ready_timeout` if the section 3 rule gives more for the first ready run's",
+                      maintain_step(6))
         self.assertIn("in a comment beside it that carries the numbers it came from", self.generator)
 
     def test_the_measured_line_is_written_once_in_step_6(self):
@@ -590,14 +593,13 @@ class UpkeepRunFindings(unittest.TestCase):
         step6 = maintain_step(6)
         self.assert_phrases(step6, (
             "Write the Measured line, the only step that writes it, whole: the template's lead-in",
-            "the first run's in parentheses labelled `first`, not `cold` (the dev server's caches may have "
-            "been warm)",
-            "The final runs: one full run and one `--quick` run on the final files",
-            "`full 12.0 (first 29.3), quick 7.7`"))
+            "the final full run's `duration_seconds` and the final quick run's",
+            "The final runs, on the final files: one full run, then one `--quick` run",
+            "`full 12.0, quick 7.7`"))
         self.assertNotIn("as the cold one", self.maintain)
-        self.assertIn("(normally the first run)", maintain_step(1))
+        self.assertIn("(normally the first ready run)", maintain_step(1))
         recipe = read(os.path.join(TEMPLATE, "SKILL.md"))
-        self.assertRegex(recipe, r"(?m)^Measured `duration_seconds`, warm \(the first run in parentheses\): ")
+        self.assertRegex(recipe, r"(?m)^Measured `duration_seconds`, warm \(a new skill adds its cold first run in parentheses\): ")
         self.assertIn("the cold run, with the dev server's caches empty", self.generator, "a new skill's rule stays")
 
     def test_a_surface_no_journey_covers_goes_under_not_covered(self):
