@@ -85,10 +85,11 @@ Give every decision a review time, so a seeded part can become real, or a real o
 At feature freeze, before any video or rehearsal, the user types `/demo-first-scope before recording`. Do only this pass, with the product in front of you:
 
 1. Fill in or update Audience and coverage. A `DEMO.md` from before that section gets it now.
-2. Check that each beat still shows what the frozen product does, and add the Words and Label columns if the script lacks them.
-3. Recount the words against each beat, and fix a line over budget.
+2. Check that each beat still shows what the frozen product does, and add the Said, Words and Label columns if the script lacks them.
+3. Give every beat a said line or mark it silent. Propose the words from what the beat shows; the user decides them.
+4. Recount the words against each beat, and fix a line over budget.
 
-Don't reopen the idea, the feasibility or the cut list. A problem that needs a product change goes to the user as a choice. When it's done, commit any product changes, with the user's OK, so the hash names what's frozen. Then add one line under the script: `Checked before recording: <date and time>, at commit <hash>`, with the hash from `git rev-parse --short HEAD`. `/demo-video` reads that line to see that the product hasn't moved since. Then suggest `/demo-video` for the user to type, or load it when they ask for the video.
+Don't reopen the idea, the feasibility or the cut list. A problem that needs a product change goes to the user as a choice. Write the line below only when every beat has its said line or a silent mark. Commit any product changes first, with the user's OK, so the hash names what's frozen. Then add one line under the script: `Checked before recording: <date and time>, at commit <hash>`, with the hash from `git rev-parse --short HEAD`. `/demo-video` reads that line to see that the product hasn't moved since. Then suggest `/demo-video` for the user to type, or load it when they ask for the video.
 
 ## Never fake silently
 

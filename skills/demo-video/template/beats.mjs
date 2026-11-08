@@ -63,7 +63,7 @@ export const beats = [
   },
   {
     caption: 'Tick it off',
-    say: 'Tick it off, and the count follows.',
+    say: 'Tick it off.',
     note: { text: 'The count updates without a reload', at: 'top-right' },
     act: async ({ page, click }) => {
       await click('li input');
@@ -72,7 +72,7 @@ export const beats = [
   },
   {
     caption: 'Reload: it stays',
-    say: 'Reload the page: the server kept it.',
+    say: 'It survives a reload.',
     act: async ({ page }) => {
       await page.reload();
       await page.locator('li.done').waitFor();

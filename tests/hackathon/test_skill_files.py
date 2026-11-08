@@ -122,8 +122,13 @@ class EventProfile(unittest.TestCase):
         self.assertIn("**Check the script first.**", video)
         self.assertIn("type `/demo-first-scope before recording`", video)
         self.assertIn("`Checked before recording:` line", video)
-        self.assertIn("or the beat marked silent", video)
-        self.assertIn("If there's no script at all, ask the user for it.", video)
+        # A closed table: every state of DEMO.md has a row, so none falls between branches.
+        for row in ("| The user said to skip this check", "| No script at all |", "a beat has neither a said line nor a silent mark",
+                    "| A script, but no audience and coverage section", "| A script, but no `Checked before recording:` line |",
+                    "| Every piece is there, but the product moved |", "| Every piece is there, and the product hasn't moved | Write the beats. |"):
+            with self.subTest(row):
+                self.assertIn(row, video)
+        self.assertIn("Give every beat a said line or mark it silent.", scope)
         hackathon = read(skill_path("hackathon", "SKILL.md"))
         self.assertLess(hackathon.index("`/demo-first-scope before recording`"), hackathon.index("| At feature freeze | `/demo-video`"))
 
