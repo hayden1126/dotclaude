@@ -57,8 +57,8 @@ when = '''(?x)
   # A handler passed by name: React's onClick, onSubmit, action and formAction, Svelte's on:click
   # and onclick, Vue's @click and v-on:click, with their modifiers.
   | \b(?:on[Cc]lick|on[Ss]ubmit|action|formAction)\s*=\s*\{\s*(?:delete|remove|destroy)[A-Z]\w*\s*\}
-  | \bon:(?:click|submit)(?:\|\w+)*\s*=\s*\{\s*(?:delete|remove|destroy)[A-Z]\w*\s*\}
-  | (?:@|\bv-on:)(?:click|submit)(?:\.\w+)*\s*=\s*["'](?:delete|remove|destroy)[A-Z]\w*["']
+  | \bon:(?:click|submit)(?:\|\w{1,20}){0,4}\s*=\s*\{\s*(?:delete|remove|destroy)[A-Z]\w*\s*\}
+  | (?:@|\bv-on:)(?:click|submit)(?:\.\w{1,20}){0,4}\s*=\s*["'](?:delete|remove|destroy)[A-Z]\w*["']
   # A server action given its row id.
   | \b(?:delete|remove|destroy)[A-Z]\w*\.bind\(
   # A fetch that sends DELETE, inline or on its own line.
