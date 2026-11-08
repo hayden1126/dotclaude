@@ -47,7 +47,7 @@ export const labels = 'after';
 export const beats = [
   {
     caption: 'A plain to-do list',
-    say: 'This is a plain to-do list, and a real server keeps it.',
+    say: 'A plain to-do list.',
     act: async ({ page }) => {
       await page.waitForTimeout(1500);
     },

@@ -37,7 +37,7 @@ Read `EVENT.md` at the project root: whether video is required, its length and f
 - End each action by waiting for what the viewer should see, such as `await page.getByText('Saved').waitFor()`. A wait that fails is what makes a broken take fail loud. Locators can't see the caption or the cursor, so a wait only ever matches the app.
 - Make the start state repeatable. `app.cmd` should reset or seed the data, or the second take will differ from the first.
 - If the user runs the app's dev server from this folder, ask them to stop it before a take: the take starts its own copy, and the two share the data files and the build folder, so the take's reset would wipe what theirs holds.
-- Keep captions short enough to read in the time the beat runs. They sit at the bottom of the page, so keep important UI out from under them. A native `<dialog>` or popover draws over them and the cursor, so check those beats in the frames.
+- Keep captions short enough to read in the time the beat runs. With `labels = 'after'` (see Captions) they become labels at the top of the finished video, and with `'page'` they sit at the bottom of the page: keep important UI out from under them either way. A native `<dialog>` or popover draws over them and the cursor, so check those beats in the frames.
 
 ## Run it
 
@@ -132,7 +132,7 @@ Add these to `demo/beats.mjs`:
 | `note` on a beat | `{ text, at }`: a note box shown for this beat, with `at` one of `top-left`, `top`, `top-right`, `left`, `center`, `right`, `bottom-left`, `bottom`, `bottom-right`. |
 | `export const labels = 'after'` | The take draws no caption box in the page, and `captions.mjs` draws each caption as a label at the top of the finished video. The default, `'page'`, draws the box in the page during the take, and no label is added afterwards, so a label is never drawn twice. |
 
-Use `labels = 'after'` for new beats when captions are used, since the template already sets it. Each step still records its caption, so `captions.srt` and the voice checks work either way. With `'page'`, subtitles sit above the page's caption box, and a caption that wraps to two lines can meet them. A beat with a bad field fails loud, at the take and in `captions.mjs`.
+Use `labels = 'after'` for new beats when captions are used, since the template already sets it. If the user skips captions, set `labels = 'page'` before the take, or the video has no labels at all. Each step still records its caption, so `captions.srt` and the voice checks work either way. With `'page'`, subtitles sit above the page's caption box, and a caption that wraps to two lines can meet them. A beat with a bad field fails loud, at the take and in `captions.mjs`.
 
 **Read the lines first.** `node demo/captions.mjs lines` needs only a take. For each beat it prints the number, start, length, label, said line, word count and note. This is the sheet to read the voiceover from, and the speech check: it flags a line with more words than fit at 2.3 words a second of its beat, and says by how many. Cut those words, or give the beat more time in `beats.mjs` and retake. A clip made with `BEATS=3-4` lists beats 3 and 4 under their own numbers. It also flags a label over 6 words.
 
