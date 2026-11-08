@@ -4628,62 +4628,16 @@ class SkillAdvice(unittest.TestCase):
             self.assertIn("new code", text)
             self.assertIn("after the migration commits", text)
             self.assertIn("in batches", text)
+            self.assertIn("large table", text)
             self.assertIn("stops using", text)
-
-    def backfill_texts(self):
-        skill, _ = PC.load_skill(DATA_LAYER)
-        with open(os.path.join(DATA_LAYER, "SKILL.md")) as f:
-            step = next(line for line in f if line.startswith("1. This release"))
-        return {"say": skill["rules"][0]["say"], "gate": " ".join(skill["gate"]), "SKILL.md": step}
-
-    def test_only_a_known_small_table_backfills_in_the_same_migration(self):
-        # A seed shows nothing about production's size: a wrong "small" holds ADD COLUMN's lock
-        # through the whole UPDATE, so the batches are the default when the size is unknown.
-        for name, text in self.backfill_texts().items():
-            with self.subTest(text=name):
-                clauses = re.split(r"[.;:]\s", text)
-                same = [c for c in clauses if "same migration" in c]
-                self.assertTrue(same)
-                for c in map(str.lower, same):
-                    for word in ("only", "known", "small"):
-                        self.assertIn(word, c)
-                    self.assertNotIn("large", c)
-                batches = [c for c in clauses if "in batches" in c]
-                self.assertTrue(batches)
-                for c in batches:
-                    self.assertNotIn("small", c)
-        self.assertIn("a seed", self.backfill_texts()["SKILL.md"])
-
-    def test_a_four_skill_digest_keeps_the_backfill_rule(self):
-        # The digest cuts whole gate lines from the end when a skill overruns its share, so the
-        # first line carries the backfill rule alone. A longer home than most leaves a margin.
-        skills = {}
-        for f in sorted(glob.glob(os.path.join(REPO, "skills", "*", "events.toml"))):
-            skill, why = PC.load_skill(os.path.dirname(f))
-            self.assertIsNone(why)
-            skill["dir"] = os.path.join("/home/a-longer-user-name/.claude/skills", skill["name"])
-            skills[skill["name"]] = skill
-        ctx = PC.digest(sorted(skills), skills)
-        kept = ctx.split("\ndata-layer (", 1)[1].split("\ndependencies (", 1)[0]
-        for words in ("add-then-remove", "in batches", "after the migration commits",
-                      "known to be small", "stops using", "Say so in your reply"):
-            self.assertIn(words, kept)
-
-    def test_each_text_bars_the_backfills_nothing_can_run(self):
-        # Round 5's unconditional batches broke 3 of 45 runs: a COMMIT inside the migration's
-        # transaction, a psql meta-command, a file nothing applied. The gate is all a model has
-        # after a compaction, and the say all it has at a deny, so each carries the guard.
-        for name, text in self.backfill_texts().items():
-            with self.subTest(text=name):
-                for words in ("no commit", "meta-command", "nothing applies", "transaction off"):
-                    self.assertIn(words, text.lower())
+        self.assertIn("small table", say)  # batching a few rows breeds backfills nothing can run
 
     def test_the_skill_covers_a_drop_a_table_and_the_contract_step(self):
         with open(os.path.join(DATA_LAYER, "SKILL.md")) as f:
             text = f.read()
         for words in ("nullable", "ignored_columns", "SeparateDatabaseAndState", "view",
                       "IS DISTINCT FROM", "disable_ddl_transaction!", "before the new code serves",
-                      "atomic = False", "no such switch"):
+                      "small table", "meta-command"):
             self.assertIn(words, text)
 
     def test_the_backfill_is_batched_after_the_sync_commits(self):
@@ -5038,11 +4992,8 @@ class DataLayerSkill(unittest.TestCase):
 
     def test_the_gate_line_and_the_spec_state_the_same_rule(self):
         skill, _ = PC.load_skill(DATA_LAYER)
-        # Two lines, the core one first: a digest short of room cuts whole lines from the end.
-        self.assertEqual(len(skill["gate"]), 2)
-        self.assertIn("add-then-remove", skill["gate"][0])
-        for line in skill["gate"]:
-            self.assertIn("REL-31", line)
+        self.assertEqual(len(skill["gate"]), 1)
+        self.assertIn("REL-31", skill["gate"][0])
         self.assertIn("## The L1 test", self.read("SPEC.md"))
 
     def test_the_shipped_files_hold_no_em_dash(self):

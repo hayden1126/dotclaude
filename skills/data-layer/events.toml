@@ -20,8 +20,7 @@
 skill = "data-layer"
 
 gate = [
-  "Build add-then-remove by default for a column or table rename or drop: a new column, a two-way sync and a backfill (in batches after the migration commits; in the same migration only if the table is known to be small); the new code on it (now if migrations deploy first, a release later if code does); the drop only after a release stops using the old name. Say so in your reply (REL-31).",
-  "Run the batches with the migration tool's transaction off, each committing on its own: no COMMIT inside a migration's transaction, no psql meta-command, no file nothing applies (REL-31).",
+  "Build add-then-remove by default for a column or table rename or drop: a new column with a two-way sync, a backfill (on a large table after the migration commits, in batches), the new code moved to it (now when migrations deploy first, a release later when code does), and the drop only after a release that stops using the old name; say so in your reply (REL-31).",
 ]
 
 [[rule]]
@@ -71,4 +70,4 @@ when = '''(?ix)
     | \bSchema::(?:rename|drop)\b
   ))
 '''
-say = "This migration renames or drops something the old release may still read. Build add-then-remove by default and say so in your reply. For a rename: add the new column with a two-way sync in the database, and backfill it before the new code serves: in batches after the migration commits, with the migration tool's transaction off and each batch committing on its own; in the same migration only if the table is known to be small. No COMMIT inside a migration's transaction, no psql meta-command, no file nothing applies. Move the new code to it now with migrations first, a release later with code first. For a drop: a release that stops using the column, and makes it nullable, comes first. Drop only after a release that stops using the old name has replaced the old one. If this is that step, resend or add `practices-allow: REL-31 <reason>`. A drop in a down migration is a false match: resend."
+say = "This migration renames or drops something the old release may still read. Build add-then-remove by default and say so in your reply. For a rename: add the new column with a two-way sync in the database and backfill it before the new code serves: in that migration on a small table, after the migration commits, in batches, on a large table; move the new code to it now with migrations first, a release later with code first. For a drop: a release that stops using the column, and makes it nullable, comes first. Drop only after a release that stops using the old name has replaced the old one. If this is that step, resend or add `practices-allow: REL-31 <reason>`. A drop in a down migration is a false match: resend."

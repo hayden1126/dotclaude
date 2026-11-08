@@ -8,7 +8,7 @@ The skill covers migrations, renames and drops of columns and tables, Row Level 
 
 Files:
 - `SKILL.md`: the core rule, the gate rule, the lines nothing enforces, then what to do when the hook stops a migration.
-- `events.toml`: REL-31 and the two gate lines for the post-compaction digest, the core one first, since a digest short of room cuts whole lines from the end. It has no event: see the L1 test below.
+- `events.toml`: REL-31 and the gate line for the post-compaction digest. It has no event: see the L1 test below.
 - Samples for every form REL-31 reads: `tests/setup/practices_samples/data-layer.toml`.
 
 ## Core rule
@@ -26,7 +26,7 @@ Why it comes first: a plain rename looks finished. The tests pass, because they 
 | L2b | REL-31's `command` and `when` against a Bash command's raw text, denied once per matched line | before the command runs |
 | L3s | REL-31 on the added lines of a commit's migration files, told to the model | after the commit |
 | push | The same scan on what a push would send, denied once per new finding | before the push |
-| L4 | The gate lines after a compaction, when the skill was loaded | SessionStart(compact) |
+| L4 | The gate line after a compaction, when the skill was loaded | SessionStart(compact) |
 
 L2b exists because a migration written by a heredoc or `printf` is a Bash call, which L2 never sees. It reads command text only, so it is blunt on purpose: a false match costs one resend, and L3s and push read the commits behind it.
 
@@ -60,7 +60,7 @@ Accepted false matches, each costing one resend: Django's state-only `RemoveFiel
 
 ## Why it is slim
 
-One enforced rule, two gate lines, no event. The five other rules stay as text because a pattern can't judge them well: a missing policy, a query that is safe by construction and a transaction's reach all need context a line of text doesn't hold. A pattern that guessed would deny good code on every run. REL-31 is different: the bad form is a short list of words in a known set of paths, and one deny line carries the whole fix.
+One enforced rule, one gate line, no event. The five other rules stay as text because a pattern can't judge them well: a missing policy, a query that is safe by construction and a transaction's reach all need context a line of text doesn't hold. A pattern that guessed would deny good code on every run. REL-31 is different: the bad form is a short list of words in a known set of paths, and one deny line carries the whole fix.
 
 ## The L1 test
 
