@@ -3,7 +3,7 @@
 
 Sessions skip that skill and plan long runs without it. A deny at the command is the one point
 every such session passes, but a deny that fires in most sessions gets ignored. Replayed over
-45 days of transcripts, the triggers below fire in 161 of 443 real sessions that ran a gate or a
+45 days of transcripts, the triggers below fire in 171 of 444 real sessions that ran a gate or a
 PR command (.lane/artifacts/replay.py in the guards lane). It fires only on:
 
   - heavy gates, at first use: `lane trial`, `lane lock suite` or `gate`, and the repo's own
