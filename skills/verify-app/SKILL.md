@@ -40,11 +40,12 @@ The harness goes in a repo folder, because sandboxed Bash can write there and ca
 `SKILL.md` goes in `.claude/skills/verify/`.
 
 1. Copy `verify.py`, `browser.py`, `LICENSE-pstack-claude` and `CHECKSUMS` with one sandboxed `cp`,
-   then check them from the harness folder:
+   then check them from the harness folder, in a subshell so the session's working directory stays at
+   the repo root (a bare `cd` moves it for every later call, and the paths below are root-relative):
 
    ```
    mkdir -p <harness> && cp <skill dir>/template/{verify.py,browser.py,LICENSE-pstack-claude,CHECKSUMS} <harness>/
-   cd <harness> && sha256sum -c CHECKSUMS
+   (cd <harness> && sha256sum -c CHECKSUMS)
    ```
 
    The check catches a template that drifted from its own list: on a mismatch, stop and report it,

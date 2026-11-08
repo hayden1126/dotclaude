@@ -10,7 +10,8 @@ proves the fix. The unit of care is the feature: every feature gets a source rea
 End with exactly one, and say which:
 
 - **clean:** every feature was read and driven live, and nothing needs changing. No commit.
-- **changed:** proven corrections to the verify skill, committed only with the user's say.
+- **changed:** proven corrections to the verify skill, a refresh from the template included, committed
+  only with the user's say.
 - **blocked:** the pass could not finish, or a fix could not be proved. Say exactly what blocked it.
 
 ## Edit scope
@@ -26,16 +27,22 @@ takes the file for binary (ugrep can) prints no matches and no error.
 
 ## Pass
 
-1. **Copies.** The harness folder is the one the recipe's Launch commands name. From it, run
-   `sha256sum -c CHECKSUMS`. A file that no longer matches its own list was edited by hand: report
-   it and stop, since the refresh would overwrite the edit. Then compare `CHECKSUMS` with
-   `<skill dir>/template/CHECKSUMS`. The same list means the copies are current. A list that
-   differs is an older harness; refresh it before anything below:
+1. **Copies.** The harness folder is the one the recipe's Launch commands name. Run
+   `(cd <harness> && sha256sum -c CHECKSUMS)`, in a subshell so the session's working directory
+   stays at the repo root: a bare `cd` moves it for every later call, and every path in this pass is
+   root-relative. A file that no longer matches its own list was edited by hand: report it and stop,
+   since the refresh would overwrite the edit. Then compare `CHECKSUMS` with
+   `<skill dir>/template/CHECKSUMS`. A list that differs can mean either side is newer: diff the
+   repo's `verify.py` against the template's, and if the repo's has code the template lacks, the
+   installed verify-app skill is the older one: stop and say to update it first. A list that
+   differs is otherwise an older harness; refresh it before anything below with steps 1.1 and 1.3.
+   Step 1.2 runs on every pass, even when the lists match, since a template change to `journeys.py`
+   or the recipe alone leaves `CHECKSUMS` the same.
    1. Re-copy the four fixed files with one sandboxed `cp`, then check them from the harness folder:
 
       ```
       cp <skill dir>/template/{verify.py,browser.py,LICENSE-pstack-claude,CHECKSUMS} <harness>/
-      cd <harness> && sha256sum -c CHECKSUMS
+      (cd <harness> && sha256sum -c CHECKSUMS)
       ```
 
       On a mismatch, stop and report it. If the permission check reads the `cp` as a write to the
@@ -47,7 +54,7 @@ takes the file for binary (ugrep can) prints no matches and no error.
       selectors, journeys, Features rows, skip paths and app-specific edges. Anything new that
       carries a `<fill: ...>` is filled from the repo, as the skill's section 2 does; `verify.py`
       exits 2 while one remains.
-   3. Re-prove on the new harness, as the skill's section 3 does: a full run, one planted wrong
+   3. After a refresh, re-prove on the new harness, as the skill's section 3 does: a full run, one planted wrong
       value in a `ctx.check` (exit 1 with its message) and its revert (exit 0), a `--quick` run,
       and new measured times on the Measured line. Then go on with step 2.
 2. **Index.** Compare the recipe's Features table with `JOURNEYS`: every row has a journey, every

@@ -140,7 +140,7 @@ class Files(unittest.TestCase):
         text = read(os.path.join(SKILL, "SKILL.md"))
         for phrase in ("`scripts/verify/`", "`tools/verify/`", "one sandboxed `cp`",
                        "cp <skill dir>/template/{verify.py,browser.py,LICENSE-pstack-claude,CHECKSUMS} <harness>/",
-                       "cd <harness> && sha256sum -c CHECKSUMS", "git add .claude/skills/verify <harness>"):
+                       "(cd <harness> && sha256sum -c CHECKSUMS)", "git add .claude/skills/verify <harness>"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, text)
         maintain = read(os.path.join(SKILL, "MAINTAIN.md"))
@@ -326,23 +326,33 @@ class Files(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, generator)
 
+    def test_no_step_moves_the_sessions_working_directory(self):
+        """A bare cd in a main session moves its cwd for every later call, breaking root-relative paths."""
+        for name in ("SKILL.md", "MAINTAIN.md"):
+            text = read(os.path.join(SKILL, name))
+            with self.subTest(name=name):
+                self.assertNotRegex(text, r"(?m)^\s*cd ", "run a cd in a subshell: (cd <dir> && ...)")
+
     def test_maintain_refreshes_an_older_harness_from_the_template(self):
         """The next upkeep pass in an app repo brings its copied harness up to this template."""
         text = read(os.path.join(SKILL, "MAINTAIN.md"))
         flat = " ".join(text.split())
         for line in ("cp <skill dir>/template/{verify.py,browser.py,LICENSE-pstack-claude,CHECKSUMS} <harness>/",
-                     "cd <harness> && sha256sum -c CHECKSUMS"):
+                     "(cd <harness> && sha256sum -c CHECKSUMS)"):
             with self.subTest(line=line):
                 self.assertRegex(text, rf"(?m)^ *{re.escape(line)}$")
         for phrase in ("The harness folder is the one the recipe's Launch commands name",
-                       "A list that differs is an older harness; refresh it before anything below",
+                       "A list that differs is otherwise an older harness; refresh it before anything below",
+                       "if the repo's has code the template lacks, the installed verify-app skill is the older one",
+                       "Step 1.2 runs on every pass, even when the lists match",
+                       "a refresh from the template included, committed only with the user's say",
                        "Re-copy the four fixed files with one sandboxed `cp`",
                        "On a mismatch, stop and report it",
                        "Re-check `journeys.py` against `<skill dir>/template/journeys.py`, and the recipe against "
                        "`<skill dir>/template/SKILL.md`",
                        'new `APP` keys (such as `APP["env"]`), new sections, new Known edges',
                        "keep the repo's own fills",
-                       "Re-prove on the new harness",
+                       "After a refresh, re-prove on the new harness",
                        "a full run, one planted wrong value in a `ctx.check` (exit 1 with its message) and its "
                        "revert (exit 0), a `--quick` run, and new measured times on the Measured line",
                        "only the harness folder and the recipe",
